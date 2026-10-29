@@ -4276,10 +4276,10 @@ Sources: R4 (the FA fit, read at FA `53c6e953`), B4 §5 (bridge design) and B3 �
 ### 21.1 Doctrine
 
 1. **FA is FrankenMining's only book of record.** FrankenMining never computes an authoritative balance.
-   Balances are FA folds, read through certified reads and cited by certificate (FACT, R4 §7.1). At a company that already runs an ERP,
-   the ERP stays the statutory ledger, and FA is a reconciling analytical book that must agree with the ERP's
-   trial balance; every difference is a cited register item, and Workpapers support entries the controllers post
-   in their own ERP (DESIGN, §1.5).
+   Balances are FA folds, read through certified reads and cited by certificate (FACT, R4 §7.1). At a company
+   that already runs an ERP, the ERP stays the statutory ledger, and FA is a reconciling analytical book that must
+   agree with the ERP's trial balance; every difference is a cited register item, and Workpapers support entries
+   the controllers post in their own ERP (DESIGN, §1.5).
 2. **FrankenMining owns operational truth and estimates; FA owns the mechanical record.** Every FrankenMining
    estimate that moves money enters FA as a certified computation document (`Workpaper`) on the entry it supports.
    This covers NRV, depletion rates, ARO PV, impairment, MTM, stream drawdown, royalties and survey true-ups.
