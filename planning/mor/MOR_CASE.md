@@ -493,3 +493,17 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
   At stored precision both footings close exactly: 241 − 38 − 37.899643 − 33 = 132.100357 (FACT, arithmetic). The
   ledger refuses these 12 instances because the declared construction needs the displayed values, and those
   depend on the cell number format, which the reader does not yet read.
+
+**frankensim materials corpus, re-counted (lead agent, 2026-10-29).** Id E824 is new and corrects E009.
+
+- **E824** The frankensim matdb seed corpus at commit `20463525d`, the commit §13.9 was verified against (FACT,
+  execution: `git ls-tree` and `git show` of `data/matdb/seed-v1/*/properties.tsv` at that commit).
+  - **Size.** 302 bundles holding 2,631 value claims (scalar, curve and surface rows).
+  - **Uncertainty.** Of the uncertainty rows, 2,466 are `unstated` (94%), 163 absolute and 2 bounded. Unstated
+    uncertainty becomes an explicit no-claim, never a verified value (`crates/fs-matdb/src/query.rs:1473-1480`).
+  - **Schema.** Pack schemas run v1–v8 (`crates/fs-matdb/src/pack.rs:20-34`). v8, two-coordinate surfaces, landed
+    on 2026-10-21 (`b323fed42`), so E009's "frozen at v7" is out of date.
+  - **Coverage.** There are still no rock, ore, mineral, soil, slurry or tailings bundles.
+  - **Working tree.** On the same day, frankensim's working tree held 264 bundles: a live session had 38 bundle
+    deletions uncommitted, among them `gold-pure-nbs-c447`. Corpus counts are therefore quoted at a commit, never
+    from a working tree.

@@ -757,8 +757,8 @@ pub enum UuTerm {
 
 ### 8.4 Refusal codes
 
-Refusals are typed values, not errors. They render as plain sentences with a `fix` hint (fs-evidence
-`Violation{code, what, fix}` pattern).
+Refusals are typed values, not errors. They render as plain sentences with a `fix` hint (fs-scenario
+`Violation{code, what, fix}` pattern, `crates/fs-scenario/src/scenario.rs:279`).
 
 | Code family | Example |
 |---|---|
@@ -1907,7 +1907,7 @@ dataset).
 9. **`fs-sparse`** has a supernodal LDLᵀ with AMD ordering, but no selected inversion for marginal variances.
 10. **The geometry trait uses `fs_exec::Cx`**, a per-tile context, not `asupersync::Cx`. The suite has three
     distinct `Cx` types (FACT, B4 S1).
-11. The matdb seed corpus has no rock, ore, soil or tailings bundles (FACT, E009).
+11. The matdb seed corpus has no rock, ore, soil or tailings bundles (FACT, E009; re-counted in E824).
 
 **Per-crate disposition (DESIGN).** Postures: **Lift** (copy with a `//! Provenance:` header plus a golden-hash
 test), **Bridge** (gated dependency through `fmine-simbridge`), **Pattern** (copy the design, not the code),
@@ -1970,8 +1970,8 @@ test), **Bridge** (gated dependency through `fmine-simbridge`), **Pattern** (cop
 - Client test data is confidential and MNPI-adjacent, so only **sealed** corpora are used (`seal_corpus`;
   `StoreError::CorpusChanged`, FACT, `fs-matdb-store/src/lib.rs`), never seed bundles.
 - The same located test result lives once in L0. matdb cards are *projections* of it (one authority per number).
-- matdb's pack schema is frozen at v7, so frankensim-side additions are governed upstream changes. FrankenMining
-  emits compatible bundles and never edits frankensim's corpus.
+- matdb's pack schema is versioned upstream (v8 at `20463525d`, E824), so frankensim-side additions are governed
+  upstream changes. FrankenMining emits compatible bundles and never edits frankensim's corpus.
 
 ### 13.11 Certificates, guards and proof obligations
 
@@ -4275,8 +4275,8 @@ Sources: R4 (the FA fit, read at FA `53c6e953`), B4 §5 (bridge design) and B3 �
 
 ### 21.1 Doctrine
 
-1. **FA is the only book of record.** FrankenMining never computes an authoritative balance. Balances are FA folds,
-   read through certified reads and cited by certificate (FACT, R4 §7.1). At a company that already runs an ERP,
+1. **FA is FrankenMining's only book of record.** FrankenMining never computes an authoritative balance.
+   Balances are FA folds, read through certified reads and cited by certificate (FACT, R4 §7.1). At a company that already runs an ERP,
    the ERP stays the statutory ledger, and FA is a reconciling analytical book that must agree with the ERP's
    trial balance; every difference is a cited register item, and Workpapers support entries the controllers post
    in their own ERP (DESIGN, §1.5).
@@ -6365,7 +6365,7 @@ runtime risk.
 |---|---|---|
 | Anchors, the knowledge-state lattice, the cognition/authority/effect plane split | FSS | §6, §7, §26 |
 | Lift headers, golden-hash guards, budget-overrun discipline | FrankenTextiles (FTX) | §27.1, §28.4 |
-| Typed refusals `Violation{code, what, fix}` | frankensim fs-evidence | §8.4 |
+| Typed refusals `Violation{code, what, fix}` | frankensim fs-scenario | §8.4 |
 | Posture closures, `franken-stack.lock`, foundation dependency rows | FA | §28, Appendix F |
 | Robot envelope, exit-code superset, doctor/repair | FA, fgdb | §30 |
 | Sealed corpora and matdb manifests | frankensim fs-matdb | §13.10 |
