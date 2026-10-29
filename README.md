@@ -33,6 +33,10 @@ FrankenMining is built for integrated gold, copper, silver and tin producers.
 It never classifies a reserve, never signs a dam and never drives a truck. It makes the people who do those
 things faster, better evidenced, and accountable to a track record.
 
+It works alongside the systems a miner already runs (the ERP, fleet management, historians, laboratory and geology
+tools), reading their exports and replacing none of them. It gives people and AI agents one checked, cited view
+of the whole operation. See [Alongside your systems](#alongside-your-systems-and-a-nerve-centre-for-agents).
+
 > **Not affiliated.** FrankenMining is an independent open-source project. It is not affiliated with, endorsed by
 > or built for Barrick, Newmont or any other company named here. The demonstration lane uses public disclosures
 > only: technical reports, quarterly Mine Stats workbooks and investor presentations, cited by file, page and
@@ -91,7 +95,34 @@ modelling and mine planning.
 **FrankenMining** is that substrate and the engines that use it. It is written in Rust on the
 [asupersync](https://github.com/Dicklesworthstone/asupersync) runtime. It reuses the
 [FrankenSuite](https://github.com/Dicklesworthstone) siblings: frankensim for geometry and solvers, and
-franken_accounting as the book of record.
+franken_accounting as the book of record. At a company that already runs an ERP, the ERP stays the statutory
+ledger and franken_accounting reconciles to it.
+
+---
+
+## Alongside your systems, and a nerve centre for agents
+
+A major miner has spent years, and often hundreds of millions of dollars, on SAP S/4HANA or another ERP, fleet
+management, historians, laboratory systems and geology and planning tools. FrankenMining is designed to sit beside
+them, not to replace them (plan §1.5, NONGOAL-001).
+- **Read-only connectors.** ERP extracts (flat file, IDoc or OData), content-hashed fleet and historian snapshots,
+  and modelling-tool exports. Nothing writes back to a transactional or control system.
+- **The ERP stays the ledger.** franken_accounting rebuilds the ERP's trial balance from extracts and must agree
+  with it, and every difference is a cited register item. Estimates that move money reach the controllers as
+  workpapers for entries they post in their own ERP.
+- **Incremental adoption.** The public demonstration needs no system access. A pilot needs a handful of read-only
+  extracts, and each further source is one more registered dialect, never a migration.
+
+On top of those systems, FrankenMining is designed to be the **agentic nerve centre**: the one place AI agents read
+the operation from (plan §1.6).
+- **One typed model of the business.** Sites, ventures, ore, metal, costs, plans, forecasts and decisions are typed
+  Claims with units, ownership basis and provenance.
+- **A robot-first surface.** One JSON envelope, typed refusals, `next_actions` and `robot-docs`, also served over
+  MCP.
+- **Safe by construction.** Agents read and prepare, and humans authorize. Agent forecasts are frozen and scored
+  like anyone's, so trust in an agent is earned on its record.
+
+The ERP keeps running the transactions. People and agents get one legible, checked and cited view of the business.
 
 ---
 

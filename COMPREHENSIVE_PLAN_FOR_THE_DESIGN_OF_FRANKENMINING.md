@@ -270,7 +270,9 @@ Every hard sub-problem has been solved somewhere in isolation:
 > DecisionCard in front of every material capital, reserve or dam decision, showing the alternatives, the
 > probability-weighted outcomes, the unknowns that would flip the call, and the cheapest way to learn more. It never
 > classifies a reserve, never signs a dam and never drives a truck. It makes the people who do those things faster,
-> better evidenced, and accountable to a track record.
+> better evidenced, and accountable to a track record. It reads the systems the company already runs (the ERP, fleet,
+> plant, laboratory and geology tools) and replaces none of them, and it gives people and AI agents one checked,
+> cited view across all of them (§1.5, §1.6).
 
 ### 1.4 What is new here (claims of novelty, kept honest)
 
@@ -291,6 +293,59 @@ testable:
    folds to it, so an auditor descends from a ledger leg to a truck ticket by digest (§21).
 7. **One comparable capital decision object** (`CapitalProgram`) over a shared scenario index. Pay metrics are
    constraints with published shadow prices, and buybacks and streams are candidates (§23).
+
+### 1.5 Alongside the systems of record, never instead of them
+
+**DESIGN.** A major miner has spent years and, at group scale, often hundreds of millions of dollars (owner's
+estimate, 2026-10-29) on its ERP (SAP S/4HANA, Oracle, JD Edwards, Pronto), fleet management, historians,
+laboratory systems and geology and planning tools. Those systems run the transactions, the fleet and the plant.
+Auditors rely on them, and the company's people know them. No such company will rip them out for a newcomer, and
+it should not have to. FrankenMining is designed to add the layer they lack, not to replace any of them
+(NONGOAL-001).
+
+- **It reads; it never takes over.** Every connector is read-only. The ERP supplies flat-file, IDoc or OData
+  extracts. Fleet and historian systems supply content-hashed snapshots. Modelling and planning tools supply
+  exports (§32.2). Nothing writes back to a transactional or control system (§31.3). Nothing changes how those
+  systems are run, audited or upgraded.
+- **The ERP stays the statutory ledger.** At a company that runs an ERP, the ERP's general ledger remains the
+  ledger of record. FA (§21) runs beside it as a reconciling analytical book: it rebuilds the ERP's trial balance
+  from extracts and must agree with it, and every difference is a cited register item. Estimates that move money
+  (NRV, depletion, ARO, royalties, survey true-ups) reach the controllers as Workpapers. The controllers post the
+  entries in their own ERP.
+- **What it adds is the evidence layer.** Each existing system passes along one value. FrankenMining keeps the
+  rest:
+  - where the number came from;
+  - how sure it is;
+  - how it reconciles with the other systems' figures;
+  - how good past forecasts of it were (§1.1–§1.4).
+- **Adoption is incremental.** The M0 lane needs no system access at all (§31.1, §37). The first private pilot
+  needs a handful of read-only extracts, not an integration programme. Each further source is one more dialect in
+  `registries/io_dialects.toml`, never a migration.
+
+### 1.6 The agentic nerve centre
+
+**DESIGN; capabilities are TARGET until their gates pass.** An AI agent at a mining company today faces a dozen
+systems. They give different names to the same ore, the same truck and the same dollar, and the agent cannot tell a
+measured figure from a guess. FrankenMining is designed to be the one place every agent reads the operation from.
+It is a business operating system for analysis and decision support, running on top of the systems that execute the
+business.
+
+- **One typed model of the business.** Sites, ventures, ore, metal, costs, plans, forecasts and decisions are
+  typed Claims with stable ids, units, ownership basis and provenance (§8). An agent that asks for an attributable
+  cost per ounce gets the figure with its cells, its rounding state and its knowledge state.
+- **A robot-first surface.** Every verb answers in one JSON envelope with typed refusals, `next_actions` and
+  stable schema ids. `robot-docs` lets a fresh agent learn the surface from the tool, and the MCP server exposes
+  the same verbs (§30.1–§30.3, GATE-ROBOT-01).
+- **Safe by construction.** Agents read and prepare; humans authorize. Agent output enters quarantine as evidence,
+  never as authority. Walls and confidentiality bind agents unchanged, and no conduit reaches control systems
+  (§30.4, §31.3).
+- **Trust earned on the record.** Agent forecasts are frozen and scored like anyone's (§10), so the company learns
+  which agents to rely on, and for what.
+- **Vendor-neutral.** Avathon or any other AI platform reads anchored export projections (§32.3), so every agent's
+  answer can cite the same FrankenMining anchor.
+
+The ERP keeps running the transactions. People and agents get one legible, checked and cited view of the whole
+operation.
 
 ## 2. Bets, each with its falsifier
 
@@ -367,7 +422,7 @@ testable:
 
 | ID | Non-goal | Reason |
 |---|---|---|
-| NONGOAL-001 | Replacing SAP S/4HANA, Pitram, DISPATCH/MineStar/FrontRunner, Leapfrog, Whittle or Deswik in years 1–2 | FrankenMining is the evidence layer that reads their exports. Replacement is not the wedge (B5 R-b1, R-c1). |
+| NONGOAL-001 | Replacing SAP S/4HANA, Pitram, DISPATCH/MineStar/FrontRunner, Leapfrog, Whittle or Deswik, at any horizon | FrankenMining is the evidence layer that reads their exports (§1.5). Replacement is neither the wedge nor the destination (B5 R-b1, R-c1). |
 | NONGOAL-002 | Fleet, plant or any other equipment control | No write conduit to ISA-95 Levels 0–2 exists or will exist (§31.3). |
 | NONGOAL-003 | Classifying resources or reserves; signing geotechnical or tailings safety; asserting regulatory compliance | E023, E031. These belong to humans. |
 | NONGOAL-004 | Building a general ledger | FA is the book of record (E019). |
@@ -4221,7 +4276,10 @@ Sources: R4 (the FA fit, read at FA `53c6e953`), B4 §5 (bridge design) and B3 �
 ### 21.1 Doctrine
 
 1. **FA is the only book of record.** FrankenMining never computes an authoritative balance. Balances are FA folds,
-   read through certified reads and cited by certificate (FACT, R4 §7.1).
+   read through certified reads and cited by certificate (FACT, R4 §7.1). At a company that already runs an ERP,
+   the ERP stays the statutory ledger, and FA is a reconciling analytical book that must agree with the ERP's
+   trial balance; every difference is a cited register item, and Workpapers support entries the controllers post
+   in their own ERP (DESIGN, §1.5).
 2. **FrankenMining owns operational truth and estimates; FA owns the mechanical record.** Every FrankenMining
    estimate that moves money enters FA as a certified computation document (`Workpaper`) on the entry it supports.
    This covers NRV, depletion rates, ARO PV, impairment, MTM, stream drawdown, royalties and survey true-ups.
@@ -7044,7 +7102,7 @@ Production code is either lifted (with provenance and a licence check) or reimpl
 | DXF | Reimplement an ASCII subset (LINE, (LW)POLYLINE, 3DFACE, POINT, layers) | ezdxf / ODA | DWG is out of scope |
 | CRS | `fmine-crs` (§25.5) | PROJ | — |
 | acQuire, Datamine, Surpac, Leapfrog, Deswik | **Dialect registry** `registries/io_dialects.toml` over their CSV, OMF, DXF and string-file exports. Surpac `.str` text is reimplemented; Datamine `.dm` enters only through export. | Vendor exports as fixtures | Units and CRS declared or `UNREGISTERED` |
-| SAP S/4HANA | Read-only flat-file or IDoc extracts, or OData JSON over asupersync HTTPS. **No RFC SDK.** | Sample extracts | SAP remains the ERP. Inside FrankenMining's scope the GL is FA, not SAP. FM↔SAP is snapshots (work orders and spares in §16.5). |
+| SAP S/4HANA | Read-only flat-file or IDoc extracts, or OData JSON over asupersync HTTPS. **No RFC SDK.** | Sample extracts | SAP remains the ERP and the statutory ledger. FA runs beside it as an analytical book that rebuilds SAP's trial balance from extracts and must agree with it (§1.5). FM↔SAP is snapshots (work orders and spares in §16.5). |
 | Fleet management (DISPATCH, MineStar, FrontRunner/Modular, Wenco, Pitram) | External collectors publish **content-hashed immutable snapshots** into quarantine. Engines read snapshots only. | Vendor exports | FrankenMining never writes back to dispatch or autonomous haulage (§31.3) |
 | Historians (AVEVA PI and others) | Exported snapshots, or a read-only OPC UA client on a DMZ relay, outbound-only | Recorded sessions | Tag maps are versioned registry rows (§16.9) |
 | Public filings (SEDAR+, EDGAR, issuer releases) | `fmine-public` parses filings into Public-basis Claims | Hand-checked fixtures | The M0 lane (§31.1) |
@@ -9194,6 +9252,31 @@ pushed; `origin/main` and `origin/master` are at `30ee8f5`. What the auditors re
    release (BD-322).
 
 Whether to amend `68e7091` or follow it with a correcting commit is the owner's decision (OPEN-R7-5).
+
+**State after the corrective work of 2026-10-29 (FACT, executions; MOR_CASE E820–E823).** Items 1 and 3 are done.
+- **The stand-in and both fallbacks are removed.**
+  - A workspace without the files refuses with FMINE-REF-502 (exit 8), naming all 18.
+  - An altered file refuses with both digests.
+- **`fmine-public` now holds:**
+  - a registry pinning the 18 workbooks (URL, bytes, SHA-256);
+  - a label-anchored AISC reader;
+  - the five-state identity ledger with exact certificates and registered reconstructions;
+  - a synthetic lane that prints `synthetic` and is never gate-eligible.
+- **The real-file run reproduces an independent reader exactly.** This covers the census and numeric digest of all
+  18 workbooks, and the full ledger: 34 tables, 2,595 instances, footing 1,004/4/6/24, per ounce
+  1,116/3/17/385/36.
+- **The envelope** carries the INV-002 flags, `no_claim`, cited exceptions with certificates, and
+  `next_actions`. `claim show` refuses.
+- **In `fmine-metrics`:**
+  - the price decks are the Circular's (E606);
+  - reserve replacement refuses a non-positive depletion;
+  - the four mislabelled tests are synthetic.
+
+Still open:
+- item 2 (BD-323);
+- findings 5, 7 and 8;
+- GATE-BULL-01 part 3 (issuer consistency across vintages);
+- reading cell number formats, so that E823's twelve refusals can be scored.
 
 ### K.3 Corrections folded into this plan
 

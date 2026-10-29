@@ -187,9 +187,10 @@ Named subsystems (plan §0.5):
   a mill or a pump.
 - It never classifies a resource or reserve, signs a dam or slope, or asserts regulatory compliance. Humans sign;
   the system supplies evidence and the record of who signed.
-- Not a general ledger. franken_accounting is the book of record, reached as a subprocess, never as a crate.
-- Not a replacement for SAP, Pitram, DISPATCH/MineStar/FrontRunner, Leapfrog, Whittle or Deswik in years 1–2. It
-  is the evidence layer that reads their exports.
+- Not a general ledger. franken_accounting is the book of record, reached as a subprocess, never as a crate. At a
+  company that runs an ERP, the ERP stays the statutory ledger and franken_accounting reconciles to it (§1.5).
+- Not a replacement for SAP, Pitram, DISPATCH/MineStar/FrontRunner, Leapfrog, Whittle or Deswik, at any horizon. It
+  is the evidence layer that reads their exports, and the one place AI agents read the operation from (§1.5, §1.6).
 - Not a general-purpose MILP solver.
 - Not a hidden aggregate score: components are always shown.
 
