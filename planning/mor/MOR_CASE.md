@@ -334,3 +334,117 @@ checked numerically. The plan's Appendix H.5b lists the corrections. New evidenc
   0.8926·[1 − exp(−22.2995·(Au − 0.032))] law nor the rational cubic 1.1536 − 0.0046/g − … appears in any corpus
   document. Table 13-12 is E660 above; E154 is roaster MCF and E181 is Turquoise Ridge intercepts.
 - The Pueblo Viejo Table 15-8 check works at S = 0.0904 (14.76 US$/t), not S = 0.0368.
+
+### Round 7: M0 code and execution evidence (2026-10-29)
+
+The round-7 modes-of-reasoning run (`planning/mor/r7/`) added these rows. Full text, commands and logs are in
+`planning/mor/r7/MOR_CASE.md` and `planning/mor/r7/.mor/run-20261029T183653Z/repro/`; ids E700–E814 (claim-level
+evidence added during normalisation) are defined there only.
+
+- **E673** Git: local commit `68e7091` (2026-10-29 13:42 -0400) adds 15 crates, `xtask`, registries, ADR-RNG-01, CI
+  and `.beads/` (320 issues); its message says WP-00..WP-03 and WP-06 are implemented. Not pushed: `origin/main`
+  and `origin/master` stay at `30ee8f5` (FACT).
+- **E674** `cargo test --workspace` at `68e7091`: 59 unit tests pass over 16 binaries; doc-tests 0 (FACT, execution).
+- **E675** `xtask check-all` prints "GATE-LAYERS-00 PASS: 60 crates registered, 8859 actual Rust LOC" (FACT,
+  execution).
+- **E676** `fmine assure public --issuer barrick` exits 0 and prints one envelope (1,108 bytes, byte-identical on
+  rerun) with gold FY2025 AISC 1,638.10 vs "reported" 1,638, a North Mara LMDI labelled 2024 Q1→Q2 (1,297 →
+  2,582) and reserve replacement 190%/504% (FACT, execution).
+- **E677** None of the 18 workbook names compiled into `BARRICK_18_WORKBOOKS` exists in the corpus; the local
+  Barrick workbooks are named `Barrick_Q{1–4}_{2024–2026}_{Mine_Stats|AISC}.xlsx` (FACT).
+- **E678** `BarrickCorpus::load_from_workspace` substitutes an in-code workbook
+  (`build_canonical_barrick_xlsx_bytes`) whenever a file read fails (FACT, code).
+- **E679** `run_barrick_m0_assurance` builds the North Mara LMDI and reserve replacement from literals
+  (`ReserveReplacementBridge::compute(3.91, 7.429, 12.277)`) (FACT, code).
+- **E680** `.beads/issues.jsonl` at `68e7091` holds 320 issues, 87 closed, all with one shared close reason (FACT).
+- **E681** Root `Cargo.toml` declares `license = "MIT"` beside the rider LICENSE; clippy lints do not deny
+  `unwrap_used`, `expect_used` or `panic` (FACT).
+- **E682** Plan file at `68e7091`: 8,902 lines, sha256 `e8429e48d43ca739b72d4e49d03c92981d2991ae2bc338146d3262d9e5451390`
+  (FACT).
+- **E683** CI (`.github/workflows/ci.yml`) runs `xtask check-all`, `cargo check` and `cargo test` on ubuntu-latest
+  and macos-14; no fmt, clippy or cargo-deny step; it has never run, because the commit is unpushed (FACT).
+- **E684** Registries at `68e7091`: calendars, crs, lifts, loc_budget, refusals, units, verbs, workspace_topology
+  (FACT).
+- **E685** The GATE-BULL-01 text audited in round 7 ("≥ 95% of site-quarter values reproduced to published
+  rounding"), since replaced by the three-part gate (plan §21.6; FACT).
+- **E690** Build host: 18.3 GB free on 2026-10-29, `sbh` status critical (FACT, execution).
+
+### Round 7: B7 refutation and dueling-wizards checks of public files (2026-10-29)
+
+Ids E691–E696 come from round 7's reserved block (E673–E699). Each was re-read from the bytes by the lead agent
+unless marked otherwise. B7 pack ids refer to `planning/brenner/B7_assurance_chain.md`.
+
+- **E691** `Barrick_Q4_2025_AISC.xlsx` `'Q4 2025'!J5:J21` (Veladero): cost of sales 67, total cash costs 39, AISC 84
+  ($M), ounces sold 47 koz, but per-ounce rates 1,526 / 886 / 1,915, which imply 43.9–44.0 koz. Sheet `2025`
+  column J: rates 1,286 / 785 / 1,450 imply 223.4–224.2 koz against 226 printed. `'Q3 2025'!J18` is 44 koz
+  (FACT, execution). The cause is not public; "Q3's denominator reused" is a HYPOTHESIS (B7 EV2-P3-2).
+- **E692** `Barrick_Q4_2024_MD-A.pdf` p.77, note 15: the 2024f row prints attributable net change GEO 6.7, the
+  same value as 2023e, while the "2019 - 2024 Total" row prints 111 (4.2 + 8.5 + 13 + 6.7 + 79 = 111.4).
+  `Barrick_Q4_2025_MD-A.pdf` p.71 prints 79 for 2024 (FACT). The first-filed vintage is wrong; see E147 for the
+  deck question on 79.
+- **E693** Row positions move between AISC workbooks: AISC, ounces sold and AISC per ounce sit in rows 17/18/21
+  in `Barrick_Q4_2025_AISC.xlsx` `'Q4 2025'` and rows 18/19/23 in `Barrick_Q1_2025_AISC.xlsx` `'Q1 2025'`, where
+  a "Non-recurring items" row is inserted at row 8 (FACT). B7 found the shift on 25 of 40 AISC sheets
+  (EV-P3-2; INFERENCE, not re-counted).
+- **E694** `Barrick_Q1_2025_AISC.xlsx` `'Q1 2025'!S18,S19,S23` (Africa & Middle East): 312 $M / 202 koz =
+  1,544.6 $/oz against 1,602 printed (FACT). Whether the filed Q1 2025 MD&A explains the gap is disputed inside
+  B7 (EV2-P2-3 vs EV2-P3-2: Loulo-Gounkoto sold no gold that quarter but carried about $10M of sustaining
+  capital); open.
+- **E695** Per-ounce identity AISC $M × 1,000 / koz sold = printed $/oz, on `Barrick_Q4_2025_AISC.xlsx` and
+  `Barrick_Q1_2025_AISC.xlsx`, seven visible sheets: 104 eligible identities; 14 within ±$1 of the printed rate,
+  87 inside the enclosure of a subtotal rounded once, 17 outside it (B7 EV2-P2-3; FACT, execution by a B7 pane,
+  not re-run). Treating the subtotal as a sum of separately rounded component lines explains most of the rest
+  (EV2-P3-2: 68 of 75 misses on its own sample; INFERENCE). No filing states which construction the issuer uses.
+- **E696** A swapped-value mutation (two sites' values exchanged in memory, citations kept, both rows labelled
+  "issuer discrepancy") leaves 0 unclassified and 0 uncited rows while extraction fidelity against an independent
+  read falls from 2/2 to 0/2 (B7 EV2-P1-2, EV2-P2-3; FACT, execution in scratch). Classification completeness
+  cannot stand in for extraction fidelity.
+- **E697** The "General & administrative costs" row is zero in every column of all 40 visible AISC sheets in the
+  eight `Barrick_Q*_AISC.xlsx` workbooks (FACT, execution). Site and region per-ounce AISC therefore carry no G&A,
+  and corporate G&A sits wholly in the Total layer (L_corp; §21.6).
+- **E698** 2025 gold reserve roll-forward in two filings of February 2026: `Fourmile_Feb2026.pdf` p.14 prints
+  acquisitions and divestments (2.2), depletion (3.6), net change 1.7; `Barrick_Q4_2025_MD-A.pdf` p.71 prints
+  depletion (3.7), net change 1.8. Both close 89 → 85 Moz to rounding (FACT). The pair fits one unrounded split near
+  3.65 / 1.75 rounded by two conventions (INFERENCE); a known answer for rounding-convention discovery.
+- **E699** LMDI on the public tables (B7 EV-P0-4, EV2-P3-3, EV2-P3-4, EV-P2-5; executions by B7 panes, not
+  re-run; INFERENCE): 26 of 127 gold site-quarter year-on-year pairs have an `n/a` or non-positive factor
+  (Veladero and Zaldívar publish no recovery); 72 of 606 factor effects change sign within rounding; by-product
+  credits are zero or positive in 124 of 519 AISC columns; a +10% error in North Mara's 2026 grade
+  (`Minestats3!H18`, 1.80 → 1.98 g/t) moves $177.39/oz from grade into B with closure unchanged.
+
+**B7 decisive pilot (lead-agent checks of the B7 quickie pack, 2026-10-29).** Ids E815–E818 are new; E700–E814
+belong to the round-7 run above.
+
+- **E815** Footing census over all visible sheets of the eight `Barrick_Q*_AISC.xlsx` workbooks: 1,207 of 1,212
+  printed TCC and AISC totals equal the sum of the displayed component lines above them (FACT, execution, label-
+  anchored rows). The five exceptions are three cells, two of them in two vintages: Kibali Q2 2024 TCC 70 against
+  72 (by-product credit printed +1 where −1 foots; `Barrick_Q3_2024_AISC.xlsx` `'Q2 2024'!O7`, and again in the
+  Q2 2025 workbook); Porgera Q2 2024 AISC 13 against 12 (`'Q2 2024'!L18`, both vintages); North America Q4 2023
+  TCC 541 against 540 (`Barrick_Q4_2024_AISC.xlsx` `'Q4 2023'`, column J). A total rounded once from unrounded
+  inputs would foot exactly only about 56% of the time (B7 EVQ-P0-1 synthetic null; INFERENCE), so the tables
+  follow the component-sum construction (INFERENCE).
+- **E816** Africa & Middle East Q1 2025 (E694) closes from public cells: `Barrick_Q1_2025_MD-A.pdf` p.18 prints
+  Loulo-Gounkoto cost of sales $5M and depreciation $5M; `Barrick_Q1_2025_Mine_Stats.xlsx` `Minestats3!B32:B34`
+  print sustaining capital 10, projects 3, total 14, and `Barrick_Q2_2025_Mine_Stats.xlsx` `Minestats3!B32`, `B74`
+  print 3 and 13 (FACT). The region's per-ounce numerators exceed its members by +10.8 $M AISC in Q1, +2.9 in Q2
+  and +14.0 in H1, each within the member-weighted rounding bound of Loulo-Gounkoto's sustaining capital (B7
+  EVQ-P0-1; INFERENCE, not re-run). No page states that the per-ounce rows include a site whose $M rows and
+  ounces are shown as nil, so the item is explained by reconstruction, with the rule unstated.
+- **E817** Cost-of-sales per ounce has a one-cell numerator, so it fails or passes on any rounding construction:
+  `Barrick_Q4_2025_AISC.xlsx` `'Q4 2025'` Kibali (column M) 123 $M at 1,557 $/oz implies 79.0 koz against 78
+  printed, and Hemlo (column H) 44 $M at 1,738 $/oz implies 25.3 koz against 27 (FACT; both outside their
+  half-unit intervals). B7 classes 35 of 46 out-of-interval per-ounce quantities as explained and 11 as having no
+  public closure (Veladero ×6, Hemlo ×2, Latin America & Asia Pacific 2023 ×3; EVQ-P0-1; INFERENCE, not re-run).
+- **E818** Loulo-Gounkoto: `Barrick_Q2_2025_MD-A.pdf` p.56 note j and `Barrick_Q3_2025_MD-A.pdf` p.55 both date
+  the loss of control June 16, 2025, against September 16 in the Q3 2025 workbook footnotes (W1-DR-03); and
+  `Barrick_Q1_2026_MD-A.pdf` p.42 states that "no operating data or per ounce data was provided for Q1 2025 to Q3
+  2025" (FACT). The filed date resolves W1-DR-03, and the later filing supports NOT_PUBLISHED for those quarters
+  while the Q1 2025 workbook's production cells stay a register item.
+- **E819** `Barrick_Q2_2026_AISC.xlsx` `'Q2 2026'` North Mara (column M): cost of sales 117, TCC 78, AISC 93,
+  ounces sold 37 koz attributable, and per-ounce rates COS 2,736, TCC 2,164, AISC 2,577 (FACT). The TCC and AISC
+  rates imply 36.0 and 36.1 koz against 37 printed (FACT, arithmetic) but stay inside their component-sum intervals,
+  so only the one-cell cost-of-sales test decides: with the 84% attributable share applied to cost of sales, it
+  implies 35.8–36.1 koz, outside 37 ± 0.5 (INFERENCE, the share is assumed; B7 by_cc D2 and EV2-P1-4 agree). B7's
+  pilot had classed this column explained and withdrew that, so its count becomes 34 of 46 explained and 12 without
+  public closure (not re-run). The signature matches Veladero (E691): all three rates point to one ounce figure
+  about 1 koz below the printed one.

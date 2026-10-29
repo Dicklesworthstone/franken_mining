@@ -1,0 +1,281 @@
+[RCH] local (speed gate: measuring this build locally)
+   Compiling fmine-core v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-core)
+   Compiling xtask v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/xtask)
+   Compiling fmine-evidence v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-evidence)
+   Compiling fmine-array v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-array)
+   Compiling fmine-time v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-time)
+   Compiling fmine-units v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-units)
+   Compiling fmine-numerics v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-numerics)
+   Compiling fmine-claim v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-claim)
+   Compiling fmine-io v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-io)
+   Compiling fmine-registry v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-registry)
+   Compiling fmine-metrics v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-metrics)
+   Compiling fmine-calib v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-calib)
+   Compiling fmine-public v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-public)
+   Compiling fmine-crs v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-crs)
+   Compiling fmine-decide v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-decide)
+   Compiling fmine-cli v0.1.0 (/Users/jemanuel/projects/franken_mining/crates/fmine-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.96s
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-array/e0cf7b4b062eebae/out/fmine_array-e0cf7b4b062eebae)
+
+running 2 tests
+test tests::test_fmt_col_1_alignment_and_zero_alloc_compositing ... ok
+test tests::test_grid2d_and_grid3d_bijective_indexing ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-calib/6e38df1308ca2e68/out/fmine_calib-6e38df1308ca2e68)
+
+running 4 tests
+test tests::test_proper_scoring_rules_crps_and_winkler ... ok
+test tests::test_reference_class_epsilon_contamination_gb32 ... ok
+test tests::test_frozen_forecast_ledger_immutability ... ok
+test tests::test_vecchia_spatial_front_pit_eprocess_gb08 ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-claim/816debf3f427b52b/out/fmine_claim-816debf3f427b52b)
+
+running 4 tests
+test tests::test_support_and_additivity_guards ... ok
+test tests::test_confidentiality_lattice_and_export_guard ... ok
+test tests::test_nl1_to_nl8_non_laundering_composition ... ok
+test tests::test_claim_dag_staleness_propagation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-cli/88afbad20cb2eb45/out/fmine_cli-88afbad20cb2eb45)
+
+running 2 tests
+test tests::test_cli_doctor_and_robot_docs ... ok
+test tests::test_cli_assure_public_barrick_end_to_end ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running unittests src/main.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-cli/251800bd762161a3/out/fmine-251800bd762161a3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-core/2c40b7370c85f0ec/out/fmine_core-2c40b7370c85f0ec)
+
+running 11 tests
+test codec::tests::test_crc32c_iscsi_known_answer ... ok
+test det::tests::test_norm_cdf_and_ppf_roundtrip ... ok
+test codec::tests::test_frame_roundtrip_and_tamper_detection ... ok
+test anchor::tests::test_anchor_v1_and_n_minus_1_roundtrip ... ok
+test hash::tests::test_official_sha256_vectors ... ok
+test id::tests::test_invalid_ids_refused ... ok
+test rand::tests::test_philox4x32_known_answers ... ok
+test rand::tests::test_sobol_owen_stratification ... ok
+test hash::tests::test_official_blake3_vectors ... ok
+test id::tests::test_all_prefixes_roundtrip_and_order ... ok
+test det::tests::test_golden_hash_10k_inputs ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-crs/5a1b16cfd25f3787/out/fmine_crs-5a1b16cfd25f3787)
+
+running 3 tests
+test tests::test_crs_mismatch_refusal_g_crs_1 ... ok
+test tests::test_mine_grid_solver_and_convex_hull_guard_g_crs_2 ... ok
+test tests::test_utm_roundtrip_reko_diq_and_carlin ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-decide/dca2f83511d3e020/out/fmine_decide-dca2f83511d3e020)
+
+running 2 tests
+test tests::test_voi_campaign_ranking_gate_helm_02 ... ok
+test tests::test_decision_card_uu_and_flip_margin_guards ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-evidence/499b4c0a1906c904/out/fmine_evidence-499b4c0a1906c904)
+
+running 3 tests
+test tests::test_knowledge_state_and_color_projection ... ok
+test lattice::tests::test_lattice_laws_commutative_associative_idempotent ... ok
+test tests::test_refusal_catalog_completeness ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-io/f42ef6e3fdf334dc/out/fmine_io-f42ef6e3fdf334dc)
+
+running 2 tests
+test tests::test_html_table_extractor_and_placeholder_typing ... ok
+test tests::test_parse_real_barrick_xlsx_workbooks ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-metrics/80cadfc68e3af29c/out/fmine_metrics-80cadfc68e3af29c)
+
+running 4 tests
+test tests::test_fixed_point_cutoff_grade_solver ... ok
+test lmdi::tests::test_north_mara_2024q1_to_q2_exact_lmdi_e137 ... ok
+test tests::test_aisc_consolidation_bridge_l_corp_refusal_and_reconciliation ... ok
+test tests::test_versioned_geo_and_reserve_replacement_bridge ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-numerics/b99dce55b9d12b52/out/fmine_numerics-b99dce55b9d12b52)
+
+running 6 tests
+test risk::tests::test_cvar_coherent_subadditivity_and_monotonicity ... ok
+test tests::test_brent_root_and_normal_roundtrip ... ok
+test tests::test_cholesky_solve_and_singular_refusal ... ok
+test tropical::tests::test_min_plus_longest_path_duality ... ok
+test voi::tests::test_evpi_non_negative_and_evsi_monotone ... ok
+test eproc::tests::test_ville_inequality_type1_error_bound ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-public/fd0a4ae9d6bcf15b/out/fmine_public-fd0a4ae9d6bcf15b)
+
+running 2 tests
+test tests::test_barrick_m0_assurance_gate_bull_01 ... ok
+test tests::test_load_18_barrick_workbooks_and_cell_claims ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-registry/2b849b6a54867bf6/out/fmine_registry-2b849b6a54867bf6)
+
+running 1 test
+test tests::test_load_and_validate_workspace_registries ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-time/6ceaf915e99b14b9/out/fmine_time-6ceaf915e99b14b9)
+
+running 3 tests
+test tests::test_quad_temporal_assay_lag_guard_g_time_2 ... ok
+test tests::test_site_and_fiscal_calendar_alignment_g_time_1 ... ok
+test tests::test_civil_calendar_roundtrip_1900_to_2200 ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/fmine-units/da8f59a808db3c8c/out/fmine_units-da8f59a808db3c8c)
+
+running 5 tests
+test tests::test_money_pro_rata_conservation ... ok
+test tests::test_hazardous_byproduct_cannot_monetize ... ok
+test tests::test_reko_diq_nitrate_basis_conversion ... ok
+test tests::test_wet_to_dry_and_contained_metal ... ok
+test tests::test_exact_statutory_conversions_10k_roundtrip ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/xtask/71654a663a4f9f2c/out/xtask-71654a663a4f9f2c)
+
+running 5 tests
+test tests::test_seeded_std_transcendental_in_bitwise_portable_fails ... ok
+test tests::test_seeded_open_child_region_fails ... ok
+test tests::test_seeded_bare_f64_quantity_fails ... ok
+test tests::test_seeded_upward_layer_edge_fails ... ok
+test tests::test_workspace_check_all_gate_layers_00_passes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/main.rs (/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T//rch_target_fmine/debug/build/xtask/ef6bfe39124f0c66/out/xtask-ef6bfe39124f0c66)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_array
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_calib
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_claim
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_cli
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_crs
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_decide
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_evidence
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_io
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_metrics
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_numerics
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_public
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_registry
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_time
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fmine_units
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests xtask
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

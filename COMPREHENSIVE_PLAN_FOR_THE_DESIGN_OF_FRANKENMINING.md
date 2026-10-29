@@ -11,9 +11,9 @@
 | Document | `COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` |
 | Version | 0.1, first comprehensive pass. It goes to multi-model refinement rounds next (see §0.6). |
 | Date | 2026-10-28 |
-| Status | PLAN. No FrankenMining code exists. Every capability statement in this document is DESIGN or TARGET unless it is labelled FACT. |
+| Status | PLAN. An M0 scaffold of 15 crates exists in `crates/` (local commit `68e7091`); nothing in it is implemented in the §0.2 sense, and its M0 output is synthetic (Appendix K.2). Every capability statement in this document is DESIGN or TARGET unless it is labelled FACT. |
 | Sibling plans mimicked | `franken_surveillance_system/COMPREHENSIVE_PLAN_FOR_FRANKEN_SURVEILLANCE_SYSTEM.md` (FSS), `franken_accounting/COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENACCOUNTING.md` (FA), `franken_textiles/COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENTEXTILES.md` (FTX) |
-| Process artifacts | `planning/research/R1–R8`, `planning/mor/MOR_CASE.md`, `planning/brenner/B1–B5`, `planning/mor/audits/` (three audit reports), `planning/corpus/C1–C6`, `planning/research/W1–W5` (§0.6) |
+| Process artifacts | `planning/research/R1–R8`, `planning/mor/MOR_CASE.md`, `planning/brenner/B1–B7`, `planning/mor/audits/` (audit reports), `planning/corpus/C1–C6`, `planning/research/W1–W5`, `planning/mor/r7/` (round-7 audited review), `planning/duel/` (idea duel) (§0.6, Appendix K) |
 
 ---
 
@@ -185,6 +185,12 @@ The process is recorded so that refinement rounds can audit it. It is not a deli
    (W2), data-residency statutes in 12 countries (W3), the M2 site and the data-access probability (W4), and 72 of
    the plan's industry figures (W5). Crate naming and the asupersync 0.6 question were checked directly. Findings
    are folded into the body (Appendix J).
+8. **Round 7 (2026-10-29): audited review, assurance-chain pass and idea duel.** A modes-of-reasoning run with
+   six reasoning passes and eight independent auditors checked the plan and the first M0 code (171 claims;
+   `planning/mor/r7/`). Brenner pass B7 ran on a live NTM squad (Claude, two Codex, Gemini) to test the assurance
+   chain against the real workbooks and the obligations of QPs, CFOs and IR (`planning/brenner/B7_*`). A
+   three-model idea duel (Claude, Codex, Gemini) generated, cross-scored and defended 45 ideas
+   (`planning/duel/`). The corrections, the new capabilities and the new beads are in Appendix K.
 
 Refinement rounds by other models SHOULD use the planning-workflow review prompt against this file. Changes SHOULD
 cite the § and ID they modify.
@@ -321,6 +327,8 @@ testable:
 | Counsel | "What does this create that is discoverable, and does it ever make a disclosure claim?" | §24, §31 |
 | IT/OT security | "What leaves our network, what runs where, and can it ever command equipment?" | §31 |
 | JV partners | "What do I see, and can I verify it without seeing my partner's private data?" | §31.2, FA `.fab` bundles |
+| Investor relations and the disclosure committee | "Which of our published figures does an outside system find inconsistent, with what citation, and can we see it before anyone else does?" | M0 discrepancy register (§37.3), worded as unexplained differences between cited cells; disclosure sequencing (§31.1, K.3) |
+| Compensation (remuneration) committee | "Are the scorecard metrics we pay on measured the same way every year, at the price deck and basis we fixed?" | Bullion metric definitions and the reserve-replacement and GEO bridges (§21.6), each with its filed page (K.3) |
 | AI agents (internal or third-party) | "Give me certified, cited numbers, or a typed refusal I can act on." | Agent surface (§30) |
 
 ## 4. Goals, non-goals and anti-goals
@@ -386,9 +394,13 @@ testable:
 Each scenario is an acceptance narrative. The milestone in brackets is where it first becomes demonstrable.
 
 - **NS-01 AISC waterfall [M0/M2].** Before: the CFO asks why gold AISC moved between periods, and FP&A returns a
-  narrative citing "lower grades, fuel, royalties" three days later. After: a certified causal waterfall (grade,
-  recovery, tonnes, price-linked royalty, fuel, FX, sustaining capex). Each bar cites its evidence, and the whole
-  waterfall replays offline.
+  narrative citing "lower grades, fuel, royalties" three days later. After: a certified waterfall (grade,
+  recovery, tonnes, price-linked royalty, fuel, FX, sustaining capex), descriptive on public data and causal only
+  once the site's metallurgical balance is in (M2; §21.6). Each bar cites its evidence, and the whole
+  waterfall replays offline. At M0, public data support only these bars for gold sites: tonnes, grade, recovery,
+  the sold/produced ratio, royalties per ounce and the AISC-workbook components (cost of sales, depreciation,
+  by-product credits, NCI, G&A, minesite exploration, sustaining capex and leases, rehabilitation accretion), with
+  no residual plug. Fuel, FX and labour bars need site data and arrive at M2 (R7-C044, Appendix K.3).
 - **NS-02 Reserve-replacement bridge [M0/M3].** Before: different reserve-replacement percentages sit in
   different documents. After: one page renders reserve replacement under each named basis from one cited
   roll-forward.
@@ -931,7 +943,8 @@ pub enum Monitor {
 - **Why `Coverage` and `SpatialFrontPit` are paired (DESIGN).**
   - `Coverage` scores monthly reconciled domain totals, the conditionally independent support (assumption A8:
     within-month spatial correlation voids the martingale argument at finer support). It binarizes each month, so
-    it is slow: 3–5 years to alarm when 80% coverage slips to about 58% (GB-08).
+    it is slow: when 80% coverage slips to about 58%, the median time to alarm is about 2 years (26 months), and
+    about 1 run in 6–7 takes more than 5 years (exact first passage of the e ≥ 20 mixture; R7-C124, GB-08).
   - `SpatialFrontPit` scores each blast polygon or stope ring k = 1, 2, … in `availability_time` order. Its null
     is stronger: the registered joint model (the Strata ensemble, or its Vecchia approximation on m nearest
     predecessors) is the true joint law of the polygon outcomes. Under that null the sequential probability
@@ -948,8 +961,8 @@ pub enum Monitor {
   - Simulated detection at α = 0.05 with aGRAPA stakes on both scores (INFERENCE from simulation; HYPOTHESIS for
     any real pit): median 22 polygons when 80% coverage falls to 58% through a location shift, 36 through a
     dispersion shift (σ × 1.59), 50 for a 0.5σ bias and about 220 for a 1.4× variance excess. The false-alarm rate
-    over 600 null polygons was 3.8%. At 10 polygons a month the first three alarm in 2–5 months, against 3–5 years
-    for `Coverage`.
+    over 600 null polygons was 3.8%. At 10 polygons a month the first three alarm in 2–5 months, against a median
+    of about 2 years for `Coverage`.
   - An alarm says the joint model is wrong somewhere (mean, variance or covariance). The InvestigationCase (§10.5)
     attributes it, and `Coverage` stays the test of the published 80% intervals.
 
@@ -1016,14 +1029,14 @@ InvestigationOpen ──► { HypothesisAdded(debit h₀, reset floor)
 |---|---|
 | GATE-PLUMB-E1 | No-laundering proptests 100% |
 | GATE-PLUMB-E2 | 100% of resolvable decision claims registered before resolution; as-of replay bit-identical |
-| GATE-PLUMB-E3 | Misspecified synthetic mine (out-of-model fault; biased capex process): the layered stack restores 80% coverage to ±5 points within 12 resolutions after an alarm, while a single global posterior documentably fails |
+| GATE-PLUMB-E3 | Misspecified synthetic mine (out-of-model fault; biased capex process): the layered stack restores 80% coverage to ±5 points within 12 resolutions after an alarm, pooled over R ≥ 50 replicate worlds (P(pass ∣ true 0.8) ≈ 0.998, P(pass ∣ 0.7) ≈ 0.004; a single 12-resolution run passes a calibrated stack only 52% of the time, R7-C120), while a single global posterior documentably fails |
 | GATE-PLUMB-E4 | Zero ε without a `RefClass`; zero unverified reference classes on disclosure-facing claims |
-| GATE-PLUMB-E5 | Correctly specified control mine: false alarms ≤ α; sharpness loss < 10% |
+| GATE-PLUMB-E5 | Correctly specified control mine: one-sided 95% Clopper–Pearson upper bound on the false-alarm rate ≤ α over N ≥ 1,000 null runs (at the simulated 3.8%, N = 600 gives 0.054 and fails; R7-C122); sharpness loss < 10% |
 
 | Kill | Trigger | Fallback |
 |---|---|---|
 | KILL-PLUMB-5 | Executive user test rejects the epistemic map | Three-field card: range · evidence class · flip margin |
-| KILL-PLUMB-6 | Monitors raise more than 1 false alarm per site per quarter in the control | Re-specify the support; CUSUM-only for fast shifts |
+| KILL-PLUMB-6 | Monitors raise more than 1 false alarm per site per quarter in the control. Each CUSUM stream is tuned to ARL₀ ≥ 85·M polygons (M = streams per site), so the expected rate is ≤ 0.36 per quarter and the kill fires by chance in ≤ 5% of quarters; at an expected rate of exactly 1 it would fire in 26% (R7-C122) | Re-specify the support; CUSUM-only for fast shifts |
 
 ---
 
@@ -3241,7 +3254,7 @@ forecast comparison runs.
 | Gate / kill | Threshold (TARGET) | Fallback |
 |---|---|---|
 | GATE-CRUC-01 | Pilot plant: 12 months of monthly metallurgical balances reproduced from raw measurements with reconciled values within stated precision; gross-error detection live | Secondary accounting only; flag |
-| GATE-CRUC-02 | Registered monthly recovery and throughput forecasts for 12 months; 80% interval coverage in [0.70, 0.90] | Cards stay `Estimated`; planning uses reference-class widening |
+| GATE-CRUC-02 | Registered monthly recovery and throughput forecasts for 12 months; 80% interval coverage in [0.70, 0.90], pooled over both quantities (n = 24: P(pass ∣ 0.8) ≈ 0.80, P(pass ∣ 0.6) ≈ 0.19 before autocorrelation; 12 outcomes alone pass a calibrated forecaster 52% of the time, R7-C120). The twelfth outcome resolves 12 months after plant data first flows (GATE-DATA-03) | Cards stay `Estimated`; planning uses reference-class widening |
 | GATE-CRUC-03 | Heap inventory posterior (where a heap exists) narrows as leach-curve data accrue, and P(inventory < book) is reported monthly to Bullion. Known answer: the Veladero 2013–2017 roll-forward reproduces the published leach-pad inventory to ±1 oz (E275) | Point inventory with a documented NRV sensitivity |
 | ✖ KILL-CRUC-1 | Plant historian or lab data not accessible by month 9 of a site engagement (§34.4) | Crucible limited to the monthly metallurgical report as an attested observation |
 
@@ -4431,11 +4444,13 @@ FrankenMining owns all 17 parts. Phases refer to §37.
      adjustment basis not located (FACT, R6 §1.5);
    - attributable vs consolidated, through FA party ownership;
    - **aggregation layers:** company AISC = Σ sold-weighted site AISC + L_corp + L_JV. In Barrick's Mine Stats,
-     Total Gold sits $47.6–55.7/oz above its sold-weighted regions in all six periods of 2025–H1 2026, while
+     Total Gold sits $47.6–55.7/oz above its sold-weighted regions in the six blocks Q1, Q2 and H1 2025 and Q1,
+     Q2 and H1 2026 (Q3 2025 is +$88.66; R7-C125), while
      regions reconcile to 0.1% (INFERENCE, E110, E111). Across all sixteen quarters 2023Q1–2026Q2 the layer is
      always positive, from +$23.57 to +$88.66/oz, and it roughly doubled from 2024 to 2025–26; the AISC workbooks
-     carry G&A as a separate component, where most of it is expected to sit (INFERENCE, E496; W1 §11, §12); NGM sits $8.7–19.4/oz above its four mines (INFERENCE,
-     E112). Each layer is named and cites the Quarter Report reconciliation (E107).
+     carry G&A only in their total column: the row is zero for every site and region on all 40 sheets (FACT,
+     E697), so corporate G&A sits wholly in L_corp (E496; W1 §11, §12); NGM sits $8.7–19.4/oz above its four
+     mines (INFERENCE, E112). Each layer is named and cites the Quarter Report reconciliation (E107).
 
    **A reported gap that cannot be decomposed into named layers is a refusal** (G-BULL-3), not a footnote.
 
@@ -4457,7 +4472,7 @@ FrankenMining owns all 17 parts. Phases refer to §37.
 Plan cost = Σ driver quantities × rates. Price-linked lines (royalties, profit-sharing, by-product credits) are
 functions of the *same* price draw as revenue (§23.4).
 
-**The causal waterfall, decomposed exactly and order-independently (DESIGN).**
+**The variance waterfall, decomposed exactly and order-independently (DESIGN).**
 - The bridge components are volume (tonnes), grade, recovery, unit rates by cost line, price-linked items,
   by-product price, classification and FX.
 - A sequential decomposition ("change grade first, then recovery…") is **order-dependent**: the same grade change
@@ -4471,6 +4486,19 @@ functions of the *same* price draw as revenue (§23.4).
 - Additive cost lines are split within the cost effect pro rata.
 - **PO-PUSH-10: the bridge sums exactly** to the total variance, to the cent.
 - The waterfall's residuals feed the calibration ledger: the plan was a registered forecast (§10).
+- **On public data the waterfall is a descriptive accounting bridge, not a causal one (B7; E699).**
+  - LMDI needs every factor finite and positive. Heap-leach sites publish no recovery (Veladero, Zaldívar) and
+    some factors are zero or negative, so 26 of 127 gold site-quarter year-on-year pairs cannot be factored. They
+    fall back to a signed additive split of the $M numerator lines, labelled as such, never to a forced factor.
+    By-product credits are zero or positive in 124 of 519 AISC columns, so a credit-value effect is not a price
+    effect.
+  - Every bar carries the interval implied by the half-unit rounding of its inputs. A bar whose interval contains
+    zero prints *sign not determined* (72 of 606 factor effects on the public tables).
+  - Closure is arithmetic, not attribution: a +10% error in North Mara's 2026 grade moves about $177/oz from grade
+    into B while the bridge still sums exactly, so PO-PUSH-10 holds either way. Causal labels wait for M2 and the
+    metallurgical balance (GATE-DATA-03; §20).
+  - The bridge closes on the recomputed rate 1,000 × Δ($M / koz). The gap to the printed rate is a listed rounding
+    or denominator item (E691, E695), never absorbed into a bar.
 
 **Other metrics.**
 - **Copper C1 cash cost** per lb (by-product credits netted).
@@ -4480,20 +4508,52 @@ functions of the *same* price draw as revenue (§23.4).
 - **Newmont CSC/GEO** (adjusted cash sustaining cost per GEO, 35% of its bonus; FACT, R6 §2.5).
 - **Reserve replacement under one registered definition.**
   - Barrick's FY2025 release and its 2026 Circular give three-year (2023–25) reserve replacement as "close to 190%"
-    in gold ounces and as 504% in gold-equivalent ounces (87 Moz ÷ 17.2 Moz), both excluding acquisitions and
+    in gold ounces and as 504% in gold-equivalent ounces (the published figure; 87 Moz ÷ 17.2 Moz on the rounded
+    inputs gives 506%, 499–514% under rounding; R7-C029), both excluding acquisitions and
     divestments (FACT, E603, E604): the bases differ by metal coverage, not by window.
   - The engine computes every basis and names each.
   - A KPI constraint uses only a reconciled definition (§23.6).
 - **ROCE** on the stated capital-employed basis.
 
 **The public lane (M0; §31.1, B5).** `fmine assure public --issuer barrick` reproduces published metrics from public
-filings (EDGAR/SEDAR+, XBRL where present) and the issuer's quarterly Mine Stats workbooks:
-- TARGET: ≥ 95% of site-quarter values reproduced to published rounding, the remainder explained or refused;
-- byte-identical reruns;
-- zero uncited numbers.
+filings (EDGAR/SEDAR+, XBRL where present) and the issuer's quarterly Mine Stats and AISC workbooks:
+- TARGET: GATE-BULL-01's three parts (below; §21.8): extraction fidelity, identity accounting with every
+  instance in one of five cited states, and issuer consistency reported per identity family;
+- every scored value passes the live-dependency proof: deleting or blanking any registered file refuses with a
+  non-zero exit, and perturbing any cited cell by one unit in its last place moves the value and the state root
+  (BD-338; it would have caught every stand-in in K.2 finding 1);
+- byte-identical reruns, with a state root that commits to the input manifest and to every scored value, so any
+  byte change in any input changes the root (R7-C065);
+- zero uncited numbers: each extracted number carries its locator and file sha256; each derived number carries its
+  rule (`rules_version`, G-BULL-6) and its input locators; each company-level figure cites the filed page that
+  states it and reproduces that page's label (period or window, basis, metal coverage, denominator, ownership
+  basis). A matching value under a different label fails (R7-C038, R7-C131);
+- registered inputs only: a pinned source registry lists each workbook with its issuer URL, retrieval time and
+  sha256 (equal to W1's). An absent, unreadable or mismatched file is a typed refusal that names the file. No
+  in-code workbook ever stands in for a registered one; synthetic fixtures print `synthetic` in every output and
+  never count toward a gate (R7-C034, R7-C037; Appendix K.2).
 
-The FY2026 per-site forecasts are hashed and timestamped before the February 2027 release, then scored whatever
-they show.
+**The FY2026 forecast record (R7-C042, R7-C066, R7-C119, R7-C135, R7-C155; DESIGN).** The FY2026 per-site forecasts
+are a scoreable, externally time-proved record, not a promise:
+- **Information set.** A stated information cut-off and an input manifest (each document, its publication date,
+  its sha256).
+- **Targets and basis.** Per-site production on the 100% basis (Mine Stats column B, E456), with a pre-written
+  rule for re-segmentation, divestment or ownership change; unit costs per ounce sold carry their own basis rule.
+- **Scored quantity and baselines.** The Q4-implied value (FY − published 9M), scored with the interval score
+  against two pre-registered baselines: Barrick's last stated per-site guidance and a run-rate persistence forecast.
+- **Deadline and time proof.** Hashed and pushed to the public repository with an RFC 3161 receipt or a completed
+  OpenTimestamps proof by 31 Dec 2026, before any M0 content reaches an issuer insider, and before any January
+  production release (Barrick issued mid-January Q4 releases for 2020–2024; R7-C154). Caller-supplied timestamps do
+  not count (R7-C061). Forecasts hashed after the 9 Nov 2026 Q3 release are mostly a Q4 nowcast (Q4 was 26.8% of
+  FY2025 attributable production; R7-C026) and are labelled so.
+- **Attestation.** The author attests that no non-public issuer information was used (extends §10.1 `author`);
+  any revision after first issuer contact is flagged `post-contact`.
+- **Further vintages.** Q1 and Q2 2027 vintages follow, each with as-of date and horizon; a vintage hashed after
+  its quarter ends is a nowcast and is scored separately (R7-C119).
+- **What it can show.** Every score report gives n, an n_eff with its assumed correlation range, and the
+  Clopper–Pearson interval. One period × about 14 sites demonstrates the protocol, not skill: separating 80% from
+  60% coverage first needs n ≈ 35 independent outcomes, so no positive calibration claim is made by month 12
+  (R7-C118). A severe miss can still be reported as evidence of miscalibration.
 
 **Public-lane sources and scoring (C1 §4; C3 §3.5).**
 - **Per-site source.** The only per-site AISC/TCC/grade/recovery source in the corpus is Barrick's quarterly Mine
@@ -4518,10 +4578,43 @@ they show.
   footnote (E474; W1 T16).
 - **Denominator.** Numeric site-quarter cells only; `—`, `n/a` and placeholders are excluded and listed.
   Site-quarters that are `NOT_PUBLISHED` are excluded by name (Loulo-Gounkoto Q1–Q3 2025; E122, E248).
-- **"Reproduced"** means the extracted value equals the published cell **and** every applicable identity
-  (attributable = ownership × 100%, Σ components, Q1 + Q2 = H1, sold-weighted roll-up) holds to ±1 unit of the
-  last published digit, or the cell is a discrepancy-register item. A register item with a bridge counts as
-  explained, not reproduced. Barrick's own identities hold in only 84/89 cases (94.4%) under strict rounding (E113–E115).
+- **GATE-BULL-01 in three parts (R7-C040, R7-C111; replaces the single "≥ 95% reproduced" bar).**
+  1. *Extraction fidelity.* 100% of the numeric cells in the named denominator N are extracted equal to the
+     published value, with locators, measured against a reference read independent of the importer (a second
+     reader, or BD-271's hand-checked cells). Reported separately for the ten known files and the blind file; every
+     miss is a listed defect.
+  2. *Identity accounting, in five states (B7; E691–E698, E815–E818).* Every identity instance (attributable =
+     ownership × 100%, Σ components, Q1 + Q2 = H1, sold-weighted roll-up, $M × 1,000 / koz = $/oz for cost of
+     sales, cash costs and AISC) is evaluated on rounding intervals under a construction declared per table family:
+     a subtotal rounded once from unrounded inputs, or a sum of separately rounded component lines. Both are run
+     and the declared one scores; the construction is never chosen per instance to make a check pass. The AISC
+     tables declare the second: 1,207 of 1,212 printed TCC and AISC totals equal the sum of their displayed lines
+     (E815). Cost of sales per ounce has a one-cell numerator, so its failures hold on any construction (E817).
+     Each instance lands in exactly one state:
+     (i) *consistent*;
+     (ii) *explained* by a named layer (L_JV, L_corp, unpublished component such as capitalized interest,
+     region-map boundary, restatement), citing the public pages or cells whose printed numbers close the
+     arithmetic, and marked *stated* where an issuer note gives the rule or *reconstructed* where only the numbers
+     close (E816);
+     (iii) *issuer discrepancy*, with an exact certificate checked in rationals and the inclusion-minimal set of
+     cells involved (BD-340);
+     (iv) *undecidable from public data*, naming the missing fact;
+     (v) *refused*, naming the missing input.
+     Acceptance: 0 unclassified; an independent census assigns the same state to every instance; a second reader
+     confirms each state-(iii) and state-(iv) item. Classification never stands in for part 1: a swapped-value
+     mutation keeps 0 unclassified and 0 uncited rows while fidelity falls to 0 of 2 (E696). Known answers:
+     Veladero Q4 2025, whose three per-ounce rates imply 44 koz against 47 printed (E691); Africa & Middle East
+     Q1 2025, explained by reconstruction from Loulo-Gounkoto's public cells (E694, E816); Kibali Q2 2024, whose
+     printed by-product sign breaks its own column's footing (E815); Kibali and Hemlo Q4 2025 cost of sales per
+     ounce (E817); the first-filed 2024 GEO row (E692); the 2025 deck and MD&A split (E698).
+  3. *Issuer consistency.* Reported per identity family as a finding, with no threshold. Barrick's own identities
+     hold in 84/89 cases (94.4%) under strict rounding (E113–E115).
+  The gate record prints N, the excluded placeholders and NOT_PUBLISHED list, and four counts: cells with a
+  passing identity, cells matched by extraction only, explained register cells and refused cells. An independent
+  census on the same files reproduces the counts. Why the single bar was withdrawn: 41–46% of numeric cells sit in
+  no named identity, so for them "reproduced" is extraction fidelity (R7-C023, R7-C050); a perfect extractor scores
+  90.5–92.4% if a failing identity disqualifies every participating cell and 98.0–99.7% if only the computed cell
+  (R7-C110); and the 84/89 consistency rate it was set against measures a different quantity (R7-C024).
 - **Component split (BD-058, partial).** Mine Stats publish per site CoS, royalties/oz, depreciation/oz, TCC,
   AISC, sustaining and project capex (cash basis), and cost per tonne. They do not publish G&A $/oz, sustaining
   leases, minesite exploration, reclamation accretion or by-product credits, so TCC → AISC is only a residual
@@ -4558,9 +4651,13 @@ When FA's CloseRun lands, these become `CloseTask` vertices with `DEPENDS_ON` ed
     Infeasible.
   - Daily site-family posting fits the writer, at about 29 min/day in year 1.
 - **Human review.**
-  - Daily site-family posting needs 60 independent reviews per book per day. For a site controller with 8 h/month
-    at 10 min/review, ρ_review ≈ 7.5. Infeasible.
-  - Monthly posting needs 12 reviews per site per month: ρ_review ≈ 0.25.
+  - Daily site-family posting needs 4 families × 3 books = 12 reviews per site per day. For a site controller with
+    8 h/month at 10 min/review who reviews only their own site, ρ_review = 12 × 30 × 10 ÷ 480 = 7.5. Infeasible.
+    (Read as 60 reviews per book per day for one reviewer, it is 37.5; R7-C123.)
+  - Monthly posting needs 12 reviews per site per month: ρ_review ≈ 0.25. If each of B4's 16 close steps per site
+    also needs the same controller, ρ = 1.25 (0.42 with one book). G-BULL-2 needs a non-self-sourced document OR a
+    human review, and §21.7 gives each close step its own reviewer, so the card states the review rule per step.
+  - Writer time "≈ 29 min/day in year 1" is the end-of-year rate; the year-1 average is about 12–18 min/day.
 - **Intuition.** The binding server is the human reviewer that FA-INV-12 requires, not FA's writer.
 - **Flip.** FA admits an authenticated delegated reviewer (V19) → daily trunk posting becomes possible.
 
@@ -4587,9 +4684,9 @@ When FA's CloseRun lands, these become `CloseTask` vertices with `DEPENDS_ON` ed
 | Gate | Threshold (TARGET) | When |
 |---|---|---|
 | INT-FA-001 | FA-ACC-01…13 all pass at the pinned FA rev | Before any trunk posting (M3) |
-| ✖ GATE-BULL-01 (public metric reproduction) | ≥ 95% of site-quarter values reproduced to published rounding, on the §21.6 denominator and "reproduced" definition (NOT_PUBLISHED site-quarters excluded by name); reruns byte-identical; zero uncited numbers; FY2026 forecasts hashed before release | M0. Kill if < 80%, or two finance reviewers rate it "nothing new": the public metric engine becomes test fixtures only, and weight shifts to M1 reconciliation and an early M4 (B5) |
-| GATE-BULL-02 | Synthetic FA book reproduces all AISC variants to $0.01/oz; the bridge closes exactly | M1 |
-| GATE-BULL-03 | Site pilot: per-quarter AISC waterfall from tonnes, grade and recovery to unit cost, reconciled to the site's reported figures | M2 |
+| ✖ GATE-BULL-01 (public metric reproduction) | On registered inputs only (§21.6): (1) extraction fidelity 100% of N against an independent reference read; (2) identity accounting with every instance in one of five cited states, confirmed by an independent census (§21.6); (3) issuer consistency reported. Every scored value passes the live-dependency proof (BD-338). Reruns byte-identical with the input manifest in the state root; zero uncited numbers; every company-level figure matches its filed page and label, checked by a person who did not build the output; the FY2026 forecast record hashed with an external time proof (§21.6). The blind-layout clause runs on the Q3 2026 workbook only if the importer's revision was pushed before 06:00 ET on 9 Nov 2026; otherwise on the Q4 2026 workbook at M1 (R7-C041) | M0. Kill if blind-file extraction fidelity is < 80%, or two reviewers from the named pool (§37.3) rate it "nothing new": the public metric engine becomes test fixtures only, and weight shifts to M1 reconciliation and an early M4 (B5) |
+| GATE-BULL-02 | Synthetic FA book reproduces all AISC variants to $0.01/oz; the bridge closes exactly | M3 (WP-13, with INT-FA-001; R7-C091, R7-C105) |
+| GATE-BULL-03 | Site pilot: per-quarter AISC waterfall from tonnes, grade and recovery to unit cost, reconciled to the site's reported figures, in the site's reporting unit ($/lb at Lumwana; Minestats4!D25). Cost-driver bars (fuel, FX, royalty, sustaining capex) count only with GATE-DATA-03's cost-centre extracts; otherwise one aggregate cost effect is shown and labelled as such (R7-C142) | M2 |
 
 ### 21.9 Galaxy-brain cards (illustrative values)
 
@@ -4661,6 +4758,11 @@ patterns.
 - **A card is scoreable.** Its outcome-relevant predictions are registered forecasts (§10). Decisions are audited
   on *process*: was the card complete, built as known at the time, and were the flips stated? Outcomes are scored
   too, but a decision is never judged by its outcome alone, because a good decision can meet bad luck.
+- **A finding is not a decision (B7).** When the supported action is to check or correct a source, the deliverable
+  is an evidence-challenge packet (BD-349): every operand's locator, the owner role, the uses blocked until it
+  closes, and the document that would close it. A DecisionCard needs actions, states and utilities. Public
+  exceptions supply none of them, so a card built from them refuses rather than inventing an NPV, a CVaR or a test
+  likelihood (B7 EV-P2-3, EV-P3-5).
 
 ### 22.2 Schema (DESIGN)
 
@@ -4763,7 +4865,7 @@ pub struct InformationOption { pub action: InfoAction, pub cost: Money, pub dela
 | Gate | Threshold (TARGET) | When |
 |---|---|---|
 | GATE-HELM-01 | Two retrospective cards built as known at the decision date, reviewed by an executive or ex-executive panel; at least one judged decision-changing | M1 (B5 H-e) |
-| GATE-HELM-02 | VOI estimator recovers the closed-form EVSI of GB-29-type discrete problems to within 2·SE across 100 seeds | M1 |
+| GATE-HELM-02 | Monte Carlo VOI estimator recovers the closed-form EVSI of K GB-29-type discrete problems: a χ² test of the K standardised deviations of the 100-seed means at α = 0.01 (no per-seed 2·SE rule: every seed within 2·SE passes an unbiased estimator with probability 0.0095, and the per-problem mean rule passes it with 0.9545^K, R7-C121) | M1 |
 
 ### 22.8 Galaxy-brain card (illustrative values)
 
@@ -4780,7 +4882,9 @@ pub struct InformationOption { pub action: InfoAction, pub cost: Money, pub dela
   through the decisions it can change.
 - **Flips.**
   - Test accuracy below about **73%** → EVSI < $9.8M → build without it.
-  - Prior P(high) ≥ about **0.78** → even a "low" result leaves EV(build) > 0 → **EVSI = 0** → build without it.
+  - Prior P(high) ≥ **34/43 ≈ 0.79** → even a "low" result leaves EV(build) > 0 → **EVSI = 0** → build without
+    it. At 0.78 a "low" result still flips the decision, but EVSI is only about $2.3M, below the $9.8M cost
+    (B7 EV-P2-4).
     The engine reports "no test result changes the choice".
 - **Assumptions.** Two-state recovery (the real card uses the Crucible card's posterior); test errors are
   symmetric and independent of the state.
@@ -5297,6 +5401,11 @@ pub struct CompetentPersonAct {
   components can fail to sum to the deck's own total (C1 DR-13; E133). A secondary "reserve" (Reko Diq's ESIA
   quotes USGS 2011 "estimated reserves"; E310) is stored as `Assertion{source: secondary}`, and G-HALL-1/3 refuse
   any render of it as a reserve.
+- **Issuer reserve rows are imported assertions (B7).** Through M2, public reserve and roll-forward figures are
+  stored as `IssuerReserveRow` (`Assertion{source: issuer}`), with the price deck and the filing vintage as separate
+  keys. They never enter `EstimateStatement`, which needs a snapshot triple and a CP act (G-HALL-3) that no public
+  filing supplies. Where filings disagree, the first-filed row and the later one are both kept (E692: the 2024 GEO
+  net change was printed as 6.7, then as 79), and a deck row is a cross-check, never the source (E698).
 - **Imported column semantics are asserted, not read from headers.** Kibali's "Contained Gold" column holds
   recovered ounces (FACT, E240). Every imported column carries an asserted basis (contained or recovered; 100% or
   attributable) checked by an identity test (§32).
@@ -5402,7 +5511,7 @@ attributable column at 61.5%, which catches its internal errors (E153, E193).
 
 | Gate | Threshold (TARGET) | When |
 |---|---|---|
-| GATE-HALL-01 | Public lane: a published reserve reconciliation (Barrick or Newmont) reproduced from filings, with every unexplained difference listed. First fixture: Barrick's 2019–2025 roll-forward; the engine flags the printed 2025 copper net-change sign (closure gap 263 Mlb; E144) and the 2024 GEO row's price-basis mismatch (E147) as discrepancy items with closure arithmetic, never silently corrected | M0–M1 |
+| GATE-HALL-01 | Public lane: a published reserve reconciliation (Barrick or Newmont) reproduced from filings, with every unexplained difference listed. First fixture: Barrick's filed 2019–2025 roll-forward (Q4 2024 MD&A p.77; Q4 2025 MD&A p.71), with the Fourmile deck p.14 as a cross-check that differs by 0.1 Moz on 2025 depletion and net change (E698); the engine flags the printed 2025 copper net-change sign (closure gap 263 Mlb; E144), the 2024 GEO row's price-basis mismatch (E147) and the first-filed 2024 GEO net change of 6.7 against a total that implies 79 (E692) as discrepancy items with closure arithmetic, never silently corrected | M0–M1 |
 | ✖ GATE-HALL-02 | Independent QP replay from the snapshot triple in ≤ 1 day (= GATE-STRATA-G5) | S+12 (month 24). Kill: revert to the declared-estimator authority, with the belief ledger as advisory. |
 | GATE-HALL-03 | The data-verification index accepted by a pilot QP as usable for a technical report | M3 |
 
@@ -6110,7 +6219,7 @@ Philox and e-processes are already written, tested and contracted upstream.
 | Repo | Crates | Pin | Posture | Use |
 |---|---|---|---|---|
 | frankenscipy | `fsci-linalg`, `fsci-sparse`, `fsci-opt`, `fsci-stats`, `fsci-spatial`, `fsci-interpolate`, `fsci-integrate`, `fsci-signal`, `fsci-fft`, `fsci-special`, `fsci-ndimage` | crates.io `=0.4.0`, default features off | Consume | Distributions, KDTree, NLLS, ODEs (leach/flotation/CIL kinetics), signal processing (vibration), root finding (IRR), Sobol/LHS sampling, small QPs |
-| frankenpandas | `fp-frame`, `fp-columnar`, `fp-types`, `fp-index`, `fp-join`; **not `fp-io`** (arrow/parquet, OPEN-SUITE-4 closed) | git `37bb94101` (or crates.io `0.6.0` if published), `default-features = false` (no `sql-sqlite`, no hdf5) | Consume | Telemetry rolling/resample/`merge_asof`, grade bins (`cut`/`qcut`), report tables. **Not** money (no decimal dtype) and **not** interval algebra (linear-scan `IntervalIndex`). |
+| frankenpandas | `fp-frame`, `fp-columnar`, `fp-types`, `fp-index`, `fp-join`; **not `fp-io`** (arrow/parquet, OPEN-SUITE-4 closed) | git `37bb94101`, `default-features = false` (no `sql-sqlite`, no hdf5). crates.io `fp-frame 0.6.0` exists but predates the pin by 68 commits and about 7,300 changed lines in the consumed crates, so it is not an alternative (R7-C165) | Consume | Telemetry rolling/resample/`merge_asof`, grade bins (`cut`/`qcut`), report tables. **Not** money (no decimal dtype) and **not** interval algebra (linear-scan `IntervalIndex`). |
 | franken_numpy | `fnp-random`, `fnp-io` | git `d32c4e04`; never `fnp-python` | Oracle (`fnp-random`); consume (`fnp-io` for `.npy`/`.npz` interchange) | RNG known-answer cross-checks; array interchange with Python users |
 | frankenjax | `fj-core`, `fj-lax`, `fj-ad` | git `fa93fb77`. Not `fj-api`, `fj-dispatch` or `fj-interpreters`, which depend on `fj-ffi` unconditionally; no `fj-backend-gpu` | Consume | Gradients and Hessian-vector products for NUTS (`fmine-infer`), and sensitivities |
 | frankensympy | `fsym-core`, `-calculus`, `-matrices`, `-solvers`, `-simplify`, `-printing` | `9d785d0`, vendored or per-crate git | **Oracle / build-time only**, inside `fmine-derive` | Golden formulas (two-product balances, Lane's cut-offs, fiscal terms), symbolic Jacobians for tests, LaTeX for reports. Never on a runtime path until an fsym compatibility profile is certified. |
@@ -6175,7 +6284,7 @@ writers poorly (HYPOTHESIS; unbenchmarked). FrankenMining's facts are spatial an
 |---|---|---|---|
 | asupersync | **`0.5.0`**: asupersync rev `78b64636e` (tag v0.5.0, the revision fgdb and FA pin; fgdb itself at FA's pin `b323bd17`), plus a `[patch.crates-io]` that keeps one `Cx` type | `fmine-runtime` and above; K crates see only `Cx<cap::None>`, `Budget` and `checkpoint` | INT-AS-001, INT-AS-SEC-001 (§31.4), GATE-PIN-06 |
 | `franken-evidence`, `franken-decision`, `franken-kernel` (asupersync workspace) | Same asupersync revision | **`fmine-decide` only** (L-4) | Part of INT-AS-001. The APIs exist at v0.5.0 (`EvidenceLedger`, `LossMatrix`, `DecisionContract`, `DecisionAuditEntry`, `render`; OPEN-SUITE-1 closed). They depend on serde, so they never enter S0: `fmine-evidence` (S0) owns schema-compatible types, and `fmine-decide` is the single round-trip-tested converter and renderer. |
-| fastmcp | `=0.13.0` (every release from 0.11.0 pins asupersync `=0.5.0`; release 0.5.0 would bring a second asupersync, 0.4.5; toolchain `nightly-2026-08-25`, drift recorded) | `fmine-mcp` only | INT-FMCP-001 (parity gate) |
+| fastmcp (crates.io package `fastmcp-rust`; the crates.io name `fastmcp` is an unrelated project, R7-C163) | `=0.13.0` (every release from 0.11.0 pins asupersync `=0.5.0`; release 0.5.0 would bring a second asupersync, 0.4.5; toolchain `nightly-2026-08-25`, drift recorded) | `fmine-mcp` only | INT-FMCP-001 (parity gate) |
 | frankentui (ftui) | `=0.9.0` (0.8.0 and later pin asupersync `=0.5.0`; 0.7.x would bring 0.4.9), asupersync lane | `fmine-tui` only | INT-FTUI-001 |
 | franken_markdown | library, pinned | `fmine-report` only | INT-FMD-001 (deterministic by digest) |
 | frankenmermaid | default features only (its optional HiGHS backend needs C++/CMake) | `fmine-report` only | INT-FMERM-001 |
@@ -6346,7 +6455,14 @@ are Rust LOC in thousands, including tests. They are TARGETs, and each ceiling i
   the subsystems Part III specified (Lodestar, Headframe, Crucible, Freeboard, Muster, Helm, the public lane and
   the viewer).
 - **Reading the numbers.** 1.13M LOC is a ceiling-governed *envelope*, not a promise. The phase-A demonstrator
-  is the only commitment, and §37's program gate at month 12 decides whether phases B and C are funded.
+  is the only commitment, and §37's program gate at month 12 decides whether phases B and C are funded. LOC
+  figures are scope caps, never effort or schedule estimates.
+- **Velocity reference class (R7-C112, R7-C113, R7-C115).** Across 25 FrankenSuite siblings, lifetime non-blank Rust
+  LOC per calendar day (tests included, as `xtask loc` counts) is min 1,106, Q1 ≈ 1,900, median ≈ 3,540, Q3 ≈
+  9,000–11,200 and max 38,541. The plan implies ≈ 1,030–1,070 per day (390k in 12 months). Code volume is
+  therefore unlikely to bind M0–M2 dates; data gates, reviewers and site access are (FORECAST, unscored; scored
+  over the first 60 days as LOC per day against days blocked on a human or external gate). If code runs near
+  sibling rates, the §28.4 80/100/115% triggers fire within months, which is their purpose.
 
 ### 28.4 Budget-overrun protocol (FTX lesson)
 
@@ -6587,6 +6703,13 @@ world.**
 
 `1` is never emitted, so a generic crash can never be mistaken for a typed outcome.
 
+**Refusal family → exit code (R7-C092, R7-C100).** 1xx domain law → 3; 2xx evidence (insufficient, conflicted, stale,
+uncalibrated) → 3; 3xx authorization and walls → 7; 4xx safety-semantic → 7; 5xx anchor and artifact integrity →
+8 for a digest or signature mismatch and 6 for a stale anchor. Usage errors (unknown issuer, malformed id) are exit
+2 with no refusal code. A missing or unreadable registered input is a typed refusal that names the file, never a
+digest-mismatch code. `registries/refusals.toml` is the single source: the compiled catalogue is generated from it,
+and a CI check compares code, meaning and exit code in both directions with §8.4, §25.6 and §31.3.
+
 ### 30.2 The verb registry, CLI, doctor and repair
 
 - **One registry, many projections.** `registries/verbs.toml` defines every verb:
@@ -6720,8 +6843,19 @@ expansion, physically separate projections where caveat compilation is not yet l
   - `fmine assure public` (M0) uses only public filings and issuer-website workbooks. A website workbook has no
     filing accession, so its registry entry holds the file's sha256 and the filed report page that reconciles it
     (§21.6; E107).
-  - No public-lane author holds private access.
-  - Public-lane forecasts are hashed and timestamped *before* the issuer's release (§10, §37).
+  - No public-lane author holds private access. *Private access* means being on an issuer insider list, being a
+    party to a data agreement with the issuer, or having received non-public issuer information (R7-C136, R7-C137).
+  - At GATE-DATA-01 the issuer's public lane is frozen at its last registered state. It is then either retired for
+    that issuer or authored only by a walled author set with signed no-access attestations. AI agents cannot sign
+    and a one-owner team may have no eligible author, so retirement is the default. M2′ public-lane content is
+    then limited to reproducing already-published values and scoring the pre-registered FY2026 forecasts unless
+    counsel clears more; BET-02's scored quarters come from the in-tenancy forward quarters plus FY2026.
+  - Public-lane forecasts are hashed, pushed and externally time-stamped *before* the issuer's release and before
+    any issuer insider sees M0 content (§10, §21.6, §37).
+  - Issuer data terms (RISK-31): until the owner and counsel decide, the repository holds only locators
+    (`file:Sheet!Cell`), source URLs, sha256 and computed check results. Fixtures that need values are synthetic and
+    labelled, or fetched at test time from the pinned URL. Barrick's site terms allow copying for non-commercial,
+    personal or educational use of unmodified material and otherwise need approval (R7-C052, R7-C158, R7-C160).
   - Internal sensitivity content never reaches a public renderer (G-HALL-5).
 
 ### 31.2 Venture walls, residency and personal data
@@ -7093,6 +7227,17 @@ It is std-only, small (budget 12k) and has its own conformance fixtures.
 | INT-FSIM-001 | frankensim | Separate-clone spike; one-package-id result recorded (expected FAIL today) | §27.1 |
 | INT-NUM-001 | frankenscipy, frankenpandas (not `fp-io`), franken_numpy (`fnp-io`), frankenjax (`fj-core`, `fj-lax`, `fj-ad`) | Closures pass L-5 and the one-package-id rule; default features off; oracle parity on every consumed kernel; cross-ISA determinism scope recorded | §27.3 |
 
+**What makes an admission record valid (R7-C017, R7-C083, R7-C101, R7-C153).** An INT-* record is valid only if it
+cites a
+commit in which `Cargo.lock` is tracked and contains the foundation, with the cargo-deny and one-package-id output
+for that lock committed beside it (CI run ids alone expire after the retention period). A record written before
+the foundation is in the graph is a pre-admission desk check and says `NOT_APPLICABLE` or `PENDING`, never PASS.
+INT-AS-001 is split: **INT-AS-001a** (closure checks: one package id, criterion 9, `[patch.crates-io]` single
+`Cx`) stays in WP-00 and reads `NOT_APPLICABLE` while asupersync is absent; **INT-AS-001b** (criteria 1–8) runs
+in WP-05 at M1 and depends on the residency planner (BD-107), a wall-test bead and a named criterion-8 bead
+(BD-337). INT-NUM-001 likewise records the FD-row fallback (own kernels in `fmine-numerics`) until a foundation
+crate enters the closure.
+
 **INT-AS-001 criteria (inlined from FSS-DD §2.9).** Integration is admitted only when:
 1. the same end-to-end scenario passes under production and lab time;
 2. no owned work survives region close;
@@ -7153,9 +7298,9 @@ that keeps delivering value without data (B5 M2′).
 
 | Gate | Threshold | Deadline | Fallback if missed |
 |---|---|---|---|
-| GATE-DATA-01 Agreement | Signed data agreement, named data steward and site sponsor, insider list and blackout policy in force | Month 4 | Escalate once through the executive sponsor, then M2′ planning |
+| GATE-DATA-01 Agreement | Signed data agreement, named data steward and site sponsor, insider list and blackout policy in force; the issuer's public lane frozen and its state change recorded in BD-200 (§31.1; R7-C137); README's "not affiliated" wording updated | Month 4 | Escalate once through the executive sponsor, then M2′ planning |
 | GATE-DATA-02 Security | IT security review passed for the on-prem binary (SBOM, threat model, no egress) | Month 5 (GATE-SEC-01) | Offer the review pack to a delivery partner (F15) |
-| GATE-DATA-03 First snapshot | 8–12 historical quarters of reconciliation inputs (block and GC models, dispatch tonnages, surveys, mill sampler, metallurgical balance, cost-centre extracts) imported with explained rejections (GATE-PORT-02) | **Month 7** | **M2′:** parent-level metric and reserve assurance on public data, the Nevada exploration hindcast and PQ-7 deal cards |
+| GATE-DATA-03 First snapshot | Grade-led threshold: 8–12 historical quarters of reconciliation inputs (block and GC models, dispatch tonnages, surveys, mill sampler, metallurgical balance, cost-centre extracts) imported with explained rejections (GATE-PORT-02). Recovery-led threshold (Lumwana): the §37.3 recovery set imported with explained rejections; either threshold meets the gate (R7-C084, R7-C102) | **Month 7** | **M2′:** parent-level metric and reserve assurance on public data, the Nevada exploration hindcast and PQ-7 deal cards |
 | GATE-DATA-04 Operations data | FMS cycle export (KILL-HEAD-1) and plant historian/LIMS export (KILL-CRUC-1) | Month 9 of a site engagement | Headframe and Crucible limited to survey epochs, monthly reports and certified activity drivers |
 | GATE-DATA-05 Personal data | Privacy impact assessment and works-council review completed before person-level ingest (GATE-MUST-03) | Before Muster at any site | Aggregate-only workforce analytics |
 | GATE-DATA-06 Exploration effort | Effort data (drilling, geophysics, geochemistry coverage) with licence for one public district (OPEN-LODE-1) | Month 15 (M4) | Tract-mode exploration with Manski bounds (KILL-LODE-2) |
@@ -7173,7 +7318,9 @@ about 0.15–0.2, Kibali about 0.1–0.15, NGM and Pueblo Viejo below 0.1.
 
 The wedge choice is unchanged: it is the only option that is useful at p = 0 and decisive at p = 1, and at p = 0.3
 H-f's EV is 4.7 against 2.3 for the next options (GB-38, §37.2). What changes is planning weight: **M2′ is the modal
-path (≈ 0.7) and is resourced from M1**, not held in reserve. p moves only on observable signals (W4 §6.5): a named
+path (≈ 0.7 with Lumwana alone; ≈ 0.5 if the alternates are pursued in parallel and independently, which they are
+not, because they share the executive sponsor and Barrick's corporate security review; R7-C126) and is resourced from
+M1**, not held in reserve. p moves only on observable signals (W4 §6.5): a named
 Lumwana site sponsor by month 2 (×2 odds), a security questionnaire issued within 30 days (×1.5), or one sample
 month of the reconciliation pack by month 4 (×3) raise it; no site sponsor by month 3 (×0.5) lowers it; no draft
 agreement at GATE-DATA-01 sets p ≤ 0.1 and triggers M2′.
@@ -7200,7 +7347,7 @@ visible by about month 6 and a countermeasure already designed into this plan.
 | F4 | **QPs refused, and legal agreed.** Probabilistic metrics read as automation of judgment and as discoverable contradictions. | QP declines attestations; legal asks to remove intervals | Never classify; the CP act makes the QP the author; `no_claim` lines; co-design with the Head of MRM from M1; counsel designs retention and privilege (§24) | Medium |
 | F5 | **The site ignored it.** A senior geologist's spreadsheet stayed the recon of record. | After 3 shadow months, the old pack still rules | **Parity first**: reproduce the site's own pack exactly; the site geologist is the named author; reduced pack time is the hook; embed a person on site (§20) | Medium |
 | F6 | **Yet another dashboard.** Executives said "interesting" and changed nothing. | No executive reuses a number in a meeting | The unit of delivery is a DecisionCard plus a scored forecast; the program gate (§34.5) | Medium |
-| F7 | **Overclaimed probabilities.** A "90%" interval missed 4 of 8 quarters in front of the CFO. | Coverage below nominal; intervals narrower than reference classes | Default `uncalibrated`; track record beside every forecast; UU budgets; refuse decision-grade probabilities without calibration (§9, §10) | Medium |
+| F7 | **Overclaimed probabilities.** A "90%" interval missed 4 of 8 quarters in front of the CFO (P = 0.005 if it were calibrated: strong evidence of miscalibration, R7-C118). | Coverage below nominal; intervals narrower than reference classes | Default `uncalibrated`; track record beside every forecast; UU budgets; refuse decision-grade probabilities without calibration (§9, §10) | Medium |
 | F8 | **The value was not there.** The pilot site already reconciled well. | Attribution matches the site's commentary by month 9 | Pre-select a site with recorded variance; report the null honestly; allow one second site (§37) | Medium |
 | F9 | **The suite never converged.** 30–40% of time went to sibling fixes. | > 20% of hours on sibling repos | Dependency firewall; lift with provenance; FA through the CLI; no deliverable depends on a sibling (§27) | Low–medium |
 | F10 | **Purity cost the year.** Rebuilding parsers, CRS and samplers ate M0–M1. | M0 slips > 4 weeks; infrastructure > 40% of LOC | A wedge with minimal missing primitives; foreign tools as oracles; budget protocol (§28.4) | Medium |
@@ -7239,12 +7386,15 @@ visible by about month 6 and a countermeasure already designed into this plan.
 | RISK-22 | Goodhart: KPI-linked pay distorts the measured quantities (AISC deferral, CCV completion) | Medium | KPI price list (§23.6); deferral detection (GB-26); CCV quality, not counts (§19) | Board remuneration committee |
 | RISK-23 | Code changes (JORC 2026, the NI 43-101 replacement) shift disclosure requirements mid-build | Medium | Renderers as registry rows (§24); OPEN-HALL-2 | Head of MRM |
 | RISK-24 | Evidence state misread as a safety statement (TSF, slopes) | High impact | Four false flags; "evidence state, never safe" wording; no `geotechnical_signoff` (§18) | Tailings function |
-| RISK-25 | LOC overrun repeats FTX (2.7×) | Medium | §28.4 protocol from commit 1 | Owner |
+| RISK-25 | LOC overrun repeats FTX (2.7×) | High (sibling velocity reference class, §28.3; R7-C115) | §28.4 protocol from commit 1 | Owner |
 | RISK-26 | Host-state action at a demonstration site: suspension, provisional administration, retroactive code, tenure lapse (Loulo-Gounkoto 2025: suspended, loss of control, no Q1–Q3 2025 data, then settlement and retroactive 2023-Code royalties for 2024–2025; E248, E412; Kibali permits 2029/2030 vs LOM 2043, with renewal under Art. 80 requiring +5% State equity; E245, E444) | High | Site-quarter state `NOT_PUBLISHED`; `CountryRegime` as-of dating (§23.4); G-HALL-6 tenure flags; GATE-BULL-01 excludes NOT_PUBLISHED by name; no silent fill | Owner + counsel |
 | RISK-27 | Water-use conflict in a hyper-arid, state-equity project: community and institutional groundwater concerns, no drawdown monitoring (E330–E333) | High | G-FREE-7/9; groundwater DATA-GATE (§18.4); evidence state, never "no impact" | Head of Environment |
 | RISK-28 | Security forces (Frontier Corps, Levies) with no Voluntary Principles reference in the ESIA or SEP (E342) | Medium | VPSHR commitment set as registry data; 24 h human-rights grievance escalation tracked as `OB-COMMIT` | Counsel + Sustainability |
 | RISK-29 | Unapproved revisions ("Rev A … NOT approved"; E304) ingested as evidence | Medium | `DocApproval` on every `DocLocator`; draft-sourced cells cap at `conflicted`/`stale` | Owner |
 | RISK-30 | Demo text misstates a site fact taken from a superseded filing (e.g. Goldstrike's thiosulphate circuit, converted to CIL in 2023; E174) | Medium | Every demo claim cites a dated source; sources older than the latest filing are flagged | Owner |
+| RISK-31 | Issuer data terms: Barrick's site terms allow copying only for non-commercial, personal or educational use of unmodified material; committed derived workbooks or values may need approval (R7-C052, R7-C158, R7-C160) | Medium | Locators, URLs, sha256 and computed results only until decided; synthetic or fetch-at-test fixtures; seek IR's written approval | Owner + counsel, before the next code push |
+| RISK-32 | A synthetic, stand-in or mislabelled figure reaches an issuer reader as the issuer's own (the unpushed M0 slice did this; Appendix K.2) | High impact | Registered inputs only, typed refusal on any missing file, `synthetic` printed on fixture output, filed-page check by a second person, and an executable uncited-number check with a seeded negative control (§21.6) | Owner |
+| RISK-33 | Process records overstate: beads closed with a generic reason, integration records marked PASS for crates not in the build (R7-C013–R7-C018) | High | Close reasons name the bead's own test, gate record or decision entry; INT records cite a tracked Cargo.lock containing the foundation and its cargo-deny output (§34.2); an xtask check rejects generic reasons | Owner |
 
 ## 36. Open questions and the decision rule
 
@@ -7270,7 +7420,12 @@ records that the default, not a decision, is governing. Nothing is decided by si
 | B5 p | P(site data by month 7) | Sponsor | Month 4 | 0.3 for Lumwana (0.15–0.45; W4, E599); M2′ is the modal path, resourced from M1 |
 | OPEN-PUSH-1 | Does `UntrustedCandidate` import of external plans respect the closed-dependency rule? | Owner | Pushback start (M4) | External plans enter as data files only, never as linked code |
 | OPEN-B4-07 | MNPI insider-list format per listing venue | Counsel | Before M2 | The strictest known format |
-| OPEN-HALL-4 | Does a software-prepared data-verification index change QP liability? | Counsel | Before M3 | Index labelled as support material only |
+| OPEN-HALL-4 | Does a software-prepared data-verification index change QP liability? | Counsel | Before GATE-DATA-01 (month 4; R7-C138) | Index labelled as support material only |
+| OPEN-R7-1 | Issuer data terms: may derived Barrick workbook values be committed to the public repository? (RISK-31) | Owner + counsel | Before the next code push | Locators, URLs, sha256 and computed results only |
+| OPEN-R7-2 | Who are the two M0 reviewers, what is their relation to Barrick, and are they available by January 2027? (R7-C045) | Owner | M0 week 4 | One independent ex-major reviewer; any issuer reviewer sees forecasts only after release |
+| OPEN-R7-3 | Is the owner a public-lane author during the FY2026 forecast window, given §31.1's private-access rule? (R7-C161) | Owner | Before the forecast hash | The owner authors only if they hold no private access; otherwise a walled author set |
+| OPEN-R7-4 | Should the public plan keep naming the Barrick Chair's Avathon role (§31, §35 F1, §34.4)? (R7-C030, R7-C032) | Owner | Before the next push | Keep the factual, sourced statement; drop characterisations |
+| OPEN-R7-5 | What happens to the unpushed M0 commit `68e7091` (amend, follow with a fix commit, or push as is)? (Appendix K.2) | Owner | Before the next push | Do not push until R001–R002 of Appendix K.2 are done |
 | OPEN-B4-08 / OPEN-HEAD-2 | Will Avathon consume anchor-pinned feeds and write back evidence only? | Sponsor | M2 | Export projections offered; no write-back channel |
 | OPEN-B4-10 | Reference site node hardware | Sponsor IT | M1 | Targets stay TARGETs |
 
@@ -7381,37 +7536,75 @@ whose decision inputs it touches.
     the source registry (today: the ten quarters **2024Q1–2026Q2**, their half-year and year-to-date blocks, and the
     2023 comparatives; E148, E451). Every cell cites `<file-period>:<Sheet>!<Cell>`
     + the workbook's sha256 and the filed Quarter Report page that reconciles it (E107). GEO is company-level only,
-    on a named price basis (GB-27). **Q3 2026 is the only DATA-GATE**. It is released on 9 Nov 2026,
-    inside M0, so the importer meets a workbook it was not developed against; GATE-BULL-01 must pass on it as
-    well as on the ten known files (E454; W1 found layout drift in every vintage);
+    on a named price basis (GB-27). **Q3 2026 is the only DATA-GATE**. It is released on 9 Nov 2026 at 06:00 ET,
+    inside M0, so the importer meets a workbook it was not developed against (E454; W1 found layout drift in
+    every vintage). That counts as a blind test only if a label-anchored importer exists and its commit and
+    built-binary sha256 are pushed to the public repository before the release; if that is missed, the Q4 2026
+    workbook (February 2027, inside M1) is the blind test and that clause of GATE-BULL-01 moves to M1 (R7-C025,
+    R7-C041);
   - published cut-off reproduction for every cut-off a technical report states (seven reproduced in the corpus,
     including the $/t vs $/st trap; E182–E184);
   - the metric-definition registry v1 (WGC 2013/2018 AISC/AIC; by-product vs co-product; GEO price ratio; named
     reserve-replacement bases);
   - a discrepancy register, each item bridged with citations or marked OPEN with the document that would close
-    it;
-  - **FY2026 per-site forecasts frozen and hashed before the February 2027 release**, with 80% intervals and the
-    flag `uncalibrated`;
+    it, and each issuer discrepancy carrying its exact certificate and shipped as an evidence-challenge packet
+    (BD-340, BD-349);
+  - the live-dependency proof and a reproduction kit for outside readers: source URLs, sha256 digests, label
+    selectors and expected state roots, with no workbook bytes in the repository (BD-338, BD-339);
+  - TARGET, not gating: the issuer's per-site guidance FY2023–FY2026 transcribed by two readers with page
+    citations, and FY2026 guidance registered beside FrankenMining's own forecasts as an issuer forecast family.
+    It uses released documents only, so it can be shown to the issuer reviewer before the FY2026 release, and it is
+    the answer to "nothing new" that does not depend on FrankenMining's own forecasting skill (BD-341);
+  - **the FY2026 forecast record** (§21.6): per-site forecasts with 80% intervals and the flag `uncalibrated`,
+    with information cut-off, input manifest, basis rule and baselines, hashed and pushed with an external time
+    proof by 31 Dec 2026 and before any M0 content reaches an issuer insider;
   - the evidence spine: Claim, ledger, refusal codes;
   - a security pack: SBOM, threat model, offline single binary.
-- *Acceptance (GATE-BULL-01):* ≥ 95% of site-quarter values reproduced to published rounding, and the rest
-  explained or refused; byte-identical reruns; zero uncited numbers; the forecast hash timestamped before the
-  release. The denominator is numeric site-quarter cells only, with placeholders and `NOT_PUBLISHED`
-  site-quarters (Loulo-Gounkoto Q1–Q3 2025) excluded and listed by name; "reproduced" means the value and every
-  applicable identity hold to ±1 unit of the last published digit (§21.6). Barrick's own identities hold in
-  94.4% of cases under that rule (E113–E115), so the 95% bar is set against the issuer's own consistency.
-- *Kill:* reproduction below 80%, or two finance reviewers rate it "nothing new". **Fallback:** the public metric
-  engine becomes test fixtures only, and weight shifts to M1 reconciliation and an early M4.
-- *Crates:* WP-00 to WP-03 and WP-06 slices (§38).
+- *Acceptance (GATE-BULL-01, three parts; §21.6, §21.8):* extraction fidelity of 100% of the named denominator
+  against an independent reference read; identity accounting with every instance in one of five cited states;
+  issuer consistency reported per identity family; the live-dependency proof on every scored value; byte-identical
+  reruns with the input manifest in the state root; zero uncited
+  numbers; every company-level figure matches its filed page and label (reserve replacement reads three-year
+  2023–25 on both bases, about 190% gold ounces and 504% GEO, Circular p.41; FY2025 gold AISC reads $1,637/oz on
+  3,318 koz sold; R7-C131); the forecast record time-proved before the release. The denominator is numeric
+  site-quarter cells only, with placeholders and `NOT_PUBLISHED` site-quarters (Loulo-Gounkoto Q1–Q3 2025)
+  excluded and listed by name. The gate record cites a run whose input manifest equals the source registry.
+- *Reviewers and disclosure sequencing (R7-C045, R7-C133–R7-C135; CONDITIONAL on counsel).* The kill is judged by a
+  named pool: one independent ex-major finance reviewer and at most one issuer finance reviewer. Before the FY2026
+  release the issuer reviewer sees only the historical reproduction and the discrepancy register; the forecast
+  set reaches issuer staff only after release, as scored output. Counsel reviews any external use of public-lane
+  forecasts (B5 F3; default: share with the sponsor only, after release). Barrick files on Form 40-F as a foreign
+  private issuer, so Regulation FD does not apply; the provincial tipping and insider-trading prohibitions
+  (explained in National Policy 51-201) and U.S. antifraud rules do. No M0 content is presented to issuer insiders
+  in Barrick's pre-release quiet period without counsel's clearance.
+- *Kill:* blind-file extraction fidelity below 80%, or the two reviewers rate it "nothing new". **Fallback:** the
+  public metric engine becomes test fixtures only, and weight shifts to M1 reconciliation and an early M4.
+- *Crates:* WP-00 to WP-03 and WP-06 slices, plus BD-090 (WP-04, FMT-CAS-1) and BD-142 (WP-07, e2e harness),
+  which the M0 deliverables' dependency closures contain (§38; R7-C086, R7-C104).
+- *Dependency calendar (R7-C116).* Each human or external dependency is listed by role with a commit-by date and a
+  private-register id (no personal names in this repository): the two M0 reviewers by M0 week 4; BD-075 complete
+  by month 2, because the month-2 Lumwana decision (BD-199) waits on it (R7-C089, R7-C106); the executive or
+  ex-executive
+  panel (GATE-HELM-01, KILL-PLUMB-5) before M1 starts; the Lumwana sponsor by month 2; the penetration tester
+  (GATE-SEC-01) by month 4; GATE-SYNC-01 and INT-ATP-001 by month 5, because GATE-DATA-02 depends on them (R7-C090);
+  the QP or metallurgist for GATE-TOUCH-04 named at GATE-DATA-01. A missed date is logged as a gate event.
 
 **M1 — Synthetic truth, reconciliation known answers, retrospective cards (months 3–6; Feb–Apr 2027).**
 - *Artifact:*
   - the synthetic-truth generator (open-pit Au and Cu–Au) with seeded biases;
   - the reconciliation engine (§20);
   - calibration ledger v1;
-  - scoring of the FY2026 public forecasts at release, **reported whatever they show**;
-  - two retrospective DecisionCards built as known at decision time (GATE-HELM-01).
+  - scoring of the FY2026 public forecasts at release, **reported whatever they show**, against the two
+    pre-registered baselines, with n, n_eff and the Clopper–Pearson interval (§21.6); the Q1 2027 vintage hashed
+    before its quarter begins;
+  - two retrospective DecisionCards built as known at decision time (GATE-HELM-01), each with a temporal-cone
+    certificate over all its ancestors, including fitted parameters, exclusion lists and decks (BD-344);
+  - from public data only (Appendix K.5): the guidance track record and the guidance completion test (BD-341,
+    BD-342); forecast cohorts with outcome vintages (BD-343); disclosure lint in cited mode and the reliance check
+    for issued outputs (BD-345, BD-347); the JV mirror for NGM, Pueblo Viejo and Kibali (BD-346).
 - *Acceptance:*
+  - each K.5 capability shipped at M1 passes its K.5 test, and any whose kill condition fired is recorded as
+    killed;
   - GATE-TOUCH-01/02: over ≥ 200 replicates, 90% intervals on each injected bias cover truth 85–95% of the time;
     the metal balance closes within stated uncertainty; non-identifiable pairs return FMINE-REF-104;
   - GATE-STORE-01, GATE-SYNC-01, GATE-DET-01, GATE-ROBOT-01, GATE-WALL-01 pass.
@@ -7446,6 +7639,16 @@ whose decision inputs it touches.
   - The recovery-capable GATE-DATA-03 set is the monthly metallurgical balance; head, tail and concentrate sampler
     and assay records; concentrate shipment and settlement assays; fresh/transitional tags on feed; and the monthly
     reconciliation pack. Historian and LIMS access (GATE-DATA-04) refines the finding but does not enable it.
+  - **GATE-DATA-03 has two thresholds (R7-C084, R7-C102).** The *recovery-led* threshold is the set above; the
+    *grade-led* threshold is §34.4's full set (block and GC models, dispatch tonnages, surveys, cost-centre
+    extracts, one GATE-PORT-02 export). Lumwana delivering only the recovery-led set does not trigger M2′. On the
+    recovery-led route BD-204 does not wait on BD-188, BD-189 or BD-194; a metallurgical-balance and sampler-record
+    import bead is added (BD-336), WP-12 gains an edge to WP-10, and GATE-TOUCH-03 has a recovery-led variant
+    (parity with the site's monthly metallurgical balance and recovery statement rather than F1/F2/F3).
+  - **A material finding is routed to disclosure (R7-C138).** Lumwana is a material property in the 2025 AIF, and the
+    92.7% feasibility recovery is an AIF statement. A finding that bears on an AIF statement is sent to Barrick's
+    disclosure QP and disclosure committee the day it is attested, before any wider sharing; counsel's QP-liability
+    item OPEN-HALL-4 moves from "before M3" to before GATE-DATA-01.
   - Residency: Zambia's DPA 2021 s.70 keeps personal data in Zambia (FACT, E514), which the on-prem artifact
     already satisfies; rosters and fatigue data never leave the site node, and only aggregates may (W3).
 - *Ranked alternates* (used only if Lumwana has no named site sponsor by month 3):
@@ -7470,7 +7673,9 @@ whose decision inputs it touches.
 - *Artifact:* an on-prem single binary ingesting read-only snapshots for 8–12 historical quarters. Outputs:
   - **parity reproduction of the site's own monthly reconciliation pack**;
   - the reconciliation posterior and attribution;
-  - a per-quarter AISC waterfall from tonnes, grade and recovery to unit cost;
+  - a per-quarter AISC waterfall from tonnes, grade and recovery to unit cost, in $/lb for a copper site, with
+    each bar classed controllable, price-linked or structural so the CFO's §3 question is answered by name (R7-C141,
+    R7-C142);
   - a rolling-origin hindcast;
   - two forward quarters pre-registered **inside the tenancy**;
   - a Site Assurance DecisionCard.
@@ -7559,7 +7764,7 @@ an adapter with a working local fallback.
 ## 38. Work packages
 
 Each work package (WP) has an owner role, a crate set (§28.3), the gates it must pass and its dependencies. The
-first 320 beads (§39) instantiate WP-00 to WP-12 in detail and the rest as epics. The "Depends on" column is
+first 357 beads (§39) instantiate WP-00 to WP-12 in detail and the rest as epics. The "Depends on" column is
 generated from the bead graph (transitive reduction), so it cannot drift from §39.
 
 | WP | Name | Crates | Milestone | Gates | Depends on |
@@ -7574,29 +7779,29 @@ generated from the bead graph (transitive reduction), so it cannot drift from §
 | WP-07 | Testpit | `fmine-gen`, `-oracles`, `-verify`, `-derive` | M0–M1 (the e2e harness in M0) | GATE-GEN-01, GATE-DET-01, GATE-E2E-01, GATE-STORE-01, GATE-WALL-01, GATE-PLUMB-E3 | WP-06 |
 | WP-08 | Touchstone | `fmine-flow`, `-recon`, `fmine-numerics` (slice) | M1–M2 | GATE-TOUCH-01…06, KILL-PLUMB-6 | WP-07 |
 | WP-09 | Corebox import | `fmine-drill`, `-qaqc` | M2 | GATE-CORE-01, -02 | WP-07 |
-| WP-10 | Crucible balance slice | `fmine-plant` (flowsheet + P754) | M2 (GATE-CRUC-02 scores through month 18) | GATE-CRUC-01, -02 | WP-08 |
+| WP-10 | Crucible balance slice | `fmine-plant` (flowsheet + P754) | M2 (GATE-CRUC-02 scores through month 18) | GATE-CRUC-01, -02 | WP-08, WP-11 |
 | WP-11 | Portal importers | `fmine-io`, `fmine-geom` (slice) | M1–M2 | GATE-PORT-01, -02, GATE-BM-01 | WP-09 |
-| WP-12 | Site pilot | deployment, security pack, shadow operations, Site Assurance card | M2 | GATE-DATA-01…03, GATE-SEC-01, GATE-TOUCH-03/04, GATE-BULL-03 | WP-03, WP-05, WP-08, WP-11 |
-| WP-13 | Bullion and Hallmark | `fmine-metalacct`, `-fa-bridge`, `-acctpack`, `-reserves` | M3 | INT-FA-001, GATE-BULL-02, GATE-HALL-03, GATE-POST-01, GATE-CRUC-03, GATE-REPORT-01 | WP-03, WP-05, WP-09, WP-10 |
-| WP-14 | Helm capital | `fmine-capital`, `-econ`; `fmine-decide` widened | M3–M4 | GATE-CAP-01…05 | WP-02 |
-| WP-15 | Lodestar | `fmine-explore`, `-infer`, `-prospect` | M4 | GATE-LODE-P1…P6 | WP-08 |
+| WP-12 | Site pilot | deployment, security pack, shadow operations, Site Assurance card | M2 | GATE-DATA-01…03, GATE-SEC-01, GATE-TOUCH-03/04, GATE-BULL-03 | WP-03, WP-05, WP-10 |
+| WP-13 | Bullion and Hallmark | `fmine-metalacct`, `-fa-bridge`, `-acctpack`, `-reserves` | M3 | INT-FA-001, GATE-BULL-02, GATE-HALL-03, GATE-POST-01, GATE-CRUC-03, GATE-REPORT-01 | WP-03, WP-05, WP-10 |
+| WP-14 | Helm capital | `fmine-capital`, `-econ`; `fmine-decide` widened | M3–M4 | GATE-CAP-01…05 | WP-03 |
+| WP-15 | Lodestar | `fmine-explore`, `-infer`, `-prospect` | M4 | GATE-LODE-P1…P6 | WP-03, WP-08 |
 | WP-16 | Strata | `fmine-geom`, `-geostat`, `-belief`, `-estimate`, `-materials` | M3–M5 (S+0 = month 12) | GATE-STRATA-G0…G5 (G5 = GATE-HALL-02) | WP-12, WP-13 |
 | WP-17 | Multi-site operations | `fmine-telemetry`, `-mcp`, `-tui` | M5 | GATE-INGEST-01, GATE-SYNC-02, INT-FMCP-001, INT-FTUI-001 | WP-12 |
 | WP-18 | Freeboard, Highwall, Muster | `fmine-tailings`, `-geotech`, `-workforce` | M5 | GATE-FREE/HIGH/MUST-*, GATE-DATA-05 | WP-12 |
 | WP-19 | Pushback | `fmine-plan`, `-optimize`, `-lp` | Starts M4 (month 18); acceptance M6 | GATE-PUSH-*, KILL-PUSH-*, INT-FNX-001 | WP-16 |
 | WP-20 | Headframe twin of record | `fmine-ops`, `-blast`, `-view` | M6 | GATE-HEAD-01…03, GATE-DATA-04 | WP-17 |
 
-## 39. The first 320 beads
+## 39. The first 357 beads
 
-These 320 beads instantiate WP-00 to WP-12 in detail and WP-13 to WP-20 as epics. They are generated
+These 357 beads instantiate WP-00 to WP-12 in detail and WP-13 to WP-20 as epics. They are generated
 from one structured list, and the generator refuses unknown dependencies and cycles. Each bead becomes one `br`
 issue with the same title, its dependency edges and a body expanded from the cited sections (the idea-wizard and
 beads-workflow polishing rounds add tests, logging and acceptance detail before implementation starts).
 
 **Graph facts (computed by the generator).**
-- 320 beads; 533 dependency edges; 0 cycles; 0 unknown dependencies; the work-package graph
+- 357 beads; 589 dependency edges; 0 cycles; 0 unknown dependencies; the work-package graph
   derived from these edges is acyclic and is the "Depends on" column of §38.
-- Root beads (no dependencies): BD-001.
+- Root beads (no dependencies): BD-001, BD-321, BD-323, BD-328.
 - Longest dependency chain: 29 beads:
   BD-001 → BD-002 → BD-008 → BD-015 → BD-016 → BD-023 → BD-037 → BD-038 → BD-040 → BD-041 → BD-042 → BD-061 → BD-065 → BD-071 → BD-072 → BD-074 → BD-075 → BD-199 → BD-200 → BD-204 → BD-205 → BD-206 → BD-207 → BD-210 → BD-211 → BD-212 → BD-246 → BD-247 → BD-301.
   It passes through WP-00 → WP-01 → WP-02 → WP-03 → WP-12 → WP-18, ending at "`RequirementSet` beyond GISTM, `EsCommitment` register, `OB-COMMIT`, G-FREE-7…10".
@@ -7606,10 +7811,14 @@ beads-workflow polishing rounds add tests, logging and acceptance detail before 
   section. Beads BD-257 to BD-270 were added by the first audit round to give every early gate a closing bead;
   BD-271 to BD-307 carry the corpus findings (C1–C6, Appendix I) into owned work; BD-308 is the numerics
   admission gate (INT-NUM-001) added by the appendix cross-check (Appendix H); BD-309 to BD-320 carry the twelve
-  upgrades of the concurrent revision into owned work.
+  upgrades of the concurrent revision into owned work; BD-321 to BD-337 carry round 7's corrections (Appendix K.2,
+  K.3); BD-338 to BD-357 carry the capabilities adopted from the idea duel and B7 (Appendix K.5).
 
 **Rules for every bead.** A bead closes only with cited evidence: a gate record, a test name or a decision entry.
-Every implementation bead includes unit tests and, where it has a user-visible effect, an e2e script with
+The close reason names that bead's own evidence; a reason shared across beads is not evidence, and no close
+reason cites a gate before that gate's record exists in `docs/delivery/`. A bead is never closed over an open
+blocker (`br close --force` is not used for this), and an xtask check rejects generic close reasons (R7-C039,
+RISK-33). Every implementation bead includes unit tests and, where it has a user-visible effect, an e2e script with
 structured logs (§33.5). A bead that would exceed its crate's budget needs a BUDGET-AMEND record first (§28.4).
 
 ### WP-00 · Workspace and discipline
@@ -7633,6 +7842,12 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-015 | GATE-LAYERS-00: every xtask check wired from commit 1 | BD-006, BD-007, BD-008, BD-009, BD-010, BD-011, BD-012, BD-013 | Gate record PASS |
 | BD-257 | INT-AS-001 admission: asupersync `=0.5.0` closure, one package id per posture closure, no second runtime, `[patch.crates-io]` single `Cx`; franken-evidence/-decision API check | BD-001 | Admission record in CELL-DEC; OPEN-SUITE-1 closed |
 | BD-308 | INT-NUM-001 admission: fsci `=0.4.0` (default features off), fp without `fp-io`, `fnp-io`, fj (`fj-core`, `fj-lax`, `fj-ad`) closures pass L-5 and the one-package-id rule; oracle parity on every consumed kernel; cross-ISA determinism scope recorded | BD-005 | Admission record per foundation, or the FD-row fallback taken |
+| BD-323 | Correct the bead and INT records: reopen beads whose done-when is unmet; each close reason cites its own evidence; INT-AS-001 reads not admitted, INT-NUM-001 the FD-row fallback (K.2 findings 4–5) | — | No closed bead cites GATE-BULL-01 before a scorer PASS on real inputs; INT records match §34.2 |
+| BD-324 | `xtask` close-reason check: rejects shared or generic close reasons and closing over open blockers | BD-323 | A shared close reason or a close over a blocker fails CI |
+| BD-325 | INT-AS-001a closure checks (one package id, criterion 9, one `Cx` through `[patch.crates-io]`) | BD-005 | Record reads NOT_APPLICABLE while asupersync is absent; the checks run in CI |
+| BD-326 | `deny.toml` in CI with the rider-licence allow-list and duplicate policy; `franken-stack.lock` row ids aligned with F.2 | BD-005 | CI runs cargo-deny; no lock row id collides with an F.2 upstream ask |
+| BD-327 | CONTRACT template completed with all ten §0.2 sections; existing CONTRACT.md files regenerated | BD-002 | Every crate's CONTRACT.md has the ten sections |
+| BD-357 | Salted review: a handful of sealed, consented seeds per internal review round (bead closes, gate records, then the QP pack) to measure whether sign-off catches errors; never an issuer-attributed false figure before an issuer reader | BD-324 | Two rounds report the catch rate with a Clopper–Pearson bound; no seed reaches an export |
 
 ### WP-01 · S0 substrate
 
@@ -7690,6 +7905,8 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-226 | Two retrospective cards built as known at decision time | BD-225, BD-053 | GATE-HELM-01 |
 | BD-227 | VOI estimator vs closed-form EVSI | BD-225, BD-022 | GATE-HELM-02 |
 | BD-311 | `Monitor::SpatialFrontPit`: sequential PIT under the registered joint (Vecchia) model along the mining front, with aGRAPA betting e-processes on the location score and the centred dispersion score (§10.4, GB-08) | BD-051, BD-048 | On synthetic truth: median alarm ≤ 40 polygons for the 58%-coverage dispersion shift and ≤ 25 for the location shift; null false-alarm rate ≤ α over 600 polygons |
+| BD-343 | Forecast cohorts and outcome vintages: frozen membership, append-only assessments, overdue and missing outcomes shown, best and worst bounds for bounded scores, restated outcomes scored separately | BD-047, BD-048 | No missing outcome is dropped from a denominator; restatement never overwrites an assessment |
+| BD-352 | Evidence-origin accounting: origin identities and typed relations (publication copy, superseding publication, repeated reading, replicate, new observation, shared systematic-error group) | BD-042 | Batch-bias known answer σ_b² + σ_ε²/n reproduced; a reprint never narrows an interval |
 
 ### WP-03 · Public lane and metrics
 
@@ -7705,26 +7922,41 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-062 | GEO with versioned price decks (GB-27) | BD-061 | Known answers |
 | BD-063 | Reserve replacement under every named basis | BD-061 | 190% vs 504% bridge reproduced (gold 3-yr 2023–25 vs GEO 3-yr 2023–25, both ex-A&D; OPEN-BULL-4 resolved, E603, E604) |
 | BD-064 | LMDI waterfall (GB-26) with metal-balance B and sold/produced S factors | BD-061 | Exact decomposition tests; North Mara Q2 2025 → Q2 2026 known answer (E137) |
-| BD-065 | Reproduction harness vs published values to rounding | BD-061, BD-059 | GATE-BULL-01 scorer runs |
+| BD-065 | Reproduction harness vs published values to rounding | BD-061, BD-059, BD-322 | GATE-BULL-01 scorer runs |
 | BD-066 | Discrepancy register with citations or the closing document | BD-065 | Every miss bridged or OPEN |
 | BD-067 | FY2026 per-site forecasts, 80% intervals, flag `uncalibrated` | BD-047, BD-059 | Forecast set complete |
-| BD-068 | Freeze, hash and externally timestamp forecasts before the Feb 2027 release | BD-067 | Timestamp precedes release |
+| BD-068 | Freeze, hash and externally timestamp forecasts before the Feb 2027 release | BD-067, BD-334 | Timestamp precedes release |
 | BD-069 | Lane separation: public build profile and access attestations (§31.1) | BD-093 | No private-access author in the lane |
 | BD-070 | Published reserve roll-forward reproduction | BD-059, BD-063 | GATE-HALL-01 |
 | BD-071 | `fmine assure public --issuer` end to end | BD-114, BD-065 | Robot output validates |
 | BD-072 | M0 report with anchors, certificates and the `no_claim` line | BD-123, BD-071 | Byte-identical reruns |
 | BD-073 | M0 security pack: SBOM, threat model, offline single binary | BD-011 | Pack reviewed |
-| BD-074 | M0 e2e script with structured logs | BD-071, BD-072, BD-142 | GATE-E2E-01 for M0 |
+| BD-074 | M0 e2e script with structured logs | BD-071, BD-072, BD-142, BD-338 | GATE-E2E-01 for M0 |
 | BD-075 | Two finance reviewers' assessment recorded (kill criterion) | BD-074 | Assessment in CELL-DEC |
-| BD-076 | Score FY2026 forecasts at release and report whatever they show | BD-068, BD-048 | Scores published to the sponsor |
+| BD-076 | Score FY2026 forecasts at release and report whatever they show | BD-068, BD-048, BD-343 | Scores published to the sponsor |
 | BD-125 | GATE-ROBOT-01: a fresh agent completes 20 tasks from robot-docs alone | BD-116, BD-115, BD-071 | ≥ 18 correct, 0 authority writes |
 | BD-260 | KILL-PLUMB-5 check: executive user test of the epistemic map on the M0 cards | BD-072, BD-054, BD-225 | Test recorded; three-field card adopted if rejected |
 | BD-271 | Pure-Rust xlsx table extractor: label-anchored, placeholder-typed, `#REF!`/oversized-range excluding, `<file-period>:<Sheet>!<Cell>` + sha256 provenance (§21.6) | BD-056 | The 3,996 parsed cells of the Q1/Q2 2026 Mine Stats reproduce exactly; the 7 zero placeholders import as Nil; all ten W1 workbooks (Q1 2024–Q2 2026) import under the versioned region map and unit rules (E461, E463), and the Q3 2026 file imports on release day without code changes |
-| BD-272 | GATE-BULL-01 scoring rule: numeric-cell denominator, NOT_PUBLISHED site-quarters excluded by name, identities to ±1 last digit, register items counted as explained | BD-065 | Scorer reports reproduced / explained / refused with the excluded list |
+| BD-272 | GATE-BULL-01 scoring rule: numeric-cell denominator, NOT_PUBLISHED site-quarters excluded by name, identities on rounding intervals under a declared construction (the ±1-last-digit rule is withdrawn: it flips 21 of 306 regional verdicts, B7 EV2-P1-1), five states (§21.6) | BD-065 | Scorer reports the five states and the excluded list; an independent census agrees on every state |
 | BD-273 | AISC aggregation layers (L_corp, L_JV) and definition flags (by-product credit location, inventory adjustments, per-oz denominator) | BD-061 | Barrick Total Gold and NGM gaps decomposed into named layers or refused (G-BULL-3) |
 | BD-274 | Published cut-off reproduction: fixed-point cut-off with R(g), exact $/t ↔ $/st | BD-061, BD-025 | Seven corpus cut-offs reproduced (E182–E184) |
 | BD-275 | Corpus discrepancy fixtures: identity breaks, copied cells, roll-forward sign and deck mismatches | BD-066, BD-070 | E113–E116, E144, E147, E153, E193 filed with closure arithmetic |
 | BD-276 | Technical-report assumptions registered as frozen forecasts with resolution criteria | BD-067 | Loulo LOM cost and recovered-gold claims registered and scored |
+| BD-321 | Remove both silent fallbacks; move the stand-in workbook and every issuer-attributed literal to a synthetic lane that prints `synthetic` and cannot count toward GATE-BULL-01; relabel the stand-in tests and add a real-file run (K.2 step 1) | — | A missing or unreadable registered file exits non-zero naming it; synthetic output is labelled and excluded |
+| BD-322 | Source registry pinning the real workbooks (URL, sha256, retrieval date) and the label-anchored importer rebuilt on it before the Q3 2026 release (K.2 step 3; E693) | BD-321, BD-271 | All 18 registered files import by label; the run's input manifest equals the registry |
+| BD-329 | Uncited-number check and the full envelope: locator and sha256 or rule id and input locators on every number; the four INV-002 flags, certificate, `next_actions` and the `no_claim` line | BD-322, BD-065 | A number without its citation fails the run |
+| BD-330 | Filed-page label check for company-level figures by a person who did not build the output (three-year reserve replacement 190% and 504%; FY2025 AISC $1,637/oz on 3,318 koz sold) | BD-329 | Check record signed; any mismatch is a register item |
+| BD-331 | Five-state identity ledger with a rounding construction declared per table family, explained items marked stated or reconstructed (§21.6 GATE-BULL-01 part 2; E691–E698, E815–E818) | BD-272, BD-340 | Independent census assigns the same state to every instance; known answers E691, E692, E694, E698, E815, E816 and E817 land in their states |
+| BD-332 | Vintage and basis key on public Claims (subject, valid period, reporting vintage, ownership basis, scope, unit) with the raw token; numeric zero in a disposed or withheld column stays `Nil` | BD-059, BD-322 | First publication and restated comparatives coexist; the Tongon disposed-site zero is never a recovery |
+| BD-333 | Waterfall on public data: factor-domain refusal with the signed additive fallback, rounding interval per bar with `sign not determined`, printed-rate gap listed (§21.6; E699) | BD-064, BD-331 | Veladero and Zaldívar fall back; the North Mara grade-error control is reported as non-identifying |
+| BD-334 | FY2026 forecast record manifest: information cut-off, input manifest, 100% basis rule and the two baselines (§21.6) | BD-067 | Manifest hashed with the forecasts |
+| BD-338 | Live-dependency proof: per registered file, deletion or blanking refuses; per cited leaf cell, a one-unit perturbation moves the value and the state root (threshold rules are crossed at their FlipMargin) | BD-322, BD-065 | Seeded hard-coded literal, dead ancestor edge and silent fallback all fail; every M0 scored value passes |
+| BD-339 | Reproduction kit for outside readers: source URLs, sha256 digests, label selectors and expected state roots, with no workbook bytes in the repository | BD-322 | A clean checkout plus the issuer's own downloads reproduces every state root |
+| BD-340 | Exact rounding-interval consistency solver: linear identities first, certificates checked in exact rationals, inclusion-minimal conflict sets, implied intervals, discovery of rounding convention, share, deck and unit | BD-024, BD-061 | E113–E116, E144, E147, E691, E692 and E698 reproduced; the component-sum construction discovered on the AISC tables with the three non-footing cells of E815 certified; zero certified conflicts over 10⁴ generated clean tables |
+| BD-341 | Guidance track record: issuer per-site guidance FY2023–FY2026 transcribed by two readers with pages; outcomes from first-published vintages; hit rate, bias and price-conditional split, descriptive only below n_eff ≈ 35 | BD-332, BD-047, BD-048 | Every guidance and outcome value reproduces its cited page or cell; estimators cover truth 85–95% on synthetic ranges |
+| BD-349 | Evidence-challenge packet for public exceptions: every operand locator, owner role, blocked uses and the closing document (§22.1) | BD-066 | Every register item renders as a packet; no packet carries an invented NPV, CVaR or likelihood |
+| BD-345 | Disclosure lint, cited mode: each number in a draft carries a Claim link and gets verified, value, basis, period, rounding, stale, uncalibrated, uncited or ambiguous; checks value and basis, not link presence; a publicness verdict per number (public since which filing and date, on which basis, or not found in any public filing, routed to counsel) | BD-329, BD-332 | Two-reader labelled set: no false `verified`; prose outside supported predicates is labelled unchecked |
+| BD-347 | Reliance status for issued outputs and reviewed decisions: issuance record (digest, output Claims, anchor), withdrawal and supersession events, an outbound register of issued copies by recipient role, consumer check current / withdrawn / superseded / unknown | BD-329 | A withdrawn output is refused for current reuse while its historical digest still verifies |
 
 ### WP-04 · Bedrock authority
 
@@ -7767,6 +7999,7 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-109 | GATE-SYNC-01: 1,000-seed partition matrix | BD-101, BD-106, BD-108 | Gate record PASS |
 | BD-110 | INT-ATP-001 admission record | BD-109 | Record filed |
 | BD-097 | Runtime capability-mask lab test | BD-077, BD-099 | PO-BED-8 |
+| BD-337 | INT-AS-001 criterion 8: scheduler or diagnostic adaptation cannot alter authoritative results | BD-099 | Authoritative outputs byte-identical over seeds 0..999 and three diagnostic levels |
 
 ### WP-06 · Surfaces and projections
 
@@ -7784,10 +8017,11 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-120 | Projector framework with high-water marks | BD-084 | HWM tests |
 | BD-121 | fsqlite projection: tables, 3-D R-tree, FTS5 | BD-120 | INT-FSQL-001: bbox p99 ≤ 50 ms |
 | BD-122 | Discard and rebuild; freshness-required refusals (F5) | BD-121 | Corruption drill passes |
-| BD-123 | `fmine-report` over franken_markdown and frankenmermaid (default features) | BD-111 | INT-FMD-001, INT-FMERM-001 |
+| BD-123 | `fmine-report` over franken_markdown and frankenmermaid (default features) | BD-111 | INT-FMD-001, INT-FMERM-001, or the FD-FMD-00 fallback taken (plain markdown without diagrams; §37.4 firewall, R7-C085, R7-C103) |
 | BD-124 | Report determinism by digest | BD-123 | Byte-identical rerender |
 | BD-126 | INT-FGDB-001 measured-benefit spike on 3 named queries | BD-120 | KILL-2 decision recorded |
 | BD-262 | INT-FSEARCH-001: quill + hash/model2vec only, no ort/fastembed, wall-scoped indexes | BD-120, BD-093 | Admission record, or fallback to fsqlite FTS5 |
+| BD-328 | Refusal registry as the single source: plan, registry and compiled catalogue agree; family → exit-code table (§30.1) | — | All refusal codes agree across the three; usage errors exit 2 |
 
 ### WP-07 · Testpit
 
@@ -7843,6 +8077,7 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-280 | Within-factor compensation detector and KA-TOUCH-KIBALI-2016-2025 | BD-278, BD-136 | Goldstrike Roaster and Kibali 2016–2025 flagged |
 | BD-281 | GATE-TOUCH-06: public reconciliation known answers (Kibali, Pueblo Viejo 2025, Porgera 2007–2011) | BD-279, BD-280, BD-154 | Gate record PASS (M1) |
 | BD-312 | `StockpileVoxelTwin` (voxel parcel provenance on `VdbGrid`, oxidation exposure, plant cone as a latent inventory) and lift/panel heap-leach convolution (§20.8) | BD-154, BD-281, BD-309 | Reclaim grade and oxidation posteriors tracked on synthetic piles; the Pueblo Viejo 2025 plant-cone swing (E666) carried in the monthly balance |
+| BD-344 | Temporal-cone check over every ancestor of a hindcast or retrospective card (fitted parameters, exclusion lists, decks, registry rows, priors) with the minimal leakage path; replay with post-cut objects removed from the store must match | BD-309, BD-161 | Seeded leaks through a variogram fit, an exclusion list and a deck are each caught |
 
 ### WP-09 · Corebox import
 
@@ -7886,6 +8121,7 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-289 | First recovery calibration card from Turquoise Ridge's 71 lab-vs-plant pairs | BD-287, BD-049 | Bias and coverage reported (E177) |
 | BD-290 | Heap book convention: R_card vs R∞, `Recoverable` stage, Veladero roll-forward known answer | BD-183, BD-277 | Veladero 2013–2017 inventory reproduced to ±1 oz |
 | BD-313 | N-tank residence-time deconvolution (`fmine-plant::rtd`) with bypass, dead volume and throughput-volume time for CIL/CIP and POX trains (§17.3, GB-41) | BD-177, BD-287 | Synthetic shift-pulse fixture reproduces GB-41, and deconvolution recovers the flat true recovery |
+| BD-336 | Metallurgical-balance and sampler-record import for the recovery-led GATE-DATA-03 route (§37.3 M2) | BD-187 | Site's monthly balance and recovery statement imported with parity |
 
 ### WP-11 · Portal importers and geometry lifts
 
@@ -7917,7 +8153,7 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-201 | Security review pack and independent penetration test | BD-073, BD-110 | GATE-SEC-01, GATE-DATA-02 |
 | BD-202 | On-prem site node deployment runbook | BD-119, BD-201 | Node live read-only |
 | BD-203 | No-egress verification by site IT | BD-202 | IT sign-off recorded |
-| BD-204 | 8–12 quarters of snapshots imported | BD-202, BD-200, BD-188, BD-194, BD-189 | GATE-DATA-03, GATE-PORT-02 |
+| BD-204 | 8–12 quarters of snapshots imported | BD-202, BD-200, BD-188, BD-194, BD-189, BD-336 | GATE-DATA-03, GATE-PORT-02 |
 | BD-205 | Site profile: F-factor conventions and pack definitions | BD-204, BD-160, BD-278 | Profile attested by the site |
 | BD-206 | Parity with the site's F1/F2/F3 | BD-205 | GATE-TOUCH-03 |
 | BD-207 | Reconciliation posterior and attribution at the pilot | BD-206, BD-156 | Certificates issued |
@@ -7926,6 +8162,8 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-210 | Material-finding review with the QP and metallurgist | BD-207 | GATE-TOUCH-04 |
 | BD-211 | Site Assurance DecisionCard | BD-210, BD-225 | Card reviewed by the sponsor |
 | BD-212 | Program-gate evidence pack (§34.5) | BD-211, BD-208, BD-209, BD-203 | Program gate decision recorded |
+| BD-348 | Non-interference check for outputs crossing a wall: rerun over a store purged of objects above the recipient's clearance or after the last public filing; the output crosses only if the digests match; disclosure-calendar registry | BD-258, BD-344 | A seeded MNPI note that changes a ranking is caught; deterministic tool outputs only |
+| BD-356 | Pilot protocol card: pre-registered pilot design and minimal data ask, power reported as an envelope across misspecified twins | BD-199 | Card reviewed by the sponsor before GATE-DATA-01 |
 
 ### WP-13 · Bullion and Hallmark
 
@@ -7948,6 +8186,10 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-293 | `StatementRow` with per-row point of reference, route and metal stage; statement attributes; two-significant-digit render test | BD-222 | Pueblo Viejo 2026 table matched from unrounded rows |
 | BD-294 | Bitemporal `OwnershipRef` (holder kinds, funded/free-carried, control vs interest) and `Tenure` claims with G-HALL-6 | BD-222 | Veladero 2017, Porgera and Reko Diq fixtures; Pueblo Viejo and Kibali tenure flags |
 | BD-295 | Stockpile metallurgical state with a degradation model; NRV at reclaim-time recovery | BD-220, BD-176 | Synthetic degrading pile: NRV moves with reclaim date |
+| BD-335 | Issuer reserve rows: public reserves as `IssuerReserveRow` with price deck and filing vintage keys; filed rows win over decks (§24.3) | BD-070 | E692 and E698 both kept as discrepancy items; no public row enters `EstimateStatement` |
+| BD-342 | Guidance completion test: required remaining production and AISC numerator from year-to-date actuals, tested against the site's own quarterly envelope and its technical-report nameplate | BD-341, BD-340 | North Mara H1 2026 (E587) reproduced; seasonality labelled; every result names its envelope tier |
+| BD-346 | JV mirror: one asset as reported by both partners (NGM and Pueblo Viejo with Newmont, Kibali with AngloGold Ashanti); consistent, explained, conflict or refused per metric at the coarsest common perimeter | BD-340, BD-332, BD-273 | Production mirrors for FY2023–FY2025 reproduce both filings' cells |
+| BD-355 | Comparability engine: per-issuer definition rows from each issuer's own non-GAAP reconciliation; rank intervals; checks of comparative claims; no bridge transferred between assets | BD-346 | Synthetic claim set classified correctly; refusals name the missing definition |
 
 ### WP-14 · Helm (epics)
 
@@ -7959,6 +8201,8 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-296 | `CountryRegime` rows with instrument and as-of date; `Restricted` and `NOT_PUBLISHED` states; price-contingent fiscal terms | BD-228 | Kibali and Loulo rows reproduce; the $85.5/oz deck mix is flagged |
 | BD-297 | `PermitGate` on `StageGate`: statutory clocks, deemed approval, reopen thresholds | BD-229 | Early-works real-option card renders |
 | BD-314 | `CapitalEntityGraph`: parent and carve-out denominators, NGM 61.5/38.5 and PV 60/40 funding and dilution, Fourmile vend-in, Kibali distributions and fiscal terms, Twiga 50/50 true-up, Reko Diq DSCR locks; Loulo-Gounkoto 2026 and Tongon exit fixtures (§23.2–23.4) | BD-229, BD-296 | Dual-denominator ΔNAV/share and JV waterfall tests pass on the Barrick portfolio fixtures |
+| BD-353 | Compensation-formula exposure: exact piecewise evaluator of a scheme formula over admitted metric definitions and rounding intervals; synthetic first, then one publicly disclosed formula; no personal data | BD-340, BD-061 | Every threshold boundary enumerated; a range straddling a threshold is never reported as a point |
+| BD-354 | Insurance recovery evidence: conditional indemnity over approved terms (waiting period, deductible, limit, indemnity period); economic loss, policy-eligible loss and recovery kept apart | BD-226 | Synthetic known answers; no coverage judgment emitted |
 
 ### WP-15 · Lodestar (epics)
 
@@ -7970,6 +8214,7 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-234 | Synthetic-district coverage and SBC | BD-233, BD-144 | GATE-LODE-P1 |
 | BD-235 | USGS three-part parity vs MapMark4 | BD-231, BD-136 | GATE-LODE-P2 |
 | BD-315 | Pad/parent/wedge bundle greedy with a data-dependent upper bound (`PortfolioCertificate`, PO-LODE-15) and the Fourmile double- vs single-refractory VOI split (§11.5(E), §11.7) | BD-231, BD-233 | Upper bound ≥ brute-force optimum on synthetic pad trees; Fourmile fixtures built from E656–E658 |
+| BD-350 | Target disclosure checks: remainder-grade arithmetic on drill releases, true-width and cut-off flags; one developer cash-flow replay with discounting-convention discovery | BD-340 | Synthetic juniors with seeded selective reporting caught; one public replay reproduces its NPV |
 
 ### WP-16 · Strata (epics)
 
@@ -7988,6 +8233,7 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-300 | Geomet coverage report against the SMU distribution (§17.4) | BD-240, BD-176 | Coverage bands rendered; cards outside them are `OutsideValidity` |
 | BD-316 | Physical-space regularization before normal-score, ILR or PPMT back-transforms (G-STRATA-11) and multi-support kriging with heteroscedastic error for joint DD and BH conditioning (§13.4, §13.7) | BD-238, BD-240 | G-STRATA-11 refuses transform-space averaging; joint DD+BH kriging passes synthetic mass-conservation tests |
 | BD-317 | Soft-contact blending on domain-free background Philox streams (`"strata_bg"`, …) that keeps common random numbers and unit variance across L1 contact moves (§13.5, GB-12) | BD-239, BD-240 | A 5 m contact move keeps paired realization correlation ρ ≥ 0.90 and unit variance across the blend |
+| BD-351 | Untested-ore decision bounds: two strata, one route, exact weighted bounds and a stable or unstable choice; additivity stated as a validity condition | BD-300 | Known answers on synthetic strata; refuses when blending interactions are declared |
 
 ### WP-17 · Multi-site operations (epics)
 
@@ -8397,6 +8643,9 @@ convenience; §27 and `franken-stack.lock` are authoritative.
 
 ### F.1 Foundation ledger (one `FD-…-00` row per foundation)
 
+The `FD-…-00` ids here are canonical. `franken-stack.lock` must use them; its current `-01` row ids collide
+with the F.2 upstream-ask ids and are renamed, with the INT records and ADR-RNG-01 that cite them (R7-C162).
+
 | FD | Foundation | Posture (§27) | Pin | Admission | Fallback that keeps the product shippable |
 |---|---|---|---|---|---|
 | FD-AS-00 | asupersync, plus franken-evidence/-decision/-kernel inside `fmine-decide` only | Consume | `0.5.0`, rev `78b64636e` (§27.5) | INT-AS-001, INT-AS-SEC-001, INT-ATP-001 | Stay on 0.5.0 with the §31.4 mitigations; move only with the suite (GATE-PIN-06) |
@@ -8636,6 +8885,8 @@ BD-307. Details, declined items and data gates are in Appendix I.
   "verifications" introduced errors (H.5b).
 - **H-5 (done 2026-10-29).** The 320 plan beads and 533 dependency edges of §39 are instantiated in `.beads/`
   (`br`), and `br dep cycles` reports no cycles. The idea-wizard and beads-workflow polishing rounds remain.
+  Round 7 added BD-321 to BD-357 to §39 (357 beads, 589 edges, 0 cycles); they are not yet in `.beads/`, and
+  BD-323 corrects the closed beads there before any new bead is created (Appendix K).
 
 ## Appendix I · The document corpus: what it showed and what it changed
 
@@ -8673,7 +8924,8 @@ Evidence ids E101–E399 are rows in `planning/corpus/C1…C6`, indexed in `plan
 2. **Barrick's own numbers fail their own identities about 5% of the time** (84/89 under strict rounding;
    E113–E115). GATE-BULL-01's 95% bar is therefore defined against an explicit denominator and identity rule
    (§21.6), and NOT_PUBLISHED quarters are excluded by name.
-3. **Company AISC is not the sold-weighted sum of its sites.** Total Gold sits $47.6–55.7/oz above its regions and
+3. **Company AISC is not the sold-weighted sum of its sites.** Total Gold sits $47.6–55.7/oz above its regions in
+   the Q1, Q2 and H1 blocks of 2025 and 2026 (+$23.57 to +$88.66 across sixteen quarters; R7-C125) and
    NGM $8.7–19.4/oz above its mines (INFERENCE, E111, E112). These become named layers, or G-BULL-3 refuses.
 4. **A public AISC bridge does not close without inventory factors.** North Mara's +$1,285/oz needs a sold/produced
    effect of −$504 (INFERENCE, E137). GB-26's identity now carries B and S.
@@ -8900,3 +9152,214 @@ A concurrent revision (2026-10-28, 23:44 local) added BD-309–BD-320 and new de
 test). They are renumbered `G-STRATA-11` and `PO-LODE-15`, with table rows, and the new refusal code 108 was added
 to the `FMINE-REF-1xx` registry. That edit's content is otherwise kept as written. Its Loulo-Gounkoto cost figures
 were Q2-only and are now labelled with the H1 values beside them (E638).
+
+## Appendix K · Round 7: the M0 reality audit, the assurance-chain pass (B7) and the idea duel
+
+### K.1 What ran (2026-10-29)
+
+| Pass | What it did | Where |
+|---|---|---|
+| Modes-of-reasoning round 7 | A neutral case (E673–E690 new, E001–E672 imported), six reasoning passes (baseline, M0 reality, internal consistency, quantitative checks, readers and obligations, dependencies), a normalised ledger of 171 claims and eight auditors who did not write the claims they checked. Auditors re-ran the M0 binary against real and altered workspaces, re-read workbook cells and recomputed the arithmetic. Result: 102 VERIFIED, 59 PARTIALLY_SUPPORTED, 2 REJECTED, 1 HYPOTHESIS, 1 SUPERSEDED, 6 NON_MATERIAL; no genuine conflict survived | `planning/mor/r7/` (report, case, ledger, audits) |
+| Brenner B7 | The assurance chain (§20, §21, §22, §24, §30) tested against the real Barrick workbooks and filings and the obligations of QPs, CFOs and IR, on a live NTM squad (Claude, two Codex, Gemini), with a forced third alternative and a cross-family disagreement register | `planning/brenner/B7_assurance_chain.md` |
+| Idea duel | Claude, Codex and Gemini each generated 30 ideas, kept 15, scored the other two models' 15 on 0–1000, saw their own scores, rebutted, steelmanned the rival's best idea and named blind spots | `planning/duel/` (`DUELING_WIZARDS_REPORT.md`) |
+
+Claim ids in this plan of the form `R7-C###` refer to `planning/mor/r7/MOR_CLAIMS.jsonl`.
+
+### K.2 The committed M0 slice against this plan (FACT; executions of 2026-10-29)
+
+A local commit, `68e7091`, added 15 crates, `xtask`, registries, CI and 320 beads (87 closed). It has not been
+pushed; `origin/main` and `origin/master` are at `30ee8f5`. What the auditors reproduced:
+
+| # | Finding | Claims |
+|---|---|---|
+| 1 | Every figure in `fmine assure public --issuer barrick` comes from an in-code stand-in workbook or from literals. Any registered file that is missing or unreadable is silently replaced by the stand-in, per file, with exit 0. With the real workbooks under the expected names the command refuses (FMINE-REF-502: no "Gold AISC" sheet). Changing an input cell leaves the output and state root byte-identical | R7-C001, R7-C011, R7-C058, R7-C059, R7-C065 |
+| 2 | Figures labelled as Barrick's are wrong: FY2025 AISC 1,638 against a published $1,637/oz; 3,255 is attributable production, not ounces sold (3,318); FY2024 3,973 matches no gold-ounce cell; the corporate layer has the wrong sign; the North Mara block is labelled 2024 Q1→Q2 with values that match no cell (the real move is Q2 2025 $1,292 → Q2 2026 $2,577); reserve-replacement inputs were solved to hit 190%/504%; the price decks are shifted by a year. None of the stand-in's 41 explicit values sits at a published coordinate | R7-C002–R7-C006, R7-C054, R7-C159 |
+| 3 | The parser itself works: it reads all 18 real workbooks and matches an independent reader exactly. The obstacles are the compiled-in file list, the hard-coded sheet name and fixed coordinates | R7-C007–R7-C010, R7-C063 |
+| 4 | All 87 closed beads share one close reason citing GATE-BULL-01, closed within 12 seconds; four were closed over open blockers; at least 23 have unmet done-when conditions (no GATE-BULL-01 scorer, no INV-002 flags, no golden cards, no robot schema) | R7-C013–R7-C016 |
+| 5 | INT-AS-001 and INT-NUM-001 records say PASS while no external crate is in the build graph; `lmdi.rs` and `fmine-calib` call `std` transcendentals although INT-NUM-001 lists them as BitwisePortable | R7-C017–R7-C019, R7-C083 |
+| 6 | The envelope lacks the four INV-002 flags, certificate, `next_actions` and the `no_claim` line; `claim show` returns `Exact`/`KnownKnown` for any id with the right prefix | R7-C021, R7-C022, R7-C062, R7-C147 |
+| 7 | Refusal codes mean different things in the plan, the registry and the compiled catalogue (4 of 25 agree); the evidence types are not §7.1/§7.2's; the CONTRACT template lacks six of §0.2's ten sections; 14 of 15 LOC budgets differ from the registry; five of eight lift guard tests do not exist; five lift headers misstate frankensim's licence; `unwrap`/`expect`/`panic` are not denied | R7-C080, R7-C081, R7-C087, R7-C088, R7-C096, R7-C099, R7-C164 |
+| 8 | `deny.toml` would fail asupersync 0.5.0 (rider licences, duplicates) and is not run in CI; `franken-stack.lock` uses `-01` row ids that collide with F.2's upstream-ask ids and names an unrelated crates.io `fastmcp` | R7-C150–R7-C152, R7-C162, R7-C163 |
+| 9 | What holds: §39 and `.beads/issues.jsonl` agree exactly (320 beads, 533 edges, acyclic, 29-bead critical path); §38 is the transitive reduction of the bead graph; §28.3 equals the LOC registry; all 51 inter-crate edges point downward; every lock pin resolves in the sibling repositories; the toolchain pin matches | R7-C068–R7-C074, R7-C166, R7-C170 |
+
+**Before any push (DOMINANT under the owner's loss function; R7 report R001–R003).**
+1. Remove both silent fallbacks; refuse with a non-zero exit that names each absent or unreadable registered file.
+   Move the stand-in and every Barrick-attributed literal to a synthetic lane whose output prints `synthetic` and
+   cannot count toward GATE-BULL-01. Replace the four stand-in tests with labelled synthetic tests plus a real-file
+   run; do not delete or weaken them (BD-321).
+2. Reopen the closed beads whose done-when is unmet, or replace the shared reason with each bead's own evidence; no
+   close reason cites GATE-BULL-01 before a scorer records a PASS on real inputs. Rewrite INT-AS-001 to "not
+   admitted" and INT-NUM-001 to "FD-row fallback taken" (BD-323).
+3. Pin the 18 real workbooks in a source registry and rebuild the importer on label anchors before the Q3 2026
+   release (BD-322).
+
+Whether to amend `68e7091` or follow it with a correcting commit is the owner's decision (OPEN-R7-5).
+
+### K.3 Corrections folded into this plan
+
+| # | Where | Change | Claims |
+|---|---|---|---|
+| 1 | Document control | Status reflects the M0 scaffold; process artifacts list R7, B7 and the duel | R7-C028, R7-C043 |
+| 2 | §3 | Rows added for investor relations and the disclosure committee, and for the compensation committee | R7-C139, R7-C140 |
+| 3 | §5 NS-01 | M0 bars restricted to what public data support; fuel, FX and labour bars wait for M2 | R7-C033, R7-C044 |
+| 4 | §10.4 | `Coverage` time to alarm at 58% coverage: median about 2 years, not 3–5 years | R7-C124 |
+| 5 | §10.7 gates | GATE-PLUMB-E3 pooled over ≥ 50 replicate worlds; GATE-PLUMB-E5 needs ≥ 1,000 null runs and a Clopper–Pearson bound; KILL-PLUMB-6 states the ARL₀ that keeps chance kills ≤ 5% | R7-C120, R7-C122 |
+| 6 | §17 GATE-CRUC-02 | Pooled over recovery and throughput; the twelfth outcome is dated from first plant data | R7-C120 |
+| 7 | §21.6 | Public lane: registered inputs only, typed refusal on any missing file, state root over the input manifest, filed-page labels for company-level figures | R7-C034, R7-C037, R7-C038, R7-C065, R7-C131 |
+| 8 | §21.6, §21.8, §37.3 | GATE-BULL-01 split into extraction fidelity, identity accounting and issuer consistency; the single 95% bar and its 84/89 basis withdrawn; kill on blind-file extraction fidelity | R7-C023, R7-C024, R7-C040, R7-C050, R7-C110, R7-C111 |
+| 9 | §21.6, §37.3 | The FY2026 forecast record: cut-off, manifest, 100% basis, baselines, interval score, external time proof by 31 Dec 2026, attestation, Q1/Q2 2027 vintages, no positive calibration claim before n ≈ 35 | R7-C026, R7-C042, R7-C061, R7-C066, R7-C118, R7-C119, R7-C154, R7-C155 |
+| 10 | §21.6 | Corporate-layer band stated for the six blocks it fits (Q3 2025 is +$88.66); 504% labelled as the published figure | R7-C029, R7-C125 |
+| 11 | §21.8 | GATE-BULL-02 is M3 (with INT-FA-001); GATE-BULL-03 in the site's unit ($/lb at Lumwana) and honest about cost-driver bars | R7-C091, R7-C105, R7-C142 |
+| 12 | §21.9 GB-28 | Review-load arithmetic restated with its assumptions; year-1 writer time is 12–18 min/day on average | R7-C123 |
+| 13 | §22 GATE-HELM-02 | χ² test over K problems replaces the per-seed 2·SE rule | R7-C121 |
+| 14 | §27.5, F.1 | frankenpandas pin fixed at git `37bb94101` (crates.io 0.6.0 is older); `fastmcp-rust` named; FD row ids canonical | R7-C162, R7-C163, R7-C165 |
+| 15 | §28.3, RISK-25 | Sibling velocity reference class; LOC figures are scope caps; RISK-25 raised to High | R7-C112, R7-C113, R7-C115 |
+| 16 | §30.1 | Refusal family → exit code table; usage errors exit 2; registry is the single source | R7-C080, R7-C092, R7-C093, R7-C100 |
+| 17 | §31.1 | "Private access" defined; the issuer's public lane frozen at GATE-DATA-01; issuer data terms | R7-C052, R7-C136, R7-C137, R7-C158, R7-C160 |
+| 18 | §34.2 | Admission records need a tracked `Cargo.lock` with the foundation; INT-AS-001 split into 001a (WP-00) and 001b (WP-05, M1) | R7-C017, R7-C083, R7-C101, R7-C153 |
+| 19 | §34.4 | GATE-DATA-01 freezes the public lane; GATE-DATA-03 has recovery-led and grade-led thresholds; P(M2′) ≈ 0.7 with Lumwana alone, about 0.5 only if the alternates were independent | R7-C084, R7-C102, R7-C126, R7-C137 |
+| 20 | §35.1 F7, §35.2 | F7's 4-of-8 miss is strong evidence (P = 0.005); RISK-31 issuer data terms, RISK-32 synthetic figures reaching an issuer, RISK-33 overstated process records | R7-C118, R7-C160 |
+| 21 | §36.2 | OPEN-HALL-4 moved before GATE-DATA-01; OPEN-R7-1…5 added (data terms, reviewers, the owner's lane status, the Chair passages, the fate of `68e7091`) | R7-C030, R7-C032, R7-C045, R7-C138, R7-C161 |
+| 22 | §37.3 M0 | Blind-test timing (push before 06:00 ET on 9 Nov 2026, else Q4 2026 at M1); named reviewer pool and disclosure sequencing (40-F filer; NP 51-201 and provincial statutes, not Reg FD); crates include BD-090 and BD-142; dependency calendar by role | R7-C025, R7-C041, R7-C086, R7-C089, R7-C090, R7-C104, R7-C116, R7-C132–R7-C135 |
+| 23 | §37.3 M2 | Recovery-led GATE-DATA-03 route; a material finding routed to Barrick's disclosure QP and committee the day it is attested; waterfall bars classed controllable, price-linked or structural | R7-C084, R7-C102, R7-C138, R7-C141 |
+| 24 | §39 | Bead rule: own-evidence close reasons, no closing over blockers, an xtask check; BD-123 accepts the FD-FMD-00 fallback | R7-C039, R7-C085, R7-C103 |
+| 25 | §21.6, §21.8, §37.3 | GATE-BULL-01 part 2 rewritten as five cited states under a declared rounding construction; the live-dependency proof added to M0 acceptance | B7; E691–E698 |
+| 26 | §21.6 | G&A sits wholly in L_corp (FACT); the waterfall is descriptive on public data, with factor-domain refusal, rounding intervals per bar and the printed-rate gap listed | E697, E699 |
+| 27 | §5 NS-01 | "Certified causal waterfall" becomes causal only once the metallurgical balance is in (M2) | E699 |
+| 28 | §22.1 | A finding is not a decision: evidence-challenge packets for public exceptions | B7 EV-P2-3, EV-P3-5 |
+| 29 | §22.8 GB-29 | No-flip prior 34/43 ≈ 0.79, not about 0.78 | B7 EV-P2-4 |
+| 30 | §24.3, §24.9 | Issuer reserve rows as imported assertions; GATE-HALL-01's fixture is the filed roll-forward, with the deck as a cross-check | E692, E698 |
+| 31 | §37.3 M0, M1 | M0 adds the live-dependency proof, the reproduction kit, certified discrepancies and (as a target) the guidance transcription; M1 adds the public-data capabilities of K.5 | K.5 |
+| 32 | §39, BD-272 | BD-272 drops the ±1-last-digit rule; BD-321 to BD-357 added (K.6) | B7 EV2-P1-1 |
+
+**Rejected during audit (kept as lessons).** "The 95% bar is reachable because AISC values match Mine Stats in 420
+of 432 cells" (R7-C064): that agreement rate is a different test on a different denominator. "INV-009 has no
+enforcing bead" (R7-C095): the same rule is NL-6, covered by BD-042 and GATE-PLUMB-E1.
+
+**Checked nulls.** JV partners, regulators and QPs have no material reader gap in M0–M1 (R7-C143–R7-C145);
+retrospective DecisionCards built only from public evidence touch no disclosure rule (R7-C146); site access and
+suite non-convergence are controlled for M0–M2 deliverables (R7-C168, R7-C169); the build-host disk shortage
+affects local throughput, not plan control (R7-C171). The recomputed cards GB-03, GB-08, GB-26, GB-29 and GB-35
+hold (R7-C055, R7-C056, R7-C125).
+
+### K.4 What B7 established about the assurance chain
+
+B7 tested 24 design hypotheses (six per pane, one pane per model family plus a second Codex pane) against the real
+workbooks and filings, in two refutation rounds, a decisive pilot and three per-family distillations. The full
+record and the verdict table are in `planning/brenner/B7_assurance_chain.md`, the register in
+`planning/brenner/B7_disagreement_register.md`.
+
+**Adopted into this plan (rule → where).**
+1. Bind every imported value to its bytes *and* its interpretation: cell or page, header, unit, basis, subject and
+   publication vintage, with the raw token kept. An anchor alone proves too little (§21.6; BD-322, BD-332).
+2. Extraction fidelity is its own gate. A five-state identity ledger reports what the identities show; no
+   completeness count stands in for fidelity (E696; §21.6 part 2; BD-331).
+3. Name the rounding construction before judging an identity: a subtotal rounded once, or a sum of rounded
+   component lines. The AISC tables identify the second (1,207 of 1,212 totals foot; E815). Feasibility,
+   explanation and physical accuracy are separate claims, and an explanation is either stated by the issuer or
+   reconstructed from public cells (E691, E694, E695, E698, E816; BD-340).
+4. On public data the waterfall is a descriptive bridge: factor-domain refusal with a signed additive fallback,
+   rounding intervals on every bar, and closure treated as arithmetic, not attribution (E699; §21.6; BD-333).
+5. A finding is not a decision: public exceptions ship as evidence-challenge packets, and DecisionCards refuse
+   without actions, states and utilities (§22.1; BD-349).
+6. Issuer reserve rows are imported assertions with deck and vintage keys; filed rows win over decks, and both
+   vintages of a corrected row are kept (§24.3; GATE-HALL-01; E692, E698; BD-335).
+7. Exact finite VOI where the decision supplies finite states and utilities. GB-29's no-flip prior is exactly
+   34/43 ≈ 0.791, not about 0.78: at 0.78 a "low" result still flips the decision and EVSI is about $2.3M, below the
+   test's $9.8M cost (B7 EV-P2-4; GB-29 corrected).
+8. The agent surface reads from the store: an invented Claim id is refused, and a draft is distinguishable from its
+   registration or adoption (§30; K.2 finding 6).
+
+**Killed or narrowed in the plan's earlier text.** The ±1-last-digit identity rule (it flips 21 of 306 regional
+verdicts; BD-272); "zero unexplained failures" as identity acceptance (replaced by five states); a universal causal
+waterfall on public data; a monetary DecisionCard for every public finding; investor-deck endnotes as the
+roll-forward fixture; G&A as an inference about the total layer (now FACT, E697).
+
+**Settled by B7's decisive pilot, then checked against the bytes.** The Africa & Middle East Q1 2025 gap closes
+from Loulo-Gounkoto's public cells, with the inclusion rule unstated (E816). Loulo-Gounkoto lost control on June
+16, 2025, as both filed MD&As say (W1-DR-03 closes), and the Q1 2026 MD&A states that no operating data were
+provided for Q1–Q3 2025. NOT_PUBLISHED therefore stands for scoring (Appendix I.6), and the Q1 2025 workbook's
+production cells stay a register item (E818).
+
+**Still open (owner or next pass).** Why Veladero's per-ounce rows sit on an ounce series no public cell carries
+(six quantities, Q1 2024–FY2025; E691, E817), and North Mara's Q2 2026 rows on one about 1 koz below the printed
+ounces (E819); Hemlo's Q4 2025 and FY2025 cost of sales per ounce; and the 2023 Latin America & Asia Pacific region
+rows that disagree with their own members (E817). Each is a state-(iv) item naming the document that would close
+it. The cheapest common test is to run the one-cell cost-of-sales check, share-scaled, on every site column of the
+eight AISC workbooks: if only these columns fail, the cause is site-specific, not a basis rule.
+
+### K.5 New capabilities from the idea duel and B7
+
+Three models each proposed 15 ideas (45 in all), scored the other two models' 15 on 0–1000, saw their own scores,
+rebutted, steelmanned the rivals' best ideas and named blind spots (`planning/duel/DUELING_WIZARDS_REPORT.md`). Each
+capability below has a first slice that does not assume the M0 code works. Scores are the two rivals' scores,
+then any revision after steelmanning.
+
+**The headline (INFERENCE).** All three models' own first-ranked ideas were about the issuer's published guidance
+(CC-01, COD-01, AGY-01). Two independent pairs converged on an exact rounding-aware consistency check (CC-02, COD-02)
+and on per-value provenance tests (blind spots of Claude and Gemini). A third pair converged on recall of issued
+outputs (blind spots of Claude and Codex). The duel's strongest advice is therefore not a new subsystem: test the
+evidence chain itself, and use the issuer's own forward statements as the pre-registered forecasts that M0 lacks.
+
+| # | Capability (origin; rival scores) | Subsystem and reader | First slice | Test | Kill or fallback | Bead |
+|---|---|---|---|---|---|---|
+| 1 | Live-dependency proof (Gemini and Claude blind spots, independent) | Testpit, Portal; gate reviewers, auditors | M0: delete or blank each registered file; perturb each cited cell by one unit in its last place | Seeded hard-coded literal, dead ancestor edge and silent fallback each fail; every M0 scored value passes | If the CI budget is exceeded, sample cells stratified by output, never skip a file | BD-338 |
+| 2 | Reproduction kit for outside readers (Gemini blind spot) | Portal; auditors, readers of the public repository | M0: URLs, sha256, label selectors, expected state roots; no workbook bytes committed | A clean checkout plus the issuer's downloads reproduces every state root | A re-posted file with new bytes is a new vintage in the registry | BD-339 |
+| 3 | Exact rounding-interval consistency solver (CC-02: 875, 910; COD-02: 830, 875) | Bullion, Portal, Hallmark; controller, IR, auditor, JV partner | M0: linear identities on the ten Mine Stats workbooks; M1: per-ounce identities and roll-forwards | 0 certified conflicts on 10⁴ generated clean tables; known answers E113–E116, E144, E147, E691, E692, E698 | If it never finds more than the interval rule alone, it stays as BD-331's kernel and is not a product | BD-340 |
+| 4 | Guidance track record (CC-01: 730 → 790, 865 → 905) | Plumb, Bullion; CFO, IR, compensation committee, board | M0 target: two-reader transcription FY2023–FY2026 with pages; M1: scores | Every value reproduces its page or cell; estimators cover truth 85–95% over ≥ 200 synthetic replicates | Fewer than three resolved years × ten sites with citations in week 1: single-site guidance cards | BD-341 |
+| 5 | Guidance completion test (COD-01: 610 → 720, 860 → 900; AGY-01 narrowed: 540 → 640, 430 → 610) | Bullion, Helm; CFO, disclosure committee, site GMs | M1, public lane only: required remaining production and AISC numerator against the site's quarterly envelope and its technical-report nameplate | North Mara H1 2026 reproduced (68 koz against 200–230 koz; E587); synthetic sites with known feasibility | If a year of results never changes an envelope tier, fold it into the track record | BD-342 |
+| 6 | Forecast cohorts and outcome vintages (COD-08: 700, 735) | Plumb; every reader of a track record | M0–M1, with the FY2026 forecast record | No missing outcome leaves a denominator; a restatement never overwrites an assessment | None: it is a ledger property | BD-343 |
+| 7 | Temporal-cone check (AGY-15: 720, 790) | Plumb, Testpit; QPs, auditors | M1, on the first hindcast and both retrospective cards | Seeded leaks through a variogram fit, an exclusion list and a deck are caught; replay with post-cut objects removed matches | Ancestors without availability times make the card refuse; the rule is never relaxed | BD-344 |
+| 8 | Disclosure lint in cited mode, with a publicness verdict (CC-04: 810, 810; converges with COD-10, AGY-05 and Claude's blind spot B2) | Adit; disclosure committee, IR, AI agents | M1: cited mode and six metric keys over public text | Two-reader labelled set: no false `verified`; publicness verdicts match filing dates | Discovery precision below about 90%: cited mode only; counsel declines the publicness verdict: drop it | BD-345 |
+| 9 | Reliance status and outbound register for issued outputs (Codex and Claude blind spots, independent; COD-04 narrowed) | Adit, Plumb; IR, audit committee, JV recipients, agents | M1: synthetic issuer, one report, two holders, one later defect | A withdrawn output is refused for current reuse while its digest still verifies | Holders never reuse detached outputs: keep only the export-path check | BD-347 |
+| 10 | JV mirror (CC-06: 830, 850) | Portal, Bullion; JV partners, both audit committees | M1: NGM and Pueblo Viejo against Newmont's filings, Kibali against AngloGold Ashanti's | Production mirrors FY2023–FY2025 reproduce both filings' cells; each bridge cites its own reconciliation | Coarser partner perimeter: reconcile there; cost lines refuse: production and capex only | BD-346 |
+| 11 | Evidence-challenge packet (B7 H-P2-6, survived) | Plumb, Bullion; source owners | M0, with the discrepancy register | Every register item renders; none carries an invented NPV, CVaR or likelihood | None | BD-349 |
+| 12 | Non-interference check at the wall (Gemini blind spot) | Bedrock; general counsel, IR, agents | M2, when private data arrive (GATE-DATA-01) | A seeded MNPI note that changes a ranking is caught | Deterministic tool outputs only; prose stays behind the lint | BD-348 |
+| 13 | Target disclosure checks (CC-10: 760, 785) | Lodestar, Helm; BD and M&A | M1–M2: synthetic juniors, one developer cash-flow replay | Seeded selective reporting caught; one public NPV reproduced | Irregular release formats: cited mode, a person enters intervals | BD-350 |
+| 14 | Comparability engine (CC-12: 705, 705) | Bullion, Portal; CFO, IR, remuneration committee | M1–M2: AISC and production for four issuers | Synthetic claim set classified correctly | Definitions too thin: production and capex only | BD-355 |
+| 15 | Untested-ore decision bounds (COD-28: 590, 815; contested) | Crucible, Strata, Helm; metallurgists, QPs | M2 | Synthetic strata known answers | Blending interactions declared: refuse | BD-351 |
+| 16 | Evidence-origin accounting (COD-03: 620, 805; contested) | Plumb, Corebox; QPs, statisticians | M1–M2 | Batch-bias known answer; a reprint never narrows an interval | Overlaps domain bias models: keep only the schema | BD-352 |
+| 17 | Compensation-formula exposure (Codex blind spot; the R7 compensation-committee row) | Bullion, Helm; remuneration committee | M1: synthetic scheme; one disclosed formula if its terms suffice | Every threshold boundary enumerated; a range across a threshold is never a point | No formula reproducible from disclosures: an ambiguity warning only | BD-353 |
+| 18 | Insurance recovery evidence (Gemini and Codex blind spots, independent) | Helm, Bullion; risk and insurance team, CFO | M3, after the sponsor gate | Synthetic known answers | No repeatable insurer question, or terms unavailable | BD-354 |
+| 19 | Pilot protocol card (CC-05: 625, 765) | Testpit, Crucible; sponsor, site GM | M1, before GATE-DATA-01 | Reviewed by the sponsor | Power stated as an envelope; no ranking fallback | BD-356 |
+| 20 | Salted review (Claude blind spot B4) | Testpit; gate reviewers, QPs | M0, internal reviews only | Two rounds report a catch rate with a Clopper–Pearson bound (0 of 5 caught bounds it below about 52%) | Reviewers decline; any seed reaches an export: stop | BD-357 |
+
+**Merged, parked or dropped (with the reason).**
+
+| Idea | Disposition |
+|---|---|
+| CC-09 guidance lifecycle; COD-16 intervention-affected outcomes | Merged into BD-341 and BD-343; the sequential revision guarantee is dropped |
+| COD-10 bounded sentences; AGY-05 prose verifier | Merged into BD-345 |
+| COD-04 decision recall; Claude's B3 outbound register | Merged into BD-347 |
+| COD-07 JV disagreement; COD-09 comparability frontier | Public versions are BD-346 and BD-355; partner-agreed exports wait |
+| CC-13 sealed-answer benchmark | Folded into GATE-ROBOT-01 |
+| CC-03 spreadsheet lifter; AGY-02 workbook autopsy | Narrowed to a structural audit at M2: public formulas sit almost wholly in three workbooks (1,092 `#REF!` cells in Q2 2026 Mine Stats, E466; 304 formula cells in each 2026 AISC file, 302 of them external references) |
+| AGY-12 geomet bridge | Its critique of BD-300's guarantee stands; folded into BD-300 |
+| AGY-07 stream terms; COD-05 metal to spendable cash | Folded into BD-314 |
+| AGY-09 stockpile segregation; AGY-14 stope sequencing | One candidate operator in BD-312; the two-sided paste window in BD-307 |
+| CC-07 intertemporal-shift ledger (450, 825); CC-08 fiscal mirror; CC-11 conversion bounds; CC-14 board delta pack | Parked: contested, or their formulations need repair first |
+| AGY-04 block-model forensics (450, 340); AGY-03 shadow-price loop (340, 300) | Parked: both rivals scored them low, and AGY-03's chance constraint is unproven |
+| AGY-08 data room (400, 180); CC-15 disruption library | Dropped by their authors; CC-15 survives as a cited fixture of quantified events |
+| Gemini blind spots: statutory workpapers (IFRIC 20, IAS 2, IAS 36, IAS 37); lender completion tests | Parked to M3 with FA: per-pushback stripping data and credit agreements are not public |
+
+### K.6 Beads added (BD-321 to BD-357)
+
+| Range | Work packages | What they carry |
+|---|---|---|
+| BD-321, BD-322, BD-329–BD-334 | WP-03 | K.2's pre-push steps, the uncited-number and filed-page checks, the five-state ledger, vintage keys, the public-data waterfall, the forecast-record manifest |
+| BD-323–BD-327, BD-357 | WP-00 | Bead and INT record corrections, the close-reason check, INT-AS-001a, `deny.toml` in CI, the CONTRACT template, salted review |
+| BD-328 | WP-06 | One refusal registry |
+| BD-335, BD-342, BD-346, BD-355 | WP-13 | Issuer reserve rows, the completion test, the JV mirror, the comparability engine |
+| BD-336 | WP-10 | Metallurgical-balance import for the recovery-led route; BD-204 now depends on it, so WP-12 depends on WP-10 |
+| BD-337 | WP-05 | INT-AS-001 criterion 8 |
+| BD-338–BD-341, BD-345, BD-347, BD-349 | WP-03 | Live-dependency proof, reproduction kit, the exact solver, the track record, the lint, the reliance check, challenge packets |
+| BD-343, BD-352 | WP-02 | Forecast cohorts, evidence-origin accounting |
+| BD-344 | WP-08 | Temporal-cone check, beside the hindcast tool |
+| BD-348, BD-356 | WP-12 | Non-interference at the wall, the pilot protocol card |
+| BD-350 | WP-15 | Target disclosure checks |
+| BD-351 | WP-16 | Untested-ore bounds, beside geomet coverage |
+| BD-353, BD-354 | WP-14 | Compensation-formula exposure, insurance recovery evidence |
+
+Edges added to existing beads: BD-065 ← BD-322 (the harness runs on registered inputs only); BD-068 ← BD-334;
+BD-074 ← BD-338 (the M0 end-to-end run includes the live-dependency proof); BD-076 ← BD-343; BD-204 ← BD-336. The
+generator reports 357 beads, 589 edges, 0 cycles and an unchanged 29-bead longest chain.

@@ -1,0 +1,60 @@
+  [2m2026-10-29T18:37:50.193732Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSelected worker: trj at ubuntu@100.91.120.17 (4 slots remaining after reservation, speed 36.5)[0m
+    [2;3mat[0m rch/src/hook.rs:4233 [2;3mon[0m ThreadId(1)
+
+  [2m2026-10-29T18:37:50.600634Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mStarting remote compilation pipeline for franken_mining (hash: 2cfd29584c9df570)[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:1144 [2;3mon[0m ThreadId(1)
+
+  [2m2026-10-29T18:37:50.600709Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mPrepared dependency sync manifest for 1 roots[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:1166 [2;3mon[0m ThreadId(1)
+
+  [2m2026-10-29T18:37:59.964408Z[0m [33m WARN[0m [1;33mrch::hook[0m[33m: [33mRemote execution failed on trj: worker source namespace initialization refused on trj (status Some(75)): RCH: durable source ownership: unfinished overlapping source owner
+RCH: durable source ownership: unfinished overlapping source owner
+RCH: durable source ownership: unfinished overlapping source owner
+RCH: durable source ownership: unfinished overlapping source owner
+RCH: durable source ownership: unfinished overlapping source owner
+RCH: durable source ownership: unfinished overlapping source owner; will retry on another worker if available[0m
+    [2;3mat[0m rch/src/hook.rs:4834 [2;3mon[0m ThreadId(1)
+
+  [2m2026-10-29T18:38:00.068410Z[0m [33m WARN[0m [1;33mrch::hook[0m[33m: [33mRemote build remote execution failed on trj; retrying on higher-capacity worker ts1 (attempt 2/3)[0m
+    [2;3mat[0m rch/src/hook.rs:4880 [2;3mon[0m ThreadId(1)
+
+[RCH] retry on bigger worker ts1 (attempt 2/3) after remote execution failed on trj
+  [2m2026-10-29T18:38:00.077147Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSelected worker: ts1 at ubuntu@100.74.254.33 (0 slots remaining after reservation, speed 56.4) [remote retry 2/3][0m
+    [2;3mat[0m rch/src/hook.rs:4233 [2;3mon[0m ThreadId(1)
+
+  [2m2026-10-29T18:38:00.656486Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mStarting remote compilation pipeline for franken_mining (hash: 2cfd29584c9df570)[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:1144 [2;3mon[0m ThreadId(1)
+
+  [2m2026-10-29T18:38:00.656524Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mPrepared dependency sync manifest for 1 roots[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:1166 [2;3mon[0m ThreadId(1)
+
+  [2m2026-10-29T18:38:01.963439Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mSyncing project to worker ts1...[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:1466 [2;3mon[0m ThreadId(1)
+
+  [2m2026-10-29T18:38:01.974328Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /Users/jemanuel/projects/franken_mining -> /Users/jemanuel/projects/franken_mining on ts1 (streaming)[0m
+    [2;3mat[0m rch/src/transfer.rs:5939 [2;3mon[0m ThreadId(1)
+
+  [2m2026-10-29T18:38:02.402582Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mSync complete: 4 files, 17748 bytes in 383ms[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:1924 [2;3mon[0m ThreadId(1)
+
+  [2m2026-10-29T18:38:02.633139Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mExecuting command remotely: cargo run -q -p xtask --config 'env.RCH_BUILD_SOURCE.value="68e709122ebb0c6b50fb6c1b5dbe558c3921a864-dirty"' --config 'env.RCH_BUILD_SOURCE.force=true' -- check-all[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:2081 [2;3mon[0m ThreadId(1)
+
+  [2m2026-10-29T18:38:02.643313Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRewriting CARGO_TARGET_DIR for remote execution (worker-scoped path): /var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/rch_target_fmine -> /Users/jemanuel/projects/franken_mining/.rch-target-ts1-pool-6f616630f3cf9e5534782aa5f1f30065[0m
+    [2;3mat[0m rch/src/transfer.rs:3950 [2;3mon[0m ThreadId(1)
+
+  [2m2026-10-29T18:38:02.643374Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mWrapping command with external timeout protection, [1;32mkind[0m[32m: cargo build, [1;32mtimeout_secs[0m[32m: 3600[0m
+    [2;3mat[0m rch/src/transfer.rs:4791 [2;3mon[0m ThreadId(1)
+
+GATE-LAYERS-00 PASS: 60 crates registered, 8859 actual Rust LOC (planned 1128000, ceiling 1298000)
+  [2m2026-10-29T18:38:04.717416Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mRemote command finished: exit=0 in 1902ms[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:2313 [2;3mon[0m ThreadId(1)
+
+[RCH] RCH-E327: artifact debug/xtask is incompatible with aarch64-apple-darwin; rejected before downloading build artifacts; local outputs were not replaced. Pin --target or set RCH_ALLOW_FOREIGN_ARTIFACTS=1 for intentional foreign artifacts
+  [2m2026-10-29T18:38:05.102530Z[0m [33m WARN[0m [1;33mrch::hook::transfer_orchestration[0m[33m: [33mFailed to sync custom CARGO_TARGET_DIR artifacts: RCH-E327: artifact debug/xtask is incompatible with aarch64-apple-darwin; rejected before downloading build artifacts; local outputs were not replaced. Pin --target or set RCH_ALLOW_FOREIGN_ARTIFACTS=1 for intentional foreign artifacts[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:2811 [2;3mon[0m ThreadId(1)
+
+[RCH] remote ts1 failed (exit 102)
+  [2m2026-10-29T18:38:05.173413Z[0m [33m WARN[0m [1;33mrch::hook[0m[33m: [33mFailed to persist acknowledged durable lease terminal state: durable retrieval or source release evidence is incomplete; terminal acknowledgement refused (state stays recoverable)[0m
+    [2;3mat[0m rch/src/hook.rs:4656 [2;3mon[0m ThreadId(1)
+
