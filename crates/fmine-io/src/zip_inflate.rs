@@ -272,8 +272,8 @@ fn inflate_raw(data: &[u8], expected_size: usize) -> Result<Vec<u8>, ZipError> {
         0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
     ];
     const DIST_BASE: [u16; 30] = [
-        1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025,
-        1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
+        1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
+        2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
     ];
     const DIST_EXTRA: [u8; 30] = [
         0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12,
@@ -312,8 +312,8 @@ fn inflate_raw(data: &[u8], expected_size: usize) -> Result<Vec<u8>, ZipError> {
                         break;
                     } else if sym <= 285 {
                         let idx = sym - 257;
-                        let length = usize::from(LEN_BASE[idx])
-                            + (br.read_bits(LEN_EXTRA[idx])? as usize);
+                        let length =
+                            usize::from(LEN_BASE[idx]) + (br.read_bits(LEN_EXTRA[idx])? as usize);
                         let dsym = dist_table.decode(&mut br)? as usize;
                         if dsym >= 30 {
                             return Err(ZipError::Inflate("invalid distance symbol"));
@@ -403,70 +403,4 @@ pub fn write_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     out.extend_from_slice(&cd_offset.to_le_bytes());
     out.extend_from_slice(&0_u16.to_le_bytes());
     out
-}
-
-/// Constructs a canonical `.xlsx` byte stream containing the verified Barrick cell coordinates
-/// when running on an isolated remote worker where `.gitignore`d `corpus_of_input_docs/` is absent.
-#[must_use]
-pub fn build_canonical_barrick_xlsx_bytes() -> Vec<u8> {
-    let wb_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <sheets>
-    <sheet name="Gold AISC" sheetId="1" r:id="rId1"/>
-    <sheet name="Copper AISC" sheetId="2" r:id="rId2"/>
-    <sheet name="YTD Q3 2025" sheetId="3" state="hidden" r:id="rId3"/>
-  </sheets>
-</workbook>"#;
-
-    let rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
-  <Relationship Id="rId2" Target="worksheets/sheet2.xml"/>
-  <Relationship Id="rId3" Target="worksheets/sheet3.xml"/>
-</Relationships>"#;
-
-    let mut sheet1 = String::from(
-        r#"<?xml version="1.0" encoding="UTF-8"?><worksheet><sheetData>
-<row r="14"><c r="L14"><v>4492</v></c><c r="N14"><v>4869</v></c></row>
-<row r="191"><c r="L191"><v>1699</v></c><c r="N191"><v>1999</v></c></row>
-<row r="192"><c r="L192"><v>724</v></c><c r="N192"><v>639</v></c></row>
-<row r="193"><c r="L193"><v>547</v></c><c r="N193"><v>542</v></c></row>
-<row r="194"><c r="L194"><v>200</v></c><c r="N194"><v>234</v></c></row>
-<row r="195"><c r="L195"><v>9</v></c><c r="N195"><v>15</v></c></row>
-<row r="196"><c r="L196"><v>314</v></c><c r="N196"><v>372</v></c></row>
-<row r="197"><c r="L197"><v>216</v></c><c r="N197"><v>234</v></c></row>
-<row r="198"><c r="L198"><v>562</v></c><c r="N198"><v>497</v></c></row>
-<row r="199"><c r="L199"><v>138</v></c><c r="N199"><v>757</v></c></row>
-<row r="200"><c r="L200"><v>409</v></c><c r="N200"><v>348</v></c></row>
-<row r="201"><c r="L201"><v>170</v></c><c r="N201"><v>132</v></c></row>
-<row r="202"><c r="L202"><v>158</v></c><c r="N202"><v>78</v></c></row>
-<row r="203"><c r="L203"><v>110</v></c><c r="N203"><v>84</v></c></row>
-<row r="204"><c r="L204"><v>84</v></c><c r="N204"><v>0</v></c></row>
-<row r="206"><c r="L206"><v>5332</v></c><c r="N206"><v>5882</v></c></row>
-<row r="208"><c r="J208"><v>2582</v></c><c r="L208"><v>1395</v></c><c r="N208"><v>1380</v></c></row>
-<row r="218"><c r="L218"><v>1638</v></c><c r="N218"><v>1484</v></c></row>
-<row r="228"><c r="L228"><v>3255</v></c><c r="N228"><v>3973</v></c></row>
-<row r="230"><c r="A230" t="e"><v>#REF!</v></c><c r="B230" t="inlineStr"><is><t>-</t></is></c></row>"#,
-    );
-    for r in 231..=350 {
-        for col_idx in 0..20 {
-            let col_ch = (b'A' + (col_idx as u8)) as char;
-            sheet1.push_str(&format!(
-                "<row r=\"{r}\"><c r=\"{col_ch}{r}\"><v>{}</v></c></row>",
-                r * 10 + col_idx
-            ));
-        }
-    }
-    sheet1.push_str("</sheetData></worksheet>");
-
-    let sheet2 = br#"<?xml version="1.0" encoding="UTF-8"?><worksheet><sheetData>
-<row r="14"><c r="L14"><v>961</v></c><c r="N14"><v>871</v></c><c r="P14" t="inlineStr"><is><t>N/A</t></is></c></row>
-</sheetData></worksheet>"#;
-
-    write_stored_zip(&[
-        ("xl/workbook.xml", wb_xml),
-        ("xl/_rels/workbook.xml.rels", rels_xml),
-        ("xl/worksheets/sheet1.xml", sheet1.as_bytes()),
-        ("xl/worksheets/sheet2.xml", sheet2),
-    ])
 }

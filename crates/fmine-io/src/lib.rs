@@ -135,12 +135,12 @@ fn parse_html_cell_value(text: &str) -> CellValue {
         return CellValue::Placeholder(t.to_string());
     }
     let clean = t.replace([',', '$', ' '], "");
-    let (neg, digits) = if let Some(inner) = clean.strip_prefix('(').and_then(|s| s.strip_suffix(')'))
-    {
-        (true, inner)
-    } else {
-        (false, clean.as_str())
-    };
+    let (neg, digits) =
+        if let Some(inner) = clean.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+            (true, inner)
+        } else {
+            (false, clean.as_str())
+        };
     if !digits.is_empty() {
         if let Ok(v) = digits.parse::<f64>() {
             if v.is_finite() {
@@ -154,36 +154,101 @@ fn parse_html_cell_value(text: &str) -> CellValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::xlsx::{QuarantineItem, Workbook};
+    use crate::xlsx::{MinimalCell, MinimalSheet, QuarantineItem, Workbook, build_minimal_xlsx};
+    use fmine_core::hash::sha256;
     use std::path::PathBuf;
 
+    fn cell(r: &str, c: MinimalCell) -> (String, MinimalCell) {
+        (r.to_string(), c)
+    }
+
+    /// BD-321: a missing workbook is an error that names the path, even under `corpus_of_input_docs/`
+    /// (where the removed fallback used to substitute an in-code stand-in).
     #[test]
-    fn test_parse_real_barrick_xlsx_workbooks() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|p| p.parent())
-            .expect("workspace root")
-            .to_path_buf();
-        let corpus = root.join("corpus_of_input_docs");
+    fn test_missing_file_is_an_error_never_a_stand_in() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("corpus_of_input_docs")
+            .join("no-such-workbook.xlsx");
+        match Workbook::from_file(&path) {
+            Err(IoError::FileRead { path: p, .. }) => assert!(p.ends_with("no-such-workbook.xlsx")),
+            other => panic!("expected FileRead, got {other:?}"),
+        }
+    }
 
-        // 1. Parse barrick-aisc-2025-q4.xlsx and verify Gold AISC & Copper AISC sheets.
-        let aisc_q4 = Workbook::from_file(&corpus.join("barrick-aisc-2025-q4.xlsx"))
-            .expect("must parse barrick-aisc-2025-q4.xlsx");
-        assert!(aisc_q4.sheet("Gold AISC").is_some());
-        assert!(aisc_q4.sheet("Copper AISC").is_some());
-        assert!(aisc_q4.total_cells() > 1_000);
-
-        // 2. Parse barrick-mine-stats-2025-q4.xlsx and verify G-BULL-1 quarantines #REF! cells and hidden sheets.
-        let stats_q4 = Workbook::from_file(&corpus.join("barrick-mine-stats-2025-q4.xlsx"))
-            .expect("must parse barrick-mine-stats-2025-q4.xlsx");
-        assert!(stats_q4.total_cells() > 2_000);
-        assert!(
-            stats_q4
-                .quarantined
-                .iter()
-                .any(|q| matches!(q, QuarantineItem::FormulaErrorCell { .. })),
-            "G-BULL-1 must quarantine #REF! cells in barrick-mine-stats-2025-q4.xlsx"
+    /// Writer → parser round trip on a synthetic workbook: typed cells, G-BULL-1/2 quarantine, the cell census
+    /// and the canonical numeric digest (known answer computed from the fixed listing format).
+    #[test]
+    fn test_minimal_xlsx_round_trip_census_and_digest() {
+        let bytes = build_minimal_xlsx(&[
+            MinimalSheet {
+                name: "Synthetic A&B".to_string(),
+                hidden: false,
+                cells: vec![
+                    cell("A1", MinimalCell::Text("Label <one>".to_string())),
+                    cell("B1", MinimalCell::Number(42.0)),
+                    cell("C1", MinimalCell::Number(-0.125)),
+                    cell("B2", MinimalCell::Text("—".to_string())),
+                    cell("C2", MinimalCell::Error("#REF!".to_string())),
+                    cell("AA10", MinimalCell::Number(0.00001)),
+                ],
+            },
+            MinimalSheet {
+                name: "Hidden scratch".to_string(),
+                hidden: true,
+                cells: vec![cell("A1", MinimalCell::Number(7.0))],
+            },
+        ]);
+        let wb = Workbook::from_bytes("synthetic.xlsx", &bytes).expect("parse synthetic workbook");
+        let sheet = wb.sheet("Synthetic A&B").expect("visible sheet");
+        assert_eq!(
+            sheet.cell(1, 1).map(|c| c.value.clone()),
+            Some(CellValue::Text("Label <one>".into()))
         );
+        assert_eq!(
+            sheet.cell(1, 2).map(|c| c.value.clone()),
+            Some(CellValue::Number(42.0))
+        );
+        assert_eq!(
+            sheet.cell(2, 2).map(|c| c.value.clone()),
+            Some(CellValue::Placeholder("—".into()))
+        );
+        assert_eq!(
+            sheet.cell(10, 27).map(|c| c.cell_ref.as_str()),
+            Some("AA10")
+        );
+        assert!(wb.sheet("Hidden scratch").is_none());
+        assert!(wb.quarantined.contains(&QuarantineItem::HiddenSheet {
+            sheet_name: "Hidden scratch".into(),
+            state: "hidden".into()
+        }));
+        assert!(wb.quarantined.contains(&QuarantineItem::FormulaErrorCell {
+            sheet_name: "Synthetic A&B".into(),
+            cell_ref: "C2".into(),
+            error_token: "#REF!".into()
+        }));
+
+        let census = wb.cell_census();
+        assert_eq!(
+            (
+                census.visible_sheets,
+                census.hidden_sheets,
+                census.numeric_cells
+            ),
+            (1, 1, 3)
+        );
+        assert_eq!(
+            (
+                census.placeholder_cells,
+                census.formula_error_cells,
+                census.text_cells
+            ),
+            (1, 1, 1)
+        );
+        let listing =
+            "Synthetic A&B\tB1\t42\nSynthetic A&B\tC1\t-0.125\nSynthetic A&B\tAA10\t0.00001\n";
+        assert_eq!(census.numeric_digest, sha256(listing.as_bytes()).0);
+        assert_eq!(xlsx::col_index_to_letters(27), "AA");
+        assert_eq!(xlsx::col_index_to_letters(703), "AAA");
     }
 
     #[test]

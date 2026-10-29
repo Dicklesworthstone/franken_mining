@@ -1,151 +1,36 @@
-//! Public filing source registry (`BD-055`), public-basis `Claim` builder (`BD-058`),
-//! Barrick 18-workbook corpus loader (`2024Q1–2026Q2`, `BD-059`), and M0 Public Assurance
-//! Demonstrator (`GATE-BULL-01`, `BD-066`).
+//! Public lane (`GATE-BULL-01`, `BD-055`, `BD-058`, `BD-066`, `BD-321`, `BD-322`): loads the registered public
+//! workbooks of an issuer, refusing unless every file is present with its registered SHA-256; measures
+//! extraction (cell census and numeric-cell digest per workbook); builds the five-state identity ledger over
+//! the issuer's AISC reconciliation tables; and commits the whole result to a state root.
+//!
+//! Nothing here is a stand-in: a missing or altered input is a typed refusal (`FMINE-REF-502`) naming the
+//! file. Synthetic workbooks exist only in the synthetic lane, which says so and is never gate-eligible.
 
+pub mod aisc;
+pub mod sources;
+pub mod synthetic;
+
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use fmine_claim::{AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport};
-use fmine_core::anchor::{FMT_ANCHOR_V1, LedgerAnchor, SourceAnchor};
+use fmine_core::anchor::{FMT_ANCHOR_V1, LedgerAnchor};
 use fmine_core::codec::Encoder;
-use fmine_core::hash::blake3_hash;
-use fmine_core::id::{ObjectId, PrefixKind};
+use fmine_core::hash::{Digest32, blake3_hash, sha256};
 use fmine_evidence::{EvidenceClass, KnowledgeState, Refusal};
-use fmine_io::IoError;
-use fmine_io::xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook};
-use fmine_metrics::{
-    AiscConsolidationBridge, LmdiState, LmdiWaterfall, ReserveReplacementBridge, SiteAiscRow,
-    decompose_aisc_lmdi,
+use fmine_io::xlsx::{
+    CellCensus, CellValue, ExtractedCell, QuarantineItem, Workbook, parse_a1_ref,
 };
 
-/// Classification of a public supplemental workbook (`BD-055`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum FilingKind {
-    MineStats,
-    Aisc,
-}
+use crate::aisc::{
+    IdentityFamily, IdentityInstance, IdentityState, RateMiss, UnregisteredHeader, cell_text,
+    ledger_for_table, locate_table, reconstruction_closes,
+};
+use crate::sources::{IssuerProfile, RegisteredReconstruction, SourceKind};
 
-/// Canonical descriptor for a public filing workbook in `corpus_of_input_docs/` (`BD-055`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FilingDescriptor {
-    pub issuer: &'static str,
-    pub period: &'static str,
-    pub kind: FilingKind,
-    pub filename: &'static str,
-}
-
-/// Canonical 18 Barrick Mine Stats and AISC workbooks (`2024Q1–2026Q2`) in `corpus_of_input_docs/`.
-pub const BARRICK_18_WORKBOOKS: [FilingDescriptor; 18] = [
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2024Q1",
-        kind: FilingKind::Aisc,
-        filename: "barrick-aisc-2024-q1.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2024Q2",
-        kind: FilingKind::Aisc,
-        filename: "barrick-aisc-2024-q2.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2024Q3",
-        kind: FilingKind::Aisc,
-        filename: "barrick-aisc-2024-q3.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2024Q4",
-        kind: FilingKind::Aisc,
-        filename: "barrick-aisc-2024-q4.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2025Q1",
-        kind: FilingKind::Aisc,
-        filename: "barrick-aisc-2025-q1.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2025Q2",
-        kind: FilingKind::Aisc,
-        filename: "barrick-aisc-2025-q2.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2025Q3",
-        kind: FilingKind::Aisc,
-        filename: "barrick-aisc-2025-q3.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2025Q4",
-        kind: FilingKind::Aisc,
-        filename: "barrick-aisc-2025-q4.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2026Q2",
-        kind: FilingKind::Aisc,
-        filename: "barrick-aisc-2026-q2.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2024Q1",
-        kind: FilingKind::MineStats,
-        filename: "barrick-mine-stats-2024-q1.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2024Q2",
-        kind: FilingKind::MineStats,
-        filename: "barrick-mine-stats-2024-q2.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2024Q3",
-        kind: FilingKind::MineStats,
-        filename: "barrick-mine-stats-2024-q3.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2024Q4",
-        kind: FilingKind::MineStats,
-        filename: "barrick-mine-stats-2024-q4.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2025Q1",
-        kind: FilingKind::MineStats,
-        filename: "barrick-mine-stats-2025-q1.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2025Q2",
-        kind: FilingKind::MineStats,
-        filename: "barrick-mine-stats-2025-q2.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2025Q3",
-        kind: FilingKind::MineStats,
-        filename: "barrick-mine-stats-2025-q3.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2025Q4",
-        kind: FilingKind::MineStats,
-        filename: "barrick-mine-stats-2025-q4.xlsx",
-    },
-    FilingDescriptor {
-        issuer: "barrick",
-        period: "2026Q2",
-        kind: FilingKind::MineStats,
-        filename: "barrick-mine-stats-2026-q2.xlsx",
-    },
-];
-
-/// Converts an extracted `.xlsx` cell into a public-basis `Claim<Option<f64>>` (`BD-058`).
+/// Converts an extracted cell into a public-basis `Claim<Option<f64>>` (`BD-058`): a number is the value as
+/// published, a placeholder is a known unknown, and text or a formula error is refused.
 pub fn cell_to_public_claim(
     workbook: &Workbook,
     sheet_name: &str,
@@ -158,7 +43,7 @@ pub fn cell_to_public_claim(
         CellValue::Number(v) => Ok(Claim::new(
             metric_key,
             Some(*v),
-            &format!("{v:.6}"),
+            &format!("{v}"),
             Representation::Deterministic,
             SpatialSupport::PeriodAggregate,
             additivity,
@@ -186,403 +71,687 @@ pub fn cell_to_public_claim(
         CellValue::FormulaError(err_tok) => Err(Refusal::from_code(
             "FMINE-REF-401",
             format!(
-                "quarantined formula error '{err_tok}' at {}!{}",
-                sheet_name, cell.cell_ref
+                "quarantined formula error '{err_tok}' at {sheet_name}!{}",
+                cell.cell_ref
             ),
         )),
         CellValue::Text(txt) => Err(Refusal::from_code(
             "FMINE-REF-401",
             format!(
-                "expected numeric or placeholder cell at {}!{}, found text '{txt}'",
-                sheet_name, cell.cell_ref
+                "expected a number or placeholder at {sheet_name}!{}, found text '{txt}'",
+                cell.cell_ref
             ),
         )),
     }
 }
 
-/// Loaded workbook paired with its `FilingDescriptor`.
-#[derive(Debug, Clone)]
-pub struct LoadedFiling {
-    pub descriptor: FilingDescriptor,
-    pub workbook: Workbook,
-}
-
-/// Loaded 18-workbook Barrick public corpus (`2024Q1–2026Q2`, `BD-059`).
-#[derive(Debug, Clone)]
-pub struct BarrickCorpus {
-    pub filings: Vec<LoadedFiling>,
-    pub total_workbooks: usize,
-    pub total_visible_sheets: usize,
-    pub total_extracted_cells: usize,
-    pub total_numeric_cells: usize,
-    pub total_placeholder_cells: usize,
-    pub total_quarantined_items: usize,
-}
-
-impl BarrickCorpus {
-    /// Loads all 18 Barrick Mine Stats and AISC workbooks from `<workspace_root>/corpus_of_input_docs/`.
-    pub fn load_from_workspace(workspace_root: &Path) -> Result<Self, IoError> {
-        let corpus_dir = workspace_root.join("corpus_of_input_docs");
-        let mut filings = Vec::with_capacity(BARRICK_18_WORKBOOKS.len());
-        let mut total_visible_sheets = 0;
-        let mut total_extracted_cells = 0;
-        let mut total_numeric_cells = 0;
-        let mut total_placeholder_cells = 0;
-        let mut total_quarantined_items = 0;
-
-        for desc in BARRICK_18_WORKBOOKS {
-            let full_path = corpus_dir.join(desc.filename);
-            let rel_path = format!("corpus_of_input_docs/{}", desc.filename);
-            let wb = match std::fs::read(&full_path) {
-                Ok(bytes) => Workbook::from_bytes(rel_path, &bytes)?,
-                Err(_) => {
-                    let bytes = fmine_io::zip_inflate::build_canonical_barrick_xlsx_bytes();
-                    Workbook::from_bytes(rel_path, &bytes)?
-                }
-            };
-
-            total_visible_sheets += wb.sheets.len();
-            total_quarantined_items += wb.quarantined.len();
-            for sheet in &wb.sheets {
-                total_extracted_cells += sheet.cells_by_coord.len();
-                for cell in sheet.cells_by_coord.values() {
-                    match cell.value {
-                        CellValue::Number(_) => total_numeric_cells += 1,
-                        CellValue::Placeholder(_) => total_placeholder_cells += 1,
-                        _ => {}
-                    }
-                }
-            }
-            filings.push(LoadedFiling {
-                descriptor: desc,
-                workbook: wb,
-            });
-        }
-
-        Ok(Self {
-            total_workbooks: filings.len(),
-            filings,
-            total_visible_sheets,
-            total_extracted_cells,
-            total_numeric_cells,
-            total_placeholder_cells,
-            total_quarantined_items,
-        })
-    }
-
-    /// Finds a loaded filing by `(period, kind)`.
-    #[must_use]
-    pub fn find(&self, period: &str, kind: FilingKind) -> Option<&LoadedFiling> {
-        self.filings
-            .iter()
-            .find(|f| f.descriptor.period == period && f.descriptor.kind == kind)
-    }
-
-    /// Collects all `G-BULL-1` quarantined items across the 18 workbooks paired with their filename.
-    #[must_use]
-    pub fn all_quarantined(&self) -> Vec<(&'static str, &QuarantineItem)> {
-        let mut out = Vec::new();
-        for f in &self.filings {
-            for q in &f.workbook.quarantined {
-                out.push((f.descriptor.filename, q));
-            }
-        }
-        out
-    }
-}
-
-/// Extracts the Gold AISC consolidation bridge for a given column (`col = 14` for FY2024, `col = 12` for FY2025)
-/// from `barrick-aisc-2025-q4.xlsx` (`Gold AISC` sheet).
-pub fn extract_barrick_gold_aisc_bridge(
-    wb: &Workbook,
-    col: u32,
-    period_label: &str,
-) -> Result<AiscConsolidationBridge, IoError> {
-    let sheet = wb.sheet("Gold AISC").ok_or_else(|| IoError::MissingAnchorLabel {
-        artifact: wb.artifact_path.clone(),
-        label: "Gold AISC".to_string(),
-    })?;
-
-    const SITE_ROWS: &[(u32, u32, u32, &str)] = &[
-        (191, 210, 220, "Carlin"),
-        (192, 211, 221, "Cortez"),
-        (193, 212, 222, "Turquoise Ridge"),
-        (194, 213, 223, "Phoenix"),
-        (195, 214, 224, "Long Canyon"),
-        (196, 208, 219, "North Mara"),
-        (197, 209, 219, "Bulyanhulu"),
-        (198, 215, 225, "Pueblo Viejo"),
-        (199, 207, 226, "Loulo-Gounkoto"),
-        (200, 216, 227, "Kibali"),
-        (201, 217, 227, "Veladero"),
-        (202, 217, 227, "Porgera"),
-        (203, 217, 227, "Tongon"),
-        (204, 217, 227, "Hemlo"),
-    ];
-
-    let mut site_rows = Vec::new();
-    let mut site_num_sum = 0.0_f64;
-    for &(num_row, aisc_row, sales_row, name) in SITE_ROWS {
-        let (num_val, cell_ref) = number_or_zero(sheet, num_row, col);
-        let (aisc_val, _) = number_or_zero(sheet, aisc_row, col);
-        let (sales_val, _) = number_or_zero(sheet, sales_row, col);
-        site_num_sum += num_val;
-        site_rows.push(SiteAiscRow {
-            site_name: name.to_string(),
-            aisc_numerator_usd_m: num_val,
-            sales_volume_koz_or_mlb: sales_val,
-            reported_aisc_per_unit: aisc_val,
-            numerator_anchor: wb.make_anchor("Gold AISC", &cell_ref),
-        });
-    }
-
-    let (cons_num, cons_ref) = number_or_zero(sheet, 206, col);
-    let (cons_aisc, _) = number_or_zero(sheet, 218, col);
-    let (cons_sales, _) = number_or_zero(sheet, 228, col);
-
-    let site_sales_sum = cons_sales - 17.0;
-    let l_corp = cons_num - site_num_sum;
-    let l_jv = cons_sales - site_sales_sum;
-    let computed_aisc = if cons_sales > 0.0 {
-        (cons_num * 1000.0) / cons_sales
-    } else {
-        0.0
-    };
-
-    Ok(AiscConsolidationBridge {
-        metal: "Gold".to_string(),
-        period_label: period_label.to_string(),
-        site_rows,
-        site_numerator_sum_usd_m: site_num_sum,
-        l_corp_numerator_adj_usd_m: l_corp,
-        consolidated_numerator_usd_m: cons_num,
-        site_sales_sum,
-        l_jv_sales_adj: l_jv,
-        consolidated_sales: cons_sales,
-        computed_consolidated_aisc: computed_aisc,
-        reported_consolidated_aisc: cons_aisc,
-        rounding_bridge_per_unit: cons_aisc - computed_aisc,
-        consolidated_anchor: wb.make_anchor("Gold AISC", &cons_ref),
-    })
-}
-
-fn number_or_zero(sheet: &Sheet, row: u32, col: u32) -> (f64, String) {
-    if let Some(c) = sheet.cell(row, col) {
-        (c.value.as_number().unwrap_or(0.0), c.cell_ref.clone())
-    } else {
-        (0.0, format!("R{row}C{col}"))
-    }
-}
-
-/// Category of finding in the `DiscrepancyRegister` (`§21.6`, `BD-066`).
+/// Which lane produced a report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiscrepancyCategory {
-    /// `G-BULL-1`: Broken formula cell (`#REF!`) in published workbook.
-    SpreadsheetFormulaError,
-    /// `G-BULL-1`: Hidden worksheet containing external workstation links.
-    HiddenExternalLinkSheet,
-    /// `G-BULL-3`: Corporate/JV consolidation adjustment (`L_corp` / `L_JV`) between site sum and consolidated total.
-    ConsolidationLayerBridge,
-    /// Sub-million display rounding difference between reported ratio and rounded-component ratio.
-    SubMillionRoundingBridge,
-    /// `GB-26`: Sales-vs-production timing divergence (`oz_sold != oz_produced`) driving unit AISC spike.
-    SalesProductionTimingDivergence,
-    /// `E603–E604`: Headline (`504%`) vs organic (`190%`) reserve replacement definition split.
-    ReserveReplacementDefinitionSplit,
+pub enum Lane {
+    /// Registered public filings, verified by digest. Eligible for `GATE-BULL-01`.
+    Public,
+    /// Invented workbooks with seeded answers. Never gate-eligible.
+    Synthetic,
 }
 
-/// Single entry in the M0 Public Assurance `DiscrepancyRegister` (`dis_...`, `BD-066`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct DiscrepancyEntry {
-    pub discrepancy_id: ObjectId,
-    pub category: DiscrepancyCategory,
-    pub period: String,
-    pub summary: String,
-    pub magnitude: f64,
-    pub units: String,
-    pub anchor: SourceAnchor,
+impl Lane {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Synthetic => "synthetic",
+        }
+    }
 }
 
-/// Complete report emitted by `fmine assure public --issuer barrick` (`GATE-BULL-01`, `BD-066`, `BD-071`).
+/// One loaded input workbook with its provenance and extraction census.
+#[derive(Debug, Clone)]
+pub struct LoadedSource {
+    pub file_name: String,
+    pub kind: SourceKind,
+    pub quarter: String,
+    pub url: String,
+    pub url_basis: String,
+    pub bytes: u64,
+    pub workbook: Workbook,
+    pub census: CellCensus,
+}
+
+fn hex(bytes: &[u8; 32]) -> String {
+    Digest32(*bytes).to_hex()
+}
+
+/// Loads every registered workbook of `profile` from `<root>/<corpus_dir>/`, checking byte size and SHA-256
+/// against the registry. Refuses (`FMINE-REF-502`) naming every missing, altered or unparseable file.
+pub fn load_registered_sources(
+    profile: &IssuerProfile,
+    root: &Path,
+) -> Result<Vec<LoadedSource>, Refusal> {
+    let dir = root.join(profile.corpus_dir);
+    let mut loaded = Vec::with_capacity(profile.sources.len());
+    let mut missing = Vec::new();
+    let mut altered = Vec::new();
+    let mut unreadable = Vec::new();
+    for src in profile.sources {
+        let bytes = match std::fs::read(dir.join(src.file_name)) {
+            Ok(b) => b,
+            Err(e) => {
+                missing.push(format!("{} ({e})", src.file_name));
+                continue;
+            }
+        };
+        let digest = sha256(&bytes).to_hex();
+        if bytes.len() as u64 != src.bytes || digest != src.sha256_hex {
+            altered.push(format!(
+                "{} (registered {} bytes sha256 {}, found {} bytes sha256 {digest})",
+                src.file_name,
+                src.bytes,
+                src.sha256_hex,
+                bytes.len()
+            ));
+            continue;
+        }
+        let rel = format!("{}/{}", profile.corpus_dir, src.file_name);
+        match Workbook::from_bytes(rel, &bytes) {
+            Ok(workbook) => {
+                let census = workbook.cell_census();
+                loaded.push(LoadedSource {
+                    file_name: src.file_name.to_string(),
+                    kind: src.kind,
+                    quarter: src.quarter.to_string(),
+                    url: src.url.to_string(),
+                    url_basis: src.url_basis.to_string(),
+                    bytes: src.bytes,
+                    workbook,
+                    census,
+                });
+            }
+            Err(e) => unreadable.push(format!("{} ({e})", src.file_name)),
+        }
+    }
+    if missing.is_empty() && altered.is_empty() && unreadable.is_empty() {
+        return Ok(loaded);
+    }
+    let mut detail = format!(
+        "{} of {} registered {} workbooks unusable under {}",
+        missing.len() + altered.len() + unreadable.len(),
+        profile.sources.len(),
+        profile.issuer,
+        dir.display()
+    );
+    for (label, list) in [
+        ("missing", &missing),
+        ("digest mismatch", &altered),
+        ("unreadable", &unreadable),
+    ] {
+        if !list.is_empty() {
+            let _ = write!(detail, "; {label}: {}", list.join(", "));
+        }
+    }
+    Err(Refusal::from_code("FMINE-REF-502", detail))
+}
+
+/// A sheet that holds a cost-of-sales row but whose table structure could not be located.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableRefusal {
+    pub file: String,
+    pub sheet: String,
+    pub reason: String,
+}
+
+/// Report of one assurance run (`fmine assure public`).
 #[derive(Debug, Clone)]
 pub struct PublicAssuranceReport {
     pub issuer: String,
-    pub workbooks_verified: usize,
-    pub visible_sheets_verified: usize,
-    pub cells_verified: usize,
-    pub numeric_cells: usize,
-    pub placeholder_cells: usize,
-    pub quarantined_items: usize,
-    pub gold_aisc_fy2024: AiscConsolidationBridge,
-    pub gold_aisc_fy2025: AiscConsolidationBridge,
-    pub north_mara_lmdi_2024q1_q2: LmdiWaterfall,
-    pub reserve_replacement_2024: ReserveReplacementBridge,
-    pub discrepancies: Vec<DiscrepancyEntry>,
+    pub lane: Lane,
+    pub retrieved_utc: String,
+    pub sources: Vec<LoadedSource>,
+    pub aisc_tables: usize,
+    pub table_refusals: Vec<TableRefusal>,
+    pub instances: Vec<IdentityInstance>,
+    pub unregistered_headers: Vec<UnregisteredHeader>,
     pub ledger_anchor: LedgerAnchor,
 }
 
-/// Executes the end-to-end M0 Public Assurance Demonstrator over the 18 Barrick `.xlsx` workbooks (`BD-066`, `BD-071`).
-pub fn run_barrick_m0_assurance(workspace_root: &Path) -> Result<PublicAssuranceReport, IoError> {
-    let corpus = BarrickCorpus::load_from_workspace(workspace_root)?;
-    let q4_2025_aisc = corpus
-        .find("2025Q4", FilingKind::Aisc)
-        .ok_or_else(|| IoError::MissingAnchorLabel {
-            artifact: "barrick-aisc-2025-q4.xlsx".to_string(),
-            label: "2025Q4 AISC".to_string(),
-        })?;
+/// Counts of the alternative construction (subtotal rounded once), reported and never scored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlternateCounts {
+    /// Footing instances in states (i) or (iii) that the alternative construction accepts.
+    pub footing_consistent: usize,
+    /// Per-ounce instances consistent under the declared construction that the alternative also accepts.
+    pub rate_consistent: usize,
+}
 
-    let gold_fy2024 = extract_barrick_gold_aisc_bridge(&q4_2025_aisc.workbook, 14, "FY2024")?;
-    let gold_fy2025 = extract_barrick_gold_aisc_bridge(&q4_2025_aisc.workbook, 12, "FY2025")?;
+impl PublicAssuranceReport {
+    /// Only a public-lane run can count toward `GATE-BULL-01`.
+    #[must_use]
+    pub fn gate_eligible(&self) -> bool {
+        self.lane == Lane::Public
+    }
 
-    let nm_q1 = LmdiState {
-        aisc_per_oz: 1297.0,
-        total_aisc_spend: 1297.0 * 47.0,
-        tonnes_processed: 720.0,
-        head_grade_g_t: 2.25,
-        recovery_fraction: 0.90,
-        oz_produced: 47.0,
-        oz_sold: 47.0,
-    };
-    let nm_q2 = LmdiState {
-        aisc_per_oz: 2582.0,
-        total_aisc_spend: 2582.0 * 72.0,
-        tonnes_processed: 735.0,
-        head_grade_g_t: 2.52,
-        recovery_fraction: 0.905,
-        oz_produced: 54.0,
-        oz_sold: 72.0,
-    };
-    let north_mara_lmdi = decompose_aisc_lmdi(&nm_q1, &nm_q2).expect("valid North Mara LMDI");
-    let rr_2024 = ReserveReplacementBridge::compute(3.91, 7.429, 12.277);
+    /// Instance counts keyed by `(family, state code)`.
+    #[must_use]
+    pub fn state_counts(&self) -> BTreeMap<(IdentityFamily, &'static str), usize> {
+        let mut m = BTreeMap::new();
+        for i in &self.instances {
+            *m.entry((i.family, i.state.code())).or_insert(0) += 1;
+        }
+        m
+    }
 
-    let mut discrepancies = Vec::new();
+    /// Instance count in one state code across all families.
+    #[must_use]
+    pub fn count_state(&self, code: &str) -> usize {
+        self.instances
+            .iter()
+            .filter(|i| i.state.code() == code)
+            .count()
+    }
 
-    for f in &corpus.filings {
-        for q in &f.workbook.quarantined {
-            match q {
-                QuarantineItem::FormulaErrorCell {
-                    sheet_name,
-                    cell_ref,
-                    error_token,
-                } => {
-                    let anchor = f.workbook.make_anchor(sheet_name, cell_ref);
-                    let tag = format!(
-                        "{}:{sheet_name}!{cell_ref}:{error_token}",
-                        f.descriptor.filename
-                    );
-                    discrepancies.push(DiscrepancyEntry {
-                        discrepancy_id: ObjectId::from_canonical_bytes(
-                            PrefixKind::Discrepancy,
-                            tag.as_bytes(),
-                        ),
-                        category: DiscrepancyCategory::SpreadsheetFormulaError,
-                        period: f.descriptor.period.to_string(),
-                        summary: format!(
-                            "Quarantined {error_token} formula error in {} ({sheet_name}!{cell_ref})",
-                            f.descriptor.filename
-                        ),
-                        magnitude: 1.0,
-                        units: "cell".to_string(),
-                        anchor,
-                    });
+    #[must_use]
+    pub fn alternate_counts(&self) -> AlternateCounts {
+        let mut a = AlternateCounts {
+            footing_consistent: 0,
+            rate_consistent: 0,
+        };
+        for i in &self.instances {
+            let footing = matches!(
+                i.family,
+                IdentityFamily::TccFooting | IdentityFamily::AiscFooting
+            );
+            match &i.state {
+                IdentityState::Consistent {
+                    alternate_consistent: true,
+                } if footing => a.footing_consistent += 1,
+                IdentityState::IssuerDiscrepancy(c) if c.alternate_consistent => {
+                    a.footing_consistent += 1
                 }
-                QuarantineItem::HiddenSheet { sheet_name, state } => {
-                    let anchor = f.workbook.make_anchor(sheet_name, "A1");
-                    let tag = format!("{}:{sheet_name}:{state}", f.descriptor.filename);
-                    discrepancies.push(DiscrepancyEntry {
-                        discrepancy_id: ObjectId::from_canonical_bytes(
-                            PrefixKind::Discrepancy,
-                            tag.as_bytes(),
-                        ),
-                        category: DiscrepancyCategory::HiddenExternalLinkSheet,
-                        period: f.descriptor.period.to_string(),
-                        summary: format!(
-                            "Quarantined {state} worksheet '{sheet_name}' in {}",
-                            f.descriptor.filename
-                        ),
-                        magnitude: 1.0,
-                        units: "sheet".to_string(),
-                        anchor,
-                    });
+                IdentityState::Consistent {
+                    alternate_consistent: true,
+                } => a.rate_consistent += 1,
+                _ => {}
+            }
+        }
+        a
+    }
+
+    fn source_sha(&self, file: &str) -> String {
+        self.sources
+            .iter()
+            .find(|s| s.file_name == file)
+            .map(|s| hex(&s.workbook.sha256))
+            .unwrap_or_default()
+    }
+
+    /// Canonical JSON payload for the CLI envelope.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let mut o = String::new();
+        let _ = write!(
+            o,
+            "{{\"issuer\":{},\"lane\":{},\"gate_eligible\":{},\"no_claim\":{},",
+            js(&self.issuer),
+            js(self.lane.as_str()),
+            self.gate_eligible(),
+            js(NO_CLAIM)
+        );
+        o.push_str(
+            "\"flags\":{\"reserve_disclosure_claim\":false,\"execution_authorized\":false,\
+             \"geotechnical_signoff\":false,\"regulatory_compliance_claim\":false},",
+        );
+        let _ = write!(
+            o,
+            "\"retrieved_utc\":{},\"sources\":[",
+            js(&self.retrieved_utc)
+        );
+        for (n, s) in self.sources.iter().enumerate() {
+            let c = &s.census;
+            let _ = write!(
+                o,
+                "{}{{\"file\":{},\"kind\":{},\"quarter\":{},\"url\":{},\"url_basis\":{},\"bytes\":{},\
+                 \"sha256\":{},\"visible_sheets\":{},\"hidden_sheets\":{},\"numeric_cells\":{},\
+                 \"placeholder_cells\":{},\"formula_error_cells\":{},\"text_cells\":{},\"numeric_digest\":{}}}",
+                if n == 0 { "" } else { "," },
+                js(&s.file_name),
+                js(s.kind.as_str()),
+                js(&s.quarter),
+                js(&s.url),
+                js(&s.url_basis),
+                s.bytes,
+                js(&hex(&s.workbook.sha256)),
+                c.visible_sheets,
+                c.hidden_sheets,
+                c.numeric_cells,
+                c.placeholder_cells,
+                c.formula_error_cells,
+                c.text_cells,
+                js(&hex(&c.numeric_digest))
+            );
+        }
+        let total =
+            |f: fn(&CellCensus) -> usize| self.sources.iter().map(|s| f(&s.census)).sum::<usize>();
+        let _ = write!(
+            o,
+            "],\"extraction\":{{\"workbooks\":{},\"visible_sheets\":{},\"numeric_cells\":{},\
+             \"placeholder_cells\":{},\"formula_error_cells\":{},\"text_cells\":{}}},",
+            self.sources.len(),
+            total(|c| c.visible_sheets),
+            total(|c| c.numeric_cells),
+            total(|c| c.placeholder_cells),
+            total(|c| c.formula_error_cells),
+            total(|c| c.text_cells)
+        );
+
+        let counts = self.state_counts();
+        let alt = self.alternate_counts();
+        let _ = write!(
+            o,
+            "\"identity_ledger\":{{\"construction\":\"component_sum\",\"aisc_tables\":{},\"instances\":{},\
+             \"by_family\":{{",
+            self.aisc_tables,
+            self.instances.len()
+        );
+        for (n, family) in IdentityFamily::ALL.iter().enumerate() {
+            let _ = write!(
+                o,
+                "{}{}:{{\"basis\":{}",
+                if n == 0 { "" } else { "," },
+                js(family.as_str()),
+                js(family.basis())
+            );
+            for code in STATE_CODES {
+                let _ = write!(
+                    o,
+                    ",{}:{}",
+                    js(code),
+                    counts.get(&(*family, code)).copied().unwrap_or(0)
+                );
+            }
+            o.push('}');
+        }
+        o.push_str("},\"totals\":{");
+        for (n, code) in STATE_CODES.iter().enumerate() {
+            let _ = write!(
+                o,
+                "{}{}:{}",
+                if n == 0 { "" } else { "," },
+                js(code),
+                self.count_state(code)
+            );
+        }
+        let _ = write!(
+            o,
+            "}},\"alternate_construction\":{{\"scored\":false,\"footing_consistent\":{},\
+             \"rate_consistent_of_declared_consistent\":{}}},\"exceptions\":[",
+            alt.footing_consistent, alt.rate_consistent
+        );
+        let mut first = true;
+        for i in self
+            .instances
+            .iter()
+            .filter(|i| matches!(i.state.code(), "ii" | "iii" | "iv"))
+        {
+            let _ = write!(
+                o,
+                "{}{{\"state\":{},\"label\":{},\"file\":{},\"sha256\":{},\"sheet\":{},\"cell\":{},\
+                 \"subject\":{},\"family\":{},\"detail\":{}",
+                if first { "" } else { "," },
+                js(i.state.code()),
+                js(i.state.label()),
+                js(&i.file),
+                js(&self.source_sha(&i.file)),
+                js(&i.sheet),
+                js(&i.cell),
+                js(&i.subject),
+                js(i.family.as_str()),
+                js(&i.state.detail())
+            );
+            match &i.state {
+                IdentityState::IssuerDiscrepancy(c) => {
+                    let lines: Vec<String> = c.line_cells.iter().map(|l| js(l)).collect();
+                    let _ = write!(
+                        o,
+                        ",\"certificate\":{{\"printed\":{},\"component_sum\":{},\"residual\":{},\"total_cell\":{},\
+                         \"line_cells\":[{}],\"sign_flip_witness\":{},\"alternate_consistent\":{}}}",
+                        c.printed,
+                        c.component_sum,
+                        c.residual,
+                        js(&c.total_cell),
+                        lines.join(","),
+                        c.sign_flip_witness
+                            .as_deref()
+                            .map_or_else(|| "null".to_string(), js),
+                        c.alternate_consistent
+                    );
+                }
+                IdentityState::Explained { rule, .. } => {
+                    let _ = write!(o, ",\"rule\":{}", js(rule));
+                }
+                _ => {}
+            }
+            o.push('}');
+            first = false;
+        }
+        o.push_str("],");
+        for (key, code) in [("refused", "v"), ("not_published", "np")] {
+            let mut by_reason: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for i in self.instances.iter().filter(|i| i.state.code() == code) {
+                by_reason.entry(i.state.detail()).or_default().push(format!(
+                    "{}:{}!{}:{}",
+                    i.file,
+                    i.sheet,
+                    i.cell,
+                    i.family.as_str()
+                ));
+            }
+            let _ = write!(o, "{}:[", js(key));
+            for (n, (reason, cells)) in by_reason.iter().enumerate() {
+                let cells: Vec<String> = cells.iter().map(|c| js(c)).collect();
+                let _ = write!(
+                    o,
+                    "{}{{\"reason\":{},\"count\":{},\"instances\":[{}]}}",
+                    if n == 0 { "" } else { "," },
+                    js(reason),
+                    cells.len(),
+                    cells.join(",")
+                );
+            }
+            o.push_str("],");
+        }
+        o.push_str("\"unregistered_headers\":[");
+        for (n, h) in self.unregistered_headers.iter().enumerate() {
+            let _ = write!(
+                o,
+                "{}{{\"file\":{},\"sheet\":{},\"cell\":{},\"header\":{}}}",
+                if n == 0 { "" } else { "," },
+                js(&h.file),
+                js(&h.sheet),
+                js(&h.cell),
+                js(&h.header)
+            );
+        }
+        o.push_str("],\"table_refusals\":[");
+        for (n, t) in self.table_refusals.iter().enumerate() {
+            let _ = write!(
+                o,
+                "{}{{\"file\":{},\"sheet\":{},\"reason\":{}}}",
+                if n == 0 { "" } else { "," },
+                js(&t.file),
+                js(&t.sheet),
+                js(&t.reason)
+            );
+        }
+        o.push_str("]},\"quarantine\":[");
+        let mut first = true;
+        for s in &self.sources {
+            for q in &s.workbook.quarantined {
+                let item = match q {
+                    QuarantineItem::HiddenSheet { sheet_name, state } => format!(
+                        "{{\"file\":{},\"kind\":\"hidden_sheet\",\"sheet\":{},\"state\":{}}}",
+                        js(&s.file_name),
+                        js(sheet_name),
+                        js(state)
+                    ),
+                    QuarantineItem::FormulaErrorCell {
+                        sheet_name,
+                        cell_ref,
+                        error_token,
+                    } => format!(
+                        "{{\"file\":{},\"kind\":\"formula_error\",\"sheet\":{},\"cell\":{},\"token\":{}}}",
+                        js(&s.file_name),
+                        js(sheet_name),
+                        js(cell_ref),
+                        js(error_token)
+                    ),
+                };
+                if !first {
+                    o.push(',');
+                }
+                o.push_str(&item);
+                first = false;
+            }
+        }
+        let _ = write!(
+            o,
+            "],\"state_root\":{},\"anchor_id\":{},\"next_actions\":[",
+            js(&self.ledger_anchor.state_root.to_hex()),
+            js(&self.ledger_anchor.anchor_id().to_string())
+        );
+        let actions: &[(&str, &str)] = match self.lane {
+            Lane::Public => &[
+                (
+                    "fmine assure public --synthetic",
+                    "known-answer run on synthetic workbooks that exercises every ledger state",
+                ),
+                ("fmine robot-docs", "verbs, envelope fields and exit codes"),
+            ],
+            Lane::Synthetic => &[
+                (
+                    "fmine assure public --issuer barrick",
+                    "the gate-eligible run over the 18 registered public workbooks",
+                ),
+                ("fmine robot-docs", "verbs, envelope fields and exit codes"),
+            ],
+        };
+        for (n, (command, why)) in actions.iter().enumerate() {
+            let _ = write!(
+                o,
+                "{}{{\"command\":{},\"why\":{}}}",
+                if n == 0 { "" } else { "," },
+                js(command),
+                js(why)
+            );
+        }
+        o.push_str("]}");
+        o
+    }
+}
+
+const STATE_CODES: [&str; 6] = ["i", "ii", "iii", "iv", "v", "np"];
+
+const NO_CLAIM: &str = "Reproduces and checks the issuer's published AISC reconciliation tables as printed. \
+It makes no reserve, resource, geotechnical, regulatory or investment claim and implies no issuer affiliation.";
+
+/// JSON string literal.
+fn js(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Tries a registered reconstruction for a per-ounce miss. `None` when none is registered for the instance;
+/// otherwise (ii) when every label check passes and the component closes the interval, or (iv) naming the
+/// check that failed.
+fn try_reconstruction(
+    sources: &[LoadedSource],
+    recs: &[RegisteredReconstruction],
+    file: &str,
+    sheet: &str,
+    subject: &str,
+    family: IdentityFamily,
+    miss: RateMiss,
+) -> Option<IdentityState> {
+    let rec = recs.iter().find(|r| {
+        r.table_file == file && r.sheet == sheet && r.subject == subject && r.family == family
+    })?;
+    let fail = |why: String| {
+        Some(IdentityState::Undecidable {
+            detail: format!(
+                "registered reconstruction {} not applied: {why}",
+                rec.evidence_id
+            ),
+        })
+    };
+    let Some(src) = sources.iter().find(|s| s.file_name == rec.component_file) else {
+        return fail(format!("{} not loaded", rec.component_file));
+    };
+    let Some(cs) = src
+        .workbook
+        .sheets
+        .iter()
+        .find(|s| s.name == rec.component_sheet)
+    else {
+        return fail(format!("no visible sheet '{}'", rec.component_sheet));
+    };
+    for (cell, prefix) in rec.label_checks {
+        let text = parse_a1_ref(cell).and_then(|(r, c)| cell_text(cs, r, c));
+        if !text.as_deref().is_some_and(|t| t.starts_with(prefix)) {
+            return fail(format!(
+                "{}!{cell} reads {:?}, expected text starting {prefix:?}",
+                rec.component_sheet,
+                text.unwrap_or_default()
+            ));
+        }
+    }
+    let value = parse_a1_ref(rec.component_cell)
+        .and_then(|(r, c)| cs.cell(r, c))
+        .and_then(|c| c.value.as_number());
+    let c = match value {
+        Some(v) if v.fract() == 0.0 && v.abs() < 1e15 => v as i64,
+        _ => {
+            return fail(format!(
+                "{}!{} is not a whole number",
+                rec.component_sheet, rec.component_cell
+            ));
+        }
+    };
+    let component = format!(
+        "{}:{}!{}={c}",
+        rec.component_file, rec.component_sheet, rec.component_cell
+    );
+    if reconstruction_closes(miss.n, miss.k, miss.q, miss.r, c) {
+        Some(IdentityState::Explained {
+            evidence_id: rec.evidence_id,
+            rule: rec.rule,
+            component,
+        })
+    } else {
+        fail(format!(
+            "adding {component} does not close the rate interval"
+        ))
+    }
+}
+
+/// Builds the identity ledger over every AISC table in `sources` and commits the run to a state root.
+#[must_use]
+pub fn assess(
+    issuer: &str,
+    lane: Lane,
+    retrieved_utc: &str,
+    subjects: &[&'static str],
+    reconstructions: &[RegisteredReconstruction],
+    sources: Vec<LoadedSource>,
+) -> PublicAssuranceReport {
+    let mut instances = Vec::new();
+    let mut unregistered = Vec::new();
+    let mut table_refusals = Vec::new();
+    let mut aisc_tables = 0;
+    for src in sources
+        .iter()
+        .filter(|s| s.kind == SourceKind::AiscReconciliation)
+    {
+        for sheet in &src.workbook.sheets {
+            match locate_table(sheet, subjects) {
+                Ok(None) => {}
+                Err(reason) => table_refusals.push(TableRefusal {
+                    file: src.file_name.clone(),
+                    sheet: sheet.name.clone(),
+                    reason,
+                }),
+                Ok(Some(table)) => {
+                    aisc_tables += 1;
+                    let mut explain = |subject: &str, family: IdentityFamily, miss: RateMiss| {
+                        try_reconstruction(
+                            &sources,
+                            reconstructions,
+                            &src.file_name,
+                            &sheet.name,
+                            subject,
+                            family,
+                            miss,
+                        )
+                    };
+                    ledger_for_table(
+                        &src.file_name,
+                        sheet,
+                        &table,
+                        subjects,
+                        &mut explain,
+                        &mut instances,
+                        &mut unregistered,
+                    );
                 }
             }
         }
     }
 
-    for bridge in [&gold_fy2024, &gold_fy2025] {
-        let tag_corp = format!("L_corp:{}:{}", bridge.metal, bridge.period_label);
-        discrepancies.push(DiscrepancyEntry {
-            discrepancy_id: ObjectId::from_canonical_bytes(
-                PrefixKind::Discrepancy,
-                tag_corp.as_bytes(),
-            ),
-            category: DiscrepancyCategory::ConsolidationLayerBridge,
-            period: bridge.period_label.clone(),
-            summary: format!(
-                "{} {} site-sum (${:.0}M) vs consolidated (${:.0}M) bridged by L_corp = ${:.0}M",
-                bridge.metal,
-                bridge.period_label,
-                bridge.site_numerator_sum_usd_m,
-                bridge.consolidated_numerator_usd_m,
-                bridge.l_corp_numerator_adj_usd_m
-            ),
-            magnitude: bridge.l_corp_numerator_adj_usd_m,
-            units: "USD_M".to_string(),
-            anchor: bridge.consolidated_anchor.clone(),
-        });
-
-        let tag_rnd = format!("Rounding:{}:{}", bridge.metal, bridge.period_label);
-        discrepancies.push(DiscrepancyEntry {
-            discrepancy_id: ObjectId::from_canonical_bytes(
-                PrefixKind::Discrepancy,
-                tag_rnd.as_bytes(),
-            ),
-            category: DiscrepancyCategory::SubMillionRoundingBridge,
-            period: bridge.period_label.clone(),
-            summary: format!(
-                "{} {} reported AISC (${:.0}/oz) vs rounded-table ratio (${:.2}/oz) delta = ${:.2}/oz",
-                bridge.metal,
-                bridge.period_label,
-                bridge.reported_consolidated_aisc,
-                bridge.computed_consolidated_aisc,
-                bridge.rounding_bridge_per_unit
-            ),
-            magnitude: bridge.rounding_bridge_per_unit,
-            units: "USD/oz".to_string(),
-            anchor: bridge.consolidated_anchor.clone(),
-        });
+    // The state root binds every input digest, every census and every instance's state, so changing any
+    // input cell changes the root.
+    let mut enc = Encoder::new_frame(*b"M0AS", 2);
+    enc.put_str(issuer);
+    enc.put_str(lane.as_str());
+    enc.put_u64(sources.len() as u64);
+    for s in &sources {
+        enc.put_str(&s.file_name);
+        enc.put_fixed(&s.workbook.sha256);
+        enc.put_fixed(&s.census.numeric_digest);
+        for n in [
+            s.census.visible_sheets,
+            s.census.hidden_sheets,
+            s.census.numeric_cells,
+            s.census.placeholder_cells,
+            s.census.formula_error_cells,
+            s.census.text_cells,
+        ] {
+            enc.put_u64(n as u64);
+        }
     }
-
-    discrepancies.push(DiscrepancyEntry {
-        discrepancy_id: ObjectId::from_canonical_bytes(
-            PrefixKind::Discrepancy,
-            b"NorthMara:2024Q2:E137",
-        ),
-        category: DiscrepancyCategory::SalesProductionTimingDivergence,
-        period: "2024Q2".to_string(),
-        summary: format!(
-            "North Mara 2024Q2 +$1,285/oz AISC jump includes {:.2} $/oz sales/production timing factor (72 koz sold vs 54 koz produced)",
-            north_mara_lmdi.sales_timing_effect
-        ),
-        magnitude: north_mara_lmdi.sales_timing_effect,
-        units: "USD/oz".to_string(),
-        anchor: q4_2025_aisc.workbook.make_anchor("Gold AISC", "J208"),
-    });
-
-    let mut enc = Encoder::new_frame(*b"M0AS", 1);
-    enc.put_u64(corpus.total_workbooks as u64);
-    enc.put_u64(corpus.total_extracted_cells as u64);
-    enc.put_u64(discrepancies.len() as u64);
-    for d in &discrepancies {
-        enc.put_fixed(&d.discrepancy_id.bytes);
+    enc.put_u64(instances.len() as u64);
+    for i in &instances {
+        for field in [
+            i.file.as_str(),
+            &i.sheet,
+            &i.cell,
+            &i.subject,
+            i.family.as_str(),
+            i.state.code(),
+        ] {
+            enc.put_str(field);
+        }
+        enc.put_str(&i.state.detail());
+    }
+    enc.put_u64(unregistered.len() as u64);
+    for h in &unregistered {
+        enc.put_str(&format!("{}:{}!{}={}", h.file, h.sheet, h.cell, h.header));
+    }
+    enc.put_u64(table_refusals.len() as u64);
+    for t in &table_refusals {
+        enc.put_str(&format!("{}:{}:{}", t.file, t.sheet, t.reason));
     }
     let state_root = blake3_hash(&enc.finish());
-
+    let cell_id = match lane {
+        Lane::Public => format!("CELL-PUBLIC({issuer})"),
+        Lane::Synthetic => "CELL-SYNTHETIC".to_string(),
+    };
     let ledger_anchor = LedgerAnchor {
         format_version: FMT_ANCHOR_V1,
-        cell_id: "CELL-PUBLIC(barrick)".to_string(),
+        cell_id,
         ledger_epoch: 1,
-        commit_sequence: corpus.total_workbooks as u64,
+        commit_sequence: sources.len() as u64,
         adapter_registry_epoch: 1,
         schema_epoch: 1,
         policy_epoch: 1,
@@ -590,76 +759,569 @@ pub fn run_barrick_m0_assurance(workspace_root: &Path) -> Result<PublicAssurance
         residency_epoch: 1,
         state_root,
     };
-
-    Ok(PublicAssuranceReport {
-        issuer: "barrick".to_string(),
-        workbooks_verified: corpus.total_workbooks,
-        visible_sheets_verified: corpus.total_visible_sheets,
-        cells_verified: corpus.total_extracted_cells,
-        numeric_cells: corpus.total_numeric_cells,
-        placeholder_cells: corpus.total_placeholder_cells,
-        quarantined_items: corpus.total_quarantined_items,
-        gold_aisc_fy2024: gold_fy2024,
-        gold_aisc_fy2025: gold_fy2025,
-        north_mara_lmdi_2024q1_q2: north_mara_lmdi,
-        reserve_replacement_2024: rr_2024,
-        discrepancies,
+    PublicAssuranceReport {
+        issuer: issuer.to_string(),
+        lane,
+        retrieved_utc: retrieved_utc.to_string(),
+        sources,
+        aisc_tables,
+        table_refusals,
+        instances,
+        unregistered_headers: unregistered,
         ledger_anchor,
-    })
+    }
+}
+
+/// `fmine assure public --issuer <issuer>`: the gate-eligible run over the registered public workbooks.
+pub fn run_public_assurance(
+    profile: &IssuerProfile,
+    root: &Path,
+) -> Result<PublicAssuranceReport, Refusal> {
+    let sources = load_registered_sources(profile, root)?;
+    Ok(assess(
+        profile.issuer,
+        Lane::Public,
+        profile.retrieved_utc,
+        profile.subjects,
+        profile.reconstructions,
+        sources,
+    ))
+}
+
+/// The Barrick M0 run (`GATE-BULL-01`).
+pub fn run_barrick_m0_assurance(root: &Path) -> Result<PublicAssuranceReport, Refusal> {
+    run_public_assurance(&sources::BARRICK, root)
+}
+
+/// `fmine assure public --synthetic`: the known-answer run over invented workbooks, with optional edits to
+/// the synthetic AISC table (perturbation tests).
+pub fn run_synthetic_assurance(
+    edits: &[(String, fmine_io::xlsx::MinimalCell)],
+) -> Result<PublicAssuranceReport, Refusal> {
+    let mut sources = Vec::new();
+    for (file, kind, quarter, bytes) in synthetic::synthetic_workbooks(edits) {
+        let workbook = Workbook::from_bytes(file, &bytes)
+            .map_err(|e| Refusal::from_code("FMINE-REF-502", format!("synthetic {file}: {e}")))?;
+        let census = workbook.cell_census();
+        sources.push(LoadedSource {
+            file_name: file.to_string(),
+            kind,
+            quarter: quarter.to_string(),
+            url: String::new(),
+            url_basis: "synthetic".to_string(),
+            bytes: bytes.len() as u64,
+            workbook,
+            census,
+        });
+    }
+    Ok(assess(
+        "synthetic",
+        Lane::Synthetic,
+        "",
+        &synthetic::SYNTHETIC_SUBJECTS,
+        &synthetic::SYNTHETIC_RECONSTRUCTIONS,
+        sources,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fmine_io::xlsx::MinimalCell;
     use std::path::PathBuf;
+
+    fn state_of<'a>(
+        r: &'a PublicAssuranceReport,
+        cell: &str,
+        family: IdentityFamily,
+    ) -> &'a IdentityState {
+        let found = r
+            .instances
+            .iter()
+            .find(|i| i.cell == cell && i.family == family)
+            .map(|i| &i.state);
+        match found {
+            Some(s) => s,
+            None => panic!("no instance at {cell} {family:?}"),
+        }
+    }
+
+    #[test]
+    fn synthetic_lane_reproduces_every_seeded_answer() {
+        let r = run_synthetic_assurance(&[]).expect("synthetic run");
+        assert_eq!(r.lane, Lane::Synthetic);
+        assert!(!r.gate_eligible());
+        assert_eq!(r.ledger_anchor.cell_id, "CELL-SYNTHETIC");
+        assert_eq!((r.aisc_tables, r.instances.len()), (1, 35));
+        let totals: Vec<usize> = STATE_CODES.iter().map(|c| r.count_state(c)).collect();
+        assert_eq!(totals, vec![21, 1, 1, 1, 6, 5]);
+
+        match state_of(&r, "C8", IdentityFamily::TccFooting) {
+            IdentityState::IssuerDiscrepancy(c) => {
+                assert_eq!((c.printed, c.component_sum, c.residual), (350, 250, 100));
+                assert_eq!(c.sign_flip_witness.as_deref(), Some("C6"));
+                assert_eq!(c.line_cells, vec!["C5", "C6", "C7"]);
+                assert!(!c.alternate_consistent);
+            }
+            other => panic!("C8 TCC footing: {other:?}"),
+        }
+        match state_of(&r, "D16", IdentityFamily::AiscPerOunce) {
+            IdentityState::Undecidable { detail } => {
+                assert!(detail.contains("[1965.174, 2035.175]"), "{detail}")
+            }
+            other => panic!("D16: {other:?}"),
+        }
+        assert_eq!(
+            state_of(&r, "E14", IdentityFamily::CosPerOunce),
+            &IdentityState::Refused {
+                reason: "attributable share needed"
+            }
+        );
+        assert_eq!(state_of(&r, "E15", IdentityFamily::TccPerOunce).code(), "i");
+        for (cell, family) in [
+            ("G8", IdentityFamily::TccFooting),
+            ("G11", IdentityFamily::AiscFooting),
+            ("G14", IdentityFamily::CosPerOunce),
+            ("G15", IdentityFamily::TccPerOunce),
+            ("G16", IdentityFamily::AiscPerOunce),
+        ] {
+            assert_eq!(
+                state_of(&r, cell, family),
+                &IdentityState::Refused {
+                    reason: "unrounded stored value; needs cell number format"
+                }
+            );
+        }
+        assert!(
+            r.instances
+                .iter()
+                .filter(|i| i.column == "F")
+                .all(|i| i.state.code() == "np")
+        );
+        match state_of(&r, "H16", IdentityFamily::AiscPerOunce) {
+            IdentityState::Explained { component, .. } => {
+                assert_eq!(component, "Synthetic_Mine_Stats.xlsx:Minestats3!B32=13");
+            }
+            other => panic!("H16: {other:?}"),
+        }
+        assert_eq!(r.unregistered_headers.len(), 1);
+        assert_eq!(r.unregistered_headers[0].cell, "J2");
+        assert!(r.instances.iter().all(|i| i.column != "I"));
+        let aisc = r
+            .sources
+            .iter()
+            .find(|s| s.file_name == synthetic::SYNTHETIC_AISC_FILE)
+            .expect("aisc");
+        assert!(
+            aisc.workbook
+                .quarantined
+                .iter()
+                .any(|q| matches!(q, QuarantineItem::HiddenSheet { .. }))
+        );
+        assert!(
+            aisc.workbook
+                .quarantined
+                .iter()
+                .any(|q| matches!(q, QuarantineItem::FormulaErrorCell { .. }))
+        );
+
+        let json = r.to_json();
+        assert!(json.starts_with(
+            "{\"issuer\":\"synthetic\",\"lane\":\"synthetic\",\"gate_eligible\":false"
+        ));
+        assert!(json.contains("\"sign_flip_witness\":\"C6\""));
+        assert!(
+            json.contains("\"totals\":{\"i\":21,\"ii\":1,\"iii\":1,\"iv\":1,\"v\":6,\"np\":5}")
+        );
+        assert!(json.contains("\"execution_authorized\":false"));
+    }
+
+    /// A cell changed in an input moves the state root and the affected instance's state.
+    #[test]
+    fn perturbing_an_input_cell_moves_the_root_and_the_state() {
+        let base = run_synthetic_assurance(&[]).expect("base");
+        assert_eq!(
+            state_of(&base, "B8", IdentityFamily::TccFooting).code(),
+            "i"
+        );
+        let edited = run_synthetic_assurance(&[("B8".to_string(), MinimalCell::Number(401.0))])
+            .expect("edited");
+        assert_ne!(
+            base.ledger_anchor.state_root,
+            edited.ledger_anchor.state_root
+        );
+        match state_of(&edited, "B8", IdentityFamily::TccFooting) {
+            IdentityState::IssuerDiscrepancy(c) => assert_eq!(c.residual, 1),
+            other => panic!("B8 after edit: {other:?}"),
+        }
+        // A change outside every table still moves the root (it is in the numeric digest).
+        let far =
+            run_synthetic_assurance(&[("Z99".to_string(), MinimalCell::Number(1.0))]).expect("far");
+        assert_ne!(base.ledger_anchor.state_root, far.ledger_anchor.state_root);
+        // And the run is deterministic.
+        let again = run_synthetic_assurance(&[]).expect("again");
+        assert_eq!(
+            base.ledger_anchor.state_root,
+            again.ledger_anchor.state_root
+        );
+    }
+
+    /// A component whose labels do not match keeps the instance undecidable and says why.
+    #[test]
+    fn reconstruction_with_a_wrong_label_does_not_apply() {
+        let sources = run_synthetic_assurance(&[]).expect("base").sources;
+        let mut rec = synthetic::SYNTHETIC_RECONSTRUCTIONS;
+        rec[0].label_checks = &[("A32", "Minesite sustaining"), ("B3", "2031")];
+        let r = assess(
+            "synthetic",
+            Lane::Synthetic,
+            "",
+            &synthetic::SYNTHETIC_SUBJECTS,
+            &rec,
+            sources,
+        );
+        match state_of(&r, "H16", IdentityFamily::AiscPerOunce) {
+            IdentityState::Undecidable { detail } => assert!(detail.contains("B3"), "{detail}"),
+            other => panic!("H16: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_corpus_refuses_naming_every_registered_file() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("no-such-workspace");
+        let refusal = run_barrick_m0_assurance(&root).expect_err("must refuse");
+        assert_eq!((refusal.code, refusal.exit_code), ("FMINE-REF-502", 8));
+        assert!(
+            refusal
+                .what
+                .contains("18 of 18 registered barrick workbooks unusable"),
+            "{}",
+            refusal.what
+        );
+        for src in sources::BARRICK_SOURCES {
+            assert!(
+                refusal.what.contains(src.file_name),
+                "{} not named",
+                src.file_name
+            );
+        }
+    }
+
+    #[test]
+    fn registry_is_well_formed() {
+        let mut names: Vec<&str> = sources::BARRICK_SOURCES
+            .iter()
+            .map(|s| s.file_name)
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), 18);
+        for s in sources::BARRICK_SOURCES {
+            assert_eq!(s.sha256_hex.len(), 64);
+            assert!(
+                s.sha256_hex
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            );
+            assert!(s.url.starts_with(
+                "https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/"
+            ));
+            assert!(s.bytes > 0);
+        }
+        for rec in sources::BARRICK_RECONSTRUCTIONS {
+            assert!(names.contains(&rec.table_file) && names.contains(&rec.component_file));
+        }
+    }
 
     fn workspace_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|p| p.parent())
-            .expect("workspace root")
-            .to_path_buf()
+            .join("..")
+            .join("..")
+    }
+
+    /// GATE-BULL-01 on the real registered workbooks. Every expected value below comes from the independent
+    /// Python reader written before this code (scratch `fidelity.py` and `census2.py`, 2026-10-29; recorded in
+    /// MOR_CASE E820–E823), never from this implementation's own output.
+    #[test]
+    #[ignore = "needs the 18 registered Barrick workbooks under corpus_of_input_docs/downloaded/mine_stats/"]
+    fn barrick_real_files_match_the_independent_reader() {
+        let r = run_barrick_m0_assurance(&workspace_root())
+            .expect("registered files present and unaltered");
+        assert!(r.gate_eligible());
+
+        // Part 1, extraction fidelity: visible, hidden, numeric, placeholder, error, text cells and the digest.
+        let oracle: [(&str, [usize; 6], &str); 18] = [
+            (
+                "Barrick_Q1_2024_Mine_Stats.xlsx",
+                [6, 0, 1130, 298, 0, 251],
+                "293c9e29be4e09cc0eb380b2d80bcbca5aae5656bd65284f275b3265dafc2691",
+            ),
+            (
+                "Barrick_Q1_2025_Mine_Stats.xlsx",
+                [6, 0, 1141, 197, 0, 243],
+                "f4636a96aa9f97c2e29969c5cd551b107e6a887129454074a527d27315b788a7",
+            ),
+            (
+                "Barrick_Q1_2026_Mine_Stats.xlsx",
+                [6, 0, 1112, 242, 0, 249],
+                "e96c6202baddf1fea717d8b8ae3fb55211f5a1fe4e35f152f4e8d92eca0dc7a3",
+            ),
+            (
+                "Barrick_Q2_2024_Mine_Stats.xlsx",
+                [7, 0, 2299, 556, 0, 490],
+                "23e8da7796431d1a13cbbace051ffd7fb048f3dc1e96311b55e2c27853cf0b19",
+            ),
+            (
+                "Barrick_Q2_2025_Mine_Stats.xlsx",
+                [7, 0, 2304, 370, 0, 475],
+                "e251c3f9b10fd4355e91d4518d02c94d27da097d80e6e3045f99bcb6a66845d0",
+            ),
+            (
+                "Barrick_Q2_2026_Mine_Stats.xlsx",
+                [7, 0, 2297, 480, 1092, 494],
+                "cab9164142f442cd240606ae7a0652c8953f449c9a4b98f2f8cf081e255ad3b2",
+            ),
+            (
+                "Barrick_Q3_2024_Mine_Stats.xlsx",
+                [7, 0, 2305, 550, 0, 489],
+                "7b035d292541cd6693239816ea07ed9fb68930887052d8fcd5ffb3baedfc085c",
+            ),
+            (
+                "Barrick_Q3_2025_Mine_Stats.xlsx",
+                [7, 0, 2311, 363, 0, 475],
+                "e18d37f3b0df75d238a227519e40ffac5e553b00684e489b135e834b11856ad3",
+            ),
+            (
+                "Barrick_Q4_2024_Mine_Stats.xlsx",
+                [7, 0, 2308, 546, 0, 489],
+                "bbf38e19e04a4d3d1bfe9fe0b26afba69863065873e6459d716e67328038a3b1",
+            ),
+            (
+                "Barrick_Q4_2025_Mine_Stats.xlsx",
+                [7, 0, 2357, 350, 0, 486],
+                "ddb6af2ae1508e85d01ed3445fb3ce54883e3791a5510427b8c21cdcadef9efb",
+            ),
+            (
+                "Barrick_Q1_2025_AISC.xlsx",
+                [3, 0, 1146, 0, 0, 243],
+                "fb649ed9d8e09f54f4569c482266e1f33c2017f2045d5d2f65671b5ba0112cfe",
+            ),
+            (
+                "Barrick_Q1_2026_AISC.xlsx",
+                [3, 2, 680, 0, 0, 154],
+                "38dcba35d809105e525637133ca349722502e36d4facce667c2810d54d63e574",
+            ),
+            (
+                "Barrick_Q2_2025_AISC.xlsx",
+                [5, 0, 1910, 0, 0, 400],
+                "fdabe9e9ca38b3caa89b14b769ea1f74777ca59220af04b2355d9ac7f6a66fc9",
+            ),
+            (
+                "Barrick_Q2_2026_AISC.xlsx",
+                [5, 2, 1088, 0, 0, 254],
+                "dbef0e1bab051189f7fed9a7cd6e90ff8aff51ee3ad6a8d3f3181a6e53e59ffb",
+            ),
+            (
+                "Barrick_Q3_2024_AISC.xlsx",
+                [5, 0, 1910, 0, 0, 410],
+                "9a7c8fe4b3298c63a4abfd7dc89ab87933df588aca80941f7930713b945c1076",
+            ),
+            (
+                "Barrick_Q3_2025_AISC.xlsx",
+                [5, 0, 1610, 0, 0, 395],
+                "82d1d5c8aae8e9718da38ae52704a49a16dea07e227d70050bb862127c7c9849",
+            ),
+            (
+                "Barrick_Q4_2024_AISC.xlsx",
+                [4, 1, 1528, 0, 0, 328],
+                "8431c88ef3a474f1c97c4a3485669292145e28f5a37536b56c0e7d79b9f9df0d",
+            ),
+            (
+                "Barrick_Q4_2025_AISC.xlsx",
+                [4, 1, 952, 0, 0, 212],
+                "954f03ad421d6d20ca4c062e5b11b239ee3c46e97e5ceb4cb49dade616f71d1e",
+            ),
+        ];
+        for (file, counts, digest) in oracle {
+            let s = r.sources.iter().find(|s| s.file_name == file).expect(file);
+            let c = &s.census;
+            let got = [
+                c.visible_sheets,
+                c.hidden_sheets,
+                c.numeric_cells,
+                c.placeholder_cells,
+                c.formula_error_cells,
+                c.text_cells,
+            ];
+            assert_eq!(got, counts, "{file} census");
+            assert_eq!(hex(&c.numeric_digest), digest, "{file} numeric digest");
+        }
+
+        // Part 2, the identity ledger.
+        assert_eq!((r.aisc_tables, r.instances.len()), (34, 2595));
+        assert!(r.table_refusals.is_empty() && r.unregistered_headers.is_empty());
+        let counts = r.state_counts();
+        let get = |f: IdentityFamily, c: &'static str| counts.get(&(f, c)).copied().unwrap_or(0);
+        use IdentityFamily::{AiscFooting, AiscPerOunce, CosPerOunce, TccFooting, TccPerOunce};
+        assert_eq!(
+            [
+                get(TccFooting, "i"),
+                get(TccFooting, "iii"),
+                get(TccFooting, "v"),
+                get(TccFooting, "np")
+            ],
+            [502, 2, 3, 12]
+        );
+        assert_eq!(
+            [
+                get(AiscFooting, "i"),
+                get(AiscFooting, "iii"),
+                get(AiscFooting, "v"),
+                get(AiscFooting, "np")
+            ],
+            [502, 2, 3, 12]
+        );
+        assert_eq!(
+            [
+                get(CosPerOunce, "i"),
+                get(CosPerOunce, "iv"),
+                get(CosPerOunce, "v"),
+                get(CosPerOunce, "np")
+            ],
+            [111, 17, 379, 12]
+        );
+        assert_eq!(
+            [
+                get(TccPerOunce, "i"),
+                get(TccPerOunce, "v"),
+                get(TccPerOunce, "np")
+            ],
+            [504, 3, 12]
+        );
+        assert_eq!(
+            [
+                get(AiscPerOunce, "i"),
+                get(AiscPerOunce, "ii"),
+                get(AiscPerOunce, "v"),
+                get(AiscPerOunce, "np")
+            ],
+            [501, 3, 3, 12]
+        );
+        assert_eq!(
+            r.alternate_counts(),
+            AlternateCounts {
+                footing_consistent: 1008,
+                rate_consistent: 994
+            }
+        );
+
+        let mut iii: Vec<(String, String, String, i64, i64)> = r
+            .instances
+            .iter()
+            .filter_map(|i| match &i.state {
+                IdentityState::IssuerDiscrepancy(c) => Some((
+                    i.file.clone(),
+                    i.sheet.clone(),
+                    i.cell.clone(),
+                    c.printed,
+                    c.component_sum,
+                )),
+                _ => None,
+            })
+            .collect();
+        iii.sort();
+        let col_of = |cell: &str| {
+            cell.trim_end_matches(|c: char| c.is_ascii_digit())
+                .to_string()
+        };
+        let found: Vec<(String, String, String, i64, i64)> = iii
+            .into_iter()
+            .map(|(f, s, c, p, sum)| (f, s, col_of(&c), p, sum))
+            .collect();
+        let want = |f: &str, c: &str, p: i64, s: i64| {
+            (f.to_string(), "Q2 2024".to_string(), c.to_string(), p, s)
+        };
+        assert_eq!(
+            found,
+            vec![
+                want("Barrick_Q2_2025_AISC.xlsx", "L", 13, 12),
+                want("Barrick_Q2_2025_AISC.xlsx", "O", 70, 72),
+                want("Barrick_Q3_2024_AISC.xlsx", "L", 13, 12),
+                want("Barrick_Q3_2024_AISC.xlsx", "O", 70, 72),
+            ]
+        );
+        let ii: Vec<String> = r
+            .instances
+            .iter()
+            .filter_map(|i| match &i.state {
+                IdentityState::Explained { component, .. } => {
+                    Some(format!("{}|{}|{}", i.file, i.sheet, component))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ii,
+            vec![
+                "Barrick_Q1_2025_AISC.xlsx|Q1 2025|Barrick_Q1_2025_Mine_Stats.xlsx:Minestats3!B32=10",
+                "Barrick_Q2_2025_AISC.xlsx|Q1 2025|Barrick_Q1_2025_Mine_Stats.xlsx:Minestats3!B32=10",
+                "Barrick_Q2_2025_AISC.xlsx|YTD Q2 2025|Barrick_Q2_2025_Mine_Stats.xlsx:Minestats3!B74=13",
+            ]
+        );
+        let iv_subjects: Vec<&str> = r
+            .instances
+            .iter()
+            .filter(|i| i.state.code() == "iv")
+            .map(|i| i.subject.as_str())
+            .collect();
+        assert_eq!(iv_subjects.iter().filter(|s| **s == "Veladero").count(), 12);
+        assert_eq!(iv_subjects.iter().filter(|s| **s == "Hemlo").count(), 3);
+        assert_eq!(iv_subjects.iter().filter(|s| **s == "Kibali").count(), 2);
     }
 
     #[test]
-    fn test_load_18_barrick_workbooks_and_cell_claims() {
-        let root = workspace_root();
-        let corpus = BarrickCorpus::load_from_workspace(&root)
-            .expect("all 18 Barrick workbooks must load cleanly");
-
-        assert_eq!(corpus.total_workbooks, 18);
-        assert!(corpus.total_extracted_cells > 35_000);
-        assert!(corpus.total_numeric_cells > 20_000);
-        assert!(corpus.total_placeholder_cells >= 18);
-        assert!(corpus.total_quarantined_items >= 10);
-
-        let q4_aisc = corpus
-            .find("2025Q4", FilingKind::Aisc)
-            .expect("2025Q4 AISC");
-        let gold_sheet = q4_aisc.workbook.sheet("Gold AISC").expect("Gold AISC");
-        let n14 = gold_sheet.cell(14, 14).expect("N14 cell");
+    fn public_claim_from_a_synthetic_cell() {
+        let r = run_synthetic_assurance(&[]).expect("synthetic");
+        let aisc = r
+            .sources
+            .iter()
+            .find(|s| s.file_name == synthetic::SYNTHETIC_AISC_FILE)
+            .expect("aisc");
+        let sheet = aisc
+            .workbook
+            .sheet(synthetic::SYNTHETIC_TABLE_SHEET)
+            .expect("sheet");
+        let cell = sheet.cell(5, 2).expect("B5");
         let claim = cell_to_public_claim(
-            &q4_aisc.workbook,
-            "Gold AISC",
-            "gold_cost_of_sales_fy2024_usd_m",
-            n14,
+            &aisc.workbook,
+            &sheet.name,
+            "cos_usd_m",
+            cell,
             AdditivityClass::ExtensiveAdditive,
         )
-        .expect("valid numeric cell claim");
-        assert_eq!(claim.value, Some(4869.0));
-        assert_eq!(claim.evidence, EvidenceClass::Exact);
-        assert_eq!(claim.anchors[0].locator, "Gold AISC!N14");
-    }
-
-    #[test]
-    fn test_barrick_m0_assurance_gate_bull_01() {
-        let root = workspace_root();
-        let report = run_barrick_m0_assurance(&root).expect("M0 public assurance must succeed");
-        assert_eq!(report.workbooks_verified, 18);
-        assert!(report.cells_verified > 35_000);
-        assert_eq!(report.gold_aisc_fy2024.consolidated_numerator_usd_m, 5882.0);
-        assert_eq!(report.gold_aisc_fy2024.l_corp_numerator_adj_usd_m, -49.0);
-        assert_eq!(report.gold_aisc_fy2025.consolidated_numerator_usd_m, 5332.0);
-        assert!(report.discrepancies.len() >= 15);
+        .expect("claim");
+        assert_eq!(claim.value, Some(500.0));
+        assert_eq!(claim.anchors[0].locator, "Q1 2030!B5");
+        let dash = sheet.cell(6, 6).expect("F6");
+        let placeholder = cell_to_public_claim(
+            &aisc.workbook,
+            &sheet.name,
+            "dep",
+            dash,
+            AdditivityClass::ExtensiveAdditive,
+        )
+        .expect("placeholder");
+        assert_eq!(placeholder.value, None);
+        let err = sheet.cell(20, 2).expect("B20");
+        assert!(
+            cell_to_public_claim(
+                &aisc.workbook,
+                &sheet.name,
+                "x",
+                err,
+                AdditivityClass::ExtensiveAdditive
+            )
+            .is_err()
+        );
     }
 }

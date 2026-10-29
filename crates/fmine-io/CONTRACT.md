@@ -8,31 +8,50 @@
 - **Allowed Module Families:** `["xlsx", "zip_inflate"]`
 
 ## 2. Mathematical & Domain Formulation
-Implements pure-Rust ZIP + RFC 1951 DEFLATE decompression (`zip_inflate`), `.xlsx` OpenXML workbook/sharedStrings/worksheet extraction (`xlsx`), `G-BULL-1` formula-error (`#REF!`) and hidden-sheet quarantine (`QuarantineItem`), `G-BULL-2` placeholder preservation (`"-"`, `"N/A"` -> `CellValue::Placeholder`), and SEC EDGAR HTML table extraction (`extract_html_tables`).
+Pure-Rust ZIP and RFC 1951 DEFLATE (`zip_inflate`); `.xlsx` workbook, shared-string and worksheet extraction
+(`xlsx`); `G-BULL-1` quarantine of formula errors and hidden sheets; `G-BULL-2` placeholder preservation (`"-"`,
+`"N/A"` become `CellValue::Placeholder`, never `0.0`); HTML table extraction (`extract_html_tables`).
+
+`Workbook::cell_census` counts cells by kind over visible sheets and computes the numeric-cell digest: SHA-256 over
+`"{sheet}\t{cell_ref}\t{value}\n"` for every numeric cell, sheets in workbook order, cells in `(row, col)` order,
+values in `f64` `Display` form. The format is fixed so an independently written reader can reproduce it
+(`GATE-BULL-01` part 1).
+
+`build_minimal_xlsx` writes a minimal valid workbook (stored ZIP, inline strings) so tests and the synthetic lane
+can use a real filing's layout without shipping any issuer's bytes.
 
 ## 3. Authority, Epistemics & Representation
-Tags every extracted `.xlsx` cell and HTML table cell with a BLAKE3 `SourceAnchor` (`artifact_path#sheet!cell_ref`).
+Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a `SourceAnchor`
+(`artifact_path`, sha256, `sheet!cell`).
 
 ## 4. Public API Surface
 - `IoError`, `HtmlTable`, `extract_html_tables`
-- `zip_inflate::{read_zip_entries, inflate_raw, build_canonical_barrick_xlsx_bytes}`
-- `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, col_index_to_letters, split_cell_ref}`
+- `zip_inflate::{read_zip_entries, inflate_raw, write_stored_zip}`
+- `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, MinimalCell, MinimalSheet,
+  build_minimal_xlsx, col_index_to_letters, parse_a1_ref}`
 
 ## 5. Guards & Typed Refusals
-- `G-BULL-1`: Quarantines `#REF!` formula errors and `state="hidden"` / `state="veryHidden"` worksheets into `Workbook::quarantined`.
-- `G-BULL-2`: Preserves `"-"`, `"N/A"` as `CellValue::Placeholder` (never `0.0`).
+- `G-BULL-1`: formula-error cells and `hidden`/`veryHidden` sheets go to `Workbook::quarantined`; hidden sheets are
+  not extracted.
+- `G-BULL-2`: placeholders are typed, never zero.
+- `Workbook::from_file` on a missing or unreadable path returns `IoError::FileRead` naming the path. There is no
+  fallback content of any kind (`BD-321`).
 
 ## 6. Proof Obligations (`PO-*`)
-- `PO-IO-1`: Parses all 18 Barrick `.xlsx` workbooks (`2024Q1–2026Q2`), extracting `>35,000` cell anchors and quarantining `Gold CAS!#REF!` and `Copper CAS (2)` (`veryHidden`).
+- `PO-IO-1`: on the 18 registered Barrick workbooks, the per-workbook census (visible and hidden sheets; numeric,
+  placeholder, error and text cells) and numeric digest equal an independent reader's (MOR_CASE E820; asserted in
+  `fmine-public`'s ignored real-file test).
+- `PO-IO-2`: writer-to-parser round trip on a synthetic workbook reproduces typed cells, quarantine, census and a
+  digest computed from the fixed listing format (unit test).
 
 ## 7. Failure Modes & Deterministic Fallbacks
-Corrupted ZIP/DEFLATE streams fail closed with `IoError::CorruptZip` or `IoError::CorruptDeflate`.
+Missing files, corrupt ZIP or DEFLATE streams and malformed workbooks fail closed with `IoError`. No fallbacks.
 
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
-- `GATE-BULL-01`
+- `GATE-BULL-01` (part 1, extraction fidelity)
 
 ## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-evidence`, `fmine-claim`.
+- Depends on `fmine-core`, `fmine-evidence`.
 
 ## 10. Non-Goals & Scope Boundary
-Does not compute AISC consolidation bridges or LMDI decompositions (`fmine-metrics`).
+Reads cells; does not interpret tables (`fmine-public`) or compute metrics (`fmine-metrics`).

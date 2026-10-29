@@ -3,7 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use fmine_evidence::{REFUSAL_CATALOG, Refusal};
-use fmine_public::run_barrick_m0_assurance;
+use fmine_public::sources::issuer_profile;
+use fmine_public::{run_public_assurance, run_synthetic_assurance};
 use fmine_registry::RegistryCatalog;
 
 /// Output serialization format (`BD-111`).
@@ -16,8 +17,10 @@ pub enum OutputFormat {
 /// Parsed CLI command (`BD-111`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
-    /// `fmine assure public --issuer <issuer>` (`BD-071`).
+    /// `fmine assure public --issuer <issuer>` (`BD-071`): the gate-eligible run over registered filings.
     AssurePublic { issuer: String },
+    /// `fmine assure public --synthetic`: the known-answer run over synthetic workbooks (never gate-eligible).
+    AssureSynthetic,
     /// `fmine doctor` (`BD-115`).
     Doctor,
     /// `fmine claim show <id>` (`BD-116`).
@@ -41,11 +44,7 @@ pub struct Envelope {
 impl Envelope {
     /// Constructs a successful `FMT-ENV-1` envelope (`exit_code = 0`).
     #[must_use]
-    pub fn ok(
-        verb: impl Into<String>,
-        anchor_id: Option<String>,
-        payload_json: String,
-    ) -> Self {
+    pub fn ok(verb: impl Into<String>, anchor_id: Option<String>, payload_json: String) -> Self {
         Self {
             schema_version: "fmine.env.v1",
             verb: verb.into(),
@@ -53,6 +52,20 @@ impl Envelope {
             exit_code: 0,
             anchor_id,
             payload_json,
+            refusal: None,
+        }
+    }
+
+    /// Constructs a usage-error envelope (`exit_code = 2`, no refusal code).
+    #[must_use]
+    pub fn usage_error(verb: impl Into<String>, message: &str) -> Self {
+        Self {
+            schema_version: "fmine.env.v1",
+            verb: verb.into(),
+            status: "usage_error",
+            exit_code: 2,
+            anchor_id: None,
+            payload_json: format!("{{\"error\":\"{}\"}}", escape_json(message)),
             refusal: None,
         }
     }
@@ -102,10 +115,14 @@ impl Envelope {
 }
 
 /// Parses command-line arguments into `(CliCommand, OutputFormat, PathBuf)`.
-pub fn parse_args(args: &[String], default_root: &Path) -> Result<(CliCommand, OutputFormat, PathBuf), String> {
+pub fn parse_args(
+    args: &[String],
+    default_root: &Path,
+) -> Result<(CliCommand, OutputFormat, PathBuf), String> {
     let mut format = OutputFormat::Json;
     let mut workspace = default_root.to_path_buf();
     let mut positional = Vec::new();
+    let mut synthetic = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -116,7 +133,11 @@ pub fn parse_args(args: &[String], default_root: &Path) -> Result<(CliCommand, O
                 format = match val.as_str() {
                     "json" => OutputFormat::Json,
                     "markdown" | "md" => OutputFormat::Markdown,
-                    other => return Err(format!("unsupported --format '{other}' (expected json|markdown)")),
+                    other => {
+                        return Err(format!(
+                            "unsupported --format '{other}' (expected json|markdown)"
+                        ));
+                    }
                 };
             }
             "--workspace" => {
@@ -129,26 +150,43 @@ pub fn parse_args(args: &[String], default_root: &Path) -> Result<(CliCommand, O
                 let val = args.get(i).ok_or("missing value for --issuer")?;
                 positional.push(format!("issuer={val}"));
             }
+            "--synthetic" => synthetic = true,
             arg => positional.push(arg.to_string()),
         }
         i += 1;
     }
 
     if positional.is_empty() {
-        return Err("missing command verb (try: assure public --issuer barrick | doctor | robot-docs)".to_string());
+        return Err(
+            "missing command verb (try: assure public --issuer barrick | assure public --synthetic | doctor | robot-docs)"
+                .to_string(),
+        );
     }
 
     let cmd = match positional[0].as_str() {
         "assure" => {
             if positional.get(1).map(String::as_str) != Some("public") {
-                return Err("expected 'fmine assure public --issuer <issuer>'".to_string());
+                return Err("expected 'fmine assure public --issuer <issuer>' or 'fmine assure public --synthetic'".to_string());
             }
-            let issuer = positional
-                .iter()
-                .find_map(|s| s.strip_prefix("issuer="))
-                .unwrap_or("barrick")
-                .to_string();
-            CliCommand::AssurePublic { issuer }
+            let issuer = positional.iter().find_map(|s| s.strip_prefix("issuer="));
+            match (issuer, synthetic) {
+                (Some(_), true) => return Err("--issuer and --synthetic are exclusive".to_string()),
+                (None, true) => CliCommand::AssureSynthetic,
+                (None, false) => {
+                    return Err(
+                        "missing --issuer <issuer> (registered: barrick) or --synthetic"
+                            .to_string(),
+                    );
+                }
+                (Some(name), false) => {
+                    if issuer_profile(name).is_none() {
+                        return Err(format!("unknown issuer '{name}' (registered: barrick)"));
+                    }
+                    CliCommand::AssurePublic {
+                        issuer: name.to_string(),
+                    }
+                }
+            }
         }
         "doctor" => CliCommand::Doctor,
         "claim" => {
@@ -173,101 +211,78 @@ pub fn parse_args(args: &[String], default_root: &Path) -> Result<(CliCommand, O
 pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     match cmd {
         CliCommand::AssurePublic { issuer } => {
-            if !issuer.eq_ignore_ascii_case("barrick") {
-                return Envelope::refused(
+            let Some(profile) = issuer_profile(issuer) else {
+                return Envelope::usage_error(
                     "assure public",
-                    Refusal::from_code(
-                        "FMINE-REF-401",
-                        format!("unsupported M0 public issuer '{issuer}' (expected 'barrick')"),
-                    ),
+                    &format!("unknown issuer '{issuer}' (registered: barrick)"),
                 );
-            }
-            match run_barrick_m0_assurance(workspace_root) {
-                Ok(report) => {
-                    let anchor_id = report.ledger_anchor.anchor_id().to_string();
-                    let payload = format!(
-                        "{{\"issuer\":\"{}\",\"workbooks_verified\":{},\"visible_sheets_verified\":{},\"cells_verified\":{},\"numeric_cells\":{},\"placeholder_cells\":{},\"quarantined_items\":{},\"gold_fy2024\":{{\"site_sum_usd_m\":{:.1},\"l_corp_adj_usd_m\":{:.1},\"consolidated_numerator_usd_m\":{:.1},\"consolidated_sales_koz\":{:.1},\"computed_aisc_per_oz\":{:.2},\"reported_aisc_per_oz\":{:.0},\"rounding_bridge_per_oz\":{:.2}}},\"gold_fy2025\":{{\"site_sum_usd_m\":{:.1},\"l_corp_adj_usd_m\":{:.1},\"consolidated_numerator_usd_m\":{:.1},\"consolidated_sales_koz\":{:.1},\"computed_aisc_per_oz\":{:.2},\"reported_aisc_per_oz\":{:.0},\"rounding_bridge_per_oz\":{:.2}}},\"north_mara_lmdi_2024q1_q2\":{{\"aisc_q1\":{:.0},\"aisc_q2\":{:.0},\"total_delta\":{:.2},\"spend_effect\":{:.2},\"sales_timing_effect\":{:.2},\"residual\":{:.12}}},\"reserve_replacement_2024\":{{\"organic_pct\":{:.1},\"headline_pct\":{:.1}}},\"discrepancy_count\":{},\"state_root\":\"{}\"}}",
-                        escape_json(&report.issuer),
-                        report.workbooks_verified,
-                        report.visible_sheets_verified,
-                        report.cells_verified,
-                        report.numeric_cells,
-                        report.placeholder_cells,
-                        report.quarantined_items,
-                        report.gold_aisc_fy2024.site_numerator_sum_usd_m,
-                        report.gold_aisc_fy2024.l_corp_numerator_adj_usd_m,
-                        report.gold_aisc_fy2024.consolidated_numerator_usd_m,
-                        report.gold_aisc_fy2024.consolidated_sales,
-                        report.gold_aisc_fy2024.computed_consolidated_aisc,
-                        report.gold_aisc_fy2024.reported_consolidated_aisc,
-                        report.gold_aisc_fy2024.rounding_bridge_per_unit,
-                        report.gold_aisc_fy2025.site_numerator_sum_usd_m,
-                        report.gold_aisc_fy2025.l_corp_numerator_adj_usd_m,
-                        report.gold_aisc_fy2025.consolidated_numerator_usd_m,
-                        report.gold_aisc_fy2025.consolidated_sales,
-                        report.gold_aisc_fy2025.computed_consolidated_aisc,
-                        report.gold_aisc_fy2025.reported_consolidated_aisc,
-                        report.gold_aisc_fy2025.rounding_bridge_per_unit,
-                        report.north_mara_lmdi_2024q1_q2.aisc_0,
-                        report.north_mara_lmdi_2024q1_q2.aisc_1,
-                        report.north_mara_lmdi_2024q1_q2.total_delta,
-                        report.north_mara_lmdi_2024q1_q2.spend_effect,
-                        report.north_mara_lmdi_2024q1_q2.sales_timing_effect,
-                        (report.north_mara_lmdi_2024q1_q2.sum_of_factors()
-                            - report.north_mara_lmdi_2024q1_q2.total_delta)
-                            .abs(),
-                        report.reserve_replacement_2024.organic_replacement_pct,
-                        report.reserve_replacement_2024.headline_replacement_pct,
-                        report.discrepancies.len(),
-                        report.ledger_anchor.state_root
-                    );
-                    Envelope::ok("assure public", Some(anchor_id), payload)
-                }
-                Err(e) => Envelope::refused(
+            };
+            match run_public_assurance(profile, workspace_root) {
+                Ok(report) => Envelope::ok(
                     "assure public",
-                    Refusal::from_code("FMINE-REF-502", e.to_string()),
+                    Some(report.ledger_anchor.anchor_id().to_string()),
+                    report.to_json(),
                 ),
+                Err(refusal) => Envelope::refused("assure public", refusal),
             }
         }
+        CliCommand::AssureSynthetic => match run_synthetic_assurance(&[]) {
+            Ok(report) => Envelope::ok(
+                "assure public",
+                Some(report.ledger_anchor.anchor_id().to_string()),
+                report.to_json(),
+            ),
+            Err(refusal) => Envelope::refused("assure public", refusal),
+        },
         CliCommand::Doctor => match RegistryCatalog::load_from_root(workspace_root) {
             Ok(cat) => {
-                let corpus_exists = workspace_root.join("corpus_of_input_docs").is_dir();
+                let barrick = &fmine_public::sources::BARRICK;
+                let dir = workspace_root.join(barrick.corpus_dir);
+                let present = barrick
+                    .sources
+                    .iter()
+                    .filter(|s| dir.join(s.file_name).is_file())
+                    .count();
                 let payload = format!(
-                    "{{\"registries_ok\":true,\"units_count\":{},\"crs_count\":{},\"refusals_count\":{},\"verbs_count\":{},\"corpus_present\":{}}}",
+                    "{{\"registries_ok\":true,\"units_count\":{},\"crs_count\":{},\"refusals_count\":{},\"verbs_count\":{},\"barrick_sources_registered\":{},\"barrick_sources_present\":{}}}",
                     cat.unit_symbols.len(),
                     cat.crs_codes.len(),
                     cat.refusal_codes.len(),
                     cat.verb_names.len(),
-                    corpus_exists
+                    barrick.sources.len(),
+                    present
                 );
                 Envelope::ok("doctor", None, payload)
             }
-            Err(e) => Envelope::refused("doctor", Refusal::from_code("FMINE-REF-502", e.to_string())),
-        },
-        CliCommand::ClaimShow { id } => {
-            if !id.starts_with("clm_") {
-                return Envelope::refused(
-                    "claim show",
-                    Refusal::from_code(
-                        "FMINE-REF-401",
-                        format!("invalid ClaimId '{id}' (must start with 'clm_')"),
-                    ),
-                );
+            Err(e) => {
+                Envelope::refused("doctor", Refusal::from_code("FMINE-REF-502", e.to_string()))
             }
-            let payload = format!(
-                "{{\"claim_id\":\"{}\",\"evidence_class\":\"Exact\",\"knowledge_state\":\"KnownKnown\"}}",
-                escape_json(id)
-            );
-            Envelope::ok("claim show", None, payload)
-        }
+        },
+        CliCommand::ClaimShow { id } => Envelope::refused(
+            "claim show",
+            Refusal::from_code(
+                "FMINE-REF-502",
+                format!(
+                    "no claim store exists in M0, so claim '{id}' cannot be read; claims are emitted only inside an \
+                     'assure public' report"
+                ),
+            ),
+        ),
         CliCommand::RobotDocs => {
-            let codes: Vec<String> = REFUSAL_CATALOG
+            let refusals: Vec<String> = REFUSAL_CATALOG
                 .iter()
-                .map(|r| format!("\"{}\"", r.code))
+                .map(|r| {
+                    format!(
+                        "{{\"code\":\"{}\",\"exit_code\":{},\"summary\":\"{}\"}}",
+                        r.code,
+                        r.exit_code,
+                        escape_json(r.summary)
+                    )
+                })
                 .collect();
             let payload = format!(
-                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"verbs\":[\"assure public\",\"doctor\",\"claim show\",\"robot-docs\"],\"refusal_codes\":[{}]}}",
-                codes.join(",")
+                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"verbs\":[\"assure public --issuer <issuer>\",\"assure public --synthetic\",\"doctor\",\"claim show <id>\",\"robot-docs\"],\"issuers\":[\"barrick\"],\"exit_codes\":{{\"0\":\"ok\",\"2\":\"usage error (unknown verb, flag or issuer)\"}},\"refusals\":[{}]}}",
+                refusals.join(",")
             );
             Envelope::ok("robot-docs", None, payload)
         }
@@ -275,10 +290,19 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
 }
 
 fn escape_json(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -293,25 +317,121 @@ mod tests {
             .to_path_buf()
     }
 
+    fn args(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| (*s).to_string()).collect()
+    }
+
     #[test]
-    fn test_cli_assure_public_barrick_end_to_end() {
+    fn test_cli_assure_synthetic_end_to_end() {
         let root = workspace_root();
-        let args = vec![
-            "assure".to_string(),
-            "public".to_string(),
-            "--issuer".to_string(),
-            "barrick".to_string(),
-        ];
-        let (cmd, fmt, ws) = parse_args(&args, &root).expect("parse assure public");
-        assert_eq!(fmt, OutputFormat::Json);
+        let (cmd, fmt, ws) =
+            parse_args(&args(&["assure", "public", "--synthetic"]), &root).expect("parse");
+        assert_eq!(
+            (cmd.clone(), fmt),
+            (CliCommand::AssureSynthetic, OutputFormat::Json)
+        );
         let env = execute_command(&cmd, &ws);
-        assert_eq!(env.exit_code, 0);
-        assert_eq!(env.status, "ok");
+        assert_eq!((env.exit_code, env.status), (0, "ok"));
         assert!(env.anchor_id.as_deref().unwrap_or("").starts_with("anc_"));
         let json = env.to_json();
-        assert!(json.contains("\"workbooks_verified\":18"));
-        assert!(json.contains("\"consolidated_numerator_usd_m\":5882.0"));
-        assert!(json.contains("\"l_corp_adj_usd_m\":-49.0"));
+        assert!(json.contains(
+            "\"payload\":{\"issuer\":\"synthetic\",\"lane\":\"synthetic\",\"gate_eligible\":false"
+        ));
+        assert!(
+            json.contains("\"totals\":{\"i\":21,\"ii\":1,\"iii\":1,\"iv\":1,\"v\":6,\"np\":5}")
+        );
+        assert!(
+            json.contains(
+                "\"next_actions\":[{\"command\":\"fmine assure public --issuer barrick\""
+            )
+        );
+    }
+
+    /// Without the registered workbooks the gate-eligible run refuses with exit 8 and names the files; it
+    /// never substitutes stand-in content (BD-321).
+    #[test]
+    fn test_cli_assure_public_refuses_without_registered_files() {
+        let empty = workspace_root()
+            .join("crates")
+            .join("fmine-cli")
+            .join("no-such-workspace");
+        let (cmd, _, ws) = parse_args(
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--workspace",
+                &empty.display().to_string(),
+            ]),
+            &workspace_root(),
+        )
+        .expect("parse");
+        let env = execute_command(&cmd, &ws);
+        assert_eq!((env.exit_code, env.status), (8, "refused"));
+        let json = env.to_json();
+        assert!(json.contains("\"code\":\"FMINE-REF-502\""));
+        assert!(json.contains("Barrick_Q2_2026_AISC.xlsx"));
+        assert!(json.contains("\"payload\":null"));
+    }
+
+    #[test]
+    fn test_cli_usage_errors() {
+        let root = workspace_root();
+        for bad in [
+            &["assure", "public", "--issuer", "newmont"][..],
+            &["assure", "public"][..],
+            &["assure", "public", "--issuer", "barrick", "--synthetic"][..],
+            &["assure", "private"][..],
+            &[][..],
+        ] {
+            assert!(
+                parse_args(&args(bad), &root).is_err(),
+                "{bad:?} must be a usage error"
+            );
+        }
+        let env = execute_command(
+            &CliCommand::AssurePublic {
+                issuer: "newmont".to_string(),
+            },
+            &root,
+        );
+        assert_eq!(
+            (env.exit_code, env.status, env.refusal.is_none()),
+            (2, "usage_error", true)
+        );
+    }
+
+    #[test]
+    fn test_cli_claim_show_refuses_without_a_claim_store() {
+        let env = execute_command(
+            &CliCommand::ClaimShow {
+                id: "clm_0001".to_string(),
+            },
+            &workspace_root(),
+        );
+        assert_eq!((env.exit_code, env.status), (8, "refused"));
+        assert!(env.to_json().contains("no claim store exists in M0"));
+    }
+
+    /// Gate run on the real registered workbooks (public lane; the files are not in git). Run with
+    /// `cargo test -p fmine-cli -- --ignored` where `corpus_of_input_docs/downloaded/mine_stats/` is present.
+    #[test]
+    #[ignore = "needs the 18 registered Barrick workbooks under corpus_of_input_docs/downloaded/mine_stats/"]
+    fn test_cli_assure_public_barrick_real_files() {
+        let root = workspace_root();
+        let (cmd, _, ws) =
+            parse_args(&args(&["assure", "public", "--issuer", "barrick"]), &root).expect("parse");
+        let env = execute_command(&cmd, &ws);
+        assert_eq!((env.exit_code, env.status), (0, "ok"), "{}", env.to_json());
+        let json = env.to_json();
+        assert!(json.contains("\"lane\":\"public\",\"gate_eligible\":true"));
+        assert!(json.contains("\"aisc_tables\":34,\"instances\":2595"));
+        assert!(
+            json.contains(
+                "\"totals\":{\"i\":2120,\"ii\":3,\"iii\":4,\"iv\":17,\"v\":391,\"np\":60}"
+            )
+        );
     }
 
     #[test]
@@ -321,8 +441,16 @@ mod tests {
         assert_eq!(env_doc.exit_code, 0);
         assert!(env_doc.to_json().contains("\"registries_ok\":true"));
 
+        assert!(
+            env_doc
+                .to_json()
+                .contains("\"barrick_sources_registered\":18")
+        );
+
         let env_rob = execute_command(&CliCommand::RobotDocs, &root);
         assert_eq!(env_rob.exit_code, 0);
-        assert!(env_rob.to_json().contains("\"FMT-ENV-1\""));
+        let rob = env_rob.to_json();
+        assert!(rob.contains("\"FMT-ENV-1\""));
+        assert!(rob.contains("{\"code\":\"FMINE-REF-502\",\"exit_code\":8,"));
     }
 }

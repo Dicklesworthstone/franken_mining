@@ -1,0 +1,203 @@
+//! Synthetic lane: workbooks in the real AISC-table layout with invented subjects ("Site A" …) and invented
+//! numbers, each column seeded with a known answer. A synthetic run prints `lane = synthetic`, is never
+//! eligible for `GATE-BULL-01`, and exists so every state of the ledger is exercised without any issuer's
+//! bytes (`BD-321`).
+//!
+//! Seeded answers (row numbers as below):
+//! - B "Site A": every identity consistent.
+//! - C "Site Bb" (footnote letter): TCC prints 350 against a component sum of 250; flipping the sign of C6
+//!   (−50) closes it, so the certificate names C6 as the witness.
+//! - D "Site C": AISC per ounce prints 2400 where 1000·(200 ± 5/2)/(100 ± 1/2) allows only
+//!   [1965.174, 2035.175] (undecidable).
+//! - E "Site D": a non-zero non-controlling-interest line, so cost of sales per ounce is refused.
+//! - F "Site E": every used cell zero or a dash (not published).
+//! - G "Site F": a stored value of 100.4 (refused: unrounded).
+//! - H "Region North": AISC per ounce 2830 closes only with the registered component in the synthetic
+//!   Mine Stats workbook, `Minestats3!B32` = 13 (explained).
+//! - I "Footnote" is skipped; J "Mystery Mine" is not a registered subject.
+
+use fmine_io::xlsx::{MinimalCell, MinimalSheet, build_minimal_xlsx};
+
+use crate::aisc::IdentityFamily;
+use crate::sources::{RegisteredReconstruction, SourceKind};
+
+pub const SYNTHETIC_AISC_FILE: &str = "Synthetic_AISC.xlsx";
+pub const SYNTHETIC_STATS_FILE: &str = "Synthetic_Mine_Stats.xlsx";
+pub const SYNTHETIC_TABLE_SHEET: &str = "Q1 2030";
+
+pub const SYNTHETIC_SUBJECTS: [&str; 8] = [
+    "Site A",
+    "Site B",
+    "Site C",
+    "Site D",
+    "Site E",
+    "Site F",
+    "Site G",
+    "Region North",
+];
+
+pub const SYNTHETIC_RECONSTRUCTIONS: [RegisteredReconstruction; 1] = [RegisteredReconstruction {
+    evidence_id: "SYNTHETIC",
+    table_file: SYNTHETIC_AISC_FILE,
+    sheet: SYNTHETIC_TABLE_SHEET,
+    subject: "Region North",
+    family: IdentityFamily::AiscPerOunce,
+    component_file: SYNTHETIC_STATS_FILE,
+    component_sheet: "Minestats3",
+    component_cell: "B32",
+    label_checks: &[
+        ("A32", "Minesite sustaining"),
+        ("B2", "Site G"),
+        ("A3", "For the three months ended March 31"),
+        ("B3", "2030"),
+    ],
+    rule: "Synthetic: the region's AISC numerator includes Site G's minesite sustaining capital.",
+}];
+
+fn n(r: &str, v: f64) -> (String, MinimalCell) {
+    (r.to_string(), MinimalCell::Number(v))
+}
+
+fn t(r: &str, s: &str) -> (String, MinimalCell) {
+    (r.to_string(), MinimalCell::Text(s.to_string()))
+}
+
+/// Cells of the synthetic AISC table sheet.
+#[must_use]
+pub fn synthetic_aisc_cells() -> Vec<(String, MinimalCell)> {
+    let mut cells = vec![
+        t(
+            "A1",
+            "Reconciliation of cost of sales to total cash costs and all-in sustaining costs",
+        ),
+        t("A3", "($ millions, except per ounce information)"),
+        t("A5", "Cost of sales applicable to gold production"),
+        t("A6", "Depreciation"),
+        t("A7", "Non-controlling interests"),
+        t("A8", "Total cash costs"),
+        t("A9", "General & administrative costs"),
+        t("A10", "Minesite sustaining capital expenditures"),
+        t("A11", "All-in sustaining costs"),
+        t("A13", "Ounces sold - attributable basis (000s ounces)"),
+        t("A14", "Cost of sales per ounce"),
+        t("A15", "Total cash costs per ounce"),
+        t("A16", "All-in sustaining costs per ounce"),
+        t("I2", "Footnote"),
+        t("I5", "a"),
+        t("J2", "Mystery Mine"),
+        n("J5", 1.0),
+        (String::from("B20"), MinimalCell::Error("#REF!".to_string())),
+    ];
+    let headers = [
+        ("B", "Site A"),
+        ("C", "Site Bb"),
+        ("D", "Site C"),
+        ("E", "Site D"),
+        ("F", "Site E"),
+        ("G", "Site F"),
+        ("H", "Region North"),
+    ];
+    for (col, h) in headers {
+        cells.push(t(&format!("{col}2"), h));
+    }
+    // Rows 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16.
+    let rows = [5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16];
+    let columns: [(&str, [f64; 11]); 6] = [
+        (
+            "B",
+            [
+                500.0, -100.0, 0.0, 400.0, 10.0, 90.0, 500.0, 400.0, 1250.0, 1000.0, 1250.0,
+            ],
+        ),
+        (
+            "C",
+            [
+                300.0, -50.0, 0.0, 350.0, 20.0, 30.0, 400.0, 200.0, 1500.0, 1750.0, 2000.0,
+            ],
+        ),
+        (
+            "D",
+            [
+                200.0, -40.0, 0.0, 160.0, 5.0, 35.0, 200.0, 100.0, 2000.0, 1600.0, 2400.0,
+            ],
+        ),
+        (
+            "E",
+            [
+                1000.0, -200.0, -160.0, 640.0, 10.0, 150.0, 800.0, 400.0, 2500.0, 1600.0, 2000.0,
+            ],
+        ),
+        (
+            "G",
+            [
+                100.4, -20.0, 0.0, 80.4, 2.0, 18.0, 100.4, 50.0, 2008.0, 1608.0, 2008.0,
+            ],
+        ),
+        (
+            "H",
+            [
+                300.0, -60.0, 0.0, 240.0, 0.0, 30.0, 270.0, 100.0, 3000.0, 2400.0, 2830.0,
+            ],
+        ),
+    ];
+    for (col, values) in columns {
+        for (row, v) in rows.iter().zip(values) {
+            cells.push(n(&format!("{col}{row}"), v));
+        }
+    }
+    for row in rows {
+        let r = format!("F{row}");
+        cells.push(if matches!(row, 6 | 7 | 9 | 10) {
+            t(&r, "-")
+        } else {
+            n(&r, 0.0)
+        });
+    }
+    cells
+}
+
+/// Builds the synthetic workbooks; `edits` replace or add cells of the AISC table sheet (for perturbation
+/// tests). Returns `(file name, kind, quarter, bytes)`.
+#[must_use]
+pub fn synthetic_workbooks(
+    edits: &[(String, MinimalCell)],
+) -> Vec<(&'static str, SourceKind, &'static str, Vec<u8>)> {
+    let mut cells = synthetic_aisc_cells();
+    for (r, c) in edits {
+        cells.retain(|(existing, _)| existing != r);
+        cells.push((r.clone(), c.clone()));
+    }
+    let aisc = build_minimal_xlsx(&[
+        MinimalSheet {
+            name: SYNTHETIC_TABLE_SHEET.to_string(),
+            hidden: false,
+            cells,
+        },
+        MinimalSheet {
+            name: "Scratch".to_string(),
+            hidden: true,
+            cells: vec![n("A1", 1.0)],
+        },
+    ]);
+    let stats = build_minimal_xlsx(&[MinimalSheet {
+        name: "Minestats3".to_string(),
+        hidden: false,
+        cells: vec![
+            t("A1", "Mine Statistics (Gold)"),
+            t("B2", "Site G (60%)1"),
+            t("A3", "For the three months ended March 31,"),
+            t("B3", "2030"),
+            t("A32", "Minesite sustaining3"),
+            n("B32", 13.0),
+        ],
+    }]);
+    vec![
+        (SYNTHETIC_STATS_FILE, SourceKind::MineStats, "2030Q1", stats),
+        (
+            SYNTHETIC_AISC_FILE,
+            SourceKind::AiscReconciliation,
+            "2030Q1",
+            aisc,
+        ),
+    ]
+}

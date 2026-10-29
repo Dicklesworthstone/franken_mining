@@ -107,8 +107,10 @@ pub fn decompose_aisc_lmdi(s0: &LmdiState, s1: &LmdiState) -> Result<LmdiWaterfa
     let s_ratio_1 = s1.oz_sold / s1.oz_produced;
     let sales_timing_effect = -l_weight * (s_ratio_1 / s_ratio_0).ln();
 
-    let circuit_0 = s0.oz_produced / (s0.tonnes_processed * s0.head_grade_g_t * s0.recovery_fraction);
-    let circuit_1 = s1.oz_produced / (s1.tonnes_processed * s1.head_grade_g_t * s1.recovery_fraction);
+    let circuit_0 =
+        s0.oz_produced / (s0.tonnes_processed * s0.head_grade_g_t * s0.recovery_fraction);
+    let circuit_1 =
+        s1.oz_produced / (s1.tonnes_processed * s1.head_grade_g_t * s1.recovery_fraction);
     let circuit_inventory_effect = -l_weight * (circuit_1 / circuit_0).ln();
 
     Ok(LmdiWaterfall {
@@ -129,11 +131,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_north_mara_2024q1_to_q2_exact_lmdi_e137() {
-        // Real Barrick corpus case E137 (barrick-mine-stats-2025-q4.xlsx & barrick-aisc-2024-q2.xlsx):
-        // North Mara (84% Barrick):
-        // 2024Q1: AISC = $1,297/oz, oz_produced = 47 koz, oz_sold = 47 koz (S0 = 1.000)
-        // 2024Q2: AISC = $2,582/oz, oz_produced = 54 koz, oz_sold = 72 koz (S1 = 72/54 = 1.3333)
+    fn test_synthetic_two_period_exact_lmdi() {
+        // Synthetic site, invented numbers. (These values were once labelled as a Barrick North Mara case,
+        // E137; they match no published cell, R7-C054.)
+        // Period 0: AISC = $1,297/oz, oz_produced = 47 koz, oz_sold = 47 koz (S0 = 1.000)
+        // Period 1: AISC = $2,582/oz, oz_produced = 54 koz, oz_sold = 72 koz (S1 = 72/54 = 1.3333)
         let q1 = LmdiState {
             aisc_per_oz: 1297.0,
             total_aisc_spend: 1297.0 * 47.0,

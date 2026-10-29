@@ -8,7 +8,7 @@ use fmine_core::anchor::SourceAnchor;
 use fmine_core::hash::sha256;
 
 use crate::IoError;
-use crate::zip_inflate::{build_canonical_barrick_xlsx_bytes, read_zip_entries};
+use crate::zip_inflate::{read_zip_entries, write_stored_zip};
 
 /// Typed cell value preserving the distinction between `0.0`, `Placeholder` (`"-"`/`"N/A"`),
 /// and `FormulaError` (`"#REF!"`) (`G-BULL-1`, `G-BULL-2`, `BD-057`).
@@ -117,23 +117,65 @@ pub struct Workbook {
     pub quarantined: Vec<QuarantineItem>,
 }
 
+/// Per-workbook cell counts over visible sheets, plus the canonical digest of every numeric cell
+/// (`GATE-BULL-01` part 1: extraction fidelity is measured by comparing these with an independent reader).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CellCensus {
+    pub visible_sheets: usize,
+    pub hidden_sheets: usize,
+    pub numeric_cells: usize,
+    pub placeholder_cells: usize,
+    pub formula_error_cells: usize,
+    pub text_cells: usize,
+    /// SHA-256 over `"{sheet}\t{cell_ref}\t{value}\n"` for every numeric cell, sheets in workbook order and
+    /// cells in `(row, col)` order; `value` is the shortest round-trip decimal in positional notation (Rust
+    /// `f64` `Display`). DESIGN: the format is fixed so a reader written independently can reproduce it.
+    pub numeric_digest: [u8; 32],
+}
+
 impl Workbook {
-    /// Reads and parses an `.xlsx` file from disk (or falls back to canonical `.xlsx` ZIP bytes
-    /// on remote workers where `.gitignore`d `corpus_of_input_docs/` is not synced).
+    /// Reads and parses an `.xlsx` file from disk. A missing or unreadable file is an error naming the
+    /// path; there is no fallback content of any kind (`BD-321`).
     pub fn from_file(path: &Path) -> Result<Self, IoError> {
-        let bytes = match fs::read(path) {
-            Ok(b) => b,
-            Err(_) if path.to_string_lossy().contains("corpus_of_input_docs") => {
-                build_canonical_barrick_xlsx_bytes()
-            }
-            Err(e) => {
-                return Err(IoError::FileRead {
-                    path: path.display().to_string(),
-                    detail: e.to_string(),
-                });
-            }
-        };
+        let bytes = fs::read(path).map_err(|e| IoError::FileRead {
+            path: path.display().to_string(),
+            detail: e.to_string(),
+        })?;
         Self::from_bytes(path.display().to_string(), &bytes)
+    }
+
+    /// Counts cells by kind over the visible sheets and computes the canonical numeric-cell digest.
+    #[must_use]
+    pub fn cell_census(&self) -> CellCensus {
+        let mut census = CellCensus {
+            visible_sheets: self.sheets.len(),
+            hidden_sheets: self
+                .quarantined
+                .iter()
+                .filter(|q| matches!(q, QuarantineItem::HiddenSheet { .. }))
+                .count(),
+            numeric_cells: 0,
+            placeholder_cells: 0,
+            formula_error_cells: 0,
+            text_cells: 0,
+            numeric_digest: [0; 32],
+        };
+        let mut listing = String::new();
+        for sheet in &self.sheets {
+            for cell in sheet.cells_by_coord.values() {
+                match &cell.value {
+                    CellValue::Number(v) => {
+                        census.numeric_cells += 1;
+                        listing.push_str(&format!("{}\t{}\t{v}\n", sheet.name, cell.cell_ref));
+                    }
+                    CellValue::Placeholder(_) => census.placeholder_cells += 1,
+                    CellValue::FormulaError(_) => census.formula_error_cells += 1,
+                    CellValue::Text(_) => census.text_cells += 1,
+                }
+            }
+        }
+        census.numeric_digest = sha256(listing.as_bytes()).0;
+        census
     }
 
     /// Parses an `.xlsx` workbook from in-memory bytes and computes its SHA-256 digest.
@@ -165,10 +207,7 @@ impl Workbook {
 
         for (sheet_name, rel_id, state) in parse_workbook_sheets(&wb_text) {
             if state == "hidden" || state == "veryHidden" {
-                quarantined.push(QuarantineItem::HiddenSheet {
-                    sheet_name,
-                    state,
-                });
+                quarantined.push(QuarantineItem::HiddenSheet { sheet_name, state });
                 continue;
             }
             let target = rel_targets
@@ -291,7 +330,9 @@ fn parse_shared_strings(xml: &str) -> Vec<String> {
             let Some(t_close) = si_body[text_start..].find("</t>") else {
                 break;
             };
-            combined.push_str(&decode_xml_entities(&si_body[text_start..text_start + t_close]));
+            combined.push_str(&decode_xml_entities(
+                &si_body[text_start..text_start + t_close],
+            ));
             t_pos = text_start + t_close + 4;
         }
         strings.push(combined);
@@ -417,6 +458,110 @@ fn classify_string_cell(
     } else {
         CellValue::Text(s)
     }
+}
+
+/// Converts a 1-based column index into Excel letters (`1 -> "A"`, `27 -> "AA"`); `0` gives `""`.
+#[must_use]
+pub fn col_index_to_letters(mut col: u32) -> String {
+    let mut out = Vec::new();
+    while col > 0 {
+        let rem = (col - 1) % 26;
+        out.push(char::from(b'A' + rem as u8));
+        col = (col - 1) / 26;
+    }
+    out.iter().rev().collect()
+}
+
+/// One cell for [`build_minimal_xlsx`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum MinimalCell {
+    Number(f64),
+    Text(String),
+    /// A formula-error token such as `#REF!`, written as an error-typed cell.
+    Error(String),
+}
+
+/// One worksheet for [`build_minimal_xlsx`]: cells keyed by A1 reference.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MinimalSheet {
+    pub name: String,
+    pub hidden: bool,
+    pub cells: Vec<(String, MinimalCell)>,
+}
+
+/// Writes a minimal valid `.xlsx` (stored ZIP, inline strings, no styles) holding the given sheets.
+/// It exists so tests and the synthetic lane can build workbooks in a real filing's layout without shipping
+/// any issuer's bytes. Cells whose reference does not parse are skipped.
+#[must_use]
+pub fn build_minimal_xlsx(sheets: &[MinimalSheet]) -> Vec<u8> {
+    let mut wb_xml = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>",
+    );
+    let mut rels_xml = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
+    );
+    let mut sheet_xmls = Vec::with_capacity(sheets.len());
+    for (i, sheet) in sheets.iter().enumerate() {
+        let n = i + 1;
+        let state = if sheet.hidden {
+            " state=\"hidden\""
+        } else {
+            ""
+        };
+        wb_xml.push_str(&format!(
+            "<sheet name=\"{}\" sheetId=\"{n}\"{state} r:id=\"rId{n}\"/>",
+            escape_xml(&sheet.name)
+        ));
+        rels_xml.push_str(&format!(
+            "<Relationship Id=\"rId{n}\" Target=\"worksheets/sheet{n}.xml\"/>"
+        ));
+        let mut rows: BTreeMap<u32, BTreeMap<u32, String>> = BTreeMap::new();
+        for (cell_ref, cell) in &sheet.cells {
+            let Some((row, col)) = parse_a1_ref(cell_ref) else {
+                continue;
+            };
+            let xml = match cell {
+                MinimalCell::Number(v) => format!("<c r=\"{cell_ref}\"><v>{v}</v></c>"),
+                MinimalCell::Text(t) => format!(
+                    "<c r=\"{cell_ref}\" t=\"inlineStr\"><is><t>{}</t></is></c>",
+                    escape_xml(t)
+                ),
+                MinimalCell::Error(t) => {
+                    format!("<c r=\"{cell_ref}\" t=\"e\"><v>{}</v></c>", escape_xml(t))
+                }
+            };
+            rows.entry(row).or_default().insert(col, xml);
+        }
+        let mut xml = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>",
+        );
+        for (row, cells) in rows {
+            xml.push_str(&format!("<row r=\"{row}\">"));
+            for c in cells.values() {
+                xml.push_str(c);
+            }
+            xml.push_str("</row>");
+        }
+        xml.push_str("</sheetData></worksheet>");
+        sheet_xmls.push((format!("xl/worksheets/sheet{n}.xml"), xml));
+    }
+    wb_xml.push_str("</sheets></workbook>");
+    rels_xml.push_str("</Relationships>");
+    let mut entries: Vec<(&str, &[u8])> = vec![
+        ("xl/workbook.xml", wb_xml.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels_xml.as_bytes()),
+    ];
+    for (name, xml) in &sheet_xmls {
+        entries.push((name.as_str(), xml.as_bytes()));
+    }
+    write_stored_zip(&entries)
+}
+
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Parses an Excel cell reference such as `"N14"` or `"AA102"` into 1-based `(row, col)`.

@@ -242,7 +242,10 @@ pub fn verify_support_compatible(a: SpatialSupport, b: SpatialSupport) -> Result
 }
 
 /// Verifies that an unweighted sum/mean is only applied to `ExtensiveAdditive` claims (`FMINE-REF-103`).
-pub fn verify_unweighted_additive(additivity: AdditivityClass, context: &str) -> Result<(), Refusal> {
+pub fn verify_unweighted_additive(
+    additivity: AdditivityClass,
+    context: &str,
+) -> Result<(), Refusal> {
     if additivity != AdditivityClass::ExtensiveAdditive {
         return Err(Refusal::from_code(
             "FMINE-REF-103",
@@ -277,7 +280,10 @@ pub fn compose_binary<A, B, R>(
 
     let mut uu_terms = left.uu_terms.clone();
     for u in &right.uu_terms {
-        if !uu_terms.iter().any(|existing| existing.scenario_id == u.scenario_id) {
+        if !uu_terms
+            .iter()
+            .any(|existing| existing.scenario_id == u.scenario_id)
+        {
             uu_terms.push(u.clone());
         }
     }
@@ -386,7 +392,11 @@ impl ClaimDag {
 
     /// Marks `root_id` and all transitive downstream dependents as `stale = true` (`INV-013`).
     /// Returns the deterministic sorted list of all affected `ClaimId`s.
-    pub fn invalidate_and_propagate(&mut self, root_id: ClaimId, superseded_by: Option<ClaimId>) -> Vec<ClaimId> {
+    pub fn invalidate_and_propagate(
+        &mut self,
+        root_id: ClaimId,
+        superseded_by: Option<ClaimId>,
+    ) -> Vec<ClaimId> {
         let mut affected = BTreeSet::new();
         let mut queue = VecDeque::new();
         queue.push_back(root_id);
@@ -423,11 +433,7 @@ mod tests {
     use super::*;
 
     fn sample_anchor() -> SourceAnchor {
-        SourceAnchor::new(
-            "corpus_of_input_docs/barrick-aisc-2025-q4.xlsx",
-            [0x11; 32],
-            "Gold AISC!L14",
-        )
+        SourceAnchor::new("synthetic/aisc.xlsx", [0x11; 32], "Synthetic AISC!L14")
     }
 
     #[test]
@@ -533,8 +539,9 @@ mod tests {
         .expect_err("must reject point vs SMU block support mismatch");
         assert_eq!(err_sup.code, "FMINE-REF-102");
 
-        let err_add = verify_unweighted_additive(AdditivityClass::IntensiveWeighted, "bench mean grade")
-            .expect_err("must reject unweighted average of intensive grade");
+        let err_add =
+            verify_unweighted_additive(AdditivityClass::IntensiveWeighted, "bench mean grade")
+                .expect_err("must reject unweighted average of intensive grade");
         assert_eq!(err_add.code, "FMINE-REF-103");
     }
 

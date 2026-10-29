@@ -13,7 +13,7 @@ const TAG_ANCHOR: [u8; 4] = *b"ANCR";
 /// Provenance anchor pointing to a specific cell, page, or byte range inside a content-addressed artifact (`§8.1`).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceAnchor {
-    /// Relative path or URI of the source artifact (e.g. `"corpus_of_input_docs/barrick-aisc-2025-q4.xlsx"`).
+    /// Relative path or URI of the source artifact (e.g. `"corpus_of_input_docs/downloaded/mine_stats/Barrick_Q4_2025_AISC.xlsx"`).
     pub artifact_path: String,
     /// SHA-256 digest of the source artifact bytes.
     pub artifact_sha256: [u8; 32],

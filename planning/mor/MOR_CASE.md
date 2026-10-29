@@ -448,3 +448,48 @@ belong to the round-7 run above.
   pilot had classed this column explained and withdrew that, so its count becomes 34 of 46 explained and 12 without
   public closure (not re-run). The signature matches Veladero (E691): all three rates point to one ounce figure
   about 1 koz below the printed one.
+
+**M0 machine run (lead agent, 2026-10-29).** Ids E820–E823 are new. An independent Python reader and census were
+written first and their outputs pinned; the Rust implementation (`fmine-io`, `fmine-public`) was then written
+against them and run on the 18 registered workbooks (BD-321, BD-322).
+
+- **E820** Extraction fidelity (FACT, execution). The Rust reader and the independent reader agree exactly on every
+  registered workbook: visible and hidden sheet counts, numeric, placeholder, formula-error and text cell counts,
+  and the SHA-256 digest of every numeric cell (`"{sheet}\t{cell}\t{value}\n"`, visible sheets in workbook order,
+  cells by row then column). Totals: 101 visible sheets, 6 hidden, 30,388 numeric cells, 3,952 placeholders, 1,092
+  formula errors (all in `Barrick_Q2_2026_Mine_Stats.xlsx`), 6,537 text cells. Test:
+  `barrick_real_files_match_the_independent_reader` (ignored by default; the files are not in git).
+- **E821** Six of the 40 sheets with a cost-of-sales row are hidden (FACT): `Barrick_Q4_2024_AISC.xlsx` `'Q4 2023'`,
+  `Barrick_Q4_2025_AISC.xlsx` `'Q4 2024'`, and `'YTD Q3 2025'` and `'YTD Q3 2024'` in both 2026 AISC workbooks. The
+  ledger reads the 34 visible tables only. This corrects E815, whose "all visible sheets" counted hidden ones: its
+  North America Q4 2023 TCC exception (541 against 540) sits on a hidden sheet and is outside the M0 ledger.
+- **E822** Identity ledger under the declared component-sum construction (FACT, execution; Rust equals the
+  independent census in every count). 34 tables, 519 subject columns, 2,595 instances.
+  - **Footing:** 1,004 consistent (i), 4 issuer discrepancies (iii), 6 refused (v), 24 not published.
+  - **Per ounce:** 1,116 (i), 3 explained (ii), 17 undecidable (iv), 385 (v), 36 not published.
+  - **Alternative construction** (subtotal rounded once; reported, not scored): it accepts 1,008 footing instances
+    and 994 of the 1,116 consistent rates.
+  - **The four (iii) instances are two cells, each in two vintages** (`Barrick_Q3_2024_AISC.xlsx` and
+    `Barrick_Q2_2025_AISC.xlsx`, sheet `'Q2 2024'`):
+    - Kibali TCC prints 70 (O11) against a component sum of 72. The run's sign-flip witness is O7, by-product
+      credits printed +1: −1 closes the footing exactly. That the sign is the error is INFERENCE.
+    - Porgera AISC prints 13 (L18) against 12, with no single-line witness.
+  - **The three (ii) instances are E816's.** Each is re-verified on the run by the label checks on `Minestats3`:
+    row label, Loulo-Gounkoto header, period and year.
+  - **The 17 (iv) instances are all cost of sales per ounce:** Veladero ×12, Hemlo ×3, Kibali ×2.
+  - **The (v) instances:**
+    - 379 cost-of-sales rates in columns with a non-zero non-controlling-interest line ("attributable share
+      needed");
+    - 12 Loulo-Gounkoto instances (E823).
+  - **Not published:** 12 all-zero columns.
+  - State root `0aa62d521f74ae6d58d53eef614c2fc708b2988f57a86cbc2de12ff4be748cf9`, anchor
+    `anc_a2d1090f25ec08128f0134f8559dcdb8`.
+- **E823** Loulo-Gounkoto, column K of `Barrick_Q1_2026_AISC.xlsx` `'Q1 2026'` and of `Barrick_Q2_2026_AISC.xlsx`
+  `'Q2 2026'` and `'Q1 2026'`, stores unrounded values (FACT). In Q1 2026:
+  - "Other" is −37.899643 (K8);
+  - TCC is 132.100357 (K10);
+  - AISC is 133.100357 (K17).
+
+  At stored precision both footings close exactly: 241 − 38 − 37.899643 − 33 = 132.100357 (FACT, arithmetic). The
+  ledger refuses these 12 instances because the declared construction needs the displayed values, and those
+  depend on the cell number format, which the reader does not yet read.

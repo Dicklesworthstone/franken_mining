@@ -1,7 +1,7 @@
 //! Public assurance metric engine (`WP-03` & `WP-06`, layer `E`):
 //! - `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`, `BD-060`–`BD-062`, `BD-272`)
 //! - Versioned `PriceDeck` and `compute_geo` (`GB-27`, `BD-063`, `BD-273`)
-//! - `ReserveReplacementBridge` (`190%` organic vs `504%` total, `E603–E604`, `BD-064`)
+//! - `ReserveReplacementBridge` (one stated basis per bridge; `E603–E604`, `BD-064`)
 //! - Exact LMDI 5-factor waterfall (`lmdi`, `GB-26`, `BD-065`, `BD-274`)
 //! - Fixed-point cut-off grade solver (`solve_cutoff_grade`, `E182–E184`, `BD-275`).
 
@@ -80,30 +80,28 @@ pub struct PriceDeck {
     pub deck_id: String,
     pub gold_usd_per_oz: f64,
     pub copper_usd_per_lb: f64,
-    pub silver_usd_per_oz: f64,
+    /// `None` when the cited source states no silver price.
+    pub silver_usd_per_oz: Option<f64>,
 }
 
 impl PriceDeck {
-    /// Barrick 2024 Reserve Price Deck (`$1,300/oz Au`, `$3.00/lb Cu`, `$18.00/oz Ag`).
+    /// Barrick's long-term mineral reserve prices for one reserve year, as printed in the 2026 Management
+    /// Information Circular, p.86 GEO note (FACT, E606): 2025 $1,500/oz Au and $3.25/lb Cu; 2024 $1,400 and
+    /// $3.00; 2023 $1,300 and $3.00. The note states no silver price. `None` for any other year.
     #[must_use]
-    pub fn barrick_reserve_2024() -> Self {
-        Self {
-            deck_id: "BARRICK-RESERVE-2024".to_string(),
-            gold_usd_per_oz: 1_300.0,
-            copper_usd_per_lb: 3.00,
-            silver_usd_per_oz: 18.00,
-        }
-    }
-
-    /// Barrick 2025 Reserve Price Deck (`$1,400/oz Au`, `$4.00/lb Cu`, `$20.00/oz Ag`).
-    #[must_use]
-    pub fn barrick_reserve_2025() -> Self {
-        Self {
-            deck_id: "BARRICK-RESERVE-2025".to_string(),
-            gold_usd_per_oz: 1_400.0,
-            copper_usd_per_lb: 4.00,
-            silver_usd_per_oz: 20.00,
-        }
+    pub fn barrick_reserve(year: u16) -> Option<Self> {
+        let (gold, copper) = match year {
+            2023 => (1_300.0, 3.00),
+            2024 => (1_400.0, 3.00),
+            2025 => (1_500.0, 3.25),
+            _ => return None,
+        };
+        Some(Self {
+            deck_id: format!("BARRICK-RESERVE-{year}"),
+            gold_usd_per_oz: gold,
+            copper_usd_per_lb: copper,
+            silver_usd_per_oz: None,
+        })
     }
 }
 
@@ -130,9 +128,13 @@ pub fn compute_geo(gold_koz: f64, copper_mlb: f64, deck: &PriceDeck) -> GeoBreak
     }
 }
 
-// --- Reserve Replacement Bridge (190% Organic vs 504% Headline, E603-E604, BD-064) ---
+// --- Reserve Replacement Bridge (BD-064) ---
 
-/// Decomposes headline vs organic reserve replacement (`E603–E604`, `BD-064`).
+/// Reserve replacement on one stated basis, split into organic additions and project conversions (`BD-064`).
+///
+/// Every input must be on the same metal basis and window. Barrick's 2026 Circular prints 2023–25 replacement
+/// as ~190% of gold ounces and 504% of gold-equivalent ounces: the two figures differ by metal basis, not by
+/// organic versus project additions (FACT, E603, E604), so each is computed on its own basis.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReserveReplacementBridge {
     pub depletion_moz: f64,
@@ -143,26 +145,27 @@ pub struct ReserveReplacementBridge {
 }
 
 impl ReserveReplacementBridge {
-    /// Computes the Barrick FY2024 Gold Reserve Replacement bridge (`E603–E604`):
-    /// - Attributable depletion (`depletion_moz`): `~3.91 Moz` (or `4.46 Moz` 100% basis)
-    /// - Organic brownfield additions: `~7.43 Moz` -> `190%` organic replacement
-    /// - Greenfield feasibility conversions (Reko Diq `+13.0 Moz` + Lumwana Super Pit `+1.7 Moz` = `12.28 Moz` net project addition) -> `504%` headline replacement.
+    /// `None` when depletion is not a positive finite number: the ratio is then undefined, and it is never
+    /// clamped to a small denominator.
     #[must_use]
     pub fn compute(
         depletion_moz: f64,
         organic_additions_moz: f64,
         greenfield_conversions_moz: f64,
-    ) -> Self {
-        let dep = depletion_moz.max(1e-9);
-        let organic_pct = 100.0 * organic_additions_moz / dep;
-        let headline_pct = 100.0 * (organic_additions_moz + greenfield_conversions_moz) / dep;
-        Self {
+    ) -> Option<Self> {
+        if !(depletion_moz.is_finite() && depletion_moz > 0.0) {
+            return None;
+        }
+        let organic_pct = 100.0 * organic_additions_moz / depletion_moz;
+        let headline_pct =
+            100.0 * (organic_additions_moz + greenfield_conversions_moz) / depletion_moz;
+        Some(Self {
             depletion_moz,
             organic_drilling_and_model_additions_moz: organic_additions_moz,
             greenfield_project_conversions_moz: greenfield_conversions_moz,
             organic_replacement_pct: organic_pct,
             headline_replacement_pct: headline_pct,
-        }
+        })
     }
 }
 
@@ -196,16 +199,13 @@ where
 mod tests {
     use super::*;
 
+    /// Synthetic numbers (no issuer's figures): exercises the `L_corp` refusal and reconciliation.
     #[test]
     fn test_aisc_consolidation_bridge_l_corp_refusal_and_reconciliation() {
-        let anchor = SourceAnchor::new(
-            "corpus_of_input_docs/barrick-aisc-2025-q4.xlsx",
-            [0x11; 32],
-            "Gold AISC!N206",
-        );
+        let anchor = SourceAnchor::new("synthetic/aisc.xlsx", [0x11; 32], "Synthetic AISC!N206");
         let fy24 = AiscConsolidationBridge {
             metal: "Gold".to_string(),
-            period_label: "FY2024".to_string(),
+            period_label: "SYNTHETIC-FY".to_string(),
             site_rows: Vec::new(),
             site_numerator_sum_usd_m: 5931.0,
             l_corp_numerator_adj_usd_m: -49.0,
@@ -225,18 +225,44 @@ mod tests {
         fy24.verify_rollup(true).expect("reconciled with L_corp");
     }
 
+    /// The decks carry the Circular's printed prices (E606); the quantities are synthetic.
     #[test]
     fn test_versioned_geo_and_reserve_replacement_bridge() {
-        let d24 = PriceDeck::barrick_reserve_2024();
-        let d25 = PriceDeck::barrick_reserve_2025();
-        let g24 = compute_geo(3910.0, 430.0, &d24);
-        let g25 = compute_geo(3910.0, 430.0, &d25);
-        assert_ne!(g24.total_geo_koz, g25.total_geo_koz);
-        assert!(g25.copper_geo_koz > g24.copper_geo_koz);
+        let deck = |y| PriceDeck::barrick_reserve(y).expect("registered deck year");
+        let (d23, d24, d25) = (deck(2023), deck(2024), deck(2025));
+        assert_eq!(
+            (d23.gold_usd_per_oz, d23.copper_usd_per_lb),
+            (1_300.0, 3.00)
+        );
+        assert_eq!(
+            (d24.gold_usd_per_oz, d24.copper_usd_per_lb),
+            (1_400.0, 3.00)
+        );
+        assert_eq!(
+            (d25.gold_usd_per_oz, d25.copper_usd_per_lb),
+            (1_500.0, 3.25)
+        );
+        assert_eq!(d25.silver_usd_per_oz, None);
+        assert_eq!(d25.deck_id, "BARRICK-RESERVE-2025");
+        assert!(PriceDeck::barrick_reserve(2026).is_none());
 
-        let rr = ReserveReplacementBridge::compute(3.91, 7.429, 12.277);
-        assert!((rr.organic_replacement_pct - 190.0).abs() < 0.5);
-        assert!((rr.headline_replacement_pct - 504.0).abs() < 0.5);
+        // 100 Mlb Cu at $3.25/lb over $1,500/oz Au = 216.666… koz GEO; at $3.00 over $1,400 = 214.285… koz.
+        let g25 = compute_geo(1_000.0, 100.0, &d25);
+        let g24 = compute_geo(1_000.0, 100.0, &d24);
+        assert!((g25.copper_geo_koz - 650.0 / 3.0).abs() < 1e-9);
+        assert!((g24.copper_geo_koz - 1_500.0 / 7.0).abs() < 1e-9);
+        assert!((g25.total_geo_koz - (1_000.0 + 650.0 / 3.0)).abs() < 1e-9);
+        assert_eq!(g25.deck_id, "BARRICK-RESERVE-2025");
+
+        // Synthetic: 4 Moz depleted, 8 Moz organic additions, 12 Moz project conversions.
+        let rr = ReserveReplacementBridge::compute(4.0, 8.0, 12.0).expect("positive depletion");
+        assert_eq!(
+            (rr.organic_replacement_pct, rr.headline_replacement_pct),
+            (200.0, 500.0)
+        );
+        assert!(ReserveReplacementBridge::compute(0.0, 8.0, 12.0).is_none());
+        assert!(ReserveReplacementBridge::compute(-1.0, 8.0, 12.0).is_none());
+        assert!(ReserveReplacementBridge::compute(f64::NAN, 8.0, 12.0).is_none());
     }
 
     #[test]

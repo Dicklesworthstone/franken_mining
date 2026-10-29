@@ -8,14 +8,14 @@
 - **Allowed Module Families:** `["lmdi"]`
 
 ## 2. Mathematical & Domain Formulation
-Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` and `compute_geo` (`GB-27`), `ReserveReplacementBridge` (`190%` organic vs `504%` total, `E603–E604`), exact 5-factor Logarithmic Mean Divisia Index (`lmdi`, `GB-26`, `E137`), and fixed-point marginal cut-off grade solver (`solve_cutoff_grade`, `E182–E184`).
+Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), exact 5-factor Logarithmic Mean Divisia Index (`lmdi`, `GB-26`), and fixed-point marginal cut-off grade solver (`solve_cutoff_grade`, `E182–E184`).
 
 ## 3. Authority, Epistemics & Representation
 Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when `L_corp` is omitted) and zero-residual multiplicative-to-additive LMDI attribution (`GB-26`).
 
 ## 4. Public API Surface
 - `SiteAiscRow`, `AiscConsolidationBridge`
-- `PriceDeck`, `GeoBreakdown`, `compute_geo`
+- `PriceDeck` (`barrick_reserve(year)`), `GeoBreakdown`, `compute_geo`
 - `ReserveReplacementBridge`
 - `solve_cutoff_grade`
 - `lmdi::{LmdiState, LmdiWaterfall, decompose_aisc_lmdi, logarithmic_mean}`
@@ -25,7 +25,8 @@ Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when 
 - `FMINE-REF-301` on non-positive LMDI state inputs.
 
 ## 6. Proof Obligations (`PO-*`)
-- `PO-MET-1`: `LmdiWaterfall::sum_of_factors() == total_delta` to `< 1e-10` (`0.0` residual on North Mara `2024Q1 -> 2024Q2` `+$1,285/oz` jump).
+- `PO-MET-1`: `LmdiWaterfall::sum_of_factors() == total_delta` to `< 1e-10` (synthetic two-period case, `+$1,285/oz`; its numbers were once mislabelled as Barrick's, R7-C054).
+- `PO-MET-3`: `ReserveReplacementBridge::compute` returns `None` for non-positive or non-finite depletion; it never clamps the denominator.
 - `PO-MET-2`: `AiscConsolidationBridge::verify_rollup(false)` refuses with `FMINE-REF-203` when `L_corp != 0`.
 
 ## 7. Failure Modes & Deterministic Fallbacks
