@@ -1,0 +1,141 @@
+# franken-stack.lock — Pinned FrankenSuite Foundation Revisions (§27, Appendix F)
+# Every consumed or lifted foundation is pinned by exact revision or crates.io version.
+# No executive deliverable may be blocked by an unconverged sibling; each row has an explicit fallback.
+
+schema_version = 1
+updated_at = "2026-10-29"
+
+[[foundation]]
+id = "FD-AS-01"
+name = "asupersync"
+posture = "consume"
+pin = "=0.5.0"
+git_rev = "78b64636e"
+confined_to = ["fmine-runtime", "fmine-authz", "fmine-ledger", "fmine-object", "fmine-telemetry", "fmine-sync", "fmine-lab", "fmine-decide"]
+admission_gate = "INT-AS-001"
+fallback = "Single-package-id patch in [patch.crates-io]; K/E crates receive Cx<cap::None> only."
+
+[[foundation]]
+id = "FD-FSIM-01"
+name = "frankensim"
+posture = "lift"
+pin = "git:20463525d9775a18c1b237d2676f364f367175ab"
+git_rev = "20463525d9775a18c1b237d2676f364f367175ab"
+confined_to = ["fmine-core", "fmine-evidence", "fmine-numerics", "fmine-geom"]
+admission_gate = "GATE-FSIM-DRIFT"
+fallback = "KILL-3: Permanent lift-only with registries/lifts.toml provenance and golden-hash tests."
+
+[[foundation]]
+id = "FD-FA-01"
+name = "franken_accounting"
+posture = "subprocess"
+pin = "git:41363acb"
+git_rev = "41363acb"
+confined_to = ["fmine-fa-bridge"]
+admission_gate = "INT-FA-001"
+fallback = "Signed canonical intent outbox (PO-BED-10); zero FA crates in Cargo graph (L-4)."
+
+[[foundation]]
+id = "FD-FSCI-01"
+name = "frankenscipy"
+posture = "consume"
+pin = "=0.4.0"
+confined_to = ["fmine-numerics", "fmine-calib", "fmine-geostat", "fmine-qaqc", "fmine-recon", "fmine-plan", "fmine-plant"]
+admission_gate = "INT-NUM-001"
+fallback = "Lifted fs-sparse and in-house deterministic kernels in fmine-numerics."
+
+[[foundation]]
+id = "FD-FP-01"
+name = "frankenpandas"
+posture = "consume"
+pin = "git:37bb94101"
+git_rev = "37bb94101"
+confined_to = ["fmine-telemetry", "fmine-report"]
+admission_gate = "INT-NUM-001"
+fallback = "KILL-6 taken for fp-io: pure-Rust CSV/XLSX/OMF/Parquet readers in fmine-io."
+
+[[foundation]]
+id = "FD-FNP-01"
+name = "franken_numpy"
+posture = "oracle_and_io"
+pin = "git:d32c4e04"
+git_rev = "d32c4e04"
+confined_to = ["fmine-io", "fmine-oracles"]
+admission_gate = "INT-NUM-001"
+fallback = "fmine-array owns contiguous grids; fmine-core::rand owns Philox4x32-10."
+
+[[foundation]]
+id = "FD-FJ-01"
+name = "frankenjax"
+posture = "consume"
+pin = "git:fa93fb77"
+git_rev = "fa93fb77"
+confined_to = ["fmine-infer", "fmine-decide"]
+admission_gate = "INT-NUM-001"
+fallback = "Consume fj-core, fj-lax, fj-ad only (never fj-api/fj-ffi); finite-difference / analytic Jacobians fallback."
+
+[[foundation]]
+id = "FD-FSYM-01"
+name = "frankensympy"
+posture = "oracle"
+pin = "git:9d785d0"
+git_rev = "9d785d0"
+confined_to = ["fmine-derive"]
+admission_gate = "GATE-ORACLE-01"
+fallback = "Build-time/dev-only oracle; golden formulas checked into fmine-oracles."
+
+[[foundation]]
+id = "FD-FSQL-01"
+name = "frankensqlite"
+posture = "consume"
+pin = "=0.4.12"
+confined_to = ["fmine-projection", "fmine-telemetry"]
+admission_gate = "INT-FSQL-001"
+fallback = "Projection-only (rebuildable from fmine-ledger); KILL-4 promotes to persistence rung L2."
+
+[[foundation]]
+id = "FD-FGDB-01"
+name = "frankengraphdb"
+posture = "consume"
+pin = "git:b323bd17"
+git_rev = "b323bd17"
+confined_to = ["fmine-projection"]
+admission_gate = "INT-FGDB-001"
+fallback = "KILL-2: Drop fgdb projection; fsqlite tables + in-memory fnx serve the evidence graph."
+
+[[foundation]]
+id = "FD-FSEARCH-01"
+name = "frankensearch"
+posture = "consume"
+pin = "=0.7.1"
+confined_to = ["fmine-projection"]
+admission_gate = "INT-FSEARCH-001"
+fallback = "Drop to fsqlite FTS5 with wall-scoped indexes."
+
+[[foundation]]
+id = "FD-FNX-01"
+name = "franken_networkx"
+posture = "consume"
+pin = "git:9d710b1c"
+git_rev = "9d710b1c"
+confined_to = ["fmine-projection", "fmine-optimize", "fmine-oracles"]
+admission_gate = "INT-FNX-001"
+fallback = "In-house CSR precedence graph and Hochbaum pseudoflow in fmine-optimize."
+
+[[foundation]]
+id = "FD-FMCP-01"
+name = "fastmcp"
+posture = "consume"
+pin = "=0.13.0"
+confined_to = ["fmine-mcp"]
+admission_gate = "INT-FMCP-001"
+fallback = "fmine CLI robot NDJSON envelope (FMT-ENV-1)."
+
+[[foundation]]
+id = "FD-FTUI-01"
+name = "frankentui"
+posture = "consume"
+pin = "=0.9.0"
+confined_to = ["fmine-tui"]
+admission_gate = "INT-FTUI-001"
+fallback = "fmine CLI and markdown reports."

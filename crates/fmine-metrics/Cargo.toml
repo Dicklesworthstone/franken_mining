@@ -1,0 +1,18 @@
+[package]
+name = "fmine-metrics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Public assurance metric engine: C1/TCC/AISC L_corp/L_JV bridges, versioned GEO, reserve replacement, exact LMDI waterfall (GB-26), cut-off solver, and GATE-BULL-01."
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-units = { path = "../fmine-units" }
+fmine-time = { path = "../fmine-time" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-claim = { path = "../fmine-claim" }
+fmine-numerics = { path = "../fmine-numerics" }
+
+[lints]
+workspace = true

@@ -1,0 +1,547 @@
+# registries/loc_budget.toml — Per-Crate LOC Budgets and Ceilings (§28.3, §28.4, BD-003)
+# Total: 59 crates across 7 layers (S0..T) plus gated fmine-simbridge.
+# Planned sum = 1,128k LOC; Ceiling sum = 1,298k LOC.
+
+schema_version = 1
+program_planned_loc = 1128000
+program_ceiling_loc = 1298000
+
+[[crate]]
+name = "fmine-core"
+layer = "S0"
+subsystem = "Bedrock"
+phase = "A"
+planned_loc = 12000
+ceiling_loc = 14000
+charter = "IDs and prefixes, anchors, codec kit (magic, LE, bounds, CRC, canonical order), lifted det, rand (Philox), hash (BLAKE3)"
+
+[[crate]]
+name = "fmine-units"
+layer = "S0"
+subsystem = "Bedrock"
+phase = "A"
+planned_loc = 10000
+ceiling_loc = 12000
+charter = "§25 quantities, bases, exact constants, money boundary type, ChemBasis"
+
+[[crate]]
+name = "fmine-time"
+layer = "S0"
+subsystem = "Bedrock"
+phase = "A"
+planned_loc = 8000
+ceiling_loc = 9000
+charter = "Quad-temporal types (QuadTemporalStamp), TimeEvidence, site and fiscal calendars, rosters"
+
+[[crate]]
+name = "fmine-crs"
+layer = "S0"
+subsystem = "Portal"
+phase = "A"
+planned_loc = 15000
+ceiling_loc = 17000
+charter = "EPSG subset, mine grids as Claims, vertical datums, UNREGISTERED"
+
+[[crate]]
+name = "fmine-evidence"
+layer = "S0"
+subsystem = "Plumb"
+phase = "A"
+planned_loc = 14000
+ceiling_loc = 16000
+charter = "Lifted fs-evidence subset; evidence classes; colours; typed refusals; EvidenceRow/DecisionRow schema types"
+
+[[crate]]
+name = "fmine-claim"
+layer = "S0"
+subsystem = "Plumb"
+phase = "A"
+planned_loc = 16000
+ceiling_loc = 18000
+charter = "The universal Claim (§8), its algebra and the no-laundering rules"
+
+[[crate]]
+name = "fmine-registry"
+layer = "S0"
+subsystem = "Bedrock"
+phase = "A"
+planned_loc = 8000
+ceiling_loc = 9000
+charter = "Registries-as-data loader and the registry-check library"
+
+[[crate]]
+name = "fmine-array"
+layer = "S0"
+subsystem = "Bedrock"
+phase = "A"
+planned_loc = 6000
+ceiling_loc = 7000
+charter = "Typed contiguous grids, views, and FMT-COL-1 SIMD interval chunks (§27.3, §29.4)"
+
+[[crate]]
+name = "fmine-runtime"
+layer = "S1"
+subsystem = "Bedrock"
+phase = "A"
+planned_loc = 12000
+ceiling_loc = 14000
+charter = "Region tree, CapSet profiles, AppSpec per role, budgets, obligation registry"
+
+[[crate]]
+name = "fmine-authz"
+layer = "S1"
+subsystem = "Bedrock"
+phase = "A"
+planned_loc = 14000
+ceiling_loc = 16000
+charter = "First-party macaroon caveats, MNPI and venture walls, residency, human authority tokens (§31)"
+
+[[crate]]
+name = "fmine-ledger"
+layer = "S1"
+subsystem = "Bedrock"
+phase = "A"
+planned_loc = 24000
+ceiling_loc = 28000
+charter = "Delta batches, cells, leases and fencing, witnesses, narrow combiner, MMR, segment files"
+
+[[crate]]
+name = "fmine-object"
+layer = "S1"
+subsystem = "Bedrock"
+phase = "A"
+planned_loc = 15000
+ceiling_loc = 17000
+charter = "CAS chunks, manifests, fanout-16 Merkle, root-last publication"
+
+[[crate]]
+name = "fmine-telemetry"
+layer = "S1"
+subsystem = "Headframe"
+phase = "B"
+planned_loc = 16000
+ceiling_loc = 18000
+charter = "Site segment log, columnar codecs, ingest backpressure, rollups (§26.8)"
+
+[[crate]]
+name = "fmine-sync"
+layer = "S1"
+subsystem = "Bedrock"
+phase = "A"
+planned_loc = 16000
+ceiling_loc = 18000
+charter = "Version vectors, SyncCert, chunk anti-entropy, QUIC/ATP adapter, residency planner"
+
+[[crate]]
+name = "fmine-lab"
+layer = "S1"
+subsystem = "Testpit"
+phase = "A"
+planned_loc = 10000
+ceiling_loc = 12000
+charter = "LabRuntime harness, chaos profiles, FM oracles (dev-only)"
+
+[[crate]]
+name = "fmine-geom"
+layer = "K0"
+subsystem = "Strata"
+phase = "A"
+planned_loc = 30000
+ceiling_loc = 35000
+charter = "Lifted VdbGrid, winding, exact predicates; meshes, block grids, sub-blocks, volcert, bricks"
+
+[[crate]]
+name = "fmine-numerics"
+layer = "K0"
+subsystem = "Bedrock"
+phase = "A"
+planned_loc = 30000
+ceiling_loc = 35000
+charter = "Lifted sparse/eproc/voi/risk/tropical/enkf; gmrf; the array bridge"
+
+[[crate]]
+name = "fmine-materials"
+layer = "K0"
+subsystem = "Strata"
+phase = "B"
+planned_loc = 12000
+ceiling_loc = 14000
+charter = "Sealed geomaterial corpora, correlation cards, matdb-format export (§13.10)"
+
+[[crate]]
+name = "fmine-calib"
+layer = "K0"
+subsystem = "Plumb"
+phase = "A"
+planned_loc = 18000
+ceiling_loc = 21000
+charter = "Forecast registration, proper scoring, calibration records, surprise monitors, reference classes (§10)"
+
+[[crate]]
+name = "fmine-drill"
+layer = "K1"
+subsystem = "Corebox"
+phase = "A"
+planned_loc = 15000
+ceiling_loc = 17000
+charter = "Collars, surveys, desurvey, intervals, compositing, sample support"
+
+[[crate]]
+name = "fmine-qaqc"
+layer = "K1"
+subsystem = "Corebox"
+phase = "A"
+planned_loc = 15000
+ceiling_loc = 17000
+charter = "CRMs, blanks, duplicates, detection limits, censored fitting, e-process drift, lab certificates"
+
+[[crate]]
+name = "fmine-flow"
+layer = "K1"
+subsystem = "Touchstone"
+phase = "A"
+planned_loc = 20000
+ceiling_loc = 23000
+charter = "Material-flow graph, conservation laws, F-factors (§20)"
+
+[[crate]]
+name = "fmine-econ"
+layer = "K1"
+subsystem = "Helm"
+phase = "B"
+planned_loc = 20000
+ceiling_loc = 23000
+charter = "Price decks, cost models, fiscal terms (NSR, royalties, tax), NPV with exact money"
+
+[[crate]]
+name = "fmine-explore"
+layer = "K1"
+subsystem = "Lodestar"
+phase = "B"
+planned_loc = 15000
+ceiling_loc = 17000
+charter = "Deposits, exploration effort, absence classes, detection-thinning data model (§11)"
+
+[[crate]]
+name = "fmine-geostat"
+layer = "K2"
+subsystem = "Strata"
+phase = "B"
+planned_loc = 40000
+ceiling_loc = 46000
+charter = "Variography, kriging, change of support, conditional simulation"
+
+[[crate]]
+name = "fmine-geotech"
+layer = "K2"
+subsystem = "Highwall"
+phase = "C"
+planned_loc = 22000
+ceiling_loc = 25000
+charter = "Rock mass, slope and support laws, instrumentation semantics, TARP automata"
+
+[[crate]]
+name = "fmine-plant"
+layer = "K2"
+subsystem = "Crucible"
+phase = "A"
+planned_loc = 32000
+ceiling_loc = 37000
+charter = "Flowsheet graph, process cards, geomet chain, P754 balances, refining custody"
+
+[[crate]]
+name = "fmine-tailings"
+layer = "K2"
+subsystem = "Freeboard"
+phase = "C"
+planned_loc = 18000
+ceiling_loc = 21000
+charter = "TSF evidence state, GISTM traceability, water balance, ARD/PAG, closure"
+
+[[crate]]
+name = "fmine-recon"
+layer = "K2"
+subsystem = "Touchstone"
+phase = "A"
+planned_loc = 18000
+ceiling_loc = 21000
+charter = "Reconciliation as joint state estimation; gross-error tests; identifiability"
+
+[[crate]]
+name = "fmine-blast"
+layer = "K2"
+subsystem = "Headframe"
+phase = "C"
+planned_loc = 15000
+ceiling_loc = 17000
+charter = "Drill and blast design records, fragmentation and blast-movement models"
+
+[[crate]]
+name = "fmine-workforce"
+layer = "K2"
+subsystem = "Muster"
+phase = "C"
+planned_loc = 16000
+ceiling_loc = 18000
+charter = "Rosters, competencies, fatigue, CCV, productivity, budgets by driver (privacy by design)"
+
+[[crate]]
+name = "fmine-belief"
+layer = "K3"
+subsystem = "Strata"
+phase = "B"
+planned_loc = 25000
+ceiling_loc = 29000
+charter = "Subsurface belief objects, realization sets, implicit structure, block-model projections"
+
+[[crate]]
+name = "fmine-plan"
+layer = "K3"
+subsystem = "Pushback"
+phase = "B"
+planned_loc = 30000
+ceiling_loc = 35000
+charter = "Plan and schedule models, precedence, scenario labels, cut-off, blend, compliance math"
+
+[[crate]]
+name = "fmine-ops"
+layer = "K3"
+subsystem = "Headframe"
+phase = "C"
+planned_loc = 35000
+ceiling_loc = 40000
+charter = "As-built, load and haul, reliability, ventilation, dewatering, energy, wear"
+
+[[crate]]
+name = "fmine-reserves"
+layer = "K4"
+subsystem = "Hallmark"
+phase = "A"
+planned_loc = 20000
+ceiling_loc = 23000
+charter = "Register model, CP/QP acts, renderers, data-verification index, statement reconciliation"
+
+[[crate]]
+name = "fmine-estimate"
+layer = "E"
+subsystem = "Strata"
+phase = "B"
+planned_loc = 15000
+ceiling_loc = 17000
+charter = "Estimation-run orchestration and certificates"
+
+[[crate]]
+name = "fmine-optimize"
+layer = "E"
+subsystem = "Pushback"
+phase = "B"
+planned_loc = 36000
+ceiling_loc = 41000
+charter = "Pit limits (pseudoflow), Bienstock-Zuckerberg, Lagrangian, TopoSort, stochastic"
+
+[[crate]]
+name = "fmine-lp"
+layer = "E"
+subsystem = "Pushback"
+phase = "B"
+planned_loc = 25000
+ceiling_loc = 29000
+charter = "PDLP, MILP, QP, MPS I/O, decomposition"
+
+[[crate]]
+name = "fmine-infer"
+layer = "E"
+subsystem = "Lodestar"
+phase = "B"
+planned_loc = 24000
+ceiling_loc = 28000
+charter = "NUTS, SMC and the thinned point-process posteriors"
+
+[[crate]]
+name = "fmine-prospect"
+layer = "E"
+subsystem = "Lodestar"
+phase = "B"
+planned_loc = 22000
+ceiling_loc = 25000
+charter = "Prospectivity engine, Bayesian search, drill-target VOI"
+
+[[crate]]
+name = "fmine-decide"
+layer = "E"
+subsystem = "Helm"
+phase = "A"
+planned_loc = 20000
+ceiling_loc = 23000
+charter = "DecisionCards, VOI, sensitivities, robustness views; the only franken-evidence/franken-decision adapter and renderer"
+
+[[crate]]
+name = "fmine-capital"
+layer = "E"
+subsystem = "Helm"
+phase = "B"
+planned_loc = 20000
+ceiling_loc = 23000
+charter = "CapitalProgram optimization, scenario index, real options, deal cards"
+
+[[crate]]
+name = "fmine-metalacct"
+layer = "E"
+subsystem = "Bullion"
+phase = "B"
+planned_loc = 30000
+ceiling_loc = 35000
+charter = "Metal-accounting subledger, costing, FA summary preparation, Merkle folding"
+
+[[crate]]
+name = "fmine-acctpack"
+layer = "E"
+subsystem = "Bullion"
+phase = "B"
+planned_loc = 22000
+ceiling_loc = 25000
+charter = "The 17-part mining domain pack over FA (NRV, stockpile costing, streams, ARO)"
+
+[[crate]]
+name = "fmine-metrics"
+layer = "E"
+subsystem = "Bullion"
+phase = "A"
+planned_loc = 18000
+ceiling_loc = 21000
+charter = "AISC/AIC/C1/GEO/reserve replacement/ROCE variants, LMDI waterfalls, public lane"
+
+[[crate]]
+name = "fmine-io"
+layer = "V"
+subsystem = "Portal"
+phase = "A"
+planned_loc = 40000
+ceiling_loc = 46000
+charter = "Quarantine-on-import parsers and writers (§32)"
+
+[[crate]]
+name = "fmine-public"
+layer = "V"
+subsystem = "Portal"
+phase = "A"
+planned_loc = 18000
+ceiling_loc = 21000
+charter = "Public-filings lane: issuer filings parsed into Public-basis Claims (§31.1)"
+
+[[crate]]
+name = "fmine-projection"
+layer = "V"
+subsystem = "Bedrock"
+phase = "A"
+planned_loc = 20000
+ceiling_loc = 23000
+charter = "Projectors to fsqlite, fgdb and frankensearch; high-water marks"
+
+[[crate]]
+name = "fmine-fa-bridge"
+layer = "V"
+subsystem = "Bullion"
+phase = "B"
+planned_loc = 15000
+ceiling_loc = 17000
+charter = "Posting-slot automaton over fa --json; outbox; FA-ACC client side"
+
+[[crate]]
+name = "fmine-service"
+layer = "V"
+subsystem = "Adit"
+phase = "A"
+planned_loc = 15000
+ceiling_loc = 17000
+charter = "Node composition (roles, supervisors, leases) -> binary fmined"
+
+[[crate]]
+name = "fmine-cli"
+layer = "U"
+subsystem = "Adit"
+phase = "A"
+planned_loc = 26000
+ceiling_loc = 30000
+charter = "Binary fmine; robot NDJSON; verb registry; doctor and repair"
+
+[[crate]]
+name = "fmine-mcp"
+layer = "U"
+subsystem = "Adit"
+phase = "B"
+planned_loc = 10000
+ceiling_loc = 12000
+charter = "Thin adapter over verbs (the only fastmcp dependent); parity gate"
+
+[[crate]]
+name = "fmine-tui"
+layer = "U"
+subsystem = "Adit"
+phase = "B"
+planned_loc = 15000
+ceiling_loc = 17000
+charter = "frankentui ops console (inline mode, asupersync lane)"
+
+[[crate]]
+name = "fmine-report"
+layer = "U"
+subsystem = "Adit"
+phase = "A"
+planned_loc = 12000
+ceiling_loc = 14000
+charter = "franken_markdown + frankenmermaid reports with anchors and no_claim lines"
+
+[[crate]]
+name = "fmine-view"
+layer = "U"
+subsystem = "Adit"
+phase = "C"
+planned_loc = 15000
+ceiling_loc = 17000
+charter = "Read-only 3-D scene export (glTF subset) and a static viewer; no authority path"
+
+[[crate]]
+name = "fmine-oracles"
+layer = "T"
+subsystem = "Testpit"
+phase = "A"
+planned_loc = 28000
+ceiling_loc = 32000
+charter = "Oracle fixtures, known answers, metamorphic relations, conformance"
+
+[[crate]]
+name = "fmine-gen"
+layer = "T"
+subsystem = "Testpit"
+phase = "A"
+planned_loc = 20000
+ceiling_loc = 23000
+charter = "Synthetic mines and districts with seeded truth (§33.3)"
+
+[[crate]]
+name = "fmine-verify"
+layer = "T"
+subsystem = "Testpit"
+phase = "A"
+planned_loc = 12000
+ceiling_loc = 14000
+charter = "std-only offline verifier of certificates, bundles and MMR proofs"
+
+[[crate]]
+name = "fmine-derive"
+layer = "T"
+subsystem = "Testpit"
+phase = "A"
+planned_loc = 8000
+ceiling_loc = 9000
+charter = "Build-time fsym derivations, golden formulas, LaTeX (§27.3)"
+
+[[crate]]
+name = "fmine-simbridge"
+layer = "GATED"
+subsystem = "Strata"
+phase = "GATED"
+planned_loc = 0
+ceiling_loc = 0
+charter = "fs_geom::Chart adapter for frankensim solvers (gated on GATE-FSIM-RECONV)"

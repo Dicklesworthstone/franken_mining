@@ -1,0 +1,14 @@
+[package]
+name = "fmine-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Label-anchored .xlsx and HTML filing table extractors with SHA-256 provenance and G-BULL-1/G-BULL-2 quarantine."
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }
+
+[lints]
+workspace = true

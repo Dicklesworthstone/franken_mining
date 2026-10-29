@@ -1,0 +1,17 @@
+[package]
+name = "fmine-calib"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Frozen forecast ledger, proper scoring rules (CRPS, log, Winkler), reference-class priors (GB-32), and Vecchia/Rosenblatt spatial PIT e-process monitors (GB-08)."
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-time = { path = "../fmine-time" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-claim = { path = "../fmine-claim" }
+fmine-numerics = { path = "../fmine-numerics" }
+
+[lints]
+workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "fmine-evidence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "EvidenceClass semilattice, KnowledgeState (KK/KU/UU), ClaimColor projection, and FMINE-REF-* refusal diagnostics."
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+
+[lints]
+workspace = true

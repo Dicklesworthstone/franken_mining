@@ -1,0 +1,30 @@
+[package]
+name = "fmine-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "FrankenMining CLI (fmine): FMT-ENV-1 response envelope, exit codes, doctor, robot-docs, and M0 public assurance."
+
+[[bin]]
+name = "fmine"
+path = "src/main.rs"
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-units = { path = "../fmine-units" }
+fmine-time = { path = "../fmine-time" }
+fmine-crs = { path = "../fmine-crs" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-claim = { path = "../fmine-claim" }
+fmine-registry = { path = "../fmine-registry" }
+fmine-array = { path = "../fmine-array" }
+fmine-numerics = { path = "../fmine-numerics" }
+fmine-calib = { path = "../fmine-calib" }
+fmine-decide = { path = "../fmine-decide" }
+fmine-io = { path = "../fmine-io" }
+fmine-public = { path = "../fmine-public" }
+fmine-metrics = { path = "../fmine-metrics" }
+
+[lints]
+workspace = true

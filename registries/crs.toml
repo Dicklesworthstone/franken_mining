@@ -1,0 +1,83 @@
+# registries/crs.toml — Coordinate Reference Systems & Site Grids (§25.5, BD-031, BD-033)
+
+schema_version = 1
+
+[[crs]]
+code = "EPSG:4326"
+kind = "Geographic2D"
+datum = "WGS84"
+utm_zone = 0
+northern = true
+description = "WGS 84 geographic latitude/longitude (degrees)"
+
+[[crs]]
+code = "EPSG:32611"
+kind = "ProjectedUTM"
+datum = "WGS84"
+utm_zone = 11
+northern = true
+description = "WGS 84 / UTM zone 11N (Nevada Gold Mines: Carlin, Cortez, Turquoise Ridge, Fourmile)"
+
+[[crs]]
+code = "EPSG:32619"
+kind = "ProjectedUTM"
+datum = "WGS84"
+utm_zone = 19
+northern = true
+description = "WGS 84 / UTM zone 19N (Pueblo Viejo, Dominican Republic)"
+
+[[crs]]
+code = "EPSG:32719"
+kind = "ProjectedUTM"
+datum = "WGS84"
+utm_zone = 19
+northern = false
+description = "WGS 84 / UTM zone 19S (Veladero, Argentina; Zaldivar, Chile)"
+
+[[crs]]
+code = "EPSG:32629"
+kind = "ProjectedUTM"
+datum = "WGS84"
+utm_zone = 29
+northern = true
+description = "WGS 84 / UTM zone 29N (Loulo-Gounkoto, Mali)"
+
+[[crs]]
+code = "EPSG:32635"
+kind = "ProjectedUTM"
+datum = "WGS84"
+utm_zone = 35
+northern = true
+description = "WGS 84 / UTM zone 35N (Kibali, DRC)"
+
+[[crs]]
+code = "EPSG:32735"
+kind = "ProjectedUTM"
+datum = "WGS84"
+utm_zone = 35
+northern = false
+description = "WGS 84 / UTM zone 35S (Lumwana, Zambia)"
+
+[[crs]]
+code = "EPSG:32736"
+kind = "ProjectedUTM"
+datum = "WGS84"
+utm_zone = 36
+northern = false
+description = "WGS 84 / UTM zone 36S (North Mara and Bulyanhulu, Tanzania)"
+
+[[crs]]
+code = "EPSG:32641"
+kind = "ProjectedUTM"
+datum = "WGS84"
+utm_zone = 41
+northern = true
+description = "WGS 84 / UTM zone 41N (Reko Diq, Balochistan, Pakistan)"
+
+[[crs]]
+code = "EPSG:32754"
+kind = "ProjectedUTM"
+datum = "WGS84"
+utm_zone = 54
+northern = false
+description = "WGS 84 / UTM zone 54S (Porgera, Papua New Guinea)"

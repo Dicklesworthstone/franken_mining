@@ -1,0 +1,212 @@
+//! Label-anchored `.xlsx` (`xlsx`) and HTML (`extract_html_tables`) filing table extractors
+//! with SHA-256 provenance and `G-BULL-1` / `G-BULL-2` quarantine (`WP-03`, `BD-056`, `BD-057`, `BD-271`).
+
+pub mod xlsx;
+pub mod zip_inflate;
+
+use std::fmt;
+
+use xlsx::{CellValue, decode_xml_entities};
+
+/// Errors raised during `.xlsx` or HTML filing ingestion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IoError {
+    FileRead { path: String, detail: String },
+    Zip(String),
+    Xml(String),
+    MissingAnchorLabel { artifact: String, label: String },
+}
+
+impl fmt::Display for IoError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FileRead { path, detail } => write!(f, "failed to read {path}: {detail}"),
+            Self::Zip(msg) => write!(f, "ZIP error: {msg}"),
+            Self::Xml(msg) => write!(f, "XML structure error: {msg}"),
+            Self::MissingAnchorLabel { artifact, label } => {
+                write!(f, "missing required anchor label '{label}' in {artifact}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for IoError {}
+
+/// Extracted HTML `<table>` from SEC/SEDAR+ filing disclosures (`BD-056`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HtmlTable {
+    pub table_index: usize,
+    pub rows: Vec<Vec<CellValue>>,
+}
+
+/// Extracts all `<table>...</table>` grids from an HTML filing document, typing numeric cells
+/// and explicit placeholders (`"-"`, `"N/A"`) (`BD-056`, `G-BULL-2`).
+#[must_use]
+pub fn extract_html_tables(html: &str) -> Vec<HtmlTable> {
+    let mut tables = Vec::new();
+    let lower = html.to_ascii_lowercase();
+    let mut pos = 0;
+    let mut table_index = 0;
+
+    while let Some(t_open) = lower[pos..].find("<table") {
+        let abs_open = pos + t_open;
+        let Some(gt) = lower[abs_open..].find('>') else {
+            break;
+        };
+        let body_start = abs_open + gt + 1;
+        let Some(t_close) = lower[body_start..].find("</table>") else {
+            break;
+        };
+        let table_slice = &html[body_start..body_start + t_close];
+        let table_lower = &lower[body_start..body_start + t_close];
+        pos = body_start + t_close + 8;
+
+        let mut rows = Vec::new();
+        let mut r_pos = 0;
+        while let Some(tr_open) = table_lower[r_pos..].find("<tr") {
+            let abs_tr = r_pos + tr_open;
+            let Some(tr_gt) = table_lower[abs_tr..].find('>') else {
+                break;
+            };
+            let tr_start = abs_tr + tr_gt + 1;
+            let Some(tr_close) = table_lower[tr_start..].find("</tr>") else {
+                break;
+            };
+            let row_slice = &table_slice[tr_start..tr_start + tr_close];
+            let row_lower = &table_lower[tr_start..tr_start + tr_close];
+            r_pos = tr_start + tr_close + 5;
+
+            let mut cells = Vec::new();
+            let mut c_pos = 0;
+            while c_pos < row_lower.len() {
+                let next_td = row_lower[c_pos..].find("<td");
+                let next_th = row_lower[c_pos..].find("<th");
+                let (cell_off, close_tag) = match (next_td, next_th) {
+                    (Some(a), Some(b)) => {
+                        if a <= b {
+                            (a, "</td>")
+                        } else {
+                            (b, "</th>")
+                        }
+                    }
+                    (Some(a), None) => (a, "</td>"),
+                    (None, Some(b)) => (b, "</th>"),
+                    (None, None) => break,
+                };
+                let abs_c = c_pos + cell_off;
+                let Some(c_gt) = row_lower[abs_c..].find('>') else {
+                    break;
+                };
+                let c_start = abs_c + c_gt + 1;
+                let Some(c_close) = row_lower[c_start..].find(close_tag) else {
+                    break;
+                };
+                let raw_cell = strip_html_tags(&row_slice[c_start..c_start + c_close]);
+                cells.push(parse_html_cell_value(&raw_cell));
+                c_pos = c_start + c_close + close_tag.len();
+            }
+            if !cells.is_empty() {
+                rows.push(cells);
+            }
+        }
+        tables.push(HtmlTable { table_index, rows });
+        table_index += 1;
+    }
+    tables
+}
+
+fn strip_html_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    decode_xml_entities(&out).trim().to_string()
+}
+
+fn parse_html_cell_value(text: &str) -> CellValue {
+    let t = text.trim();
+    if matches!(t, "-" | "–" | "—" | "N/A" | "n/a" | "NA") {
+        return CellValue::Placeholder(t.to_string());
+    }
+    let clean = t.replace([',', '$', ' '], "");
+    let (neg, digits) = if let Some(inner) = clean.strip_prefix('(').and_then(|s| s.strip_suffix(')'))
+    {
+        (true, inner)
+    } else {
+        (false, clean.as_str())
+    };
+    if !digits.is_empty() {
+        if let Ok(v) = digits.parse::<f64>() {
+            if v.is_finite() {
+                return CellValue::Number(if neg { -v } else { v });
+            }
+        }
+    }
+    CellValue::Text(t.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::xlsx::{QuarantineItem, Workbook};
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_parse_real_barrick_xlsx_workbooks() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .to_path_buf();
+        let corpus = root.join("corpus_of_input_docs");
+
+        // 1. Parse barrick-aisc-2025-q4.xlsx and verify Gold AISC & Copper AISC sheets.
+        let aisc_q4 = Workbook::from_file(&corpus.join("barrick-aisc-2025-q4.xlsx"))
+            .expect("must parse barrick-aisc-2025-q4.xlsx");
+        assert!(aisc_q4.sheet("Gold AISC").is_some());
+        assert!(aisc_q4.sheet("Copper AISC").is_some());
+        assert!(aisc_q4.total_cells() > 1_000);
+
+        // 2. Parse barrick-mine-stats-2025-q4.xlsx and verify G-BULL-1 quarantines #REF! cells and hidden sheets.
+        let stats_q4 = Workbook::from_file(&corpus.join("barrick-mine-stats-2025-q4.xlsx"))
+            .expect("must parse barrick-mine-stats-2025-q4.xlsx");
+        assert!(stats_q4.total_cells() > 2_000);
+        assert!(
+            stats_q4
+                .quarantined
+                .iter()
+                .any(|q| matches!(q, QuarantineItem::FormulaErrorCell { .. })),
+            "G-BULL-1 must quarantine #REF! cells in barrick-mine-stats-2025-q4.xlsx"
+        );
+    }
+
+    #[test]
+    fn test_html_table_extractor_and_placeholder_typing() {
+        let html = r#"
+        <table>
+          <tr><th>Site</th><th>Tonnes</th><th>Grade</th></tr>
+          <tr><td>Carlin</td><td>1,250.5</td><td>-</td></tr>
+          <tr><td>Cortez</td><td>(45.0)</td><td>N/A</td></tr>
+        </table>
+        "#;
+        let tables = extract_html_tables(html);
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].rows.len(), 3);
+        assert_eq!(tables[0].rows[1][1], CellValue::Number(1250.5));
+        assert_eq!(
+            tables[0].rows[1][2],
+            CellValue::Placeholder("-".to_string())
+        );
+        assert_eq!(tables[0].rows[2][1], CellValue::Number(-45.0));
+        assert_eq!(
+            tables[0].rows[2][2],
+            CellValue::Placeholder("N/A".to_string())
+        );
+    }
+}

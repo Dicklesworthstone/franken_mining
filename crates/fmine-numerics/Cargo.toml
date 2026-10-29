@@ -1,0 +1,15 @@
+[package]
+name = "fmine-numerics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Deterministic numerical kernels: SPD Cholesky, Brent root-finding, normal quantiles, e-processes, EVPI/EVSI, CVaR/Drawdown, and tropical schedule algebra."
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-array = { path = "../fmine-array" }
+fmine-evidence = { path = "../fmine-evidence" }
+
+[lints]
+workspace = true

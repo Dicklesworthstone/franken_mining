@@ -1,0 +1,19 @@
+[package]
+name = "fmine-public"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Public filing source registry, public-basis Claim builder, and Barrick 18-workbook corpus loader (2024Q1-2026Q2)."
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-units = { path = "../fmine-units" }
+fmine-time = { path = "../fmine-time" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-claim = { path = "../fmine-claim" }
+fmine-io = { path = "../fmine-io" }
+fmine-metrics = { path = "../fmine-metrics" }
+
+[lints]
+workspace = true

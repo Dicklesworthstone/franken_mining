@@ -1,0 +1,13 @@
+[package]
+name = "fmine-time"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Quad-temporal timestamps, civil calendar math, site/fiscal shift calendars, and assay-lag lookahead guards."
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+
+[lints]
+workspace = true

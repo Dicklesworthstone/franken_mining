@@ -1,0 +1,157 @@
+# registries/refusals.toml — Canonical FMINE-REF-* Refusal Code Registry (§8.4, §25.6, §31.3, BD-031, BD-039)
+
+schema_version = 1
+
+[[refusal]]
+code = "FMINE-REF-101"
+exit_code = 3
+category = "domain_law"
+what = "Mass or metal conservation law violated beyond measurement tolerance (Sigma_in - Sigma_out - Delta_stock != 0)"
+fix = "Inspect flow node balances or open a Touchstone reconciliation case; never insert a plug row."
+
+[[refusal]]
+code = "FMINE-REF-102"
+exit_code = 3
+category = "domain_law"
+what = "Incompatible physical support (e.g. combining core interval and SMU block without explicit change-of-support)"
+fix = "Apply explicit mass-space compositing or sub-cell regularization (G-STRATA-11) before combining."
+
+[[refusal]]
+code = "FMINE-REF-103"
+exit_code = 3
+category = "domain_law"
+what = "Non-additive average attempted (e.g. unweighted addition of Grade, FoS, RMR, or recovery)"
+fix = "Compute mass-weighted mean (contained_metal / dry_mass) or use a nonlinear transform card."
+
+[[refusal]]
+code = "FMINE-REF-104"
+exit_code = 3
+category = "domain_law"
+what = "Non-identifiable attribution or unbridged aggregation layer (e.g. site-to-company AISC gap without L_corp/L_JV)"
+fix = "Supply named corporate/JV layers (G-BULL-3) or widen the reconciliation witness set."
+
+[[refusal]]
+code = "FMINE-REF-105"
+exit_code = 3
+category = "domain_law"
+what = "Basis mismatch across wet/dry mass, metal stage (InSitu..Sold), chemical species (ChemBasis), or currency"
+fix = "Convert explicitly using moisture Claim, recovery card, molar-mass stoichiometric ratio, or FxRateDeck."
+
+[[refusal]]
+code = "FMINE-REF-106"
+exit_code = 3
+category = "domain_law"
+what = "Unregistered CRS or coordinate outside the control-point convex hull of a local mine grid (G-CRS-2)"
+fix = "Register the EPSG/mine-grid transform in registries/crs.toml or extend surveyed control points."
+
+[[refusal]]
+code = "FMINE-REF-107"
+exit_code = 3
+category = "domain_law"
+what = "Undeclared unit, mass basis, chemical basis, or time zone at import boundary"
+fix = "Declare the unit, basis, and site calendar in the import manifest before quarantine release."
+
+[[refusal]]
+code = "FMINE-REF-108"
+exit_code = 3
+category = "domain_law"
+what = "Assay-availability lookahead violation: availability_time > decision_timestamp tau (G-TIME-2, INV-016)"
+fix = "Filter observations via as_of_decision(tau) so backtests cannot see delayed fire/POX assays before lab receipt."
+
+[[refusal]]
+code = "FMINE-REF-201"
+exit_code = 4
+category = "epistemic"
+what = "Epistemic laundering or missing unknown-unknown budget (UuTerm) on a decision-facing Claim (G-UU, INV-015)"
+fix = "Attach an explicit UuTerm (UnmodelledBudget or FlipMargin) and preserve worst-input EvidenceClass (NL-1)."
+
+[[refusal]]
+code = "FMINE-REF-202"
+exit_code = 4
+category = "epistemic"
+what = "Late forecast registration: resolution timestamp precedes or equals freeze timestamp (INV-008)"
+fix = "Register and hash forecasts before the physical period closes or disclosure is published."
+
+[[refusal]]
+code = "FMINE-REF-203"
+exit_code = 4
+category = "domain_law"
+what = "Disclosure roll-up mismatch without explicit consolidation adjustment layer (G-BULL-3)"
+fix = "Supply L_corp and L_JV adjustment layers to reconcile site sums to consolidated totals."
+
+[[refusal]]
+code = "FMINE-REF-301"
+exit_code = 7
+category = "wall_and_authz"
+what = "MNPI wall boundary violation or non-positive-definite covariance matrix"
+fix = "Restrict query to Public-tainted claims or inspect duplicate sample coordinates."
+
+[[refusal]]
+code = "FMINE-REF-302"
+exit_code = 7
+category = "wall_and_authz"
+what = "Venture/JV wall violation: cross-JV access without partner entitlement caveat (e.g. NGM 61.5%/38.5%, Twiga, Reko Diq)"
+fix = "Scope the query to a single venture cell or use public-basis disclosures."
+
+[[refusal]]
+code = "FMINE-REF-303"
+exit_code = 7
+category = "wall_and_authz"
+what = "Host-state data-residency violation: export of restricted geoscience or personal data outside jurisdiction"
+fix = "Keep raw data in the sovereign site cell and replicate only permitted aggregate rollups."
+
+[[refusal]]
+code = "FMINE-REF-304"
+exit_code = 5
+category = "solver"
+what = "Schedule optimization LP/MILP is infeasible under capacity and precedence constraints"
+fix = "Inspect the IIS minimal conflicting constraint set in the solver diagnostic."
+
+[[refusal]]
+code = "FMINE-REF-401"
+exit_code = 6
+category = "authority_and_sync"
+what = "Fencing epoch regression, stale lease, or Red/Placeholder claim presented as decision-grade"
+fix = "Refresh cell lease epoch or replace placeholder inputs with calibrated claims."
+
+[[refusal]]
+code = "FMINE-REF-402"
+exit_code = 6
+category = "wall_and_authz"
+what = "Confidentiality lattice violation: export level below claim sensitivity (INV-007)"
+fix = "Aggregate or redact restricted claims before exporting to a lower clearance tier."
+
+[[refusal]]
+code = "FMINE-REF-403"
+exit_code = 6
+category = "epistemic"
+what = "Forecast ledger mutation attempted after freeze_time (INV-008)"
+fix = "Create a new timestamped forecast entry rather than mutating a frozen ledger record."
+
+[[refusal]]
+code = "FMINE-REF-404"
+exit_code = 6
+category = "epistemic"
+what = "Decision card missing required Unknown-Unknown (UuTerm) tail-risk slot (INV-015)"
+fix = "Attach at least one explicit UuTerm scenario or structural residual to the DecisionCard."
+
+[[refusal]]
+code = "FMINE-REF-501"
+exit_code = 7
+category = "safety_and_actuation"
+what = "Direct actuation attempt on FMS/AHS/PLC/mill/TSF hardware (INV-002, NONGOAL-002, G-HEAD-1)"
+fix = "Prepare a read-only EFFECT-* advisory document and require a human-signed HumanAuthorityToken."
+
+[[refusal]]
+code = "FMINE-REF-502"
+exit_code = 8
+category = "integrity"
+what = "Artifact SHA-256 or BLAKE3 content digest mismatch or missing required corpus/registry file"
+fix = "Re-verify input file integrity or regenerate the bundle from canonical sources."
+
+[[refusal]]
+code = "FMINE-REF-504"
+exit_code = 7
+category = "safety_and_actuation"
+what = "Uncured backfill exposure: secondary stope scheduled adjacent to primary fill with UCS(t_cure) < sigma_req (G-HEAD-7)"
+fix = "Delay secondary stope blast until paste-fill hydration reaches required factor-of-safety UCS threshold."

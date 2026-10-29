@@ -1,0 +1,57 @@
+# registries/verbs.toml — Robot & Operator CLI Verb Registry (§30.2, BD-031, BD-113)
+
+schema_version = 1
+
+[[verb]]
+path = "assure public"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Run M0 Public Guidance & Reserve Assurance over issuer filings and Mine Stats workbooks"
+
+[[verb]]
+path = "claim show"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Display a Claim with its EvidenceClass, KnowledgeState, UuTerm, and provenance locators"
+
+[[verb]]
+path = "claim why"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Explain the epistemic color, flip margin, and staleness chain of a Claim"
+
+[[verb]]
+path = "claim trace"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Trace the upstream provenance DAG of a Claim back to raw cells or anchors"
+
+[[verb]]
+path = "doctor"
+subsystem = "Adit"
+mutates_authority = false
+description = "Verify hash chains, high-water marks, foundation pins, LOC budgets, obligations, and Little's-law queues"
+
+[[verb]]
+path = "repair plan"
+subsystem = "Adit"
+mutates_authority = false
+description = "Generate a deterministic truncation/rebuild repair plan for a torn segment or stale projection"
+
+[[verb]]
+path = "repair apply"
+subsystem = "Adit"
+mutates_authority = true
+description = "Apply a verified repair plan by digest"
+
+[[verb]]
+path = "robot-docs"
+subsystem = "Adit"
+mutates_authority = false
+description = "Emit machine-readable documentation for all CLI verbs, exit codes, and FMT-ENV-1 schemas"
+
+[[verb]]
+path = "robot schema"
+subsystem = "Adit"
+mutates_authority = false
+description = "Emit the JSON schema for FMT-ENV-1 envelopes, Claims, DecisionCards, and Refusals"

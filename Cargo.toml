@@ -1,0 +1,48 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/xtask",
+    "crates/fmine-core",
+    "crates/fmine-units",
+    "crates/fmine-time",
+    "crates/fmine-crs",
+    "crates/fmine-evidence",
+    "crates/fmine-claim",
+    "crates/fmine-registry",
+    "crates/fmine-array",
+    "crates/fmine-numerics",
+    "crates/fmine-calib",
+    "crates/fmine-decide",
+    "crates/fmine-io",
+    "crates/fmine-public",
+    "crates/fmine-metrics",
+    "crates/fmine-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Jeffrey Emanuel", "FrankenMining Contributors"]
+repository = "https://github.com/Dicklesworthstone/franken_mining"
+homepage = "https://github.com/Dicklesworthstone/franken_mining"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "allow"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+
+[workspace.metadata.fmine]
+production_language = "rust"
+sole_async_runtime = "asupersync"
+asupersync_pin = "=0.5.0"
+dependency_policy = "deny.toml"
+stack_lock = "franken-stack.lock"
+loc_budget_registry = "registries/loc_budget.toml"
+topology_registry = "registries/workspace_topology.toml"
+lifts_registry = "registries/lifts.toml"

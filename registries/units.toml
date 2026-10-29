@@ -1,0 +1,101 @@
+# registries/units.toml — Canonical Physical, Mass-Basis, Metal-Stage & Chemical-Basis Registry (§25, BD-031)
+
+schema_version = 1
+
+[[unit]]
+code = "t"
+dimension = "Mass"
+scale_num = 1000000
+scale_den = 1
+description = "Metric tonne (1,000 kg = 1,000,000 g)"
+
+[[unit]]
+code = "kt"
+dimension = "Mass"
+scale_num = 1000000000
+scale_den = 1
+description = "Thousand metric tonnes (10^9 g)"
+
+[[unit]]
+code = "Mt"
+dimension = "Mass"
+scale_num = 1000000000000
+scale_den = 1
+description = "Million metric tonnes (10^12 g)"
+
+[[unit]]
+code = "st"
+dimension = "Mass"
+scale_num = 90718474
+scale_den = 100
+description = "US short ton (2,000 avoirdupois lb = 907,184.74 g exact)"
+
+[[unit]]
+code = "g"
+dimension = "Mass"
+scale_num = 1
+scale_den = 1
+description = "Gram (base mass unit)"
+
+[[unit]]
+code = "oz_t"
+dimension = "Mass"
+scale_num = 311034768
+scale_den = 10000000
+description = "Troy ounce (31.1034768 g exact)"
+
+[[unit]]
+code = "koz"
+dimension = "Mass"
+scale_num = 311034768
+scale_den = 10000
+description = "Thousand troy ounces"
+
+[[unit]]
+code = "Moz"
+dimension = "Mass"
+scale_num = 311034768
+scale_den = 10
+description = "Million troy ounces"
+
+[[unit]]
+code = "lb"
+dimension = "Mass"
+scale_num = 45359237
+scale_den = 100000
+description = "Avoirdupois pound (453.59237 g exact)"
+
+[[unit]]
+code = "Mlb"
+dimension = "Mass"
+scale_num = 453592370
+scale_den = 1
+description = "Million avoirdupois pounds"
+
+[[unit]]
+code = "g_per_t"
+dimension = "Grade"
+scale_num = 1
+scale_den = 1000000
+description = "Grams per metric tonne (ppm mass fraction)"
+
+[[unit]]
+code = "oz_per_st"
+dimension = "Grade"
+scale_num = 240
+scale_den = 7000000
+description = "Troy ounces per US short ton (= 240/7 g/t exact = 34.285714... g/t)"
+
+[[unit]]
+code = "wt_pct"
+dimension = "MassFraction"
+scale_num = 1
+scale_den = 100
+description = "Weight percent (10^-2 mass fraction)"
+
+[[unit]]
+code = "mass_fraction"
+dimension = "MassFraction"
+scale_num = 1
+scale_den = 1
+description = "Unitless mass fraction in [0, 1]"

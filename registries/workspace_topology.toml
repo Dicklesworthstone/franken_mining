@@ -1,0 +1,105 @@
+# registries/workspace_topology.toml — Layer Order & Allowed Intra-Layer Edges (§28.2, §28.5, BD-004)
+# Downward order: T (9) -> U (8) -> V (7) -> E (6) -> K4 (5) -> K3 (4) -> K2 (3) -> K1 (2) -> K0 (1) -> S1 (1) -> S0 (0)
+# Wait: K0..K4 sit above S1, so:
+# S0 (0) < S1 (1) < K0 (2) < K1 (3) < K2 (4) < K3 (5) < K4 (6) < E (7) < V (8) < U (9) < T (10)
+
+schema_version = 1
+
+[layer_ranks]
+S0 = 0
+S1 = 1
+K0 = 2
+K1 = 3
+K2 = 4
+K3 = 5
+K4 = 6
+E = 7
+V = 8
+U = 9
+T = 10
+
+# Permitted intra-layer edges inside S0 (must form a strict DAG):
+[[allowed_same_layer_edge]]
+from = "fmine-units"
+to = "fmine-core"
+
+[[allowed_same_layer_edge]]
+from = "fmine-time"
+to = "fmine-core"
+
+[[allowed_same_layer_edge]]
+from = "fmine-crs"
+to = "fmine-core"
+
+[[allowed_same_layer_edge]]
+from = "fmine-crs"
+to = "fmine-units"
+
+[[allowed_same_layer_edge]]
+from = "fmine-evidence"
+to = "fmine-core"
+
+[[allowed_same_layer_edge]]
+from = "fmine-evidence"
+to = "fmine-units"
+
+[[allowed_same_layer_edge]]
+from = "fmine-claim"
+to = "fmine-core"
+
+[[allowed_same_layer_edge]]
+from = "fmine-claim"
+to = "fmine-units"
+
+[[allowed_same_layer_edge]]
+from = "fmine-claim"
+to = "fmine-time"
+
+[[allowed_same_layer_edge]]
+from = "fmine-claim"
+to = "fmine-evidence"
+
+[[allowed_same_layer_edge]]
+from = "fmine-registry"
+to = "fmine-core"
+
+[[allowed_same_layer_edge]]
+from = "fmine-registry"
+to = "fmine-units"
+
+[[allowed_same_layer_edge]]
+from = "fmine-registry"
+to = "fmine-time"
+
+[[allowed_same_layer_edge]]
+from = "fmine-registry"
+to = "fmine-evidence"
+
+[[allowed_same_layer_edge]]
+from = "fmine-array"
+to = "fmine-core"
+
+[[allowed_same_layer_edge]]
+from = "fmine-array"
+to = "fmine-units"
+
+# Permitted intra-layer edges inside K0 / V / U / E (strict DAG):
+[[allowed_same_layer_edge]]
+from = "fmine-calib"
+to = "fmine-numerics"
+
+[[allowed_same_layer_edge]]
+from = "fmine-public"
+to = "fmine-io"
+
+[[allowed_same_layer_edge]]
+from = "fmine-capital"
+to = "fmine-decide"
+
+[[allowed_same_layer_edge]]
+from = "fmine-metrics"
+to = "fmine-decide"
+
+[[allowed_same_layer_edge]]
+from = "fmine-cli"
+to = "fmine-report"

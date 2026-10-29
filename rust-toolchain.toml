@@ -1,0 +1,7 @@
+[toolchain]
+# Pinned date so every worker and local build resolves the same nightly, matching the
+# sibling FrankenSuite projects (§27.5). Bump deliberately, never to a floating "nightly":
+# the conformance fixtures and deterministic BitwisePortable kernels assume one compiler.
+channel = "nightly-2026-08-31"
+components = ["rustfmt", "clippy", "rust-src"]
+targets = ["wasm32-unknown-unknown"]

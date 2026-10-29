@@ -1,0 +1,17 @@
+[package]
+name = "fmine-decide"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "DecisionCard, flip-margin sensitivity, EVSI/VOI campaign ranking (GATE-HELM-02), and Epistemic One-Pager renderer."
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-claim = { path = "../fmine-claim" }
+fmine-numerics = { path = "../fmine-numerics" }
+fmine-calib = { path = "../fmine-calib" }
+
+[lints]
+workspace = true

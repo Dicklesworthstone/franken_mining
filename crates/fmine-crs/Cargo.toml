@@ -1,0 +1,13 @@
+[package]
+name = "fmine-crs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Coordinate reference systems, Snyder UTM forward/inverse projections, Helmert transforms, and mine-grid control-monument solver with convex-hull guard."
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+
+[lints]
+workspace = true

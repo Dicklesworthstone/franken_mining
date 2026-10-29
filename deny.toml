@@ -1,0 +1,44 @@
+# deny.toml — FrankenMining Dependency & License Constitution (§28.5 Rule L-5)
+# Enforced by `xtask check-deps` and `cargo deny`.
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+
+# Banned direct dependencies and public-API exposure (§28.5 L-5):
+# - Foreign async runtimes / HTTP stacks: tokio, async-std, smol, hyper, reqwest, actix, axum, tower, tonic
+# - Foreign DB / ORM / columnar stacks: sqlx, diesel, sea-orm, arrow, parquet, polars, duckdb, rusqlite
+# - Foreign ML / C++ FFI stacks: ort, candle, tch, openssl, ring
+# - Uncontrolled time/rand in production closures: chrono, time (direct dependency banned; fmine-time owns civil/quad-temporal time)
+deny = [
+    { name = "tokio" },
+    { name = "async-std" },
+    { name = "smol" },
+    { name = "hyper" },
+    { name = "reqwest" },
+    { name = "actix-web" },
+    { name = "axum" },
+    { name = "tonic" },
+    { name = "sqlx" },
+    { name = "diesel" },
+    { name = "sea-orm" },
+    { name = "rusqlite" },
+    { name = "duckdb" },
+    { name = "arrow" },
+    { name = "parquet" },
+    { name = "polars" },
+    { name = "ort" },
+    { name = "candle-core" },
+    { name = "tch" },
+    { name = "openssl" },
+    { name = "chrono" },
+    { name = "time" },
+]
