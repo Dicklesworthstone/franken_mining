@@ -1,0 +1,74 @@
+# Rust build output
+/target/
+target/
+**/*.rs.bk
+*.pdb
+
+# Keep Cargo.lock tracked: fmine is a binary and every certificate names its inputs.
+
+# Profiling, coverage, benchmark scratch
+*.profraw
+*.profdata
+/coverage/
+/lcov.info
+/criterion/
+/bench-output/
+perf.data
+perf.data.old
+flamegraph.svg
+
+# Wasm build output
+/pkg/
+/crates/*/pkg/
+*.wasm
+
+# === FrankenMining specific ===
+
+# Source documents are never committed. The corpus (technical reports, Mine Stats workbooks,
+# investor decks, textbooks) is read locally; the repository carries only the evidence notes in
+# planning/corpus/ and planning/research/, which cite documents by file, page and cell.
+/corpus_of_input_docs/
+*.pdf
+*.xlsx
+*.xls
+
+# Held back from the public repository pending owner review: notes on a source document whose
+# cover carries a confidentiality notice. Do not force-add.
+planning/corpus/C5_reko_diq_esia.md
+
+# Site data, MNPI and personal data never enter the repository (plan §31). Real site exports,
+# JV-partner data and anything embargoed live in a tenancy outside this tree; fixtures are
+# synthetic (fmine-gen) or built from public filings only.
+/private/
+/site_data/
+/tenancy/
+*.private.*
+*.mnpi.*
+.env
+.env.*
+
+# Run workspaces and generated reports produced by `fmine`
+/runs/
+/out/
+/ws/
+
+# Beads: the JSONL is truth; the database and locks are local (see .beads/.gitignore)
+.beads/beads.db*
+.beads/*.lock
+
+# Python oracle and analysis tooling
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+
+# Agent and tool state
+.ee/
+.ntm/
+.rch/
+.bv/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
