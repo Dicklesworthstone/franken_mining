@@ -362,8 +362,8 @@ impl LeafCheck {
     }
 }
 
-/// `{"leaves","instances","pass","failed","skipped","by_role","by_perturbation","skipped_by_reason",
-/// "elapsed_ms"}`.
+/// `{"leaves","instances","pass","failed","skipped","by_role","by_family","by_perturbation",
+/// "skipped_by_reason","elapsed_ms"}`.
 #[must_use]
 pub fn leaf_summary(checks: &[LeafCheck], elapsed_ms: u128) -> String {
     let render = |m: &BTreeMap<&str, usize>| {
@@ -371,11 +371,14 @@ pub fn leaf_summary(checks: &[LeafCheck], elapsed_ms: u128) -> String {
         format!("{{{}}}", parts.join(","))
     };
     let mut by_role = BTreeMap::new();
+    let mut by_family = BTreeMap::new();
     let mut by_perturbation = BTreeMap::new();
     let mut skipped = BTreeMap::new();
     let mut instances: Vec<&str> = Vec::new();
     for c in checks {
         *by_role.entry(c.role.as_str()).or_insert(0) += 1;
+        let family = c.instance.rsplit_once(' ').map_or("", |(_, f)| f);
+        *by_family.entry(family).or_insert(0) += 1;
         if let Some(p) = c.perturbation {
             *by_perturbation.entry(p.as_str()).or_insert(0) += 1;
         }
@@ -389,12 +392,13 @@ pub fn leaf_summary(checks: &[LeafCheck], elapsed_ms: u128) -> String {
     let failed = checks.iter().filter(|c| c.failure.is_some()).count();
     format!(
         "{{\"leaves\":{},\"instances\":{},\"pass\":{},\"failed\":{failed},\"skipped\":{},\"by_role\":{},\
-         \"by_perturbation\":{},\"skipped_by_reason\":{},\"elapsed_ms\":{elapsed_ms}}}",
+         \"by_family\":{},\"by_perturbation\":{},\"skipped_by_reason\":{},\"elapsed_ms\":{elapsed_ms}}}",
         checks.len(),
         instances.len(),
         checks.iter().filter(|c| c.pass()).count(),
         skipped.values().sum::<usize>(),
         render(&by_role),
+        render(&by_family),
         render(&by_perturbation),
         render(&skipped)
     )
@@ -1174,6 +1178,24 @@ mod tests {
         distinct.dedup();
         assert_eq!(distinct.len(), 50);
         assert!(checks.iter().filter(|c| c.pass()).count() > 250);
+    }
+
+    /// A counted line is perturbed by token, not by value. B15 is 1000·400/400 with k = 3 (B5, B6, B7). With B6 as
+    /// "-", k = 2, so the range [996.25, 1003.76] narrows but still holds 1000: only k and the range move.
+    #[test]
+    fn test_live_leaves_count_operand_perturbed_by_token() {
+        let checks = prove_leaves(&synthetic_sources(), &assess_synthetic);
+        let Some(c) = checks
+            .iter()
+            .find(|c| c.instance == format!("{} tcc_per_oz", aisc("B15")) && c.leaf == aisc("B6"))
+        else {
+            panic!("no check for B6 under B15");
+        };
+        assert_eq!(c.role, OperandRole::Counted);
+        assert_eq!(c.perturbation, Some(Perturbation::ToPlaceholder));
+        assert_eq!(c.moved, ["k", "range"]);
+        assert_eq!((c.state_before, c.state_after), ("i", Some("i")));
+        assert!(c.pass(), "{}", c.to_json());
     }
 
     /// M1: C8's certificate keeps the literal 350, its real value, so only a perturbation can tell.
