@@ -1,6 +1,8 @@
 """Mine Statistics census: ownership and quarter-sum identities on the QTD/YTD summary sheets, and the site_sheet
-identity (summary value = Minestats value), each instance decided alone on its own displayed cells, then all decided
-instances posed jointly by shared cells, with every minimum correction set of each jointly infeasible component.
+identity (summary value = Minestats value), each instance decided alone on its own displayed cells, then the decided
+instances of these three families posed jointly by shared cells, with every minimum correction set of each jointly
+infeasible component. The sum families sites_to_region and region_to_total (region = sum of its sites, total = sum
+of the regions or of the copper sites) are decided alone only, never posed jointly.
 
 Independent reader, written 2026-10-30 without opening any Rust under crates/, planning/mor/MOR_CASE.md, repro/ or
 any other agent's scratch files. It reads the xlsx itself (zipfile + xml.etree) and imports formats.py only for its
@@ -123,13 +125,46 @@ Minestats value of the same release, site, period and column-year group.
 - Record: family "site_sheet", field = the summary field id, anchor = the summary cell, cells = [summary cell,
   Minestats cell or null], share and printed_share null, certificate null except "nil_token" (step 5).
 
+Family sites_to_region and family region_to_total (the sum families; added 2026-10-30 by a second reader, who wrote
+them from the rule as given, without reading crates/ or any Rust). Both are sums of flows on the QTD and YTD sheets,
+read as above (blocks, column groups, fields, subjects, values as displayed, placeholders, blank, periods), with the
+region map keyed by the file's release quarter (see 'Exclusions'). A release restates its comparatives under its own
+map, so the release's map applies to both column groups. Fields: the three flow fields of each block, gold and
+copper; unit-cost columns are out of scope. Each instance is decided alone and never posed in the joint components.
+- sites_to_region: per summary sheet, gold block, column group, flow field and data row whose subject is a region of
+  the release's map: region = sum of its members, in the map's order. Operands, in order: each member's cell (same
+  sheet, block, group, field; the row whose subject equals the member, or its alias, J30), then the region's cell.
+  A data row labelled as a region that is not in the release's map -> v, region_not_in_map; a member with no row in
+  that block -> v, operand_row_missing (both at null). Exclusion by name, applied first: excluded_e818 when
+  Loulo-Gounkoto is a member and the cell's period is 2025Q1, 2025Q2, 2025Q3, 2025 H1 or 2025 9M.
+- region_to_total. Gold: "Total Gold" = sum of the regions of the release's map, in map order; operands the region
+  cells, then the Total Gold cell; a map region with no row in that block -> v, operand_row_missing. Copper: "Total
+  Copper" = sum of every non-aggregate data row of the copper block, in row order; operands those cells, then the
+  Total Copper cell. Once per (release, sheet, gold block), one line lists the gold data rows that are neither an
+  aggregate nor a member of any region in the release's map (a completeness check of the map; a report, not an
+  instance). Nevada Gold Mines LLC's own sub-sum (Carlin + Cortez + ...) is not posed: it needs a registry table of
+  its mines that the rule does not have yet.
+- Decision, first match wins (after exclusions and missing rows): 1. Any operand blank -> v, blank_operand, at = the
+  first blank operand in operand order. 2. All operands placeholders (any kind) -> np. 3. Any operand a placeholder
+  other than the nil token (a text cell whose text is exactly "—" or "— "; "n/a", "N/A", "-", "–" and number-shown-
+  as-dash cells are other placeholders) -> v, placeholder_operand, at = the first such operand. 4. Otherwise every
+  operand is a number or the nil token, which is exactly 0 with half-width 0: i iff |sum of members - aggregate| <=
+  the sum of the half-widths of all operands, in exact decimal arithmetic (fractions, never floats), else iii. If any
+  operand is the nil token, certificate "nil_token", else null.
+- Record: family, field = the flow field id, anchor = the aggregate cell, cells = the operand locators in operand
+  order, state, reason, at, share and printed_share null, certificate as in step 4.
+
 Components. Every instance in state i or iii (and certificate null) is posed jointly; instances sharing a cell are
 linked; connected components are decided exactly: do true values exist, each in its closed box, satisfying every
 identity of the component (c = s.b, t = a + q, summary = Minestats)? For each infeasible component: every minimum
 correction set (smallest k such that
 dropping the boxes of some k cells makes it feasible; exhaustive by size; sets sorted), and with --values, for each
 set and cell, the implied interval (exact range of the cell's true value with that set's boxes dropped). joint_only
-if every instance of the component is i. Every iii instance carries its component id and corrections.
+if every instance of the component is i. Every iii instance carries its component id and corrections. The sum
+families (sites_to_region, region_to_total) are decided alone and never posed here: a sum links every site of a
+block (and every region to the total), so posing them jointly would merge the existing components, each confined
+to one subject, into one component of hundreds of cells per block, field, column group and year of releases (the
+quarter_sum chains carry the link across releases), past what the exhaustive minimum-set search can enumerate.
 
 Output (stdout, one compact JSON object per line, ensure_ascii=False, deterministic order):
 1. one line per instance sorted by (family, anchor, group, field): {"family","subject","field","group","period",
@@ -137,9 +172,12 @@ Output (stdout, one compact JSON object per line, ensure_ascii=False, determinis
    ownership's field is the attributable field and its anchor the attributable cell; with --values also "values"
    (displayed operand texts) and "implied" ([{locator: [lo, hi]}] per correction set);
 2. one line per jointly infeasible component {"component","cells","instances","joint_only","corrections"};
-3. per family {"family","n","i","iii","v","np","v_by_reason"} (ownership, quarter_sum, site_sheet); then one line
-   per refused Minestats* sheet {"family":"site_sheet","refused","reason"}; then one line per release
-   {"family":"site_sheet","release","no_minestats_column"}; then {"components","infeasible_components","joint_only"};
+3. per family {"family","n","i","iii","v","np","v_by_reason"} (ownership, quarter_sum, site_sheet, sites_to_region,
+   region_to_total); then one line per refused Minestats* sheet {"family":"site_sheet","refused","reason"}; then one
+   line per release {"family":"site_sheet","release","no_minestats_column"}; then one line per (release, sheet)
+   {"family":"region_to_total","release","sheet","gold_rows_not_in_map"}; then one line per release
+   {"families":["sites_to_region","region_to_total"],"release","n","comparisons","iii"} (J29); then
+   {"components","infeasible_components","joint_only"};
 4. known-answer checks {"check","ok","detail"}: E113, E114, E115, E116, computed from the instances.
 RISK-31: no issuer cell value and no implied interval is printed unless --values is given.
 
@@ -246,6 +284,46 @@ J21 Output: the site_sheet family summary follows quarter_sum's; then the refusa
    Minestats text]. The comparison with W1's T4 table is not printed.
 J22 E116 is read from the finished records: exactly one site_sheet instance anchored at 2026Q2:YTD!E11, in state
    iii, certificate "nil_token", cells ["2026Q2:YTD!E11", "2026Q2:Minestats1!N103"].
+J23-J30 belong to the sum families sites_to_region and region_to_total (second reader, 2026-10-30).
+J23 The map's order is the rule's, as 'Exclusions' lists it (ORDER_TO_2025Q3 and ORDER_FROM_2025Q4 below; the
+   frozenset maps quarter_sum uses are derived from them): regions North America, then Latin America & Asia Pacific
+   or South America & Asia Pacific, then Africa & Middle East; members as listed. Africa & Middle East's order
+   (Loulo-Gounkoto, Kibali, North Mara, Tongon, Bulyanhulu) is not its row order on the sheets. The order changes
+   "cells" and "at", never a state.
+J24 A member is matched to a row by exact subject equality (J6 subjects, as J15), except for the one alias of J30.
+   The map spells "Nevada Gold Mines"; every summary sheet of this corpus spells the row "Nevada Gold Mines LLC" (J6
+   strips only footnote digits and shares), so North America reads that member through J30. The completeness line
+   compares exact names and does not use the alias, as amended: every gold block's line lists "Nevada Gold Mines
+   LLC" together with the Nevada mine rows (Carlin, Cortez, Turquoise Ridge, Phoenix; Long Canyon in the 2024
+   releases).
+J25 region_not_in_map: the subject is a key of either map (J8) but not of the release's map. It has the empty member
+   set there, so its cells are [the region cell]. None occurs in this corpus. A map region with no row in a block
+   poses no sites_to_region instance (region_to_total reports it as operand_row_missing). excluded_e818 is tested
+   first, then region_not_in_map, then missing member rows; E818 cannot meet region_not_in_map (Loulo-Gounkoto is a
+   member of Africa & Middle East in both maps).
+J26 excluded_e818 applies to sites_to_region only, where the rule places it: Loulo-Gounkoto is never an operand of
+   region_to_total (its gold operands are region cells), so Total Gold instances in the E818 periods are decided.
+J27 Operands are read with read_operand (J7 refusals included); then a placeholder held in a text cell whose raw
+   text is exactly "—" or "— " is the nil token (J16's spellings). Every other placeholder, including a number whose
+   format shows a dash, is "other". certificate is set in step 4 only, so a v or np record has certificate null.
+J28 "Non-aggregate" (copper) means a subject outside the aggregate list of family ownership, so a region or Total
+   Gold row inside the copper block would be left out of the sum (none in this corpus). A block without its "Total
+   Gold" or "Total Copper" row, or a copper block with no non-aggregate row: SystemExit naming the block's
+   column-header row. The completeness line lists subjects sorted (as J21); in this corpus it is never empty (J24).
+J29 Output: instance lines sort with the others (region_to_total falls between quarter_sum and site_sheet, and
+   sites_to_region after site_sheet); "component" and "corrections" are always null. The two family summaries follow
+   site_sheet's; after the no_minestats_column lines come the completeness lines (release, then QTD before YTD), then
+   one line per release counting the two families together: n instances, "comparisons" = instances in state i or
+   iii (nil_token certificate included), "iii". Components, their lines and the known-answer checks are computed
+   from the other three families only, so they are unchanged. The comparison with W1's T2 table is not printed.
+J30 Member alias (amendment of 2026-10-30, given as data from the issuer registry, which records that the subject
+   "Nevada Gold Mines" prints in Mine Stats as "Nevada Gold Mines LLC"); both sum families, and only there; no other
+   alias. A map member named "Nevada Gold Mines" is read from the row whose subject is "Nevada Gold Mines LLC" (or
+   from a row with the subject "Nevada Gold Mines" itself). A block with rows for both names: every instance taking
+   that member is v, operand_unreadable, at = the first of the two rows' cells in the field (the lower row number),
+   and that cell also stands in "cells" (as J17). Precedence: excluded_e818, region_not_in_map, then
+   operand_row_missing (any member with neither row), then operand_unreadable (at = the first such member in operand
+   order), then steps 1-4. No block of this corpus holds both names.
 """
 import itertools
 import json
@@ -266,17 +344,21 @@ TEXT_TYPES = ("s", "inlineStr", "str")
 PLACE = {"—", "–", "-", "n/a", "N/A"}
 AGGREGATES = {"North America", "Latin America & Asia Pacific", "South America & Asia Pacific",
               "Africa & Middle East", "Total Gold", "Total Copper"}
-AFRICA = frozenset({"Loulo-Gounkoto", "Kibali", "North Mara", "Tongon", "Bulyanhulu"})
-MAP_TO_2025Q3 = {
-    "North America": frozenset({"Nevada Gold Mines", "Hemlo"}),
-    "Latin America & Asia Pacific": frozenset({"Pueblo Viejo", "Veladero", "Porgera"}),
+# the region map in the rule's order (regions, and members within each region); the sum families keep this order
+AFRICA = ("Loulo-Gounkoto", "Kibali", "North Mara", "Tongon", "Bulyanhulu")
+ORDER_TO_2025Q3 = {
+    "North America": ("Nevada Gold Mines", "Hemlo"),
+    "Latin America & Asia Pacific": ("Pueblo Viejo", "Veladero", "Porgera"),
     "Africa & Middle East": AFRICA,
 }
-MAP_FROM_2025Q4 = {
-    "North America": frozenset({"Nevada Gold Mines", "Pueblo Viejo", "Hemlo"}),
-    "South America & Asia Pacific": frozenset({"Veladero", "Porgera"}),
+ORDER_FROM_2025Q4 = {
+    "North America": ("Nevada Gold Mines", "Pueblo Viejo", "Hemlo"),
+    "South America & Asia Pacific": ("Veladero", "Porgera"),
     "Africa & Middle East": AFRICA,
 }
+MAP_TO_2025Q3 = {k: frozenset(v) for k, v in ORDER_TO_2025Q3.items()}
+MAP_FROM_2025Q4 = {k: frozenset(v) for k, v in ORDER_FROM_2025Q4.items()}
+MEMBER_ALIAS = {"Nevada Gold Mines": "Nevada Gold Mines LLC"}  # sum families only (J30; issuer registry)
 REGIONS = set(MAP_TO_2025Q3) | set(MAP_FROM_2025Q4)
 E818_SUBJECT = "Loulo-Gounkoto"
 E818_PERIODS = {"2025Q1", "2025Q2", "2025Q3", "2025 H1", "2025 9M"}
@@ -326,6 +408,11 @@ def letters(col):
 
 def region_map(year, q):
     return MAP_TO_2025Q3 if (year, q) <= (2025, 3) else MAP_FROM_2025Q4
+
+
+def region_order(year, q):
+    """The release's region map with its order (J23): region -> member subjects, both in the rule's order."""
+    return ORDER_TO_2025Q3 if (year, q) <= (2025, 3) else ORDER_FROM_2025Q4
 
 
 def period(year, kind):
@@ -1039,6 +1126,92 @@ def site_sheet_instances(releases):
     return out, unmatched
 
 
+# ---------------------------------------------------------------------------------------------------- sum families
+
+def read_sum_operand(sheet, row, col):
+    """Sum families: read_operand's Op, with the nil token split from the other placeholders (J27)."""
+    op = read_operand(sheet, row, col)
+    if op.kind == "ph":
+        t, text = sheet.cells[(row, col)]
+        if t in TEXT_TYPES and text in SITE_NIL:
+            return Op(op.loc, "nil", F(0), F(0), text)
+    return op
+
+
+def member_row(blk, subj):
+    """Sum families: ('ok', row), ('missing', None) or ('both', the lower row) for an operand subject (J30)."""
+    names = [subj] + ([MEMBER_ALIAS[subj]] if subj in MEMBER_ALIAS else [])
+    rows = sorted(blk.rows[n][0] for n in names if n in blk.rows)
+    if not rows:
+        return "missing", None
+    return ("both" if len(rows) > 1 else "ok"), rows[0]
+
+
+def decide_sum(ops):
+    """Steps 1-4 for a sum instance whose operands all exist, the aggregate last: (state, reason, at, certificate)."""
+    for o in ops:
+        if o.kind == "blank":
+            return "v", "blank_operand", o.loc, None
+    if all(o.kind in ("nil", "ph") for o in ops):
+        return "np", None, None, None
+    for o in ops:
+        if o.kind == "ph":
+            return "v", "placeholder_operand", o.loc, None
+    gap = abs(sum((o.value for o in ops[:-1]), F(0)) - ops[-1].value)
+    ok = gap <= sum((o.half for o in ops), F(0))
+    return ("i" if ok else "iii"), None, None, ("nil_token" if any(o.kind == "nil" for o in ops) else None)
+
+
+def sum_instances(releases):
+    """Families sites_to_region and region_to_total; also, per (release, sheet), the gold rows outside the map."""
+    out, outside = [], []
+    for (y, q), rel in sorted(releases.items()):
+        order = region_order(y, q)
+        in_map = {s for members in order.values() for s in members}
+        for sname in ("QTD", "YTD"):
+            sheet = rel.sheets.get(sname)
+            if sheet is None:
+                continue
+            kind = "Q%d" % q if sname == "QTD" else CUM[q]
+            gold, copper = sheet.blocks["au"], sheet.blocks["cu"]
+            outside.append((rel.key, sname, sorted(s for s in gold.rows if s not in AGGREGATES and s not in in_map)))
+            sums = []  # (family, metal, aggregate subject, operand subjects in operand order, reason or None)
+            for subj in sorted(gold.rows, key=lambda s: gold.rows[s][0]):
+                if subj in REGIONS:
+                    sums.append(("sites_to_region", "au", subj, order.get(subj, ()),
+                                 None if subj in order else "region_not_in_map"))
+            sums.append(("region_to_total", "au", "Total Gold", tuple(order), None))
+            sites = tuple(s for s in sorted(copper.rows, key=lambda s: copper.rows[s][0]) if s not in AGGREGATES)
+            if not sites:
+                die("%s: copper block has no non-aggregate data row" % sheet.loc(copper.header_row, 1))
+            sums.append(("region_to_total", "cu", "Total Copper", sites, None))
+            for family, metal, agg, parts, why in sums:
+                blk = sheet.blocks[metal]
+                if agg not in blk.rows:
+                    die("%s: block has no %s row" % (sheet.loc(blk.header_row, 1), agg))
+                found = [member_row(blk, s) for s in parts]
+                for g in GROUPS:
+                    per = period(y if g == "current" else y - 1, kind)
+                    for flow in FLOWS:
+                        col = blk.cols[(g, flow)]
+                        ops = [read_sum_operand(sheet, r, col) if r is not None else None for _how, r in found]
+                        ops.append(read_sum_operand(sheet, blk.rows[agg][0], col))
+                        inst = base(family, agg, metal, flow, g, per, ops[-1].loc, ops)
+                        if family == "sites_to_region" and E818_SUBJECT in parts and per in E818_PERIODS:
+                            inst["state"], inst["reason"] = "v", "excluded_e818"
+                        elif why is not None:
+                            inst["state"], inst["reason"] = "v", why
+                        elif any(how == "missing" for how, _r in found):
+                            inst["state"], inst["reason"] = "v", "operand_row_missing"
+                        elif any(how == "both" for how, _r in found):
+                            first = next(i for i, (how, _r) in enumerate(found) if how == "both")
+                            inst["state"], inst["reason"], inst["at"] = "v", "operand_unreadable", ops[first].loc
+                        else:
+                            inst["state"], inst["reason"], inst["at"], inst["certificate"] = decide_sum(ops)
+                        out.append(inst)
+    return out, outside
+
+
 # ---------------------------------------------------------------------------------------------------- exact joint decision
 
 def _norm(cons):
@@ -1330,18 +1503,20 @@ def main(argv):
         die("usage: mine_stats_census.py [--values] <dir-or-files...>")
     releases = collect(args)
     site, unmatched = site_sheet_instances(releases)
+    sums, outside = sum_instances(releases)
     instances = ownership_instances(releases) + quarter_sum_instances(releases) + site
     instances.sort(key=sort_key)
+    printed = sorted(instances + sums, key=sort_key)
     seen = set()
-    for x in instances:
+    for x in printed:
         k = sort_key(x)
         if k in seen:
             die("two instances with one key %r" % (k,))
         seen.add(k)
-    comps, comp_lines = analyse(instances, with_values)
+    comps, comp_lines = analyse(instances, with_values)  # the sum families are decided alone, never posed (J29)
     keys = ["family", "subject", "field", "group", "period", "anchor", "cells", "state", "reason", "at", "certificate",
             "share", "printed_share", "component", "corrections"]
-    for x in instances:
+    for x in printed:
         rec = {k: x[k] for k in keys}
         if with_values:
             rec["values"] = [o.text if o is not None and o.kind != "blank" else None for o in x["_ops"]]
@@ -1349,8 +1524,8 @@ def main(argv):
         emit(rec)
     for line in comp_lines:
         emit(line)
-    for fam in ("ownership", "quarter_sum", "site_sheet"):
-        xs = [x for x in instances if x["family"] == fam]
+    for fam in ("ownership", "quarter_sum", "site_sheet", "sites_to_region", "region_to_total"):
+        xs = [x for x in printed if x["family"] == fam]
         by = {}
         for x in xs:
             if x["state"] == "v":
@@ -1363,6 +1538,13 @@ def main(argv):
             emit({"family": "site_sheet", "refused": where, "reason": why})
     for key, subjects in unmatched:
         emit({"family": "site_sheet", "release": key, "no_minestats_column": subjects})
+    for key, sname, subjects in outside:
+        emit({"family": "region_to_total", "release": key, "sheet": sname, "gold_rows_not_in_map": subjects})
+    for _y, rel in sorted(releases.items()):
+        xs = [x for x in sums if x["anchor"].startswith(rel.key + ":")]
+        emit({"families": ["sites_to_region", "region_to_total"], "release": rel.key, "n": len(xs),
+              "comparisons": sum(1 for x in xs if x["state"] in ("i", "iii")),
+              "iii": sum(1 for x in xs if x["state"] == "iii")})
     emit({"components": len(comps), "infeasible_components": len(comp_lines),
           "joint_only": sum(1 for c in comp_lines if c["joint_only"])})
     for c in checks(instances, with_values):
