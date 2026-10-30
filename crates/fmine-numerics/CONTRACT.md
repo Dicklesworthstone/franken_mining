@@ -30,16 +30,24 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
   - `Cell`, `Convention::{Closed, HalfUp, HalfDown, HalfEven, Truncate}` and `Convention::interval`; `End`
     and `Bound` (ranges with open or infinite ends). A zero step marks an exact value, a closed point under
     every convention (BD-331.S6: the 0 a placeholder stands for).
-  - `Identity { id, family, closure, kind: Sum | Equal | Scale | Ratio }` and `Identity::row` (linear kinds).
-    `Ratio { rate, num, den, factor }` is linearised when its rate cell is in no other identity
-    (otherwise `Indeterminate`, "bilinear") and its denominator keeps one sign.
+  - `Identity { id, family, closure, kind: Sum | Equal | Scale | Ratio | WeightedMean }` and
+    `Identity::row` (linear kinds). `Ratio { rate, num, den, factor }` is linearised when its rate cell is in
+    no other identity (otherwise `Indeterminate`, "bilinear") and its denominator keeps one sign.
+  - `WeightedMean { rate, parts }` (bd-4wvl.6, BD-340.S6), `rate·Σwᵢ = Σ rateᵢ·wᵢ`, is relaxed: `W = Σwᵢ`
+    and the four McCormick rows per product over its factors' closed hulls (every factor needs a finite range,
+    else `Indeterminate`). An infeasible relaxation is `Infeasible` with a checked Farkas certificate over the
+    envelope rows; a feasible one is `NotRefuted`, never `Feasible`; neither `implied_interval` nor `blame`
+    reads one. `check_witness` checks the bilinear identity exactly. No part or a repeated cell is refused.
+  - `region_against_members(id, family, closure, factor, region, members)` with `RateCells { rate, weight,
+    numerator }`: the weights' `Sum`; then, when the region and every member print a numerator, the linear
+    form (the numerators' `Sum` and one unshared `Ratio` per rate), else one `WeightedMean`.
   - `Rules { convention, constructions }`. `Construction::{ComponentSum, RoundedOnce}` is declared per
     family before a run; a `Sum` whose family has none is refused. `ComponentSum` requires the printed
     footing (else `Certificate::Residual`) and drops the total's own box.
   - `solve` and `solve_with_caps` give one `Component` per connected group of cells, with
     `Outcome::{Feasible { witness }, Infeasible { certificate }, NotRefuted, Indeterminate { reason }}`.
     `Certificate` is `Farkas { multipliers }` by row id, or `Residual { identity, residual }`.
-    `NotRefuted` is reserved for relaxations (S6).
+    `NotRefuted` is a feasible relaxation (S6).
   - `check_witness` (identities checked exactly, ratios as ratios) and `check_certificate` (residuals
     recomputed; Farkas ranges over the linearised rows) are independent of the simplex. Every reported
     outcome passed one; a rejected one is `Indeterminate`. The certificate checker shares the linearisation:
@@ -59,7 +67,7 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
   - `presence_conflicts`: an `Equal` identity between a number and a `Placeholder` is a conflict located on
     the number. Other cells printing the same value are `Signature`s labelled `Hypothesis`.
   - `certificate_digest`: hex BLAKE3 of an `XFCT` v2 frame (v2 binds the constructions), independent of
-    input order.
+    input order; a weighted mean is kind 4 (no earlier digest moves).
   - Input is refused with `XfRefusal`:
     - a negative step, or an off-grid half-even value;
     - a duplicate cell or identity, or an unknown cell or variable;

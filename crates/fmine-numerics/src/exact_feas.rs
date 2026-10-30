@@ -11,7 +11,13 @@
 //! - A `Ratio` whose rate cell occurs in no other identity, and whose denominator keeps one sign on its
 //!   interval, becomes the linear pair `r_lo·den ≤ factor·num ≤ r_hi·den` (reversed for a negative
 //!   denominator), each side with a slack that carries the rate's open end. A shared rate cell is bilinear and
-//!   gives `Indeterminate` until S6; a denominator interval that contains zero is refused.
+//!   gives `Indeterminate`; a denominator interval that contains zero is refused.
+//! - A `WeightedMean` (bd-4wvl.6, BD-340.S6) `rate·Σwᵢ = Σ rateᵢ·wᵢ` is bilinear. It is relaxed: `W = Σwᵢ` is a
+//!   row, and each product `z = x·y` gets the four McCormick rows over the closed hull of its factors' ranges,
+//!   which contain every true product. An infeasible relaxation is a checked conflict (its Farkas multipliers
+//!   range over the envelope rows); a feasible one is [`Outcome::NotRefuted`], never consistent. A component with
+//!   one gives no implied interval and no blame. [`region_against_members`] uses the linear form whenever the
+//!   numerators are printed.
 //! - Cells linked by identities form components. Each is solved by an exact two-phase simplex over [`Rat`] with
 //!   Bland's rule, so it terminates. Every variable maps to non-negative columns (shifted from a finite end, or
 //!   split in two when free), and boxes are explicit rows `y + s = w`: the same polytope as a bounded-variable
@@ -20,8 +26,8 @@
 //!
 //! Outcomes: [`Outcome::Feasible`] with a witness, [`Outcome::Infeasible`] with a [`Certificate`] (Farkas
 //! multipliers over the linearised rows, or a component-sum residual), or [`Outcome::Indeterminate`] (a cap, an
-//! overflow, a bilinear ratio, or a checker rejection), never a claim. [`Outcome::NotRefuted`] is reserved for
-//! relaxations (S6).
+//! overflow, a bilinear ratio, or a checker rejection), never a claim. [`Outcome::NotRefuted`] is a feasible
+//! relaxation (S6).
 //!
 //! Checkers are independent of the simplex. [`check_witness`] checks every cell against its interval (a
 //! component-sum total has none) and every identity exactly, the ratio included, without the linearisation.
@@ -400,6 +406,12 @@ pub enum IdentityKind {
         den: String,
         factor: Rat,
     },
+    /// `rate·Σwᵢ = Σ rateᵢ·wᵢ` over `parts` = `(rateᵢ, wᵢ)`: the sold-weighted roll-up of per-ounce rates (S6).
+    /// Bilinear, so only a McCormick relaxation can refute it; see [`region_against_members`] for the linear form.
+    WeightedMean {
+        rate: String,
+        parts: Vec<(String, String)>,
+    },
 }
 
 /// One identity over cells.
@@ -455,7 +467,7 @@ impl Identity {
                 terms.push((target, ONE));
                 terms.push((source, factor.checked_neg().map_err(|_| degenerate())?));
             }
-            IdentityKind::Ratio { .. } => {
+            IdentityKind::Ratio { .. } | IdentityKind::WeightedMean { .. } => {
                 return Err(XfRefusal::NotLinear {
                     identity: self.id.clone(),
                 });
@@ -489,6 +501,10 @@ impl Identity {
             IdentityKind::Ratio { rate, num, den, .. } => {
                 vec![rate.as_str(), num.as_str(), den.as_str()]
             }
+            IdentityKind::WeightedMean { rate, parts } => [rate.as_str()]
+                .into_iter()
+                .chain(parts.iter().flat_map(|(r, w)| [r.as_str(), w.as_str()]))
+                .collect(),
         }
     }
 
@@ -512,6 +528,17 @@ impl Identity {
                 rules.construction(self)?;
                 self.row().map(|_| ())
             }
+            // No part, or a cell named twice (the region's rate among its parts, a shared weight).
+            IdentityKind::WeightedMean { parts, .. } => {
+                let locators = self.locators();
+                let distinct: BTreeSet<&str> = locators.iter().copied().collect();
+                if parts.is_empty() || distinct.len() != locators.len() {
+                    return Err(XfRefusal::Degenerate {
+                        identity: self.id.clone(),
+                    });
+                }
+                Ok(())
+            }
             _ => self.row().map(|_| ()),
         }
     }
@@ -522,6 +549,81 @@ impl Identity {
             Closure::MayUseUnpublished => 1,
         }
     }
+}
+
+/// One rate of a region-against-members check (S6): the rate cell, its weight (ounces sold) and, when the table
+/// prints it, its numerator ($M).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RateCells {
+    pub rate: String,
+    pub weight: String,
+    pub numerator: Option<String>,
+}
+
+/// The identities of a region's rate against its members' (S6), all of `family` and `closure`. The weights roll
+/// up linearly: the region's is Σ the members' (`<id>:weight`). When the region and every member print a
+/// numerator, the check is linear: the numerators roll up the same way (`<id>:num`) and each rate is an unshared
+/// `Ratio` `rate = factor·numerator/weight` (`<id>:rate:region`, `<id>:rate:<k>`), so a consistent table gets a
+/// checked witness. Otherwise the rates are one `WeightedMean` (`<id>`), which can only refute.
+#[must_use]
+pub fn region_against_members(
+    id: &str,
+    family: &str,
+    closure: Closure,
+    factor: Rat,
+    region: &RateCells,
+    members: &[RateCells],
+) -> Vec<Identity> {
+    let identity = |suffix: &str, kind: IdentityKind| Identity {
+        id: format!("{id}{suffix}"),
+        family: family.to_string(),
+        closure,
+        kind,
+    };
+    let sum = |suffix: &str, total: &str, lines: Vec<String>| {
+        identity(
+            suffix,
+            IdentityKind::Sum {
+                total: total.to_string(),
+                signs: vec![1; lines.len()],
+                lines,
+            },
+        )
+    };
+    let weights = members.iter().map(|m| m.weight.clone()).collect();
+    let mut out = vec![sum(":weight", &region.weight, weights)];
+    let numerators: Option<Vec<String>> = members.iter().map(|m| m.numerator.clone()).collect();
+    if let (Some(region_numerator), Some(numerators)) = (&region.numerator, numerators) {
+        out.push(sum(":num", region_numerator, numerators));
+        let keyed = [("region".to_string(), region)]
+            .into_iter()
+            .chain(members.iter().enumerate().map(|(k, m)| (k.to_string(), m)));
+        for (key, cells) in keyed {
+            if let Some(numerator) = &cells.numerator {
+                out.push(identity(
+                    &format!(":rate:{key}"),
+                    IdentityKind::Ratio {
+                        rate: cells.rate.clone(),
+                        num: numerator.clone(),
+                        den: cells.weight.clone(),
+                        factor,
+                    },
+                ));
+            }
+        }
+    } else {
+        out.push(identity(
+            "",
+            IdentityKind::WeightedMean {
+                rate: region.rate.clone(),
+                parts: members
+                    .iter()
+                    .map(|m| (m.rate.clone(), m.weight.clone()))
+                    .collect(),
+            },
+        ));
+    }
+    out
 }
 
 /// Input the kernel refuses rather than solve.
@@ -857,6 +959,8 @@ fn decide(
         Lin::System(lin) => lin,
     };
     Ok(match feasibility(&lin, max_pivots) {
+        // A point of a relaxation need not be a point of the identities: no claim of consistency (S6).
+        Ok(Feasibility::Feasible(_)) if lin.relaxed => Outcome::NotRefuted,
         Ok(Feasibility::Feasible(values)) => match witness_of(&lin, &values) {
             Ok(witness) => match check_witness_in(cells, identities, rules, &none, &witness) {
                 Ok(()) => Outcome::Feasible { witness },
@@ -892,7 +996,50 @@ struct Linear {
     /// Each ratio as (rate, num, den, factor) by variable index; the rate is eliminated from the rows.
     ratios: Vec<(usize, usize, usize, Rat)>,
     cells: usize,
+    /// Whether McCormick rows stand in for a `WeightedMean`: the system then contains the true set, so only its
+    /// infeasibility means anything.
+    relaxed: bool,
 }
+
+/// One McCormick row of `z = x·y`: `z + a_x·x + a_y·y + slack·σ = rhs`, `σ ≥ 0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Envelope {
+    suffix: &'static str,
+    a_x: Rat,
+    a_y: Rat,
+    slack: Rat,
+    rhs: Rat,
+}
+
+/// The four McCormick rows of `z = x·y` for `x ∈ [xl, xu]`, `y ∈ [yl, yu]`. Each is a product of two
+/// non-negative factors expanded: `(x−xl)(y−yl) ≥ 0` gives `z ≥ yl·x + xl·y − xl·yl` (`ll`), `(xu−x)(yu−y)`
+/// gives `z ≥ yu·x + xu·y − xu·yu` (`uu`), `(xu−x)(y−yl)` gives `z ≤ yl·x + xu·y − xu·yl` (`ul`), and
+/// `(x−xl)(yu−y)` gives `z ≤ yu·x + xl·y − xl·yu` (`lu`). So every true product satisfies all four.
+fn mccormick(x: (Rat, Rat), y: (Rat, Rat)) -> Result<[Envelope; 4], UnitsError> {
+    let ((xl, xu), (yl, yu)) = (x, y);
+    let row = |suffix, ex: Rat, ey: Rat, slack| -> Result<Envelope, UnitsError> {
+        Ok(Envelope {
+            suffix,
+            a_x: ey.checked_neg()?,
+            a_y: ex.checked_neg()?,
+            slack,
+            rhs: ex.checked_mul(ey)?.checked_neg()?,
+        })
+    };
+    Ok([
+        row("ll", xl, yl, MINUS_ONE)?,
+        row("uu", xu, yu, MINUS_ONE)?,
+        row("ul", xu, yl, ONE)?,
+        row("lu", xl, yu, ONE)?,
+    ])
+}
+
+/// Both ends of a range, when finite (closed: the hull a relaxation needs).
+fn finite_ends(b: Bound) -> Option<(Rat, Rat)> {
+    Some((b.lo?.at, b.hi?.at))
+}
+
+const RELAXATION: &str = "a weighted mean is only relaxed (McCormick): it can refute, never imply a value or carry blame";
 
 enum Lin {
     System(Linear),
@@ -1036,6 +1183,9 @@ fn linearise(
     let mut rows = Vec::new();
     let mut ratios = Vec::new();
     for id in identities {
+        if matches!(id.kind, IdentityKind::WeightedMean { .. }) {
+            continue;
+        }
         let IdentityKind::Ratio {
             rate,
             num,
@@ -1119,13 +1269,125 @@ fn linearise(
         }
         ratios.push((r, n, d, *factor));
     }
+    // S6: weighted means last, over the ranges the rules and the frame left.
+    let mut relaxed = false;
+    for id in identities {
+        if let IdentityKind::WeightedMean { rate, parts } = &id.kind {
+            relaxed = true;
+            let vars = Vars {
+                names: &mut names,
+                bounds: &mut bounds,
+            };
+            if let Err(reason) = relax_weighted_mean(&id.id, rate, parts, &index, vars, &mut rows) {
+                return Ok(Lin::Indeterminate(reason));
+            }
+        }
+    }
     Ok(Lin::System(Linear {
         names,
         bounds,
         rows,
         ratios,
         cells: cells.len(),
+        relaxed,
     }))
+}
+
+/// The variable list a relaxation adds to.
+struct Vars<'a> {
+    names: &'a mut Vec<String>,
+    bounds: &'a mut Vec<Bound>,
+}
+
+impl Vars<'_> {
+    fn push(&mut self, name: String, bound: Bound) -> usize {
+        self.names.push(name);
+        self.bounds.push(bound);
+        self.names.len() - 1
+    }
+
+    /// The closed hull of `loc`'s range, when both ends are finite.
+    fn hull(
+        &self,
+        index: &BTreeMap<&str, usize>,
+        loc: &str,
+        id: &str,
+    ) -> Result<(Rat, Rat), String> {
+        finite_ends(self.bounds[index[loc]])
+            .ok_or_else(|| format!("the weighted mean {id} needs a finite range for {loc}"))
+    }
+}
+
+/// A weighted mean's relaxation (S6): `W − Σwᵢ = 0` (row `<id>#W`); one free product variable per side,
+/// `<id>#z0` for `rate·W` and `<id>#z<k>` for part `k`'s `rateₖ·wₖ`, each with its four McCormick rows
+/// `<id>#z<k>:<ll|uu|ul|lu>` (a slack of the same name, `≥ 0`); and `z0 − Σ zₖ = 0` (row `<id>`). `W`'s hull is
+/// the sum of the weights' hulls. `Err` is why the component is indeterminate: a factor without a finite range,
+/// or an overflow.
+fn relax_weighted_mean(
+    id: &str,
+    rate: &str,
+    parts: &[(String, String)],
+    index: &BTreeMap<&str, usize>,
+    mut vars: Vars<'_>,
+    rows: &mut Vec<LinRow>,
+) -> Result<(), String> {
+    let overflow = |_: UnitsError| OVERFLOW.to_string();
+    let w = vars.push(format!("{id}#W"), Bound::FREE);
+    let mut w_terms = vec![(w, ONE)];
+    let (mut w_lo, mut w_hi) = (ZERO, ZERO);
+    for (_, weight) in parts {
+        let (lo, hi) = vars.hull(index, weight, id)?;
+        w_lo = w_lo.checked_add(lo).map_err(overflow)?;
+        w_hi = w_hi.checked_add(hi).map_err(overflow)?;
+        w_terms.push((index[weight.as_str()], MINUS_ONE));
+    }
+    rows.push(LinRow {
+        id: format!("{id}#W"),
+        terms: w_terms,
+        rhs: ZERO,
+    });
+    // (x, x's hull, y, y's hull) per product: rate·W first, then each part.
+    let mut products = vec![(index[rate], vars.hull(index, rate, id)?, w, (w_lo, w_hi))];
+    for (part_rate, weight) in parts {
+        products.push((
+            index[part_rate.as_str()],
+            vars.hull(index, part_rate, id)?,
+            index[weight.as_str()],
+            vars.hull(index, weight, id)?,
+        ));
+    }
+    let mut balance = Vec::with_capacity(products.len());
+    for (k, (x, x_hull, y, y_hull)) in products.into_iter().enumerate() {
+        let name = format!("{id}#z{k}");
+        let z = vars.push(name.clone(), Bound::FREE);
+        balance.push((z, if k == 0 { ONE } else { MINUS_ONE }));
+        for e in mccormick(x_hull, y_hull).map_err(overflow)? {
+            let row_id = format!("{name}:{}", e.suffix);
+            let slack = vars.push(
+                row_id.clone(),
+                Bound {
+                    lo: Some(End {
+                        at: ZERO,
+                        strict: false,
+                    }),
+                    hi: None,
+                },
+            );
+            let mut terms = vec![(z, ONE), (x, e.a_x), (y, e.a_y), (slack, e.slack)];
+            terms.retain(|(_, a)| *a != ZERO);
+            rows.push(LinRow {
+                id: row_id,
+                terms,
+                rhs: e.rhs,
+            });
+        }
+    }
+    rows.push(LinRow {
+        id: id.to_string(),
+        terms: balance,
+        rhs: ZERO,
+    });
+    Ok(())
 }
 
 /// `Σ coefficients·printed` of a row.
@@ -1694,6 +1956,22 @@ fn check_witness_in(
             }
             continue;
         }
+        // The bilinear identity itself, never its relaxation.
+        if let IdentityKind::WeightedMean { rate, parts } = &id.kind {
+            let (mut weight, mut total) = (ZERO, ZERO);
+            for (part_rate, w) in parts {
+                let w = value(w)?;
+                weight = checked(weight.checked_add(w))?;
+                total = checked(total.checked_add(checked(value(part_rate)?.checked_mul(w))?))?;
+            }
+            if checked(value(rate)?.checked_mul(weight))? != total {
+                return fail(format!(
+                    "weighted mean {} does not hold at the witness",
+                    id.id
+                ));
+            }
+            continue;
+        }
         let row = id.row().map_err(|e| CheckFailure(e.to_string()))?;
         let mut sum = ZERO;
         for (loc, a) in &row.coefficients {
@@ -1937,6 +2215,12 @@ fn implied_in(
     frame: &Frame,
 ) -> Result<Interval, ImpliedError> {
     let overflow = || ImpliedError::Indeterminate(OVERFLOW.to_string());
+    if identities
+        .iter()
+        .any(|id| matches!(id.kind, IdentityKind::WeightedMean { .. }))
+    {
+        return Err(ImpliedError::Indeterminate(RELAXATION.to_string()));
+    }
     let Some(cell) = cells.iter().find(|c| c.locator == var) else {
         return Err(XfRefusal::UnknownVariable {
             locator: var.to_string(),
@@ -2106,6 +2390,7 @@ fn rate_extreme(lin: &Linear, r: usize, maximize: bool) -> Result<Option<Rat>, I
         rows,
         ratios: Vec::new(),
         cells: 0,
+        relaxed: lin.relaxed,
     };
     optimum(&transformed, w, maximize, MAX_PIVOTS).map_err(lp_implied)
 }
@@ -2238,7 +2523,7 @@ pub struct Blame {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlameOutcome {
     Blamed(Blame),
-    /// No claim: a cap, an overflow, or a checker rejection.
+    /// No claim: a cap, an overflow, a checker rejection, or a refuted relaxation (S6).
     Indeterminate {
         reason: String,
     },
@@ -2293,6 +2578,21 @@ pub fn blame_with_caps(
                 Outcome::Infeasible { .. }
             )
         {
+            continue;
+        }
+        // A refuted relaxation: its conflict is certified, but runs without some printed values would read the
+        // relaxation as a model (S6).
+        if comp_ids
+            .iter()
+            .any(|id| matches!(id.kind, IdentityKind::WeightedMean { .. }))
+        {
+            out.push(ComponentBlame {
+                cells: comp_cells.iter().map(|c| c.locator.clone()).collect(),
+                identities: comp_ids.iter().map(|i| i.id.clone()).collect(),
+                outcome: BlameOutcome::Indeterminate {
+                    reason: RELAXATION.to_string(),
+                },
+            });
             continue;
         }
         let mut search = Search {
@@ -2685,8 +2985,9 @@ fn put_rat(enc: &mut Encoder, q: Rat) {
 
 /// The certificate's canonical digest (hex BLAKE3 of an `XFCT` v2 frame): the convention; the construction of
 /// every family with `Sum` identities; the cells sorted by locator (locator, sha256, token, printed, step,
-/// scope); the identities sorted by id (id, family, closure, kind and its cells and factor); then the
-/// certificate (Farkas multipliers sorted by row id, or the residual). v1 (bd-4wvl.1) had no constructions.
+/// scope); the identities sorted by id (id, family, closure, kind and its cells and factor; a weighted mean, kind
+/// 4 since S6, its rate and its parts in order); then the certificate (Farkas multipliers sorted by row id, or the
+/// residual). v1 (bd-4wvl.1) had no constructions.
 pub fn certificate_digest(
     cells: &[Cell],
     identities: &[Identity],
@@ -2768,6 +3069,15 @@ pub fn certificate_digest(
                 enc.put_str(num);
                 enc.put_str(den);
                 put_rat(&mut enc, *factor);
+            }
+            IdentityKind::WeightedMean { rate, parts } => {
+                enc.put_u8(4);
+                enc.put_str(rate);
+                enc.put_u64(parts.len() as u64);
+                for (part_rate, weight) in parts {
+                    enc.put_str(part_rate);
+                    enc.put_str(weight);
+                }
             }
         }
     }
@@ -4390,5 +4700,408 @@ mod tests {
             presence_conflicts(&cells, &[dash("x")], &[]),
             Err(XfRefusal::DuplicateCell { .. })
         ));
+    }
+
+    // --- S6 (bd-4wvl.6): weighted means through McCormick ---
+
+    fn rate_cells(rate: &str, weight: &str, numerator: Option<&str>) -> RateCells {
+        RateCells {
+            rate: rate.to_string(),
+            weight: weight.to_string(),
+            numerator: numerator.map(str::to_string),
+        }
+    }
+
+    fn row_ids(multipliers: &[(String, Rat)]) -> Vec<&str> {
+        multipliers.iter().map(|(id, _)| id.as_str()).collect()
+    }
+
+    /// The bead's synthetic table: region R printed `region` against members A (1,000) and B (1,500), each
+    /// weighted 100 koz, R's weight 200; every value at step 1. No numerator is printed, so the weighted mean.
+    fn hull_table(region: i128) -> (Vec<Cell>, Vec<Identity>) {
+        let cells = vec![
+            cell("R:rate", int(region), int(1)),
+            cell("R:oz", int(200), int(1)),
+            cell("A:rate", int(1_000), int(1)),
+            cell("A:oz", int(100), int(1)),
+            cell("B:rate", int(1_500), int(1)),
+            cell("B:oz", int(100), int(1)),
+        ];
+        let ids = region_against_members(
+            "wm",
+            "sum",
+            Closure::Definitional,
+            int(1_000),
+            &rate_cells("R:rate", "R:oz", None),
+            &[
+                rate_cells("A:rate", "A:oz", None),
+                rate_cells("B:rate", "B:oz", None),
+            ],
+        );
+        (cells, ids)
+    }
+
+    /// Every true product `x·y` over a hull satisfies the four rows; a value far above the product breaks one.
+    #[test]
+    fn prop_mccormick_envelope_contains_true_products() {
+        let mut rng = PhiloxStream::new(RngKey {
+            seed_root: 346,
+            partition: 1,
+            domain: 0,
+            var_group: 0,
+            realization: 0,
+            brick: 0,
+        });
+        let mut next = |n: u64| (rng.next_u64() % n) as i128;
+        let slack_of = |e: &Envelope, x: Rat, y: Rat, z: Rat| -> Rat {
+            // z + a_x·x + a_y·y + s·σ = rhs, s = ±1, so σ = s·(rhs − z − a_x·x − a_y·y).
+            let rest = e
+                .rhs
+                .checked_sub(z)
+                .and_then(|v| v.checked_sub(e.a_x.checked_mul(x)?))
+                .and_then(|v| v.checked_sub(e.a_y.checked_mul(y)?))
+                .expect("rest");
+            e.slack.checked_mul(rest).expect("sigma")
+        };
+        let cases = 10_000;
+        for case in 0..cases {
+            // Hulls of either sign on a grid of sevenths; points at a corner or inside.
+            let mut hulls = [(ZERO, ZERO); 2];
+            for h in &mut hulls {
+                let (a, b) = (q(next(2_001) - 1_000, 7), q(next(2_001) - 1_000, 7));
+                *h = if a.checked_cmp(b).expect("cmp") == Ordering::Greater {
+                    (b, a)
+                } else {
+                    (a, b)
+                };
+            }
+            let mut point = [ZERO; 2];
+            for (p, &(lo, hi)) in point.iter_mut().zip(&hulls) {
+                *p = match next(4) {
+                    0 => lo,
+                    1 => hi,
+                    _ => {
+                        let t = q(next(1_001), 1_000);
+                        lo.checked_add(t.checked_mul(hi.checked_sub(lo).expect("w")).expect("t"))
+                            .expect("p")
+                    }
+                };
+            }
+            let [x, y] = point;
+            let z = x.checked_mul(y).expect("z");
+            let rows = mccormick(hulls[0], hulls[1]).expect("rows");
+            for e in &rows {
+                assert!(
+                    slack_of(e, x, y, z).signum() >= 0,
+                    "case {case}: {} cuts the true product {x:?}·{y:?}",
+                    e.suffix
+                );
+            }
+            // Planted negative: |x·y| ≤ (1000/7)², so z + 10⁵ is above every upper row somewhere.
+            let far = z.checked_add(int(100_000)).expect("far");
+            assert!(
+                rows.iter().any(|e| slack_of(e, x, y, far).signum() < 0),
+                "case {case}: no row cuts z + 1e5"
+            );
+        }
+        println!(
+            "{{\"prop\":\"mccormick_envelope\",\"cases\":{cases},\"seed\":346,\"violations\":0}}"
+        );
+    }
+
+    /// The bead's synthetic known answer: a region rate of 2,000 over members at 1,000 and 1,500 is outside the
+    /// members' hull, so the envelope alone refutes it, with a certificate the checker accepts.
+    #[test]
+    fn test_mccormick_refutes_rate_outside_member_hull() {
+        let (cells, ids) = hull_table(2_000);
+        let r = rules(Convention::Closed);
+        let outcome = only(solve(&cells, &ids, &r).expect("solves"));
+        let Outcome::Infeasible { certificate } = outcome.clone() else {
+            panic!("not refuted: {outcome:?}");
+        };
+        let multipliers = farkas(outcome);
+        let rows = row_ids(&multipliers);
+        assert!(
+            rows.iter().any(|id| id.starts_with("wm#z")),
+            "no McCormick row: {rows:?}"
+        );
+        let range = check_certificate(&cells, &ids, &r, &certificate).expect("checks");
+        let digest = certificate_digest(&cells, &ids, &r, &certificate).expect("digest");
+        println!(
+            "{{\"fixture\":\"synthetic-hull\",\"rate_cell\":\"R:rate\",\"path\":\"mccormick\",\
+             \"verdict\":\"refuted\",\"rows\":{},\"certificate_digest\":\"{digest}\"}}",
+            rows.len()
+        );
+        assert!(range.range.lo.is_some() || range.range.hi.is_some());
+        // A tampered certificate is rejected: the balance row's multiplier negated leaves the free product
+        // variables uncancelled. (The weight-sum row's multiplier is not a tamper test: that row has bounded cells
+        // only, and with a margin of ~594,000 either sign still certifies.)
+        let mut tampered = multipliers.clone();
+        let balance = tampered
+            .iter_mut()
+            .find(|(id, _)| id == "wm")
+            .expect("the balance row carries a multiplier");
+        balance.1 = balance.1.checked_neg().expect("neg");
+        assert!(
+            check_certificate(
+                &cells,
+                &ids,
+                &r,
+                &Certificate::Farkas {
+                    multipliers: tampered
+                }
+            )
+            .is_err()
+        );
+        // The conflict is certified, but a relaxation carries no blame and implies no value.
+        let blamed = blame(&cells, &ids, &r).expect("blame");
+        assert_eq!(blamed.len(), 1);
+        assert_eq!(
+            blamed[0].outcome,
+            BlameOutcome::Indeterminate {
+                reason: RELAXATION.to_string()
+            }
+        );
+        assert_eq!(
+            implied_interval(&cells, &ids, &r, "R:rate", true),
+            Err(ImpliedError::Indeterminate(RELAXATION.to_string()))
+        );
+    }
+
+    /// A consistent table (1,250 is the members' weighted mean) is `NotRefuted`, never `Feasible`, under every
+    /// convention; its true point passes the exact witness checker, which the relaxation is never asked for.
+    #[test]
+    fn test_feasible_envelope_reports_not_refuted_never_consistent() {
+        let (cells, ids) = hull_table(1_250);
+        for convention in [Convention::Closed, Convention::HalfUp, Convention::HalfDown] {
+            let outcome = only(solve(&cells, &ids, &rules(convention)).expect("solves"));
+            assert_eq!(outcome, Outcome::NotRefuted, "{convention:?}");
+        }
+        let truth: BTreeMap<String, Rat> = [
+            ("R:rate", 1_250),
+            ("R:oz", 200),
+            ("A:rate", 1_000),
+            ("A:oz", 100),
+            ("B:rate", 1_500),
+            ("B:oz", 100),
+        ]
+        .into_iter()
+        .map(|(l, v)| (l.to_string(), int(v)))
+        .collect();
+        let r = rules(Convention::Closed);
+        assert_eq!(check_witness(&cells, &ids, &r, &truth), Ok(()));
+        // The exact identity, not its envelope: 1,250.5 is in R's box but not the weighted mean.
+        let mut off = truth.clone();
+        off.insert("R:rate".to_string(), q(2_501, 2));
+        assert!(check_witness(&cells, &ids, &r, &off).is_err());
+    }
+
+    /// Refusals that need no value: no part, the region's rate among its parts, a weight shared by two parts.
+    #[test]
+    fn test_weighted_mean_degenerate_forms_refused() {
+        let (cells, _) = hull_table(1_250);
+        let wm = |parts: &[(&str, &str)]| Identity {
+            id: "wm".to_string(),
+            family: "wm".to_string(),
+            closure: Closure::Definitional,
+            kind: IdentityKind::WeightedMean {
+                rate: "R:rate".to_string(),
+                parts: parts
+                    .iter()
+                    .map(|(r, w)| ((*r).to_string(), (*w).to_string()))
+                    .collect(),
+            },
+        };
+        for parts in [
+            &[][..],
+            &[("R:rate", "A:oz")][..],
+            &[("A:rate", "A:oz"), ("B:rate", "A:oz")][..],
+        ] {
+            assert_eq!(
+                solve(&cells, &[wm(parts)], &rules(Convention::Closed)),
+                Err(XfRefusal::Degenerate {
+                    identity: "wm".to_string()
+                }),
+                "{parts:?}"
+            );
+        }
+        // A factor without a finite range gives no envelope: A's weight, made the total of a component-sum split,
+        // loses its own box.
+        let (mut cells, mut ids) = hull_table(1_250);
+        cells.push(cell("A1:oz", int(60), int(1)));
+        cells.push(cell("A2:oz", int(40), int(1)));
+        ids.push(sum("split", "A:oz", &["A1:oz", "A2:oz"]));
+        assert_eq!(
+            only(solve(&cells, &ids, &component_sum(Convention::Closed)).expect("solves")),
+            Outcome::Indeterminate {
+                reason: "the weighted mean wm needs a finite range for A:oz".to_string()
+            }
+        );
+    }
+
+    /// With every numerator printed the check is linear: no weighted mean, a checked witness when consistent,
+    /// and a certificate over sums and ratio rows only when not. Drop one numerator and the weighted mean returns.
+    #[test]
+    fn test_region_against_members_linear_when_numerators_printed() {
+        let table = |region_rate: i128| {
+            vec![
+                cell("R:rate", int(region_rate), int(1)),
+                cell("R:usd", int(250), int(1)),
+                cell("R:oz", int(200), int(1)),
+                cell("A:rate", int(1_000), int(1)),
+                cell("A:usd", int(100), int(1)),
+                cell("A:oz", int(100), int(1)),
+                cell("B:rate", int(1_500), int(1)),
+                cell("B:usd", int(150), int(1)),
+                cell("B:oz", int(100), int(1)),
+            ]
+        };
+        let ids_for = |b_numerator: Option<&str>| {
+            region_against_members(
+                "rg",
+                "sum",
+                Closure::Definitional,
+                int(1_000),
+                &rate_cells("R:rate", "R:oz", Some("R:usd")),
+                &[
+                    rate_cells("A:rate", "A:oz", Some("A:usd")),
+                    rate_cells("B:rate", "B:oz", b_numerator),
+                ],
+            )
+        };
+        let r = rules(Convention::Closed);
+        let linear = ids_for(Some("B:usd"));
+        let kinds: Vec<&str> = linear
+            .iter()
+            .map(|i| match i.kind {
+                IdentityKind::Sum { .. } => "sum",
+                IdentityKind::Ratio { .. } => "ratio",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, ["sum", "sum", "ratio", "ratio", "ratio"]);
+        let consistent = only(solve(&table(1_250), &linear, &r).expect("solves"));
+        let Outcome::Feasible { witness } = consistent else {
+            panic!("linear path not consistent: {consistent:?}");
+        };
+        assert_eq!(check_witness(&table(1_250), &linear, &r, &witness), Ok(()));
+        let refuted = farkas(only(solve(&table(2_000), &linear, &r).expect("solves")));
+        let rows = row_ids(&refuted);
+        assert!(
+            rows.iter()
+                .all(|id| !id.contains("#z") && !id.contains("#W")),
+            "McCormick row on the linear path: {rows:?}"
+        );
+        println!(
+            "{{\"fixture\":\"synthetic-linear\",\"rate_cell\":\"R:rate\",\"path\":\"linear\",\
+             \"verdict\":\"refuted\",\"rows\":{}}}",
+            rows.len()
+        );
+        // B's numerator unprinted: the weighted mean, which refutes 2,000 through its envelope and never says 1,250
+        // is consistent.
+        let relaxed = ids_for(None);
+        assert!(
+            relaxed
+                .iter()
+                .any(|i| matches!(i.kind, IdentityKind::WeightedMean { .. }))
+        );
+        let cells: Vec<Cell> = table(1_250)
+            .into_iter()
+            .filter(|c| c.locator != "R:usd" && c.locator != "A:usd" && c.locator != "B:usd")
+            .collect();
+        assert_eq!(
+            only(solve(&cells, &relaxed, &r).expect("solves")),
+            Outcome::NotRefuted
+        );
+    }
+
+    /// Soundness: 10³ tables printed from exact true rates and weights (2–5 members, rates $500–3,500/oz in
+    /// sevenths at step 1, weights 1–501 koz at step 1 or 0.1, half-up, under Closed or HalfUp) are never
+    /// refuted and never called consistent. Planted negative per table: the region rate printed two steps above
+    /// the highest member is outside the hull, and the envelope refutes it every time.
+    #[test]
+    fn prop_generated_feasible_bilinear_tables_never_refuted() {
+        let mut rng = PhiloxStream::new(RngKey {
+            seed_root: 346,
+            partition: 2,
+            domain: 0,
+            var_group: 0,
+            realization: 0,
+            brick: 0,
+        });
+        let mut next = |n: u64| (rng.next_u64() % n) as i128;
+        let tables = 1_000;
+        let (mut not_refuted, mut indeterminate, mut planted_refuted) = (0_usize, 0_usize, 0_usize);
+        for t in 0..tables {
+            let convention = if t % 2 == 0 {
+                Convention::Closed
+            } else {
+                Convention::HalfUp
+            };
+            let weight_step = if next(2) == 0 { int(1) } else { q(1, 10) };
+            let k = 2 + next(4) as usize;
+            let (mut cells, mut members) = (Vec::new(), Vec::new());
+            let (mut numerator, mut weight, mut highest) = (ZERO, ZERO, ZERO);
+            for i in 0..k {
+                let rate = q(3_500 + next(21_001), 7);
+                let w = q(70 + next(35_001), 70);
+                numerator = numerator
+                    .checked_add(rate.checked_mul(w).expect("rw"))
+                    .expect("n");
+                weight = weight.checked_add(w).expect("w");
+                let printed = round_half_up(rate, int(1));
+                if printed.checked_cmp(highest).expect("cmp") == Ordering::Greater {
+                    highest = printed;
+                }
+                cells.push(cell(&format!("m{i}:rate"), printed, int(1)));
+                cells.push(cell(
+                    &format!("m{i}:oz"),
+                    round_half_up(w, weight_step),
+                    weight_step,
+                ));
+                members.push(rate_cells(&format!("m{i}:rate"), &format!("m{i}:oz"), None));
+            }
+            let region = numerator.checked_div(weight).expect("mean");
+            cells.push(cell(
+                "R:oz",
+                round_half_up(weight, weight_step),
+                weight_step,
+            ));
+            let ids = region_against_members(
+                "wm",
+                "sum",
+                Closure::Definitional,
+                int(1_000),
+                &rate_cells("R:rate", "R:oz", None),
+                &members,
+            );
+            let r = rules(convention);
+            let mut with_region = cells.clone();
+            with_region.push(cell("R:rate", round_half_up(region, int(1)), int(1)));
+            match only(solve(&with_region, &ids, &r).expect("solves")) {
+                Outcome::NotRefuted => not_refuted += 1,
+                Outcome::Indeterminate { .. } => indeterminate += 1,
+                other => panic!("table {t}: a true table gave {}", verdict(&other)),
+            }
+            cells.push(cell(
+                "R:rate",
+                highest.checked_add(int(2)).expect("+2"),
+                int(1),
+            ));
+            match only(solve(&cells, &ids, &r).expect("solves")) {
+                Outcome::Infeasible { certificate } => {
+                    check_certificate(&cells, &ids, &r, &certificate).expect("checks");
+                    planted_refuted += 1;
+                }
+                other => panic!("table {t}: the planted rate gave {}", verdict(&other)),
+            }
+        }
+        println!(
+            "{{\"prop\":\"feasible_bilinear_tables\",\"tables\":{tables},\"seed\":346,\"refuted\":0,\
+             \"not_refuted\":{not_refuted},\"indeterminate\":{indeterminate},\"planted\":{tables},\
+             \"planted_refuted\":{planted_refuted}}}"
+        );
+        assert_eq!(not_refuted + indeterminate, tables);
+        assert_eq!(planted_refuted, tables);
     }
 }
