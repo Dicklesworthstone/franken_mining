@@ -1843,6 +1843,10 @@ mod tests {
         assert!(!rate_interval_holds(79, 1, 68, 1141));
         // Outward rounding: 1177.777… prints as 1177.778 (it printed 1177.777 before 2026-10-29, below the bound).
         assert_eq!(rate_range_text(79, 1, 68), "[1145.985, 1177.778]");
+        // bd-sjrh.1, NEW-cell-number-formats' worked example: 129500/69.5 = 1863.3093… and 134500/68.5 =
+        // 1963.5036…; 127500/69.5 = 1834.5323… and 138500/68.5 = 2021.8978….
+        assert_eq!(rate_range_text(132, 5, 69), "[1863.309, 1963.504]");
+        assert_eq!(rate_range_text(133, 11, 69), "[1834.532, 2021.898]");
         // Negative range: floor of −578.94… is −578.948; ceiling of −428.57… is −428.571.
         assert_eq!(rate_range_text(-5, 1, 10), "[-578.948, -428.571]");
         // No corner can equal a bound r ± ½ exactly: 2000·(2n ± k) is even, (2r ∓ 1)(2q ∓ 1) is odd.
