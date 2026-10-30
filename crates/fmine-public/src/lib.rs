@@ -1015,6 +1015,82 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
     }
 
+    /// A complete run through a TOML registry in default CI (the real-corpus runs are ignored tests): the two
+    /// synthetic workbooks plus a third, later Mine Stats file are written to a scratch corpus, registered by
+    /// digest in a generated TOML, and loaded with no code-side profile. The ledger equals the in-code synthetic
+    /// profile's, and `--through 2030Q1` drops the third file and leaves the ledger unchanged.
+    #[test]
+    fn test_synthetic_three_file_toml_profile_runs_end_to_end() {
+        let ws = std::env::temp_dir().join(format!("fmine-public-toml-e2e-{}", std::process::id()));
+        let corpus = ws.join("corpus");
+        std::fs::create_dir_all(&corpus).expect("corpus dir");
+        let mut files = synthetic::synthetic_workbooks(&[]);
+        let later = fmine_io::xlsx::build_minimal_xlsx(&[fmine_io::xlsx::MinimalSheet {
+            name: "Minestats3".to_string(),
+            hidden: false,
+            cells: vec![("A1".to_string(), MinimalCell::Text("Mine Statistics (Gold)".to_string()))],
+        }]);
+        files.push(("Synthetic_Q2_Mine_Stats.xlsx", SourceKind::MineStats, "2030Q2", later));
+        let mut toml = String::from(
+            "schema = \"fmine.sources.v1\"\nissuer = \"synthetic\"\ncorpus_dir = \"corpus\"\n\
+             retrieved_utc = \"synthetic\"\nurl_prefix = \"https://example.invalid/\"\n",
+        );
+        for (name, kind, quarter, bytes) in &files {
+            std::fs::write(corpus.join(name), bytes).expect("write workbook");
+            let _ = write!(
+                toml,
+                "\n[[source]]\nfile = \"{name}\"\nkind = \"{}\"\nquarter = \"{quarter}\"\npath = \"{name}\"\n\
+                 url_basis = \"W1 table\"\nbytes = {}\nsha256 = \"{}\"\n",
+                kind.as_str(),
+                bytes.len(),
+                sha256(bytes).to_hex()
+            );
+        }
+        let code_profile = synthetic::synthetic_profile();
+        for s in &code_profile.subjects {
+            let _ = write!(toml, "\n[[subject]]\nname = \"{s}\"\n");
+        }
+        let rec = &code_profile.reconstructions[0];
+        let _ = write!(
+            toml,
+            "\n[[reconstruction]]\nevidence_id = \"{}\"\ntable_file = \"{}\"\nsheet = \"{}\"\nsubject = \"{}\"\n\
+             family = \"{}\"\ncomponent_file = \"{}\"\ncomponent_sheet = \"{}\"\ncomponent_cell = \"{}\"\n\
+             label_checks = \"synthetic\"\nrule = \"{}\"\n",
+            rec.evidence_id,
+            rec.table_file,
+            rec.sheet,
+            rec.subject,
+            rec.family.as_str(),
+            rec.component_file,
+            rec.component_sheet,
+            rec.component_cell,
+            rec.rule
+        );
+        for (cell, prefix) in &rec.label_checks {
+            let _ = write!(toml, "\n[[label_check]]\nset = \"synthetic\"\ncell = \"{cell}\"\nprefix = \"{prefix}\"\n");
+        }
+        let reg = sources::registry_path(&ws, "synthetic");
+        std::fs::create_dir_all(reg.parent().expect("dir")).expect("registry dir");
+        std::fs::write(&reg, toml).expect("write registry");
+
+        let profile = load_issuer_profile(&ws, "synthetic").expect("generated registry loads");
+        assert_eq!(profile.sources.len(), 3);
+        assert_eq!(profile.reconstructions, code_profile.reconstructions);
+        let r = run_public_assurance(&profile, &ws).expect("all three files verify by digest");
+        let totals: Vec<usize> = STATE_CODES.iter().map(|c| r.count_state(c)).collect();
+        assert_eq!(totals, vec![21, 1, 1, 1, 6, 5], "same ledger as the in-code synthetic profile");
+        assert_eq!(r.sources.len(), 3);
+        assert_eq!(r.ledger_anchor.commit_sequence, 3);
+
+        let bounded = run_public_assurance(&profile.through("2030Q1").expect("bound"), &ws).expect("run");
+        assert_eq!(bounded.sources.len(), 2);
+        assert_eq!(bounded.through.as_deref(), Some("2030Q1"));
+        let totals: Vec<usize> = STATE_CODES.iter().map(|c| bounded.count_state(c)).collect();
+        assert_eq!(totals, vec![21, 1, 1, 1, 6, 5]);
+        assert_ne!(bounded.ledger_anchor.state_root, r.ledger_anchor.state_root, "the source set is in the root");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
     #[test]
     fn test_next_actions_text_has_no_hard_coded_count() {
         let json = run_synthetic_assurance(&[]).expect("synthetic").to_json();
