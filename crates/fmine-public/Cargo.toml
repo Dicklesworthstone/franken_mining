@@ -15,9 +15,7 @@ fmine-claim = { path = "../fmine-claim" }
 fmine-io = { path = "../fmine-io" }
 fmine-metrics = { path = "../fmine-metrics" }
 fmine-registry = { path = "../fmine-registry" }
-
-[dev-dependencies]
-# bd-4wvl.2: the exact kernel is tested against aisc.rs as its oracle (tests/exact_feas_oracle.rs).
+# BD-331.S6: the identity ledger's footing and rate decisions run on the exact kernel (exact_feas, BD-340).
 fmine-numerics = { path = "../fmine-numerics" }
 
 [lints]

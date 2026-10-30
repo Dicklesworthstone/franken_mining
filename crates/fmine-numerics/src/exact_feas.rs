@@ -85,7 +85,9 @@ pub struct Cell {
     /// The text as printed.
     pub token: String,
     pub printed: Rat,
-    /// The rounding step; it must be positive. An unknown step is refused by the caller, never guessed here.
+    /// The rounding step. Zero marks an exact value (no rounding, under every convention), such as the 0 a
+    /// placeholder dash stands for; a negative step is refused. An unknown step is refused by the caller, never
+    /// guessed here.
     pub step: Rat,
     pub scope: Scope,
 }
@@ -524,7 +526,7 @@ impl Identity {
 /// Input the kernel refuses rather than solve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum XfRefusal {
-    NonPositiveStep {
+    NegativeStep {
         locator: String,
     },
     OffGrid {
@@ -574,7 +576,7 @@ pub enum XfRefusal {
 impl fmt::Display for XfRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NonPositiveStep { locator } => write!(f, "{locator}: the step must be positive"),
+            Self::NegativeStep { locator } => write!(f, "{locator}: the step must not be negative"),
             Self::OffGrid { locator } => {
                 write!(
                     f,
@@ -786,10 +788,21 @@ fn prepare<'a>(
 
 /// A cell's printed box, `None` when forming it overflowed.
 fn cell_bound(c: &Cell, convention: Convention) -> Result<Option<Bound>, XfRefusal> {
-    if c.step.signum() <= 0 {
-        return Err(XfRefusal::NonPositiveStep {
-            locator: c.locator.clone(),
-        });
+    match c.step.signum() {
+        -1 => {
+            return Err(XfRefusal::NegativeStep {
+                locator: c.locator.clone(),
+            });
+        }
+        0 => {
+            return Ok(Some(Bound::of(Interval {
+                lo: c.printed,
+                hi: c.printed,
+                lo_strict: false,
+                hi_strict: false,
+            })));
+        }
+        _ => {}
     }
     let Ok(h) = c.step.checked_div(Rat::from_integer(2)) else {
         return Ok(None);
@@ -3189,14 +3202,61 @@ mod tests {
         assert!(reason.contains("overflow"), "{reason}");
     }
 
+    /// A zero step is an exact value under every convention: a closed point, never a half-open empty box.
+    #[test]
+    fn test_zero_step_is_an_exact_value() {
+        let conventions = [
+            Convention::Closed,
+            Convention::HalfUp,
+            Convention::HalfDown,
+            Convention::HalfEven,
+            Convention::Truncate,
+        ];
+        for c in conventions {
+            let cells = vec![cell("x", int(3), int(0)), cell("y", int(3), int(1))];
+            let ids = vec![equal("eq", "x", "y")];
+            let r = rules(c);
+            assert_eq!(
+                verdict(&only(solve(&cells, &ids, &r).expect("solves"))),
+                "feasible",
+                "{c:?}"
+            );
+            let x = implied_interval(&cells, &ids, &r, "x", false).expect("an interval");
+            assert_eq!(
+                (x.lo, x.hi, x.lo_strict, x.hi_strict),
+                (int(3), int(3), false, false),
+                "{c:?}"
+            );
+        }
+        // t = a + b with t printed 6 and b printed 2 (step 1): an exact a = 3 reaches t only at the tie 5.5, so
+        // it holds under Closed and fails under HalfUp; a rounded a (3 ± ½) holds under both.
+        let problem = |a_step: i128| {
+            (
+                vec![
+                    cell("a", int(3), int(a_step)),
+                    cell("b", int(2), int(1)),
+                    cell("t", int(6), int(1)),
+                ],
+                vec![sum("foot", "t", &["a", "b"])],
+            )
+        };
+        let decide = |a_step: i128, c: Convention| {
+            let (cells, ids) = problem(a_step);
+            verdict(&only(solve(&cells, &ids, &rules(c)).expect("solves")))
+        };
+        assert_eq!(decide(0, Convention::Closed), "feasible");
+        assert_eq!(decide(0, Convention::HalfUp), "infeasible");
+        assert_eq!(decide(1, Convention::HalfUp), "feasible");
+    }
+
     #[test]
     fn test_refusals_name_the_input() {
         let r = rules(Convention::Closed);
         let (mut cells, ids) = e114();
-        cells[0].step = int(0);
+        cells[0].step = int(-1);
         assert!(matches!(
             solve(&cells, &ids, &r),
-            Err(XfRefusal::NonPositiveStep { .. })
+            Err(XfRefusal::NegativeStep { .. })
         ));
         let (cells, mut ids) = e114();
         ids.push(sum("e114", "TR:H1 2026", &["TR:Q1 2026"]));

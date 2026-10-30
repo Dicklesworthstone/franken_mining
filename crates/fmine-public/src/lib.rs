@@ -32,7 +32,7 @@ use crate::aisc::{
     IdentityState, OneCellCheck, OneCellOutcome, Operand, OperandRole, OperandValue, RateMiss,
     ReconstructionCheck, ShareBasis, StatedShare, Undecided, UnregisteredHeader, cell_text,
     confirm_share_label, find_qtd_sheet, ledger_for_table, locate_table, one_cell_checks,
-    operand_at, reconstruction_closes,
+    operand_at, reconstruction_holds,
 };
 use crate::mine_stats::{CellRefusal, LabelVocabulary, MineStatsRead, read_mine_stats};
 pub use crate::sources::load_issuer_profile;
@@ -1001,15 +1001,17 @@ fn try_reconstruction(
         cell: rec.component_cell.clone(),
         value: c,
     };
-    if reconstruction_closes(miss.n, miss.k, miss.q, miss.r, c) {
-        Some(IdentityState::Explained {
+    match reconstruction_holds(miss, c) {
+        Ok(true) => Some(IdentityState::Explained {
             evidence_id: rec.evidence_id.clone(),
             rule: rec.rule.clone(),
             component,
             basis: rec.basis.clone(),
-        })
-    } else {
-        fail(ReconstructionCheck::DoesNotClose { component })
+        }),
+        Ok(false) => fail(ReconstructionCheck::DoesNotClose { component }),
+        Err(_) => Some(IdentityState::Refused {
+            reason: crate::aisc::RefusedReason::KernelIndeterminate,
+        }),
     }
 }
 
@@ -2190,7 +2192,8 @@ mod tests {
             .map(|r| (r.code(), r.why()))
             .chain(NotPublishedReason::ALL.iter().map(|r| (r.code(), r.why())))
             .collect();
-        assert_eq!(pairs.len(), 15);
+        // 16 since BD-331.S6 added `exact_kernel_indeterminate`.
+        assert_eq!(pairs.len(), 16);
         for (code, why) in &pairs {
             assert!(
                 !code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),

@@ -8,7 +8,7 @@
 //!
 //! The payload is not in the state root; nothing here moves it.
 
-use crate::aisc::{Calc, IdentityInstance, Operand, OperandRole, OperandValue, rate_range_text};
+use crate::aisc::{Calc, IdentityInstance, Operand, OperandRole, OperandValue, implied_rate_text};
 use crate::js;
 
 /// The version of the derivation rules below. A change to any rule's arithmetic bumps it.
@@ -134,7 +134,7 @@ pub fn derived(i: &IdentityInstance) -> Vec<(&'static str, Cited)> {
                     .cloned()
                     .collect::<Vec<_>>(),
             );
-            let range = rate_range_text(m.n, m.k, m.q);
+            let range = implied_rate_text(m.n, m.k, m.q);
             let (lo, hi) = range
                 .trim_start_matches('[')
                 .trim_end_matches(']')

@@ -1,6 +1,10 @@
 //! bd-4wvl.2 (BD-340.S2): the exact kernel `fmine_numerics::exact_feas` against `aisc.rs`, the bespoke footing
 //! and per-ounce checks written earlier, used as an independent oracle: every instance of the synthetic AISC
-//! table, and 10⁴ seeded (n, k, q, r) quadruples against `rate_interval_holds`.
+//! table, and 10⁴ seeded (n, k, q, r) quadruples against the corner rule.
+//!
+//! Since BD-331.S6, `aisc.rs` itself decides on this kernel, so the synthetic-table comparison checks the
+//! ledger's posing against this file's posing, no longer against independent arithmetic. The corner rule,
+//! copied here as [`oracle::corner_rate_holds`], stays an independent oracle for the 10⁴ quadruples.
 //!
 //! Each instance is posed as `aisc.rs` poses it. A footing is its printed total and summands under
 //! `ComponentSum`. A per-ounce rate is the printed numerator `n` with `k` half-widths (`aisc.rs`'s N ± k/2, which
@@ -19,7 +23,7 @@ mod oracle {
     };
     use fmine_public::aisc::{
         Calc, IdentityFamily, IdentityInstance, IdentityState, OperandRole, OperandValue,
-        rate_interval_holds,
+        rate_holds,
     };
     use fmine_public::run_synthetic_assurance;
     use fmine_public::synthetic::SYNTHETIC_SHARES;
@@ -344,11 +348,38 @@ mod oracle {
         );
     }
 
-    /// The linearised ratio against `rate_interval_holds` on 10⁴ seeded quadruples: n in [−3000, 3000], k in
+    /// The closed-form corner rule `aisc.rs` used before BD-331.S6 moved the ledger onto the kernel, kept here as
+    /// an independent oracle: whether some N ∈ [n − k/2, n + k/2] and Q ∈ [q − ½, q + ½] give 1000·N/Q ∈
+    /// [r − ½, r + ½]. 1000·N/Q is monotone along each edge of the box (Q never crosses zero for |q| ≥ 1), so its
+    /// range is spanned by the four corners, 1000·(2n ± k)/(2q ± 1), compared by exact cross-multiplication.
+    fn corner_rate_holds(n: i64, k: i64, q: i64, r: i64) -> bool {
+        let (n2, k, q2, r2) = (
+            2 * i128::from(n),
+            i128::from(k),
+            2 * i128::from(q),
+            2 * i128::from(r),
+        );
+        // num/den against b/2, with den's sign folded in.
+        let cmp = |num: i128, den: i128, b: i128| {
+            let ord = (num * 2).cmp(&(b * den));
+            if den < 0 { ord.reverse() } else { ord }
+        };
+        let corners = [
+            (1000 * (n2 - k), q2 - 1),
+            (1000 * (n2 - k), q2 + 1),
+            (1000 * (n2 + k), q2 - 1),
+            (1000 * (n2 + k), q2 + 1),
+        ];
+        let reaches_low = corners.iter().any(|&(a, b)| cmp(a, b, r2 - 1).is_ge());
+        let reaches_high = corners.iter().any(|&(a, b)| cmp(a, b, r2 + 1).is_le());
+        reaches_low && reaches_high
+    }
+
+    /// The linearised ratio against [`corner_rate_holds`] on 10⁴ seeded quadruples: n in [−3000, 3000], k in
     /// [1, 9], |q| in [1, 400] (one in eight negative), and r within about twice the rate range's half-width of
-    /// 1000·n/q.
+    /// 1000·n/q. Also the ledger's own entry point, `aisc::rate_holds`.
     #[test]
-    fn prop_ratio_linearisation_matches_rate_interval_holds() {
+    fn prop_ratio_linearisation_matches_corner_rule() {
         let mut rng = PhiloxStream::new(RngKey {
             seed_root: 340,
             partition: 3,
@@ -367,7 +398,12 @@ mod oracle {
             let q = if next(8) == 0 { -magnitude } else { magnitude };
             let spread = 2 + (500 * k) / magnitude + (500 * n.abs()) / (magnitude * magnitude);
             let r = (1000 * n).div_euclid(q) + next((4 * spread + 1) as u64) - 2 * spread;
-            let expected = rate_interval_holds(n, k, q, r);
+            let expected = corner_rate_holds(n, k, q, r);
+            assert_eq!(
+                rate_holds(n, k, q, r, (1, 1)),
+                Ok(expected),
+                "case {case}: the ledger's entry point"
+            );
             let kernel = match rate_outcome(n, k, q, r, int(1000)) {
                 Outcome::Feasible { .. } => true,
                 Outcome::Infeasible { .. } => false,

@@ -22,8 +22,9 @@ use fmine_io::styles::NumberFormat;
 use fmine_io::xlsx::{CellValue, ExtractedCell, Sheet, build_minimal_xlsx, parse_a1_ref};
 
 use crate::aisc::{
-    AnchorRule, Calc, IdentityInstance, IdentityState, NotPublishedReason, Operand, OperandRole,
-    OperandValue, ROW_ANCHORS, RefusedReason, locate_table, rate_interval_holds, rate_range_text,
+    AnchorRule, Calc, IdentityInstance, IdentityState, KernelIndeterminate, NotPublishedReason,
+    Operand, OperandRole, OperandValue, ROW_ANCHORS, RefusedReason, admitted_rates,
+    implied_rate_text, locate_table, rate_holds,
 };
 use crate::sources::IssuerProfile;
 use crate::{LoadedSource, PublicAssuranceReport};
@@ -239,19 +240,56 @@ fn judge(
 const FLIP_SEARCH: i64 = 1_000_000;
 
 /// The smallest printed rate above `r` that the interval for (n, k, q) excludes: where a consistent rate flips
-/// upward. `None` when none lies within the search bound.
-#[must_use]
-pub fn rate_flip_up(n: i64, k: i64, q: i64, r: i64) -> Option<i64> {
-    (r.saturating_add(1)..=r.saturating_add(FLIP_SEARCH))
-        .find(|&x| !rate_interval_holds(n, k, q, x))
+/// upward. `None` when none lies within the search bound. Found from the kernel's admitted rates, then confirmed
+/// by its checked decisions at the flip and just inside it.
+pub fn rate_flip_up(n: i64, k: i64, q: i64, r: i64) -> Result<Option<i64>, KernelIndeterminate> {
+    let (lo, hi) = admitted_rates(n, k, q)?;
+    let x = if r.saturating_add(1) < lo {
+        r.saturating_add(1)
+    } else {
+        r.saturating_add(1).max(hi.saturating_add(1))
+    };
+    if x > r.saturating_add(FLIP_SEARCH) {
+        return Ok(None);
+    }
+    confirm_flip(n, k, q, x, (x > r + 1).then(|| x - 1))
 }
 
 /// The largest printed rate below `r` that the interval for (n, k, q) excludes.
-#[must_use]
-pub fn rate_flip_down(n: i64, k: i64, q: i64, r: i64) -> Option<i64> {
-    (r.saturating_sub(FLIP_SEARCH)..r)
-        .rev()
-        .find(|&x| !rate_interval_holds(n, k, q, x))
+pub fn rate_flip_down(n: i64, k: i64, q: i64, r: i64) -> Result<Option<i64>, KernelIndeterminate> {
+    let (lo, hi) = admitted_rates(n, k, q)?;
+    let x = if r.saturating_sub(1) > hi {
+        r.saturating_sub(1)
+    } else {
+        r.saturating_sub(1).min(lo.saturating_sub(1))
+    };
+    if x < r.saturating_sub(FLIP_SEARCH) {
+        return Ok(None);
+    }
+    confirm_flip(n, k, q, x, (x < r - 1).then(|| x + 1))
+}
+
+/// `Some(x)` once the kernel decides that x does not hold and `inside` (the neighbour toward r, if it is not r)
+/// does.
+fn confirm_flip(
+    n: i64,
+    k: i64,
+    q: i64,
+    x: i64,
+    inside: Option<i64>,
+) -> Result<Option<i64>, KernelIndeterminate> {
+    let flips = !rate_holds(n, k, q, x, (1, 1))?;
+    let held = match inside {
+        Some(y) => rate_holds(n, k, q, y, (1, 1))?,
+        None => true,
+    };
+    if flips && held {
+        Ok(Some(x))
+    } else {
+        Err(KernelIndeterminate(format!(
+            "the flip at {x} is not confirmed by the kernel's decisions"
+        )))
+    }
 }
 
 /// What the leaf proof does to one operand cell.
@@ -505,9 +543,12 @@ fn plan(
             _ => (P::ToOne, Int(1), Expect::K(k + 1)),
         }),
         (R::Rate, Calc::Rate(m), Int(_)) => match &i.state {
-            IdentityState::Consistent { basis: None, .. } => rate_flip_up(m.n, m.k, m.q, m.r)
-                .map(|r| (P::RateFlip, Int(r), Expect::Rate(r)))
-                .ok_or("no_flip_margin_within_search"),
+            IdentityState::Consistent { basis: None, .. } => match rate_flip_up(m.n, m.k, m.q, m.r)
+            {
+                Ok(Some(r)) => Ok((P::RateFlip, Int(r), Expect::Rate(r))),
+                Ok(None) => Err("no_flip_margin_within_search"),
+                Err(_) => Err("exact_kernel_indeterminate"),
+            },
             IdentityState::Consistent { .. } | IdentityState::Explained { .. } => {
                 let r = m.r.saturating_mul(3).saturating_add(1000);
                 Ok((P::RateFar, Int(r), Expect::Rate(r)))
@@ -605,7 +646,7 @@ fn moved_fields(b: &IdentityInstance, a: &IdentityInstance) -> Vec<&'static str>
             }
         }
         (Calc::Rate(m0), Calc::Rate(m1)) => {
-            let range = rate_range_text(m0.n, m0.k, m0.q) != rate_range_text(m1.n, m1.k, m1.q);
+            let range = implied_rate_text(m0.n, m0.k, m0.q) != implied_rate_text(m1.n, m1.k, m1.q);
             for (name, moved) in [
                 ("r", m0.r != m1.r),
                 ("n", m0.n != m1.n),
@@ -1131,10 +1172,17 @@ mod tests {
     /// (79, 1, 68) spans [1145.985, 1177.778]: 1146 and 1178 hold, 1145 and 1179 do not.
     #[test]
     fn test_flip_margin_rate_known_answer() {
-        assert!(rate_interval_holds(79, 1, 68, 1146) && rate_interval_holds(79, 1, 68, 1178));
-        assert!(!rate_interval_holds(79, 1, 68, 1145) && !rate_interval_holds(79, 1, 68, 1179));
-        assert_eq!(rate_flip_up(79, 1, 68, 1162), Some(1179));
-        assert_eq!(rate_flip_down(79, 1, 68, 1162), Some(1145));
+        let holds = |r| rate_holds(79, 1, 68, r, (1, 1)).expect("decided");
+        assert!(holds(1146) && holds(1178));
+        assert!(!holds(1145) && !holds(1179));
+        assert_eq!(rate_flip_up(79, 1, 68, 1162), Ok(Some(1179)));
+        assert_eq!(rate_flip_down(79, 1, 68, 1162), Ok(Some(1145)));
+        // From an excluded rate the next one out is the neighbour; past the search bound there is none.
+        assert_eq!(rate_flip_up(79, 1, 68, 1100), Ok(Some(1101)));
+        assert_eq!(rate_flip_down(79, 1, 68, 1200), Ok(Some(1199)));
+        assert_eq!(rate_flip_up(79, 1, 68, 1200), Ok(Some(1201)));
+        // (10⁶, 1, 1) admits up to 2,000,001,000: more than 10⁶ above 10⁹.
+        assert_eq!(rate_flip_up(1_000_000, 1, 1, 1_000_000_000), Ok(None));
     }
 
     /// B8 prints 400 against 500 − 100 + 0; 401 leaves a residual of 1.

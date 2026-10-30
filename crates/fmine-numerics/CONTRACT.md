@@ -23,7 +23,8 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
 - `exact_feas` (bd-4wvl.1 BD-340.S1, bd-4wvl.2 BD-340.S2): exact rounding-interval feasibility over
   `Rat = fmine_units::ExactQty`.
   - `Cell`, `Convention::{Closed, HalfUp, HalfDown, HalfEven, Truncate}` and `Convention::interval`; `End`
-    and `Bound` (ranges with open or infinite ends).
+    and `Bound` (ranges with open or infinite ends). A zero step marks an exact value, a closed point under
+    every convention (BD-331.S6: the 0 a placeholder stands for).
   - `Identity { id, family, closure, kind: Sum | Equal | Scale | Ratio }` and `Identity::row` (linear kinds).
     `Ratio { rate, num, den, factor }` is linearised when its rate cell is in no other identity
     (otherwise `Indeterminate`, "bilinear") and its denominator keeps one sign.
@@ -55,7 +56,7 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
   - `certificate_digest`: hex BLAKE3 of an `XFCT` v2 frame (v2 binds the constructions), independent of
     input order.
   - Input is refused with `XfRefusal`:
-    - a non-positive step, or an off-grid half-even value;
+    - a negative step, or an off-grid half-even value;
     - a duplicate cell or identity, or an unknown cell or variable;
     - bad signs, a degenerate row, or a ratio row requested;
     - an undeclared construction, or a denominator interval that contains zero;

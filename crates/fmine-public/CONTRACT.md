@@ -21,7 +21,16 @@ The public lane of M0 (`fmine assure public`).
   header row by registered subjects, so no coordinate is fixed. It also builds the identity ledger
   (`GATE-BULL-01` part 2, plan §21.6).
   - **Declared construction:** component sum. TCC = Σ block-1 lines; AISC = TCC + Σ block-2 lines. Each rate is
-    r = 1000·N/Q, checked on intervals (N ± k/2, Q ± 1/2, r ± 1/2). All arithmetic is exact (`i128`).
+    r = 1000·N/Q, checked on intervals (N ± k/2, Q ± 1/2, r ± 1/2).
+  - **Kernel** (BD-331.S6): every footing and rate decision is a run of `fmine_numerics::exact_feas` (BD-340)
+    under the `Closed` tie convention, whose checkers re-verify each witness and certificate.
+    - A footing is posed under `ComponentSum` and its alternative under `RoundedOnce`.
+    - A placeholder line is an exact 0 (a zero step) and never counts in k.
+    - In the AISC alternative, TCC stands for its k₁ numeric block-1 lines.
+    - A (iii)'s residual and sign-flip witness come from the kernel's residual certificate. Its total and line
+      cells are S3's one minimal conflict set.
+    - The (iv) range is the kernel's implied interval, rounded outward to three places.
+    - A kernel that makes no claim refuses the instance (`exact_kernel_indeterminate`).
   - **States:** (i) consistent; (ii) explained by a registered reconstruction, re-verified on the run and
     labelled `explained_stated` or `explained_reconstructed` by whether an issuer note states the rule;
     (iii) issuer discrepancy, with an exact certificate and any single-line sign-flip witness;
@@ -83,8 +92,9 @@ The public lane of M0 (`fmine assure public`).
 - `aisc::{IdentityFamily, IdentityState, IdentityInstance, FootingCertificate, UnregisteredHeader, AiscTable,
   RateMiss, ShareBasis, ExplanationBasis, DEFAULT_MISSING_FACT, SHARE_MISSING_FACT, RowAnchor, AnchorRule,
   ROW_ANCHORS (the seven rows `locate_table` anchors on, BD-339.S4), locate_table,
-  ledger_for_table, rate_interval_holds, scaled_rate_holds, feasible_share, feasible_share_text,
-  find_share_footnote, find_qtd_sheet, confirm_share_label, reconstruction_closes, match_subject, cell_text,
+  ledger_for_table, rate_holds, rate_range, admitted_rates, KernelIndeterminate, feasible_share,
+  feasible_share_text, find_share_footnote, find_qtd_sheet, confirm_share_label, reconstruction_holds,
+  match_subject, cell_text,
   OneCellCheck, OneCellOutcome, OneCellVerdict, FailGroup, implied_ounces, one_cell_checks, one_cell_verdict}`
   (bd-prmn.8); `PublicAssuranceReport::one_cell`, the payload's `one_cell_cos` section.
 - `aisc::{Operand, OperandRole, OperandValue, operand_at}` and `IdentityInstance::operands` (bd-sjrh.1, part 2
@@ -294,8 +304,8 @@ The public lane of M0 (`fmine assure public`).
 ## 9. Lifted Code & Foundation Dependencies
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io` (and, in the manifest, `fmine-units`,
   `fmine-time`, `fmine-metrics`, not used by this crate since BD-321).
-- Dev-dependency `fmine-numerics` (bd-4wvl.2): `tests/exact_feas_oracle.rs` runs the exact kernel against
-  `aisc.rs` as its oracle. No run uses the kernel yet; BD-331.S6 ports the ledger onto it.
+- Depends on `fmine-numerics` (BD-331.S6): the ledger's exact kernel (`exact_feas`, BD-340).
+  `tests/exact_feas_oracle.rs` keeps the old closed-form corner rule as an independent oracle for rates.
 
 ## 10. Non-Goals & Scope Boundary
 - Operates only on public disclosures (`ConfidentialityTier::Public`).
