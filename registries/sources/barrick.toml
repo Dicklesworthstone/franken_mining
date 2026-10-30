@@ -246,8 +246,10 @@ kind = "region"
 
 # BD-331.S3: Barrick's stated ownership shares. The AISC footnote states gold cost of sales per ounce on an
 # attributable basis using Barrick's ownership share, so the run checks that rate at these shares, but only
-# after the same-release Mine Stats QTD label prints the same share. Long Canyon has no registered share.
+# after the same-release Mine Stats QTD label prints the same share.
 # Twiga (North Mara, Bulyanhulu): the Government of Tanzania's 16% is free-carried (E135), so 84%.
+# Long Canyon was in NGM's 61.5% until care and maintenance at the end of 2023 (E827); only 2023 comparatives
+# print it.
 
 [[share]]
 subject = "Nevada Gold Mines"
@@ -279,6 +281,12 @@ subject = "Phoenix"
 num = 123
 den = 200
 evidence = "E457"
+
+[[share]]
+subject = "Long Canyon"
+num = 123
+den = 200
+evidence = "E827"
 
 [[share]]
 subject = "Pueblo Viejo"

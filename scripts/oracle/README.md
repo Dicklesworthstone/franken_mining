@@ -15,7 +15,7 @@ then they sit in `corpus_of_input_docs/downloaded/mine_stats/`.
 |---|---|---|
 | E820 extraction fidelity | `python3 -I scripts/oracle/fidelity.py corpus_of_input_docs/downloaded/mine_stats/*.xlsx` | one line per file: visible and hidden sheets, numeric, placeholder, formula-error and text counts, numeric digest; totals 101, 6, 30388, 3952, 1092, 6537 |
 | E821 and E822 identity ledger | `python3 -I scripts/oracle/census2.py .` | `AISC tables (visible): 34 instances: 2595`; footing i 1004, iii 4, v 6, np 24; per ounce i 1116, ii 3, iv 17, v 385, np 36 |
-| E826 stated share rule (2026-10-30) | `python3 -I scripts/oracle/share_census.py .` | 379 lines, then `{"sites": 328, "fit": 260, "miss": 65, "unconfirmed": 0, "regions_v": 51, "no_footnote": 0, "no_registered_share": 3}` |
+| E826 stated share rule (2026-10-30) | `python3 -I scripts/oracle/share_census.py .` | 379 lines, then `{"sites": 328, "fit": 263, "miss": 65, "unconfirmed": 0, "regions_v": 51, "no_footnote": 0, "no_registered_share": 0}` (Long Canyon registered on E827) |
 
 | Script | What it is |
 |---|---|

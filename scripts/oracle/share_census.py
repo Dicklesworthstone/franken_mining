@@ -4,6 +4,10 @@ census2.py refuses with "attributable share needed" (a non-zero non-controlling-
 Independent second reader, written 2026-10-30 without opening any Rust under crates/ and without reading
 rate_census.py. It imports census2.py, census.py and xl.py (written before the Rust) only to enumerate the
 in-scope instances; every row, footnote, label and share it uses is located here, by text.
+The REGISTERED entry for Long Canyon (123/200) was added 2026-10-30 on a lead decision, on the evidence of
+QTD!A33 in Barrick_Q1_2024, Q3_2024 and Q4_2024 Mine Statistics ("These results represent our 61.5% interest in
+Carlin, Cortez, Turquoise Ridge, Phoenix and Long Canyon until it transitioned to care and maintenance at the
+end of 2023"); its three in-scope instances are all 2023 comparatives.
 
 Rule, as written in BD-331.S3 (applied as stated, not tuned):
 1. Footnote: on the table's own sheet, a cell whose text reads "Gold cost of sales per ounce is calculated as
@@ -54,6 +58,8 @@ REGISTERED = {
     "North Mara": F(21, 25), "Bulyanhulu": F(21, 25),
     "Loulo-Gounkoto": F(4, 5),
     "Tongon": F(897, 1000),
+    # Long Canyon: Barrick_Q1/Q3/Q4_2024_Mine_Stats.xlsx QTD!A33 "our 61.5% interest in ... Long Canyon until ... end of 2023"
+    "Long Canyon": F(123, 200),
 }
 # Mine Statistics label for a subject, where it differs from the subject name.
 MS_LABEL = {"Nevada Gold Mines": "Nevada Gold Mines LLC"}

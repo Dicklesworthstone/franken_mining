@@ -99,9 +99,9 @@ The public lane of M0 (`fmine assure public`).
   every registered workbook equal an independent reader's. The test also pins the state root as a regression
   value (not independent).
   - **Ledger:** 34 visible AISC tables, 2,595 instances. Footing: 1,004 (i), 4 (iii), 6 (v), 24 not published.
-    Per ounce, after the stated share rule (E826): 1,376 (i), 3 (ii), 82 (iv), 60 (v), 36 not published. Before
+    Per ounce, after the stated share rule (E826): 1,379 (i), 3 (ii), 82 (iv), 57 (v), 36 not published. Before
     it, the counts were 1,116 (i), 17 (iv) and 385 (v).
-  - **Alternative construction:** 1,008 footing and 1,254 rate instances consistent.
+  - **Alternative construction:** 1,008 footing and 1,257 rate instances consistent.
   - **Identities:** each (ii) and (iii) instance is identified.
 - `PO-PUB-2` (synthetic): every seeded answer is reproduced, including the sign-flip witness. Perturbing one cell
   moves the state root and the affected state. A wrong component label leaves the instance in (iv).
@@ -116,7 +116,7 @@ The public lane of M0 (`fmine assure public`).
     period and a formula error.
 - `PO-PUB-5` (stated share rule, BD-331.S3, MOR_CASE E826):
   - **Real files** (ignored test `barrick_share_rule_matches_census`): of the 379 instances refused before, the 328
-    site instances split into 260 (i), 65 (iv) and 3 with no registered share. The 51 region instances stay (v).
+    site instances split into 263 (i) and 65 (iv). The 51 region instances stay (v).
     The counts and per-subject fit/miss equal the independent census. On every instance, Rust also equals it on
     state, subject, footnote cell and label cell; that check was run outside the test.
   - **Synthetic:** K14 fits at 3/4, and L14 misses with the interval [0.8210, 0.8290]. Further tests cover a

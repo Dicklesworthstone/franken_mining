@@ -802,17 +802,17 @@ mod tests {
         assert!(json.contains("\"through\":\"2026Q2\""));
         // Regression pin of this implementation's output (MOR_CASE E822, E826), not an independent value.
         assert!(json.contains(
-            "\"state_root\":\"be22f27186a4b923e366594c8e5376c4a0d3bb2fd3df23766417e03658adba82\""
+            "\"state_root\":\"0c6d01e3f3a8020e4cc6591559c04d10a171e4da0805c0b47f7784357cf03613\""
         ));
         assert!(json.contains("\"aisc_tables\":34,\"instances\":2595"));
         assert!(json.contains(
-            // BD-331.S3 (census E826): 260 stated-share fits move v → i and 65 misses v → iv.
-            "\"totals\":{\"i\":2380,\"ii\":3,\"iii\":4,\"iv\":82,\"v\":66,\"np\":60}"
+            // BD-331.S3 (census E826): 263 stated-share fits move v → i and 65 misses v → iv.
+            "\"totals\":{\"i\":2383,\"ii\":3,\"iii\":4,\"iv\":82,\"v\":63,\"np\":60}"
         ));
         // The public-lane envelope: the root as certificate, the no-claim line, and its two next actions.
         assert_eq!(
             env.certificate.as_deref(),
-            Some("be22f27186a4b923e366594c8e5376c4a0d3bb2fd3df23766417e03658adba82")
+            Some("0c6d01e3f3a8020e4cc6591559c04d10a171e4da0805c0b47f7784357cf03613")
         );
         assert_eq!(env.no_claim, Some(fmine_public::NO_CLAIM));
         let commands: Vec<&str> = env

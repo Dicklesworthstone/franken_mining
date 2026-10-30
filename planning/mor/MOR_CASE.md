@@ -549,14 +549,20 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
   - **Rule.** Each AISC sheet's footnote, found by text (A35 "h" in 2024Q3–2025Q1, A35 "g" in 2025Q2, A36 "h" in
     2025Q3, A32 "g" from 2025Q4), states the rate on an attributable basis using Barrick's ownership share. The rate
     is checked as 1000·s·N/Q on exact interval corners, at the registered share s: NGM and its four sites 61.5%
-    (E457), Pueblo Viejo 60% (E672), Loulo-Gounkoto 80% (E670), North Mara and Bulyanhulu 84% (E135), Tongon 89.7%
-    (E487). The same-release Mine Stats `QTD` label must print the same share; all 325 labels do.
-  - **Result.** 328 site instances: 260 fit (i); 65 miss (iv); 3 Long Canyon have no registered share (v). The
-    51 region instances stay (v): "regional numerator needs member weighting". None keeps "attributable share
-    needed". The 65 misses are 39 distinct data points, because periods repeat across vintages: Carlin 15, NGM 14,
-    North Mara 3, Pueblo Viejo 3, Cortez 2, Bulyanhulu 1, Turquoise Ridge 1.
-  - **Fit and miss by subject.** Carlin 9/25, NGM 11/23, Cortez 31/3, Turquoise Ridge 32/2, Phoenix 34/0, Pueblo
-    Viejo 29/5, North Mara 30/4, Bulyanhulu 31/3, Loulo-Gounkoto 23/0, Tongon 30/0. Every 61.5% miss interval ends
+    (E457), Long Canyon 61.5% through 2023 (E827), Pueblo Viejo 60% (E672), Loulo-Gounkoto 80% (E670), North Mara
+    and Bulyanhulu 84% (E135), Tongon 89.7% (E487). The same-release Mine Stats `QTD` label must print the same
+    share; all 328 labels do.
+  - **Result.** 328 site instances: 263 fit (i); 65 miss (iv). The 51 region instances stay (v): "regional
+    numerator needs member weighting". None keeps "attributable share needed". The 65 misses are 39 distinct data
+    points, because periods repeat across vintages: Carlin 15, NGM 14, North Mara 3, Pueblo Viejo 3, Cortez 2,
+    Bulyanhulu 1, Turquoise Ridge 1.
+  - **History.** The first run (commit 04684ff, root `be22f271…`) registered no Long Canyon share, so those 3
+    instances were (v) "no registered share" and the result was 260 fit. Long Canyon was then registered on E827,
+    by the same lead decision in both readers, and the census was re-run by its own author.
+  - **Fit and miss by subject.** Carlin 9/25, NGM 11/23, Cortez 31/3, Turquoise Ridge 32/2, Phoenix 34/0, Long
+    Canyon 3/0, Pueblo Viejo 29/5, North Mara 30/4, Bulyanhulu 31/3, Loulo-Gounkoto 23/0, Tongon 30/0. Long Canyon's
+    operands are small, (6, 2, 1832) for example, so its fits allow shares as wide as [0.4227, 0.8330]: weak
+    support. Every 61.5% miss interval ends
     below 0.615 (highest upper bound 0.6146, rounded up); every Pueblo Viejo miss interval ends below 0.600 (highest
     0.5998). INFERENCE: one-sided misses suggest a consistent basis difference, not rounding. North Mara Q2 2026,
     (n, q, r) = (117, 37, 2736), allows only s in [0.849751…, 0.880847…], which excludes 0.84.
@@ -566,5 +572,11 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
   - **Judgement call.** The 2026 footnotes say "Gold COS/oz is calculated as cost of sales…", not "Gold cost of
     sales per ounce…". Both readers accept this wording because the rate row there is labelled "COS/oz". It decides
     73 instances: 63 fit and 10 miss.
-  - **State root** `be22f27186a4b923e366594c8e5376c4a0d3bb2fd3df23766417e03658adba82` (2026-10-30), replacing
-    `9283f896…` (E822). Totals: i 2380, ii 3, iii 4, iv 82, v 66, np 60.
+  - **State root** `0c6d01e3f3a8020e4cc6591559c04d10a171e4da0805c0b47f7784357cf03613` (2026-10-30), replacing
+    `9283f896…` (E822). Totals: i 2383, ii 3, iii 4, iv 82, v 63, np 60.
+- **E827** Long Canyon was in Nevada Gold Mines at Barrick's 61.5% until care and maintenance at the end of 2023
+  (FACT). `QTD!A33` of `Barrick_Q1_2024_Mine_Stats.xlsx`, `Barrick_Q3_2024_Mine_Stats.xlsx` and
+  `Barrick_Q4_2024_Mine_Stats.xlsx` reads: "These results represent our 61.5% interest in Carlin, Cortez, Turquoise
+  Ridge, Phoenix and Long Canyon until it transitioned to care and maintenance at the end of 2023". The label at
+  `QTD!A9`, "Long Canyon (61.5%)2", cites footnote 2 (A32, metrics ceased from Q1 2024; E489). Read 2026-10-30 by
+  two readers. Only the 2023 comparative sheets of the Q3 2024 and Q4 2024 AISC files print Long Canyon rates.

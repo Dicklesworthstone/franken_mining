@@ -1542,8 +1542,8 @@ mod tests {
                 get(CosPerOunce, "np")
             ],
             // BD-331.S3 (census E826): of the 379 rates refused before for a non-zero non-controlling-interest
-            // line, 260 fit the stated share (i) and 65 miss (iv); 51 region and 3 Long Canyon stay (v).
-            [111 + 260, 17 + 65, 379 - 325, 12]
+            // line, 263 fit the stated share (i) and 65 miss (iv); the 51 region instances stay (v).
+            [111 + 263, 17 + 65, 379 - 328, 12]
         );
         assert_eq!(
             [
@@ -1566,8 +1566,8 @@ mod tests {
             r.alternate_counts(),
             AlternateCounts {
                 footing_consistent: 1008,
-                // A stated-share fit sums one line (k = 1), so the alternative construction accepts all 260.
-                rate_consistent: 994 + 260
+                // A stated-share fit sums one line (k = 1), so the alternative construction accepts all 263.
+                rate_consistent: 994 + 263
             }
         );
 
@@ -1638,7 +1638,7 @@ mod tests {
         // 325 changed states were checked instance by instance against census E826.
         assert_eq!(
             r.ledger_anchor.state_root.to_hex(),
-            "be22f27186a4b923e366594c8e5376c4a0d3bb2fd3df23766417e03658adba82"
+            "0c6d01e3f3a8020e4cc6591559c04d10a171e4da0805c0b47f7784357cf03613"
         );
     }
 
@@ -1709,11 +1709,12 @@ mod tests {
             "{{\"sites\":{sites},\"fit\":{fit},\"miss\":{miss},\"unconfirmed\":{unconfirmed},\
              \"regions_v\":{regions_v},\"no_registered_share\":{no_share},\"no_footnote\":{no_footnote}}}"
         );
-        assert_eq!((sites, summary), (328, [260, 65, 0, 51, 3, 0]));
+        assert_eq!((sites, summary), (328, [263, 65, 0, 51, 0, 0]));
         let census: BTreeMap<String, [usize; 3]> = [
             ("Bulyanhulu", 31, 3),
             ("Carlin", 9, 25),
             ("Cortez", 31, 3),
+            ("Long Canyon", 3, 0),
             ("Loulo-Gounkoto", 23, 0),
             ("Nevada Gold Mines", 11, 23),
             ("North Mara", 30, 4),
