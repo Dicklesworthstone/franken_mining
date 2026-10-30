@@ -279,7 +279,9 @@ mod oracle {
     }
 
     /// D16 (iv): r 2400 against N = 200 over k = 5 lines and Q = 100, where `aisc.rs` allows the rate only in
-    /// [1965.174, 2035.176]. The kernel states the same miss from the other side, exactly: the numerator would need
+    /// [1965.174, 2035.176], rounded outward. The kernel's rate range is exactly 1000·[197.5/100.5, 202.5/99.5] =
+    /// [395000/201, 405000/199], which rounds outward to the same text. It also states the miss from the other
+    /// side, exactly: the numerator would need
     /// N ∈ [2399.5·99.5, 2400.5·100.5]/1000 = [955001/4000, 965001/4000] against its [197.5, 202.5], and the ounces
     /// Q ∈ [1000·197.5/2400.5, 1000·202.5/2399.5] = [395000/4801, 405000/4799] against [99.5, 100.5].
     #[test]
@@ -314,6 +316,30 @@ mod oracle {
         );
         assert_eq!(
             implied_interval(&cells, &ids, &rules, "Q", false),
+            Err(ImpliedError::Infeasible)
+        );
+        let range = implied_interval(&cells, &ids, &rules, "R", true).expect("the rate range");
+        assert_eq!(range, closed(exact(395_000, 201), exact(405_000, 199)));
+        // Outward to three decimals, in integers: ⌊1000·lo⌋ and ⌈1000·hi⌉ thousandths.
+        let thousandths = |x: Rat, up: bool| {
+            let (num, den) = (x.num() * 1000, x.den());
+            if up {
+                -(-num).div_euclid(den)
+            } else {
+                num.div_euclid(den)
+            }
+        };
+        let text = |t: i128| format!("{}.{:03}", t / 1000, t % 1000);
+        let shown = format!(
+            "[{}, {}]",
+            text(thousandths(range.lo, false)),
+            text(thousandths(range.hi, true))
+        );
+        assert_eq!(shown, "[1965.174, 2035.176]");
+        assert!(d16.state.detail().contains(&shown));
+        // With its own box [2399.5, 2400.5] the rate has no value.
+        assert_eq!(
+            implied_interval(&cells, &ids, &rules, "R", false),
             Err(ImpliedError::Infeasible)
         );
     }
@@ -351,6 +377,16 @@ mod oracle {
                 kernel, expected,
                 "case {case}: (n, k, q, r) = ({n}, {k}, {q}, {r})"
             );
+            // The same answer by the other path: the rate's range by Charnes–Cooper, cut by r's own box.
+            let (cells, ids) = rate_problem(n, k, q, r, int(1000));
+            let rules = Rules::new(Convention::Closed);
+            match implied_interval(&cells, &ids, &rules, "R", false) {
+                Ok(_) => assert!(expected, "case {case}: a range where aisc.rs has none"),
+                Err(ImpliedError::Infeasible) => {
+                    assert!(!expected, "case {case}: no range where aisc.rs has one")
+                }
+                Err(other) => panic!("case {case} ({n}, {k}, {q}, {r}): {other:?}"),
+            }
             if expected {
                 holds += 1;
             } else {

@@ -974,12 +974,8 @@ fn linearise(
             index[num.as_str()],
             index[den.as_str()],
         );
-        let (Some(r_lo), Some(r_hi)) = (bounds[r].lo, bounds[r].hi) else {
-            return Ok(Lin::Indeterminate(format!(
-                "the rate cell {rate} of {} has no finite interval",
-                id.id
-            )));
-        };
+        // A missing end (a rate range overridden by `implied_interval`) gives no row on that side.
+        let (r_lo, r_hi) = (bounds[r].lo, bounds[r].hi);
         let Ok(sign) = one_sign(bounds[d]) else {
             return Ok(Lin::Indeterminate(OVERFLOW.to_string()));
         };
@@ -1000,6 +996,9 @@ fn linearise(
         // The rate is eliminated: the two rows below hold it in its interval.
         bounds[r] = Bound::FREE;
         for (side, end, lower) in [("lo", r_lo, true), ("hi", r_hi, false)] {
+            let Some(end) = end else {
+                continue;
+            };
             // s·(factor·num − end·den) − σ = 0, σ ≥ 0: s = +1 on the lower side of a positive denominator.
             let s = if (sign > 0) == lower { ONE } else { MINUS_ONE };
             let (Ok(a_num), Ok(a_den)) = (
@@ -1760,7 +1759,8 @@ pub enum ImpliedError {
     Infeasible,
     /// The cell is unbounded in at least one direction.
     Unbounded,
-    /// No claim: a cap, an overflow, a bilinear or rate cell, or a checker rejection.
+    /// No claim: a cap, an overflow, a bilinear cell, a rate over a denominator without a finite range of one
+    /// sign, or a checker rejection.
     Indeterminate(String),
 }
 
@@ -1782,7 +1782,8 @@ fn lp_implied(e: LpError) -> ImpliedError {
 
 /// The exact interval `var` can take in its component (S2). With `free_own_box`, the cell's own printed box is
 /// dropped (a ratio's denominator keeps its printed sign): the "implied" value of a cell from the others.
-/// Without it, the "un-rounding" interval of a cell in a feasible component. Never a published value.
+/// Without it, the "un-rounding" interval of a cell in a feasible component. A ratio's rate gets the ratio's
+/// exact range (Charnes–Cooper, [`rate_extreme`]) cut by its own box. Never a published value.
 pub fn implied_interval(
     cells: &[Cell],
     identities: &[Identity],
@@ -1810,40 +1811,30 @@ pub fn implied_interval(
     }
     let cells: Vec<&Cell> = cell_ix.iter().map(|&i| p.cells[i]).collect();
     let identities: Vec<&Identity> = id_ix.iter().map(|&i| p.identities[i]).collect();
+    let overflow = || ImpliedError::Indeterminate(OVERFLOW.to_string());
+    let printed = cell_bound(p.cells[pos], rules.convention)?.ok_or_else(overflow)?;
+    let is_rate = identities
+        .iter()
+        .any(|id| matches!(&id.kind, IdentityKind::Ratio { rate, .. } if rate == var));
+    let is_den = identities
+        .iter()
+        .any(|id| matches!(&id.kind, IdentityKind::Ratio { den, .. } if den == var));
     let mut overrides = BTreeMap::new();
-    if free_own_box {
+    if free_own_box || is_rate {
+        // A rate's range is the ratio's, so its rows are dropped here; its own box (unless freed) cuts below.
         let mut own = Bound::FREE;
-        for id in &identities {
-            if let IdentityKind::Ratio { rate, den, .. } = &id.kind {
-                if rate == var {
-                    return Err(ImpliedError::Indeterminate(format!(
-                        "{var} is the rate of {}: its range is not linear",
-                        id.id
-                    )));
-                }
-                if den == var {
-                    let printed = cell_bound(p.cells[pos], rules.convention)?
-                        .ok_or_else(|| ImpliedError::Indeterminate(OVERFLOW.to_string()))?;
-                    let zero_open = Some(End {
-                        at: ZERO,
-                        strict: true,
-                    });
-                    match one_sign(printed) {
-                        Ok(1) => own.lo = zero_open,
-                        Ok(-1) => own.hi = zero_open,
-                        _ => {}
-                    }
-                }
+        if free_own_box && is_den {
+            let zero_open = Some(End {
+                at: ZERO,
+                strict: true,
+            });
+            match one_sign(printed) {
+                Ok(1) => own.lo = zero_open,
+                Ok(-1) => own.hi = zero_open,
+                _ => {}
             }
         }
         overrides.insert(var.to_string(), own);
-    } else if identities
-        .iter()
-        .any(|id| matches!(&id.kind, IdentityKind::Ratio { rate, .. } if rate == var))
-    {
-        return Err(ImpliedError::Indeterminate(format!(
-            "{var} is the rate of a ratio: its range is not linear"
-        )));
     }
     let lin = match linearise(&cells, &identities, rules, &overrides)? {
         Lin::System(lin) => lin,
@@ -1853,21 +1844,149 @@ pub fn implied_interval(
     let j = lin.names.iter().position(|n| n == var).ok_or_else(|| {
         ImpliedError::Indeterminate(format!("{var} is not a variable of its component"))
     })?;
-    let base = lin.bounds[j];
-    let lo = optimum(&lin, j, false, MAX_PIVOTS)
-        .map_err(lp_implied)?
-        .ok_or(ImpliedError::Infeasible)?;
-    let hi = optimum(&lin, j, true, MAX_PIVOTS)
-        .map_err(lp_implied)?
-        .ok_or(ImpliedError::Infeasible)?;
+    let (base, lo, hi) = if is_rate {
+        let base = if free_own_box { Bound::FREE } else { printed };
+        let lo = rate_extreme(&lin, j, false)?.ok_or(ImpliedError::Infeasible)?;
+        let hi = rate_extreme(&lin, j, true)?.ok_or(ImpliedError::Infeasible)?;
+        // The ratio's range cut by the rate's own box: the image of the convex region is an interval.
+        let cmp = |a: Rat, b: Rat| a.checked_cmp(b).map_err(|_| overflow());
+        let lo = match base.lo {
+            Some(e) if cmp(lo, e.at)? == Ordering::Less => e.at,
+            _ => lo,
+        };
+        let hi = match base.hi {
+            Some(e) if cmp(hi, e.at)? == Ordering::Greater => e.at,
+            _ => hi,
+        };
+        if cmp(lo, hi)? == Ordering::Greater {
+            return Err(ImpliedError::Infeasible);
+        }
+        (base, lo, hi)
+    } else {
+        let lo = optimum(&lin, j, false, MAX_PIVOTS)
+            .map_err(lp_implied)?
+            .ok_or(ImpliedError::Infeasible)?;
+        let hi = optimum(&lin, j, true, MAX_PIVOTS)
+            .map_err(lp_implied)?
+            .ok_or(ImpliedError::Infeasible)?;
+        (lin.bounds[j], lo, hi)
+    };
     let lo_strict = settle(&cells, &identities, rules, var, base, lo, true)?;
     let hi_strict = settle(&cells, &identities, rules, var, base, hi, false)?;
+    // A single point with an open end is no point: the closure touched, the region did not.
+    if lo == hi && (lo_strict || hi_strict) {
+        return Err(ImpliedError::Infeasible);
+    }
     Ok(Interval {
         lo,
         hi,
         lo_strict,
         hi_strict,
     })
+}
+
+/// The exact minimum (or maximum), over the closure, of `factor·num/den` for the ratio whose rate is variable
+/// `r` (its rows dropped). Charnes–Cooper: with `u = 1/|den|` and `z = u·x`, every row `Σ a·x = b` becomes
+/// `Σ a·z − b·u = 0`, every end `lo ≤ x` (`x ≤ hi`) becomes `z − lo·u ≥ 0` (`hi·u − z ≥ 0`), `z_den = ±1`, and
+/// the objective is the linear `±factor·z_num`. The denominator's range must be finite and of one sign, which
+/// rules out `u = 0` in the closure.
+fn rate_extreme(lin: &Linear, r: usize, maximize: bool) -> Result<Option<Rat>, ImpliedError> {
+    let indeterminate = |reason: &str| ImpliedError::Indeterminate(reason.to_string());
+    let overflow = |_| indeterminate(OVERFLOW);
+    let Some(&(_, n, d, factor)) = lin.ratios.iter().find(|(rate, ..)| *rate == r) else {
+        return Err(indeterminate("no ratio has this rate"));
+    };
+    let den = lin.bounds[d];
+    let sign = match (den.lo, den.hi, one_sign(den).map_err(overflow)?) {
+        (Some(_), Some(_), 1) => ONE,
+        (Some(_), Some(_), -1) => MINUS_ONE,
+        _ => {
+            return Err(indeterminate(
+                "the denominator has no finite range of one sign",
+            ));
+        }
+    };
+    let nv = lin.bounds.len();
+    let (u, w) = (nv, nv + 1);
+    let mut names: Vec<String> = lin.names.iter().map(|x| format!("z:{x}")).collect();
+    names.extend(["u".to_string(), "w".to_string()]);
+    let mut bounds = vec![Bound::FREE; nv];
+    bounds.push(Bound {
+        lo: Some(End {
+            at: ZERO,
+            strict: true,
+        }),
+        hi: None,
+    });
+    bounds.push(Bound::FREE);
+    let mut rows = Vec::new();
+    for row in &lin.rows {
+        let mut terms = row.terms.clone();
+        if row.rhs != ZERO {
+            terms.push((u, row.rhs.checked_neg().map_err(overflow)?));
+        }
+        rows.push(LinRow {
+            id: row.id.clone(),
+            terms,
+            rhs: ZERO,
+        });
+    }
+    for (j, b) in lin.bounds.iter().enumerate() {
+        for (end, lower) in [(b.lo, true), (b.hi, false)] {
+            let Some(end) = end else {
+                continue;
+            };
+            // z − lo·u − σ = 0 or hi·u − z − σ = 0, with σ ≥ 0 keeping the end's openness.
+            let slack = names.len();
+            names.push(format!(
+                "{}#{}",
+                lin.names[j],
+                if lower { "lo" } else { "hi" }
+            ));
+            bounds.push(Bound {
+                lo: Some(End {
+                    at: ZERO,
+                    strict: end.strict,
+                }),
+                hi: None,
+            });
+            let (a_z, a_u) = if lower {
+                (ONE, end.at.checked_neg().map_err(overflow)?)
+            } else {
+                (MINUS_ONE, end.at)
+            };
+            let mut terms = vec![(j, a_z), (u, a_u), (slack, MINUS_ONE)];
+            terms.retain(|(_, a)| *a != ZERO);
+            rows.push(LinRow {
+                id: names[slack].clone(),
+                terms,
+                rhs: ZERO,
+            });
+        }
+    }
+    rows.push(LinRow {
+        id: "den".to_string(),
+        terms: vec![(d, ONE)],
+        rhs: sign,
+    });
+    // w = sign·factor·z_num = factor·num/den.
+    let a_num = sign
+        .checked_mul(factor)
+        .and_then(Rat::checked_neg)
+        .map_err(overflow)?;
+    rows.push(LinRow {
+        id: "objective".to_string(),
+        terms: vec![(w, ONE), (n, a_num)],
+        rhs: ZERO,
+    });
+    let transformed = Linear {
+        names,
+        bounds,
+        rows,
+        ratios: Vec::new(),
+        cells: 0,
+    };
+    optimum(&transformed, w, maximize, MAX_PIVOTS).map_err(lp_implied)
 }
 
 /// Re-decides one end `m` of an implied interval by checked runs, and returns whether the end is open.
@@ -2825,7 +2944,7 @@ mod tests {
             implied_interval(&cells, &ids, &half_up, "Q1", true),
             Ok(iv(int(148), int(150), true, true))
         );
-        // A lone freed cell is unbounded; an unknown cell is refused; a rate cell has no linear range.
+        // A lone freed cell is unbounded; an unknown cell is refused.
         let lone = vec![cell("x", int(1), int(1))];
         assert_eq!(
             implied_interval(&lone, &[], &closed_rules, "x", true),
@@ -2835,12 +2954,102 @@ mod tests {
             implied_interval(&lone, &[], &closed_rules, "y", true),
             Err(ImpliedError::Refused(XfRefusal::UnknownVariable { .. }))
         ));
+        // E691 from the rate side: 1000·N/Q over N ∈ [66.5, 67.5], Q ∈ [46.5, 47.5] is [1400, 45000/31]
+        // (≈ 1451.61), wholly below 1,526's box, which is therefore empty.
         let (cells, ids) = e691();
-        for free in [true, false] {
-            assert!(matches!(
-                implied_interval(&cells, &ids, &closed_rules, &veladero_locator("J19"), free),
-                Err(ImpliedError::Indeterminate(_))
-            ));
+        let cost_per_oz = veladero_locator("J19");
+        assert_eq!(
+            implied_interval(&cells, &ids, &closed_rules, &cost_per_oz, true),
+            Ok(iv(int(1400), q(45_000, 31), false, false))
+        );
+        assert_eq!(
+            implied_interval(&cells, &ids, &closed_rules, &cost_per_oz, false),
+            Err(ImpliedError::Infeasible)
+        );
+    }
+
+    /// A rate's range by Charnes–Cooper, with its ends settled by checked runs.
+    #[test]
+    fn test_rate_implied_interval_charnes_cooper() {
+        let cells = vec![
+            cell("R", int(2000), int(1)),
+            cell("N", int(100), int(1)),
+            cell("Q", int(50), int(1)),
+        ];
+        let ids = vec![ratio("rate", "R", "N", "Q", int(1000))];
+        let iv = |lo, hi, lo_strict, hi_strict| Interval {
+            lo,
+            hi,
+            lo_strict,
+            hi_strict,
+        };
+        let (closed_rules, half_up) = (
+            Rules::new(Convention::Closed),
+            Rules::new(Convention::HalfUp),
+        );
+        // Closed: [1000·99.5/50.5, 1000·100.5/49.5] = [199000/101, 201000/99], cut by R's [1999.5, 2000.5].
+        let range = (q(199_000, 101), q(201_000, 99));
+        assert_eq!(
+            implied_interval(&cells, &ids, &closed_rules, "R", true),
+            Ok(iv(range.0, range.1, false, false))
+        );
+        assert_eq!(
+            implied_interval(&cells, &ids, &closed_rules, "R", false),
+            Ok(iv(q(3999, 2), q(4001, 2), false, false))
+        );
+        // Half-up: N < 100.5 and Q < 50.5, so neither extreme is reached; R's own box is [1999.5, 2000.5).
+        assert_eq!(
+            implied_interval(&cells, &ids, &half_up, "R", true),
+            Ok(iv(range.0, range.1, true, true))
+        );
+        assert_eq!(
+            implied_interval(&cells, &ids, &half_up, "R", false),
+            Ok(iv(q(3999, 2), q(4001, 2), false, true))
+        );
+        // A negative denominator: 1000·N/Q over N ∈ [99.5, 100.5], Q ∈ [−50.5, −49.5].
+        let negative = vec![
+            cell("R", int(-2000), int(1)),
+            cell("N", int(100), int(1)),
+            cell("Q", int(-50), int(1)),
+        ];
+        assert_eq!(
+            implied_interval(&negative, &ids, &closed_rules, "R", true),
+            Ok(iv(q(-201_000, 99), q(-199_000, 101), false, false))
+        );
+        // A rate whose ratio range only touches its own box at an open end has no value: under half-up,
+        // R printed 2031 has box [2030.5, 2031.5), beyond the ratio's supremum 201000/99 ≈ 2030.30.
+        let beyond = vec![
+            cell("R", int(2031), int(1)),
+            cell("N", int(100), int(1)),
+            cell("Q", int(50), int(1)),
+        ];
+        assert_eq!(
+            implied_interval(&beyond, &ids, &half_up, "R", false),
+            Err(ImpliedError::Infeasible)
+        );
+        // Every reported end agrees with a feasibility run that pins the rate there.
+        for (r, convention) in [
+            (closed_rules, Convention::Closed),
+            (half_up, Convention::HalfUp),
+        ] {
+            let implied = implied_interval(&cells, &ids, &r, "R", true).expect("implied");
+            for (end, strict) in [
+                (implied.lo, implied.lo_strict),
+                (implied.hi, implied.hi_strict),
+            ] {
+                let pinned = vec![
+                    cell("R", end, q(1, 1_000_000)),
+                    cells[1].clone(),
+                    cells[2].clone(),
+                ];
+                // A box of ±1/2·10⁻⁶ round the end meets the region on its inside either way.
+                let outcome = only(solve(&pinned, &ids, &Rules::new(convention)).expect("solves"));
+                assert_eq!(
+                    verdict(&outcome),
+                    "feasible",
+                    "{convention:?} end {end:?} strict {strict}"
+                );
+            }
         }
     }
 

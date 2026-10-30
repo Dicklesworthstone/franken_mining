@@ -40,7 +40,8 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
     a linearisation fault is caught by the `aisc.rs` oracle tests, not by the checker.
   - `implied_interval(cells, identities, rules, var, free_own_box)`: the exact interval of a cell, with
     open ends, each end re-decided by checked runs; `ImpliedError::{Refused, Infeasible, Unbounded,
-    Indeterminate}`. A rate cell gives `Indeterminate`.
+    Indeterminate}`. A rate gets its ratio's exact range (Charnes–Cooper over the closure) cut by its own
+    box; a denominator without a finite range of one sign gives `Indeterminate`.
   - `certificate_digest`: hex BLAKE3 of an `XFCT` v2 frame (v2 binds the constructions), independent of
     input order.
   - Input is refused with `XfRefusal`:
