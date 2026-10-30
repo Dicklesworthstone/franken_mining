@@ -1,6 +1,6 @@
-"""Mine Statistics census: ownership and quarter-sum identities on the QTD/YTD summary sheets, each instance
-decided alone on its own displayed cells, then all decided instances posed jointly by shared cells, with every
-minimum correction set of each jointly infeasible component.
+"""Mine Statistics census: ownership and quarter-sum identities on the QTD/YTD summary sheets, and the site_sheet
+identity (summary value = Minestats value), each instance decided alone on its own displayed cells, then all decided
+instances posed jointly by shared cells, with every minimum correction set of each jointly infeasible component.
 
 Independent reader, written 2026-10-30 without opening any Rust under crates/, planning/mor/MOR_CASE.md, repro/ or
 any other agent's scratch files. It reads the xlsx itself (zipfile + xml.etree) and imports formats.py only for its
@@ -82,22 +82,65 @@ States, in this order of precedence (after exclusions):
 5. All numbers -> decide the identity alone on its own cells: consistent -> i; not -> iii. (share_unprinted applies
    here, only when all operands are numbers.)
 
-Components. Every instance in state i or iii is posed jointly; instances sharing a cell are linked; connected
-components are decided exactly: do true values exist, each in its closed box, satisfying every identity of the
-component (c = s.b, t = a + q)? For each infeasible component: every minimum correction set (smallest k such that
+Family site_sheet (the plan's family 7, "summary equals site sheet"; added 2026-10-30 by a second reader, from the
+rule as given, without reading crates/ or any Rust). Mine Stats print each site's flows and unit costs twice: on
+QTD/YTD (B-G the release's own year, I-N the prior year) and in the site's column on a Minestats* sheet (two columns
+per site, current year then prior year; years on the block header row). Identity: the summary value equals the
+Minestats value of the same release, site, period and column-year group.
+- Minestats reading. A Minestats* sheet is gold if its A1 title contains "(Gold)", copper if "(Copper)"; otherwise a
+  refusal line is printed and the sheet skipped. Blocks start at a column-A cell beginning "For the" and naming
+  three, six, nine or twelve months; the site header row is the row above; a site name is carried right across
+  blank (merged) header cells; a column's year is the integer on the block header row. Data rows run down to the
+  next block header or footnote. Row labels: column A, whitespace collapsed and trimmed, trailing footnote digits
+  stripped (^(.*?[^\\d\\s])(\\d{1,2})$), matched case-insensitively. Site names: trailing footnote number and any
+  (x%) share stripped; "Copper - Total" is the subject "Total Copper". Summary subjects as read above. Period of a
+  block: three months = the release's quarter, six = H1, nine = 9M, twelve = FY, with the column's year (J1).
+- Field map (summary field id -> Minestats row label, on a sheet of that metal). Gold: au_prod_attr_koz "Production
+  (thousands of ounces)", au_sold_attr_koz "Sales (thousands of ounces)", cos_usd_per_oz "Cost of sales per ounce
+  ($/oz)", tcc_usd_per_oz "Total cash costs", aisc_usd_per_oz "All-in sustaining costs". Copper: cu_prod_attr_kt
+  "Production (thousands of tonnes)", cu_sold_attr_kt "Sales (thousands of tonnes)", cos_usd_per_lb "Cost of sales
+  per pound ($/lb)", c1_usd_per_lb "C1 cash costs", aisc_usd_per_lb "All-in sustaining costs". W1-DR-02: in releases
+  2024Q1 to 2024Q4 only, the copper rows "Production (millions of pounds)" and "Sales (millions of pounds)" are read
+  as the thousands-of-tonnes rows (values unchanged, no conversion); no other unit substitution is ever made.
+  Summary cost headers map as the flow headers do: "Cost of sales ($/oz)" or "Total Cost of sales ($/oz)" ->
+  cos_usd_per_oz, "Total cash costs ($/oz)" -> tcc_usd_per_oz, "All-In sustaining costs ($/oz)" -> aisc_usd_per_oz;
+  the $/lb headers -> cos_usd_per_lb, c1_usd_per_lb ("C1 cash costs"), aisc_usd_per_lb. A header naming none of
+  these is not read.
+- Instances: one per summary value of a mapped field (both sheets, both column groups) whose subject has a column on
+  some Minestats* sheet of the field's metal in the same release. Subjects with no such column pose none (regions,
+  "Total Gold"); one line per release lists the summary subjects (not a region, not "Total Gold") with no Minestats
+  column. A subject with columns on two sheets of one metal in one release: every instance for it is v,
+  operand_unreadable.
+- Decision, first match wins: 1. withheld (Loulo-Gounkoto, period in the E818 list) -> v, excluded_e818. 2. The
+  block for the period and group has no row with the counterpart label, or the subject's column has no block for the
+  period -> v, operand_row_missing; the label twice in one block -> v, operand_unreadable at the first. 3. Either
+  cell blank -> v, blank_operand, at = the blank cell. 4. Both cells tokens ("—", "— ", "n/a", any combination) ->
+  np. 5. One cell the nil token "—", the other a number: the identity reads number = 0; iii if the number's closed
+  box [v - step/2, v + step/2] excludes 0, else i; certificate "nil_token"; decided alone, NOT posed jointly. 6. One
+  cell "n/a", the other a number -> v, placeholder_operand, at = the n/a cell. 7. A number with no exact displayed
+  value (or shown as a percentage) -> v, operand_unreadable. 8. Both numbers: equal identity over the two closed
+  boxes: i if they intersect, else iii; posed jointly with the ownership and quarter_sum instances.
+- Record: family "site_sheet", field = the summary field id, anchor = the summary cell, cells = [summary cell,
+  Minestats cell or null], share and printed_share null, certificate null except "nil_token" (step 5).
+
+Components. Every instance in state i or iii (and certificate null) is posed jointly; instances sharing a cell are
+linked; connected components are decided exactly: do true values exist, each in its closed box, satisfying every
+identity of the component (c = s.b, t = a + q, summary = Minestats)? For each infeasible component: every minimum
+correction set (smallest k such that
 dropping the boxes of some k cells makes it feasible; exhaustive by size; sets sorted), and with --values, for each
 set and cell, the implied interval (exact range of the cell's true value with that set's boxes dropped). joint_only
 if every instance of the component is i. Every iii instance carries its component id and corrections.
 
 Output (stdout, one compact JSON object per line, ensure_ascii=False, deterministic order):
 1. one line per instance sorted by (family, anchor, group, field): {"family","subject","field","group","period",
-   "anchor","cells","state","reason","at","share","printed_share","component","corrections"}; ownership's field is
-   the attributable field and its anchor the attributable cell; with --values also "values" (displayed operand
-   texts) and "implied" ([{locator: [lo, hi]}] per correction set);
+   "anchor","cells","state","reason","at","certificate","share","printed_share","component","corrections"};
+   ownership's field is the attributable field and its anchor the attributable cell; with --values also "values"
+   (displayed operand texts) and "implied" ([{locator: [lo, hi]}] per correction set);
 2. one line per jointly infeasible component {"component","cells","instances","joint_only","corrections"};
-3. per family {"family","n","i","iii","v","np","v_by_reason"}, then {"components","infeasible_components",
-   "joint_only"};
-4. known-answer checks {"check","ok","detail"}: E113, E114, E115, computed from the instances.
+3. per family {"family","n","i","iii","v","np","v_by_reason"} (ownership, quarter_sum, site_sheet); then one line
+   per refused Minestats* sheet {"family":"site_sheet","refused","reason"}; then one line per release
+   {"family":"site_sheet","release","no_minestats_column"}; then {"components","infeasible_components","joint_only"};
+4. known-answer checks {"check","ok","detail"}: E113, E114, E115, E116, computed from the instances.
 RISK-31: no issuer cell value and no implied interval is printed unless --values is given.
 
 Method for the joint decision (exact): the component's identities are homogeneous linear equalities. Gauss-Jordan
@@ -155,6 +198,54 @@ J11 Input: a directory contributes its direct children named exactly Barrick_Q<n
    reads visible sheets only), are refused. QTD is required in every release, YTD in every Q2-Q4 release.
 J12 Known-answer checks are read from the finished instance records. Without --values, E113's "281 lies in the
    implied interval" is not evaluated and "ok" covers the other conditions (the detail says so).
+J13-J22 belong to family site_sheet (second reader, 2026-10-30).
+J13 Minestats* sheets: the workbook's sheets whose name begins "Minestats", in workbook order. A hidden one gets a
+   refusal line and is skipped (formats.py shows no values on hidden sheets), as does one whose A1 (a text cell)
+   names neither or both of "(Gold)" and "(Copper)" (substrings, case-sensitive). No sheet of this corpus is refused.
+J14 Minestats blocks: a block header is column-A text that, whitespace collapsed, begins "for the" in any case (as
+   J3); it must name exactly one of three/six/nine/twelve as a word, else SystemExit. Two blocks of one period on one
+   sheet, or a block header in row 1, SystemExit. A block's columns are the non-empty cells of its header row from
+   column B; each must be a 4-digit year (text, or a number displayed as one) equal to the release's year (current)
+   or the year before (prior), else SystemExit. A column's site is the nearest non-empty cell at or left of it (from
+   column B) on the row above, which must be text; merges are not consulted. A site with two columns for one year in
+   one block: SystemExit. A block ends at the next block header on the sheet or at the first footnote row below its
+   header (J5's footnote test), whichever comes first; with neither, SystemExit. Every row in between with column-A
+   text contributes its label.
+J15 Subjects: a Minestats site name goes through J6 (whitespace, footnote, shares), then "Copper - Total" becomes
+   "Total Copper"; it is compared with summary subjects by exact string equality (no alias table: "Nevada Gold Mines
+   LLC" is spelled so on both sides). Row labels are compared after str.lower().
+J16 This family reads its operands with its own reader, which never stops the run. A number displayed per 'Values'
+   is a number. A text cell whose raw text is exactly "—" or "— " is the nil token (step 4 lists both spellings;
+   step 5 names "—"), exactly "n/a" is n/a; blank as J7. Everything else is unreadable (step 7; at = that cell, the
+   summary cell first when both are): a displayed percentage, a formats.py token or refused format, any other text
+   (including "–", "-" and "N/A", which the other two families accept as placeholders), error and boolean cells.
+   "A number" in steps 5, 6 and 8 means a readable number. In this corpus the mapped cells hold only numbers, "—",
+   "— " and two blanks, so no instance is unreadable and none is n/a.
+J17 at is null for excluded_e818, operand_row_missing and the two-sheet operand_unreadable. cells[1] is null when no
+   counterpart cell is located (no block, no column, no row, two sheets) and names the located cell otherwise, also
+   for an excluded instance. A label occurring twice: at and cells[1] are its first (lowest-row) occurrence in the
+   subject's column. In 2024 releases the thousands-of-tonnes label and its W1-DR-02 "millions of pounds" alias count
+   together, so a block holding both rows holds the label twice.
+J18 The two-sheet operand_unreadable is applied before excluded_e818 ("every instance for it"). No subject of this
+   corpus has columns on two sheets of one metal, so the order changes nothing here.
+J19 Summary unit-cost headers: whitespace collapsed, lower case, must read "<base> ($/oz)" or "<base> ($/lb)",
+   optionally followed by 1-2 footnote digits; <base> must be "cost of sales" or "total cost of sales", "total cash
+   costs" ($/oz), "c1 cash costs" ($/lb) or "all-in sustaining costs". 1-2 digits glued to the end of <base> are
+   dropped only if <base> does not map as it stands (so "C1" keeps its digit; J2's HEADER_FOOT is not used here
+   because it reads "C1 cash costs" as "c cash costs"). Group from J4. A second column for one (group, field):
+   SystemExit. All 12 unit-cost headers of every summary sheet in this corpus map.
+J20 Joint decision: posed instances are those in state i or iii with certificate null; a site_sheet instance adds the
+   equality summary - Minestats = 0 over its two boxes. A nil_token instance has component and corrections null.
+   Component ids still follow J9, so a component holding a Minestats cell is usually named by it (":Minestats1!"
+   sorts before ":QTD!"). The rule poses the two prints as independent boxes, so an equal Minestats print pins its
+   summary cell and a correction set that dropped only the summary cell now also needs the Minestats cell; whether
+   the two prints are independent evidence is outside this census.
+J21 Output: the site_sheet family summary follows quarter_sum's; then the refusal lines (release order, then sheet
+   order), then the per-release "no_minestats_column" lines (subjects sorted), then the components line. Every
+   instance line gains "certificate" after "at". With --values, a site_sheet line's "values" is [summary text,
+   Minestats text]. The comparison with W1's T4 table is not printed.
+J22 E116 is read from the finished records: exactly one site_sheet instance anchored at 2026Q2:YTD!E11, in state
+   iii, certificate "nil_token", cells ["2026Q2:YTD!E11", "2026Q2:Minestats1!N103"].
 """
 import itertools
 import json
@@ -201,6 +292,24 @@ WORDS = {"three": "Q", "six": "H1", "nine": "9M", "twelve": "FY"}
 HEADER_FOOT = re.compile(r"(?<=[A-Za-z)])[0-9]{1,2}(?=[\s(]|$)")
 SHARE_RE = re.compile(r"\(\s*([0-9]+(?:\.[0-9]+)?)\s*%\s*\)")
 FOOTNOTE_RE = re.compile(r"[0-9]+\s")
+# site_sheet (family 7): summary field id -> Minestats row label (lower case), per metal, in output field order
+SITE_FIELDS = {
+    "au": {"au_prod_attr_koz": "production (thousands of ounces)", "au_sold_attr_koz": "sales (thousands of ounces)",
+           "cos_usd_per_oz": "cost of sales per ounce ($/oz)", "tcc_usd_per_oz": "total cash costs",
+           "aisc_usd_per_oz": "all-in sustaining costs"},
+    "cu": {"cu_prod_attr_kt": "production (thousands of tonnes)", "cu_sold_attr_kt": "sales (thousands of tonnes)",
+           "cos_usd_per_lb": "cost of sales per pound ($/lb)", "c1_usd_per_lb": "c1 cash costs",
+           "aisc_usd_per_lb": "all-in sustaining costs"},
+}
+DR02_YEAR = 2024  # W1-DR-02: releases 2024Q1-2024Q4 label the copper kt rows "millions of pounds"
+DR02_LABELS = {"cu_prod_attr_kt": "production (millions of pounds)", "cu_sold_attr_kt": "sales (millions of pounds)"}
+COST_FIELD = {("oz", "cost of sales"): "cos_usd_per_oz", ("oz", "total cost of sales"): "cos_usd_per_oz",
+              ("oz", "total cash costs"): "tcc_usd_per_oz", ("oz", "all-in sustaining costs"): "aisc_usd_per_oz",
+              ("lb", "cost of sales"): "cos_usd_per_lb", ("lb", "total cost of sales"): "cos_usd_per_lb",
+              ("lb", "c1 cash costs"): "c1_usd_per_lb", ("lb", "all-in sustaining costs"): "aisc_usd_per_lb"}
+SITE_NIL = ("—", "— ")  # the nil token, with and without its trailing space (J16)
+SITE_NA = "n/a"
+LABEL_FOOT = re.compile(r"^(.*?[^\d\s])(\d{1,2})$")
 
 
 def die(msg):
@@ -372,10 +481,24 @@ def subject_of(label):
     return s, (shares[0] if shares else None)
 
 
+def cost_field(text):
+    """site_sheet: the field id a summary unit-cost header names, or None (not read) (J19)."""
+    t = re.sub(r"\s+", " ", text).strip().lower()
+    m = re.fullmatch(r"(.*?) ?\(\$/(oz|lb)\)(?:[0-9]{1,2})?", t)
+    if not m:
+        return None
+    base = m.group(1).strip()
+    fid = COST_FIELD.get((m.group(2), base))
+    if fid is None:
+        fid = COST_FIELD.get((m.group(2), re.sub(r"(?<=[a-z])[0-9]{1,2}$", "", base)))
+    return fid
+
+
 class Block:
     def __init__(self, metal, year_row, header_row, cols):
         self.metal, self.year_row, self.header_row, self.cols = metal, year_row, header_row, cols
         self.rows = {}  # subject -> (row, label, share text)
+        self.cost_cols = {}  # site_sheet: (group, cost field id) -> column
 
 
 def year_of(sheet, yr, col):
@@ -462,7 +585,18 @@ def layout(sheet):
             cols[(g, k[2])] = c
         if len(cols) != 6:
             die("%s: a group lacks a flow field column" % sheet.loc(hr, 1))
-        sheet.blocks[metal] = Block(metal, yr, hr, cols)
+        blk = Block(metal, yr, hr, cols)
+        for c, k in sorted(kinds.items()):
+            if k[0] != "cost":
+                continue
+            fid = cost_field(sheet.text(hr, c))
+            if fid is None:
+                continue
+            g = year_of(sheet, yr, c)
+            if (g, fid) in blk.cost_cols:
+                die("%s: second column for one group and unit-cost field" % sheet.loc(hr, c))
+            blk.cost_cols[(g, fid)] = c
+        sheet.blocks[metal] = blk
         year_rows.append(yr)
         prev_header = hr
     max_row = max(sheet.rows)
@@ -501,6 +635,110 @@ def layout(sheet):
                 read_operand(sheet, r, c)  # J7: classify every flow cell now
 
 
+def ms_label(text):
+    """A Minestats row label as matched: whitespace collapsed, trimmed, footnote digits stripped, lower case."""
+    s = re.sub(r"\s+", " ", text).strip()
+    m = LABEL_FOOT.match(s)
+    return (m.group(1) if m else s).lower()
+
+
+class MsBlock:
+    def __init__(self, kind, header_row):
+        self.kind, self.header_row = kind, header_row
+        self.end = None
+        self.cols = {}  # (subject, group) -> column
+        self.labels = {}  # matched label -> [rows], ascending
+
+
+def ms_metal(sheet):
+    """'au', 'cu', or None when the A1 title names neither or both metals (refusal, J13)."""
+    title = sheet.text(1, 1) or ""
+    gold, copper = "(Gold)" in title, "(Copper)" in title
+    if gold == copper:
+        return None
+    return "au" if gold else "cu"
+
+
+def ms_year(sheet, row, col):
+    """J14: the 4-digit year of a non-empty block-header cell, else None."""
+    t, text = sheet.cells[(row, col)]
+    if t in TEXT_TYPES:
+        text = (text or "").strip()
+    else:
+        shown = sheet.release.shown.get((sheet.name, "%s%d" % (letters(col), row)))
+        text = shown[1] if shown and shown[0] == "shown" else None
+    return int(text) if text is not None and re.fullmatch(r"[0-9]{4}", text) else None
+
+
+def ms_layout(sheet):
+    """Blocks of a Minestats* sheet by period kind (J14)."""
+    rel = sheet.release
+    heads = []
+    for r in sorted(sheet.rows):
+        a = sheet.text(r, 1)
+        if a is None or not re.sub(r"\s+", " ", a).strip().lower().startswith("for the"):
+            continue
+        low = re.sub(r"\s+", " ", a).lower()
+        found = [w for w in WORDS if re.search(r"\b%s\b" % w, low)]
+        if len(found) != 1:
+            die("%s: block header names no single period (three, six, nine or twelve months)" % sheet.loc(r, 1))
+        kind = "Q%d" % rel.q if WORDS[found[0]] == "Q" else WORDS[found[0]]
+        if r < 2:
+            die("%s: block header with no site header row above it" % sheet.loc(r, 1))
+        heads.append((r, kind))
+    sheet.ms_blocks = {}
+    max_row = max(sheet.rows)
+    for i, (hr, kind) in enumerate(heads):
+        if kind in sheet.ms_blocks:
+            die("%s: second block for one period on this sheet" % sheet.loc(hr, 1))
+        blk = MsBlock(kind, hr)
+        for c in sorted(sheet.rows[hr]):
+            if c == 1 or sheet.is_empty(hr, c):
+                continue
+            year = ms_year(sheet, hr, c)
+            if year is None:
+                die("%s: block header cell is not a year" % sheet.loc(hr, c))
+            if year == rel.year:
+                g = "current"
+            elif year == rel.year - 1:
+                g = "prior"
+            else:
+                die("%s: year is neither the release's year nor the year before" % sheet.loc(hr, c))
+            name = None
+            for cc in range(c, 1, -1):
+                if not sheet.is_empty(hr - 1, cc):
+                    name = sheet.text(hr - 1, cc)
+                    if name is None:
+                        die("%s: site header cell is not text" % sheet.loc(hr - 1, cc))
+                    break
+            if name is None:
+                die("%s: no site name over this column" % sheet.loc(hr - 1, c))
+            subj, _share = subject_of(name)
+            if subj is None:
+                die("%s: two shares in one site name" % sheet.loc(hr - 1, c))
+            if subj == "Copper - Total":
+                subj = "Total Copper"
+            if not subj:
+                die("%s: empty site name" % sheet.loc(hr - 1, c))
+            if (subj, g) in blk.cols:
+                die("%s: second column for one site and year in this block" % sheet.loc(hr, c))
+            blk.cols[(subj, g)] = c
+        ends = [h for h, _ in heads[i + 1:i + 2]]
+        for r in range(hr + 1, max_row + 1):
+            a = sheet.text(r, 1)
+            if a is not None and FOOTNOTE_RE.match(a.lstrip()):
+                ends.append(r)
+                break
+        if not ends:
+            die("%s: block has no end (no next block, no footnote row)" % sheet.loc(hr, 1))
+        blk.end = min(ends)
+        for r in range(hr + 1, blk.end):
+            a = sheet.text(r, 1)
+            if a is not None and a.strip():
+                blk.labels.setdefault(ms_label(a), []).append(r)
+        sheet.ms_blocks[kind] = blk
+
+
 class Release:
     def __init__(self, path, year, q):
         self.path, self.year, self.q = path, year, q
@@ -532,6 +770,33 @@ class Release:
             die("%s: no YTD sheet" % self.key)
         for sheet in self.sheets.values():
             layout(sheet)
+        # site_sheet: the Minestats* sheets, in workbook order (J13)
+        self.ms_sheets, self.refusals = [], []
+        self.ms_cols = {"au": {}, "cu": {}}  # metal -> subject -> [sheet names with a column for it]
+        for sh in wb.find(M + "sheets").findall(M + "sheet"):
+            name = sh.get("name")
+            if not name.startswith("Minestats"):
+                continue
+            where = "%s:%s!A1" % (self.key, name)
+            if sh.get("state", "visible") in ("hidden", "veryHidden"):
+                self.refusals.append((where, "hidden sheet"))
+                continue
+            key = formats.part("xl", target[sh.get(R + "id")])
+            if key not in names:
+                die("%s:%s: sheet part missing" % (self.key, name))
+            sheet = Sheet(self, name, ET.fromstring(z.read(key)), ss)
+            metal = ms_metal(sheet)
+            if metal is None:
+                self.refusals.append((where, "A1 title names neither (Gold) nor (Copper), or both"))
+                continue
+            ms_layout(sheet)
+            sheet.metal = metal
+            self.ms_sheets.append(sheet)
+            for blk in sheet.ms_blocks.values():
+                for subj, _g in blk.cols:
+                    have = self.ms_cols[metal].setdefault(subj, [])
+                    if name not in have:
+                        have.append(name)
 
 
 def collect(args):
@@ -584,7 +849,7 @@ def decide(inst, ops):
 def base(family, subject, metal, flow, group, per, anchor, ops):
     return {"family": family, "subject": subject, "field": FIELD_ID[(metal, flow)], "group": group,
             "period": per, "anchor": anchor, "cells": [o.loc if o is not None else None for o in ops],
-            "state": None, "reason": None, "at": None, "share": None, "printed_share": None,
+            "state": None, "reason": None, "at": None, "certificate": None, "share": None, "printed_share": None,
             "component": None, "corrections": None, "_ops": ops, "_s": None}
 
 
@@ -653,6 +918,125 @@ def quarter_sum_instances(releases):
                             inst["state"], inst["reason"], inst["at"] = decide(inst, ops)
                         out.append(inst)
     return out
+
+
+def read_site_operand(sheet, row, col):
+    """site_sheet operand: Op kind num, nil, na, blank or unreadable; never stops the run (J16)."""
+    loc = sheet.loc(row, col)
+    cell = sheet.cells.get((row, col))
+    if cell is not None and cell[0] in ("e", "b"):
+        return Op(loc, "unreadable", text=cell[1])
+    shown = sheet.release.shown.get((sheet.name, "%s%d" % (letters(col), row)))
+    if shown is not None:
+        kind, text = shown
+        if kind == "shown":
+            m = re.fullmatch(r"-?[0-9]+(?:\.([0-9]+))?", text)
+            if m:
+                return Op(loc, "num", F(text), F(1, 2 * 10 ** len(m.group(1) or "")), text)
+        return Op(loc, "unreadable", text=text)  # a percentage, a format token or a refused format
+    if cell is None:
+        return Op(loc, "blank")
+    t, text = cell
+    if t in TEXT_TYPES:
+        if text is None or text == "":
+            return Op(loc, "blank")
+        if text in SITE_NIL:
+            return Op(loc, "nil", text=text)
+        if text == SITE_NA:
+            return Op(loc, "na", text=text)
+        return Op(loc, "unreadable", text=text)
+    if text is None or text.strip() == "":
+        return Op(loc, "blank")
+    return Op(loc, "unreadable", text=text)
+
+
+def decide_site(ops):
+    """Steps 3-8 for a site_sheet instance whose two operands exist: (state, reason, at, certificate)."""
+    for o in ops:
+        if o.kind == "blank":
+            return "v", "blank_operand", o.loc, None
+    kinds = [o.kind for o in ops]
+    if all(k in ("nil", "na") for k in kinds):
+        return "np", None, None, None
+    if sorted(kinds) == ["nil", "num"]:
+        n = next(o for o in ops if o.kind == "num")
+        ok = n.value - n.half <= 0 <= n.value + n.half
+        return ("i" if ok else "iii"), None, None, "nil_token"
+    if sorted(kinds) == ["na", "num"]:
+        return "v", "placeholder_operand", next(o.loc for o in ops if o.kind == "na"), None
+    if any(k == "unreadable" for k in kinds):
+        return "v", "operand_unreadable", next(o.loc for o in ops if o.kind == "unreadable"), None
+    a, b = ops
+    ok = a.value - a.half <= b.value + b.half and b.value - b.half <= a.value + a.half
+    return ("i" if ok else "iii"), None, None, None
+
+
+def site_counterpart(rel, metal, subj, kind, g, fid):
+    """('two_sheets'|'missing', None) or ('dup'|'ok', Minestats op at the (first) counterpart cell) (J17)."""
+    have = rel.ms_cols[metal][subj]
+    if len(have) > 1:
+        return "two_sheets", None
+    sheet = next(s for s in rel.ms_sheets if s.name == have[0])
+    blk = sheet.ms_blocks.get(kind)
+    if blk is None or (subj, g) not in blk.cols:
+        return "missing", None
+    labels = [SITE_FIELDS[metal][fid]]
+    if metal == "cu" and rel.year == DR02_YEAR and fid in DR02_LABELS:
+        labels.append(DR02_LABELS[fid])
+    rows = sorted(r for lab in labels for r in blk.labels.get(lab, []))
+    if not rows:
+        return "missing", None
+    op = read_site_operand(sheet, rows[0], blk.cols[(subj, g)])
+    return ("dup" if len(rows) > 1 else "ok"), op
+
+
+def site_sheet_instances(releases):
+    """Family site_sheet; also, per release, the summary subjects with no Minestats column."""
+    out, unmatched = [], []
+    for (y, q), rel in sorted(releases.items()):
+        missing = set()
+        for sname in ("QTD", "YTD"):
+            sheet = rel.sheets.get(sname)
+            if sheet is None:
+                continue
+            kind = "Q%d" % q if sname == "QTD" else CUM[q]
+            for metal in ("au", "cu"):
+                blk = sheet.blocks[metal]
+                cols = dict(blk.cost_cols)
+                for g in GROUPS:
+                    for flow in ("prod_attr", "sold_attr"):
+                        cols[(g, FIELD_ID[(metal, flow)])] = blk.cols[(g, flow)]
+                for subj, (r, _label, _share) in blk.rows.items():
+                    if subj not in rel.ms_cols[metal]:
+                        if subj not in REGIONS and subj != "Total Gold":
+                            missing.add(subj)
+                        continue
+                    for g in GROUPS:
+                        per = period(y if g == "current" else y - 1, kind)
+                        for fid in SITE_FIELDS[metal]:
+                            if (g, fid) not in cols:
+                                continue
+                            sop = read_site_operand(sheet, r, cols[(g, fid)])
+                            how, mop = site_counterpart(rel, metal, subj, kind, g, fid)
+                            ops = [sop, mop]
+                            inst = {"family": "site_sheet", "subject": subj, "field": fid, "group": g,
+                                    "period": per, "anchor": sop.loc, "cells": [sop.loc, mop.loc if mop else None],
+                                    "state": "v", "reason": None, "at": None, "certificate": None, "share": None,
+                                    "printed_share": None, "component": None, "corrections": None, "_ops": ops,
+                                    "_s": None}
+                            if how == "two_sheets":
+                                inst["reason"] = "operand_unreadable"
+                            elif subj == E818_SUBJECT and per in E818_PERIODS:
+                                inst["reason"] = "excluded_e818"
+                            elif how == "missing":
+                                inst["reason"] = "operand_row_missing"
+                            elif how == "dup":
+                                inst["reason"], inst["at"] = "operand_unreadable", mop.loc
+                            else:
+                                inst["state"], inst["reason"], inst["at"], inst["certificate"] = decide_site(ops)
+                            out.append(inst)
+        unmatched.append((rel.key, sorted(missing)))
+    return out, unmatched
 
 
 # ---------------------------------------------------------------------------------------------------- exact joint decision
@@ -769,7 +1153,7 @@ class System:
 
 
 def components(instances):
-    posed = [x for x in instances if x["state"] in ("i", "iii")]
+    posed = [x for x in instances if x["state"] in ("i", "iii") and x["certificate"] is None]
     parent = {}
 
     def find(a):
@@ -797,6 +1181,9 @@ def components(instances):
             if x["family"] == "ownership":
                 b, c = x["cells"]
                 eqs.append({c: F(1), b: -x["_s"]})
+            elif x["family"] == "site_sheet":
+                s, m = x["cells"]
+                eqs.append({s: F(1), m: F(-1)})
             else:
                 a, q, t = x["cells"]
                 eqs.append({t: F(1), a: F(-1), q: F(-1)})
@@ -914,6 +1301,18 @@ def checks(instances, with_values):
     if rows != ["28"]:
         rec["ok"] = False
     out.append(rec)
+    hits = find(instances, family="site_sheet", anchor="2026Q2:YTD!E11")
+    want = ["2026Q2:YTD!E11", "2026Q2:Minestats1!N103"]
+    if len(hits) != 1:
+        out.append({"check": "E116", "ok": False, "detail": "site_sheet: %d instances anchored at 2026Q2:YTD!E11"
+                    % len(hits)})
+    else:
+        x = hits[0]
+        ok = x["state"] == "iii" and x["certificate"] == "nil_token" and x["cells"] == want
+        out.append({"check": "E116", "ok": ok, "detail": "site_sheet %s %s %s %s state %s certificate %s cells %s; "
+                    "expected state iii, certificate nil_token, cells %s"
+                    % (x["anchor"], x["subject"], x["field"], x["period"], x["state"], x["certificate"],
+                       json.dumps(x["cells"]), json.dumps(want))})
     return out
 
 
@@ -930,7 +1329,8 @@ def main(argv):
     if bad or not args:
         die("usage: mine_stats_census.py [--values] <dir-or-files...>")
     releases = collect(args)
-    instances = ownership_instances(releases) + quarter_sum_instances(releases)
+    site, unmatched = site_sheet_instances(releases)
+    instances = ownership_instances(releases) + quarter_sum_instances(releases) + site
     instances.sort(key=sort_key)
     seen = set()
     for x in instances:
@@ -939,8 +1339,8 @@ def main(argv):
             die("two instances with one key %r" % (k,))
         seen.add(k)
     comps, comp_lines = analyse(instances, with_values)
-    keys = ["family", "subject", "field", "group", "period", "anchor", "cells", "state", "reason", "at", "share",
-            "printed_share", "component", "corrections"]
+    keys = ["family", "subject", "field", "group", "period", "anchor", "cells", "state", "reason", "at", "certificate",
+            "share", "printed_share", "component", "corrections"]
     for x in instances:
         rec = {k: x[k] for k in keys}
         if with_values:
@@ -949,7 +1349,7 @@ def main(argv):
         emit(rec)
     for line in comp_lines:
         emit(line)
-    for fam in ("ownership", "quarter_sum"):
+    for fam in ("ownership", "quarter_sum", "site_sheet"):
         xs = [x for x in instances if x["family"] == fam]
         by = {}
         for x in xs:
@@ -958,6 +1358,11 @@ def main(argv):
         emit({"family": fam, "n": len(xs), **{s: sum(1 for x in xs if x["state"] == s)
                                                for s in ("i", "iii", "v", "np")},
               "v_by_reason": dict(sorted(by.items()))})
+    for _y, rel in sorted(releases.items()):
+        for where, why in rel.refusals:
+            emit({"family": "site_sheet", "refused": where, "reason": why})
+    for key, subjects in unmatched:
+        emit({"family": "site_sheet", "release": key, "no_minestats_column": subjects})
     emit({"components": len(comps), "infeasible_components": len(comp_lines),
           "joint_only": sum(1 for c in comp_lines if c["joint_only"])})
     for c in checks(instances, with_values):
