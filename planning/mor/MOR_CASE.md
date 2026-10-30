@@ -666,3 +666,14 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
   - **Tests.** `cargo test -p fmine-public -p fmine-cli -- --ignored`: 6 of 6 passed.
   - **Root.** `cargo run -q -p fmine-cli -- assure public --issuer barrick --through 2026Q2` printed certificate
     `fb8b38c2…` and anchor `anc_8874c61ae1fd136b9b64ed92deb763c9`, equal to `expected.toml`'s last row.
+- **E833** Cell number formats on the 18 registered workbooks (NEW-cell.S1, bd-jg43.1; FACT, execution,
+  2026-10-30).
+  - **Oracle.** `scripts/oracle/formats.py` (zipfile and ElementTree, committed at 345e2ba before any Rust) found
+    10 formats, 30,388 numeric cells (E820's total) and 6,256 non-integers. That equals the bead's table, which
+    was written before either reader.
+  - **Rust.** `Workbook::format_census` (7f68f82) equals the oracle on 18 of 18 files and on the summary, with
+    lines compared whole (`test_format_census_matches_independent_reader`, run locally).
+  - **Parity.** E820 parity holds: every census count and numeric digest is unchanged on the 18 files, and the
+    synthetic census pinned at 345e2ba is unchanged.
+  - **Planted negative.** Format codes left entity-encoded failed all 18 files; the change was reverted.
+  - **Same origin.** The agent that wrote the Rust also wrote the oracle, though first. It counts once.
