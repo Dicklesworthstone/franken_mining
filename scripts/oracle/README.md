@@ -18,6 +18,7 @@ then they sit in `corpus_of_input_docs/downloaded/mine_stats/`.
 | E826 stated share rule (2026-10-30) | `python3 -I scripts/oracle/share_census.py .` | 379 lines, then `{"sites": 328, "fit": 263, "miss": 65, "unconfirmed": 0, "regions_v": 51, "no_footnote": 0, "no_registered_share": 0}` (Long Canyon registered on E827) |
 | E828 hidden scope (2026-10-30) | `python3 -I scripts/oracle/hidden_census.py .` | 435 lines, then `{"hidden_sheets": 6, "instances": 435, "footing": {"i": 169, "iii": 1, "np": 4}, "per_oz": {"i": 235, "iv": 17, "np": 6, "v": 3}}` |
 | bd-jg43.1 number formats (2026-10-30) | `python3 -I scripts/oracle/formats.py corpus_of_input_docs/downloaded/mine_stats/*.xlsx` | 18 file lines, then 10 formats, `"numeric_total":30388,"non_integer_total":6256` |
+| bd-prmn.8 K.4 one-cell check (2026-10-30) | `python3 -I scripts/oracle/one_cell_cos.py --quiet .` | `{"columns": 519, "pass": 374, "fail": 82, "refused": 63, "k4_fail": 17, "other_fail": 65, "verdict": "basis rule", ...}` |
 | bd-jg43.2 displayed values (2026-10-30) | `python3 -I scripts/oracle/formats.py --displayed corpus_of_input_docs/downloaded/mine_stats/*.xlsx` | 18 file lines with `displayed_digest`, then `{"files":18,"shown":27367,"token":2873,"refused":148}` |
 
 | Script | What it is |
@@ -31,5 +32,6 @@ then they sit in `corpus_of_input_docs/downloaded/mine_stats/`.
 | `format_census.py` | Number-format census (cell-number-formats bead); research check. |
 | `formats.py` | bd-jg43.1 number-format census per file: format code to [numeric, non-integer], with non-integer decided on the exact stored decimal. Written and run before the Rust styles reader, by the agent that then wrote it. It counts numeric cells as `fidelity.py` does. `--displayed` (bd-jg43.2) adds each numeric cell's displayed text and a per-file digest; it was written before the Rust interpreter, by the same agent, and its two rounding rules are hypotheses until the LibreOffice cross-check runs. |
 | `as_shown_check.sh`, `as_shown_check.py` | bd-jg43.2 cross-check: LibreOffice's "as shown" CSV text against `formats.py --displayed`, on a fixture of hypothesis cases and 50 stratified cells per file. Runs in the `as-shown` job of `.github/workflows/real-files.yml`; issuer values are logged only with `--values`. |
+| `one_cell_cos.py` | bd-prmn.8, Appendix K.4's cheapest common test: the one-cell cost-of-sales-per-ounce check on every registered-subject column of the visible AISC tables, at 100% and at the registered share, with the implied ounces and the K.4 verdict. It reuses `census2.py`'s layout and `share_census.py`'s shares, footnote and label rules. Written before the Rust diagnostic, by the agent that then wrote it (same origin). |
 | `vintage_census.py` | Cross-vintage stored-value comparison; research check. |
 | `rate_census.py` | Per-ounce check that mirrors `aisc.rs`; NOT independent evidence. |
