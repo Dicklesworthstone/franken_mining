@@ -414,6 +414,25 @@ num = 49
 den = 200
 evidence = "W1-DR-01"
 
+# BD-331.S4: W1-DR-02 (CONFIRMED stale label). In the four 2024 files Minestats4 labels copper production and
+# sales "(millions of pounds)", but the values equal the summary sheets' kilotonnes in every cell and the sheet's
+# own footnote says quantities moved to tonnes in 2024 (Q1_2024:Minestats4!A29); from Q1 2025 the label reads
+# "(Thousands of tonnes)". The Mine Stats ledger reads those rows as the kilotonne rows; no value is converted.
+
+[[mine_stats_label_alias]]
+label = "Production (millions of pounds)"
+reads_as = "Production (Thousands of tonnes)"
+first = "2024Q1"
+last = "2024Q4"
+evidence = "W1-DR-02"
+
+[[mine_stats_label_alias]]
+label = "Sales (millions of pounds)"
+reads_as = "Sales (Thousands of tonnes)"
+first = "2024Q1"
+last = "2024Q4"
+evidence = "W1-DR-02"
+
 # bd-a28f.1: statuses that change how a subject's printed zeros read. A numeric zero in a period a disposal or
 # a withholding covers is Nil with its token kept, never a value; a non-zero number there stays visible, flagged.
 # Care and maintenance is recorded but leaves zeros as numbers.

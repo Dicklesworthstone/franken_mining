@@ -13,7 +13,7 @@ use fmine_evidence::Refusal;
 use fmine_registry::sources::{
     BasisRow, SourcesRegistry, SubjectStatusRow, is_quarter, load_sources_registry,
 };
-pub use fmine_registry::sources::{PrintedShareCorrection, RegionMemberRow};
+pub use fmine_registry::sources::{MineStatsLabelAlias, PrintedShareCorrection, RegionMemberRow};
 
 use crate::aisc::{ExplanationBasis, IdentityFamily};
 use crate::key::{StatusKind, SubjectStatus};
@@ -125,6 +125,8 @@ pub struct IssuerProfile {
     pub region_members: Vec<RegionMemberRow>,
     /// Printed shares the Mine Stats ledger replaces with a registered one (BD-331.S4, W1-DR-01).
     pub printed_share_corrections: Vec<PrintedShareCorrection>,
+    /// Stale Mine Statistics row labels the ledger reads as registered ones (BD-331.S4, W1-DR-02).
+    pub mine_stats_label_aliases: Vec<MineStatsLabelAlias>,
     /// The `--through YYYYQn` bound applied, if any; later rows were dropped before loading.
     pub through: Option<String>,
 }
@@ -232,6 +234,7 @@ impl IssuerProfile {
                 .collect::<Result<_, _>>()?,
             region_members: reg.region_members,
             printed_share_corrections: reg.printed_share_corrections,
+            mine_stats_label_aliases: reg.mine_stats_label_aliases,
             through: None,
         })
     }

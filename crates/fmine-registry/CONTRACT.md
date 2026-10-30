@@ -22,6 +22,11 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   (a registered site, not a region), `printed` (the decimal inside `(…%)`, e.g. `"47.5"`), positive `num` ≤
   `den`, `evidence`; one row per subject and printed share. It is not a `[[share]]` row: the registered share
   holds for the AISC tables, while this one replaces only what the label prints, which stays reported beside.
+- `sources::MineStatsLabelAlias`, `MineStatsLabelAlias::holds_for`, `SourcesRegistry::mine_stats_label_aliases`
+  (BD-331.S4, W1-DR-02): optional `[[mine_stats_label_alias]]` rows, a `Minestats*` row label printed with a
+  stale unit and read as a registered one in files released from `first` to `last`: `label` and `reads_as`
+  (both registered `[[mine_stats_label]]` labels, never the same one), release quarters `first` and `last` ≥
+  `first`, `evidence`; no two rows of one label over overlapping releases. Values are never converted.
 
 ## 5. Guards & Typed Refusals
 - `RegistryError::MissingEntry`, `RegistryError::CatalogMismatch`, `RegistryError::Io`.

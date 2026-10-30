@@ -26,12 +26,12 @@
 //! unit its field id promises (thousand ounces, kilotonnes, $/oz, $/lb), and a header naming no known field is
 //! refused, never dropped.
 //!
-//! The reader reports what the file prints. W1-DR-01 (Porgera's stale share) is registry data read by the
-//! ledger (`mine_ledger`, `[[printed_share_correction]]`), and the ledger asks the region map
-//! (`[[region_member]]`) by release; values carry no map version. Not yet here (bd-gwf1.1 stays open for it):
-//! the W1-DR-02 correction as data.
+//! The reader reports what the file prints. W1-DR-01 (Porgera's stale share) and W1-DR-02 (the 2024 copper rows
+//! labelled "(millions of pounds)" that hold kilotonnes) are registry data read by the ledger (`mine_ledger`,
+//! `[[printed_share_correction]]` and `[[mine_stats_label_alias]]`); values keep the label as printed. The ledger
+//! asks the region map (`[[region_member]]`) by release; values carry no map version.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fmine_core::hash::{Digest32, sha256};
 use fmine_evidence::Refusal;
@@ -174,6 +174,9 @@ pub struct MineStatsRead {
     pub refusals: Vec<CellRefusal>,
     /// Hidden sheets of the workbook. They are not read; they are named here so they are never skipped silently.
     pub hidden_sheets: Vec<String>,
+    /// The column-A locator of the first row of each `Minestats*` label printed twice in one block (the second is
+    /// refused): its values are read, and a reader that pairs them must not take them as the label's only print.
+    pub repeated: Vec<String>,
 }
 
 impl MineStatsRead {
@@ -284,6 +287,7 @@ pub fn read_mine_stats(
                 QuarantineItem::FormulaErrorCell { .. } => None,
             })
             .collect(),
+        repeated: Vec::new(),
     };
     for sheet in &workbook.sheets {
         if sheet.name == "QTD" || sheet.name == "YTD" {
@@ -421,7 +425,7 @@ fn read_minestats(
             }
         }
         let mut parent: Option<String> = None;
-        let mut seen = BTreeSet::new();
+        let mut seen: BTreeMap<(Option<String>, String), u32> = BTreeMap::new();
         let mut rr = r + 1;
         while rr <= max_row {
             let Some(cell_text) = py_str(sheet, rr, 1) else {
@@ -444,7 +448,14 @@ fn read_minestats(
                 None
             };
             let has_data = columns.iter().any(|(c, _, _)| sheet.cell(rr, *c).is_some());
-            if has_data && !seen.insert((section.clone(), label.clone())) {
+            let first = has_data
+                .then(|| *seen.entry((section.clone(), label.clone())).or_insert(rr))
+                .filter(|first| *first != rr);
+            if let Some(first) = first {
+                let at = format!("{}:{}!A{first}", read.quarter, sheet.name);
+                if !read.repeated.contains(&at) {
+                    read.repeated.push(at);
+                }
                 refuse(
                     read,
                     sheet,

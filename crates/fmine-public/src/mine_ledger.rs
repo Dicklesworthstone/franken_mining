@@ -1,5 +1,5 @@
-//! The Mine Statistics identity ledger (BD-331.S4, bd-prmn.4): two of the plan's Mine Stats families on the
-//! `QTD`/`YTD` summary sheets, decided by the exact kernel (`fmine_numerics::exact_feas`).
+//! The Mine Statistics identity ledger (BD-331.S4, bd-prmn.4): three of the plan's Mine Stats families, anchored on
+//! the `QTD`/`YTD` summary sheets and decided by the exact kernel (`fmine_numerics::exact_feas`).
 //!
 //! - **Ownership.** Attributable production = s × 100%-basis production, per site row and column group (the
 //!   release's own year, or the prior-year comparative). s is the share the row's label prints. A registered
@@ -9,6 +9,14 @@
 //! - **Quarter sums.** H1 = Q1 + Q2, 9M = H1 + Q3 and FY = 9M + Q4 on the three flow columns (100% production,
 //!   attributable production, attributable sold), anchored on each `YTD` cell. The operands come from releases
 //!   of the anchor's year, in the anchor's column group, on the row of the same subject.
+//! - **Summary against site sheet** (family 7). Each summary value of production, sales, cost of sales, TCC or
+//!   C1 and AISC equals the same site's value on a `Minestats*` sheet of the metal (title `(Gold)` or
+//!   `(Copper)`), same release, period and column group: [`SITE_FIELDS`] names the row. A registered label alias
+//!   reads a stale row label as the registered one (W1-DR-02: the 2024 copper "(millions of pounds)" rows hold
+//!   kilotonnes). Subjects with no column on such a sheet (regions, `Total Gold`) pose none. A subject on two
+//!   sheets of one metal, or a row label twice in one block, is refused. Two numbers are one equal identity
+//!   over their boxes; the nil token `—` against a number reads as number = 0 and is decided alone
+//!   (`nil_token`, E116); `n/a` against a number is refused.
 //!
 //! Exclusions by name come first: a subject whose registered status is `withheld` for the whole period of an
 //! operand (Loulo-Gounkoto Q1–Q3 2025, E818), and a region whose registered members differ between the
@@ -32,9 +40,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use fmine_io::xlsx::{Workbook, parse_a1_ref};
+use fmine_io::xlsx::{CellValue, Workbook, parse_a1_ref};
 use fmine_numerics::exact_feas::{self as xf, Rat};
-use fmine_registry::sources::PrintedShareCorrection;
+use fmine_registry::sources::{MineStatsLabelAlias, PrintedShareCorrection};
 
 use crate::key::{Period, PeriodKind, StatusKind, SubjectStatus};
 use crate::mine_stats::{MineStatsCell, MineStatsRead, MineStatsValue, View};
@@ -47,23 +55,78 @@ pub const FLOW_FIELDS: [[&str; 3]; 2] = [
     ["cu_prod_100_kt", "cu_prod_attr_kt", "cu_sold_attr_kt"],
 ];
 
+/// Family 7's fields: `(metal, summary field id, Minestats row label in lower case)`. The site sheets print
+/// Barrick's share, so production and sales pair with the attributable summary columns.
+pub const SITE_FIELDS: [(Metal, &str, &str); 10] = [
+    (
+        Metal::Gold,
+        "au_prod_attr_koz",
+        "production (thousands of ounces)",
+    ),
+    (
+        Metal::Gold,
+        "au_sold_attr_koz",
+        "sales (thousands of ounces)",
+    ),
+    (
+        Metal::Gold,
+        "cos_usd_per_oz",
+        "cost of sales per ounce ($/oz)",
+    ),
+    (Metal::Gold, "tcc_usd_per_oz", "total cash costs"),
+    (Metal::Gold, "aisc_usd_per_oz", "all-in sustaining costs"),
+    (
+        Metal::Copper,
+        "cu_prod_attr_kt",
+        "production (thousands of tonnes)",
+    ),
+    (
+        Metal::Copper,
+        "cu_sold_attr_kt",
+        "sales (thousands of tonnes)",
+    ),
+    (
+        Metal::Copper,
+        "cos_usd_per_lb",
+        "cost of sales per pound ($/lb)",
+    ),
+    (Metal::Copper, "c1_usd_per_lb", "c1 cash costs"),
+    (Metal::Copper, "aisc_usd_per_lb", "all-in sustaining costs"),
+];
+
 /// Metal totals: like regions, they roll up sites held at different shares.
 const TOTALS: [&str; 2] = ["Total Gold", "Total Copper"];
 
 const QUARTER_SUM: &str = "quarter_sum";
 
+/// Components up to this many cells get the exhaustive correction search (the kernel's default is 20). A summary
+/// cell's site-sheet print joins it to its component, so one site's year of quarters can reach 21 cells. The run
+/// cap still bounds the search: at 32 cells every set up to size 3 takes at most 32 + 496 + 4,960 = 5,488 runs,
+/// within [`xf::MAX_BLAME_RUNS`]; past the cap the set is labelled inclusion-minimal only.
+const EXHAUSTIVE_CELLS: usize = 32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Metal {
+    Gold,
+    Copper,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Family {
     Ownership,
     QuarterSum,
+    SiteSheet,
 }
 
 impl Family {
+    pub const ALL: [Self; 3] = [Self::Ownership, Self::QuarterSum, Self::SiteSheet];
+
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Ownership => "ownership",
             Self::QuarterSum => QUARTER_SUM,
+            Self::SiteSheet => "site_sheet",
         }
     }
 }
@@ -170,6 +233,9 @@ pub struct Instance {
     pub share: Option<Rat>,
     /// The share as printed (`"61.5"`).
     pub printed_share: Option<String>,
+    /// A site-sheet instance decided as number = 0 because the other print is the nil token (`nil_token`); it is
+    /// never posed jointly.
+    pub nil_token: bool,
     /// The id of the jointly infeasible component the instance is in, if any.
     pub component: Option<String>,
 }
@@ -228,6 +294,7 @@ pub struct LedgerRules<'a> {
     pub region_members: &'a [RegionMemberRow],
     pub statuses: &'a [SubjectStatus],
     pub corrections: &'a [PrintedShareCorrection],
+    pub aliases: &'a [MineStatsLabelAlias],
 }
 
 impl LedgerRules<'_> {
@@ -259,13 +326,23 @@ pub struct LedgerFile<'a> {
     pub workbook: &'a Workbook,
 }
 
-/// A summary cell as an operand.
+/// A cell as an operand.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Operand {
     Number { value: Rat, step: Rat },
-    Placeholder,
+    Placeholder(Mark),
     Blank,
     Unreadable,
+}
+
+/// A placeholder's kind. Ownership and quarter sums read every kind alike; the site-sheet family reads only the
+/// nil token (`"—"` or `"— "` exactly) and `"n/a"` (exactly), and any other placeholder as unreadable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mark {
+    Nil,
+    NotApplicable,
+    /// Another spelling, or a number shown as a format token.
+    Other,
 }
 
 #[derive(Debug, Clone)]
@@ -278,6 +355,19 @@ struct Slot {
 
 /// `(release, sheet, field, group, subject)`.
 type SlotKey = (String, String, String, Group, String);
+
+/// `(release, metal, row label as read, period, site)`: a site's cell on a `Minestats*` sheet.
+type SiteKey = (String, Metal, String, Period, String);
+
+/// The `Minestats*` cells of every release read.
+#[derive(Debug, Default)]
+struct SiteSheets {
+    /// Every cell of a key with its row, in row order (an aliased label beside its registered one gives two), and
+    /// whether the reader found the row's label printed again in its block.
+    cells: BTreeMap<SiteKey, Vec<(u32, bool, Slot)>>,
+    /// `(release, metal, site)` → the sheets of that metal with a column for the site.
+    sheets: BTreeMap<(String, Metal, String), BTreeSet<String>>,
+}
 
 /// `2026Q2`, `2026H1`, `20269M` or `2026FY`, as the reader writes periods.
 fn parse_period(code: &str) -> Option<Period> {
@@ -304,7 +394,15 @@ fn release_parts(quarter: &str) -> Option<(u16, u8)> {
 fn operand(v: &MineStatsValue, workbook: &Workbook) -> Operand {
     match &v.value {
         MineStatsCell::Missing => Operand::Blank,
-        MineStatsCell::Nil { .. } | MineStatsCell::NotApplicable { .. } => Operand::Placeholder,
+        MineStatsCell::Nil { token } if token == "—" || token == "— " => {
+            Operand::Placeholder(Mark::Nil)
+        }
+        MineStatsCell::NotApplicable { token } if token == "n/a" => {
+            Operand::Placeholder(Mark::NotApplicable)
+        }
+        MineStatsCell::Nil { .. } | MineStatsCell::NotApplicable { .. } => {
+            Operand::Placeholder(Mark::Other)
+        }
         MineStatsCell::Number { .. } => {
             let shown = workbook
                 .sheet(&v.sheet)
@@ -312,7 +410,7 @@ fn operand(v: &MineStatsValue, workbook: &Workbook) -> Operand {
                 .and_then(|(s, (row, col))| s.cell(row, col))
                 .and_then(|c| c.displayed());
             match shown {
-                Some(Ok(d)) if d.token.is_some() => Operand::Placeholder,
+                Some(Ok(d)) if d.token.is_some() => Operand::Placeholder(Mark::Other),
                 Some(Ok(d)) if !d.percent => {
                     let scale = 10_i128.checked_pow(u32::from(d.d));
                     match scale.map(|s| (Rat::new(d.scaled, s), Rat::new(1, s))) {
@@ -326,10 +424,13 @@ fn operand(v: &MineStatsValue, workbook: &Workbook) -> Operand {
     }
 }
 
-/// Every flow cell of the summary sheets, by key. A key read twice (one subject on two rows of a block) keeps
-/// neither value: both become unreadable.
+fn is_flow(field: &str) -> bool {
+    FLOW_FIELDS.iter().flatten().any(|f| *f == field)
+}
+
+/// Every flow cell and every [`SITE_FIELDS`] cell of the summary sheets, by key. A key read twice (one subject
+/// on two rows of a block) keeps neither value: both become unreadable.
 fn slots(files: &[LedgerFile<'_>]) -> BTreeMap<SlotKey, Slot> {
-    let flows: BTreeSet<&str> = FLOW_FIELDS.iter().flatten().copied().collect();
     let mut out: BTreeMap<SlotKey, Slot> = BTreeMap::new();
     for f in files {
         let Some((year, _)) = release_parts(f.quarter) else {
@@ -338,7 +439,7 @@ fn slots(files: &[LedgerFile<'_>]) -> BTreeMap<SlotKey, Slot> {
         for v in f.read.values.iter().filter(|v| {
             v.view == View::Summary
                 && (v.sheet == "QTD" || v.sheet == "YTD")
-                && flows.contains(v.label.as_str())
+                && (is_flow(&v.label) || SITE_FIELDS.iter().any(|(_, s, _)| *s == v.label))
         }) {
             let Some(period) = parse_period(&v.period) else {
                 continue;
@@ -374,6 +475,77 @@ fn slots(files: &[LedgerFile<'_>]) -> BTreeMap<SlotKey, Slot> {
     out
 }
 
+/// The metal a `Minestats*` sheet's A1 title names: `(Gold)` or `(Copper)`, not both.
+fn sheet_metal(workbook: &Workbook, sheet: &str) -> Option<Metal> {
+    let title = match &workbook.sheet(sheet)?.cell(1, 1)?.value {
+        CellValue::Text(t) => t,
+        _ => return None,
+    };
+    match (title.contains("(Gold)"), title.contains("(Copper)")) {
+        (true, false) => Some(Metal::Gold),
+        (false, true) => Some(Metal::Copper),
+        _ => None,
+    }
+}
+
+/// A `Minestats*` row label as matched: whitespace collapsed, lower case, and read as its registered label
+/// where an alias holds for the release.
+fn site_label(aliases: &[MineStatsLabelAlias], release: &str, label: &str) -> String {
+    let norm = |s: &str| {
+        s.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    let label = norm(label);
+    aliases
+        .iter()
+        .find(|a| a.holds_for(release) && norm(&a.label) == label)
+        .map_or(label, |a| norm(&a.reads_as))
+}
+
+/// Every cell of the `Minestats*` sheets whose title names one metal.
+fn site_sheets(files: &[LedgerFile<'_>], aliases: &[MineStatsLabelAlias]) -> SiteSheets {
+    let mut out = SiteSheets::default();
+    for f in files {
+        let mut metals: BTreeMap<&str, Option<Metal>> = BTreeMap::new();
+        let repeated: BTreeSet<&str> = f.read.repeated.iter().map(String::as_str).collect();
+        for v in f.read.values.iter().filter(|v| v.view == View::Minestats) {
+            let metal = *metals
+                .entry(v.sheet.as_str())
+                .or_insert_with(|| sheet_metal(f.workbook, &v.sheet));
+            let (Some(metal), Some(period), Some((row, _))) =
+                (metal, parse_period(&v.period), parse_a1_ref(&v.cell))
+            else {
+                continue;
+            };
+            out.sheets
+                .entry((f.quarter.to_string(), metal, v.site.clone()))
+                .or_default()
+                .insert(v.sheet.clone());
+            let slot = Slot {
+                locator: v.locator.clone(),
+                operand: operand(v, f.workbook),
+                period,
+                printed_share: None,
+            };
+            let key = (
+                f.quarter.to_string(),
+                metal,
+                site_label(aliases, f.quarter, &v.label),
+                period,
+                v.site.clone(),
+            );
+            let twice = repeated.contains(format!("{}:{}!A{row}", f.quarter, v.sheet).as_str());
+            out.cells.entry(key).or_default().push((row, twice, slot));
+        }
+    }
+    for cells in out.cells.values_mut() {
+        cells.sort_by_key(|(row, _, _)| *row);
+    }
+    out
+}
+
 /// States 2–4 of the rule over operands that all exist: a blank, all placeholders, some placeholders, an
 /// unreadable number. `None` when every operand is a number.
 fn operand_state(ops: &[&Slot]) -> Option<State> {
@@ -386,10 +558,13 @@ fn operand_state(ops: &[&Slot]) -> Option<State> {
     if let Some(at) = first(|o| *o == Operand::Blank) {
         return refused(Reason::BlankOperand, Some(at));
     }
-    if ops.iter().all(|s| s.operand == Operand::Placeholder) {
+    if ops
+        .iter()
+        .all(|s| matches!(s.operand, Operand::Placeholder(_)))
+    {
         return Some(State::NotPublished);
     }
-    if let Some(at) = first(|o| *o == Operand::Placeholder) {
+    if let Some(at) = first(|o| matches!(o, Operand::Placeholder(_))) {
         return refused(Reason::PlaceholderOperand, Some(at));
     }
     if let Some(at) = first(|o| *o == Operand::Unreadable) {
@@ -502,6 +677,7 @@ fn ownership(
                 state,
                 share,
                 printed_share: c.printed_share.clone(),
+                nil_token: false,
                 component: None,
             };
             let refused = |reason, at| State::Refused { reason, at };
@@ -553,8 +729,9 @@ fn quarter_sums(
     releases: &BTreeSet<&str>,
     out: &mut Vec<(Instance, Option<Posed>)>,
 ) {
-    for ((release, _, field, group, subject), total) in
-        slots.iter().filter(|((_, s, _, _, _), _)| s == "YTD")
+    for ((release, _, field, group, subject), total) in slots
+        .iter()
+        .filter(|((_, s, f, _, _), _)| s == "YTD" && is_flow(f))
     {
         let Some((year, n @ 2..=4)) = release_parts(release) else {
             continue;
@@ -601,6 +778,7 @@ fn quarter_sums(
             state: State::Consistent,
             share: None,
             printed_share: None,
+            nil_token: false,
             component: None,
         };
         let refused = |reason| State::Refused { reason, at: None };
@@ -644,6 +822,147 @@ fn quarter_sums(
     }
 }
 
+/// Whether 0 lies in the number's closed box `[v − step/2, v + step/2]`; `None` on overflow.
+fn box_holds_zero(value: Rat, step: Rat) -> Option<bool> {
+    let half = step.checked_div(Rat::from_integer(2)).ok()?;
+    let lo = value.checked_sub(half).ok()?;
+    let hi = value.checked_add(half).ok()?;
+    Some(lo.signum() <= 0 && hi.signum() >= 0)
+}
+
+/// Steps 3–8 of family 7 for a summary operand `s` and its site-sheet counterpart `m`: the state, with the
+/// posing for two numbers, and whether the nil token decided it.
+fn decide_site(s: &Slot, m: &Slot, posed: xf::Identity) -> (State, Option<Posed>, bool) {
+    let refused = |reason, at: &Slot| State::Refused {
+        reason,
+        at: Some(at.locator.clone()),
+    };
+    let ops = [s, m];
+    if let Some(b) = ops.iter().find(|o| o.operand == Operand::Blank) {
+        return (refused(Reason::BlankOperand, b), None, false);
+    }
+    let token = |o: &Slot| {
+        matches!(
+            o.operand,
+            Operand::Placeholder(Mark::Nil | Mark::NotApplicable)
+        )
+    };
+    if ops.iter().all(|o| token(o)) {
+        return (State::NotPublished, None, false);
+    }
+    let number = ops.iter().find_map(|o| match o.operand {
+        Operand::Number { value, step } => Some((value, step)),
+        _ => None,
+    });
+    let other = ops
+        .iter()
+        .find(|o| !matches!(o.operand, Operand::Number { .. }));
+    match (number, other.map(|o| (&o.operand, *o))) {
+        (Some((value, step)), Some((Operand::Placeholder(Mark::Nil), _))) => {
+            let state = match box_holds_zero(value, step) {
+                Some(true) => State::Consistent,
+                Some(false) => State::Discrepancy,
+                None => kernel_refused("overflow testing the nil token".to_string()),
+            };
+            return (state, None, true);
+        }
+        (Some(_), Some((Operand::Placeholder(Mark::NotApplicable), na))) => {
+            return (refused(Reason::PlaceholderOperand, na), None, false);
+        }
+        _ => {}
+    }
+    if let Some(u) = ops.iter().find(|o| {
+        matches!(
+            o.operand,
+            Operand::Unreadable | Operand::Placeholder(Mark::Other)
+        )
+    }) {
+        return (refused(Reason::OperandUnreadable, u), None, false);
+    }
+    let p = Posed {
+        cells: ops.into_iter().filter_map(xf_cell).collect(),
+        identity: posed,
+    };
+    (decide(&p), Some(p), false)
+}
+
+/// Family 7: each summary value of a [`SITE_FIELDS`] field whose subject has a column on a `Minestats*` sheet of
+/// the field's metal in the same release.
+fn site_sheet(
+    rules: &LedgerRules<'_>,
+    slots: &BTreeMap<SlotKey, Slot>,
+    sites: &SiteSheets,
+    out: &mut Vec<(Instance, Option<Posed>)>,
+) {
+    for ((release, _, field, group, subject), s) in slots {
+        let Some(&(metal, _, label)) = SITE_FIELDS.iter().find(|(_, f, _)| f == field) else {
+            continue;
+        };
+        let Some(sheets) = sites.sheets.get(&(release.clone(), metal, subject.clone())) else {
+            continue;
+        };
+        let two_sheets = sheets.len() > 1;
+        let found = sites
+            .cells
+            .get(&(
+                release.clone(),
+                metal,
+                label.to_string(),
+                s.period,
+                subject.clone(),
+            ))
+            .filter(|_| !two_sheets);
+        let first = found.and_then(|cells| cells.first()).map(|(_, _, m)| m);
+        let mut instance = Instance {
+            family: Family::SiteSheet,
+            subject: subject.clone(),
+            field: field.clone(),
+            group: *group,
+            period: s.period,
+            anchor: s.locator.clone(),
+            cells: vec![Some(s.locator.clone()), first.map(|m| m.locator.clone())],
+            state: State::Consistent,
+            share: None,
+            printed_share: None,
+            nil_token: false,
+            component: None,
+        };
+        let refused = |reason, at: Option<&Slot>| State::Refused {
+            reason,
+            at: at.map(|m| m.locator.clone()),
+        };
+        let mut posed = None;
+        instance.state = if two_sheets {
+            refused(Reason::OperandUnreadable, None)
+        } else if let Some(evidence) = rules.withheld(subject, &s.period) {
+            refused(Reason::Withheld { evidence }, None)
+        } else if let Some(m) = first {
+            if found
+                .is_some_and(|cells| cells.len() > 1 || cells.iter().any(|(_, twice, _)| *twice))
+            {
+                refused(Reason::OperandUnreadable, Some(m))
+            } else {
+                let identity = xf::Identity {
+                    id: identity_id(Family::SiteSheet, &s.locator),
+                    family: Family::SiteSheet.as_str().to_string(),
+                    closure: xf::Closure::Definitional,
+                    kind: xf::IdentityKind::Equal {
+                        a: s.locator.clone(),
+                        b: m.locator.clone(),
+                    },
+                };
+                let (state, p, nil_token) = decide_site(s, m, identity);
+                posed = p;
+                instance.nil_token = nil_token;
+                state
+            }
+        } else {
+            refused(Reason::OperandRowMissing, None)
+        };
+        out.push((instance, posed));
+    }
+}
+
 /// Poses every decided instance jointly and blames each infeasible component.
 fn joint(
     instances: &mut [Instance],
@@ -669,7 +988,14 @@ fn joint(
         Ok(s) => s,
         Err(e) => return (0, Vec::new(), vec![(String::new(), e.to_string())]),
     };
-    let blamed = xf::blame(&cells, &identities, &rules).unwrap_or_default();
+    let blamed = xf::blame_with_caps(
+        &cells,
+        &identities,
+        &rules,
+        EXHAUSTIVE_CELLS,
+        xf::MAX_BLAME_RUNS,
+    )
+    .unwrap_or_default();
     let mut infeasible = Vec::new();
     let mut indeterminate = Vec::new();
     for c in &solved {
@@ -757,6 +1083,12 @@ pub fn mine_ledger(files: &[LedgerFile<'_>], rules: &LedgerRules<'_>) -> MineLed
     let mut pairs = Vec::new();
     ownership(rules, &slots, &mut pairs);
     quarter_sums(rules, &slots, &releases, &mut pairs);
+    site_sheet(
+        rules,
+        &slots,
+        &site_sheets(files, rules.aliases),
+        &mut pairs,
+    );
     pairs.sort_by(|(a, _), (b, _)| {
         (a.family, &a.anchor, a.group, &a.field).cmp(&(b.family, &b.anchor, b.group, &b.field))
     });
@@ -815,25 +1147,56 @@ mod tests {
         region_members: &[],
         statuses: &[],
         corrections: &[],
+        aliases: &[],
     };
 
-    fn sheet(name: &str, months: &str, rows: &[Row<'_>]) -> MinimalSheet {
-        let text = |s: &str| MinimalCell::Text(s.to_string());
+    const GOLD: [&str; 3] = [
+        "Gold produced (000s oz 100%)",
+        "Gold produced (000s oz attributable)",
+        "Gold sold (000s oz attributable)",
+    ];
+
+    const COPPER: [&str; 3] = [
+        "Copper produced (thousands of tonnes 100%)",
+        "Copper produced (thousands of tonnes attributable)",
+        "Copper sold (thousands of tonnes attributable)",
+    ];
+
+    fn text(s: &str) -> MinimalCell {
+        MinimalCell::Text(s.to_string())
+    }
+
+    /// A data cell from its spec (see [`Row`]); a spec holding `—` is that text as printed. `None` for blank.
+    fn data(v: &str) -> Option<MinimalCell> {
         let number = |raw: &str, xf| MinimalCell::Styled {
             raw: raw.to_string(),
             xf,
         };
+        match v {
+            "" => None,
+            _ if v.contains('—') || v == "n/a" => Some(text(v)),
+            _ => Some(match (v.strip_prefix("##"), v.strip_prefix('#')) {
+                (Some(raw), _) => number(raw, 2),
+                (None, Some(raw)) => number(raw, 1),
+                (None, None) => number(v, 0),
+            }),
+        }
+    }
+
+    /// A summary sheet with one block of the release's own year: `headers` in B4–D4, rows from row 5.
+    fn summary(name: &str, months: &str, headers: [&str; 3], rows: &[Row<'_>]) -> MinimalSheet {
         let mut cells = vec![
             (
                 "A3".to_string(),
                 text(&format!("For the {months} months ended December 31,")),
             ),
-            ("B3".to_string(), number("2030", 0)),
-        ];
-        let headers = [
-            "Gold produced (000s oz 100%)",
-            "Gold produced (000s oz attributable)",
-            "Gold sold (000s oz attributable)",
+            (
+                "B3".to_string(),
+                MinimalCell::Styled {
+                    raw: "2030".to_string(),
+                    xf: 0,
+                },
+            ),
         ];
         for (col, h) in ["B", "C", "D"].into_iter().zip(headers) {
             cells.push((format!("{col}4"), text(h)));
@@ -842,16 +1205,9 @@ mod tests {
             let row = 5 + k;
             cells.push((format!("A{row}"), text(label)));
             for (col, v) in ["B", "C", "D"].into_iter().zip(values) {
-                let c = match *v {
-                    "" => continue,
-                    "—" | "n/a" => text(v),
-                    _ => match (v.strip_prefix("##"), v.strip_prefix('#')) {
-                        (Some(raw), _) => number(raw, 2),
-                        (None, Some(raw)) => number(raw, 1),
-                        (None, None) => number(v, 0),
-                    },
-                };
-                cells.push((format!("{col}{row}"), c));
+                if let Some(c) = data(v) {
+                    cells.push((format!("{col}{row}"), c));
+                }
             }
         }
         MinimalSheet {
@@ -861,32 +1217,76 @@ mod tests {
         }
     }
 
-    fn ledger(releases: &[Release<'_>], rules: &LedgerRules<'_>) -> MineLedger {
+    /// A `Minestats*` sheet titled `title` with one three-month block: each site's name on row 2 over its two
+    /// columns (from B), the block header on row 3 with 2030 and 2029 in each site's columns, then from row 4 one
+    /// row per label with each site's current-year and prior-year cells (specs as in [`Row`]).
+    fn minestats(
+        name: &str,
+        title: &str,
+        sites: &[&str],
+        rows: &[(&str, Vec<&str>)],
+    ) -> MinimalSheet {
+        const COLS: [&str; 6] = ["B", "C", "D", "E", "F", "G"];
+        let mut cells = vec![
+            ("A1".to_string(), text(title)),
+            (
+                "A3".to_string(),
+                text("For the three months ended March 31,"),
+            ),
+        ];
+        for (k, site) in sites.iter().enumerate() {
+            let (cur, prior) = (COLS[2 * k], COLS[2 * k + 1]);
+            cells.push((format!("{cur}2"), text(site)));
+            for (col, year) in [(cur, "2030"), (prior, "2029")] {
+                let year = MinimalCell::Styled {
+                    raw: year.to_string(),
+                    xf: 0,
+                };
+                cells.push((format!("{col}3"), year));
+            }
+        }
+        for (k, (label, values)) in rows.iter().enumerate() {
+            let row = 4 + k;
+            cells.push((format!("A{row}"), text(label)));
+            for (col, v) in COLS.into_iter().zip(values) {
+                if let Some(c) = data(v) {
+                    cells.push((format!("{col}{row}"), c));
+                }
+            }
+        }
+        MinimalSheet {
+            name: name.to_string(),
+            hidden: false,
+            cells,
+        }
+    }
+
+    /// The ledger over `(quarter, sheets)` workbooks, with the reader's refusal locators.
+    fn run(
+        books: Vec<(String, Vec<MinimalSheet>)>,
+        rules: &LedgerRules<'_>,
+    ) -> (MineLedger, Vec<String>) {
         let styles = MinimalStyles {
             num_fmts: vec![(164, "0.0".to_string())],
             xfs: vec![0, 164, 2],
         };
-        let books: Vec<(String, Workbook)> = releases
-            .iter()
-            .map(|(n, qtd, ytd)| {
-                let mut sheets = vec![sheet("QTD", "three", qtd)];
-                if *n > 1 {
-                    let months = ["three", "six", "nine", "twelve"][usize::from(*n) - 1];
-                    sheets.push(sheet("YTD", months, ytd));
-                }
+        let books: Vec<(String, Workbook)> = books
+            .into_iter()
+            .map(|(q, sheets)| {
                 let bytes = build_minimal_xlsx_styled(&sheets, Some(&styles));
                 let wb = Workbook::from_bytes("synthetic_mine_ledger.xlsx", &bytes)
                     .expect("synthetic workbook parses");
-                (format!("2030Q{n}"), wb)
+                (q, wb)
             })
             .collect();
         let reads: Vec<MineStatsRead> = books
             .iter()
-            .map(|(q, wb)| {
-                let read = read_mine_stats(wb, q, None).expect("reads");
-                assert!(read.refusals.is_empty(), "{q}: {:?}", read.refusals);
-                read
-            })
+            .map(|(q, wb)| read_mine_stats(wb, q, None).expect("reads"))
+            .collect();
+        let refusals = reads
+            .iter()
+            .flat_map(|r| &r.refusals)
+            .map(|r| r.locator.clone())
             .collect();
         let files: Vec<LedgerFile<'_>> = books
             .iter()
@@ -897,8 +1297,40 @@ mod tests {
                 workbook,
             })
             .collect();
-        mine_ledger(&files, rules)
+        (mine_ledger(&files, rules), refusals)
     }
+
+    fn ledger(releases: &[Release<'_>], rules: &LedgerRules<'_>) -> MineLedger {
+        let books = releases
+            .iter()
+            .map(|(n, qtd, ytd)| {
+                let mut sheets = vec![summary("QTD", "three", GOLD, qtd)];
+                if *n > 1 {
+                    let months = ["three", "six", "nine", "twelve"][usize::from(*n) - 1];
+                    sheets.push(summary("YTD", months, GOLD, ytd));
+                }
+                (format!("2030Q{n}"), sheets)
+            })
+            .collect();
+        let (l, refusals) = run(books, rules);
+        assert!(refusals.is_empty(), "{refusals:?}");
+        l
+    }
+
+    /// Release `2030Q1`: a `QTD` sheet of `metal` headers and `rows`, beside the given `Minestats*` sheets.
+    fn site_ledger(
+        metal: [&str; 3],
+        rows: &[Row<'_>],
+        sheets: Vec<MinimalSheet>,
+        rules: &LedgerRules<'_>,
+    ) -> (MineLedger, Vec<String>) {
+        let mut all = vec![summary("QTD", "three", metal, rows)];
+        all.extend(sheets);
+        run(vec![("2030Q1".to_string(), all)], rules)
+    }
+
+    const AU: &str = "Mine Statistics (Gold)";
+    const CU: &str = "Mine Statistics (Copper)";
 
     fn at<'a>(l: &'a MineLedger, family: Family, anchor: &str) -> &'a Instance {
         l.instances
@@ -1268,5 +1700,337 @@ mod tests {
             at(&l, Family::Ownership, "2030Q2:QTD!C5").state,
             State::Consistent
         );
+    }
+
+    fn site_at(l: &MineLedger, cell: &str) -> (State, Option<String>) {
+        let i = at(l, Family::SiteSheet, &format!("2030Q1:QTD!{cell}"));
+        (i.state.clone(), i.cells.get(1).cloned().flatten())
+    }
+
+    fn ms(cell: &str) -> Option<String> {
+        Some(format!("2030Q1:Minestats1!{cell}"))
+    }
+
+    /// Family 7: a summary value pairs with its site's print of the same row label (matched in lower case,
+    /// whitespace collapsed, footnote stripped), period and year. 90 and 92 are boxes [89.5, 90.5] and
+    /// [91.5, 92.5]: (iii), posed jointly, either print alone a correction. A subject with no column on a site
+    /// sheet of the metal poses none, nor does the 100% column.
+    #[test]
+    fn test_site_sheet_pairs_each_summary_value_with_its_site_print() {
+        let (l, refusals) = site_ledger(
+            GOLD,
+            &[
+                ("Hemlo", ["", "100", "90"]),
+                ("Turquoise Ridge", ["", "50", "45"]),
+            ],
+            vec![minestats(
+                "Minestats1",
+                AU,
+                &["Hemlo2"],
+                &[
+                    ("Production (Thousands of  ounces)", vec!["100", "80"]),
+                    ("Sales (thousands of ounces)1", vec!["92", "85"]),
+                ],
+            )],
+            &NONE,
+        );
+        assert!(refusals.is_empty(), "{refusals:?}");
+        assert_eq!(site_at(&l, "C5"), (State::Consistent, ms("B4")));
+        assert_eq!(site_at(&l, "D5"), (State::Discrepancy, ms("B5")));
+        assert_eq!(
+            l.instances
+                .iter()
+                .filter(|i| i.family == Family::SiteSheet)
+                .count(),
+            2
+        );
+        let [c] = l.infeasible.as_slice() else {
+            panic!("one infeasible component: {:?}", l.infeasible);
+        };
+        assert_eq!(c.id, "2030Q1:Minestats1!B5");
+        assert_eq!(
+            at(&l, Family::SiteSheet, "2030Q1:QTD!D5")
+                .component
+                .as_deref(),
+            Some(c.id.as_str())
+        );
+        assert!(c.minimum && !c.joint_only);
+        assert_eq!(sets(c), [["2030Q1:Minestats1!B5"], ["2030Q1:QTD!D5"]]);
+        assert_eq!(l.components, 2);
+    }
+
+    /// The nil token against a number reads as number = 0 and is decided alone (E116's shape): 5 is [4.5, 5.5],
+    /// (iii); 0 is [−0.5, 0.5], (i). Two tokens are not published; `n/a` against a number is refused at the `n/a`.
+    #[test]
+    fn test_site_sheet_nil_token_and_placeholders() {
+        let (l, refusals) = site_ledger(
+            GOLD,
+            &[
+                ("Hemlo", ["", "5", "0"]),
+                ("Tongon (89.7%)", ["", "—", "12"]),
+            ],
+            vec![minestats(
+                "Minestats1",
+                AU,
+                &["Hemlo", "Tongon (89.7%)"],
+                &[
+                    ("Production (thousands of ounces)", vec!["—", "", "n/a", ""]),
+                    ("Sales (thousands of ounces)", vec!["— ", "", "n/a", ""]),
+                ],
+            )],
+            &NONE,
+        );
+        assert!(refusals.is_empty(), "{refusals:?}");
+        assert_eq!(site_at(&l, "C5"), (State::Discrepancy, ms("B4")));
+        assert_eq!(site_at(&l, "D5"), (State::Consistent, ms("B5")));
+        for cell in ["C5", "D5"] {
+            let i = at(&l, Family::SiteSheet, &format!("2030Q1:QTD!{cell}"));
+            assert!(i.nil_token && i.component.is_none(), "{cell}");
+        }
+        assert_eq!(site_at(&l, "C6"), (State::NotPublished, ms("D4")));
+        assert_eq!(
+            site_at(&l, "D6").0,
+            refused(Reason::PlaceholderOperand, Some("2030Q1:Minestats1!D5"))
+        );
+        // Nothing is posed jointly.
+        assert_eq!((l.components, l.infeasible.len()), (0, 0));
+    }
+
+    /// Only `"—"` and `"— "` are the nil token here: another spelling of it is unreadable, never read as zero.
+    #[test]
+    fn test_other_nil_spelling_is_unreadable() {
+        let (l, refusals) = site_ledger(
+            GOLD,
+            &[("Hemlo", ["", "5", "0"])],
+            vec![minestats(
+                "Minestats1",
+                AU,
+                &["Hemlo"],
+                &[
+                    ("Production (thousands of ounces)", vec!["  —", ""]),
+                    ("Sales (thousands of ounces)", vec!["—", ""]),
+                ],
+            )],
+            &NONE,
+        );
+        assert!(refusals.is_empty(), "{refusals:?}");
+        assert_eq!(
+            site_at(&l, "C5"),
+            (
+                refused(Reason::OperandUnreadable, Some("2030Q1:Minestats1!B4")),
+                ms("B4")
+            )
+        );
+        assert_eq!(site_at(&l, "D5").0, State::Consistent);
+    }
+
+    /// The census's order: a subject on two site sheets of one metal; a withheld subject (its counterpart still
+    /// named); a missing row; then a blank or unreadable operand at that cell.
+    #[test]
+    fn test_site_sheet_refusals_in_order() {
+        let statuses = [SubjectStatus {
+            subject: "Loulo-Gounkoto".to_string(),
+            kind: StatusKind::Withheld,
+            first: (2030, 1),
+            last: Some((2030, 3)),
+            evidence: "E818".to_string(),
+        }];
+        let (l, refusals) = site_ledger(
+            GOLD,
+            &[
+                ("Hemlo", ["", "100", "90"]),
+                ("Loulo-Gounkoto (80%)", ["", "50", "40"]),
+                ("Kibali (45%)", ["", "30", "20"]),
+                ("Tongon (89.7%)", ["", "60", "55"]),
+            ],
+            vec![
+                minestats(
+                    "Minestats1",
+                    AU,
+                    &["Hemlo", "Loulo-Gounkoto (80%)"],
+                    &[
+                        ("Production (thousands of ounces)", vec!["", "", "50", ""]),
+                        ("Sales (thousands of ounces)", vec!["90.4", "", "40", ""]),
+                    ],
+                ),
+                minestats(
+                    "Minestats2",
+                    AU,
+                    &["Kibali (45%)", "Tongon (89.7%)"],
+                    &[("Production (thousands of ounces)", vec!["30", "", "60", ""])],
+                ),
+                minestats(
+                    "Minestats3",
+                    AU,
+                    &["Kibali (45%)"],
+                    &[("Production (thousands of ounces)", vec!["30", ""])],
+                ),
+            ],
+            &LedgerRules {
+                statuses: &statuses,
+                ..NONE
+            },
+        );
+        assert!(refusals.is_empty(), "{refusals:?}");
+        let blank = refused(Reason::BlankOperand, Some("2030Q1:Minestats1!B4"));
+        assert_eq!(site_at(&l, "C5"), (blank, ms("B4")));
+        // General shows 90.4 by column width: unreadable, never guessed.
+        let unreadable = refused(Reason::OperandUnreadable, Some("2030Q1:Minestats1!B5"));
+        assert_eq!(site_at(&l, "D5"), (unreadable, ms("B5")));
+        let withheld = refused(
+            Reason::Withheld {
+                evidence: "E818".to_string(),
+            },
+            None,
+        );
+        assert_eq!(site_at(&l, "C6"), (withheld.clone(), ms("D4")));
+        assert_eq!(site_at(&l, "D6"), (withheld, ms("D5")));
+        for cell in ["C7", "D7"] {
+            assert_eq!(
+                site_at(&l, cell),
+                (refused(Reason::OperandUnreadable, None), None)
+            );
+        }
+        assert_eq!(
+            site_at(&l, "C8"),
+            (State::Consistent, Some("2030Q1:Minestats2!D4".to_string()))
+        );
+        assert_eq!(
+            site_at(&l, "D8"),
+            (refused(Reason::OperandRowMissing, None), None)
+        );
+    }
+
+    /// W1-DR-02: a registered alias reads a stale row label as the registered one, for its releases only, and
+    /// converts nothing. The stale row beside the registered one is one label printed twice: refused at the first.
+    #[test]
+    fn test_label_alias_reads_a_stale_row_for_its_releases() {
+        let alias = |what: &str, first: &str, last: &str| MineStatsLabelAlias {
+            label: format!("{what} (millions of pounds)"),
+            reads_as: format!("{what} (Thousands of tonnes)"),
+            first: first.to_string(),
+            last: last.to_string(),
+            evidence: "W1-DR-02".to_string(),
+        };
+        let states = |aliases: &[MineStatsLabelAlias], both: bool| {
+            let mut rows = vec![
+                ("Production (millions of pounds)", vec!["30", ""]),
+                ("Sales (millions of pounds)", vec!["29", ""]),
+            ];
+            if both {
+                rows.push(("Production (thousands of tonnes)", vec!["30", ""]));
+            }
+            let (l, refusals) = site_ledger(
+                COPPER,
+                &[("Lumwana", ["", "30", "29"])],
+                vec![minestats("Minestats1", CU, &["Lumwana"], &rows)],
+                &LedgerRules { aliases, ..NONE },
+            );
+            assert!(refusals.is_empty(), "{refusals:?}");
+            [site_at(&l, "C5"), site_at(&l, "D5")]
+        };
+        let missing = (refused(Reason::OperandRowMissing, None), None);
+        assert_eq!(states(&[], false), [missing.clone(), missing.clone()]);
+        let now = [
+            alias("Production", "2030Q1", "2030Q4"),
+            alias("Sales", "2030Q1", "2030Q4"),
+        ];
+        assert_eq!(
+            states(&now, false),
+            [(State::Consistent, ms("B4")), (State::Consistent, ms("B5"))]
+        );
+        let later = [
+            alias("Production", "2031Q1", "2031Q4"),
+            alias("Sales", "2031Q1", "2031Q4"),
+        ];
+        assert_eq!(states(&later, false), [missing.clone(), missing]);
+        let [production, sales] = states(&now, true);
+        assert_eq!(
+            production,
+            (
+                refused(Reason::OperandUnreadable, Some("2030Q1:Minestats1!B4")),
+                ms("B4")
+            )
+        );
+        assert_eq!(sales, (State::Consistent, ms("B5")));
+    }
+
+    /// A row label printed twice in one block: the reader refuses the second row, and the ledger refuses the
+    /// pair at the first rather than take one print as the label's only one.
+    #[test]
+    fn test_label_printed_twice_is_refused_at_the_first() {
+        let (l, refusals) = site_ledger(
+            GOLD,
+            &[("Hemlo", ["", "100", "90"])],
+            vec![minestats(
+                "Minestats1",
+                AU,
+                &["Hemlo"],
+                &[
+                    ("Production (thousands of ounces)", vec!["100", ""]),
+                    ("Sales (thousands of ounces)", vec!["90", ""]),
+                    ("Production (thousands of ounces)", vec!["101", ""]),
+                ],
+            )],
+            &NONE,
+        );
+        assert_eq!(refusals, ["2030Q1:Minestats1!A6"]);
+        assert_eq!(
+            site_at(&l, "C5"),
+            (
+                refused(Reason::OperandUnreadable, Some("2030Q1:Minestats1!B4")),
+                ms("B4")
+            )
+        );
+        assert_eq!(site_at(&l, "D5"), (State::Consistent, ms("B5")));
+    }
+
+    /// The site print joins the ownership identity's component. Alone each holds: C = B/2 in [99.75, 100.25]
+    /// meets C's [99.5, 100.5], and 100 meets 101 at 100.5. Together C is 100.5 and B = 201 misses
+    /// [199.5, 200.5]. Disregarding B leaves C = 100.5 (B in [201, 201]); disregarding the site print leaves
+    /// C in [99.75, 100.25] (the print in [399/4, 401/4]); disregarding C leaves the two in conflict.
+    #[test]
+    fn test_site_print_joins_the_ownership_component() {
+        let (l, refusals) = site_ledger(
+            GOLD,
+            &[("Carlin (50%)", ["200", "100", "90"])],
+            vec![minestats(
+                "Minestats1",
+                AU,
+                &["Carlin (50%)"],
+                &[
+                    ("Production (thousands of ounces)", vec!["101", ""]),
+                    ("Sales (thousands of ounces)", vec!["90", ""]),
+                ],
+            )],
+            &NONE,
+        );
+        assert!(refusals.is_empty(), "{refusals:?}");
+        assert_eq!(
+            at(&l, Family::Ownership, "2030Q1:QTD!C5").state,
+            State::Consistent
+        );
+        assert_eq!(site_at(&l, "C5"), (State::Consistent, ms("B4")));
+        let [c] = l.infeasible.as_slice() else {
+            panic!("one infeasible component: {:?}", l.infeasible);
+        };
+        assert!(c.joint_only && c.minimum);
+        assert_eq!(c.id, "2030Q1:Minestats1!B4");
+        assert_eq!(c.instances.len(), 2);
+        assert_eq!(sets(c), [["2030Q1:Minestats1!B4"], ["2030Q1:QTD!B5"]]);
+        let ranges: Vec<(&str, String)> = c
+            .corrections
+            .iter()
+            .flat_map(|s| &s.implied)
+            .map(|(cell, r)| (cell.as_str(), range_text(r)))
+            .collect();
+        assert_eq!(
+            ranges,
+            [
+                ("2030Q1:Minestats1!B4", "[399/4, 401/4]".to_string()),
+                ("2030Q1:QTD!B5", "[201, 201]".to_string()),
+            ]
+        );
+        assert_eq!(l.components, 2);
     }
 }

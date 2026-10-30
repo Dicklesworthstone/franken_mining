@@ -166,6 +166,27 @@ pub struct PrintedShareCorrection {
     pub evidence: String,
 }
 
+/// A Mine Statistics row label printed with a stale unit (BD-331.S4, W1-DR-02): in files released from `first` to
+/// `last`, the row labelled `label` is read as the registered row `reads_as`. Values are never converted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MineStatsLabelAlias {
+    pub label: String,
+    pub reads_as: String,
+    /// `YYYYQn`.
+    pub first: String,
+    /// `YYYYQn`, at or after `first`.
+    pub last: String,
+    pub evidence: String,
+}
+
+impl MineStatsLabelAlias {
+    /// Whether the alias holds for a file released in `release` (`YYYYQn`).
+    #[must_use]
+    pub fn holds_for(&self, release: &str) -> bool {
+        self.first.as_str() <= release && release <= self.last.as_str()
+    }
+}
+
 /// A checked issuer registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourcesRegistry {
@@ -190,6 +211,8 @@ pub struct SourcesRegistry {
     pub region_members: Vec<RegionMemberRow>,
     /// Printed shares the run corrects, at most one per `(subject, printed)`, in file order.
     pub printed_share_corrections: Vec<PrintedShareCorrection>,
+    /// Stale Mine Statistics labels read as registered ones, at most one per label for any release, in file order.
+    pub mine_stats_label_aliases: Vec<MineStatsLabelAlias>,
 }
 
 impl SourcesRegistry {
@@ -425,6 +448,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "subject_status",
             "region_member",
             "printed_share_correction",
+            "mine_stats_label_alias",
         ]
         .contains(&row.table.as_str())
         {
@@ -942,6 +966,50 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         });
     }
 
+    let mut mine_stats_label_aliases: Vec<MineStatsLabelAlias> = Vec::new();
+    for row in doc.rows_of("mine_stats_label_alias") {
+        let f = Fields::of_row(row);
+        f.only(&["label", "reads_as", "first", "last", "evidence"])?;
+        let (label, label_line) = f.string("label")?;
+        let (reads_as, reads_line) = f.string("reads_as")?;
+        for (l, line) in [(&label, label_line), (&reads_as, reads_line)] {
+            if !mine_stats_labels.iter().any(|m| m.label == *l) {
+                return fail(
+                    line,
+                    format!("{l:?} is not a registered [[mine_stats_label]]"),
+                );
+            }
+        }
+        if label == reads_as {
+            return fail(reads_line, format!("{label:?} is read as itself"));
+        }
+        let (first, last) = (f.string("first")?.0, f.string("last")?.0);
+        if !is_quarter(&first) || !is_quarter(&last) {
+            return fail(row.line, "first and last must be quarters YYYYQ1..YYYYQ4");
+        }
+        if last < first {
+            return fail(row.line, format!("last {last} is before first {first}"));
+        }
+        if mine_stats_label_aliases
+            .iter()
+            .any(|a| a.label == label && a.first <= last && first <= a.last)
+        {
+            return fail(
+                label_line,
+                format!(
+                    "{label:?} has two [[mine_stats_label_alias]] rows for overlapping releases"
+                ),
+            );
+        }
+        mine_stats_label_aliases.push(MineStatsLabelAlias {
+            label,
+            reads_as,
+            first,
+            last,
+            evidence: f.string("evidence")?.0,
+        });
+    }
+
     Ok(SourcesRegistry {
         issuer,
         corpus_dir,
@@ -956,6 +1024,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         subject_statuses,
         region_members,
         printed_share_corrections,
+        mine_stats_label_aliases,
     })
 }
 
@@ -1469,6 +1538,71 @@ mod tests {
             (
                 "[[printed_share_correction]]\nsubject = \"Site A\"\nprinted = \"47.5\"\nnum = 1\nden = 2\n"
                     .to_string(),
+                "evidence",
+            ),
+        ] {
+            let e = refusal(&minimal(&b, &format!("{head}{extra}")));
+            assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
+        }
+    }
+
+    /// BD-331.S4 (W1-DR-02): `[[mine_stats_label_alias]]` rows. Both labels must be registered; every malformed
+    /// row refuses at its line.
+    #[test]
+    fn test_mine_stats_label_aliases_parse_and_refuse() {
+        let b = source_b("aisc_reconciliation", SHA_B);
+        let head = "[[mine_stats_label]]\nlabel = \"Production (millions of pounds)\"\n\n\
+                    [[mine_stats_label]]\nlabel = \"Production (Thousands of tonnes)\"\n\n";
+        let row = |label: &str, reads_as: &str, first: &str, last: &str| {
+            format!(
+                "[[mine_stats_label_alias]]\nlabel = \"{label}\"\nreads_as = \"{reads_as}\"\nfirst = \"{first}\"\n\
+                 last = \"{last}\"\nevidence = \"W1-DR-02\"\n\n"
+            )
+        };
+        let (mlb, kt) = (
+            "Production (millions of pounds)",
+            "Production (Thousands of tonnes)",
+        );
+        let reg = parse_sources_registry(&minimal(
+            &b,
+            &format!("{head}{}", row(mlb, kt, "2024Q1", "2024Q4")),
+        ))
+        .expect("accepted");
+        let alias = MineStatsLabelAlias {
+            label: mlb.to_string(),
+            reads_as: kt.to_string(),
+            first: "2024Q1".to_string(),
+            last: "2024Q4".to_string(),
+            evidence: "W1-DR-02".to_string(),
+        };
+        assert_eq!(reg.mine_stats_label_aliases, vec![alias.clone()]);
+        assert!(alias.holds_for("2024Q1") && alias.holds_for("2024Q4"));
+        assert!(!alias.holds_for("2023Q4") && !alias.holds_for("2025Q1"));
+        for (extra, why) in [
+            (
+                row("Sales (pounds)", kt, "2024Q1", "2024Q4"),
+                "not a registered",
+            ),
+            (
+                row(mlb, "Sales (tonnes)", "2024Q1", "2024Q4"),
+                "not a registered",
+            ),
+            (row(mlb, mlb, "2024Q1", "2024Q4"), "read as itself"),
+            (row(mlb, kt, "2024Q5", "2024Q4"), "quarters"),
+            (row(mlb, kt, "2024Q3", "2024Q2"), "before first"),
+            (
+                format!(
+                    "{}{}",
+                    row(mlb, kt, "2024Q1", "2024Q4"),
+                    row(mlb, kt, "2024Q4", "2025Q1")
+                ),
+                "overlapping releases",
+            ),
+            (
+                format!(
+                    "[[mine_stats_label_alias]]\nlabel = \"{mlb}\"\nreads_as = \"{kt}\"\nfirst = \"2024Q1\"\n\
+                     last = \"2024Q4\"\n"
+                ),
                 "evidence",
             ),
         ] {

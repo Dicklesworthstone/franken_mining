@@ -2882,7 +2882,8 @@ mod tests {
     /// purpose (column G styled, column N added, frame v5), so this is now a regression pin of that commit's
     /// output: the five moved and five new states are pinned one by one by the synthetic tests in `lib.rs`.
     /// Frame v6 (bd-prmn.4) appends the Mine Stats ledger section, empty here: at v5 without it the root is
-    /// still 54f1201b…, checked when the pin moved.
+    /// still 54f1201b…, checked when the pin moved. Frame v7 (site-sheet family) changes only the version here:
+    /// at v6 the root is still fd7864f9…, checked when the pin moved.
     #[test]
     fn test_port_keeps_synthetic_root() {
         let run = crate::run_synthetic_assurance(&[]).expect("synthetic run");
@@ -2890,7 +2891,7 @@ mod tests {
         assert_eq!(run.mine_ledger, crate::mine_ledger::MineLedger::default());
         assert_eq!(
             run.ledger_anchor.state_root.to_hex(),
-            "fd7864f904ef3721e874460a4b0a4fce782d9d24381554faec39266163b6374d"
+            "dfb17a08c70d5307ece489544334cea72086234182fe9d3d0580e3a0d209f5e5"
         );
     }
 

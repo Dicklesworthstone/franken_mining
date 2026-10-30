@@ -152,6 +152,7 @@ pub fn synthetic_profile() -> IssuerProfile {
         subject_statuses: Vec::new(),
         region_members: Vec::new(),
         printed_share_corrections: Vec::new(),
+        mine_stats_label_aliases: Vec::new(),
         through: None,
     }
 }

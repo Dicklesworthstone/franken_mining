@@ -341,10 +341,7 @@ impl PublicAssuranceReport {
         let l = &self.mine_ledger;
         let list = |cells: &[String]| cells.iter().map(|c| js(c)).collect::<Vec<_>>().join(",");
         o.push_str("\"mine_stats_ledger\":{\"construction\":\"rounded_once\",\"families\":[");
-        for (n, family) in [Family::Ownership, Family::QuarterSum]
-            .into_iter()
-            .enumerate()
-        {
+        for (n, family) in Family::ALL.into_iter().enumerate() {
             let mut by_reason: BTreeMap<&str, usize> = BTreeMap::new();
             for i in l.instances.iter().filter(|i| i.family == family) {
                 if let State::Refused { reason, .. } = &i.state {
@@ -388,7 +385,7 @@ impl PublicAssuranceReport {
                 let cells: Vec<String> = i.cells.iter().flatten().cloned().collect();
                 format!(
                     "{{\"family\":{},\"subject\":{},\"field\":{},\"group\":{},\"period\":{},\"anchor\":{},\
-                     \"cells\":[{}],\"share\":{},\"printed_share\":{},\"component\":{}}}",
+                     \"cells\":[{}],\"share\":{},\"printed_share\":{},\"certificate\":{},\"component\":{}}}",
                     js(i.family.as_str()),
                     js(&i.subject),
                     js(&i.field),
@@ -399,6 +396,7 @@ impl PublicAssuranceReport {
                     i.share
                         .map_or_else(|| "null".to_string(), |s| js(&mine_ledger::rat_text(s))),
                     i.printed_share.as_deref().map_or_else(|| "null".to_string(), js),
+                    if i.nil_token { "\"nil_token\"" } else { "null" },
                     i.component.as_deref().map_or_else(|| "null".to_string(), js)
                 )
             })
@@ -1372,6 +1370,7 @@ pub fn assess(
                         reason: refusal.to_string(),
                     }],
                     hidden_sheets: Vec::new(),
+                    repeated: Vec::new(),
                 });
             (s.file_name.clone(), read)
         })
@@ -1394,6 +1393,7 @@ pub fn assess(
                 region_members: &profile.region_members,
                 statuses: &profile.subject_statuses,
                 corrections: &profile.printed_share_corrections,
+                aliases: &profile.mine_stats_label_aliases,
             },
         )
     };
@@ -1402,8 +1402,9 @@ pub fn assess(
     // input cell changes the root. Version 3 adds the hidden-scope section (BD-331.S2). Version 4 binds each
     // state as reason codes and fields, never its prose, and each instance's operands (bd-sjrh.1). Version 5
     // binds each file's displayed values, which the ledger now scores (bd-jg43.3): their digest and the shown,
-    // token and refused counts. Version 6 adds the Mine Stats ledger section (BD-331.S4).
-    let mut enc = Encoder::new_frame(*b"M0AS", 6);
+    // token and refused counts. Version 6 adds the Mine Stats ledger section (BD-331.S4). Version 7 adds its
+    // site-sheet family and binds each instance's nil-token certificate.
+    let mut enc = Encoder::new_frame(*b"M0AS", 7);
     enc.put_str(issuer);
     enc.put_str(lane.as_str());
     enc.put_u64(sources.len() as u64);
@@ -1499,9 +1500,9 @@ pub fn assess(
     }
 }
 
-/// Binds the Mine Stats ledger into the root frame (v6): every instance's identity, operands and state as codes
-/// and locators, the share used and the share printed, then every infeasible component with its correction sets
-/// and implied ranges.
+/// Binds the Mine Stats ledger into the root frame (v7): every instance's identity, operands and state as codes
+/// and locators, the share used and the share printed, the nil-token certificate, then every infeasible component
+/// with its correction sets and implied ranges.
 fn encode_mine_ledger(enc: &mut Encoder, ledger: &MineLedger) {
     let opt = |enc: &mut Encoder, s: Option<&str>| match s {
         None => enc.put_u8(0),
@@ -1539,6 +1540,7 @@ fn encode_mine_ledger(enc: &mut Encoder, ledger: &MineLedger) {
         }
         opt(enc, i.share.map(mine_ledger::rat_text).as_deref());
         opt(enc, i.printed_share.as_deref());
+        enc.put_u8(u8::from(i.nil_token));
         opt(enc, i.component.as_deref());
     }
     enc.put_u64(ledger.components as u64);
@@ -5220,8 +5222,8 @@ mod tests {
         });
         format!(
             "{{\"family\":{},\"subject\":{},\"field\":{},\"group\":{},\"period\":{},\"anchor\":{},\"cells\":[{}],\
-             \"state\":{},\"reason\":{},\"at\":{},\"share\":{},\"printed_share\":{},\"component\":{},\
-             \"corrections\":{}}}",
+             \"state\":{},\"reason\":{},\"at\":{},\"certificate\":{},\"share\":{},\"printed_share\":{},\
+             \"component\":{},\"corrections\":{}}}",
             js(i.family.as_str()),
             js(&i.subject),
             js(&i.field),
@@ -5232,6 +5234,7 @@ mod tests {
             js(i.state.code()),
             opt(reason),
             opt(at),
+            opt(i.nil_token.then(|| "nil_token".to_string())),
             opt(i.share.map(percent_text)),
             opt(i.printed_share.clone()),
             opt(i.component.clone()),
@@ -5319,7 +5322,7 @@ mod tests {
         );
         assert!(l.indeterminate.is_empty(), "{:?}", l.indeterminate);
         // The summary lines, as the census prints them.
-        for family in [Family::Ownership, Family::QuarterSum] {
+        for family in Family::ALL {
             let mut by_reason: BTreeMap<String, usize> = BTreeMap::new();
             for i in l.instances.iter().filter(|i| i.family == family) {
                 if let mine_ledger::State::Refused { reason, .. } = &i.state {
@@ -5359,7 +5362,7 @@ mod tests {
         assert!(lines.contains(&summary.as_str()), "{summary}");
         assert_eq!(
             summary,
-            r#"{"components":299,"infeasible_components":27,"joint_only":2}"#
+            r#"{"components":2091,"infeasible_components":27,"joint_only":2}"#
         );
 
         // Implied ranges: one line per (component, set, cell), never printed.
@@ -5443,6 +5446,25 @@ mod tests {
         assert!(
             b5.contains(fmine_numerics::exact_feas::Rat::from_integer(281))
                 .expect("exact")
+        );
+        // E116: the summary prints a number where the site sheet prints the nil token; decided as number = 0,
+        // alone.
+        let e116: Vec<&mine_ledger::Instance> = l
+            .instances
+            .iter()
+            .filter(|i| i.family == Family::SiteSheet && i.anchor == "2026Q2:YTD!E11")
+            .collect();
+        assert_eq!(e116.len(), 1, "E116: one site_sheet instance");
+        let e116 = e116.first().expect("E116");
+        assert_eq!(e116.state.code(), "iii", "E116");
+        assert!(e116.nil_token && e116.component.is_none(), "E116");
+        assert_eq!(
+            e116.cells,
+            [
+                Some("2026Q2:YTD!E11".to_string()),
+                Some("2026Q2:Minestats1!N103".to_string())
+            ],
+            "E116"
         );
     }
 
