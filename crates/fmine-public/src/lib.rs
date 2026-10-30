@@ -867,7 +867,8 @@ mod tests {
         }
         match state_of(&r, "D16", IdentityFamily::AiscPerOunce) {
             IdentityState::Undecidable { detail } => {
-                assert!(detail.contains("[1965.174, 2035.175]"), "{detail}")
+                // 405000/199 = 2035.1758…: the upper bound rounds up (it printed 2035.175 before 2026-10-29).
+                assert!(detail.contains("[1965.174, 2035.176]"), "{detail}")
             }
             other => panic!("D16: {other:?}"),
         }

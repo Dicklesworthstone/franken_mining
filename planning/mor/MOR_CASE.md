@@ -482,8 +482,9 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
       needed");
     - 12 Loulo-Gounkoto instances (E823).
   - **Not published:** 12 all-zero columns.
-  - State root `0aa62d521f74ae6d58d53eef614c2fc708b2988f57a86cbc2de12ff4be748cf9`, anchor
-    `anc_a2d1090f25ec08128f0134f8559dcdb8`.
+  - State root `9283f89649b8e51b63e271532d8227b801ee0e6dce522d7a1b5e60c9ad389bb2`, anchor
+    `anc_3ebc2f9029781b51cc242d95fc0df692` (2026-10-29). The earlier root `0aa62d52…` (543df53) printed the
+    upper bound of undecidable rate ranges rounded down; the range text now rounds outward. Counts are unchanged.
 - **E823** Loulo-Gounkoto, column K of `Barrick_Q1_2026_AISC.xlsx` `'Q1 2026'` and of `Barrick_Q2_2026_AISC.xlsx`
   `'Q2 2026'` and `'Q1 2026'`, stores unrounded values (FACT). In Q1 2026:
   - "Other" is −37.899643 (K8);

@@ -405,7 +405,8 @@ pub fn rate_interval_holds(n: i64, k: i64, q: i64, r: i64) -> bool {
     reaches_low && reaches_high
 }
 
-/// Exact range of 1000·N/Q over the box, as decimal text with three places (display only).
+/// Exact range of 1000·N/Q over the box, as decimal text with three places (display only). The lower bound is
+/// rounded down and the upper bound up, so the printed interval always contains the exact one.
 fn rate_range_text(n: i64, k: i64, q: i64) -> String {
     let (n2, k, q2) = (2 * i128::from(n), i128::from(k), 2 * i128::from(q));
     let mut corners = [
@@ -415,14 +416,18 @@ fn rate_range_text(n: i64, k: i64, q: i64) -> String {
         (1000 * (n2 + k), q2 + 1),
     ];
     corners.sort_by(|a, b| cmp_frac(a.0, a.1, b.0, b.1));
-    let fmt = |(num, den): (i128, i128)| {
+    let fmt = |(num, den): (i128, i128), round_up: bool| {
         let (num, den) = if den < 0 { (-num, -den) } else { (num, den) };
-        let milli = (num * 1000).div_euclid(den);
+        let milli = if round_up {
+            -(-num * 1000).div_euclid(den)
+        } else {
+            (num * 1000).div_euclid(den)
+        };
         let sign = if milli < 0 { "-" } else { "" };
         let m = milli.abs();
         format!("{sign}{}.{:03}", m / 1000, m % 1000)
     };
-    format!("[{}, {}]", fmt(corners[0]), fmt(corners[3]))
+    format!("[{}, {}]", fmt(corners[0], false), fmt(corners[3], true))
 }
 
 /// Whether adding a component c (printed, so c ± 1/2) to the numerator closes the rate interval:
@@ -719,7 +724,10 @@ mod tests {
         assert!(rate_interval_holds(79, 1, 68, 1162));
         assert!(rate_interval_holds(79, 1, 68, 1146));
         assert!(!rate_interval_holds(79, 1, 68, 1141));
-        assert_eq!(rate_range_text(79, 1, 68), "[1145.985, 1177.777]");
+        // Outward rounding: 1177.777… prints as 1177.778 (it printed 1177.777 before 2026-10-29, below the bound).
+        assert_eq!(rate_range_text(79, 1, 68), "[1145.985, 1177.778]");
+        // Negative range: floor of −578.94… is −578.948; ceiling of −428.57… is −428.571.
+        assert_eq!(rate_range_text(-5, 1, 10), "[-578.948, -428.571]");
         // No corner can equal a bound r ± ½ exactly: 2000·(2n ± k) is even, (2r ∓ 1)(2q ∓ 1) is odd.
         // Negative numerators: 1000·(−5 ± ½)/(10 ± ½) spans [−578.9…, −428.5…].
         assert!(rate_interval_holds(-5, 1, 10, -500));
