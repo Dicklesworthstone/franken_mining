@@ -15,7 +15,8 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 
 ## 4. Public API Surface
 - `ForecastEntry`, `ForecastResolution`, `ForecastLedger`
-- `gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`
+- `gaussian_crps`, `gaussian_log_score`, `winkler_interval_score` → `Result<f64, ScoreError>` (non-finite inputs, non-positive std_dev, alpha outside (0, 1) and inverted intervals refuse; nothing is clamped, bd-8wrk)
+- `ForecastLedger::evaluate_model` → `Result<CalibrationReport, ScoreError>`; `register` and `record_outcome` refuse non-finite or non-positive-std forecasts and non-finite outcomes at entry
 - `ProjectArchetype`, `ReferenceClassPrior`
 - `SpatialFrontPitMonitor`
 

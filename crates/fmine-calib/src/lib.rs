@@ -47,10 +47,18 @@ impl ForecastLedger {
         mean: f64,
         std_dev: f64,
     ) -> Result<ObjectId, Refusal> {
-        if registered_ns > freeze_time_ns || std_dev <= 0.0 {
+        if registered_ns > freeze_time_ns {
             return Err(Refusal::from_code(
                 "FMINE-REF-403",
                 format!("forecast registered at {registered_ns} after freeze_time {freeze_time_ns}"),
+            ));
+        }
+        // A forecast that cannot be scored is refused at entry, so `evaluate_model` never meets one. The code is
+        // the ledger's only registered refusal until BD-328 adds an invalid-forecast code.
+        if !mean.is_finite() || !(std_dev.is_finite() && std_dev > 0.0) {
+            return Err(Refusal::from_code(
+                "FMINE-REF-403",
+                format!("forecast needs a finite mean and a positive finite std_dev, got mean {mean}, std_dev {std_dev}"),
             ));
         }
         let model_key = model_key.into();
@@ -102,13 +110,21 @@ impl ForecastLedger {
                 ),
             ));
         }
+        if !realized.is_finite() {
+            return Err(Refusal::from_code(
+                "FMINE-REF-403",
+                format!("outcome for {forecast_id} must be finite, got {realized}"),
+            ));
+        }
         rec.realized_outcome = Some(realized);
         Ok(())
     }
 
     /// Evaluates calibration across all realized forecasts for `model_key` (`BD-048`, `BD-049`).
-    #[must_use]
-    pub fn evaluate_model(&self, model_key: &str) -> CalibrationReport {
+    ///
+    /// A realized record whose score cannot be computed refuses the whole evaluation; it is never skipped, so the
+    /// denominator cannot shrink silently. `register` and `record_outcome` refuse such records at entry.
+    pub fn evaluate_model(&self, model_key: &str) -> Result<CalibrationReport, ScoreError> {
         let mut n = 0_usize;
         let mut crps_sum = 0.0_f64;
         let mut winkler_sum = 0.0_f64;
@@ -121,8 +137,8 @@ impl ForecastLedger {
             }
             if let Some(y) = rec.realized_outcome {
                 n += 1;
-                crps_sum += gaussian_crps(rec.mean, rec.std_dev, y);
-                winkler_sum += winkler_interval_score(rec.p10, rec.p90, 0.20, y);
+                crps_sum += gaussian_crps(rec.mean, rec.std_dev, y)?;
+                winkler_sum += winkler_interval_score(rec.p10, rec.p90, 0.20, y)?;
                 if y >= rec.p10 && y <= rec.p90 {
                     covered_80 += 1;
                 }
@@ -130,14 +146,14 @@ impl ForecastLedger {
             }
         }
         if n == 0 {
-            return CalibrationReport {
+            return Ok(CalibrationReport {
                 n_scored: 0,
                 mean_crps: 0.0,
                 mean_winkler_80: 0.0,
                 empirical_coverage_80: 0.0,
                 mean_standardized_bias: 0.0,
                 flag: CalibrationFlag::Unscored,
-            };
+            });
         }
         let cov80 = (covered_80 as f64) / (n as f64);
         let bias = z_sum / (n as f64);
@@ -148,14 +164,14 @@ impl ForecastLedger {
         } else {
             CalibrationFlag::Calibrated
         };
-        CalibrationReport {
+        Ok(CalibrationReport {
             n_scored: n,
             mean_crps: crps_sum / (n as f64),
             mean_winkler_80: winkler_sum / (n as f64),
             empirical_coverage_80: cov80,
             mean_standardized_bias: bias,
             flag,
-        }
+        })
     }
 }
 
@@ -203,36 +219,79 @@ pub fn apply_calibration_gate<T>(claim: &mut Claim<T>, flag: CalibrationFlag) {
 /// Closed-form Gneiting & Raftery (2007) Continuous Ranked Probability Score (`CRPS`)
 /// for $\mathcal{N}(\mu, \sigma^2)$ evaluated at realization $y$:
 /// $\text{CRPS}(\mathcal{N}(\mu, \sigma^2), y) = \sigma \left[ z (2 \Phi(z) - 1) + 2 \phi(z) - \frac{1}{\sqrt{\pi}} \right]$.
-#[must_use]
-pub fn gaussian_crps(mean: f64, std_dev: f64, y: f64) -> f64 {
-    let sigma = std_dev.max(1e-12);
-    let z = (y - mean) / sigma;
+pub fn gaussian_crps(mean: f64, std_dev: f64, y: f64) -> Result<f64, ScoreError> {
+    check_gaussian(mean, std_dev, y)?;
+    let z = (y - mean) / std_dev;
     let phi_cdf = norm_cdf(z);
     let phi_pdf = (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt();
     let inv_sqrt_pi = 1.0 / std::f64::consts::PI.sqrt();
-    sigma * (z * (2.0 * phi_cdf - 1.0) + 2.0 * phi_pdf - inv_sqrt_pi)
+    Ok(std_dev * (z * (2.0 * phi_cdf - 1.0) + 2.0 * phi_pdf - inv_sqrt_pi))
 }
 
 /// Negative log predictive density (`NLL`) for $\mathcal{N}(\mu, \sigma^2)$ at $y$.
-#[must_use]
-pub fn gaussian_log_score(mean: f64, std_dev: f64, y: f64) -> f64 {
-    let sigma = std_dev.max(1e-12);
-    let z = (y - mean) / sigma;
-    0.5 * (2.0 * std::f64::consts::PI).ln() + sigma.ln() + 0.5 * z * z
+pub fn gaussian_log_score(mean: f64, std_dev: f64, y: f64) -> Result<f64, ScoreError> {
+    check_gaussian(mean, std_dev, y)?;
+    let z = (y - mean) / std_dev;
+    Ok(0.5 * (2.0 * std::f64::consts::PI).ln() + std_dev.ln() + 0.5 * z * z)
 }
 
-/// Winklerproper interval score for central $(1 - \alpha)$ interval $[l, u]$ at realization $y$.
-#[must_use]
-pub fn winkler_interval_score(lo: f64, hi: f64, alpha: f64, y: f64) -> f64 {
-    let a = alpha.clamp(1e-6, 1.0 - 1e-6);
-    let width = (hi - lo).max(0.0);
-    if y < lo {
-        width + (2.0 / a) * (lo - y)
+/// Winkler interval score for the central $(1 - \alpha)$ interval $[l, u]$ at realization $y$.
+///
+/// Refuses `alpha` outside `(0, 1)`, an inverted interval and non-finite inputs; nothing is clamped.
+pub fn winkler_interval_score(lo: f64, hi: f64, alpha: f64, y: f64) -> Result<f64, ScoreError> {
+    if !(lo.is_finite() && hi.is_finite() && alpha.is_finite() && y.is_finite()) {
+        return Err(ScoreError::NonFinite);
+    }
+    if !(alpha > 0.0 && alpha < 1.0) {
+        return Err(ScoreError::AlphaOutOfDomain(alpha));
+    }
+    if lo > hi {
+        return Err(ScoreError::InvertedInterval { lo, hi });
+    }
+    let width = hi - lo;
+    Ok(if y < lo {
+        width + (2.0 / alpha) * (lo - y)
     } else if y > hi {
-        width + (2.0 / a) * (y - hi)
+        width + (2.0 / alpha) * (y - hi)
     } else {
         width
+    })
+}
+
+/// Why a proper score refused (`bd-8wrk`): out-of-domain inputs are never floored or clamped (AGENTS rule 5).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ScoreError {
+    /// A mean, bound, level or realization is NaN or infinite.
+    NonFinite,
+    /// The predictive standard deviation is not positive.
+    NonPositiveStdDev(f64),
+    /// The interval level `alpha` is outside `(0, 1)`.
+    AlphaOutOfDomain(f64),
+    /// The interval's lower bound exceeds its upper bound.
+    InvertedInterval { lo: f64, hi: f64 },
+}
+
+impl std::fmt::Display for ScoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonFinite => write!(f, "score inputs must be finite"),
+            Self::NonPositiveStdDev(s) => write!(f, "predictive std_dev must be positive, got {s}"),
+            Self::AlphaOutOfDomain(a) => write!(f, "interval level alpha must lie in (0, 1), got {a}"),
+            Self::InvertedInterval { lo, hi } => write!(f, "interval is inverted: lo {lo} > hi {hi}"),
+        }
     }
+}
+
+impl std::error::Error for ScoreError {}
+
+fn check_gaussian(mean: f64, std_dev: f64, y: f64) -> Result<(), ScoreError> {
+    if !(mean.is_finite() && std_dev.is_finite() && y.is_finite()) {
+        return Err(ScoreError::NonFinite);
+    }
+    if std_dev <= 0.0 {
+        return Err(ScoreError::NonPositiveStdDev(std_dev));
+    }
+    Ok(())
 }
 
 // --- Reference-Class Epsilon-Contamination Prior (BD-050, GB-32) ---
@@ -422,15 +481,66 @@ mod tests {
     #[test]
     fn test_proper_scoring_rules_crps_and_winkler() {
         // Perfect mean has lower CRPS than biased mean.
-        let c_good = gaussian_crps(2.0, 0.5, 2.0);
-        let c_bad = gaussian_crps(4.0, 0.5, 2.0);
+        let c_good = gaussian_crps(2.0, 0.5, 2.0).expect("valid");
+        let c_bad = gaussian_crps(4.0, 0.5, 2.0).expect("valid");
         assert!(c_good < c_bad);
 
-        // Winkler score penalizes observations outside [lo, hi].
-        let w_in = winkler_interval_score(1.0, 3.0, 0.20, 2.0);
-        let w_out = winkler_interval_score(1.0, 3.0, 0.20, 4.0);
+        // Winkler score penalizes observations outside [lo, hi]: width 2 plus (2 / 0.2) * 1 = 12.
+        let w_in = winkler_interval_score(1.0, 3.0, 0.20, 2.0).expect("valid");
+        let w_out = winkler_interval_score(1.0, 3.0, 0.20, 4.0).expect("valid");
         assert!((w_in - 2.0).abs() < 1e-12);
-        assert!(w_out > w_in);
+        assert!((w_out - 12.0).abs() < 1e-12);
+    }
+
+    /// Regression for the 2026-10-29 finding (bd-8wrk): alpha used to be clamped to [1e-6, 1 − 1e-6], an inverted
+    /// interval became width 0, and a non-positive std_dev was floored to 1e-12. Each now refuses.
+    #[test]
+    fn test_scores_refuse_out_of_domain_inputs() {
+        assert_eq!(winkler_interval_score(1.0, 3.0, 0.0, 2.0), Err(ScoreError::AlphaOutOfDomain(0.0)));
+        assert_eq!(winkler_interval_score(1.0, 3.0, 1.0, 2.0), Err(ScoreError::AlphaOutOfDomain(1.0)));
+        assert_eq!(
+            winkler_interval_score(3.0, 1.0, 0.2, 2.0),
+            Err(ScoreError::InvertedInterval { lo: 3.0, hi: 1.0 })
+        );
+        assert_eq!(winkler_interval_score(1.0, 3.0, 0.2, f64::NAN), Err(ScoreError::NonFinite));
+        assert_eq!(gaussian_crps(2.0, 0.0, 2.0), Err(ScoreError::NonPositiveStdDev(0.0)));
+        assert_eq!(gaussian_log_score(2.0, -1.0, 2.0), Err(ScoreError::NonPositiveStdDev(-1.0)));
+        assert_eq!(gaussian_log_score(f64::INFINITY, 1.0, 2.0), Err(ScoreError::NonFinite));
+        // A degenerate interval (lo == hi) is valid and scores its miss penalty only.
+        assert_eq!(winkler_interval_score(2.0, 2.0, 0.5, 3.0), Ok(4.0));
+    }
+
+    /// `evaluate_model` had no test. Known answer over three resolved forecasts, plus the entry refusals that keep
+    /// unscorable records out of the ledger (so no record is ever skipped during evaluation).
+    #[test]
+    fn test_evaluate_model_known_answer_and_entry_refusals() {
+        let mut ledger = ForecastLedger::new();
+        let mut ids = Vec::new();
+        for (i, mean) in [10.0, 20.0, 30.0].into_iter().enumerate() {
+            let t = 1_000 * (i as i64 + 1);
+            ids.push(ledger.register("m", t, t + 100, mean, 1.0).expect("register"));
+        }
+        // Outcomes: exactly on the mean, inside the 80% band, far outside it.
+        for (fid, y) in ids.iter().zip([10.0, 20.5, 35.0]) {
+            ledger.record_outcome(*fid, 10_000, y).expect("outcome");
+        }
+        let report = ledger.evaluate_model("m").expect("scorable");
+        assert_eq!(report.n_scored, 3);
+        assert!((report.empirical_coverage_80 - 2.0 / 3.0).abs() < 1e-12);
+        assert!((report.mean_standardized_bias - 5.5 / 3.0).abs() < 1e-12);
+        assert_eq!(report.flag, CalibrationFlag::Biased);
+        let z80 = 1.281_551_565_544_600_4_f64;
+        let width = 2.0 * z80;
+        let expected_winkler = (3.0 * width + (2.0 / 0.2) * (35.0 - (30.0 + z80))) / 3.0;
+        assert!((report.mean_winkler_80 - expected_winkler).abs() < 1e-9);
+        assert_eq!(ledger.evaluate_model("absent").expect("empty").flag, CalibrationFlag::Unscored);
+
+        assert!(ledger.register("m", 1, 2, 1.0, 0.0).is_err(), "zero std_dev refused");
+        assert!(ledger.register("m", 1, 2, 1.0, f64::NAN).is_err(), "NaN std_dev refused");
+        assert!(ledger.register("m", 1, 2, f64::NAN, 1.0).is_err(), "NaN mean refused");
+        let fid = ledger.register("n", 1, 2, 1.0, 1.0).expect("register");
+        assert!(ledger.record_outcome(fid, 3, f64::NAN).is_err(), "NaN outcome refused");
+        assert!(ledger.record_outcome(fid, 3, 1.0).is_ok(), "the refused write left the record open");
     }
 
     #[test]
