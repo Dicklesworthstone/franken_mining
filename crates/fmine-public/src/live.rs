@@ -866,7 +866,7 @@ pub fn prove_labels(
 /// changed and its census recomputed. Hidden-scope instances are not checked.
 pub fn prove_leaves(
     base: &[LoadedSource],
-    run: &dyn Fn(Vec<LoadedSource>) -> PublicAssuranceReport,
+    run: &(dyn Fn(Vec<LoadedSource>) -> PublicAssuranceReport + Sync),
 ) -> Vec<LeafCheck> {
     prove_leaves_in(base, run, &|_, _, _| true)
 }
@@ -879,63 +879,101 @@ pub fn one_leaf_per_instance(instance: usize, operand: usize, n_operands: usize)
 }
 
 /// [`prove_leaves`] on the leaves `select(instance index, operand index, operand count)` admits. Leaves
-/// outside the frame are not reported; the caller records the frame.
+/// outside the frame are not reported; the caller records the frame. The checks are independent runs of
+/// `run`, so they are spread over the available cores; the result is in instance and operand order, as a
+/// sequential pass would give it.
 pub fn prove_leaves_in(
     base: &[LoadedSource],
-    run: &dyn Fn(Vec<LoadedSource>) -> PublicAssuranceReport,
-    select: &dyn Fn(usize, usize, usize) -> bool,
+    run: &(dyn Fn(Vec<LoadedSource>) -> PublicAssuranceReport + Sync),
+    select: &(dyn Fn(usize, usize, usize) -> bool + Sync),
 ) -> Vec<LeafCheck> {
     let before = run(base.to_vec());
-    let mut out = Vec::new();
-    for (ii, i) in before.instances.iter().enumerate() {
-        for (oi, o) in i.operands.iter().enumerate() {
-            if !select(ii, oi, i.operands.len()) {
-                continue;
-            }
-            let check = LeafCheck {
-                instance: format!("{}:{}!{} {}", i.file, i.sheet, i.cell, i.family.as_str()),
-                leaf: locator(o),
-                role: o.role,
-                perturbation: None,
-                state_before: i.state.code(),
-                state_after: None,
-                moved: Vec::new(),
-                root_moved: false,
-                skipped: None,
-                failure: None,
-            };
-            out.push(match plan(i, o) {
-                Err(why) => LeafCheck {
-                    skipped: Some(why),
-                    ..check
-                },
-                Ok((p, new, expect)) => {
-                    let mut sources = base.to_vec();
-                    if set_leaf(&mut sources, o, &new) {
-                        let after = run(sources);
-                        let check = LeafCheck {
-                            perturbation: Some(p),
-                            ..check
-                        };
-                        judge_leaf(check, i, o, &new, expect, &before, &after)
-                    } else {
-                        LeafCheck {
-                            skipped: Some("leaf_not_in_loaded_sheet"),
-                            ..check
-                        }
-                    }
-                }
+    let leaves: Vec<(&IdentityInstance, &Operand)> = before
+        .instances
+        .iter()
+        .enumerate()
+        .flat_map(|(ii, i)| {
+            i.operands
+                .iter()
+                .enumerate()
+                .filter(move |(oi, _)| select(ii, *oi, i.operands.len()))
+                .map(move |(_, o)| (i, o))
+        })
+        .collect();
+    let workers = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .clamp(1, leaves.len().max(1));
+    // Worker w takes leaves w, w + workers, w + 2 * workers, ..., which spreads slow tables evenly.
+    let mut parts: Vec<Vec<LeafCheck>> = vec![Vec::new(); workers];
+    std::thread::scope(|scope| {
+        for (w, part) in parts.iter_mut().enumerate() {
+            let (leaves, before) = (&leaves, &before);
+            scope.spawn(move || {
+                *part = leaves
+                    .iter()
+                    .skip(w)
+                    .step_by(workers)
+                    .map(|&(i, o)| leaf_check(base, run, before, i, o))
+                    .collect();
             });
         }
+    });
+    let mut parts: Vec<std::vec::IntoIter<LeafCheck>> =
+        parts.into_iter().map(Vec::into_iter).collect();
+    (0..leaves.len())
+        .filter_map(|k| parts[k % workers].next())
+        .collect()
+}
+
+/// One leaf's check: `o` of instance `i`, perturbed in a copy of `base` and judged against `before`.
+fn leaf_check(
+    base: &[LoadedSource],
+    run: &(dyn Fn(Vec<LoadedSource>) -> PublicAssuranceReport + Sync),
+    before: &PublicAssuranceReport,
+    i: &IdentityInstance,
+    o: &Operand,
+) -> LeafCheck {
+    let check = LeafCheck {
+        instance: format!("{}:{}!{} {}", i.file, i.sheet, i.cell, i.family.as_str()),
+        leaf: locator(o),
+        role: o.role,
+        perturbation: None,
+        state_before: i.state.code(),
+        state_after: None,
+        moved: Vec::new(),
+        root_moved: false,
+        skipped: None,
+        failure: None,
+    };
+    match plan(i, o) {
+        Err(why) => LeafCheck {
+            skipped: Some(why),
+            ..check
+        },
+        Ok((p, new, expect)) => {
+            let mut sources = base.to_vec();
+            if set_leaf(&mut sources, o, &new) {
+                let after = run(sources);
+                let check = LeafCheck {
+                    perturbation: Some(p),
+                    ..check
+                };
+                judge_leaf(check, i, o, &new, expect, before, &after)
+            } else {
+                LeafCheck {
+                    skipped: Some("leaf_not_in_loaded_sheet"),
+                    ..check
+                }
+            }
+        }
     }
-    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sources::load_issuer_profile;
-    use crate::{Lane, load_registered_sources, run_public_assurance, synthetic};
+    use crate::{Lane, MineStatsMemo, load_registered_sources, run_public_assurance, synthetic};
     use fmine_core::hash::sha256;
     use std::path::PathBuf;
 
@@ -1325,6 +1363,27 @@ mod tests {
         compare(bytes, parsed);
     }
 
+    /// The threaded pass gives what one sequential pass gives, check for check and in the same order.
+    #[test]
+    fn test_live_leaves_threaded_matches_sequential() {
+        let base = synthetic_sources();
+        let threaded = prove_leaves(&base, &assess_synthetic);
+        let before = assess_synthetic(base.clone());
+        let sequential: Vec<LeafCheck> = before
+            .instances
+            .iter()
+            .flat_map(|i| i.operands.iter().map(move |o| (i, o)))
+            .map(|(i, o)| leaf_check(&base, &assess_synthetic, &before, i, o))
+            .collect();
+        let workers = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+        println!(
+            "{{\"test\":\"leaves_threaded\",\"workers\":{workers},\"checks\":{}}}",
+            threaded.len()
+        );
+        assert!(threaded.len() > 50, "{}", threaded.len());
+        assert_eq!(threaded, sequential);
+    }
+
     /// Positive control: every cited leaf of every visible synthetic instance moves what it should. Skips are
     /// only where the seeded answers put a state before any arithmetic:
     /// - Site F's unrounded column (G), all five instances;
@@ -1416,17 +1475,38 @@ mod tests {
     #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
     fn barrick_live_leaves_one_per_instance() {
         let (profile, sources) = barrick();
-        let run = |s: Vec<LoadedSource>| crate::assess(&profile, Lane::Public, s);
+        // Most leaves are AISC cells, so the Mine Stats section is reused (bd-r7lp). A leaf in a Mine Stats file
+        // (a printed share label) recomputes it.
+        let memo = MineStatsMemo::default();
+        let run = |s: Vec<LoadedSource>| crate::assess_memo(&profile, Lane::Public, s, &memo);
         let start = std::time::Instant::now();
         let checks = prove_leaves_in(&sources, &run, &one_leaf_per_instance);
         let summary = leaf_summary(&checks, start.elapsed().as_millis());
-        println!("{{\"frame\":\"one_leaf_per_instance\",\"summary\":{summary}}}");
+        let stats_files: Vec<String> = sources
+            .iter()
+            .filter(|s| s.kind == crate::sources::SourceKind::MineStats)
+            .map(|s| format!("{}:", s.file_name))
+            .collect();
+        let stats_runs = checks
+            .iter()
+            .filter(|c| {
+                c.perturbation.is_some() && stats_files.iter().any(|f| c.leaf.starts_with(f))
+            })
+            .count();
+        println!(
+            "{{\"frame\":\"one_leaf_per_instance\",\"summary\":{summary},\
+             \"mine_stats_memo\":{{\"hits\":{},\"misses\":{},\"mine_stats_leaf_runs\":{stats_runs}}}}}",
+            memo.hits(),
+            memo.misses()
+        );
         let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
         for f in &failures {
             println!("{f}");
         }
         assert_eq!(checks.len(), 2595);
         assert!(failures.is_empty(), "{} failures", failures.len());
+        // The base run and each Mine Stats leaf compute the section; every other run reuses it.
+        assert_eq!(memo.misses(), 1 + stats_runs as u64);
     }
 
     /// BD-338.S3, files, on the real lane: 18 registered workbooks × {absent, zero bytes, foreign xlsx} = 54
@@ -1470,7 +1550,8 @@ mod tests {
             })
             .collect();
         assert_eq!(tables.len(), 8);
-        let run = |s: Vec<LoadedSource>| crate::assess(&profile, Lane::Public, s);
+        let memo = MineStatsMemo::default();
+        let run = |s: Vec<LoadedSource>| crate::assess_memo(&profile, Lane::Public, s, &memo);
         let checks = prove_labels(&sources, &run, &profile.subjects, &tables);
         for c in &checks {
             println!("{}", c.to_json());
@@ -1530,11 +1611,12 @@ mod tests {
     #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
     fn barrick_live_leaves_mutant_m1_literal_is_caught() {
         let (profile, sources) = barrick();
+        let memo = MineStatsMemo::default();
         let is_o11 = |i: &IdentityInstance| {
             i.file == "Barrick_Q3_2024_AISC.xlsx" && i.sheet == "Q2 2024" && i.cell == "O11"
         };
         let literal = |s: Vec<LoadedSource>| {
-            let mut r = crate::assess(&profile, Lane::Public, s);
+            let mut r = crate::assess_memo(&profile, Lane::Public, s, &memo);
             for i in &mut r.instances {
                 if let (true, IdentityState::IssuerDiscrepancy(c)) = (is_o11(i), &mut i.state) {
                     c.printed = 70;
@@ -1542,7 +1624,7 @@ mod tests {
             }
             r
         };
-        let base = crate::assess(&profile, Lane::Public, sources.clone());
+        let base = crate::assess_memo(&profile, Lane::Public, sources.clone(), &memo);
         let Some(at) = base.instances.iter().position(is_o11) else {
             panic!("no instance at O11");
         };
@@ -1556,7 +1638,7 @@ mod tests {
         // Without the mutant, every leaf of O11 passes.
         let honest = prove_leaves_in(
             &sources,
-            &|s| crate::assess(&profile, Lane::Public, s),
+            &|s| crate::assess_memo(&profile, Lane::Public, s, &memo),
             &|i, _, _| i == at,
         );
         assert!(honest.iter().all(LeafCheck::pass), "{}", honest.len());

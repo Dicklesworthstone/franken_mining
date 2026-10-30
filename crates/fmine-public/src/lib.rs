@@ -18,6 +18,8 @@ pub mod synthetic;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fmine_claim::{AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport};
 use fmine_core::anchor::{FMT_ANCHOR_V1, LedgerAnchor};
@@ -1200,12 +1202,158 @@ fn share_bases(
     out
 }
 
+/// Reuses the Mine Stats reads and ledger of an earlier run with equal Mine Stats inputs (bd-r7lp). The live
+/// proofs rerun [`assess`] once per perturbed cell, the ledger's exact blame dominates a run, and the ledger
+/// depends only on the profile and the Mine Stats workbooks. The key is the whole profile and each Mine Stats
+/// source's file name, quarter and parsed workbook, compared for equality, so a change to any of them
+/// recomputes. A run through a memo gives the report [`assess`] gives. Holds one entry, its first computed run's:
+/// the proofs run the unperturbed sources first, and a perturbed Mine Stats cell (a printed share label, say)
+/// recomputes without displacing it. Shareable across threads: runs that miss together each compute, and the
+/// first to finish sets the entry.
+#[derive(Debug, Default)]
+pub struct MineStatsMemo {
+    entry: OnceLock<MineStatsEntry>,
+    hits: AtomicU64,
+    misses: AtomicU64,
+}
+
+#[derive(Debug)]
+struct MineStatsEntry {
+    profile: IssuerProfile,
+    inputs: Vec<(String, String, Workbook)>,
+    reads: Vec<(String, MineStatsRead)>,
+    ledger: MineLedger,
+}
+
+impl MineStatsEntry {
+    fn holds(&self, profile: &IssuerProfile, sources: &[LoadedSource]) -> bool {
+        let mut current = sources.iter().filter(|s| s.kind == SourceKind::MineStats);
+        self.profile == *profile
+            && self.inputs.iter().all(|(file, quarter, workbook)| {
+                current.next().is_some_and(|s| {
+                    s.file_name == *file && s.quarter == *quarter && s.workbook == *workbook
+                })
+            })
+            && current.next().is_none()
+    }
+}
+
+impl MineStatsMemo {
+    /// Runs that reused the stored entry.
+    #[must_use]
+    pub fn hits(&self) -> u64 {
+        self.hits.load(Ordering::Relaxed)
+    }
+
+    /// Runs that computed the Mine Stats section.
+    #[must_use]
+    pub fn misses(&self) -> u64 {
+        self.misses.load(Ordering::Relaxed)
+    }
+}
+
+/// Reads every Mine Stats source and builds the ledger over the reads, or takes both from `memo` when its
+/// entry holds for these inputs.
+fn mine_stats_section(
+    profile: &IssuerProfile,
+    sources: &[LoadedSource],
+    memo: Option<&MineStatsMemo>,
+) -> (Vec<(String, MineStatsRead)>, MineLedger) {
+    if let Some(m) = memo
+        && let Some(e) = m.entry.get()
+        && e.holds(profile, sources)
+    {
+        m.hits.fetch_add(1, Ordering::Relaxed);
+        return (e.reads.clone(), e.ledger.clone());
+    }
+    let vocabulary: LabelVocabulary = profile.mine_stats_labels.iter().cloned().collect();
+    let vocabulary = (!vocabulary.is_empty()).then_some(vocabulary);
+    let mine_stats: Vec<(String, MineStatsRead)> = sources
+        .iter()
+        .filter(|s| s.kind == SourceKind::MineStats)
+        .map(|s| {
+            // The registry already checks the quarter format; a refusal here is kept, never dropped.
+            let read = read_mine_stats(&s.workbook, &s.quarter, vocabulary.as_ref())
+                .unwrap_or_else(|refusal| MineStatsRead {
+                    quarter: s.quarter.clone(),
+                    blocks: 0,
+                    values: Vec::new(),
+                    refusals: vec![CellRefusal {
+                        locator: s.file_name.clone(),
+                        reason: refusal.to_string(),
+                    }],
+                    hidden_sheets: Vec::new(),
+                    repeated: Vec::new(),
+                });
+            (s.file_name.clone(), read)
+        })
+        .collect();
+    let files: Vec<LedgerFile<'_>> = sources
+        .iter()
+        .filter(|s| s.kind == SourceKind::MineStats)
+        .zip(&mine_stats)
+        .map(|(s, (_, read))| LedgerFile {
+            quarter: &s.quarter,
+            read,
+            workbook: &s.workbook,
+        })
+        .collect();
+    let ledger = mine_ledger(
+        &files,
+        &LedgerRules {
+            regions: &profile.regions,
+            region_members: &profile.region_members,
+            statuses: &profile.subject_statuses,
+            corrections: &profile.printed_share_corrections,
+            aliases: &profile.mine_stats_label_aliases,
+        },
+    );
+    if let Some(m) = memo {
+        m.misses.fetch_add(1, Ordering::Relaxed);
+        if m.entry.get().is_none() {
+            // A run that loses the race to set the entry keeps its own result; the entry stays the first set.
+            let _ = m.entry.set(MineStatsEntry {
+                profile: profile.clone(),
+                inputs: sources
+                    .iter()
+                    .filter(|s| s.kind == SourceKind::MineStats)
+                    .map(|s| (s.file_name.clone(), s.quarter.clone(), s.workbook.clone()))
+                    .collect(),
+                reads: mine_stats.clone(),
+                ledger: ledger.clone(),
+            });
+        }
+    }
+    (mine_stats, ledger)
+}
+
 /// Builds the identity ledger over every AISC table in `sources` and commits the run to a state root.
 #[must_use]
 pub fn assess(
     profile: &IssuerProfile,
     lane: Lane,
     sources: Vec<LoadedSource>,
+) -> PublicAssuranceReport {
+    assess_inner(profile, lane, sources, None)
+}
+
+/// [`assess`], taking the Mine Stats section from `memo` when its inputs are unchanged since the memo's last
+/// computed run. For callers that rerun the pipeline on perturbed copies of one set of sources.
+#[must_use]
+pub fn assess_memo(
+    profile: &IssuerProfile,
+    lane: Lane,
+    sources: Vec<LoadedSource>,
+    memo: &MineStatsMemo,
+) -> PublicAssuranceReport {
+    assess_inner(profile, lane, sources, Some(memo))
+}
+
+fn assess_inner(
+    profile: &IssuerProfile,
+    lane: Lane,
+    sources: Vec<LoadedSource>,
+    memo: Option<&MineStatsMemo>,
 ) -> PublicAssuranceReport {
     let issuer = profile.issuer.as_str();
     let subjects = profile.subjects.as_slice();
@@ -1353,50 +1501,7 @@ pub fn assess(
         table_refusals,
     } = visible;
 
-    let vocabulary: LabelVocabulary = profile.mine_stats_labels.iter().cloned().collect();
-    let vocabulary = (!vocabulary.is_empty()).then_some(vocabulary);
-    let mine_stats: Vec<(String, MineStatsRead)> = sources
-        .iter()
-        .filter(|s| s.kind == SourceKind::MineStats)
-        .map(|s| {
-            // The registry already checks the quarter format; a refusal here is kept, never dropped.
-            let read = read_mine_stats(&s.workbook, &s.quarter, vocabulary.as_ref())
-                .unwrap_or_else(|refusal| MineStatsRead {
-                    quarter: s.quarter.clone(),
-                    blocks: 0,
-                    values: Vec::new(),
-                    refusals: vec![CellRefusal {
-                        locator: s.file_name.clone(),
-                        reason: refusal.to_string(),
-                    }],
-                    hidden_sheets: Vec::new(),
-                    repeated: Vec::new(),
-                });
-            (s.file_name.clone(), read)
-        })
-        .collect();
-    let mine_ledger = {
-        let files: Vec<LedgerFile<'_>> = sources
-            .iter()
-            .filter(|s| s.kind == SourceKind::MineStats)
-            .zip(&mine_stats)
-            .map(|(s, (_, read))| LedgerFile {
-                quarter: &s.quarter,
-                read,
-                workbook: &s.workbook,
-            })
-            .collect();
-        mine_ledger(
-            &files,
-            &LedgerRules {
-                regions: &profile.regions,
-                region_members: &profile.region_members,
-                statuses: &profile.subject_statuses,
-                corrections: &profile.printed_share_corrections,
-                aliases: &profile.mine_stats_label_aliases,
-            },
-        )
-    };
+    let (mine_stats, mine_ledger) = mine_stats_section(profile, &sources, memo);
 
     // The state root binds every input digest, every census and every instance's state, so changing any
     // input cell changes the root. Version 3 adds the hidden-scope section (BD-331.S2). Version 4 binds each
@@ -3235,6 +3340,97 @@ mod tests {
         // Every instance but the unrounded column's depends on something the sweep can move.
         assert!(deps.len() >= 30, "{}", deps.len());
         assert!(missing.is_empty(), "{missing:#?}");
+    }
+
+    /// bd-r7lp: a run through a shared memo gives the anchor, Mine Stats reads and Mine Stats ledger `assess`
+    /// gives, on the base sources and on every one-cell perturbation of every synthetic sheet; the memo is reused
+    /// exactly when no Mine Stats cell changed, a perturbed Mine Stats run never displaces the base entry, and a
+    /// changed profile recomputes.
+    #[test]
+    fn test_mine_stats_memo_matches_assess_on_every_one_cell_edit() {
+        let profile = synthetic::synthetic_profile();
+        let mut base = load_synthetic(synthetic::synthetic_workbooks(&[])).expect("parse");
+        // A second Mine Stats release whose summary poses an ownership instance (Site X at 50%), so that the
+        // sweep moves the ledger.
+        let text = |r: &str, s: &str| (r.to_string(), MinimalCell::Text(s.to_string()));
+        let num = |r: &str, v: f64| (r.to_string(), MinimalCell::Number(v));
+        let owned = fmine_io::xlsx::build_minimal_xlsx(&[fmine_io::xlsx::MinimalSheet {
+            name: "QTD".to_string(),
+            hidden: false,
+            cells: vec![
+                text("A3", "For the three months ended June 30,"),
+                num("B3", 2030.0),
+                text("B4", "Gold produced (000s oz 100%)"),
+                text("C4", "Gold produced (000s oz attributable)"),
+                text("D4", "Gold sold (000s oz attributable)"),
+                text("A5", "Site X (50%)"),
+                num("B5", 200.0),
+                num("C5", 100.0),
+                num("D5", 90.0),
+            ],
+        }]);
+        let later = vec![(
+            synthetic::SYNTHETIC_LATER_STATS_FILE,
+            SourceKind::MineStats,
+            "2030Q2",
+            owned,
+        )];
+        base.extend(load_synthetic(later).expect("parse"));
+        let memo = MineStatsMemo::default();
+        let same = |sources: &[LoadedSource], profile: &IssuerProfile| {
+            let plain = assess(profile, Lane::Synthetic, sources.to_vec());
+            let memoed = assess_memo(profile, Lane::Synthetic, sources.to_vec(), &memo);
+            assert_eq!(memoed.ledger_anchor, plain.ledger_anchor);
+            assert_eq!(memoed.mine_stats, plain.mine_stats);
+            assert_eq!(memoed.mine_ledger, plain.mine_ledger);
+            plain
+        };
+        let first = same(&base, &profile);
+        assert_eq!((memo.hits(), memo.misses()), (0, 1));
+        let (mut swept, mut stats_cells, mut ledger_moved) = (0, 0, 0);
+        for (si, src) in base.iter().enumerate() {
+            for (ki, sheet) in src.workbook.sheets.iter().enumerate() {
+                let rows = sheet.cells_by_coord.keys().map(|k| k.0).max().unwrap_or(0);
+                let cols = sheet.cells_by_coord.keys().map(|k| k.1).max().unwrap_or(0);
+                for (row, col) in (1..=rows).flat_map(|r| (1..=cols).map(move |c| (r, c))) {
+                    let mut sources = base.clone();
+                    perturb(&mut sources[si].workbook.sheets[ki], row, col);
+                    // The base entry stays: a perturbed Mine Stats run before this one did not displace it.
+                    let hits = memo.hits();
+                    same(&base, &profile);
+                    assert_eq!(memo.hits() - hits, 1);
+                    let hits = memo.hits();
+                    let r = same(&sources, &profile);
+                    let stats = src.kind == SourceKind::MineStats;
+                    assert_eq!(
+                        memo.hits() - hits,
+                        u64::from(!stats),
+                        "{}:{}!{row},{col}",
+                        src.file_name,
+                        sheet.name
+                    );
+                    swept += 1;
+                    stats_cells += usize::from(stats);
+                    ledger_moved += usize::from(r.mine_ledger != first.mine_ledger);
+                }
+            }
+        }
+        let mut changed = profile.clone();
+        changed.mine_stats_label_aliases.clear();
+        changed.regions.push("Region Elsewhere".to_string());
+        same(&base, &profile);
+        let misses = memo.misses();
+        same(&base, &changed);
+        assert_eq!(memo.misses() - misses, 1);
+        println!(
+            "{{\"test\":\"mine_stats_memo\",\"swept_cells\":{swept},\"mine_stats_cells\":{stats_cells},\
+             \"ledger_moved\":{ledger_moved},\"hits\":{},\"misses\":{}}}",
+            memo.hits(),
+            memo.misses()
+        );
+        assert!(swept > 300 && stats_cells > 0, "{swept} {stats_cells}");
+        // The equality checks are not vacuous: some perturbations move the Mine Stats ledger.
+        assert!(ledger_moved > 0);
     }
 
     /// BD-331.S4: the same sweep with Region North weighed against Site H and Site I (not refuted at 2100). Every

@@ -119,7 +119,7 @@ pub enum QuarantineItem {
 }
 
 /// Extracted visible worksheet from an `.xlsx` workbook.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Sheet {
     pub name: String,
     pub cells_by_coord: BTreeMap<(u32, u32), ExtractedCell>,
@@ -160,7 +160,9 @@ impl Sheet {
 }
 
 /// Extracted `.xlsx` workbook with SHA-256 digest and `G-BULL-1` quarantine log (`BD-057`, `BD-271`).
-#[derive(Debug, Clone)]
+/// Equality compares every field, so an edit to a parsed cell makes two workbooks unequal even when their
+/// `sha256` (of the original bytes) agrees.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Workbook {
     pub artifact_path: String,
     pub sha256: [u8; 32],

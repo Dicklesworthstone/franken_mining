@@ -8,7 +8,8 @@
 # BD-338.S3's live-dependency proof runs in two places:
 # - its file checks and the real M1, inside test_public;
 # - its leaf sample (one leaf per instance, about 2,600 reruns of the pipeline), as the release-mode stage
-#   live_leaves. In debug it would take about ten minutes.
+#   live_leaves. The reruns reuse the Mine Stats section unless a leaf is in a Mine Stats file, and run on
+#   every core (bd-r7lp). Release, 2026-10-30: 55 s on 36 cores, 751 s on one thread.
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 

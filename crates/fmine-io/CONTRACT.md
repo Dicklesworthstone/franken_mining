@@ -32,7 +32,8 @@ Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a
 - `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, FormatCount, MinimalCell,
   MinimalSheet, MinimalStyles, build_minimal_xlsx, build_minimal_xlsx_styled, col_index_to_letters,
   parse_a1_ref}`; `Workbook::format_census`;
-  `ExtractedCell::{style, format}` (bd-jg43.1)
+  `ExtractedCell::{style, format}` (bd-jg43.1). `Sheet` and `Workbook` implement `PartialEq` over every field
+  (bd-r7lp), so two parsed workbooks are equal only when every cell is equal, whatever their `sha256`.
 - `styles::{Styles, NumberFormat, BUILTIN_FORMATS, builtin_code, parse_styles, styles_part_name,
   decimal_is_non_integer}` (bd-jg43.1): a cell's `s` resolves through `cellXfs` to a `numFmts` code or an
   ECMA-376 §18.8.30 built-in. Without `s` it uses xf 0, and with no styles part every cell is General. An index

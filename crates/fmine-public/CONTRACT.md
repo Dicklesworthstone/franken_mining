@@ -81,6 +81,10 @@ The public lane of M0 (`fmine assure public`).
 - `lib`:
   - `load_registered_sources` verifies every registered file;
   - `assess` builds the ledger and the state root;
+  - `assess_memo` is `assess` with a `MineStatsMemo` (bd-r7lp). The memo reuses the Mine Stats reads and ledger
+    of its last computed run when the profile and every Mine Stats source's name, quarter and parsed workbook
+    are equal. The live proofs use it, because their perturbations move only AISC cells. A synthetic sweep of
+    every one-cell edit checks that its anchor, reads and ledger equal `assess`'s;
   - `PublicAssuranceReport::to_json` is the envelope payload;
   - `cell_to_public_claim` is the public-basis `Claim` builder (`BD-058`).
 
@@ -174,6 +178,9 @@ The public lane of M0 (`fmine assure public`).
     - a label to "x".
   - **Skips:** a state decided before arithmetic, a share refusal's non-cause leaves, and an unrounded value
     are skipped, each with its reason.
+  - **Threads** (bd-r7lp): the checks are independent runs, spread over `available_parallelism()` scoped
+    threads, so `run` must be `Sync`. The result is in instance and operand order, equal to a sequential pass
+    (`test_live_leaves_threaded_matches_sequential`).
   - **Not yet:** hidden-scope instances.
 - `live::{prove_leaves_in, one_leaf_per_instance, prove_labels, LabelCheck}` (BD-338.S3): the real-lane
   frame and the label sample.
@@ -181,7 +188,8 @@ The public lane of M0 (`fmine assure public`).
     ounces prefix). Each must give a table refusal or changed instances.
   - **Real lane** (ignored, local runs):
     - files: 54 of 54;
-    - leaves (one per instance): 2,444 pass, 0 fail, 151 skipped;
+    - leaves (one per instance): 2,492 pass, 0 fail, 103 skipped, all `nci_not_decisive` (2026-10-30; it was
+      2,444, 0 and 151 at 38a62ae, and the change is not attributed commit by commit);
     - labels: 56 of 56 table refusals;
     - the Kibali O11 literal mutant is caught.
   - **Finding, fixed:** a broken cost-of-sales label made `locate_table` return `Ok(None)`, so the table dropped
@@ -217,7 +225,8 @@ The public lane of M0 (`fmine assure public`).
   - `IdentityState::reason_code()` gives the code that the payload's exception records and refused and
     not-published groups carry as `reason_code`. `detail()` renders the same prose as before.
 - `Lane`, `LoadedSource`, `TableRefusal`, `AlternateCounts`, `HiddenScope`, `HIDDEN_SCOPE`,
-  `PublicAssuranceReport`, `load_registered_sources`, `assess`, `run_public_assurance`, `run_barrick_m0_assurance`,
+  `PublicAssuranceReport`, `load_registered_sources`, `assess`, `assess_memo`, `MineStatsMemo` (`hits`,
+  `misses`), `run_public_assurance`, `run_barrick_m0_assurance`,
   `run_synthetic_assurance`, `cell_to_public_claim`, `NO_CLAIM`; `PublicAssuranceReport::next_actions`
 - `key` (bd-a28f.1, BD-332.S1): the key of a printed public figure, and the value typed with its raw token.
   - `PublicKey { issuer, subject, valid_period, reporting_vintage, ownership_basis, scope, unit, line }`.
