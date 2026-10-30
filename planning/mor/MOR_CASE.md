@@ -815,3 +815,34 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     column N, "Site G", re-seeds the refusals. A General non-integer at N6 refuses the TCC footing, and
     date-format ounces at N13 refuse the three rates; each names the cell and the format code. The lane now has
     55 instances: i 40, ii 2, iii 1, iv 2, v 5, np 5.
+- **E839** Latin America & Asia Pacific 2023 cost of sales per ounce against its members (bd-4wvl.6, BD-340.S6;
+  FACT, execution, 2026-10-30, owner machine).
+  - **Cells.** Two files: `Barrick_Q3_2024_AISC.xlsx` (sha256 `d063ea7c…`), sheets `'Q3 2023'` and
+    `'YTD Sept 30 2023'`; and `Barrick_Q4_2024_AISC.xlsx` (`f8426969…`), sheet `'YTD Dec 31 2023'`. Rows: 19
+    (attributable ounces sold) and 20 (cost of sales per ounce, footnotes h and i). Columns: K (Pueblo Viejo), L
+    (Veladero) and M (the region), headers in row 4.
+    - The three rates are E817's "Latin America & Asia Pacific 2023 ×3". The ledger's 2023 LAAP instances refused
+      as `regional_numerator_needs_weighting` are exactly M20 on these sheets.
+  - **Two readers before commit.**
+    - Reader 1: `formats.py`.
+    - Reader 2: a second agent's own zipfile/XML reader, given only the locators.
+    - All 18 displayed values, both sha256 and the labels agree. The ignored test reads them a third time through
+      `fmine-io`: 18 of 18.
+  - **Result.**
+    - The members' ounces foot exactly on all three sheets.
+    - Each region rate is refuted by the McCormick relaxation of `rate·Σwᵢ = Σ rateᵢ·wᵢ`. Each Farkas
+      certificate is checked over the envelope rows.
+    - The lower end of the printed region rate lies about 13 to 17 $/oz above the highest weighted mean the
+      members' rounding intervals allow. Example: Q3 2023 at 1,467.5 against at most about 1,454.6 (INFERENCE,
+      hand arithmetic).
+  - **Not claimed.**
+    - Refuted means the printed cells contradict "the region is these two members, weighted by attributable
+      ounces sold". It does not say which cell is wrong, and gives no corrected value: a relaxation carries no
+      blame.
+    - The region may carry a cost or a site the table does not show, as E816 found for Africa & Middle East
+      (hypothesis, not tested).
+    - Mapping the result to a ledger state is BD-331.S4's job.
+  - **Tests.** `test:fmine-public::laap::test_laap_2023_fixture`, plus the ignored
+    `test_laap_2023_fixture_cells_match_registered_bytes`.
+  - **Planted negative.** Q3 2023 M20 set to 1,454 gives `NotRefuted`, and the bytes test names the cell. The
+    value was reverted.
