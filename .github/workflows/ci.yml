@@ -40,6 +40,18 @@ jobs:
         run: cargo check --workspace --all-targets --profile ${{ matrix.profile }}
       - name: Run workspace test suite
         run: cargo test --workspace --profile ${{ matrix.profile }}
+      # Each public-lane kernel's golden digest line (bd-hp2j.3), in the run summary so one run shows both hosts.
+      # The tests above already assert the committed values; this step only prints them, six or it fails.
+      - name: Golden digest lines
+        if: matrix.profile == 'dev'
+        shell: bash
+        run: |
+          cargo test -p fmine-numerics -p fmine-calib -p fmine-metrics --lib golden_digest -- --nocapture \
+            --test-threads 1 > "$RUNNER_TEMP/digests.log"
+          grep -o '{"kernel".*}' "$RUNNER_TEMP/digests.log" | sort > "$RUNNER_TEMP/digest_lines.txt"
+          cat "$RUNNER_TEMP/digest_lines.txt"
+          test "$(wc -l < "$RUNNER_TEMP/digest_lines.txt")" -eq 6
+          { echo '```'; cat "$RUNNER_TEMP/digest_lines.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       # Every verb's printed envelope (bd-sjrh.3, PO-ADIT-1); the real-corpus run logs skipped: corpus_absent.
       - name: Envelope e2e
         if: matrix.profile == 'dev'

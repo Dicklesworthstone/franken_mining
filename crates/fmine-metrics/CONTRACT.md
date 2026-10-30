@@ -19,6 +19,10 @@ Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when 
 - `ReserveReplacementBridge`
 - `solve_cutoff_grade` → `Result<CutoffSolution, CutoffError>`
 - `lmdi::{LmdiState, LmdiWaterfall, decompose_aisc_lmdi, logarithmic_mean}`
+- `lmdi::{golden_digest_logarithmic_mean_10k, golden_digest_decompose_aisc_lmdi_10k}` (bd-hp2j.3): BLAKE3 over the
+  output bits on 10,000 inputs from `LMDI_DIGEST_KEY` (series branch, both branches, ratios to e^300, magnitudes
+  near the subnormals; seeded positive state pairs). The committed values were first observed on aarch64-macos;
+  `lmdi.rs` declares `BitwisePortable` only after ubuntu-latest and macos-14 agree in one CI run.
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-203` (`ConsolidationBridgeMissing`, `G-BULL-3`)

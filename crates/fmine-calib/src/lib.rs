@@ -8,7 +8,9 @@ use std::collections::BTreeMap;
 
 use fmine_claim::Claim;
 use fmine_core::det;
+use fmine_core::hash::blake3_hash;
 use fmine_core::id::{ObjectId, PrefixKind};
+use fmine_core::rand::{PhiloxStream, RngKey};
 use fmine_evidence::{EvidenceClass, Refusal};
 use fmine_numerics::cholesky_solve;
 use fmine_numerics::eproc::BettingEProcess;
@@ -247,6 +249,67 @@ pub fn gaussian_log_score(mean: f64, std_dev: f64, y: f64) -> Result<f64, ScoreE
     check_gaussian(mean, std_dev, y)?;
     let z = (y - mean) / std_dev;
     Ok(0.5 * LN_2PI + det::ln(std_dev) + 0.5 * z * z)
+}
+
+/// The Philox key of the scoring-rule golden digests (bd-hp2j.3).
+pub const SCORE_DIGEST_KEY: RngKey = RngKey {
+    seed_root: 0x6361_6c69,
+    partition: 1,
+    domain: 0,
+    var_group: 0,
+    realization: 0,
+    brick: 0,
+};
+
+/// The 10,000 `(mean, std_dev, y)` triples of the scoring-rule digests: mean uniform on [−100, 100], `std_dev`
+/// log-uniform on [1e-3, 1e3] (through `det`), and `y = mean + z·std_dev` with `z` uniform on [−12, 12], so
+/// |z| > 8 is a third of them.
+#[must_use]
+pub fn score_digest_inputs(key: RngKey) -> Vec<(f64, f64, f64)> {
+    let mut rng = PhiloxStream::new(key);
+    let (lo, hi) = (det::ln(1e-3), det::ln(1e3));
+    (0..10_000)
+        .map(|_| {
+            let mean = 200.0 * rng.next_f64_open01() - 100.0;
+            let std_dev = det::exp(lo + rng.next_f64_open01() * (hi - lo));
+            let z = 24.0 * rng.next_f64_open01() - 12.0;
+            (mean, std_dev, mean + z * std_dev)
+        })
+        .collect()
+}
+
+/// BLAKE3 over each score's little-endian bits over [`score_digest_inputs`]; a refusal hashes as `u64::MAX`.
+fn digest_scores(key: RngKey, score: fn(f64, f64, f64) -> Result<f64, ScoreError>) -> String {
+    let bytes: Vec<u8> = score_digest_inputs(key)
+        .into_iter()
+        .map(|(m, s, y)| score(m, s, y).map_or(u64::MAX, f64::to_bits))
+        .flat_map(u64::to_le_bytes)
+        .collect();
+    blake3_hash(&bytes).to_hex()
+}
+
+/// The digest of [`gaussian_crps`] over [`score_digest_inputs`].
+#[must_use]
+pub fn digest_gaussian_crps(key: RngKey) -> String {
+    digest_scores(key, gaussian_crps)
+}
+
+/// The digest of [`gaussian_log_score`] over [`score_digest_inputs`].
+#[must_use]
+pub fn digest_gaussian_log_score(key: RngKey) -> String {
+    digest_scores(key, gaussian_log_score)
+}
+
+/// [`digest_gaussian_crps`] under [`SCORE_DIGEST_KEY`].
+#[must_use]
+pub fn golden_digest_gaussian_crps_10k() -> String {
+    digest_gaussian_crps(SCORE_DIGEST_KEY)
+}
+
+/// [`digest_gaussian_log_score`] under [`SCORE_DIGEST_KEY`].
+#[must_use]
+pub fn golden_digest_gaussian_log_score_10k() -> String {
+    digest_gaussian_log_score(SCORE_DIGEST_KEY)
 }
 
 /// Winkler interval score for the central $(1 - \alpha)$ interval $[l, u]$ at realization $y$.
@@ -531,6 +594,65 @@ mod tests {
             LN_2PI.to_bits(),
             from_det.to_bits(),
             "det::ln(2π) = {from_det:?}"
+        );
+    }
+
+    /// The bd-hp2j.3 log line: kernel, input count, the folded Philox key and counter prefix, digest, host.
+    fn digest_line(kernel: &str, key: RngKey, digest: &str) -> String {
+        let (k, c) = key.to_philox_key_and_hi_ctr();
+        format!(
+            "{{\"kernel\":\"{kernel}\",\"n\":10000,\"rng_key\":\"{:08x}{:08x}{:08x}{:08x}\",\"digest\":\"{digest}\",\
+             \"target\":\"{}-{}\"}}",
+            k[0],
+            k[1],
+            c[0],
+            c[1],
+            std::env::consts::ARCH,
+            std::env::consts::OS
+        )
+    }
+
+    // TARGETs, first observed on aarch64-macos (bd-hp2j.3). Never regenerated on another host: a difference
+    // there is the failure this test exists to catch.
+    const GAUSSIAN_CRPS_10K: &str =
+        "d3a20c177f23259db387f4451373c8662dbd4d3178ec2b24e6b0e05d05b75f65";
+    const GAUSSIAN_LOG_SCORE_10K: &str =
+        "b59d447a25e88d6a669ac00492a8bb883be9a28ac4db057865be3cf659a8b1a8";
+
+    #[test]
+    fn test_golden_digest_gaussian_crps_10k() {
+        let d = golden_digest_gaussian_crps_10k();
+        println!("{}", digest_line("gaussian_crps", SCORE_DIGEST_KEY, &d));
+        assert_eq!(d, GAUSSIAN_CRPS_10K);
+    }
+
+    #[test]
+    fn test_golden_digest_gaussian_log_score_10k() {
+        let d = golden_digest_gaussian_log_score_10k();
+        println!(
+            "{}",
+            digest_line("gaussian_log_score", SCORE_DIGEST_KEY, &d)
+        );
+        assert_eq!(d, GAUSSIAN_LOG_SCORE_10K);
+    }
+
+    #[test]
+    fn test_score_digest_inputs_cover_tails_and_change_with_key() {
+        let inputs = score_digest_inputs(SCORE_DIGEST_KEY);
+        let z = |&(m, s, y): &(f64, f64, f64)| (y - m) / s;
+        assert!(inputs.iter().any(|t| z(t) > 8.0) && inputs.iter().any(|t| z(t) < -8.0));
+        assert!(inputs.iter().all(|t| gaussian_crps(t.0, t.1, t.2).is_ok()));
+        let other = RngKey {
+            seed_root: SCORE_DIGEST_KEY.seed_root + 1,
+            ..SCORE_DIGEST_KEY
+        };
+        assert_ne!(
+            digest_gaussian_crps(other),
+            golden_digest_gaussian_crps_10k()
+        );
+        assert_ne!(
+            digest_gaussian_log_score(other),
+            golden_digest_gaussian_log_score_10k()
         );
     }
 

@@ -14,6 +14,8 @@ pub mod risk;
 pub mod tropical;
 pub mod voi;
 
+use fmine_core::hash::blake3_hash;
+use fmine_core::rand::{PhiloxStream, RngKey};
 use fmine_evidence::Refusal;
 
 /// Solves $A x = b$ for an $n \times n$ row-major symmetric positive-definite matrix `a`
@@ -250,6 +252,99 @@ pub fn norm_inv(p: f64) -> f64 {
     fmine_core::det::norm_ppf(p)
 }
 
+// --- Golden digests (bd-hp2j.3): the same bits on every host, or the kernel is not BitwisePortable ---
+
+/// The Philox key of this file's golden digests.
+pub const NUMERICS_DIGEST_KEY: RngKey = RngKey {
+    seed_root: 0x6e75_6d65,
+    partition: 1,
+    domain: 0,
+    var_group: 0,
+    realization: 0,
+    brick: 0,
+};
+
+/// BLAKE3 over each value's little-endian bits.
+fn digest_bits(bits: impl IntoIterator<Item = u64>) -> String {
+    let bytes: Vec<u8> = bits.into_iter().flat_map(u64::to_le_bytes).collect();
+    blake3_hash(&bytes).to_hex()
+}
+
+/// The 10,000 `(z, p)` inputs of the normal digest: `z` uniform on [−12, 12] (|z| > 8 is a third of them); `p`
+/// alternately `e^{−700u}` (from about 1e-304 up to 1) and `1 − e^{−37u}` (1 − p from about 1e-16 up to 1).
+#[must_use]
+pub fn normal_digest_inputs(key: RngKey) -> Vec<(f64, f64)> {
+    let mut rng = PhiloxStream::new(key);
+    (0..10_000)
+        .map(|i| {
+            let z = 24.0 * rng.next_f64_open01() - 12.0;
+            let u = rng.next_f64_open01();
+            let p = if i % 2 == 0 {
+                fmine_core::det::exp(-700.0 * u)
+            } else {
+                1.0 - fmine_core::det::exp(-37.0 * u)
+            };
+            (z, p)
+        })
+        .collect()
+}
+
+/// The digest of `norm_cdf(z)` and `norm_inv(p)` over [`normal_digest_inputs`].
+#[must_use]
+pub fn digest_norm_cdf_inv(key: RngKey) -> String {
+    digest_bits(
+        normal_digest_inputs(key)
+            .into_iter()
+            .flat_map(|(z, p)| [norm_cdf(z), norm_inv(p)].map(f64::to_bits)),
+    )
+}
+
+/// [`digest_norm_cdf_inv`] under [`NUMERICS_DIGEST_KEY`].
+#[must_use]
+pub fn golden_digest_norm_cdf_inv_10k() -> String {
+    digest_norm_cdf_inv(NUMERICS_DIGEST_KEY)
+}
+
+/// The digest of 10,000 seeded `cholesky_solve` systems (3 × 3, `A = M Mᵀ + I/2` with `M` and `b` uniform on
+/// [−1, 1]; the solution's three values) and 10,000 `brent_root` problems (`x³ = c`, `c` uniform on [0.1, 10],
+/// bracket [0, 3], tolerance 1e-12; the root). A refusal hashes as `u64::MAX`.
+#[must_use]
+pub fn digest_cholesky_brent(key: RngKey) -> String {
+    let mut rng = PhiloxStream::new(key);
+    let mut bits = Vec::with_capacity(40_000);
+    let mut u = || 2.0 * rng.next_f64_open01() - 1.0;
+    for _ in 0..10_000 {
+        let m: Vec<f64> = (0..9).map(|_| u()).collect();
+        let b: Vec<f64> = (0..3).map(|_| u()).collect();
+        let mut a = vec![0.0; 9];
+        for i in 0..3 {
+            for j in 0..3 {
+                let dot: f64 = (0..3).map(|k| m[3 * i + k] * m[3 * j + k]).sum();
+                a[3 * i + j] = dot + if i == j { 0.5 } else { 0.0 };
+            }
+        }
+        match cholesky_solve(&a, &b, 3) {
+            Ok(x) => bits.extend(x.iter().map(|v| v.to_bits())),
+            Err(_) => bits.push(u64::MAX),
+        }
+    }
+    for _ in 0..10_000 {
+        let c = 0.1 + 9.9 * (0.5 * u() + 0.5);
+        let root = brent_root(0.0, 3.0, 1e-12, 200, |x| x * x * x - c);
+        bits.push(root.map_or(u64::MAX, |r| r.x.to_bits()));
+    }
+    digest_bits(bits)
+}
+
+/// [`digest_cholesky_brent`] under [`NUMERICS_DIGEST_KEY`] (partition 2).
+#[must_use]
+pub fn golden_digest_cholesky_brent_10k() -> String {
+    digest_cholesky_brent(RngKey {
+        partition: 2,
+        ..NUMERICS_DIGEST_KEY
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +360,67 @@ mod tests {
         let singular = [1.0, 2.0, 2.0, 4.0];
         let err = cholesky_solve(&singular, &b, 2).expect_err("singular must refuse");
         assert_eq!(err.code, "FMINE-REF-301");
+    }
+
+    /// The bd-hp2j.3 log line: kernel, input count, the folded Philox key and counter prefix, digest, host.
+    fn digest_line(kernel: &str, key: RngKey, digest: &str) -> String {
+        let (k, c) = key.to_philox_key_and_hi_ctr();
+        format!(
+            "{{\"kernel\":\"{kernel}\",\"n\":10000,\"rng_key\":\"{:08x}{:08x}{:08x}{:08x}\",\"digest\":\"{digest}\",\
+             \"target\":\"{}-{}\"}}",
+            k[0],
+            k[1],
+            c[0],
+            c[1],
+            std::env::consts::ARCH,
+            std::env::consts::OS
+        )
+    }
+
+    // TARGETs, first observed on aarch64-macos (bd-hp2j.3). Never regenerated on another host: a difference
+    // there is the failure this test exists to catch.
+    const NORM_CDF_INV_10K: &str =
+        "c597baa370caa8d34160bf165d9dc13aa6c6fee3c50d44541d6a01c2ab6a993a";
+    const CHOLESKY_BRENT_10K: &str =
+        "b7e9a3f30c520bfcb6cf55e7c8306348252ee2753ac53a5440cddf34c96c63f0";
+
+    #[test]
+    fn test_golden_digest_norm_cdf_inv_10k() {
+        let d = golden_digest_norm_cdf_inv_10k();
+        println!("{}", digest_line("norm_cdf_inv", NUMERICS_DIGEST_KEY, &d));
+        assert_eq!(d, NORM_CDF_INV_10K);
+    }
+
+    #[test]
+    fn test_golden_digest_cholesky_brent_10k() {
+        let d = golden_digest_cholesky_brent_10k();
+        let key = RngKey {
+            partition: 2,
+            ..NUMERICS_DIGEST_KEY
+        };
+        println!("{}", digest_line("cholesky_brent", key, &d));
+        assert_eq!(d, CHOLESKY_BRENT_10K);
+    }
+
+    #[test]
+    fn test_normal_digest_inputs_cover_tails_and_change_with_key() {
+        let inputs = normal_digest_inputs(NUMERICS_DIGEST_KEY);
+        assert!(inputs.iter().any(|&(z, _)| z > 8.0) && inputs.iter().any(|&(z, _)| z < -8.0));
+        assert!(inputs.iter().any(|&(_, p)| p < 1e-200), "no p near 0");
+        assert!(inputs.iter().any(|&(_, p)| 1.0 - p < 1e-12), "no p near 1");
+        assert!(inputs.iter().all(|&(_, p)| p > 0.0 && p < 1.0));
+        let other = RngKey {
+            seed_root: NUMERICS_DIGEST_KEY.seed_root + 1,
+            ..NUMERICS_DIGEST_KEY
+        };
+        assert_ne!(digest_norm_cdf_inv(other), golden_digest_norm_cdf_inv_10k());
+        assert_ne!(
+            digest_cholesky_brent(RngKey {
+                partition: 2,
+                ..other
+            }),
+            golden_digest_cholesky_brent_10k()
+        );
     }
 
     /// bd-hp2j.2: the old body clamped `p` into [1e-15, 1 − 1e-15] and returned a finite quantile for any input.

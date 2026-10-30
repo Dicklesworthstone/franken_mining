@@ -4,6 +4,8 @@
 //! Determinism: DeterministicPerIsa (BitwisePortable once its cross-host digest exists, bd-hp2j.3).
 
 use fmine_core::det;
+use fmine_core::hash::blake3_hash;
+use fmine_core::rand::{PhiloxStream, RngKey};
 use fmine_evidence::Refusal;
 
 /// Operational state for a single period used in the 5-factor multiplicative AISC identity:
@@ -157,9 +159,229 @@ pub fn decompose_aisc_lmdi(s0: &LmdiState, s1: &LmdiState) -> Result<LmdiWaterfa
     })
 }
 
+// --- Golden digests (bd-hp2j.3): the same bits on every host, or the kernel is not BitwisePortable ---
+
+/// The Philox key of the LMDI golden digests.
+pub const LMDI_DIGEST_KEY: RngKey = RngKey {
+    seed_root: 0x6c6d_6469,
+    partition: 1,
+    domain: 0,
+    var_group: 0,
+    realization: 0,
+    brick: 0,
+};
+
+/// A value log-uniform on `[lo, hi]`, through `det` only, so every host draws the same inputs.
+fn log_uniform(rng: &mut PhiloxStream, lo: f64, hi: f64) -> f64 {
+    let (l, h) = (det::ln(lo), det::ln(hi));
+    det::exp(l + rng.next_f64_open01() * (h - l))
+}
+
+/// BLAKE3 over each value's little-endian bits.
+fn digest_bits(bits: impl IntoIterator<Item = u64>) -> String {
+    let bytes: Vec<u8> = bits.into_iter().flat_map(u64::to_le_bytes).collect();
+    blake3_hash(&bytes).to_hex()
+}
+
+/// The 10,000 `(a, b)` pairs of the logarithmic-mean digest, cycling through four kinds: a relative distance
+/// below 1e-7 (the series branch), from 1e-7 to 1 (both branches), ratios up to e^300, and magnitudes from
+/// 1e-307 to 1e-290, next to the subnormals.
+#[must_use]
+pub fn logarithmic_mean_digest_inputs(key: RngKey) -> Vec<(f64, f64)> {
+    let mut rng = PhiloxStream::new(key);
+    (0..10_000)
+        .map(|i| {
+            let (a, r) = match i % 4 {
+                0 => (
+                    log_uniform(&mut rng, 1e-3, 1e6),
+                    log_uniform(&mut rng, 1e-16, 1e-7),
+                ),
+                1 => (
+                    log_uniform(&mut rng, 1e-3, 1e6),
+                    log_uniform(&mut rng, 1e-7, 1.0),
+                ),
+                2 => (
+                    log_uniform(&mut rng, 1e-150, 1e150),
+                    det::exp(300.0 * rng.next_f64_open01()) - 1.0,
+                ),
+                _ => (
+                    log_uniform(&mut rng, 1e-307, 1e-290),
+                    log_uniform(&mut rng, 1e-16, 1e3),
+                ),
+            };
+            let b = if rng.next_f64_open01() < 0.5 {
+                a * (1.0 + r)
+            } else {
+                a / (1.0 + r)
+            };
+            (a, b)
+        })
+        .collect()
+}
+
+/// The digest of [`logarithmic_mean`] over [`logarithmic_mean_digest_inputs`].
+#[must_use]
+pub fn digest_logarithmic_mean(key: RngKey) -> String {
+    digest_bits(
+        logarithmic_mean_digest_inputs(key)
+            .into_iter()
+            .map(|(a, b)| logarithmic_mean(a, b).to_bits()),
+    )
+}
+
+/// [`digest_logarithmic_mean`] under [`LMDI_DIGEST_KEY`].
+#[must_use]
+pub fn golden_digest_logarithmic_mean_10k() -> String {
+    digest_logarithmic_mean(LMDI_DIGEST_KEY)
+}
+
+fn digest_state(rng: &mut PhiloxStream) -> LmdiState {
+    let aisc_per_oz = log_uniform(rng, 300.0, 5_000.0);
+    let oz_sold = log_uniform(rng, 1.0, 2_000.0);
+    let tonnes_processed = log_uniform(rng, 10.0, 1e5);
+    let head_grade_g_t = log_uniform(rng, 0.2, 20.0);
+    let recovery_fraction = 0.5 + 0.5 * rng.next_f64_open01();
+    let oz_produced = oz_sold * log_uniform(rng, 0.5, 2.0);
+    LmdiState {
+        aisc_per_oz,
+        total_aisc_spend: aisc_per_oz * oz_sold,
+        tonnes_processed,
+        head_grade_g_t,
+        recovery_fraction,
+        oz_produced,
+        oz_sold,
+    }
+}
+
+/// The digest of [`decompose_aisc_lmdi`] over 10,000 seeded pairs of strictly positive states: per pair,
+/// `total_delta` and the six effects in declaration order (a refusal hashes as `u64::MAX`).
+#[must_use]
+pub fn digest_decompose_aisc_lmdi(key: RngKey) -> String {
+    let mut rng = PhiloxStream::new(key);
+    let mut bits = Vec::with_capacity(70_000);
+    for _ in 0..10_000 {
+        let s0 = digest_state(&mut rng);
+        let s1 = digest_state(&mut rng);
+        match decompose_aisc_lmdi(&s0, &s1) {
+            Ok(w) => bits.extend(
+                [
+                    w.total_delta,
+                    w.spend_effect,
+                    w.throughput_effect,
+                    w.grade_effect,
+                    w.recovery_effect,
+                    w.sales_timing_effect,
+                    w.circuit_inventory_effect,
+                ]
+                .map(f64::to_bits),
+            ),
+            Err(_) => bits.push(u64::MAX),
+        }
+    }
+    digest_bits(bits)
+}
+
+/// [`digest_decompose_aisc_lmdi`] under [`LMDI_DIGEST_KEY`] (partition 2).
+#[must_use]
+pub fn golden_digest_decompose_aisc_lmdi_10k() -> String {
+    digest_decompose_aisc_lmdi(RngKey {
+        partition: 2,
+        ..LMDI_DIGEST_KEY
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bd-hp2j.3 log line: kernel, input count, the folded Philox key and counter prefix, digest, host.
+    fn digest_line(kernel: &str, key: RngKey, digest: &str) -> String {
+        let (k, c) = key.to_philox_key_and_hi_ctr();
+        format!(
+            "{{\"kernel\":\"{kernel}\",\"n\":10000,\"rng_key\":\"{:08x}{:08x}{:08x}{:08x}\",\"digest\":\"{digest}\",\
+             \"target\":\"{}-{}\"}}",
+            k[0],
+            k[1],
+            c[0],
+            c[1],
+            std::env::consts::ARCH,
+            std::env::consts::OS
+        )
+    }
+
+    // TARGETs, first observed on aarch64-macos (bd-hp2j.3). Never regenerated on another host: a difference
+    // there is the failure this test exists to catch.
+    const LOGARITHMIC_MEAN_10K: &str =
+        "008970ccb3f6e8d75c423d3af688994fc222065dec26de9b47fb343af933ebe5";
+    const DECOMPOSE_AISC_LMDI_10K: &str =
+        "cea397de741217027d16e76227c5f615b0ec883e575bf0217c8bfd9e5e344f8b";
+
+    #[test]
+    fn test_golden_digest_logarithmic_mean_10k() {
+        let d = golden_digest_logarithmic_mean_10k();
+        println!("{}", digest_line("logarithmic_mean", LMDI_DIGEST_KEY, &d));
+        assert_eq!(d, LOGARITHMIC_MEAN_10K);
+    }
+
+    #[test]
+    fn test_golden_digest_decompose_aisc_lmdi_10k() {
+        let d = golden_digest_decompose_aisc_lmdi_10k();
+        let key = RngKey {
+            partition: 2,
+            ..LMDI_DIGEST_KEY
+        };
+        println!("{}", digest_line("decompose_aisc_lmdi", key, &d));
+        assert_eq!(d, DECOMPOSE_AISC_LMDI_10K);
+    }
+
+    #[test]
+    fn test_digest_inputs_cover_series_branch_and_tails() {
+        let pairs = logarithmic_mean_digest_inputs(LMDI_DIGEST_KEY);
+        let rel = |(a, b): (f64, f64)| (a - b).abs() / (0.5 * (a + b));
+        let ratio = |(a, b): (f64, f64)| a.max(b) / a.min(b);
+        assert!(
+            pairs.iter().any(|&p| rel(p) < 1e-7),
+            "no pair on the old series branch"
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|&p| rel(p) < SERIES_SWITCH && rel(p) > 1e-7)
+        );
+        assert!(pairs.iter().any(|&p| rel(p) >= SERIES_SWITCH));
+        assert!(pairs.iter().any(|&p| ratio(p) > 1e100), "no large ratio");
+        assert!(
+            pairs.iter().any(|&(a, b)| a.min(b) < 1e-300),
+            "nothing near the subnormals"
+        );
+        assert!(
+            pairs
+                .iter()
+                .all(|&(a, b)| a > 0.0 && b > 0.0 && a.is_finite() && b.is_finite())
+        );
+    }
+
+    /// One Philox key word changed changes both digests.
+    #[test]
+    fn test_digests_change_with_the_key() {
+        let other = RngKey {
+            seed_root: LMDI_DIGEST_KEY.seed_root + 1,
+            ..LMDI_DIGEST_KEY
+        };
+        assert_ne!(
+            digest_logarithmic_mean(other),
+            golden_digest_logarithmic_mean_10k()
+        );
+        let other2 = RngKey {
+            seed_root: LMDI_DIGEST_KEY.seed_root + 1,
+            partition: 2,
+            ..LMDI_DIGEST_KEY
+        };
+        assert_ne!(
+            digest_decompose_aisc_lmdi(other2),
+            golden_digest_decompose_aisc_lmdi_10k()
+        );
+    }
 
     #[test]
     fn test_synthetic_two_period_exact_lmdi() {
