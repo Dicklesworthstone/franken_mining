@@ -707,3 +707,31 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
       `Barrick_Q2_2026_AISC.xlsx`.
   - **Not yet.** The real blind record (bd-s9j3.1) needs a push, which is the owner's decision. `--run` reads it
     from `repro/barrick/blind_record.json` (`binary_sha256`).
+- **E836** Appendix K.4's cheapest common test (bd-prmn.8; FACT, execution, 2026-10-30, owner machine; oracle
+  4acf3ce, Rust 3a73653).
+  - **What ran.** The one-cell cost-of-sales-per-ounce check, 1000·s·N/Q against the printed rate on exact
+    corners. It ran on every registered-subject column of the 34 visible AISC tables through 2026Q2. The basis
+    is the registered, label-confirmed share where an NCI line is non-zero, and 100% otherwise.
+    `scripts/oracle/one_cell_cos.py` was written and committed first. On all 519 columns,
+    `fmine_public::aisc::one_cell_checks` equals it field by field (ignored test
+    `barrick_one_cell_matches_independent_reader`). Both were written by the same agent, so this is one reader
+    of one stated rule.
+  - **Counts.** 374 pass, 82 fail and 63 refused (51 regions needing member weighting, 12 all-zero columns).
+    The 82 failures are exactly the 82 cost-of-sales-per-ounce (iv).
+  - **K.4 items.** 17 failing columns are K.4 items: Veladero 12 (all dated 2024 or 2025; it passes in 15 of 27
+    columns, including every 2023 and 2026 column); Hemlo 3; North Mara 2 (Q2 2026 and YTD Q2 2026, failing at
+    both 21/25 and 100%). The three 2023 Latin America & Asia Pacific region columns are refused for member
+    weighting, and fail at 100%.
+  - **Verdict: basis rule, not site-specific.** 65 failing columns are outside the K.4 items:
+    - 63 are share-scaled NCI columns that fail at both their share and 100%: Carlin 25, Nevada Gold Mines 23,
+      Pueblo Viejo 5, Cortez 3, Bulyanhulu 3, Turquoise Ridge 2, North Mara 2. With North Mara's two K.4
+      columns, they are E826's 65 stated-share misses.
+    - Kibali has 2 at 100%.
+  - **A shared period.** The Q4 2025 and 2025 (FY) sheets fail for six subjects together: Carlin, Cortez,
+    Nevada Gold Mines, Hemlo, Veladero and Kibali (17 of 42 columns on those sheets). Every Hemlo and Kibali
+    failure sits there, so their (iv) is a period-wide cost or ounce basis, not a site fact. Their registered
+    missing fact now says so (it was E817's "the attributable ounces sold used for the rate"), and Veladero's
+    cites E836. States and totals are unchanged. The root moved from `fb8b38c2…` to `ca290d03…`
+    (`repro/barrick/expected.toml`, row appended, observed from the binary of 3a73653).
+  - **Next research hour.** The Q4 2025 release's basis change, read across the six subjects. Then the Nevada
+    (61.5%) share rule, which fails for Carlin in 25 of 34 columns and for NGM in 23 of 34.

@@ -93,3 +93,20 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "Hidden scope in its own root section, and missing facts on every (iv); no visible state changed."
 evidence = "bd-prmn.2, E828"
+
+# Observed from the binary of 3a73653 (git archive, own target directory) on the registry of the commit that
+# appends this row: only the registered missing-fact text moved; the code did not change.
+[[expected]]
+commit = "3a73653"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "ca290d03e7bd133abef19dd07be387826e0224ac9f0533961180a56193d163c4"
+anchor_id = "anc_c0e48431c97dacda24ff97980a854413"
+totals_i = 2383
+totals_ii = 3
+totals_iii = 4
+totals_iv = 82
+totals_v = 63
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "Missing-fact text of Kibali's and Hemlo's (iv) from K.4's one-cell check; Veladero's cites it too."
+evidence = "bd-prmn.8, E836"

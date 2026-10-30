@@ -323,23 +323,25 @@ evidence = "E487"
 # BD-331.S2: the fact that would decide each (iv) instance, by (subject, family). Prose only: the source is in
 # evidence. An instance with no row names its family's default (crates/fmine-public/src/lib.rs).
 
+# E836 (K.4's one-cell check, bd-prmn.8) replaced Kibali's and Hemlo's "the attributable ounces sold used for
+# the rate" (E817): all their misses sit on the Q4 2025 and 2025 sheets, where six subjects fail.
 [[missing_fact]]
 subject = "Veladero"
 family = "cos_per_oz"
 text = "the ounce series behind the per-ounce rows"
-evidence = "E691"
+evidence = "E691, E836"
 
 [[missing_fact]]
 subject = "Kibali"
 family = "cos_per_oz"
-text = "the attributable ounces sold used for the rate"
-evidence = "E817"
+text = "a period-wide cost of sales or ounce basis: the one-cell check fails in the same period for six subjects"
+evidence = "E817, E836"
 
 [[missing_fact]]
 subject = "Hemlo"
 family = "cos_per_oz"
-text = "the attributable ounces sold used for the rate"
-evidence = "E817"
+text = "a period-wide cost of sales or ounce basis: the one-cell check fails in the same period for six subjects"
+evidence = "E817, E836"
 
 # E816: Africa & Middle East AISC per ounce, Q1 2025 (two vintages) and H1 2025. The rule text is part of
 # the state root (it is in each instance's detail), so it must not change by a byte.

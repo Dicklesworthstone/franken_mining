@@ -2801,9 +2801,12 @@ mod tests {
         assert_eq!(visible_iv, 82);
         let velad = (
             "Veladero".to_string(),
-            "the ounce series behind the per-ounce rows (E691)".to_string(),
+            "the ounce series behind the per-ounce rows (E691, E836)".to_string(),
         );
-        let attributable = "the attributable ounces sold used for the rate (E817)".to_string();
+        let attributable =
+            "a period-wide cost of sales or ounce basis: the one-cell check fails in the same \
+                            period for six subjects (E817, E836)"
+                .to_string();
         let visible = |subject: &str, fact: &str| {
             r.instances
                 .iter()
