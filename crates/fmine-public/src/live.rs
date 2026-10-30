@@ -1,19 +1,32 @@
-//! Live-dependency proof, file half (BD-338.S1): every registered file is load-bearing at the gate.
+//! Live-dependency proof (BD-338).
 //!
-//! For each registered file, a scratch workspace holds copies of the other files, and that file absent, written
-//! as zero bytes, or replaced by a valid but foreign xlsx. The loader must refuse each case with `FMINE-REF-502`
-//! (exit 8, a catalogued code), count "1 of n registered", and name that file, and no other, under the label
-//! that applies: "missing" for an absent file, "digest mismatch" for a changed one. Only a refusal passes;
-//! a loader that falls back to other bytes, or re-raises under an unregistered code, fails by name.
+//! **Files (S1).** Every registered file is load-bearing at the gate. For each registered file, a scratch
+//! workspace holds copies of the other files, and that file absent, written as zero bytes, or replaced by a valid
+//! but foreign xlsx. The loader must refuse each case with `FMINE-REF-502` (exit 8, a catalogued code), count
+//! "1 of n registered", and name that file, and no other, under the label that applies: "missing" for an absent
+//! file, "digest mismatch" for a changed one. Only a refusal passes; a loader that falls back to other bytes, or
+//! re-raises under an unregistered code, fails by name.
+//!
+//! **Leaves (S2).** Every cell an instance cites is live. Each operand is perturbed alone, on a copy of the
+//! parsed sources, and the run repeated. The field located at the leaf must read the new value ("value did not
+//! move" otherwise). A field derived from it, or the state, must move ("dead ancestor" otherwise). The state
+//! root must move too, which is necessary but never sufficient. Leaves the state did not reach (a refusal before
+//! any arithmetic, a stored value that is not whole) are skipped with their reason, never dropped.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
 use fmine_evidence::{Refusal, lookup_refusal_spec};
-use fmine_io::xlsx::build_minimal_xlsx;
+use fmine_io::styles::NumberFormat;
+use fmine_io::xlsx::{CellValue, ExtractedCell, Sheet, build_minimal_xlsx, parse_a1_ref};
 
-use crate::LoadedSource;
+use crate::aisc::{
+    Calc, IdentityInstance, IdentityState, Operand, OperandRole, OperandValue, rate_interval_holds,
+    rate_range_text,
+};
 use crate::sources::IssuerProfile;
+use crate::{LoadedSource, PublicAssuranceReport};
 
 /// What a check does to the one file it is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +235,506 @@ fn judge(
     }
 }
 
+/// How far [`rate_flip_up`] and [`rate_flip_down`] search.
+const FLIP_SEARCH: i64 = 1_000_000;
+
+/// The smallest printed rate above `r` that the interval for (n, k, q) excludes: where a consistent rate flips
+/// upward. `None` when none lies within the search bound.
+#[must_use]
+pub fn rate_flip_up(n: i64, k: i64, q: i64, r: i64) -> Option<i64> {
+    (r.saturating_add(1)..=r.saturating_add(FLIP_SEARCH))
+        .find(|&x| !rate_interval_holds(n, k, q, x))
+}
+
+/// The largest printed rate below `r` that the interval for (n, k, q) excludes.
+#[must_use]
+pub fn rate_flip_down(n: i64, k: i64, q: i64, r: i64) -> Option<i64> {
+    (r.saturating_sub(FLIP_SEARCH)..r)
+        .rev()
+        .find(|&x| !rate_interval_holds(n, k, q, x))
+}
+
+/// What the leaf proof does to one operand cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Perturbation {
+    /// A whole number plus one.
+    PlusOne,
+    /// A placeholder set to the number 1.
+    ToOne,
+    /// A counted number set to the placeholder "-", so k drops by one.
+    ToPlaceholder,
+    /// A rate consistent on the plain construction, moved to its flip margin ([`rate_flip_up`]).
+    RateFlip,
+    /// A rate consistent at a stated share, or explained by a reconstruction, moved outside any interval:
+    /// 3r + 1000.
+    RateFar,
+    /// A non-zero NCI line set to zero.
+    ToZero,
+    /// A label or quote replaced by text no prefix matches.
+    BreakText,
+}
+
+impl Perturbation {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PlusOne => "plus_one",
+            Self::ToOne => "to_one",
+            Self::ToPlaceholder => "to_placeholder",
+            Self::RateFlip => "rate_flip",
+            Self::RateFar => "rate_far",
+            Self::ToZero => "to_zero",
+            Self::BreakText => "break_text",
+        }
+    }
+}
+
+/// What must hold after a perturbation, besides the leaf reading its new value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Expect {
+    /// The printed total reads this, in the calc and in any footing certificate; the state moves.
+    Printed(i64),
+    /// The component sum reads this; the state moves.
+    Sum(i64),
+    /// The count of numeric lines reads this.
+    K(i64),
+    /// The printed rate reads this; the state moves.
+    Rate(i64),
+    /// The numerator reads this; the rate range moves.
+    N(i64),
+    /// The ounces read this; the rate range moves.
+    Q(i64),
+    /// The state moves (the leaf may stop being an operand, e.g. a broken footnote).
+    State,
+}
+
+/// One leaf check: one operand of one instance, perturbed alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeafCheck {
+    /// `file:sheet!cell family`.
+    pub instance: String,
+    /// `file:sheet!cell`.
+    pub leaf: String,
+    pub role: OperandRole,
+    /// `None` when the leaf was skipped.
+    pub perturbation: Option<Perturbation>,
+    pub state_before: &'static str,
+    pub state_after: Option<&'static str>,
+    /// The fields that moved, by name, never their values (RISK-31).
+    pub moved: Vec<&'static str>,
+    pub root_moved: bool,
+    /// Why the leaf was not perturbed.
+    pub skipped: Option<&'static str>,
+    /// Why the check failed; `None` when it passed or was skipped.
+    pub failure: Option<String>,
+}
+
+impl LeafCheck {
+    #[must_use]
+    pub fn pass(&self) -> bool {
+        self.skipped.is_none() && self.failure.is_none()
+    }
+
+    /// One JSON log line: locators, codes and field names only.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let opt = |s: Option<&str>| s.map_or_else(|| "null".to_string(), |s| format!("\"{s}\""));
+        let moved: Vec<String> = self.moved.iter().map(|m| format!("\"{m}\"")).collect();
+        let mut o = format!(
+            "{{\"kind\":\"leaf\",\"instance\":\"{}\",\"leaf\":\"{}\",\"role\":\"{}\",\"perturbation\":{},\
+             \"state_before\":\"{}\",\"state_after\":{},\"moved\":[{}],\"root_moved\":{},\"skipped\":{},\"pass\":{}",
+            self.instance,
+            self.leaf,
+            self.role.as_str(),
+            opt(self.perturbation.map(Perturbation::as_str)),
+            self.state_before,
+            opt(self.state_after),
+            moved.join(","),
+            self.root_moved,
+            opt(self.skipped),
+            self.pass()
+        );
+        if let Some(f) = &self.failure {
+            let _ = write!(o, ",\"failure\":\"{}\"", f.replace('"', "'"));
+        }
+        o.push('}');
+        o
+    }
+}
+
+/// `{"leaves","instances","pass","failed","skipped","by_role","by_perturbation","skipped_by_reason",
+/// "elapsed_ms"}`.
+#[must_use]
+pub fn leaf_summary(checks: &[LeafCheck], elapsed_ms: u128) -> String {
+    let render = |m: &BTreeMap<&str, usize>| {
+        let parts: Vec<String> = m.iter().map(|(k, v)| format!("\"{k}\":{v}")).collect();
+        format!("{{{}}}", parts.join(","))
+    };
+    let mut by_role = BTreeMap::new();
+    let mut by_perturbation = BTreeMap::new();
+    let mut skipped = BTreeMap::new();
+    let mut instances: Vec<&str> = Vec::new();
+    for c in checks {
+        *by_role.entry(c.role.as_str()).or_insert(0) += 1;
+        if let Some(p) = c.perturbation {
+            *by_perturbation.entry(p.as_str()).or_insert(0) += 1;
+        }
+        if let Some(s) = c.skipped {
+            *skipped.entry(s).or_insert(0) += 1;
+        }
+        if !instances.contains(&c.instance.as_str()) {
+            instances.push(&c.instance);
+        }
+    }
+    let failed = checks.iter().filter(|c| c.failure.is_some()).count();
+    format!(
+        "{{\"leaves\":{},\"instances\":{},\"pass\":{},\"failed\":{failed},\"skipped\":{},\"by_role\":{},\
+         \"by_perturbation\":{},\"skipped_by_reason\":{},\"elapsed_ms\":{elapsed_ms}}}",
+        checks.len(),
+        instances.len(),
+        checks.iter().filter(|c| c.pass()).count(),
+        skipped.values().sum::<usize>(),
+        render(&by_role),
+        render(&by_perturbation),
+        render(&skipped)
+    )
+}
+
+/// Refusals that come from the stated-share rule, whose NCI lines and label cells decide them.
+const SHARE_RULE_REFUSALS: [&str; 4] = [
+    "attributable-basis footnote not found on the sheet",
+    "regional numerator needs member weighting",
+    "no registered share",
+    "registered share not confirmed by label",
+];
+
+fn locator(o: &Operand) -> String {
+    format!("{}:{}!{}", o.file, o.sheet, o.cell)
+}
+
+fn same_cell(a: &Operand, b: &Operand) -> bool {
+    a.file == b.file && a.sheet == b.sheet && a.cell == b.cell
+}
+
+/// The perturbation for an NCI line: whether any NCI line is non-zero decides the basis, so a line is perturbed
+/// only when no other NCI line of the instance is non-zero.
+fn nci_plan(
+    i: &IdentityInstance,
+    o: &Operand,
+) -> Result<(Perturbation, OperandValue, Expect), &'static str> {
+    let other_nonzero = i.operands.iter().any(|x| {
+        x.role == OperandRole::NciLine
+            && !same_cell(x, o)
+            && matches!(x.value, OperandValue::Int(v) if v != 0)
+    });
+    if other_nonzero {
+        return Err("nci_not_decisive");
+    }
+    Ok(match o.value {
+        OperandValue::Int(x) if x != 0 => {
+            (Perturbation::ToZero, OperandValue::Int(0), Expect::State)
+        }
+        OperandValue::Int(x) => (
+            Perturbation::PlusOne,
+            OperandValue::Int(x + 1),
+            Expect::State,
+        ),
+        _ => (Perturbation::ToOne, OperandValue::Int(1), Expect::State),
+    })
+}
+
+/// The perturbation for one leaf of one instance, and what must move; or why the leaf is skipped.
+fn plan(
+    i: &IdentityInstance,
+    o: &Operand,
+) -> Result<(Perturbation, OperandValue, Expect), &'static str> {
+    use OperandRole as R;
+    use OperandValue::{Int, Token, Unrounded};
+    use Perturbation as P;
+    if matches!(o.value, Unrounded(_)) {
+        return Err("leaf_skipped_no_format");
+    }
+    let bump = |x: &OperandValue| match x {
+        Int(v) => (P::PlusOne, Int(v + 1)),
+        _ => (P::ToOne, Int(1)),
+    };
+    let reason = match &i.state {
+        IdentityState::NotPublished { reason }
+        | IdentityState::Refused { reason }
+        | IdentityState::RefusedAt { reason, .. } => Some(*reason),
+        _ => None,
+    };
+    match reason {
+        Some("all-zero column") => {
+            let (p, v) = bump(&o.value);
+            return Ok((p, v, Expect::State));
+        }
+        Some("rate not published") if o.role == R::Rate => {
+            return Ok((P::ToOne, Int(1), Expect::State));
+        }
+        Some(reason) if SHARE_RULE_REFUSALS.contains(&reason) => {
+            return match o.role {
+                R::NciLine => nci_plan(i, o),
+                R::LabelCheck => Ok((P::BreakText, Token("x".to_string()), Expect::State)),
+                _ => Err("refused_by_share_rule"),
+            };
+        }
+        Some(_) => return Err("decided_before_arithmetic"),
+        None => {}
+    }
+    match (o.role, i.calc, &o.value) {
+        (R::Total, Calc::Footing { printed, .. }, Int(x)) => {
+            Ok((P::PlusOne, Int(x + 1), Expect::Printed(printed + 1)))
+        }
+        (R::Line, Calc::Footing { component_sum, .. }, v) => {
+            let (p, new) = bump(v);
+            Ok((p, new, Expect::Sum(component_sum + 1)))
+        }
+        (
+            R::Counted,
+            Calc::Footing { k_alt: k, .. } | Calc::Rate(crate::aisc::RateMiss { k, .. }),
+            v,
+        ) => Ok(match v {
+            Int(_) => (P::ToPlaceholder, Token("-".to_string()), Expect::K(k - 1)),
+            _ => (P::ToOne, Int(1), Expect::K(k + 1)),
+        }),
+        (R::Rate, Calc::Rate(m), Int(_)) => match &i.state {
+            IdentityState::Consistent { basis: None, .. } => rate_flip_up(m.n, m.k, m.q, m.r)
+                .map(|r| (P::RateFlip, Int(r), Expect::Rate(r)))
+                .ok_or("no_flip_margin_within_search"),
+            IdentityState::Consistent { .. } | IdentityState::Explained { .. } => {
+                let r = m.r.saturating_mul(3).saturating_add(1000);
+                Ok((P::RateFar, Int(r), Expect::Rate(r)))
+            }
+            _ => Ok((P::PlusOne, Int(m.r + 1), Expect::Rate(m.r + 1))),
+        },
+        (R::Numerator, Calc::Rate(m), Int(x)) => Ok((P::PlusOne, Int(x + 1), Expect::N(m.n + 1))),
+        (R::Ounces, Calc::Rate(m), Int(x)) => Ok((P::PlusOne, Int(x + 1), Expect::Q(m.q + 1))),
+        (R::NciLine, Calc::Rate(_), _) => nci_plan(i, o),
+        (R::LabelCheck, _, _) => Ok((P::BreakText, Token("x".to_string()), Expect::State)),
+        (R::Component, _, Int(x)) => Ok((P::PlusOne, Int(x + 1), Expect::State)),
+        _ => Err("role_outside_calc"),
+    }
+}
+
+/// Sets one operand's cell in `sources` and recomputes that file's census. False when the file, sheet or cell
+/// reference is not loaded.
+fn set_leaf(sources: &mut [LoadedSource], o: &Operand, new: &OperandValue) -> bool {
+    let Some(src) = sources.iter_mut().find(|s| s.file_name == o.file) else {
+        return false;
+    };
+    let Some((row, col)) = parse_a1_ref(&o.cell) else {
+        return false;
+    };
+    let Some(sheet) = src.workbook.sheets.iter_mut().find(|s| s.name == o.sheet) else {
+        return false;
+    };
+    set_cell(sheet, row, col, new);
+    src.census = src.workbook.cell_census();
+    true
+}
+
+fn set_cell(sheet: &mut Sheet, row: u32, col: u32, new: &OperandValue) {
+    let (value, number_text) = match new {
+        OperandValue::Int(x) => (CellValue::Number(*x as f64), Some(x.to_string())),
+        OperandValue::Token(t) if t == "-" => (CellValue::Placeholder(t.clone()), None),
+        OperandValue::Token(t) | OperandValue::Unrounded(t) => (CellValue::Text(t.clone()), None),
+        OperandValue::Blank => {
+            sheet.cells_by_coord.remove(&(row, col));
+            return;
+        }
+    };
+    let cell = sheet
+        .cells_by_coord
+        .entry((row, col))
+        .or_insert_with(|| ExtractedCell {
+            cell_ref: format!("{}{row}", fmine_io::xlsx::col_index_to_letters(col)),
+            row,
+            col,
+            value: CellValue::Number(0.0),
+            formula: None,
+            number_text: None,
+            style: None,
+            format: NumberFormat::Builtin(0),
+        });
+    cell.value = value;
+    cell.number_text = number_text;
+}
+
+/// The calc fields and state that differ between an instance before and after a perturbation.
+fn moved_fields(b: &IdentityInstance, a: &IdentityInstance) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    match (b.calc, a.calc) {
+        (
+            Calc::Footing {
+                printed: p0,
+                component_sum: s0,
+                k_alt: k0,
+            },
+            Calc::Footing {
+                printed: p1,
+                component_sum: s1,
+                k_alt: k1,
+            },
+        ) => {
+            for (name, moved) in [
+                ("printed", p0 != p1),
+                ("component_sum", s0 != s1),
+                ("residual", p0 - s0 != p1 - s1),
+                ("k", k0 != k1),
+            ] {
+                if moved {
+                    out.push(name);
+                }
+            }
+        }
+        (Calc::Rate(m0), Calc::Rate(m1)) => {
+            let range = rate_range_text(m0.n, m0.k, m0.q) != rate_range_text(m1.n, m1.k, m1.q);
+            for (name, moved) in [
+                ("r", m0.r != m1.r),
+                ("n", m0.n != m1.n),
+                ("k", m0.k != m1.k),
+                ("q", m0.q != m1.q),
+                ("range", range),
+            ] {
+                if moved {
+                    out.push(name);
+                }
+            }
+        }
+        (x, y) if x != y => out.push("calc"),
+        _ => {}
+    }
+    if a.state != b.state {
+        out.push("state");
+    }
+    out
+}
+
+fn judge_leaf(
+    mut check: LeafCheck,
+    i: &IdentityInstance,
+    o: &Operand,
+    new: &OperandValue,
+    expect: Expect,
+    before: &PublicAssuranceReport,
+    after: &PublicAssuranceReport,
+) -> LeafCheck {
+    check.root_moved = before.ledger_anchor.state_root != after.ledger_anchor.state_root;
+    let Some(a) = after
+        .instances
+        .iter()
+        .find(|x| x.file == i.file && x.sheet == i.sheet && x.cell == i.cell)
+    else {
+        check.failure = Some(format!(
+            "instance vanished: {} after {}",
+            check.instance, check.leaf
+        ));
+        return check;
+    };
+    check.state_after = Some(a.state.code());
+    check.moved = moved_fields(i, a);
+    let state_moved = a.state != i.state;
+    // (a) The leaf reads its new value, and so does every field located at it.
+    let read = a
+        .operands
+        .iter()
+        .find(|x| same_cell(x, o))
+        .map(|x| &x.value);
+    let leaf_reads = if expect == Expect::State {
+        read.is_none_or(|v| v == new)
+    } else {
+        read == Some(new)
+    };
+    let certificate = match &a.state {
+        IdentityState::IssuerDiscrepancy(c) => Some(c.printed),
+        _ => None,
+    };
+    let field_reads = match (expect, a.calc) {
+        (Expect::Printed(p), Calc::Footing { printed, .. }) => {
+            printed == p && certificate.is_none_or(|c| c == p)
+        }
+        (Expect::Rate(r), Calc::Rate(m)) => m.r == r,
+        (Expect::N(n), Calc::Rate(m)) => m.n == n,
+        (Expect::Q(q), Calc::Rate(m)) => m.q == q,
+        (Expect::Printed(_) | Expect::Rate(_) | Expect::N(_) | Expect::Q(_), _) => false,
+        _ => true,
+    };
+    // (b) A field derived from the leaf, or the state, moves.
+    let range_moved = check.moved.contains(&"range");
+    let derived = match (expect, a.calc) {
+        (Expect::Printed(_) | Expect::Rate(_) | Expect::State, _) => state_moved,
+        (Expect::Sum(s), Calc::Footing { component_sum, .. }) => component_sum == s && state_moved,
+        (Expect::K(k), Calc::Footing { k_alt, .. }) => k_alt == k,
+        (Expect::K(k), Calc::Rate(m)) => m.k == k,
+        (Expect::N(_) | Expect::Q(_), Calc::Rate(_)) => range_moved,
+        _ => false,
+    };
+    check.failure = if !(leaf_reads && field_reads) {
+        Some(format!("value did not move: {}", check.leaf))
+    } else if !derived {
+        Some(format!(
+            "dead ancestor: {} → {}",
+            check.leaf, check.instance
+        ))
+    } else if !check.root_moved {
+        Some(format!("root did not move: {}", check.leaf))
+    } else {
+        None
+    };
+    check
+}
+
+/// Runs a leaf check on every operand of every visible instance of `run(base)`. `run` is the pipeline under
+/// proof (`assess` on a profile, or a wrapper around it). Each check gets its own copy of `base` with one cell
+/// changed and its census recomputed. Hidden-scope instances are not checked.
+pub fn prove_leaves(
+    base: &[LoadedSource],
+    run: &dyn Fn(Vec<LoadedSource>) -> PublicAssuranceReport,
+) -> Vec<LeafCheck> {
+    let before = run(base.to_vec());
+    let mut out = Vec::new();
+    for i in &before.instances {
+        for o in &i.operands {
+            let check = LeafCheck {
+                instance: format!("{}:{}!{} {}", i.file, i.sheet, i.cell, i.family.as_str()),
+                leaf: locator(o),
+                role: o.role,
+                perturbation: None,
+                state_before: i.state.code(),
+                state_after: None,
+                moved: Vec::new(),
+                root_moved: false,
+                skipped: None,
+                failure: None,
+            };
+            out.push(match plan(i, o) {
+                Err(why) => LeafCheck {
+                    skipped: Some(why),
+                    ..check
+                },
+                Ok((p, new, expect)) => {
+                    let mut sources = base.to_vec();
+                    if set_leaf(&mut sources, o, &new) {
+                        let after = run(sources);
+                        let check = LeafCheck {
+                            perturbation: Some(p),
+                            ..check
+                        };
+                        judge_leaf(check, i, o, &new, expect, &before, &after)
+                    } else {
+                        LeafCheck {
+                            skipped: Some("leaf_not_in_loaded_sheet"),
+                            ..check
+                        }
+                    }
+                }
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,5 +927,310 @@ mod tests {
             r.what
         );
         let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    // S2: leaves. Every expected value below is read from the seeded answers in `synthetic.rs`, never from a run.
+
+    fn synthetic_sources() -> Vec<LoadedSource> {
+        crate::load_synthetic(synthetic::synthetic_workbooks(&[]))
+            .expect("synthetic workbooks parse")
+    }
+
+    fn assess_synthetic(sources: Vec<LoadedSource>) -> PublicAssuranceReport {
+        crate::assess(&synthetic::synthetic_profile(), Lane::Synthetic, sources)
+    }
+
+    fn aisc(cell: &str) -> String {
+        format!(
+            "{}:{}!{cell}",
+            synthetic::SYNTHETIC_AISC_FILE,
+            synthetic::SYNTHETIC_TABLE_SHEET
+        )
+    }
+
+    /// The synthetic run after setting one AISC-sheet cell.
+    fn edited(cell: &str, value: OperandValue) -> PublicAssuranceReport {
+        let mut sources = synthetic_sources();
+        let o = Operand {
+            role: OperandRole::Line,
+            file: synthetic::SYNTHETIC_AISC_FILE.to_string(),
+            sheet: synthetic::SYNTHETIC_TABLE_SHEET.to_string(),
+            cell: cell.to_string(),
+            value: OperandValue::Blank,
+        };
+        assert!(set_leaf(&mut sources, &o, &value));
+        assess_synthetic(sources)
+    }
+
+    fn state_at<'a>(r: &'a PublicAssuranceReport, cell: &str) -> &'a IdentityState {
+        match r.instances.iter().find(|i| i.cell == cell) {
+            Some(i) => &i.state,
+            None => panic!("no instance at {cell}"),
+        }
+    }
+
+    fn write_leaf_log(tag: &str, checks: &[LeafCheck], elapsed_ms: u128) -> String {
+        let mut log: String = checks.iter().map(|c| c.to_json() + "\n").collect();
+        log.push_str(&leaf_summary(checks, elapsed_ms));
+        log.push('\n');
+        let dir = std::env::temp_dir().join("live_dependency");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join(format!("synthetic-leaves-{tag}.jsonl")), &log);
+        log
+    }
+
+    /// (79, 1, 68) spans [1145.985, 1177.778]: 1146 and 1178 hold, 1145 and 1179 do not.
+    #[test]
+    fn test_flip_margin_rate_known_answer() {
+        assert!(rate_interval_holds(79, 1, 68, 1146) && rate_interval_holds(79, 1, 68, 1178));
+        assert!(!rate_interval_holds(79, 1, 68, 1145) && !rate_interval_holds(79, 1, 68, 1179));
+        assert_eq!(rate_flip_up(79, 1, 68, 1162), Some(1179));
+        assert_eq!(rate_flip_down(79, 1, 68, 1162), Some(1145));
+    }
+
+    /// B8 prints 400 against 500 − 100 + 0; 401 leaves a residual of 1.
+    #[test]
+    fn test_flip_margin_footing_plus_one_gives_residual_one() {
+        let r = edited("B8", OperandValue::Int(401));
+        match state_at(&r, "B8") {
+            IdentityState::IssuerDiscrepancy(c) => assert_eq!((c.printed, c.residual), (401, 1)),
+            other => panic!("B8: {other:?}"),
+        }
+    }
+
+    /// E7 −160 → 0: E14 is checked plainly, 1000·[999.5, 1000.5]/[399.5, 400.5] spans [2495.63, 2504.38] and holds
+    /// 2500; E8's lines now sum to 800 against 640 printed.
+    #[test]
+    fn test_flip_margin_nci_to_zero_evaluates_cos_rate() {
+        let base = assess_synthetic(synthetic_sources());
+        assert_eq!(state_at(&base, "E14").code(), "v");
+        let r = edited("E7", OperandValue::Int(0));
+        assert_eq!(state_at(&r, "E14").code(), "i");
+        match state_at(&r, "E8") {
+            IdentityState::IssuerDiscrepancy(c) => {
+                assert_eq!((c.printed, c.component_sum), (640, 800))
+            }
+            other => panic!("E8: {other:?}"),
+        }
+    }
+
+    /// F5 0 → 1: no instance of column F is an all-zero column any more.
+    #[test]
+    fn test_flip_margin_all_zero_column_leaves_np() {
+        let all_zero = IdentityState::NotPublished {
+            reason: "all-zero column",
+        };
+        let base = assess_synthetic(synthetic_sources());
+        let r = edited("F5", OperandValue::Int(1));
+        for cell in ["F8", "F11", "F14", "F15", "F16"] {
+            assert_eq!(state_at(&base, cell), &all_zero);
+            assert_ne!(state_at(&r, cell), &all_zero, "{cell}");
+        }
+    }
+
+    /// Region North's reconstruction checks `Minestats3!B2` starts "Site G"; broken, H16 is (iv) and names the cell.
+    #[test]
+    fn test_flip_margin_label_check_breaks_reconstruction() {
+        let mut sources = synthetic_sources();
+        let o = Operand {
+            role: OperandRole::LabelCheck,
+            file: synthetic::SYNTHETIC_STATS_FILE.to_string(),
+            sheet: "Minestats3".to_string(),
+            cell: "B2".to_string(),
+            value: OperandValue::Blank,
+        };
+        assert!(set_leaf(
+            &mut sources,
+            &o,
+            &OperandValue::Token("x".to_string())
+        ));
+        let r = assess_synthetic(sources);
+        let s = state_at(&r, "H16");
+        assert_eq!(s.code(), "iv");
+        assert!(s.detail().contains("Minestats3!B2 reads"), "{}", s.detail());
+    }
+
+    /// A parsed-level edit recomputes the file's census: Z99 = 1 changes the numeric digest.
+    #[test]
+    fn test_live_leaves_census_recomputed() {
+        let base = synthetic_sources();
+        let mut sources = base.clone();
+        let o = Operand {
+            role: OperandRole::Line,
+            file: synthetic::SYNTHETIC_AISC_FILE.to_string(),
+            sheet: synthetic::SYNTHETIC_TABLE_SHEET.to_string(),
+            cell: "Z99".to_string(),
+            value: OperandValue::Blank,
+        };
+        assert!(set_leaf(&mut sources, &o, &OperandValue::Int(1)));
+        let file = |s: &[LoadedSource]| {
+            s.iter()
+                .find(|x| x.file_name == synthetic::SYNTHETIC_AISC_FILE)
+                .map(|x| x.census)
+                .expect("aisc")
+        };
+        assert_ne!(file(&base).numeric_digest, file(&sources).numeric_digest);
+        assert_eq!(file(&sources).numeric_cells, file(&base).numeric_cells + 1);
+    }
+
+    /// The same edit made in the xlsx bytes and in the parsed cells gives the same instances and root: C8 = 351 in
+    /// the AISC workbook, and Site H's `QTD` label broken in the Mine Stats workbook.
+    #[test]
+    fn test_live_leaves_byte_level_matches_parsed_level() {
+        // The root also binds each file's sha256, which only the byte-level edit changes, so it is not compared.
+        let compare = |bytes: Vec<LoadedSource>, parsed: Vec<LoadedSource>| {
+            let censuses = |s: &[LoadedSource]| s.iter().map(|x| x.census).collect::<Vec<_>>();
+            assert_eq!(censuses(&bytes), censuses(&parsed));
+            let (a, b) = (assess_synthetic(bytes), assess_synthetic(parsed));
+            assert_eq!(a.instances, b.instances);
+        };
+        let at = |file: &str, sheet: &str, cell: &str| Operand {
+            role: OperandRole::Line,
+            file: file.to_string(),
+            sheet: sheet.to_string(),
+            cell: cell.to_string(),
+            value: OperandValue::Blank,
+        };
+        let bytes = crate::load_synthetic(synthetic::synthetic_workbooks(&[(
+            "C8".to_string(),
+            fmine_io::xlsx::MinimalCell::Number(351.0),
+        )]))
+        .expect("parse");
+        let mut parsed = synthetic_sources();
+        let c8 = at(
+            synthetic::SYNTHETIC_AISC_FILE,
+            synthetic::SYNTHETIC_TABLE_SHEET,
+            "C8",
+        );
+        assert!(set_leaf(&mut parsed, &c8, &OperandValue::Int(351)));
+        compare(bytes, parsed);
+
+        let mut files = synthetic::synthetic_workbooks(&[]);
+        for f in &mut files {
+            if f.0 == synthetic::SYNTHETIC_STATS_FILE {
+                f.3 = synthetic::synthetic_stats_workbook("x");
+            }
+        }
+        let bytes = crate::load_synthetic(files).expect("parse");
+        let mut parsed = synthetic_sources();
+        let a5 = at(synthetic::SYNTHETIC_STATS_FILE, "QTD", "A5");
+        assert!(set_leaf(
+            &mut parsed,
+            &a5,
+            &OperandValue::Token("x".to_string())
+        ));
+        compare(bytes, parsed);
+    }
+
+    /// Positive control: every cited leaf of every visible synthetic instance moves what it should. Skips are
+    /// only where the seeded answers put a state before any arithmetic:
+    /// - Site F's unrounded column (G), all five instances;
+    /// - Site D's cost of sales per ounce (E14), refused by the share rule: its rate, ounces and numerator. Its
+    ///   NCI line and footnote are checked.
+    #[test]
+    fn test_live_leaves_synthetic_all_pass() {
+        let start = std::time::Instant::now();
+        let checks = prove_leaves(&synthetic_sources(), &assess_synthetic);
+        let log = write_leaf_log("all", &checks, start.elapsed().as_millis());
+        print!("{log}");
+        let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+        let mut skipped: Vec<String> = checks
+            .iter()
+            .filter(|c| c.skipped.is_some())
+            .map(|c| {
+                c.instance
+                    .rsplit_once(' ')
+                    .map_or("", |(at, _)| at)
+                    .to_string()
+            })
+            .collect();
+        skipped.sort();
+        skipped.dedup();
+        let mut want: Vec<String> = ["G8", "G11", "G14", "G15", "G16", "E14"]
+            .iter()
+            .map(|c| aisc(c))
+            .collect();
+        want.sort();
+        assert_eq!(skipped, want);
+        let e14: Vec<(&str, Option<&str>)> = checks
+            .iter()
+            .filter(|c| c.instance.starts_with(&aisc("E14")))
+            .map(|c| (c.role.as_str(), c.skipped))
+            .collect();
+        assert_eq!(
+            e14,
+            [
+                ("rate", Some("refused_by_share_rule")),
+                ("ounces", Some("refused_by_share_rule")),
+                ("numerator", Some("refused_by_share_rule")),
+                ("nci_line", None),
+                ("label_check", None),
+            ]
+        );
+        // 50 instances; all but Site F's five have a checked leaf.
+        let instances: Vec<&str> = checks.iter().map(|c| c.instance.as_str()).collect();
+        let mut distinct = instances.clone();
+        distinct.dedup();
+        assert_eq!(distinct.len(), 50);
+        assert!(checks.iter().filter(|c| c.pass()).count() > 250);
+    }
+
+    /// M1: C8's certificate keeps the literal 350, its real value, so only a perturbation can tell.
+    #[test]
+    fn test_live_leaves_mutant_m1_literal_is_caught() {
+        let literal = |sources: Vec<LoadedSource>| {
+            let mut r = assess_synthetic(sources);
+            for i in &mut r.instances {
+                if let (true, IdentityState::IssuerDiscrepancy(c)) = (i.cell == "C8", &mut i.state)
+                {
+                    c.printed = 350;
+                }
+            }
+            r
+        };
+        let checks = prove_leaves(&synthetic_sources(), &literal);
+        let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
+        assert_eq!(failures, [format!("value did not move: {}", aisc("C8"))]);
+    }
+
+    /// M2: B8 also cites P5, read honestly but used by nothing.
+    #[test]
+    fn test_live_leaves_mutant_m2_dead_ancestor_is_caught() {
+        let extra = |sources: Vec<LoadedSource>| {
+            let p5 = sources
+                .iter()
+                .find(|s| s.file_name == synthetic::SYNTHETIC_AISC_FILE)
+                .and_then(|s| {
+                    s.workbook
+                        .sheets
+                        .iter()
+                        .find(|w| w.name == synthetic::SYNTHETIC_TABLE_SHEET)
+                })
+                .map(|w| {
+                    crate::aisc::operand_at(
+                        synthetic::SYNTHETIC_AISC_FILE,
+                        w,
+                        5,
+                        16,
+                        OperandRole::Line,
+                    )
+                });
+            let mut r = assess_synthetic(sources);
+            if let (Some(p5), Some(b8)) = (p5, r.instances.iter_mut().find(|i| i.cell == "B8")) {
+                b8.operands.push(p5);
+            }
+            r
+        };
+        let checks = prove_leaves(&synthetic_sources(), &extra);
+        let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
+        assert_eq!(
+            failures,
+            [format!(
+                "dead ancestor: {} → {} tcc_footing",
+                aisc("P5"),
+                aisc("B8")
+            )]
+        );
     }
 }

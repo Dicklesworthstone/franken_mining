@@ -1908,11 +1908,22 @@ mod tests {
             ]
         );
         // The AISC footing adds the TCC line and block 2, and counts block 1 for its alternate rule.
-        let c11: Vec<String> = operands_of(&r, "C11").into_iter().map(|o| o.1).collect();
-        let want: Vec<String> = ["C11", "C8", "C5", "C6", "C7", "C9", "C10"]
-            .iter()
-            .map(|c| aisc_at(c))
+        let c11: Vec<(OperandRole, String)> = operands_of(&r, "C11")
+            .into_iter()
+            .map(|o| (o.0, o.1))
             .collect();
+        let want: Vec<(OperandRole, String)> = [
+            (R::Total, "C11"),
+            (R::Line, "C8"),
+            (R::Counted, "C5"),
+            (R::Counted, "C6"),
+            (R::Counted, "C7"),
+            (R::Line, "C9"),
+            (R::Line, "C10"),
+        ]
+        .iter()
+        .map(|(role, c)| (*role, aisc_at(c)))
+        .collect();
         assert_eq!(c11, want);
     }
 

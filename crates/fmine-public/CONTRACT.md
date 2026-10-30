@@ -110,6 +110,28 @@ The public lane of M0 (`fmine assure public`).
   live-dependency proof. For each registered file, the cases are absent, zero bytes and a foreign xlsx, each in
   its own scratch workspace. Each must refuse `FMINE-REF-502`, exit 8, "1 of n registered", naming only that
   file under "missing" or "digest mismatch".
+- `live::{prove_leaves, LeafCheck, Perturbation, leaf_summary, rate_flip_up, rate_flip_down}` (BD-338.S2): the
+  leaf half. Each operand of each visible instance is perturbed alone, on a copy of the parsed sources with
+  that file's census recomputed.
+  - **Pass rule:**
+    - the field at the leaf reads the new value, including a footing certificate's `printed`; otherwise
+      "value did not move";
+    - a field derived from the leaf (component sum, k, rate range) or the state moves; otherwise "dead
+      ancestor";
+    - the root moves.
+  - **Perturbations:**
+    - +1, or 1 for a placeholder;
+    - a counted line to "-" (k − 1);
+    - a plain-consistent rate to its flip margin, or 3r + 1000 for a stated-share or explained rate;
+    - a decisive NCI line to 0;
+    - a label to "x".
+  - **Skips:** a state decided before arithmetic, a share refusal's non-cause leaves, and an unrounded value
+    are skipped, each with its reason.
+  - **Not yet:** the budgeted real-lane sample (S3) and hidden-scope instances.
+- `aisc::Calc` and `IdentityInstance::calc` (bd-sjrh.1): a footing's printed total, component sum and k; a
+  rate's r, n, k and q, as the ledger read them. They are not in `detail()`, the payload or the root.
+  `OperandRole::Counted` marks lines read only for their count: rate lines, and block 1 under the AISC
+  footing.
 - `Lane`, `LoadedSource`, `TableRefusal`, `AlternateCounts`, `HiddenScope`, `HIDDEN_SCOPE`,
   `PublicAssuranceReport`, `load_registered_sources`, `assess`, `run_public_assurance`, `run_barrick_m0_assurance`,
   `run_synthetic_assurance`, `cell_to_public_claim`, `NO_CLAIM`; `PublicAssuranceReport::next_actions`
@@ -183,6 +205,20 @@ The public lane of M0 (`fmine assure public`).
     - M4, re-raising under an uncatalogued code, fails every check with "refusal exit 2 is not 8".
   - **Unreadable file:** a chmod 000 file is named under "missing". As root, the test says it skipped.
   - **Lane:** the synthetic registry never reports the public lane or gate eligibility.
+- `PO-PUB-9` (live dependency, leaves; BD-338.S2; default suite, `live::tests`):
+  - **Positive control:** every leaf of the 50 synthetic instances passes or is skipped with a reason. Skips
+    fall only on Site F's unrounded column and on E14's three non-cause leaves (hand-read from
+    `synthetic.rs`).
+  - **Mutants:**
+    - M1, C8's certificate keeping the literal 350, is named "value did not move";
+    - M2, B8 citing the unused P5, is named "dead ancestor".
+  - **Flip margins (hand-derived):**
+    - (79, 1, 68) flips at 1145 and 1179;
+    - B8 401 gives residual 1;
+    - E7 → 0 evaluates E14 as (i) and E8 as (iii);
+    - F5 → 1 ends the all-zero column;
+    - a broken `Minestats3!B2` makes H16 (iv) naming the cell.
+  - **Edits:** a byte-level edit and a parsed-level edit give the same census and instances.
 - `PO-PUB-7` (K.4 one-cell check, bd-prmn.8, MOR_CASE E836):
   - **Real files** (ignored test `barrick_one_cell_matches_independent_reader`): 519 columns give 374 pass,
     82 fail and 63 refused. On every column, every field equals `scripts/oracle/one_cell_cos.py` (same origin),

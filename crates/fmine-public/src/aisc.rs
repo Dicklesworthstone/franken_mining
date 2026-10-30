@@ -390,6 +390,25 @@ pub struct IdentityInstance {
     /// Every cell the state was computed from (bd-sjrh.1, BD-329.S1), with its role and value as read. Not yet
     /// in the payload or the state root.
     pub operands: Vec<Operand>,
+    /// The numbers the state was computed from, as the ledger read them (bd-sjrh.1).
+    pub calc: Calc,
+}
+
+/// The numbers behind an instance's state, out of prose (bd-sjrh.1): what the live-dependency proof checks a
+/// perturbed leaf against (BD-338.S2). Not in the payload or the state root; `detail()` is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Calc {
+    /// A footing: the printed total, the sum of its summands, and how many numeric lines its alternate rule
+    /// counts.
+    Footing {
+        printed: i64,
+        component_sum: i64,
+        k_alt: i64,
+    },
+    /// A per-ounce rate: printed r, numerator n, counted lines k and ounces q.
+    Rate(RateMiss),
+    /// The state was decided before any arithmetic (refused or not published).
+    None,
 }
 
 /// What an operand cell is to its instance.
@@ -397,9 +416,11 @@ pub struct IdentityInstance {
 pub enum OperandRole {
     /// The printed total a footing checks.
     Total,
-    /// A summand of a footing, or a line counted (its k) in a rate's numerator interval or a footing's alternate
-    /// rule.
+    /// A summand of a footing.
     Line,
+    /// A line read only to count it (k): a rate's numerator lines, or block 1 under the AISC footing's alternate
+    /// rule. Its value never enters a sum; whether it is a number does.
+    Counted,
     /// The printed per-ounce rate.
     Rate,
     Ounces,
@@ -419,6 +440,7 @@ impl OperandRole {
         match self {
             Self::Total => "total",
             Self::Line => "line",
+            Self::Counted => "counted",
             Self::Rate => "rate",
             Self::Ounces => "ounces",
             Self::Numerator => "numerator",
@@ -514,11 +536,17 @@ fn family_operands(
             at(t.aisc_row, R::Numerator),
         ],
     };
+    let counted = |rows: &[u32]| rows.iter().map(|&r| at(r, R::Counted)).collect::<Vec<_>>();
     match family {
-        IdentityFamily::TccFooting | IdentityFamily::TccPerOunce => out.extend(lines(&t.block1)),
-        IdentityFamily::AiscFooting | IdentityFamily::AiscPerOunce => {
-            out.extend(lines(&t.block1));
+        IdentityFamily::TccFooting => out.extend(lines(&t.block1)),
+        IdentityFamily::AiscFooting => {
+            out.extend(counted(&t.block1));
             out.extend(lines(&t.block2));
+        }
+        IdentityFamily::TccPerOunce => out.extend(counted(&t.block1)),
+        IdentityFamily::AiscPerOunce => {
+            out.extend(counted(&t.block1));
+            out.extend(counted(&t.block2));
         }
         IdentityFamily::CosPerOunce => {
             out.extend(t.nci_rows.iter().map(|&r| at(r, R::NciLine)));
@@ -830,7 +858,7 @@ pub fn scaled_rate_holds(n: i64, k: i64, q: i64, r: i64, s_num: i64, s_den: i64)
 
 /// Exact range of 1000·N/Q over the box, as decimal text with three places (display only). The lower bound is
 /// rounded down and the upper bound up, so the printed interval always contains the exact one.
-fn rate_range_text(n: i64, k: i64, q: i64) -> String {
+pub(crate) fn rate_range_text(n: i64, k: i64, q: i64) -> String {
     let (n2, k, q2) = (2 * i128::from(n), i128::from(k), 2 * i128::from(q));
     let mut corners = [
         (1000 * (n2 - k), q2 - 1),
@@ -1276,7 +1304,7 @@ pub fn ledger_for_table<S: AsRef<str>>(
             continue;
         };
         let letters = col_index_to_letters(col);
-        let mut push = |family: IdentityFamily, row: u32, state: IdentityState| {
+        let mut push = |family: IdentityFamily, row: u32, state: IdentityState, calc: Calc| {
             let all_zero = state
                 == IdentityState::NotPublished {
                     reason: "all-zero column",
@@ -1298,6 +1326,7 @@ pub fn ledger_for_table<S: AsRef<str>>(
                     all_zero,
                     footnote.as_deref(),
                 ),
+                calc,
             });
         };
         let share = shares.get(subject);
@@ -1322,7 +1351,7 @@ fn column_ledger(
     subject: &str,
     stated: &StatedShare<'_>,
     explain: &mut dyn FnMut(&str, IdentityFamily, RateMiss) -> Option<IdentityState>,
-    push: &mut dyn FnMut(IdentityFamily, u32, IdentityState),
+    push: &mut dyn FnMut(IdentityFamily, u32, IdentityState, Calc),
 ) {
     let v = |row: u32| val(sheet, row, col);
     let cell_ref = |row: u32| format!("{}{row}", col_index_to_letters(col));
@@ -1341,27 +1370,18 @@ fn column_ledger(
         .iter()
         .all(|&r| matches!(v(r), Val::Place) || v(r) == Val::Num(0.0))
     {
-        push(
-            IdentityFamily::TccFooting,
-            t.tcc_row,
-            IdentityState::NotPublished {
-                reason: "all-zero column",
-            },
-        );
-        push(
-            IdentityFamily::AiscFooting,
-            t.aisc_row,
-            IdentityState::NotPublished {
-                reason: "all-zero column",
-            },
-        );
-        for (family, row) in rate_rows {
+        let footings = [
+            (IdentityFamily::TccFooting, t.tcc_row),
+            (IdentityFamily::AiscFooting, t.aisc_row),
+        ];
+        for (family, row) in footings.into_iter().chain(rate_rows) {
             push(
                 family,
                 row,
                 IdentityState::NotPublished {
                     reason: "all-zero column",
                 },
+                Calc::None,
             );
         }
         return;
@@ -1375,8 +1395,9 @@ fn column_ledger(
         (IdentityFamily::TccFooting, t.tcc_row, &t.block1),
         (IdentityFamily::AiscFooting, t.aisc_row, &tcc_and_block2),
     ] {
-        let state = footing_state(&v, &cell_ref, total, lines, family, &t.block1, &all_lines);
-        push(family, total, state);
+        let (state, calc) =
+            footing_state(&v, &cell_ref, total, lines, family, &t.block1, &all_lines);
+        push(family, total, state, calc);
     }
 
     // Per ounce: r = 1000·N/Q on intervals.
@@ -1388,6 +1409,7 @@ fn column_ledger(
             IdentityFamily::TccPerOunce => (t.tcc_row, t.block1.clone()),
             _ => (t.aisc_row, all_lines.clone()),
         };
+        let mut calc = Calc::None;
         let state = if !matches!(rv, Val::Num(_)) {
             IdentityState::NotPublished {
                 reason: "rate not published",
@@ -1430,6 +1452,7 @@ fn column_ledger(
                     q: line_value(q),
                     r: line_value(rv),
                 };
+                calc = Calc::Rate(miss);
                 let nci = t
                     .nci_rows
                     .iter()
@@ -1459,7 +1482,7 @@ fn column_ledger(
                 }
             }
         };
-        push(family, rate_row, state);
+        push(family, rate_row, state, calc);
     }
 }
 
@@ -1471,21 +1494,24 @@ fn footing_state(
     family: IdentityFamily,
     block1: &[u32],
     all_lines: &[u32],
-) -> IdentityState {
+) -> (IdentityState, Calc) {
     if !matches!(v(total), Val::Num(_)) {
-        return IdentityState::NotPublished {
+        let state = IdentityState::NotPublished {
             reason: "total not published",
         };
+        return (state, Calc::None);
     }
     if lines.iter().any(|&r| non_numeric(v(r))) {
-        return IdentityState::Refused {
+        let state = IdentityState::Refused {
             reason: "line not numeric",
         };
+        return (state, Calc::None);
     }
     if !lines.iter().chain([&total]).all(|&r| int_or_place(v(r))) {
-        return IdentityState::Refused {
+        let state = IdentityState::Refused {
             reason: "unrounded stored value; needs cell number format",
         };
+        return (state, Calc::None);
     }
     let sum: i64 = lines.iter().map(|&r| line_value(v(r))).sum();
     let printed = line_value(v(total));
@@ -1499,11 +1525,17 @@ fn footing_state(
         .filter(|&&r| matches!(v(r), Val::Num(_)))
         .count() as i64;
     let alternate_consistent = (printed - sum).abs() * 2 <= 1 + k_alt;
+    let calc = Calc::Footing {
+        printed,
+        component_sum: sum,
+        k_alt,
+    };
     if sum == printed {
-        return IdentityState::Consistent {
+        let state = IdentityState::Consistent {
             alternate_consistent,
             basis: None,
         };
+        return (state, calc);
     }
     let sign_flip_witness = lines
         .iter()
@@ -1512,7 +1544,7 @@ fn footing_state(
             x != 0 && sum - 2 * x == printed
         })
         .map(|&r| cell_ref(r));
-    IdentityState::IssuerDiscrepancy(FootingCertificate {
+    let state = IdentityState::IssuerDiscrepancy(FootingCertificate {
         printed,
         component_sum: sum,
         residual: printed - sum,
@@ -1520,7 +1552,8 @@ fn footing_state(
         line_cells: lines.iter().map(|&r| cell_ref(r)).collect(),
         sign_flip_witness,
         alternate_consistent,
-    })
+    });
+    (state, calc)
 }
 
 #[cfg(test)]
