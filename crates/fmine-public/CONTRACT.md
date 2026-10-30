@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "synthetic"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "synthetic", "live"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
@@ -94,6 +94,10 @@ The public lane of M0 (`fmine assure public`).
   synthetic_share_label_cells, synthetic_profile, write_issuer_workspace, SYNTHETIC_ISSUER, SYNTHETIC_SUBJECTS,
   SYNTHETIC_SHARES, SYNTHETIC_SHARE_FOOTNOTE, SYNTHETIC_STATED_QUOTE, SYNTHETIC_HIDDEN_SHEET,
   SYNTHETIC_LATER_STATS_FILE}`
+- `live::{CheckKind, LiveCheck, LiveReport, Loader, prove_files}` (BD-338.S1): the file half of the
+  live-dependency proof. For each registered file, the cases are absent, zero bytes and a foreign xlsx, each in
+  its own scratch workspace. Each must refuse `FMINE-REF-502`, exit 8, "1 of n registered", naming only that
+  file under "missing" or "digest mismatch".
 - `Lane`, `LoadedSource`, `TableRefusal`, `AlternateCounts`, `HiddenScope`, `HIDDEN_SCOPE`,
   `PublicAssuranceReport`, `load_registered_sources`, `assess`, `run_public_assurance`, `run_barrick_m0_assurance`,
   `run_synthetic_assurance`, `cell_to_public_claim`, `NO_CLAIM`; `PublicAssuranceReport::next_actions`
@@ -158,6 +162,15 @@ The public lane of M0 (`fmine assure public`).
   - **Synthetic:** M16 is a stated (ii), and a changed or empty quote keeps it (iv). The hidden `Q4 2029` table's
     (iii) is reported and never counted. A changed hidden cell moves the root and no visible state. Hidden sheets
     leave the census and its digest unchanged.
+- `PO-PUB-8` (live dependency, files; BD-338.S1; default suite, `live::tests`):
+  - **Positive control:** on the three-file synthetic registry, 3 files × 3 cases give 9 checks, and every
+    one refuses as required.
+  - **Mutants:**
+    - M3, a loader that restores the intact bytes on refusal, fails each file with "file deletion did not
+      refuse: <file>".
+    - M4, re-raising under an uncatalogued code, fails every check with "refusal exit 2 is not 8".
+  - **Unreadable file:** a chmod 000 file is named under "missing". As root, the test says it skipped.
+  - **Lane:** the synthetic registry never reports the public lane or gate eligibility.
 - `PO-PUB-7` (K.4 one-cell check, bd-prmn.8, MOR_CASE E836):
   - **Real files** (ignored test `barrick_one_cell_matches_independent_reader`): 519 columns give 374 pass,
     82 fail and 63 refused. On every column, every field equals `scripts/oracle/one_cell_cos.py` (same origin),

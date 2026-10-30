@@ -7,6 +7,7 @@
 //! file. Synthetic workbooks exist only in the synthetic lane, which says so and is never gate-eligible.
 
 pub mod aisc;
+pub mod live;
 pub mod mine_stats;
 pub mod sources;
 pub mod synthetic;
