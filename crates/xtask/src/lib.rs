@@ -652,7 +652,12 @@ pub fn check_det_in_source(path: &Path, prod_code: &str) -> Result<(), String> {
 /// source-registry rules (unique files, paths and digests; lowercase 64-hex digests; `YYYYQn` quarters;
 /// registered kinds, URL bases and families; reconstructions pointing at registered rows), and its `issuer`
 /// matches its file name. A missing directory is an error: the public lane cannot run without it.
-pub fn check_sources_registry(root: &Path) -> Result<(), Vec<String>> {
+///
+/// On success it returns one JSON log line per registry, in file-name order:
+/// `{"stage":"registry","issuer","sources","subjects","reconstructions","label_checks","mine_stats_labels",
+/// "check":"pass"}`. `label_checks` counts the checks the run makes: a set shared by two reconstructions
+/// counts once for each.
+pub fn check_sources_registry(root: &Path) -> Result<Vec<String>, Vec<String>> {
     let dir = root.join("registries").join("sources");
     let entries =
         fs::read_dir(&dir).map_err(|e| vec![format!("cannot read {}: {e}", dir.display())])?;
@@ -668,16 +673,28 @@ pub fn check_sources_registry(root: &Path) -> Result<(), Vec<String>> {
             dir.display()
         )]);
     }
-    let errors: Vec<String> = files
-        .iter()
-        .filter_map(|p| {
-            fmine_registry::sources::load_sources_registry(p)
-                .err()
-                .map(|e| format!("registry-check {}: {e}", p.display()))
-        })
-        .collect();
+    let mut lines = Vec::new();
+    let mut errors = Vec::new();
+    for p in &files {
+        match fmine_registry::sources::load_sources_registry(p) {
+            Ok(reg) => lines.push(format!(
+                "{{\"stage\":\"registry\",\"issuer\":\"{}\",\"sources\":{},\"subjects\":{},\"reconstructions\":{},\
+                 \"label_checks\":{},\"mine_stats_labels\":{},\"check\":\"pass\"}}",
+                reg.issuer.replace('\\', "\\\\").replace('"', "\\\""),
+                reg.sources.len(),
+                reg.subjects.len(),
+                reg.reconstructions.len(),
+                reg.reconstructions
+                    .iter()
+                    .map(|r| r.label_checks.len())
+                    .sum::<usize>(),
+                reg.mine_stats_labels.len()
+            )),
+            Err(e) => errors.push(format!("registry-check {}: {e}", p.display())),
+        }
+    }
     if errors.is_empty() {
-        Ok(())
+        Ok(lines)
     } else {
         Err(errors)
     }
@@ -925,11 +942,35 @@ mod tests {
             .and_then(|p| p.parent())
             .expect("workspace root")
             .to_path_buf();
-        check_sources_registry(&root).expect("workspace registries pass registry-check");
+        let lines =
+            check_sources_registry(&root).expect("workspace registries pass registry-check");
+        let text = fs::read_to_string(root.join("registries/sources/barrick.toml")).expect("read");
+        // The bd-s9j3.1 log line, its counts taken from the TOML text rather than from the parser. A label-check
+        // set counts once per reconstruction that names it.
+        let count = |table: &str| text.lines().filter(|l| l.trim() == table).count();
+        let applied: usize = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("label_checks = "))
+            .map(|set| {
+                let row = format!("set = {set}");
+                text.lines().filter(|l| l.trim() == row).count()
+            })
+            .sum();
+        assert_eq!(
+            lines,
+            vec![format!(
+                "{{\"stage\":\"registry\",\"issuer\":\"barrick\",\"sources\":{},\"subjects\":{},\
+                 \"reconstructions\":{},\"label_checks\":{},\"mine_stats_labels\":{},\"check\":\"pass\"}}",
+                count("[[source]]"),
+                count("[[subject]]"),
+                count("[[reconstruction]]"),
+                applied,
+                count("[[mine_stats_label]]")
+            )]
+        );
         let scratch = std::env::temp_dir().join(format!("xtask-registry-{}", std::process::id()));
         let dir = scratch.join("registries").join("sources");
         fs::create_dir_all(&dir).expect("scratch dir");
-        let text = fs::read_to_string(root.join("registries/sources/barrick.toml")).expect("read");
         let dup = text.replacen(
             "sha256 = \"1a73d6d7d4658f923757e873eec147ccc74aa8aada6a439f3c98da8540ff68d5\"",
             "sha256 = \"e2e1243ec0549f4c487c773869876e2acade401a0b6cd1141adf4b9296aec840\"",

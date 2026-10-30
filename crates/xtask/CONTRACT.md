@@ -23,6 +23,8 @@ Pure static verifier over repository source files and TOML registries; produces 
 - `check_claims(root: &Path) -> Result<(), Vec<String>>`
 - `check_det(root: &Path) -> Result<(), Vec<String>>`
 - `check_oracle(root: &Path) -> Result<(), Vec<String>>`
+- `check_sources_registry(root: &Path) -> Result<Vec<String>, Vec<String>>` (`registry-check`; on success one
+  `{"stage":"registry",…}` JSON log line per `registries/sources/*.toml`)
 - `check_all(root: &Path) -> Result<LocReport, Vec<String>>`
 
 ## 5. Guards & Typed Refusals

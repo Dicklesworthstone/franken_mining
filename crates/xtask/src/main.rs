@@ -52,7 +52,14 @@ fn main() -> ExitCode {
         "check-scope" => run_one("check-scope", xtask::check_scope(&root)),
         "check-claims" => run_one("check-claims", xtask::check_claims(&root)),
         "check-det" => run_one("check-det", xtask::check_det(&root)),
-        "registry-check" => run_one("registry-check", xtask::check_sources_registry(&root)),
+        "registry-check" => run_one(
+            "registry-check",
+            xtask::check_sources_registry(&root).map(|lines| {
+                for line in lines {
+                    println!("{line}");
+                }
+            }),
+        ),
         "check-all" => match xtask::check_all(&root) {
             Ok(report) => {
                 println!(
