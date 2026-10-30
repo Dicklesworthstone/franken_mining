@@ -17,7 +17,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use fmine_io::xlsx::{CellValue, Sheet, col_index_to_letters};
+use fmine_io::xlsx::{CellValue, Sheet, col_index_to_letters, parse_a1_ref};
 
 /// The five identity families of one subject column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -387,6 +387,151 @@ pub struct IdentityInstance {
     /// The printed total or rate cell the instance is about.
     pub cell: String,
     pub state: IdentityState,
+    /// Every cell the state was computed from (bd-sjrh.1, BD-329.S1), with its role and value as read. Not yet
+    /// in the payload or the state root.
+    pub operands: Vec<Operand>,
+}
+
+/// What an operand cell is to its instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperandRole {
+    /// The printed total a footing checks.
+    Total,
+    /// A summand of a footing, or a line counted (its k) in a rate's numerator interval or a footing's alternate
+    /// rule.
+    Line,
+    /// The printed per-ounce rate.
+    Rate,
+    Ounces,
+    /// The printed total a rate divides.
+    Numerator,
+    /// A non-controlling-interest line, which decides a cost-of-sales rate's basis.
+    NciLine,
+    /// A registered reconstruction's component cell.
+    Component,
+    /// A cell whose text a registered rule checks (label or stated quote).
+    LabelCheck,
+}
+
+impl OperandRole {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Total => "total",
+            Self::Line => "line",
+            Self::Rate => "rate",
+            Self::Ounces => "ounces",
+            Self::Numerator => "numerator",
+            Self::NciLine => "nci_line",
+            Self::Component => "component",
+            Self::LabelCheck => "label_check",
+        }
+    }
+}
+
+/// An operand's value as read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperandValue {
+    Int(i64),
+    /// A placeholder, text or formula error, as stored.
+    Token(String),
+    Blank,
+    /// A number that is not a whole number, in `f64` display form.
+    Unrounded(String),
+}
+
+/// One cell an instance was computed from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Operand {
+    pub role: OperandRole,
+    pub file: String,
+    pub sheet: String,
+    pub cell: String,
+    pub value: OperandValue,
+}
+
+/// The operand at `(row, col)` of `sheet` in `file`.
+#[must_use]
+pub fn operand_at(file: &str, sheet: &Sheet, row: u32, col: u32, role: OperandRole) -> Operand {
+    let value = match sheet.cell(row, col).map(|c| &c.value) {
+        None => OperandValue::Blank,
+        Some(CellValue::Number(x)) => as_int(Val::Num(*x))
+            .map_or_else(|| OperandValue::Unrounded(x.to_string()), OperandValue::Int),
+        Some(CellValue::Placeholder(t) | CellValue::Text(t) | CellValue::FormulaError(t)) => {
+            OperandValue::Token(t.clone())
+        }
+    };
+    Operand {
+        role,
+        file: file.to_string(),
+        sheet: sheet.name.clone(),
+        cell: format!("{}{row}", col_index_to_letters(col)),
+        value,
+    }
+}
+
+/// The table cells one instance of `family` in column `col` is computed from. An all-zero column's instances
+/// are decided by every used cell of the column. The AISC footing's alternate rule counts block 1's lines too.
+/// A cost-of-sales rate with a non-zero NCI line also reads the attributable-basis footnote (`footnote`, a cell
+/// of this sheet); the registered share's label cell is in another workbook and is added by the caller.
+fn family_operands(
+    file: &str,
+    sheet: &Sheet,
+    t: &AiscTable,
+    col: u32,
+    family: IdentityFamily,
+    all_zero: bool,
+    footnote: Option<&str>,
+) -> Vec<Operand> {
+    use OperandRole as R;
+    let at = |row: u32, role: OperandRole| operand_at(file, sheet, row, col, role);
+    let lines = |rows: &[u32]| rows.iter().map(|&r| at(r, R::Line)).collect::<Vec<_>>();
+    if all_zero {
+        let mut out = lines(&t.block1);
+        out.push(at(t.tcc_row, R::Total));
+        out.extend(lines(&t.block2));
+        out.push(at(t.aisc_row, R::Total));
+        out.push(at(t.ounces_row, R::Ounces));
+        out.extend([t.cos_rate_row, t.tcc_rate_row, t.aisc_rate_row].map(|r| at(r, R::Rate)));
+        return out;
+    }
+    let mut out = match family {
+        IdentityFamily::TccFooting => vec![at(t.tcc_row, R::Total)],
+        IdentityFamily::AiscFooting => vec![at(t.aisc_row, R::Total), at(t.tcc_row, R::Line)],
+        IdentityFamily::CosPerOunce => vec![
+            at(t.cos_rate_row, R::Rate),
+            at(t.ounces_row, R::Ounces),
+            at(t.cos_row, R::Numerator),
+        ],
+        IdentityFamily::TccPerOunce => vec![
+            at(t.tcc_rate_row, R::Rate),
+            at(t.ounces_row, R::Ounces),
+            at(t.tcc_row, R::Numerator),
+        ],
+        IdentityFamily::AiscPerOunce => vec![
+            at(t.aisc_rate_row, R::Rate),
+            at(t.ounces_row, R::Ounces),
+            at(t.aisc_row, R::Numerator),
+        ],
+    };
+    match family {
+        IdentityFamily::TccFooting | IdentityFamily::TccPerOunce => out.extend(lines(&t.block1)),
+        IdentityFamily::AiscFooting | IdentityFamily::AiscPerOunce => {
+            out.extend(lines(&t.block1));
+            out.extend(lines(&t.block2));
+        }
+        IdentityFamily::CosPerOunce => {
+            out.extend(t.nci_rows.iter().map(|&r| at(r, R::NciLine)));
+            let nci = t
+                .nci_rows
+                .iter()
+                .any(|&r| matches!(val(sheet, r, col), Val::Num(x) if x != 0.0));
+            if let Some((r, c)) = footnote.filter(|_| nci).and_then(parse_a1_ref) {
+                out.push(operand_at(file, sheet, r, c, R::LabelCheck));
+            }
+        }
+    }
+    out
 }
 
 /// A table header that names no registered subject (the column is refused as a whole).
@@ -1132,6 +1277,10 @@ pub fn ledger_for_table<S: AsRef<str>>(
         };
         let letters = col_index_to_letters(col);
         let mut push = |family: IdentityFamily, row: u32, state: IdentityState| {
+            let all_zero = state
+                == IdentityState::NotPublished {
+                    reason: "all-zero column",
+                };
             instances.push(IdentityInstance {
                 file: file.to_string(),
                 sheet: sheet.name.clone(),
@@ -1140,6 +1289,15 @@ pub fn ledger_for_table<S: AsRef<str>>(
                 family,
                 cell: format!("{letters}{row}"),
                 state,
+                operands: family_operands(
+                    file,
+                    sheet,
+                    table,
+                    col,
+                    family,
+                    all_zero,
+                    footnote.as_deref(),
+                ),
             });
         };
         let share = shares.get(subject);

@@ -27,9 +27,9 @@ use fmine_io::xlsx::{
 
 use crate::aisc::{
     DEFAULT_MISSING_FACT, ExplanationBasis, IdentityFamily, IdentityInstance, IdentityState,
-    OneCellCheck, OneCellOutcome, RateMiss, ShareBasis, UnregisteredHeader, cell_text,
-    confirm_share_label, find_qtd_sheet, ledger_for_table, locate_table, one_cell_checks,
-    reconstruction_closes,
+    OneCellCheck, OneCellOutcome, Operand, OperandRole, OperandValue, RateMiss, ShareBasis,
+    UnregisteredHeader, cell_text, confirm_share_label, find_qtd_sheet, ledger_for_table,
+    locate_table, one_cell_checks, operand_at, reconstruction_closes,
 };
 use crate::mine_stats::{CellRefusal, LabelVocabulary, MineStatsRead, read_mine_stats};
 pub use crate::sources::load_issuer_profile;
@@ -796,6 +796,74 @@ fn js(s: &str) -> String {
 /// Tries a registered reconstruction for a per-ounce miss. `None` when none is registered for the instance;
 /// otherwise (ii) when every label check passes and the component closes the interval, or (iv) naming the
 /// check that failed.
+fn find_reconstruction<'a>(
+    recs: &'a [RegisteredReconstruction],
+    file: &str,
+    sheet: &str,
+    subject: &str,
+    family: IdentityFamily,
+) -> Option<&'a RegisteredReconstruction> {
+    recs.iter().find(|r| {
+        r.table_file == file && r.sheet == sheet && r.subject == subject && r.family == family
+    })
+}
+
+/// The operand at `file:sheet!cell` of the loaded sources; blank when that file or sheet is not loaded.
+fn operand_in(
+    sources: &[LoadedSource],
+    file: &str,
+    sheet: &str,
+    cell: &str,
+    role: OperandRole,
+) -> Operand {
+    let ws = sources
+        .iter()
+        .find(|s| s.file_name == file)
+        .and_then(|s| s.workbook.sheets.iter().find(|w| w.name == sheet));
+    match (ws, parse_a1_ref(cell)) {
+        (Some(ws), Some((r, c))) => operand_at(file, ws, r, c, role),
+        _ => Operand {
+            role,
+            file: file.to_string(),
+            sheet: sheet.to_string(),
+            cell: cell.to_string(),
+            value: OperandValue::Blank,
+        },
+    }
+}
+
+/// The cells a registered reconstruction reads (bd-sjrh.1): its stated quote cell, its label-check cells and
+/// its component. A cell on a sheet or file that is not loaded is recorded as blank.
+fn reconstruction_operands(
+    sources: &[LoadedSource],
+    rec: &RegisteredReconstruction,
+) -> Vec<Operand> {
+    let mut out = Vec::new();
+    let mut add = |file: &str, sheet: &str, cell: &str, role: OperandRole| {
+        out.push(operand_in(sources, file, sheet, cell, role));
+    };
+    if let ExplanationBasis::Stated { doc, locator, .. } = &rec.basis
+        && let Some((sheet, cell)) = locator.split_once('!')
+    {
+        add(doc, sheet, cell, OperandRole::LabelCheck);
+    }
+    for (cell, _) in &rec.label_checks {
+        add(
+            &rec.component_file,
+            &rec.component_sheet,
+            cell,
+            OperandRole::LabelCheck,
+        );
+    }
+    add(
+        &rec.component_file,
+        &rec.component_sheet,
+        &rec.component_cell,
+        OperandRole::Component,
+    );
+    out
+}
+
 fn try_reconstruction(
     sources: &[LoadedSource],
     recs: &[RegisteredReconstruction],
@@ -805,9 +873,7 @@ fn try_reconstruction(
     family: IdentityFamily,
     miss: RateMiss,
 ) -> Option<IdentityState> {
-    let rec = recs.iter().find(|r| {
-        r.table_file == file && r.sheet == sheet && r.subject == subject && r.family == family
-    })?;
+    let rec = find_reconstruction(recs, file, sheet, subject, family)?;
     let fail = |why: String| {
         Some(IdentityState::Undecidable {
             detail: format!(
@@ -980,8 +1046,25 @@ pub fn assess(
                     }),
                     Ok(Some(table)) => {
                         scope.aisc_tables += 1;
+                        let before = scope.instances.len();
+                        // The reconstructions a miss consulted, whose cells become operands (bd-sjrh.1).
+                        let mut consulted: Vec<(String, IdentityFamily, Vec<Operand>)> = Vec::new();
                         let mut explain =
                             |subject: &str, family: IdentityFamily, miss: RateMiss| {
+                                let rec = find_reconstruction(
+                                    reconstructions,
+                                    &src.file_name,
+                                    &sheet.name,
+                                    subject,
+                                    family,
+                                );
+                                if let Some(rec) = rec {
+                                    consulted.push((
+                                        subject.to_string(),
+                                        family,
+                                        reconstruction_operands(&sources, rec),
+                                    ));
+                                }
                                 try_reconstruction(
                                     &sources,
                                     reconstructions,
@@ -1002,6 +1085,32 @@ pub fn assess(
                             &mut scope.instances,
                             &mut scope.unregistered_headers,
                         );
+                        for (subject, family, ops) in consulted {
+                            for i in scope.instances[before..]
+                                .iter_mut()
+                                .filter(|i| i.subject == subject && i.family == family)
+                            {
+                                i.operands.extend(ops.iter().cloned());
+                            }
+                        }
+                        // A cost-of-sales rate that read the footnote also read its confirmed share label.
+                        for i in scope.instances[before..].iter_mut().filter(|i| {
+                            i.family == IdentityFamily::CosPerOunce
+                                && i.operands.iter().any(|o| o.role == OperandRole::LabelCheck)
+                        }) {
+                            let label = match shares.get(&i.subject) {
+                                Some(ShareBasis::Confirmed { label_cell, .. }) => {
+                                    label_cell.split_once(':').and_then(|(f, rest)| {
+                                        rest.rsplit_once('!').map(|(s, c)| (f, s, c))
+                                    })
+                                }
+                                _ => None,
+                            };
+                            if let Some((f, s, c)) = label {
+                                let op = operand_in(&sources, f, s, c, OperandRole::LabelCheck);
+                                i.operands.push(op);
+                            }
+                        }
                         if shown {
                             one_cell_checks(
                                 &src.file_name,
@@ -1752,6 +1861,287 @@ mod tests {
         assert_eq!(
             v.pattern,
             [(("Site H".to_string(), (3, 5), Some(false)), 1)]
+        );
+    }
+
+    /// An instance's operands as (role, `file:sheet!cell`, value).
+    fn operands_of(
+        r: &PublicAssuranceReport,
+        cell: &str,
+    ) -> Vec<(OperandRole, String, OperandValue)> {
+        let Some(i) = r.instances.iter().find(|i| i.cell == cell) else {
+            panic!("no instance at {cell}");
+        };
+        i.operands
+            .iter()
+            .map(|o| {
+                (
+                    o.role,
+                    format!("{}:{}!{}", o.file, o.sheet, o.cell),
+                    o.value.clone(),
+                )
+            })
+            .collect()
+    }
+
+    fn aisc_at(cell: &str) -> String {
+        format!(
+            "{}:{}!{cell}",
+            synthetic::SYNTHETIC_AISC_FILE,
+            synthetic::SYNTHETIC_TABLE_SHEET
+        )
+    }
+
+    /// bd-sjrh.1: C8's footing is computed from its total and block 1 (hand-read from `synthetic.rs`).
+    #[test]
+    fn test_c8_footing_operands() {
+        use OperandRole as R;
+        use OperandValue::Int;
+        let r = run_synthetic_assurance(&[]).expect("synthetic run");
+        assert_eq!(
+            operands_of(&r, "C8"),
+            vec![
+                (R::Total, aisc_at("C8"), Int(350)),
+                (R::Line, aisc_at("C5"), Int(300)),
+                (R::Line, aisc_at("C6"), Int(-50)),
+                (R::Line, aisc_at("C7"), Int(0)),
+            ]
+        );
+        // The AISC footing adds the TCC line and block 2, and counts block 1 for its alternate rule.
+        let c11: Vec<String> = operands_of(&r, "C11").into_iter().map(|o| o.1).collect();
+        let want: Vec<String> = ["C11", "C8", "C5", "C6", "C7", "C9", "C10"]
+            .iter()
+            .map(|c| aisc_at(c))
+            .collect();
+        assert_eq!(c11, want);
+    }
+
+    /// bd-sjrh.1: Site D's cost of sales per ounce is refused for its NCI line, after reading the footnote. Site A
+    /// has a zero NCI line, so its footnote is never read; Site H's confirmed share adds the `QTD` label.
+    #[test]
+    fn test_cos_refusal_operands_name_nci_row() {
+        use OperandRole as R;
+        use OperandValue::{Int, Token};
+        let r = run_synthetic_assurance(&[]).expect("synthetic run");
+        let footnote = (
+            R::LabelCheck,
+            aisc_at("A30"),
+            Token(synthetic::SYNTHETIC_SHARE_FOOTNOTE.to_string()),
+        );
+        assert_eq!(
+            operands_of(&r, "E14"),
+            vec![
+                (R::Rate, aisc_at("E14"), Int(2500)),
+                (R::Ounces, aisc_at("E13"), Int(400)),
+                (R::Numerator, aisc_at("E5"), Int(1000)),
+                (R::NciLine, aisc_at("E7"), Int(-160)),
+                footnote.clone(),
+            ]
+        );
+        assert_eq!(
+            operands_of(&r, "B14"),
+            vec![
+                (R::Rate, aisc_at("B14"), Int(1250)),
+                (R::Ounces, aisc_at("B13"), Int(400)),
+                (R::Numerator, aisc_at("B5"), Int(500)),
+                (R::NciLine, aisc_at("B7"), Int(0)),
+            ]
+        );
+        let k14 = operands_of(&r, "K14");
+        assert_eq!(k14[4], footnote);
+        assert_eq!(
+            k14[5],
+            (
+                R::LabelCheck,
+                format!("{}:QTD!A5", synthetic::SYNTHETIC_STATS_FILE),
+                Token("Site H (75%)1".to_string())
+            )
+        );
+        assert_eq!(k14.len(), 6);
+    }
+
+    /// bd-sjrh.1: H16 is explained by `Minestats3!B32` = 13 after four label checks; M16 also reads its stated
+    /// quote, `A31`. F's all-zero column cites every used cell (11).
+    #[test]
+    fn test_explained_component_cited_cell_h16() {
+        use OperandRole as R;
+        use OperandValue::{Int, Token};
+        let r = run_synthetic_assurance(&[]).expect("synthetic run");
+        let stats = |c: &str| format!("{}:Minestats3!{c}", synthetic::SYNTHETIC_STATS_FILE);
+        let rec = [
+            (
+                R::LabelCheck,
+                stats("A32"),
+                Token("Minesite sustaining3".to_string()),
+            ),
+            (
+                R::LabelCheck,
+                stats("B2"),
+                Token("Site G (60%)1".to_string()),
+            ),
+            (
+                R::LabelCheck,
+                stats("A3"),
+                Token("For the three months ended March 31,".to_string()),
+            ),
+            (R::LabelCheck, stats("B3"), Token("2030".to_string())),
+            (R::Component, stats("B32"), Int(13)),
+        ];
+        let h16 = operands_of(&r, "H16");
+        // Rate, ounces, numerator, then the five lines of blocks 1 and 2, then the reconstruction.
+        assert_eq!(h16.len(), 3 + 5 + 5);
+        assert_eq!(
+            h16[..3].iter().map(|o| o.0).collect::<Vec<_>>(),
+            [R::Rate, R::Ounces, R::Numerator]
+        );
+        assert_eq!(h16[8..], rec[..]);
+        let m16 = operands_of(&r, "M16");
+        assert_eq!(m16[8].0, R::LabelCheck);
+        assert_eq!(m16[8].1, aisc_at("A31"));
+        assert_eq!(m16[9..], rec[..]);
+        for cell in ["F8", "F11", "F14", "F15", "F16"] {
+            assert_eq!(operands_of(&r, cell).len(), 11, "{cell}");
+        }
+    }
+
+    /// Cells that place a table or a sheet rather than feed an instance: the AISC sheet's row labels (column A,
+    /// rows 1 to 16) and subject headers (row 2), and the `QTD` sheet's title and period line (rows 1 and 3).
+    fn structural(file: &str, sheet: &str, row: u32, col: u32) -> bool {
+        match (file, sheet) {
+            (synthetic::SYNTHETIC_AISC_FILE, synthetic::SYNTHETIC_TABLE_SHEET) => {
+                row == 2 || (col == 1 && row <= 16)
+            }
+            (synthetic::SYNTHETIC_STATS_FILE, "QTD") => row == 1 || row == 3,
+            _ => false,
+        }
+    }
+
+    /// Perturbs one cell in place: a number +1, any other value to the text "x", a blank cell to 1.
+    fn perturb(sheet: &mut fmine_io::xlsx::Sheet, row: u32, col: u32) {
+        let value = match sheet.cell(row, col).map(|c| &c.value) {
+            Some(CellValue::Number(x)) => CellValue::Number(x + 1.0),
+            Some(_) => CellValue::Text("x".to_string()),
+            None => CellValue::Number(1.0),
+        };
+        let number_text = match &value {
+            CellValue::Number(x) => Some(x.to_string()),
+            _ => None,
+        };
+        let cell = sheet
+            .cells_by_coord
+            .entry((row, col))
+            .or_insert_with(|| ExtractedCell {
+                cell_ref: format!("{}{row}", fmine_io::xlsx::col_index_to_letters(col)),
+                row,
+                col,
+                value: CellValue::Number(0.0),
+                formula: None,
+                number_text: None,
+                style: None,
+                format: fmine_io::styles::NumberFormat::Builtin(0),
+            });
+        cell.value = value;
+        cell.number_text = number_text;
+    }
+
+    /// For each instance cell, the cells whose perturbation changed its state: every non-structural cell of every
+    /// visible synthetic sheet, within its used range, one at a time. Observed from the code's behaviour, never
+    /// from its operand lists.
+    fn observed_dependencies() -> (usize, BTreeMap<String, Vec<String>>) {
+        let profile = synthetic::synthetic_profile();
+        let base_sources = load_synthetic(synthetic::synthetic_workbooks(&[])).expect("parse");
+        let base = assess(&profile, Lane::Synthetic, base_sources.clone());
+        let mut swept = 0;
+        let mut deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (si, src) in base_sources.iter().enumerate() {
+            for (ki, sheet) in src.workbook.sheets.iter().enumerate() {
+                let rows = sheet.cells_by_coord.keys().map(|k| k.0).max().unwrap_or(0);
+                let cols = sheet.cells_by_coord.keys().map(|k| k.1).max().unwrap_or(0);
+                for (row, col) in (1..=rows).flat_map(|r| (1..=cols).map(move |c| (r, c))) {
+                    if structural(&src.file_name, &sheet.name, row, col) {
+                        continue;
+                    }
+                    swept += 1;
+                    let mut sources = base_sources.clone();
+                    perturb(&mut sources[si].workbook.sheets[ki], row, col);
+                    let r = assess(&profile, Lane::Synthetic, sources);
+                    let at = format!(
+                        "{}:{}!{}{row}",
+                        src.file_name,
+                        sheet.name,
+                        fmine_io::xlsx::col_index_to_letters(col)
+                    );
+                    for b in &base.instances {
+                        let after = r
+                            .instances
+                            .iter()
+                            .find(|e| e.cell == b.cell)
+                            .map(|e| &e.state);
+                        if after != Some(&b.state) {
+                            deps.entry(b.cell.clone()).or_default().push(at.clone());
+                        }
+                    }
+                }
+            }
+        }
+        (swept, deps)
+    }
+
+    /// Each observed dependency the instance's operands do not cite, as "uncited input: <cell> → <instance>".
+    fn uncited(r: &PublicAssuranceReport, deps: &BTreeMap<String, Vec<String>>) -> Vec<String> {
+        let mut out = Vec::new();
+        for i in &r.instances {
+            let cited: Vec<String> = i
+                .operands
+                .iter()
+                .map(|o| format!("{}:{}!{}", o.file, o.sheet, o.cell))
+                .collect();
+            for at in deps.get(&i.cell).into_iter().flatten() {
+                if !cited.contains(at) {
+                    out.push(format!(
+                        "uncited input: {at} → {} {}",
+                        i.cell,
+                        i.family.as_str()
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// bd-sjrh.1: every cell whose perturbation moves an instance's state is among that instance's operands.
+    #[test]
+    fn test_operands_cover_every_input_cell() {
+        let r = run_synthetic_assurance(&[]).expect("synthetic run");
+        let (swept, deps) = observed_dependencies();
+        let missing = uncited(&r, &deps);
+        println!(
+            "{{\"test\":\"operands_cover\",\"instances\":{},\"operands\":{},\"swept_cells\":{swept},\
+             \"dependencies\":{},\"uncited\":{}}}",
+            r.instances.len(),
+            r.instances.iter().map(|i| i.operands.len()).sum::<usize>(),
+            deps.values().map(Vec::len).sum::<usize>(),
+            missing.len()
+        );
+        assert!(r.instances.iter().all(|i| !i.operands.is_empty()));
+        assert!(swept > 300, "{swept}");
+        // Every instance but the unrounded column's depends on something the sweep can move.
+        assert!(deps.len() >= 30, "{}", deps.len());
+        assert!(missing.is_empty(), "{missing:#?}");
+    }
+
+    /// The coverage check catches a dropped operand: C8 without C6.
+    #[test]
+    fn test_mutation_missing_operands_detected() {
+        let mut r = run_synthetic_assurance(&[]).expect("synthetic run");
+        let (_, deps) = observed_dependencies();
+        let Some(c8) = r.instances.iter_mut().find(|i| i.cell == "C8") else {
+            panic!("no C8");
+        };
+        c8.operands.retain(|o| o.cell != "C6");
+        assert_eq!(
+            uncited(&r, &deps),
+            [format!("uncited input: {} → C8 tcc_footing", aisc_at("C6"))]
         );
     }
 
@@ -2553,6 +2943,52 @@ mod tests {
         assert_eq!(iv_subjects.iter().filter(|s| **s == "Veladero").count(), 12);
         assert_eq!(iv_subjects.iter().filter(|s| **s == "Hemlo").count(), 3);
         assert_eq!(iv_subjects.iter().filter(|s| **s == "Kibali").count(), 2);
+
+        // bd-sjrh.1: every instance cites operands. Each (iii)'s total and summands are among them, read
+        // separately from the footing, and the summands add to its component sum. Failure messages and the log
+        // name cells and counts only, never values (RISK-31).
+        let mut by_role: BTreeMap<&str, usize> = BTreeMap::new();
+        for i in &r.instances {
+            let at = format!("{}:{}!{}", i.file, i.sheet, i.cell);
+            assert!(!i.operands.is_empty(), "{at} has no operands");
+            for o in &i.operands {
+                *by_role.entry(o.role.as_str()).or_default() += 1;
+            }
+            if let IdentityState::IssuerDiscrepancy(c) = &i.state {
+                let value = |cell: &str| {
+                    i.operands
+                        .iter()
+                        .find(|o| o.file == i.file && o.sheet == i.sheet && o.cell == cell)
+                        .map(|o| &o.value)
+                };
+                assert!(
+                    value(&c.total_cell) == Some(&OperandValue::Int(c.printed)),
+                    "{at}: total operand differs from the printed total"
+                );
+                let mut sum = 0;
+                for line in &c.line_cells {
+                    match value(line) {
+                        Some(OperandValue::Int(x)) => sum += x,
+                        Some(OperandValue::Token(_) | OperandValue::Blank) => {}
+                        _ => panic!("{at}: summand {line} not cited as a whole number or token"),
+                    }
+                }
+                assert!(
+                    sum == c.component_sum,
+                    "{at}: cited summands do not add to the component sum"
+                );
+            }
+        }
+        let roles: Vec<String> = by_role
+            .iter()
+            .map(|(k, v)| format!("\"{k}\":{v}"))
+            .collect();
+        println!(
+            "{{\"test\":\"real_operands\",\"instances\":{},\"operands\":{},\"by_role\":{{{}}}}}",
+            r.instances.len(),
+            by_role.values().sum::<usize>(),
+            roles.join(",")
+        );
 
         // Regression pin (not independent; see the doc comment): root, anchor, totals, registry epoch and digest
         // of digests equal the last row of repro/barrick/expected.toml, which records why each root moved.

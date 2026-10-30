@@ -85,6 +85,18 @@ The public lane of M0 (`fmine assure public`).
   find_share_footnote, find_qtd_sheet, confirm_share_label, reconstruction_closes, match_subject, cell_text,
   OneCellCheck, OneCellOutcome, OneCellVerdict, FailGroup, implied_ounces, one_cell_checks, one_cell_verdict}`
   (bd-prmn.8); `PublicAssuranceReport::one_cell`, the payload's `one_cell_cos` section.
+- `aisc::{Operand, OperandRole, OperandValue, operand_at}` and `IdentityInstance::operands` (bd-sjrh.1, part 2
+  of BD-329.S1). Each instance cites every cell its state was computed from, with its role (total, line,
+  rate, ounces, numerator, NCI line, component, label check) and its value as read.
+  - **Cited cells:**
+    - the table cells of the instance's family;
+    - every used cell, for an all-zero column;
+    - the footnote and the confirmed share label, for a cost-of-sales rate with a non-zero NCI line;
+    - a consulted reconstruction's quote, label-check and component cells.
+  - **Not cited:** structure cells (row labels, subject headers, a sheet's title and period line).
+  - **Not yet in the payload or the state root.**
+  - **Test:** `test_operands_cover_every_input_cell` perturbs every other synthetic cell, one at a time, and
+    fails on any state change it causes that the operands do not cite.
   `IdentityState::Consistent` carries `basis` (the stated share, footnote and label it used, or `None`);
   `IdentityState::Explained` carries `basis: ExplanationBasis`; `IdentityState::Undecidable` carries
   `missing_fact` and `closing_document`; `IdentityState::RefusedAt` is (v) naming a cell or file.
