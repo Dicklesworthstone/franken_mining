@@ -41,6 +41,11 @@
 //! re-decided by checked feasibility runs: no point beyond the end (a checked certificate), and the end itself
 //! reached (a checked witness: a closed end) or not (a checked certificate: an open end).
 //!
+//! [`blame`] (bd-4wvl.3, BD-340.S3) says which printed values an infeasible component's conflict rests on:
+//! inclusion-minimal conflict sets with checked certificates, and correction sets (labelled `Minimum` only after
+//! an exhaustive search) with each cell's implied range, never a corrected value. [`presence_conflicts`] covers a
+//! number set against a placeholder, which no interval can express.
+//!
 //! K0: std only, no I/O. Determinism: exact rational arithmetic, inputs sorted by locator and id before solving.
 
 use std::cmp::Ordering;
@@ -559,6 +564,11 @@ pub enum XfRefusal {
     UnknownVariable {
         locator: String,
     },
+    /// [`presence_conflicts`]: a placeholder in an identity other than `Equal`.
+    PlaceholderInIdentity {
+        identity: String,
+        locator: String,
+    },
 }
 
 impl fmt::Display for XfRefusal {
@@ -593,6 +603,10 @@ impl fmt::Display for XfRefusal {
             ),
             Self::NotLinear { identity } => write!(f, "identity {identity} is a ratio, not a row"),
             Self::UnknownVariable { locator } => write!(f, "{locator} is not a given cell"),
+            Self::PlaceholderInIdentity { identity, locator } => write!(
+                f,
+                "identity {identity}: the placeholder {locator} can only be in an Equal identity"
+            ),
         }
     }
 }
@@ -814,7 +828,7 @@ fn decide(
     rules: &Rules,
     max_pivots: usize,
 ) -> Result<Outcome, XfRefusal> {
-    let none = BTreeMap::new();
+    let none = Frame::default();
     let lin = match linearise(cells, identities, rules, &none)? {
         Lin::Indeterminate(reason) => return Ok(indeterminate(reason)),
         Lin::Residual { identity, residual } => {
@@ -874,11 +888,61 @@ enum Lin {
 
 /// The linearisation the solver and the certificate checker share. `overrides` replace cells' ranges after the
 /// construction rules apply (used by [`implied_interval`]).
+/// Whether `loc` is the denominator of a ratio.
+fn is_den(identities: &[&Identity], loc: &str) -> bool {
+    identities
+        .iter()
+        .any(|id| matches!(&id.kind, IdentityKind::Ratio { den, .. } if den == loc))
+}
+
+/// The range of a cell whose printed value is disregarded: free, except that a ratio's denominator keeps the
+/// sign of its printed box, so the ratio stays linear.
+fn freed_bound(printed: Bound, den: bool) -> Bound {
+    let zero_open = Some(End {
+        at: ZERO,
+        strict: true,
+    });
+    match (den, one_sign(printed)) {
+        (true, Ok(1)) => Bound {
+            lo: zero_open,
+            hi: None,
+        },
+        (true, Ok(-1)) => Bound {
+            lo: None,
+            hi: zero_open,
+        },
+        _ => Bound::FREE,
+    }
+}
+
+/// What one run changes from the printed table. A cell in `unprinted` has its printed value disregarded: it has no
+/// box, and no printed footing over it is required. `bounds` replaces a variable's range (an unprinted cell's, or a
+/// range pinned by `implied_interval`).
+#[derive(Debug, Clone, Default)]
+struct Frame {
+    unprinted: BTreeSet<String>,
+    bounds: BTreeMap<String, Bound>,
+}
+
+impl Frame {
+    /// Whether the identity has a cell whose printed value is disregarded.
+    fn touches(&self, id: &Identity) -> bool {
+        id.locators().iter().any(|l| self.unprinted.contains(*l))
+    }
+
+    /// This frame with `var`'s range replaced.
+    fn pinned(&self, var: &str, bound: Bound) -> Self {
+        let mut f = self.clone();
+        f.bounds.insert(var.to_string(), bound);
+        f
+    }
+}
+
 fn linearise(
     cells: &[&Cell],
     identities: &[&Identity],
     rules: &Rules,
-    overrides: &BTreeMap<String, Bound>,
+    frame: &Frame,
 ) -> Result<Lin, XfRefusal> {
     let mut index: BTreeMap<&str, usize> = BTreeMap::new();
     let mut printed: BTreeMap<&str, Rat> = BTreeMap::new();
@@ -908,12 +972,17 @@ fn linearise(
             uses.entry(loc).or_default().insert(id.id.as_str());
         }
     }
-    // ComponentSum: the printed footing first; then the total's own box is dropped.
+    // ComponentSum: the printed footing first (unless a cell's printed value is disregarded); then the total's own
+    // box is dropped.
     let mut freed = Vec::new();
     for id in identities {
         if let IdentityKind::Sum { total, .. } = &id.kind
             && rules.construction(id)? == Construction::ComponentSum
         {
+            if frame.touches(id) {
+                freed.push(index[total.as_str()]);
+                continue;
+            }
             let Ok(gap) = printed_value(&id.row()?, &printed) else {
                 return Ok(Lin::Indeterminate(OVERFLOW.to_string()));
             };
@@ -929,10 +998,19 @@ fn linearise(
             freed.push(index[total.as_str()]);
         }
     }
+    let boxes = bounds.clone();
     for j in freed {
         bounds[j] = Bound::FREE;
     }
-    for (loc, b) in overrides {
+    for loc in &frame.unprinted {
+        let Some(&j) = index.get(loc.as_str()) else {
+            return Err(XfRefusal::UnknownVariable {
+                locator: loc.clone(),
+            });
+        };
+        bounds[j] = freed_bound(boxes[j], is_den(identities, loc));
+    }
+    for (loc, b) in &frame.bounds {
         let Some(&j) = index.get(loc.as_str()) else {
             return Err(XfRefusal::UnknownVariable {
                 locator: loc.clone(),
@@ -1521,14 +1599,14 @@ pub fn check_witness(
 ) -> Result<(), CheckFailure> {
     let cells: Vec<&Cell> = cells.iter().collect();
     let identities: Vec<&Identity> = identities.iter().collect();
-    check_witness_in(&cells, &identities, rules, &BTreeMap::new(), witness)
+    check_witness_in(&cells, &identities, rules, &Frame::default(), witness)
 }
 
 fn check_witness_in(
     cells: &[&Cell],
     identities: &[&Identity],
     rules: &Rules,
-    overrides: &BTreeMap<String, Bound>,
+    frame: &Frame,
     witness: &BTreeMap<String, Rat>,
 ) -> Result<(), CheckFailure> {
     let mut bounds: BTreeMap<&str, Bound> = BTreeMap::new();
@@ -1552,7 +1630,7 @@ fn check_witness_in(
                 == Construction::ComponentSum
         {
             let row = id.row().map_err(|e| CheckFailure(e.to_string()))?;
-            if checked(printed_value(&row, &printed))? != ZERO {
+            if !frame.touches(id) && checked(printed_value(&row, &printed))? != ZERO {
                 return fail(format!(
                     "identity {} does not foot in printed values",
                     id.id
@@ -1561,7 +1639,20 @@ fn check_witness_in(
             bounds.insert(total.as_str(), Bound::FREE);
         }
     }
-    for (loc, b) in overrides {
+    for loc in &frame.unprinted {
+        let Some(b) = bounds.get_mut(loc.as_str()) else {
+            return fail(format!("{loc} is not a cell"));
+        };
+        let printed_box = cells
+            .iter()
+            .find(|c| c.locator == *loc)
+            .map(|c| cell_bound(c, rules.convention));
+        let Some(Ok(Some(printed_box))) = printed_box else {
+            return fail(OVERFLOW);
+        };
+        *b = freed_bound(printed_box, is_den(identities, loc));
+    }
+    for (loc, b) in &frame.bounds {
         bounds.insert(loc.as_str(), *b);
     }
     let value = |loc: &str| -> Result<Rat, CheckFailure> {
@@ -1625,14 +1716,14 @@ pub fn check_certificate(
     cells.sort_by(|a, b| a.locator.cmp(&b.locator));
     let mut identities: Vec<&Identity> = identities.iter().collect();
     identities.sort_by(|a, b| a.id.cmp(&b.id));
-    check_certificate_in(&cells, &identities, rules, &BTreeMap::new(), certificate)
+    check_certificate_in(&cells, &identities, rules, &Frame::default(), certificate)
 }
 
 fn check_certificate_in(
     cells: &[&Cell],
     identities: &[&Identity],
     rules: &Rules,
-    overrides: &BTreeMap<String, Bound>,
+    frame: &Frame,
     certificate: &Certificate,
 ) -> Result<CertificateRange, CheckFailure> {
     let multipliers = match certificate {
@@ -1644,6 +1735,11 @@ fn check_certificate_in(
                 || rules.construction(id) != Ok(Construction::ComponentSum)
             {
                 return fail(format!("{identity} is not a component-sum identity"));
+            }
+            if frame.touches(id) {
+                return fail(format!(
+                    "{identity} has a cell whose printed value is disregarded"
+                ));
             }
             let printed: BTreeMap<&str, Rat> = cells
                 .iter()
@@ -1671,7 +1767,7 @@ fn check_certificate_in(
         }
         Certificate::Farkas { multipliers } => multipliers,
     };
-    let lin = match linearise(cells, identities, rules, overrides) {
+    let lin = match linearise(cells, identities, rules, frame) {
         Ok(Lin::System(lin)) => lin,
         Ok(Lin::Residual { identity, .. }) => {
             return fail(format!(
@@ -1811,32 +1907,39 @@ pub fn implied_interval(
     }
     let cells: Vec<&Cell> = cell_ix.iter().map(|&i| p.cells[i]).collect();
     let identities: Vec<&Identity> = id_ix.iter().map(|&i| p.identities[i]).collect();
+    let mut frame = Frame::default();
+    if free_own_box {
+        frame.unprinted.insert(var.to_string());
+    }
+    implied_in(&cells, &identities, rules, var, &frame)
+}
+
+/// [`implied_interval`] of `var` in one component under `frame`; `var`'s own box is dropped when it is unprinted.
+fn implied_in(
+    cells: &[&Cell],
+    identities: &[&Identity],
+    rules: &Rules,
+    var: &str,
+    frame: &Frame,
+) -> Result<Interval, ImpliedError> {
     let overflow = || ImpliedError::Indeterminate(OVERFLOW.to_string());
-    let printed = cell_bound(p.cells[pos], rules.convention)?.ok_or_else(overflow)?;
+    let Some(cell) = cells.iter().find(|c| c.locator == var) else {
+        return Err(XfRefusal::UnknownVariable {
+            locator: var.to_string(),
+        }
+        .into());
+    };
+    let printed = cell_bound(cell, rules.convention)?.ok_or_else(overflow)?;
     let is_rate = identities
         .iter()
         .any(|id| matches!(&id.kind, IdentityKind::Ratio { rate, .. } if rate == var));
-    let is_den = identities
-        .iter()
-        .any(|id| matches!(&id.kind, IdentityKind::Ratio { den, .. } if den == var));
-    let mut overrides = BTreeMap::new();
-    if free_own_box || is_rate {
-        // A rate's range is the ratio's, so its rows are dropped here; its own box (unless freed) cuts below.
-        let mut own = Bound::FREE;
-        if free_own_box && is_den {
-            let zero_open = Some(End {
-                at: ZERO,
-                strict: true,
-            });
-            match one_sign(printed) {
-                Ok(1) => own.lo = zero_open,
-                Ok(-1) => own.hi = zero_open,
-                _ => {}
-            }
-        }
-        overrides.insert(var.to_string(), own);
-    }
-    let lin = match linearise(&cells, &identities, rules, &overrides)? {
+    // A rate's range is the ratio's, so its rows are dropped here; its own box (unless disregarded) cuts below.
+    let run = if is_rate {
+        frame.pinned(var, Bound::FREE)
+    } else {
+        frame.clone()
+    };
+    let lin = match linearise(cells, identities, rules, &run)? {
         Lin::System(lin) => lin,
         Lin::Residual { .. } => return Err(ImpliedError::Infeasible),
         Lin::Indeterminate(reason) => return Err(ImpliedError::Indeterminate(reason)),
@@ -1845,7 +1948,11 @@ pub fn implied_interval(
         ImpliedError::Indeterminate(format!("{var} is not a variable of its component"))
     })?;
     let (base, lo, hi) = if is_rate {
-        let base = if free_own_box { Bound::FREE } else { printed };
+        let base = if frame.unprinted.contains(var) {
+            Bound::FREE
+        } else {
+            printed
+        };
         let lo = rate_extreme(&lin, j, false)?.ok_or(ImpliedError::Infeasible)?;
         let hi = rate_extreme(&lin, j, true)?.ok_or(ImpliedError::Infeasible)?;
         // The ratio's range cut by the rate's own box: the image of the convex region is an interval.
@@ -1871,8 +1978,8 @@ pub fn implied_interval(
             .ok_or(ImpliedError::Infeasible)?;
         (lin.bounds[j], lo, hi)
     };
-    let lo_strict = settle(&cells, &identities, rules, var, base, lo, true)?;
-    let hi_strict = settle(&cells, &identities, rules, var, base, hi, false)?;
+    let lo_strict = settle(cells, identities, rules, frame, var, base, (lo, true))?;
+    let hi_strict = settle(cells, identities, rules, frame, var, base, (hi, false))?;
     // A single point with an open end is no point: the closure touched, the region did not.
     if lo == hi && (lo_strict || hi_strict) {
         return Err(ImpliedError::Infeasible);
@@ -1989,16 +2096,20 @@ fn rate_extreme(lin: &Linear, r: usize, maximize: bool) -> Result<Option<Rat>, I
     optimum(&transformed, w, maximize, MAX_PIVOTS).map_err(lp_implied)
 }
 
-/// Re-decides one end `m` of an implied interval by checked runs, and returns whether the end is open.
+/// Re-decides one end `(m, lower)` of an implied interval by checked runs, and returns whether the end is open.
 fn settle(
     cells: &[&Cell],
     identities: &[&Identity],
     rules: &Rules,
+    frame: &Frame,
     var: &str,
     base: Bound,
-    m: Rat,
-    lower: bool,
+    (m, lower): (Rat, bool),
 ) -> Result<bool, ImpliedError> {
+    let reached = |bound| -> Result<bool, ImpliedError> {
+        let run = checked_run(cells, identities, rules, &frame.pinned(var, bound))?;
+        Ok(matches!(run, Checked::Feasible))
+    };
     let overflow = |_| ImpliedError::Indeterminate(OVERFLOW.to_string());
     let at_m = |strict| Some(End { at: m, strict });
     let past = if lower {
@@ -2013,8 +2124,7 @@ fn settle(
         }
     };
     let beyond = base.meet(past).map_err(overflow)?;
-    if !beyond.is_empty().map_err(overflow)? && checked_run(cells, identities, rules, var, beyond)?
-    {
+    if !beyond.is_empty().map_err(overflow)? && reached(beyond)? {
         return Err(ImpliedError::Indeterminate(
             "checker rejected: a point lies beyond the optimum".to_string(),
         ));
@@ -2028,38 +2138,530 @@ fn settle(
     if point.is_empty().map_err(overflow)? {
         return Ok(true);
     }
-    Ok(!checked_run(cells, identities, rules, var, point)?)
+    Ok(!reached(point)?)
 }
 
-/// A feasibility run with `var`'s range replaced: true for a checked witness, false for a checked certificate.
+/// A feasibility run that passed its checker.
+enum Checked {
+    Feasible,
+    Infeasible(Certificate),
+}
+
+/// A feasibility run under `frame`, reported only through its checker.
 fn checked_run(
     cells: &[&Cell],
     identities: &[&Identity],
     rules: &Rules,
-    var: &str,
-    bound: Bound,
-) -> Result<bool, ImpliedError> {
+    frame: &Frame,
+) -> Result<Checked, ImpliedError> {
     let rejected = |_| ImpliedError::Indeterminate("checker rejected".to_string());
-    let overrides = BTreeMap::from([(var.to_string(), bound)]);
-    let lin = match linearise(cells, identities, rules, &overrides)? {
+    let lin = match linearise(cells, identities, rules, frame)? {
         Lin::System(lin) => lin,
-        Lin::Residual { .. } => return Err(ImpliedError::Infeasible),
+        Lin::Residual { identity, residual } => {
+            let certificate = Certificate::Residual { identity, residual };
+            check_certificate_in(cells, identities, rules, frame, &certificate)
+                .map_err(rejected)?;
+            return Ok(Checked::Infeasible(certificate));
+        }
         Lin::Indeterminate(reason) => return Err(ImpliedError::Indeterminate(reason)),
     };
     match feasibility(&lin, MAX_PIVOTS).map_err(lp_implied)? {
         Feasibility::Feasible(values) => {
             let witness = witness_of(&lin, &values)
                 .map_err(|_| ImpliedError::Indeterminate(OVERFLOW.to_string()))?;
-            check_witness_in(cells, identities, rules, &overrides, &witness).map_err(rejected)?;
-            Ok(true)
+            check_witness_in(cells, identities, rules, frame, &witness).map_err(rejected)?;
+            Ok(Checked::Feasible)
         }
         Feasibility::Infeasible(multipliers) => {
             let certificate = Certificate::Farkas { multipliers };
-            check_certificate_in(cells, identities, rules, &overrides, &certificate)
+            check_certificate_in(cells, identities, rules, frame, &certificate)
                 .map_err(rejected)?;
-            Ok(false)
+            Ok(Checked::Infeasible(certificate))
         }
     }
+}
+
+/// Above this many cells, a component's correction search is greedy and labelled `InclusionMinimalOnly` (S3).
+pub const MAX_EXHAUSTIVE_CELLS: usize = 20;
+/// Checked runs one component's blame may spend before the exhaustive search gives way to the greedy one.
+pub const MAX_BLAME_RUNS: usize = 10_000;
+
+/// How far the correction search went (S3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CorrectionLabel {
+    /// Every set of the smallest size that makes the component feasible: a search over all of its cells, run to
+    /// completion.
+    Minimum,
+    /// One set that makes the component feasible and from which no cell can be dropped. A smaller one may exist.
+    InclusionMinimalOnly,
+}
+
+/// Cells whose printed values, disregarded together, make the component feasible, each with the range it can then
+/// take (with the whole set disregarded). A range of consistent values, never a corrected value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CorrectionSet {
+    pub cells: Vec<String>,
+    pub implied: Vec<(String, Result<Interval, ImpliedError>)>,
+}
+
+/// An inclusion-minimal infeasible set of printed cells. With every other cell's printed value disregarded the
+/// component is still infeasible, as `certificate` shows ([`check_conflict_set`]); disregarding any member as well
+/// makes it feasible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictSet {
+    pub cells: Vec<String>,
+    pub certificate: Certificate,
+}
+
+/// Which printed values an infeasible component's conflict rests on (S3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Blame {
+    pub conflicts: Vec<ConflictSet>,
+    pub corrections: Vec<CorrectionSet>,
+    pub label: CorrectionLabel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlameOutcome {
+    Blamed(Blame),
+    /// No claim: a cap, an overflow, or a checker rejection.
+    Indeterminate {
+        reason: String,
+    },
+}
+
+/// The blame of one component that [`solve`] finds infeasible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentBlame {
+    pub cells: Vec<String>,
+    pub identities: Vec<String>,
+    pub outcome: BlameOutcome,
+}
+
+/// Blames every component that [`solve`] finds infeasible; feasible and indeterminate components get none.
+///
+/// Identities are hard; printed values are soft, and "disregarding" a cell drops its box and any printed footing
+/// over it. Conflict sets come from a deletion filter (disregard each cell in turn while the rest stays infeasible),
+/// run once per identity with that identity's cells last. Correction sets: with at most [`MAX_EXHAUSTIVE_CELLS`]
+/// cells, every subset by size, skipping those that miss a known conflict set, until a size restores feasibility;
+/// all sets of that size are reported, labelled `Minimum`. Otherwise, or past [`MAX_BLAME_RUNS`], one greedy
+/// hitting set made inclusion-minimal, labelled `InclusionMinimalOnly`. Every feasibility decision is a checked run.
+pub fn blame(
+    cells: &[Cell],
+    identities: &[Identity],
+    rules: &Rules,
+) -> Result<Vec<ComponentBlame>, XfRefusal> {
+    blame_with_caps(
+        cells,
+        identities,
+        rules,
+        MAX_EXHAUSTIVE_CELLS,
+        MAX_BLAME_RUNS,
+    )
+}
+
+/// [`blame`] with explicit caps.
+pub fn blame_with_caps(
+    cells: &[Cell],
+    identities: &[Identity],
+    rules: &Rules,
+    exhaustive_cells: usize,
+    max_runs: usize,
+) -> Result<Vec<ComponentBlame>, XfRefusal> {
+    let p = prepare(cells, identities, rules)?;
+    let mut out = Vec::new();
+    for (cell_ix, id_ix) in &p.groups {
+        let comp_cells: Vec<&Cell> = cell_ix.iter().map(|&i| p.cells[i]).collect();
+        let comp_ids: Vec<&Identity> = id_ix.iter().map(|&i| p.identities[i]).collect();
+        if comp_cells.len() > MAX_VARIABLES
+            || !matches!(
+                decide(&comp_cells, &comp_ids, rules, MAX_PIVOTS)?,
+                Outcome::Infeasible { .. }
+            )
+        {
+            continue;
+        }
+        let mut search = Search {
+            cells: &comp_cells,
+            identities: &comp_ids,
+            rules,
+            runs: 0,
+            max_runs,
+        };
+        let outcome = match search.blame(exhaustive_cells) {
+            Ok(b) => BlameOutcome::Blamed(b),
+            Err(reason) => BlameOutcome::Indeterminate { reason },
+        };
+        out.push(ComponentBlame {
+            cells: comp_cells.iter().map(|c| c.locator.clone()).collect(),
+            identities: comp_ids.iter().map(|i| i.id.clone()).collect(),
+            outcome,
+        });
+    }
+    Ok(out)
+}
+
+/// One component's blame search: checked runs with some printed values disregarded.
+struct Search<'a> {
+    cells: &'a [&'a Cell],
+    identities: &'a [&'a Identity],
+    rules: &'a Rules,
+    runs: usize,
+    max_runs: usize,
+}
+
+impl<'a> Search<'a> {
+    fn run(&mut self, unprinted: &BTreeSet<&str>) -> Result<Checked, String> {
+        self.runs += 1;
+        let frame = Frame {
+            unprinted: unprinted.iter().map(|s| (*s).to_string()).collect(),
+            bounds: BTreeMap::new(),
+        };
+        checked_run(self.cells, self.identities, self.rules, &frame).map_err(|e| match e {
+            ImpliedError::Indeterminate(reason) => reason,
+            other => format!("{other:?}"),
+        })
+    }
+
+    fn feasible(&mut self, unprinted: &BTreeSet<&str>) -> Result<bool, String> {
+        Ok(matches!(self.run(unprinted)?, Checked::Feasible))
+    }
+
+    /// The deletion filter from `freed` (infeasible): disregards each cell of `order` in turn, keeping it
+    /// disregarded while the rest stays infeasible. The cells of `order` left are an inclusion-minimal infeasible
+    /// set, because disregarding more cells only relaxes the system.
+    fn filter(
+        &mut self,
+        mut freed: BTreeSet<&'a str>,
+        order: &[&'a str],
+    ) -> Result<Vec<&'a str>, String> {
+        for &c in order {
+            if freed.insert(c) && self.feasible(&freed)? {
+                freed.remove(c);
+            }
+        }
+        let mut kept: Vec<&str> = order
+            .iter()
+            .copied()
+            .filter(|c| !freed.contains(c))
+            .collect();
+        kept.sort_unstable();
+        Ok(kept)
+    }
+
+    /// Records `set` (sorted) with its certificate, unless already known.
+    fn record(&mut self, set: Vec<&str>, conflicts: &mut Vec<ConflictSet>) -> Result<(), String> {
+        if conflicts
+            .iter()
+            .any(|c| c.cells.iter().map(String::as_str).eq(set.iter().copied()))
+        {
+            return Ok(());
+        }
+        let others: BTreeSet<&str> = self
+            .cells
+            .iter()
+            .map(|c| c.locator.as_str())
+            .filter(|c| !set.contains(c))
+            .collect();
+        let Checked::Infeasible(certificate) = self.run(&others)? else {
+            return Err("checker rejected: a conflict set is feasible".to_string());
+        };
+        conflicts.push(ConflictSet {
+            cells: set.iter().map(|s| (*s).to_string()).collect(),
+            certificate,
+        });
+        Ok(())
+    }
+
+    fn blame(&mut self, exhaustive_cells: usize) -> Result<Blame, String> {
+        let all: Vec<&'a str> = self.cells.iter().map(|c| c.locator.as_str()).collect();
+        let mut conflicts = Vec::new();
+        for id in self.identities {
+            let own = id.locators();
+            let order: Vec<&str> = all
+                .iter()
+                .copied()
+                .filter(|c| !own.contains(c))
+                .chain(all.iter().copied().filter(|c| own.contains(c)))
+                .collect();
+            let set = self.filter(BTreeSet::new(), &order)?;
+            self.record(set, &mut conflicts)?;
+        }
+        let exhaustive = if all.len() <= exhaustive_cells {
+            self.exhaustive(&all, &conflicts)?
+        } else {
+            None
+        };
+        let (sets, label) = match exhaustive {
+            Some(sets) => (sets, CorrectionLabel::Minimum),
+            None => (
+                vec![self.greedy(&all, &mut conflicts)?],
+                CorrectionLabel::InclusionMinimalOnly,
+            ),
+        };
+        let corrections = sets
+            .into_iter()
+            .map(|set| {
+                let frame = Frame {
+                    unprinted: set.iter().map(|s| (*s).to_string()).collect(),
+                    bounds: BTreeMap::new(),
+                };
+                let implied = set
+                    .iter()
+                    .map(|c| {
+                        let range = implied_in(self.cells, self.identities, self.rules, c, &frame);
+                        ((*c).to_string(), range)
+                    })
+                    .collect();
+                CorrectionSet {
+                    cells: set.iter().map(|s| (*s).to_string()).collect(),
+                    implied,
+                }
+            })
+            .collect();
+        Ok(Blame {
+            conflicts,
+            corrections,
+            label,
+        })
+    }
+
+    /// Every smallest set that restores feasibility, or `None` past the run cap.
+    fn exhaustive(
+        &mut self,
+        all: &[&'a str],
+        conflicts: &[ConflictSet],
+    ) -> Result<Option<Vec<Vec<&'a str>>>, String> {
+        let n = all.len();
+        for size in 1..=n {
+            let mut found = Vec::new();
+            let mut idx: Vec<usize> = (0..size).collect();
+            loop {
+                let set: BTreeSet<&str> = idx.iter().map(|&i| all[i]).collect();
+                // A set that misses a conflict set leaves it infeasible.
+                let hits = conflicts
+                    .iter()
+                    .all(|c| c.cells.iter().any(|x| set.contains(x.as_str())));
+                if hits {
+                    if self.runs >= self.max_runs {
+                        return Ok(None);
+                    }
+                    if self.feasible(&set)? {
+                        found.push(set.into_iter().collect());
+                    }
+                }
+                if !next_combination(&mut idx, n) {
+                    break;
+                }
+            }
+            if !found.is_empty() {
+                return Ok(Some(found));
+            }
+        }
+        Err("disregarding every printed value leaves the component infeasible".to_string())
+    }
+
+    /// One inclusion-minimal set that restores feasibility: hit the known conflict sets greedily, find another
+    /// conflict set when that is not enough, and finally drop every cell the set does not need.
+    fn greedy(
+        &mut self,
+        all: &[&'a str],
+        conflicts: &mut Vec<ConflictSet>,
+    ) -> Result<Vec<&'a str>, String> {
+        let mut set: BTreeSet<&'a str> = BTreeSet::new();
+        loop {
+            loop {
+                let unhit: Vec<&ConflictSet> = conflicts
+                    .iter()
+                    .filter(|c| !c.cells.iter().any(|x| set.contains(x.as_str())))
+                    .collect();
+                if unhit.is_empty() {
+                    break;
+                }
+                let in_unhit = |c: &str| {
+                    unhit
+                        .iter()
+                        .filter(|u| u.cells.iter().any(|x| x == c))
+                        .count()
+                };
+                // The cell in most unhit sets; ties go to the first locator.
+                let Some(best) = all
+                    .iter()
+                    .copied()
+                    .filter(|c| !set.contains(c))
+                    .max_by_key(|c| (in_unhit(c), std::cmp::Reverse(*c)))
+                else {
+                    return Err("no cell hits a conflict set".to_string());
+                };
+                set.insert(best);
+            }
+            if self.feasible(&set)? {
+                break;
+            }
+            let order: Vec<&str> = all.iter().copied().filter(|c| !set.contains(c)).collect();
+            let found = self.filter(set.clone(), &order)?;
+            self.record(found, conflicts)?;
+        }
+        for c in set.clone() {
+            set.remove(c);
+            if !self.feasible(&set)? {
+                set.insert(c);
+            }
+        }
+        Ok(set.into_iter().collect())
+    }
+}
+
+/// Advances `idx` (strictly increasing indices below `n`) to the next combination in lexicographic order.
+fn next_combination(idx: &mut [usize], n: usize) -> bool {
+    let k = idx.len();
+    for i in (0..k).rev() {
+        if idx[i] < n - k + i {
+            idx[i] += 1;
+            let base = idx[i];
+            for (off, slot) in idx[i + 1..].iter_mut().enumerate() {
+                *slot = base + off + 1;
+            }
+            return true;
+        }
+    }
+    false
+}
+
+/// Re-checks a conflict set: its certificate, with every other cell of its component disregarded.
+pub fn check_conflict_set(
+    cells: &[Cell],
+    identities: &[Identity],
+    rules: &Rules,
+    set: &ConflictSet,
+) -> Result<CertificateRange, CheckFailure> {
+    let p = prepare(cells, identities, rules).map_err(|e| CheckFailure(e.to_string()))?;
+    let Some(first) = set.cells.first() else {
+        return fail("an empty conflict set");
+    };
+    let Some(pos) = p.cells.iter().position(|c| c.locator == *first) else {
+        return fail(format!("{first} is not a given cell"));
+    };
+    let Some((cell_ix, id_ix)) = p.groups.iter().find(|(c, _)| c.contains(&pos)) else {
+        return fail(format!("{first} is in no component"));
+    };
+    let comp_cells: Vec<&Cell> = cell_ix.iter().map(|&i| p.cells[i]).collect();
+    let comp_ids: Vec<&Identity> = id_ix.iter().map(|&i| p.identities[i]).collect();
+    for loc in &set.cells {
+        if !comp_cells.iter().any(|c| c.locator == *loc) {
+            return fail(format!("{loc} is not in the component of {first}"));
+        }
+    }
+    let frame = Frame {
+        unprinted: comp_cells
+            .iter()
+            .filter(|c| !set.cells.contains(&c.locator))
+            .map(|c| c.locator.clone())
+            .collect(),
+        bounds: BTreeMap::new(),
+    };
+    check_certificate_in(&comp_cells, &comp_ids, rules, &frame, &set.certificate)
+}
+
+/// A cell that prints a placeholder (such as `—`) where a number could stand (S3, E116).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placeholder {
+    pub locator: String,
+    pub sha256: String,
+    /// The placeholder exactly as stored.
+    pub token: String,
+}
+
+/// How far a signature goes: never further than a hypothesis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureLabel {
+    Hypothesis,
+}
+
+/// Another cell that prints exactly the located cell's value: a pattern worth checking, never the cause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signature {
+    pub label: SignatureLabel,
+    pub equal_to: String,
+}
+
+/// A conflict outside the linear system: an `Equal` identity between a printed number and a placeholder. It is
+/// located on the number, the one side with a printed value to disregard; the placeholder has no box.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresenceConflict {
+    pub identity: String,
+    pub located: String,
+    pub placeholder: String,
+    pub signatures: Vec<Signature>,
+}
+
+/// Every presence conflict among `identities` (sorted by identity id). An `Equal` identity between two placeholders
+/// holds; a placeholder in any other identity is refused. Each conflict's signatures are the other given cells that
+/// print exactly the located value, labelled [`SignatureLabel::Hypothesis`].
+pub fn presence_conflicts(
+    cells: &[Cell],
+    placeholders: &[Placeholder],
+    identities: &[Identity],
+) -> Result<Vec<PresenceConflict>, XfRefusal> {
+    let mut known: BTreeSet<&str> = BTreeSet::new();
+    for loc in cells
+        .iter()
+        .map(|c| c.locator.as_str())
+        .chain(placeholders.iter().map(|p| p.locator.as_str()))
+    {
+        if !known.insert(loc) {
+            return Err(XfRefusal::DuplicateCell {
+                locator: loc.to_string(),
+            });
+        }
+    }
+    let is_placeholder = |loc: &str| placeholders.iter().any(|p| p.locator == loc);
+    let mut identities: Vec<&Identity> = identities.iter().collect();
+    identities.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut out = Vec::new();
+    for id in identities {
+        for loc in id.locators() {
+            if !known.contains(loc) {
+                return Err(XfRefusal::UnknownCell {
+                    identity: id.id.clone(),
+                    locator: loc.to_string(),
+                });
+            }
+        }
+        let Some(placeholder) = id.locators().into_iter().find(|l| is_placeholder(l)) else {
+            continue;
+        };
+        let IdentityKind::Equal { a, b } = &id.kind else {
+            return Err(XfRefusal::PlaceholderInIdentity {
+                identity: id.id.clone(),
+                locator: placeholder.to_string(),
+            });
+        };
+        let (number, placeholder) = match (is_placeholder(a), is_placeholder(b)) {
+            (true, true) => continue,
+            (true, false) => (b, a),
+            _ => (a, b),
+        };
+        let Some(located) = cells.iter().find(|c| c.locator == *number) else {
+            continue;
+        };
+        let mut signatures: Vec<Signature> = cells
+            .iter()
+            .filter(|c| c.locator != located.locator && c.printed == located.printed)
+            .map(|c| Signature {
+                label: SignatureLabel::Hypothesis,
+                equal_to: c.locator.clone(),
+            })
+            .collect();
+        signatures.sort_by(|x, y| x.equal_to.cmp(&y.equal_to));
+        out.push(PresenceConflict {
+            identity: id.id.clone(),
+            located: located.locator.clone(),
+            placeholder: placeholder.clone(),
+            signatures,
+        });
+    }
+    Ok(out)
 }
 
 fn put_rat(enc: &mut Encoder, q: Rat) {
@@ -3353,5 +3955,379 @@ mod tests {
             (implied.lo, implied.hi),
             (q(133_000_000, 3053), q(5_000_000, 113))
         );
+    }
+
+    /// A checked run with the printed values of `unprinted` disregarded.
+    fn feasible_without(cells: &[Cell], ids: &[Identity], r: &Rules, unprinted: &[&str]) -> bool {
+        let cells: Vec<&Cell> = cells.iter().collect();
+        let ids: Vec<&Identity> = ids.iter().collect();
+        let frame = Frame {
+            unprinted: unprinted.iter().map(|s| (*s).to_string()).collect(),
+            bounds: BTreeMap::new(),
+        };
+        matches!(
+            checked_run(&cells, &ids, r, &frame).expect("a checked run"),
+            Checked::Feasible
+        )
+    }
+
+    fn blamed(outcome: &BlameOutcome) -> &Blame {
+        match outcome {
+            BlameOutcome::Blamed(b) => b,
+            other => panic!("not blamed: {other:?}"),
+        }
+    }
+
+    /// Every subset of `all` of size `k`.
+    fn subsets<'a>(all: &[&'a str], k: usize) -> Vec<Vec<&'a str>> {
+        let mut out = Vec::new();
+        let mut idx: Vec<usize> = (0..k).collect();
+        if k > all.len() {
+            return out;
+        }
+        loop {
+            out.push(idx.iter().map(|&i| all[i]).collect());
+            if !next_combination(&mut idx, all.len()) {
+                return out;
+            }
+        }
+    }
+
+    /// Blame on seeded perturbed tables (a sum of 2–4 lines, a 2×2 grid with row, column and half-year totals,
+    /// a share), each table one component, checked against the definitions by brute force:
+    /// - every conflict set is certified ([`check_conflict_set`]), and disregarding any member makes it feasible;
+    /// - every correction set restores feasibility, and dropping any member undoes that;
+    /// - under `Minimum`, no smaller subset restores feasibility, and the reported sets are every subset of their
+    ///   size that does. The brute force tries all subsets, without the search's hitting-set pruning.
+    #[test]
+    fn prop_deletion_filter_set_is_inclusion_minimal() {
+        let mut rng = PhiloxStream::new(RngKey {
+            seed_root: 340,
+            partition: 4,
+            domain: 0,
+            var_group: 0,
+            realization: 0,
+            brick: 0,
+        });
+        let mut next = |n: u64| (rng.next_u64() % n) as i128;
+        let r = rules(Convention::Closed);
+        let (tables, mut blamed_tables, mut conflicts, mut multi_conflict) = (400, 0, 0, 0);
+        for t in 0..tables {
+            let kind = next(3);
+            let k_lines = 2 + next(3) as usize;
+            let mut draw = || next(201) - 100;
+            let mut truth: Vec<(String, i128)> = Vec::new();
+            let mut ids: Vec<Identity> = Vec::new();
+            match kind {
+                0 => {
+                    let lines: Vec<i128> = (0..k_lines).map(|_| draw()).collect();
+                    let names: Vec<String> = (0..k_lines).map(|i| format!("l{i}")).collect();
+                    for (n, x) in names.iter().zip(&lines) {
+                        truth.push((n.clone(), *x));
+                    }
+                    truth.push(("total".to_string(), lines.iter().sum()));
+                    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+                    ids.push(sum("rows", "total", &refs));
+                }
+                1 => {
+                    let (a1, a2, b1, b2) = (draw(), draw(), draw(), draw());
+                    for (name, x) in [
+                        ("aQ1", a1),
+                        ("aQ2", a2),
+                        ("bQ1", b1),
+                        ("bQ2", b2),
+                        ("aH1", a1 + a2),
+                        ("bH1", b1 + b2),
+                        ("tQ1", a1 + b1),
+                        ("tQ2", a2 + b2),
+                        ("tH1", a1 + a2 + b1 + b2),
+                    ] {
+                        truth.push((name.to_string(), x));
+                    }
+                    ids.push(sum("aH1", "aH1", &["aQ1", "aQ2"]));
+                    ids.push(sum("bH1", "bH1", &["bQ1", "bQ2"]));
+                    ids.push(sum("tQ1", "tQ1", &["aQ1", "bQ1"]));
+                    ids.push(sum("tQ2", "tQ2", &["aQ2", "bQ2"]));
+                    ids.push(sum("tH1", "tH1", &["aH1", "bH1"]));
+                }
+                _ => {
+                    // 100% and an attributable 50% share, in two quarters and the half year.
+                    let (s1, s2) = (2 * draw(), 2 * draw());
+                    for (name, x) in [
+                        ("q1", s1),
+                        ("q2", s2),
+                        ("h1", s1 + s2),
+                        ("q1a", s1 / 2),
+                        ("q2a", s2 / 2),
+                    ] {
+                        truth.push((name.to_string(), x));
+                    }
+                    ids.push(sum("h1", "h1", &["q1", "q2"]));
+                    for (id, target, source) in [("s1", "q1a", "q1"), ("s2", "q2a", "q2")] {
+                        ids.push(Identity {
+                            id: id.to_string(),
+                            family: "share".to_string(),
+                            closure: Closure::Definitional,
+                            kind: IdentityKind::Scale {
+                                target: target.to_string(),
+                                source: source.to_string(),
+                                factor: q(1, 2),
+                            },
+                        });
+                    }
+                }
+            }
+            // Misprint one or two cells by 2 to 5 steps.
+            let misprints = 1 + next(2) as usize;
+            for _ in 0..misprints {
+                let i = next(truth.len() as u64) as usize;
+                let shift = (2 + next(4)) * if next(2) == 0 { 1 } else { -1 };
+                truth[i].1 += shift;
+            }
+            let cells: Vec<Cell> = truth
+                .iter()
+                .map(|(name, x)| cell(name, int(*x), int(1)))
+                .collect();
+            let all: Vec<&str> = cells.iter().map(|c| c.locator.as_str()).collect();
+            let found = blame(&cells, &ids, &r).expect("blames");
+            let solved_infeasible = solve(&cells, &ids, &r)
+                .expect("solves")
+                .iter()
+                .any(|c| verdict(&c.outcome) == "infeasible");
+            assert_eq!(found.len(), usize::from(solved_infeasible), "table {t}");
+            let Some(component) = found.first() else {
+                continue;
+            };
+            blamed_tables += 1;
+            let b = blamed(&component.outcome);
+            assert_eq!(b.label, CorrectionLabel::Minimum, "table {t}");
+            assert!(!b.conflicts.is_empty(), "table {t}");
+            conflicts += b.conflicts.len();
+            multi_conflict += usize::from(b.conflicts.len() > 1);
+            for set in &b.conflicts {
+                assert!(
+                    check_conflict_set(&cells, &ids, &r, set).is_ok(),
+                    "table {t}: {set:?}"
+                );
+                let others: Vec<&str> = all
+                    .iter()
+                    .copied()
+                    .filter(|c| !set.cells.iter().any(|s| s == c))
+                    .collect();
+                assert!(!feasible_without(&cells, &ids, &r, &others), "table {t}");
+                for m in &set.cells {
+                    let mut freed = others.clone();
+                    freed.push(m);
+                    assert!(
+                        feasible_without(&cells, &ids, &r, &freed),
+                        "table {t}: {m} is not needed in {:?}",
+                        set.cells
+                    );
+                }
+            }
+            let size = b.corrections[0].cells.len();
+            for set in &b.corrections {
+                assert_eq!(set.cells.len(), size, "table {t}");
+                let cells_of: Vec<&str> = set.cells.iter().map(String::as_str).collect();
+                assert!(feasible_without(&cells, &ids, &r, &cells_of), "table {t}");
+                for m in &cells_of {
+                    let rest: Vec<&str> = cells_of.iter().copied().filter(|c| c != m).collect();
+                    assert!(!feasible_without(&cells, &ids, &r, &rest), "table {t}");
+                }
+            }
+            for k in 1..size {
+                for s in subsets(&all, k) {
+                    assert!(
+                        !feasible_without(&cells, &ids, &r, &s),
+                        "table {t}: {s:?} is smaller"
+                    );
+                }
+            }
+            let mut every: Vec<Vec<String>> = subsets(&all, size)
+                .into_iter()
+                .filter(|s| feasible_without(&cells, &ids, &r, s))
+                .map(|s| {
+                    let mut s: Vec<String> = s.iter().map(|x| (*x).to_string()).collect();
+                    s.sort();
+                    s
+                })
+                .collect();
+            every.sort();
+            let mut reported: Vec<Vec<String>> =
+                b.corrections.iter().map(|c| c.cells.clone()).collect();
+            reported.sort();
+            assert_eq!(reported, every, "table {t}");
+        }
+        println!(
+            "{{\"test\":\"prop_deletion_filter\",\"tables\":{tables},\"seed\":340,\"blamed\":{blamed_tables},\
+             \"conflict_sets\":{conflicts},\"multi_conflict\":{multi_conflict},\"violations\":0}}"
+        );
+        assert!(blamed_tables > tables / 2 && multi_conflict > tables / 20);
+    }
+
+    #[test]
+    fn test_correction_label_minimum_only_when_exhaustive() {
+        // A chain c00 = c01 = … = c20, every cell printed 1 but c20 printed 5: 21 candidate cells.
+        let chain = |n: usize| -> (Vec<Cell>, Vec<Identity>) {
+            let cells = (0..n)
+                .map(|i| {
+                    cell(
+                        &format!("c{i:02}"),
+                        int(if i + 1 == n { 5 } else { 1 }),
+                        int(1),
+                    )
+                })
+                .collect();
+            let ids = (1..n)
+                .map(|i| {
+                    equal(
+                        &format!("e{i:02}"),
+                        &format!("c{:02}", i - 1),
+                        &format!("c{i:02}"),
+                    )
+                })
+                .collect();
+            (cells, ids)
+        };
+        let r = Rules::new(Convention::Closed);
+        let (cells, ids) = chain(21);
+        let only_blame = |found: Vec<ComponentBlame>| {
+            assert_eq!(found.len(), 1);
+            blamed(&found[0].outcome).clone()
+        };
+        let greedy = only_blame(blame(&cells, &ids, &r).expect("blames"));
+        assert_eq!(greedy.label, CorrectionLabel::InclusionMinimalOnly);
+        assert_eq!(greedy.corrections.len(), 1);
+        assert_eq!(greedy.corrections[0].cells, vec!["c20".to_string()]);
+        assert_eq!(
+            greedy.corrections[0].implied,
+            vec![(
+                "c20".to_string(),
+                Ok(Interval {
+                    lo: q(1, 2),
+                    hi: q(3, 2),
+                    lo_strict: false,
+                    hi_strict: false
+                })
+            )]
+        );
+        // Every conflict pairs c20 with one other cell. The seeded filter finds 19 of the 20: c00 is disregarded
+        // first in every seeded order, so {c00, c20} is never kept. The correction search does not need them all.
+        assert_eq!(greedy.conflicts.len(), 19);
+        assert!(
+            greedy
+                .conflicts
+                .iter()
+                .all(|c| c.cells.len() == 2 && c.cells[1] == "c20")
+        );
+        // The same 21 cells searched exhaustively: the same set, now labelled minimum.
+        let exhaustive =
+            only_blame(blame_with_caps(&cells, &ids, &r, 21, MAX_BLAME_RUNS).expect("blames"));
+        assert_eq!(exhaustive.label, CorrectionLabel::Minimum);
+        assert_eq!(exhaustive.corrections, greedy.corrections);
+        // Twenty cells, but the run cap reached before the search completes: not minimum.
+        let (cells, ids) = chain(20);
+        let capped = only_blame(blame_with_caps(&cells, &ids, &r, 20, 1).expect("blames"));
+        assert_eq!(capped.label, CorrectionLabel::InclusionMinimalOnly);
+        let full = only_blame(blame(&cells, &ids, &r).expect("blames"));
+        assert_eq!(full.label, CorrectionLabel::Minimum);
+    }
+
+    /// Disregarding a cell of a component-sum footing drops the whole printed footing (the cell's printed value is
+    /// not re-derived from it), so each footing cell alone is a minimum correction: the total then ranges over
+    /// the sum of the lines, while a line is unbounded.
+    #[test]
+    fn test_component_sum_blame_disregards_the_footing() {
+        let cells = vec![
+            cell("l1", int(1), int(1)),
+            cell("l2", int(1), int(1)),
+            cell("t", int(3), int(1)),
+        ];
+        let ids = vec![sum("foot", "t", &["l1", "l2"])];
+        let r = component_sum(Convention::Closed);
+        let found = blame(&cells, &ids, &r).expect("blames");
+        let b = blamed(&found[0].outcome);
+        assert_eq!(b.conflicts.len(), 1);
+        assert_eq!(b.conflicts[0].cells, vec!["l1", "l2", "t"]);
+        assert_eq!(
+            b.conflicts[0].certificate,
+            Certificate::Residual {
+                identity: "foot".to_string(),
+                residual: int(1)
+            }
+        );
+        assert!(check_conflict_set(&cells, &ids, &r, &b.conflicts[0]).is_ok());
+        assert_eq!(b.label, CorrectionLabel::Minimum);
+        let sets: Vec<&Vec<String>> = b.corrections.iter().map(|c| &c.cells).collect();
+        assert_eq!(
+            sets,
+            [
+                &vec!["l1".to_string()],
+                &vec!["l2".to_string()],
+                &vec!["t".to_string()]
+            ]
+        );
+        assert_eq!(
+            b.corrections[2].implied,
+            vec![(
+                "t".to_string(),
+                Ok(Interval {
+                    lo: int(1),
+                    hi: int(3),
+                    lo_strict: false,
+                    hi_strict: false
+                })
+            )]
+        );
+        assert_eq!(b.corrections[0].implied[0].1, Err(ImpliedError::Unbounded));
+        // A feasible problem has no blame.
+        let fine = vec![
+            cell("l1", int(1), int(1)),
+            cell("l2", int(1), int(1)),
+            cell("t", int(2), int(1)),
+        ];
+        assert!(blame(&fine, &ids, &r).expect("blames").is_empty());
+    }
+
+    #[test]
+    fn test_presence_conflicts_refuse_and_locate() {
+        let cells = vec![cell("x", int(7), int(1)), cell("y", int(7), int(1))];
+        let dash = |loc: &str| Placeholder {
+            locator: loc.to_string(),
+            sha256: "0".repeat(64),
+            token: "—".to_string(),
+        };
+        let found = presence_conflicts(&cells, &[dash("p")], &[equal("eq", "p", "x")]).expect("ok");
+        assert_eq!(
+            found,
+            vec![PresenceConflict {
+                identity: "eq".to_string(),
+                located: "x".to_string(),
+                placeholder: "p".to_string(),
+                signatures: vec![Signature {
+                    label: SignatureLabel::Hypothesis,
+                    equal_to: "y".to_string()
+                }],
+            }]
+        );
+        // Two placeholders agree; a placeholder in a sum is refused; an unknown locator is refused.
+        let both = [dash("p"), dash("p2")];
+        assert!(
+            presence_conflicts(&cells, &both, &[equal("eq", "p", "p2")])
+                .expect("ok")
+                .is_empty()
+        );
+        assert!(matches!(
+            presence_conflicts(&cells, &both, &[sum("s", "x", &["p", "y"])]),
+            Err(XfRefusal::PlaceholderInIdentity { .. })
+        ));
+        assert!(matches!(
+            presence_conflicts(&cells, &both, &[equal("eq", "p", "z")]),
+            Err(XfRefusal::UnknownCell { .. })
+        ));
+        assert!(matches!(
+            presence_conflicts(&cells, &[dash("x")], &[]),
+            Err(XfRefusal::DuplicateCell { .. })
+        ));
     }
 }

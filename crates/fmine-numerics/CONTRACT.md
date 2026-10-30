@@ -42,13 +42,24 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
     open ends, each end re-decided by checked runs; `ImpliedError::{Refused, Infeasible, Unbounded,
     Indeterminate}`. A rate gets its ratio's exact range (Charnes–Cooper over the closure) cut by its own
     box; a denominator without a finite range of one sign gives `Indeterminate`.
+  - `blame` and `blame_with_caps` (bd-4wvl.3, BD-340.S3), for each component `solve` finds infeasible:
+    - `ConflictSet`s: inclusion-minimal infeasible sets of printed cells, each with a certificate that
+      `check_conflict_set` re-checks;
+    - `CorrectionSet`s: cells whose printed values, disregarded together, restore feasibility, each with its
+      implied range (never a corrected value);
+    - the label is `Minimum` only after an exhaustive search over at most `MAX_EXHAUSTIVE_CELLS` (20) cells
+      within `MAX_BLAME_RUNS`; otherwise `InclusionMinimalOnly`;
+    - disregarding a cell drops its box and any component-sum footing over it.
+  - `presence_conflicts`: an `Equal` identity between a number and a `Placeholder` is a conflict located on
+    the number. Other cells printing the same value are `Signature`s labelled `Hypothesis`.
   - `certificate_digest`: hex BLAKE3 of an `XFCT` v2 frame (v2 binds the constructions), independent of
     input order.
   - Input is refused with `XfRefusal`:
     - a non-positive step, or an off-grid half-even value;
     - a duplicate cell or identity, or an unknown cell or variable;
     - bad signs, a degenerate row, or a ratio row requested;
-    - an undeclared construction, or a denominator interval that contains zero.
+    - an undeclared construction, or a denominator interval that contains zero;
+    - a placeholder in an identity other than `Equal` (`presence_conflicts`).
   - Caps: 256 cells per component (`MAX_VARIABLES`) and 10⁴ pivots per run (`MAX_PIVOTS`). A cap or an
     overflow gives `Indeterminate`.
 
