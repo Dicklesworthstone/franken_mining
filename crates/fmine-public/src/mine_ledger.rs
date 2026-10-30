@@ -1,5 +1,6 @@
-//! The Mine Statistics identity ledger (BD-331.S4, bd-prmn.4): three of the plan's Mine Stats families, anchored on
-//! the `QTD`/`YTD` summary sheets and decided by the exact kernel (`fmine_numerics::exact_feas`).
+//! The Mine Statistics identity ledger (BD-331.S4, bd-prmn.4): five of the plan's Mine Stats families, anchored on
+//! the `QTD`/`YTD` summary sheets and decided in exact arithmetic (the kernel `fmine_numerics::exact_feas`, or
+//! its closed form for a lone sum).
 //!
 //! - **Ownership.** Attributable production = s × 100%-basis production, per site row and column group (the
 //!   release's own year, or the prior-year comparative). s is the share the row's label prints. A registered
@@ -17,20 +18,33 @@
 //!   sheets of one metal, or a row label twice in one block, is refused. Two numbers are one equal identity
 //!   over their boxes; the nil token `—` against a number reads as number = 0 and is decided alone
 //!   (`nil_token`, E116); `n/a` against a number is refused.
+//! - **Sites to region** (family 3). A region row = Σ its registered members in the release's map, on the three
+//!   gold flow columns. A member's row is found by its subject or by its registered Mine Stats label ("Nevada Gold
+//!   Mines LLC"); a member printed under both is refused at the row printed first. A region row with no member in
+//!   the release's map is refused (`region_not_in_map`).
+//! - **Region to total** (family 4). `Total Gold` = Σ the regions of the release's map (not every region row
+//!   printed); `Total Copper` = Σ the copper block's site rows, in row order.
+//!
+//!   In both, the nil token is exactly 0 (`nil_token`); any other placeholder beside a number is refused. A sum
+//!   is decided alone by |Σ parts − total| ≤ Σ half-steps over every operand, which is the kernel's answer for
+//!   one sum with every box rounded once (a test checks the two agree). Sums are never posed jointly: a sum links
+//!   every site of a block, so posing them would merge the other families' components past the exhaustive
+//!   correction search. Not yet posed: the Nevada Gold Mines LLC sub-sum (Carlin, Cortez, Turquoise Ridge,
+//!   Phoenix, Long Canyon), which needs a registry table of its own.
 //!
 //! Exclusions by name come first: a subject whose registered status is `withheld` for the whole period of an
-//! operand (Loulo-Gounkoto Q1–Q3 2025, E818), and a region whose registered members differ between the
-//! operands' releases (the Q4 2025 map change). Then, in order: an operand row the release does not print, a
-//! blank operand, all operands placeholders (not published), some placeholders. An instance whose operands are
-//! all numbers is decided alone: each value as displayed stands for the closed box [v − step/2, v + step/2]
-//! (rounded once, the step from the displayed decimals), the identity holds exactly between true values, and a
-//! feasible run is (i), an infeasible one (iii).
+//! operand (Loulo-Gounkoto Q1–Q3 2025, E818; for a region sum, a member's), and a region whose registered
+//! members differ between the operands' releases (the Q4 2025 map change). Then, in order: an operand row the
+//! release does not print, a blank operand, all operands placeholders (not published), some placeholders. An
+//! instance whose operands are all numbers is decided alone: each value as displayed stands for the closed box
+//! [v − step/2, v + step/2] (rounded once, the step from the displayed decimals), the identity holds exactly
+//! between true values, and a feasible run is (i), an infeasible one (iii).
 //!
-//! Every decided instance is then posed jointly. Instances that share a cell form a component: a 100% cell is
-//! in its ownership identity and in quarter sums, and a cumulative is the total of one sum and an operand of the
-//! next. For each infeasible component the kernel's blame gives every minimum correction set, with the range
-//! each of its cells can take, never a corrected value. A component can be infeasible though each of its
-//! identities is consistent alone (`joint_only`); its instances stay (i).
+//! Every decided instance but the sums is then posed jointly. Instances that share a cell form a component: a
+//! 100% cell is in its ownership identity and in quarter sums, and a cumulative is the total of one sum and an
+//! operand of the next. For each infeasible component the kernel's blame gives every minimum correction set, with
+//! the range each of its cells can take, never a corrected value. A component can be infeasible though each of
+//! its identities is consistent alone (`joint_only`); its instances stay (i).
 //!
 //! A cell the Mine Stats reader refused is not in its values, so an instance that needs it is refused as a
 //! missing row; the reader's refusals are reported with the read.
@@ -46,7 +60,7 @@ use fmine_registry::sources::{MineStatsLabelAlias, PrintedShareCorrection};
 
 use crate::key::{Period, PeriodKind, StatusKind, SubjectStatus};
 use crate::mine_stats::{MineStatsCell, MineStatsRead, MineStatsValue, View};
-use crate::sources::RegionMemberRow;
+use crate::sources::{RegionMemberRow, RegisteredShare};
 
 /// The flow columns of the summary sheets per metal: 100% production, attributable production, attributable
 /// sold (field ids of the Mine Stats reader).
@@ -111,22 +125,35 @@ pub enum Metal {
     Copper,
 }
 
+/// The families, declared in the order of their names, which is the order instances are sorted in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Family {
     Ownership,
     QuarterSum,
+    /// Family 4: `Total Gold` = Σ the release's regions; `Total Copper` = Σ the copper sites.
+    RegionToTotal,
     SiteSheet,
+    /// Family 3: a region = Σ its registered members in the release's map.
+    SitesToRegion,
 }
 
 impl Family {
-    pub const ALL: [Self; 3] = [Self::Ownership, Self::QuarterSum, Self::SiteSheet];
+    pub const ALL: [Self; 5] = [
+        Self::Ownership,
+        Self::QuarterSum,
+        Self::RegionToTotal,
+        Self::SiteSheet,
+        Self::SitesToRegion,
+    ];
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Ownership => "ownership",
             Self::QuarterSum => QUARTER_SUM,
+            Self::RegionToTotal => "region_to_total",
             Self::SiteSheet => "site_sheet",
+            Self::SitesToRegion => "sites_to_region",
         }
     }
 }
@@ -159,6 +186,8 @@ pub enum Reason {
     },
     /// Excluded by name: a region whose registered members differ between the operands' releases.
     CrossMapRegion,
+    /// A region row whose region has no registered member in the release's map.
+    RegionNotInMap,
     /// An operand's release does not print a row for the subject.
     OperandRowMissing,
     /// An operand's release is not among the files read.
@@ -179,6 +208,7 @@ impl Reason {
             Self::ShareUnprinted => "share_unprinted",
             Self::Withheld { .. } => "withheld",
             Self::CrossMapRegion => "cross_map_region",
+            Self::RegionNotInMap => "region_not_in_map",
             Self::OperandRowMissing => "operand_row_missing",
             Self::ReleaseMissing => "release_missing",
             Self::BlankOperand => "blank_operand",
@@ -295,6 +325,9 @@ pub struct LedgerRules<'a> {
     pub statuses: &'a [SubjectStatus],
     pub corrections: &'a [PrintedShareCorrection],
     pub aliases: &'a [MineStatsLabelAlias],
+    /// The registered shares, for the label a subject prints under in Mine Stats ("Nevada Gold Mines LLC" for
+    /// the subject "Nevada Gold Mines"); the sum families find a member's row by it.
+    pub labels: &'a [RegisteredShare],
 }
 
 impl LedgerRules<'_> {
@@ -304,6 +337,34 @@ impl LedgerRules<'_> {
             .filter(|m| m.region == region && m.holds_for(release))
             .map(|m| m.member.clone())
             .collect()
+    }
+
+    /// `region`'s members in the release's map, in registry row order.
+    fn members_in_order(&self, region: &str, release: &str) -> Vec<String> {
+        self.region_members
+            .iter()
+            .filter(|m| m.region == region && m.holds_for(release))
+            .map(|m| m.member.clone())
+            .collect()
+    }
+
+    /// The regions of the release's map, in the order of their first registry row.
+    fn map_regions(&self, release: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for m in self.region_members.iter().filter(|m| m.holds_for(release)) {
+            if !out.contains(&m.region) {
+                out.push(m.region.clone());
+            }
+        }
+        out
+    }
+
+    /// The Mine Stats label `subject` prints under, where it is registered and differs from the subject.
+    fn label_of(&self, subject: &str) -> Option<&str> {
+        self.labels
+            .iter()
+            .find(|s| s.subject == subject && s.label != subject)
+            .map(|s| s.label.as_str())
     }
 
     fn withheld(&self, subject: &str, period: &Period) -> Option<String> {
@@ -963,6 +1024,208 @@ fn site_sheet(
     }
 }
 
+/// The row of a locator `release:sheet!A1`; 0 when it does not parse (locators come from the reader, so it does).
+fn row_of(locator: &str) -> u32 {
+    locator
+        .rsplit_once('!')
+        .and_then(|(_, cell)| parse_a1_ref(cell))
+        .map_or(0, |(row, _)| row)
+}
+
+/// A sum operand's row in a block: found once, absent, or found under both the subject and its registered
+/// label (the cell of the lower row number).
+enum Found<'s> {
+    One(&'s Slot),
+    Missing,
+    Both(&'s Slot),
+}
+
+fn find_member<'s>(
+    rows: &BTreeMap<&str, &'s Slot>,
+    rules: &LedgerRules<'_>,
+    subject: &str,
+) -> Found<'s> {
+    let mut hits: Vec<&Slot> = [Some(subject), rules.label_of(subject)]
+        .into_iter()
+        .flatten()
+        .filter_map(|name| rows.get(name).copied())
+        .collect();
+    hits.sort_by_key(|s| row_of(&s.locator));
+    match hits.as_slice() {
+        [] => Found::Missing,
+        [one] => Found::One(one),
+        [first, ..] => Found::Both(first),
+    }
+}
+
+/// Whether Σ parts = total holds for true values in the operands' closed boxes, the nil token being exactly 0:
+/// |Σ parts − total| ≤ Σ step/2 over every operand. `None` on overflow. Every operand is a number or the nil
+/// token.
+fn sum_holds(parts: &[&Slot], total: &Slot) -> Option<bool> {
+    let two = Rat::from_integer(2);
+    let (mut gap, mut slack) = (Rat::from_integer(0), Rat::from_integer(0));
+    for (k, o) in parts.iter().chain(std::iter::once(&total)).enumerate() {
+        let (value, half) = match o.operand {
+            Operand::Number { value, step } => (value, step.checked_div(two).ok()?),
+            Operand::Placeholder(Mark::Nil) => (Rat::from_integer(0), Rat::from_integer(0)),
+            _ => return None,
+        };
+        gap = if k < parts.len() {
+            gap.checked_add(value).ok()?
+        } else {
+            gap.checked_sub(value).ok()?
+        };
+        slack = slack.checked_add(half).ok()?;
+    }
+    let gap = if gap.signum() < 0 {
+        gap.checked_neg().ok()?
+    } else {
+        gap
+    };
+    Some(gap.checked_cmp(slack).ok()? != std::cmp::Ordering::Greater)
+}
+
+/// Families 3 and 4 on each summary sheet, flow field and column group: a region's value is the sum of its
+/// registered members in the release's map (`sites_to_region`); `Total Gold` is the sum of the map's regions and
+/// `Total Copper` the sum of the copper block's sites (`region_to_total`). A member's row is found by its subject
+/// or by its registered Mine Stats label. Each instance is decided alone, in exact arithmetic, and never posed
+/// jointly: a sum links every site of a block, so posing the sums would merge the other families' components
+/// into ones far past the exhaustive correction search.
+fn sums(
+    rules: &LedgerRules<'_>,
+    slots: &BTreeMap<SlotKey, Slot>,
+    out: &mut Vec<(Instance, Option<Posed>)>,
+) {
+    let mut blocks: BTreeMap<(&str, &str, &str, Group), BTreeMap<&str, &Slot>> = BTreeMap::new();
+    for ((release, sheet, field, group, subject), slot) in slots {
+        if is_flow(field) {
+            blocks
+                .entry((release, sheet, field, *group))
+                .or_default()
+                .insert(subject, slot);
+        }
+    }
+    for ((release, _, field, group), rows) in &blocks {
+        // (family, aggregate, operand subjects in order, a refusal decided before the operands)
+        let mut posings: Vec<(Family, &str, Vec<String>, Option<Reason>)> = Vec::new();
+        if FLOW_FIELDS[0].contains(field) {
+            for region in rows
+                .keys()
+                .filter(|s| rules.regions.iter().any(|r| r == **s))
+            {
+                let members = rules.members_in_order(region, release);
+                let why = members.is_empty().then_some(Reason::RegionNotInMap);
+                posings.push((Family::SitesToRegion, region, members, why));
+            }
+            posings.push((
+                Family::RegionToTotal,
+                "Total Gold",
+                rules.map_regions(release),
+                None,
+            ));
+        } else {
+            let mut sites: Vec<(&str, u32)> = rows
+                .iter()
+                .filter(|(s, _)| !rules.aggregate(s))
+                .map(|(s, slot)| (*s, row_of(&slot.locator)))
+                .collect();
+            sites.sort_by_key(|(_, row)| *row);
+            let sites = sites.into_iter().map(|(s, _)| s.to_string()).collect();
+            posings.push((Family::RegionToTotal, "Total Copper", sites, None));
+        }
+        for (family, aggregate, parts, why) in posings {
+            // No aggregate row, no anchor: nothing is posed (the census stops there; no registered file lacks it).
+            let Some(&total) = rows.get(aggregate) else {
+                continue;
+            };
+            let found: Vec<Found<'_>> = parts.iter().map(|p| find_member(rows, rules, p)).collect();
+            let mut cells: Vec<Option<String>> = found
+                .iter()
+                .map(|f| match f {
+                    Found::One(s) | Found::Both(s) => Some(s.locator.clone()),
+                    Found::Missing => None,
+                })
+                .collect();
+            cells.push(Some(total.locator.clone()));
+            let refused = |reason, at: Option<&Slot>| State::Refused {
+                reason,
+                at: at.map(|s| s.locator.clone()),
+            };
+            let withheld = (family == Family::SitesToRegion)
+                .then(|| parts.iter().find_map(|m| rules.withheld(m, &total.period)))
+                .flatten();
+            let present: Vec<&Slot> = found
+                .iter()
+                .filter_map(|f| match f {
+                    Found::One(s) | Found::Both(s) => Some(*s),
+                    Found::Missing => None,
+                })
+                .collect();
+            let ops: Vec<&Slot> = present
+                .iter()
+                .copied()
+                .chain(std::iter::once(total))
+                .collect();
+            let first = |p: &dyn Fn(&Operand) -> bool| ops.iter().copied().find(|s| p(&s.operand));
+            let mut nil_token = false;
+            let state = if let Some(evidence) = withheld {
+                refused(Reason::Withheld { evidence }, None)
+            } else if let Some(reason) = why {
+                refused(reason, None)
+            } else if parts.is_empty() || found.iter().any(|f| matches!(f, Found::Missing)) {
+                refused(Reason::OperandRowMissing, None)
+            } else if let Some(Found::Both(s)) = found.iter().find(|f| matches!(f, Found::Both(_)))
+            {
+                refused(Reason::OperandUnreadable, Some(s))
+            } else if let Some(b) = first(&|o| *o == Operand::Blank) {
+                refused(Reason::BlankOperand, Some(b))
+            } else if ops
+                .iter()
+                .all(|s| matches!(s.operand, Operand::Placeholder(_)))
+            {
+                State::NotPublished
+            } else if let Some(p) =
+                first(&|o| matches!(o, Operand::Placeholder(m) if *m != Mark::Nil))
+            {
+                refused(Reason::PlaceholderOperand, Some(p))
+            } else if let Some(u) = first(&|o| *o == Operand::Unreadable) {
+                refused(Reason::OperandUnreadable, Some(u))
+            } else {
+                match sum_holds(&present, total) {
+                    Some(holds) => {
+                        nil_token = ops
+                            .iter()
+                            .any(|s| s.operand == Operand::Placeholder(Mark::Nil));
+                        if holds {
+                            State::Consistent
+                        } else {
+                            State::Discrepancy
+                        }
+                    }
+                    None => kernel_refused("overflow in the exact sum".to_string()),
+                }
+            };
+            out.push((
+                Instance {
+                    family,
+                    subject: aggregate.to_string(),
+                    field: (*field).to_string(),
+                    group: *group,
+                    period: total.period,
+                    anchor: total.locator.clone(),
+                    cells,
+                    state,
+                    share: None,
+                    printed_share: None,
+                    nil_token,
+                    component: None,
+                },
+                None,
+            ));
+        }
+    }
+}
+
 /// Poses every decided instance jointly and blames each infeasible component.
 fn joint(
     instances: &mut [Instance],
@@ -1089,6 +1352,7 @@ pub fn mine_ledger(files: &[LedgerFile<'_>], rules: &LedgerRules<'_>) -> MineLed
         &site_sheets(files, rules.aliases),
         &mut pairs,
     );
+    sums(rules, &slots, &mut pairs);
     pairs.sort_by(|(a, _), (b, _)| {
         (a.family, &a.anchor, a.group, &a.field).cmp(&(b.family, &b.anchor, b.group, &b.field))
     });
@@ -1148,6 +1412,7 @@ mod tests {
         statuses: &[],
         corrections: &[],
         aliases: &[],
+        labels: &[],
     };
 
     const GOLD: [&str; 3] = [
@@ -1449,7 +1714,12 @@ mod tests {
             ("Total Gold", ["300", "200", "180"]),
         ];
         let l = ledger(&[(1, rows, vec![])], &rules);
-        let [hemlo] = l.instances.as_slice() else {
+        let owned: Vec<&Instance> = l
+            .instances
+            .iter()
+            .filter(|i| i.family == Family::Ownership)
+            .collect();
+        let [hemlo] = owned.as_slice() else {
             panic!("ownership for Hemlo only: {:?}", l.instances);
         };
         // 100 = 100% × 100 would hold; an unprinted share is never read as 100%.
@@ -2032,5 +2302,455 @@ mod tests {
             ]
         );
         assert_eq!(l.components, 2);
+    }
+
+    fn member(region: &str, member: &str, first: &str) -> RegionMemberRow {
+        RegionMemberRow {
+            region: region.to_string(),
+            member: member.to_string(),
+            first: first.to_string(),
+            last: None,
+        }
+    }
+
+    /// Locators on release 2030Q1's `QTD` sheet, `None` kept.
+    fn locs(cells: &[Option<&str>]) -> Vec<Option<String>> {
+        cells
+            .iter()
+            .map(|c| c.map(|c| format!("2030Q1:QTD!{c}")))
+            .collect()
+    }
+
+    fn sum_state(l: &MineLedger, family: Family, cell: &str) -> State {
+        at(l, family, &format!("2030Q1:QTD!{cell}")).state.clone()
+    }
+
+    /// The first region sum on the 100% column.
+    fn region_b(l: &MineLedger) -> &Instance {
+        l.instances
+            .iter()
+            .find(|i| i.family == Family::SitesToRegion && i.field == "au_prod_100_koz")
+            .expect("a region sum on the 100% column")
+    }
+
+    /// Release 2030Q1, rows 5–10: North America = Carlin + Hemlo, Latin America = Pueblo Viejo, `Total Gold` = the
+    /// two regions.
+    fn americas<'a>(na: [&'a str; 3], total: [&'a str; 3]) -> Vec<Release<'a>> {
+        vec![(
+            1,
+            vec![
+                ("Carlin (50%)", ["100", "50", "45"]),
+                ("Hemlo (100%)", ["50", "50", "45"]),
+                ("North America", na),
+                ("Pueblo Viejo (60%)", ["100", "60", "55"]),
+                ("Latin America", ["100", "60", "55"]),
+                ("Total Gold", total),
+            ],
+            vec![],
+        )]
+    }
+
+    #[test]
+    fn test_region_and_total_sums_hold_within_the_rounding_slack() {
+        let regions = ["North America".to_string(), "Latin America".to_string()];
+        let members = [
+            member("North America", "Carlin", "2030Q1"),
+            member("North America", "Hemlo", "2030Q1"),
+            member("Latin America", "Pueblo Viejo", "2030Q1"),
+        ];
+        let rules = LedgerRules {
+            regions: &regions,
+            region_members: &members,
+            ..NONE
+        };
+        // Three operands shown to the unit: 100 + 50 meets the printed region within 1.5.
+        for (printed, code) in [
+            ("148", "iii"),
+            ("149", "i"),
+            ("150", "i"),
+            ("151", "i"),
+            ("152", "iii"),
+        ] {
+            let l = ledger(
+                &americas([printed, "100", "90"], ["250", "160", "145"]),
+                &rules,
+            );
+            let state = sum_state(&l, Family::SitesToRegion, "B7");
+            assert_eq!(state.code(), code, "North America printed {printed}");
+        }
+        let l = ledger(
+            &americas(["150", "102", "90"], ["250", "162", "145"]),
+            &rules,
+        );
+        let na = at(&l, Family::SitesToRegion, "2030Q1:QTD!B7");
+        assert_eq!(
+            (na.subject.as_str(), na.field.as_str()),
+            ("North America", "au_prod_100_koz")
+        );
+        assert_eq!(na.cells, locs(&[Some("B5"), Some("B6"), Some("B7")]));
+        assert_eq!(
+            sum_state(&l, Family::SitesToRegion, "C7"),
+            State::Discrepancy
+        );
+        // The total adds the regions as printed: North America's discrepancy does not reach it.
+        let total = at(&l, Family::RegionToTotal, "2030Q1:QTD!C10");
+        assert_eq!(
+            (total.subject.as_str(), &total.state),
+            ("Total Gold", &State::Consistent)
+        );
+        assert_eq!(total.cells, locs(&[Some("C7"), Some("C9"), Some("C10")]));
+        assert_eq!(
+            [Family::SitesToRegion, Family::RegionToTotal]
+                .map(|f| [l.count(f, "i"), l.count(f, "iii")]),
+            [[5, 1], [3, 0]]
+        );
+        // Decided alone and never posed: the discrepancy is in no component.
+        assert!(l.infeasible.is_empty());
+        assert!(
+            l.instances
+                .iter()
+                .all(|i| i.component.is_none() && !i.nil_token)
+        );
+    }
+
+    #[test]
+    fn test_sum_operands_nil_token_and_placeholders() {
+        let regions = ["North America".to_string()];
+        let members = [
+            member("North America", "Carlin", "2030Q1"),
+            member("North America", "Hemlo", "2030Q1"),
+        ];
+        let rules = LedgerRules {
+            regions: &regions,
+            region_members: &members,
+            ..NONE
+        };
+        let states = |hemlo: [&str; 3], na: [&str; 3]| {
+            let rows = vec![
+                ("Carlin (50%)", ["100", "—", "45"]),
+                ("Hemlo (100%)", hemlo),
+                ("North America", na),
+            ];
+            let l = ledger(&[(1, rows, vec![])], &rules);
+            ["B7", "C7", "D7"].map(|c| {
+                let i = at(&l, Family::SitesToRegion, &format!("2030Q1:QTD!{c}"));
+                (i.state.clone(), i.nil_token)
+            })
+        };
+        let at6 = |c: &str| Some(format!("2030Q1:QTD!{c}6"));
+        // The nil token is exactly 0 with no box: 100 + 0 meets 101 within 1.
+        assert_eq!(
+            states(["—", "—", "n/a"], ["101", "—", "45"]),
+            [
+                (State::Consistent, true),
+                (State::NotPublished, false),
+                (
+                    State::Refused {
+                        reason: Reason::PlaceholderOperand,
+                        at: at6("D")
+                    },
+                    false
+                ),
+            ]
+        );
+        // 102 is past it; a blank comes before the placeholders; a nil region is 0 against 45.
+        assert_eq!(
+            states(["—", "", "—"], ["102", "50", "—"]),
+            [
+                (State::Discrepancy, true),
+                (
+                    State::Refused {
+                        reason: Reason::BlankOperand,
+                        at: at6("C")
+                    },
+                    false
+                ),
+                (State::Discrepancy, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_member_is_found_by_its_registered_label_and_refused_under_both() {
+        let regions = ["North America".to_string()];
+        let members = [
+            member("North America", "Nevada Gold Mines", "2030Q1"),
+            member("North America", "Hemlo", "2030Q1"),
+        ];
+        let labels = [RegisteredShare {
+            subject: "Nevada Gold Mines".to_string(),
+            num: 1,
+            den: 2,
+            evidence: "E1".to_string(),
+            label: "Nevada Gold Mines LLC".to_string(),
+        }];
+        let llc = ("Nevada Gold Mines LLC (50%)", ["100", "50", "45"]);
+        let plain = ("Nevada Gold Mines (50%)", ["100", "50", "45"]);
+        let hemlo = ("Hemlo (100%)", ["50", "50", "45"]);
+        let na = ("North America", ["150", "100", "90"]);
+        let sum = |rows: Vec<Row<'_>>, labels: &[RegisteredShare]| {
+            let rules = LedgerRules {
+                regions: &regions,
+                region_members: &members,
+                labels,
+                ..NONE
+            };
+            let i = region_b(&ledger(&[(1, rows, vec![])], &rules)).clone();
+            (i.state, i.cells)
+        };
+        assert_eq!(
+            sum(vec![llc, hemlo, na], &labels),
+            (
+                State::Consistent,
+                locs(&[Some("B5"), Some("B6"), Some("B7")])
+            )
+        );
+        assert_eq!(
+            sum(vec![llc, hemlo, na], &[]),
+            (
+                refused(Reason::OperandRowMissing, None),
+                locs(&[None, Some("B6"), Some("B7")])
+            )
+        );
+        // Printed under both names: refused at the row printed first, whichever name it carries.
+        for rows in [vec![llc, plain, hemlo, na], vec![plain, llc, hemlo, na]] {
+            assert_eq!(
+                sum(rows, &labels),
+                (
+                    refused(Reason::OperandUnreadable, Some("2030Q1:QTD!B5")),
+                    locs(&[Some("B5"), Some("B7"), Some("B8")])
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn test_region_outside_the_map_and_missing_operand_rows_are_refused() {
+        let regions = [
+            "North America".to_string(),
+            "Africa".to_string(),
+            "Latin America".to_string(),
+        ];
+        let members = [
+            member("North America", "Carlin", "2030Q1"),
+            member("North America", "Cortez", "2030Q1"),
+            member("Africa", "Kibali", "2031Q1"),
+        ];
+        let with_latin = [
+            members.as_slice(),
+            &[member("Latin America", "Pueblo Viejo", "2030Q1")],
+        ]
+        .concat();
+        let rows = || {
+            vec![
+                ("Carlin (50%)", ["100", "50", "45"]),
+                ("North America", ["100", "50", "45"]),
+                ("Africa", ["10", "5", "4"]),
+                ("Total Gold", ["100", "50", "45"]),
+            ]
+        };
+        let with = |members: &[RegionMemberRow]| {
+            let rules = LedgerRules {
+                regions: &regions,
+                region_members: members,
+                ..NONE
+            };
+            ledger(&[(1, rows(), vec![])], &rules)
+        };
+        let l = with(&members);
+        // Africa's row is printed, but its members join the map in 2031.
+        assert_eq!(
+            sum_state(&l, Family::SitesToRegion, "B7"),
+            refused(Reason::RegionNotInMap, None)
+        );
+        // Cortez prints no row.
+        let na = at(&l, Family::SitesToRegion, "2030Q1:QTD!B6");
+        assert_eq!(na.state, refused(Reason::OperandRowMissing, None));
+        assert_eq!(na.cells, locs(&[Some("B5"), None, Some("B6")]));
+        // The total adds the map's regions, so North America alone and not the printed Africa.
+        let total = at(&l, Family::RegionToTotal, "2030Q1:QTD!B8");
+        assert_eq!(total.state, State::Consistent);
+        assert_eq!(total.cells, locs(&[Some("B6"), Some("B8")]));
+        // A region of the map with no row refuses the total.
+        let l = with(&with_latin);
+        let total = at(&l, Family::RegionToTotal, "2030Q1:QTD!B8");
+        assert_eq!(total.state, refused(Reason::OperandRowMissing, None));
+        assert_eq!(total.cells, locs(&[Some("B6"), None, Some("B8")]));
+    }
+
+    #[test]
+    fn test_withheld_member_excludes_its_region_for_the_periods_it_covers() {
+        let regions = ["Africa".to_string()];
+        let members = [
+            member("Africa", "Loulo-Gounkoto", "2030Q1"),
+            member("Africa", "Kibali", "2030Q1"),
+        ];
+        let statuses = [SubjectStatus {
+            subject: "Loulo-Gounkoto".to_string(),
+            kind: StatusKind::Withheld,
+            first: (2030, 1),
+            last: Some((2030, 3)),
+            evidence: "E818".to_string(),
+        }];
+        let quarter = || {
+            vec![
+                ("Loulo-Gounkoto (80%)", ["100", "80", "70"]),
+                ("Kibali (45%)", ["100", "45", "40"]),
+                ("Africa", ["200", "125", "110"]),
+            ]
+        };
+        let h1 = vec![
+            ("Loulo-Gounkoto (80%)", ["200", "160", "140"]),
+            ("Kibali (45%)", ["200", "90", "80"]),
+            ("Africa", ["400", "250", "220"]),
+        ];
+        let releases = vec![(1, quarter(), vec![]), (2, quarter(), h1)];
+        let sums = |statuses: &[SubjectStatus]| {
+            let rules = LedgerRules {
+                regions: &regions,
+                region_members: &members,
+                statuses,
+                ..NONE
+            };
+            let l = ledger(&releases, &rules);
+            ["2030Q1:QTD!B7", "2030Q2:QTD!B7", "2030Q2:YTD!B7"]
+                .map(|a| at(&l, Family::SitesToRegion, a).state.clone())
+        };
+        let withheld = refused(
+            Reason::Withheld {
+                evidence: "E818".to_string(),
+            },
+            None,
+        );
+        assert_eq!(
+            sums(&statuses),
+            [withheld, State::Consistent, State::Consistent]
+        );
+        assert_eq!(sums(&[]), [(); 3].map(|()| State::Consistent));
+    }
+
+    #[test]
+    fn test_total_copper_sums_the_copper_sites_in_row_order() {
+        let total = |d: &str| {
+            let (l, refusals) = site_ledger(
+                COPPER,
+                &[
+                    ("Zaldivar (50%)", ["50", "25", "24"]),
+                    ("Lumwana (100%)", ["30", "30", "28"]),
+                    ("Jabal Sayid (50%)", ["10", "5", "5"]),
+                    ("Total Copper", ["90", "60", d]),
+                ],
+                vec![],
+                &NONE,
+            );
+            assert!(refusals.is_empty(), "{refusals:?}");
+            // 90 = 50 + 30 + 10 and 60 = 25 + 30 + 5; no copper row is a region.
+            assert_eq!(
+                [
+                    sum_state(&l, Family::RegionToTotal, "B8"),
+                    sum_state(&l, Family::RegionToTotal, "C8")
+                ],
+                [State::Consistent, State::Consistent]
+            );
+            assert!(
+                l.instances
+                    .iter()
+                    .all(|i| i.family != Family::SitesToRegion)
+            );
+            at(&l, Family::RegionToTotal, "2030Q1:QTD!D8").clone()
+        };
+        let i = total("57");
+        assert_eq!(
+            (i.subject.as_str(), i.field.as_str()),
+            ("Total Copper", "cu_sold_attr_kt")
+        );
+        assert_eq!(
+            i.cells,
+            locs(&[Some("D5"), Some("D6"), Some("D7"), Some("D8")])
+        );
+        // Four operands shown to the unit: 24 + 28 + 5 = 57 meets the printed total within 2, the bound included.
+        for (printed, code) in [("54", "iii"), ("55", "i"), ("59", "i"), ("60", "iii")] {
+            assert_eq!(total(printed).state.code(), code, "Total Copper {printed}");
+        }
+    }
+
+    /// [`sum_holds`] against the kernel posing Σ lines = total with every box rounded once, on pseudo-random
+    /// values of mixed steps around the slack bound.
+    #[test]
+    fn test_closed_form_sum_matches_the_kernel() {
+        let period = Period {
+            year: 2030,
+            kind: PeriodKind::Quarter(1),
+        };
+        let steps = [
+            Rat::from_integer(1),
+            Rat::new(1, 10).expect("step"),
+            Rat::new(1, 100).expect("step"),
+        ];
+        let mut seed = 0x5eed_u64;
+        let mut next = |n: u64| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) % n
+        };
+        let slot = |locator: String, units: i128, step: Rat| Slot {
+            locator,
+            operand: Operand::Number {
+                value: Rat::from_integer(units).checked_mul(step).expect("value"),
+                step,
+            },
+            period,
+            printed_share: None,
+        };
+        let rules = xf::Rules::new(xf::Convention::Closed)
+            .with("sites_to_region", xf::Construction::RoundedOnce);
+        let mut outcomes = [0_usize; 2];
+        for trial in 0..400 {
+            let parts: Vec<Slot> = (0..2 + next(4))
+                .map(|k| {
+                    let step = steps[next(3) as usize];
+                    slot(format!("T!B{k}"), i128::from(next(100_000)), step)
+                })
+                .collect();
+            let mut sum = Rat::from_integer(0);
+            for p in &parts {
+                if let Operand::Number { value, .. } = p.operand {
+                    sum = sum.checked_add(value).expect("sum");
+                }
+            }
+            let step = steps[next(3) as usize];
+            let q = sum.checked_div(step).expect("units");
+            let total = slot(
+                "T!Z1".to_string(),
+                q.num().div_euclid(q.den()) + i128::from(next(7)) - 3,
+                step,
+            );
+            let refs: Vec<&Slot> = parts.iter().collect();
+            let closed = sum_holds(&refs, &total).expect("no overflow");
+            let identity = xf::Identity {
+                id: format!("sum{trial}"),
+                family: "sites_to_region".to_string(),
+                closure: xf::Closure::Definitional,
+                kind: xf::IdentityKind::Sum {
+                    total: total.locator.clone(),
+                    lines: parts.iter().map(|p| p.locator.clone()).collect(),
+                    signs: vec![1; parts.len()],
+                },
+            };
+            let cells: Vec<xf::Cell> = parts.iter().chain([&total]).filter_map(xf_cell).collect();
+            let solved = xf::solve(&cells, &[identity], &rules).expect("solves");
+            let [c] = solved.as_slice() else {
+                panic!("trial {trial}: one component, got {}", solved.len());
+            };
+            let kernel = match &c.outcome {
+                xf::Outcome::Feasible { .. } => true,
+                xf::Outcome::Infeasible { .. } => false,
+                o => panic!("trial {trial}: {o:?}"),
+            };
+            assert_eq!(closed, kernel, "trial {trial}");
+            outcomes[usize::from(closed)] += 1;
+        }
+        assert!(outcomes.iter().all(|&n| n >= 50), "{outcomes:?}");
     }
 }

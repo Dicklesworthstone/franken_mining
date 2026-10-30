@@ -58,23 +58,30 @@ The public lane of M0 (`fmine assure public`).
   registered is refused too. W1-DR-01 is data (`[[printed_share_correction]]`, read by `mine_ledger`), and so is
   W1-DR-02 (`[[mine_stats_label_alias]]`, read by `mine_ledger`); other units are not. The region map is
   (`[[region_member]]`, BD-331.S4); values do not carry its version, and `mine_ledger` asks it by release.
-- `mine_ledger` (BD-331.S4, bd-prmn.4): three Mine Stats identity families anchored on the `QTD`/`YTD` summary
-  sheets, decided by the exact kernel. Ownership: attributable = s × 100% per site row and column group, s the
+- `mine_ledger` (BD-331.S4, bd-prmn.4): five Mine Stats identity families anchored on the `QTD`/`YTD` summary
+  sheets, decided in exact arithmetic. Ownership: attributable = s × 100% per site row and column group, s the
   share the label prints or its registered correction (the printed share kept beside); regions and metal totals
   pose none; a row with no printed share is refused, never read as 100%. Quarter sums: H1 = Q1 + Q2,
   9M = H1 + Q3, FY = 9M + Q4 on the 100%, attributable and sold columns, anchored on each `YTD` cell. Summary
   against site sheet (family 7): each summary value of attributable production and sales, cost of sales, TCC or
   C1 and AISC equals the same site's value on a `Minestats*` sheet of the metal (A1 title `(Gold)` or
   `(Copper)`), same release, period and year (`SITE_FIELDS`), with a registered label alias applied by release;
-  subjects with no site-sheet column pose none. Exclusions by name come first (a `withheld` status covering an
-  operand's period; a region whose members differ between the operands' releases; a site on two site sheets of
-  one metal), then a missing row or release, a label printed twice in a block, a blank, all placeholders (not
-  published), some placeholders, an unreadable number. On a site sheet only `—`, `— ` and `n/a` are tokens; the
-  nil token against a number reads as number = 0, decided alone (`Instance::nil_token`, E116). Each value as
-  displayed stands for its closed box [v − step/2, v + step/2], the step from the displayed decimals (General
-  non-integers are refused). Every decided instance is then posed jointly; each infeasible component reports
-  every minimum correction set (an exhaustive search up to 32 cells within the kernel's run cap) and the range
-  each of its cells can take, never a corrected value, and whether it is infeasible only jointly.
+  subjects with no site-sheet column pose none. Sites to region (family 3): a region row = Σ its registered
+  members in the release's map on the gold flow columns, a member found by its subject or its registered Mine
+  Stats label (refused at the first row when printed under both); a region with no member in the map is refused
+  (`region_not_in_map`). Region to total (family 4): `Total Gold` = Σ the map's regions, `Total Copper` = Σ the
+  copper sites in row order. A sum's nil token is exactly 0; a sum is decided alone by |Σ parts − total| ≤
+  Σ half-steps (the kernel's answer for one rounded-once sum, checked by a test) and never posed jointly. The
+  Nevada Gold Mines LLC sub-sum is not posed (it needs a registry table). Exclusions by name come first (a
+  `withheld` status covering an operand's period, or a region member's; a region whose members differ between
+  the operands' releases; a site on two site sheets of one metal), then a missing row or release, a label printed
+  twice in a block, a blank, all placeholders (not published), some placeholders, an unreadable number. On a
+  site sheet only `—`, `— ` and `n/a` are tokens; the nil token against a number reads as number = 0, decided
+  alone (`Instance::nil_token`, E116). Each value as displayed stands for its closed box [v − step/2, v + step/2],
+  the step from the displayed decimals (General non-integers are refused). Every decided instance but the sums is
+  then posed jointly; each infeasible component reports every minimum correction set (an exhaustive search up to
+  32 cells within the kernel's run cap) and the range each of its cells can take, never a corrected value, and
+  whether it is infeasible only jointly.
 - `synthetic`: invented workbooks in the real layout, seeded with one known answer per state. They are never
   gate-eligible. `write_issuer_workspace` writes them, plus a later title-only vintage, with a digest registry
   under the reserved issuer name `synthetic`; `run_public_assurance` runs that name in the synthetic lane.
@@ -102,7 +109,8 @@ The public lane of M0 (`fmine assure public`).
   - (v6, bd-prmn.4) the Mine Stats ledger in its own section: each instance's family, subject, field, group,
     period, anchor, cells, state code, reason and evidence, share and component, then each infeasible
     component's cells, flags and correction sets with their implied ranges. Its counts stay apart from the
-    AISC totals. v7 adds the site-sheet family and each instance's nil-token certificate.
+    AISC totals. v7 adds the site-sheet family and each instance's nil-token certificate. The sum families
+    (families 3–4) add instances in the v7 frame, with no change to its format.
 
   Changing any input cell moves the root; rewording a message does not (bd-sjrh.1 part 4).
 - The report payload carries `lane` and `gate_eligible`. The no-claim line (`NO_CLAIM`), the four INV-002 flags
@@ -374,14 +382,17 @@ The public lane of M0 (`fmine assure public`).
     and refuted at 2098, 2102, 1900 and 2300, where the exact bound is [2099⅙, 2100⅚]. Every refusal and
     exclusion names its cell or member; a footnote-less sheet and a release before the members' first keep the
     earlier refusals.
-- `PO-PUB-11` (Mine Stats ownership, quarter sums and summary against site sheet, BD-331.S4, bd-prmn.4,
-  MOR_CASE E841, E842):
-  - **Real files** (ignored test `barrick_mine_ledger_matches_census`): 10 releases, 4,664 instances. Ownership
+- `PO-PUB-11` (Mine Stats ownership, quarter sums, summary against site sheet and the sum families, BD-331.S4,
+  bd-prmn.4, MOR_CASE E841, E842, E843):
+  - **Real files** (ignored test `barrick_mine_ledger_matches_census`): 10 releases, 5,174 instances. Ownership
     592: 470 (i), 29 (iii), 73 (v), 20 np; quarter sums 942: 883 (i), 9 (iii), 26 (v), 24 np; site sheet 3,130:
-    2,982 (i), 1 (iii), 42 (v: 40 withheld, 2 blank), 105 np. 2,091 components, 27 infeasible (2 only jointly),
+    2,982 (i), 1 (iii), 42 (v: 40 withheld, 2 blank), 105 np; sites to region 306: 282 (i, 41 by the nil token),
+    24 (v: withheld, E818); region to total 204: 204 (i). 2,091 components, 27 infeasible (2 only jointly),
     every one with all its minimum correction sets. Every instance line, component line, summary and implied
-    range equals `scripts/oracle/mine_stats_census.py` (e66f7dc; family 7 a736c26, each written first by a
-    separate reader, exact Fourier–Motzkin over fractions), run in the test. The plan's known answers hold:
+    range equals `scripts/oracle/mine_stats_census.py` (e66f7dc; family 7 a736c26; families 3–4 c697b13, each
+    written first by a separate reader, exact Fourier–Motzkin or exact sums over fractions), run in the test,
+    which compares a sum's member cells as a set (the census orders a map's members by its rule, the ledger by
+    registry row) and pins the sum families' counts. The plan's known answers hold:
     E113, E114 and E115 are each a pair of (iii) on one component whose one minimum set is the shared cell,
     E113's B5 can take 281, and E116 is one (iii) site-sheet instance decided by the nil token, alone.
   - **Synthetic** (default suite): the E113 shape (one shared cell, the one minimum set); a component
@@ -393,7 +404,13 @@ The public lane of M0 (`fmine assure public`).
     both prints as its sets; the nil token as zero ((iii) at 5, (i) at 0) and `n/a`; another nil spelling
     unreadable; the refusal order (two sheets, withheld, missing row, blank, unreadable); the W1-DR-02 alias by
     release, and beside its registered row; a label printed twice; a site print making an ownership component
-    infeasible only jointly, its two minimum sets and ranges ([399/4, 401/4], [201, 201]) derived by hand.
+    infeasible only jointly, its two minimum sets and ranges ([399/4, 401/4], [201, 201]) derived by hand. Sum
+    families: the slack bound on both sides (148–152 against 150 with slack 1.5; Total Copper 54–60 against 57
+    with slack 2, the bound included), a region discrepancy that neither reaches the total nor forms a
+    component; the nil token as exactly 0, all nil (np), `n/a` and a blank; a member found by its registered
+    label, missing without it, and refused at the first row under both names in either order; a region outside
+    the map, a missing member and a map region with no row; a withheld member by period; the closed form
+    against the kernel on 400 pseudo-random sums of mixed steps (both outcomes at least 50 times).
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.

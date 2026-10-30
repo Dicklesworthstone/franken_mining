@@ -1306,6 +1306,7 @@ fn mine_stats_section(
             statuses: &profile.subject_statuses,
             corrections: &profile.printed_share_corrections,
             aliases: &profile.mine_stats_label_aliases,
+            labels: &profile.shares,
         },
     );
     if let Some(m) = memo {
@@ -5486,9 +5487,39 @@ mod tests {
             .collect();
         let ours: Vec<String> = l.instances.iter().map(|i| mine_census_line(l, i)).collect();
         assert_eq!(ours.len(), instances.len(), "instance count");
+        // A sum's operand order is a representation choice: the census lists members in its rule's map order,
+        // the ledger in registry row order (they differ only for North America from 2025Q4). So a sum's member
+        // cells are compared as a set, the aggregate's cell last. No sum here has an `at`, which order would set.
+        let sum_cells_sorted = |line: &str| -> String {
+            let sum = line.contains("\"family\":\"sites_to_region\"")
+                || line.contains("\"family\":\"region_to_total\"");
+            let Some(start) = line.find("\"cells\":[").map(|k| k + "\"cells\":[".len()) else {
+                return line.to_string();
+            };
+            let Some(len) = line[start..].find(']') else {
+                return line.to_string();
+            };
+            if !sum {
+                return line.to_string();
+            }
+            let mut cells: Vec<&str> = line[start..start + len].split(',').collect();
+            let aggregate = cells.pop();
+            cells.sort_unstable();
+            cells.extend(aggregate);
+            format!(
+                "{}{}{}",
+                &line[..start],
+                cells.join(","),
+                &line[start + len..]
+            )
+        };
         for (a, b) in ours.iter().zip(&instances) {
-            assert_eq!(a, b);
+            assert_eq!(sum_cells_sorted(a), sum_cells_sorted(b));
         }
+        // The sum families' counts (c697b13's census), pinned so that both sides cannot drift together.
+        let counts = |f: Family| ["i", "iii", "v", "np"].map(|code| l.count(f, code));
+        assert_eq!(counts(Family::SitesToRegion), [282, 0, 24, 0]);
+        assert_eq!(counts(Family::RegionToTotal), [204, 0, 0, 0]);
         let components: Vec<&str> = lines
             .iter()
             .copied()
