@@ -118,7 +118,11 @@ impl Sheet {
 pub struct Workbook {
     pub artifact_path: String,
     pub sha256: [u8; 32],
+    /// Visible worksheets, in workbook order.
     pub sheets: Vec<Sheet>,
+    /// Hidden and very hidden worksheets, parsed the same way (BD-331.S2). Never in `cell_census`, the
+    /// numeric digest, `sheet()` or the quarantine log's cell items.
+    pub hidden_sheets: Vec<Sheet>,
     pub quarantined: Vec<QuarantineItem>,
 }
 
@@ -208,23 +212,44 @@ impl Workbook {
         let rel_targets = parse_workbook_rels(&rels_text);
 
         let mut sheets = Vec::new();
+        let mut hidden_sheets = Vec::new();
         let mut quarantined = Vec::new();
-
-        for (sheet_name, rel_id, state) in parse_workbook_sheets(&wb_text) {
-            if state == "hidden" || state == "veryHidden" {
-                quarantined.push(QuarantineItem::HiddenSheet { sheet_name, state });
-                continue;
-            }
+        let zip_key_of = |rel_id: &str, fallback: usize| {
             let target = rel_targets
-                .get(&rel_id)
+                .get(rel_id)
                 .cloned()
-                .unwrap_or_else(|| format!("worksheets/sheet{}.xml", sheets.len() + 1));
-            let zip_key = if target.starts_with("xl/") {
+                .unwrap_or_else(|| format!("worksheets/sheet{fallback}.xml"));
+            if target.starts_with("xl/") {
                 target
             } else {
                 format!("xl/{}", target.trim_start_matches('/'))
-            };
-            if let Some(sheet_bytes) = entries.get(&zip_key) {
+            }
+        };
+
+        for (position, (sheet_name, rel_id, state)) in
+            parse_workbook_sheets(&wb_text).into_iter().enumerate()
+        {
+            if state == "hidden" || state == "veryHidden" {
+                // Parsed for the hidden scope (BD-331.S2) but kept out of `sheets`, the census and the
+                // quarantine log: a reader never sees these cells.
+                if let Some(sheet_bytes) = entries.get(&zip_key_of(&rel_id, position + 1)) {
+                    let sheet_xml = String::from_utf8_lossy(sheet_bytes);
+                    let mut ignored = Vec::new();
+                    let cells = parse_worksheet_cells(
+                        &sheet_name,
+                        &sheet_xml,
+                        &shared_strings,
+                        &mut ignored,
+                    );
+                    hidden_sheets.push(Sheet {
+                        name: sheet_name.clone(),
+                        cells_by_coord: cells,
+                    });
+                }
+                quarantined.push(QuarantineItem::HiddenSheet { sheet_name, state });
+                continue;
+            }
+            if let Some(sheet_bytes) = entries.get(&zip_key_of(&rel_id, sheets.len() + 1)) {
                 let sheet_xml = String::from_utf8_lossy(sheet_bytes);
                 let cells = parse_worksheet_cells(
                     &sheet_name,
@@ -243,6 +268,7 @@ impl Workbook {
             artifact_path,
             sha256: digest,
             sheets,
+            hidden_sheets,
             quarantined,
         })
     }

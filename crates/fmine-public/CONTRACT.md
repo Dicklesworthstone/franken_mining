@@ -22,10 +22,15 @@ The public lane of M0 (`fmine assure public`).
   (`GATE-BULL-01` part 2, plan §21.6).
   - **Declared construction:** component sum. TCC = Σ block-1 lines; AISC = TCC + Σ block-2 lines. Each rate is
     r = 1000·N/Q, checked on intervals (N ± k/2, Q ± 1/2, r ± 1/2). All arithmetic is exact (`i128`).
-  - **States:** (i) consistent; (ii) explained by a registered reconstruction, re-verified on the run;
+  - **States:** (i) consistent; (ii) explained by a registered reconstruction, re-verified on the run and
+    labelled `explained_stated` or `explained_reconstructed` by whether an issuer note states the rule;
     (iii) issuer discrepancy, with an exact certificate and any single-line sign-flip witness;
-    (iv) undecidable; (v) refused; not published (excluded by name).
+    (iv) undecidable, naming the missing fact (registered by subject and family, else the family default) and any
+    closing document; (v) refused; not published (excluded by name).
   - **Alternative construction:** subtotal rounded once. It is reported, never scored.
+  - **Hidden scope** (BD-331.S2): the same families run over hidden worksheets into `hidden_scope`. Each instance
+    is labelled "sheet not displayed to readers". It is bound into the state root in its own section and never
+    counted in the totals, `by_family` or `GATE-BULL-01`.
 - `mine_stats` (bd-gwf1.1): a label-anchored reader for the quarterly Mine Statistics workbooks (W1 §3, §4, §13).
   It finds blocks by `For the (three|six|nine|twelve) months`, takes site names from the row above (carried left
   across merged blanks), and strips trailing footnote numbers from labels. The `QTD`/`YTD` summary columns are
@@ -47,32 +52,37 @@ The public lane of M0 (`fmine assure public`).
 ## 3. Authority, Epistemics & Representation
 - Every reported exception cites file, file SHA-256, `sheet!cell`, subject, family and ownership basis
   (`IdentityFamily::basis`).
-- The `LedgerAnchor` state root (BLAKE3 over an `M0AS` v2 frame) binds:
+- The `LedgerAnchor` state root (BLAKE3 over an `M0AS` v3 frame) binds:
   - every input's SHA-256, numeric digest and census;
   - every instance's state and detail;
-  - unregistered headers and table refusals.
+  - unregistered headers and table refusals;
+  - the same three for the hidden scope, in their own section.
 
   Changing any input cell moves the root.
 - The report payload carries `lane` and `gate_eligible`. The no-claim line (`NO_CLAIM`), the four INV-002 flags
   and the next actions (`PublicAssuranceReport::next_actions`) are envelope fields, which `fmine-cli` prints.
 
 ## 4. Public API Surface
-- `sources::{SourceKind, RegisteredSource, RegisteredReconstruction, RegisteredShare, IssuerProfile,
-  load_issuer_profile, registry_path, registered_issuers, is_issuer_name, is_through_bound}`;
-  `IssuerProfile::{from_registry, through}`; `IssuerProfile::{regions, shares}` (BD-331.S3)
+- `sources::{SourceKind, RegisteredSource, RegisteredReconstruction, RegisteredShare, RegisteredMissingFact,
+  IssuerProfile, load_issuer_profile, registry_path, registered_issuers, is_issuer_name, is_through_bound}`;
+  `IssuerProfile::{from_registry, through}`; `IssuerProfile::{regions, shares}` (BD-331.S3);
+  `IssuerProfile::missing_facts`, `RegisteredReconstruction::basis` (BD-331.S2)
 - `aisc::{IdentityFamily, IdentityState, IdentityInstance, FootingCertificate, UnregisteredHeader, AiscTable,
-  RateMiss, ShareBasis, locate_table, ledger_for_table, rate_interval_holds, scaled_rate_holds, feasible_share,
-  feasible_share_text, find_share_footnote, find_qtd_sheet, confirm_share_label, reconstruction_closes,
-  match_subject, cell_text}`. `IdentityState::Consistent` carries `basis` (the stated share, footnote and label it
-  used, or `None`); `IdentityState::RefusedAt` is (v) naming a cell or file.
+  RateMiss, ShareBasis, ExplanationBasis, DEFAULT_MISSING_FACT, SHARE_MISSING_FACT, locate_table,
+  ledger_for_table, rate_interval_holds, scaled_rate_holds, feasible_share, feasible_share_text,
+  find_share_footnote, find_qtd_sheet, confirm_share_label, reconstruction_closes, match_subject, cell_text}`.
+  `IdentityState::Consistent` carries `basis` (the stated share, footnote and label it used, or `None`);
+  `IdentityState::Explained` carries `basis: ExplanationBasis`; `IdentityState::Undecidable` carries
+  `missing_fact` and `closing_document`; `IdentityState::RefusedAt` is (v) naming a cell or file.
 - `mine_stats::{View, MineStatsCell, MineStatsValue, CellRefusal, MineStatsRead, LabelVocabulary, read_mine_stats,
   strip_footnote, printed_share, site_name, is_m0_target}`
-- `synthetic::{synthetic_aisc_cells, synthetic_workbooks, synthetic_stats_workbook, synthetic_share_label_cells,
-  synthetic_profile, write_issuer_workspace, SYNTHETIC_ISSUER, SYNTHETIC_SUBJECTS, SYNTHETIC_SHARES,
-  SYNTHETIC_SHARE_FOOTNOTE, SYNTHETIC_LATER_STATS_FILE}`
-- `Lane`, `LoadedSource`, `TableRefusal`, `AlternateCounts`, `PublicAssuranceReport`, `load_registered_sources`,
-  `assess`, `run_public_assurance`, `run_barrick_m0_assurance`, `run_synthetic_assurance`, `cell_to_public_claim`,
-  `NO_CLAIM`; `PublicAssuranceReport::next_actions`
+- `synthetic::{synthetic_aisc_cells, synthetic_hidden_cells, synthetic_workbooks, synthetic_stats_workbook,
+  synthetic_share_label_cells, synthetic_profile, write_issuer_workspace, SYNTHETIC_ISSUER, SYNTHETIC_SUBJECTS,
+  SYNTHETIC_SHARES, SYNTHETIC_SHARE_FOOTNOTE, SYNTHETIC_STATED_QUOTE, SYNTHETIC_HIDDEN_SHEET,
+  SYNTHETIC_LATER_STATS_FILE}`
+- `Lane`, `LoadedSource`, `TableRefusal`, `AlternateCounts`, `HiddenScope`, `HIDDEN_SCOPE`,
+  `PublicAssuranceReport`, `load_registered_sources`, `assess`, `run_public_assurance`, `run_barrick_m0_assurance`,
+  `run_synthetic_assurance`, `cell_to_public_claim`, `NO_CLAIM`; `PublicAssuranceReport::next_actions`
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-502` (exit 8) names every registered file that is missing, digest-mismatched or unparseable. A run never
@@ -93,6 +103,8 @@ The public lane of M0 (`fmine assure public`).
   - the same-release Mine Stats quarter-to-date label is missing, repeated or prints another share
     (`RefusedAt`, naming the cell);
   - an operand is not positive.
+- A stated (ii) whose quote cell no longer starts with the registered prefix is refused as an explanation: the
+  instance stays (iv), naming the quote cell and what it reads.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-PUB-1` (real files through 2026Q2, ignored test; recorded in MOR_CASE E820–E823): the census and digest of
@@ -121,6 +133,15 @@ The public lane of M0 (`fmine assure public`).
     state, subject, footnote cell and label cell; that check was run outside the test.
   - **Synthetic:** K14 fits at 3/4, and L14 misses with the interval [0.8210, 0.8290]. Further tests cover a
     mismatched or missing label, a moved footnote letter and a removed footnote, a region, and a dropped share.
+- `PO-PUB-6` (state-type completion and hidden scope, BD-331.S2, MOR_CASE E828):
+  - **Real files** (ignored tests `barrick_hidden_scope_matches_census`, `barrick_every_iv_names_missing_fact`):
+    6 hidden tables, 435 instances. Footing: 169 (i), 1 (iii, North America Q4 2023 TCC, 541 against 540), 4 not
+    published. Per ounce: 235 (i), 17 (iv), 3 (v), 6 not published. The counts equal the hidden census; on every
+    instance, Rust also equals it, a check run outside the test. Each of the 82 visible and 17 hidden (iv) names a
+    missing fact. E816's three (ii) are reconstructed.
+  - **Synthetic:** M16 is a stated (ii), and a changed or empty quote keeps it (iv). The hidden `Q4 2029` table's
+    (iii) is reported and never counted. A changed hidden cell moves the root and no visible state. Hidden sheets
+    leave the census and its digest unchanged.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.

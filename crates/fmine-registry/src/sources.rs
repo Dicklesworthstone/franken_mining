@@ -56,6 +56,33 @@ pub struct ReconstructionRow {
     /// `(cell, prefix)` pairs of the named label-check set, in file order.
     pub label_checks: Vec<(String, String)>,
     pub rule: String,
+    pub basis: BasisRow,
+}
+
+/// Whether the issuer states a reconstruction's rule or the registry reconstructs it (BD-331.S2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BasisRow {
+    /// No issuer text states the rule.
+    Reconstructed,
+    /// The issuer states it: the run re-reads `doc` at `locator` (`sheet!cell`) and needs text starting
+    /// `quote_prefix`.
+    Stated {
+        doc: String,
+        locator: String,
+        quote_prefix: String,
+    },
+}
+
+/// The fact that would decide a (iv) instance of `family` for `subject` (BD-331.S2). `text` is prose with no
+/// digits; the source goes in `evidence`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingFactRow {
+    pub subject: String,
+    pub family: String,
+    pub text: String,
+    pub evidence: String,
+    /// A document known to decide the instance, if any.
+    pub closing_document: Option<String>,
 }
 
 /// One registered Mine Statistics row label (bd-gwf1.1): the label without its footnote number, and the label of
@@ -95,6 +122,8 @@ pub struct SourcesRegistry {
     /// The Mine Statistics label vocabulary, in file order. Empty when the issuer registers none, in which case
     /// labels are read without a vocabulary check.
     pub mine_stats_labels: Vec<MineStatsLabelRow>,
+    /// Missing facts by `(subject, family)`, in file order.
+    pub missing_facts: Vec<MissingFactRow>,
 }
 
 /// Why a sources registry was refused. `line` is 1-based; 0 means the file as a whole.
@@ -279,6 +308,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "label_check",
             "mine_stats_label",
             "share",
+            "missing_fact",
         ]
         .contains(&row.table.as_str())
         {
@@ -418,7 +448,57 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "component_cell",
             "label_checks",
             "rule",
+            "basis",
+            "quote_doc",
+            "quote_locator",
+            "quote_prefix",
         ])?;
+        let quote = [
+            f.optional_string("quote_doc")?,
+            f.optional_string("quote_locator")?,
+            f.optional_string("quote_prefix")?,
+        ];
+        let (basis_text, basis_line) = f.string("basis")?;
+        let basis = match (basis_text.as_str(), quote) {
+            ("reconstructed", [None, None, None]) => BasisRow::Reconstructed,
+            ("stated", [Some(doc), Some(locator), Some(quote_prefix)]) => {
+                if !files.contains(&doc) {
+                    return fail(
+                        basis_line,
+                        format!("quote_doc {doc:?} is not a registered [[source]] file"),
+                    );
+                }
+                if !locator.contains('!') || quote_prefix.is_empty() {
+                    return fail(
+                        basis_line,
+                        "quote_locator must read sheet!cell and quote_prefix must not be empty",
+                    );
+                }
+                BasisRow::Stated {
+                    doc,
+                    locator,
+                    quote_prefix,
+                }
+            }
+            ("reconstructed", _) => {
+                return fail(
+                    basis_line,
+                    "a reconstructed basis takes no quote_doc, quote_locator or quote_prefix",
+                );
+            }
+            ("stated", _) => {
+                return fail(
+                    basis_line,
+                    "a stated basis needs quote_doc, quote_locator and quote_prefix",
+                );
+            }
+            (other, _) => {
+                return fail(
+                    basis_line,
+                    format!("basis {other:?} is not \"stated\" or \"reconstructed\""),
+                );
+            }
+        };
         let (table_file, table_line) = f.string("table_file")?;
         let (component_file, component_line) = f.string("component_file")?;
         let (subject, subject_line) = f.string("subject")?;
@@ -465,6 +545,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             component_cell: f.string("component_cell")?.0,
             label_checks: checks.clone(),
             rule: f.string("rule")?.0,
+            basis,
         });
     }
     if let Some((set, _)) = label_sets.iter().find(|(s, _)| !used_sets.contains(s)) {
@@ -525,6 +606,52 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         });
     }
 
+    let mut missing_facts: Vec<MissingFactRow> = Vec::new();
+    for row in doc.rows_of("missing_fact") {
+        let f = Fields::of_row(row);
+        f.only(&["subject", "family", "text", "evidence", "closing_document"])?;
+        let (subject, subject_line) = f.string("subject")?;
+        let (family, family_line) = f.string("family")?;
+        let (text, text_line) = f.string("text")?;
+        if !subjects.contains(&subject) {
+            return fail(
+                subject_line,
+                format!("subject {subject:?} is not a registered [[subject]]"),
+            );
+        }
+        if !IDENTITY_FAMILIES.contains(&family.as_str()) {
+            return fail(
+                family_line,
+                format!(
+                    "family {family:?} is not registered ({})",
+                    IDENTITY_FAMILIES.join(", ")
+                ),
+            );
+        }
+        if missing_facts
+            .iter()
+            .any(|m| m.subject == subject && m.family == family)
+        {
+            return fail(
+                subject_line,
+                format!("duplicate [[missing_fact]] for {subject:?} {family}"),
+            );
+        }
+        if text.is_empty() || text.bytes().any(|b| b.is_ascii_digit()) {
+            return fail(
+                text_line,
+                "missing-fact text must be prose with no digits; put the source in evidence",
+            );
+        }
+        missing_facts.push(MissingFactRow {
+            subject,
+            family,
+            text,
+            evidence: f.string("evidence")?.0,
+            closing_document: f.optional_string("closing_document")?,
+        });
+    }
+
     Ok(SourcesRegistry {
         issuer,
         corpus_dir,
@@ -535,6 +662,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         shares,
         reconstructions,
         mine_stats_labels,
+        missing_facts,
     })
 }
 
@@ -639,6 +767,7 @@ mod tests {
         let recon = "\n[[reconstruction]]\nevidence_id = \"E1\"\ntable_file = \"C.xlsx\"\nsheet = \"Q1\"\n\
                      subject = \"Site A\"\nfamily = \"aisc_per_oz\"\ncomponent_file = \"A.xlsx\"\n\
                      component_sheet = \"S\"\ncomponent_cell = \"B2\"\nlabel_checks = \"set1\"\nrule = \"r\"\n\
+                     basis = \"reconstructed\"\n\
                      [[label_check]]\nset = \"set1\"\ncell = \"A1\"\nprefix = \"x\"\n";
         let e = refusal(&minimal(&source_b("aisc_reconciliation", SHA_B), recon));
         assert!(e.reason.contains("\"C.xlsx\" is not a registered"), "{e}");
@@ -663,6 +792,98 @@ mod tests {
             let bad = ok.replacen(from, to, 1);
             let e = refusal(&minimal(&source_b("aisc_reconciliation", SHA_B), &bad));
             assert!(e.reason.contains(needle), "{needle}: {e}");
+        }
+    }
+
+    /// BD-331.S2: every reconstruction declares its basis; a stated one names the quote it re-reads.
+    #[test]
+    fn test_reconstruction_basis_parse_and_refuse() {
+        let recon = "\n[[reconstruction]]\nevidence_id = \"E1\"\ntable_file = \"B.xlsx\"\nsheet = \"Q1\"\n\
+                     subject = \"Site A\"\nfamily = \"aisc_per_oz\"\ncomponent_file = \"A.xlsx\"\n\
+                     component_sheet = \"S\"\ncomponent_cell = \"B2\"\nlabel_checks = \"set1\"\nrule = \"r\"\n\
+                     basis = \"reconstructed\"\n\
+                     [[label_check]]\nset = \"set1\"\ncell = \"A1\"\nprefix = \"x\"\n";
+        let b = source_b("aisc_reconciliation", SHA_B);
+        let parse = |text: &str| parse_sources_registry(&minimal(&b, text));
+        let reg = parse(recon).expect("valid");
+        assert_eq!(reg.reconstructions[0].basis, BasisRow::Reconstructed);
+        let quote =
+            "quote_doc = \"B.xlsx\"\nquote_locator = \"Q1!A40\"\nquote_prefix = \"Includes\"\n";
+        let stated = recon.replace(
+            "basis = \"reconstructed\"\n",
+            &format!("basis = \"stated\"\n{quote}"),
+        );
+        assert_eq!(
+            parse(&stated).expect("valid").reconstructions[0].basis,
+            BasisRow::Stated {
+                doc: "B.xlsx".into(),
+                locator: "Q1!A40".into(),
+                quote_prefix: "Includes".into()
+            }
+        );
+        for (bad, why) in [
+            (
+                recon.replace("basis = \"reconstructed\"\n", ""),
+                "has no basis",
+            ),
+            (
+                recon.replace("\"reconstructed\"", "\"guessed\""),
+                "is not \"stated\" or \"reconstructed\"",
+            ),
+            (
+                recon.replace("basis = \"reconstructed\"\n", "basis = \"stated\"\n"),
+                "needs quote_doc",
+            ),
+            (
+                recon.replace(
+                    "basis = \"reconstructed\"\n",
+                    &format!("basis = \"reconstructed\"\n{quote}"),
+                ),
+                "takes no quote_doc",
+            ),
+            (
+                stated.replace("quote_doc = \"B.xlsx\"", "quote_doc = \"C.xlsx\""),
+                "quote_doc",
+            ),
+            (stated.replace("Q1!A40", "A40"), "sheet!cell"),
+        ] {
+            let e = refusal(&minimal(&b, &bad));
+            assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
+        }
+    }
+
+    /// BD-331.S2: `[[missing_fact]]` rows keyed by (subject, family); the text is prose with no digits.
+    #[test]
+    fn test_missing_fact_has_no_digits() {
+        let b = source_b("aisc_reconciliation", SHA_B);
+        let row = "[[missing_fact]]\nsubject = \"Site A\"\nfamily = \"cos_per_oz\"\n\
+                   text = \"the ounce series behind the per-ounce rows\"\nevidence = \"E691\"\n";
+        let reg = parse_sources_registry(&minimal(&b, row)).expect("accepted");
+        assert_eq!(
+            reg.missing_facts,
+            vec![MissingFactRow {
+                subject: "Site A".into(),
+                family: "cos_per_oz".into(),
+                text: "the ounce series behind the per-ounce rows".into(),
+                evidence: "E691".into(),
+                closing_document: None,
+            }]
+        );
+        for (bad, why) in [
+            (
+                row.replace("per-ounce rows", "per-ounce rows of Q4 2025"),
+                "no digits",
+            ),
+            (
+                row.replace("Site A", "Site Z"),
+                "not a registered [[subject]]",
+            ),
+            (row.replace("cos_per_oz", "cos_per_t"), "family"),
+            (format!("{row}\n{row}"), "duplicate [[missing_fact]]"),
+            (row.replace("evidence = \"E691\"\n", ""), "has no evidence"),
+        ] {
+            let e = refusal(&minimal(&b, &bad));
+            assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
         }
     }
 

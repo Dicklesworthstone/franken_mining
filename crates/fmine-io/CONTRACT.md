@@ -31,8 +31,9 @@ Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a
   build_minimal_xlsx, col_index_to_letters, parse_a1_ref}`
 
 ## 5. Guards & Typed Refusals
-- `G-BULL-1`: formula-error cells and `hidden`/`veryHidden` sheets go to `Workbook::quarantined`; hidden sheets are
-  not extracted.
+- `G-BULL-1`: formula-error cells and `hidden`/`veryHidden` sheets go to `Workbook::quarantined`. Hidden sheets are
+  parsed into `Workbook::hidden_sheets` (BD-331.S2, for the hidden scope), never into `sheets`, `sheet()`,
+  `cell_census` or the numeric digest; their formula errors are not logged.
 - `G-BULL-2`: placeholders are typed, never zero. A placeholder keeps its token exactly as stored, surrounding
   whitespace included (`"— "` and `"—"` stay distinct); a number keeps its stored text in
   `ExtractedCell::number_text`.

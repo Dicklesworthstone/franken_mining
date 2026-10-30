@@ -97,17 +97,24 @@ pub enum IdentityState {
         alternate_consistent: bool,
         basis: Option<String>,
     },
-    /// (ii) The numbers close only with a registered reconstruction, re-verified on this run.
+    /// (ii) The numbers close only with a registered reconstruction, re-verified on this run. `basis` says
+    /// whether an issuer note states the rule (BD-331.S2).
     Explained {
         evidence_id: String,
         rule: String,
         component: String,
+        basis: ExplanationBasis,
     },
     /// (iii) The printed total differs from the sum of its printed lines.
     IssuerDiscrepancy(FootingCertificate),
     /// (iv) The printed rate lies outside every value the printed inputs allow, and no registered
-    /// reconstruction explains it.
-    Undecidable { detail: String },
+    /// reconstruction explains it. `missing_fact` names what would decide it (prose, no digits), and
+    /// `closing_document` a document known to hold that fact, if any (BD-331.S2).
+    Undecidable {
+        detail: String,
+        missing_fact: String,
+        closing_document: Option<String>,
+    },
     /// (v) The instance cannot be scored from what is printed.
     Refused { reason: &'static str },
     /// (v) Refused because of a named cell or file (`at`).
@@ -134,7 +141,14 @@ impl IdentityState {
     pub const fn label(&self) -> &'static str {
         match self {
             Self::Consistent { .. } => "consistent",
-            Self::Explained { .. } => "explained_reconstructed",
+            Self::Explained {
+                basis: ExplanationBasis::Stated { .. },
+                ..
+            } => "explained_stated",
+            Self::Explained {
+                basis: ExplanationBasis::Reconstructed,
+                ..
+            } => "explained_reconstructed",
             Self::IssuerDiscrepancy(_) => "issuer_discrepancy",
             Self::Undecidable { .. } => "undecidable_from_public_data",
             Self::Refused { .. } | Self::RefusedAt { .. } => "refused",
@@ -156,8 +170,14 @@ impl IdentityState {
             Self::Explained {
                 evidence_id,
                 component,
+                basis,
                 ..
-            } => format!("{evidence_id}: {component}"),
+            } => match basis {
+                ExplanationBasis::Reconstructed => format!("{evidence_id}: {component}"),
+                ExplanationBasis::Stated { doc, locator, .. } => {
+                    format!("{evidence_id}: {component}; stated at {doc}:{locator}")
+                }
+            },
             Self::IssuerDiscrepancy(c) => format!(
                 "printed {} vs component sum {} (residual {}){}",
                 c.printed,
@@ -168,12 +188,39 @@ impl IdentityState {
                     .map(|w| format!("; sign-flip witness {w}"))
                     .unwrap_or_default()
             ),
-            Self::Undecidable { detail } => detail.clone(),
+            Self::Undecidable {
+                detail,
+                missing_fact,
+                closing_document,
+            } => match closing_document {
+                None => format!("{detail}; missing fact: {missing_fact}"),
+                Some(d) => format!("{detail}; missing fact: {missing_fact} (closed by {d})"),
+            },
             Self::Refused { reason } | Self::NotPublished { reason } => (*reason).to_string(),
             Self::RefusedAt { reason, at } => format!("{reason}: {at}"),
         }
     }
 }
+
+/// Whether an issuer note states a (ii) explanation's rule (BD-331.S2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExplanationBasis {
+    /// The issuer states it: `doc` at `locator` (`sheet!cell`) reads text starting `quote_prefix`, re-read on
+    /// every run.
+    Stated {
+        doc: String,
+        locator: String,
+        quote_prefix: String,
+    },
+    /// No issuer note states it; the registry reconstructs it from published cells.
+    Reconstructed,
+}
+
+/// The missing fact a (iv) instance names when no `(subject, family)` row is registered.
+pub const DEFAULT_MISSING_FACT: &str = "the numerator or denominator the issuer used for this rate";
+
+/// The missing fact of a stated-share miss (BD-331.S3).
+pub const SHARE_MISSING_FACT: &str = "the attributable cost of sales or ounces the issuer used";
 
 /// What the run knows about one subject's ownership share, for the per-ounce rate the issuer states on an
 /// attributable basis (BD-331.S3). A subject with no entry has no registered share.
@@ -696,9 +743,11 @@ fn stated_share_state(
         IdentityState::Undecidable {
             detail: format!(
                 "printed {} outside 1000·s·N/Q at {cited}, for N = {} ± {}/2, Q = {} ± 1/2; the printed numbers \
-                 allow s in {interval}; missing fact: the attributable cost of sales or ounces the issuer used",
+                 allow s in {interval}",
                 miss.r, miss.n, miss.k, miss.q
             ),
+            missing_fact: SHARE_MISSING_FACT.to_string(),
+            closing_document: None,
         }
     }
 }
@@ -935,6 +984,8 @@ fn column_ledger(
                             miss.k,
                             miss.q
                         ),
+                        missing_fact: DEFAULT_MISSING_FACT.to_string(),
+                        closing_document: None,
                     }
                 }
             }

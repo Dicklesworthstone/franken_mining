@@ -318,6 +318,27 @@ num = 897
 den = 1000
 evidence = "E487"
 
+# BD-331.S2: the fact that would decide each (iv) instance, by (subject, family). Prose only: the source is in
+# evidence. An instance with no row names its family's default (crates/fmine-public/src/lib.rs).
+
+[[missing_fact]]
+subject = "Veladero"
+family = "cos_per_oz"
+text = "the ounce series behind the per-ounce rows"
+evidence = "E691"
+
+[[missing_fact]]
+subject = "Kibali"
+family = "cos_per_oz"
+text = "the attributable ounces sold used for the rate"
+evidence = "E817"
+
+[[missing_fact]]
+subject = "Hemlo"
+family = "cos_per_oz"
+text = "the attributable ounces sold used for the rate"
+evidence = "E817"
+
 # E816: Africa & Middle East AISC per ounce, Q1 2025 (two vintages) and H1 2025. The rule text is part of
 # the state root (it is in each instance's detail), so it must not change by a byte.
 
@@ -332,6 +353,7 @@ component_sheet = "Minestats3"
 component_cell = "B32"
 label_checks = "E816-Q1-2025"
 rule = "The region's per-ounce AISC numerator includes Loulo-Gounkoto's minesite sustaining capital although the site's $M rows and ounces print nil; no issuer note states the rule (E816)."
+basis = "reconstructed"
 
 [[reconstruction]]
 evidence_id = "E816"
@@ -344,6 +366,7 @@ component_sheet = "Minestats3"
 component_cell = "B32"
 label_checks = "E816-Q1-2025"
 rule = "The region's per-ounce AISC numerator includes Loulo-Gounkoto's minesite sustaining capital although the site's $M rows and ounces print nil; no issuer note states the rule (E816)."
+basis = "reconstructed"
 
 [[reconstruction]]
 evidence_id = "E816"
@@ -356,6 +379,7 @@ component_sheet = "Minestats3"
 component_cell = "B74"
 label_checks = "E816-H1-2025"
 rule = "The region's per-ounce AISC numerator includes Loulo-Gounkoto's minesite sustaining capital although the site's $M rows and ounces print nil; no issuer note states the rule (E816)."
+basis = "reconstructed"
 
 # Q1 2025 Mine Stats, sheet Minestats3, three-month block (rows 2-43): FACT, read 2026-10-29.
 

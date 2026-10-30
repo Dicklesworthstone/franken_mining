@@ -10,9 +10,9 @@
 use std::path::{Path, PathBuf};
 
 use fmine_evidence::Refusal;
-use fmine_registry::sources::{SourcesRegistry, is_quarter, load_sources_registry};
+use fmine_registry::sources::{BasisRow, SourcesRegistry, is_quarter, load_sources_registry};
 
-use crate::aisc::IdentityFamily;
+use crate::aisc::{ExplanationBasis, IdentityFamily};
 
 /// What a registered workbook is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -50,9 +50,10 @@ pub struct RegisteredSource {
 }
 
 /// A registered explanation for one identity instance whose printed numbers close only when a component
-/// published elsewhere is added (plan §21.6 state (ii), *reconstructed*: no issuer note states the rule).
+/// published elsewhere is added (plan §21.6 state (ii)). `basis` says whether an issuer note states the rule.
 /// The run re-reads the component cell, checks the labels that say what it is (row label, column header,
-/// period, year), and re-does the interval arithmetic; if any check fails the instance stays undecidable.
+/// period, year), re-reads a stated rule's quote, and re-does the interval arithmetic; if any check fails the
+/// instance stays undecidable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredReconstruction {
     pub evidence_id: String,
@@ -66,6 +67,17 @@ pub struct RegisteredReconstruction {
     /// `(cell, prefix)`: the cell's text (whitespace-collapsed) must start with the prefix.
     pub label_checks: Vec<(String, String)>,
     pub rule: String,
+    pub basis: ExplanationBasis,
+}
+
+/// The fact that would decide a (iv) instance of `family` for `subject` (BD-331.S2): prose with no digits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredMissingFact {
+    pub subject: String,
+    pub family: IdentityFamily,
+    pub text: String,
+    pub evidence: String,
+    pub closing_document: Option<String>,
 }
 
 /// The issuer's stated ownership share in a site (BD-331.S3), used for the per-ounce rates the issuer states on
@@ -100,6 +112,8 @@ pub struct IssuerProfile {
     /// The registered Mine Statistics label vocabulary as `(section, label)`. When it is non-empty, a data row
     /// whose label is not in it is refused by locator (bd-gwf1.1); when empty, labels are read unchecked.
     pub mine_stats_labels: Vec<(Option<String>, String)>,
+    /// Registered missing facts, at most one per `(subject, family)`.
+    pub missing_facts: Vec<RegisteredMissingFact>,
     /// The `--through YYYYQn` bound applied, if any; later rows were dropped before loading.
     pub through: Option<String>,
 }
@@ -145,6 +159,28 @@ impl IssuerProfile {
                 component_cell: r.component_cell,
                 label_checks: r.label_checks,
                 rule: r.rule,
+                basis: match r.basis {
+                    BasisRow::Reconstructed => ExplanationBasis::Reconstructed,
+                    BasisRow::Stated {
+                        doc,
+                        locator,
+                        quote_prefix,
+                    } => ExplanationBasis::Stated {
+                        doc,
+                        locator,
+                        quote_prefix,
+                    },
+                },
+            });
+        }
+        let mut missing_facts = Vec::with_capacity(reg.missing_facts.len());
+        for m in reg.missing_facts {
+            missing_facts.push(RegisteredMissingFact {
+                family: family(&m.family)?,
+                subject: m.subject,
+                text: m.text,
+                evidence: m.evidence,
+                closing_document: m.closing_document,
             });
         }
         let mut shares = Vec::with_capacity(reg.shares.len());
@@ -177,6 +213,7 @@ impl IssuerProfile {
                 .into_iter()
                 .map(|r| (r.section, r.label))
                 .collect(),
+            missing_facts,
             through: None,
         })
     }

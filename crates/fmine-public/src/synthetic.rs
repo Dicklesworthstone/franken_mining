@@ -19,6 +19,11 @@
 //!   synthetic Mine Stats `QTD` sheet confirms. The stated share rule (footnote `A30`, BD-331.S3) gives
 //!   cost of sales per ounce 1000·¾·400/150 = 2000: K prints 2000 (consistent at the stated share), L prints 2200,
 //!   whose feasible share interval [0.8210, 0.8290] excludes 3/4 (undecidable). Site D has no registered share.
+//! - M "Site J": AISC per ounce 2830 closes with the same component as H, and the footnote at `A31` states the
+//!   rule, so the explanation is *stated* (BD-331.S2); H's is *reconstructed*.
+//! - D's (iv) names Site C's registered missing fact; L's names the stated share rule's.
+//! - The hidden sheet `Q4 2029` holds one table: B "Site A" prints TCC 401 against a component sum of 400
+//!   (issuer discrepancy, hidden scope only). The hidden sheet `Scratch` holds A1 = 1 and no table.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -26,9 +31,10 @@ use std::path::{Path, PathBuf};
 use fmine_core::hash::sha256;
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, build_minimal_xlsx};
 
-use crate::aisc::IdentityFamily;
+use crate::aisc::{ExplanationBasis, IdentityFamily};
 use crate::sources::{
-    IssuerProfile, RegisteredReconstruction, RegisteredShare, SourceKind, registry_path,
+    IssuerProfile, RegisteredMissingFact, RegisteredReconstruction, RegisteredShare, SourceKind,
+    registry_path,
 };
 
 /// The issuer name reserved for the synthetic lane: a run under it is never gate-eligible.
@@ -36,8 +42,14 @@ pub const SYNTHETIC_ISSUER: &str = "synthetic";
 pub const SYNTHETIC_AISC_FILE: &str = "Synthetic_AISC.xlsx";
 pub const SYNTHETIC_STATS_FILE: &str = "Synthetic_Mine_Stats.xlsx";
 pub const SYNTHETIC_TABLE_SHEET: &str = "Q1 2030";
+/// The hidden sheet holding a table (BD-331.S2).
+pub const SYNTHETIC_HIDDEN_SHEET: &str = "Q4 2029";
 
-pub const SYNTHETIC_SUBJECTS: [&str; 10] = [
+/// The issuer note stating Site J's rule, at `A31` of the table sheet.
+pub const SYNTHETIC_STATED_QUOTE: &str = "i.  Site J's all-in sustaining costs per ounce include Site G's \
+minesite sustaining capital.";
+
+pub const SYNTHETIC_SUBJECTS: [&str; 11] = [
     "Site A",
     "Site B",
     "Site C",
@@ -48,6 +60,7 @@ pub const SYNTHETIC_SUBJECTS: [&str; 10] = [
     "Region North",
     "Site H",
     "Site I",
+    "Site J",
 ];
 
 /// Registered shares of the synthetic lane `(subject, num, den)`, printed as `(75%)` on the `QTD` sheet.
@@ -57,11 +70,34 @@ pub const SYNTHETIC_SHARES: [(&str, i64, i64); 2] = [("Site H", 3, 4), ("Site I"
 pub const SYNTHETIC_SHARE_FOOTNOTE: &str = "h.  Cost of sales per ounce: Gold cost of sales per ounce is \
 calculated as cost of sales divided by ounces sold (both on an attributable basis using the issuer's ownership share).";
 
-/// The synthetic lane's profile: its subjects and its one registered reconstruction. It has no registered
-/// sources because the synthetic workbooks are built in memory (`synthetic_workbooks`), never read from disk.
+/// The synthetic lane's profile: its subjects, shares, two registered reconstructions (one reconstructed, one
+/// stated) and one missing fact. It has no registered sources because the synthetic workbooks are built in memory
+/// (`synthetic_workbooks`), never read from disk.
 #[must_use]
 pub fn synthetic_profile() -> IssuerProfile {
     let s = |x: &str| x.to_string();
+    let reconstruction =
+        |evidence_id: &str, subject: &str, rule: &str, basis| RegisteredReconstruction {
+            evidence_id: s(evidence_id),
+            table_file: s(SYNTHETIC_AISC_FILE),
+            sheet: s(SYNTHETIC_TABLE_SHEET),
+            subject: s(subject),
+            family: IdentityFamily::AiscPerOunce,
+            component_file: s(SYNTHETIC_STATS_FILE),
+            component_sheet: s("Minestats3"),
+            component_cell: s("B32"),
+            label_checks: [
+                ("A32", "Minesite sustaining"),
+                ("B2", "Site G"),
+                ("A3", "For the three months ended March 31"),
+                ("B3", "2030"),
+            ]
+            .iter()
+            .map(|(c, p)| (s(c), s(p)))
+            .collect(),
+            rule: s(rule),
+            basis,
+        };
     IssuerProfile {
         issuer: s(SYNTHETIC_ISSUER),
         corpus_dir: String::new(),
@@ -79,29 +115,33 @@ pub fn synthetic_profile() -> IssuerProfile {
                 label: s(subject),
             })
             .collect(),
-        reconstructions: vec![RegisteredReconstruction {
-            evidence_id: s("SYNTHETIC"),
-            table_file: s(SYNTHETIC_AISC_FILE),
-            sheet: s(SYNTHETIC_TABLE_SHEET),
-            subject: s("Region North"),
-            family: IdentityFamily::AiscPerOunce,
-            component_file: s(SYNTHETIC_STATS_FILE),
-            component_sheet: s("Minestats3"),
-            component_cell: s("B32"),
-            label_checks: [
-                ("A32", "Minesite sustaining"),
-                ("B2", "Site G"),
-                ("A3", "For the three months ended March 31"),
-                ("B3", "2030"),
-            ]
-            .iter()
-            .map(|(c, p)| (s(c), s(p)))
-            .collect(),
-            rule: s(
+        reconstructions: vec![
+            reconstruction(
+                "SYNTHETIC",
+                "Region North",
                 "Synthetic: the region's AISC numerator includes Site G's minesite sustaining capital.",
+                ExplanationBasis::Reconstructed,
             ),
-        }],
+            reconstruction(
+                "SYNTHETIC-STATED",
+                "Site J",
+                "Synthetic: Site J's AISC numerator includes Site G's minesite sustaining capital, as A31 states.",
+                ExplanationBasis::Stated {
+                    doc: s(SYNTHETIC_AISC_FILE),
+                    locator: format!("{SYNTHETIC_TABLE_SHEET}!A31"),
+                    // The run collapses whitespace before comparing, as for label checks.
+                    quote_prefix: s("i. Site J's all-in sustaining costs per ounce include"),
+                },
+            ),
+        ],
         mine_stats_labels: Vec::new(),
+        missing_facts: vec![RegisteredMissingFact {
+            subject: s("Site C"),
+            family: IdentityFamily::AiscPerOunce,
+            text: s("the sustaining capital the synthetic issuer used for this rate"),
+            evidence: s("synthetic"),
+            closing_document: None,
+        }],
         through: None,
     }
 }
@@ -140,6 +180,7 @@ pub fn synthetic_aisc_cells() -> Vec<(String, MinimalCell)> {
         n("J5", 1.0),
         (String::from("B20"), MinimalCell::Error("#REF!".to_string())),
         t("A30", SYNTHETIC_SHARE_FOOTNOTE),
+        t("A31", SYNTHETIC_STATED_QUOTE),
     ];
     let headers = [
         ("B", "Site A"),
@@ -151,13 +192,14 @@ pub fn synthetic_aisc_cells() -> Vec<(String, MinimalCell)> {
         ("H", "Region North"),
         ("K", "Site H"),
         ("L", "Site I"),
+        ("M", "Site J"),
     ];
     for (col, h) in headers {
         cells.push(t(&format!("{col}2"), h));
     }
     // Rows 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16.
     let rows = [5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16];
-    let columns: [(&str, [f64; 11]); 8] = [
+    let columns: [(&str, [f64; 11]); 9] = [
         (
             "B",
             [
@@ -206,6 +248,12 @@ pub fn synthetic_aisc_cells() -> Vec<(String, MinimalCell)> {
                 400.0, -100.0, -75.0, 225.0, 10.0, 15.0, 250.0, 150.0, 2200.0, 1500.0, 1667.0,
             ],
         ),
+        (
+            "M",
+            [
+                300.0, -60.0, 0.0, 240.0, 0.0, 30.0, 270.0, 100.0, 3000.0, 2400.0, 2830.0,
+            ],
+        ),
     ];
     for (col, values) in columns {
         for (row, v) in rows.iter().zip(values) {
@@ -219,6 +267,26 @@ pub fn synthetic_aisc_cells() -> Vec<(String, MinimalCell)> {
         } else {
             n(&r, 0.0)
         });
+    }
+    cells
+}
+
+/// Cells of the hidden `Q4 2029` table: Site A prints TCC 401 against lines summing to 400 (one (iii)); its AISC,
+/// 501, foots on the printed TCC, and its three rates fit.
+#[must_use]
+pub fn synthetic_hidden_cells() -> Vec<(String, MinimalCell)> {
+    let mut cells: Vec<(String, MinimalCell)> = synthetic_aisc_cells()
+        .into_iter()
+        .filter(|(r, _)| {
+            (r.starts_with('A') && !matches!(r.as_str(), "A30" | "A31")) || r.as_str() == "B2"
+        })
+        .collect();
+    let rows = [5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16];
+    let values = [
+        500.0, -100.0, 0.0, 401.0, 10.0, 90.0, 501.0, 400.0, 1250.0, 1003.0, 1253.0,
+    ];
+    for (row, v) in rows.iter().zip(values) {
+        cells.push(n(&format!("B{row}"), v));
     }
     cells
 }
@@ -281,6 +349,11 @@ pub fn synthetic_workbooks(
             name: "Scratch".to_string(),
             hidden: true,
             cells: vec![n("A1", 1.0)],
+        },
+        MinimalSheet {
+            name: SYNTHETIC_HIDDEN_SHEET.to_string(),
+            hidden: true,
+            cells: synthetic_hidden_cells(),
         },
     ]);
     let stats = synthetic_stats_workbook("Site H (75%)1");
@@ -354,12 +427,33 @@ pub fn write_issuer_workspace(ws: &Path) -> std::io::Result<PathBuf> {
             s.subject, s.num, s.den, s.evidence
         );
     }
+    for m in &profile.missing_facts {
+        let _ = write!(
+            toml,
+            "\n[[missing_fact]]\nsubject = \"{}\"\nfamily = \"{}\"\ntext = \"{}\"\nevidence = \"{}\"\n",
+            m.subject,
+            m.family.as_str(),
+            m.text,
+            m.evidence
+        );
+    }
     for rec in &profile.reconstructions {
+        let basis = match &rec.basis {
+            ExplanationBasis::Reconstructed => "basis = \"reconstructed\"\n".to_string(),
+            ExplanationBasis::Stated {
+                doc,
+                locator,
+                quote_prefix,
+            } => format!(
+                "basis = \"stated\"\nquote_doc = \"{doc}\"\nquote_locator = \"{locator}\"\n\
+                 quote_prefix = \"{quote_prefix}\"\n"
+            ),
+        };
         let _ = write!(
             toml,
             "\n[[reconstruction]]\nevidence_id = \"{}\"\ntable_file = \"{}\"\nsheet = \"{}\"\nsubject = \"{}\"\n\
              family = \"{}\"\ncomponent_file = \"{}\"\ncomponent_sheet = \"{}\"\ncomponent_cell = \"{}\"\n\
-             label_checks = \"{}\"\nrule = \"{}\"\n",
+             label_checks = \"{}\"\nrule = \"{}\"\n{basis}",
             rec.evidence_id,
             rec.table_file,
             rec.sheet,

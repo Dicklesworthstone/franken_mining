@@ -598,7 +598,7 @@ mod tests {
             "\"payload\":{\"issuer\":\"synthetic\",\"lane\":\"synthetic\",\"gate_eligible\":false"
         ));
         assert!(
-            json.contains("\"totals\":{\"i\":30,\"ii\":1,\"iii\":1,\"iv\":2,\"v\":6,\"np\":5}")
+            json.contains("\"totals\":{\"i\":34,\"ii\":2,\"iii\":1,\"iv\":2,\"v\":6,\"np\":5}")
         );
         // The next actions sit in the envelope, not the payload.
         assert_eq!(
@@ -800,11 +800,16 @@ mod tests {
         let json = env.to_json();
         assert!(json.contains("\"lane\":\"public\",\"gate_eligible\":true"));
         assert!(json.contains("\"through\":\"2026Q2\""));
-        // Regression pin of this implementation's output (MOR_CASE E822, E826), not an independent value.
+        // Regression pin of this implementation's output (MOR_CASE E822, E826, E828), not an independent value.
         assert!(json.contains(
-            "\"state_root\":\"0c6d01e3f3a8020e4cc6591559c04d10a171e4da0805c0b47f7784357cf03613\""
+            "\"state_root\":\"fb8b38c2e3c6bf0c3f59e82ac88e00106b4048efb3c0463b06b8c0cf8a9c2601\""
         ));
         assert!(json.contains("\"aisc_tables\":34,\"instances\":2595"));
+        // BD-331.S2 (census E828): the hidden scope is reported, labelled and never counted.
+        assert!(json.contains(
+            "\"hidden_scope\":{\"scope\":\"sheet not displayed to readers\",\"counted\":false,\
+             \"aisc_tables\":6,\"instances\":435,\"by_state\":{\"i\":404,\"ii\":0,\"iii\":1,\"iv\":17,\"v\":3,\"np\":10}"
+        ));
         assert!(json.contains(
             // BD-331.S3 (census E826): 263 stated-share fits move v → i and 65 misses v → iv.
             "\"totals\":{\"i\":2383,\"ii\":3,\"iii\":4,\"iv\":82,\"v\":63,\"np\":60}"
@@ -812,7 +817,7 @@ mod tests {
         // The public-lane envelope: the root as certificate, the no-claim line, and its two next actions.
         assert_eq!(
             env.certificate.as_deref(),
-            Some("0c6d01e3f3a8020e4cc6591559c04d10a171e4da0805c0b47f7784357cf03613")
+            Some("fb8b38c2e3c6bf0c3f59e82ac88e00106b4048efb3c0463b06b8c0cf8a9c2601")
         );
         assert_eq!(env.no_claim, Some(fmine_public::NO_CLAIM));
         let commands: Vec<&str> = env

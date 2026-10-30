@@ -25,13 +25,13 @@ use fmine_io::xlsx::{
 };
 
 use crate::aisc::{
-    IdentityFamily, IdentityInstance, IdentityState, RateMiss, ShareBasis, UnregisteredHeader,
-    cell_text, confirm_share_label, find_qtd_sheet, ledger_for_table, locate_table,
-    reconstruction_closes,
+    DEFAULT_MISSING_FACT, ExplanationBasis, IdentityFamily, IdentityInstance, IdentityState,
+    RateMiss, ShareBasis, UnregisteredHeader, cell_text, confirm_share_label, find_qtd_sheet,
+    ledger_for_table, locate_table, reconstruction_closes,
 };
 use crate::mine_stats::{CellRefusal, LabelVocabulary, MineStatsRead, read_mine_stats};
 pub use crate::sources::load_issuer_profile;
-use crate::sources::{IssuerProfile, RegisteredReconstruction, SourceKind};
+use crate::sources::{IssuerProfile, RegisteredMissingFact, RegisteredReconstruction, SourceKind};
 
 /// Converts an extracted cell into a public-basis `Claim<Option<f64>>` (`BD-058`): a number is the value as
 /// published, a placeholder is a known unknown, and text or a formula error is refused.
@@ -220,7 +220,22 @@ pub struct PublicAssuranceReport {
     /// state root yet: it enters with the Mine Stats claims (BD-332.S3), so the root still moves only when an
     /// input file or the AISC ledger does.
     pub mine_stats: Vec<(String, MineStatsRead)>,
+    /// The same families run over hidden worksheets (BD-331.S2). Bound into the state root in its own section
+    /// and never counted in `instances`, the totals or `GATE-BULL-01`.
+    pub hidden_scope: HiddenScope,
     pub ledger_anchor: LedgerAnchor,
+}
+
+/// How every hidden-scope instance is labelled.
+pub const HIDDEN_SCOPE: &str = "sheet not displayed to readers";
+
+/// The identity ledger over the AISC tables on hidden worksheets: reported, bound into the root, never counted.
+#[derive(Debug, Clone, Default)]
+pub struct HiddenScope {
+    pub aisc_tables: usize,
+    pub instances: Vec<IdentityInstance>,
+    pub unregistered_headers: Vec<UnregisteredHeader>,
+    pub table_refusals: Vec<TableRefusal>,
 }
 
 /// Counts of the alternative construction (subtotal rounded once), reported and never scored.
@@ -285,6 +300,65 @@ impl PublicAssuranceReport {
             }
         }
         a
+    }
+
+    /// One (ii), (iii) or (iv) instance as a JSON object; `scope` labels a hidden-scope instance.
+    fn exception_json(&self, i: &IdentityInstance, scope: Option<&str>) -> String {
+        let mut o = format!(
+            "{{\"state\":{},\"label\":{},\"file\":{},\"sha256\":{},\"sheet\":{},\"cell\":{},\
+             \"subject\":{},\"family\":{},\"detail\":{}",
+            js(i.state.code()),
+            js(i.state.label()),
+            js(&i.file),
+            js(&self.source_sha(&i.file)),
+            js(&i.sheet),
+            js(&i.cell),
+            js(&i.subject),
+            js(i.family.as_str()),
+            js(&i.state.detail())
+        );
+        if let Some(scope) = scope {
+            let _ = write!(o, ",\"scope\":{}", js(scope));
+        }
+        match &i.state {
+            IdentityState::IssuerDiscrepancy(c) => {
+                let lines: Vec<String> = c.line_cells.iter().map(|l| js(l)).collect();
+                let _ = write!(
+                    o,
+                    ",\"certificate\":{{\"printed\":{},\"component_sum\":{},\"residual\":{},\"total_cell\":{},\
+                     \"line_cells\":[{}],\"sign_flip_witness\":{},\"alternate_consistent\":{}}}",
+                    c.printed,
+                    c.component_sum,
+                    c.residual,
+                    js(&c.total_cell),
+                    lines.join(","),
+                    c.sign_flip_witness
+                        .as_deref()
+                        .map_or_else(|| "null".to_string(), js),
+                    c.alternate_consistent
+                );
+            }
+            IdentityState::Explained { rule, .. } => {
+                let _ = write!(o, ",\"rule\":{}", js(rule));
+            }
+            IdentityState::Undecidable {
+                missing_fact,
+                closing_document,
+                ..
+            } => {
+                let _ = write!(
+                    o,
+                    ",\"missing_fact\":{},\"closing_document\":{}",
+                    js(missing_fact),
+                    closing_document
+                        .as_deref()
+                        .map_or_else(|| "null".to_string(), js)
+                );
+            }
+            _ => {}
+        }
+        o.push('}');
+        o
     }
 
     fn source_sha(&self, file: &str) -> String {
@@ -431,53 +505,13 @@ impl PublicAssuranceReport {
              \"rate_consistent_of_declared_consistent\":{}}},\"exceptions\":[",
             alt.footing_consistent, alt.rate_consistent
         );
-        let mut first = true;
-        for i in self
+        let exceptions: Vec<String> = self
             .instances
             .iter()
             .filter(|i| matches!(i.state.code(), "ii" | "iii" | "iv"))
-        {
-            let _ = write!(
-                o,
-                "{}{{\"state\":{},\"label\":{},\"file\":{},\"sha256\":{},\"sheet\":{},\"cell\":{},\
-                 \"subject\":{},\"family\":{},\"detail\":{}",
-                if first { "" } else { "," },
-                js(i.state.code()),
-                js(i.state.label()),
-                js(&i.file),
-                js(&self.source_sha(&i.file)),
-                js(&i.sheet),
-                js(&i.cell),
-                js(&i.subject),
-                js(i.family.as_str()),
-                js(&i.state.detail())
-            );
-            match &i.state {
-                IdentityState::IssuerDiscrepancy(c) => {
-                    let lines: Vec<String> = c.line_cells.iter().map(|l| js(l)).collect();
-                    let _ = write!(
-                        o,
-                        ",\"certificate\":{{\"printed\":{},\"component_sum\":{},\"residual\":{},\"total_cell\":{},\
-                         \"line_cells\":[{}],\"sign_flip_witness\":{},\"alternate_consistent\":{}}}",
-                        c.printed,
-                        c.component_sum,
-                        c.residual,
-                        js(&c.total_cell),
-                        lines.join(","),
-                        c.sign_flip_witness
-                            .as_deref()
-                            .map_or_else(|| "null".to_string(), js),
-                        c.alternate_consistent
-                    );
-                }
-                IdentityState::Explained { rule, .. } => {
-                    let _ = write!(o, ",\"rule\":{}", js(rule));
-                }
-                _ => {}
-            }
-            o.push('}');
-            first = false;
-        }
+            .map(|i| self.exception_json(i, None))
+            .collect();
+        o.push_str(&exceptions.join(","));
         o.push_str("],");
         for (key, code) in [("refused", "v"), ("not_published", "np")] {
             let mut by_reason: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -527,7 +561,36 @@ impl PublicAssuranceReport {
                 js(&t.reason)
             );
         }
-        o.push_str("]},\"quarantine\":[");
+        o.push_str("]},");
+        let hidden = &self.hidden_scope;
+        let _ = write!(
+            o,
+            "\"hidden_scope\":{{\"scope\":{},\"counted\":false,\"aisc_tables\":{},\"instances\":{},\"by_state\":{{",
+            js(HIDDEN_SCOPE),
+            hidden.aisc_tables,
+            hidden.instances.len()
+        );
+        for (n, code) in STATE_CODES.iter().enumerate() {
+            let count = hidden
+                .instances
+                .iter()
+                .filter(|i| i.state.code() == *code)
+                .count();
+            let _ = write!(o, "{}{}:{count}", if n == 0 { "" } else { "," }, js(code));
+        }
+        let hidden_exceptions: Vec<String> = hidden
+            .instances
+            .iter()
+            .filter(|i| matches!(i.state.code(), "ii" | "iii" | "iv"))
+            .map(|i| self.exception_json(i, Some(HIDDEN_SCOPE)))
+            .collect();
+        let _ = write!(
+            o,
+            "}},\"exceptions\":[{}],\"unregistered_headers\":{},\"table_refusals\":{}}},\"quarantine\":[",
+            hidden_exceptions.join(","),
+            hidden.unregistered_headers.len(),
+            hidden.table_refusals.len()
+        );
         let mut first = true;
         for s in &self.sources {
             for q in &s.workbook.quarantined {
@@ -635,8 +698,37 @@ fn try_reconstruction(
                 "registered reconstruction {} not applied: {why}",
                 rec.evidence_id
             ),
+            missing_fact: DEFAULT_MISSING_FACT.to_string(),
+            closing_document: None,
         })
     };
+    if let ExplanationBasis::Stated {
+        doc,
+        locator,
+        quote_prefix,
+    } = &rec.basis
+    {
+        // A stated rule counts only while the issuer's text still says it (BD-331.S2).
+        let quote = locator.split_once('!').and_then(|(sheet, cell)| {
+            let ws = sources
+                .iter()
+                .find(|s| s.file_name == *doc)?
+                .workbook
+                .sheets
+                .iter()
+                .find(|s| s.name == sheet)?;
+            parse_a1_ref(cell).and_then(|(r, c)| cell_text(ws, r, c))
+        });
+        if !quote
+            .as_deref()
+            .is_some_and(|t| t.starts_with(quote_prefix))
+        {
+            return fail(format!(
+                "stated quote {doc}:{locator} reads {:?}, expected text starting {quote_prefix:?}",
+                quote.unwrap_or_default()
+            ));
+        }
+    }
     let Some(src) = sources.iter().find(|s| s.file_name == rec.component_file) else {
         return fail(format!("{} not loaded", rec.component_file));
     };
@@ -679,6 +771,7 @@ fn try_reconstruction(
             evidence_id: rec.evidence_id.clone(),
             rule: rec.rule.clone(),
             component,
+            basis: rec.basis.clone(),
         })
     } else {
         fail(format!(
@@ -743,54 +836,68 @@ pub fn assess(
     let issuer = profile.issuer.as_str();
     let subjects = profile.subjects.as_slice();
     let reconstructions = profile.reconstructions.as_slice();
-    let mut instances = Vec::new();
-    let mut unregistered = Vec::new();
-    let mut table_refusals = Vec::new();
-    let mut aisc_tables = 0;
+    let mut visible = HiddenScope::default();
+    let mut hidden = HiddenScope::default();
     for src in sources
         .iter()
         .filter(|s| s.kind == SourceKind::AiscReconciliation)
     {
         let shares = share_bases(profile, &sources, &src.quarter);
-        for sheet in &src.workbook.sheets {
-            match locate_table(sheet, subjects) {
-                Ok(None) => {}
-                Err(reason) => table_refusals.push(TableRefusal {
-                    file: src.file_name.clone(),
-                    sheet: sheet.name.clone(),
-                    reason,
-                }),
-                Ok(Some(table)) => {
-                    aisc_tables += 1;
-                    let mut explain = |subject: &str, family: IdentityFamily, miss: RateMiss| {
-                        try_reconstruction(
-                            &sources,
-                            reconstructions,
+        let scopes = [
+            (&src.workbook.sheets, &mut visible),
+            (&src.workbook.hidden_sheets, &mut hidden),
+        ];
+        for (sheets, scope) in scopes {
+            for sheet in sheets {
+                match locate_table(sheet, subjects) {
+                    Ok(None) => {}
+                    Err(reason) => scope.table_refusals.push(TableRefusal {
+                        file: src.file_name.clone(),
+                        sheet: sheet.name.clone(),
+                        reason,
+                    }),
+                    Ok(Some(table)) => {
+                        scope.aisc_tables += 1;
+                        let mut explain =
+                            |subject: &str, family: IdentityFamily, miss: RateMiss| {
+                                try_reconstruction(
+                                    &sources,
+                                    reconstructions,
+                                    &src.file_name,
+                                    &sheet.name,
+                                    subject,
+                                    family,
+                                    miss,
+                                )
+                            };
+                        ledger_for_table(
                             &src.file_name,
-                            &sheet.name,
-                            subject,
-                            family,
-                            miss,
-                        )
-                    };
-                    ledger_for_table(
-                        &src.file_name,
-                        sheet,
-                        &table,
-                        subjects,
-                        &shares,
-                        &mut explain,
-                        &mut instances,
-                        &mut unregistered,
-                    );
+                            sheet,
+                            &table,
+                            subjects,
+                            &shares,
+                            &mut explain,
+                            &mut scope.instances,
+                            &mut scope.unregistered_headers,
+                        );
+                    }
                 }
             }
         }
     }
+    for i in visible.instances.iter_mut().chain(&mut hidden.instances) {
+        name_missing_fact(i, &profile.missing_facts);
+    }
+    let HiddenScope {
+        aisc_tables,
+        instances,
+        unregistered_headers: unregistered,
+        table_refusals,
+    } = visible;
 
     // The state root binds every input digest, every census and every instance's state, so changing any
-    // input cell changes the root.
-    let mut enc = Encoder::new_frame(*b"M0AS", 2);
+    // input cell changes the root. Version 3 adds the hidden-scope section (BD-331.S2).
+    let mut enc = Encoder::new_frame(*b"M0AS", 3);
     enc.put_str(issuer);
     enc.put_str(lane.as_str());
     enc.put_u64(sources.len() as u64);
@@ -809,27 +916,36 @@ pub fn assess(
             enc.put_u64(n as u64);
         }
     }
-    enc.put_u64(instances.len() as u64);
-    for i in &instances {
-        for field in [
-            i.file.as_str(),
-            &i.sheet,
-            &i.cell,
-            &i.subject,
-            i.family.as_str(),
-            i.state.code(),
-        ] {
-            enc.put_str(field);
+    for (instances, unregistered, table_refusals) in [
+        (&instances, &unregistered, &table_refusals),
+        (
+            &hidden.instances,
+            &hidden.unregistered_headers,
+            &hidden.table_refusals,
+        ),
+    ] {
+        enc.put_u64(instances.len() as u64);
+        for i in instances {
+            for field in [
+                i.file.as_str(),
+                &i.sheet,
+                &i.cell,
+                &i.subject,
+                i.family.as_str(),
+                i.state.code(),
+            ] {
+                enc.put_str(field);
+            }
+            enc.put_str(&i.state.detail());
         }
-        enc.put_str(&i.state.detail());
-    }
-    enc.put_u64(unregistered.len() as u64);
-    for h in &unregistered {
-        enc.put_str(&format!("{}:{}!{}={}", h.file, h.sheet, h.cell, h.header));
-    }
-    enc.put_u64(table_refusals.len() as u64);
-    for t in &table_refusals {
-        enc.put_str(&format!("{}:{}:{}", t.file, t.sheet, t.reason));
+        enc.put_u64(unregistered.len() as u64);
+        for h in unregistered {
+            enc.put_str(&format!("{}:{}!{}={}", h.file, h.sheet, h.cell, h.header));
+        }
+        enc.put_u64(table_refusals.len() as u64);
+        for t in table_refusals {
+            enc.put_str(&format!("{}:{}:{}", t.file, t.sheet, t.reason));
+        }
     }
     let state_root = blake3_hash(&enc.finish());
     let cell_id = match lane {
@@ -880,7 +996,28 @@ pub fn assess(
         instances,
         unregistered_headers: unregistered,
         mine_stats,
+        hidden_scope: hidden,
         ledger_anchor,
+    }
+}
+
+/// Names the fact that would decide a (iv) instance: the registered `(subject, family)` row if there is one,
+/// otherwise the text the ledger gave it (its family default, or the stated share rule's).
+fn name_missing_fact(instance: &mut IdentityInstance, registered: &[RegisteredMissingFact]) {
+    let IdentityState::Undecidable {
+        missing_fact,
+        closing_document,
+        ..
+    } = &mut instance.state
+    else {
+        return;
+    };
+    if let Some(row) = registered
+        .iter()
+        .find(|m| m.subject == instance.subject && m.family == instance.family)
+    {
+        *missing_fact = format!("{} ({})", row.text, row.evidence);
+        closing_document.clone_from(&row.closing_document);
     }
 }
 
@@ -971,10 +1108,11 @@ mod tests {
         assert_eq!(r.lane, Lane::Synthetic);
         assert!(!r.gate_eligible());
         assert_eq!(r.ledger_anchor.cell_id, "CELL-SYNTHETIC");
-        assert_eq!((r.aisc_tables, r.instances.len()), (1, 45));
+        assert_eq!((r.aisc_tables, r.instances.len()), (1, 50));
         let totals: Vec<usize> = STATE_CODES.iter().map(|c| r.count_state(c)).collect();
-        // Columns K and L (BD-331.S3) add nine (i) and one (iv) to the 35 instances of columns B–H.
-        assert_eq!(totals, vec![30, 1, 1, 2, 6, 5]);
+        // Columns K and L (BD-331.S3) add nine (i) and one (iv) to the 35 instances of columns B–H; column M
+        // (BD-331.S2) adds four (i) and one stated (ii).
+        assert_eq!(totals, vec![34, 2, 1, 2, 6, 5]);
 
         match state_of(&r, "C8", IdentityFamily::TccFooting) {
             IdentityState::IssuerDiscrepancy(c) => {
@@ -986,9 +1124,19 @@ mod tests {
             other => panic!("C8 TCC footing: {other:?}"),
         }
         match state_of(&r, "D16", IdentityFamily::AiscPerOunce) {
-            IdentityState::Undecidable { detail } => {
+            IdentityState::Undecidable {
+                detail,
+                missing_fact,
+                closing_document,
+            } => {
                 // 405000/199 = 2035.1758…: the upper bound rounds up (it printed 2035.175 before 2026-10-29).
-                assert!(detail.contains("[1965.174, 2035.176]"), "{detail}")
+                assert!(detail.contains("[1965.174, 2035.176]"), "{detail}");
+                // Site C's registered missing fact replaces the family default (BD-331.S2).
+                assert_eq!(
+                    missing_fact,
+                    "the sustaining capital the synthetic issuer used for this rate (synthetic)"
+                );
+                assert_eq!(closing_document, &None);
             }
             other => panic!("D16: {other:?}"),
         }
@@ -1012,11 +1160,19 @@ mod tests {
             }
         );
         match state_of(&r, "L14", IdentityFamily::CosPerOunce) {
-            IdentityState::Undecidable { detail } => {
+            s @ IdentityState::Undecidable {
+                detail,
+                missing_fact,
+                ..
+            } => {
                 assert!(detail.contains("allow s in [0.8210, 0.8290]"), "{detail}");
+                assert_eq!(missing_fact, aisc::SHARE_MISSING_FACT);
                 assert!(
-                    detail.contains("missing fact: the attributable cost of sales or ounces"),
-                    "{detail}"
+                    s.detail().ends_with(
+                        "; missing fact: the attributable cost of sales or ounces the issuer used"
+                    ),
+                    "{}",
+                    s.detail()
                 );
             }
             other => panic!("L14: {other:?}"),
@@ -1047,6 +1203,10 @@ mod tests {
             }
             other => panic!("H16: {other:?}"),
         }
+        assert_eq!(
+            state_of(&r, "M16", IdentityFamily::AiscPerOunce).label(),
+            "explained_stated"
+        );
         assert_eq!(r.unregistered_headers.len(), 1);
         assert_eq!(r.unregistered_headers[0].cell, "J2");
         assert!(r.instances.iter().all(|i| i.column != "I"));
@@ -1074,8 +1234,13 @@ mod tests {
         ));
         assert!(json.contains("\"sign_flip_witness\":\"C6\""));
         assert!(
-            json.contains("\"totals\":{\"i\":30,\"ii\":1,\"iii\":1,\"iv\":2,\"v\":6,\"np\":5}")
+            // Site J (BD-331.S2) adds four (i) and one stated (ii); the hidden table is not counted.
+            json.contains("\"totals\":{\"i\":34,\"ii\":2,\"iii\":1,\"iv\":2,\"v\":6,\"np\":5}")
         );
+        assert!(json.contains(
+            "\"hidden_scope\":{\"scope\":\"sheet not displayed to readers\",\"counted\":false,\
+             \"aisc_tables\":1,\"instances\":5,\"by_state\":{\"i\":4,\"ii\":0,\"iii\":1,\"iv\":0,\"v\":0,\"np\":0}"
+        ));
         // The flags, the no-claim line and the next actions belong to the CLI envelope, not the payload.
         for field in ["\"flags\"", "\"no_claim\"", "\"next_actions\""] {
             assert!(!json.contains(field), "{field} in the payload");
@@ -1127,7 +1292,7 @@ mod tests {
         ];
         let r = assess(&profile, Lane::Synthetic, sources);
         match state_of(&r, "H16", IdentityFamily::AiscPerOunce) {
-            IdentityState::Undecidable { detail } => assert!(detail.contains("B3"), "{detail}"),
+            IdentityState::Undecidable { detail, .. } => assert!(detail.contains("B3"), "{detail}"),
             other => panic!("H16: {other:?}"),
         }
     }
@@ -1314,6 +1479,260 @@ mod tests {
         );
     }
 
+    /// BD-331.S2: a (ii) says whether the issuer states its rule. Region North's is reconstructed; Site J's is
+    /// stated at A31. Barrick's E816 rows are registered as reconstructed.
+    #[test]
+    fn test_explained_basis_labels() {
+        let r = run_synthetic_assurance(&[]).expect("synthetic");
+        let h16 = state_of(&r, "H16", IdentityFamily::AiscPerOunce);
+        assert_eq!(h16.label(), "explained_reconstructed");
+        assert_eq!(
+            h16.detail(),
+            "SYNTHETIC: Synthetic_Mine_Stats.xlsx:Minestats3!B32=13"
+        );
+        let m16 = state_of(&r, "M16", IdentityFamily::AiscPerOunce);
+        assert_eq!(m16.label(), "explained_stated");
+        assert_eq!(
+            m16.detail(),
+            "SYNTHETIC-STATED: Synthetic_Mine_Stats.xlsx:Minestats3!B32=13; stated at \
+             Synthetic_AISC.xlsx:Q1 2030!A31"
+        );
+        let json = r.to_json();
+        assert!(json.contains("\"label\":\"explained_stated\""), "{json}");
+        let barrick = load_issuer_profile(&workspace_root(), "barrick").expect("registry");
+        let e816: Vec<&ExplanationBasis> = barrick
+            .reconstructions
+            .iter()
+            .filter(|r| r.evidence_id == "E816")
+            .map(|r| &r.basis)
+            .collect();
+        assert_eq!(e816, [&ExplanationBasis::Reconstructed; 3]);
+    }
+
+    /// BD-331.S2 planted negative: when the stated quote no longer reads as registered, the explanation is
+    /// refused and the instance stays (iv), naming the quote cell. The reconstructed (ii) needs no quote.
+    #[test]
+    fn test_stated_quote_mismatch_keeps_iv() {
+        for text in [
+            "i.  Site J's all-in sustaining costs per ounce exclude Site G's capital.",
+            "",
+        ] {
+            let edit = [(String::from("A31"), MinimalCell::Text(text.to_string()))];
+            let r = run_synthetic_assurance(&edit).expect("synthetic");
+            match state_of(&r, "M16", IdentityFamily::AiscPerOunce) {
+                IdentityState::Undecidable {
+                    detail,
+                    missing_fact,
+                    ..
+                } => {
+                    assert!(
+                        detail.starts_with(
+                            "registered reconstruction SYNTHETIC-STATED not applied: stated quote \
+                             Synthetic_AISC.xlsx:Q1 2030!A31 reads"
+                        ),
+                        "{detail}"
+                    );
+                    assert_eq!(missing_fact, aisc::DEFAULT_MISSING_FACT);
+                }
+                other => panic!("M16 with A31 = {text:?}: {other:?}"),
+            }
+            assert_eq!(
+                state_of(&r, "H16", IdentityFamily::AiscPerOunce).label(),
+                "explained_reconstructed"
+            );
+        }
+    }
+
+    /// BD-331.S2: an unregistered (subject, family) names its family's default; a registered row replaces it;
+    /// a stated-share miss names the share rule's fact.
+    #[test]
+    fn test_missing_fact_family_default() {
+        let mut profile = synthetic::synthetic_profile();
+        profile.missing_facts.clear();
+        let r = synthetic_run_with(&profile, &[], "Site H (75%)1");
+        let fact = |cell: &str, family| match state_of(&r, cell, family) {
+            IdentityState::Undecidable { missing_fact, .. } => missing_fact.clone(),
+            other => panic!("{cell}: {other:?}"),
+        };
+        assert_eq!(
+            fact("D16", IdentityFamily::AiscPerOunce),
+            aisc::DEFAULT_MISSING_FACT
+        );
+        assert_eq!(
+            fact("L14", IdentityFamily::CosPerOunce),
+            aisc::SHARE_MISSING_FACT
+        );
+        // A row for another family of the same subject does not apply.
+        profile.missing_facts = synthetic::synthetic_profile().missing_facts;
+        profile.missing_facts[0].family = IdentityFamily::TccPerOunce;
+        let r = synthetic_run_with(&profile, &[], "Site H (75%)1");
+        match state_of(&r, "D16", IdentityFamily::AiscPerOunce) {
+            IdentityState::Undecidable { missing_fact, .. } => {
+                assert_eq!(missing_fact, aisc::DEFAULT_MISSING_FACT)
+            }
+            other => panic!("D16: {other:?}"),
+        }
+        // Every (iv) of the seeded run names one, in the state and in the report.
+        let r = run_synthetic_assurance(&[]).expect("synthetic");
+        let iv: Vec<&IdentityInstance> = r
+            .instances
+            .iter()
+            .filter(|i| i.state.code() == "iv")
+            .collect();
+        assert_eq!(iv.len(), 2);
+        for i in iv {
+            assert!(i.state.detail().contains("; missing fact: the "), "{i:?}");
+        }
+        assert_eq!(r.to_json().matches("\"missing_fact\":\"the ").count(), 2);
+    }
+
+    /// BD-331.S2: missing-fact texts are prose. The two built-in texts and every registered Barrick row have no
+    /// digit (the registry refuses one; `fmine-registry` tests that).
+    #[test]
+    fn test_missing_fact_texts_have_no_digits() {
+        let barrick = load_issuer_profile(&workspace_root(), "barrick").expect("registry");
+        assert_eq!(barrick.missing_facts.len(), 3);
+        let texts = [aisc::DEFAULT_MISSING_FACT, aisc::SHARE_MISSING_FACT]
+            .into_iter()
+            .chain(barrick.missing_facts.iter().map(|m| m.text.as_str()));
+        for text in texts {
+            assert!(!text.bytes().any(|b| b.is_ascii_digit()), "{text}");
+        }
+    }
+
+    /// BD-331.S2: hidden sheets are parsed into `hidden_sheets` and leave the census and its digest unchanged.
+    #[test]
+    fn test_hidden_sheet_parsed_not_censused() {
+        let files = synthetic::synthetic_workbooks(&[]);
+        let aisc_bytes = files
+            .iter()
+            .find(|f| f.0 == synthetic::SYNTHETIC_AISC_FILE)
+            .map(|f| f.3.clone())
+            .expect("aisc");
+        let with_hidden = Workbook::from_bytes("a.xlsx", &aisc_bytes).expect("parse");
+        let visible_only = Workbook::from_bytes(
+            "a.xlsx",
+            &fmine_io::xlsx::build_minimal_xlsx(&[fmine_io::xlsx::MinimalSheet {
+                name: synthetic::SYNTHETIC_TABLE_SHEET.to_string(),
+                hidden: false,
+                cells: synthetic::synthetic_aisc_cells(),
+            }]),
+        )
+        .expect("parse");
+        let names: Vec<&str> = with_hidden
+            .hidden_sheets
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(names, ["Scratch", synthetic::SYNTHETIC_HIDDEN_SHEET]);
+        assert_eq!(
+            with_hidden.hidden_sheets[0]
+                .cell(1, 1)
+                .and_then(|c| c.value.as_number()),
+            Some(1.0)
+        );
+        assert!(with_hidden.sheet("Scratch").is_none());
+        let (a, b) = (with_hidden.cell_census(), visible_only.cell_census());
+        assert_eq!((a.hidden_sheets, b.hidden_sheets), (2, 0));
+        assert_eq!(
+            CellCensus {
+                hidden_sheets: 0,
+                ..a
+            },
+            b
+        );
+    }
+
+    /// BD-331.S2: the hidden table's instances are reported in their own section, labelled, and never counted.
+    #[test]
+    fn test_hidden_scope_never_counted() {
+        let r = run_synthetic_assurance(&[]).expect("synthetic");
+        let hidden = &r.hidden_scope;
+        assert_eq!(hidden.aisc_tables, 1);
+        assert_eq!(r.aisc_tables, 1);
+        let states: Vec<(&str, &str)> = hidden
+            .instances
+            .iter()
+            .map(|i| (i.cell.as_str(), i.state.code()))
+            .collect();
+        assert_eq!(
+            states,
+            [
+                ("B8", "iii"),
+                ("B11", "i"),
+                ("B14", "i"),
+                ("B15", "i"),
+                ("B16", "i")
+            ]
+        );
+        assert!(
+            hidden
+                .instances
+                .iter()
+                .all(|i| i.sheet == synthetic::SYNTHETIC_HIDDEN_SHEET)
+        );
+        assert!(
+            r.instances
+                .iter()
+                .all(|i| i.sheet == synthetic::SYNTHETIC_TABLE_SHEET)
+        );
+        assert_eq!(r.count_state("iii"), 1, "only C8 on the visible sheet");
+        let json = r.to_json();
+        let (ledger, rest) = json.split_once("\"hidden_scope\":").expect("section");
+        assert!(!ledger.contains(synthetic::SYNTHETIC_HIDDEN_SHEET));
+        assert!(rest.contains(
+            "\"sheet\":\"Q4 2029\",\"cell\":\"B8\",\"subject\":\"Site A\",\"family\":\"tcc_footing\",\
+             \"detail\":\"printed 401 vs component sum 400 (residual 1)\",\
+             \"scope\":\"sheet not displayed to readers\""
+        ));
+    }
+
+    /// BD-331.S2: a hidden cell is outside the counts but inside the root.
+    #[test]
+    fn test_hidden_scope_moves_root() {
+        let base = run_synthetic_assurance(&[]).expect("synthetic");
+        let mut files = synthetic::synthetic_workbooks(&[]);
+        let mut hidden_cells = synthetic::synthetic_hidden_cells();
+        hidden_cells.retain(|(r, _)| r != "B8");
+        hidden_cells.push(("B8".to_string(), MinimalCell::Number(400.0)));
+        for f in &mut files {
+            if f.0 == synthetic::SYNTHETIC_AISC_FILE {
+                f.3 = fmine_io::xlsx::build_minimal_xlsx(&[
+                    fmine_io::xlsx::MinimalSheet {
+                        name: synthetic::SYNTHETIC_TABLE_SHEET.to_string(),
+                        hidden: false,
+                        cells: synthetic::synthetic_aisc_cells(),
+                    },
+                    fmine_io::xlsx::MinimalSheet {
+                        name: "Scratch".to_string(),
+                        hidden: true,
+                        cells: vec![("A1".to_string(), MinimalCell::Number(1.0))],
+                    },
+                    fmine_io::xlsx::MinimalSheet {
+                        name: synthetic::SYNTHETIC_HIDDEN_SHEET.to_string(),
+                        hidden: true,
+                        cells: hidden_cells.clone(),
+                    },
+                ]);
+            }
+        }
+        let moved = assess(
+            &synthetic::synthetic_profile(),
+            Lane::Synthetic,
+            load_synthetic(files).expect("parse"),
+        );
+        assert_eq!(moved.instances, base.instances);
+        assert_eq!(
+            moved.sources[1].census.numeric_digest,
+            base.sources[1].census.numeric_digest
+        );
+        assert_eq!(moved.hidden_scope.instances[0].state.code(), "i");
+        assert_ne!(
+            moved.ledger_anchor.state_root,
+            base.ledger_anchor.state_root
+        );
+    }
+
     /// A complete run through a TOML registry in default CI (the real-corpus runs are ignored tests): the two
     /// synthetic workbooks plus a third, later Mine Stats file are written to a scratch corpus, registered by
     /// digest in a generated TOML, and loaded with no code-side profile. The ledger equals the in-code synthetic
@@ -1328,13 +1747,15 @@ mod tests {
         let profile = load_issuer_profile(&ws, "synthetic").expect("generated registry loads");
         assert_eq!(profile.sources.len(), 3);
         assert_eq!(profile.reconstructions, code_profile.reconstructions);
+        assert_eq!(profile.missing_facts, code_profile.missing_facts);
         let r = run_public_assurance(&profile, &ws).expect("all three files verify by digest");
         let totals: Vec<usize> = STATE_CODES.iter().map(|c| r.count_state(c)).collect();
         assert_eq!(
             totals,
-            vec![30, 1, 1, 2, 6, 5],
+            vec![34, 2, 1, 2, 6, 5],
             "same ledger as the in-code synthetic profile"
         );
+        assert_eq!(r.hidden_scope.instances.len(), 5);
         assert_eq!(
             (&profile.regions, &profile.shares),
             (&code_profile.regions, &code_profile.shares)
@@ -1354,7 +1775,7 @@ mod tests {
         assert_eq!(bounded.sources.len(), 2);
         assert_eq!(bounded.through.as_deref(), Some("2030Q1"));
         let totals: Vec<usize> = STATE_CODES.iter().map(|c| bounded.count_state(c)).collect();
-        assert_eq!(totals, vec![30, 1, 1, 2, 6, 5]);
+        assert_eq!(totals, vec![34, 2, 1, 2, 6, 5]);
         assert_ne!(
             bounded.ledger_anchor.state_root, r.ledger_anchor.state_root,
             "the source set is in the root"
@@ -1610,18 +2031,26 @@ mod tests {
             .instances
             .iter()
             .filter_map(|i| match &i.state {
-                IdentityState::Explained { component, .. } => {
-                    Some(format!("{}|{}|{}", i.file, i.sheet, component))
-                }
+                IdentityState::Explained { component, .. } => Some(format!(
+                    "{}|{}|{}|{}",
+                    i.file,
+                    i.sheet,
+                    component,
+                    i.state.label()
+                )),
                 _ => None,
             })
             .collect();
+        // BD-331.S2: no issuer note states E816's rule, so all three are reconstructed.
         assert_eq!(
             ii,
             vec![
-                "Barrick_Q1_2025_AISC.xlsx|Q1 2025|Barrick_Q1_2025_Mine_Stats.xlsx:Minestats3!B32=10",
-                "Barrick_Q2_2025_AISC.xlsx|Q1 2025|Barrick_Q1_2025_Mine_Stats.xlsx:Minestats3!B32=10",
-                "Barrick_Q2_2025_AISC.xlsx|YTD Q2 2025|Barrick_Q2_2025_Mine_Stats.xlsx:Minestats3!B74=13",
+                "Barrick_Q1_2025_AISC.xlsx|Q1 2025|Barrick_Q1_2025_Mine_Stats.xlsx:Minestats3!B32=10|\
+                 explained_reconstructed",
+                "Barrick_Q2_2025_AISC.xlsx|Q1 2025|Barrick_Q1_2025_Mine_Stats.xlsx:Minestats3!B32=10|\
+                 explained_reconstructed",
+                "Barrick_Q2_2025_AISC.xlsx|YTD Q2 2025|Barrick_Q2_2025_Mine_Stats.xlsx:Minestats3!B74=13|\
+                 explained_reconstructed",
             ]
         );
         let iv_subjects: Vec<&str> = r
@@ -1635,11 +2064,174 @@ mod tests {
         assert_eq!(iv_subjects.iter().filter(|s| **s == "Kibali").count(), 2);
 
         // Regression pin (not independent; see the doc comment). It moved from 9283f896… with BD-331.S3, whose
-        // 325 changed states were checked instance by instance against census E826.
+        // 328 changed states were checked instance by instance against census E826, then from 0c6d01e3… with
+        // BD-331.S2: frame version 3, the hidden-scope section (435 instances, each equal to the hidden census
+        // E828) and the missing fact appended to each (iv) detail. No visible state changed.
         assert_eq!(
             r.ledger_anchor.state_root.to_hex(),
-            "0c6d01e3f3a8020e4cc6591559c04d10a171e4da0805c0b47f7784357cf03613"
+            "fb8b38c2e3c6bf0c3f59e82ac88e00106b4048efb3c0463b06b8c0cf8a9c2601"
         );
+    }
+
+    /// BD-331.S2 on the real files: every (iv), visible or hidden, names a missing fact. One JSON line per (iv)
+    /// (`--nocapture`).
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+    fn barrick_every_iv_names_missing_fact() {
+        let profile = load_issuer_profile(&workspace_root(), "barrick")
+            .expect("registry")
+            .through("2026Q2")
+            .expect("bound");
+        let r = run_public_assurance(&profile, &workspace_root())
+            .expect("registered files present and unaltered");
+        let mut by_fact: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for i in r.instances.iter().chain(&r.hidden_scope.instances) {
+            let IdentityState::Undecidable { missing_fact, .. } = &i.state else {
+                continue;
+            };
+            println!(
+                "{{\"file\":{},\"sheet\":{},\"cell\":{},\"subject\":{},\"family\":{},\"missing_fact\":{}}}",
+                js(&i.file),
+                js(&i.sheet),
+                js(&i.cell),
+                js(&i.subject),
+                js(i.family.as_str()),
+                js(missing_fact)
+            );
+            assert!(!missing_fact.is_empty());
+            *by_fact
+                .entry((i.subject.clone(), missing_fact.clone()))
+                .or_default() += 1;
+        }
+        let visible_iv = r.count_state("iv");
+        assert_eq!(visible_iv, 82);
+        let velad = (
+            "Veladero".to_string(),
+            "the ounce series behind the per-ounce rows (E691)".to_string(),
+        );
+        let attributable = "the attributable ounces sold used for the rate (E817)".to_string();
+        let visible = |subject: &str, fact: &str| {
+            r.instances
+                .iter()
+                .filter(|i| {
+                    i.subject == subject
+                        && matches!(&i.state, IdentityState::Undecidable { missing_fact, .. }
+                            if missing_fact == fact)
+                })
+                .count()
+        };
+        assert_eq!(visible(&velad.0, &velad.1), 12);
+        assert_eq!(visible("Kibali", &attributable), 2);
+        assert_eq!(visible("Hemlo", &attributable), 3);
+        let share = r
+            .instances
+            .iter()
+            .filter(|i| {
+                matches!(&i.state, IdentityState::Undecidable { missing_fact, .. }
+                    if missing_fact == aisc::SHARE_MISSING_FACT)
+            })
+            .count();
+        assert_eq!(share, 65);
+        println!(
+            "{{\"visible_iv\":{visible_iv},\"hidden_iv\":{},\"by_subject_and_fact\":{}}}",
+            r.hidden_scope
+                .instances
+                .iter()
+                .filter(|i| i.state.code() == "iv")
+                .count(),
+            by_fact.len()
+        );
+    }
+
+    /// BD-331.S2 on the real files: the hidden scope. Every count is from the hidden census
+    /// (`python3 -I scripts/oracle/hidden_census.py .`, which runs census2.py and share_census.py unchanged on
+    /// the hidden sheets). One JSON line per hidden instance and per hidden sheet, then a summary (`--nocapture`).
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+    fn barrick_hidden_scope_matches_census() {
+        let profile = load_issuer_profile(&workspace_root(), "barrick")
+            .expect("registry")
+            .through("2026Q2")
+            .expect("bound");
+        let r = run_public_assurance(&profile, &workspace_root())
+            .expect("registered files present and unaltered");
+        let hidden = &r.hidden_scope;
+        let mut sheets: BTreeMap<(String, String), BTreeMap<&str, usize>> = BTreeMap::new();
+        let (mut footing, mut per_oz) = (BTreeMap::new(), BTreeMap::new());
+        for i in &hidden.instances {
+            println!(
+                "{{\"file\":{},\"sheet\":{},\"column\":{},\"subject\":{},\"family\":{},\"state\":{}}}",
+                js(&i.file),
+                js(&i.sheet),
+                js(&i.column),
+                js(&i.subject),
+                js(i.family.as_str()),
+                js(i.state.code())
+            );
+            *sheets
+                .entry((i.file.clone(), i.sheet.clone()))
+                .or_default()
+                .entry(i.state.code())
+                .or_default() += 1;
+            let tally = match i.family {
+                IdentityFamily::TccFooting | IdentityFamily::AiscFooting => &mut footing,
+                _ => &mut per_oz,
+            };
+            *tally.entry(i.state.code()).or_insert(0_usize) += 1;
+        }
+        for ((file, sheet), by_state) in &sheets {
+            let states: Vec<String> = by_state
+                .iter()
+                .map(|(k, v)| format!("{}:{v}", js(k)))
+                .collect();
+            println!(
+                "{{\"file\":{},\"sheet\":{},\"instances\":{},\"by_state\":{{{}}}}}",
+                js(file),
+                js(sheet),
+                by_state.values().sum::<usize>(),
+                states.join(",")
+            );
+        }
+        // The census's numbers (2026-10-30): 6 hidden sheets, 435 instances.
+        let census_footing = BTreeMap::from([("i", 169), ("iii", 1), ("np", 4)]);
+        let census_per_oz = BTreeMap::from([("i", 235), ("iv", 17), ("np", 6), ("v", 3)]);
+        let agrees = sheets.len() == 6
+            && hidden.instances.len() == 435
+            && footing == census_footing
+            && per_oz == census_per_oz;
+        println!(
+            "{{\"hidden_sheets\":{},\"instances\":{},\"iii\":{},\"census_agrees\":{agrees}}}",
+            sheets.len(),
+            hidden.instances.len(),
+            footing.get("iii").copied().unwrap_or(0)
+        );
+        assert_eq!((hidden.aisc_tables, sheets.len()), (6, 6));
+        assert_eq!(hidden.instances.len(), 435);
+        assert_eq!(footing, census_footing);
+        assert_eq!(per_oz, census_per_oz);
+        assert!(hidden.unregistered_headers.is_empty() && hidden.table_refusals.is_empty());
+        // E815, E821: North America Q4 2023 total cash costs, hidden in the Q4 2024 file, prints 541 against 540.
+        let na = hidden
+            .instances
+            .iter()
+            .find(|i| i.state.code() == "iii")
+            .expect("one (iii)");
+        assert_eq!(
+            (na.file.as_str(), na.sheet.as_str(), na.column.as_str()),
+            ("Barrick_Q4_2024_AISC.xlsx", "Q4 2023", "J")
+        );
+        assert_eq!(
+            (na.subject.as_str(), na.family),
+            ("North America", IdentityFamily::TccFooting)
+        );
+        match &na.state {
+            IdentityState::IssuerDiscrepancy(c) => {
+                assert_eq!((c.printed, c.component_sum), (541, 540))
+            }
+            other => panic!("{other:?}"),
+        }
+        // Never counted: the visible ledger is unchanged by the hidden scope.
+        assert_eq!((r.aisc_tables, r.instances.len()), (34, 2595));
     }
 
     /// BD-331.S3 on the real files. Every count is from the independent census E826
@@ -1663,7 +2255,7 @@ mod tests {
         {
             let (slot, detail) = match &i.state {
                 IdentityState::Consistent { basis: Some(b), .. } => (0, b.as_str()),
-                IdentityState::Undecidable { detail } if detail.contains("1000·s·N/Q") => {
+                IdentityState::Undecidable { detail, .. } if detail.contains("1000·s·N/Q") => {
                     (1, detail.as_str())
                 }
                 IdentityState::RefusedAt { at, .. } => (2, at.as_str()),

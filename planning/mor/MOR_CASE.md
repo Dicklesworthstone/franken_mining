@@ -580,3 +580,28 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
   Ridge, Phoenix and Long Canyon until it transitioned to care and maintenance at the end of 2023". The label at
   `QTD!A9`, "Long Canyon (61.5%)2", cites footnote 2 (A32, metrics ceased from Q1 2024; E489). Read 2026-10-30 by
   two readers. Only the 2023 comparative sheets of the Q3 2024 and Q4 2024 AISC files print Long Canyon rates.
+- **E828** Hidden scope and state-type completion (BD-331.S2, bd-prmn.2; FACT, execution, 2026-10-30).
+  - **Hidden scope.** The six hidden sheets of E821 hold 6 AISC tables and 435 instances. Footing: 169 (i), 1 (iii),
+    4 not published. Per ounce: 235 (i), 17 (iv), 3 (v), 6 not published. Census:
+    `python3 -I scripts/oracle/hidden_census.py .`. It is a wrapper with no ledger logic, written before the Rust
+    ran on the corpus, by the agent that wrote the Rust. It runs census2.py and share_census.py unchanged, with their
+    AISC sheet choice pointed at the hidden sheets. Rust equals it on all 435 instances (file, sheet, column,
+    subject, family, state), compared outside the test. Ignored test `barrick_hidden_scope_matches_census` pins
+    the counts.
+  - **The (iii)** is North America Q4 2023 TCC, `Barrick_Q4_2024_AISC.xlsx` `'Q4 2023'` column J: 541 printed
+    against a component sum of 540 (E815, E821). Visible 1,038 plus hidden 174 footing totals give E815's 1,212.
+  - **Bead expectation not met.** The bead expected 204 scoreable hidden footings, 203 consistent (INFERENCE,
+    E815 minus E822). The census finds 170 scoreable, 169 consistent, plus 4 not published. Only the census's
+    numbers are pinned.
+  - **Never counted.** Hidden instances appear in the report under `hidden_scope`, labelled "sheet not displayed
+    to readers". They are bound into the state root in their own section (frame `M0AS` v3), and are outside the
+    totals and `GATE-BULL-01`.
+  - **Missing fact on every (iv).** Visible, 82: Veladero 12 "the ounce series behind the per-ounce rows" (E691);
+    Kibali 2 and Hemlo 3 "the attributable ounces sold used for the rate" (E817); 65 stated-share misses "the
+    attributable cost of sales or ounces the issuer used". Hidden, 17: 13 stated-share misses, Veladero 3, and
+    one Long Canyon rate with the family default "the numerator or denominator the issuer used for this rate".
+    No closing document is known for any of them.
+  - **Basis on every (ii).** E816's three are `explained_reconstructed`; no Barrick (ii) is stated.
+  - **State root** `fb8b38c2e3c6bf0c3f59e82ac88e00106b4048efb3c0463b06b8c0cf8a9c2601`, replacing `0c6d01e3…`
+    (E826): frame v3, the hidden section, and the missing fact appended to each (iv) detail. No visible state
+    changed; totals i 2383, ii 3, iii 4, iv 82, v 63, np 60.
