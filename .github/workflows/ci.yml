@@ -46,6 +46,11 @@ jobs:
       - name: Fetch kit offline test
         if: matrix.profile == 'dev'
         run: bash repro/barrick/test_fetch_offline.sh
+      # The vintage registration script over file:// (bd-s9j3.2): candidate rows, the oracle seal, the
+      # already-registered guard, a reused directory, a binary that is not the blind one, a changed oracle.
+      - name: Vintage registration offline test
+        if: matrix.profile == 'dev'
+        run: bash scripts/test_register_vintage.sh
       # No issuer workbook is ever committed (OPEN-R7-1); synthetic workbooks are written outside the tree.
       - name: No workbook in git
         run: test -z "$(git ls-files '*.xlsx' '*.xls')"

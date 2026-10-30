@@ -1027,6 +1027,60 @@ mod tests {
         let _ = fs::remove_dir_all(&scratch);
     }
 
+    /// bd-s9j3.2: the candidate row `scripts/register_vintage.py` prints for a new vintage parses in the TOML
+    /// subset and passes registry-check when appended to a copy of the workspace registry, with no other edit.
+    #[test]
+    fn test_candidate_row_parses_under_toml_subset() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .to_path_buf();
+        let prefix = "https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/";
+        let sha = "ab".repeat(32);
+        let out = std::process::Command::new("python3")
+            .arg("-I")
+            .arg(root.join("scripts/register_vintage.py"))
+            .args(["row", "barrick", prefix])
+            .arg(format!("{prefix}2026/q3/AISC_Q3_2026.xlsx"))
+            .args(["51234", &sha, "2026-11-10T11:05:00Z"])
+            .output()
+            .expect("python3 runs");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let row = String::from_utf8(out.stdout).expect("utf-8");
+        for want in [
+            "[[source]]\n",
+            "file = \"Barrick_Q3_2026_AISC.xlsx\"\n",
+            "kind = \"aisc_reconciliation\"\n",
+            "quarter = \"2026Q3\"\n",
+            "path = \"2026/q3/AISC_Q3_2026.xlsx\"\n",
+            "url_basis = \"fetched and verified 2026-11-10\"\n",
+            "bytes = 51_234\n",
+        ] {
+            assert!(row.contains(want), "{want:?} not in {row}");
+        }
+        fmine_registry::toml_subset::parse_subset(&row).expect("the row is in the TOML subset");
+
+        let text = fs::read_to_string(root.join("registries/sources/barrick.toml")).expect("read");
+        let scratch =
+            std::env::temp_dir().join(format!("xtask-vintage-row-{}", std::process::id()));
+        let dir = scratch.join("registries").join("sources");
+        fs::create_dir_all(&dir).expect("scratch dir");
+        fs::write(dir.join("barrick.toml"), format!("{text}\n{row}")).expect("write");
+        let lines =
+            check_sources_registry(&scratch).expect("registry-check passes with the row appended");
+        let sources = text.lines().filter(|l| l.trim() == "[[source]]").count();
+        assert!(
+            lines[0].contains(&format!("\"sources\":{},", sources + 1)),
+            "{lines:?}"
+        );
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
     /// BD-008 done-when "smuggled module fails CI": a module missing from the charter's Allowed Module Families
     /// fails `check_scope` whatever its visibility; the `#[cfg(test)]` module and a module nested in it pass.
     #[test]
