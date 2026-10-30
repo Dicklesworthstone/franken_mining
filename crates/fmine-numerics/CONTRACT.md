@@ -11,7 +11,7 @@
 Implements Cholesky SPD factorization (`cholesky_solve`), Brent root-finding (`brent_root`), normal CDF/PPF (`norm_cdf`, `norm_inv`), anytime-valid betting e-processes (`BettingEProcess`), Value of Information (`VoiProblem`, `EVPI`, `EVSI`), coherent Rockafellar-Uryasev `CVaR` (`compute_cvar`), and `(max,+)`/`(min,+)` tropical critical-path algebra (`TropicalDag`, `GB-19`).
 
 ## 3. Authority, Epistemics & Representation
-Pure `BitwisePortable` mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`.
+Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism class: `DeterministicPerIsa`, not `BitwisePortable`: `norm_cdf` and `norm_inv` call std `exp`, `ln` and `sqrt` (porting them is NEW-det-portable-kernels, bd-hp2j).
 
 ## 4. Public API Surface
 - `cholesky_solve`, `norm_cdf`, `norm_inv`
