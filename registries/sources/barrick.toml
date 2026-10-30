@@ -6,9 +6,11 @@
 #
 # Provenance (FACT): planning/research/W1_barrick_mine_stats.md sections 2.1-2.2 (E451, E452). All files were
 # downloaded from the issuer's public CDN on 2026-10-29 between 03:35:00Z and 03:36:24Z. Mine Stats URLs are
-# W1's table ("W1 table", FACT); the AISC workbook URLs follow W1's stated naming rule ("W1 naming rule",
-# INFERENCE). The digest, not the URL, binds a run to its input. No affiliation: the issuer's files are
-# public disclosures read as published.
+# W1's table ("W1 table", FACT). The AISC workbook URLs were first inferred from W1's stated naming rule
+# ("W1 naming rule", INFERENCE). On 2026-10-30, repro/barrick/fetch.sh fetched all eight from a clean clone,
+# and each served the registered bytes and sha256 with no redirect (E831): "fetched and verified 2026-10-30".
+# The digest, not the URL, binds a run to its input. No affiliation: the issuer's files are public
+# disclosures read as published.
 
 schema = "fmine.sources.v1"
 issuer = "barrick"
@@ -114,7 +116,7 @@ file = "Barrick_Q3_2024_AISC.xlsx"
 kind = "aisc_reconciliation"
 quarter = "2024Q3"
 path = "2024/q3/Barrick_Q3_2024_AISC.xlsx"
-url_basis = "W1 naming rule"
+url_basis = "fetched and verified 2026-10-30"
 bytes = 40_977
 sha256 = "d063ea7c1cd667a6db9c9de1b3aa4cb0ff2dba4a8cb24f6ce889e56af2fd0ef7"
 
@@ -123,7 +125,7 @@ file = "Barrick_Q4_2024_AISC.xlsx"
 kind = "aisc_reconciliation"
 quarter = "2024Q4"
 path = "2024/q4/Barrick_Q4_2024_AISC.xlsx"
-url_basis = "W1 naming rule"
+url_basis = "fetched and verified 2026-10-30"
 bytes = 42_141
 sha256 = "f842696915b7a44d00194e01a3bdf4a76d1e52d0e31c2610a91be70afb4b1b4d"
 
@@ -132,7 +134,7 @@ file = "Barrick_Q1_2025_AISC.xlsx"
 kind = "aisc_reconciliation"
 quarter = "2025Q1"
 path = "2025/01/AISC_Q1_2025.xlsx"
-url_basis = "W1 naming rule"
+url_basis = "fetched and verified 2026-10-30"
 bytes = 32_587
 sha256 = "06951434c3a3e325553dbe25018544c7329bc1a8b6e01ab0d3fcdeba2bb4388e"
 
@@ -141,7 +143,7 @@ file = "Barrick_Q2_2025_AISC.xlsx"
 kind = "aisc_reconciliation"
 quarter = "2025Q2"
 path = "2025/q2/AISC_Q2_2025.xlsx"
-url_basis = "W1 naming rule"
+url_basis = "fetched and verified 2026-10-30"
 bytes = 41_599
 sha256 = "1cbd6b739a276d64e4752ebbc67c369720ccb8eec16845a4858dccd04fd6d178"
 
@@ -150,7 +152,7 @@ file = "Barrick_Q3_2025_AISC.xlsx"
 kind = "aisc_reconciliation"
 quarter = "2025Q3"
 path = "2025/q3/AISC_Q3_2025.xlsx"
-url_basis = "W1 naming rule"
+url_basis = "fetched and verified 2026-10-30"
 bytes = 41_020
 sha256 = "62901aaab21d64057422a950e29e0ad2ecebad525e0c2b8b9185e4843d9ecfd3"
 
@@ -159,7 +161,7 @@ file = "Barrick_Q4_2025_AISC.xlsx"
 kind = "aisc_reconciliation"
 quarter = "2025Q4"
 path = "2025/q4/AISC_Q4_2025.xlsx"
-url_basis = "W1 naming rule"
+url_basis = "fetched and verified 2026-10-30"
 bytes = 40_336
 sha256 = "2ce7b8e46b36d745228487e683b221101c4db3019ba67acedea96967486d6755"
 
@@ -168,7 +170,7 @@ file = "Barrick_Q1_2026_AISC.xlsx"
 kind = "aisc_reconciliation"
 quarter = "2026Q1"
 path = "2026/q1/AISC_Q1_2026.xlsx"
-url_basis = "W1 naming rule"
+url_basis = "fetched and verified 2026-10-30"
 bytes = 43_718
 sha256 = "dbe567e90730b4ef87330b1eaa539c7289a92781e452b949c24f7b705464ef28"
 
@@ -177,7 +179,7 @@ file = "Barrick_Q2_2026_AISC.xlsx"
 kind = "aisc_reconciliation"
 quarter = "2026Q2"
 path = "2026/q2/AISC_Q2_2026.xlsx"
-url_basis = "W1 naming rule"
+url_basis = "fetched and verified 2026-10-30"
 bytes = 49_738
 sha256 = "66515a4ae4305de130b72fa1a3a78bf6aa51ac5a10350fc43732bb621c6d0e99"
 

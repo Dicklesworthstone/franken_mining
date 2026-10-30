@@ -640,3 +640,21 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     landed, so the registry is the one copy. `test_fetch_list_equals_registry` checks that fetch.sh's awk
     reading equals the Rust loader's. Planted once, two ways, and both failed it: a parser keeping `_` in byte
     counts, and a listing without the URL prefix.
+- **E831** The eight AISC workbook URLs serve the registered bytes (BD-339.S3, bd-s4oy.3; FACT, execution,
+  2026-10-30). E830's clean-clone fetch requested each URL once, under the prefix
+  `https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/`. The effective URL equalled the
+  requested one, and the size and sha256 equalled the registered row:
+  - `2024/q3/Barrick_Q3_2024_AISC.xlsx`, 40,977 bytes,
+    `d063ea7c1cd667a6db9c9de1b3aa4cb0ff2dba4a8cb24f6ce889e56af2fd0ef7`;
+  - `2024/q4/Barrick_Q4_2024_AISC.xlsx`, 42,141 bytes,
+    `f842696915b7a44d00194e01a3bdf4a76d1e52d0e31c2610a91be70afb4b1b4d`;
+  - `2025/01/AISC_Q1_2025.xlsx`, 32,587 bytes, `06951434c3a3e325553dbe25018544c7329bc1a8b6e01ab0d3fcdeba2bb4388e`;
+  - `2025/q2/AISC_Q2_2025.xlsx`, 41,599 bytes, `1cbd6b739a276d64e4752ebbc67c369720ccb8eec16845a4858dccd04fd6d178`;
+  - `2025/q3/AISC_Q3_2025.xlsx`, 41,020 bytes, `62901aaab21d64057422a950e29e0ad2ecebad525e0c2b8b9185e4843d9ecfd3`;
+  - `2025/q4/AISC_Q4_2025.xlsx`, 40,336 bytes, `2ce7b8e46b36d745228487e683b221101c4db3019ba67acedea96967486d6755`;
+  - `2026/q1/AISC_Q1_2026.xlsx`, 43,718 bytes, `dbe567e90730b4ef87330b1eaa539c7289a92781e452b949c24f7b705464ef28`;
+  - `2026/q2/AISC_Q2_2026.xlsx`, 49,738 bytes, `66515a4ae4305de130b72fa1a3a78bf6aa51ac5a10350fc43732bb621c6d0e99`.
+
+  Their `url_basis` changes from "W1 naming rule" (INFERENCE) to "fetched and verified 2026-10-30". The Q1 2025
+  path `2025/01/` breaks the naming rule, yet it is the URL the registry already held, and it served the
+  registered bytes. No URL needed correcting. The fetch ran on the owner machine, not in CI.

@@ -1,0 +1,96 @@
+name: Real files
+
+# The real lane in CI (BD-339.S3). repro/barrick/ci_real_files.sh fetches the registered Barrick workbooks from
+# the issuer and checks every size and sha256. It then runs the ignored real-file tests, which check the root and
+# anchor of repro/barrick/expected.toml's last row, and checks that no workbook is in git. Issuer files live only
+# in this repository's Actions cache: never in an artifact, never in a log of cell values (RISK-31, OPEN-R7-1).
+
+on:
+  workflow_dispatch:
+    inputs:
+      corrupt_one_cached_file:
+        description: "Negative control: flip one byte of one workbook before fetch.sh; the run must fail there"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 6 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - "crates/fmine-public/**"
+      - "crates/fmine-io/**"
+      - "registries/sources/**"
+      - "repro/barrick/**"
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    name: real files (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      root: ${{ steps.run.outputs.root }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: corpus_of_input_docs/downloaded/mine_stats
+          key: barrick-corpus-${{ runner.os }}-${{ hashFiles('registries/sources/barrick.toml') }}
+      - name: Negative control, one byte of one workbook flipped
+        if: inputs.corrupt_one_cached_file
+        run: |
+          f=corpus_of_input_docs/downloaded/mine_stats/Barrick_Q3_2025_AISC.xlsx
+          [ -f "$f" ] || repro/barrick/fetch.sh
+          python3 -I -c 'import sys; p = sys.argv[1]; b = bytearray(open(p, "rb").read()); b[100] ^= 1; open(p, "wb").write(b)' "$f"
+          echo '{"stage":"corrupt","file":"Barrick_Q3_2025_AISC.xlsx","byte":100}'
+      - id: run
+        name: Fetch, verify and run the real-file tests
+        run: bash repro/barrick/ci_real_files.sh
+      - name: Cache the verified workbooks
+        if: success() && steps.cache.outputs.cache-hit != 'true' && !inputs.corrupt_one_cached_file
+        uses: actions/cache/save@v4
+        with:
+          path: corpus_of_input_docs/downloaded/mine_stats
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  # Weekly, and on a dispatch without the negative control: the same run on macOS, for the determinism check.
+  macos:
+    name: real files (macos-14)
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.corrupt_one_cached_file)
+    runs-on: macos-14
+    timeout-minutes: 60
+    outputs:
+      root: ${{ steps.run.outputs.root }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: corpus_of_input_docs/downloaded/mine_stats
+          key: barrick-corpus-${{ runner.os }}-${{ hashFiles('registries/sources/barrick.toml') }}
+      - id: run
+        name: Fetch, verify and run the real-file tests
+        run: bash repro/barrick/ci_real_files.sh
+      - name: Cache the verified workbooks
+        if: success() && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: corpus_of_input_docs/downloaded/mine_stats
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  determinism:
+    name: same root on Ubuntu and macOS
+    needs: [ubuntu, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          UBUNTU_ROOT: ${{ needs.ubuntu.outputs.root }}
+          MACOS_ROOT: ${{ needs.macos.outputs.root }}
+        run: |
+          equal=false
+          if [ -n "$UBUNTU_ROOT" ] && [ "$UBUNTU_ROOT" = "$MACOS_ROOT" ]; then equal=true; fi
+          echo "{\"stage\":\"determinism\",\"ubuntu_root\":\"$UBUNTU_ROOT\",\"macos_root\":\"$MACOS_ROOT\",\"equal\":$equal}"
+          [ "$equal" = true ]

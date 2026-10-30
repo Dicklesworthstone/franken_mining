@@ -43,7 +43,8 @@ pub struct RegisteredSource {
     /// Reporting quarter of the release, `YYYYQn`.
     pub quarter: String,
     pub url: String,
-    /// `"W1 table"` (FACT) or `"W1 naming rule"` (INFERENCE).
+    /// `"W1 table"` (FACT), `"W1 naming rule"` (INFERENCE) or `"fetched and verified YYYY-MM-DD"` (FACT: the
+    /// URL served the registered bytes on that date).
     pub url_basis: String,
     pub bytes: u64,
     pub sha256_hex: String,

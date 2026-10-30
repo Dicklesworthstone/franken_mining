@@ -17,8 +17,11 @@ pub const SOURCES_SCHEMA: &str = "fmine.sources.v1";
 /// Registered source kinds (`fmine_public::sources::SourceKind::as_str`).
 pub const SOURCE_KINDS: [&str; 2] = ["mine_stats", "aisc_reconciliation"];
 /// Registered URL bases: `"W1 table"` is FACT (the URL was read from the issuer's page), `"W1 naming rule"` is
-/// INFERENCE (the URL follows the issuer's stated naming pattern).
+/// INFERENCE (the URL follows the issuer's stated naming pattern). A URL fetched and found to serve the
+/// registered bytes may instead carry [`URL_BASIS_FETCHED`] followed by the fetch date (`is_url_basis`).
 pub const URL_BASES: [&str; 2] = ["W1 table", "W1 naming rule"];
+/// Prefix of the dated URL basis, `"fetched and verified YYYY-MM-DD"` (BD-339.S3).
+pub const URL_BASIS_FETCHED: &str = "fetched and verified ";
 /// Registered identity families (`fmine_public::aisc::IdentityFamily::as_str`).
 pub const IDENTITY_FAMILIES: [&str; 5] = [
     "tcc_footing",
@@ -169,6 +172,38 @@ pub fn is_quarter(s: &str) -> bool {
         && b[..4].iter().all(u8::is_ascii_digit)
         && b[4] == b'Q'
         && (b'1'..=b'4').contains(&b[5])
+}
+
+/// One of [`URL_BASES`], or [`URL_BASIS_FETCHED`] followed by a calendar date `YYYY-MM-DD`.
+#[must_use]
+pub fn is_url_basis(s: &str) -> bool {
+    if URL_BASES.contains(&s) {
+        return true;
+    }
+    let Some(date) = s.strip_prefix(URL_BASIS_FETCHED) else {
+        return false;
+    };
+    let b = date.as_bytes();
+    let num = |r: std::ops::Range<usize>| -> Option<u32> {
+        b[r].iter().try_fold(0_u32, |n, c| {
+            c.is_ascii_digit().then(|| n * 10 + u32::from(c - b'0'))
+        })
+    };
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return false;
+    }
+    let (Some(y), Some(m), Some(d)) = (num(0..4), num(5..7), num(8..10)) else {
+        return false;
+    };
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let days = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days).contains(&d)
 }
 
 fn is_lower_hex64(s: &str) -> bool {
@@ -366,11 +401,11 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         if !paths.insert(path.clone()) {
             return fail(path_line, format!("duplicate path {path:?}"));
         }
-        if !URL_BASES.contains(&url_basis.as_str()) {
+        if !is_url_basis(&url_basis) {
             return fail(
                 basis_line,
                 format!(
-                    "url_basis {url_basis:?} is not registered ({})",
+                    "url_basis {url_basis:?} is not registered ({}, or \"{URL_BASIS_FETCHED}YYYY-MM-DD\")",
                     URL_BASES.join(", ")
                 ),
             );
@@ -885,6 +920,57 @@ mod tests {
             let e = refusal(&minimal(&b, &bad));
             assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
         }
+    }
+
+    /// BD-339.S3: a URL basis is one of the two W1 bases or a dated fetch; anything else refuses.
+    #[test]
+    fn test_url_basis_values_are_registered() {
+        for ok in [
+            "W1 table",
+            "W1 naming rule",
+            "fetched and verified 2026-10-30",
+            "fetched and verified 2028-02-29",
+        ] {
+            assert!(is_url_basis(ok), "{ok}");
+        }
+        for bad in [
+            "fetched and verified",
+            "fetched and verified 2026-13-01",
+            "fetched and verified 2026-02-29",
+            "fetched and verified 2026-04-31",
+            "fetched and verified 2026-10-30 by hand",
+            "fetched and verified 26-10-30",
+            "verified 2026-10-30",
+            "W1 Table",
+        ] {
+            assert!(!is_url_basis(bad), "{bad}");
+        }
+        let b = source_b("aisc_reconciliation", SHA_B);
+        let fetched = minimal(
+            &b.replacen("W1 naming rule", "fetched and verified 2026-10-30", 1),
+            "",
+        );
+        let reg = parse_sources_registry(&fetched).expect("dated basis accepted");
+        assert!(
+            reg.sources
+                .iter()
+                .any(|s| s.url_basis == "fetched and verified 2026-10-30")
+        );
+        let e = refusal(&minimal(
+            &b.replacen("W1 naming rule", "fetched and verified 2026-02-30", 1),
+            "",
+        ));
+        assert!(e.reason.contains("url_basis"), "{e}");
+    }
+
+    /// The real registry: every row's basis is registered (default CI, no corpus).
+    #[test]
+    fn test_barrick_url_bases_are_registered() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let text = std::fs::read_to_string(root.join("registries/sources/barrick.toml"))
+            .expect("barrick registry");
+        let reg = parse_sources_registry(&text).expect("barrick registry parses");
+        assert!(reg.sources.iter().all(|s| is_url_basis(&s.url_basis)));
     }
 
     #[test]
