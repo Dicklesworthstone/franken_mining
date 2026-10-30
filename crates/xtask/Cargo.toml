@@ -6,5 +6,8 @@ license.workspace = true
 publish = false
 description = "FrankenMining workspace governance, layer DAG, LOC budget, lift provenance, and capability checks (GATE-LAYERS-00)"
 
+[dependencies]
+fmine-registry = { path = "../fmine-registry" }
+
 [lints]
 workspace = true

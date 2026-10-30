@@ -8,7 +8,7 @@
 //! - C "Site Bb" (footnote letter): TCC prints 350 against a component sum of 250; flipping the sign of C6
 //!   (−50) closes it, so the certificate names C6 as the witness.
 //! - D "Site C": AISC per ounce prints 2400 where 1000·(200 ± 5/2)/(100 ± 1/2) allows only
-//!   [1965.174, 2035.175] (undecidable).
+//!   [1965.174, 2035.176] (undecidable; bounds rounded outward).
 //! - E "Site D": a non-zero non-controlling-interest line, so cost of sales per ounce is refused.
 //! - F "Site E": every used cell zero or a dash (not published).
 //! - G "Site F": a stored value of 100.4 (refused: unrounded).
@@ -19,7 +19,7 @@
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, build_minimal_xlsx};
 
 use crate::aisc::IdentityFamily;
-use crate::sources::{RegisteredReconstruction, SourceKind};
+use crate::sources::{IssuerProfile, RegisteredReconstruction, SourceKind};
 
 pub const SYNTHETIC_AISC_FILE: &str = "Synthetic_AISC.xlsx";
 pub const SYNTHETIC_STATS_FILE: &str = "Synthetic_Mine_Stats.xlsx";
@@ -36,23 +36,40 @@ pub const SYNTHETIC_SUBJECTS: [&str; 8] = [
     "Region North",
 ];
 
-pub const SYNTHETIC_RECONSTRUCTIONS: [RegisteredReconstruction; 1] = [RegisteredReconstruction {
-    evidence_id: "SYNTHETIC",
-    table_file: SYNTHETIC_AISC_FILE,
-    sheet: SYNTHETIC_TABLE_SHEET,
-    subject: "Region North",
-    family: IdentityFamily::AiscPerOunce,
-    component_file: SYNTHETIC_STATS_FILE,
-    component_sheet: "Minestats3",
-    component_cell: "B32",
-    label_checks: &[
-        ("A32", "Minesite sustaining"),
-        ("B2", "Site G"),
-        ("A3", "For the three months ended March 31"),
-        ("B3", "2030"),
-    ],
-    rule: "Synthetic: the region's AISC numerator includes Site G's minesite sustaining capital.",
-}];
+/// The synthetic lane's profile: its subjects and its one registered reconstruction. It has no registered
+/// sources because the synthetic workbooks are built in memory (`synthetic_workbooks`), never read from disk.
+#[must_use]
+pub fn synthetic_profile() -> IssuerProfile {
+    let s = |x: &str| x.to_string();
+    IssuerProfile {
+        issuer: s("synthetic"),
+        corpus_dir: String::new(),
+        retrieved_utc: String::new(),
+        sources: Vec::new(),
+        subjects: SYNTHETIC_SUBJECTS.iter().map(|x| s(x)).collect(),
+        reconstructions: vec![RegisteredReconstruction {
+            evidence_id: s("SYNTHETIC"),
+            table_file: s(SYNTHETIC_AISC_FILE),
+            sheet: s(SYNTHETIC_TABLE_SHEET),
+            subject: s("Region North"),
+            family: IdentityFamily::AiscPerOunce,
+            component_file: s(SYNTHETIC_STATS_FILE),
+            component_sheet: s("Minestats3"),
+            component_cell: s("B32"),
+            label_checks: [
+                ("A32", "Minesite sustaining"),
+                ("B2", "Site G"),
+                ("A3", "For the three months ended March 31"),
+                ("B3", "2030"),
+            ]
+            .iter()
+            .map(|(c, p)| (s(c), s(p)))
+            .collect(),
+            rule: s("Synthetic: the region's AISC numerator includes Site G's minesite sustaining capital."),
+        }],
+        through: None,
+    }
+}
 
 fn n(r: &str, v: f64) -> (String, MinimalCell) {
     (r.to_string(), MinimalCell::Number(v))

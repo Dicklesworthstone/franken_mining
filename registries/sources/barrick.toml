@@ -1,0 +1,322 @@
+# Barrick public-lane source registry (bd-s9j3.1, schema fmine.sources.v1). `fmine assure public --issuer
+# barrick` reads it at run time from <workspace>/registries/sources/barrick.toml; it is never compiled into
+# the binary. Registering a quarterly vintage is a data edit here: append its [[source]] rows (row order
+# matters, because the state root binds sources in this order), widen retrieved_utc, then run
+# `cargo run -p xtask -- check-all`, which applies the registry-check rules.
+#
+# Provenance (FACT): planning/research/W1_barrick_mine_stats.md sections 2.1-2.2 (E451, E452). All files were
+# downloaded from the issuer's public CDN on 2026-10-29 between 03:35:00Z and 03:36:24Z. Mine Stats URLs are
+# W1's table ("W1 table", FACT); the AISC workbook URLs follow W1's stated naming rule ("W1 naming rule",
+# INFERENCE). The digest, not the URL, binds a run to its input. No affiliation: the issuer's files are
+# public disclosures read as published.
+
+schema = "fmine.sources.v1"
+issuer = "barrick"
+corpus_dir = "corpus_of_input_docs/downloaded/mine_stats"
+retrieved_utc = "2026-10-29T03:35:00Z/03:36:24Z"
+url_prefix = "https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/"
+
+# Mine Stats for 2024Q1-2026Q2 and the AISC reconciliation workbooks for 2024Q3-2026Q2 (the issuer
+# published none for 2024Q1 or 2024Q2).
+
+[[source]]
+file = "Barrick_Q1_2024_Mine_Stats.xlsx"
+kind = "mine_stats"
+quarter = "2024Q1"
+path = "2024/q1/Barrick_Q1_2024_Mine_Stats.xlsx"
+url_basis = "W1 table"
+bytes = 43_668
+sha256 = "e2e1243ec0549f4c487c773869876e2acade401a0b6cd1141adf4b9296aec840"
+
+[[source]]
+file = "Barrick_Q2_2024_Mine_Stats.xlsx"
+kind = "mine_stats"
+quarter = "2024Q2"
+path = "2024/q2/Barrick_Q2_2024_Mine_Stats.xlsx"
+url_basis = "W1 table"
+bytes = 109_832
+sha256 = "1a73d6d7d4658f923757e873eec147ccc74aa8aada6a439f3c98da8540ff68d5"
+
+[[source]]
+file = "Barrick_Q3_2024_Mine_Stats.xlsx"
+kind = "mine_stats"
+quarter = "2024Q3"
+path = "2024/q3/Barrick_Q3_2024_Mine_Stats.xlsx"
+url_basis = "W1 table"
+bytes = 110_573
+sha256 = "d8786ce96f7129bf4cc240e01d2fe7840bfde0df4082517975578e69d73ead3b"
+
+[[source]]
+file = "Barrick_Q4_2024_Mine_Stats.xlsx"
+kind = "mine_stats"
+quarter = "2024Q4"
+path = "2024/q4/Barrick_Q4_2024_Mine_Stats.xlsx"
+url_basis = "W1 table"
+bytes = 110_614
+sha256 = "f5e7db7c4657927f96e8684b40f9b50c0061fa2e0c22912aa480babdb49ef4cd"
+
+[[source]]
+file = "Barrick_Q1_2025_Mine_Stats.xlsx"
+kind = "mine_stats"
+quarter = "2025Q1"
+path = "2025/01/Barrick_Q1_2025_Mine_Stats.xlsx"
+url_basis = "W1 table"
+bytes = 45_695
+sha256 = "ec5158f8b4624643ee83d0099e4f3354dc550729ebb443a2dbfacfc29315998b"
+
+[[source]]
+file = "Barrick_Q2_2025_Mine_Stats.xlsx"
+kind = "mine_stats"
+quarter = "2025Q2"
+path = "2025/q2/Barrick_Q2_2025_Mine_Stats.xlsx"
+url_basis = "W1 table"
+bytes = 107_135
+sha256 = "599864f9958b5a109530c321e9481fa7d59c53ed2c730be96f51035390a2d822"
+
+[[source]]
+file = "Barrick_Q3_2025_Mine_Stats.xlsx"
+kind = "mine_stats"
+quarter = "2025Q3"
+path = "2025/q3/Barrick_Q3_2025_Mine_Stats.xlsx"
+url_basis = "W1 table"
+bytes = 108_497
+sha256 = "b55b857766195fe90464cf813e7a71a5112439d606a6fc96ec3b6c5f01b58715"
+
+[[source]]
+file = "Barrick_Q4_2025_Mine_Stats.xlsx"
+kind = "mine_stats"
+quarter = "2025Q4"
+path = "2025/q4/Barrick_Q4_2025_Mine_Stats.xlsx"
+url_basis = "W1 table"
+bytes = 117_396
+sha256 = "94f6692acfa5f133b97ae028f172cc9c5e7527945788da7bd9a06ffd11c7eec4"
+
+[[source]]
+file = "Barrick_Q1_2026_Mine_Stats.xlsx"
+kind = "mine_stats"
+quarter = "2026Q1"
+path = "2026/q1/Barrick_Q1_2026_Mine_Stats.xlsx"
+url_basis = "W1 table"
+bytes = 55_644
+sha256 = "ddef08dd544f0df511fc30f53c1dd889bb6878257d394b8baad7ac3dbfa8c5d2"
+
+[[source]]
+file = "Barrick_Q2_2026_Mine_Stats.xlsx"
+kind = "mine_stats"
+quarter = "2026Q2"
+path = "2026/q2/Barrick_Q2_2026_Mine_Stats.xlsx"
+url_basis = "W1 table"
+bytes = 131_296
+sha256 = "cf0d3f4fea9c96f967c138d0aca549f4ff4f4a233bd2c5946c4035bf96c3df8e"
+
+[[source]]
+file = "Barrick_Q3_2024_AISC.xlsx"
+kind = "aisc_reconciliation"
+quarter = "2024Q3"
+path = "2024/q3/Barrick_Q3_2024_AISC.xlsx"
+url_basis = "W1 naming rule"
+bytes = 40_977
+sha256 = "d063ea7c1cd667a6db9c9de1b3aa4cb0ff2dba4a8cb24f6ce889e56af2fd0ef7"
+
+[[source]]
+file = "Barrick_Q4_2024_AISC.xlsx"
+kind = "aisc_reconciliation"
+quarter = "2024Q4"
+path = "2024/q4/Barrick_Q4_2024_AISC.xlsx"
+url_basis = "W1 naming rule"
+bytes = 42_141
+sha256 = "f842696915b7a44d00194e01a3bdf4a76d1e52d0e31c2610a91be70afb4b1b4d"
+
+[[source]]
+file = "Barrick_Q1_2025_AISC.xlsx"
+kind = "aisc_reconciliation"
+quarter = "2025Q1"
+path = "2025/01/AISC_Q1_2025.xlsx"
+url_basis = "W1 naming rule"
+bytes = 32_587
+sha256 = "06951434c3a3e325553dbe25018544c7329bc1a8b6e01ab0d3fcdeba2bb4388e"
+
+[[source]]
+file = "Barrick_Q2_2025_AISC.xlsx"
+kind = "aisc_reconciliation"
+quarter = "2025Q2"
+path = "2025/q2/AISC_Q2_2025.xlsx"
+url_basis = "W1 naming rule"
+bytes = 41_599
+sha256 = "1cbd6b739a276d64e4752ebbc67c369720ccb8eec16845a4858dccd04fd6d178"
+
+[[source]]
+file = "Barrick_Q3_2025_AISC.xlsx"
+kind = "aisc_reconciliation"
+quarter = "2025Q3"
+path = "2025/q3/AISC_Q3_2025.xlsx"
+url_basis = "W1 naming rule"
+bytes = 41_020
+sha256 = "62901aaab21d64057422a950e29e0ad2ecebad525e0c2b8b9185e4843d9ecfd3"
+
+[[source]]
+file = "Barrick_Q4_2025_AISC.xlsx"
+kind = "aisc_reconciliation"
+quarter = "2025Q4"
+path = "2025/q4/AISC_Q4_2025.xlsx"
+url_basis = "W1 naming rule"
+bytes = 40_336
+sha256 = "2ce7b8e46b36d745228487e683b221101c4db3019ba67acedea96967486d6755"
+
+[[source]]
+file = "Barrick_Q1_2026_AISC.xlsx"
+kind = "aisc_reconciliation"
+quarter = "2026Q1"
+path = "2026/q1/AISC_Q1_2026.xlsx"
+url_basis = "W1 naming rule"
+bytes = 43_718
+sha256 = "dbe567e90730b4ef87330b1eaa539c7289a92781e452b949c24f7b705464ef28"
+
+[[source]]
+file = "Barrick_Q2_2026_AISC.xlsx"
+kind = "aisc_reconciliation"
+quarter = "2026Q2"
+path = "2026/q2/AISC_Q2_2026.xlsx"
+url_basis = "W1 naming rule"
+bytes = 49_738
+sha256 = "66515a4ae4305de130b72fa1a3a78bf6aa51ac5a10350fc43732bb621c6d0e99"
+
+# Reporting subjects as printed in the AISC table headers, before the issuer's one-letter footnote suffix
+# (FACT: every header of the 34 visible AISC tables matches exactly one).
+
+[[subject]]
+name = "Nevada Gold Mines"
+
+[[subject]]
+name = "Carlin"
+
+[[subject]]
+name = "Cortez"
+
+[[subject]]
+name = "Turquoise Ridge"
+
+[[subject]]
+name = "Phoenix"
+
+[[subject]]
+name = "Long Canyon"
+
+[[subject]]
+name = "Hemlo"
+
+[[subject]]
+name = "Pueblo Viejo"
+
+[[subject]]
+name = "Veladero"
+
+[[subject]]
+name = "Porgera"
+
+[[subject]]
+name = "Loulo-Gounkoto"
+
+[[subject]]
+name = "Kibali"
+
+[[subject]]
+name = "North Mara"
+
+[[subject]]
+name = "Tongon"
+
+[[subject]]
+name = "Bulyanhulu"
+
+[[subject]]
+name = "North America"
+
+[[subject]]
+name = "Latin America & Asia Pacific"
+
+[[subject]]
+name = "Africa & Middle East"
+
+# E816: Africa & Middle East AISC per ounce, Q1 2025 (two vintages) and H1 2025. The rule text is part of
+# the state root (it is in each instance's detail), so it must not change by a byte.
+
+[[reconstruction]]
+evidence_id = "E816"
+table_file = "Barrick_Q1_2025_AISC.xlsx"
+sheet = "Q1 2025"
+subject = "Africa & Middle East"
+family = "aisc_per_oz"
+component_file = "Barrick_Q1_2025_Mine_Stats.xlsx"
+component_sheet = "Minestats3"
+component_cell = "B32"
+label_checks = "E816-Q1-2025"
+rule = "The region's per-ounce AISC numerator includes Loulo-Gounkoto's minesite sustaining capital although the site's $M rows and ounces print nil; no issuer note states the rule (E816)."
+
+[[reconstruction]]
+evidence_id = "E816"
+table_file = "Barrick_Q2_2025_AISC.xlsx"
+sheet = "Q1 2025"
+subject = "Africa & Middle East"
+family = "aisc_per_oz"
+component_file = "Barrick_Q1_2025_Mine_Stats.xlsx"
+component_sheet = "Minestats3"
+component_cell = "B32"
+label_checks = "E816-Q1-2025"
+rule = "The region's per-ounce AISC numerator includes Loulo-Gounkoto's minesite sustaining capital although the site's $M rows and ounces print nil; no issuer note states the rule (E816)."
+
+[[reconstruction]]
+evidence_id = "E816"
+table_file = "Barrick_Q2_2025_AISC.xlsx"
+sheet = "YTD Q2 2025"
+subject = "Africa & Middle East"
+family = "aisc_per_oz"
+component_file = "Barrick_Q2_2025_Mine_Stats.xlsx"
+component_sheet = "Minestats3"
+component_cell = "B74"
+label_checks = "E816-H1-2025"
+rule = "The region's per-ounce AISC numerator includes Loulo-Gounkoto's minesite sustaining capital although the site's $M rows and ounces print nil; no issuer note states the rule (E816)."
+
+# Q1 2025 Mine Stats, sheet Minestats3, three-month block (rows 2-43): FACT, read 2026-10-29.
+
+[[label_check]]
+set = "E816-Q1-2025"
+cell = "A32"
+prefix = "Minesite sustaining"
+
+[[label_check]]
+set = "E816-Q1-2025"
+cell = "B2"
+prefix = "Loulo-Gounkoto"
+
+[[label_check]]
+set = "E816-Q1-2025"
+cell = "A3"
+prefix = "For the three months ended March 31"
+
+[[label_check]]
+set = "E816-Q1-2025"
+cell = "B3"
+prefix = "2025"
+
+# Q2 2025 Mine Stats, sheet Minestats3, six-month block (header row 44): FACT, read 2026-10-29.
+
+[[label_check]]
+set = "E816-H1-2025"
+cell = "A74"
+prefix = "Minesite sustaining"
+
+[[label_check]]
+set = "E816-H1-2025"
+cell = "B44"
+prefix = "Loulo-Gounkoto"
+
+[[label_check]]
+set = "E816-H1-2025"
+cell = "A45"
+prefix = "For the six months ended June 30"
+
+[[label_check]]
+set = "E816-H1-2025"
+cell = "B45"
+prefix = "2025"

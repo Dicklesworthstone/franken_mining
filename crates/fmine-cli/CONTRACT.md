@@ -12,7 +12,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
 - **Envelope:** `FMT-ENV-1` (`schema_version: "fmine.env.v1"`).
 - **Verbs:**
-  - `assure public --issuer <issuer>`: the gate-eligible run over registered public filings;
+  - `assure public --issuer <issuer> [--through YYYYQn]`: the gate-eligible run over the filings in
+    `registries/sources/<issuer>.toml`, optionally only those at or before a quarter;
   - `assure public --synthetic`: the known-answer run, never gate-eligible;
   - `doctor`;
   - `claim show <id>`;
@@ -37,7 +38,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 - **Exit 2:** a usage error with no refusal code. This covers:
   - an unknown verb or flag;
   - a missing `--issuer`;
-  - an unregistered issuer;
+  - an unregistered issuer (no `registries/sources/<issuer>.toml` in the workspace);
+  - a malformed `--through` bound, or `--through` with `--synthetic`;
   - `--issuer` together with `--synthetic`.
 - **Exit 3–8:** the catalog refusal's own exit code. For example, `FMINE-REF-502` (exit 8) means a registered file
   is missing or altered.

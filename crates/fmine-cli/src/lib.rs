@@ -3,7 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use fmine_evidence::{REFUSAL_CATALOG, Refusal};
-use fmine_public::sources::issuer_profile;
+use fmine_public::sources::{
+    is_issuer_name, is_through_bound, load_issuer_profile, registered_issuers, registry_path,
+};
 use fmine_public::{run_public_assurance, run_synthetic_assurance};
 use fmine_registry::RegistryCatalog;
 
@@ -17,8 +19,12 @@ pub enum OutputFormat {
 /// Parsed CLI command (`BD-111`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
-    /// `fmine assure public --issuer <issuer>` (`BD-071`): the gate-eligible run over registered filings.
-    AssurePublic { issuer: String },
+    /// `fmine assure public --issuer <issuer> [--through YYYYQn]` (`BD-071`): the gate-eligible run over the
+    /// filings in `registries/sources/<issuer>.toml`, optionally only those at or before a quarter.
+    AssurePublic {
+        issuer: String,
+        through: Option<String>,
+    },
     /// `fmine assure public --synthetic`: the known-answer run over synthetic workbooks (never gate-eligible).
     AssureSynthetic,
     /// `fmine doctor` (`BD-115`).
@@ -123,6 +129,7 @@ pub fn parse_args(
     let mut workspace = default_root.to_path_buf();
     let mut positional = Vec::new();
     let mut synthetic = false;
+    let mut through = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -150,6 +157,14 @@ pub fn parse_args(
                 let val = args.get(i).ok_or("missing value for --issuer")?;
                 positional.push(format!("issuer={val}"));
             }
+            "--through" => {
+                i += 1;
+                let val = args.get(i).ok_or("missing value for --through")?;
+                if !is_through_bound(val) {
+                    return Err(format!("--through '{val}' is not a quarter YYYYQ1..YYYYQ4"));
+                }
+                through = Some(val.clone());
+            }
             "--synthetic" => synthetic = true,
             arg => positional.push(arg.to_string()),
         }
@@ -169,21 +184,30 @@ pub fn parse_args(
                 return Err("expected 'fmine assure public --issuer <issuer>' or 'fmine assure public --synthetic'".to_string());
             }
             let issuer = positional.iter().find_map(|s| s.strip_prefix("issuer="));
+            let registered = || registered_issuers(&workspace).join(", ");
             match (issuer, synthetic) {
                 (Some(_), true) => return Err("--issuer and --synthetic are exclusive".to_string()),
+                (None, true) if through.is_some() => {
+                    return Err("--through applies to --issuer runs only".to_string());
+                }
                 (None, true) => CliCommand::AssureSynthetic,
                 (None, false) => {
-                    return Err(
-                        "missing --issuer <issuer> (registered: barrick) or --synthetic"
-                            .to_string(),
-                    );
+                    return Err(format!(
+                        "missing --issuer <issuer> (registered: {}) or --synthetic",
+                        registered()
+                    ));
                 }
                 (Some(name), false) => {
-                    if issuer_profile(name).is_none() {
-                        return Err(format!("unknown issuer '{name}' (registered: barrick)"));
+                    if !is_issuer_name(name) || !registry_path(&workspace, name).is_file() {
+                        return Err(format!(
+                            "unknown issuer '{name}': no registries/sources/{name}.toml under {} (registered: {})",
+                            workspace.display(),
+                            registered()
+                        ));
                     }
                     CliCommand::AssurePublic {
                         issuer: name.to_string(),
+                        through,
                     }
                 }
             }
@@ -210,14 +234,26 @@ pub fn parse_args(
 #[must_use]
 pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     match cmd {
-        CliCommand::AssurePublic { issuer } => {
-            let Some(profile) = issuer_profile(issuer) else {
+        CliCommand::AssurePublic { issuer, through } => {
+            if !is_issuer_name(issuer) || !registry_path(workspace_root, issuer).is_file() {
                 return Envelope::usage_error(
                     "assure public",
-                    &format!("unknown issuer '{issuer}' (registered: barrick)"),
+                    &format!(
+                        "unknown issuer '{issuer}' (registered: {})",
+                        registered_issuers(workspace_root).join(", ")
+                    ),
                 );
+            }
+            let profile = match (load_issuer_profile(workspace_root, issuer), through) {
+                (Ok(p), Some(bound)) => p.through(bound),
+                (loaded, None) => loaded,
+                (Err(e), Some(_)) => Err(e),
             };
-            match run_public_assurance(profile, workspace_root) {
+            let profile = match profile {
+                Ok(p) => p,
+                Err(refusal) => return Envelope::refused("assure public", refusal),
+            };
+            match run_public_assurance(&profile, workspace_root) {
                 Ok(report) => Envelope::ok(
                     "assure public",
                     Some(report.ledger_anchor.anchor_id().to_string()),
@@ -236,21 +272,39 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         },
         CliCommand::Doctor => match RegistryCatalog::load_from_root(workspace_root) {
             Ok(cat) => {
-                let barrick = &fmine_public::sources::BARRICK;
-                let dir = workspace_root.join(barrick.corpus_dir);
-                let present = barrick
-                    .sources
+                // One entry per registries/sources/<issuer>.toml: registered and present counts, or the
+                // registry's refusal (file and line) when it does not load.
+                let issuers: Vec<String> = registered_issuers(workspace_root)
                     .iter()
-                    .filter(|s| dir.join(s.file_name).is_file())
-                    .count();
+                    .map(|name| match load_issuer_profile(workspace_root, name) {
+                        Ok(p) => {
+                            let dir = workspace_root.join(&p.corpus_dir);
+                            let present = p
+                                .sources
+                                .iter()
+                                .filter(|s| dir.join(&s.file_name).is_file())
+                                .count();
+                            format!(
+                                "{{\"issuer\":\"{}\",\"registry_ok\":true,\"sources_registered\":{},\"sources_present\":{}}}",
+                                escape_json(name),
+                                p.sources.len(),
+                                present
+                            )
+                        }
+                        Err(r) => format!(
+                            "{{\"issuer\":\"{}\",\"registry_ok\":false,\"error\":\"{}\"}}",
+                            escape_json(name),
+                            escape_json(&r.what)
+                        ),
+                    })
+                    .collect();
                 let payload = format!(
-                    "{{\"registries_ok\":true,\"units_count\":{},\"crs_count\":{},\"refusals_count\":{},\"verbs_count\":{},\"barrick_sources_registered\":{},\"barrick_sources_present\":{}}}",
+                    "{{\"registries_ok\":true,\"units_count\":{},\"crs_count\":{},\"refusals_count\":{},\"verbs_count\":{},\"issuers\":[{}]}}",
                     cat.unit_symbols.len(),
                     cat.crs_codes.len(),
                     cat.refusal_codes.len(),
                     cat.verb_names.len(),
-                    barrick.sources.len(),
-                    present
+                    issuers.join(",")
                 );
                 Envelope::ok("doctor", None, payload)
             }
@@ -280,8 +334,13 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                     )
                 })
                 .collect();
+            let issuers: Vec<String> = registered_issuers(workspace_root)
+                .iter()
+                .map(|i| format!("\"{}\"", escape_json(i)))
+                .collect();
             let payload = format!(
-                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"verbs\":[\"assure public --issuer <issuer>\",\"assure public --synthetic\",\"doctor\",\"claim show <id>\",\"robot-docs\"],\"issuers\":[\"barrick\"],\"exit_codes\":{{\"0\":\"ok\",\"2\":\"usage error (unknown verb, flag or issuer)\"}},\"refusals\":[{}]}}",
+                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"verbs\":[\"assure public --issuer <issuer> [--through YYYYQn]\",\"assure public --synthetic\",\"doctor\",\"claim show <id>\",\"robot-docs\"],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok\",\"2\":\"usage error (unknown verb, flag, issuer or --through bound)\"}},\"refusals\":[{}]}}",
+                issuers.join(","),
                 refusals.join(",")
             );
             Envelope::ok("robot-docs", None, payload)
@@ -349,30 +408,56 @@ mod tests {
 
     /// Without the registered workbooks the gate-eligible run refuses with exit 8 and names the files; it
     /// never substitutes stand-in content (BD-321).
+    ///
+    /// The scratch workspace holds a copy of the registry and no corpus.
     #[test]
     fn test_cli_assure_public_refuses_without_registered_files() {
-        let empty = workspace_root()
-            .join("crates")
-            .join("fmine-cli")
-            .join("no-such-workspace");
-        let (cmd, _, ws) = parse_args(
-            &args(&[
-                "assure",
-                "public",
-                "--issuer",
-                "barrick",
-                "--workspace",
-                &empty.display().to_string(),
-            ]),
+        let ws = std::env::temp_dir().join(format!("fmine-cli-no-corpus-{}", std::process::id()));
+        let reg = registry_path(&ws, "barrick");
+        std::fs::create_dir_all(reg.parent().expect("dir")).expect("registry dir");
+        std::fs::copy(registry_path(&workspace_root(), "barrick"), &reg).expect("copy registry");
+        let ws_arg = ws.display().to_string();
+        let (cmd, _, ws_parsed) = parse_args(
+            &args(&["assure", "public", "--issuer", "barrick", "--workspace", &ws_arg]),
             &workspace_root(),
         )
         .expect("parse");
-        let env = execute_command(&cmd, &ws);
+        let env = execute_command(&cmd, &ws_parsed);
         assert_eq!((env.exit_code, env.status), (8, "refused"));
         let json = env.to_json();
         assert!(json.contains("\"code\":\"FMINE-REF-502\""));
         assert!(json.contains("Barrick_Q2_2026_AISC.xlsx"));
         assert!(json.contains("\"payload\":null"));
+
+        // --through narrows the refusal to the rows at or before the bound.
+        let (cmd, _, _) = parse_args(
+            &args(&["assure", "public", "--issuer", "barrick", "--through", "2024Q4", "--workspace", &ws_arg]),
+            &workspace_root(),
+        )
+        .expect("parse");
+        assert_eq!(
+            cmd,
+            CliCommand::AssurePublic {
+                issuer: "barrick".to_string(),
+                through: Some("2024Q4".to_string())
+            }
+        );
+        let json = execute_command(&cmd, &ws_parsed).to_json();
+        assert!(json.contains("Barrick_Q4_2024_AISC.xlsx"), "{json}");
+        assert!(!json.contains("Barrick_Q1_2025"), "{json}");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// A workspace without the issuer's registry file makes the issuer unknown: a usage error, exit 2.
+    #[test]
+    fn test_cli_unknown_issuer_without_registry_is_usage_error() {
+        let empty = workspace_root().join("crates").join("fmine-cli").join("no-such-workspace");
+        let err = parse_args(
+            &args(&["assure", "public", "--issuer", "barrick", "--workspace", &empty.display().to_string()]),
+            &workspace_root(),
+        )
+        .expect_err("no registry there");
+        assert!(err.contains("no registries/sources/barrick.toml"), "{err}");
     }
 
     #[test]
@@ -383,6 +468,11 @@ mod tests {
             &["assure", "public"][..],
             &["assure", "public", "--issuer", "barrick", "--synthetic"][..],
             &["assure", "private"][..],
+            &["assure", "public", "--issuer", "barrick", "--through", "2026Q5"][..],
+            &["assure", "public", "--issuer", "barrick", "--through", "2026-Q2"][..],
+            &["assure", "public", "--issuer", "barrick", "--through"][..],
+            &["assure", "public", "--synthetic", "--through", "2026Q2"][..],
+            &["assure", "public", "--issuer", "../registries/sources/barrick"][..],
             &[][..],
         ] {
             assert!(
@@ -393,6 +483,7 @@ mod tests {
         let env = execute_command(
             &CliCommand::AssurePublic {
                 issuer: "newmont".to_string(),
+                through: None,
             },
             &root,
         );
@@ -417,15 +508,23 @@ mod tests {
     /// Gate run on the real registered workbooks (public lane; the files are not in git). Run with
     /// `cargo test -p fmine-cli -- --ignored` where `corpus_of_input_docs/downloaded/mine_stats/` is present.
     #[test]
-    #[ignore = "needs the 18 registered Barrick workbooks under corpus_of_input_docs/downloaded/mine_stats/"]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
     fn test_cli_assure_public_barrick_real_files() {
         let root = workspace_root();
-        let (cmd, _, ws) =
-            parse_args(&args(&["assure", "public", "--issuer", "barrick"]), &root).expect("parse");
+        let (cmd, _, ws) = parse_args(
+            &args(&["assure", "public", "--issuer", "barrick", "--through", "2026Q2"]),
+            &root,
+        )
+        .expect("parse");
         let env = execute_command(&cmd, &ws);
         assert_eq!((env.exit_code, env.status), (0, "ok"), "{}", env.to_json());
         let json = env.to_json();
         assert!(json.contains("\"lane\":\"public\",\"gate_eligible\":true"));
+        assert!(json.contains("\"through\":\"2026Q2\""));
+        // Regression pin of this implementation's output (MOR_CASE E822), not an independent value.
+        assert!(json.contains(
+            "\"state_root\":\"9283f89649b8e51b63e271532d8227b801ee0e6dce522d7a1b5e60c9ad389bb2\""
+        ));
         assert!(json.contains("\"aisc_tables\":34,\"instances\":2595"));
         assert!(
             json.contains(
@@ -440,17 +539,20 @@ mod tests {
         let env_doc = execute_command(&CliCommand::Doctor, &root);
         assert_eq!(env_doc.exit_code, 0);
         assert!(env_doc.to_json().contains("\"registries_ok\":true"));
-
+        let n = load_issuer_profile(&root, "barrick").expect("registry").sources.len();
         assert!(
-            env_doc
-                .to_json()
-                .contains("\"barrick_sources_registered\":18")
+            env_doc.to_json().contains(&format!(
+                "{{\"issuer\":\"barrick\",\"registry_ok\":true,\"sources_registered\":{n},"
+            )),
+            "{}",
+            env_doc.to_json()
         );
 
         let env_rob = execute_command(&CliCommand::RobotDocs, &root);
         assert_eq!(env_rob.exit_code, 0);
         let rob = env_rob.to_json();
         assert!(rob.contains("\"FMT-ENV-1\""));
+        assert!(rob.contains("\"issuers\":[\"barrick\"]"), "{rob}");
         assert!(rob.contains("{\"code\":\"FMINE-REF-502\",\"exit_code\":8,"));
     }
 }

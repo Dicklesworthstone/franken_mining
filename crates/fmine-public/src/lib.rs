@@ -28,6 +28,7 @@ use crate::aisc::{
     ledger_for_table, locate_table, reconstruction_closes,
 };
 use crate::sources::{IssuerProfile, RegisteredReconstruction, SourceKind};
+pub use crate::sources::load_issuer_profile;
 
 /// Converts an extracted cell into a public-basis `Claim<Option<f64>>` (`BD-058`): a number is the value as
 /// published, a placeholder is a known unknown, and text or a formula error is refused.
@@ -127,13 +128,13 @@ pub fn load_registered_sources(
     profile: &IssuerProfile,
     root: &Path,
 ) -> Result<Vec<LoadedSource>, Refusal> {
-    let dir = root.join(profile.corpus_dir);
+    let dir = root.join(&profile.corpus_dir);
     let mut loaded = Vec::with_capacity(profile.sources.len());
     let mut missing = Vec::new();
     let mut altered = Vec::new();
     let mut unreadable = Vec::new();
-    for src in profile.sources {
-        let bytes = match std::fs::read(dir.join(src.file_name)) {
+    for src in &profile.sources {
+        let bytes = match std::fs::read(dir.join(&src.file_name)) {
             Ok(b) => b,
             Err(e) => {
                 missing.push(format!("{} ({e})", src.file_name));
@@ -156,11 +157,11 @@ pub fn load_registered_sources(
             Ok(workbook) => {
                 let census = workbook.cell_census();
                 loaded.push(LoadedSource {
-                    file_name: src.file_name.to_string(),
+                    file_name: src.file_name.clone(),
                     kind: src.kind,
-                    quarter: src.quarter.to_string(),
-                    url: src.url.to_string(),
-                    url_basis: src.url_basis.to_string(),
+                    quarter: src.quarter.clone(),
+                    url: src.url.clone(),
+                    url_basis: src.url_basis.clone(),
                     bytes: src.bytes,
                     workbook,
                     census,
@@ -205,6 +206,8 @@ pub struct PublicAssuranceReport {
     pub issuer: String,
     pub lane: Lane,
     pub retrieved_utc: String,
+    /// The `--through YYYYQn` bound the run applied, if any. Not in the state root: the sources it kept are.
+    pub through: Option<String>,
     pub sources: Vec<LoadedSource>,
     pub aisc_tables: usize,
     pub table_refusals: Vec<TableRefusal>,
@@ -301,8 +304,9 @@ impl PublicAssuranceReport {
         );
         let _ = write!(
             o,
-            "\"retrieved_utc\":{},\"sources\":[",
-            js(&self.retrieved_utc)
+            "\"retrieved_utc\":{},\"through\":{},\"sources\":[",
+            js(&self.retrieved_utc),
+            self.through.as_deref().map_or_else(|| "null".to_string(), js)
         );
         for (n, s) in self.sources.iter().enumerate() {
             let c = &s.census;
@@ -528,7 +532,7 @@ impl PublicAssuranceReport {
             Lane::Synthetic => &[
                 (
                     "fmine assure public --issuer barrick",
-                    "the gate-eligible run over the 18 registered public workbooks",
+                    "the gate-eligible run over the workbooks in registries/sources/barrick.toml",
                 ),
                 ("fmine robot-docs", "verbs, envelope fields and exit codes"),
             ],
@@ -607,7 +611,7 @@ fn try_reconstruction(
     else {
         return fail(format!("no visible sheet '{}'", rec.component_sheet));
     };
-    for (cell, prefix) in rec.label_checks {
+    for (cell, prefix) in &rec.label_checks {
         let text = parse_a1_ref(cell).and_then(|(r, c)| cell_text(cs, r, c));
         if !text.as_deref().is_some_and(|t| t.starts_with(prefix)) {
             return fail(format!(
@@ -617,7 +621,7 @@ fn try_reconstruction(
             ));
         }
     }
-    let value = parse_a1_ref(rec.component_cell)
+    let value = parse_a1_ref(&rec.component_cell)
         .and_then(|(r, c)| cs.cell(r, c))
         .and_then(|c| c.value.as_number());
     let c = match value {
@@ -635,8 +639,8 @@ fn try_reconstruction(
     );
     if reconstruction_closes(miss.n, miss.k, miss.q, miss.r, c) {
         Some(IdentityState::Explained {
-            evidence_id: rec.evidence_id,
-            rule: rec.rule,
+            evidence_id: rec.evidence_id.clone(),
+            rule: rec.rule.clone(),
             component,
         })
     } else {
@@ -648,14 +652,10 @@ fn try_reconstruction(
 
 /// Builds the identity ledger over every AISC table in `sources` and commits the run to a state root.
 #[must_use]
-pub fn assess(
-    issuer: &str,
-    lane: Lane,
-    retrieved_utc: &str,
-    subjects: &[&'static str],
-    reconstructions: &[RegisteredReconstruction],
-    sources: Vec<LoadedSource>,
-) -> PublicAssuranceReport {
+pub fn assess(profile: &IssuerProfile, lane: Lane, sources: Vec<LoadedSource>) -> PublicAssuranceReport {
+    let issuer = profile.issuer.as_str();
+    let subjects = profile.subjects.as_slice();
+    let reconstructions = profile.reconstructions.as_slice();
     let mut instances = Vec::new();
     let mut unregistered = Vec::new();
     let mut table_refusals = Vec::new();
@@ -762,7 +762,8 @@ pub fn assess(
     PublicAssuranceReport {
         issuer: issuer.to_string(),
         lane,
-        retrieved_utc: retrieved_utc.to_string(),
+        retrieved_utc: profile.retrieved_utc.clone(),
+        through: profile.through.clone(),
         sources,
         aisc_tables,
         table_refusals,
@@ -778,19 +779,12 @@ pub fn run_public_assurance(
     root: &Path,
 ) -> Result<PublicAssuranceReport, Refusal> {
     let sources = load_registered_sources(profile, root)?;
-    Ok(assess(
-        profile.issuer,
-        Lane::Public,
-        profile.retrieved_utc,
-        profile.subjects,
-        profile.reconstructions,
-        sources,
-    ))
+    Ok(assess(profile, Lane::Public, sources))
 }
 
-/// The Barrick M0 run (`GATE-BULL-01`).
+/// The Barrick M0 run (`GATE-BULL-01`): registry and corpus both under `root`.
 pub fn run_barrick_m0_assurance(root: &Path) -> Result<PublicAssuranceReport, Refusal> {
-    run_public_assurance(&sources::BARRICK, root)
+    run_public_assurance(&sources::load_issuer_profile(root, "barrick")?, root)
 }
 
 /// `fmine assure public --synthetic`: the known-answer run over invented workbooks, with optional edits to
@@ -814,14 +808,7 @@ pub fn run_synthetic_assurance(
             census,
         });
     }
-    Ok(assess(
-        "synthetic",
-        Lane::Synthetic,
-        "",
-        &synthetic::SYNTHETIC_SUBJECTS,
-        &synthetic::SYNTHETIC_RECONSTRUCTIONS,
-        sources,
-    ))
+    Ok(assess(&synthetic::synthetic_profile(), Lane::Synthetic, sources))
 }
 
 #[cfg(test)]
@@ -971,67 +958,68 @@ mod tests {
     #[test]
     fn reconstruction_with_a_wrong_label_does_not_apply() {
         let sources = run_synthetic_assurance(&[]).expect("base").sources;
-        let mut rec = synthetic::SYNTHETIC_RECONSTRUCTIONS;
-        rec[0].label_checks = &[("A32", "Minesite sustaining"), ("B3", "2031")];
-        let r = assess(
-            "synthetic",
-            Lane::Synthetic,
-            "",
-            &synthetic::SYNTHETIC_SUBJECTS,
-            &rec,
-            sources,
-        );
+        let mut profile = synthetic::synthetic_profile();
+        profile.reconstructions[0].label_checks = vec![
+            ("A32".to_string(), "Minesite sustaining".to_string()),
+            ("B3".to_string(), "2031".to_string()),
+        ];
+        let r = assess(&profile, Lane::Synthetic, sources);
         match state_of(&r, "H16", IdentityFamily::AiscPerOunce) {
             IdentityState::Undecidable { detail } => assert!(detail.contains("B3"), "{detail}"),
             other => panic!("H16: {other:?}"),
         }
     }
 
+    /// The registry is read from the workspace; the corpus is absent. Every registered file is named, and the
+    /// count comes from the registry, not from a literal.
     #[test]
     fn missing_corpus_refuses_naming_every_registered_file() {
+        let profile = load_issuer_profile(&workspace_root(), "barrick").expect("registry");
+        let n = profile.sources.len();
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("no-such-workspace");
-        let refusal = run_barrick_m0_assurance(&root).expect_err("must refuse");
+        let refusal = run_public_assurance(&profile, &root).expect_err("must refuse");
         assert_eq!((refusal.code, refusal.exit_code), ("FMINE-REF-502", 8));
         assert!(
             refusal
                 .what
-                .contains("18 of 18 registered barrick workbooks unusable"),
+                .contains(&format!("{n} of {n} registered barrick workbooks unusable")),
             "{}",
             refusal.what
         );
-        for src in sources::BARRICK_SOURCES {
-            assert!(
-                refusal.what.contains(src.file_name),
-                "{} not named",
-                src.file_name
-            );
+        for src in &profile.sources {
+            assert!(refusal.what.contains(&src.file_name), "{} not named", src.file_name);
         }
     }
 
+    /// A row added to a copy of the registry is picked up with no code change: the refusal count follows the
+    /// registry, and the added file is named.
     #[test]
-    fn registry_is_well_formed() {
-        let mut names: Vec<&str> = sources::BARRICK_SOURCES
-            .iter()
-            .map(|s| s.file_name)
-            .collect();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), 18);
-        for s in sources::BARRICK_SOURCES {
-            assert_eq!(s.sha256_hex.len(), 64);
-            assert!(
-                s.sha256_hex
-                    .chars()
-                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-            );
-            assert!(s.url.starts_with(
-                "https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/"
-            ));
-            assert!(s.bytes > 0);
-        }
-        for rec in sources::BARRICK_RECONSTRUCTIONS {
-            assert!(names.contains(&rec.table_file) && names.contains(&rec.component_file));
-        }
+    fn test_refusal_count_follows_registry_rows() {
+        let ws = std::env::temp_dir().join(format!("fmine-public-rows-{}", std::process::id()));
+        let reg_dir = ws.join("registries").join("sources");
+        std::fs::create_dir_all(&reg_dir).expect("temp registry dir");
+        let text = std::fs::read_to_string(sources::registry_path(&workspace_root(), "barrick")).expect("read");
+        let base = load_issuer_profile(&workspace_root(), "barrick").expect("registry").sources.len();
+        let added = "\n[[source]]\nfile = \"Barrick_Q3_2026_Mine_Stats.xlsx\"\nkind = \"mine_stats\"\n\
+                     quarter = \"2026Q3\"\npath = \"2026/q3/Barrick_Q3_2026_Mine_Stats.xlsx\"\n\
+                     url_basis = \"W1 naming rule\"\nbytes = 1\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000001\"\n";
+        std::fs::write(reg_dir.join("barrick.toml"), format!("{text}{added}")).expect("write");
+        let profile = load_issuer_profile(&ws, "barrick").expect("extended registry");
+        assert_eq!(profile.sources.len(), base + 1);
+        let refusal = run_public_assurance(&profile, &ws).expect_err("no corpus");
+        let n = base + 1;
+        assert!(refusal.what.contains(&format!("{n} of {n} registered barrick workbooks unusable")));
+        assert!(refusal.what.contains("Barrick_Q3_2026_Mine_Stats.xlsx"));
+        // `--through 2026Q2` drops the added row again.
+        assert_eq!(profile.through("2026Q2").expect("bound").sources.len(), base);
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn test_next_actions_text_has_no_hard_coded_count() {
+        let json = run_synthetic_assurance(&[]).expect("synthetic").to_json();
+        assert!(json.contains("registries/sources/barrick.toml"), "{json}");
+        assert!(!json.contains(" 18 "), "{json}");
     }
 
     fn workspace_root() -> PathBuf {
@@ -1043,15 +1031,24 @@ mod tests {
     /// GATE-BULL-01 on the real registered workbooks. Every expected value below comes from the independent
     /// Python reader written before this code (scratch `fidelity.py` and `census2.py`, 2026-10-29; recorded in
     /// MOR_CASE E820–E823), never from this implementation's own output.
+    ///
+    /// The run is bounded `--through 2026Q2`, so it keeps testing the same inputs after later vintages are
+    /// registered. The state root at the end is different in kind: it is a regression pin of this
+    /// implementation's own output (MOR_CASE E822, updated 2026-10-29 for outward rate rounding), not an
+    /// independent value.
     #[test]
-    #[ignore = "needs the 18 registered Barrick workbooks under corpus_of_input_docs/downloaded/mine_stats/"]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
     fn barrick_real_files_match_the_independent_reader() {
-        let r = run_barrick_m0_assurance(&workspace_root())
+        let profile = load_issuer_profile(&workspace_root(), "barrick")
+            .and_then(|p| p.through("2026Q2"))
+            .expect("registry");
+        let r = run_public_assurance(&profile, &workspace_root())
             .expect("registered files present and unaltered");
         assert!(r.gate_eligible());
+        assert_eq!(r.through.as_deref(), Some("2026Q2"));
 
         // Part 1, extraction fidelity: visible, hidden, numeric, placeholder, error, text cells and the digest.
-        let oracle: [(&str, [usize; 6], &str); 18] = [
+        let oracle: &[(&str, [usize; 6], &str)] = &[
             (
                 "Barrick_Q1_2024_Mine_Stats.xlsx",
                 [6, 0, 1130, 298, 0, 251],
@@ -1143,7 +1140,8 @@ mod tests {
                 "954f03ad421d6d20ca4c062e5b11b239ee3c46e97e5ceb4cb49dade616f71d1e",
             ),
         ];
-        for (file, counts, digest) in oracle {
+        assert_eq!(r.sources.len(), oracle.len(), "every loaded file has an oracle row");
+        for &(file, counts, digest) in oracle {
             let s = r.sources.iter().find(|s| s.file_name == file).expect(file);
             let c = &s.census;
             let got = [
@@ -1278,6 +1276,12 @@ mod tests {
         assert_eq!(iv_subjects.iter().filter(|s| **s == "Veladero").count(), 12);
         assert_eq!(iv_subjects.iter().filter(|s| **s == "Hemlo").count(), 3);
         assert_eq!(iv_subjects.iter().filter(|s| **s == "Kibali").count(), 2);
+
+        // Regression pin (not independent; see the doc comment).
+        assert_eq!(
+            r.ledger_anchor.state_root.to_hex(),
+            "9283f89649b8e51b63e271532d8227b801ee0e6dce522d7a1b5e60c9ad389bb2"
+        );
     }
 
     #[test]

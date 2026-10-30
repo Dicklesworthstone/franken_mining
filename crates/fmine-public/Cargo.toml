@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Public filing source registry, public-basis Claim builder, and Barrick 18-workbook corpus loader (2024Q1-2026Q2)."
+description = "Public filing source registry (registries/sources/*.toml), public-basis Claim builder, and the registered-corpus loader."
 
 [dependencies]
 fmine-core = { path = "../fmine-core" }
@@ -14,6 +14,7 @@ fmine-evidence = { path = "../fmine-evidence" }
 fmine-claim = { path = "../fmine-claim" }
 fmine-io = { path = "../fmine-io" }
 fmine-metrics = { path = "../fmine-metrics" }
+fmine-registry = { path = "../fmine-registry" }
 
 [lints]
 workspace = true

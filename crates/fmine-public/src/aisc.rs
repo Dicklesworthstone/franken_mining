@@ -94,8 +94,8 @@ pub enum IdentityState {
     Consistent { alternate_consistent: bool },
     /// (ii) The numbers close only with a registered reconstruction, re-verified on this run.
     Explained {
-        evidence_id: &'static str,
-        rule: &'static str,
+        evidence_id: String,
+        rule: String,
         component: String,
     },
     /// (iii) The printed total differs from the sum of its printed lines.
@@ -218,8 +218,8 @@ pub fn cell_text(sheet: &Sheet, row: u32, col: u32) -> Option<String> {
 /// Matches a header against the registered subjects: exact, or the subject followed by one lower-case
 /// footnote letter.
 #[must_use]
-pub fn match_subject(header: &str, subjects: &[&'static str]) -> Option<&'static str> {
-    subjects.iter().copied().find(|s| {
+pub fn match_subject<'a, S: AsRef<str>>(header: &str, subjects: &'a [S]) -> Option<&'a str> {
+    subjects.iter().map(AsRef::as_ref).find(|s| {
         header == *s
             || header.strip_prefix(*s).is_some_and(|rest| {
                 rest.chars().count() == 1 && rest.chars().all(char::is_lowercase)
@@ -231,7 +231,7 @@ const COS_LABEL: &str = "cost of sales applicable to gold production";
 
 /// Locates the AISC table on a sheet. `Ok(None)` when the sheet has no cost-of-sales row (not an AISC
 /// table); `Err` when it has one but the remaining structure cannot be found (a table-level refusal).
-pub fn locate_table(sheet: &Sheet, subjects: &[&'static str]) -> Result<Option<AiscTable>, String> {
+pub fn locate_table<S: AsRef<str>>(sheet: &Sheet, subjects: &[S]) -> Result<Option<AiscTable>, String> {
     let mut labels: BTreeMap<u32, String> = BTreeMap::new();
     for &(row, col) in sheet.cells_by_coord.keys() {
         if col == 1 {
@@ -463,11 +463,11 @@ pub struct RateMiss {
 
 /// Builds the identity ledger for one located table. `explain` is offered every per-ounce miss and may
 /// return an explained state (it must itself re-verify the component); otherwise the miss is (iv).
-pub fn ledger_for_table(
+pub fn ledger_for_table<S: AsRef<str>>(
     file: &str,
     sheet: &Sheet,
     table: &AiscTable,
-    subjects: &[&'static str],
+    subjects: &[S],
     explain: &mut dyn FnMut(&str, IdentityFamily, RateMiss) -> Option<IdentityState>,
     instances: &mut Vec<IdentityInstance>,
     unregistered: &mut Vec<UnregisteredHeader>,

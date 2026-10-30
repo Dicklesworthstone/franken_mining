@@ -115,6 +115,7 @@ dependencies = [
  "fmine-evidence",
  "fmine-io",
  "fmine-metrics",
+ "fmine-registry",
  "fmine-time",
  "fmine-units",
 ]
@@ -144,3 +145,6 @@ dependencies = [
 [[package]]
 name = "xtask"
 version = "0.1.0"
+dependencies = [
+ "fmine-registry",
+]

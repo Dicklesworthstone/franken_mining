@@ -5,7 +5,7 @@
 - **Layer:** `S0` (Substrate)
 - **Subsystem:** `Bedrock`
 - **LOC Budget:** `10k planned / 12k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["catalog", "parser"]`
+- **Allowed Module Families:** `["catalog", "parser", "sources", "toml_subset"]`
 
 ## 2. Mathematical & Domain Formulation
 Parses and validates the 8 canonical TOML registries in `registries/` (`loc_budget`, `workspace_topology`, `lifts`, `units`, `crs`, `calendars`, `refusals`, `verbs`) and verifies 1:1 alignment between `registries/refusals.toml` and `fmine_evidence::REFUSAL_CATALOG`.
@@ -15,6 +15,8 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
 
 ## 4. Public API Surface
 - `RegistryCatalog`, `RegistryError`
+- `toml_subset::{parse_subset, TomlDoc, TomlRow, TomlField, TomlValue, SubsetError}`: a strict TOML subset (`[[table]]` rows, basic strings, integers, comments); anything else refuses naming the line (bd-s9j3.1)
+- `sources::{parse_sources_registry, load_sources_registry, SourcesRegistry, SourceRow, ReconstructionRow, SourcesError, is_quarter}`: issuer source registries `registries/sources/<issuer>.toml` (`fmine.sources.v1`), checked on load
 
 ## 5. Guards & Typed Refusals
 - `RegistryError::MissingEntry`, `RegistryError::CatalogMismatch`, `RegistryError::Io`.

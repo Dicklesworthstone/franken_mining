@@ -641,6 +641,33 @@ pub fn check_det_in_source(path: &Path, prod_code: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// `registry-check` (bd-s9j3.1): every `registries/sources/*.toml` parses in the TOML subset and passes the
+/// source-registry rules (unique files, paths and digests; lowercase 64-hex digests; `YYYYQn` quarters;
+/// registered kinds, URL bases and families; reconstructions pointing at registered rows), and its `issuer`
+/// matches its file name. A missing directory is an error: the public lane cannot run without it.
+pub fn check_sources_registry(root: &Path) -> Result<(), Vec<String>> {
+    let dir = root.join("registries").join("sources");
+    let entries = fs::read_dir(&dir).map_err(|e| vec![format!("cannot read {}: {e}", dir.display())])?;
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        return Err(vec![format!("no *.toml source registries in {}", dir.display())]);
+    }
+    let errors: Vec<String> = files
+        .iter()
+        .filter_map(|p| {
+            fmine_registry::sources::load_sources_registry(p)
+                .err()
+                .map(|e| format!("registry-check {}: {e}", p.display()))
+        })
+        .collect();
+    if errors.is_empty() { Ok(()) } else { Err(errors) }
+}
+
 /// Run all `GATE-LAYERS-00` checks (`BD-015`).
 pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
     let mut all_errors = Vec::new();
@@ -670,6 +697,9 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
         all_errors.extend(e);
     }
     if let Err(e) = check_det(root) {
+        all_errors.extend(e);
+    }
+    if let Err(e) = check_sources_registry(root) {
         all_errors.extend(e);
     }
     if all_errors.is_empty() {
@@ -874,6 +904,34 @@ mod tests {
             "//! Determinism: BitwisePortable\npub fn f(x: f64) -> f64 { f64::exp(x) }",
         );
         assert!(res.is_err());
+    }
+
+    /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.
+    #[test]
+    fn test_registry_check_on_workspace_and_on_a_broken_copy() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .to_path_buf();
+        check_sources_registry(&root).expect("workspace registries pass registry-check");
+        let scratch = std::env::temp_dir().join(format!("xtask-registry-{}", std::process::id()));
+        let dir = scratch.join("registries").join("sources");
+        fs::create_dir_all(&dir).expect("scratch dir");
+        let text = fs::read_to_string(root.join("registries/sources/barrick.toml")).expect("read");
+        let dup = text.replacen(
+            "sha256 = \"1a73d6d7d4658f923757e873eec147ccc74aa8aada6a439f3c98da8540ff68d5\"",
+            "sha256 = \"e2e1243ec0549f4c487c773869876e2acade401a0b6cd1141adf4b9296aec840\"",
+            1,
+        );
+        assert_ne!(dup, text, "the edit must apply");
+        fs::write(dir.join("barrick.toml"), dup).expect("write");
+        let errs = check_sources_registry(&scratch).expect_err("duplicate digest");
+        assert!(errs[0].contains("barrick.toml: line ") && errs[0].contains("duplicate sha256"), "{errs:?}");
+        fs::write(dir.join("other.toml"), text).expect("write");
+        let errs = check_sources_registry(&scratch).expect_err("issuer/file-name mismatch");
+        assert!(errs.iter().any(|e| e.contains("does not match the file name")), "{errs:?}");
+        let _ = fs::remove_dir_all(&scratch);
     }
 
     #[test]

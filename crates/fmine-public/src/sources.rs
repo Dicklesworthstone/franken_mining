@@ -1,13 +1,16 @@
-//! Source registry for the public lane (`BD-055`, `BD-322`): every workbook a run reads is registered here with
-//! its retrieval URL, byte size and SHA-256, and a run refuses unless the bytes on disk match.
+//! Source registry for the public lane (`BD-055`, `BD-322`, bd-s9j3.1): every workbook a run reads is registered
+//! with its retrieval URL, byte size and SHA-256, and a run refuses unless the bytes on disk match.
 //!
-//! Provenance (FACT): `planning/research/W1_barrick_mine_stats.md` §2.1–§2.2 (E451, E452). All files were
-//! downloaded from the issuer's public CDN on 2026-10-29 between 03:35:00Z and 03:36:24Z. The Mine Stats URLs
-//! are W1's table; the AISC workbook URLs follow W1's stated naming rule (`Barrick_QN_YYYY_AISC.xlsx` for 2024,
-//! `AISC_QN_YYYY.xlsx` from 2025, Q1 2025 in folder `2025/01/`), so their basis is INFERENCE. The digest, not the
-//! URL, is what binds a run to its input.
+//! The registry is data, read at run time from `<workspace>/registries/sources/<issuer>.toml` (schema
+//! `fmine.sources.v1`, checked by `fmine_registry::sources`). Registering a new quarterly vintage is a TOML edit
+//! and needs no code change or rebuild. Provenance for each issuer's rows is in the TOML file itself.
 //!
 //! No affiliation: the issuer's files are public disclosures read as published.
+
+use std::path::{Path, PathBuf};
+
+use fmine_evidence::Refusal;
+use fmine_registry::sources::{SourcesRegistry, is_quarter, load_sources_registry};
 
 use crate::aisc::IdentityFamily;
 
@@ -21,6 +24,8 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
+    pub const ALL: [Self; 2] = [Self::MineStats, Self::AiscReconciliation];
+
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -31,52 +36,210 @@ impl SourceKind {
 }
 
 /// One registered public workbook.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredSource {
-    pub file_name: &'static str,
+    pub file_name: String,
     pub kind: SourceKind,
     /// Reporting quarter of the release, `YYYYQn`.
-    pub quarter: &'static str,
-    pub url: &'static str,
+    pub quarter: String,
+    pub url: String,
     /// `"W1 table"` (FACT) or `"W1 naming rule"` (INFERENCE).
-    pub url_basis: &'static str,
+    pub url_basis: String,
     pub bytes: u64,
-    pub sha256_hex: &'static str,
+    pub sha256_hex: String,
 }
 
 /// A registered explanation for one identity instance whose printed numbers close only when a component
 /// published elsewhere is added (plan §21.6 state (ii), *reconstructed*: no issuer note states the rule).
 /// The run re-reads the component cell, checks the labels that say what it is (row label, column header,
 /// period, year), and re-does the interval arithmetic; if any check fails the instance stays undecidable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredReconstruction {
-    pub evidence_id: &'static str,
-    pub table_file: &'static str,
-    pub sheet: &'static str,
-    pub subject: &'static str,
+    pub evidence_id: String,
+    pub table_file: String,
+    pub sheet: String,
+    pub subject: String,
     pub family: IdentityFamily,
-    pub component_file: &'static str,
-    pub component_sheet: &'static str,
-    pub component_cell: &'static str,
+    pub component_file: String,
+    pub component_sheet: String,
+    pub component_cell: String,
     /// `(cell, prefix)`: the cell's text (whitespace-collapsed) must start with the prefix.
-    pub label_checks: &'static [(&'static str, &'static str)],
-    pub rule: &'static str,
+    pub label_checks: Vec<(String, String)>,
+    pub rule: String,
 }
 
 /// Everything a public-lane run needs to know about one issuer: where its files live, which files, which
 /// header names are reporting subjects in its AISC tables, and its registered reconstructions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssuerProfile {
-    pub issuer: &'static str,
+    pub issuer: String,
     /// Directory holding the files, relative to the workspace root.
-    pub corpus_dir: &'static str,
-    pub retrieved_utc: &'static str,
-    pub sources: &'static [RegisteredSource],
+    pub corpus_dir: String,
+    pub retrieved_utc: String,
+    pub sources: Vec<RegisteredSource>,
     /// Reporting subjects (sites, joint ventures, regions) as printed in AISC table headers, before the
     /// issuer's one-letter footnote suffix.
-    pub subjects: &'static [&'static str],
-    pub reconstructions: &'static [RegisteredReconstruction],
+    pub subjects: Vec<String>,
+    pub reconstructions: Vec<RegisteredReconstruction>,
+    /// The `--through YYYYQn` bound applied, if any; later rows were dropped before loading.
+    pub through: Option<String>,
 }
+
+impl IssuerProfile {
+    /// Converts a checked registry into a profile. Fails only if the registry's kind or family names drift
+    /// from this crate's enums (a test pins the two lists together).
+    pub fn from_registry(reg: SourcesRegistry) -> Result<Self, String> {
+        let kind = |name: &str| {
+            SourceKind::ALL
+                .into_iter()
+                .find(|k| k.as_str() == name)
+                .ok_or_else(|| format!("source kind {name:?} has no SourceKind"))
+        };
+        let family = |name: &str| {
+            IdentityFamily::ALL
+                .into_iter()
+                .find(|f| f.as_str() == name)
+                .ok_or_else(|| format!("family {name:?} has no IdentityFamily"))
+        };
+        let mut sources = Vec::with_capacity(reg.sources.len());
+        for s in reg.sources {
+            sources.push(RegisteredSource {
+                kind: kind(&s.kind)?,
+                file_name: s.file,
+                quarter: s.quarter,
+                url: s.url,
+                url_basis: s.url_basis,
+                bytes: s.bytes,
+                sha256_hex: s.sha256,
+            });
+        }
+        let mut reconstructions = Vec::with_capacity(reg.reconstructions.len());
+        for r in reg.reconstructions {
+            reconstructions.push(RegisteredReconstruction {
+                family: family(&r.family)?,
+                evidence_id: r.evidence_id,
+                table_file: r.table_file,
+                sheet: r.sheet,
+                subject: r.subject,
+                component_file: r.component_file,
+                component_sheet: r.component_sheet,
+                component_cell: r.component_cell,
+                label_checks: r.label_checks,
+                rule: r.rule,
+            });
+        }
+        Ok(Self {
+            issuer: reg.issuer,
+            corpus_dir: reg.corpus_dir,
+            retrieved_utc: reg.retrieved_utc,
+            sources,
+            subjects: reg.subjects,
+            reconstructions,
+            through: None,
+        })
+    }
+
+    /// Keeps only the sources whose quarter is at or before `bound` (`YYYYQn`, already validated), so a later
+    /// registry reproduces an earlier run. Refuses when no source remains.
+    pub fn through(mut self, bound: &str) -> Result<Self, Refusal> {
+        self.sources.retain(|s| s.quarter.as_str() <= bound);
+        if self.sources.is_empty() {
+            return Err(Refusal::from_code(
+                "FMINE-REF-502",
+                format!("no registered {} workbooks at or before {bound}", self.issuer),
+            ));
+        }
+        self.through = Some(bound.to_string());
+        Ok(self)
+    }
+}
+
+/// An issuer name as used on the command line and as a registry file stem.
+#[must_use]
+pub fn is_issuer_name(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
+}
+
+/// Whether `s` is a valid `--through` bound (`YYYYQ1` … `YYYYQ4`).
+#[must_use]
+pub fn is_through_bound(s: &str) -> bool {
+    is_quarter(s)
+}
+
+/// `<workspace>/registries/sources/<issuer>.toml`.
+#[must_use]
+pub fn registry_path(workspace: &Path, issuer: &str) -> PathBuf {
+    workspace
+        .join("registries")
+        .join("sources")
+        .join(format!("{issuer}.toml"))
+}
+
+/// The issuers with a registry file under `<workspace>/registries/sources/`, sorted.
+#[must_use]
+pub fn registered_issuers(workspace: &Path) -> Vec<String> {
+    let mut out: Vec<String> = std::fs::read_dir(workspace.join("registries").join("sources"))
+        .map(|rd| {
+            rd.filter_map(Result::ok)
+                .filter_map(|e| {
+                    let name = e.file_name().into_string().ok()?;
+                    let stem = name.strip_suffix(".toml")?;
+                    is_issuer_name(stem).then(|| stem.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+/// Loads and checks the issuer's registry from `<workspace>/registries/sources/<issuer>.toml`. A missing or
+/// malformed file refuses (`FMINE-REF-502`; BD-328 owns the final code) naming the file and the line.
+pub fn load_issuer_profile(workspace: &Path, issuer: &str) -> Result<IssuerProfile, Refusal> {
+    if !is_issuer_name(issuer) {
+        return Err(Refusal::from_code(
+            "FMINE-REF-502",
+            format!("issuer {issuer:?} is not a registry name"),
+        ));
+    }
+    let path = registry_path(workspace, issuer);
+    let reg = load_sources_registry(&path).map_err(|e| {
+        Refusal::from_code("FMINE-REF-502", format!("source registry {}: {e}", path.display()))
+    })?;
+    IssuerProfile::from_registry(reg).map_err(|e| {
+        Refusal::from_code("FMINE-REF-502", format!("source registry {}: {e}", path.display()))
+    })
+}
+
+/// The registry constants this module held before bd-s9j3.1, kept only for the golden test that proves the
+/// TOML registry carries the same rows. Deleted once that test passes (the bead's two-commit plan).
+#[cfg(test)]
+pub(crate) mod former {
+    use super::SourceKind;
+    use crate::aisc::IdentityFamily;
+
+    pub struct RegisteredSource {
+        pub file_name: &'static str,
+        pub kind: SourceKind,
+        pub quarter: &'static str,
+        pub url: &'static str,
+        pub url_basis: &'static str,
+        pub bytes: u64,
+        pub sha256_hex: &'static str,
+    }
+
+    pub struct RegisteredReconstruction {
+        pub evidence_id: &'static str,
+        pub table_file: &'static str,
+        pub sheet: &'static str,
+        pub subject: &'static str,
+        pub family: IdentityFamily,
+        pub component_file: &'static str,
+        pub component_sheet: &'static str,
+        pub component_cell: &'static str,
+        pub label_checks: &'static [(&'static str, &'static str)],
+        pub rule: &'static str,
+    }
 
 macro_rules! src {
     ($file:literal, $kind:ident, $q:literal, $path:literal, $basis:literal, $bytes:literal, $sha:literal) => {
@@ -95,8 +258,6 @@ macro_rules! src {
     };
 }
 
-/// The 18 public Barrick workbooks of the M0 lane: Mine Stats for 2024Q1–2026Q2 (10 files) and the AISC
-/// reconciliation workbooks for 2024Q3–2026Q2 (8 files; the issuer published none for 2024Q1 or 2024Q2).
 pub const BARRICK_SOURCES: [RegisteredSource; 18] = [
     src!(
         "Barrick_Q1_2024_Mine_Stats.xlsx",
@@ -344,21 +505,132 @@ pub const BARRICK_RECONSTRUCTIONS: [RegisteredReconstruction; 3] = [
     },
 ];
 
-/// The Barrick public-lane profile.
-pub const BARRICK: IssuerProfile = IssuerProfile {
-    issuer: "barrick",
-    corpus_dir: "corpus_of_input_docs/downloaded/mine_stats",
-    retrieved_utc: "2026-10-29T03:35:00Z/03:36:24Z",
-    sources: &BARRICK_SOURCES,
-    subjects: &BARRICK_SUBJECTS,
-    reconstructions: &BARRICK_RECONSTRUCTIONS,
-};
+pub const CORPUS_DIR: &str = "corpus_of_input_docs/downloaded/mine_stats";
+pub const RETRIEVED_UTC: &str = "2026-10-29T03:35:00Z/03:36:24Z";
+}
 
-/// Looks up a registered issuer profile by its CLI name.
-#[must_use]
-pub fn issuer_profile(issuer: &str) -> Option<&'static IssuerProfile> {
-    match issuer {
-        "barrick" => Some(&BARRICK),
-        _ => None,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
+    }
+
+    /// Golden: `registries/sources/barrick.toml` carries exactly the rows the Rust constants held, field by
+    /// field and in the same order (the root binds sources in registry order).
+    #[test]
+    fn test_toml_registry_equals_former_constants() {
+        let p = load_issuer_profile(&workspace_root(), "barrick").expect("barrick registry");
+        assert_eq!(p.issuer, "barrick");
+        assert_eq!(p.corpus_dir, former::CORPUS_DIR);
+        assert_eq!(p.retrieved_utc, former::RETRIEVED_UTC);
+        assert_eq!(p.through, None);
+        assert_eq!(p.sources.len(), former::BARRICK_SOURCES.len());
+        for (got, want) in p.sources.iter().zip(former::BARRICK_SOURCES.iter()) {
+            assert_eq!(
+                (
+                    got.file_name.as_str(),
+                    got.kind,
+                    got.quarter.as_str(),
+                    got.url.as_str(),
+                    got.url_basis.as_str(),
+                    got.bytes,
+                    got.sha256_hex.as_str()
+                ),
+                (
+                    want.file_name,
+                    want.kind,
+                    want.quarter,
+                    want.url,
+                    want.url_basis,
+                    want.bytes,
+                    want.sha256_hex
+                )
+            );
+        }
+        assert_eq!(p.subjects, former::BARRICK_SUBJECTS);
+        assert_eq!(p.reconstructions.len(), former::BARRICK_RECONSTRUCTIONS.len());
+        for (got, want) in p.reconstructions.iter().zip(former::BARRICK_RECONSTRUCTIONS.iter()) {
+            assert_eq!(
+                (
+                    got.evidence_id.as_str(),
+                    got.table_file.as_str(),
+                    got.sheet.as_str(),
+                    got.subject.as_str(),
+                    got.family,
+                    got.component_file.as_str(),
+                    got.component_sheet.as_str(),
+                    got.component_cell.as_str(),
+                    got.rule.as_str()
+                ),
+                (
+                    want.evidence_id,
+                    want.table_file,
+                    want.sheet,
+                    want.subject,
+                    want.family,
+                    want.component_file,
+                    want.component_sheet,
+                    want.component_cell,
+                    want.rule
+                )
+            );
+            let checks: Vec<(&str, &str)> =
+                got.label_checks.iter().map(|(c, p)| (c.as_str(), p.as_str())).collect();
+            assert_eq!(checks, want.label_checks);
+        }
+    }
+
+    /// The registry crate's name lists must match this crate's enums, or a checked registry could fail to map.
+    #[test]
+    fn test_registry_name_lists_match_enums() {
+        let kinds: Vec<&str> = SourceKind::ALL.iter().map(|k| k.as_str()).collect();
+        assert_eq!(kinds, fmine_registry::sources::SOURCE_KINDS);
+        let families: Vec<&str> = IdentityFamily::ALL.iter().map(|f| f.as_str()).collect();
+        assert_eq!(families, fmine_registry::sources::IDENTITY_FAMILIES);
+    }
+
+    #[test]
+    fn test_through_filters_by_quarter() {
+        let p = load_issuer_profile(&workspace_root(), "barrick").expect("barrick registry");
+        let all = p.sources.len();
+        let h1_2025 = p.clone().through("2025Q2").expect("rows remain");
+        assert_eq!(h1_2025.through.as_deref(), Some("2025Q2"));
+        assert!(h1_2025.sources.len() < all);
+        assert!(h1_2025.sources.iter().all(|s| s.quarter.as_str() <= "2025Q2"));
+        assert!(h1_2025.sources.iter().any(|s| s.quarter == "2025Q2"));
+        // Order is preserved: the filtered rows are a prefix-respecting subsequence of the registry.
+        let names: Vec<&str> = h1_2025.sources.iter().map(|s| s.file_name.as_str()).collect();
+        let kept: Vec<&str> = p
+            .sources
+            .iter()
+            .filter(|s| s.quarter.as_str() <= "2025Q2")
+            .map(|s| s.file_name.as_str())
+            .collect();
+        assert_eq!(names, kept);
+        assert_eq!(p.clone().through("2099Q4").expect("all").sources.len(), all);
+        let e = p.through("2023Q4").expect_err("nothing that early");
+        assert_eq!(e.code, "FMINE-REF-502");
+        assert!(is_through_bound("2026Q2") && !is_through_bound("2026Q5") && !is_through_bound("2026-Q2"));
+    }
+
+    #[test]
+    fn test_missing_or_malformed_registry_refuses_naming_file_and_line() {
+        let dir = std::env::temp_dir().join(format!("fmine-public-registry-{}", std::process::id()));
+        let sources = dir.join("registries").join("sources");
+        std::fs::create_dir_all(&sources).expect("temp registry dir");
+        let e = load_issuer_profile(&dir, "nobody").expect_err("no file");
+        assert_eq!(e.code, "FMINE-REF-502");
+        assert!(e.what.contains("nobody.toml"), "{}", e.what);
+        let text = std::fs::read_to_string(registry_path(&workspace_root(), "barrick")).expect("read");
+        let broken = text.replacen("bytes = 43_668", "bytes = 43.668", 1);
+        let line = broken.lines().position(|l| l == "bytes = 43.668").map(|i| i + 1).expect("edited");
+        std::fs::write(sources.join("barrick.toml"), broken).expect("write");
+        let e = load_issuer_profile(&dir, "barrick").expect_err("float refused");
+        assert!(e.what.contains(&format!("line {line}: ")) && e.what.contains("floats"), "{}", e.what);
+        assert!(load_issuer_profile(&dir, "../etc").is_err());
+        assert_eq!(registered_issuers(&workspace_root()), vec!["barrick".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

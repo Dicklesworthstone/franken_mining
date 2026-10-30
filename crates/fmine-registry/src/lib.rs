@@ -1,5 +1,8 @@
 //! Schema-validated loader and cross-reference verifier for `registries/*.toml` (`BD-030`, `BD-031`).
 
+pub mod sources;
+pub mod toml_subset;
+
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
