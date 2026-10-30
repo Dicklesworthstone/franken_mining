@@ -41,6 +41,11 @@ jobs:
       - name: Envelope e2e
         if: matrix.profile == 'dev'
         run: bash tests/e2e_envelope.sh
+      # The reproduction kit's fetch script against invented files over file:// (BD-339.S2): saving under the
+      # registered name, a changed issuer file, a present mismatching file left alone, a non-bare file name.
+      - name: Fetch kit offline test
+        if: matrix.profile == 'dev'
+        run: bash repro/barrick/test_fetch_offline.sh
       # The source registry is data read at run time (bd-s9j3.1): a vintage is registered by editing
       # registries/sources/<issuer>.toml, so the release binary must not carry a registry digest.
       - name: No compiled-in source registry

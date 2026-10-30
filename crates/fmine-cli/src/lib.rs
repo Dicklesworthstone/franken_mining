@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use fmine_core::hash::sha256;
 use fmine_evidence::{REFUSAL_CATALOG, Refusal};
 use fmine_public::sources::{
     is_issuer_name, is_through_bound, load_issuer_profile, registered_issuers, registry_path,
@@ -450,23 +451,46 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         },
         CliCommand::Doctor => match RegistryCatalog::load_from_root(workspace_root) {
             Ok(cat) => {
-                // One entry per registries/sources/<issuer>.toml: registered and present counts, or the
-                // registry's refusal (file and line) when it does not load.
+                // One entry per registries/sources/<issuer>.toml: registered, present and verified counts with
+                // one row per file (BD-339.S2), or the registry's refusal (file and line) when it does not load.
+                // A file whose bytes differ from the registry is reported, never refused: doctor diagnoses.
                 let issuers: Vec<String> = registered_issuers(workspace_root)
                     .iter()
                     .map(|name| match load_issuer_profile(workspace_root, name) {
                         Ok(p) => {
                             let dir = workspace_root.join(&p.corpus_dir);
-                            let present = p
+                            let checks: Vec<(&str, [bool; 3])> = p
                                 .sources
                                 .iter()
-                                .filter(|s| dir.join(&s.file_name).is_file())
-                                .count();
+                                .map(|s| {
+                                    let check = match std::fs::read(dir.join(&s.file_name)) {
+                                        Ok(bytes) => [
+                                            true,
+                                            bytes.len() as u64 == s.bytes,
+                                            sha256(&bytes).to_hex() == s.sha256_hex,
+                                        ],
+                                        Err(_) => [false; 3],
+                                    };
+                                    (s.file_name.as_str(), check)
+                                })
+                                .collect();
+                            let count = |i: usize| checks.iter().filter(|(_, c)| c[i]).count();
+                            let rows: Vec<String> = checks
+                                .iter()
+                                .map(|(file, [present, bytes_ok, digest_ok])| {
+                                    format!(
+                                        "{{\"file\":\"{}\",\"present\":{present},\"bytes_ok\":{bytes_ok},\"digest_ok\":{digest_ok}}}",
+                                        escape_json(file)
+                                    )
+                                })
+                                .collect();
                             format!(
-                                "{{\"issuer\":\"{}\",\"registry_ok\":true,\"sources_registered\":{},\"sources_present\":{}}}",
+                                "{{\"issuer\":\"{}\",\"registry_ok\":true,\"sources_registered\":{},\"sources_present\":{},\"sources_verified\":{},\"sources\":[{}]}}",
                                 escape_json(name),
                                 p.sources.len(),
-                                present
+                                count(0),
+                                count(2),
+                                rows.join(",")
                             )
                         }
                         Err(r) => format!(
@@ -839,6 +863,122 @@ mod tests {
         assert_eq!(
             commands,
             ["fmine assure public --synthetic", "fmine robot-docs"]
+        );
+    }
+
+    /// A synthetic issuer workspace that `doctor` can also load: every top-level catalogue registry copied in.
+    fn doctor_workspace(tag: &str) -> PathBuf {
+        let ws = synthetic_workspace(tag);
+        let registries = workspace_root().join("registries");
+        for entry in std::fs::read_dir(&registries).expect("registries dir") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_some_and(|e| e == "toml") {
+                let name = path.file_name().expect("file name");
+                std::fs::copy(&path, ws.join("registries").join(name))
+                    .expect("copy catalogue registry");
+            }
+        }
+        ws
+    }
+
+    /// BD-339.S2: doctor checks each registered file's size and sha256. Every synthetic file verifies; after one
+    /// byte of one file is flipped, that file alone is present with `digest_ok: false`.
+    #[test]
+    fn test_doctor_reports_digest_per_file() {
+        let ws = doctor_workspace("doctor-digest");
+        let profile = load_issuer_profile(&ws, "synthetic").expect("synthetic registry");
+        let n = profile.sources.len();
+        let env = execute_command(&CliCommand::Doctor, &ws);
+        let json = env.to_json();
+        assert!(
+            json.contains(&format!(
+                "{{\"issuer\":\"synthetic\",\"registry_ok\":true,\"sources_registered\":{n},\"sources_present\":{n},\"sources_verified\":{n},"
+            )),
+            "{json}"
+        );
+        let first = &profile.sources[0];
+        let path = ws.join(&profile.corpus_dir).join(&first.file_name);
+        let mut bytes = std::fs::read(&path).expect("synthetic file");
+        bytes[0] ^= 1;
+        std::fs::write(&path, &bytes).expect("flip one byte");
+        let json = execute_command(&CliCommand::Doctor, &ws).to_json();
+        assert!(
+            json.contains(&format!(
+                "\"sources_present\":{n},\"sources_verified\":{},",
+                n - 1
+            )),
+            "{json}"
+        );
+        assert!(
+            json.contains(&format!(
+                "{{\"file\":\"{}\",\"present\":true,\"bytes_ok\":true,\"digest_ok\":false}}",
+                first.file_name
+            )),
+            "{json}"
+        );
+        let missing = &profile.sources[1];
+        std::fs::rename(
+            ws.join(&profile.corpus_dir).join(&missing.file_name),
+            ws.join(&profile.corpus_dir).join("moved_aside"),
+        )
+        .expect("move a scratch file aside");
+        let json = execute_command(&CliCommand::Doctor, &ws).to_json();
+        assert!(
+            json.contains(&format!(
+                "{{\"file\":\"{}\",\"present\":false,\"bytes_ok\":false,\"digest_ok\":false}}",
+                missing.file_name
+            )),
+            "{json}"
+        );
+    }
+
+    /// BD-339.S2: `repro/barrick/fetch.sh` reads the registry with its own awk parser, so that a reader can
+    /// fetch without building. Its listing must equal the Rust loader's rows (file, url, bytes, sha256) in
+    /// order: the registry is the one copy, and the two readers of it cannot drift apart unnoticed.
+    #[test]
+    fn test_fetch_list_equals_registry() {
+        let root = workspace_root();
+        let out = std::process::Command::new("bash")
+            .arg(root.join("repro").join("barrick").join("fetch.sh"))
+            .arg("--list")
+            .env("FMINE_WORKSPACE", &root)
+            .output()
+            .expect("run fetch.sh --list");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let want: String = load_issuer_profile(&root, "barrick")
+            .expect("registry")
+            .sources
+            .iter()
+            .map(|s| {
+                format!(
+                    "{}\t{}\t{}\t{}\n",
+                    s.file_name, s.url, s.bytes, s.sha256_hex
+                )
+            })
+            .collect();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), want);
+    }
+
+    /// BD-339.S2: a digest mismatch is a diagnosis, not a refusal.
+    #[test]
+    fn test_doctor_never_refuses_on_digest_mismatch() {
+        let ws = doctor_workspace("doctor-norefuse");
+        let profile = load_issuer_profile(&ws, "synthetic").expect("synthetic registry");
+        let path = ws
+            .join(&profile.corpus_dir)
+            .join(&profile.sources[0].file_name);
+        std::fs::write(&path, b"not the registered bytes").expect("overwrite scratch file");
+        let env = execute_command(&CliCommand::Doctor, &ws);
+        assert_eq!((env.exit_code, env.status), (0, "ok"), "{}", env.to_json());
+        assert!(
+            env.to_json()
+                .contains("\"present\":true,\"bytes_ok\":false,\"digest_ok\":false"),
+            "{}",
+            env.to_json()
         );
     }
 
