@@ -51,7 +51,10 @@ fn main() -> ExitCode {
         "check-lifts" => run_one("check-lifts", xtask::check_lifts(&root)),
         "check-scope" => run_one("check-scope", xtask::check_scope(&root)),
         "check-claims" => run_one("check-claims", xtask::check_claims(&root)),
-        "check-det" => run_one("check-det", xtask::check_det(&root)),
+        "check-det" => run_one(
+            "check-det",
+            xtask::check_det(&root).map(|r| println!("{}", r.log_line())),
+        ),
         "registry-check" => run_one(
             "registry-check",
             xtask::check_sources_registry(&root).map(|lines| {
@@ -102,6 +105,10 @@ fn main() -> ExitCode {
                     report.total_planned,
                     report.total_ceiling
                 );
+                // check_all ran check-det and it passed; read again for its counts.
+                if let Ok(det) = xtask::check_det(&root) {
+                    println!("{}", det.log_line());
+                }
                 ExitCode::SUCCESS
             }
             Err(errs) => {

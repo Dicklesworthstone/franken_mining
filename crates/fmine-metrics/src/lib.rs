@@ -1,4 +1,6 @@
-//! Public assurance metric engine (`WP-03` & `WP-06`, layer `E`):
+//! Public assurance metric engine (`WP-03` & `WP-06`, layer `E`).
+//! Determinism: DeterministicPerIsa (no cross-host digest test; plan §29.2, bd-hp2j.1).
+//!
 //! - `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`, `BD-060`–`BD-062`, `BD-272`)
 //! - Versioned `PriceDeck` and `compute_geo` (`GB-27`, `BD-063`, `BD-273`)
 //! - `ReserveReplacementBridge` (one stated basis per bridge; `E603–E604`, `BD-064`)

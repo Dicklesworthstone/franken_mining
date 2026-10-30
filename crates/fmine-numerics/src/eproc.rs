@@ -1,5 +1,6 @@
 //! Provenance: frankensim crates/fs-eproc/src/lib.rs @ 20463525d9775a18c1b237d2676f364f367175ab;
 //! license: MIT/Apache-2.0. Anytime-valid betting martingale e-processes (`BD-022`, `GB-08`).
+//! Determinism: DeterministicPerIsa (no cross-host digest test; plan §29.2, bd-hp2j.1).
 
 /// Anytime-valid betting martingale e-process for testing $H_0: \mathbb{E}[Z_t] \le \mu_0$
 /// on bounded or PIT-transformed sequential observations $u_t \in [0, 1]$ (`GB-08`).

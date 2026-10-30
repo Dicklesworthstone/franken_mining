@@ -1,6 +1,8 @@
 //! Frozen forecast ledger (`INV-008`), proper scoring rules (`CRPS`, log, Winkler),
 //! `CalibrationFlag` auto-downgrade (`NL-8`), `REFCLASS-` $\varepsilon$-contamination (`GB-32`),
 //! and Vecchia/Rosenblatt spatial PIT e-process monitoring (`GB-08`, `BD-311`).
+//! Determinism: DeterministicPerIsa (transcendentals via `fmine_core::det`; BitwisePortable once its cross-host
+//! digest exists, bd-hp2j.3).
 
 use std::collections::BTreeMap;
 

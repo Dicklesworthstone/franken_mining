@@ -46,7 +46,8 @@
 //! an exhaustive search) with each cell's implied range, never a corrected value. [`presence_conflicts`] covers a
 //! number set against a placeholder, which no interval can express.
 //!
-//! K0: std only, no I/O. Determinism: exact rational arithmetic, inputs sorted by locator and id before solving.
+//! K0: std only, no I/O.
+//! Determinism: Exact (rational arithmetic, no floating point; inputs sorted by locator and id before solving).
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};

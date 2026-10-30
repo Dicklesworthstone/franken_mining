@@ -1,5 +1,6 @@
 //! The public forecast record (BD-334, plan §21.6): a manifest hashed together with the forecasts, so that they
 //! can be scored later without judgment, and a rules file hashed and stamped before any forecast exists.
+//! Determinism: Exact (integers, text and content hashes; no floating point outside tests).
 //!
 //! Everything here is pure: the two frames, the manifest's parser and validator, the exact interval score and
 //! the persistence baseline's quantiles. Reading the files, writing the digests and reading a time proof's dates

@@ -1,5 +1,6 @@
 //! Provenance: frankensim crates/fs-voi/src/lib.rs @ 20463525d9775a18c1b237d2676f364f367175ab;
 //! license: MIT/Apache-2.0. Expected Value of Perfect and Sample Information (`BD-022`, `BD-225`, `GATE-HELM-02`).
+//! Determinism: DeterministicPerIsa (no cross-host digest test; plan §29.2, bd-hp2j.1).
 
 /// Decision problem payoff matrix across discrete/ensemble states (`S` states x `A` actions).
 #[derive(Debug, Clone, PartialEq)]

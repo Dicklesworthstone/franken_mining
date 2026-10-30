@@ -1,6 +1,7 @@
 //! Exact Logarithmic Mean Divisia Index (`LMDI`) 5-factor AISC waterfall (`GB-26`, `BD-065`, `BD-274`).
 //!
 //! Every logarithm goes through `fmine_core::det` (bd-hp2j.2), never the platform libm.
+//! Determinism: DeterministicPerIsa (BitwisePortable once its cross-host digest exists, bd-hp2j.3).
 
 use fmine_core::det;
 use fmine_evidence::Refusal;

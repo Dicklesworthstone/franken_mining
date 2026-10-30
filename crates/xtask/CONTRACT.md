@@ -23,7 +23,12 @@ The `forecast-*` commands are the exception: they write a record's digest files 
 - `check_lifts(root: &Path) -> Result<(), Vec<String>>`
 - `check_scope(root: &Path) -> Result<(), Vec<String>>`
 - `check_claims(root: &Path) -> Result<(), Vec<String>>`
-- `check_det(root: &Path) -> Result<(), Vec<String>>`
+- `check_det(root: &Path) -> Result<DetReport, Vec<String>>` (bd-hp2j.1; command `check-det`, and `check-all`
+  prints its line `{"check":"check-det","files","headers_missing":0,"violations":0,"bitwise_files"}`): every
+  production file of a `K`/`E` crate declares `//! Determinism: <class>` with a §29.2 class (`DET_CLASSES`); a
+  `BitwisePortable` file calls none of `BANNED_TRANSCENDENTALS` as `.name(` or `f64::name(` outside comments and
+  test code (`banned_transcendental_calls`); only `DET_EXEMPT` (`crates/fmine-core/src/det.rs`) is exempt; an
+  unreadable file is an error.
 - `check_oracle(root: &Path) -> Result<(), Vec<String>>`
 - `check_sources_registry(root: &Path) -> Result<Vec<String>, Vec<String>>` (`registry-check`; on success one
   `{"stage":"registry",…}` JSON log line per `registries/sources/*.toml`)
@@ -48,7 +53,7 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   refuses a shallow clone, whose history cannot show the order.
 
 ## 5. Guards & Typed Refusals
-Fails CI (`exit 2`) on any upward layer edge (`L-1`), banned dependency (`L-5`), `open_child_region` escalation outside `fmine-runtime` (`L-3`), lift provenance mismatch (`L-7`), undeclared module family (`§28.4`), bare `f64` physical quantity in `K`/`E` public signatures (`L-6`), `std` transcendental in `BitwisePortable` modules (`PO-NUM-2`), LOC ceiling overrun (`§28.4`), or oracle crate in a production closure (`GATE-ORACLE-01`).
+Fails CI (`exit 2`) on any upward layer edge (`L-1`), banned dependency (`L-5`), `open_child_region` escalation outside `fmine-runtime` (`L-3`), lift provenance mismatch (`L-7`), undeclared module family (`§28.4`), bare `f64` physical quantity in `K`/`E` public signatures (`L-6`), a `K`/`E` file without a determinism class or a `std` transcendental in a `BitwisePortable` module (`PO-NUM-2`), LOC ceiling overrun (`§28.4`), or oracle crate in a production closure (`GATE-ORACLE-01`).
 
 ## 6. Proof Obligations (`PO-*`)
 Each check has a positive workspace test and a seeded negative violation unit test (`BD-003`..`BD-015`).

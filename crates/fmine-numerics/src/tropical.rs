@@ -1,5 +1,6 @@
 //! Provenance: frankensim crates/fs-tropical/src/lib.rs @ 20463525d9775a18c1b237d2676f364f367175ab;
 //! license: MIT/Apache-2.0. Tropical `(max, +)` / `(min, +)` critical-path schedule algebra (`BD-022`).
+//! Determinism: DeterministicPerIsa (no cross-host digest test; plan §29.2, bd-hp2j.1).
 
 /// Precedence arc `(u -> v)` with minimum lag `lag` (`start[v] >= start[u] + lag`).
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -634,54 +634,175 @@ pub fn check_bare_quantity_signature(path: &Path, prod_code: &str) -> Result<(),
     Ok(())
 }
 
-/// Check `PO-NUM-2` (`BD-010`): ban direct `f64::sin`, `f64::cos`, `f64::exp`, `f64::ln`, `f64::atan2`
-/// in modules marked `//! Determinism: BitwisePortable`.
-pub fn check_det(root: &Path) -> Result<(), Vec<String>> {
+/// The determinism classes of plan §29.2, as a `//! Determinism: <class>` header names them.
+pub const DET_CLASSES: [&str; 4] = [
+    "Exact",
+    "BitwisePortable",
+    "DeterministicPerIsa",
+    "ThreadVariant",
+];
+
+/// Std float methods that call the platform libm (§29.3), banned in `BitwisePortable` modules. `sqrt`, `mul_add`,
+/// `abs`, `floor`, `ceil`, `round`, `min` and `max` are correctly rounded or exact, and allowed.
+pub const BANNED_TRANSCENDENTALS: [&str; 21] = [
+    "ln", "log2", "log10", "ln_1p", "exp", "exp2", "exp_m1", "sin", "cos", "tan", "asin", "acos",
+    "atan", "atan2", "sinh", "cosh", "tanh", "powf", "powi", "cbrt", "hypot",
+];
+
+/// The one file allowed to implement transcendentals, by its path relative to the workspace root.
+pub const DET_EXEMPT: &str = "crates/fmine-core/src/det.rs";
+
+/// What `check-det` checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetReport {
+    /// Production `.rs` files read (every crate except xtask).
+    pub files: usize,
+    /// Files whose header declares `BitwisePortable`.
+    pub bitwise_files: usize,
+}
+
+impl DetReport {
+    /// The one log line `check-det` and `check-all` print; a passing run has no missing headers or violations.
+    #[must_use]
+    pub fn log_line(&self) -> String {
+        format!(
+            "{{\"check\":\"check-det\",\"files\":{},\"headers_missing\":0,\"violations\":0,\"bitwise_files\":{}}}",
+            self.files, self.bitwise_files
+        )
+    }
+}
+
+/// Check `PO-NUM-2` (`BD-010`, bd-hp2j.1, plan §29.2–29.3):
+/// - every production file of a crate whose layer starts with `K` or is `E` carries `//! Determinism: <class>`,
+///   with a class from [`DET_CLASSES`];
+/// - a `BitwisePortable` file calls none of [`BANNED_TRANSCENDENTALS`] as `.name(` or `f64::name(`, outside
+///   comments and `#[cfg(test)]` code. Only [`DET_EXEMPT`] is exempt.
+///
+/// An unreadable file is an error.
+pub fn check_det(root: &Path) -> Result<DetReport, Vec<String>> {
+    let layers: BTreeMap<String, String> = check_loc_budget(root)?
+        .rows
+        .into_iter()
+        .map(|r| (r.name, r.layer))
+        .collect();
     let mut errors = Vec::new();
+    let mut report = DetReport {
+        files: 0,
+        bitwise_files: 0,
+    };
     for member_toml in workspace_member_manifests(root)? {
         let (pkg_name, _, _) = parse_cargo_manifest(&member_toml)?;
         if pkg_name == "xtask" {
             continue;
         }
+        let layer = layers.get(&pkg_name).map_or("", String::as_str);
         let src_dir = member_toml.parent().unwrap_or(root).join("src");
-        for rs_file in collect_rs_files(&src_dir) {
-            if rs_file.ends_with("det.rs") {
-                continue;
-            }
-            let content = fs::read_to_string(&rs_file).unwrap_or_default();
-            let prod_code = strip_cfg_test(&content);
-            if let Err(e) = check_det_in_source(&rs_file, &prod_code) {
-                errors.push(e);
-            }
-        }
+        check_det_dir(root, layer, &src_dir, &mut report, &mut errors);
     }
     if errors.is_empty() {
-        Ok(())
+        Ok(report)
     } else {
         Err(errors)
     }
 }
 
-/// Inspect a `BitwisePortable` module for banned `std` floating-point transcendentals (`PO-NUM-2`, `BD-010`).
-pub fn check_det_in_source(path: &Path, prod_code: &str) -> Result<(), String> {
-    if !prod_code.contains("Determinism: BitwisePortable") {
-        return Ok(());
+/// `check-det` over one crate's `src` directory.
+fn check_det_dir(
+    root: &Path,
+    layer: &str,
+    src_dir: &Path,
+    report: &mut DetReport,
+    errors: &mut Vec<String>,
+) {
+    for rs_file in collect_rs_files(src_dir) {
+        let rel = rs_file.strip_prefix(root).unwrap_or(&rs_file);
+        let content = match fs::read_to_string(&rs_file) {
+            Ok(c) => c,
+            Err(e) => {
+                errors.push(format!("{}: unreadable ({e})", rel.display()));
+                continue;
+            }
+        };
+        report.files += 1;
+        match check_det_in_source(rel, layer, &strip_cfg_test(&content)) {
+            Ok(Some("BitwisePortable")) => report.bitwise_files += 1,
+            Ok(_) => {}
+            Err(e) => errors.push(e),
+        }
     }
-    for banned in [
-        "f64::sin(",
-        "f64::cos(",
-        "f64::exp(",
-        "f64::ln(",
-        "f64::atan2(",
-    ] {
-        if prod_code.contains(banned) {
+}
+
+/// The class a `//! Determinism: <class>` line declares (its first word), if the code has such a line.
+fn det_class(prod_code: &str) -> Option<&str> {
+    prod_code.lines().find_map(|l| {
+        l.trim_start()
+            .strip_prefix("//! Determinism:")
+            .and_then(|rest| rest.split_whitespace().next())
+    })
+}
+
+/// Every banned std transcendental call in `prod_code`, as `(line number, name)`, one entry per call: the method
+/// form `.name(` and the path form `f64::name(`, with `//` comments removed first. The `(` must follow the name,
+/// so `.exp(` never matches `.exp2(` or `.exp_m1(`.
+#[must_use]
+pub fn banned_transcendental_calls(prod_code: &str) -> Vec<(usize, &'static str)> {
+    let mut out = Vec::new();
+    for (i, line) in prod_code.lines().enumerate() {
+        let code = line.find("//").map_or(line, |at| &line[..at]);
+        for name in BANNED_TRANSCENDENTALS {
+            for prefix in [".", "f64::"] {
+                out.extend(
+                    code.matches(&format!("{prefix}{name}("))
+                        .map(|_| (i + 1, name)),
+                );
+            }
+        }
+    }
+    out
+}
+
+/// Checks one file's production code (`path` relative to the workspace root, `layer` its crate's layer) and
+/// returns its declared class, if any (`PO-NUM-2`, `BD-010`, bd-hp2j.1).
+pub fn check_det_in_source<'a>(
+    path: &Path,
+    layer: &str,
+    prod_code: &'a str,
+) -> Result<Option<&'a str>, String> {
+    let class = det_class(prod_code);
+    match class {
+        None if layer.starts_with('K') || layer == "E" => {
             return Err(format!(
-                "{}: banned std transcendental `{banned}` in BitwisePortable module (PO-NUM-2; use fmine_core::det)",
-                path.display()
+                "{}: layer {layer} file has no `//! Determinism: <class>` header (plan §29.2; one of {})",
+                path.display(),
+                DET_CLASSES.join(", ")
+            ));
+        }
+        Some(c) if !DET_CLASSES.contains(&c) => {
+            return Err(format!(
+                "{}: unknown determinism class `{c}` (plan §29.2; one of {})",
+                path.display(),
+                DET_CLASSES.join(", ")
+            ));
+        }
+        _ => {}
+    }
+    if class == Some("BitwisePortable") && path != Path::new(DET_EXEMPT) {
+        let calls = banned_transcendental_calls(prod_code);
+        if !calls.is_empty() {
+            let list: Vec<String> = calls
+                .iter()
+                .map(|(l, n)| format!("{n} at line {l}"))
+                .collect();
+            return Err(format!(
+                "{}: {} banned std transcendental call(s) in a BitwisePortable module ({}; PO-NUM-2, use \
+                 fmine_core::det)",
+                path.display(),
+                calls.len(),
+                list.join(", ")
             ));
         }
     }
-    Ok(())
+    Ok(class)
 }
 
 /// `registry-check` (bd-s9j3.1): every `registries/sources/*.toml` parses in the TOML subset and passes the
@@ -965,9 +1086,153 @@ mod tests {
     fn test_seeded_std_transcendental_in_bitwise_portable_fails() {
         let res = check_det_in_source(
             Path::new("crates/fmine-calib/src/lib.rs"),
+            "K0",
             "//! Determinism: BitwisePortable\npub fn f(x: f64) -> f64 { f64::exp(x) }",
         );
         assert!(res.is_err());
+    }
+
+    const CALIB: &str = "crates/fmine-calib/src/lib.rs";
+    const BITWISE: &str = "//! Determinism: BitwisePortable\n";
+
+    fn det_check(path: &str, layer: &str, body: &str) -> Result<Option<String>, String> {
+        let code = format!("{BITWISE}{body}");
+        check_det_in_source(Path::new(path), layer, &code).map(|c| c.map(str::to_string))
+    }
+
+    // bd-hp2j.1: the old scan matched only `f64::{sin,cos,exp,ln,atan2}(`, so `x.ln()` passed.
+    #[test]
+    fn test_seeded_method_call_ln_in_bitwise_portable_fails() {
+        let err = det_check(CALIB, "K0", "pub fn f(x: f64) -> f64 { x.ln() }").expect_err("x.ln()");
+        assert!(err.contains("ln at line 2"), "{err}");
+    }
+
+    #[test]
+    fn test_seeded_ufcs_f64_exp_in_bitwise_portable_fails() {
+        let err = det_check(CALIB, "K0", "pub fn f(x: f64) -> f64 { f64::exp(x) }")
+            .expect_err("f64::exp");
+        assert!(err.contains("exp at line 2"), "{err}");
+    }
+
+    #[test]
+    fn test_powi_banned_but_sqrt_and_mul_add_allowed() {
+        assert!(det_check(CALIB, "K0", "pub fn f(x: f64) -> f64 { x.powi(4) }").is_err());
+        let ok = "pub fn f(x: f64) -> f64 { x.sqrt().mul_add(x.abs(), x.floor().max(x.ceil().min(x.round()))) }";
+        assert_eq!(
+            det_check(CALIB, "K0", ok),
+            Ok(Some("BitwisePortable".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_exp2_not_matched_as_exp_but_banned_itself() {
+        let calls = banned_transcendental_calls("let y = x.exp2(); let z = x.exp_m1();");
+        assert_eq!(calls, vec![(1, "exp2"), (1, "exp_m1")]);
+        assert!(det_check(CALIB, "K0", "pub fn f(x: f64) -> f64 { x.exp2() }").is_err());
+    }
+
+    #[test]
+    fn test_comment_mentioning_ln_is_ignored() {
+        let body = "/// Uses `x.ln()` in prose only.\npub fn f(x: f64) -> f64 { x * 2.0 } // not x.exp()\n";
+        assert_eq!(
+            det_check(CALIB, "K0", body),
+            Ok(Some("BitwisePortable".to_string()))
+        );
+        // Two calls on one line are two matches.
+        assert_eq!(banned_transcendental_calls("a.ln() - b.ln()").len(), 2);
+    }
+
+    #[test]
+    fn test_missing_header_in_k_layer_fails() {
+        let code = "pub fn f(x: f64) -> f64 { x }";
+        for layer in ["K0", "K3", "E"] {
+            let err = check_det_in_source(Path::new(CALIB), layer, code).expect_err(layer);
+            assert!(
+                err.contains("no `//! Determinism: <class>` header"),
+                "{err}"
+            );
+        }
+        // Outside K and E a header is optional.
+        assert_eq!(
+            check_det_in_source(Path::new("crates/fmine-cli/src/lib.rs"), "U", code),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn test_unknown_class_fails() {
+        let code = "//! Determinism: Bitwise\npub fn f() {}";
+        let err = check_det_in_source(Path::new(CALIB), "K0", code).expect_err("unknown class");
+        assert!(err.contains("unknown determinism class `Bitwise`"), "{err}");
+    }
+
+    /// Only fmine-core's det.rs implements transcendentals; the old rule exempted any file named det.rs.
+    #[test]
+    fn test_only_core_det_rs_is_exempt() {
+        let body = "pub fn ln(x: f64) -> f64 { x.ln() }";
+        assert!(det_check(DET_EXEMPT, "S0", body).is_ok());
+        assert!(det_check("crates/fmine-calib/src/det.rs", "K0", body).is_err());
+    }
+
+    /// The old rule read an unreadable file as empty, and so passed it.
+    #[test]
+    fn test_unreadable_file_is_error() {
+        let dir = std::env::temp_dir().join(format!("xtask_det_unreadable_{}", std::process::id()));
+        let src = dir.join("crates/fmine-calib/src");
+        fs::create_dir_all(&src).expect("mkdir");
+        fs::write(src.join("lib.rs"), "//! Determinism: DeterministicPerIsa\n")
+            .expect("write lib.rs");
+        // Not UTF-8, so it cannot be read as source.
+        fs::write(src.join("broken.rs"), [0xff, 0xfe, 0x00]).expect("write broken.rs");
+        let mut report = DetReport {
+            files: 0,
+            bitwise_files: 0,
+        };
+        let mut errors = Vec::new();
+        check_det_dir(&dir, "K0", &src, &mut report, &mut errors);
+        fs::remove_dir_all(&dir).expect("cleanup");
+        assert_eq!(report.files, 1);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].starts_with("crates/fmine-calib/src/broken.rs: unreadable"),
+            "{errors:?}"
+        );
+    }
+
+    /// The workspace passes, with every K and E file classified, and prints the bd-hp2j.1 log line.
+    #[test]
+    fn test_workspace_check_det_passes_and_logs() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .to_path_buf();
+        let report = check_det(&root).expect("check-det passes on the workspace");
+        println!("{}", report.log_line());
+        // Every crates/<name>/src/**/*.rs except xtask's, counted by walking the directories.
+        fn walk(dir: &Path) -> usize {
+            fs::read_dir(dir).map_or(0, |entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.path())
+                    .map(|p| {
+                        if p.is_dir() {
+                            walk(&p)
+                        } else {
+                            usize::from(p.extension().is_some_and(|x| x == "rs"))
+                        }
+                    })
+                    .sum()
+            })
+        }
+        let expected: usize = fs::read_dir(root.join("crates"))
+            .expect("crates/")
+            .flatten()
+            .filter(|e| e.file_name() != "xtask")
+            .map(|e| walk(&e.path().join("src")))
+            .sum();
+        assert_eq!(report.files, expected, "{report:?}");
+        assert_eq!(report.bitwise_files, 7, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

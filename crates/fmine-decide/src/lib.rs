@@ -1,5 +1,6 @@
 //! `DecisionCard`, flip-margin sensitivity (`BD-227`), EVSI/VOI campaign ranking (`BD-225`,
 //! `GATE-HELM-02`), and `EpistemicOnePager` renderer (`§9.6`, `BD-052`, `BD-054`).
+//! Determinism: DeterministicPerIsa (no cross-host digest test; plan §29.2, bd-hp2j.1).
 
 use fmine_claim::Claim;
 use fmine_core::id::{ObjectId, PrefixKind};
