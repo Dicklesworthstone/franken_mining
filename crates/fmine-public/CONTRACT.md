@@ -58,7 +58,7 @@ The public lane of M0 (`fmine assure public`).
   registered is refused too. W1-DR-01 is data (`[[printed_share_correction]]`, read by `mine_ledger`), and so is
   W1-DR-02 (`[[mine_stats_label_alias]]`, read by `mine_ledger`); other units are not. The region map is
   (`[[region_member]]`, BD-331.S4); values do not carry its version, and `mine_ledger` asks it by release.
-- `mine_ledger` (BD-331.S4, bd-prmn.4): five Mine Stats identity families anchored on the `QTD`/`YTD` summary
+- `mine_ledger` (BD-331.S4, bd-prmn.4): six Mine Stats identity families anchored on the `QTD`/`YTD` summary
   sheets, decided in exact arithmetic. Ownership: attributable = s × 100% per site row and column group, s the
   share the label prints or its registered correction (the printed share kept beside); regions and metal totals
   pose none; a row with no printed share is refused, never read as 100%. Quarter sums: H1 = Q1 + Q2,
@@ -72,16 +72,23 @@ The public lane of M0 (`fmine assure public`).
   (`region_not_in_map`). Region to total (family 4): `Total Gold` = Σ the map's regions, `Total Copper` = Σ the
   copper sites in row order. A sum's nil token is exactly 0; a sum is decided alone by |Σ parts − total| ≤
   Σ half-steps (the kernel's answer for one rounded-once sum, checked by a test) and never posed jointly. The
-  Nevada Gold Mines LLC sub-sum is not posed (it needs a registry table). Exclusions by name come first (a
+  Nevada Gold Mines LLC sub-sum is not posed (it needs a registry table). Sold-weighted rate (family 5): a
+  region's cost of sales, TCC and AISC per ounce (`RATE_FIELDS`) = its members' rates weighted by attributable
+  gold sold, members found as in family 3, in row order. A member whose sold cell is the nil token leaves the
+  identity; a placeholder left in it refuses (a rate is never read as 0), as do no member left
+  (`weights_all_nil`) and a weight at or below 0 (`weight_not_positive`). It is decided alone and exactly (the
+  extremes at vertices of the weight box, at most 16 members; a feasible answer carries a witness checked
+  exactly) and never posed jointly. A conflict is (iv) `cost_totals_unpublished`, not (iii): the issuer may
+  weight by quantities it does not print. Exclusions by name come first (a
   `withheld` status covering an operand's period, or a region member's; a region whose members differ between
   the operands' releases; a site on two site sheets of one metal), then a missing row or release, a label printed
   twice in a block, a blank, all placeholders (not published), some placeholders, an unreadable number. On a
   site sheet only `—`, `— ` and `n/a` are tokens; the nil token against a number reads as number = 0, decided
   alone (`Instance::nil_token`, E116). Each value as displayed stands for its closed box [v − step/2, v + step/2],
-  the step from the displayed decimals (General non-integers are refused). Every decided instance but the sums is
-  then posed jointly; each infeasible component reports every minimum correction set (an exhaustive search up to
-  32 cells within the kernel's run cap) and the range each of its cells can take, never a corrected value, and
-  whether it is infeasible only jointly.
+  the step from the displayed decimals (General non-integers are refused). Every decided instance but the sums
+  and the sold-weighted rates is then posed jointly; each infeasible component reports every minimum correction
+  set (an exhaustive search up to 32 cells within the kernel's run cap) and the range each of its cells can
+  take, never a corrected value, and whether it is infeasible only jointly.
 - `synthetic`: invented workbooks in the real layout, seeded with one known answer per state. They are never
   gate-eligible. `write_issuer_workspace` writes them, plus a later title-only vintage, with a digest registry
   under the reserved issuer name `synthetic`; `run_public_assurance` runs that name in the synthetic lane.
@@ -110,7 +117,9 @@ The public lane of M0 (`fmine assure public`).
     period, anchor, cells, state code, reason and evidence, share and component, then each infeasible
     component's cells, flags and correction sets with their implied ranges. Its counts stay apart from the
     AISC totals. v7 adds the site-sheet family and each instance's nil-token certificate. The sum families
-    (families 3–4) add instances in the v7 frame, with no change to its format.
+    (families 3–4) add instances in the v7 frame, with no change to its format. The sold-weighted rate
+    (family 5) adds the first (iv) instances: after the state code `iv`, the frame binds the need's code where
+    (i) and (iii) put a zero byte, so the state code already says which branch follows.
 
   Changing any input cell moves the root; rewording a message does not (bd-sjrh.1 part 4).
 - The report payload carries `lane` and `gate_eligible`. The no-claim line (`NO_CLAIM`), the four INV-002 flags
@@ -158,9 +167,10 @@ The public lane of M0 (`fmine assure public`).
 - `mine_stats::{View, MineStatsCell, MineStatsValue, CellRefusal, MineStatsRead, LabelVocabulary, read_mine_stats,
   strip_footnote, printed_share, site_name, is_m0_target}`
 - `mine_ledger::{mine_ledger, MineLedger, LedgerRules, LedgerFile, Instance, Family, Group, Metal, State, Reason,
-  Component, Correction, FLOW_FIELDS, SITE_FIELDS, range_text, rat_text}`; `PublicAssuranceReport::mine_ledger`,
-  the payload's `mine_stats_ledger` section (counts by family and state, (v) by reason, discrepancies with their
-  certificate, and each infeasible component with its correction sets and implied ranges).
+  Need, Component, Correction, FLOW_FIELDS, SITE_FIELDS, RATE_FIELDS, range_text, rat_text}`;
+  `PublicAssuranceReport::mine_ledger`, the payload's `mine_stats_ledger` section (counts by family and state,
+  (v) by reason, discrepancies with their certificate, each (iv) with its need under `unresolved`, and each
+  infeasible component with its correction sets and implied ranges).
 - `synthetic::{synthetic_aisc_cells, synthetic_hidden_cells, synthetic_workbooks, synthetic_stats_workbook,
   synthetic_share_label_cells, synthetic_profile, write_issuer_workspace, SYNTHETIC_ISSUER, SYNTHETIC_SUBJECTS,
   SYNTHETIC_SHARES, SYNTHETIC_SHARE_FOOTNOTE, SYNTHETIC_STATED_QUOTE, SYNTHETIC_HIDDEN_SHEET,
@@ -382,17 +392,19 @@ The public lane of M0 (`fmine assure public`).
     and refuted at 2098, 2102, 1900 and 2300, where the exact bound is [2099⅙, 2100⅚]. Every refusal and
     exclusion names its cell or member; a footnote-less sheet and a release before the members' first keep the
     earlier refusals.
-- `PO-PUB-11` (Mine Stats ownership, quarter sums, summary against site sheet and the sum families, BD-331.S4,
-  bd-prmn.4, MOR_CASE E841, E842, E843):
-  - **Real files** (ignored test `barrick_mine_ledger_matches_census`): 10 releases, 5,174 instances. Ownership
+- `PO-PUB-11` (Mine Stats ownership, quarter sums, summary against site sheet, the sum families and the
+  sold-weighted rate, BD-331.S4, bd-prmn.4, MOR_CASE E841, E842, E843, E844):
+  - **Real files** (ignored test `barrick_mine_ledger_matches_census`): 10 releases, 5,480 instances. Ownership
     592: 470 (i), 29 (iii), 73 (v), 20 np; quarter sums 942: 883 (i), 9 (iii), 26 (v), 24 np; site sheet 3,130:
     2,982 (i), 1 (iii), 42 (v: 40 withheld, 2 blank), 105 np; sites to region 306: 282 (i, 41 by the nil token),
-    24 (v: withheld, E818); region to total 204: 204 (i). 2,091 components, 27 infeasible (2 only jointly),
-    every one with all its minimum correction sets. Every instance line, component line, summary and implied
-    range equals `scripts/oracle/mine_stats_census.py` (e66f7dc; family 7 a736c26; families 3–4 c697b13, each
-    written first by a separate reader, exact Fourier–Motzkin or exact sums over fractions), run in the test,
-    which compares a sum's member cells as a set (the census orders a map's members by its rule, the ledger by
-    registry row) and pins the sum families' counts. The plan's known answers hold:
+    24 (v: withheld, E818); region to total 204: 204 (i); sold-weighted rate 306: 252 (i), 30 (iv), 24 (v:
+    withheld, E818), 45 of them with a nil-sold member. 2,091 components, 27 infeasible (2 only jointly), every
+    one with all its minimum correction sets. Every instance line, component line, summary and implied range
+    equals `scripts/oracle/mine_stats_census.py` (e66f7dc; family 7 a736c26; families 3–4 c697b13; family 5
+    ac07fee, each written first by a separate reader, exact Fourier–Motzkin, exact sums over fractions or a
+    separable exact test of the weighted mean), run in the test, which compares a sum's or a rate's member cells
+    as a set (the census orders a map's members by its rule, the ledger by row) and pins the sum and rate
+    families' counts. The plan's known answers hold:
     E113, E114 and E115 are each a pair of (iii) on one component whose one minimum set is the shared cell,
     E113's B5 can take 281, and E116 is one (iii) site-sheet instance decided by the nil token, alone.
   - **Synthetic** (default suite): the E113 shape (one shared cell, the one minimum set); a component
@@ -410,7 +422,12 @@ The public lane of M0 (`fmine assure public`).
     component; the nil token as exactly 0, all nil (np), `n/a` and a blank; a member found by its registered
     label, missing without it, and refused at the first row under both names in either order; a region outside
     the map, a missing member and a map region with no row; a withheld member by period; the closed form
-    against the kernel on 400 pseudo-random sums of mixed steps (both outcomes at least 50 times).
+    against the kernel on 400 pseudo-random sums of mixed steps (both outcomes at least 50 times). Sold-weighted
+    rate: a region rate held between its weighted-mean bounds and (iv) on either side, cells in row order when the
+    registry lists members in reverse; a nil-sold member dropped, all nil (`weights_all_nil`), a rate placeholder
+    refused, a zero or negative weight; refusals by name, missing row and both names; the exact decision against a
+    separable test written apart from it on 600 pseudo-random cases (both outcomes at least 50 times), and the
+    kernel's McCormick relaxation, which refutes at least 50 of them and never a feasible one.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.

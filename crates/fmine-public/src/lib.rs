@@ -357,7 +357,7 @@ impl PublicAssuranceReport {
                 js(family.as_str()),
                 l.instances.iter().filter(|i| i.family == family).count()
             );
-            for code in ["i", "iii", "v", "np"] {
+            for code in ["i", "iii", "iv", "v", "np"] {
                 let _ = write!(o, ",{}:{}", js(code), l.count(family, code));
             }
             let reasons: Vec<String> = by_reason
@@ -404,6 +404,32 @@ impl PublicAssuranceReport {
             })
             .collect();
         o.push_str(&iii.join(","));
+        o.push_str("],\"unresolved\":[");
+        let iv: Vec<String> = l
+            .instances
+            .iter()
+            .filter_map(|i| match &i.state {
+                State::Unresolved(need) => Some((i, need)),
+                _ => None,
+            })
+            .map(|(i, need)| {
+                let cells: Vec<String> = i.cells.iter().flatten().cloned().collect();
+                format!(
+                    "{{\"family\":{},\"subject\":{},\"field\":{},\"group\":{},\"period\":{},\"anchor\":{},\
+                     \"cells\":[{}],\"needs\":{},\"certificate\":{}}}",
+                    js(i.family.as_str()),
+                    js(&i.subject),
+                    js(&i.field),
+                    js(i.group.as_str()),
+                    js(&i.period.code()),
+                    js(&i.anchor),
+                    list(&cells),
+                    js(need.code()),
+                    if i.nil_token { "\"nil_token\"" } else { "null" },
+                )
+            })
+            .collect();
+        o.push_str(&iv.join(","));
         o.push_str("],\"infeasible\":[");
         let comps: Vec<String> = l
             .infeasible
@@ -1607,8 +1633,8 @@ fn assess_inner(
 }
 
 /// Binds the Mine Stats ledger into the root frame (v7): every instance's identity, operands and state as codes
-/// and locators, the share used and the share printed, the nil-token certificate, then every infeasible component
-/// with its correction sets and implied ranges.
+/// and locators (a refusal's reason, an (iv) item's needed fact), the share used and the share printed, the
+/// nil-token certificate, then every infeasible component with its correction sets and implied ranges.
 fn encode_mine_ledger(enc: &mut Encoder, ledger: &MineLedger) {
     let opt = |enc: &mut Encoder, s: Option<&str>| match s {
         None => enc.put_u8(0),
@@ -1641,6 +1667,9 @@ fn encode_mine_ledger(enc: &mut Encoder, ledger: &MineLedger) {
                     enc.put_str(evidence);
                 }
                 opt(enc, at.as_deref());
+            }
+            mine_ledger::State::Unresolved(need) => {
+                enc.put_str(need.code());
             }
             _ => enc.put_u8(0),
         }
@@ -5396,6 +5425,7 @@ mod tests {
                 }),
                 at.clone(),
             ),
+            State::Unresolved(need) => (Some(need.code().to_string()), None),
             _ => (None, None),
         };
         let cells: Vec<String> = i.cells.iter().map(|c| opt(c.clone())).collect();
@@ -5483,7 +5513,8 @@ mod tests {
         let instances: Vec<&str> = lines
             .iter()
             .copied()
-            .filter(|x| x.contains("\"anchor\":"))
+            // An instance line is a family record with an anchor (E817's check line lists anchors too).
+            .filter(|x| x.starts_with("{\"family\":") && x.contains("\"anchor\":"))
             .collect();
         let ours: Vec<String> = l.instances.iter().map(|i| mine_census_line(l, i)).collect();
         assert_eq!(ours.len(), instances.len(), "instance count");
@@ -5520,6 +5551,10 @@ mod tests {
         let counts = |f: Family| ["i", "iii", "v", "np"].map(|code| l.count(f, code));
         assert_eq!(counts(Family::SitesToRegion), [282, 0, 24, 0]);
         assert_eq!(counts(Family::RegionToTotal), [204, 0, 0, 0]);
+        // Family 5 (ac07fee's census): i, iii, iv, v, np.
+        let rate =
+            ["i", "iii", "iv", "v", "np"].map(|code| l.count(Family::SoldWeightedRate, code));
+        assert_eq!(rate, [252, 0, 30, 24, 0]);
         let components: Vec<&str> = lines
             .iter()
             .copied()
@@ -5566,8 +5601,14 @@ mod tests {
                 .iter()
                 .map(|(r, k)| format!("{}:{k}", js(r)))
                 .collect();
+            // Only family 5 can be (iv), and only its line counts it.
+            let iv = if family == Family::SoldWeightedRate {
+                format!(",\"iv\":{}", l.count(family, "iv"))
+            } else {
+                String::new()
+            };
             let line = format!(
-                "{{\"family\":{},\"n\":{},\"i\":{},\"iii\":{},\"v\":{},\"np\":{},\"v_by_reason\":{{{}}}}}",
+                "{{\"family\":{},\"n\":{},\"i\":{},\"iii\":{}{iv},\"v\":{},\"np\":{},\"v_by_reason\":{{{}}}}}",
                 js(family.as_str()),
                 l.instances.iter().filter(|i| i.family == family).count(),
                 l.count(family, "i"),

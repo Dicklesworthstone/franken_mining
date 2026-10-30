@@ -1,6 +1,6 @@
-//! The Mine Statistics identity ledger (BD-331.S4, bd-prmn.4): five of the plan's Mine Stats families, anchored on
+//! The Mine Statistics identity ledger (BD-331.S4, bd-prmn.4): six of the plan's Mine Stats families, anchored on
 //! the `QTD`/`YTD` summary sheets and decided in exact arithmetic (the kernel `fmine_numerics::exact_feas`, or
-//! its closed form for a lone sum).
+//! an exact closed form for a lone sum or weighted mean).
 //!
 //! - **Ownership.** Attributable production = s × 100%-basis production, per site row and column group (the
 //!   release's own year, or the prior-year comparative). s is the share the row's label prints. A registered
@@ -31,6 +31,15 @@
 //!   every site of a block, so posing them would merge the other families' components past the exhaustive
 //!   correction search. Not yet posed: the Nevada Gold Mines LLC sub-sum (Carlin, Cortez, Turquoise Ridge,
 //!   Phoenix, Long Canyon), which needs a registry table of its own.
+//! - **Sold-weighted rate** (family 5). A region's cost of sales, total cash costs and AISC per ounce = its
+//!   members' rates weighted by their attributable gold sold, R·Σwᵢ = Σ rᵢ·wᵢ, members found as in family 3 and
+//!   taken in row order. A member whose sold cell is the nil token sold nothing and leaves the identity; any other
+//!   placeholder still in it refuses (a rate is never read as 0), and so do no member left (`weights_all_nil`) and
+//!   a weight printed at or below 0 (`weight_not_positive`). The rest is decided alone and exactly: the extremes of
+//!   the members' weighted means sit at vertices of the weight box, and a feasible answer carries a witness checked
+//!   exactly. A conflict is (iv), naming the region's and members' costs in dollars, not (iii): the issuer may
+//!   weight by quantities it does not publish. Never posed jointly. The AISC tables' regional check
+//!   (`aisc::regional_state`) still uses the kernel's McCormick relaxation, which can only refute.
 //!
 //! Exclusions by name come first: a subject whose registered status is `withheld` for the whole period of an
 //! operand (Loulo-Gounkoto Q1–Q3 2025, E818; for a region sum, a member's), and a region whose registered
@@ -40,9 +49,9 @@
 //! [v − step/2, v + step/2] (rounded once, the step from the displayed decimals), the identity holds exactly
 //! between true values, and a feasible run is (i), an infeasible one (iii).
 //!
-//! Every decided instance but the sums is then posed jointly. Instances that share a cell form a component: a
-//! 100% cell is in its ownership identity and in quarter sums, and a cumulative is the total of one sum and an
-//! operand of the next. For each infeasible component the kernel's blame gives every minimum correction set, with
+//! Every decided instance but the sums and sold-weighted rates is then posed jointly. Instances that share a cell
+//! form a component: a 100% cell is in its ownership identity and in quarter sums, and a cumulative is the total
+//! of one sum and an operand of the next. For each infeasible component the kernel's blame gives every minimum correction set, with
 //! the range each of its cells can take, never a corrected value. A component can be infeasible though each of
 //! its identities is consistent alone (`joint_only`); its instances stay (i).
 //!
@@ -108,6 +117,9 @@ pub const SITE_FIELDS: [(Metal, &str, &str); 10] = [
     (Metal::Copper, "aisc_usd_per_lb", "all-in sustaining costs"),
 ];
 
+/// Family 5's rates: the gold unit-cost columns of a summary sheet, each weighted by attributable gold sold.
+pub const RATE_FIELDS: [&str; 3] = ["cos_usd_per_oz", "tcc_usd_per_oz", "aisc_usd_per_oz"];
+
 /// Metal totals: like regions, they roll up sites held at different shares.
 const TOTALS: [&str; 2] = ["Total Gold", "Total Copper"];
 
@@ -135,15 +147,18 @@ pub enum Family {
     SiteSheet,
     /// Family 3: a region = Σ its registered members in the release's map.
     SitesToRegion,
+    /// Family 5: a region's gold unit cost = its members' unit costs weighted by attributable gold sold.
+    SoldWeightedRate,
 }
 
 impl Family {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Ownership,
         Self::QuarterSum,
         Self::RegionToTotal,
         Self::SiteSheet,
         Self::SitesToRegion,
+        Self::SoldWeightedRate,
     ];
 
     #[must_use]
@@ -154,6 +169,7 @@ impl Family {
             Self::RegionToTotal => "region_to_total",
             Self::SiteSheet => "site_sheet",
             Self::SitesToRegion => "sites_to_region",
+            Self::SoldWeightedRate => "sold_weighted_rate",
         }
     }
 }
@@ -197,6 +213,10 @@ pub enum Reason {
     PlaceholderOperand,
     /// A number with no exact displayed value, or shown as a percentage.
     OperandUnreadable,
+    /// A weighted rate whose every member sold nothing (each sold cell the nil token).
+    WeightsAllNil,
+    /// A weight of a weighted rate printed at or below 0: a weighted mean is bounded only for positive weights.
+    WeightNotPositive,
     /// The kernel made no claim (a cap, an overflow, a checker rejection).
     KernelIndeterminate(String),
 }
@@ -214,7 +234,25 @@ impl Reason {
             Self::BlankOperand => "blank_operand",
             Self::PlaceholderOperand => "placeholder_operand",
             Self::OperandUnreadable => "operand_unreadable",
+            Self::WeightsAllNil => "weights_all_nil",
+            Self::WeightNotPositive => "weight_not_positive",
             Self::KernelIndeterminate(_) => "kernel_indeterminate",
+        }
+    }
+}
+
+/// The fact that would decide an (iv) instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Need {
+    /// The region's and its members' costs in dollars, which Mine Stats does not print.
+    CostTotals,
+}
+
+impl Need {
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::CostTotals => "cost_totals_unpublished",
         }
     }
 }
@@ -225,6 +263,9 @@ pub enum State {
     Consistent,
     /// (iii): no true values within the printed boxes satisfy it.
     Discrepancy,
+    /// (iv): no true values within the printed boxes satisfy it, but the issuer may use quantities it does not
+    /// publish; the named fact would decide it.
+    Unresolved(Need),
     /// (v), with the first offending operand where there is one.
     Refused { reason: Reason, at: Option<String> },
     /// Every operand is a placeholder.
@@ -237,6 +278,7 @@ impl State {
         match self {
             Self::Consistent => "i",
             Self::Discrepancy => "iii",
+            Self::Unresolved(_) => "iv",
             Self::Refused { .. } => "v",
             Self::NotPublished => "np",
         }
@@ -1226,6 +1268,297 @@ fn sums(
     }
 }
 
+/// `Σ xᵢ·wᵢ / Σ wᵢ`; `None` on overflow or a zero total weight.
+fn mean(xs: &[Rat], ws: &[Rat]) -> Option<Rat> {
+    let (mut num, mut den) = (Rat::from_integer(0), Rat::from_integer(0));
+    for (x, w) in xs.iter().zip(ws) {
+        num = num.checked_add(x.checked_mul(*w).ok()?).ok()?;
+        den = den.checked_add(*w).ok()?;
+    }
+    num.checked_div(den).ok()
+}
+
+fn at_most(x: Rat, y: Rat) -> Option<bool> {
+    Some(x.checked_cmp(y).ok()? != std::cmp::Ordering::Greater)
+}
+
+/// A closed box `[lo, hi]`.
+type Interval = (Rat, Rat);
+
+/// Whether `R·Σwᵢ = Σ rᵢ·wᵢ` holds for true values in the closed boxes `region` = [e, f] (R) and `parts` =
+/// ([aᵢ, bᵢ] for rᵢ, [cᵢ, dᵢ] for wᵢ), every cᵢ > 0. `None` on overflow, past 16 parts, or a witness that fails
+/// its exact check (never a claim).
+///
+/// With W = Σwᵢ > 0 the identity reads R = Σ rᵢwᵢ/W. For fixed weights the rates' weighted mean takes every value
+/// in [L(w), U(w)], L(w) = Σ aᵢwᵢ/W and U(w) = Σ bᵢwᵢ/W, so it holds at w iff that range meets [e, f]. It holds
+/// somewhere iff min L ≤ f and max U ≥ e: if no point has both, take one with L ≤ f (so U < e) and one with
+/// U ≥ e; along the segment between them U crosses e, where L ≤ U = e ≤ f. L and U are linear-fractional with a
+/// positive denominator, so their extremes over the weight box are at its vertices. A feasible answer is returned
+/// with a witness: weights at a vertex or at that crossing, R = max(e, L(w)), rates on the segment from (aᵢ) to
+/// (bᵢ), each value checked against its box and the identity checked exactly.
+fn weighted_mean_holds(region: Interval, parts: &[(Interval, Interval)]) -> Option<bool> {
+    let n = parts.len();
+    if n == 0 || n > 16 {
+        return None;
+    }
+    let (e, f) = region;
+    let a: Vec<Rat> = parts.iter().map(|((lo, _), _)| *lo).collect();
+    let b: Vec<Rat> = parts.iter().map(|((_, hi), _)| *hi).collect();
+    let vertex = |mask: u32| -> Vec<Rat> {
+        parts
+            .iter()
+            .enumerate()
+            .map(|(k, (_, (lo, hi)))| if (mask >> k) & 1 == 1 { *hi } else { *lo })
+            .collect()
+    };
+    let (mut v_lo, mut v_hi) = (vertex(0), vertex(0));
+    let (mut min_l, mut max_u) = (mean(&a, &v_lo)?, mean(&b, &v_hi)?);
+    for mask in 1..(1_u32 << n) {
+        let w = vertex(mask);
+        let l = mean(&a, &w)?;
+        if !at_most(min_l, l)? {
+            (min_l, v_lo) = (l, w.clone());
+        }
+        let u = mean(&b, &w)?;
+        if !at_most(u, max_u)? {
+            (max_u, v_hi) = (u, w);
+        }
+    }
+    if !(at_most(min_l, f)? && at_most(e, max_u)?) {
+        return Some(false);
+    }
+    let w = if at_most(e, mean(&b, &v_lo)?)? {
+        v_lo
+    } else if at_most(mean(&a, &v_hi)?, f)? {
+        v_hi
+    } else {
+        // g(w) = Σ (bᵢ − e)·wᵢ is negative at v_lo (U < e) and not negative at v_hi (U ≥ e), and affine along the
+        // segment: its root t = g₀ / (g₀ − g₁).
+        let g = |w: &[Rat]| {
+            b.iter()
+                .zip(w)
+                .try_fold(Rat::from_integer(0), |acc, (bi, wi)| {
+                    acc.checked_add(bi.checked_sub(e).ok()?.checked_mul(*wi).ok()?)
+                        .ok()
+                })
+        };
+        let (g0, g1) = (g(&v_lo)?, g(&v_hi)?);
+        let t = g0.checked_div(g0.checked_sub(g1).ok()?).ok()?;
+        v_lo.iter()
+            .zip(&v_hi)
+            .map(|(x, y)| {
+                x.checked_add(t.checked_mul(y.checked_sub(*x).ok()?).ok()?)
+                    .ok()
+            })
+            .collect::<Option<Vec<Rat>>>()?
+    };
+    let l = mean(&a, &w)?;
+    let r = if at_most(l, e)? { e } else { l };
+    let total = w
+        .iter()
+        .try_fold(Rat::from_integer(0), |acc, x| acc.checked_add(*x).ok())?;
+    let dot = |x: &[Rat]| {
+        x.iter()
+            .zip(&w)
+            .try_fold(Rat::from_integer(0), |acc, (xi, wi)| {
+                acc.checked_add(xi.checked_mul(*wi).ok()?).ok()
+            })
+    };
+    let (base, top) = (dot(&a)?, dot(&b)?);
+    let spread = top.checked_sub(base).ok()?;
+    let lambda = if spread.signum() == 0 {
+        Rat::from_integer(0)
+    } else {
+        r.checked_mul(total)
+            .ok()?
+            .checked_sub(base)
+            .ok()?
+            .checked_div(spread)
+            .ok()?
+    };
+    let rates = a
+        .iter()
+        .zip(&b)
+        .map(|(lo, hi)| {
+            lo.checked_add(lambda.checked_mul(hi.checked_sub(*lo).ok()?).ok()?)
+                .ok()
+        })
+        .collect::<Option<Vec<Rat>>>()?;
+    let within = |x: Rat, (lo, hi): Interval| Some(at_most(lo, x)? && at_most(x, hi)?);
+    let mut checked = within(r, region)? && r.checked_mul(total).ok()? == dot(&rates)?;
+    for ((rate_box, weight_box), (rk, wk)) in parts.iter().zip(rates.iter().zip(&w)) {
+        checked &= within(*rk, *rate_box)? && within(*wk, *weight_box)?;
+    }
+    checked.then_some(true)
+}
+
+/// A number operand's closed box `[v − step/2, v + step/2]`.
+fn closed_box(slot: &Slot) -> Option<Interval> {
+    let Operand::Number { value, step } = slot.operand else {
+        return None;
+    };
+    let half = step.checked_div(Rat::from_integer(2)).ok()?;
+    Some((value.checked_sub(half).ok()?, value.checked_add(half).ok()?))
+}
+
+/// Steps 1–7 of family 5 for members found in row order, `(rate, sold)` each, and the region's rate: the state,
+/// and whether a member left the identity by its nil sold cell.
+fn decide_weighted(members: &[(&Slot, &Slot)], region: &Slot) -> (State, bool) {
+    let refused = |reason, at: Option<&Slot>| State::Refused {
+        reason,
+        at: at.map(|s| s.locator.clone()),
+    };
+    let ops: Vec<&Slot> = members
+        .iter()
+        .flat_map(|(r, w)| [*r, *w])
+        .chain(std::iter::once(region))
+        .collect();
+    if let Some(b) = ops.iter().find(|o| o.operand == Operand::Blank) {
+        return (refused(Reason::BlankOperand, Some(b)), false);
+    }
+    if ops
+        .iter()
+        .all(|o| matches!(o.operand, Operand::Placeholder(_)))
+    {
+        return (State::NotPublished, false);
+    }
+    // A nil sold cell sold nothing: weight exactly 0, so the member leaves the identity whatever its rate prints.
+    let kept: Vec<(&Slot, &Slot)> = members
+        .iter()
+        .copied()
+        .filter(|(_, w)| w.operand != Operand::Placeholder(Mark::Nil))
+        .collect();
+    let live: Vec<&Slot> = kept
+        .iter()
+        .flat_map(|(r, w)| [*r, *w])
+        .chain(std::iter::once(region))
+        .collect();
+    // A rate is never read as 0: any placeholder still in the identity refuses.
+    if let Some(p) = live
+        .iter()
+        .find(|o| matches!(o.operand, Operand::Placeholder(_)))
+    {
+        return (refused(Reason::PlaceholderOperand, Some(p)), false);
+    }
+    if let Some(u) = live.iter().find(|o| o.operand == Operand::Unreadable) {
+        return (refused(Reason::OperandUnreadable, Some(u)), false);
+    }
+    if kept.is_empty() {
+        return (refused(Reason::WeightsAllNil, None), false);
+    }
+    if let Some((_, w)) = kept
+        .iter()
+        .find(|(_, w)| matches!(w.operand, Operand::Number { value, .. } if value.signum() <= 0))
+    {
+        return (refused(Reason::WeightNotPositive, Some(w)), false);
+    }
+    let parts: Option<Vec<(Interval, Interval)>> = kept
+        .iter()
+        .map(|(r, w)| Some((closed_box(r)?, closed_box(w)?)))
+        .collect();
+    let left = kept.len() < members.len();
+    match parts
+        .zip(closed_box(region))
+        .and_then(|(parts, region)| weighted_mean_holds(region, &parts))
+    {
+        Some(true) => (State::Consistent, left),
+        Some(false) => (State::Unresolved(Need::CostTotals), left),
+        None => (
+            kernel_refused("the exact weighted mean overflowed or its witness failed".to_string()),
+            false,
+        ),
+    }
+}
+
+/// Family 5 on each summary sheet, column group and gold unit-cost field: a region's rate is its members' rates
+/// weighted by their attributable gold sold, `R·Σwᵢ = Σ rᵢ·wᵢ`, the members found as the sum families find them
+/// and taken in row order. Decided alone and exactly ([`weighted_mean_holds`]); a conflict is (iv), since the
+/// issuer may weight by quantities it does not publish, and the instance is never posed jointly.
+fn sold_weighted(
+    rules: &LedgerRules<'_>,
+    slots: &BTreeMap<SlotKey, Slot>,
+    out: &mut Vec<(Instance, Option<Posed>)>,
+) {
+    let sold_field = FLOW_FIELDS[0][2];
+    let mut blocks: BTreeMap<(&str, &str, &str, Group), BTreeMap<&str, &Slot>> = BTreeMap::new();
+    for ((release, sheet, field, group, subject), slot) in slots {
+        if RATE_FIELDS.contains(&field.as_str()) || field == sold_field {
+            blocks
+                .entry((release, sheet, field, *group))
+                .or_default()
+                .insert(subject, slot);
+        }
+    }
+    for (&(release, sheet, field, group), rates) in &blocks {
+        if !RATE_FIELDS.contains(&field) {
+            continue;
+        }
+        let Some(sold) = blocks.get(&(release, sheet, sold_field, group)) else {
+            continue;
+        };
+        for (&region, &total) in rates
+            .iter()
+            .filter(|(s, _)| rules.regions.iter().any(|r| r == **s))
+        {
+            let members = rules.members_in_order(region, release);
+            let mut found: Vec<(&Slot, &Slot, bool)> = Vec::new();
+            let mut missing = false;
+            for m in &members {
+                match (find_member(rates, rules, m), find_member(sold, rules, m)) {
+                    (Found::One(r), Found::One(w)) => found.push((r, w, false)),
+                    (Found::Both(r), Found::Both(w)) => found.push((r, w, true)),
+                    _ => missing = true,
+                }
+            }
+            found.sort_by_key(|(r, _, _)| row_of(&r.locator));
+            let mut cells: Vec<Option<String>> = found
+                .iter()
+                .flat_map(|(r, w, _)| [Some(r.locator.clone()), Some(w.locator.clone())])
+                .collect();
+            cells.push(Some(total.locator.clone()));
+            let refused = |reason, at: Option<&Slot>| State::Refused {
+                reason,
+                at: at.map(|s| s.locator.clone()),
+            };
+            let withheld = members
+                .iter()
+                .find_map(|m| rules.withheld(m, &total.period));
+            let mut nil_token = false;
+            let state = if let Some(evidence) = withheld {
+                refused(Reason::Withheld { evidence }, None)
+            } else if members.is_empty() {
+                refused(Reason::RegionNotInMap, None)
+            } else if missing {
+                refused(Reason::OperandRowMissing, None)
+            } else if let Some((r, _, _)) = found.iter().find(|(_, _, both)| *both) {
+                refused(Reason::OperandUnreadable, Some(r))
+            } else {
+                let pairs: Vec<(&Slot, &Slot)> = found.iter().map(|(r, w, _)| (*r, *w)).collect();
+                let (state, left) = decide_weighted(&pairs, total);
+                nil_token = left;
+                state
+            };
+            out.push((
+                Instance {
+                    family: Family::SoldWeightedRate,
+                    subject: region.to_string(),
+                    field: field.to_string(),
+                    group,
+                    period: total.period,
+                    anchor: total.locator.clone(),
+                    cells,
+                    state,
+                    share: None,
+                    printed_share: None,
+                    nil_token,
+                    component: None,
+                },
+                None,
+            ));
+        }
+    }
+}
+
 /// Poses every decided instance jointly and blames each infeasible component.
 fn joint(
     instances: &mut [Instance],
@@ -1353,6 +1686,7 @@ pub fn mine_ledger(files: &[LedgerFile<'_>], rules: &LedgerRules<'_>) -> MineLed
         &mut pairs,
     );
     sums(rules, &slots, &mut pairs);
+    sold_weighted(rules, &slots, &mut pairs);
     pairs.sort_by(|(a, _), (b, _)| {
         (a.family, &a.anchor, a.group, &a.field).cmp(&(b.family, &b.anchor, b.group, &b.field))
     });
@@ -1450,6 +1784,18 @@ mod tests {
 
     /// A summary sheet with one block of the release's own year: `headers` in B4–D4, rows from row 5.
     fn summary(name: &str, months: &str, headers: [&str; 3], rows: &[Row<'_>]) -> MinimalSheet {
+        let rows: Vec<(&str, &[&str])> = rows.iter().map(|(l, v)| (*l, v.as_slice())).collect();
+        summary_cols(name, months, &headers, &rows)
+    }
+
+    /// [`summary`] with up to six columns, B–G.
+    fn summary_cols(
+        name: &str,
+        months: &str,
+        headers: &[&str],
+        rows: &[(&str, &[&str])],
+    ) -> MinimalSheet {
+        const COLS: [&str; 6] = ["B", "C", "D", "E", "F", "G"];
         let mut cells = vec![
             (
                 "A3".to_string(),
@@ -1463,13 +1809,13 @@ mod tests {
                 },
             ),
         ];
-        for (col, h) in ["B", "C", "D"].into_iter().zip(headers) {
+        for (col, h) in COLS.into_iter().zip(headers) {
             cells.push((format!("{col}4"), text(h)));
         }
         for (k, (label, values)) in rows.iter().enumerate() {
             let row = 5 + k;
             cells.push((format!("A{row}"), text(label)));
-            for (col, v) in ["B", "C", "D"].into_iter().zip(values) {
+            for (col, v) in COLS.into_iter().zip(values.iter()) {
                 if let Some(c) = data(v) {
                     cells.push((format!("{col}{row}"), c));
                 }
@@ -2752,5 +3098,359 @@ mod tests {
             outcomes[usize::from(closed)] += 1;
         }
         assert!(outcomes.iter().all(|&n| n >= 50), "{outcomes:?}");
+    }
+
+    /// The gold flows (B–D) and unit costs per ounce (E–G).
+    const GOLD_RATES: [&str; 6] = [
+        GOLD[0],
+        GOLD[1],
+        GOLD[2],
+        "Cost of sales ($/oz)",
+        "Total cash costs ($/oz)",
+        "All-in sustaining costs ($/oz)",
+    ];
+
+    /// A rate row: the label, then 100% and attributable production, attributable sold, cost of sales, TCC and
+    /// AISC per ounce (specs as in [`Row`]).
+    type RateRow<'a> = (&'a str, [&'a str; 6]);
+
+    /// Release 2030Q1: one `QTD` sheet of [`GOLD_RATES`], rows from row 5.
+    fn rate_ledger(rows: &[RateRow<'_>], rules: &LedgerRules<'_>) -> MineLedger {
+        let rows: Vec<(&str, &[&str])> = rows.iter().map(|(l, v)| (*l, v.as_slice())).collect();
+        let sheet = summary_cols("QTD", "three", &GOLD_RATES, &rows);
+        let (l, refusals) = run(vec![("2030Q1".to_string(), vec![sheet])], rules);
+        assert!(refusals.is_empty(), "{refusals:?}");
+        l
+    }
+
+    fn rate_at<'a>(l: &'a MineLedger, cell: &str) -> &'a Instance {
+        at(l, Family::SoldWeightedRate, &format!("2030Q1:QTD!{cell}"))
+    }
+
+    /// North America (row 7) = Carlin (row 5) and Hemlo (row 6), 100 ounces each.
+    fn north_america<'a>(
+        carlin: [&'a str; 6],
+        hemlo: [&'a str; 6],
+        na: [&'a str; 6],
+    ) -> Vec<RateRow<'a>> {
+        vec![
+            ("Carlin (50%)", carlin),
+            ("Hemlo (100%)", hemlo),
+            ("North America", na),
+        ]
+    }
+
+    const CARLIN: [&str; 6] = ["200", "100", "100", "1000", "800", "1300"];
+    const HEMLO: [&str; 6] = ["100", "100", "100", "1500", "1200", "1700"];
+
+    #[test]
+    fn test_region_rate_is_its_members_sold_weighted_mean() {
+        let regions = ["North America".to_string()];
+        let members = [
+            member("North America", "Carlin", "2030Q1"),
+            member("North America", "Hemlo", "2030Q1"),
+        ];
+        let rules = LedgerRules {
+            regions: &regions,
+            region_members: &members,
+            ..NONE
+        };
+        // Weights in [99.5, 100.5] and rates within 0.5 put the true mean of 1,000 and 1,500 in [1,248.25,
+        // 1,251.75], derived by hand: a printed region rate meets it from 1,248 to 1,252.
+        for (printed, code) in [
+            ("1247", "iv"),
+            ("1248", "i"),
+            ("1250", "i"),
+            ("1252", "i"),
+            ("1253", "iv"),
+        ] {
+            let na = ["300", "200", "200", printed, "1000", "1600"];
+            let l = rate_ledger(&north_america(CARLIN, HEMLO, na), &rules);
+            assert_eq!(
+                rate_at(&l, "E7").state.code(),
+                code,
+                "cost of sales {printed}"
+            );
+        }
+        let na = ["300", "200", "200", "1250", "1000", "1600"];
+        let l = rate_ledger(&north_america(CARLIN, HEMLO, na), &rules);
+        let cos = rate_at(&l, "E7");
+        assert_eq!(
+            (cos.subject.as_str(), cos.field.as_str(), cos.nil_token),
+            ("North America", "cos_usd_per_oz", false)
+        );
+        // Each member's rate then its sold, in row order, then the region's rate.
+        assert_eq!(
+            cos.cells,
+            locs(&[Some("E5"), Some("D5"), Some("E6"), Some("D6"), Some("E7")])
+        );
+        assert_eq!(rate_at(&l, "F7").state, State::Consistent);
+        // 1,600 is far from the mean of 1,300 and 1,700: (iv), never (iii), and never posed jointly.
+        let aisc = rate_at(&l, "G7");
+        assert_eq!(aisc.state, State::Unresolved(Need::CostTotals));
+        assert_eq!(aisc.component, None);
+        assert!(l.infeasible.is_empty());
+        assert_eq!(l.count(Family::SoldWeightedRate, "iii"), 0);
+        // The registry's member order does not set the operand order; the rows do.
+        let reversed = [members[1].clone(), members[0].clone()];
+        let l = rate_ledger(
+            &north_america(CARLIN, HEMLO, na),
+            &LedgerRules {
+                region_members: &reversed,
+                ..rules
+            },
+        );
+        assert_eq!(rate_at(&l, "E7").cells, cos.cells);
+    }
+
+    #[test]
+    fn test_weighted_rate_nil_sold_placeholders_and_weights() {
+        let regions = ["North America".to_string()];
+        let members = [
+            member("North America", "Carlin", "2030Q1"),
+            member("North America", "Hemlo", "2030Q1"),
+        ];
+        let rules = LedgerRules {
+            regions: &regions,
+            region_members: &members,
+            ..NONE
+        };
+        let cos = |carlin: [&str; 6], hemlo: [&str; 6], na_cos: &str| {
+            let na = ["300", "200", "200", na_cos, "1000", "1600"];
+            let i = rate_at(
+                &rate_ledger(&north_america(carlin, hemlo, na), &rules),
+                "E7",
+            )
+            .clone();
+            (i.state, i.nil_token)
+        };
+        let at = |c: &str| Some(format!("2030Q1:QTD!{c}"));
+        let refused = |reason, cell: Option<String>| State::Refused { reason, at: cell };
+        // Hemlo sold nothing: it leaves the identity whatever its rate prints, and Carlin's rate alone decides.
+        let idle = ["—", "—", "—", "1500", "—", "n/a"];
+        assert_eq!(cos(CARLIN, idle, "1000"), (State::Consistent, true));
+        assert_eq!(
+            cos(CARLIN, idle, "1250"),
+            (State::Unresolved(Need::CostTotals), true)
+        );
+        // A rate is never 0: a nil rate beside ounces sold refuses.
+        let no_rate = ["100", "100", "100", "—", "1200", "1700"];
+        assert_eq!(
+            cos(CARLIN, no_rate, "1250"),
+            (refused(Reason::PlaceholderOperand, at("E6")), false)
+        );
+        // Nobody sold: no weighted mean to compare.
+        let carlin_idle = ["—", "—", "—", "1000", "800", "1300"];
+        assert_eq!(
+            cos(carlin_idle, idle, "1250"),
+            (refused(Reason::WeightsAllNil, None), false)
+        );
+        // Zero ounces is not the nil token: its box reaches below 0.
+        let zero = ["0", "0", "0", "1500", "1200", "1700"];
+        assert_eq!(
+            cos(CARLIN, zero, "1250"),
+            (refused(Reason::WeightNotPositive, at("D6")), false)
+        );
+        // A blank comes first; all placeholders are not published.
+        let blank = ["100", "100", "100", "", "1200", "1700"];
+        assert_eq!(
+            cos(CARLIN, blank, "1250"),
+            (refused(Reason::BlankOperand, at("E6")), false)
+        );
+        let none = ["—", "—", "—", "—", "—", "—"];
+        assert_eq!(cos(none, none, "—"), (State::NotPublished, false));
+    }
+
+    #[test]
+    fn test_weighted_rate_refusals_by_name_and_row() {
+        let regions = ["North America".to_string(), "Africa".to_string()];
+        let rows = vec![
+            ("Nevada Gold Mines LLC (50%)", CARLIN),
+            ("Hemlo (100%)", HEMLO),
+            (
+                "North America",
+                ["300", "200", "200", "1250", "1000", "1600"],
+            ),
+            ("Africa", ["10", "5", "5", "900", "700", "1100"]),
+        ];
+        let base = [
+            member("North America", "Nevada Gold Mines", "2030Q1"),
+            member("North America", "Hemlo", "2030Q1"),
+            member("Africa", "Kibali", "2031Q1"),
+        ];
+        let labels = [RegisteredShare {
+            subject: "Nevada Gold Mines".to_string(),
+            num: 1,
+            den: 2,
+            evidence: "E1".to_string(),
+            label: "Nevada Gold Mines LLC".to_string(),
+        }];
+        let ledger_with = |rows: &[RateRow<'_>], members: &[RegionMemberRow], labels, statuses| {
+            let rules = LedgerRules {
+                regions: &regions,
+                region_members: members,
+                labels,
+                statuses,
+                ..NONE
+            };
+            rate_ledger(rows, &rules)
+        };
+        let l = ledger_with(&rows, &base, &labels, &[]);
+        // Found by its registered label; Africa's members join the map in 2031.
+        assert_eq!(rate_at(&l, "E7").state, State::Consistent);
+        let africa = rate_at(&l, "E8");
+        assert_eq!(africa.state, refused(Reason::RegionNotInMap, None));
+        assert_eq!(africa.cells, locs(&[Some("E8")]));
+        // Without the label the member has no row; the cells hold the members found.
+        let missing = rate_at(&ledger_with(&rows, &base, &[], &[]), "E7").clone();
+        assert_eq!(missing.state, refused(Reason::OperandRowMissing, None));
+        assert_eq!(missing.cells, locs(&[Some("E6"), Some("D6"), Some("E7")]));
+        // Printed under both names: refused at the rate cell of the row printed first.
+        let mut twice = rows.clone();
+        twice.insert(0, ("Nevada Gold Mines (50%)", CARLIN));
+        let both = rate_at(&ledger_with(&twice, &base, &labels, &[]), "E8").clone();
+        assert_eq!(
+            both.state,
+            refused(Reason::OperandUnreadable, Some("2030Q1:QTD!E5"))
+        );
+        // A withheld member excludes the region for the periods its status covers.
+        let statuses = [SubjectStatus {
+            subject: "Hemlo".to_string(),
+            kind: StatusKind::Withheld,
+            first: (2030, 1),
+            last: Some((2030, 3)),
+            evidence: "E818".to_string(),
+        }];
+        let held = ledger_with(&rows, &base, &labels, &statuses);
+        assert_eq!(
+            rate_at(&held, "E7").state,
+            refused(
+                Reason::Withheld {
+                    evidence: "E818".to_string()
+                },
+                None
+            )
+        );
+    }
+
+    /// [`weighted_mean_holds`] against two other derivations on pseudo-random boxes of mixed steps: the separable
+    /// test (max over the weights of Σ (bᵢ − e)·wᵢ ≥ 0 and min of Σ (aᵢ − f)·wᵢ ≤ 0, each term at an end of its
+    /// weight's box) must agree exactly, and the kernel's McCormick relaxation, which only refutes, must never
+    /// refute what the closed form calls feasible.
+    #[test]
+    fn test_exact_weighted_mean_matches_the_separable_test_and_the_kernel() {
+        let steps = [
+            Rat::from_integer(1),
+            Rat::new(1, 10).expect("step"),
+            Rat::new(1, 100).expect("step"),
+        ];
+        let mut seed = 0x0517_u64;
+        let mut next = |n: u64| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) % n
+        };
+        let rat =
+            |units: i128, step: Rat| Rat::from_integer(units).checked_mul(step).expect("value");
+        let half = |step: Rat| step.checked_div(Rat::from_integer(2)).expect("half");
+        let span = |v: Rat, step: Rat| {
+            (
+                v.checked_sub(half(step)).expect("lo"),
+                v.checked_add(half(step)).expect("hi"),
+            )
+        };
+        let mut outcomes = [0_usize; 2];
+        let mut refuted = 0;
+        for trial in 0..600 {
+            let n = 1 + next(5) as usize;
+            let mut cells = Vec::new();
+            let mut parts = Vec::new();
+            let mut printed = Vec::new();
+            for k in 0..n {
+                let (rs, ws) = (steps[next(3) as usize], steps[next(3) as usize]);
+                let (r, w) = (
+                    rat(i128::from(1_000 + next(100_000)), rs),
+                    rat(i128::from(1 + next(5_000)), ws),
+                );
+                printed.push((r, w));
+                parts.push((span(r, rs), span(w, ws)));
+                for (name, value, step) in [(format!("r{k}"), r, rs), (format!("w{k}"), w, ws)] {
+                    cells.push(xf::Cell {
+                        locator: name,
+                        sha256: String::new(),
+                        token: String::new(),
+                        printed: value,
+                        step,
+                        scope: xf::Scope::Visible,
+                    });
+                }
+            }
+            let rates: Vec<Rat> = printed.iter().map(|(r, _)| *r).collect();
+            let weights: Vec<Rat> = printed.iter().map(|(_, w)| *w).collect();
+            let m = mean(&rates, &weights).expect("mean");
+            let rs = steps[next(3) as usize];
+            let q = m.checked_div(rs).expect("units");
+            let region_value = rat(q.num().div_euclid(q.den()) + i128::from(next(61)) - 30, rs);
+            let region = span(region_value, rs);
+            cells.push(xf::Cell {
+                locator: "R".to_string(),
+                sha256: String::new(),
+                token: String::new(),
+                printed: region_value,
+                step: rs,
+                scope: xf::Scope::Visible,
+            });
+            let holds = weighted_mean_holds(region, &parts).expect("decided");
+            // The separable test.
+            let (e, f) = region;
+            let mut up = Rat::from_integer(0);
+            let mut dn = Rat::from_integer(0);
+            for ((a, b), (c, d)) in &parts {
+                let term = |x: Rat, w: Rat| x.checked_mul(w).expect("term");
+                let (bu, au) = (
+                    b.checked_sub(e).expect("b-e"),
+                    a.checked_sub(f).expect("a-f"),
+                );
+                let hi = [term(bu, *c), term(bu, *d)];
+                let lo = [term(au, *c), term(au, *d)];
+                let pick = |xs: [Rat; 2], greater: bool| {
+                    let ord = xs[0].checked_cmp(xs[1]).expect("cmp");
+                    if (ord == std::cmp::Ordering::Less) == greater {
+                        xs[1]
+                    } else {
+                        xs[0]
+                    }
+                };
+                up = up.checked_add(pick(hi, true)).expect("up");
+                dn = dn.checked_add(pick(lo, false)).expect("dn");
+            }
+            assert_eq!(holds, up.signum() >= 0 && dn.signum() <= 0, "trial {trial}");
+            // The kernel's relaxation.
+            let identity = xf::Identity {
+                id: format!("wm{trial}"),
+                family: Family::SoldWeightedRate.as_str().to_string(),
+                closure: xf::Closure::MayUseUnpublished,
+                kind: xf::IdentityKind::WeightedMean {
+                    rate: "R".to_string(),
+                    parts: (0..n).map(|k| (format!("r{k}"), format!("w{k}"))).collect(),
+                },
+            };
+            let solved = xf::solve(&cells, &[identity], &xf::Rules::new(xf::Convention::Closed))
+                .expect("solves");
+            let [c] = solved.as_slice() else {
+                panic!("trial {trial}: one component, got {}", solved.len());
+            };
+            if matches!(c.outcome, xf::Outcome::Infeasible { .. }) {
+                refuted += 1;
+                assert!(
+                    !holds,
+                    "trial {trial}: the relaxation refutes a feasible system"
+                );
+            }
+            outcomes[usize::from(holds)] += 1;
+        }
+        assert!(outcomes.iter().all(|&k| k >= 50), "{outcomes:?}");
+        assert!(refuted >= 50, "the kernel refuted only {refuted}");
     }
 }
