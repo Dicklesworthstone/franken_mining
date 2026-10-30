@@ -6,8 +6,10 @@
 //!   non-convergence and never returns an unconverged iterate (bd-t1dk)
 //! - Standard normal CDF (`norm_cdf`) and Acklam inverse quantile (`norm_inv`)
 //! - Lifted `frankensim` modules: `eproc`, `voi`, `risk`, `tropical`.
+//! - `exact_feas`: exact rounding-interval feasibility with checked witnesses and Farkas certificates (bd-4wvl.1).
 
 pub mod eproc;
+pub mod exact_feas;
 pub mod risk;
 pub mod tropical;
 pub mod voi;

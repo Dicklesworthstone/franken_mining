@@ -104,6 +104,7 @@ dependencies = [
  "fmine-array",
  "fmine-core",
  "fmine-evidence",
+ "fmine-units",
 ]
 
 [[package]]

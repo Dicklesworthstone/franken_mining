@@ -10,6 +10,7 @@ description = "Deterministic numerical kernels: SPD Cholesky, Brent root-finding
 fmine-core = { path = "../fmine-core" }
 fmine-array = { path = "../fmine-array" }
 fmine-evidence = { path = "../fmine-evidence" }
+fmine-units = { path = "../fmine-units" }
 
 [lints]
 workspace = true

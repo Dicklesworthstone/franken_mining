@@ -5,7 +5,7 @@
 - **Layer:** `K0` (Kernel Foundation)
 - **Subsystem:** `Kernels`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["eproc", "voi", "risk", "tropical"]`
+- **Allowed Module Families:** `["eproc", "voi", "risk", "tropical", "exact_feas"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements Cholesky SPD factorization (`cholesky_solve`), Brent root-finding (`brent_root`), normal CDF/PPF (`norm_cdf`, `norm_inv`), anytime-valid betting e-processes (`BettingEProcess`), Value of Information (`VoiProblem`, `EVPI`, `EVSI`), coherent Rockafellar-Uryasev `CVaR` (`compute_cvar`), and `(max,+)`/`(min,+)` tropical critical-path algebra (`TropicalDag`, `GB-19`).
@@ -20,6 +20,19 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
 - `voi::{VoiProblem, VoiSummary}`
 - `risk::{TailRiskSummary, compute_cvar, max_drawdown}`
 - `tropical::{TropicalEdge, TropicalDag, TropicalScheduleResult}`
+- `exact_feas` (bd-4wvl.1, BD-340.S1): exact rounding-interval feasibility over `Rat = fmine_units::ExactQty`.
+  - `Cell`, `Convention::{Closed, HalfUp, HalfDown, HalfEven, Truncate}` and `Convention::interval`;
+    `Identity { id, family, closure, kind: Sum | Equal | Scale }` and `Identity::row`.
+  - `solve` and `solve_with_caps` give one `Component` per connected group of cells, with
+    `Outcome::{Feasible { witness }, Infeasible { certificate }, NotRefuted, Indeterminate { reason }}`.
+    `NotRefuted` is reserved for relaxations (S6).
+  - `check_witness` and `check_certificate` are independent of the simplex. Every reported outcome passed
+    one; a rejected one is `Indeterminate`.
+  - `certificate_digest`: hex BLAKE3 of an `XFCT` v1 frame, independent of input order.
+  - Input is refused with `XfRefusal`: a non-positive step, an off-grid half-even value, a duplicate cell
+    or identity, an unknown cell, bad signs, or a degenerate row.
+  - Caps: 256 cells per component (`MAX_VARIABLES`) and 10⁴ pivots (`MAX_PIVOTS`). A cap or an overflow
+    gives `Indeterminate`.
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-301` (`NonSpdCovarianceMatrix`) when Cholesky diagonal pivot `<= 1e-12` or cycle detected in `TropicalDag`.

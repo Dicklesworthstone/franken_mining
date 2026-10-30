@@ -16,7 +16,9 @@ Enforces compile-time and runtime guards against silent unit, moisture-basis, cu
 ## 4. Public API Surface
 - `Qty<D, B, R>`, `MoistureFraction`, `MassFraction`, `to_dry_mass`, `to_wet_mass`
 - `Grade<R>`, `mass_weighted_mean`, `DryMassGrade<R>` (a dry mass with its grade)
-- `ExactQty`
+- `ExactQty`: `new`, `from_integer`, `from_decimal_str` (sign, fraction, exponent, exact),
+  `checked_{add, sub, neg, mul, div, cmp}`, `signum` (bd-4wvl.1). Every overflow, including negating
+  `i128::MIN` in `new`, is `UnitsError::Overflow`, never a wrapped value.
 - `Currency`, `Money`, `allocate_pro_rata`
 - `ChemBasis`, `No3Loading`, `check_who_no3_limit`
 - `HazardousByproduct`, `StreamMassBalance`

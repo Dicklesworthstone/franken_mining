@@ -1,6 +1,7 @@
 //! Phantom-typed physical quantities, moisture/recovery bases, exact statutory conversions,
 //! `Money`, chemical basis tags, and hazardous byproduct guards (`WP-01`).
 
+use std::cmp::Ordering;
 use std::fmt;
 use std::marker::PhantomData;
 use std::ops::{Add, Sub};
@@ -289,12 +290,94 @@ impl ExactQty {
         if den == 0 {
             return Err(UnitsError::Overflow);
         }
-        let (n, d) = if den < 0 { (-num, -den) } else { (num, den) };
+        let (n, d) = if den < 0 {
+            (
+                num.checked_neg().ok_or(UnitsError::Overflow)?,
+                den.checked_neg().ok_or(UnitsError::Overflow)?,
+            )
+        } else {
+            (num, den)
+        };
+        // gcd ≤ d ≤ i128::MAX, so the cast is exact.
         let g = gcd_i128(n.unsigned_abs(), d.unsigned_abs()) as i128;
         Ok(Self {
             num: n / g,
             den: d / g,
         })
+    }
+
+    /// Parses a decimal text exactly: an optional sign, digits with an optional fraction, and an optional
+    /// exponent (`-37.899642999999998`, `1.5E-3`). Anything else, or a value that does not fit, is an error.
+    pub fn from_decimal_str(s: &str) -> Result<Self, UnitsError> {
+        let bad = || UnitsError::Overflow;
+        let (mantissa, exponent) = match s.find(['e', 'E']) {
+            Some(i) => (&s[..i], s[i + 1..].parse::<i32>().map_err(|_| bad())?),
+            None => (s, 0),
+        };
+        let (negative, digits) = match mantissa.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, mantissa.strip_prefix('+').unwrap_or(mantissa)),
+        };
+        let (int, frac) = digits.split_once('.').unwrap_or((digits, ""));
+        if (int.is_empty() && frac.is_empty())
+            || !int.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit())
+        {
+            return Err(bad());
+        }
+        let mut n: i128 = 0;
+        for b in int.bytes().chain(frac.bytes()) {
+            n = n
+                .checked_mul(10)
+                .and_then(|n| n.checked_add(i128::from(b - b'0')))
+                .ok_or_else(bad)?;
+        }
+        let scale = exponent - i32::try_from(frac.len()).map_err(|_| bad())?;
+        let pow = 10_i128.checked_pow(scale.unsigned_abs()).ok_or_else(bad)?;
+        let q = if scale >= 0 {
+            Self::new(n.checked_mul(pow).ok_or_else(bad)?, 1)?
+        } else {
+            Self::new(n, pow)?
+        };
+        if negative { q.checked_neg() } else { Ok(q) }
+    }
+
+    /// `self + rhs`, exactly.
+    pub fn checked_add(self, rhs: Self) -> Result<Self, UnitsError> {
+        let g = gcd_i128(self.den.unsigned_abs(), rhs.den.unsigned_abs()) as i128;
+        let (bd, dd) = (self.den / g, rhs.den / g);
+        let n = self
+            .num
+            .checked_mul(dd)
+            .and_then(|a| rhs.num.checked_mul(bd).and_then(|b| a.checked_add(b)))
+            .ok_or(UnitsError::Overflow)?;
+        let d = bd.checked_mul(rhs.den).ok_or(UnitsError::Overflow)?;
+        Self::new(n, d)
+    }
+
+    /// `-self`, exactly.
+    pub fn checked_neg(self) -> Result<Self, UnitsError> {
+        Ok(Self {
+            num: self.num.checked_neg().ok_or(UnitsError::Overflow)?,
+            den: self.den,
+        })
+    }
+
+    /// `self - rhs`, exactly.
+    pub fn checked_sub(self, rhs: Self) -> Result<Self, UnitsError> {
+        self.checked_add(rhs.checked_neg()?)
+    }
+
+    /// Compares exactly by cross-multiplication; an overflow is an error, never a guess.
+    pub fn checked_cmp(self, rhs: Self) -> Result<Ordering, UnitsError> {
+        let l = self.num.checked_mul(rhs.den).ok_or(UnitsError::Overflow)?;
+        let r = rhs.num.checked_mul(self.den).ok_or(UnitsError::Overflow)?;
+        Ok(l.cmp(&r))
+    }
+
+    /// The sign of the value: -1, 0 or 1.
+    #[must_use]
+    pub const fn signum(self) -> i128 {
+        self.num.signum()
     }
 
     /// Creates an exact integer quantity `n / 1`.
@@ -729,6 +812,74 @@ mod tests {
         let rec_grade = blended.apply_recovery(rec);
         let rec_grams = metal_grams(tot_dry, rec_grade);
         assert!((rec_grams.value() - 1_840.0 * 2.0 * 0.89).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_exactqty_add_sub_neg_cmp_known_answers() {
+        let q = |n, d| ExactQty::new(n, d).expect("valid");
+        assert_eq!(q(1, 3).checked_add(q(1, 6)), Ok(q(1, 2)));
+        assert_eq!(q(1, 3).checked_sub(q(1, 2)), Ok(q(-1, 6)));
+        assert_eq!(q(3, 4).checked_neg(), Ok(q(-3, 4)));
+        assert_eq!(q(-1, 2).checked_cmp(q(1, 3)), Ok(Ordering::Less));
+        assert_eq!(q(2, 4).checked_cmp(q(1, 2)), Ok(Ordering::Equal));
+        assert_eq!(q(7, 3).checked_cmp(q(-7, 3)), Ok(Ordering::Greater));
+        // A negative denominator is moved to the numerator; i128::MIN cannot be negated.
+        assert_eq!(q(1, -2), q(-1, 2));
+        assert_eq!(ExactQty::new(i128::MIN, -1), Err(UnitsError::Overflow));
+        assert_eq!(q(-5, 3).signum(), -1);
+    }
+
+    #[test]
+    fn test_exactqty_add_overflow_is_error() {
+        let big = ExactQty::from_integer(i128::MAX);
+        assert_eq!(
+            big.checked_add(ExactQty::from_integer(1)),
+            Err(UnitsError::Overflow)
+        );
+        assert_eq!(
+            ExactQty::from_integer(i128::MIN).checked_neg(),
+            Err(UnitsError::Overflow)
+        );
+        // Coprime denominators near the limit overflow in the common denominator.
+        let a = ExactQty::new(1, i128::MAX).expect("valid");
+        let b = ExactQty::new(1, i128::MAX - 1).expect("valid");
+        assert_eq!(a.checked_add(b), Err(UnitsError::Overflow));
+        assert_eq!(
+            big.checked_cmp(ExactQty::new(1, 3).expect("valid")),
+            Err(UnitsError::Overflow)
+        );
+    }
+
+    #[test]
+    fn test_exactqty_from_decimal_str_exact() {
+        let q = |n, d| ExactQty::new(n, d).expect("valid");
+        // -37.899642999999998 = -37899642999999998 / 10^15, already in lowest terms (the numerator is even and
+        // not a multiple of 5; 10^15 = 2^15 · 5^15, gcd 2).
+        assert_eq!(
+            ExactQty::from_decimal_str("-37.899642999999998"),
+            Ok(q(-18_949_821_499_999_999, 500_000_000_000_000))
+        );
+        for (text, n, d) in [
+            ("0", 0, 1),
+            ("1691", 1691, 1),
+            ("+2.50", 5, 2),
+            (".5", 1, 2),
+            ("1.", 1, 1),
+            ("1.5E-3", 3, 2000),
+            ("2.5e2", 250, 1),
+            ("-0.125", -1, 8),
+        ] {
+            assert_eq!(ExactQty::from_decimal_str(text), Ok(q(n, d)), "{text}");
+        }
+        for text in [
+            "", "-", ".", "1,000", "1.2.3", "0x10", "1e", "e5", "--1", "1e40", "1 ",
+        ] {
+            assert_eq!(
+                ExactQty::from_decimal_str(text),
+                Err(UnitsError::Overflow),
+                "{text:?}"
+            );
+        }
     }
 
     #[test]
