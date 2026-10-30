@@ -2936,12 +2936,14 @@ mod tests {
     }
 
     /// For each instance cell, the cells whose perturbation changed its state: every non-structural cell of every
-    /// visible synthetic sheet, within its used range, one at a time. Observed from the code's behaviour, never
-    /// from its operand lists.
-    fn observed_dependencies() -> (usize, BTreeMap<String, Vec<String>>) {
-        let profile = synthetic::synthetic_profile();
-        let base_sources = load_synthetic(synthetic::synthetic_workbooks(&[])).expect("parse");
-        let base = assess(&profile, Lane::Synthetic, base_sources.clone());
+    /// visible synthetic sheet, within its used range, one at a time, under `profile` with `edits` applied first.
+    /// Observed from the code's behaviour, never from its operand lists.
+    fn observed_dependencies(
+        profile: &IssuerProfile,
+        edits: &[(String, MinimalCell)],
+    ) -> (usize, BTreeMap<String, Vec<String>>) {
+        let base_sources = load_synthetic(synthetic::synthetic_workbooks(edits)).expect("parse");
+        let base = assess(profile, Lane::Synthetic, base_sources.clone());
         let mut swept = 0;
         let mut deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (si, src) in base_sources.iter().enumerate() {
@@ -2955,7 +2957,7 @@ mod tests {
                     swept += 1;
                     let mut sources = base_sources.clone();
                     perturb(&mut sources[si].workbook.sheets[ki], row, col);
-                    let r = assess(&profile, Lane::Synthetic, sources);
+                    let r = assess(profile, Lane::Synthetic, sources);
                     let at = format!(
                         "{}:{}!{}{row}",
                         src.file_name,
@@ -3004,7 +3006,7 @@ mod tests {
     #[test]
     fn test_operands_cover_every_input_cell() {
         let r = run_synthetic_assurance(&[]).expect("synthetic run");
-        let (swept, deps) = observed_dependencies();
+        let (swept, deps) = observed_dependencies(&synthetic::synthetic_profile(), &[]);
         let missing = uncited(&r, &deps);
         println!(
             "{{\"test\":\"operands_cover\",\"instances\":{},\"operands\":{},\"swept_cells\":{swept},\
@@ -3019,6 +3021,37 @@ mod tests {
         // Every instance but the unrounded column's depends on something the sweep can move.
         assert!(deps.len() >= 30, "{}", deps.len());
         assert!(missing.is_empty(), "{missing:#?}");
+    }
+
+    /// BD-331.S4: the same sweep with Region North weighed against Site H and Site I (not refuted at 2100). Every
+    /// cell that moves the region's state is among its operands, the member cells included, and the region's
+    /// state does move with each member's rate and ounces.
+    #[test]
+    fn test_region_operands_cover_every_input_cell() {
+        let profile = region_profile("2030Q1");
+        let edits = [
+            (String::from("H7"), MinimalCell::Number(-10.0)),
+            (String::from("H13"), MinimalCell::Number(300.0)),
+            (String::from("H14"), MinimalCell::Number(2100.0)),
+        ];
+        let r = assess(
+            &profile,
+            Lane::Synthetic,
+            load_synthetic(synthetic::synthetic_workbooks(&edits)).expect("parse"),
+        );
+        assert_eq!(r.relaxation_only(), 1);
+        let (_, deps) = observed_dependencies(&profile, &edits);
+        let missing = uncited(&r, &deps);
+        assert!(missing.is_empty(), "{missing:#?}");
+        let region: Vec<&str> = deps
+            .get("H14")
+            .into_iter()
+            .flatten()
+            .filter_map(|at| at.rsplit_once('!').map(|(_, cell)| cell))
+            .collect();
+        for member_cell in ["K13", "K14", "L13", "L14"] {
+            assert!(region.contains(&member_cell), "{member_cell}: {region:?}");
+        }
     }
 
     /// A broken cost-of-sales label on the release's own quarter sheet refuses the table by name instead of
@@ -3077,7 +3110,7 @@ mod tests {
     #[test]
     fn test_mutation_missing_operands_detected() {
         let mut r = run_synthetic_assurance(&[]).expect("synthetic run");
-        let (_, deps) = observed_dependencies();
+        let (_, deps) = observed_dependencies(&synthetic::synthetic_profile(), &[]);
         let Some(c8) = r.instances.iter_mut().find(|i| i.cell == "C8") else {
             panic!("no C8");
         };
