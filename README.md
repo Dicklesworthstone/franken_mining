@@ -250,8 +250,9 @@ grade and recovery by site (plan §37.1).
   - keep a discrepancy register;
   - hash FY2026 per-site forecasts, with 80% intervals, *before* the February 2027 release.
 
-  Its gate, GATE-BULL-01, requires ≥ 95% of numeric site-quarter values reproduced to published rounding, the
-  rest explained or refused, zero uncited numbers and byte-identical reruns.
+  Its gate, GATE-BULL-01, has three parts (plan §21.6): every numeric cell in a named denominator extracted equal
+  to the published value against an independent read; every identity instance placed in one of five states; and
+  issuer consistency across vintages. Zero uncited numbers and byte-identical reruns still apply.
 - **M1–M2.** Synthetic truth, reconciliation known answers, then a site assurance pilot in shadow mode: the
   12-month demonstrator.
 - **M3–M6.** Group metric and reserve assurance with the accounting bridge. Then exploration and capital

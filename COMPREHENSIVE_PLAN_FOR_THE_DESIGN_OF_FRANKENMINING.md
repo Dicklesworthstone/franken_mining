@@ -2016,7 +2016,7 @@ test), **Bridge** (gated dependency through `fmine-simbridge`), **Pattern** (cop
 |---|---|---|---|
 | ✖ GATE-STRATA-G0 (frankensim spike) | S+5 (month 17) | A separate clone at a pinned commit: a scratch crate depending on fs-rep-mesh + fs-topo + fs-sparse builds with one unified asupersync; one `Chart` round-trip from a FrankenMining field | Kill the bridge; lift-only (no impact on the resource path) |
 | GATE-STRATA-G1 (parity) | S+6 (month 18) | `DeclaredOk` vs reference OK: estimates and kriging variances ≤ 1e-6 relative; desurvey ≤ 1 mm/1,000 m; identical composite intervals | Block the QP pack until fixed |
-| GATE-STRATA-G2 (regeneration and throughput) | S+7 (month 19) | Bit-identical bricks across 3 runs × 2 machines (same ISA); 10⁷ blocks × 100 conditional realizations ≤ 1 h on 64 cores; summaries ≤ 64 B/block | Optimize; if > 4× over, materialize SMU ensembles for active zones only |
+| GATE-STRATA-G2 (regeneration and throughput) | S+7 (month 19) | Bit-identical bricks across 3 runs × 2 machines (same ISA); 10⁷ blocks × 100 conditional realizations ≤ 3.3 min on 64 cores (c_node ≈ 12.5 µs; GB-10's TARGET of 2 µs gives ≈ 31 s); summaries ≤ 64 B/block | Optimize; if > 4× over (c_node > 50 µs, GB-10's flip), materialize SMU ensembles for active zones only |
 | ✖ GATE-STRATA-G3 (calibration) | S+8 (month 20) | Synthetic-truth mine: 80% panel-metal intervals cover 0.72–0.88 over ≥ 50 panels; injected 5% F2 bias recovered within ±2%; injected 8% resource bias reduced to < 2% after 12 periods | Ship only `DeclaredOk` plus ensembles labelled "uncalibrated"; no probabilistic claims in management views |
 | GATE-STRATA-G4 (scale and incremental) | S+10 (month 22) | 10⁸ SMU blocks end to end with out-of-core paging, peak RAM ≤ 50% of host; +100 holes recomputes ≤ 5% of bricks and satisfies PO-STRATA-7 | Restrict v1 to ≤ 10⁷ blocks per domain-region |
 | ✖ GATE-STRATA-G5 (QP replay) | S+12 (month 24) | An independent QP reproduces `DeclaredOk`, the validation pack and the TonnageGradeCertificate from the snapshot triple alone, in ≤ 1 day | Revert to the declared-estimator authority, with the belief ledger as advisory |
@@ -6844,9 +6844,13 @@ verbs with keys, and `robot-docs` that a fresh agent can learn from. GATE-ROBOT-
   - evidence class next to every number;
   - "evidence state", never "safe" (§18.1);
   - colour-blind-safe palettes;
-  - every number clickable to its Claim.
-- The executive one-pager is the epistemic map (§9.6). If users fail the K5-style test, it falls back to a
-  three-field card: range, evidence class, flip margin (KILL-PLUMB-5).
+  - every number clickable to its Claim;
+  - plain sentences on executive pages: each §9.6 field written out in words (for example "inside its 80% range
+    in 15 of 20 quarters", "the conclusion reverses if gold falls below $2,900/oz"), with the coded map kept as
+    the analyst view.
+- The executive one-pager is the epistemic map (§9.6). The K5-style test (KILL-PLUMB-5) shows its plain-sentence
+  rendering first and the coded layout second; if users fail both, it falls back to a three-field card: range,
+  evidence class, flip margin.
 
 ### 30.6 Proof obligations and gates
 
@@ -6897,6 +6901,10 @@ expansion, physically separate projections where caveat compilation is not yet l
 - **Taint is monotone (INV-007).** Confidentiality is a join-semilattice
   `Public < Internal < Venture(V) < Mnpi(Wall)`, and derived data is at least the join of its inputs. MNPI-derived
   bytes never reach a public export, and export fuzzing tests this.
+- **Site code stays in a private overlay.** Site registries, profiles, configuration, fitted models and any
+  site-specific code live in a private overlay on the issuer's network, never in this repository. A change moves
+  from the overlay to the public core only as a reviewed patch: the issuer approves it, and it carries no site data,
+  fitted values, site identifiers or fixtures built from site data (INV-007's taint rule applied to code).
 - **The public lane is separate.**
   - `fmine assure public` (M0) uses only public filings and issuer-website workbooks. A website workbook has no
     filing accession, so its registry entry holds the file's sha256 and the filed report page that reconciles it
@@ -7436,7 +7444,7 @@ visible by about month 6 and a countermeasure already designed into this plan.
 | RISK-14 | OEM export lock-in (F14) | Medium | Snapshot importers; data-ownership clauses | Sponsor |
 | RISK-15 | Procurement (F15) | Medium | Delivery partner; escrow | Owner |
 | RISK-16 | Scale (F16) | Deferred | Benchmarks; regeneration | Owner |
-| RISK-17 | **Licence rider** (MIT + OpenAI/Anthropic) on lifted code and the substrate in a client-facing product | OPEN | Owner and counsel decision before M2 | Owner + counsel |
+| RISK-17 | **Licence rider** (MIT + OpenAI/Anthropic) on lifted code, the substrate and FrankenMining's own `LICENSE` (E681) in a client-facing product. The rider reaches anyone acting on behalf of, for the benefit of or under the direction of OpenAI or Anthropic, and bars making the software available to or for them, so the decision also covers agents hosted by those parties reading through `fmine-mcp` or the CLI (§30.4) | OPEN | Owner and counsel decision before M2, and before the M2 agent slice opens | Owner + counsel |
 | RISK-18 | asupersync 0.5.0 security and durability defects (B4 S3) | High | §31.4 mitigations; GATE-PIN-06 | Owner |
 | RISK-19 | Human review is the FA posting bottleneck (GB-28) | Medium | Monthly trunk; delegated reviewer ask (OPEN-BULL-3) | Controller |
 | RISK-20 | Name collisions (`fm`, `fmd`, `fm-*`) | Medium | `fmine-` prefix (OPEN-B4-09) | Owner |
@@ -7588,6 +7596,13 @@ Brenner pass B5 tested seven first wedges. The verdicts:
 Each milestone has an artifact, acceptance criteria (TARGETs), a kill gate with a fallback, and the pay metrics
 whose decision inputs it touches.
 
+**Clocks (DESIGN).** M0 keeps absolute dates, because its deadlines are Barrick's release dates. Steps that need
+Barrick's people, data or signature (the site decision rule, GATE-DATA-01 to -04 in §34.4, M2 to M6 and the program
+gate) count months from the start of the engagement, so a later signature moves all of them by the same amount. On
+a January 2027 start, GATE-DATA-01 (month 4) falls at the end of April 2027 and the program gate (month 12) at the
+end of December 2027. Work that needs nothing from Barrick (engineering gates, M1's synthetic and public-lane items)
+keeps month 0 = November 2026.
+
 **M0 — Public Mirror plus Spine (months 0–3; Nov 2026–Jan 2027).**
 - *Artifact:* `fmine assure public --issuer barrick`, emitting:
   - per-site AISC/TCC (C1 for copper)/CoS/grade/recovery/capex for every quarter whose Mine Stats workbook is in
@@ -7669,7 +7684,8 @@ whose decision inputs it touches.
 - *Kill:* coverage outside 80–97% after one fix cycle, or identifiability not characterised. **Fallback:** no site
   pitch on reconciliation; lead with the metric engine and H-a/PQ-7.
 
-**M2 — Site Assurance Pilot in shadow mode (months 6–12; May–Oct 2027). The 12-month demonstrator.**
+**M2 — Site Assurance Pilot in shadow mode (engagement months 6–12; Jul–Dec 2027 on a January 2027 start). The
+12-month demonstrator.**
 - *Preconditions:* GATE-DATA-01/02 (data agreement, insider list and blackout policy, security review, a named
   site sponsor plus QP and metallurgist).
 - *Site preference:* **Lumwana** (Zambia; 100% through Lumwana Mining Company, E551), Barrick's only wholly
@@ -7683,7 +7699,9 @@ whose decision inputs it touches.
   - Barrick calls 2021–25 recovery (91.15%, fresh plus transitional ore) "reasonable" and attributes changes to
     grade and the mine plan; no mechanism is published (E569, E573). The pre-registered deliverable is therefore
     an **attribution** of the grade-normalised gap among measurement (head and tail sampling, assay), ore type
-    (fresh vs transitional) and operations (throughput, downtime, power), not "recovery is low".
+    (fresh vs transitional) and operations (throughput and grind, downtime, power), not "recovery is low". Grind
+    (P80) is split from throughput only where sizing data exist (LIMS or historian, GATE-DATA-04); otherwise the two
+    are reported as one cause.
   - The same recovery card is scored against the feasibility study's 92.7% fresh-ore recovery for the 52 Mtpa
     parallel plant, which uses a similar flowsheet. One point at 240 ktpa ≈ 2.6 kt Cu/yr (E570–E572).
   - The site reports its grade reconciliation as confirming the model (E130). A grade null is the expected result
@@ -7693,7 +7711,8 @@ whose decision inputs it touches.
     segment boundary. Strip ratio rises 4.37 → 5.74 and new-plant commissioning runs from H2 2027, with first copper
     at end-Q1 2028 (E131, E132, E578). Historical quarters are 2024Q1–2027Q1; the two forward quarters are
     pre-registered for the **existing circuit only**, and new-plant tonnage is a separate circuit with `Estimated`
-    cards.
+    cards. On a January 2027 start they are Q3 and Q4 2027, each registered before it begins (by 30 June and
+    30 September 2027) and scored by January 2028, before first copper; Q3 needs GATE-DATA-03 met by month 6.
   - The recovery-capable GATE-DATA-03 set is the monthly metallurgical balance; head, tail and concentrate sampler
     and assay records; concentrate shipment and settlement assays; fresh/transitional tags on feed; and the monthly
     reconciliation pack. Historian and LIMS access (GATE-DATA-04) refines the finding but does not enable it.
@@ -7736,7 +7755,11 @@ whose decision inputs it touches.
     R7-C142);
   - a rolling-origin hindcast;
   - two forward quarters pre-registered **inside the tenancy**;
-  - a Site Assurance DecisionCard.
+  - a Site Assurance DecisionCard that names, for each attributed cause, the cheapest trial or audit that would
+    confirm it, with its expected effect registered before it runs; the metallurgist decides what to try;
+  - a read-only agent interface on the node: the robot CLI and a read-only `fmine-mcp` slice over the pilot's
+    Claims, with no `prepare_*` effects and the §30.4 rules (walls, AccessEvents, imported text as data). It opens
+    only after RISK-17 is decided.
 - *Acceptance:*
   1. Parity with the site's F1/F2/F3 from the same inputs, every difference explained (GATE-TOUCH-03).
   2. **At least one material finding** attested `Reviewed{against}` by the site QP or metallurgist as new and
@@ -7744,7 +7767,9 @@ whose decision inputs it touches.
      sponsor (GATE-TOUCH-04).
   3. Hindcast coverage reported with a small-sample caveat (GATE-TOUCH-05).
   4. No data egress, verified by Barrick IT.
-  5. Reconciliation pack time down ≥ 50%, or the site elects to co-sign.
+  5. Reconciliation pack time down ≥ 50%, or the site elects to co-sign. The baseline is registered in BD-356's
+     card before GATE-DATA-01: person-hours per pack for the last three packs, by role and site total, with no
+     per-person figures, held in the private register.
 - *Kill (month 12):*
   - No data by month 7 → **M2′**: parent-level metric and reserve assurance on public data, the Nevada
     exploration hindcast and PQ-7 deal cards.
@@ -7839,7 +7864,7 @@ generated from the bead graph (transitive reduction), so it cannot drift from §
 | WP-09 | Corebox import | `fmine-drill`, `-qaqc` | M2 | GATE-CORE-01, -02 | WP-07 |
 | WP-10 | Crucible balance slice | `fmine-plant` (flowsheet + P754) | M2 (GATE-CRUC-02 scores through month 18) | GATE-CRUC-01, -02 | WP-08, WP-11 |
 | WP-11 | Portal importers | `fmine-io`, `fmine-geom` (slice) | M1–M2 | GATE-PORT-01, -02, GATE-BM-01 | WP-09 |
-| WP-12 | Site pilot | deployment, security pack, shadow operations, Site Assurance card | M2 | GATE-DATA-01…03, GATE-SEC-01, GATE-TOUCH-03/04, GATE-BULL-03 | WP-03, WP-05, WP-10 |
+| WP-12 | Site pilot | deployment, security pack, shadow operations, Site Assurance card, read-only agent slice (`fmine-mcp` read verbs only; BD-244 completes the crate at M5) | M2 | GATE-DATA-01…03, GATE-SEC-01, GATE-TOUCH-03/04, GATE-BULL-03 | WP-03, WP-05, WP-10 |
 | WP-13 | Bullion and Hallmark | `fmine-metalacct`, `-fa-bridge`, `-acctpack`, `-reserves` | M3 | INT-FA-001, GATE-BULL-02, GATE-HALL-03, GATE-POST-01, GATE-CRUC-03, GATE-REPORT-01 | WP-03, WP-05, WP-10 |
 | WP-14 | Helm capital | `fmine-capital`, `-econ`; `fmine-decide` widened | M3–M4 | GATE-CAP-01…05 | WP-03 |
 | WP-15 | Lodestar | `fmine-explore`, `-infer`, `-prospect` | M4 | GATE-LODE-P1…P6 | WP-03, WP-08 |
@@ -7992,7 +8017,7 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-074 | M0 e2e script with structured logs | BD-071, BD-072, BD-142, BD-338 | GATE-E2E-01 for M0 |
 | BD-075 | Two finance reviewers' assessment recorded (kill criterion) | BD-074 | Assessment in CELL-DEC |
 | BD-076 | Score FY2026 forecasts at release and report whatever they show | BD-068, BD-048, BD-343 | Scores published to the sponsor |
-| BD-125 | GATE-ROBOT-01: a fresh agent completes 20 tasks from robot-docs alone | BD-116, BD-115, BD-071 | ≥ 18 correct, 0 authority writes |
+| BD-125 | GATE-ROBOT-01: a fresh agent completes 20 tasks from robot-docs alone | BD-116, BD-115, BD-071 | ≥ 18 correct, 0 authority writes, 0 wall breaches |
 | BD-260 | KILL-PLUMB-5 check: executive user test of the epistemic map on the M0 cards | BD-072, BD-054, BD-225 | Test recorded; three-field card adopted if rejected |
 | BD-271 | Pure-Rust xlsx table extractor: label-anchored, placeholder-typed, `#REF!`/oversized-range excluding, `<file-period>:<Sheet>!<Cell>` + sha256 provenance (§21.6) | BD-056 | The 3,996 parsed cells of the Q1/Q2 2026 Mine Stats reproduce exactly; the 7 zero placeholders import as Nil; all ten W1 workbooks (Q1 2024–Q2 2026) import under the versioned region map and unit rules (E461, E463), and the Q3 2026 file imports on release day without code changes |
 | BD-272 | GATE-BULL-01 scoring rule: numeric-cell denominator, NOT_PUBLISHED site-quarters excluded by name, identities on rounding intervals under a declared construction (the ±1-last-digit rule is withdrawn: it flips 21 of 306 regional verdicts, B7 EV2-P1-1), five states (§21.6) | BD-065 | Scorer reports the five states and the excluded list; an independent census agrees on every state |
@@ -8209,7 +8234,7 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-199 | Site selection memo: 100% owned, recorded variance (Lumwana, recovery-led; North Mara/Bulyanhulu alternate, grade-led) | BD-075 | Decision in CELL-DEC, with Lumwana's commissioning segmentation |
 | BD-200 | Data agreement, insider list and blackout policy | BD-199 | GATE-DATA-01 |
 | BD-201 | Security review pack and independent penetration test | BD-073, BD-110 | GATE-SEC-01, GATE-DATA-02 |
-| BD-202 | On-prem site node deployment runbook | BD-119, BD-201 | Node live read-only |
+| BD-202 | On-prem site node deployment runbook | BD-119, BD-201 | Node live read-only; site IT runs install, upgrade, restore from backup and `fmine doctor` from the runbook alone |
 | BD-203 | No-egress verification by site IT | BD-202 | IT sign-off recorded |
 | BD-204 | 8–12 quarters of snapshots imported | BD-202, BD-200, BD-188, BD-194, BD-189, BD-336 | GATE-DATA-03, GATE-PORT-02 |
 | BD-205 | Site profile: F-factor conventions and pack definitions | BD-204, BD-160, BD-278 | Profile attested by the site |
@@ -8980,8 +9005,8 @@ Evidence ids E101–E399 are rows in `planning/corpus/C1…C6`, indexed in `plan
    the research pass added the other eight from Q1 2024 (W1; E451). No per-site GEO field exists in any of them
    (FACT, E148, E499). Q3 2026 (9 Nov 2026) is the only open data gate (§37.3).
 2. **Barrick's own numbers fail their own identities about 5% of the time** (84/89 under strict rounding;
-   E113–E115). GATE-BULL-01's 95% bar is therefore defined against an explicit denominator and identity rule
-   (§21.6), and NOT_PUBLISHED quarters are excluded by name.
+   E113–E115). GATE-BULL-01 therefore scores identities against an explicit denominator and identity rule, in
+   the three parts of §21.6 that replaced the single 95% bar, and NOT_PUBLISHED quarters are excluded by name.
 3. **Company AISC is not the sold-weighted sum of its sites.** Total Gold sits $47.6–55.7/oz above its regions in
    the Q1, Q2 and H1 blocks of 2025 and 2026 (+$23.57 to +$88.66 across sixteen quarters; R7-C125) and
    NGM $8.7–19.4/oz above its mines (INFERENCE, E111, E112). These become named layers, or G-BULL-3 refuses.

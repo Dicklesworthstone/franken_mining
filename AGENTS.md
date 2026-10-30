@@ -378,9 +378,9 @@ map without explicit user approval. Phase A (M0–M2) slices 35 of them. The fir
   `cargo run -p xtask -- check-all`.
 - **M0 Public Mirror plus Spine** (Nov 2026–Jan 2027), gate GATE-BULL-01. `fmine assure public --issuer barrick`
   must:
-  - reproduce ≥ 95% of numeric site-quarter values in the Mine Stats workbooks (2024Q1–2026Q2, plus Q3 2026 on
-    its release) to published rounding;
-  - explain or refuse the rest;
+  - extract 100% of the numeric cells in a named denominator of the Mine Stats workbooks (2024Q1–2026Q2, plus
+    Q3 2026 on its release) equal to the published value, against an independent read (plan §21.6);
+  - place every identity instance in one of five states, explaining or refusing the inconsistent ones;
   - leave zero uncited numbers;
   - give byte-identical reruns;
   - hash the FY2026 per-site forecasts before the February 2027 release.
