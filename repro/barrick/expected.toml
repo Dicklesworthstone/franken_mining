@@ -262,3 +262,22 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "The Mine Stats ledger adds the sold-weighted rate, family 5 (frame v7, iv binds its need); no AISC moves."
 evidence = "BD-331.S4, bd-prmn.4, E844"
+
+# Observed from the release binary of 1172606 (git archive, own target directory; exit 0, empty stderr). No AISC
+# state code moves: the totals equal e5f2035's. The root moves because the 41 visible regional (i) (and 2 hidden)
+# now carry the exact basis, a witness checked exactly, in place of relaxation_only (41 to 0 in the payload).
+# No registry file row or cell changes.
+[[expected]]
+commit = "1172606"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "f15f034e3e42fafde5c0976804419453fcb2a0c60dcdfc373bae6b8c265cbb33"
+anchor_id = "anc_098a3dd9cce8db2c4829834cc582b710"
+totals_i = 2436
+totals_ii = 3
+totals_iii = 4
+totals_iv = 92
+totals_v = 0
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "AISC regional rates proved by the exact weighted mean, not relaxation_only; no state code moves."
+evidence = "BD-331.S4, bd-prmn.4, E845"

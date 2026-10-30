@@ -1105,3 +1105,37 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     `repro/barrick/expected.toml` has the row, and the ignored expected-root test passes on it (and fails with
     one digit of the root changed).
   - **Verification.** Self-verified on this machine only; nothing has run in CI.
+- **E845** AISC regional cost of sales per ounce proved by the exact weighted mean, not only not refuted
+  (BD-331.S4, bd-prmn.4, follows E840 and E844; FACT, execution, 2026-10-30, owner machine).
+  - **Rule.** `aisc::regional_state` as in E840, then, where the McCormick relaxation does not refute, the
+    exact decision of E844 (`mine_ledger::weighted_mean_holds`). Each printed whole number stands for its
+    closed box ±½, and the members' ounces are free of the region's box, as under the component sum. Weights
+    and rates in their boxes that reach the region's rate, with the witness checked exactly, give (i)
+    `ConsistentBasis::MembersExact`. None gives (iv) `region_outside_members`, with the certificate
+    `EXACT_REGION_REFUTATION` in place of a McCormick digest. No answer (overflow, more than 16 members) leaves
+    (i) `relaxation_only`. Every refutation the relaxation finds still carries its checked certificate.
+  - **Result.**
+    - The 41 visible and 2 hidden regional (i) are proved exactly; none is `relaxation_only` (the payload's
+      count goes from 41 to 0). No state code moves: totals and the 10 visible and 1 hidden (iv) are unchanged.
+    - The ignored test `barrick_regions_match_region_census` still equals `scripts/oracle/region_census.py`
+      (57a5aa5) on every instance. That census's check was always the exact vertex check, so the ledger and its
+      independent reader now decide the same question; the test pins 41 and 2 exact and 0 relaxation-only.
+  - **Exploration, not a test.** A one-off search over 4,160 configurations (two or three members, rates 100
+    to 3,000, ounces 1 to 40) compared the two at the first refuted rate on each side of the exact bound. The
+    relaxation refuted every one the exact decision refutes. The (iv) safety net therefore has no synthetic
+    case and no planted negative; it does not occur in the corpus either.
+  - **Not claimed.**
+    - The rounded-once alternative (`alternate_construction_consistent`) is still the kernel's relaxation:
+      reported, never scored, and not proved.
+    - (iv) still blames no cell and gives no corrected value.
+  - **Tests.** Synthetic, default suite: three region tests now require the exact basis (Region North at 2100,
+    a member left out or absent, and the operand sweep); 2099 and 2101 are checked as (i) by code only. The new
+    `test_region_exact_bounds_are_closed` sets Site
+    H at 1000 and Site I at 2000 on one ounce each, where the bound [1249½, 1750½] is reached only at box
+    corners: 1249 and 1751 are (i) exactly, and 1248 and 1752 are refuted by a McCormick certificate.
+  - **Planted negative, reverted.** Open bounds in the exact decision fail the new test and E844's oracle test.
+  - **Root.** The basis has its own tag in the frame (v7 kept: a new tag after the existing ones). The root
+    moves to `f15f034e…`, observed from the release binary of 1172606 (exit 0, empty stderr), with AISC totals
+    unchanged; `repro/barrick/expected.toml` has the row, and the ignored expected-root and port-root tests pass
+    on it.
+  - **Verification.** Self-verified on this machine only; nothing has run in CI.
