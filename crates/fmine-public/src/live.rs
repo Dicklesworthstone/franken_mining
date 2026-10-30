@@ -696,10 +696,30 @@ pub fn prove_leaves(
     base: &[LoadedSource],
     run: &dyn Fn(Vec<LoadedSource>) -> PublicAssuranceReport,
 ) -> Vec<LeafCheck> {
+    prove_leaves_in(base, run, &|_, _, _| true)
+}
+
+/// The sample frame of the real lane (BD-338.S3): one leaf per instance, the operand at index i mod n of the
+/// i-th instance (n operands), so every instance and, across instances, every role is reached.
+#[must_use]
+pub fn one_leaf_per_instance(instance: usize, operand: usize, n_operands: usize) -> bool {
+    n_operands > 0 && operand == instance % n_operands
+}
+
+/// [`prove_leaves`] on the leaves `select(instance index, operand index, operand count)` admits. Leaves
+/// outside the frame are not reported; the caller records the frame.
+pub fn prove_leaves_in(
+    base: &[LoadedSource],
+    run: &dyn Fn(Vec<LoadedSource>) -> PublicAssuranceReport,
+    select: &dyn Fn(usize, usize, usize) -> bool,
+) -> Vec<LeafCheck> {
     let before = run(base.to_vec());
     let mut out = Vec::new();
-    for i in &before.instances {
-        for o in &i.operands {
+    for (ii, i) in before.instances.iter().enumerate() {
+        for (oi, o) in i.operands.iter().enumerate() {
+            if !select(ii, oi, i.operands.len()) {
+                continue;
+            }
             let check = LeafCheck {
                 instance: format!("{}:{}!{} {}", i.file, i.sheet, i.cell, i.family.as_str()),
                 leaf: locator(o),
@@ -1196,6 +1216,101 @@ mod tests {
         assert_eq!(c.moved, ["k", "range"]);
         assert_eq!((c.state_before, c.state_after), ("i", Some("i")));
         assert!(c.pass(), "{}", c.to_json());
+    }
+
+    fn barrick() -> (IssuerProfile, Vec<LoadedSource>) {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let profile = load_issuer_profile(&root, "barrick")
+            .and_then(|p| p.through("2026Q2"))
+            .expect("registry");
+        let sources = load_registered_sources(&profile, &root)
+            .expect("registered files present and unaltered");
+        (profile, sources)
+    }
+
+    /// BD-338.S3, leaves, on the real lane: frame `one_leaf_per_instance`, so 2,595 leaves, one per instance.
+    /// Prints the summary and any failure. Both carry locators, codes and counts, never cell values (RISK-31).
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+    fn barrick_live_leaves_one_per_instance() {
+        let (profile, sources) = barrick();
+        let run = |s: Vec<LoadedSource>| crate::assess(&profile, Lane::Public, s);
+        let start = std::time::Instant::now();
+        let checks = prove_leaves_in(&sources, &run, &one_leaf_per_instance);
+        let summary = leaf_summary(&checks, start.elapsed().as_millis());
+        println!("{{\"frame\":\"one_leaf_per_instance\",\"summary\":{summary}}}");
+        let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
+        for f in &failures {
+            println!("{f}");
+        }
+        assert_eq!(checks.len(), 2595);
+        assert!(failures.is_empty(), "{} failures", failures.len());
+    }
+
+    /// BD-338.S3, files, on the real lane: 18 registered workbooks × {absent, zero bytes, foreign xlsx} = 54
+    /// checks, each refusing `FMINE-REF-502`, exit 8, "1 of 18 registered", naming only that file.
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+    fn barrick_live_files_all_refuse() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let profile = load_issuer_profile(&root, "barrick")
+            .and_then(|p| p.through("2026Q2"))
+            .expect("registry");
+        assert_eq!(profile.sources.len(), 18);
+        let scratch =
+            std::env::temp_dir().join(format!("fmine-live-barrick-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let checks = prove_files(&profile, &root, &scratch, &load_registered_sources)
+            .expect("scratch workspaces");
+        let _ = std::fs::remove_dir_all(&scratch);
+        for c in &checks {
+            println!("{}", c.to_json());
+        }
+        assert_eq!(checks.len(), 54);
+        let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
+        assert!(failures.is_empty(), "{failures:?}");
+    }
+
+    /// The real M1 (B7 H-P3-6): Kibali's `'Q2 2024'!O11` in `Barrick_Q3_2024_AISC.xlsx` kept at its literal value,
+    /// 70 (E822). The literal equals the cell, so only perturbing the cell rejects it.
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+    fn barrick_live_leaves_mutant_m1_literal_is_caught() {
+        let (profile, sources) = barrick();
+        let is_o11 = |i: &IdentityInstance| {
+            i.file == "Barrick_Q3_2024_AISC.xlsx" && i.sheet == "Q2 2024" && i.cell == "O11"
+        };
+        let literal = |s: Vec<LoadedSource>| {
+            let mut r = crate::assess(&profile, Lane::Public, s);
+            for i in &mut r.instances {
+                if let (true, IdentityState::IssuerDiscrepancy(c)) = (is_o11(i), &mut i.state) {
+                    c.printed = 70;
+                }
+            }
+            r
+        };
+        let base = crate::assess(&profile, Lane::Public, sources.clone());
+        let Some(at) = base.instances.iter().position(is_o11) else {
+            panic!("no instance at O11");
+        };
+        assert_eq!(base.instances[at].state.code(), "iii");
+        let checks = prove_leaves_in(&sources, &literal, &|i, _, _| i == at);
+        let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
+        assert_eq!(
+            failures,
+            ["value did not move: Barrick_Q3_2024_AISC.xlsx:Q2 2024!O11"]
+        );
+        // Without the mutant, every leaf of O11 passes.
+        let honest = prove_leaves_in(
+            &sources,
+            &|s| crate::assess(&profile, Lane::Public, s),
+            &|i, _, _| i == at,
+        );
+        assert!(honest.iter().all(LeafCheck::pass), "{}", honest.len());
     }
 
     /// M1: C8's certificate keeps the literal 350, its real value, so only a perturbation can tell.

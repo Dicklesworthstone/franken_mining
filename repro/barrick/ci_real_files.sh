@@ -5,7 +5,10 @@
 #
 # Output: {"stage","ok","elapsed_s"} per stage, plus fetch.sh's lines and {"stage":"root",...}. It stops at the
 # first failed stage with exit 1. Under GitHub Actions the root is also written to $GITHUB_OUTPUT as root=<hex>.
-# BD-338.S3 adds its live-dependency proof as a stage here.
+# BD-338.S3's live-dependency proof runs in two places:
+# - its file checks and the real M1, inside test_public;
+# - its leaf sample (one leaf per instance, about 2,600 reruns of the pipeline), as the release-mode stage
+#   live_leaves. In debug it would take about ten minutes.
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 
@@ -37,7 +40,9 @@ xlsx_guard() {
 }
 
 stage fetch repro/barrick/fetch.sh
-stage test_public cargo test -p fmine-public -- --ignored
+stage test_public cargo test -p fmine-public -- --ignored --skip barrick_live_leaves_one_per_instance
+stage live_leaves cargo test --release -p fmine-public --lib -- --ignored --exact \
+  live::tests::barrick_live_leaves_one_per_instance --nocapture
 stage test_cli cargo test -p fmine-cli -- --ignored
 stage root root
 stage xlsx_guard xlsx_guard
