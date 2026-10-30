@@ -246,6 +246,87 @@ kind = "region"
 name = "Africa & Middle East"
 kind = "region"
 
+[[subject]]
+name = "South America & Asia Pacific"
+kind = "region"
+
+# BD-331.S4 (bd-gwf1.1): the region map, keyed by the file's release quarter, never by a sheet's period.
+# FACT, W1 §13 rule 2: to Q3 2025, North America = NGM + Hemlo and Latin America & Asia Pacific = Pueblo Viejo +
+# Veladero + Porgera. From Q4 2025, North America = NGM + Pueblo Viejo + Hemlo and South America & Asia Pacific =
+# Veladero + Porgera. The Q4 2025 release restated its comparatives: "Starting Q4 2025, we have presented Pueblo
+# Viejo as part of North America instead of South America & Asia Pacific. Comparative information has been
+# restated." (Q4_2025:QTD!A33). Africa & Middle East is the comment above the regions. NGM's own sites (Carlin,
+# Cortez, Turquoise Ridge, Phoenix, Long Canyon) roll into NGM and are never region members. A member the sheet
+# does not print is reported absent; the check uses the members it prints.
+
+[[region_member]]
+region = "North America"
+member = "Nevada Gold Mines"
+first = "2024Q1"
+
+[[region_member]]
+region = "North America"
+member = "Hemlo"
+first = "2024Q1"
+
+[[region_member]]
+region = "Latin America & Asia Pacific"
+member = "Pueblo Viejo"
+first = "2024Q1"
+last = "2025Q3"
+
+[[region_member]]
+region = "North America"
+member = "Pueblo Viejo"
+first = "2025Q4"
+
+[[region_member]]
+region = "Latin America & Asia Pacific"
+member = "Veladero"
+first = "2024Q1"
+last = "2025Q3"
+
+[[region_member]]
+region = "South America & Asia Pacific"
+member = "Veladero"
+first = "2025Q4"
+
+[[region_member]]
+region = "Latin America & Asia Pacific"
+member = "Porgera"
+first = "2024Q1"
+last = "2025Q3"
+
+[[region_member]]
+region = "South America & Asia Pacific"
+member = "Porgera"
+first = "2025Q4"
+
+[[region_member]]
+region = "Africa & Middle East"
+member = "Loulo-Gounkoto"
+first = "2024Q1"
+
+[[region_member]]
+region = "Africa & Middle East"
+member = "Kibali"
+first = "2024Q1"
+
+[[region_member]]
+region = "Africa & Middle East"
+member = "North Mara"
+first = "2024Q1"
+
+[[region_member]]
+region = "Africa & Middle East"
+member = "Tongon"
+first = "2024Q1"
+
+[[region_member]]
+region = "Africa & Middle East"
+member = "Bulyanhulu"
+first = "2024Q1"
+
 # BD-331.S3: Barrick's stated ownership shares. The AISC footnote states gold cost of sales per ounce on an
 # attributable basis using Barrick's ownership share, so the run checks that rate at these shares, but only
 # after the same-release Mine Stats QTD label prints the same share.

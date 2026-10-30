@@ -560,6 +560,12 @@ fn plan(
         (R::NciLine, Calc::Rate(_), _) => nci_plan(i, o),
         (R::LabelCheck, _, _) => Ok((P::BreakText, Token("x".to_string()), Expect::State)),
         (R::Component, _, Int(x)) => Ok((P::PlusOne, Int(x + 1), Expect::State)),
+        // A region's state carries every weighed member's rate and ounces (BD-331.S4), and a member that sold
+        // nothing stops being one when a value moves off zero.
+        (R::MemberRate | R::MemberOunces, Calc::Rate(_), v) => {
+            let (p, new) = bump(v);
+            Ok((p, new, Expect::State))
+        }
         _ => Err("role_outside_calc"),
     }
 }

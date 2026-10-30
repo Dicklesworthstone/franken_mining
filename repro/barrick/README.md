@@ -123,6 +123,27 @@ A column header names a subject when it equals a registered subject, or is the s
 - North America (region)
 - Latin America & Asia Pacific (region)
 - Africa & Middle East (region)
+- South America & Asia Pacific (region)
+
+### Region members
+
+A region's cost-of-sales rate, where its sheet states an attributable basis, is checked against the members registered for the table's release, weighted by attributable ounces sold. A member the sheet does not print is named as absent; no last release means the row still holds.
+
+| Region | Member | First release | Last release |
+|---|---|---|---|
+| North America | Nevada Gold Mines | 2024Q1 |  |
+| North America | Hemlo | 2024Q1 |  |
+| Latin America & Asia Pacific | Pueblo Viejo | 2024Q1 | 2025Q3 |
+| North America | Pueblo Viejo | 2025Q4 |  |
+| Latin America & Asia Pacific | Veladero | 2024Q1 | 2025Q3 |
+| South America & Asia Pacific | Veladero | 2025Q4 |  |
+| Latin America & Asia Pacific | Porgera | 2024Q1 | 2025Q3 |
+| South America & Asia Pacific | Porgera | 2025Q4 |  |
+| Africa & Middle East | Loulo-Gounkoto | 2024Q1 |  |
+| Africa & Middle East | Kibali | 2024Q1 |  |
+| Africa & Middle East | North Mara | 2024Q1 |  |
+| Africa & Middle East | Tongon | 2024Q1 |  |
+| Africa & Middle East | Bulyanhulu | 2024Q1 |  |
 
 ### Reconstructions
 

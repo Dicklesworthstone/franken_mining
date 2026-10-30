@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use fmine_evidence::Refusal;
+pub use fmine_registry::sources::RegionMemberRow;
 use fmine_registry::sources::{
     BasisRow, SourcesRegistry, SubjectStatusRow, is_quarter, load_sources_registry,
 };
@@ -120,6 +121,8 @@ pub struct IssuerProfile {
     pub missing_facts: Vec<RegisteredMissingFact>,
     /// Registered subject statuses (bd-a28f.1), at most one per site.
     pub subject_statuses: Vec<SubjectStatus>,
+    /// The region map (BD-331.S4): which sites each region rolls up, by release quarter.
+    pub region_members: Vec<RegionMemberRow>,
     /// The `--through YYYYQn` bound applied, if any; later rows were dropped before loading.
     pub through: Option<String>,
 }
@@ -225,8 +228,19 @@ impl IssuerProfile {
                 .iter()
                 .map(subject_status)
                 .collect::<Result<_, _>>()?,
+            region_members: reg.region_members,
             through: None,
         })
+    }
+
+    /// The registered members of `region` in a file released in `release` (`YYYYQn`), in registry order.
+    #[must_use]
+    pub fn members_of(&self, region: &str, release: &str) -> Vec<String> {
+        self.region_members
+            .iter()
+            .filter(|m| m.region == region && m.holds_for(release))
+            .map(|m| m.member.clone())
+            .collect()
     }
 
     /// Keeps only the sources whose quarter is at or before `bound` (`YYYYQn`, already validated), so a later
@@ -418,6 +432,24 @@ pub fn kit_selectors_markdown(profile: &IssuerProfile) -> String {
             ""
         };
         out.push_str(&format!("- {s}{region}\n"));
+    }
+    if !profile.region_members.is_empty() {
+        out.push_str(
+            "\n### Region members\n\n\
+             A region's cost-of-sales rate, where its sheet states an attributable basis, is checked against the \
+             members registered for the table's release, weighted by attributable ounces sold. A member the sheet \
+             does not print is named as absent; no last release means the row still holds.\n\n\
+             | Region | Member | First release | Last release |\n|---|---|---|---|\n",
+        );
+        for m in &profile.region_members {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                m.region,
+                m.member,
+                m.first,
+                m.last.as_deref().unwrap_or("")
+            ));
+        }
     }
     out.push_str(
         "\n### Reconstructions\n\n\

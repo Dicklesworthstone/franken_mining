@@ -107,6 +107,32 @@ pub struct SubjectStatusRow {
     pub evidence: String,
 }
 
+/// One registered region member (BD-331.S4, bd-gwf1.1): `member` rolls up into `region` in every file released
+/// from `first` through `last` (open when absent). The map is keyed by the file's release quarter, never by a
+/// sheet's period, because a release restates its comparatives under its own map (W1 §13 rule 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionMemberRow {
+    pub region: String,
+    pub member: String,
+    /// `YYYYQn`.
+    pub first: String,
+    /// `YYYYQn`, at or after `first`.
+    pub last: Option<String>,
+}
+
+impl RegionMemberRow {
+    /// Whether the row holds for a file released in `release` (`YYYYQn`).
+    #[must_use]
+    pub fn holds_for(&self, release: &str) -> bool {
+        self.first.as_str() <= release && self.last.as_deref().is_none_or(|l| release <= l)
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        let before = |a: &str, b: Option<&str>| b.is_none_or(|b| a <= b);
+        before(&self.first, other.last.as_deref()) && before(&other.first, self.last.as_deref())
+    }
+}
+
 /// One registered Mine Statistics row label (bd-gwf1.1): the label without its footnote number, and the label of
 /// the row it belongs to when it is a sub-row (`Processed` under `Average grade (grams per tonne)`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -148,6 +174,20 @@ pub struct SourcesRegistry {
     pub missing_facts: Vec<MissingFactRow>,
     /// Subject statuses, at most one per subject, in file order.
     pub subject_statuses: Vec<SubjectStatusRow>,
+    /// Region members, in file order; a site is in at most one region for any release.
+    pub region_members: Vec<RegionMemberRow>,
+}
+
+impl SourcesRegistry {
+    /// The members of `region` in a file released in `release`, in registry order.
+    #[must_use]
+    pub fn members_of(&self, region: &str, release: &str) -> Vec<String> {
+        self.region_members
+            .iter()
+            .filter(|m| m.region == region && m.holds_for(release))
+            .map(|m| m.member.clone())
+            .collect()
+    }
 }
 
 /// Why a sources registry was refused. `line` is 1-based; 0 means the file as a whole.
@@ -369,6 +409,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "share",
             "missing_fact",
             "subject_status",
+            "region_member",
         ]
         .contains(&row.table.as_str())
         {
@@ -785,6 +826,60 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         });
     }
 
+    let mut region_members: Vec<RegionMemberRow> = Vec::new();
+    for row in doc.rows_of("region_member") {
+        let f = Fields::of_row(row);
+        f.only(&["region", "member", "first", "last"])?;
+        let (region, region_line) = f.string("region")?;
+        let (member, member_line) = f.string("member")?;
+        if !regions.contains(&region) {
+            return fail(
+                region_line,
+                format!("{region:?} is not a registered [[subject]] with kind = \"region\""),
+            );
+        }
+        if !subjects.contains(&member) || regions.contains(&member) {
+            return fail(
+                member_line,
+                format!("member {member:?} is not a registered site"),
+            );
+        }
+        let row_member = RegionMemberRow {
+            region,
+            member,
+            first: f.string("first")?.0,
+            last: f.optional_string("last")?,
+        };
+        if [Some(&row_member.first), row_member.last.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|q| !is_quarter(q))
+        {
+            return fail(row.line, "first and last must be quarters YYYYQ1..YYYYQ4");
+        }
+        if let Some(last) = &row_member.last
+            && *last < row_member.first
+        {
+            return fail(
+                row.line,
+                format!("last {last} is before first {}", row_member.first),
+            );
+        }
+        if let Some(other) = region_members
+            .iter()
+            .find(|m| m.member == row_member.member && m.overlaps(&row_member))
+        {
+            return fail(
+                member_line,
+                format!(
+                    "{:?} is in {:?} and {:?} for overlapping releases",
+                    row_member.member, other.region, row_member.region
+                ),
+            );
+        }
+        region_members.push(row_member);
+    }
+
     Ok(SourcesRegistry {
         issuer,
         corpus_dir,
@@ -797,6 +892,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         mine_stats_labels,
         missing_facts,
         subject_statuses,
+        region_members,
     })
 }
 
@@ -1196,6 +1292,72 @@ mod tests {
             ),
         ] {
             let e = refusal(&minimal(&b, extra));
+            assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
+        }
+    }
+
+    /// BD-331.S4: `[[region_member]]` rows, keyed by release. A site moves between regions only across releases;
+    /// every malformed or overlapping row refuses at its line.
+    #[test]
+    fn test_region_members_parse_and_refuse() {
+        let b = source_b("aisc_reconciliation", SHA_B);
+        let head = "[[subject]]\nname = \"Site B\"\n\n\
+                    [[subject]]\nname = \"North\"\nkind = \"region\"\n\n\
+                    [[subject]]\nname = \"South\"\nkind = \"region\"\n\n";
+        let member = |region: &str, site: &str, first: &str, last: Option<&str>| {
+            let last = last
+                .map(|l| format!("last = \"{l}\"\n"))
+                .unwrap_or_default();
+            format!(
+                "[[region_member]]\nregion = \"{region}\"\nmember = \"{site}\"\nfirst = \"{first}\"\n{last}\n"
+            )
+        };
+        let rows = format!(
+            "{head}{}{}{}",
+            member("North", "Site A", "2030Q1", None),
+            member("North", "Site B", "2030Q1", Some("2030Q2")),
+            member("South", "Site B", "2030Q3", None),
+        );
+        let reg = parse_sources_registry(&minimal(&b, &rows)).expect("accepted");
+        assert_eq!(reg.region_members.len(), 3);
+        assert_eq!(reg.members_of("North", "2030Q2"), ["Site A", "Site B"]);
+        assert_eq!(reg.members_of("North", "2030Q3"), ["Site A"]);
+        assert_eq!(reg.members_of("South", "2030Q3"), ["Site B"]);
+        assert!(reg.members_of("South", "2030Q2").is_empty());
+        assert!(reg.members_of("North", "2029Q4").is_empty());
+
+        for (extra, why) in [
+            (member("Site A", "Site B", "2030Q1", None), "kind = \"region\""),
+            (member("North", "South", "2030Q1", None), "not a registered site"),
+            (member("North", "Site Z", "2030Q1", None), "not a registered site"),
+            (member("North", "Site A", "2030Q5", None), "quarters YYYYQ1..YYYYQ4"),
+            (
+                member("North", "Site A", "2030Q2", Some("2030Q1")),
+                "is before first",
+            ),
+            (
+                format!(
+                    "{}{}",
+                    member("North", "Site A", "2030Q1", Some("2030Q3")),
+                    member("South", "Site A", "2030Q3", None)
+                ),
+                "for overlapping releases",
+            ),
+            (
+                format!(
+                    "{}{}",
+                    member("North", "Site A", "2030Q1", None),
+                    member("North", "Site A", "2031Q1", None)
+                ),
+                "for overlapping releases",
+            ),
+            (
+                "[[region_member]]\nregion = \"North\"\nmember = \"Site A\"\nfirst = \"2030Q1\"\nshare = 1\n"
+                    .to_string(),
+                "share",
+            ),
+        ] {
+            let e = refusal(&minimal(&b, &format!("{head}{extra}")));
             assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
         }
     }

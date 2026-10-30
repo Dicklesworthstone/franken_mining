@@ -28,11 +28,11 @@ use fmine_io::xlsx::{
 };
 
 use crate::aisc::{
-    CitedCell, DEFAULT_MISSING_FACT, ExplanationBasis, IdentityFamily, IdentityInstance,
-    IdentityState, OneCellCheck, OneCellOutcome, Operand, OperandRole, OperandValue, RateMiss,
-    ReconstructionCheck, ShareBasis, StatedShare, Undecided, UnregisteredHeader, cell_text,
-    confirm_share_label, find_qtd_sheet, ledger_for_table, locate_table, one_cell_checks,
-    operand_at, reconstruction_holds,
+    CitedCell, ConsistentBasis, DEFAULT_MISSING_FACT, ExplanationBasis, IdentityFamily,
+    IdentityInstance, IdentityState, MemberWeighting, OneCellCheck, OneCellOutcome, Operand,
+    OperandRole, OperandValue, RateMiss, ReconstructionCheck, ShareBasis, StatedShare, Undecided,
+    UnregisteredHeader, cell_text, confirm_share_label, find_qtd_sheet, ledger_for_table,
+    locate_table, one_cell_checks, operand_at, reconstruction_holds,
 };
 use crate::mine_stats::{CellRefusal, LabelVocabulary, MineStatsRead, read_mine_stats};
 pub use crate::sources::load_issuer_profile;
@@ -280,6 +280,24 @@ impl PublicAssuranceReport {
         self.instances
             .iter()
             .filter(|i| i.state.code() == code)
+            .count()
+    }
+
+    /// (i) instances whose consistency is only a relaxation that does not refute them (BD-331.S4: a region not
+    /// refuted by its members' weighted mean). They show no conflict and prove no value.
+    #[must_use]
+    pub fn relaxation_only(&self) -> usize {
+        self.instances
+            .iter()
+            .filter(|i| {
+                matches!(
+                    i.state,
+                    IdentityState::Consistent {
+                        basis: Some(ConsistentBasis::Members(_)),
+                        ..
+                    }
+                )
+            })
             .count()
     }
 
@@ -653,8 +671,10 @@ impl PublicAssuranceReport {
         let _ = write!(
             o,
             "}},\"alternate_construction\":{{\"scored\":false,\"footing_consistent\":{},\
-             \"rate_consistent_of_declared_consistent\":{}}},\"exceptions\":[",
-            alt.footing_consistent, alt.rate_consistent
+             \"rate_consistent_of_declared_consistent\":{}}},\"relaxation_only\":{},\"exceptions\":[",
+            alt.footing_consistent,
+            alt.rate_consistent,
+            self.relaxation_only()
         );
         let exceptions: Vec<String> = self
             .instances
@@ -1015,8 +1035,9 @@ fn try_reconstruction(
     }
 }
 
-/// What the run knows about each subject's ownership share for the release `quarter` (BD-331.S3): regions as
-/// such, and each registered share confirmed or not against the same-release Mine Stats quarter-to-date label.
+/// What the run knows about each subject's ownership share for the release `quarter` (BD-331.S3): regions with
+/// their registered members for the release (BD-331.S4), and each registered share confirmed or not against the
+/// same-release Mine Stats quarter-to-date label.
 fn share_bases(
     profile: &IssuerProfile,
     sources: &[LoadedSource],
@@ -1025,7 +1046,10 @@ fn share_bases(
     let mut out: BTreeMap<String, ShareBasis> = profile
         .regions
         .iter()
-        .map(|r| (r.clone(), ShareBasis::Region))
+        .map(|r| {
+            let members = profile.members_of(r, quarter);
+            (r.clone(), ShareBasis::Region { members })
+        })
         .collect();
     if profile.shares.is_empty() {
         return out;
@@ -1385,6 +1409,22 @@ fn encode_state(enc: &mut Encoder, state: &IdentityState) {
         }
         enc.put_i64(c.value);
     };
+    let weighting = |enc: &mut Encoder, w: &MemberWeighting| {
+        enc.put_u64(w.used.len() as u64);
+        for m in &w.used {
+            for t in [&m.subject, &m.rate_cell, &m.ounces_cell] {
+                enc.put_str(t);
+            }
+            enc.put_i64(m.rate);
+            enc.put_i64(m.ounces);
+        }
+        for names in [&w.excluded, &w.absent] {
+            enc.put_u64(names.len() as u64);
+            for n in names {
+                enc.put_str(n);
+            }
+        }
+    };
     match state {
         IdentityState::Consistent {
             alternate_consistent,
@@ -1393,9 +1433,13 @@ fn encode_state(enc: &mut Encoder, state: &IdentityState) {
             enc.put_u8(u8::from(*alternate_consistent));
             match basis {
                 None => enc.put_u8(0),
-                Some(b) => {
+                Some(ConsistentBasis::Share(b)) => {
                     enc.put_u8(1);
                     share(enc, b);
+                }
+                Some(ConsistentBasis::Members(w)) => {
+                    enc.put_u8(2);
+                    weighting(enc, w);
                 }
             }
         }
@@ -1474,6 +1518,13 @@ fn encode_state(enc: &mut Encoder, state: &IdentityState) {
                         | ReconstructionCheck::NotWhole { at: t } => enc.put_str(t),
                         ReconstructionCheck::DoesNotClose { component } => cell(enc, component),
                     }
+                }
+                Undecided::RegionOutsideMembers {
+                    weighting: w,
+                    certificate,
+                } => {
+                    weighting(enc, w);
+                    enc.put_str(certificate);
                 }
             }
             enc.put_str(missing_fact);
@@ -1568,7 +1619,7 @@ fn load_synthetic(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aisc::{Calc, NotPublishedReason, RefusedReason};
+    use crate::aisc::{Calc, NotPublishedReason, RefusedReason, WeightedMember};
     use fmine_io::xlsx::MinimalCell;
     use std::path::PathBuf;
 
@@ -1751,13 +1802,13 @@ mod tests {
             k14,
             &IdentityState::Consistent {
                 alternate_consistent: true,
-                basis: Some(StatedShare {
+                basis: Some(ConsistentBasis::Share(StatedShare {
                     num: 3,
                     den: 4,
                     evidence: "synthetic".to_string(),
                     footnote: "Q1 2030!A30".to_string(),
                     label_cell: "Synthetic_Mine_Stats.xlsx:QTD!A5".to_string(),
-                }),
+                })),
             }
         );
         assert_eq!(
@@ -2042,7 +2093,10 @@ mod tests {
         ];
         let r = run_synthetic_assurance(&moved).expect("synthetic");
         match state_of(&r, "K14", IdentityFamily::CosPerOunce) {
-            IdentityState::Consistent { basis: Some(b), .. } => {
+            IdentityState::Consistent {
+                basis: Some(ConsistentBasis::Share(b)),
+                ..
+            } => {
                 assert_eq!(b.footnote, "Q1 2030!A41");
             }
             other => panic!("K14: {other:?}"),
@@ -2082,6 +2136,269 @@ mod tests {
             r.instances
                 .iter()
                 .all(|i| i.state.detail() != "attributable share needed")
+        );
+    }
+
+    /// The synthetic profile with Region North (column H) registered as Site H (K) and Site I (L), the members
+    /// first holding from `first`.
+    fn region_profile(first: &str) -> IssuerProfile {
+        let mut profile = synthetic::synthetic_profile();
+        profile.region_members = ["Site H", "Site I"]
+            .iter()
+            .map(|m| crate::sources::RegionMemberRow {
+                region: "Region North".to_string(),
+                member: (*m).to_string(),
+                first: first.to_string(),
+                last: None,
+            })
+            .collect();
+        profile
+    }
+
+    /// Region North with a non-zero NCI line (H7), ounces footing to its members' (H13 = 150 + 150) and rate
+    /// `h14`, then `more` on top.
+    fn region_run(
+        profile: &IssuerProfile,
+        h14: f64,
+        more: &[(&str, MinimalCell)],
+    ) -> PublicAssuranceReport {
+        let mut edits = vec![
+            (String::from("H7"), MinimalCell::Number(-10.0)),
+            (String::from("H13"), MinimalCell::Number(300.0)),
+            (String::from("H14"), MinimalCell::Number(h14)),
+        ];
+        edits.extend(more.iter().map(|(r, c)| ((*r).to_string(), c.clone())));
+        synthetic_run_with(profile, &edits, "Site H (75%)1")
+    }
+
+    fn weighed(subject: &str, col: &str, rate: i64, ounces: i64) -> WeightedMember {
+        WeightedMember {
+            subject: subject.to_string(),
+            rate_cell: format!("{col}14"),
+            rate,
+            ounces_cell: format!("{col}13"),
+            ounces,
+        }
+    }
+
+    /// BD-331.S4: a region's rate is weighed against its registered members. Site H prints 2000 and Site I 2200,
+    /// each on 150 ounces, so with every printed value ± ½ the weighted mean lies in [2099⅙, 2100⅚]: Region
+    /// North at 2100 is not refuted, (i) `relaxation_only`; at 2300 or 1900 the McCormick relaxation refutes it
+    /// with a checked certificate, (iv), naming what public data leaves open.
+    #[test]
+    fn test_region_weighed_against_members() {
+        let profile = region_profile("2030Q1");
+        let weighting = MemberWeighting {
+            used: vec![
+                weighed("Site H", "K", 2000, 150),
+                weighed("Site I", "L", 2200, 150),
+            ],
+            excluded: Vec::new(),
+            absent: Vec::new(),
+        };
+        let r = region_run(&profile, 2100.0, &[]);
+        let h14 = state_of(&r, "H14", IdentityFamily::CosPerOunce);
+        assert_eq!(
+            h14,
+            &IdentityState::Consistent {
+                alternate_consistent: true,
+                basis: Some(ConsistentBasis::Members(weighting.clone())),
+            }
+        );
+        assert_eq!(
+            h14.detail(),
+            "alternate_construction_consistent=true; relaxation_only; weighted by ounces sold over Site H \
+             K14/K13, Site I L14/L13"
+        );
+        assert_eq!(r.relaxation_only(), 1);
+        assert!(r.to_json().contains("\"relaxation_only\":1,"));
+        let region = r
+            .instances
+            .iter()
+            .find(|i| i.cell == "H14" && i.family == IdentityFamily::CosPerOunce)
+            .expect("H14");
+        let members: Vec<(&str, OperandRole)> = region
+            .operands
+            .iter()
+            .filter(|o| matches!(o.role, OperandRole::MemberRate | OperandRole::MemberOunces))
+            .map(|o| (o.cell.as_str(), o.role))
+            .collect();
+        assert_eq!(
+            members,
+            [
+                ("K14", OperandRole::MemberRate),
+                ("K13", OperandRole::MemberOunces),
+                ("L14", OperandRole::MemberRate),
+                ("L13", OperandRole::MemberOunces),
+            ]
+        );
+        for far in [2300.0, 1900.0] {
+            let r = region_run(&profile, far, &[]);
+            match state_of(&r, "H14", IdentityFamily::CosPerOunce) {
+                IdentityState::Undecidable {
+                    why:
+                        Undecided::RegionOutsideMembers {
+                            weighting: w,
+                            certificate,
+                        },
+                    missing_fact,
+                    closing_document: None,
+                } => {
+                    assert_eq!(w, &weighting);
+                    assert_eq!(certificate.len(), 64, "{certificate}");
+                    assert!(certificate.bytes().all(|b| b.is_ascii_hexdigit()));
+                    assert_eq!(missing_fact, crate::aisc::REGION_MISSING_FACT);
+                }
+                other => panic!("H14 at {far}: {other:?}"),
+            }
+            assert_eq!(r.relaxation_only(), 0);
+        }
+        // At the edges the relaxation refutes exactly where the exact vertex bound does: 2099 ± ½ and 2101 ± ½
+        // meet [2099⅙, 2100⅚]; 2098 ± ½ and 2102 ± ½ do not.
+        for (edge, code) in [(2098.0, "iv"), (2099.0, "i"), (2101.0, "i"), (2102.0, "iv")] {
+            let r = region_run(&profile, edge, &[]);
+            assert_eq!(
+                state_of(&r, "H14", IdentityFamily::CosPerOunce).code(),
+                code,
+                "{edge}"
+            );
+        }
+    }
+
+    /// BD-331.S4: members that sold nothing (rate and ounces both zero, or both placeholders) are left out by
+    /// name, and a registered member the sheet does not print is named as absent; the rest are weighed.
+    #[test]
+    fn test_region_excludes_and_names_absent() {
+        let profile = region_profile("2030Q1");
+        let zero = MinimalCell::Number(0.0);
+        let place = MinimalCell::Text("-".to_string());
+        for (what, l) in [("zero", zero), ("placeholder", place)] {
+            let r = region_run(
+                &profile,
+                2000.0,
+                &[
+                    ("H13", MinimalCell::Number(150.0)),
+                    ("L13", l.clone()),
+                    ("L14", l),
+                ],
+            );
+            assert_eq!(
+                state_of(&r, "H14", IdentityFamily::CosPerOunce),
+                &IdentityState::Consistent {
+                    alternate_consistent: true,
+                    basis: Some(ConsistentBasis::Members(MemberWeighting {
+                        used: vec![weighed("Site H", "K", 2000, 150)],
+                        excluded: vec!["Site I".to_string()],
+                        absent: Vec::new(),
+                    })),
+                },
+                "{what}"
+            );
+        }
+        let mut with_absent = region_profile("2030Q1");
+        with_absent.subjects.push("Site Z".to_string());
+        with_absent
+            .region_members
+            .push(crate::sources::RegionMemberRow {
+                region: "Region North".to_string(),
+                member: "Site Z".to_string(),
+                first: "2030Q1".to_string(),
+                last: None,
+            });
+        let r = region_run(&with_absent, 2100.0, &[]);
+        match state_of(&r, "H14", IdentityFamily::CosPerOunce) {
+            IdentityState::Consistent {
+                basis: Some(ConsistentBasis::Members(w)),
+                ..
+            } => assert_eq!(w.absent, ["Site Z"]),
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            state_of(&r, "H14", IdentityFamily::CosPerOunce)
+                .detail()
+                .ends_with("; not printed: Site Z")
+        );
+    }
+
+    /// BD-331.S4 refusals, each naming its cell where it has one: the region's ounces not footing to its
+    /// members' (H13 = 100 against 150 + 150); a member's rate beside zero ounces (the ounces), a text rate (the
+    /// rate), a zero beside a placeholder (the rate), negative ounces; a member printed twice (the second
+    /// header); and no member left to weigh. Unchanged: the footnote is checked first, and a region with no
+    /// members registered for the release keeps the regional-numerator refusal.
+    #[test]
+    fn test_region_refusals() {
+        use RefusedReason as R;
+        let profile = region_profile("2030Q1");
+        let at = |reason, at: &str| IdentityState::RefusedAt {
+            reason,
+            at: at.to_string(),
+        };
+        let num = MinimalCell::Number;
+        let text = |s: &str| MinimalCell::Text(s.to_string());
+        type Edits = Vec<(&'static str, MinimalCell)>;
+        let cases: [(&str, Edits, IdentityState); 8] = [
+            (
+                "ounces do not foot",
+                vec![("H13", num(100.0))],
+                at(R::RegionOuncesDoNotFoot, "H13"),
+            ),
+            (
+                "rate beside zero ounces",
+                vec![("L13", num(0.0))],
+                at(R::RegionMemberOperand, "L13"),
+            ),
+            (
+                "text rate",
+                vec![("L14", text("x"))],
+                at(R::RegionMemberOperand, "L14"),
+            ),
+            (
+                "zero beside a placeholder",
+                vec![("L13", num(0.0)), ("L14", text("-"))],
+                at(R::RegionMemberOperand, "L14"),
+            ),
+            (
+                "negative ounces",
+                vec![("L13", num(-150.0))],
+                at(R::RegionMemberOperand, "L13"),
+            ),
+            (
+                "member printed twice",
+                vec![("J2", text("Site I"))],
+                at(R::RegionMemberOperand, "L2"),
+            ),
+            (
+                "no member sold anything",
+                vec![
+                    ("K13", num(0.0)),
+                    ("K14", num(0.0)),
+                    ("L13", num(0.0)),
+                    ("L14", num(0.0)),
+                ],
+                IdentityState::Refused {
+                    reason: R::RegionNoMembers,
+                },
+            ),
+            ("footnote first", vec![("A30", text("x"))], NO_FOOTNOTE),
+        ];
+        for (what, more, want) in cases {
+            let r = region_run(&profile, 2100.0, &more);
+            assert_eq!(
+                state_of(&r, "H14", IdentityFamily::CosPerOunce),
+                &want,
+                "{what}"
+            );
+        }
+        let later = region_profile("2030Q2");
+        assert_eq!(
+            state_of(
+                &region_run(&later, 2100.0, &[]),
+                "H14",
+                IdentityFamily::CosPerOunce
+            ),
+            &IdentityState::Refused {
+                reason: R::RegionalNumerator
+            }
         );
     }
 
@@ -2288,8 +2605,8 @@ mod tests {
             .chain(NotPublishedReason::ALL.iter().map(|r| (r.code(), r.why())))
             .collect();
         // 16 since BD-331.S6 added `exact_kernel_indeterminate`; 18 since bd-jg43.3 split the unrounded refusal
-        // into three by the operand's format.
-        assert_eq!(pairs.len(), 18);
+        // into three by the operand's format; 21 since BD-331.S4 added the three regional refusals.
+        assert_eq!(pairs.len(), 21);
         for (code, why) in &pairs {
             assert!(
                 !code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
@@ -3521,8 +3838,9 @@ mod tests {
                 get(CosPerOunce, "np")
             ],
             // BD-331.S3 (census E826): of the 379 rates refused before for a non-zero non-controlling-interest
-            // line, 263 fit the stated share (i) and 65 miss (iv); the 51 region instances stay (v).
-            [111 + 263, 17 + 65, 379 - 328, 12]
+            // line, 263 fit the stated share (i) and 65 miss (iv); BD-331.S4 (region_census.py): of the 51
+            // region instances left, 41 are not refuted by their members (i) and 10 are (iv).
+            [111 + 263 + 41, 17 + 65 + 10, 379 - 328 - 51, 12]
         );
         assert_eq!(
             [
@@ -3546,8 +3864,10 @@ mod tests {
             AlternateCounts {
                 // `census2.py --displayed`: 1,014 and 1,000 (E838; 1,008 and 994 on stored values).
                 footing_consistent: 1014,
-                // A stated-share fit sums one line (k = 1), so the alternative construction accepts all 263.
-                rate_consistent: 1000 + 263
+                // A stated-share fit sums one line (k = 1), so the alternative construction accepts all 263. The
+                // 41 regions not refuted by their members are not refuted with the region's ounces kept in their
+                // own box either (BD-331.S4; the kernel's own result, no independent reader computes it).
+                rate_consistent: 1000 + 263 + 41
             }
         );
 
@@ -4075,7 +4395,8 @@ mod tests {
                 .or_default() += 1;
         }
         let visible_iv = r.count_state("iv");
-        assert_eq!(visible_iv, 82);
+        // 92 since BD-331.S4: ten regions lie outside their members' weighted means (region_census.py).
+        assert_eq!(visible_iv, 92);
         let velad = (
             "Veladero".to_string(),
             "the ounce series behind the per-ounce rows (E691, E836)".to_string(),
@@ -4107,6 +4428,15 @@ mod tests {
             })
             .count();
         assert_eq!(share, 65);
+        let region = r
+            .instances
+            .iter()
+            .filter(|i| {
+                matches!(&i.state, IdentityState::Undecidable { missing_fact, .. }
+                    if missing_fact == aisc::REGION_MISSING_FACT)
+            })
+            .count();
+        assert_eq!(region, 10);
         println!(
             "{{\"visible_iv\":{visible_iv},\"hidden_iv\":{},\"by_subject_and_fact\":{}}}",
             r.hidden_scope
@@ -4272,7 +4602,8 @@ mod tests {
             (519, 374, 82, 63)
         );
         assert_eq!((v.k4_fail, v.other_fail, v.verdict), (17, 65, "basis rule"));
-        // Every failing column is a (iv) cost-of-sales-per-ounce instance of the ledger, and the reverse.
+        // Every failing column is a (iv) cost-of-sales-per-ounce instance of the ledger, and the reverse, but for
+        // the regions refuted by their members (BD-331.S4), which the one-cell check leaves unbased.
         let mut fails: Vec<String> = r
             .one_cell
             .iter()
@@ -4283,6 +4614,7 @@ mod tests {
             .instances
             .iter()
             .filter(|i| i.family == IdentityFamily::CosPerOunce && i.state.code() == "iv")
+            .filter(|i| i.state.reason_code() != Some("region_outside_members"))
             .map(|i| format!("{}:{}!{}", i.file, i.sheet, i.column))
             .collect();
         fails.sort_unstable();
@@ -4336,9 +4668,11 @@ mod tests {
                 states.join(",")
             );
         }
-        // The census's numbers (2026-10-30): 6 hidden sheets, 435 instances.
+        // The census's numbers (2026-10-30): 6 hidden sheets, 435 instances. Its three regional rates in (v) are
+        // decided by their members since BD-331.S4: `region_census.py --hidden` finds two not refuted (i) and one
+        // refuted (iv), compared one by one in `barrick_regions_match_region_census`.
         let census_footing = BTreeMap::from([("i", 169), ("iii", 1), ("np", 4)]);
-        let census_per_oz = BTreeMap::from([("i", 235), ("iv", 17), ("np", 6), ("v", 3)]);
+        let census_per_oz = BTreeMap::from([("i", 235 + 2), ("iv", 17 + 1), ("np", 6)]);
         let agrees = sheets.len() == 6
             && hidden.instances.len() == 435
             && footing == census_footing
@@ -4389,7 +4723,8 @@ mod tests {
             .expect("registry");
         let r = run_public_assurance(&profile, &workspace_root())
             .expect("registered files present and unaltered");
-        // fit, miss, unconfirmed, regions_v, no_registered_share, no_footnote
+        // fit, miss, unconfirmed, regions_v, no_registered_share, no_footnote. Since BD-331.S4 the census's
+        // regions_v are decided by their members, which `barrick_regions_match_region_census` checks one by one.
         let mut summary = [0_usize; 6];
         let mut by_subject: BTreeMap<String, [usize; 3]> = BTreeMap::new();
         for i in r
@@ -4398,7 +4733,11 @@ mod tests {
             .filter(|i| i.family == IdentityFamily::CosPerOunce)
         {
             let slot = match &i.state {
-                IdentityState::Consistent { basis: Some(_), .. } => 0,
+                _ if region_record(i).is_some() => 3,
+                IdentityState::Consistent {
+                    basis: Some(ConsistentBasis::Share(_)),
+                    ..
+                } => 0,
                 IdentityState::Undecidable {
                     why: Undecided::ShareOutside { .. },
                     ..
@@ -4453,6 +4792,123 @@ mod tests {
         .map(|(s, fit, miss)| (s.to_string(), [fit, miss, 0]))
         .collect();
         assert_eq!(by_subject, census);
+    }
+
+    /// The region census's record of an instance the region rule decided (BD-331.S4), as `[file, sheet, cell,
+    /// region, verdict, reason, at, members, absent, excluded]` in Python's `json.dumps` form with the lists
+    /// sorted (their order carries nothing); `None` for any other instance. A refusal's lists are empty (the
+    /// Rust state carries none, so the census's are not compared), and a footing refusal names no cell (the
+    /// census names none; the Rust names the region's ounces).
+    fn region_record(i: &IdentityInstance) -> Option<String> {
+        let (verdict, reason, at, weighting) = match &i.state {
+            IdentityState::Consistent {
+                basis: Some(ConsistentBasis::Members(w)),
+                ..
+            } => ("not_refuted", None, None, Some(w)),
+            IdentityState::Undecidable {
+                why: Undecided::RegionOutsideMembers { weighting, .. },
+                ..
+            } => ("refuted", None, None, Some(weighting)),
+            IdentityState::Refused {
+                reason: RefusedReason::RegionNoMembers,
+            } => ("refused", Some("no_members"), None, None),
+            IdentityState::RefusedAt {
+                reason: RefusedReason::RegionOuncesDoNotFoot,
+                ..
+            } => ("refused", Some("region_ounces_do_not_foot"), None, None),
+            IdentityState::RefusedAt {
+                reason: RefusedReason::RegionMemberOperand,
+                at,
+            } => ("refused", Some("member_operand"), Some(at.as_str()), None),
+            _ => return None,
+        };
+        let list = |names: Vec<&String>| {
+            let mut names: Vec<String> = names.into_iter().map(|n| js(n)).collect();
+            names.sort_unstable();
+            format!("[{}]", names.join(", "))
+        };
+        let used = weighting.map_or_else(Vec::new, |w| w.used.iter().map(|m| &m.subject).collect());
+        let absent = weighting.map_or_else(Vec::new, |w| w.absent.iter().collect());
+        let excluded = weighting.map_or_else(Vec::new, |w| w.excluded.iter().collect());
+        let opt = |s: Option<&str>| s.map_or_else(|| "null".to_string(), js);
+        Some(format!(
+            "[{}, {}, {}, {}, {}, {}, {}, {}, {}, {}]",
+            js(&i.file),
+            js(&i.sheet),
+            js(&i.cell),
+            js(&i.subject),
+            js(verdict),
+            opt(reason),
+            opt(at),
+            list(used),
+            list(absent),
+            list(excluded)
+        ))
+    }
+
+    /// BD-331.S4 on the real files: the region rule decides exactly the cost-of-sales rates the stated-share
+    /// census leaves to member weighting, visible and hidden, and each one's verdict, reason, cell and member
+    /// lists equal the independent region census (`python3 -I scripts/oracle/region_census.py .` and
+    /// `--hidden`, 57a5aa5, written without reading this crate), run here. Locators and names only (RISK-31).
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/ and python3"]
+    fn barrick_regions_match_region_census() {
+        let root = workspace_root();
+        let profile = load_issuer_profile(&root, "barrick")
+            .and_then(|p| p.through("2026Q2"))
+            .expect("registry");
+        let r =
+            run_public_assurance(&profile, &root).expect("registered files present and unaltered");
+        // The census's own output, each line re-printed with its lists sorted and a refusal's emptied, then
+        // its summary line as printed.
+        let script = "import json, subprocess, sys\n\
+            out = subprocess.run([sys.executable, '-I', 'scripts/oracle/region_census.py', '.'] + sys.argv[1:], \
+            capture_output=True, text=True, check=True).stdout.splitlines()\n\
+            keys = ('file', 'sheet', 'cell', 'region', 'verdict', 'reason', 'at')\n\
+            for line in out[:-1]:\n    x = json.loads(line)\n    \
+            lists = [[] if x['verdict'] == 'refused' else sorted(x[k]) for k in ('members', 'absent', 'excluded')]\n    \
+            print(json.dumps([x[k] for k in keys] + lists, ensure_ascii=False))\n\
+            print(out[-1])\n";
+        let scopes: [(&str, &[IdentityInstance], &[&str], &str); 2] = [
+            (
+                "visible",
+                &r.instances,
+                &[],
+                r#"{"regions": 51, "refuted": 10, "not_refuted": 41, "refused": 0}"#,
+            ),
+            (
+                "hidden",
+                &r.hidden_scope.instances,
+                &["--hidden"],
+                r#"{"regions": 3, "refuted": 1, "not_refuted": 2, "refused": 0}"#,
+            ),
+        ];
+        for (scope, instances, flags, summary) in scopes {
+            let out = std::process::Command::new("python3")
+                .args(["-I", "-c", script])
+                .args(flags)
+                .current_dir(&root)
+                .output()
+                .expect("python3 runs");
+            assert!(
+                out.status.success(),
+                "region_census.py failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let stdout = String::from_utf8(out.stdout).expect("utf-8 census output");
+            let mut census: Vec<&str> = stdout.lines().collect();
+            let census_summary = census.pop().expect("summary line");
+            census.sort_unstable();
+            let mut ours: Vec<String> = instances.iter().filter_map(region_record).collect();
+            ours.sort_unstable();
+            for line in &ours {
+                println!("{{\"scope\":{},\"record\":{line}}}", js(scope));
+            }
+            println!("{{\"scope\":{},\"census\":{census_summary}}}", js(scope));
+            assert_eq!(census_summary, summary, "{scope}");
+            assert_eq!(ours, census, "{scope}");
+        }
+        assert_eq!(r.relaxation_only(), 41);
     }
 
     #[test]

@@ -846,3 +846,49 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     `test_laap_2023_fixture_cells_match_registered_bytes`.
   - **Planted negative.** Q3 2023 M20 set to 1,454 gives `NotRefuted`, and the bytes test names the cell. The
     value was reverted.
+- **E840** Regional cost of sales per ounce decided against registered members (BD-331.S4, bd-prmn.4, the
+  region map of bd-gwf1.1; FACT, execution, 2026-10-30, owner machine).
+  - **Data.** The region map is registry data: 13 `[[region_member]]` rows in `registries/sources/barrick.toml`,
+    keyed by the AISC file's release quarter (W1 §13 rule 2), with "South America & Asia Pacific" registered
+    from 2025Q4 (Q4 2025 Mine Stats `QTD!A33`). The parser refuses an unknown region or member, a region as a
+    member, a bad quarter, `last` before `first`, and one member over overlapping releases.
+  - **Rule.** A region's cost-of-sales rate on a sheet with the attributable-basis footnote and a non-zero NCI
+    line is weighed against its printed members by attributable ounces sold. The rule is region_census.py's
+    rules 2 to 7 (57a5aa5), with one difference: the McCormick relaxation of `rate·Σwᵢ = Σ rateᵢ·wᵢ` replaces
+    its exact vertex check. A checked certificate gives (iv) `region_outside_members`. No refutation gives (i)
+    with `relaxation_only`: no conflict is shown, and no value is proved.
+  - **Independent reader.** `scripts/oracle/region_census.py` was committed before any of this Rust. A subagent
+    wrote it from a rule statement, without reading the crate. The rule statement and the Rust share one origin
+    (this agent), so agreement checks the implementation, not the choice of rule.
+  - **Result.**
+    - The ignored test `barrick_regions_match_region_census` runs the census CLI. All 51 visible and 3 hidden
+      instances equal it on verdict, reason, cell and the used, absent and excluded members.
+    - Visible: 41 (i) and 10 (iv). Hidden: 2 (i) and 1 (iv). On this corpus the relaxation refutes exactly the
+      set the exact check refutes.
+    - The visible cost-of-sales-per-ounce counts move from 374 (i), 82 (iv), 51 (v) to 415 (i), 92 (iv), 0
+      (v). No visible instance of any family is (v) any more.
+    - E839's three LAAP 2023 rates are among the ten.
+  - **Pattern (INFERENCE, from the census's `--values` run on the owner machine; values not printed).**
+    - Nine of the eleven refuted regions have a member that is not weighed. In five, Loulo-Gounkoto (four Africa
+      & Middle East cells, 2025) or Porgera (LAAP, Q1 2024) prints zero-section tokens. In four, Porgera is
+      absent (LAAP 2023, one of them hidden). All nine print above every weighted mean the members allow.
+    - Every region with a member not weighed is refuted, 9 of 9. Of the 45 with every member weighed, 2 are
+      refuted: LAAP Q2 2024, the same period in the Q3 2024 and Q2 2025 files, both below.
+  - **Not claimed.**
+    - A refutation blames no cell and gives no corrected value.
+    - Hypothesis, not tested: the region's cost of sales carries costs of a member that sold nothing or is not
+      printed. The two Q2 2024 LAAP refutations are unexplained.
+    - The 41 (i) are also consistent under the rounded-once alternative. That is the kernel's result; no
+      independent reader computes it.
+  - **Tests.** Synthetic, default suite:
+    - `test_region_weighed_against_members`: not refuted at 2099 to 2101, refuted at 2098 and 2102, where the
+      exact bound is [2099⅙, 2100⅚].
+    - `test_region_excludes_and_names_absent` and `test_region_refusals`: each refusal names its cell.
+    - Updated real-file tests: share census, hidden scope, one-cell, every (iv), and the totals.
+  - **Planted negatives, each reverted.**
+    - Weighing a member whose ounces print zero failed two synthetic tests. The real-file comparison passed: on
+      this corpus every excluded member prints tokens, not zeros.
+    - Not naming absent members failed a synthetic test and the real-file comparison.
+  - **Root.** The registry epoch and the state root move. The `repro/barrick/expected.toml` row is observed from
+    the release binary of the code commit.
+  - **Verification.** Self-verified on this machine only; nothing has run in CI.

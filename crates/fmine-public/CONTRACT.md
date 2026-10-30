@@ -54,7 +54,8 @@ The public lane of M0 (`fmine assure public`).
   label and section. Numeric zero stays `Number`. Cells outside the token set, unknown periods and labels
   repeated within a block are refused by locator. With the issuer's `[[mine_stats_label]]` vocabulary (Barrick:
   56 pairs from W1's read, frozen before the Q3 2026 release), a data row whose `(section, label)` is not
-  registered is refused too. Units, region maps and the W1-DR-01/02 corrections are not data yet.
+  registered is refused too. Units and the W1-DR-01/02 corrections are not data yet. The region map is
+  (`[[region_member]]`, BD-331.S4), but Mine Stats values do not yet carry its version.
 - `synthetic`: invented workbooks in the real layout, seeded with one known answer per state. They are never
   gate-eligible. `write_issuer_workspace` writes them, plus a later title-only vintage, with a digest registry
   under the reserved issuer name `synthetic`; `run_public_assurance` runs that name in the synthetic lane.
@@ -84,6 +85,8 @@ The public lane of M0 (`fmine assure public`).
 - `sources::{SourceKind, RegisteredSource, RegisteredReconstruction, RegisteredShare, RegisteredMissingFact,
   IssuerProfile, load_issuer_profile, registry_path, registered_issuers, is_issuer_name, is_through_bound}`;
   `IssuerProfile::{from_registry, through}`; `IssuerProfile::{regions, shares}` (BD-331.S3);
+  `RegionMemberRow`, `IssuerProfile::{region_members, members_of}` (BD-331.S4: a region's registered members
+  for a release, in registry order);
   `IssuerProfile::missing_facts`, `RegisteredReconstruction::basis` (BD-331.S2);
   `ExpectedRoot`, `expected_roots_path`, `load_expected_roots` (BD-339.S1);
   `kit_selectors_markdown`, `kit_readme_section`, `KIT_SELECTORS_BEGIN`, `KIT_SELECTORS_END` (BD-339.S4: the
@@ -92,6 +95,7 @@ The public lane of M0 (`fmine assure public`).
 - `PublicAssuranceReport::{registry_epoch, census_digest_of_digests, check_expected}` (BD-339.S1)
 - `aisc::{IdentityFamily, IdentityState, IdentityInstance, FootingCertificate, UnregisteredHeader, AiscTable,
   RateMiss, ShareBasis, ExplanationBasis, DEFAULT_MISSING_FACT, SHARE_MISSING_FACT, RowAnchor, AnchorRule,
+  ConsistentBasis, MemberWeighting, WeightedMember, REGION_MISSING_FACT (BD-331.S4),
   ROW_ANCHORS (the seven rows `locate_table` anchors on, BD-339.S4), locate_table,
   ledger_for_table, rate_holds, rate_range, admitted_rates, KernelIndeterminate, feasible_share,
   feasible_share_text, find_share_footnote, find_qtd_sheet, confirm_share_label, reconstruction_holds,
@@ -100,17 +104,20 @@ The public lane of M0 (`fmine assure public`).
   (bd-prmn.8); `PublicAssuranceReport::one_cell`, the payload's `one_cell_cos` section.
 - `aisc::{Operand, OperandRole, OperandValue, operand_at}` and `IdentityInstance::operands` (bd-sjrh.1, part 2
   of BD-329.S1). Each instance cites every cell its state was computed from, with its role (total, line,
-  rate, ounces, numerator, NCI line, component, label check) and its value as read.
+  rate, ounces, numerator, NCI line, component, label check, member rate, member ounces) and its value as read.
   - **Cited cells:**
     - the table cells of the instance's family;
     - every used cell, for an all-zero column;
     - the footnote and the confirmed share label, for a cost-of-sales rate with a non-zero NCI line;
+    - each printed member's rate and ounces, for such a rate of a region with registered members;
     - a consulted reconstruction's quote, label-check and component cells.
   - **Not cited:** structure cells (row labels, subject headers, a sheet's title and period line).
   - **Not yet in the payload or the state root.**
   - **Test:** `test_operands_cover_every_input_cell` perturbs every other synthetic cell, one at a time, and
     fails on any state change it causes that the operands do not cite.
-  `IdentityState::Consistent` carries `basis` (the stated share, footnote and label it used, or `None`);
+  `IdentityState::Consistent` carries `basis`: `ConsistentBasis::Share` (the stated share, footnote and label
+  it used), `ConsistentBasis::Members` (a region's weighting, `relaxation_only`: no conflict shown, no value
+  proved; the report counts these), or `None`;
   `IdentityState::Explained` carries `basis: ExplanationBasis`; `IdentityState::Undecidable` carries
   `missing_fact` and `closing_document`; `IdentityState::RefusedAt` is (v) naming a cell or file.
 - `mine_stats::{View, MineStatsCell, MineStatsValue, CellRefusal, MineStatsRead, LabelVocabulary, read_mine_stats,
@@ -223,11 +230,27 @@ The public lane of M0 (`fmine assure public`).
   footnote and the label. A miss is (iv), giving the feasible share interval, rounded outward, and the missing
   fact. The instance is (v) instead when:
   - the sheet has no attributable-basis footnote, found by text;
-  - the subject is a registered region ("regional numerator needs member weighting");
+  - the subject is a registered region with no members registered for the release ("regional numerator needs
+    member weighting");
   - the subject has no registered share;
   - the same-release Mine Stats quarter-to-date label is missing, repeated or prints another share
     (`RefusedAt`, naming the cell);
   - an operand is not positive.
+- Such a rate of a region with members registered for the AISC file's release (BD-331.S4), on a sheet with the
+  footnote, is checked against its members, weighted by attributable ounces sold. A member printed on the sheet
+  is weighed when its rate and ounces are whole displayed numbers with ounces not zero, and left out by name when
+  both are zero (a displayed 0 or a zero-section token) or both placeholders. A registered member the sheet does
+  not print is named as absent. The weighed members' ounces must sum to the region's (component sum). Then
+  `exact_feas::region_against_members` poses the weighted mean with no numerator (the table prints consolidated
+  cost of sales, not the attributable numerator). Its McCormick relaxation either refutes the rate with a
+  checked certificate (iv, `region_outside_members`, carrying the weighting and the certificate digest, with
+  `REGION_MISSING_FACT`), or does not: (i) with `ConsistentBasis::Members`, `relaxation_only`. The rounded-once
+  alternative is reported, never scored. The instance is (v) instead, naming a cell where it has one, when:
+  - a member's rate or ounces is anything else, or its ounces are negative (`region_member_operand`, at the
+    rate's cell when the rate is not whole, else the ounces'), or a member heads two columns (at the second
+    header);
+  - no member is weighed (`region_no_members`);
+  - the members' ounces do not sum to the region's (`region_ounces_do_not_foot`, at the region's ounces).
 - A stated (ii) whose quote cell no longer starts with the registered prefix is refused as an explanation: the
   instance stays (iv), naming the quote cell and what it reads.
 
@@ -237,10 +260,11 @@ The public lane of M0 (`fmine assure public`).
   `repro/barrick/expected.toml` (root, anchor, totals, registry epoch, digest of digests). The root is a
   regression value, not independent; the last two can be recomputed without this code (E829). Rows are
   append-only, and a default-CI test checks each row's form and that its anchor derives from its root.
-  - **Ledger:** 34 visible AISC tables, 2,595 instances. Footing: 1,004 (i), 4 (iii), 6 (v), 24 not published.
-    Per ounce, after the stated share rule (E826): 1,379 (i), 3 (ii), 82 (iv), 57 (v), 36 not published. Before
-    it, the counts were 1,116 (i), 17 (iv) and 385 (v).
-  - **Alternative construction:** 1,008 footing and 1,257 rate instances consistent.
+  - **Ledger:** 34 visible AISC tables, 2,595 instances. Footing: 1,010 (i), 4 (iii), 24 not published.
+    Per ounce, after the region rule (E840): 1,426 (i), 3 (ii), 92 (iv), 36 not published, none (v); 41 of the
+    (i) are `relaxation_only`. Before the stated share rule (E826) the counts were 1,116 (i), 17 (iv) and 385
+    (v); E838 (displayed values) and E840 took the rest out of (v).
+  - **Alternative construction:** 1,014 footing and 1,304 rate instances consistent.
   - **Identities:** each (ii) and (iii) instance is identified.
 - `PO-PUB-2` (synthetic): every seeded answer is reproduced, including the sign-flip witness. Perturbing one cell
   moves the state root and the affected state. A wrong component label leaves the instance in (iv). Column G's
@@ -257,7 +281,7 @@ The public lane of M0 (`fmine assure public`).
     period and a formula error.
 - `PO-PUB-5` (stated share rule, BD-331.S3, MOR_CASE E826):
   - **Real files** (ignored test `barrick_share_rule_matches_census`): of the 379 instances refused before, the 328
-    site instances split into 263 (i) and 65 (iv). The 51 region instances stay (v).
+    site instances split into 263 (i) and 65 (iv). The 51 region instances go to the region rule (PO-PUB-10).
     The counts and per-subject fit/miss equal the independent census. On every instance, Rust also equals it on
     state, subject, footnote cell and label cell; that check was run outside the test.
   - **Synthetic:** K14 fits at 3/4, and L14 misses with the interval [0.8210, 0.8290]. Further tests cover a
@@ -265,9 +289,10 @@ The public lane of M0 (`fmine assure public`).
 - `PO-PUB-6` (state-type completion and hidden scope, BD-331.S2, MOR_CASE E828):
   - **Real files** (ignored tests `barrick_hidden_scope_matches_census`, `barrick_every_iv_names_missing_fact`):
     6 hidden tables, 435 instances. Footing: 169 (i), 1 (iii, North America Q4 2023 TCC, 541 against 540), 4 not
-    published. Per ounce: 235 (i), 17 (iv), 3 (v), 6 not published. The counts equal the hidden census; on every
-    instance, Rust also equals it, a check run outside the test. Each of the 82 visible and 17 hidden (iv) names a
-    missing fact. E816's three (ii) are reconstructed.
+    published. Per ounce: 237 (i), 18 (iv), 6 not published. The counts equal the hidden census, whose three
+    regional (v) the region census decides (PO-PUB-10); on every instance, Rust also equals the hidden census, a
+    check run outside the test. Each of the 92 visible and 18 hidden (iv) names a missing fact. E816's three (ii)
+    are reconstructed.
   - **Synthetic:** M16 is a stated (ii), and a changed or empty quote keeps it (iv). The hidden `Q4 2029` table's
     (iii) is reported and never counted. A changed hidden cell moves the root and no visible state. Hidden sheets
     leave the census and its digest unchanged.
@@ -297,10 +322,22 @@ The public lane of M0 (`fmine assure public`).
 - `PO-PUB-7` (K.4 one-cell check, bd-prmn.8, MOR_CASE E836):
   - **Real files** (ignored test `barrick_one_cell_matches_independent_reader`): 519 columns give 374 pass,
     82 fail and 63 refused. On every column, every field equals `scripts/oracle/one_cell_cos.py` (same origin),
-    including the summary. The failing columns are exactly the 82 cost-of-sales-per-ounce (iv). Of the 82, 17 are
-    K.4 items and 65 are not, so the verdict is "basis rule". The root does not move.
+    including the summary. The failing columns are exactly the 82 cost-of-sales-per-ounce (iv) other than the ten
+    regions refuted by their members (PO-PUB-10), which the check leaves unbased. Of the 82, 17 are K.4 items and
+    65 are not, so the verdict is "basis rule". The root does not move.
   - **Synthetic:** 10 columns, and Site I fails at both bases with known implied ounces. A share registered
     wrong for Site H (3/5, labelled 60%) fails at that basis and gives "basis rule".
+- `PO-PUB-10` (region against members, BD-331.S4, MOR_CASE E840):
+  - **Real files** (ignored test `barrick_regions_match_region_census`): the 51 visible and 3 hidden regional
+    rates the stated-share census leaves to member weighting are decided: visible 41 not refuted (i,
+    `relaxation_only`) and 10 refuted (iv); hidden 2 and 1. Each instance's verdict, reason, cell and used,
+    absent and excluded members equal `scripts/oracle/region_census.py` (57a5aa5, an exact vertex check written
+    before the Rust and without reading it), run in the test. The 41 are also consistent under the rounded-once
+    alternative (the kernel's result; no independent reader computes it).
+  - **Synthetic** (default suite): Region North over Site H and Site I is not refuted at 2099, 2100 and 2101,
+    and refuted at 2098, 2102, 1900 and 2300, where the exact bound is [2099⅙, 2100⅚]. Every refusal and
+    exclusion names its cell or member; a footnote-less sheet and a release before the members' first keep the
+    earlier refusals.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.

@@ -150,6 +150,7 @@ pub fn synthetic_profile() -> IssuerProfile {
             closing_document: None,
         }],
         subject_statuses: Vec::new(),
+        region_members: Vec::new(),
         through: None,
     }
 }

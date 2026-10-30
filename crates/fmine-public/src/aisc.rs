@@ -15,8 +15,14 @@
 //! Every instance lands in exactly one state: (i) consistent, (ii) explained by a registered
 //! reconstruction, (iii) issuer discrepancy with an exact certificate, (iv) undecidable from public data,
 //! (v) refused, or not published (excluded by name).
+//!
+//! A region's cost-of-sales rate (BD-331.S4) is checked against its registered members for the release, weighted
+//! by attributable ounces sold: the members' ounces must foot to the region's under the component sum, and the
+//! McCormick relaxation of `rate·Σwᵢ = Σ rateᵢ·wᵢ` either refutes the rate with a checked certificate (iv) or
+//! does not, which is (i) qualified `relaxation_only`: no conflict shown, no value proved.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use fmine_io::numfmt;
 use fmine_io::xlsx::{CellValue, ExtractedCell, Sheet, col_index_to_letters, parse_a1_ref};
@@ -95,10 +101,11 @@ pub struct FootingCertificate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityState {
     /// (i) The printed numbers satisfy the declared construction. `basis` cites the stated share, footnote and
-    /// label when the construction needed one (BD-331.S3).
+    /// label when the construction needed one (BD-331.S3), or the members a region's rate was weighed against,
+    /// which is `relaxation_only` (BD-331.S4).
     Consistent {
         alternate_consistent: bool,
-        basis: Option<StatedShare>,
+        basis: Option<ConsistentBasis>,
     },
     /// (ii) The numbers close only with a registered reconstruction, re-verified on this run. `basis` says
     /// whether an issuer note states the rule (BD-331.S2).
@@ -146,10 +153,17 @@ pub enum RefusedReason {
     DecimalsShown,
     /// The exact kernel made no claim (BD-331.S6): a cap, an overflow, a refused posing or a checker rejection.
     KernelIndeterminate,
+    /// A region member's rate or ounces is neither a whole printed number (ounces not zero) nor, with the other,
+    /// a zero or a placeholder (BD-331.S4); `RefusedAt` names the cell.
+    RegionMemberOperand,
+    /// No registered member of the region prints a rate and ounces.
+    RegionNoMembers,
+    /// The members' printed ounces do not sum to the region's (component sum); `RefusedAt` names the region's.
+    RegionOuncesDoNotFoot,
 }
 
 impl RefusedReason {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 17] = [
         Self::FootnoteNotFound,
         Self::RegionalNumerator,
         Self::NoRegisteredShare,
@@ -164,6 +178,9 @@ impl RefusedReason {
         Self::UnsupportedFormat,
         Self::DecimalsShown,
         Self::KernelIndeterminate,
+        Self::RegionMemberOperand,
+        Self::RegionNoMembers,
+        Self::RegionOuncesDoNotFoot,
     ];
 
     #[must_use]
@@ -183,6 +200,9 @@ impl RefusedReason {
             Self::UnsupportedFormat => "unsupported_number_format",
             Self::DecimalsShown => "displayed_decimals_not_supported",
             Self::KernelIndeterminate => "exact_kernel_indeterminate",
+            Self::RegionMemberOperand => "region_member_operand",
+            Self::RegionNoMembers => "region_no_members",
+            Self::RegionOuncesDoNotFoot => "region_ounces_do_not_foot",
         }
     }
 
@@ -207,6 +227,9 @@ impl RefusedReason {
                 "decimals displayed; the declared construction sums whole displayed numbers"
             }
             Self::KernelIndeterminate => "the exact kernel made no claim",
+            Self::RegionMemberOperand => "a region member's rate or ounces cannot be weighed",
+            Self::RegionNoMembers => "no region member prints a rate and ounces",
+            Self::RegionOuncesDoNotFoot => "the region's ounces do not foot to its members'",
         }
     }
 }
@@ -271,6 +294,70 @@ impl StatedShare {
     }
 }
 
+/// Why a cost-of-sales rate is consistent beyond its own column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConsistentBasis {
+    /// The registered, label-confirmed share the rate was checked at (BD-331.S3).
+    Share(StatedShare),
+    /// A region the McCormick relaxation of its members' weighted mean does not refute (BD-331.S4,
+    /// `relaxation_only`): no conflict is shown, and no value is proved.
+    Members(MemberWeighting),
+}
+
+impl ConsistentBasis {
+    #[must_use]
+    pub fn text(&self) -> String {
+        match self {
+            Self::Share(s) => s.text(),
+            Self::Members(m) => format!("relaxation_only; {}", m.text()),
+        }
+    }
+}
+
+/// A region's cost of sales per ounce against its registered members, weighted by attributable ounces sold
+/// (BD-331.S4): `rate·Σwᵢ = Σ rateᵢ·wᵢ` with the region's ounces footing to the members'.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberWeighting {
+    /// The members weighed, in registry order.
+    pub used: Vec<WeightedMember>,
+    /// Members whose rate and ounces both print zero, or both a placeholder: they sold nothing and enter as
+    /// nothing.
+    pub excluded: Vec<String>,
+    /// Members registered for the release that the sheet does not print.
+    pub absent: Vec<String>,
+}
+
+/// One member's printed rate and attributable ounces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeightedMember {
+    pub subject: String,
+    pub rate_cell: String,
+    pub rate: i64,
+    pub ounces_cell: String,
+    pub ounces: i64,
+}
+
+impl MemberWeighting {
+    #[must_use]
+    pub fn text(&self) -> String {
+        let used: Vec<String> = self
+            .used
+            .iter()
+            .map(|m| format!("{} {}/{}", m.subject, m.rate_cell, m.ounces_cell))
+            .collect();
+        let mut out = format!("weighted by ounces sold over {}", used.join(", "));
+        for (what, names) in [
+            ("sold nothing", &self.excluded),
+            ("not printed", &self.absent),
+        ] {
+            if !names.is_empty() {
+                let _ = write!(out, "; {what}: {}", names.join(", "));
+            }
+        }
+        out
+    }
+}
+
 /// A whole-number cell a (ii) explanation read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CitedCell {
@@ -303,6 +390,13 @@ pub enum Undecided {
     ReconstructionNotApplied {
         evidence_id: String,
         check: ReconstructionCheck,
+    },
+    /// A region's rate lies outside every weighted mean its members' printed rates and ounces allow
+    /// (BD-331.S4): the McCormick certificate (`certificate`, its digest) refutes "the region is these members,
+    /// weighted by attributable ounces sold". It blames no cell.
+    RegionOutsideMembers {
+        weighting: MemberWeighting,
+        certificate: String,
     },
 }
 
@@ -383,6 +477,7 @@ impl Undecided {
             Self::RateOutside(_) => "rate_outside_interval",
             Self::ShareOutside { .. } => "rate_outside_interval_at_stated_share",
             Self::ReconstructionNotApplied { .. } => "reconstruction_not_applied",
+            Self::RegionOutsideMembers { .. } => "region_outside_members",
         }
     }
 
@@ -416,6 +511,14 @@ impl Undecided {
                     check.text()
                 )
             }
+            Self::RegionOutsideMembers {
+                weighting,
+                certificate,
+            } => format!(
+                "the region's rate lies outside every weighted mean of its members' printed rates, {}; McCormick \
+                 certificate {certificate}",
+                weighting.text()
+            ),
         }
     }
 }
@@ -553,8 +656,9 @@ pub enum ShareBasis {
     },
     /// A registered share the label does not confirm; `why` names the cell, or the label or sheet not found.
     Unconfirmed { why: String },
-    /// A region: its numerator rolls up member sites held at different shares.
-    Region,
+    /// A region: its numerator rolls up member sites held at different shares. `members` are the sites the
+    /// registry maps into it for the release, in registry order (BD-331.S4); none means no registered map.
+    Region { members: Vec<String> },
 }
 
 /// Locates, by its text, the footnote stating that cost of sales per ounce is cost of sales over ounces sold,
@@ -750,6 +854,10 @@ pub enum OperandRole {
     Component,
     /// A cell whose text a registered rule checks (label or stated quote).
     LabelCheck,
+    /// A region member's printed cost-of-sales rate (BD-331.S4).
+    MemberRate,
+    /// A region member's printed attributable ounces sold (BD-331.S4).
+    MemberOunces,
 }
 
 impl OperandRole {
@@ -765,6 +873,8 @@ impl OperandRole {
             Self::NciLine => "nci_line",
             Self::Component => "component",
             Self::LabelCheck => "label_check",
+            Self::MemberRate => "member_rate",
+            Self::MemberOunces => "member_ounces",
         }
     }
 }
@@ -818,7 +928,9 @@ pub fn operand_at(file: &str, sheet: &Sheet, row: u32, col: u32, role: OperandRo
 /// The table cells one instance of `family` in column `col` is computed from. An all-zero column's instances
 /// are decided by every used cell of the column. The AISC footing's alternate rule counts block 1's lines too.
 /// A cost-of-sales rate with a non-zero NCI line also reads the attributable-basis footnote (`footnote`, a cell
-/// of this sheet); the registered share's label cell is in another workbook and is added by the caller.
+/// of this sheet); the registered share's label cell is in another workbook and is added by the caller. A region's
+/// such rate also reads each printed member's rate and ounces (`members`, BD-331.S4).
+#[allow(clippy::too_many_arguments)]
 fn family_operands(
     file: &str,
     sheet: &Sheet,
@@ -827,6 +939,7 @@ fn family_operands(
     family: IdentityFamily,
     all_zero: bool,
     footnote: Option<&str>,
+    members: &[(String, u32)],
 ) -> Vec<Operand> {
     use OperandRole as R;
     let at = |row: u32, role: OperandRole| operand_at(file, sheet, row, col, role);
@@ -879,6 +992,10 @@ fn family_operands(
                 .any(|&r| non_zero_number(val(sheet, r, col)));
             if let Some((r, c)) = footnote.filter(|_| nci).and_then(parse_a1_ref) {
                 out.push(operand_at(file, sheet, r, c, R::LabelCheck));
+            }
+            for &(_, m) in members.iter().filter(|_| nci) {
+                out.push(operand_at(file, sheet, t.cos_rate_row, m, R::MemberRate));
+                out.push(operand_at(file, sheet, t.ounces_row, m, R::MemberOunces));
             }
         }
     }
@@ -1450,7 +1567,7 @@ fn stated_share_state(
         return refused(RefusedReason::FootnoteNotFound);
     };
     let (num, den, evidence, label_cell) = match share {
-        Some(ShareBasis::Region) => return refused(RefusedReason::RegionalNumerator),
+        Some(ShareBasis::Region { .. }) => return refused(RefusedReason::RegionalNumerator),
         None => return refused(RefusedReason::NoRegisteredShare),
         Some(ShareBasis::Unconfirmed { why }) => {
             return IdentityState::RefusedAt {
@@ -1480,7 +1597,7 @@ fn stated_share_state(
         (Err(_), _) | (_, Err(_)) => refused(RefusedReason::KernelIndeterminate),
         (Ok(true), Ok(alternate_consistent)) => IdentityState::Consistent {
             alternate_consistent,
-            basis: Some(share),
+            basis: Some(ConsistentBasis::Share(share)),
         },
         (Ok(false), Ok(_)) => IdentityState::Undecidable {
             why: Undecided::ShareOutside {
@@ -1492,6 +1609,208 @@ fn stated_share_state(
             closing_document: None,
         },
     }
+}
+
+/// What a region's (iv) leaves open (BD-331.S4): prose, no digits.
+pub const REGION_MISSING_FACT: &str = "each member's attributable cost of sales and ounces sold behind the \
+region's figure, including members that sold nothing or that the table does not print";
+
+/// A region member's rate or ounces cell as the regional rule reads it (BD-331.S4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MemberVal {
+    /// A whole displayed number.
+    Whole(i64),
+    /// A numeric zero its format shows as a token (the dash of a zero section).
+    ZeroToken,
+    /// A text placeholder.
+    Place,
+    Other,
+}
+
+impl MemberVal {
+    fn read(sheet: &Sheet, row: u32, col: u32) -> Self {
+        let Some(c) = sheet.cell(row, col) else {
+            return Self::Other;
+        };
+        match &c.value {
+            CellValue::Placeholder(_) => Self::Place,
+            CellValue::Number(_) if matches!(c.displayed(), Some(Ok(d)) if d.token.is_some()) => {
+                Self::ZeroToken
+            }
+            CellValue::Number(_) => as_int(number_val(c)).map_or(Self::Other, Self::Whole),
+            CellValue::Text(_) | CellValue::FormulaError(_) => Self::Other,
+        }
+    }
+
+    const fn is_zero(self) -> bool {
+        matches!(self, Self::ZeroToken | Self::Whole(0))
+    }
+}
+
+/// A region's cost of sales per ounce against its registered members (BD-331.S4), on a sheet whose footnote
+/// states the rate on an attributable basis. Each printed member is weighed when its rate and ounces are whole
+/// numbers with ounces not zero, and left out as having sold nothing when both are zero or both placeholders;
+/// anything else refuses, naming the cell (the rate's if it is not whole, else the ounces'). The weighed members'
+/// ounces must sum to the region's (the declared component sum). Then the McCormick relaxation of the weighted
+/// mean: a checked certificate is (iv), no refutation is (i) `relaxation_only`. The alternative construction
+/// (the region's ounces rounded once) is reported, never scored.
+fn regional_state(
+    sheet: &Sheet,
+    t: &AiscTable,
+    col: u32,
+    region: &RegionColumns,
+    miss: RateMiss,
+) -> IdentityState {
+    let at = |row: u32, c: u32| format!("{}{row}", col_index_to_letters(c));
+    let refused_at = |reason, at: String| IdentityState::RefusedAt { reason, at };
+    if let Some(header) = &region.ambiguous {
+        return refused_at(RefusedReason::RegionMemberOperand, header.clone());
+    }
+    let mut weighting = MemberWeighting {
+        used: Vec::new(),
+        excluded: Vec::new(),
+        absent: region.absent.clone(),
+    };
+    for (subject, m) in &region.members {
+        let (rate_cell, ounces_cell) = (at(t.cos_rate_row, *m), at(t.ounces_row, *m));
+        match (
+            MemberVal::read(sheet, t.cos_rate_row, *m),
+            MemberVal::read(sheet, t.ounces_row, *m),
+        ) {
+            (MemberVal::Whole(rate), MemberVal::Whole(ounces)) if ounces != 0 => {
+                if ounces < 0 {
+                    return refused_at(RefusedReason::RegionMemberOperand, ounces_cell);
+                }
+                weighting.used.push(WeightedMember {
+                    subject: subject.clone(),
+                    rate_cell,
+                    rate,
+                    ounces_cell,
+                    ounces,
+                });
+            }
+            (r, o)
+                if (r.is_zero() && o.is_zero())
+                    || (r, o) == (MemberVal::Place, MemberVal::Place) =>
+            {
+                weighting.excluded.push(subject.clone());
+            }
+            (MemberVal::Whole(_), _) => {
+                return refused_at(RefusedReason::RegionMemberOperand, ounces_cell);
+            }
+            _ => return refused_at(RefusedReason::RegionMemberOperand, rate_cell),
+        }
+    }
+    if weighting.used.is_empty() {
+        return IdentityState::Refused {
+            reason: RefusedReason::RegionNoMembers,
+        };
+    }
+    match weighting
+        .used
+        .iter()
+        .try_fold(0_i64, |sum, m| sum.checked_add(m.ounces))
+    {
+        Some(sum) if sum == miss.q => {}
+        Some(_) => return refused_at(RefusedReason::RegionOuncesDoNotFoot, at(t.ounces_row, col)),
+        None => {
+            return IdentityState::Refused {
+                reason: RefusedReason::KernelIndeterminate,
+            };
+        }
+    }
+    match region_decision(
+        &at(t.cos_rate_row, col),
+        &at(t.ounces_row, col),
+        miss,
+        &weighting,
+    ) {
+        Ok((Some(certificate), _)) => IdentityState::Undecidable {
+            why: Undecided::RegionOutsideMembers {
+                weighting,
+                certificate,
+            },
+            missing_fact: REGION_MISSING_FACT.to_string(),
+            closing_document: None,
+        },
+        Ok((None, alternate_consistent)) => IdentityState::Consistent {
+            alternate_consistent,
+            basis: Some(ConsistentBasis::Members(weighting)),
+        },
+        Err(_) => IdentityState::Refused {
+            reason: RefusedReason::KernelIndeterminate,
+        },
+    }
+}
+
+/// The kernel's verdict on a region against its weighed members: under the component sum, the digest of a checked
+/// refutation or `None` when not refuted; and whether the rounded-once alternative (the region's ounces kept in
+/// their own printed box) is not refuted either. No rate is posed with a numerator: the table prints cost of sales
+/// on a consolidated basis, never the attributable numerator the rate divides, so the check is the weighted mean,
+/// which can refute but never give a witness.
+fn region_decision(
+    rate_cell: &str,
+    ounces_cell: &str,
+    miss: RateMiss,
+    weighting: &MemberWeighting,
+) -> Result<(Option<String>, bool), KernelIndeterminate> {
+    const FAMILY: &str = "region_ounces";
+    let mut cells = vec![
+        xf_cell(rate_cell, miss.r, 1),
+        xf_cell(ounces_cell, miss.q, 1),
+    ];
+    let mut members = Vec::new();
+    for m in &weighting.used {
+        cells.push(xf_cell(&m.rate_cell, m.rate, 1));
+        cells.push(xf_cell(&m.ounces_cell, m.ounces, 1));
+        members.push(xf::RateCells {
+            rate: m.rate_cell.clone(),
+            weight: m.ounces_cell.clone(),
+            numerator: None,
+        });
+    }
+    let region = xf::RateCells {
+        rate: rate_cell.to_string(),
+        weight: ounces_cell.to_string(),
+        numerator: None,
+    };
+    let identities = xf::region_against_members(
+        "region",
+        FAMILY,
+        xf::Closure::MayUseUnpublished,
+        Rat::from_integer(1000),
+        &region,
+        &members,
+    );
+    let run = |construction| -> Result<(xf::Rules, xf::Outcome), KernelIndeterminate> {
+        let rules = xf::Rules::new(xf::Convention::Closed).with(FAMILY, construction);
+        let components = xf::solve(&cells, &identities, &rules)
+            .map_err(|e| KernelIndeterminate(e.to_string()))?;
+        let [component] = components.as_slice() else {
+            return Err(KernelIndeterminate(format!(
+                "{} components where one was posed",
+                components.len()
+            )));
+        };
+        Ok((rules, component.outcome.clone()))
+    };
+    let refuted = |rules: &xf::Rules, outcome: xf::Outcome| match outcome {
+        xf::Outcome::Infeasible { certificate } => {
+            xf::certificate_digest(&cells, &identities, rules, &certificate)
+                .map(Some)
+                .map_err(|e| KernelIndeterminate(format!("{e:?}")))
+        }
+        xf::Outcome::NotRefuted => Ok(None),
+        xf::Outcome::Feasible { .. } => Err(KernelIndeterminate(
+            "a weighted mean was reported feasible".to_string(),
+        )),
+        xf::Outcome::Indeterminate { reason } => Err(KernelIndeterminate(reason)),
+    };
+    let (rules, outcome) = run(xf::Construction::ComponentSum)?;
+    let primary = refuted(&rules, outcome)?;
+    let (rules, outcome) = run(xf::Construction::RoundedOnce)?;
+    let alternate_consistent = refuted(&rules, outcome)?.is_none();
+    Ok((primary, alternate_consistent))
 }
 
 /// Whether adding a registered component c (printed, so c ± ½) to the numerator closes the rate: [`rate_holds`]
@@ -1608,7 +1927,7 @@ pub fn one_cell_checks<S: AsRef<str>>(
             continue;
         };
         let share = shares.get(subject);
-        let region = matches!(share, Some(ShareBasis::Region));
+        let region = matches!(share, Some(ShareBasis::Region { .. }));
         let site_share = registered.get(subject).copied().filter(|_| !region);
         out.push(OneCellCheck {
             file: file.to_string(),
@@ -1684,7 +2003,7 @@ fn one_cell_outcome(
         (1, 1)
     } else {
         match share {
-            Some(ShareBasis::Region) => {
+            Some(ShareBasis::Region { .. }) => {
                 return unbased("regional numerator needs member weighting");
             }
             _ if !footnote => return unbased("attributable-basis footnote not found"),
@@ -1797,7 +2116,25 @@ pub fn ledger_for_table<S: AsRef<str>>(
             cell_text(sheet, table.header_row, c.col).map(|t| (c.col, t, c.cell_ref.clone()))
         })
         .collect();
-    for (col, header, header_ref) in header_cells {
+    let columns: Vec<(&str, u32, &str)> = header_cells
+        .iter()
+        .filter_map(|(col, header, cell)| {
+            match_subject(header, subjects).map(|s| (s, *col, cell.as_str()))
+        })
+        .collect();
+    let region_columns = |members: &[String]| {
+        let mut out = RegionColumns::default();
+        for m in members {
+            let mut found = columns.iter().filter(|(s, _, _)| s == m);
+            match (found.next(), found.next()) {
+                (None, _) => out.absent.push(m.clone()),
+                (Some(&(_, c, _)), None) => out.members.push((m.clone(), c)),
+                (Some(_), Some(&(_, _, cell))) => out.ambiguous = Some(cell.to_string()),
+            }
+        }
+        out
+    };
+    for (col, header, header_ref) in header_cells.iter().cloned() {
         if header.to_lowercase() == "footnote" {
             continue;
         }
@@ -1811,6 +2148,14 @@ pub fn ledger_for_table<S: AsRef<str>>(
             continue;
         };
         let letters = col_index_to_letters(col);
+        let share = shares.get(subject);
+        let region = match share {
+            Some(ShareBasis::Region { members }) if !members.is_empty() => {
+                Some(region_columns(members))
+            }
+            _ => None,
+        };
+        let member_cols = region.as_ref().map_or(&[][..], |r| r.members.as_slice());
         let mut push = |family: IdentityFamily, row: u32, state: IdentityState, calc: Calc| {
             let all_zero = state
                 == IdentityState::NotPublished {
@@ -1832,23 +2177,35 @@ pub fn ledger_for_table<S: AsRef<str>>(
                     family,
                     all_zero,
                     footnote.as_deref(),
+                    member_cols,
                 ),
                 calc,
             });
         };
-        let share = shares.get(subject);
         let stated = ShareInputs {
             footnote: footnote.as_deref(),
             share,
+            region: region.as_ref(),
         };
         column_ledger(sheet, table, col, subject, &stated, explain, &mut push);
     }
 }
 
-/// The stated-share inputs of one column: the sheet's attributable-basis footnote and the subject's share.
+/// The stated-share inputs of one column: the sheet's attributable-basis footnote, the subject's share and, for a
+/// region with registered members, where they print on this sheet.
 struct ShareInputs<'a> {
     footnote: Option<&'a str>,
     share: Option<&'a ShareBasis>,
+    region: Option<&'a RegionColumns>,
+}
+
+/// A region's registered members on one sheet (BD-331.S4): each printed member's column, the members the sheet
+/// does not print, and the header cell of a member printed twice (which refuses the region).
+#[derive(Debug, Default)]
+struct RegionColumns {
+    members: Vec<(String, u32)>,
+    absent: Vec<String>,
+    ambiguous: Option<String>,
 }
 
 fn column_ledger(
@@ -1960,7 +2317,10 @@ fn column_ledger(
                 let nci = t.nci_rows.iter().any(|&r| non_zero_number(v(r)));
                 let at = |k| rate_holds(miss.n, k, miss.q, miss.r, (1, 1));
                 if family == IdentityFamily::CosPerOunce && nci {
-                    stated_share_state(&sheet.name, stated.footnote, stated.share, miss)
+                    match (stated.footnote, stated.region) {
+                        (Some(_), Some(region)) => regional_state(sheet, t, col, region, miss),
+                        _ => stated_share_state(&sheet.name, stated.footnote, stated.share, miss),
+                    }
                 } else {
                     match (at(miss.k), at(1)) {
                         (Err(_), _) | (_, Err(_)) => refused(RefusedReason::KernelIndeterminate),

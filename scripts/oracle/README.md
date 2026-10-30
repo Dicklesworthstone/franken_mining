@@ -20,7 +20,7 @@ then they sit in `corpus_of_input_docs/downloaded/mine_stats/`.
 | bd-jg43.1 number formats (2026-10-30) | `python3 -I scripts/oracle/formats.py corpus_of_input_docs/downloaded/mine_stats/*.xlsx` | 18 file lines, then 10 formats, `"numeric_total":30388,"non_integer_total":6256` |
 | bd-prmn.8 K.4 one-cell check (2026-10-30) | `python3 -I scripts/oracle/one_cell_cos.py --quiet .` | `{"columns": 519, "pass": 374, "fail": 82, "refused": 63, "k4_fail": 17, "other_fail": 65, "verdict": "basis rule", ...}` |
 | bd-jg43.2 displayed values (2026-10-30) | `python3 -I scripts/oracle/formats.py --displayed corpus_of_input_docs/downloaded/mine_stats/*.xlsx` | 18 file lines with `displayed_digest`, then `{"files":18,"shown":27367,"token":2873,"refused":148}` |
-| bd-prmn.4 region against members (2026-10-30) | `python3 -I scripts/oracle/region_census.py .`, then with `--hidden` | 51 lines, then `{"regions": 51, "refuted": 10, "not_refuted": 41, "refused": 0}`; hidden: 3 lines, then `{"regions": 3, "refuted": 1, "not_refuted": 2, "refused": 0}` |
+| bd-prmn.4 region against members (2026-10-30) | `python3 -I scripts/oracle/region_census.py .`, then with `--hidden` | 51 lines, then `{"regions": 51, "refuted": 10, "not_refuted": 41, "refused": 0}`; hidden: 3 lines, then `{"regions": 3, "refuted": 1, "not_refuted": 2, "refused": 0}`. The ignored Rust test `barrick_regions_match_region_census` runs both and equals every line (E840) |
 | E838 ledger on displayed values (2026-10-30) | `python3 -I scripts/oracle/census2.py --displayed .` | `AISC tables (visible): 34 instances: 2595`; footing i 1010, iii 4, np 24; per ounce i 1122, ii 3, iv 17, v 379, np 36; alt construction 1014 and 1000 |
 
 | Script | What it is |
