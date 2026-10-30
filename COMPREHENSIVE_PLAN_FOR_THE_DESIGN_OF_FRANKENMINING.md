@@ -4607,7 +4607,9 @@ are a scoreable, externally time-proved record, not a promise:
 - **Attestation.** The author attests that no non-public issuer information was used (extends §10.1 `author`);
   any revision after first issuer contact is flagged `post-contact`.
 - **Further vintages.** Q1 and Q2 2027 vintages follow, each with as-of date and horizon; a vintage hashed after
-  its quarter ends is a nowcast and is scored separately (R7-C119).
+  its quarter ends is a nowcast and is scored separately (R7-C119). A vintage is issued only while its author
+  holds no private access (§31.1): once the author joins the issuer's insider list, which the proposal places in
+  the first three months of the engagement, no further vintage is issued, and the frozen ones are only scored.
 - **What it can show.** Every score report gives n, an n_eff with its assumed correlation range, and the
   Clopper–Pearson interval. One period × about 14 sites demonstrates the protocol, not skill: separating 80% from
   60% coverage first needs n ≈ 35 independent outcomes, so no positive calibration claim is made by month 12
@@ -8007,7 +8009,7 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-064 | LMDI waterfall (GB-26) with metal-balance B and sold/produced S factors | BD-061 | Exact decomposition tests; North Mara Q2 2025 → Q2 2026 known answer (E137) |
 | BD-065 | Reproduction harness vs published values to rounding | BD-061, BD-059, BD-322 | GATE-BULL-01 scorer runs |
 | BD-066 | Discrepancy register with citations or the closing document | BD-065 | Every miss bridged or OPEN |
-| BD-067 | FY2026 per-site forecasts, 80% intervals, flag `uncalibrated` | BD-047, BD-059 | Forecast set complete |
+| BD-067 | FY2026 per-site forecasts, 80% intervals, flag `uncalibrated` | BD-322, BD-334 (rules), Q3 2026 vintage | Forecast set complete |
 | BD-068 | Freeze, hash and externally timestamp forecasts before the Feb 2027 release | BD-067, BD-334 | Timestamp precedes release |
 | BD-069 | Lane separation: public build profile and access attestations (§31.1) | BD-093 | No private-access author in the lane |
 | BD-070 | Published reserve roll-forward reproduction | BD-059, BD-063 | GATE-HALL-01 |
@@ -9471,3 +9473,17 @@ evidence chain itself, and use the issuer's own forward statements as the pre-re
 Edges added to existing beads: BD-065 ← BD-322 (the harness runs on registered inputs only); BD-068 ← BD-334;
 BD-074 ← BD-338 (the M0 end-to-end run includes the live-dependency proof); BD-076 ← BD-343; BD-204 ← BD-336. The
 generator reports 357 beads, 589 edges, 0 cycles and an unchanged 29-bead longest chain.
+
+### K.7 Alignment with the client proposal (2026-10-30)
+
+The client proposal (October 2026) commits in writing to four public-lane dates: the Q3 2026 workbook read on
+9 Nov 2026; per-site Q4 2026 estimates with 80% ranges, time-proved by 31 Dec 2026; the demonstration, cut-off
+reproduction included, ready at the end of January 2027; scoring against the FY2026 results in February 2027.
+- **BD-067's edges.** BD-047 and BD-059 are replaced by BD-322 (the reader), BD-334's stamped rules and the Q3 2026
+  vintage. With the old edges BD-068 sat behind 31 open beads, mostly WP-00/WP-01. BD-334's frame freezes and
+  hashes the record itself; BD-047 later ingests it.
+- **Priorities.** BD-334, BD-067 and BD-068 are P0 with due dates; the Lumwana gap (bd-srqc) is P1, since the
+  proposal's first headline figure rests on it.
+- **Open scope.** The proposal says "every cut-off grade stated in a technical report"; BD-274 reproduces seven
+  (E182–E184). The owner widens the bead or narrows the wording.
+- **Later vintages** stop when the author gains private access (§21.6).
