@@ -677,3 +677,16 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     synthetic census pinned at 345e2ba is unchanged.
   - **Planted negative.** Format codes left entity-encoded failed all 18 files; the change was reverted.
   - **Same origin.** The agent that wrote the Rust also wrote the oracle, though first. It counts once.
+- **E834** Displayed values on the 18 registered workbooks (NEW-cell.S2, bd-jg43.2; FACT, execution,
+  2026-10-30).
+  - **Oracle.** `formats.py --displayed` was committed at 58d5c98, before the Rust. It shows 27,367 numbers and 2,873
+    zero tokens, and refuses 148 cells (the General non-integers). These sum to E820's 30,388.
+  - **Rust.** `Workbook::displayed_census` (5bfe46c) equals the oracle's digest and counts on 18 of 18 files.
+  - **Loulo-Gounkoto.** In Q1 2026, K8 shows −38, K10 132 and K17 133. In Q2 2026's own sheet, K8 shows −8,
+    K10 164 and K17 194. On displayed values the E823 footing closes in integers: 241 − 38 − 38 − 33 = 132.
+  - **Planted negative.** Percentages left unscaled failed 10 of 18 files; the change was reverted.
+  - **Hypotheses.** Section choice by stored sign, 15 significant digits first, and half away from zero are
+    shared hypotheses of both readers. `scripts/oracle/as_shown_check.sh` (LibreOffice "as shown") decides
+    them. It has not run: LibreOffice is on neither the owner machine nor an rch worker, and the `as-shown`
+    CI job runs after a push. Until then, E834 equates two readers of one stated rule, not the rule with a
+    renderer.
