@@ -31,7 +31,9 @@ use crate::aisc::{
 };
 use crate::mine_stats::{CellRefusal, LabelVocabulary, MineStatsRead, read_mine_stats};
 pub use crate::sources::load_issuer_profile;
-use crate::sources::{IssuerProfile, RegisteredMissingFact, RegisteredReconstruction, SourceKind};
+use crate::sources::{
+    ExpectedRoot, IssuerProfile, RegisteredMissingFact, RegisteredReconstruction, SourceKind,
+};
 
 /// Converts an extracted cell into a public-basis `Claim<Option<f64>>` (`BD-058`): a number is the value as
 /// published, a placeholder is a known unknown, and text or a formula error is refused.
@@ -359,6 +361,78 @@ impl PublicAssuranceReport {
         }
         o.push('}');
         o
+    }
+
+    /// sha256 over the sorted `"{file}\t{sha256}\n"` lines of the sources this run read (BD-339.S1).
+    #[must_use]
+    pub fn registry_epoch(&self) -> String {
+        let mut lines: Vec<String> = self
+            .sources
+            .iter()
+            .map(|s| format!("{}\t{}\n", s.file_name, hex(&s.workbook.sha256)))
+            .collect();
+        lines.sort();
+        sha256(lines.concat().as_bytes()).to_hex()
+    }
+
+    /// sha256 over `"{file}\t{numeric_digest}\n"` in registry order: one value an independent reader of the
+    /// cells can reproduce (BD-339.S1).
+    #[must_use]
+    pub fn census_digest_of_digests(&self) -> String {
+        let lines: String = self
+            .sources
+            .iter()
+            .map(|s| format!("{}\t{}\n", s.file_name, hex(&s.census.numeric_digest)))
+            .collect();
+        sha256(lines.as_bytes()).to_hex()
+    }
+
+    /// Compares this run with a row of the expected-roots file: root, anchor, totals, registry epoch and digest
+    /// of digests must all be equal. The error names every field that differs.
+    pub fn check_expected(&self, expected: &ExpectedRoot) -> Result<(), String> {
+        let totals = STATE_CODES.map(|c| self.count_state(c) as u64);
+        let checks = [
+            (
+                "state_root",
+                self.ledger_anchor.state_root.to_hex(),
+                expected.state_root.clone(),
+            ),
+            (
+                "anchor_id",
+                self.ledger_anchor.anchor_id().to_string(),
+                expected.anchor_id.clone(),
+            ),
+            (
+                "totals",
+                format!("{totals:?}"),
+                format!("{:?}", expected.totals),
+            ),
+            (
+                "registry_epoch",
+                self.registry_epoch(),
+                expected.registry_epoch.clone(),
+            ),
+            (
+                "census_digest_of_digests",
+                self.census_digest_of_digests(),
+                expected.census_digest_of_digests.clone(),
+            ),
+        ];
+        let differ: Vec<String> = checks
+            .iter()
+            .filter(|(_, got, want)| got != want)
+            .map(|(name, got, want)| format!("{name}: run {got}, expected {want}"))
+            .collect();
+        if differ.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "run differs from the expected row of commit {} (line {}): {}",
+                expected.commit,
+                expected.line,
+                differ.join("; ")
+            ))
+        }
     }
 
     fn source_sha(&self, file: &str) -> String {
@@ -948,22 +1022,7 @@ pub fn assess(
         }
     }
     let state_root = blake3_hash(&enc.finish());
-    let cell_id = match lane {
-        Lane::Public => format!("CELL-PUBLIC({issuer})"),
-        Lane::Synthetic => "CELL-SYNTHETIC".to_string(),
-    };
-    let ledger_anchor = LedgerAnchor {
-        format_version: FMT_ANCHOR_V1,
-        cell_id,
-        ledger_epoch: 1,
-        commit_sequence: sources.len() as u64,
-        adapter_registry_epoch: 1,
-        schema_epoch: 1,
-        policy_epoch: 1,
-        privacy_epoch: 1,
-        residency_epoch: 1,
-        state_root,
-    };
+    let ledger_anchor = ledger_anchor(issuer, lane, sources.len(), state_root);
     let vocabulary: LabelVocabulary = profile.mine_stats_labels.iter().cloned().collect();
     let vocabulary = (!vocabulary.is_empty()).then_some(vocabulary);
     let mine_stats = sources
@@ -998,6 +1057,27 @@ pub fn assess(
         mine_stats,
         hidden_scope: hidden,
         ledger_anchor,
+    }
+}
+
+/// The anchor a run commits to: everything but the state root is fixed by the issuer, the lane and the number of
+/// sources read.
+fn ledger_anchor(issuer: &str, lane: Lane, sources: usize, state_root: Digest32) -> LedgerAnchor {
+    let cell_id = match lane {
+        Lane::Public => format!("CELL-PUBLIC({issuer})"),
+        Lane::Synthetic => "CELL-SYNTHETIC".to_string(),
+    };
+    LedgerAnchor {
+        format_version: FMT_ANCHOR_V1,
+        cell_id,
+        ledger_epoch: 1,
+        commit_sequence: sources as u64,
+        adapter_registry_epoch: 1,
+        schema_epoch: 1,
+        policy_epoch: 1,
+        privacy_epoch: 1,
+        residency_epoch: 1,
+        state_root,
     }
 }
 
@@ -1783,6 +1863,128 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
     }
 
+    /// BD-339.S1: the expected-roots file parses and every row is well formed. Each anchor is the one the run
+    /// derives from its root (18 sources, public lane), so a typo in either is caught without the corpus.
+    #[test]
+    fn test_expected_roots_file_is_well_formed() {
+        let rows = sources::load_expected_roots(&sources::expected_roots_path(
+            &workspace_root(),
+            "barrick",
+        ))
+        .expect("expected roots");
+        assert!(rows.len() >= 5, "rows are append-only");
+        let hex64 = |s: &str| {
+            s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        };
+        let registry = load_issuer_profile(&workspace_root(), "barrick")
+            .expect("registry")
+            .through("2026Q2")
+            .expect("bound");
+        for row in &rows {
+            let at = format!("row of {} (line {})", row.commit, row.line);
+            assert!(
+                row.commit.len() >= 7 && row.commit.bytes().all(|b| b.is_ascii_hexdigit()),
+                "{at}"
+            );
+            for h in [
+                &row.registry_epoch,
+                &row.state_root,
+                &row.census_digest_of_digests,
+            ] {
+                assert!(hex64(h), "{at}: {h}");
+            }
+            assert!(!row.reason.is_empty() && !row.evidence.is_empty(), "{at}");
+            assert_eq!(row.totals.iter().sum::<u64>(), 2595, "{at}");
+            let mut root = [0_u8; 32];
+            for (i, byte) in root.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(&row.state_root[2 * i..2 * i + 2], 16).expect("hex");
+            }
+            let root = Digest32(root);
+            assert_eq!(
+                ledger_anchor("barrick", Lane::Public, registry.sources.len(), root)
+                    .anchor_id()
+                    .to_string(),
+                row.anchor_id,
+                "{at}"
+            );
+        }
+        // E822's row, resolved by re-running commit 748da79 on the corpus.
+        assert_eq!(
+            (rows[0].commit.as_str(), rows[0].totals),
+            ("748da79", [2120, 3, 4, 17, 391, 60])
+        );
+        let roots: std::collections::BTreeSet<&str> =
+            rows.iter().map(|r| r.state_root.as_str()).collect();
+        assert_eq!(roots.len(), rows.len(), "each row records a new root");
+    }
+
+    /// BD-339.S1 negative control: one flipped hex digit in any compared field is reported, naming the field.
+    #[test]
+    fn test_expected_root_comparison_rejects_flipped_digit() {
+        let r = run_synthetic_assurance(&[]).expect("synthetic");
+        let good = ExpectedRoot {
+            commit: "0000000".to_string(),
+            registry_epoch: r.registry_epoch(),
+            state_root: r.ledger_anchor.state_root.to_hex(),
+            anchor_id: r.ledger_anchor.anchor_id().to_string(),
+            totals: STATE_CODES.map(|c| r.count_state(c) as u64),
+            census_digest_of_digests: r.census_digest_of_digests(),
+            reason: "synthetic".to_string(),
+            evidence: "synthetic".to_string(),
+            line: 1,
+        };
+        assert_eq!(r.check_expected(&good), Ok(()));
+        let flip = |s: &str| {
+            let mut b = s.as_bytes().to_vec();
+            let last = b.len() - 1;
+            b[last] = if b[last] == b'0' { b'1' } else { b'0' };
+            String::from_utf8(b).expect("ascii")
+        };
+        let cases: [(&str, ExpectedRoot); 5] = [
+            (
+                "state_root",
+                ExpectedRoot {
+                    state_root: flip(&good.state_root),
+                    ..good.clone()
+                },
+            ),
+            (
+                "anchor_id",
+                ExpectedRoot {
+                    anchor_id: flip(&good.anchor_id),
+                    ..good.clone()
+                },
+            ),
+            (
+                "registry_epoch",
+                ExpectedRoot {
+                    registry_epoch: flip(&good.registry_epoch),
+                    ..good.clone()
+                },
+            ),
+            (
+                "census_digest_of_digests",
+                ExpectedRoot {
+                    census_digest_of_digests: flip(&good.census_digest_of_digests),
+                    ..good.clone()
+                },
+            ),
+            (
+                "totals",
+                ExpectedRoot {
+                    totals: [good.totals[0] + 1, 0, 0, 0, 0, 0],
+                    ..good.clone()
+                },
+            ),
+        ];
+        for (field, bad) in cases {
+            let why = r.check_expected(&bad).expect_err(field);
+            assert!(why.contains(&format!("{field}: run ")), "{field}: {why}");
+        }
+    }
+
     #[test]
     fn test_next_actions_text_has_no_hard_coded_count() {
         let actions = run_synthetic_assurance(&[])
@@ -2063,14 +2265,17 @@ mod tests {
         assert_eq!(iv_subjects.iter().filter(|s| **s == "Hemlo").count(), 3);
         assert_eq!(iv_subjects.iter().filter(|s| **s == "Kibali").count(), 2);
 
-        // Regression pin (not independent; see the doc comment). It moved from 9283f896… with BD-331.S3, whose
-        // 328 changed states were checked instance by instance against census E826, then from 0c6d01e3… with
-        // BD-331.S2: frame version 3, the hidden-scope section (435 instances, each equal to the hidden census
-        // E828) and the missing fact appended to each (iv) detail. No visible state changed.
-        assert_eq!(
-            r.ledger_anchor.state_root.to_hex(),
-            "fb8b38c2e3c6bf0c3f59e82ac88e00106b4048efb3c0463b06b8c0cf8a9c2601"
-        );
+        // Regression pin (not independent; see the doc comment): root, anchor, totals, registry epoch and digest
+        // of digests equal the last row of repro/barrick/expected.toml, which records why each root moved.
+        let expected = sources::load_expected_roots(&sources::expected_roots_path(
+            &workspace_root(),
+            "barrick",
+        ))
+        .expect("expected roots");
+        let last = expected.last().expect("at least one row");
+        if let Err(why) = r.check_expected(last) {
+            panic!("{why}");
+        }
     }
 
     /// BD-331.S2 on the real files: every (iv), visible or hidden, names a missing fact. One JSON line per (iv)

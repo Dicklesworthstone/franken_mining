@@ -236,6 +236,98 @@ impl IssuerProfile {
     }
 }
 
+/// One row of `repro/<issuer>/expected.toml` (BD-339.S1): what a run of the registered files printed at one
+/// code revision. The file is append-only; the last row is the current expectation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedRoot {
+    pub commit: String,
+    /// sha256 over the sorted `"{file}\t{sha256}\n"` lines of the registry rows the run used.
+    pub registry_epoch: String,
+    pub state_root: String,
+    pub anchor_id: String,
+    /// Instance counts in the order i, ii, iii, iv, v, np.
+    pub totals: [u64; 6],
+    /// sha256 over `"{file}\t{numeric_digest}\n"` in registry order.
+    pub census_digest_of_digests: String,
+    pub reason: String,
+    pub evidence: String,
+    /// 1-based line of the row's `[[expected]]` header.
+    pub line: usize,
+}
+
+/// `<workspace>/repro/<issuer>/expected.toml`.
+#[must_use]
+pub fn expected_roots_path(workspace: &Path, issuer: &str) -> PathBuf {
+    workspace.join("repro").join(issuer).join("expected.toml")
+}
+
+/// Reads the `[[expected]]` rows of an expected-roots file, in file order. Refuses an unknown table or key, a
+/// missing key, a value of the wrong type, and a file with no rows; the message names the line.
+pub fn load_expected_roots(path: &Path) -> Result<Vec<ExpectedRoot>, String> {
+    use fmine_registry::toml_subset::{TomlValue, parse_subset};
+    const KEYS: [&str; 13] = [
+        "commit",
+        "registry_epoch",
+        "state_root",
+        "anchor_id",
+        "totals_i",
+        "totals_ii",
+        "totals_iii",
+        "totals_iv",
+        "totals_v",
+        "totals_np",
+        "census_digest_of_digests",
+        "reason",
+        "evidence",
+    ];
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let doc = parse_subset(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut rows = Vec::new();
+    for row in &doc.rows {
+        if row.table != "expected" {
+            return Err(format!(
+                "line {}: unknown table [[{}]]",
+                row.line, row.table
+            ));
+        }
+        if let Some(f) = row.fields.iter().find(|f| !KEYS.contains(&f.key.as_str())) {
+            return Err(format!("line {}: unknown key {:?}", f.line, f.key));
+        }
+        let s = |key: &str| match row.get(key).map(|f| &f.value) {
+            Some(TomlValue::Str(v)) => Ok(v.clone()),
+            _ => Err(format!("line {}: {key} must be a string", row.line)),
+        };
+        let n = |key: &str| match row.get(key).map(|f| &f.value) {
+            Some(TomlValue::Int(v)) => u64::try_from(*v)
+                .map_err(|_| format!("line {}: {key} must not be negative", row.line)),
+            _ => Err(format!("line {}: {key} must be an integer", row.line)),
+        };
+        rows.push(ExpectedRoot {
+            commit: s("commit")?,
+            registry_epoch: s("registry_epoch")?,
+            state_root: s("state_root")?,
+            anchor_id: s("anchor_id")?,
+            totals: [
+                n("totals_i")?,
+                n("totals_ii")?,
+                n("totals_iii")?,
+                n("totals_iv")?,
+                n("totals_v")?,
+                n("totals_np")?,
+            ],
+            census_digest_of_digests: s("census_digest_of_digests")?,
+            reason: s("reason")?,
+            evidence: s("evidence")?,
+            line: row.line,
+        });
+    }
+    if rows.is_empty() {
+        return Err(format!("{}: no [[expected]] rows", path.display()));
+    }
+    Ok(rows)
+}
+
 /// An issuer name as used on the command line and as a registry file stem.
 #[must_use]
 pub fn is_issuer_name(s: &str) -> bool {

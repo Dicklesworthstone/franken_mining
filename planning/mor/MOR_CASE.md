@@ -605,3 +605,20 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
   - **State root** `fb8b38c2e3c6bf0c3f59e82ac88e00106b4048efb3c0463b06b8c0cf8a9c2601`, replacing `0c6d01e3…`
     (E826): frame v3, the hidden section, and the missing fact appended to each (iv) detail. No visible state
     changed; totals i 2383, ii 3, iii 4, iv 82, v 63, np 60.
+- **E829** Expected-roots file (BD-339.S1, bd-s4oy.1; FACT, execution, 2026-10-30). `repro/barrick/expected.toml`
+  holds one append-only row for each change that moved the real-lane root. Each row was observed by building
+  that commit from `git archive` in its own target directory and running `fmine assure public --issuer barrick`
+  on the 18 registered files.
+  - **E822's row resolved.** Commit 748da79 is the last commit before defab9d; no crate changed after 543df53.
+    It prints root `0aa62d52…`, anchor `anc_a2d1090f25ec08128f0134f8559dcdb8` and totals 2120/3/4/17/391/60, as
+    E822 recorded. defab9d prints `9283f896…` with anchor `anc_3ebc2f9029781b51cc242d95fc0df692`. A first
+    defab9d run printed `0aa62d52…` because it reused 748da79's target directory and did not rebuild. That run
+    is discarded.
+  - **Two values a reader can recompute without this code.** registry_epoch is sha256 over the sorted
+    `"{file}\t{sha256}\n"` lines of the 18 registry rows: `1b81a8aa…`. census_digest_of_digests is sha256 over
+    `"{file}\t{numeric_digest}\n"` in registry order, with the digests from `scripts/oracle/fidelity.py`:
+    `003ba318…`. Both were computed in Python before the Rust computed them; the Rust equals both.
+  - **Planted flip.** With the last digit of the last row's root changed from 1 to 0, three tests failed:
+    `barrick_real_files_match_the_independent_reader`, which named the field and both values;
+    `test_cli_assure_public_barrick_real_files`; and the default-CI `test_expected_roots_file_is_well_formed`,
+    because the anchor derived from the flipped root no longer matched. With the digit restored, all three pass.

@@ -66,7 +66,9 @@ The public lane of M0 (`fmine assure public`).
 - `sources::{SourceKind, RegisteredSource, RegisteredReconstruction, RegisteredShare, RegisteredMissingFact,
   IssuerProfile, load_issuer_profile, registry_path, registered_issuers, is_issuer_name, is_through_bound}`;
   `IssuerProfile::{from_registry, through}`; `IssuerProfile::{regions, shares}` (BD-331.S3);
-  `IssuerProfile::missing_facts`, `RegisteredReconstruction::basis` (BD-331.S2)
+  `IssuerProfile::missing_facts`, `RegisteredReconstruction::basis` (BD-331.S2);
+  `ExpectedRoot`, `expected_roots_path`, `load_expected_roots` (BD-339.S1)
+- `PublicAssuranceReport::{registry_epoch, census_digest_of_digests, check_expected}` (BD-339.S1)
 - `aisc::{IdentityFamily, IdentityState, IdentityInstance, FootingCertificate, UnregisteredHeader, AiscTable,
   RateMiss, ShareBasis, ExplanationBasis, DEFAULT_MISSING_FACT, SHARE_MISSING_FACT, locate_table,
   ledger_for_table, rate_interval_holds, scaled_rate_holds, feasible_share, feasible_share_text,
@@ -108,8 +110,10 @@ The public lane of M0 (`fmine assure public`).
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-PUB-1` (real files through 2026Q2, ignored test; recorded in MOR_CASE E820–E823): the census and digest of
-  every registered workbook equal an independent reader's. The test also pins the state root as a regression
-  value (not independent).
+  every registered workbook equal an independent reader's. The test also checks the run against the last row of
+  `repro/barrick/expected.toml` (root, anchor, totals, registry epoch, digest of digests). The root is a
+  regression value, not independent; the last two can be recomputed without this code (E829). Rows are
+  append-only, and a default-CI test checks each row's form and that its anchor derives from its root.
   - **Ledger:** 34 visible AISC tables, 2,595 instances. Footing: 1,004 (i), 4 (iii), 6 (v), 24 not published.
     Per ounce, after the stated share rule (E826): 1,379 (i), 3 (ii), 82 (iv), 57 (v), 36 not published. Before
     it, the counts were 1,116 (i), 17 (iv) and 385 (v).

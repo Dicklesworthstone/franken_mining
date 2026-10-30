@@ -800,10 +800,24 @@ mod tests {
         let json = env.to_json();
         assert!(json.contains("\"lane\":\"public\",\"gate_eligible\":true"));
         assert!(json.contains("\"through\":\"2026Q2\""));
-        // Regression pin of this implementation's output (MOR_CASE E822, E826, E828), not an independent value.
-        assert!(json.contains(
-            "\"state_root\":\"fb8b38c2e3c6bf0c3f59e82ac88e00106b4048efb3c0463b06b8c0cf8a9c2601\""
-        ));
+        // Regression pin of this implementation's output, not an independent value: the root and anchor of the
+        // last row of repro/barrick/expected.toml (BD-339.S1), which records why each root moved.
+        let expected = fmine_public::sources::load_expected_roots(
+            &fmine_public::sources::expected_roots_path(&root, "barrick"),
+        )
+        .expect("expected roots");
+        let last = expected.last().expect("at least one row");
+        assert!(
+            json.contains(&format!("\"state_root\":\"{}\"", last.state_root)),
+            "root differs from the expected row of {}",
+            last.commit
+        );
+        assert_eq!(
+            env.anchor_id.as_deref(),
+            Some(last.anchor_id.as_str()),
+            "anchor differs from the expected row of {}",
+            last.commit
+        );
         assert!(json.contains("\"aisc_tables\":34,\"instances\":2595"));
         // BD-331.S2 (census E828): the hidden scope is reported, labelled and never counted.
         assert!(json.contains(
@@ -815,10 +829,7 @@ mod tests {
             "\"totals\":{\"i\":2383,\"ii\":3,\"iii\":4,\"iv\":82,\"v\":63,\"np\":60}"
         ));
         // The public-lane envelope: the root as certificate, the no-claim line, and its two next actions.
-        assert_eq!(
-            env.certificate.as_deref(),
-            Some("fb8b38c2e3c6bf0c3f59e82ac88e00106b4048efb3c0463b06b8c0cf8a9c2601")
-        );
+        assert_eq!(env.certificate.as_deref(), Some(last.state_root.as_str()));
         assert_eq!(env.no_claim, Some(fmine_public::NO_CLAIM));
         let commands: Vec<&str> = env
             .next_actions

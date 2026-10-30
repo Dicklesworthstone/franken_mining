@@ -1,0 +1,95 @@
+# Expected results of `fmine assure public --issuer barrick --through 2026Q2` on the 18 registered workbooks
+# (BD-339.S1). Append-only: a change that moves the root appends a row in the same commit, with its reason and a
+# bead or E id. Rows are never edited. The ignored real-file tests in fmine-public and fmine-cli check the last
+# row.
+#
+# The state root is a regression value, not an independent oracle: it is BLAKE3 over the M0AS frame, which
+# binds file names, digests, census numbers, every instance's state and detail text. The same bytes and the same
+# code give the same root. The counts are checked against the independent readers in scripts/oracle/.
+#
+# registry_epoch: sha256 over the sorted "{file}\t{sha256}\n" lines of the registry rows the run used.
+# census_digest_of_digests: sha256 over "{file}\t{numeric_digest}\n" in registry order. Both can be computed
+# without this code: the numeric digests come from `python3 -I scripts/oracle/fidelity.py`.
+#
+# Every row was observed on 2026-10-30 by building that commit from `git archive` in its own target directory
+# and running the CLI on the registered corpus. Rows before 04684ff come from code that had no --through flag;
+# it read the same 18 files.
+
+schema = "fmine.expected_roots.v1"
+issuer = "barrick"
+through = "2026Q2"
+
+[[expected]]
+commit = "748da79"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "0aa62d521f74ae6d58d53eef614c2fc708b2988f57a86cbc2de12ff4be748cf9"
+anchor_id = "anc_a2d1090f25ec08128f0134f8559dcdb8"
+totals_i = 2120
+totals_ii = 3
+totals_iii = 4
+totals_iv = 17
+totals_v = 391
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "First identity ledger (E822); the code landed in 543df53 and no crate changed before 748da79."
+evidence = "E822"
+
+[[expected]]
+commit = "defab9d"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "9283f89649b8e51b63e271532d8227b801ee0e6dce522d7a1b5e60c9ad389bb2"
+anchor_id = "anc_3ebc2f9029781b51cc242d95fc0df692"
+totals_i = 2120
+totals_ii = 3
+totals_iii = 4
+totals_iv = 17
+totals_v = 391
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "Undecidable rate ranges print their upper bound rounded up; no state changed."
+evidence = "E822"
+
+[[expected]]
+commit = "04684ff"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "be22f27186a4b923e366594c8e5376c4a0d3bb2fd3df23766417e03658adba82"
+anchor_id = "anc_cd6aae6a4d13a213fb02a212b3f9ef84"
+totals_i = 2380
+totals_ii = 3
+totals_iii = 4
+totals_iv = 82
+totals_v = 66
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "Stated share rule for cost of sales per ounce: 260 (v) to (i), 65 (v) to (iv)."
+evidence = "bd-prmn.3, E826"
+
+[[expected]]
+commit = "70aa5ae"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "0c6d01e3f3a8020e4cc6591559c04d10a171e4da0805c0b47f7784357cf03613"
+anchor_id = "anc_26e2a6841ebdf70563e4db828c535408"
+totals_i = 2383
+totals_ii = 3
+totals_iii = 4
+totals_iv = 82
+totals_v = 63
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "Long Canyon's 61.5% share registered: its 3 rates move from (v) to (i)."
+evidence = "bd-prmn.3, E827"
+
+[[expected]]
+commit = "0779a3c"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "fb8b38c2e3c6bf0c3f59e82ac88e00106b4048efb3c0463b06b8c0cf8a9c2601"
+anchor_id = "anc_8874c61ae1fd136b9b64ed92deb763c9"
+totals_i = 2383
+totals_ii = 3
+totals_iii = 4
+totals_iv = 82
+totals_v = 63
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "Hidden scope in its own root section, and missing facts on every (iv); no visible state changed."
+evidence = "bd-prmn.2, E828"
