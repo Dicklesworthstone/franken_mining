@@ -20,30 +20,36 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `robot-docs`.
 
 ## 3. Authority, Epistemics & Representation
-- Every response is an `FMT-ENV-1` envelope.
-- A successful assurance run carries the run's `anc_…` anchor id, and the report as payload.
-- The payload holds:
-  - `lane`, `gate_eligible` and a `no_claim` line;
-  - the four INV-002 flags, all false;
-  - sources with SHA-256, the extraction census, the identity ledger with cited exceptions, and the quarantine;
-  - the state root and `next_actions` (`[{command, why}]`).
+- Every invocation prints exactly one `FMT-ENV-1` envelope on stdout, a usage error included (`BD-329.S3`).
+- After `anchor_id` every envelope has, in this order:
+  - `flags`: the four INV-002 flags, all false, from one constant (no field or setter can set one);
+  - `certificate`: the report's state root (hex), or null for a verb that writes no report;
+  - `warnings` (an array) and `next_actions` (`[{command, why}]`; every command parses with `parse_args`);
+  - `no_claim`, on report envelopes only;
+  - then `payload` and `refusal`.
+- A successful assurance run carries the run's `anc_…` anchor id, and the report as payload: `lane`,
+  `gate_eligible`, sources with SHA-256, the extraction census, the identity ledger with cited exceptions, the
+  quarantine and the state root. The payload holds no flags, no `no_claim` and no `next_actions`.
 - A refusal carries `{code, exit_code, what, fix}` and a null payload.
+- Field names are this crate's. Renaming them to FMT-ENV-1's (`v`, `event`, `node`, `anchor`, `data`) and
+  bumping `schema_version` are open for the FMT-ENV-1 owner.
 
 ## 4. Public API Surface
-- `OutputFormat`, `CliCommand`, `Envelope`
-- `parse_args`, `execute_command`
+- `OutputFormat`, `CliCommand`, `Envelope`, `NextAction`
+- `run` (what `fmine` prints, and its exit code), `invoke`, `parse_args`, `execute_command`
 
 ## 5. Guards & Typed Refusals
 - **Exit 0:** ok.
 - **Exit 2:** a usage error with no refusal code. This covers:
-  - an unknown verb or flag;
+  - an unknown verb or flag, a surplus word, or a flag the verb does not take (none is ignored);
   - a missing `--issuer`;
   - an unregistered issuer (no `registries/sources/<issuer>.toml` in the workspace);
   - a malformed `--through` bound, or `--through` with `--synthetic`;
   - `--issuer` together with `--synthetic`.
 - **Exit 3–8:** the catalog refusal's own exit code. For example, `FMINE-REF-502` (exit 8) means a registered file
   is missing or altered.
-- `claim show` refuses (`FMINE-REF-502`): M0 has no claim store, and the verb never fabricates a claim.
+- `claim show` refuses (`FMINE-REF-502`): M0 has no claim store, and the verb never fabricates a claim. The
+  code is wrong for this case (502 is a digest mismatch); BD-328.S1 (`bd-h0q1.1`, point 4) owns the choice.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-CLI-1`: `assure public --synthetic` exits 0 with `lane` `synthetic`, `gate_eligible` false and the seeded
@@ -51,6 +57,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 - `PO-CLI-2`: `assure public --issuer barrick` without the registered files exits 8 and names them.
 - `PO-CLI-3` (real files, ignored test): with the files it exits 0 with 34 tables, 2,595 instances and totals
   `{i 2120, ii 3, iii 4, iv 17, v 391, np 60}`.
+- `PO-ADIT-1`: every verb's envelope matches a hand-written frame (`test_po_adit_1_golden_every_verb`; payload,
+  anchor, certificate and refusal text masked), and `tests/e2e_envelope.sh` checks the printed line of each.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 None: every failure is a usage error or a typed refusal.

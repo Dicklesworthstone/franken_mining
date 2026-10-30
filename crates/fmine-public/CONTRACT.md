@@ -36,7 +36,8 @@ The public lane of M0 (`fmine assure public`).
   56 pairs from W1's read, frozen before the Q3 2026 release), a data row whose `(section, label)` is not
   registered is refused too. Units, region maps and the W1-DR-01/02 corrections are not data yet.
 - `synthetic`: invented workbooks in the real layout, seeded with one known answer per state. They are never
-  gate-eligible.
+  gate-eligible. `write_issuer_workspace` writes them, plus a later title-only vintage, with a digest registry
+  under the reserved issuer name `synthetic`; `run_public_assurance` runs that name in the synthetic lane.
 - `lib`:
   - `load_registered_sources` verifies every registered file;
   - `assess` builds the ledger and the state root;
@@ -52,7 +53,8 @@ The public lane of M0 (`fmine assure public`).
   - unregistered headers and table refusals.
 
   Changing any input cell moves the root.
-- The report carries `lane`, `gate_eligible`, a `no_claim` line, and the four INV-002 flags, all false.
+- The report payload carries `lane` and `gate_eligible`. The no-claim line (`NO_CLAIM`), the four INV-002 flags
+  and the next actions (`PublicAssuranceReport::next_actions`) are envelope fields, which `fmine-cli` prints.
 
 ## 4. Public API Surface
 - `sources::{SourceKind, RegisteredSource, RegisteredReconstruction, IssuerProfile, load_issuer_profile,
@@ -61,9 +63,11 @@ The public lane of M0 (`fmine assure public`).
   RateMiss, locate_table, ledger_for_table, rate_interval_holds, reconstruction_closes, match_subject, cell_text}`
 - `mine_stats::{View, MineStatsCell, MineStatsValue, CellRefusal, MineStatsRead, LabelVocabulary, read_mine_stats,
   strip_footnote, printed_share, site_name, is_m0_target}`
-- `synthetic::{synthetic_aisc_cells, synthetic_workbooks, synthetic_profile, SYNTHETIC_SUBJECTS}`
+- `synthetic::{synthetic_aisc_cells, synthetic_workbooks, synthetic_profile, write_issuer_workspace,
+  SYNTHETIC_ISSUER, SYNTHETIC_SUBJECTS, SYNTHETIC_LATER_STATS_FILE}`
 - `Lane`, `LoadedSource`, `TableRefusal`, `AlternateCounts`, `PublicAssuranceReport`, `load_registered_sources`,
-  `assess`, `run_public_assurance`, `run_barrick_m0_assurance`, `run_synthetic_assurance`, `cell_to_public_claim`
+  `assess`, `run_public_assurance`, `run_barrick_m0_assurance`, `run_synthetic_assurance`, `cell_to_public_claim`,
+  `NO_CLAIM`; `PublicAssuranceReport::next_actions`
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-502` (exit 8) names every registered file that is missing, digest-mismatched or unparseable. A run never

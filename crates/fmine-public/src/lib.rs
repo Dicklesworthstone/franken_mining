@@ -296,17 +296,13 @@ impl PublicAssuranceReport {
     #[must_use]
     pub fn to_json(&self) -> String {
         let mut o = String::new();
+        // The no-claim line, the four flags and the next actions are envelope fields (fmine-cli), not payload.
         let _ = write!(
             o,
-            "{{\"issuer\":{},\"lane\":{},\"gate_eligible\":{},\"no_claim\":{},",
+            "{{\"issuer\":{},\"lane\":{},\"gate_eligible\":{},",
             js(&self.issuer),
             js(self.lane.as_str()),
-            self.gate_eligible(),
-            js(NO_CLAIM)
-        );
-        o.push_str(
-            "\"flags\":{\"reserve_disclosure_claim\":false,\"execution_authorized\":false,\
-             \"geotechnical_signoff\":false,\"regulatory_compliance_claim\":false},",
+            self.gate_eligible()
         );
         let _ = write!(
             o,
@@ -560,43 +556,38 @@ impl PublicAssuranceReport {
         }
         let _ = write!(
             o,
-            "],\"state_root\":{},\"anchor_id\":{},\"next_actions\":[",
+            "],\"state_root\":{},\"anchor_id\":{}}}",
             js(&self.ledger_anchor.state_root.to_hex()),
             js(&self.ledger_anchor.anchor_id().to_string())
         );
-        let actions: &[(&str, &str)] = match self.lane {
-            Lane::Public => &[
-                (
-                    "fmine assure public --synthetic",
-                    "known-answer run on synthetic workbooks that exercises every ledger state",
-                ),
-                ("fmine robot-docs", "verbs, envelope fields and exit codes"),
-            ],
-            Lane::Synthetic => &[
-                (
-                    "fmine assure public --issuer barrick",
-                    "the gate-eligible run over the workbooks in registries/sources/barrick.toml",
-                ),
-                ("fmine robot-docs", "verbs, envelope fields and exit codes"),
-            ],
-        };
-        for (n, (command, why)) in actions.iter().enumerate() {
-            let _ = write!(
-                o,
-                "{}{{\"command\":{},\"why\":{}}}",
-                if n == 0 { "" } else { "," },
-                js(command),
-                js(why)
-            );
-        }
-        o.push_str("]}");
         o
+    }
+
+    /// The commands worth running after this report, as `(command, why)`: the CLI puts them in the
+    /// envelope's `next_actions`.
+    #[must_use]
+    pub fn next_actions(&self) -> Vec<(&'static str, &'static str)> {
+        let other_lane = match self.lane {
+            Lane::Public => (
+                "fmine assure public --synthetic",
+                "known-answer run on synthetic workbooks that exercises every ledger state",
+            ),
+            Lane::Synthetic => (
+                "fmine assure public --issuer barrick",
+                "the gate-eligible run over the workbooks in registries/sources/barrick.toml",
+            ),
+        };
+        vec![
+            other_lane,
+            ("fmine robot-docs", "verbs, envelope fields and exit codes"),
+        ]
     }
 }
 
 const STATE_CODES: [&str; 6] = ["i", "ii", "iii", "iv", "v", "np"];
 
-const NO_CLAIM: &str = "Reproduces and checks the issuer's published AISC reconciliation tables as printed. \
+/// What an `assure public` report does not claim; the CLI prints it in the envelope's `no_claim` field.
+pub const NO_CLAIM: &str = "Reproduces and checks the issuer's published AISC reconciliation tables as printed. \
 It makes no reserve, resource, geotechnical, regulatory or investment claim and implies no issuer affiliation.";
 
 /// JSON string literal.
@@ -843,12 +834,21 @@ pub fn assess(
 }
 
 /// `fmine assure public --issuer <issuer>`: the gate-eligible run over the registered public workbooks.
+///
+/// The issuer name `synthetic` is reserved for the invented workbooks: a registry under that name (for
+/// example one written by [`synthetic::write_issuer_workspace`]) runs in the synthetic lane and is never
+/// gate-eligible, though it goes through the same registry and digest checks.
 pub fn run_public_assurance(
     profile: &IssuerProfile,
     root: &Path,
 ) -> Result<PublicAssuranceReport, Refusal> {
     let sources = load_registered_sources(profile, root)?;
-    Ok(assess(profile, Lane::Public, sources))
+    let lane = if profile.issuer == synthetic::SYNTHETIC_ISSUER {
+        Lane::Synthetic
+    } else {
+        Lane::Public
+    };
+    Ok(assess(profile, lane, sources))
 }
 
 /// The Barrick M0 run (`GATE-BULL-01`): registry and corpus both under `root`.
@@ -994,7 +994,14 @@ mod tests {
         assert!(
             json.contains("\"totals\":{\"i\":21,\"ii\":1,\"iii\":1,\"iv\":1,\"v\":6,\"np\":5}")
         );
-        assert!(json.contains("\"execution_authorized\":false"));
+        // The flags, the no-claim line and the next actions belong to the CLI envelope, not the payload.
+        for field in ["\"flags\"", "\"no_claim\"", "\"next_actions\""] {
+            assert!(!json.contains(field), "{field} in the payload");
+        }
+        assert!(json.ends_with(&format!(
+            "\"anchor_id\":\"{}\"}}",
+            r.ledger_anchor.anchor_id()
+        )));
     }
 
     /// A cell changed in an input moves the state root and the affected instance's state.
@@ -1110,67 +1117,9 @@ mod tests {
     #[test]
     fn test_synthetic_three_file_toml_profile_runs_end_to_end() {
         let ws = std::env::temp_dir().join(format!("fmine-public-toml-e2e-{}", std::process::id()));
-        let corpus = ws.join("corpus");
-        std::fs::create_dir_all(&corpus).expect("corpus dir");
-        let mut files = synthetic::synthetic_workbooks(&[]);
-        let later = fmine_io::xlsx::build_minimal_xlsx(&[fmine_io::xlsx::MinimalSheet {
-            name: "Minestats3".to_string(),
-            hidden: false,
-            cells: vec![(
-                "A1".to_string(),
-                MinimalCell::Text("Mine Statistics (Gold)".to_string()),
-            )],
-        }]);
-        files.push((
-            "Synthetic_Q2_Mine_Stats.xlsx",
-            SourceKind::MineStats,
-            "2030Q2",
-            later,
-        ));
-        let mut toml = String::from(
-            "schema = \"fmine.sources.v1\"\nissuer = \"synthetic\"\ncorpus_dir = \"corpus\"\n\
-             retrieved_utc = \"synthetic\"\nurl_prefix = \"https://example.invalid/\"\n",
-        );
-        for (name, kind, quarter, bytes) in &files {
-            std::fs::write(corpus.join(name), bytes).expect("write workbook");
-            let _ = write!(
-                toml,
-                "\n[[source]]\nfile = \"{name}\"\nkind = \"{}\"\nquarter = \"{quarter}\"\npath = \"{name}\"\n\
-                 url_basis = \"W1 table\"\nbytes = {}\nsha256 = \"{}\"\n",
-                kind.as_str(),
-                bytes.len(),
-                sha256(bytes).to_hex()
-            );
-        }
+        let reg = synthetic::write_issuer_workspace(&ws).expect("write workspace");
+        assert_eq!(reg, sources::registry_path(&ws, "synthetic"));
         let code_profile = synthetic::synthetic_profile();
-        for s in &code_profile.subjects {
-            let _ = write!(toml, "\n[[subject]]\nname = \"{s}\"\n");
-        }
-        let rec = &code_profile.reconstructions[0];
-        let _ = write!(
-            toml,
-            "\n[[reconstruction]]\nevidence_id = \"{}\"\ntable_file = \"{}\"\nsheet = \"{}\"\nsubject = \"{}\"\n\
-             family = \"{}\"\ncomponent_file = \"{}\"\ncomponent_sheet = \"{}\"\ncomponent_cell = \"{}\"\n\
-             label_checks = \"synthetic\"\nrule = \"{}\"\n",
-            rec.evidence_id,
-            rec.table_file,
-            rec.sheet,
-            rec.subject,
-            rec.family.as_str(),
-            rec.component_file,
-            rec.component_sheet,
-            rec.component_cell,
-            rec.rule
-        );
-        for (cell, prefix) in &rec.label_checks {
-            let _ = write!(
-                toml,
-                "\n[[label_check]]\nset = \"synthetic\"\ncell = \"{cell}\"\nprefix = \"{prefix}\"\n"
-            );
-        }
-        let reg = sources::registry_path(&ws, "synthetic");
-        std::fs::create_dir_all(reg.parent().expect("dir")).expect("registry dir");
-        std::fs::write(&reg, toml).expect("write registry");
 
         let profile = load_issuer_profile(&ws, "synthetic").expect("generated registry loads");
         assert_eq!(profile.sources.len(), 3);
@@ -1184,6 +1133,13 @@ mod tests {
         );
         assert_eq!(r.sources.len(), 3);
         assert_eq!(r.ledger_anchor.commit_sequence, 3);
+        // The reserved issuer name keeps invented numbers out of the public lane; the same registry under
+        // another name would be gate-eligible, so the name is what decides.
+        assert_eq!((r.lane, r.gate_eligible()), (Lane::Synthetic, false));
+        let mut renamed = profile.clone();
+        renamed.issuer = "renamed".to_string();
+        let public = run_public_assurance(&renamed, &ws).expect("same files");
+        assert_eq!((public.lane, public.gate_eligible()), (Lane::Public, true));
 
         let bounded =
             run_public_assurance(&profile.through("2030Q1").expect("bound"), &ws).expect("run");
@@ -1200,9 +1156,12 @@ mod tests {
 
     #[test]
     fn test_next_actions_text_has_no_hard_coded_count() {
-        let json = run_synthetic_assurance(&[]).expect("synthetic").to_json();
-        assert!(json.contains("registries/sources/barrick.toml"), "{json}");
-        assert!(!json.contains(" 18 "), "{json}");
+        let actions = run_synthetic_assurance(&[])
+            .expect("synthetic")
+            .next_actions();
+        let text: String = actions.iter().map(|(c, w)| format!("{c} {w} ")).collect();
+        assert!(text.contains("registries/sources/barrick.toml"), "{text}");
+        assert!(!text.contains(" 18 "), "{text}");
     }
 
     fn workspace_root() -> PathBuf {

@@ -33,6 +33,10 @@ jobs:
         run: cargo check --workspace --all-targets --profile ${{ matrix.profile }}
       - name: Run workspace test suite
         run: cargo test --workspace --profile ${{ matrix.profile }}
+      # Every verb's printed envelope (bd-sjrh.3, PO-ADIT-1); the real-corpus run logs skipped: corpus_absent.
+      - name: Envelope e2e
+        if: matrix.profile == 'dev'
+        run: bash tests/e2e_envelope.sh
       # The source registry is data read at run time (bd-s9j3.1): a vintage is registered by editing
       # registries/sources/<issuer>.toml, so the release binary must not carry a registry digest.
       - name: No compiled-in source registry

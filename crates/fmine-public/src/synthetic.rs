@@ -16,11 +16,17 @@
 //!   Mine Stats workbook, `Minestats3!B32` = 13 (explained).
 //! - I "Footnote" is skipped; J "Mystery Mine" is not a registered subject.
 
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+
+use fmine_core::hash::sha256;
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, build_minimal_xlsx};
 
 use crate::aisc::IdentityFamily;
-use crate::sources::{IssuerProfile, RegisteredReconstruction, SourceKind};
+use crate::sources::{IssuerProfile, RegisteredReconstruction, SourceKind, registry_path};
 
+/// The issuer name reserved for the synthetic lane: a run under it is never gate-eligible.
+pub const SYNTHETIC_ISSUER: &str = "synthetic";
 pub const SYNTHETIC_AISC_FILE: &str = "Synthetic_AISC.xlsx";
 pub const SYNTHETIC_STATS_FILE: &str = "Synthetic_Mine_Stats.xlsx";
 pub const SYNTHETIC_TABLE_SHEET: &str = "Q1 2030";
@@ -42,7 +48,7 @@ pub const SYNTHETIC_SUBJECTS: [&str; 8] = [
 pub fn synthetic_profile() -> IssuerProfile {
     let s = |x: &str| x.to_string();
     IssuerProfile {
-        issuer: s("synthetic"),
+        issuer: s(SYNTHETIC_ISSUER),
         corpus_dir: String::new(),
         retrieved_utc: String::new(),
         sources: Vec::new(),
@@ -220,4 +226,84 @@ pub fn synthetic_workbooks(
             aisc,
         ),
     ]
+}
+
+/// A later synthetic Mine Stats vintage (2030Q2) with a title and nothing else.
+pub const SYNTHETIC_LATER_STATS_FILE: &str = "Synthetic_Q2_Mine_Stats.xlsx";
+
+/// Writes a synthetic issuer workspace under `ws`, so the registry-and-digest path of
+/// `fmine assure public --issuer synthetic --workspace <ws>` runs end to end on invented numbers. The issuer
+/// name is reserved, so the run is in the synthetic lane and never gate-eligible.
+///
+/// It writes the two synthetic workbooks plus a later, title-only Mine Stats vintage (2030Q2) into
+/// `ws/corpus`, and `registries/sources/synthetic.toml`, which registers all three by size and sha256 along with
+/// the synthetic subjects, the reconstruction and its label checks. Returns the registry path.
+///
+/// # Errors
+/// The I/O error of the first directory or file that cannot be written.
+pub fn write_issuer_workspace(ws: &Path) -> std::io::Result<PathBuf> {
+    let corpus = ws.join("corpus");
+    std::fs::create_dir_all(&corpus)?;
+    let mut files = synthetic_workbooks(&[]);
+    let later = build_minimal_xlsx(&[MinimalSheet {
+        name: "Minestats3".to_string(),
+        hidden: false,
+        cells: vec![t("A1", "Mine Statistics (Gold)")],
+    }]);
+    files.push((
+        SYNTHETIC_LATER_STATS_FILE,
+        SourceKind::MineStats,
+        "2030Q2",
+        later,
+    ));
+    let mut toml = String::from(
+        "schema = \"fmine.sources.v1\"\nissuer = \"synthetic\"\ncorpus_dir = \"corpus\"\n\
+         retrieved_utc = \"synthetic\"\nurl_prefix = \"https://example.invalid/\"\n",
+    );
+    for (name, kind, quarter, bytes) in &files {
+        std::fs::write(corpus.join(name), bytes)?;
+        let _ = write!(
+            toml,
+            "\n[[source]]\nfile = \"{name}\"\nkind = \"{}\"\nquarter = \"{quarter}\"\npath = \"{name}\"\n\
+             url_basis = \"W1 table\"\nbytes = {}\nsha256 = \"{}\"\n",
+            kind.as_str(),
+            bytes.len(),
+            sha256(bytes).to_hex()
+        );
+    }
+    let profile = synthetic_profile();
+    for s in &profile.subjects {
+        let _ = write!(toml, "\n[[subject]]\nname = \"{s}\"\n");
+    }
+    for rec in &profile.reconstructions {
+        let _ = write!(
+            toml,
+            "\n[[reconstruction]]\nevidence_id = \"{}\"\ntable_file = \"{}\"\nsheet = \"{}\"\nsubject = \"{}\"\n\
+             family = \"{}\"\ncomponent_file = \"{}\"\ncomponent_sheet = \"{}\"\ncomponent_cell = \"{}\"\n\
+             label_checks = \"{}\"\nrule = \"{}\"\n",
+            rec.evidence_id,
+            rec.table_file,
+            rec.sheet,
+            rec.subject,
+            rec.family.as_str(),
+            rec.component_file,
+            rec.component_sheet,
+            rec.component_cell,
+            rec.evidence_id,
+            rec.rule
+        );
+        for (cell, prefix) in &rec.label_checks {
+            let _ = write!(
+                toml,
+                "\n[[label_check]]\nset = \"{}\"\ncell = \"{cell}\"\nprefix = \"{prefix}\"\n",
+                rec.evidence_id
+            );
+        }
+    }
+    let reg = registry_path(ws, SYNTHETIC_ISSUER);
+    if let Some(dir) = reg.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&reg, toml)?;
+    Ok(reg)
 }
