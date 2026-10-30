@@ -690,3 +690,20 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     them. It has not run: LibreOffice is on neither the owner machine nor an rch worker, and the `as-shown`
     CI job runs after a push. Until then, E834 equates two readers of one stated rule, not the rule with a
     renderer.
+- **E835** Quarterly vintage registration, rehearsed on Q2 2026 (NEW-vintage.S2, bd-s9j3.2; FACT, execution,
+  2026-10-30, owner machine, commit a211446).
+  - **Oracle.** `fidelity.py` reproduces E820 on the 18 files: 101 visible and 6 hidden sheets; 30,388 numeric,
+    3,952 placeholder, 1,092 error and 6,537 text cells. Run by the script's oracle step, `census2.py`
+    reproduces E822: 2,595 instances, with i 2120, ii 3, iii 4, iv 17, v 391 and np 60.
+  - **Dry run.** `scripts/register_vintage.sh --dry-run` was run on the two live Q2 2026 URLs. Its rows equal
+    the registered rows field by field, except the Mine Stats `url_basis` ("fetched and verified 2026-10-30"
+    against "W1 table").
+  - **Run.** `--run 2026Q1` on that directory, with a scratch blind record of a local release binary
+    (sha256 `c479c16e…`):
+    - the seal was intact, and the oracle's time (06:11:41Z) preceded both fmine runs (06:12:04Z);
+    - both Q2 2026 files' census equal the oracle's;
+    - `root_all` is `fb8b38c2…`, and the `--through 2026Q1` root is `b6d5fa80…`;
+    - Q2 2026 adds 320 instances (2,595 − 2,275), equal to the oracle's per-file count for
+      `Barrick_Q2_2026_AISC.xlsx`.
+  - **Not yet.** The real blind record (bd-s9j3.1) needs a push, which is the owner's decision. `--run` reads it
+    from `repro/barrick/blind_record.json` (`binary_sha256`).
