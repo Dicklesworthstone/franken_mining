@@ -508,3 +508,38 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
   - **Working tree.** On the same day, frankensim's working tree held 264 bundles: a live session had 38 bundle
     deletions uncommitted, among them `gold-pure-nbs-c447`. Corpus counts are therefore quoted at a commit, never
     from a working tree.
+
+**Mine Stats reader against W1's reader (lead agent, 2026-10-29).** Id E825 is new.
+
+- **E825** `fmine_public::mine_stats` (bd-gwf1.1), the label-anchored Rust reader, reads the ten registered Mine Stats
+  workbooks (2024Q1–2026Q2) exactly as W1's openpyxl reader did before the Rust code existed (FACT, execution:
+  ignored test `barrick_mine_stats_match_the_w1_reader`; reference `scripts/oracle/mine_stats_extract3.py`, output
+  `long_all3.json` sha256 `8992ae50…81dd`, lines from `scripts/oracle/mine_stats_lines.py`).
+  - **Equality.** Same canonical-line digest on every file: sheet, cell, view, period, printed and clean site, label,
+    section, kind, and the raw token (numbers as IEEE-754 bits). Q2 2026 and Q4 2024 were also compared byte for
+    byte. There were no refusals and no hidden sheets.
+  - **Counts.** 22,732 cells in 102 blocks: 18,775 numbers (7 of them numeric zeros), 1,173 `—` or `'— '`,
+    2,778 `n/a`, 6 blank.
+
+    | File | Cells | Numbers | Zeros | Dash | n/a | Blank |
+    |---|---|---|---|---|---|---|
+    | Q1 2024 | 1,380 | 1,082 | 0 | 108 | 190 | 0 |
+    | Q2 2024 | 2,760 | 2,204 | 0 | 183 | 373 | 0 |
+    | Q3 2024 | 2,760 | 2,210 | 0 | 177 | 373 | 0 |
+    | Q4 2024 | 2,760 | 2,213 | 0 | 173 | 372 | 2 |
+    | Q1 2025 | 1,292 | 1,095 | 0 | 52 | 145 | 0 |
+    | Q2 2025 | 2,584 | 2,213 | 0 | 82 | 288 | 1 |
+    | Q3 2025 | 2,584 | 2,220 | 0 | 82 | 281 | 1 |
+    | Q4 2025 | 2,616 | 2,266 | 0 | 44 | 306 | 0 |
+    | Q1 2026 | 1,308 | 1,066 | 3 | 90 | 152 | 0 |
+    | Q2 2026 | 2,688 | 2,206 | 4 | 182 | 298 | 2 |
+  - **Plan §21.6 / C1.** Q1 and Q2 2026 hold 3,996 cells. The seven numeric-zero placeholders (C1 DR-07) are numbers
+    with stored text `0` at `Minestats1!N27`, `N28` and `Minestats3!F19` (both files) and `Minestats3!F64` (Q2 2026).
+  - **W1 §4 M0 census.** It reproduces: 820 cells = 744 numeric, 33 `'— '`, 11 `'—'`, 28 `n/a`, 4 numeric zero.
+    W1 gave the counts but not the selection. The selection that reproduces them was found in Python on W1's own
+    read first: QTD cost of sales, total cash costs or C1, and AISC; three-month processed grade and site recovery;
+    current year; aggregates excluded, the Nevada Gold Mines total among them.
+  - **Change found on the way.** The xlsx reader used to trim placeholders, so `'— '` read as `'—'` and W1's census
+    could not be reproduced. It now keeps the token as stored. The real-lane state root did not move.
+  - **Not covered.** The metric-label registry (labels, units, region maps v0–v2, W1-DR-01 and W1-DR-02 as data) and
+    the refusal of unregistered labels are not built. The read is not yet in the state root or the identity ledger.

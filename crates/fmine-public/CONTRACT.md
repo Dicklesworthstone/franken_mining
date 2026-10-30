@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "synthetic"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "synthetic"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
@@ -26,6 +26,14 @@ The public lane of M0 (`fmine assure public`).
     (iii) issuer discrepancy, with an exact certificate and any single-line sign-flip witness;
     (iv) undecidable; (v) refused; not published (excluded by name).
   - **Alternative construction:** subtotal rounded once. It is reported, never scored.
+- `mine_stats` (bd-gwf1.1): a label-anchored reader for the quarterly Mine Statistics workbooks (W1 §3, §4, §13).
+  It finds blocks by `For the (three|six|nine|twelve) months`, takes site names from the row above (carried left
+  across merged blanks), and strips trailing footnote numbers from labels. The `QTD`/`YTD` summary columns are
+  mapped to field ids. Each data cell becomes a typed value (`Number` with its stored text, `Nil`,
+  `NotApplicable`, `Missing`) with locator `<quarter>:<sheet>!<cell>`, period, site, printed ownership share,
+  label and section. Numeric zero stays `Number`. Cells outside the token set, unknown periods and labels
+  repeated within a block are refused by locator. The metric-label registry (labels, units, region maps,
+  corrections) is not built yet.
 - `synthetic`: invented workbooks in the real layout, seeded with one known answer per state. They are never
   gate-eligible.
 - `lib`:
@@ -50,6 +58,8 @@ The public lane of M0 (`fmine assure public`).
   registry_path, registered_issuers, is_issuer_name, is_through_bound}`; `IssuerProfile::{from_registry, through}`
 - `aisc::{IdentityFamily, IdentityState, IdentityInstance, FootingCertificate, UnregisteredHeader, AiscTable,
   RateMiss, locate_table, ledger_for_table, rate_interval_holds, reconstruction_closes, match_subject, cell_text}`
+- `mine_stats::{View, MineStatsCell, MineStatsValue, CellRefusal, MineStatsRead, read_mine_stats, strip_footnote,
+  printed_share, site_name, is_m0_target}`
 - `synthetic::{synthetic_aisc_cells, synthetic_workbooks, synthetic_profile, SYNTHETIC_SUBJECTS}`
 - `Lane`, `LoadedSource`, `TableRefusal`, `AlternateCounts`, `PublicAssuranceReport`, `load_registered_sources`,
   `assess`, `run_public_assurance`, `run_barrick_m0_assurance`, `run_synthetic_assurance`, `cell_to_public_claim`
@@ -78,6 +88,13 @@ The public lane of M0 (`fmine assure public`).
   moves the state root and the affected state. A wrong component label leaves the instance in (iv).
 - `PO-PUB-3`: a workspace without the files refuses, naming every registered file; the count follows the registry
   rows (a row added to a copy of the TOML changes it with no code edit).
+- `PO-PUB-4` (Mine Stats reader, MOR_CASE E825):
+  - **Real files** (ignored test through 2026Q2): all ten reads equal W1's openpyxl read, digest for digest
+    (22,732 cells, no refusals). Q1 and Q2 2026 hold 3,996 cells, and the seven numeric zeros sit at their
+    locators with stored text `0`. The W1 §4 M0 census is 820 cells.
+  - **Synthetic** (default suite): an inserted site, an inserted row, renumbered footnotes and a misspelled
+    month give the same values. Each refusal names its cell: an unknown token, a repeated label, an unknown
+    period and a formula error.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.

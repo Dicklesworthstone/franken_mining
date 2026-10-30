@@ -7,6 +7,7 @@
 //! file. Synthetic workbooks exist only in the synthetic lane, which says so and is never gate-eligible.
 
 pub mod aisc;
+pub mod mine_stats;
 pub mod sources;
 pub mod synthetic;
 
@@ -27,6 +28,7 @@ use crate::aisc::{
     IdentityFamily, IdentityInstance, IdentityState, RateMiss, UnregisteredHeader, cell_text,
     ledger_for_table, locate_table, reconstruction_closes,
 };
+use crate::mine_stats::{CellRefusal, MineStatsRead, read_mine_stats};
 use crate::sources::{IssuerProfile, RegisteredReconstruction, SourceKind};
 pub use crate::sources::load_issuer_profile;
 
@@ -213,6 +215,10 @@ pub struct PublicAssuranceReport {
     pub table_refusals: Vec<TableRefusal>,
     pub instances: Vec<IdentityInstance>,
     pub unregistered_headers: Vec<UnregisteredHeader>,
+    /// The label-anchored read of each registered Mine Stats workbook, by file name (bd-gwf1.1). Not in the
+    /// state root yet: it enters with the Mine Stats claims (BD-332.S3), so the root still moves only when an
+    /// input file or the AISC ledger does.
+    pub mine_stats: Vec<(String, MineStatsRead)>,
     pub ledger_anchor: LedgerAnchor,
 }
 
@@ -345,6 +351,37 @@ impl PublicAssuranceReport {
             total(|c| c.formula_error_cells),
             total(|c| c.text_cells)
         );
+        o.push_str("\"mine_stats\":[");
+        for (n, (file, read)) in self.mine_stats.iter().enumerate() {
+            let _ = write!(
+                o,
+                "{}{{\"file\":{},\"quarter\":{},\"blocks\":{},\"cells\":{},\"number\":{},\"numeric_zero\":{},\
+                 \"nil\":{},\"na\":{},\"missing\":{},\"digest\":{},\"hidden_sheets\":[{}],\"refusals\":[",
+                if n == 0 { "" } else { "," },
+                js(file),
+                js(&read.quarter),
+                read.blocks,
+                read.values.len(),
+                read.count("number"),
+                read.numeric_zeros(),
+                read.count("nil"),
+                read.count("na"),
+                read.count("missing"),
+                js(&read.digest().to_hex()),
+                read.hidden_sheets.iter().map(|h| js(h)).collect::<Vec<_>>().join(",")
+            );
+            for (k, r) in read.refusals.iter().enumerate() {
+                let _ = write!(
+                    o,
+                    "{}{{\"locator\":{},\"reason\":{}}}",
+                    if k == 0 { "" } else { "," },
+                    js(&r.locator),
+                    js(&r.reason)
+                );
+            }
+            o.push_str("]}");
+        }
+        o.push_str("],");
 
         let counts = self.state_counts();
         let alt = self.alternate_counts();
@@ -759,6 +796,21 @@ pub fn assess(profile: &IssuerProfile, lane: Lane, sources: Vec<LoadedSource>) -
         residency_epoch: 1,
         state_root,
     };
+    let mine_stats = sources
+        .iter()
+        .filter(|s| s.kind == SourceKind::MineStats)
+        .map(|s| {
+            // The registry already checks the quarter format; a refusal here is kept, never dropped.
+            let read = read_mine_stats(&s.workbook, &s.quarter).unwrap_or_else(|refusal| MineStatsRead {
+                quarter: s.quarter.clone(),
+                blocks: 0,
+                values: Vec::new(),
+                refusals: vec![CellRefusal { locator: s.file_name.clone(), reason: refusal.to_string() }],
+                hidden_sheets: Vec::new(),
+            });
+            (s.file_name.clone(), read)
+        })
+        .collect();
     PublicAssuranceReport {
         issuer: issuer.to_string(),
         lane,
@@ -769,6 +821,7 @@ pub fn assess(profile: &IssuerProfile, lane: Lane, sources: Vec<LoadedSource>) -
         table_refusals,
         instances,
         unregistered_headers: unregistered,
+        mine_stats,
         ledger_anchor,
     }
 }

@@ -53,6 +53,10 @@ pub struct ExtractedCell {
     pub col: u32,
     pub value: CellValue,
     pub formula: Option<String>,
+    /// For a `CellValue::Number`, the value's text exactly as stored in `<v>` (surrounding whitespace removed),
+    /// e.g. `"0"`, `"2026"` or `"1.25"`; `None` for every other kind. Readers that must tell an integer-typed
+    /// cell from a float-typed one, or report the printed token, use this instead of re-formatting the `f64`.
+    pub number_text: Option<String>,
 }
 
 /// Item quarantined by `G-BULL-1` (`BD-271`) during workbook ingestion.
@@ -379,6 +383,7 @@ fn parse_worksheet_cells(
             .or_else(|| extract_element_text(c_body, "t"))
             .unwrap_or_default();
 
+        let mut number_text = None;
         let value = match cell_type.as_str() {
             "s" => {
                 let idx = raw_v.trim().parse::<usize>().ok();
@@ -408,6 +413,7 @@ fn parse_worksheet_cells(
                 }
                 if let Ok(num) = trimmed.parse::<f64>() {
                     if num.is_finite() {
+                        number_text = Some(trimmed.to_string());
                         CellValue::Number(num)
                     } else {
                         continue;
@@ -431,6 +437,7 @@ fn parse_worksheet_cells(
                 col,
                 value,
                 formula,
+                number_text,
             },
         );
     }
