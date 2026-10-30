@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod forecast;
+
 /// Summary row for a single crate's LOC budget (`BD-003`, `BD-012`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CrateBudgetRow {

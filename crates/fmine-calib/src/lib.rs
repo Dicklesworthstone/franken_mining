@@ -11,6 +11,8 @@ use fmine_numerics::cholesky_solve;
 use fmine_numerics::eproc::BettingEProcess;
 use fmine_numerics::norm_cdf;
 
+pub mod record;
+
 /// Immutable forecast record registered before outcome realization (`BD-047`, `INV-008`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrozenForecast {

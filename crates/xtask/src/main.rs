@@ -60,6 +60,27 @@ fn main() -> ExitCode {
                 }
             }),
         ),
+        "forecast-rules-hash" | "forecast-record-hash" | "forecast-record-verify" => {
+            let Some(path) = args.get(1).map(PathBuf::from) else {
+                eprintln!("{cmd} needs a path");
+                return ExitCode::from(2);
+            };
+            let res = match cmd {
+                "forecast-rules-hash" => xtask::forecast::rules_hash(&path).map(|d| vec![d]),
+                "forecast-record-hash" => {
+                    xtask::forecast::record_hash(&root, &path).map(|d| vec![d])
+                }
+                _ => xtask::forecast::record_verify(&root, &path),
+            };
+            run_one(
+                cmd,
+                res.map(|lines| {
+                    for line in lines {
+                        println!("{line}");
+                    }
+                }),
+            )
+        }
         "check-all" => match xtask::check_all(&root) {
             Ok(report) => {
                 println!(

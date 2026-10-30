@@ -5,7 +5,7 @@
 - **Layer:** `K0` (Kernel Foundation)
 - **Subsystem:** `Kernels`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["ledger", "scoring", "prior", "pit"]`
+- **Allowed Module Families:** `["ledger", "scoring", "prior", "pit", "record"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements the append-only pre-registration `ForecastLedger` (`INV-008`, `FMINE-REF-403`), strictly proper scoring rules (`gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`), `ReferenceClassPrior` (`GB-32`: capex `+28%/+43%`, schedule `+31%`, ramp-up `74%` Yr-1), and `SpatialFrontPitMonitor` (`GB-08` Vecchia/Rosenblatt conditional PIT + `BettingEProcess`).
@@ -19,6 +19,20 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 - `ForecastLedger::evaluate_model` → `Result<CalibrationReport, ScoreError>`; `register` and `record_outcome` refuse non-finite or non-positive-std forecasts and non-finite outcomes at entry
 - `ProjectArchetype`, `ReferenceClassPrior`
 - `SpatialFrontPitMonitor`
+- `record` (BD-334.S1, the public forecast record of plan §21.6), all pure:
+  - `record_frame`/`record_digest` (`FMREC1`: manifest and forecasts hashed as one) and `rules_frame`/`rules_digest`
+    (`FMRUL1`: the rules alone, stamped first);
+  - `parse_manifest` → `RecordManifest` over `fmine-registry`'s TOML subset (no booleans, so `label` is
+    `forecast`/`nowcast` and `contact` is `pre-contact`/`post-contact`); unknown keys or tables, missing keys and
+    mistyped values refuse (`RecordError`);
+  - `validate(manifest, registered digests, Option<ProofTimes>, RecordDates)` → `Vec<Finding>`: a digest that
+    differs from the source registry, an input after the cut-off, a reworded attestation, an author that is not a
+    role id; with a proof, a cut-off not before it, a label that disagrees with it, a proof after the deadline.
+    Times come only from a proof (`ProofTimes`), never from a clock; `FY2026_DATES` holds the Q3 release
+    (2026-11-09T11:00Z) and the 31 Dec 2026 deadline;
+  - `interval_score` on exact rationals (refuses α outside (0, 1) and l > u), `quantile` (Hyndman–Fan types 1
+    and 7) and `persistence_interval` (inverse ECDF only: exact, since exp of a quantile of log ratios is then an
+    observed ratio; the linear estimator's bounds are irrational and refuse with `NotExact`)
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-403` (`RetroactiveForecastEdit`, `INV-008`)
@@ -34,7 +48,8 @@ Miscalibrated spatial fronts trip `BettingEProcess` at `E_t >= 20.0` (`alpha = 0
 - `GATE-HELM-01`
 
 ## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`.
+- Depends on `fmine-core`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`, and `fmine-registry` (S0)
+  for the TOML subset the record's manifest is written in.
 
 ## 10. Non-Goals & Scope Boundary
 Pure calibration and scoring kernel; does not perform file I/O (`L-3`).

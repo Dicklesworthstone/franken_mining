@@ -51,6 +51,12 @@ jobs:
       - name: Vintage registration offline test
         if: matrix.profile == 'dev'
         run: bash scripts/test_register_vintage.sh
+      # The public forecast record (BD-334.S1): hash, an RFC 3161 round trip with a throwaway local TSA, verify,
+      # then six planted defects refused (a changed forecast, changed rules, a re-hash, a wrong chain, a digest
+      # that differs from the source registry, a cut-off after the proof).
+      - name: Forecast record e2e
+        if: matrix.profile == 'dev'
+        run: bash scripts/forecast_record_e2e.sh
       # No issuer workbook is ever committed (OPEN-R7-1); synthetic workbooks are written outside the tree.
       - name: No workbook in git
         run: test -z "$(git ls-files '*.xlsx' '*.xls')"

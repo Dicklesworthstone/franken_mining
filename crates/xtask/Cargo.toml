@@ -8,6 +8,7 @@ publish = false
 description = "FrankenMining workspace governance, layer DAG, LOC budget, lift provenance, and capability checks (GATE-LAYERS-00)"
 
 [dependencies]
+fmine-calib = { path = "../fmine-calib" }
 fmine-registry = { path = "../fmine-registry" }
 
 [lints]
