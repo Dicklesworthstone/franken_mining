@@ -10,7 +10,11 @@
 ## 2. Mathematical & Domain Formulation
 Provides the foundational `BitwisePortable` primitives for the entire workspace:
 - Content-addressed 256-bit BLAKE3 digests and SHA-256 hash-chain/MMR digests (`hash`).
-- Strict IEEE-754 elementary functions (`exp`, `expm1`, `ln`, `sin`, `cos`, `sin_cos`, `tan`, `atan`, `atan2`, `erf`, `erfc`, `norm_cdf`, `norm_ppf`, `pow`, `powi`, `hypot`, `sqrt`) free of platform `libm` (`det`).
+- Elementary functions free of platform `libm` (`det`): `exp`, `expm1`, `ln`, `sin`, `cos`, `sin_cos`, `tanh`, `atan`,
+  `atan2`, `erf`, `norm_cdf`, `norm_ppf`, `powi`, `hypot` and `sqrt`. Same bits on every host; not correctly rounded
+  (`ln(2)` is `LN_2` exactly, `exp(1)` within 1 ulp of `E`, `ln(2π)` 1 ulp above the correctly rounded value). `erf` is
+  A&S 7.1.6's positive series below 2.5 and 1 − erfc by continued fraction above, within 10 ulp of 60-digit
+  references (8 measured); it replaced A&S 7.1.26, whose 1.5e-7 error put `norm_cdf(0)` off 0.5 (bd-hp2j.2).
 - Counter-based `Philox4x32-10` and scrambled `Sobol/Owen` quasi-Monte Carlo sequences keyed by the 6-tuple `(seed_root, partition, domain, var_group, realization, brick)` (`rand`, `ADR-RNG-01`).
 - Canonical little-endian binary framing (`FMNE` magic, bounds checks, Castagnoli CRC32C) (`codec`) and `FMT-ANCHOR-1` `LedgerAnchor` (`anchor`).
 
@@ -21,7 +25,8 @@ Owns `LedgerAnchor` (`FMT-ANCHOR-1`) and canonical object identifiers (`ObjectId
 - `id::{PrefixKind, ObjectId, IdParseError}`
 - `codec::{MAGIC_FMNE, CodecError, Encoder, Decoder, crc32c}`
 - `hash::{Blake3, Digest32, sha256, blake3_hash, mmr_parent}`
-- `det::{exp, expm1, ln, sin, cos, sin_cos, tan, atan, atan2, erf, erfc, norm_cdf, norm_ppf, pow, powi, hypot, sqrt}`
+- `det::{exp, expm1, ln, sin, cos, sin_cos, tanh, atan, atan2, erf, norm_cdf, norm_ppf, powi, hypot, sqrt,
+  golden_digest_10k}`
 - `rand::{RngKey, PhiloxStream, philox4x32_10, sobol_owen_2d}`
 - `anchor::{LedgerAnchor, FMT_ANCHOR_V1}`
 

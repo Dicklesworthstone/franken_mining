@@ -29,6 +29,10 @@ Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when 
 - `PO-MET-1`: `LmdiWaterfall::sum_of_factors() == total_delta` to `< 1e-10` (synthetic two-period case, `+$1,285/oz`; its numbers were once mislabelled as Barrick's, R7-C054).
 - `PO-MET-3`: `ReserveReplacementBridge::compute` returns `None` for non-positive or non-finite depletion; it never clamps the denominator.
 - `PO-MET-2`: `AiscConsolidationBridge::verify_rollup(false)` refuses with `FMINE-REF-203` when `L_corp != 0`.
+- `PO-MET-4` (bd-hp2j.2): `logarithmic_mean` takes its logarithm from `fmine_core::det`, never the platform libm. On
+  10,000 Philox-seeded pairs each, it lies in [min, max], `L(a, b)` and `L(b, a)` are the same bits, and its series and
+  logarithm branches agree to < 1e-12 relative at the switch (1.1e-14 measured; the old 1e-7 switch on `ln a − ln b`
+  jumped 1.1e-8).
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Non-positive physical inputs or missing consolidation adjustments fail closed with `Refusal`.

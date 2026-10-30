@@ -11,10 +11,11 @@
 Implements Cholesky SPD factorization (`cholesky_solve`), Brent root-finding (`brent_root`), normal CDF/PPF (`norm_cdf`, `norm_inv`), anytime-valid betting e-processes (`BettingEProcess`), Value of Information (`VoiProblem`, `EVPI`, `EVSI`), coherent Rockafellar-Uryasev `CVaR` (`compute_cvar`), and `(max,+)`/`(min,+)` tropical critical-path algebra (`TropicalDag`, `GB-19`).
 
 ## 3. Authority, Epistemics & Representation
-Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism class: `DeterministicPerIsa`, not `BitwisePortable`: `norm_cdf` and `norm_inv` call std `exp`, `ln` and `sqrt` (porting them is NEW-det-portable-kernels, bd-hp2j).
+Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism class: `DeterministicPerIsa`, not yet `BitwisePortable`: `norm_cdf` and `norm_inv` delegate to `fmine_core::det` (bd-hp2j.2), and the class changes only with a cross-host golden digest (bd-hp2j.3).
 
 ## 4. Public API Surface
-- `cholesky_solve`, `norm_cdf`, `norm_inv`
+- `cholesky_solve`, `norm_cdf`, `norm_inv`. `norm_inv` clamps nothing: `p` outside [0, 1] or NaN gives NaN, and 0
+  and 1 give −∞ and +∞; callers refuse those (bd-hp2j.2 removed a silent clamp to [1e-15, 1 − 1e-15]).
 - `brent_root` → `Result<Root, RootError>`: `NoSignChange`, `NonFinite` (endpoint or iterate) and `NotConverged` refuse; an unconverged iterate is never returned (bd-t1dk)
 - `eproc::{BettingEProcess, EProcStatus}`
 - `voi::{VoiProblem, VoiSummary}`

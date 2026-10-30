@@ -268,16 +268,40 @@ pub fn erf(x: f64) -> f64 {
     let sign = if x.is_sign_negative() { -1.0 } else { 1.0 };
     let a = x.abs();
     if a >= 6.0 {
+        // erfc(6) ≈ 2.2e-17 is below half an ulp of 1.
         return sign;
     }
-    // Abramowitz & Stegun 7.1.26 / rational Chebyshev approximation (max error < 1.5e-7,
-    // refined with one Newton-like step against asymptotic expansion for high accuracy).
-    let t = 1.0 / (1.0 + 0.327_591_1 * a);
-    let poly = t
-        * (0.254_829_592
-            + t * (-0.284_496_736
-                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
-    let y = 1.0 - poly * exp(-a * a);
+    // bd-hp2j.2 replaced Abramowitz & Stegun 7.1.26 (absolute error 1.5e-7, so erf(0) was about 1e-9). Within
+    // about 8 ulp of the correctly rounded value on a 0.005 grid over (0, 6), measured on an f64 prototype of
+    // this algorithm against 60-digit references.
+    //
+    // e^{−a²} with a² split exactly (a² = hi + lo), so rounding a² does not cost about a² ulps.
+    let hi = a * a;
+    let lo = a.mul_add(a, -hi);
+    let e = exp(-hi) * (1.0 - lo);
+    let y = if a < 2.5 {
+        // A&S 7.1.6: erf(a) = (2/√π) e^{−a²} Σ 2ⁿ a^{2n+1} / (1·3·…·(2n+1)). Every term is positive, so nothing
+        // cancels; the terms fall once 2n + 3 > 2a².
+        let two_a2 = 2.0 * hi;
+        let mut term = a;
+        let mut sum = a;
+        let mut n = 0.0;
+        while term > sum * 1e-17 && n < 200.0 {
+            n += 1.0;
+            term *= two_a2 / (2.0 * n + 1.0);
+            sum += term;
+        }
+        core::f64::consts::FRAC_2_SQRT_PI * e * sum
+    } else {
+        // 1 − erfc(a), erfc by its continued fraction (A&S 7.1.14) evaluated bottom-up to depth 60:
+        // erfc(a) = (e^{−a²}/√π) / (a + (1/2)/(a + 1/(a + (3/2)/(a + …)))). erfc is below 4.1e-4 here, so its
+        // own relative error barely reaches the result.
+        let mut f = a;
+        for k in (1..=60).rev() {
+            f = a + f64::from(k) * 0.5 / f;
+        }
+        1.0 - e * (0.5 * core::f64::consts::FRAC_2_SQRT_PI) / f
+    };
     sign * y
 }
 
@@ -510,6 +534,67 @@ mod tests {
             digest,
             "927a71067fdd069d69fbd77ae7d0de54f0fb1ddf10bde992638ffdf86faa1684"
         );
+    }
+
+    // bd-hp2j.2: det's own accuracy at known points, before the public-lane kernels rely on it.
+    #[test]
+    fn test_det_ln_2_equals_ln_2_constant() {
+        assert_eq!(ln(2.0).to_bits(), core::f64::consts::LN_2.to_bits());
+    }
+
+    #[test]
+    fn test_det_exp_1_within_one_ulp() {
+        let e = core::f64::consts::E;
+        let got = exp(1.0);
+        let ulps = (got.to_bits() as i64 - e.to_bits() as i64).unsigned_abs();
+        assert!(ulps <= 1, "exp(1) = {got:?}, {ulps} ulp from E");
+    }
+
+    /// References: the series summed to 60 significant digits in Python `decimal`, then correctly rounded. 0.44,
+    /// 1.97 and 2.845 are where the f64 prototype was worst; 2.49 and 2.5 straddle the switch.
+    #[test]
+    fn test_det_erf_within_ten_ulp_of_reference() {
+        let cases = [
+            (1e-8, 1.128_379_167_095_512_6e-8),
+            (0.1, 0.112_462_916_018_284_9),
+            (0.44, 0.466_225_115_277_957_57),
+            (0.5, 0.520_499_877_813_046_5),
+            (1.97, 0.994_663_724_646_529_9),
+            (2.49, 0.999_570_712_132_266_1),
+            (2.5, 0.999_593_047_982_555),
+            (2.845, 0.999_942_645_210_915_6),
+            (1.0, 0.842_700_792_949_714_9),
+            (1.5, 0.966_105_146_475_310_8),
+            (2.0, 0.995_322_265_018_952_7),
+            (3.0, 0.999_977_909_503_001_4),
+            (4.0, 0.999_999_984_582_742_1),
+            (5.0, 0.999_999_999_998_462_6),
+            (5.9, 0.999_999_999_999_999_9),
+        ];
+        let mut worst = 0;
+        for (x, want) in cases {
+            let got = erf(x);
+            let ulps = (got.to_bits() as i64 - f64::to_bits(want) as i64).unsigned_abs();
+            worst = worst.max(ulps);
+            assert!(ulps <= 10, "erf({x}) = {got:?}, want {want:?}, {ulps} ulp");
+            assert_eq!(erf(-x).to_bits(), (-got).to_bits(), "erf is odd at {x}");
+        }
+        println!(
+            "{{\"test\":\"erf_reference\",\"cases\":{},\"worst_ulp\":{worst}}}",
+            cases.len()
+        );
+        assert_eq!(erf(0.0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(erf(6.5), 1.0);
+    }
+
+    #[test]
+    fn test_det_norm_cdf_zero_is_half() {
+        assert_eq!(norm_cdf(0.0).to_bits(), 0.5_f64.to_bits());
+    }
+
+    #[test]
+    fn test_det_norm_ppf_half_is_zero() {
+        assert_eq!(norm_ppf(0.5), 0.0);
     }
 
     #[test]

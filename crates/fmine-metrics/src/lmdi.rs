@@ -1,5 +1,8 @@
 //! Exact Logarithmic Mean Divisia Index (`LMDI`) 5-factor AISC waterfall (`GB-26`, `BD-065`, `BD-274`).
+//!
+//! Every logarithm goes through `fmine_core::det` (bd-hp2j.2), never the platform libm.
 
+use fmine_core::det;
 use fmine_evidence::Refusal;
 
 /// Operational state for a single period used in the 5-factor multiplicative AISC identity:
@@ -58,18 +61,43 @@ impl LmdiWaterfall {
     }
 }
 
-/// Logarithmic mean $L(a, b) = (a - b) / (\ln a - \ln b)$ with smooth $a \to b$ series expansion (`GB-26`).
+/// Below this relative difference `|a − b| / mean`, [`logarithmic_mean`] sums the series; at or above it, it
+/// takes the logarithm. Both branches agree to about 1e-14 here (bd-hp2j.2).
+const SERIES_SWITCH: f64 = 1e-2;
+
+/// The series branch: with $m = (a + b)/2$ and $u = (a - b)/(a + b)$, $\ln a - \ln b = 2\,\operatorname{atanh} u$, so
+/// $L = m / (1 + u^2/3 + u^4/5 + u^6/7 + \dots)$. For $|u| < 0.005$ the first omitted term is below $10^{-19}$.
+fn series_branch(a: f64, b: f64) -> f64 {
+    let u = (a - b) / (a + b);
+    let u2 = u * u;
+    0.5 * (a + b) / (1.0 + u2 * (1.0 / 3.0 + u2 * (1.0 / 5.0 + u2 / 7.0)))
+}
+
+/// The logarithm branch, on the ratio: `ln(a / b)` has no cancellation, where `ln a − ln b` loses about
+/// `|ln a| · 1e-16 / |ln(a/b)|` relative (1e-8 at a relative difference of 1e-7, measured). A ratio that
+/// overflows falls back to the difference, which is then far from cancelling. The larger argument is always the
+/// numerator, so `L(a, b)` and `L(b, a)` are the same bits.
+fn log_branch(a: f64, b: f64) -> f64 {
+    let (hi, lo) = if a >= b { (a, b) } else { (b, a) };
+    let ratio = hi / lo;
+    let log = if ratio.is_normal() {
+        det::ln(ratio)
+    } else {
+        det::ln(hi) - det::ln(lo)
+    };
+    (hi - lo) / log
+}
+
+/// Logarithmic mean $L(a, b) = (a - b) / (\ln a - \ln b)$, with a series branch near $a = b$ (`GB-26`).
 #[must_use]
 pub fn logarithmic_mean(a: f64, b: f64) -> f64 {
-    let diff = a - b;
     let mean = 0.5 * (a + b);
     // `max(1e-15)` only selects the series branch near a = b; it never changes the returned value's inputs, and
     // callers refuse non-positive states (FMINE-REF-301) before reaching here. Not a domain clamp.
-    if diff.abs() / mean.max(1e-15) < 1e-7 {
-        let u = diff / (a + b);
-        mean * (1.0 - (u * u) / 3.0 - 4.0 * u.powi(4) / 45.0)
+    if (a - b).abs() / mean.max(1e-15) < SERIES_SWITCH {
+        series_branch(a, b)
     } else {
-        diff / (a.ln() - b.ln())
+        log_branch(a, b)
     }
 }
 
@@ -100,20 +128,20 @@ pub fn decompose_aisc_lmdi(s0: &LmdiState, s1: &LmdiState) -> Result<LmdiWaterfa
     let unit_spend_0 = s0.aisc_per_oz * s0.oz_sold;
     let unit_spend_1 = s1.aisc_per_oz * s1.oz_sold;
 
-    let spend_effect = l_weight * (unit_spend_1 / unit_spend_0).ln();
-    let throughput_effect = -l_weight * (s1.tonnes_processed / s0.tonnes_processed).ln();
-    let grade_effect = -l_weight * (s1.head_grade_g_t / s0.head_grade_g_t).ln();
-    let recovery_effect = -l_weight * (s1.recovery_fraction / s0.recovery_fraction).ln();
+    let spend_effect = l_weight * det::ln(unit_spend_1 / unit_spend_0);
+    let throughput_effect = -l_weight * det::ln(s1.tonnes_processed / s0.tonnes_processed);
+    let grade_effect = -l_weight * det::ln(s1.head_grade_g_t / s0.head_grade_g_t);
+    let recovery_effect = -l_weight * det::ln(s1.recovery_fraction / s0.recovery_fraction);
 
     let s_ratio_0 = s0.oz_sold / s0.oz_produced;
     let s_ratio_1 = s1.oz_sold / s1.oz_produced;
-    let sales_timing_effect = -l_weight * (s_ratio_1 / s_ratio_0).ln();
+    let sales_timing_effect = -l_weight * det::ln(s_ratio_1 / s_ratio_0);
 
     let circuit_0 =
         s0.oz_produced / (s0.tonnes_processed * s0.head_grade_g_t * s0.recovery_fraction);
     let circuit_1 =
         s1.oz_produced / (s1.tonnes_processed * s1.head_grade_g_t * s1.recovery_fraction);
-    let circuit_inventory_effect = -l_weight * (circuit_1 / circuit_0).ln();
+    let circuit_inventory_effect = -l_weight * det::ln(circuit_1 / circuit_0);
 
     Ok(LmdiWaterfall {
         aisc_0: s0.aisc_per_oz,
@@ -167,8 +195,88 @@ mod tests {
             wf.total_delta
         );
         // Sales timing effect (72 koz sold vs 54 koz produced):
-        // -L(2582, 1297) * ln(72 / 54) = -1865.629 * 0.287682 = -$536.71/oz (dilutes unit AISC while spend surged).
+        // -L(2582, 1297) * ln(72 / 54), with L ≈ 1866.35 and ln(4/3) ≈ 0.287682: about -$536.91/oz (dilutes unit
+        // AISC while spend surged).
         assert!(wf.sales_timing_effect < -500.0 && wf.sales_timing_effect > -550.0);
         assert!(wf.spend_effect > 1800.0);
+    }
+
+    fn pairs(stream: u32) -> (fmine_core::rand::RngKey, Vec<(f64, f64)>) {
+        let key = fmine_core::rand::RngKey {
+            seed_root: 2_242,
+            partition: stream,
+            domain: 0,
+            var_group: 0,
+            realization: 0,
+            brick: 0,
+        };
+        let mut rng = fmine_core::rand::PhiloxStream::new(key);
+        let out = (0..10_000)
+            .map(|_| {
+                // a in (1e-3, 1e6); b at a relative distance 10^-e, e in [0, 14), either side. The inputs come
+                // from det too, so every host tests the same pairs.
+                let ln10 = std::f64::consts::LN_10;
+                let a = 1e-3 * det::exp(9.0 * ln10 * rng.next_f64_open01());
+                let r = det::exp(-14.0 * ln10 * rng.next_f64_open01());
+                let b = if rng.next_f64_open01() < 0.5 {
+                    a * (1.0 + r)
+                } else {
+                    a / (1.0 + r)
+                };
+                (a, b)
+            })
+            .collect();
+        (key, out)
+    }
+
+    #[test]
+    fn test_logarithmic_mean_between_min_and_max() {
+        let (key, pairs) = pairs(1);
+        for &(a, b) in &pairs {
+            let l = logarithmic_mean(a, b);
+            assert!(a.min(b) <= l && l <= a.max(b), "L({a:e}, {b:e}) = {l:e}");
+        }
+        println!(
+            "{{\"test\":\"between\",\"cases\":{},\"key\":\"{key:?}\"}}",
+            pairs.len()
+        );
+    }
+
+    #[test]
+    fn test_logarithmic_mean_symmetric() {
+        let (key, pairs) = pairs(2);
+        for &(a, b) in &pairs {
+            assert_eq!(
+                logarithmic_mean(a, b).to_bits(),
+                logarithmic_mean(b, a).to_bits()
+            );
+        }
+        println!(
+            "{{\"test\":\"symmetric\",\"cases\":{},\"key\":\"{key:?}\"}}",
+            pairs.len()
+        );
+    }
+
+    /// The jump across the switch is the two branches' difference there: both are evaluated at the same points,
+    /// a relative distance of SERIES_SWITCH · (1 ± 1e-3) apart, on either side.
+    #[test]
+    fn test_logarithmic_mean_continuous_at_series_switch() {
+        let (key, pairs) = pairs(3);
+        let mut max_rel_jump = 0.0_f64;
+        for (i, &(a, _)) in pairs.iter().enumerate() {
+            let r = SERIES_SWITCH * (1.0 + 1e-3 * ((i % 21) as f64 - 10.0) / 10.0);
+            let b = if i % 2 == 0 {
+                a * (1.0 + r)
+            } else {
+                a / (1.0 + r)
+            };
+            let (s, l) = (series_branch(a, b), log_branch(a, b));
+            max_rel_jump = max_rel_jump.max((s - l).abs() / l);
+        }
+        println!(
+            "{{\"test\":\"continuous_at_switch\",\"cases\":{},\"key\":\"{key:?}\",\"max_rel_jump\":{max_rel_jump:e}}}",
+            pairs.len()
+        );
+        assert!(max_rel_jump < 1e-12, "max relative jump {max_rel_jump:e}");
     }
 }

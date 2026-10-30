@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use fmine_claim::Claim;
+use fmine_core::det;
 use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::{EvidenceClass, Refusal};
 use fmine_numerics::cholesky_solve;
@@ -230,16 +231,20 @@ pub fn gaussian_crps(mean: f64, std_dev: f64, y: f64) -> Result<f64, ScoreError>
     check_gaussian(mean, std_dev, y)?;
     let z = (y - mean) / std_dev;
     let phi_cdf = norm_cdf(z);
-    let phi_pdf = (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt();
+    let phi_pdf = det::exp(-0.5 * z * z) / (2.0 * std::f64::consts::PI).sqrt();
     let inv_sqrt_pi = 1.0 / std::f64::consts::PI.sqrt();
     Ok(std_dev * (z * (2.0 * phi_cdf - 1.0) + 2.0 * phi_pdf - inv_sqrt_pi))
 }
+
+/// $\ln 2\pi$ as the literal `det::ln(2π)` returns (`test_ln_2pi_literal_matches_det` pins the bits). It is 0.525
+/// ulp from the exact logarithm of the f64 2π, one ulp above the correctly rounded value (bd-hp2j.2).
+const LN_2PI: f64 = 1.837_877_066_409_345_6;
 
 /// Negative log predictive density (`NLL`) for $\mathcal{N}(\mu, \sigma^2)$ at $y$.
 pub fn gaussian_log_score(mean: f64, std_dev: f64, y: f64) -> Result<f64, ScoreError> {
     check_gaussian(mean, std_dev, y)?;
     let z = (y - mean) / std_dev;
-    Ok(0.5 * (2.0 * std::f64::consts::PI).ln() + std_dev.ln() + 0.5 * z * z)
+    Ok(0.5 * LN_2PI + det::ln(std_dev) + 0.5 * z * z)
 }
 
 /// Winkler interval score for the central $(1 - \alpha)$ interval $[l, u]$ at realization $y$.
@@ -443,7 +448,7 @@ impl SpatialFrontPitMonitor {
         if h < 1e-9 {
             self.nugget_var + self.sill_var
         } else {
-            self.sill_var * (-h / self.range_m).exp()
+            self.sill_var * det::exp(-h / self.range_m)
         }
     }
 
@@ -515,6 +520,17 @@ mod tests {
     use fmine_core::anchor::SourceAnchor;
     use fmine_core::rand::{PhiloxStream, RngKey};
     use fmine_evidence::KnowledgeState;
+
+    /// bd-hp2j.2: the literal is the bits `det::ln(2π)` returns, so the log score depends on no platform libm.
+    #[test]
+    fn test_ln_2pi_literal_matches_det() {
+        let from_det = det::ln(2.0 * std::f64::consts::PI);
+        assert_eq!(
+            LN_2PI.to_bits(),
+            from_det.to_bits(),
+            "det::ln(2π) = {from_det:?}"
+        );
+    }
 
     #[test]
     fn test_frozen_forecast_ledger_immutability() {
