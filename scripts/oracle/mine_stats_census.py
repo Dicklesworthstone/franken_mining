@@ -2,7 +2,8 @@
 identity (summary value = Minestats value), each instance decided alone on its own displayed cells, then the decided
 instances of these three families posed jointly by shared cells, with every minimum correction set of each jointly
 infeasible component. The sum families sites_to_region and region_to_total (region = sum of its sites, total = sum
-of the regions or of the copper sites) are decided alone only, never posed jointly.
+of the regions or of the copper sites) are decided alone only, never posed jointly; so is family sold_weighted_rate
+(a region's gold unit cost = its members' unit costs weighted by their attributable gold sold).
 
 Independent reader, written 2026-10-30 without opening any Rust under crates/, planning/mor/MOR_CASE.md, repro/ or
 any other agent's scratch files. It reads the xlsx itself (zipfile + xml.etree) and imports formats.py only for its
@@ -154,6 +155,54 @@ copper; unit-cost columns are out of scope. Each instance is decided alone and n
 - Record: family, field = the flow field id, anchor = the aggregate cell, cells = the operand locators in operand
   order, state, reason, at, share and printed_share null, certificate as in step 4.
 
+Family sold_weighted_rate (the plan's family 5, "sold-weighted roll-ups"; added 2026-10-30 by a second reader, who
+wrote it from the rule as given, without reading crates/ or any Rust). On the QTD and YTD summary sheets the gold
+block prints three unit-cost columns per column group, mapped as in J19: cos_usd_per_oz, tcc_usd_per_oz,
+aisc_usd_per_oz. A region's rate is its members' rates weighted by their attributable gold sold.
+- Instances: one per (summary sheet, column group, gold unit-cost field, gold data row whose subject is a region). A
+  region of the release's map gets the instance as below. A data row labelled as a region (a key of either map) that
+  is not in the release's map -> v, region_not_in_map, at null, cells = [the region's rate cell].
+- Members: the release's map members of that region, each read from its row of the gold block as in sites_to_region
+  (exact subject match, plus the J30 alias "Nevada Gold Mines" -> row "Nevada Gold Mines LLC").
+- Operand order: the members whose rows exist, sorted by their row number on the sheet (NOT the map's order); for
+  each such member its rate cell (same field, same group), then its "Gold sold (000s ozs attributable share)" cell
+  (same group); then the region's rate cell last. cells lists these locators in this order.
+- Identity: R * (w_1 + ... + w_n) = r_1*w_1 + ... + r_n*w_n, where R is the region's true rate, r_i and w_i member
+  i's true rate and true attributable sold, and every true value lies in its cell's closed box [v - h, v + h] (v the
+  displayed value, h half the displayed step, exactly as the other families read numbers).
+- Values: read exactly as the sum families read their operands (read_sum_operand, J27): a number, the nil token (a
+  text cell whose raw text is exactly "—" or "— "), another placeholder, or blank. Any cell the existing reader would
+  refuse (SystemExit) is handled as the existing reader handles it.
+- Decision, first match wins. 0. Exclusions and rows, with sites_to_region's precedence: excluded_e818 when
+  Loulo-Gounkoto is a member and the cell's period is in the E818 list (at null); region_not_in_map (above);
+  operand_row_missing when some member has neither its own row nor its alias row (at null; cells = the found members'
+  pairs in row order, then the region's rate cell; the missing member contributes no locator); operand_unreadable
+  when some member has rows under both names (at = the rate cell of the lower-numbered of the two rows; that member's
+  pair in cells is that row's pair). 1. Any operand blank -> v, blank_operand, at = the first blank operand in
+  operand order. 2. All operands placeholders (any kind, nil token included) -> np. 3. A member whose sold cell is the
+  nil token sold nothing: its weight is exactly 0, and the member (its rate cell and sold cell, whatever the rate cell
+  holds: a number or any placeholder) leaves the identity. The record's certificate is "nil_token" when at least one
+  member left this way (and the instance reaches step 7), else null. Its locators stay in cells. 4. Of the operands
+  still in the identity (the region's rate cell, and each remaining member's rate cell and sold cell), any
+  placeholder, the nil token included (a rate is never read as 0) -> v, placeholder_operand, at = the first such
+  operand in operand order. 5. No member remains -> v, weights_all_nil, at null. 6. A remaining member's sold value
+  v <= 0 -> v, weight_not_positive, at = the first such sold cell in operand order (a weighted mean is bounded only
+  for positive weights; with v > 0 the whole box is positive). 7. Otherwise decide exactly whether true values exist,
+  each in its closed box, satisfying the identity: yes -> i; no -> iv with reason "cost_totals_unpublished" (the
+  issuer may weight by quantities it does not publish, so a conflict is not a discrepancy (iii) but an open item
+  that the region's and members' costs in dollars would decide). Arithmetic exact (fractions, never floats), no
+  relaxation: the method (below) decides the exact question. Every instance called i gets explicit true values
+  (R, r_i, w_i) within the boxes, and the identity is checked to hold exactly on them.
+- Never posed jointly: this family's instances get component and corrections null and never enter the components;
+  the components and known-answer checks E113-E116 stay as they are.
+- Record (one line per instance, same keys and key order as the other families'): family "sold_weighted_rate",
+  subject = the region, field = the unit-cost field id, group, period, anchor = the region's rate cell, cells as
+  above, state, reason (the v reason, or "cost_totals_unpublished" for iv, else null), at, certificate, share null,
+  printed_share null, component null, corrections null; with --values, "values" as the other families do.
+- Summary: {"family":"sold_weighted_rate","n","i","iii","iv","v","np","v_by_reason"} (iii is always 0).
+- Known answer E817: every sold_weighted_rate instance of the region "Latin America & Asia Pacific" whose period's
+  year is 2023 (anchor, field, state, reason), listed whatever their states; "ok" true iff there is at least one.
+
 Components. Every instance in state i or iii (and certificate null) is posed jointly; instances sharing a cell are
 linked; connected components are decided exactly: do true values exist, each in its closed box, satisfying every
 identity of the component (c = s.b, t = a + q, summary = Minestats)? For each infeasible component: every minimum
@@ -165,20 +214,24 @@ families (sites_to_region, region_to_total) are decided alone and never posed he
 block (and every region to the total), so posing them jointly would merge the existing components, each confined
 to one subject, into one component of hundreds of cells per block, field, column group and year of releases (the
 quarter_sum chains carry the link across releases), past what the exhaustive minimum-set search can enumerate.
+Family sold_weighted_rate is decided alone too: its identity is bilinear (rate x weight), not linear.
 
 Output (stdout, one compact JSON object per line, ensure_ascii=False, deterministic order):
 1. one line per instance sorted by (family, anchor, group, field): {"family","subject","field","group","period",
    "anchor","cells","state","reason","at","certificate","share","printed_share","component","corrections"};
    ownership's field is the attributable field and its anchor the attributable cell; with --values also "values"
-   (displayed operand texts) and "implied" ([{locator: [lo, hi]}] per correction set);
+   (displayed operand texts) and "implied" ([{locator: [lo, hi]}] per correction set); sold_weighted_rate's lines
+   come last (J37);
 2. one line per jointly infeasible component {"component","cells","instances","joint_only","corrections"};
 3. per family {"family","n","i","iii","v","np","v_by_reason"} (ownership, quarter_sum, site_sheet, sites_to_region,
-   region_to_total); then one line per refused Minestats* sheet {"family":"site_sheet","refused","reason"}; then one
+   region_to_total); then {"family":"sold_weighted_rate","n","i","iii","iv","v","np","v_by_reason"} (J37); then
+   one line per refused Minestats* sheet {"family":"site_sheet","refused","reason"}; then one
    line per release {"family":"site_sheet","release","no_minestats_column"}; then one line per (release, sheet)
    {"family":"region_to_total","release","sheet","gold_rows_not_in_map"}; then one line per release
    {"families":["sites_to_region","region_to_total"],"release","n","comparisons","iii"} (J29); then
    {"components","infeasible_components","joint_only"};
-4. known-answer checks {"check","ok","detail"}: E113, E114, E115, E116, computed from the instances.
+4. known-answer checks {"check","ok","detail"}: E113, E114, E115, E116, computed from the instances; then E817,
+   {"check","ok","detail","instances"}, computed from the sold_weighted_rate instances (J38).
 RISK-31: no issuer cell value and no implied interval is printed unless --values is given.
 
 Method for the joint decision (exact): the component's identities are homogeneous linear equalities. Gauss-Jordan
@@ -187,6 +240,22 @@ the free cells; each kept box becomes two inequalities on the free cells; Fourie
 variable (keeping, per normalised direction, only the tightest right-hand side) decides feasibility exactly. The
 implied range of a cell substitutes the cell's own value for one free variable it depends on and eliminates the
 rest; what remains bounds the cell (a side with no bound is "unbounded").
+
+Method for sold_weighted_rate step 7 (exact). Step 6 leaves every weight box positive (lo_i > 0), so W = sum w_i > 0
+at every point of the boxes and the identity says R = f(r, w) = sum r_i w_i / W. Write [Rl, Rh] for R's box and
+[rl_i, rh_i], [lo_i, hi_i] for the rates' and weights' boxes. Test: up = sum_i max((rh_i - Rl) lo_i, (rh_i - Rl)
+hi_i), dn = sum_i min((rl_i - Rh) lo_i, (rl_i - Rh) hi_i); true values exist iff up >= 0 and dn <= 0. Why exact: at
+any point of the boxes sum r_i w_i - R W <= sum (rh_i - Rl) w_i <= up (r_i <= rh_i and R >= Rl, every w_i > 0; the
+middle sum is a sum of terms each affine in its own w_i, so its maximum over the weight box is the endpoint choice),
+so up < 0 excludes every point, and dn > 0 does likewise from below: iv is then proved. Conversely up >= 0 gives the
+point P+ = (rh, w+) (w+ those endpoints) with f >= Rl, and dn <= 0 a point P- = (rl, w-) with f <= Rh; the boxes form
+a convex set on which f is continuous, so f takes every value between f(P-) and f(P+), among them one in [Rl, Rh]:
+i. The witness is built in rationals on the path P- -> M = (rh, w-) -> P+: on each leg only the rates or only the
+weights move, so sum r_i w_i - R W is affine in the leg's parameter t and its root is one division. No relaxation
+enters: the test is the exact question. A second derivation cross-checks it: f rises in each r_i, and as a function
+of one w_j alone it is (c + r_j w_j) / (d + w_j) with d >= 0, monotone on w_j > 0, so f's range is [min f(rl, v),
+max f(rh, v)] over the 2^n weight vertices v; the two derivations must agree, and the witness must satisfy the
+identity exactly inside every box, else SystemExit (an internal error, never a state).
 
 Judgement calls (the rule is silent or ambiguous here)
 ======================================================
@@ -324,6 +393,43 @@ J30 Member alias (amendment of 2026-10-30, given as data from the issuer registr
    and that cell also stands in "cells" (as J17). Precedence: excluded_e818, region_not_in_map, then
    operand_row_missing (any member with neither row), then operand_unreadable (at = the first such member in operand
    order), then steps 1-4. No block of this corpus holds both names.
+J31-J38 belong to family sold_weighted_rate (second reader, 2026-10-30).
+J31 Instances: a gold region row (subject a key of either map, J8) poses one instance per (group, field) of
+   SWR_FIELDS whose unit-cost column J19 maps (Block.cost_cols); a (group, field) with no mapped column poses none, as
+   in site_sheet. Every gold block of this corpus maps all six, so each of its three region rows poses six
+   instances. "The cell's period" (excluded_e818) is the instance's period, which all its cells share (J1).
+J32 Reading: every operand of every instance is read with read_sum_operand when the instance is built, before any
+   exclusion (as the sum families do), so a cell the reader refuses stops the run even for an excluded instance; the
+   refusal messages are read_operand's own ("... in a flow column"). The sold cells are flow cells (already read by
+   J7); the unit-cost cells of region and member rows are read here first. In this corpus every one of them reads as
+   a number or the nil token: no blank and no other placeholder.
+J33 Operand order and cells: a member's row is the row member_row returns (J30; for a member under both names the
+   lower row); members are sorted by that row number (distinct subjects have distinct rows, so no ties). cells
+   never holds null: a member with no row contributes no locator (unlike the sum families' null, J8). The
+   excluded_e818 and operand_unreadable records list every located operand, as J17 keeps located cells on excluded
+   instances; region_not_in_map lists the region's rate cell alone (its member set is empty).
+J34 operand_unreadable with several members under both names: at = the rate cell of the first such member in
+   operand order (as J30). Only "Nevada Gold Mines" has an alias, so at most one member can be affected; no gold block
+   of this corpus holds both names.
+J35 Steps 3-6: the nil token is read_sum_operand's kind "nil" (raw text exactly "—" or "— "); a sold cell holding
+   another placeholder ("n/a", "N/A", "-", "–", a number shown as a dash) does not take its member out and falls to
+   step 4. Step 4 runs before step 5, so with every weight nil a placeholder region rate gives placeholder_operand and
+   weights_all_nil needs a numeric region rate. Step 6 tests the displayed v of a number: v is a multiple of its step
+   2h, so v > 0 gives v - h >= h > 0. certificate is set at step 7 only (as J27): v and np records carry null.
+J36 Step 7 as 'Method for sold_weighted_rate' states. The witness takes R = f(P-) if Rl <= f(P-), else R = f(P+) if
+   f(P+) <= Rh, else R = Rl, reached on the leg P- -> M if the gap sum r_i w_i - Rl W is >= 0 at M, else on M -> P+;
+   in each leg t = g0 / (g0 - g1) (t = 0 when g0 = g1). Weight endpoints: w+ takes hi_i where rh_i - Rl > 0, w- takes
+   hi_i where rl_i - Rh < 0, else lo_i (a zero coefficient makes the choice immaterial).
+J37 Output: instance lines sort with the others by J9's key; "sold_weighted_rate" sorts last of the six families,
+   so its lines follow sites_to_region's and precede the component lines. Its family summary comes directly after
+   region_to_total's (before the site_sheet refusal lines), with "iv" between "iii" and "v"; an iv record is counted
+   in neither "v" nor "v_by_reason". The per-release line of J29 still counts sites_to_region and region_to_total
+   only. With --values a record gains "values" ([displayed text or null] per cell) and "implied": null, as the sum
+   families' records do. Every pre-existing line is unchanged; the family adds lines only.
+J38 E817 is printed after E116 as {"check":"E817","ok","detail","instances":[{"anchor","field","state","reason"}]},
+   the instances in output order (J9's key); "the period's year" is the year that begins the period label (J1). In
+   this corpus there are 21: the prior group (2023) of the seven sheets of the 2024 releases (four QTD, three YTD) x
+   three fields; 3 are i and 18 iv (every iv with certificate nil_token), so "ok" is true.
 """
 import itertools
 import json
@@ -1212,6 +1318,185 @@ def sum_instances(releases):
     return out, outside
 
 
+# -------------------------------------------------------------------------------------------------- sold-weighted rates
+
+SWR_FAMILY = "sold_weighted_rate"
+SWR_FIELDS = ("cos_usd_per_oz", "tcc_usd_per_oz", "aisc_usd_per_oz")  # the gold unit-cost fields (J19, J31)
+SWR_E817_REGION = "Latin America & Asia Pacific"
+
+
+def _box(o):
+    return o.value - o.half, o.value + o.half
+
+
+def _swr_gap(point, target):
+    """sum r_i w_i - target * sum w_i at a point (rates, weights); zero iff the point's weighted mean is target."""
+    rates, weights = point
+    return sum((r * w for r, w in zip(rates, weights)), F(0)) - target * sum(weights, F(0))
+
+
+def _swr_mean(rates, weights):
+    return sum((r * w for r, w in zip(rates, weights)), F(0)) / sum(weights, F(0))
+
+
+def _swr_on_segment(p, q, target, where):
+    """A point of the segment p-q whose gap to target is 0. p and q differ in their rates only or in their weights
+    only, so the gap is affine in the segment parameter t; it has opposite signs (or a zero) at the two ends, so the
+    root is t = g0 / (g0 - g1), one exact division (J36)."""
+    g0, g1 = _swr_gap(p, target), _swr_gap(q, target)
+    if g0 * g1 > 0:
+        die("%s: sold_weighted_rate witness segment without a sign change (internal error)" % where)
+    t = F(0) if g0 == g1 else g0 / (g0 - g1)
+    return tuple(tuple(x + t * (y - x) for x, y in zip(a, b)) for a, b in zip(p, q))
+
+
+def swr_feasible(region, pairs):
+    """Step 7, exact ('Method for sold_weighted_rate'): True iff true values exist, each in its closed box, with
+    R * sum w_i = sum r_i w_i. region: the region's rate Op; pairs: [(rate Op, sold Op)] of the members still in the
+    identity, every one a number and every sold value > 0 (steps 4-6)."""
+    where = region.loc
+    rlo, rhi = _box(region)
+    rates = [_box(r) for r, _w in pairs]
+    weights = [_box(w) for _r, w in pairs]
+    if any(lo <= 0 for lo, _hi in weights):
+        die("%s: sold_weighted_rate weight box not positive at step 7 (internal error)" % where)
+    lo_rates = tuple(lo for lo, _hi in rates)
+    hi_rates = tuple(hi for _lo, hi in rates)
+    # separable test: each term is affine in its own weight, so the extreme is at an endpoint of that weight's box
+    w_up = tuple(hi if rh - rlo > 0 else lo for rh, (lo, hi) in zip(hi_rates, weights))
+    w_dn = tuple(hi if rl - rhi < 0 else lo for rl, (lo, hi) in zip(lo_rates, weights))
+    up = sum(((rh - rlo) * w for rh, w in zip(hi_rates, w_up)), F(0))  # max over the boxes of sum (rh_i - Rl) w_i
+    dn = sum(((rl - rhi) * w for rl, w in zip(lo_rates, w_dn)), F(0))  # min over the boxes of sum (rl_i - Rh) w_i
+    feasible = up >= 0 and dn <= 0
+    # second derivation (vertex enumeration of f's range), which must agree with the separable test
+    vertices = list(itertools.product(*weights))
+    m_hi = max(_swr_mean(hi_rates, v) for v in vertices)
+    m_lo = min(_swr_mean(lo_rates, v) for v in vertices)
+    if (m_hi >= rlo and m_lo <= rhi) != feasible:
+        die("%s: sold_weighted_rate separable test and vertex enumeration disagree (internal error)" % where)
+    if not feasible:
+        # iv. Infeasibility argument: if up < 0, then at every point of the boxes
+        #   sum r_i w_i - R * sum w_i <= sum (rh_i - Rl) w_i <= up < 0
+        # (r_i <= rh_i and R >= Rl with every w_i > 0; the middle sum is affine in each w_i, so its maximum over the
+        # weight box is the endpoint choice w_up), so the identity fails everywhere; if dn > 0, symmetrically
+        #   sum r_i w_i - R * sum w_i >= sum (rl_i - Rh) w_i >= dn > 0.
+        return False
+    # i. Witness (R, r_i, w_i) inside the boxes with R * sum w_i = sum r_i w_i, checked exactly.
+    p_lo, p_hi = (lo_rates, w_dn), (hi_rates, w_up)
+    a, b = _swr_mean(*p_lo), _swr_mean(*p_hi)  # a <= Rh because dn <= 0; b >= Rl because up >= 0
+    if rlo <= a:
+        point, big_r = p_lo, a
+    elif b <= rhi:
+        point, big_r = p_hi, b
+    else:  # a < Rl <= Rh < b: Rl is a weighted mean of some point on the path p_lo -> mid -> p_hi
+        big_r = rlo
+        mid = (hi_rates, w_dn)
+        if _swr_gap(mid, big_r) >= 0:
+            point = _swr_on_segment(p_lo, mid, big_r, where)
+        else:
+            point = _swr_on_segment(mid, p_hi, big_r, where)
+    w_rates, w_weights = point
+    inside = rlo <= big_r <= rhi and all(lo <= x <= hi for x, (lo, hi) in zip(w_rates, rates)) \
+        and all(lo <= x <= hi for x, (lo, hi) in zip(w_weights, weights))
+    if not inside or big_r * sum(w_weights, F(0)) != sum((r * w for r, w in zip(w_rates, w_weights)), F(0)):
+        die("%s: sold_weighted_rate witness fails its check (internal error)" % where)
+    return True
+
+
+def decide_swr(pairs, region):
+    """Steps 1-7 for a sold_weighted_rate instance past step 0: (state, reason, at, certificate). pairs: the members'
+    [(rate Op, sold Op)] in operand order; region: the region's rate Op (the last operand)."""
+    ops = [o for pair in pairs for o in pair] + [region]
+    for o in ops:
+        if o.kind == "blank":
+            return "v", "blank_operand", o.loc, None
+    if all(o.kind in ("nil", "ph") for o in ops):
+        return "np", None, None, None
+    kept = [(r, w) for r, w in pairs if w.kind != "nil"]  # step 3: a nil sold cell takes its member out (weight 0)
+    for o in [o for pair in kept for o in pair] + [region]:
+        if o.kind in ("nil", "ph"):
+            return "v", "placeholder_operand", o.loc, None
+    if not kept:
+        return "v", "weights_all_nil", None, None
+    for _r, w in kept:
+        if w.value <= 0:
+            return "v", "weight_not_positive", w.loc, None
+    cert = "nil_token" if len(kept) < len(pairs) else None
+    if swr_feasible(region, kept):
+        return "i", None, None, cert
+    return "iv", "cost_totals_unpublished", None, cert
+
+
+def swr_instances(releases):
+    """Family sold_weighted_rate: a region's gold unit cost = its members' unit costs weighted by attributable sold."""
+    out = []
+    for (y, q), rel in sorted(releases.items()):
+        order = region_order(y, q)
+        for sname in ("QTD", "YTD"):
+            sheet = rel.sheets.get(sname)
+            if sheet is None:
+                continue
+            kind = "Q%d" % q if sname == "QTD" else CUM[q]
+            blk = sheet.blocks["au"]
+            for subj, (rrow, _label, _share) in sorted(blk.rows.items(), key=lambda kv: kv[1][0]):
+                if subj not in REGIONS:
+                    continue
+                members = order.get(subj)  # None: a region of the other map (region_not_in_map)
+                found = [member_row(blk, s) for s in members] if members is not None else []
+                located = sorted((r, how) for how, r in found if r is not None)  # operand order: by row (J33)
+                for g in GROUPS:
+                    per = period(y if g == "current" else y - 1, kind)
+                    sold_col = blk.cols[(g, "sold_attr")]
+                    for fid in SWR_FIELDS:
+                        if (g, fid) not in blk.cost_cols:
+                            continue  # J31: no mapped unit-cost column for this group and field
+                        col = blk.cost_cols[(g, fid)]
+                        pairs = [(read_sum_operand(sheet, r, col), read_sum_operand(sheet, r, sold_col))
+                                 for r, _how in located]
+                        region = read_sum_operand(sheet, rrow, col)
+                        ops = [o for pair in pairs for o in pair] + [region]
+                        inst = {"family": SWR_FAMILY, "subject": subj, "field": fid, "group": g, "period": per,
+                                "anchor": region.loc, "cells": [o.loc for o in ops], "state": "v", "reason": None,
+                                "at": None, "certificate": None, "share": None, "printed_share": None,
+                                "component": None, "corrections": None, "_ops": ops, "_s": None}
+                        if members is not None and E818_SUBJECT in members and per in E818_PERIODS:
+                            inst["reason"] = "excluded_e818"
+                        elif members is None:
+                            inst["reason"] = "region_not_in_map"
+                        elif any(how == "missing" for how, _r in found):
+                            inst["reason"] = "operand_row_missing"
+                        elif any(how == "both" for _r, how in located):
+                            first = next(i for i, (_r, how) in enumerate(located) if how == "both")
+                            inst["reason"], inst["at"] = "operand_unreadable", pairs[first][0].loc
+                        else:
+                            inst["state"], inst["reason"], inst["at"], inst["certificate"] = decide_swr(pairs, region)
+                        out.append(inst)
+    return out
+
+
+def swr_summary(xs):
+    by = {}
+    for x in xs:
+        if x["state"] == "v":
+            by[x["reason"]] = by.get(x["reason"], 0) + 1
+    return {"family": SWR_FAMILY, "n": len(xs), **{s: sum(1 for x in xs if x["state"] == s)
+                                                    for s in ("i", "iii", "iv", "v", "np")},
+            "v_by_reason": dict(sorted(by.items()))}
+
+
+def check_e817(swr):
+    """E817 (J38): every sold_weighted_rate instance of Latin America & Asia Pacific with a 2023 period, any state."""
+    hits = sorted((x for x in swr if x["subject"] == SWR_E817_REGION and x["period"][:4] == "2023"), key=sort_key)
+    states = {}
+    for x in hits:
+        states[x["state"]] = states.get(x["state"], 0) + 1
+    return {"check": "E817", "ok": bool(hits),
+            "detail": "sold_weighted_rate: %d instances of %s with a 2023 period; states %s"
+                      % (len(hits), SWR_E817_REGION, json.dumps(dict(sorted(states.items())))),
+            "instances": [{"anchor": x["anchor"], "field": x["field"], "state": x["state"], "reason": x["reason"]}
+                          for x in hits]}
+
+
 # ---------------------------------------------------------------------------------------------------- exact joint decision
 
 def _norm(cons):
@@ -1504,9 +1789,10 @@ def main(argv):
     releases = collect(args)
     site, unmatched = site_sheet_instances(releases)
     sums, outside = sum_instances(releases)
+    swr = swr_instances(releases)  # decided alone, never posed (J37)
     instances = ownership_instances(releases) + quarter_sum_instances(releases) + site
     instances.sort(key=sort_key)
-    printed = sorted(instances + sums, key=sort_key)
+    printed = sorted(instances + sums + swr, key=sort_key)
     seen = set()
     for x in printed:
         k = sort_key(x)
@@ -1533,6 +1819,7 @@ def main(argv):
         emit({"family": fam, "n": len(xs), **{s: sum(1 for x in xs if x["state"] == s)
                                                for s in ("i", "iii", "v", "np")},
               "v_by_reason": dict(sorted(by.items()))})
+    emit(swr_summary(swr))  # J37: directly after the five family summaries
     for _y, rel in sorted(releases.items()):
         for where, why in rel.refusals:
             emit({"family": "site_sheet", "refused": where, "reason": why})
@@ -1549,6 +1836,7 @@ def main(argv):
           "joint_only": sum(1 for c in comp_lines if c["joint_only"])})
     for c in checks(instances, with_values):
         emit(c)
+    emit(check_e817(swr))  # J38
 
 
 if __name__ == "__main__":
