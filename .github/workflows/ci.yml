@@ -29,6 +29,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run GATE-LAYERS-00 (xtask check-all)
         run: cargo run -p xtask -- check-all
+      # BD-003 done-when: CI prints the per-crate LOC budget table (check-all prints only the totals).
+      - name: LOC budget table
+        if: matrix.os == 'ubuntu-latest' && matrix.profile == 'dev'
+        run: cargo run -p xtask -- loc
       - name: Check workspace
         run: cargo check --workspace --all-targets --profile ${{ matrix.profile }}
       - name: Run workspace test suite

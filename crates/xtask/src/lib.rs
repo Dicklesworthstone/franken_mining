@@ -487,8 +487,8 @@ pub fn check_lifts(root: &Path) -> Result<(), Vec<String>> {
     }
 }
 
-/// Check that every workspace crate has a 10-section `CONTRACT.md` and every `pub mod` in `src/lib.rs`
-/// is listed in `Allowed Module Families` (`BD-002`, `BD-008`).
+/// Check that every workspace crate has a 10-section `CONTRACT.md` and every module `src/lib.rs` declares, at
+/// any visibility and outside `#[cfg(test)]`, is listed in `Allowed Module Families` (`BD-002`, `BD-008`).
 pub fn check_scope(root: &Path) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
     for member_toml in workspace_member_manifests(root)? {
@@ -516,20 +516,12 @@ pub fn check_scope(root: &Path) -> Result<(), Vec<String>> {
         let lib_rs = crate_dir.join("src/lib.rs");
         if lib_rs.exists() {
             let lib_text = fs::read_to_string(&lib_rs).unwrap_or_default();
-            for line in lib_text.lines() {
-                let trimmed = line.trim();
-                if let Some(rest) = trimmed.strip_prefix("pub mod ") {
-                    let mod_name = rest
-                        .trim_end_matches(';')
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or("");
-                    if !mod_name.is_empty() && !allowed_mods.contains(mod_name) {
-                        errors.push(format!(
-                            "undeclared module `pub mod {mod_name}` in {pkg_name}/src/lib.rs not in CONTRACT.md Allowed Module Families {:?} (BD-008)",
-                            allowed_mods
-                        ));
-                    }
+            for mod_name in declared_modules(&lib_text) {
+                if !allowed_mods.contains(mod_name) {
+                    errors.push(format!(
+                        "undeclared module `{mod_name}` in {pkg_name}/src/lib.rs not in CONTRACT.md Allowed Module Families {:?} (BD-008)",
+                        allowed_mods
+                    ));
                 }
             }
         }
@@ -540,6 +532,48 @@ pub fn check_scope(root: &Path) -> Result<(), Vec<String>> {
     } else {
         Err(errors)
     }
+}
+
+/// The top-level modules `lib_text` declares, at any visibility (`mod`, `pub mod`, `pub(crate) mod`, …), in a
+/// file or inline. A module under `#[cfg(test)]` is skipped; any other private module is reported like a public
+/// one, so visibility is no way around the charter (BD-008).
+fn declared_modules(lib_text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut cfg_test = false;
+    for line in lib_text.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with("//") {
+            continue;
+        }
+        if t.starts_with("#[") {
+            cfg_test |= t == "#[cfg(test)]";
+            continue;
+        }
+        // Top-level items start in column 0; a `mod` nested in another module's body is not a crate module.
+        if !cfg_test
+            && !line.starts_with(char::is_whitespace)
+            && let Some(name) = module_name(t)
+        {
+            out.push(name);
+        }
+        cfg_test = false;
+    }
+    out
+}
+
+/// The module name an item line declares (`pub(crate) mod foo {` gives `foo`), or `None`.
+fn module_name(item: &str) -> Option<&str> {
+    let rest = match item.strip_prefix("pub") {
+        Some(v) if v.starts_with('(') => v.get(v.find(')')? + 1..)?.trim_start(),
+        Some(v) if v.starts_with(' ') => v.trim_start(),
+        Some(_) => return None,
+        None => item,
+    };
+    let name = rest
+        .strip_prefix("mod ")?
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .next()?;
+    (!name.is_empty()).then_some(name)
 }
 
 /// Check `L-6` (`BD-009`): no bare `f64` physical quantity parameters (`tonnes: f64`, `grade: f64`, `ounces: f64`, `moisture: f64`)
@@ -990,6 +1024,43 @@ mod tests {
                 .any(|e| e.contains("does not match the file name")),
             "{errs:?}"
         );
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    /// BD-008 done-when "smuggled module fails CI": a module missing from the charter's Allowed Module Families
+    /// fails `check_scope` whatever its visibility; the `#[cfg(test)]` module and a module nested in it pass.
+    #[test]
+    fn test_seeded_smuggled_module_fails_check_scope() {
+        let scratch = std::env::temp_dir().join(format!("xtask-scope-{}", std::process::id()));
+        let krate = scratch.join("crates").join("x");
+        fs::create_dir_all(krate.join("src")).expect("scratch crate");
+        fs::write(
+            scratch.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/x\"]\n",
+        )
+        .expect("workspace manifest");
+        fs::write(krate.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("manifest");
+        let mut contract = String::from("- **Allowed Module Families:** `[\"core\"]`\n");
+        for sec in 1..=10 {
+            contract.push_str(&format!("## {sec}. Section\n"));
+        }
+        fs::write(krate.join("CONTRACT.md"), contract).expect("contract");
+        let clean = "pub mod core;\n\n#[cfg(test)]\n#[allow(dead_code)]\nmod tests {\n    mod helpers {}\n}\n";
+        fs::write(krate.join("src/lib.rs"), clean).expect("lib.rs");
+        check_scope(&scratch).expect("charted modules and the test module pass");
+        for smuggled in [
+            "pub mod smuggled;",
+            "mod smuggled;",
+            "pub(crate) mod smuggled {}",
+            "pub(super) mod smuggled;",
+        ] {
+            fs::write(krate.join("src/lib.rs"), format!("{clean}{smuggled}\n")).expect("lib.rs");
+            let errs = check_scope(&scratch).expect_err(smuggled);
+            assert!(
+                errs.len() == 1 && errs[0].contains("undeclared module `smuggled` in x/src/lib.rs"),
+                "{smuggled}: {errs:?}"
+            );
+        }
         let _ = fs::remove_dir_all(&scratch);
     }
 
