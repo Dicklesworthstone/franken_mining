@@ -110,3 +110,21 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "Missing-fact text of Kibali's and Hemlo's (iv) from K.4's one-cell check; Veladero's cites it too."
 evidence = "bd-prmn.8, E836"
+
+# Observed from the binary of b17d47d (git archive, own target directory; exit 0, empty stderr). Against b304af3
+# every exception, instance record, refused and not-published group, the hidden scope and the totals are equal
+# once the new reason_code fields are stripped; only the frame moved.
+[[expected]]
+commit = "b17d47d"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "b1b3d1c8b873058b8b9e841e41df6127c5af28596f2a8ad7ef3be95e6d0ef60d"
+anchor_id = "anc_5957c0d3f86021fde9dfed9c1a8393ee"
+totals_i = 2383
+totals_ii = 3
+totals_iii = 4
+totals_iv = 82
+totals_v = 63
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "M0AS frame v4: structured details and operands; no state or reason changed."
+evidence = "bd-sjrh.1, b17d47d"
