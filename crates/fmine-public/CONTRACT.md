@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "synthetic", "live"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "synthetic", "live", "citation"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
@@ -135,12 +135,32 @@ The public lane of M0 (`fmine assure public`).
   - **Real lane** (ignored, local runs):
     - files: 54 of 54;
     - leaves (one per instance): 2,444 pass, 0 fail, 151 skipped;
-    - labels: 56 of 56, 48 table refusals and 8 changed instances;
+    - labels: 56 of 56 table refusals;
     - the Kibali O11 literal mutant is caught.
-  - **Finding:** a broken cost-of-sales label makes `locate_table` return `Ok(None)`. The table drops out with no
-    refusal; only the table count and the root show it.
+  - **Finding, fixed:** a broken cost-of-sales label made `locate_table` return `Ok(None)`, so the table dropped
+    out with no refusal. `assess` now refuses a reconciliation's own-quarter sheet by name when it has no table
+    ("no cost-of-sales row on the release's own quarter sheet") or is missing ("the release's own quarter sheet
+    is missing").
 - `aisc::Calc` and `IdentityInstance::calc` (bd-sjrh.1): a footing's printed total, component sum and k; a
-  rate's r, n, k and q, as the ledger read them. They are not in `detail()`, the payload or the root.
+  rate's r, n, k and q, as the ledger read them. They are not in `detail()` or the root; `citation` renders them
+  in the payload.
+- `citation::{Cited, RULES, RULES_VERSION, extracted, derived, cited_json, locator}` (bd-sjrh.1 part 3): the
+  cited numbers of an instance.
+  - **Extracted:** each operand is `{"role","v"|"token"|"blank"|"unrounded","at","sha256"}`.
+  - **Derived** (`{"name","v","rule","rules_version","in"}`, rules version `m0-ledger/1`):
+    - a footing gives `component_sum` (`aisc.footing.component_sum`, from its lines) and `residual`
+      (`aisc.footing.residual`, from its total and lines);
+    - a rate gives `k` (`ledger.count`, of its counted lines or the cost-of-sales row) and `range_lo` and
+      `range_hi` (`aisc.rate_interval`, rounded outward).
+  - **Payload:** every exception record carries `cited`, and an issuer discrepancy's certificate cites printed,
+    component sum and residual. The top-level `instances` array holds one `{"at","family","state","cited"}`
+    record per counted instance: 50 synthetic and 2,595 real.
+  - **Size:** the real payload is about 7.3 MB.
+  - **Not yet:**
+    - totals and census counts as count citations;
+    - the uncited-number validator (S2);
+    - structured states (part 1);
+    - frame v3 (part 4).
   `OperandRole::Counted` marks lines read only for their count: rate lines, and block 1 under the AISC
   footing.
 - `Lane`, `LoadedSource`, `TableRefusal`, `AlternateCounts`, `HiddenScope`, `HIDDEN_SCOPE`,

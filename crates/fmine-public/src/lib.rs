@@ -7,6 +7,7 @@
 //! file. Synthetic workbooks exist only in the synthetic lane, which says so and is never gate-eligible.
 
 pub mod aisc;
+pub mod citation;
 pub mod live;
 pub mod mine_stats;
 pub mod sources;
@@ -363,16 +364,34 @@ impl PublicAssuranceReport {
         if let Some(scope) = scope {
             let _ = write!(o, ",\"scope\":{}", js(scope));
         }
+        let sha_of = |f: &str| self.source_sha(f);
+        let derived = citation::derived(i);
         match &i.state {
             IdentityState::IssuerDiscrepancy(c) => {
                 let lines: Vec<String> = c.line_cells.iter().map(|l| js(l)).collect();
+                // The three numbers as citations (bd-sjrh.1): the printed total as read, the sum and the residual
+                // with their rules and inputs.
+                let printed = i
+                    .operands
+                    .iter()
+                    .find(|o| o.role == OperandRole::Total)
+                    .map_or_else(
+                        || "null".to_string(),
+                        |o| citation::extracted(o, &sha_of).to_json(),
+                    );
+                let by_name = |name: &str| {
+                    derived
+                        .iter()
+                        .find(|(n, _)| *n == name)
+                        .map_or_else(|| "null".to_string(), |(_, d)| d.to_json())
+                };
                 let _ = write!(
                     o,
                     ",\"certificate\":{{\"printed\":{},\"component_sum\":{},\"residual\":{},\"total_cell\":{},\
                      \"line_cells\":[{}],\"sign_flip_witness\":{},\"alternate_consistent\":{}}}",
-                    c.printed,
-                    c.component_sum,
-                    c.residual,
+                    printed,
+                    by_name("component_sum"),
+                    by_name("residual"),
                     js(&c.total_cell),
                     lines.join(","),
                     c.sign_flip_witness
@@ -400,8 +419,20 @@ impl PublicAssuranceReport {
             }
             _ => {}
         }
+        let _ = write!(o, ",\"cited\":{}", citation::cited_json(i, &sha_of));
         o.push('}');
         o
+    }
+
+    /// One compact record per counted instance (bd-sjrh.1): its cell, family, state and cited numbers.
+    fn instance_json(&self, i: &IdentityInstance) -> String {
+        format!(
+            "{{\"at\":{},\"family\":{},\"state\":{},\"cited\":{}}}",
+            js(&format!("{}:{}!{}", i.file, i.sheet, i.cell)),
+            js(i.family.as_str()),
+            js(i.state.code()),
+            citation::cited_json(i, &|f| self.source_sha(f))
+        )
     }
 
     /// sha256 over the sorted `"{file}\t{sha256}\n"` lines of the sources this run read (BD-339.S1).
@@ -676,7 +707,14 @@ impl PublicAssuranceReport {
                 js(&t.reason)
             );
         }
-        o.push_str("]},");
+        o.push_str("]},\"instances\":[");
+        let records: Vec<String> = self
+            .instances
+            .iter()
+            .map(|i| self.instance_json(i))
+            .collect();
+        o.push_str(&records.join(","));
+        o.push_str("],");
         self.one_cell_json(&mut o);
         let hidden = &self.hidden_scope;
         let _ = write!(
@@ -1916,6 +1954,83 @@ mod tests {
         )
     }
 
+    /// The synthetic AISC workbook's sha256, from its bytes.
+    fn synthetic_aisc_sha() -> String {
+        synthetic::synthetic_workbooks(&[])
+            .into_iter()
+            .find(|w| w.0 == synthetic::SYNTHETIC_AISC_FILE)
+            .map(|w| fmine_core::hash::sha256(&w.3).to_hex())
+            .expect("synthetic AISC workbook")
+    }
+
+    /// bd-sjrh.1 part 3: C8 (hand-read from `synthetic.rs`: C5 300, C6 −50, C7 0, C8 350) renders as three cited
+    /// numbers: 350 as read, the sum 250 of C5:C7 and the residual 100, in its certificate and its `cited` record.
+    #[test]
+    fn test_c8_footing_renders_three_cited_numbers() {
+        let json = run_synthetic_assurance(&[])
+            .expect("synthetic run")
+            .to_json();
+        let sha = synthetic_aisc_sha();
+        let at = |c: &str| format!("\"Synthetic_AISC.xlsx:Q1 2030!{c}\"");
+        let x = |v: i64, c: &str| format!("\"v\":{v},\"at\":{},\"sha256\":\"{sha}\"}}", at(c));
+        let rule = |r: &str| format!("\"rule\":\"{r}\",\"rules_version\":\"m0-ledger/1\"");
+        let lines = format!("{},{},{}", at("C5"), at("C6"), at("C7"));
+        let sum = format!(
+            "\"v\":250,{},\"in\":[{lines}]}}",
+            rule("aisc.footing.component_sum")
+        );
+        let residual = format!(
+            "\"v\":100,{},\"in\":[{},{lines}]}}",
+            rule("aisc.footing.residual"),
+            at("C8")
+        );
+        let certificate = format!(
+            "\"certificate\":{{\"printed\":{{{},\"component_sum\":{{{sum},\"residual\":{{{residual},\
+             \"total_cell\":\"C8\",\"line_cells\":[\"C5\",\"C6\",\"C7\"],\"sign_flip_witness\":\"C6\"",
+            x(350, "C8")
+        );
+        assert!(json.contains(&certificate), "{certificate}");
+        let cited = format!(
+            "\"cited\":{{\"operands\":[{{\"role\":\"total\",{},{{\"role\":\"line\",{},{{\"role\":\"line\",{},\
+             {{\"role\":\"line\",{}],\"derived\":[{{\"name\":\"component_sum\",{sum},{{\"name\":\"residual\",\
+             {residual}]}}",
+            x(350, "C8"),
+            x(300, "C5"),
+            x(-50, "C6"),
+            x(0, "C7")
+        );
+        assert!(json.contains(&cited), "{cited}");
+    }
+
+    /// bd-sjrh.1 part 3: D16 prints 2400 against N = D11 200 over k = 5 numeric lines (D5, D6, D7, D9, D10) and
+    /// Q = D13 100. Hand-derived: 1000·197.5/100.5 = 1965.1741… floors to 1965.174, and 1000·202.5/99.5 =
+    /// 2035.1758… ceils to 2035.176.
+    #[test]
+    fn test_d16_rate_range_cited() {
+        let json = run_synthetic_assurance(&[])
+            .expect("synthetic run")
+            .to_json();
+        let at = |c: &str| format!("\"Synthetic_AISC.xlsx:Q1 2030!{c}\"");
+        let rule = |r: &str| format!("\"rule\":\"{r}\",\"rules_version\":\"m0-ledger/1\"");
+        let counted: Vec<String> = ["D5", "D6", "D7", "D9", "D10"].map(at).to_vec();
+        let range_in = format!("[{},{},{}]", at("D13"), at("D11"), counted.join(","));
+        let want = format!(
+            "\"derived\":[{{\"name\":\"k\",\"v\":5,{},\"in\":[{}]}},\
+             {{\"name\":\"range_lo\",\"v\":1965.174,{},\"in\":{range_in}}},\
+             {{\"name\":\"range_hi\",\"v\":2035.176,{},\"in\":{range_in}}}]",
+            rule("ledger.count"),
+            counted.join(","),
+            rule("aisc.rate_interval"),
+            rule("aisc.rate_interval"),
+        );
+        assert!(json.contains(&want), "{want}");
+        // One record per counted instance, each with operands.
+        let (_, records) = json.split_once("\"instances\":[").expect("instances array");
+        let records = records.split_once("],\"one_cell_cos\"").expect("end").0;
+        assert_eq!(records.matches("\"cited\":{\"operands\":[{").count(), 50);
+        assert_eq!(records.matches("{\"at\":").count(), 50);
+    }
+
     /// bd-sjrh.1: C8's footing is computed from its total and block 1 (hand-read from `synthetic.rs`).
     #[test]
     fn test_c8_footing_operands() {
@@ -3075,6 +3190,35 @@ mod tests {
             r.instances.len(),
             by_role.values().sum::<usize>(),
             roles.join(",")
+        );
+
+        // bd-sjrh.1 part 3, cited numbers: Kibali's 'Q2 2024'!O11 certificate prints 70 against a component sum
+        // of 72 (E822), cited at the registered sha256 (registry, not this run). Messages name no values.
+        let json = r.to_json();
+        let kibali = "Barrick_Q3_2024_AISC.xlsx";
+        let sha = &profile
+            .sources
+            .iter()
+            .find(|s| s.file_name == kibali)
+            .expect("registered")
+            .sha256_hex;
+        let at = format!("\"{kibali}:Q2 2024!O11\"");
+        let printed = format!("\"printed\":{{\"v\":70,\"at\":{at},\"sha256\":\"{sha}\"}}");
+        let sum = "\"component_sum\":{\"v\":72,\"rule\":\"aisc.footing.component_sum\"";
+        let residual = "\"residual\":{\"v\":-2,\"rule\":\"aisc.footing.residual\"";
+        let cert = json
+            .split("\"certificate\":")
+            .find(|c| c.starts_with(&format!("{{{printed}")))
+            .is_some_and(|c| c.contains(sum) && c.contains(residual));
+        assert!(cert, "Kibali O11 certificate is not the cited triple");
+        let (_, records) = json.split_once("\"instances\":[").expect("instances array");
+        let records = records.split_once("],\"one_cell_cos\"").expect("end").0;
+        let n_records = records.matches("{\"at\":").count();
+        let n_cited = records.matches("\"cited\":{\"operands\":[{").count();
+        assert_eq!((n_records, n_cited), (r.instances.len(), r.instances.len()));
+        println!(
+            "{{\"test\":\"real_cited\",\"records\":{n_records},\"with_operands\":{n_cited},\"payload_bytes\":{}}}",
+            json.len()
         );
 
         // Regression pin (not independent; see the doc comment): root, anchor, totals, registry epoch and digest
