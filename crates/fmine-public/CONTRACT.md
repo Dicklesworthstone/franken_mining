@@ -305,7 +305,8 @@ The public lane of M0 (`fmine assure public`).
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io` (and, in the manifest, `fmine-units`,
   `fmine-time`, `fmine-metrics`, not used by this crate since BD-321).
 - Depends on `fmine-numerics` (BD-331.S6): the ledger's exact kernel (`exact_feas`, BD-340).
-  `tests/exact_feas_oracle.rs` keeps the old closed-form corner rule as an independent oracle for rates.
+  `tests/exact_feas_oracle.rs` keeps the old closed-form corner rule as an independent oracle for rates (at a
+  share, and the (iv) range exactly); `test_property_footings_match_closed_form` does the same for footings.
 
 ## 10. Non-Goals & Scope Boundary
 - Operates only on public disclosures (`ConfidentialityTier::Public`).

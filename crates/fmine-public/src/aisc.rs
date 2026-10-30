@@ -1301,100 +1301,6 @@ pub(crate) fn implied_rate_text(n: i64, k: i64, q: i64) -> String {
     }
 }
 
-/// The bespoke corner kernel the binding above replaced, kept only until the side-by-side comparison
-/// (BD-331.S6 step 3) shows no difference.
-#[cfg(test)]
-pub(crate) mod legacy {
-    use std::cmp::Ordering;
-
-    /// Compares the rationals `a_num / a_den` and `b_num / b_den` (denominators non-zero) exactly.
-    fn cmp_frac(a_num: i128, a_den: i128, b_num: i128, b_den: i128) -> Ordering {
-        let ord = (a_num * b_den).cmp(&(b_num * a_den));
-        if (a_den < 0) != (b_den < 0) {
-            ord.reverse()
-        } else {
-            ord
-        }
-    }
-
-    pub(crate) fn rate_interval_holds(n: i64, k: i64, q: i64, r: i64) -> bool {
-        scaled_rate_holds(n, k, q, r, 1, 1)
-    }
-
-    pub(crate) fn scaled_rate_holds(
-        n: i64,
-        k: i64,
-        q: i64,
-        r: i64,
-        s_num: i64,
-        s_den: i64,
-    ) -> bool {
-        let (n2, k, q2, r2, a, b) = (
-            2 * i128::from(n),
-            i128::from(k),
-            2 * i128::from(q),
-            2 * i128::from(r),
-            i128::from(s_num),
-            i128::from(s_den),
-        );
-        let corners = [
-            (1000 * a * (n2 - k), b * (q2 - 1)),
-            (1000 * a * (n2 - k), b * (q2 + 1)),
-            (1000 * a * (n2 + k), b * (q2 - 1)),
-            (1000 * a * (n2 + k), b * (q2 + 1)),
-        ];
-        // Lower bound of the rate interval is (r2 − 1)/2, upper (r2 + 1)/2.
-        let reaches_low = corners
-            .iter()
-            .any(|&(num, den)| cmp_frac(num, den, r2 - 1, 2) != Ordering::Less);
-        let reaches_high = corners
-            .iter()
-            .any(|&(num, den)| cmp_frac(num, den, r2 + 1, 2) != Ordering::Greater);
-        reaches_low && reaches_high
-    }
-
-    pub(crate) fn rate_range_text(n: i64, k: i64, q: i64) -> String {
-        let (n2, k, q2) = (2 * i128::from(n), i128::from(k), 2 * i128::from(q));
-        let mut corners = [
-            (1000 * (n2 - k), q2 - 1),
-            (1000 * (n2 - k), q2 + 1),
-            (1000 * (n2 + k), q2 - 1),
-            (1000 * (n2 + k), q2 + 1),
-        ];
-        corners.sort_by(|a, b| cmp_frac(a.0, a.1, b.0, b.1));
-        let fmt = |(num, den): (i128, i128), round_up: bool| {
-            let (num, den) = if den < 0 { (-num, -den) } else { (num, den) };
-            let milli = if round_up {
-                -(-num * 1000).div_euclid(den)
-            } else {
-                (num * 1000).div_euclid(den)
-            };
-            let sign = if milli < 0 { "-" } else { "" };
-            let m = milli.abs();
-            format!("{sign}{}.{:03}", m / 1000, m % 1000)
-        };
-        format!("[{}, {}]", fmt(corners[0], false), fmt(corners[3], true))
-    }
-
-    pub(crate) fn reconstruction_closes(n: i64, k: i64, q: i64, r: i64, c: i64) -> bool {
-        let (n, k, q, r, c) = (
-            i128::from(n),
-            i128::from(k),
-            i128::from(q),
-            i128::from(r),
-            i128::from(c),
-        );
-        if q <= 0 || r <= 0 {
-            return false;
-        }
-        let have_lo = 2000 * (2 * n - k + 2 * c - 1);
-        let have_hi = 2000 * (2 * n + k + 2 * c + 1);
-        let need_lo = (2 * r - 1) * (2 * q - 1);
-        let need_hi = (2 * r + 1) * (2 * q + 1);
-        have_hi >= need_lo && have_lo <= need_hi
-    }
-}
-
 /// The shares s for which the printed n, q, r fit 1000·s·N/Q (N = n ± k/2, Q = q ± 1/2, R = r ± 1/2, all
 /// positive), as exact fractions `(num, den)`: s ∈ [(r − ½)(q − ½)/(1000(n + k/2)), (r + ½)(q + ½)/(1000(n − k/2))].
 /// The ratio R·Q/(1000·N) is continuous on the box, so every share in between is attained.
@@ -2262,146 +2168,6 @@ mod tests {
         assert!(fits > 0 && fits < 5 * 4 * 5 * shares.len(), "{fits}");
     }
 
-    // BD-331.S6 step 3: both kernels side by side. Each instance the exact kernel decided by arithmetic is
-    // re-decided by the corner kernel (`legacy`) from the numbers it was decided on, and the two states' codes and
-    // reasons are compared. Nothing is reconciled by editing expectations: a difference fails the test.
-
-    /// A state's code and reason as the side-by-side compares them.
-    fn fingerprint(s: &IdentityState) -> String {
-        match s {
-            IdentityState::Consistent {
-                alternate_consistent,
-                basis,
-            } => format!("i alt={alternate_consistent} share={}", basis.is_some()),
-            IdentityState::Explained {
-                evidence_id,
-                component,
-                ..
-            } => format!("ii {evidence_id} {}", component.cell),
-            IdentityState::IssuerDiscrepancy(c) => format!(
-                "iii residual={} witness={:?} alt={}",
-                c.residual, c.sign_flip_witness, c.alternate_consistent
-            ),
-            IdentityState::Undecidable { why, .. } => format!("iv {}", why.code()),
-            IdentityState::Refused { reason } | IdentityState::RefusedAt { reason, .. } => {
-                format!("v {}", reason.code())
-            }
-            IdentityState::NotPublished { reason } => format!("np {}", reason.code()),
-        }
-    }
-
-    /// The corner kernel's state for an instance, from the numbers the exact kernel decided it on (its operands
-    /// and `calc`); `None` for an instance settled before any arithmetic, where both kernels share the code path.
-    fn legacy_fingerprint(inst: &IdentityInstance) -> Option<String> {
-        use legacy::{rate_interval_holds, reconstruction_closes, scaled_rate_holds};
-        let kernel_refused = matches!(
-            inst.state,
-            IdentityState::Refused {
-                reason: RefusedReason::KernelIndeterminate
-            }
-        );
-        match inst.calc {
-            Calc::None => None,
-            Calc::Footing {
-                printed,
-                component_sum: sum,
-                k_alt,
-            } => {
-                let alt = (printed - sum).abs() * 2 <= 1 + k_alt;
-                if printed == sum {
-                    return Some(format!("i alt={alt} share=false"));
-                }
-                let witness = inst
-                    .operands
-                    .iter()
-                    .filter(|o| o.role == OperandRole::Line)
-                    .find(|o| {
-                        matches!(o.value, OperandValue::Int(x) if x != 0 && sum - 2 * x == printed)
-                    })
-                    .map(|o| o.cell.clone());
-                Some(format!(
-                    "iii residual={} witness={witness:?} alt={alt}",
-                    printed - sum
-                ))
-            }
-            Calc::Rate(m) => {
-                let share = match &inst.state {
-                    IdentityState::Consistent { basis: Some(s), .. }
-                    | IdentityState::Undecidable {
-                        why: Undecided::ShareOutside { share: s, .. },
-                        ..
-                    } => Some((s.num, s.den)),
-                    _ if kernel_refused => return Some("decided by the corner kernel".to_string()),
-                    // A share refusal comes before any arithmetic.
-                    IdentityState::Refused { .. } | IdentityState::RefusedAt { .. } => return None,
-                    _ => None,
-                };
-                if let Some((a, b)) = share {
-                    return Some(if scaled_rate_holds(m.n, m.k, m.q, m.r, a, b) {
-                        format!(
-                            "i alt={} share=true",
-                            scaled_rate_holds(m.n, 1, m.q, m.r, a, b)
-                        )
-                    } else {
-                        "iv rate_outside_interval_at_stated_share".to_string()
-                    });
-                }
-                if rate_interval_holds(m.n, m.k, m.q, m.r) {
-                    let alt = rate_interval_holds(m.n, 1, m.q, m.r);
-                    return Some(format!("i alt={alt} share=false"));
-                }
-                // The plain check fails: the registered reconstruction, if any, decides, re-checked here.
-                let closes = |c: &CitedCell| reconstruction_closes(m.n, m.k, m.q, m.r, c.value);
-                Some(match &inst.state {
-                    IdentityState::Explained {
-                        evidence_id,
-                        component,
-                        ..
-                    } if closes(component) => format!("ii {evidence_id} {}", component.cell),
-                    IdentityState::Undecidable {
-                        why:
-                            Undecided::ReconstructionNotApplied {
-                                evidence_id,
-                                check: ReconstructionCheck::DoesNotClose { component },
-                            },
-                        ..
-                    } if closes(component) => format!("ii {evidence_id} {}", component.cell),
-                    IdentityState::Explained { .. } => "iv reconstruction_not_applied".to_string(),
-                    IdentityState::Undecidable { why, .. } => format!("iv {}", why.code()),
-                    other => format!("iv or ii, not {}", other.code()),
-                })
-            }
-        }
-    }
-
-    /// Side-by-side counts over `instances`: (decided by arithmetic, differing), with one line per difference.
-    fn side_by_side(instances: &[&IdentityInstance], log: &mut Vec<String>) -> (usize, usize) {
-        let (mut decided, mut differing) = (0, 0);
-        for inst in instances {
-            let Some(old) = legacy_fingerprint(inst) else {
-                continue;
-            };
-            decided += 1;
-            let new = fingerprint(&inst.state);
-            if old != new {
-                differing += 1;
-                // Codes only: no issuer values in a log (RISK-31).
-                let code = |s: &str| s.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
-                log.push(format!(
-                    "{{\"file\":\"{}\",\"sheet\":\"{}\",\"cell\":\"{}\",\"family\":\"{}\",\
-                     \"old\":\"{}\",\"new\":\"{}\"}}",
-                    inst.file,
-                    inst.sheet,
-                    inst.cell,
-                    inst.family.as_str(),
-                    code(&old),
-                    code(&new)
-                ));
-            }
-        }
-        (decided, differing)
-    }
-
     /// For a (iii) footing: BD-340.S3's conflict sets for the footing as the ledger poses it (from its cited
     /// operands; a placeholder is an exact 0), and the certificate's own cells, total first. Under the component
     /// sum, disregarding any one printed value drops the footing, so the one minimal set is every cell.
@@ -2484,39 +2250,25 @@ mod tests {
         assert_eq!(footing_conflicts(c8).0, vec![vec!["C5", "C6", "C7", "C8"]]);
     }
 
+    /// BD-331.S6: the port changed no state. At cd423b9 the two kernels ran side by side on all 55 synthetic
+    /// instances with no difference; the corner kernel is gone, and this root, its root at 9aab4a6
+    /// (`fmine assure public --synthetic`), pins the result.
     #[test]
-    fn test_port_identical_states_synthetic() {
+    fn test_port_keeps_synthetic_root() {
         let run = crate::run_synthetic_assurance(&[]).expect("synthetic run");
-        let all: Vec<&IdentityInstance> = run
-            .instances
-            .iter()
-            .chain(&run.hidden_scope.instances)
-            .collect();
-        let in_b_to_h = |i: &&&IdentityInstance| {
-            matches!(i.column.as_str(), "B" | "C" | "D" | "E" | "F" | "G" | "H")
-        };
-        assert_eq!(run.instances.iter().filter(|i| in_b_to_h(&i)).count(), 35);
-        let mut log = Vec::new();
-        let (decided, differing) = side_by_side(&all, &mut log);
-        println!(
-            "{{\"test\":\"port_synthetic\",\"instances\":{},\"decided\":{decided},\"differing\":{differing},\
-             \"root\":\"{}\"}}",
-            all.len(),
-            run.ledger_anchor.state_root.to_hex()
-        );
-        assert_eq!(log, Vec::<String>::new());
-        assert!(decided >= 44, "{decided}");
-        // The synthetic root of the corner kernel at 9aab4a6 (`fmine assure public --synthetic`, before the port).
+        assert_eq!(run.instances.len() + run.hidden_scope.instances.len(), 55);
         assert_eq!(
             run.ledger_anchor.state_root.to_hex(),
             "b50f77791da2521dec709b02577305cbb51f42973514195443a59323c8d96ab3"
         );
     }
 
-    /// Both kernels on 10⁴ seeded rates (n, k, q, r, share) and 10⁴ seeded footings with placeholder lines. The
-    /// BD-340 S7 table generator does not exist yet, so these stand in for its tables.
+    /// 10⁴ seeded footings with placeholder lines against the closed-form rules the corner kernel used: the
+    /// primary holds iff the printed lines sum to the printed total, the alternate iff |printed − sum|·2 ≤ 1 + k.
+    /// The rates' closed-form oracle is `tests/exact_feas_oracle.rs`. The BD-340 S7 table generator does not
+    /// exist yet, so these stand in for its tables.
     #[test]
-    fn test_property_generator_tables_both_kernels_agree() {
+    fn test_property_footings_match_closed_form() {
         use fmine_core::{PhiloxStream, RngKey};
         let mut rng = PhiloxStream::new(RngKey {
             seed_root: 331,
@@ -2527,29 +2279,8 @@ mod tests {
             brick: 0,
         });
         let mut next = |lo: i64, hi: i64| lo + (rng.next_u64() % (hi - lo + 1) as u64) as i64;
-        let shares = [(1, 1), (3, 4), (123, 200), (21, 25), (897, 1000)];
-        let (mut rate_holds_n, mut footing_alt_only) = (0, 0);
+        let mut footing_alt_only = 0;
         for case in 0..10_000 {
-            let (n, k, q) = (next(-3000, 3000), next(0, 12), next(1, 400));
-            let share = shares[next(0, 4) as usize];
-            // A rate near the exact one, so both outcomes are common.
-            let centre = 1000 * share.0 * n / (share.1 * q);
-            let r = centre + next(-40, 40);
-            let old = legacy::scaled_rate_holds(n, k, q, r, share.0, share.1);
-            assert_eq!(
-                rate_holds(n, k, q, r, share),
-                Ok(old),
-                "case {case}: n={n} k={k} q={q} r={r} s={share:?}"
-            );
-            rate_holds_n += usize::from(old);
-            // The range shown for a (iv) rate is the same text.
-            if share == (1, 1) {
-                assert_eq!(
-                    implied_rate_text(n, k.max(1), q),
-                    legacy::rate_range_text(n, k.max(1), q),
-                    "case {case}: n={n} k={k} q={q}"
-                );
-            }
             // A footing of 1–6 lines, some placeholders (exact 0), printed near its sum.
             let lines: Vec<Option<i64>> = (0..next(1, 6))
                 .map(|_| (next(0, 3) > 0).then(|| next(-500, 500)))
@@ -2576,10 +2307,10 @@ mod tests {
             footing_alt_only += usize::from(old_alt && printed != sum);
         }
         println!(
-            "{{\"test\":\"port_property\",\"cases\":10000,\"seed\":331,\"rate_holds\":{rate_holds_n},\
+            "{{\"test\":\"footing_property\",\"cases\":10000,\"seed\":331,\
              \"footing_alternate_only\":{footing_alt_only},\"disagree\":0}}"
         );
-        assert!((2000..8000).contains(&rate_holds_n) && footing_alt_only > 500);
+        assert!(footing_alt_only > 500, "{footing_alt_only}");
     }
 
     /// The alternative construction survives as a `RoundedOnce` run: TCC, as a line of the AISC footing, stands
@@ -2635,12 +2366,13 @@ mod tests {
         assert!(holds(100, 4, 100, 1025) && !holds(100, 1, 100, 1025));
     }
 
-    /// The side-by-side over every instance of the registered Barrick workbooks through 2026Q2 (BD-339's job).
-    /// One line per differing instance (codes only, RISK-31) and a summary; `root_old` is the corner kernel's
-    /// root, the last row of `repro/barrick/expected.toml`.
+    /// BD-331.S6 on the registered Barrick workbooks through 2026Q2. At cd423b9 the two kernels ran side by side
+    /// on all 3,030 instances with no difference; the corner kernel is gone, and the root pins the result:
+    /// `root_old` is the corner kernel's, the last row of `repro/barrick/expected.toml`. Every (iii) carries
+    /// S3's one minimal set. Prints locators and counts only (RISK-31).
     #[test]
     #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
-    fn barrick_port_identical_states() {
+    fn barrick_port_keeps_root_and_minimal_sets() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..");
@@ -2659,21 +2391,13 @@ mod tests {
             .iter()
             .chain(&run.hidden_scope.instances)
             .collect();
-        let mut log = Vec::new();
-        let (decided, differing) = side_by_side(&all, &mut log);
-        for line in &log {
-            println!("{line}");
-        }
         let root_new = run.ledger_anchor.state_root.to_hex();
         println!(
-            "{{\"instances\":{},\"visible\":{},\"decided_by_arithmetic\":{decided},\"identical\":{},\
-             \"differing\":{differing},\"root_old\":\"{root_old}\",\"root_new\":\"{root_new}\"}}",
+            "{{\"instances\":{},\"visible\":{},\"root_old\":\"{root_old}\",\"root_new\":\"{root_new}\"}}",
             all.len(),
-            run.instances.len(),
-            all.len() - differing
+            run.instances.len()
         );
-        assert_eq!(run.instances.len(), 2595);
-        assert_eq!(differing, 0);
+        assert_eq!((all.len(), run.instances.len()), (3030, 2595));
         assert_eq!(&root_new, root_old);
         // Every (iii) carries S3's minimal set; Kibali 'Q2 2024'!O11 (E815) has the witness O7.
         let mut discrepancies = 0;

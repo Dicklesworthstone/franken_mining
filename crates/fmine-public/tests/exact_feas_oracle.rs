@@ -1,6 +1,6 @@
 //! bd-4wvl.2 (BD-340.S2): the exact kernel `fmine_numerics::exact_feas` against `aisc.rs`, the bespoke footing
 //! and per-ounce checks written earlier, used as an independent oracle: every instance of the synthetic AISC
-//! table, and 10⁴ seeded (n, k, q, r) quadruples against the corner rule.
+//! table, and 10⁴ seeded (n, k, q, r, s) cases against the corner rule.
 //!
 //! Since BD-331.S6, `aisc.rs` itself decides on this kernel, so the synthetic-table comparison checks the
 //! ledger's posing against this file's posing, no longer against independent arithmetic. The corner rule,
@@ -23,7 +23,7 @@ mod oracle {
     };
     use fmine_public::aisc::{
         Calc, IdentityFamily, IdentityInstance, IdentityState, OperandRole, OperandValue,
-        rate_holds,
+        rate_holds, rate_range,
     };
     use fmine_public::run_synthetic_assurance;
     use fmine_public::synthetic::SYNTHETIC_SHARES;
@@ -348,36 +348,55 @@ mod oracle {
         );
     }
 
+    /// The four corners of 1000·s·N/Q over N ∈ [n − k/2, n + k/2] and Q ∈ [q − ½, q + ½], s = a/b:
+    /// 1000·a·(2n ± k)/(b·(2q ± 1)), as (numerator, denominator).
+    fn corners(n: i64, k: i64, q: i64, (a, b): (i64, i64)) -> [(i128, i128); 4] {
+        let (n2, k, q2) = (2 * i128::from(n), i128::from(k), 2 * i128::from(q));
+        let (a, b) = (i128::from(a), i128::from(b));
+        [
+            (1000 * a * (n2 - k), b * (q2 - 1)),
+            (1000 * a * (n2 - k), b * (q2 + 1)),
+            (1000 * a * (n2 + k), b * (q2 - 1)),
+            (1000 * a * (n2 + k), b * (q2 + 1)),
+        ]
+    }
+
     /// The closed-form corner rule `aisc.rs` used before BD-331.S6 moved the ledger onto the kernel, kept here as
-    /// an independent oracle: whether some N ∈ [n − k/2, n + k/2] and Q ∈ [q − ½, q + ½] give 1000·N/Q ∈
-    /// [r − ½, r + ½]. 1000·N/Q is monotone along each edge of the box (Q never crosses zero for |q| ≥ 1), so its
-    /// range is spanned by the four corners, 1000·(2n ± k)/(2q ± 1), compared by exact cross-multiplication.
-    fn corner_rate_holds(n: i64, k: i64, q: i64, r: i64) -> bool {
-        let (n2, k, q2, r2) = (
-            2 * i128::from(n),
-            i128::from(k),
-            2 * i128::from(q),
-            2 * i128::from(r),
-        );
-        // num/den against b/2, with den's sign folded in.
-        let cmp = |num: i128, den: i128, b: i128| {
-            let ord = (num * 2).cmp(&(b * den));
+    /// an independent oracle: whether some N ∈ [n − k/2, n + k/2] and Q ∈ [q − ½, q + ½] give 1000·s·N/Q ∈
+    /// [r − ½, r + ½]. 1000·s·N/Q is monotone along each edge of the box (Q never crosses zero for |q| ≥ 1), so
+    /// its range is spanned by the four [`corners`], compared by exact cross-multiplication.
+    fn corner_rate_holds(n: i64, k: i64, q: i64, r: i64, share: (i64, i64)) -> bool {
+        let r2 = 2 * i128::from(r);
+        // num/den against c/2, with den's sign folded in.
+        let cmp = |num: i128, den: i128, c: i128| {
+            let ord = (num * 2).cmp(&(c * den));
             if den < 0 { ord.reverse() } else { ord }
         };
-        let corners = [
-            (1000 * (n2 - k), q2 - 1),
-            (1000 * (n2 - k), q2 + 1),
-            (1000 * (n2 + k), q2 - 1),
-            (1000 * (n2 + k), q2 + 1),
-        ];
+        let corners = corners(n, k, q, share);
         let reaches_low = corners.iter().any(|&(a, b)| cmp(a, b, r2 - 1).is_ge());
         let reaches_high = corners.iter().any(|&(a, b)| cmp(a, b, r2 + 1).is_le());
         reaches_low && reaches_high
     }
 
-    /// The linearised ratio against [`corner_rate_holds`] on 10⁴ seeded quadruples: n in [−3000, 3000], k in
-    /// [1, 9], |q| in [1, 400] (one in eight negative), and r within about twice the rate range's half-width of
-    /// 1000·n/q. Also the ledger's own entry point, `aisc::rate_holds`.
+    /// The rate's exact range at 100% by the corner rule: the least and greatest corner, both attained.
+    fn corner_rate_range(n: i64, k: i64, q: i64) -> Interval {
+        let mut values: Vec<Rat> = corners(n, k, q, (1, 1))
+            .iter()
+            .map(|&(num, den)| Rat::new(num, den).expect("Q never crosses zero"))
+            .collect();
+        values.sort_by(|x, y| x.checked_cmp(*y).expect("comparable"));
+        Interval {
+            lo: values[0],
+            hi: values[3],
+            lo_strict: false,
+            hi_strict: false,
+        }
+    }
+
+    /// The linearised ratio against [`corner_rate_holds`] on 10⁴ seeded cases: n in [−3000, 3000], k in [1, 9],
+    /// |q| in [1, 400] (one in eight negative), a share s among five (100% and four registered-style shares), and
+    /// r within about twice the rate range's half-width of 1000·s·n/q. Also the ledger's own entry points:
+    /// `aisc::rate_holds` at the share, and `aisc::rate_range` (the (iv) range) at 100%, exactly.
     #[test]
     fn prop_ratio_linearisation_matches_corner_rule() {
         let mut rng = PhiloxStream::new(RngKey {
@@ -389,6 +408,7 @@ mod oracle {
             brick: 0,
         });
         let mut next = |n: u64| (rng.next_u64() % n) as i64;
+        let shares = [(1, 1), (3, 4), (123, 200), (21, 25), (897, 1000)];
         let quadruples = 10_000;
         let (mut holds, mut fails) = (0_usize, 0_usize);
         for case in 0..quadruples {
@@ -396,25 +416,35 @@ mod oracle {
             let k = 1 + next(9);
             let magnitude = 1 + next(400);
             let q = if next(8) == 0 { -magnitude } else { magnitude };
+            let share = shares[next(5) as usize];
+            let factor = Rat::new(1000 * i128::from(share.0), i128::from(share.1)).expect("factor");
             let spread = 2 + (500 * k) / magnitude + (500 * n.abs()) / (magnitude * magnitude);
-            let r = (1000 * n).div_euclid(q) + next((4 * spread + 1) as u64) - 2 * spread;
-            let expected = corner_rate_holds(n, k, q, r);
+            let centre = (1000 * share.0 * n).div_euclid(share.1 * q);
+            let r = centre + next((4 * spread + 1) as u64) - 2 * spread;
+            let expected = corner_rate_holds(n, k, q, r, share);
             assert_eq!(
-                rate_holds(n, k, q, r, (1, 1)),
+                rate_holds(n, k, q, r, share),
                 Ok(expected),
-                "case {case}: the ledger's entry point"
+                "case {case}: the ledger's entry point at {share:?}"
             );
-            let kernel = match rate_outcome(n, k, q, r, int(1000)) {
+            if share == (1, 1) {
+                assert_eq!(
+                    rate_range(n, k, q),
+                    Ok(corner_rate_range(n, k, q)),
+                    "case {case}: the (iv) range"
+                );
+            }
+            let kernel = match rate_outcome(n, k, q, r, factor) {
                 Outcome::Feasible { .. } => true,
                 Outcome::Infeasible { .. } => false,
                 other => panic!("case {case} ({n}, {k}, {q}, {r}): {other:?}"),
             };
             assert_eq!(
                 kernel, expected,
-                "case {case}: (n, k, q, r) = ({n}, {k}, {q}, {r})"
+                "case {case}: (n, k, q, r, s) = ({n}, {k}, {q}, {r}, {share:?})"
             );
             // The same answer by the other path: the rate's range by Charnes–Cooper, cut by r's own box.
-            let (cells, ids) = rate_problem(n, k, q, r, int(1000));
+            let (cells, ids) = rate_problem(n, k, q, r, factor);
             let rules = Rules::new(Convention::Closed);
             match implied_interval(&cells, &ids, &rules, "R", false) {
                 Ok(_) => assert!(expected, "case {case}: a range where aisc.rs has none"),
