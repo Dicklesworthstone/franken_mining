@@ -7492,11 +7492,11 @@ records that the default, not a decision, is governing. Nothing is decided by si
 | OPEN-PUSH-1 | Does `UntrustedCandidate` import of external plans respect the closed-dependency rule? | Owner | Pushback start (M4) | External plans enter as data files only, never as linked code |
 | OPEN-B4-07 | MNPI insider-list format per listing venue | Counsel | Before M2 | The strictest known format |
 | OPEN-HALL-4 | Does a software-prepared data-verification index change QP liability? | Counsel | Before GATE-DATA-01 (month 4; R7-C138) | Index labelled as support material only |
-| OPEN-R7-1 | Issuer data terms: may derived Barrick workbook values be committed to the public repository? (RISK-31) | Owner + counsel | Before the next code push | Locators, URLs, sha256 and computed results only |
+| OPEN-R7-1 | Issuer data terms: may derived Barrick workbook values be committed to the public repository? (RISK-31) The 2026-10-29 push (`748da79`) carried MOR_CASE rows that quote cell values (E820–E823). Files citing workbook cells, to read for quoted values in one pass: W1, C1, C3, C4, W4, MOR_CASE, AUDIT_4, the R7 MOR run, `repro/barrick/README.md`, `scripts/oracle/share_census.py`, `forecasts/fy2026/rules.toml` (locators only) and fmine-public's sources and tests. Undecided; the default binds new commits | Owner + counsel | Before the next push that adds derived values | Locators, URLs, sha256 and computed results only |
 | OPEN-R7-2 | Who are the two M0 reviewers, what is their relation to Barrick, and are they available by January 2027? (R7-C045) | Owner | M0 week 4 | One independent ex-major reviewer; any issuer reviewer sees forecasts only after release |
 | OPEN-R7-3 | Is the owner a public-lane author during the FY2026 forecast window, given §31.1's private-access rule? (R7-C161) | Owner | Before the forecast hash | The owner authors only if they hold no private access; otherwise a walled author set |
-| OPEN-R7-4 | Should the public plan keep naming the Barrick Chair's Avathon role (§31, §35 F1, §34.4)? (R7-C030, R7-C032) | Owner | Before the next push | Keep the factual, sourced statement; drop characterisations |
-| OPEN-R7-5 | What happens to the unpushed M0 commit `68e7091` (amend, follow with a fix commit, or push as is)? (Appendix K.2) | Owner | Before the next push | Do not push until R001–R002 of Appendix K.2 are done |
+| OPEN-R7-4 | Should the public plan keep naming the Barrick Chair's Avathon role (§31, §35 F1, §34.4)? (R7-C030, R7-C032) The passages were pushed unchanged on 2026-10-29; undecided | Owner | Before the next push | Keep the factual, sourced statement; drop characterisations |
+| OPEN-R7-5 | What happens to the unpushed M0 commit `68e7091` (amend, follow with a fix commit, or push as is)? (Appendix K.2) **Resolved 2026-10-29:** pushed at the owner's instruction and followed by correcting commits (`543df53` … `748da79`); public history is not rewritten. K.2 step 2 was not complete at the push and is tracked as BD-323 | Owner | Done | — |
 | OPEN-B4-08 / OPEN-HEAD-2 | Will Avathon consume anchor-pinned feeds and write back evidence only? | Sponsor | M2 | Export projections offered; no write-back channel |
 | OPEN-B4-10 | Reference site node hardware | Sponsor IT | M1 | Targets stay TARGETs |
 
@@ -9281,7 +9281,9 @@ pushed; `origin/main` and `origin/master` are at `30ee8f5`. What the auditors re
 3. Pin the 18 real workbooks in a source registry and rebuild the importer on label anchors before the Q3 2026
    release (BD-322).
 
-Whether to amend `68e7091` or follow it with a correcting commit is the owner's decision (OPEN-R7-5).
+`68e7091` was pushed on 2026-10-29 at the owner's instruction, followed by correcting commits (`543df53` …
+`748da79`); public history is never rewritten, so it stays (OPEN-R7-5, resolved). Step 2 was not complete at that
+push and is tracked as BD-323.
 
 **State after the corrective work of 2026-10-29 (FACT, executions; MOR_CASE E820–E823).** Items 1 and 3 are done.
 - **The stand-in and both fallbacks are removed.**
