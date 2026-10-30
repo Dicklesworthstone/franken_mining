@@ -2639,7 +2639,8 @@ mod tests {
 
     /// BD-331.S6 on the registered Barrick workbooks through 2026Q2. At cd423b9 the two kernels ran side by side
     /// on all 3,030 instances with no difference; the corner kernel is gone, and the root pins the result:
-    /// `root_old` is the corner kernel's, the last row of `repro/barrick/expected.toml`. Every (iii) carries
+    /// `root_old` is the last row of `repro/barrick/expected.toml` (the corner kernel's until bd-jg43.3 moved
+    /// the root on purpose, at 2386e66). Every (iii) carries
     /// S3's one minimal set. Prints locators and counts only (RISK-31).
     #[test]
     #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]

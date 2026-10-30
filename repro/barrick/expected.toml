@@ -147,3 +147,21 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "Missing-fact text of Kibali's and Hemlo's (iv) per subject: no shared Q4 2025 cause exists."
 evidence = "bd-10om, E837"
+
+# Observed from the release binary of 2386e66 (git archive, own target directory; exit 0, empty stderr). Against
+# 4863607… exactly E823's 12 Loulo-Gounkoto instances move from (v) to (i). Every other instance record, the hidden
+# scope, the sources and the Mine Stats section are equal; the alternates move to 1014 and 1263.
+[[expected]]
+commit = "2386e66"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "e95d0b238954c56b21c5977b55de0b988517a500600bbe76d4a878d7d47393a6"
+anchor_id = "anc_55def738ff688dd84175801da545577a"
+totals_i = 2395
+totals_ii = 3
+totals_iii = 4
+totals_iv = 82
+totals_v = 51
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "The ledger scores displayed values (M0AS frame v5 binds them): E823's 12 instances leave (v)."
+evidence = "bd-jg43.3, E838"
