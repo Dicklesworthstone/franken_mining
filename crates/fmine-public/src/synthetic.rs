@@ -142,6 +142,7 @@ pub fn synthetic_profile() -> IssuerProfile {
             evidence: s("synthetic"),
             closing_document: None,
         }],
+        subject_statuses: Vec::new(),
         through: None,
     }
 }

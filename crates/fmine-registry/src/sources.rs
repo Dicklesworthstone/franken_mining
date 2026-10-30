@@ -88,6 +88,25 @@ pub struct MissingFactRow {
     pub closing_document: Option<String>,
 }
 
+/// The registered subject statuses: a status changes how a subject's printed zeros read (bd-a28f.1).
+pub const SUBJECT_STATUSES: [&str; 3] = ["disposed", "withheld", "care_and_maintenance"];
+
+/// One registered subject status (bd-a28f.1). A disposal states its closing date and covers the periods that
+/// begin after it; any other status states the first quarter it covers and, when it ended, the last.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubjectStatusRow {
+    pub subject: String,
+    /// One of [`SUBJECT_STATUSES`].
+    pub status: String,
+    /// `YYYY-MM-DD`; set exactly when the status is `disposed`.
+    pub closed: Option<String>,
+    /// `YYYYQn`; set exactly when the status is not `disposed`.
+    pub first: Option<String>,
+    /// `YYYYQn`, at or after `first`.
+    pub last: Option<String>,
+    pub evidence: String,
+}
+
 /// One registered Mine Statistics row label (bd-gwf1.1): the label without its footnote number, and the label of
 /// the row it belongs to when it is a sub-row (`Processed` under `Average grade (grams per tonne)`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -127,6 +146,8 @@ pub struct SourcesRegistry {
     pub mine_stats_labels: Vec<MineStatsLabelRow>,
     /// Missing facts by `(subject, family)`, in file order.
     pub missing_facts: Vec<MissingFactRow>,
+    /// Subject statuses, at most one per subject, in file order.
+    pub subject_statuses: Vec<SubjectStatusRow>,
 }
 
 /// Why a sources registry was refused. `line` is 1-based; 0 means the file as a whole.
@@ -180,9 +201,12 @@ pub fn is_url_basis(s: &str) -> bool {
     if URL_BASES.contains(&s) {
         return true;
     }
-    let Some(date) = s.strip_prefix(URL_BASIS_FETCHED) else {
-        return false;
-    };
+    s.strip_prefix(URL_BASIS_FETCHED).is_some_and(is_date)
+}
+
+/// A calendar date `YYYY-MM-DD`.
+#[must_use]
+pub fn is_date(date: &str) -> bool {
     let b = date.as_bytes();
     let num = |r: std::ops::Range<usize>| -> Option<u32> {
         b[r].iter().try_fold(0_u32, |n, c| {
@@ -344,6 +368,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "mine_stats_label",
             "share",
             "missing_fact",
+            "subject_status",
         ]
         .contains(&row.table.as_str())
         {
@@ -687,6 +712,79 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         });
     }
 
+    let mut subject_statuses: Vec<SubjectStatusRow> = Vec::new();
+    for row in doc.rows_of("subject_status") {
+        let f = Fields::of_row(row);
+        f.only(&["subject", "status", "closed", "first", "last", "evidence"])?;
+        let (subject, subject_line) = f.string("subject")?;
+        let (status, status_line) = f.string("status")?;
+        if !subjects.contains(&subject) {
+            return fail(
+                subject_line,
+                format!("subject {subject:?} is not a registered [[subject]]"),
+            );
+        }
+        if regions.contains(&subject) {
+            return fail(
+                subject_line,
+                format!("{subject:?} is a region: a status is registered for a site"),
+            );
+        }
+        if subject_statuses.iter().any(|s| s.subject == subject) {
+            return fail(
+                subject_line,
+                format!("duplicate [[subject_status]] for {subject:?}"),
+            );
+        }
+        if !SUBJECT_STATUSES.contains(&status.as_str()) {
+            return fail(
+                status_line,
+                format!(
+                    "status {status:?} is not registered ({})",
+                    SUBJECT_STATUSES.join(", ")
+                ),
+            );
+        }
+        let (closed, first, last) = (
+            f.optional_string("closed")?,
+            f.optional_string("first")?,
+            f.optional_string("last")?,
+        );
+        let disposed = status == "disposed";
+        if disposed != closed.is_some()
+            || disposed == first.is_some()
+            || (disposed && last.is_some())
+        {
+            return fail(
+                status_line,
+                "a disposal states closed only; any other status states first and, optionally, last",
+            );
+        }
+        if closed.as_deref().is_some_and(|d| !is_date(d)) {
+            return fail(row.line, "closed must be a date YYYY-MM-DD");
+        }
+        if [&first, &last]
+            .into_iter()
+            .flatten()
+            .any(|q| !is_quarter(q))
+        {
+            return fail(row.line, "first and last must be quarters YYYYQ1..YYYYQ4");
+        }
+        if let (Some(a), Some(b)) = (&first, &last)
+            && b < a
+        {
+            return fail(row.line, format!("last {b} is before first {a}"));
+        }
+        subject_statuses.push(SubjectStatusRow {
+            subject,
+            status,
+            closed,
+            first,
+            last,
+            evidence: f.string("evidence")?.0,
+        });
+    }
+
     Ok(SourcesRegistry {
         issuer,
         corpus_dir,
@@ -698,6 +796,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         reconstructions,
         mine_stats_labels,
         missing_facts,
+        subject_statuses,
     })
 }
 
@@ -1097,6 +1196,93 @@ mod tests {
             ),
         ] {
             let e = refusal(&minimal(&b, extra));
+            assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
+        }
+    }
+
+    /// bd-a28f.1: `[[subject_status]]` rows. A disposal states its closing date; any other status states its
+    /// quarters. Every malformed row refuses at its line.
+    #[test]
+    fn test_subject_statuses_parse_and_refuse() {
+        let b = source_b("aisc_reconciliation", SHA_B);
+        let rows = "[[subject]]\nname = \"Site B\"\n\n\
+                    [[subject_status]]\nsubject = \"Site A\"\nstatus = \"disposed\"\nclosed = \"2029-12-01\"\n\
+                    evidence = \"E1\"\n\n\
+                    [[subject_status]]\nsubject = \"Site B\"\nstatus = \"withheld\"\nfirst = \"2030Q1\"\n\
+                    last = \"2030Q3\"\nevidence = \"E2\"\n";
+        let reg = parse_sources_registry(&minimal(&b, rows)).expect("accepted");
+        assert_eq!(
+            reg.subject_statuses,
+            vec![
+                SubjectStatusRow {
+                    subject: "Site A".into(),
+                    status: "disposed".into(),
+                    closed: Some("2029-12-01".into()),
+                    first: None,
+                    last: None,
+                    evidence: "E1".into(),
+                },
+                SubjectStatusRow {
+                    subject: "Site B".into(),
+                    status: "withheld".into(),
+                    closed: None,
+                    first: Some("2030Q1".into()),
+                    last: Some("2030Q3".into()),
+                    evidence: "E2".into(),
+                },
+            ]
+        );
+        assert!(
+            parse_sources_registry(&minimal(&b, ""))
+                .expect("accepted")
+                .subject_statuses
+                .is_empty()
+        );
+
+        let row = |body: &str| {
+            format!("[[subject_status]]\nsubject = \"Site A\"\n{body}evidence = \"E1\"\n")
+        };
+        for (extra, why) in [
+            (
+                "[[subject_status]]\nsubject = \"Site Z\"\nstatus = \"disposed\"\nclosed = \"2029-12-01\"\n\
+                 evidence = \"E1\"\n"
+                    .to_string(),
+                "not a registered [[subject]]",
+            ),
+            (
+                "[[subject]]\nname = \"R\"\nkind = \"region\"\n\n[[subject_status]]\nsubject = \"R\"\n\
+                 status = \"withheld\"\nfirst = \"2030Q1\"\nevidence = \"E1\"\n"
+                    .to_string(),
+                "is a region",
+            ),
+            (row("status = \"sold\"\nclosed = \"2029-12-01\"\n"), "is not registered"),
+            (row("status = \"disposed\"\nfirst = \"2030Q1\"\n"), "a disposal states closed only"),
+            (
+                row("status = \"disposed\"\nclosed = \"2029-12-01\"\nlast = \"2030Q1\"\n"),
+                "a disposal states closed only",
+            ),
+            (row("status = \"withheld\"\nclosed = \"2029-12-01\"\n"), "a disposal states closed only"),
+            (row("status = \"withheld\"\n"), "a disposal states closed only"),
+            (row("status = \"disposed\"\nclosed = \"2029-02-30\"\n"), "date YYYY-MM-DD"),
+            (row("status = \"withheld\"\nfirst = \"2030Q5\"\n"), "quarters YYYYQ1..YYYYQ4"),
+            (
+                row("status = \"withheld\"\nfirst = \"2030Q3\"\nlast = \"2030Q1\"\n"),
+                "is before first",
+            ),
+            (
+                format!(
+                    "{}\n{}",
+                    row("status = \"withheld\"\nfirst = \"2030Q1\"\n"),
+                    row("status = \"withheld\"\nfirst = \"2030Q2\"\n")
+                ),
+                "duplicate [[subject_status]]",
+            ),
+            (
+                "[[subject_status]]\nsubject = \"Site A\"\nstatus = \"withheld\"\nfirst = \"2030Q1\"\n".to_string(),
+                "has no evidence",
+            ),
+        ] {
+            let e = refusal(&minimal(&b, &extra));
             assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
         }
     }

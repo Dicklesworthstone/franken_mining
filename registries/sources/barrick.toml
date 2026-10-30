@@ -320,6 +320,39 @@ num = 897
 den = 1000
 evidence = "E487"
 
+# bd-a28f.1: statuses that change how a subject's printed zeros read. A numeric zero in a period a disposal or
+# a withholding covers is Nil with its token kept, never a value; a non-zero number there stays visible, flagged.
+# Care and maintenance is recorded but leaves zeros as numbers.
+# A disposal covers the periods that begin after its closing date, so the Q4 2025 stub and 2025 keep their
+# numbers. Hemlo and Tongon print "—" in 2026 apart from numeric-zero recovery cells (E488).
+# Loulo-Gounkoto: "no operating data or per ounce data was provided for Q1 2025 to Q3 2025" (E818).
+# Long Canyon: no production or cost metrics from the first quarter of 2024 (E489).
+
+[[subject_status]]
+subject = "Hemlo"
+status = "disposed"
+closed = "2025-11-26"
+evidence = "E486, E488"
+
+[[subject_status]]
+subject = "Tongon"
+status = "disposed"
+closed = "2025-12-01"
+evidence = "E487, E488"
+
+[[subject_status]]
+subject = "Loulo-Gounkoto"
+status = "withheld"
+first = "2025Q1"
+last = "2025Q3"
+evidence = "E818"
+
+[[subject_status]]
+subject = "Long Canyon"
+status = "care_and_maintenance"
+first = "2024Q1"
+evidence = "E489"
+
 # BD-331.S2: the fact that would decide each (iv) instance, by (subject, family). Prose only: the source is in
 # evidence. An instance with no row names its family's default (crates/fmine-public/src/lib.rs).
 

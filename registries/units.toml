@@ -99,3 +99,19 @@ dimension = "MassFraction"
 scale_num = 1
 scale_den = 1
 description = "Unitless mass fraction in [0, 1]"
+
+# Public-lane money units (bd-a28f.1): the issuer prints costs in US$ millions and unit costs in US$ per troy
+# ounce. Scales are relative to one US dollar and to US$ per gram (oz_t = 31.1034768 g exact).
+[[unit]]
+code = "usd_m"
+dimension = "Money"
+scale_num = 1000000
+scale_den = 1
+description = "Million US dollars (fmine_units::Money::from_millions_f64)"
+
+[[unit]]
+code = "usd_per_oz"
+dimension = "MoneyPerMass"
+scale_num = 10000000
+scale_den = 311034768
+description = "US dollars per troy ounce (= 1/31.1034768 US$ per gram exact)"

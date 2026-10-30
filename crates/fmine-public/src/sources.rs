@@ -10,9 +10,12 @@
 use std::path::{Path, PathBuf};
 
 use fmine_evidence::Refusal;
-use fmine_registry::sources::{BasisRow, SourcesRegistry, is_quarter, load_sources_registry};
+use fmine_registry::sources::{
+    BasisRow, SourcesRegistry, SubjectStatusRow, is_quarter, load_sources_registry,
+};
 
 use crate::aisc::{ExplanationBasis, IdentityFamily};
+use crate::key::{StatusKind, SubjectStatus};
 
 /// What a registered workbook is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -115,6 +118,8 @@ pub struct IssuerProfile {
     pub mine_stats_labels: Vec<(Option<String>, String)>,
     /// Registered missing facts, at most one per `(subject, family)`.
     pub missing_facts: Vec<RegisteredMissingFact>,
+    /// Registered subject statuses (bd-a28f.1), at most one per site.
+    pub subject_statuses: Vec<SubjectStatus>,
     /// The `--through YYYYQn` bound applied, if any; later rows were dropped before loading.
     pub through: Option<String>,
 }
@@ -215,6 +220,11 @@ impl IssuerProfile {
                 .map(|r| (r.section, r.label))
                 .collect(),
             missing_facts,
+            subject_statuses: reg
+                .subject_statuses
+                .iter()
+                .map(subject_status)
+                .collect::<Result<_, _>>()?,
             through: None,
         })
     }
@@ -235,6 +245,45 @@ impl IssuerProfile {
         self.through = Some(bound.to_string());
         Ok(self)
     }
+}
+
+/// Converts a checked `[[subject_status]]` row: a disposal covers the months after its closing date; any other
+/// status covers its first quarter's first month through its last quarter's last month.
+fn subject_status(row: &SubjectStatusRow) -> Result<SubjectStatus, String> {
+    let drift = || format!("subject status row for {} does not convert", row.subject);
+    let int = |s: &str| s.parse::<u16>().map_err(|_| drift());
+    let quarter = |q: &str, last: bool| -> Result<(u16, u8), String> {
+        let (y, n) = q.split_once('Q').ok_or_else(drift)?;
+        let n = u8::try_from(int(n)?).map_err(|_| drift())?;
+        Ok((int(y)?, if last { 3 * n } else { 3 * n - 2 }))
+    };
+    let kind = match row.status.as_str() {
+        "disposed" => StatusKind::Disposed,
+        "withheld" => StatusKind::Withheld,
+        "care_and_maintenance" => StatusKind::CareAndMaintenance,
+        other => return Err(format!("status {other:?} has no StatusKind")),
+    };
+    if let Some(date) = &row.closed {
+        let mut parts = date.split('-');
+        let (Some(y), Some(m), Some(d)) = (parts.next(), parts.next(), parts.next()) else {
+            return Err(drift());
+        };
+        let byte = |s: &str| int(s).and_then(|v| u8::try_from(v).map_err(|_| drift()));
+        return Ok(SubjectStatus::from_date(
+            &row.subject,
+            kind,
+            (int(y)?, byte(m)?, byte(d)?),
+            &row.evidence,
+        ));
+    }
+    let first = row.first.as_deref().ok_or_else(drift)?;
+    Ok(SubjectStatus {
+        subject: row.subject.clone(),
+        kind,
+        first: quarter(first, false)?,
+        last: row.last.as_deref().map(|q| quarter(q, true)).transpose()?,
+        evidence: row.evidence.clone(),
+    })
 }
 
 /// One row of `repro/<issuer>/expected.toml` (BD-339.S1): what a run of the registered files printed at one

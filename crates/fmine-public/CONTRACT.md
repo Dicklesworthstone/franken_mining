@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "synthetic", "live", "citation"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "synthetic", "live", "citation", "key"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
@@ -174,6 +174,21 @@ The public lane of M0 (`fmine assure public`).
 - `Lane`, `LoadedSource`, `TableRefusal`, `AlternateCounts`, `HiddenScope`, `HIDDEN_SCOPE`,
   `PublicAssuranceReport`, `load_registered_sources`, `assess`, `run_public_assurance`, `run_barrick_m0_assurance`,
   `run_synthetic_assurance`, `cell_to_public_claim`, `NO_CLAIM`; `PublicAssuranceReport::next_actions`
+- `key` (bd-a28f.1, BD-332.S1): the key of a printed public figure, and the value typed with its raw token.
+  - `PublicKey { issuer, subject, valid_period, reporting_vintage, ownership_basis, scope, unit, line }`.
+    `series_key()` drops only the vintage. `canonical_tag(raw_token)` is `fmk1` plus every field and the
+    token, length-prefixed, and goes into `Claim::new` as the canonical value tag, so the claim id differs
+    whenever any field or the token differs.
+  - `parse_sheet_period`: `Qn YYYY`, `YTD Q2 YYYY` (H1), `YTD Q3 YYYY` and `YTD Sept 30 YYYY` (nine months),
+    `YTD Dec 31 YYYY` and `YYYY` (full year). Anything else refuses.
+  - `parse_ownership`: `100%` first, then a final `(x%)` after a one- or two-digit footnote run. No `%` gives
+    `Unprinted`, never 100%.
+  - `classify`: `—` and other dashes give `Nil { Unknown }`, `n/a` gives `NotApplicable`, and no cell gives
+    `Missing`, each keeping the token as stored. A numeric zero where a registered disposal or withholding
+    applies is `Nil`; a non-zero number there stays a `Number`, flagged. Text or a formula error refuses.
+  - `SubjectStatus`, `status_for`: the `[[subject_status]]` rows of the issuer registry, carried on
+    `IssuerProfile::subject_statuses`. A disposal covers the periods that begin after its closing date.
+  - **Not yet:** no run reads claims through the key. The Mine Stats and AISC readers adopt it in S2 and S3.
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-502` (exit 8) names every registered file that is missing, digest-mismatched or unparseable. A run never

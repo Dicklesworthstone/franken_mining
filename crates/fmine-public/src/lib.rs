@@ -8,6 +8,7 @@
 
 pub mod aisc;
 pub mod citation;
+pub mod key;
 pub mod live;
 pub mod mine_stats;
 pub mod sources;
