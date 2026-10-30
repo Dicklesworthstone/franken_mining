@@ -16,7 +16,8 @@ use crate::zip_inflate::{read_zip_entries, write_stored_zip};
 pub enum CellValue {
     /// Clean numeric scalar.
     Number(f64),
-    /// Explicit disclosure placeholder (`"-"`, `"–"`, `"N/A"`, `"n/a"`).
+    /// Explicit disclosure placeholder (`"-"`, `"–"`, `"—"`, `"N/A"`, `"n/a"`), with the token exactly as stored,
+    /// surrounding whitespace included (`"— "` and `"—"` stay distinct).
     Placeholder(String),
     /// Spreadsheet formula error (`"#REF!"`, `"#DIV/0!"`, `"#VALUE!"`, `"#N/A"`).
     FormulaError(String),
@@ -444,7 +445,9 @@ fn classify_string_cell(
 ) -> CellValue {
     let t = s.trim();
     if matches!(t, "-" | "–" | "—" | "N/A" | "n/a" | "NA" | "na") {
-        CellValue::Placeholder(t.to_string())
+        // Keep the token as stored: the issuer's `'— '` (trailing space) and `'—'` are counted separately
+        // in the W1 census, so trimming here would make that census unreproducible (bd-gwf1.1).
+        CellValue::Placeholder(s)
     } else if matches!(
         t,
         "#REF!" | "#DIV/0!" | "#VALUE!" | "#NAME?" | "#N/A" | "#NUM!"

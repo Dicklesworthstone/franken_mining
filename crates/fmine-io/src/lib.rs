@@ -188,6 +188,7 @@ mod tests {
                     cell("B1", MinimalCell::Number(42.0)),
                     cell("C1", MinimalCell::Number(-0.125)),
                     cell("B2", MinimalCell::Text("—".to_string())),
+                    cell("B3", MinimalCell::Text("— ".to_string())),
                     cell("C2", MinimalCell::Error("#REF!".to_string())),
                     cell("AA10", MinimalCell::Number(0.00001)),
                 ],
@@ -211,6 +212,11 @@ mod tests {
         assert_eq!(
             sheet.cell(2, 2).map(|c| c.value.clone()),
             Some(CellValue::Placeholder("—".into()))
+        );
+        // Regression (bd-gwf1.1): the trailing space of the issuer's `'— '` token is kept, not trimmed.
+        assert_eq!(
+            sheet.cell(3, 2).map(|c| c.value.clone()),
+            Some(CellValue::Placeholder("— ".into()))
         );
         assert_eq!(
             sheet.cell(10, 27).map(|c| c.cell_ref.as_str()),
@@ -242,7 +248,7 @@ mod tests {
                 census.formula_error_cells,
                 census.text_cells
             ),
-            (1, 1, 1)
+            (2, 1, 1)
         );
         let listing =
             "Synthetic A&B\tB1\t42\nSynthetic A&B\tC1\t-0.125\nSynthetic A&B\tAA10\t0.00001\n";
