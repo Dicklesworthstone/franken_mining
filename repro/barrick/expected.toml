@@ -184,3 +184,23 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "Regional cost of sales per ounce decided against registered members: the last 51 visible (v) leave."
 evidence = "BD-331.S4, bd-prmn.4, E840"
+
+# Observed from the release binary of 35955e4 (git archive, own target directory; exit 0, empty stderr). No AISC
+# state moves: the totals and the hidden scope (i 406, iii 1, iv 18, np 10) equal 360cc39's. The root moves because
+# frame v6 binds the Mine Stats ledger in its own section: ownership 470 (i), 29 (iii), 73 (v), 20 np; quarter sums
+# 883, 9, 26, 24; 27 of 299 components infeasible. The registry epoch covers file rows only, so the new
+# [[printed_share_correction]] row leaves it unchanged.
+[[expected]]
+commit = "35955e4"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "a6ba9013fffbda543e19b14df3f02c5ccbb72d2c36e32c5505577f8fed2222b7"
+anchor_id = "anc_191472c6e37b83ee580951a662356f4a"
+totals_i = 2436
+totals_ii = 3
+totals_iii = 4
+totals_iv = 92
+totals_v = 0
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "The state root binds the Mine Stats ledger (frame v6); no AISC state moves."
+evidence = "BD-331.S4, bd-prmn.4, E841"

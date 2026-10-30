@@ -412,7 +412,7 @@ impl PublicAssuranceReport {
                 let anchors: Vec<String> = c
                     .instances
                     .iter()
-                    .map(|&k| l.instances[k].anchor.clone())
+                    .filter_map(|&k| l.instances.get(k).map(|i| i.anchor.clone()))
                     .collect();
                 let sets: Vec<String> = c
                     .corrections
@@ -431,7 +431,7 @@ impl PublicAssuranceReport {
                     })
                     .collect();
                 format!(
-                    "{{\"component\":{},\"cells\":[{}],\"instances\":[{}],\"joint_only\":{},\"minimum\":{},\
+                    "{{\"component\":{},\"cells\":[{}],\"anchors\":[{}],\"joint_only\":{},\"minimum\":{},\
                      \"corrections\":[{}]}}",
                     js(&c.id),
                     list(&c.cells),

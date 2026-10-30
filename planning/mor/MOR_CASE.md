@@ -893,3 +893,51 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     stderr); `repro/barrick/expected.toml` has the row. The registry epoch hashes the file rows only, so it does
     not move (360cc39's commit message says it does; that was wrong).
   - **Verification.** Self-verified on this machine only; nothing has run in CI.
+- **E841** Mine Stats ownership and quarter sums decided by the exact kernel (BD-331.S4, bd-prmn.4; FACT,
+  execution, 2026-10-30, owner machine).
+  - **Data.** W1-DR-01 is registry data: one `[[printed_share_correction]]` row in
+    `registries/sources/barrick.toml` reads Porgera's printed "(47.5%)" as 49/200 and keeps the printed share
+    beside. It is not a `[[share]]` row: it replaces only what the Mine Stats label prints. The parser refuses a
+    region or unregistered subject, a share above one, a non-decimal `printed`, a repeated subject and printed
+    share, and a missing `evidence`.
+  - **Rule.** `fmine-public::mine_ledger`, on the `QTD`/`YTD` summary sheets of the 10 registered releases.
+    - Ownership: attributable = s × 100% per site row and column group, s as printed or corrected. Regions and
+      metal totals pose none. A row with no printed share is refused, never read as 100%.
+    - Quarter sums: H1 = Q1 + Q2, 9M = H1 + Q3, FY = 9M + Q4 on the 100%, attributable and sold columns.
+    - Exclusions by name first (E818's withheld Loulo-Gounkoto quarters; a region whose registered members
+      differ between the operands' releases), then a missing row or release, blank, placeholders, unreadable.
+    - Each displayed value stands for its closed box. Every decided instance is posed jointly; each infeasible
+      component reports every minimum correction set and the range each of its cells can take.
+  - **Independent reader.** `scripts/oracle/mine_stats_census.py` (e66f7dc) was written first by a subagent
+    from a rule statement, without reading the crate: stdlib only, exact Gauss–Jordan and Fourier–Motzkin over
+    fractions, where the Rust uses the exact simplex kernel. The rule statement and the Rust share one origin
+    (this agent), so agreement checks the implementation, not the choice of rule.
+  - **Result.**
+    - The ignored test `barrick_mine_ledger_matches_census` runs the census. All 1,534 instance lines, the 27
+      infeasible component lines, the summaries and every implied range are equal.
+    - Ownership 592: 470 (i), 29 (iii), 73 (v: 65 unprinted shares, Lumwana and Hemlo; 8 withheld), 20 np.
+      Quarter sums 942: 883 (i), 9 (iii), 26 (v: 12 withheld, 12 cross-map regions, 2 placeholders), 24 np.
+    - 299 components, 27 infeasible: 19 fixed by one cell (7 with one candidate, 12 with two or three), 7 by
+      two, 1 by three. Two are infeasible only jointly (NGM 2024: `2024Q1:QTD!B10`, `2025Q1:QTD!I9`).
+    - The C1 known answers hold: DR-01, DR-02 and DR-04 (E113, E114, E115) are each a pair of (iii) on one
+      component whose one minimum set is the shared 100% cell, and DR-01's B5 can take 281.
+  - **Not claimed.**
+    - A minimum correction set names the fewest cells whose printed values, disregarded, make the component
+      feasible. It does not say those cells are wrong, and the ranges are not corrected values.
+    - Three Porgera ownership rows stay (iii) with the correction; not examined.
+    - The ledger's counts stay apart from the AISC totals; no AISC state moves.
+  - **Tests.** Ten synthetic tests, default suite: the DR-01 shape; a component infeasible only jointly, with
+    its three minimum sets and ranges derived by hand before the run ([201/4, 201/4] twice, [202, 203]); an
+    unprinted share; the correction kept beside; withheld and region-map exclusions; placeholders, blanks and a
+    repeated row; one stored text decided by its displayed format; row and file order; three mutations.
+  - **Planted negatives, each reverted.**
+    - Without the Porgera row the real-file comparison fails (ownership (iii) 32 against the census's 29; the
+      census's own planted negative B gives the same 32).
+    - With the cross-map exclusion disabled the real-file comparison and the synthetic region test fail.
+  - **Root.** Frame v6 binds the ledger in its own section. The root moves to `a6ba9013…`, observed from the
+    release binary of 35955e4 (exit 0, empty stderr), with AISC totals unchanged; `repro/barrick/expected.toml`
+    has the row. The synthetic port root moves too; at v5 without the section the old root returns.
+  - **Correction.** 35955e4's JSON named each component's anchors `"instances"`, ahead of the payload's own
+    `instances` array, and the real-file citation test, which splits at the first such key, failed. The key is
+    now `"anchors"`; the root does not move.
+  - **Verification.** Self-verified on this machine only; nothing has run in CI.
