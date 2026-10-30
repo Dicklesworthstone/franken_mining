@@ -28,7 +28,7 @@ use crate::aisc::{
     IdentityFamily, IdentityInstance, IdentityState, RateMiss, UnregisteredHeader, cell_text,
     ledger_for_table, locate_table, reconstruction_closes,
 };
-use crate::mine_stats::{CellRefusal, MineStatsRead, read_mine_stats};
+use crate::mine_stats::{CellRefusal, LabelVocabulary, MineStatsRead, read_mine_stats};
 pub use crate::sources::load_issuer_profile;
 use crate::sources::{IssuerProfile, RegisteredReconstruction, SourceKind};
 
@@ -806,13 +806,15 @@ pub fn assess(
         residency_epoch: 1,
         state_root,
     };
+    let vocabulary: LabelVocabulary = profile.mine_stats_labels.iter().cloned().collect();
+    let vocabulary = (!vocabulary.is_empty()).then_some(vocabulary);
     let mine_stats = sources
         .iter()
         .filter(|s| s.kind == SourceKind::MineStats)
         .map(|s| {
             // The registry already checks the quarter format; a refusal here is kept, never dropped.
-            let read =
-                read_mine_stats(&s.workbook, &s.quarter).unwrap_or_else(|refusal| MineStatsRead {
+            let read = read_mine_stats(&s.workbook, &s.quarter, vocabulary.as_ref())
+                .unwrap_or_else(|refusal| MineStatsRead {
                     quarter: s.quarter.clone(),
                     blocks: 0,
                     values: Vec::new(),

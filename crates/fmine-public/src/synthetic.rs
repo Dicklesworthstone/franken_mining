@@ -69,6 +69,7 @@ pub fn synthetic_profile() -> IssuerProfile {
                 "Synthetic: the region's AISC numerator includes Site G's minesite sustaining capital.",
             ),
         }],
+        mine_stats_labels: Vec::new(),
         through: None,
     }
 }

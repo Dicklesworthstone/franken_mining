@@ -81,6 +81,9 @@ pub struct IssuerProfile {
     /// issuer's one-letter footnote suffix.
     pub subjects: Vec<String>,
     pub reconstructions: Vec<RegisteredReconstruction>,
+    /// The registered Mine Statistics label vocabulary as `(section, label)`. When it is non-empty, a data row
+    /// whose label is not in it is refused by locator (bd-gwf1.1); when empty, labels are read unchecked.
+    pub mine_stats_labels: Vec<(Option<String>, String)>,
     /// The `--through YYYYQn` bound applied, if any; later rows were dropped before loading.
     pub through: Option<String>,
 }
@@ -135,6 +138,11 @@ impl IssuerProfile {
             sources,
             subjects: reg.subjects,
             reconstructions,
+            mine_stats_labels: reg
+                .mine_stats_labels
+                .into_iter()
+                .map(|r| (r.section, r.label))
+                .collect(),
             through: None,
         })
     }

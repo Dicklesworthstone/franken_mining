@@ -32,8 +32,9 @@ The public lane of M0 (`fmine assure public`).
   mapped to field ids. Each data cell becomes a typed value (`Number` with its stored text, `Nil`,
   `NotApplicable`, `Missing`) with locator `<quarter>:<sheet>!<cell>`, period, site, printed ownership share,
   label and section. Numeric zero stays `Number`. Cells outside the token set, unknown periods and labels
-  repeated within a block are refused by locator. The metric-label registry (labels, units, region maps,
-  corrections) is not built yet.
+  repeated within a block are refused by locator. With the issuer's `[[mine_stats_label]]` vocabulary (Barrick:
+  56 pairs from W1's read, frozen before the Q3 2026 release), a data row whose `(section, label)` is not
+  registered is refused too. Units, region maps and the W1-DR-01/02 corrections are not data yet.
 - `synthetic`: invented workbooks in the real layout, seeded with one known answer per state. They are never
   gate-eligible.
 - `lib`:
@@ -58,8 +59,8 @@ The public lane of M0 (`fmine assure public`).
   registry_path, registered_issuers, is_issuer_name, is_through_bound}`; `IssuerProfile::{from_registry, through}`
 - `aisc::{IdentityFamily, IdentityState, IdentityInstance, FootingCertificate, UnregisteredHeader, AiscTable,
   RateMiss, locate_table, ledger_for_table, rate_interval_holds, reconstruction_closes, match_subject, cell_text}`
-- `mine_stats::{View, MineStatsCell, MineStatsValue, CellRefusal, MineStatsRead, read_mine_stats, strip_footnote,
-  printed_share, site_name, is_m0_target}`
+- `mine_stats::{View, MineStatsCell, MineStatsValue, CellRefusal, MineStatsRead, LabelVocabulary, read_mine_stats,
+  strip_footnote, printed_share, site_name, is_m0_target}`
 - `synthetic::{synthetic_aisc_cells, synthetic_workbooks, synthetic_profile, SYNTHETIC_SUBJECTS}`
 - `Lane`, `LoadedSource`, `TableRefusal`, `AlternateCounts`, `PublicAssuranceReport`, `load_registered_sources`,
   `assess`, `run_public_assurance`, `run_barrick_m0_assurance`, `run_synthetic_assurance`, `cell_to_public_claim`

@@ -16,7 +16,7 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
 ## 4. Public API Surface
 - `RegistryCatalog`, `RegistryError`
 - `toml_subset::{parse_subset, TomlDoc, TomlRow, TomlField, TomlValue, SubsetError}`: a strict TOML subset (`[[table]]` rows, basic strings, integers, comments); anything else refuses naming the line (bd-s9j3.1)
-- `sources::{parse_sources_registry, load_sources_registry, SourcesRegistry, SourceRow, ReconstructionRow, SourcesError, is_quarter}`: issuer source registries `registries/sources/<issuer>.toml` (`fmine.sources.v1`), checked on load
+- `sources::{parse_sources_registry, load_sources_registry, SourcesRegistry, SourceRow, ReconstructionRow, MineStatsLabelRow, SourcesError, is_quarter}`: issuer source registries (optional `[[mine_stats_label]]` rows: `label`, optional `section`, duplicates refused) `registries/sources/<issuer>.toml` (`fmine.sources.v1`), checked on load
 
 ## 5. Guards & Typed Refusals
 - `RegistryError::MissingEntry`, `RegistryError::CatalogMismatch`, `RegistryError::Io`.

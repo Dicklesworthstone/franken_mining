@@ -18,8 +18,11 @@
 //! `scripts/oracle/mine_stats_lines.py` there produce the same line format. Where the reference reader turns a
 //! cell into text (labels, site names), this module follows Python's `str()` and whitespace rules.
 //!
-//! Not yet here (bd-gwf1.1 stays open for them): the metric-label registry as data (labels, units, region-map
-//! versions, unit and ownership corrections), and refusal of a label that registry does not know.
+//! The issuer registry's `[[mine_stats_label]]` rows are the label vocabulary ([`LabelVocabulary`]). When it is
+//! given, a data row whose `(section, label)` is not registered is refused by locator.
+//!
+//! Not yet here (bd-gwf1.1 stays open for them): units per label, region-map versions (v0/v1/v2) and the
+//! W1-DR-01 and W1-DR-02 corrections as data. The sub-row list (`CHILD_ROWS`) is still code.
 
 use std::collections::BTreeSet;
 
@@ -227,12 +230,23 @@ const CHILD_ROWS: &[&str] = &[
     "c1 cash costs",
 ];
 
+/// The registered `Minestats*` row labels as `(section, label)` (`[[mine_stats_label]]` in the issuer registry).
+pub type LabelVocabulary = BTreeSet<(Option<String>, String)>;
+
 /// Reads every `QTD`, `YTD` and `Minestats*` sheet of `workbook`, registered for `quarter` (`YYYYQn`).
+///
+/// With a `vocabulary`, a `Minestats*` data row whose `(section, label)` is not registered is refused by
+/// locator and not emitted, so a label first seen in a later vintage is named instead of read silently. Without
+/// one, every label is read.
 ///
 /// # Errors
 /// Refuses (`FMINE-REF-502`) when `quarter` is not `YYYYQn`: the quarter digit is part of every quarterly
 /// period code. Cell-level problems never fail the read; they are listed in [`MineStatsRead::refusals`].
-pub fn read_mine_stats(workbook: &Workbook, quarter: &str) -> Result<MineStatsRead, Refusal> {
+pub fn read_mine_stats(
+    workbook: &Workbook,
+    quarter: &str,
+    vocabulary: Option<&LabelVocabulary>,
+) -> Result<MineStatsRead, Refusal> {
     let fq = quarter
         .split_once('Q')
         .filter(|(y, q)| {
@@ -268,7 +282,7 @@ pub fn read_mine_stats(workbook: &Workbook, quarter: &str) -> Result<MineStatsRe
         if sheet.name == "QTD" || sheet.name == "YTD" {
             read_summary(sheet, fq, &mut read);
         } else if sheet.name.starts_with("Minestats") {
-            read_minestats(sheet, fq, &mut read);
+            read_minestats(sheet, fq, vocabulary, &mut read);
         }
     }
     Ok(read)
@@ -342,7 +356,12 @@ fn read_summary(sheet: &Sheet, fq: u8, read: &mut MineStatsRead) {
     }
 }
 
-fn read_minestats(sheet: &Sheet, fq: u8, read: &mut MineStatsRead) {
+fn read_minestats(
+    sheet: &Sheet,
+    fq: u8,
+    vocabulary: Option<&LabelVocabulary>,
+    read: &mut MineStatsRead,
+) {
     let max_row = max_row(sheet);
     let mut r = 1;
     while r <= max_row {
@@ -411,6 +430,19 @@ fn read_minestats(sheet: &Sheet, fq: u8, read: &mut MineStatsRead) {
                     rr,
                     1,
                     format!("label {label:?} appears twice in this block"),
+                );
+            } else if has_data
+                && vocabulary.is_some_and(|v| !v.contains(&(section.clone(), label.clone())))
+            {
+                refuse(
+                    read,
+                    sheet,
+                    rr,
+                    1,
+                    format!(
+                        "label {label:?} (section {section:?}) is not in the registered Mine Stats \
+                         vocabulary; add a [[mine_stats_label]] row once the label is understood"
+                    ),
                 );
             } else if has_data {
                 for (c, year, site) in &columns {
@@ -1023,7 +1055,7 @@ mod tests {
     /// numeric zero kept as a number, a blank in a row with data as Missing, and the summary field ids.
     #[test]
     fn test_synthetic_known_answers() {
-        let read = read_mine_stats(&workbook(fixture(false)), "2030Q2").expect("read");
+        let read = read_mine_stats(&workbook(fixture(false)), "2030Q2", None).expect("read");
         assert!(read.refusals.is_empty(), "{:?}", read.refusals);
         assert_eq!(read.blocks, 3);
         assert_eq!(read.values.len(), 32);
@@ -1138,8 +1170,8 @@ mod tests {
                 v.section.clone(),
             )
         };
-        let base = read_mine_stats(&workbook(fixture(false)), "2030Q2").expect("read");
-        let drift = read_mine_stats(&workbook(fixture(true)), "2030Q2").expect("read");
+        let base = read_mine_stats(&workbook(fixture(false)), "2030Q2", None).expect("read");
+        let drift = read_mine_stats(&workbook(fixture(true)), "2030Q2", None).expect("read");
         assert!(drift.refusals.is_empty(), "{:?}", drift.refusals);
         assert_eq!(drift.blocks, 3);
         let base_map: BTreeMap<_, _> = base
@@ -1188,7 +1220,7 @@ mod tests {
     fn test_refusals_name_the_cell() {
         let (mut ms, qtd) = fixture(false);
         put(&mut ms, 4, 5, t("x"));
-        let read = read_mine_stats(&workbook((ms, qtd)), "2030Q2").expect("read");
+        let read = read_mine_stats(&workbook((ms, qtd)), "2030Q2", None).expect("read");
         assert_eq!(read.refusals.len(), 1);
         assert_eq!(read.refusals[0].locator, "2030Q2:Minestats1!D5");
         assert!(
@@ -1200,7 +1232,7 @@ mod tests {
 
         let (mut ms, qtd) = fixture(false);
         put(&mut ms, 1, 9, t("Tonnes processed (thousands)2"));
-        let read = read_mine_stats(&workbook((ms, qtd)), "2030Q2").expect("read");
+        let read = read_mine_stats(&workbook((ms, qtd)), "2030Q2", None).expect("read");
         assert_eq!(read.refusals.len(), 1);
         assert_eq!(read.refusals[0].locator, "2030Q2:Minestats1!A9");
         assert!(read.refusals[0].reason.contains("appears twice"));
@@ -1208,7 +1240,7 @@ mod tests {
 
         let (mut ms, qtd) = fixture(false);
         put(&mut ms, 1, 13, t("For the fortnight ended June 30,"));
-        let read = read_mine_stats(&workbook((ms, qtd)), "2030Q2").expect("read");
+        let read = read_mine_stats(&workbook((ms, qtd)), "2030Q2", None).expect("read");
         assert_eq!(read.refusals.len(), 1);
         assert_eq!(read.refusals[0].locator, "2030Q2:Minestats1!A13");
         assert_eq!(
@@ -1219,13 +1251,58 @@ mod tests {
 
         let (ms, mut qtd) = fixture(false);
         put(&mut qtd, 3, 5, MinimalCell::Error("#REF!".into()));
-        let read = read_mine_stats(&workbook((ms, qtd)), "2030Q2").expect("read");
+        let read = read_mine_stats(&workbook((ms, qtd)), "2030Q2", None).expect("read");
         assert_eq!(read.refusals.len(), 1);
         assert_eq!(read.refusals[0].locator, "2030Q2:QTD!C5");
 
         let refused =
-            read_mine_stats(&workbook(fixture(false)), "2030-Q2").expect_err("bad quarter");
+            read_mine_stats(&workbook(fixture(false)), "2030-Q2", None).expect_err("bad quarter");
         assert!(refused.to_string().contains("not YYYYQn"), "{refused}");
+    }
+
+    /// Under the vocabulary of the base layout, the drifted layout reads the same except for the one row whose
+    /// label is new (Revenue), which is refused by locator, in both blocks it would appear in.
+    #[test]
+    fn test_unregistered_label_is_refused_by_locator() {
+        let base = read_mine_stats(&workbook(fixture(false)), "2030Q2", None).expect("read");
+        let vocabulary: LabelVocabulary = base
+            .values
+            .iter()
+            .filter(|v| v.view == View::Minestats)
+            .map(|v| (v.section.clone(), v.label.clone()))
+            .collect();
+        let again =
+            read_mine_stats(&workbook(fixture(false)), "2030Q2", Some(&vocabulary)).expect("read");
+        assert!(again.refusals.is_empty() && again.values == base.values);
+
+        let drift =
+            read_mine_stats(&workbook(fixture(true)), "2030Q2", Some(&vocabulary)).expect("read");
+        assert_eq!(drift.refusals.len(), 1, "{:?}", drift.refusals);
+        assert_eq!(drift.refusals[0].locator, "2030Q2:Minestats1!A5");
+        assert!(
+            drift.refusals[0]
+                .reason
+                .contains("\"Revenue ($ millions)\"")
+        );
+        assert!(
+            drift
+                .values
+                .iter()
+                .all(|v| v.label != "Revenue ($ millions)")
+        );
+
+        let mut narrow = vocabulary.clone();
+        narrow.remove(&(
+            Some("Average grade (grams per tonne)".to_string()),
+            "Processed".to_string(),
+        ));
+        let read =
+            read_mine_stats(&workbook(fixture(false)), "2030Q2", Some(&narrow)).expect("read");
+        assert_eq!(read.refusals.len(), 1);
+        assert_eq!(
+            read.refusals[0].locator, "2030Q2:Minestats1!A8",
+            "a sub-row is keyed by its section too"
+        );
     }
 
     fn workspace_root() -> PathBuf {
@@ -1303,9 +1380,16 @@ mod tests {
         let sources = load_registered_sources(&profile, &root)
             .expect("registered files present and unaltered");
         let dump = std::env::var_os("FMINE_MINE_STATS_DUMP").map(PathBuf::from);
+        // The registered vocabulary is in force: every label of the ten files must be registered.
+        let vocabulary: LabelVocabulary = profile.mine_stats_labels.iter().cloned().collect();
+        assert!(
+            !vocabulary.is_empty(),
+            "barrick registers a Mine Stats vocabulary"
+        );
         let mut reads = BTreeMap::new();
         for src in sources.iter().filter(|s| s.kind == SourceKind::MineStats) {
-            let read = read_mine_stats(&src.workbook, &src.quarter).expect("registered quarter");
+            let read = read_mine_stats(&src.workbook, &src.quarter, Some(&vocabulary))
+                .expect("registered quarter");
             let got = [
                 read.values.len(),
                 read.count("number"),

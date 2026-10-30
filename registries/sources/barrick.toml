@@ -320,3 +320,218 @@ prefix = "For the six months ended June 30"
 set = "E816-H1-2025"
 cell = "B45"
 prefix = "2025"
+
+# Mine Statistics row-label vocabulary (bd-gwf1.1): every (section, label) pair with data in a Minestats* block
+# of the ten Mine Stats files 2024Q1-2026Q2, labels without footnote numbers, in order of first appearance.
+# FACT: derived from W1's independent openpyxl read (scripts/oracle/mine_stats_extract3.py, long_all3.json),
+# not from the Rust reader. Frozen on 2026-10-29, before the Q3 2026 release: a label first seen in a later
+# vintage is refused by locator until a row is added here, once the label is understood. `section` is the label
+# of the row a sub-row belongs to, omitted for a top-level row.
+
+[[mine_stats_label]]
+label = "Tonnes mined (thousands)"
+
+[[mine_stats_label]]
+section = "Tonnes mined (thousands)"
+label = "Open Pit Ore"
+
+[[mine_stats_label]]
+section = "Tonnes mined (thousands)"
+label = "Open Pit Waste"
+
+[[mine_stats_label]]
+section = "Tonnes mined (thousands)"
+label = "Underground"
+
+[[mine_stats_label]]
+label = "Strip Ratio"
+
+[[mine_stats_label]]
+section = "Cost per tonne mined ($/tonne)"
+label = "Open Pit"
+
+[[mine_stats_label]]
+section = "Cost per tonne mined ($/tonne)"
+label = "Underground"
+
+[[mine_stats_label]]
+label = "Tonnes processed (thousands)"
+
+[[mine_stats_label]]
+section = "Tonnes processed (thousands)"
+label = "Oxide Mill"
+
+[[mine_stats_label]]
+section = "Tonnes processed (thousands)"
+label = "Roasters"
+
+[[mine_stats_label]]
+section = "Tonnes processed (thousands)"
+label = "Autoclave"
+
+[[mine_stats_label]]
+section = "Tonnes processed (thousands)"
+label = "Heap Leach"
+
+[[mine_stats_label]]
+section = "Cost per tonne processed ($/tonne)"
+label = "Oxide Mill"
+
+[[mine_stats_label]]
+section = "Cost per tonne processed ($/tonne)"
+label = "Roasters"
+
+[[mine_stats_label]]
+section = "Cost per tonne processed ($/tonne)"
+label = "Autoclave"
+
+[[mine_stats_label]]
+section = "Cost per tonne processed ($/tonne)"
+label = "Heap Leach"
+
+[[mine_stats_label]]
+label = "G&A cost per tonne processed ($/tonne)"
+
+[[mine_stats_label]]
+section = "Average grade (grams per tonne)"
+label = "Open Pit mined"
+
+[[mine_stats_label]]
+section = "Average grade (grams per tonne)"
+label = "Underground mined"
+
+[[mine_stats_label]]
+section = "Average grade (grams per tonne)"
+label = "Processed"
+
+[[mine_stats_label]]
+label = "Recovery rate (percent)"
+
+[[mine_stats_label]]
+section = "Recovery rate (percent)"
+label = "Oxide Mill"
+
+[[mine_stats_label]]
+section = "Recovery rate (percent)"
+label = "Roasters"
+
+[[mine_stats_label]]
+section = "Recovery rate (percent)"
+label = "Autoclave"
+
+[[mine_stats_label]]
+label = "Production (thousands of ounces)"
+
+[[mine_stats_label]]
+section = "Production (thousands of ounces)"
+label = "Oxide Mill"
+
+[[mine_stats_label]]
+section = "Production (thousands of ounces)"
+label = "Roasters"
+
+[[mine_stats_label]]
+section = "Production (thousands of ounces)"
+label = "Autoclave"
+
+[[mine_stats_label]]
+section = "Production (thousands of ounces)"
+label = "Heap Leach"
+
+[[mine_stats_label]]
+label = "Sales (thousands of ounces)"
+
+[[mine_stats_label]]
+label = "Cost of sales per ounce ($/oz)"
+
+[[mine_stats_label]]
+section = "Costs per ounce ($/oz)"
+label = "Royalties"
+
+[[mine_stats_label]]
+section = "Costs per ounce ($/oz)"
+label = "Depreciation"
+
+[[mine_stats_label]]
+section = "Costs per ounce ($/oz)"
+label = "Total cash costs"
+
+[[mine_stats_label]]
+section = "Costs per ounce ($/oz)"
+label = "All-in sustaining costs"
+
+[[mine_stats_label]]
+section = "Capital expenditures ($ millions)"
+label = "Minesite sustaining"
+
+[[mine_stats_label]]
+section = "Capital expenditures ($ millions)"
+label = "Projects"
+
+[[mine_stats_label]]
+label = "Total capital expenditures ($ millions)"
+
+[[mine_stats_label]]
+section = "Costs per ounce"
+label = "Royalties"
+
+[[mine_stats_label]]
+section = "Costs per ounce"
+label = "Depreciation"
+
+[[mine_stats_label]]
+section = "Costs per ounce"
+label = "Total cash costs"
+
+[[mine_stats_label]]
+section = "Costs per ounce"
+label = "All-in sustaining costs"
+
+[[mine_stats_label]]
+label = "Cost per tonne processed ($/tonne)"
+
+[[mine_stats_label]]
+section = "Average grade"
+label = "Open Pit mined"
+
+[[mine_stats_label]]
+section = "Average grade"
+label = "Underground mined"
+
+[[mine_stats_label]]
+section = "Average grade"
+label = "Processed"
+
+[[mine_stats_label]]
+label = "Production (millions of pounds)"
+
+[[mine_stats_label]]
+label = "Sales (millions of pounds)"
+
+[[mine_stats_label]]
+label = "Cost of sales per pound ($/lb)"
+
+[[mine_stats_label]]
+section = "Costs per pound"
+label = "C1 Cash Costs"
+
+[[mine_stats_label]]
+section = "Costs per pound"
+label = "Depreciation"
+
+[[mine_stats_label]]
+section = "Costs per pound"
+label = "All-in sustaining costs"
+
+[[mine_stats_label]]
+label = "Production (Thousands of tonnes)"
+
+[[mine_stats_label]]
+label = "Sales (Thousands of tonnes)"
+
+[[mine_stats_label]]
+section = "Costs per pound"
+label = "C1 cash costs"
+
+[[mine_stats_label]]
+label = "Revenue ($ millions)"

@@ -58,6 +58,14 @@ pub struct ReconstructionRow {
     pub rule: String,
 }
 
+/// One registered Mine Statistics row label (bd-gwf1.1): the label without its footnote number, and the label of
+/// the row it belongs to when it is a sub-row (`Processed` under `Average grade (grams per tonne)`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MineStatsLabelRow {
+    pub section: Option<String>,
+    pub label: String,
+}
+
 /// A checked issuer registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourcesRegistry {
@@ -67,6 +75,9 @@ pub struct SourcesRegistry {
     pub sources: Vec<SourceRow>,
     pub subjects: Vec<String>,
     pub reconstructions: Vec<ReconstructionRow>,
+    /// The Mine Statistics label vocabulary, in file order. Empty when the issuer registers none, in which case
+    /// labels are read without a vocabulary check.
+    pub mine_stats_labels: Vec<MineStatsLabelRow>,
 }
 
 /// Why a sources registry was refused. `line` is 1-based; 0 means the file as a whole.
@@ -173,6 +184,15 @@ impl<'a> Fields<'a> {
         }
     }
 
+    /// Like [`Self::string`], for a key that may be absent.
+    fn optional_string(&self, key: &str) -> Result<Option<String>, SourcesError> {
+        if self.fields.iter().any(|f| f.key == key) {
+            self.string(key).map(|(s, _)| Some(s))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn positive_int(&self, key: &str) -> Result<(u64, usize), SourcesError> {
         match self.fields.iter().find(|f| f.key == key) {
             Some(TomlField {
@@ -235,7 +255,15 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
     }
 
     for row in &doc.rows {
-        if !["source", "subject", "reconstruction", "label_check"].contains(&row.table.as_str()) {
+        if ![
+            "source",
+            "subject",
+            "reconstruction",
+            "label_check",
+            "mine_stats_label",
+        ]
+        .contains(&row.table.as_str())
+        {
             return fail(row.line, format!("unknown table [[{}]]", row.table));
         }
     }
@@ -417,6 +445,23 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         );
     }
 
+    let mut mine_stats_labels: Vec<MineStatsLabelRow> = Vec::new();
+    for row in doc.rows_of("mine_stats_label") {
+        let f = Fields::of_row(row);
+        f.only(&["section", "label"])?;
+        let entry = MineStatsLabelRow {
+            section: f.optional_string("section")?,
+            label: f.string("label")?.0,
+        };
+        if mine_stats_labels.contains(&entry) {
+            return fail(
+                row.line,
+                format!("duplicate [[mine_stats_label]] {entry:?}"),
+            );
+        }
+        mine_stats_labels.push(entry);
+    }
+
     Ok(SourcesRegistry {
         issuer,
         corpus_dir,
@@ -424,6 +469,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         sources,
         subjects,
         reconstructions,
+        mine_stats_labels,
     })
 }
 
@@ -578,6 +624,50 @@ mod tests {
                 .reason
                 .contains("unknown table")
         );
+    }
+
+    #[test]
+    fn test_mine_stats_labels_parse_in_order_and_refuse_duplicates() {
+        let b = source_b("aisc_reconciliation", SHA_B);
+        let rows = "[[mine_stats_label]]\nlabel = \"Tonnes processed (thousands)\"\n\n\
+                    [[mine_stats_label]]\nsection = \"Average grade (grams per tonne)\"\nlabel = \"Processed\"\n";
+        let reg = parse_sources_registry(&minimal(&b, rows)).expect("accepted");
+        assert_eq!(
+            reg.mine_stats_labels,
+            vec![
+                MineStatsLabelRow {
+                    section: None,
+                    label: "Tonnes processed (thousands)".into()
+                },
+                MineStatsLabelRow {
+                    section: Some("Average grade (grams per tonne)".into()),
+                    label: "Processed".into()
+                },
+            ]
+        );
+        assert!(
+            parse_sources_registry(&minimal(&b, ""))
+                .expect("accepted")
+                .mine_stats_labels
+                .is_empty()
+        );
+        let dup =
+            format!("{rows}\n[[mine_stats_label]]\nlabel = \"Tonnes processed (thousands)\"\n");
+        let e = refusal(&minimal(&b, &dup));
+        assert!(
+            e.reason.contains("duplicate [[mine_stats_label]]") && e.line > 0,
+            "{e}"
+        );
+        let e = refusal(&minimal(
+            &b,
+            "[[mine_stats_label]]\nlabel = \"X\"\nunit = \"kt\"\n",
+        ));
+        assert!(e.reason.contains("unknown key"), "{e}");
+        let e = refusal(&minimal(
+            &b,
+            "[[mine_stats_label]]\nsection = \"\"\nlabel = \"X\"\n",
+        ));
+        assert!(e.reason.contains("non-empty"), "{e}");
     }
 
     #[test]
