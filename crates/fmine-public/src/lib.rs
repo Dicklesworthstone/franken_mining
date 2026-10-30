@@ -26,8 +26,9 @@ use fmine_io::xlsx::{
 
 use crate::aisc::{
     DEFAULT_MISSING_FACT, ExplanationBasis, IdentityFamily, IdentityInstance, IdentityState,
-    RateMiss, ShareBasis, UnregisteredHeader, cell_text, confirm_share_label, find_qtd_sheet,
-    ledger_for_table, locate_table, reconstruction_closes,
+    OneCellCheck, OneCellOutcome, RateMiss, ShareBasis, UnregisteredHeader, cell_text,
+    confirm_share_label, find_qtd_sheet, ledger_for_table, locate_table, one_cell_checks,
+    reconstruction_closes,
 };
 use crate::mine_stats::{CellRefusal, LabelVocabulary, MineStatsRead, read_mine_stats};
 pub use crate::sources::load_issuer_profile;
@@ -225,6 +226,9 @@ pub struct PublicAssuranceReport {
     /// The same families run over hidden worksheets (BD-331.S2). Bound into the state root in its own section
     /// and never counted in `instances`, the totals or `GATE-BULL-01`.
     pub hidden_scope: HiddenScope,
+    /// Appendix K.4's one-cell cost-of-sales check on every registered-subject column of the visible AISC
+    /// tables (bd-prmn.8). A diagnostic: it changes no instance's state and is not in the state root.
+    pub one_cell: Vec<OneCellCheck>,
     pub ledger_anchor: LedgerAnchor,
 }
 
@@ -302,6 +306,42 @@ impl PublicAssuranceReport {
             }
         }
         a
+    }
+
+    /// The `one_cell_cos` section (bd-prmn.8): counts over every checked column, then each failing column.
+    fn one_cell_json(&self, o: &mut String) {
+        let count = |state: &str| self.one_cell.iter().filter(|c| c.state() == state).count();
+        let _ = write!(
+            o,
+            "\"one_cell_cos\":{{\"diagnostic\":\"Appendix K.4 one-cell cost-of-sales check; not a ledger state, \
+             not in the state root\",\"columns\":{},\"pass\":{},\"fail\":{},\"refused\":{},\"failing\":[",
+            self.one_cell.len(),
+            count("pass"),
+            count("fail"),
+            count("refused")
+        );
+        let failing = self.one_cell.iter().filter_map(|c| match &c.outcome {
+            OneCellOutcome::Checked {
+                basis: (a, b),
+                pass: false,
+                at_full,
+                at_share,
+                implied_oz: (lo, hi),
+            } => Some(format!(
+                "{{\"file\":{},\"sheet\":{},\"column\":{},\"subject\":{},\"basis\":\"{a}/{b}\",\"at_full\":{at_full},\
+                 \"at_share\":{},\"implied_oz\":[{},{}]}}",
+                js(&c.file),
+                js(&c.sheet),
+                js(&c.column),
+                js(&c.subject),
+                at_share.map_or_else(|| "null".to_string(), |s| s.to_string()),
+                js(lo),
+                js(hi)
+            )),
+            _ => None,
+        });
+        o.push_str(&failing.collect::<Vec<_>>().join(","));
+        o.push_str("]},");
     }
 
     /// One (ii), (iii) or (iv) instance as a JSON object; `scope` labels a hidden-scope instance.
@@ -636,6 +676,7 @@ impl PublicAssuranceReport {
             );
         }
         o.push_str("]},");
+        self.one_cell_json(&mut o);
         let hidden = &self.hidden_scope;
         let _ = write!(
             o,
@@ -912,16 +953,22 @@ pub fn assess(
     let reconstructions = profile.reconstructions.as_slice();
     let mut visible = HiddenScope::default();
     let mut hidden = HiddenScope::default();
+    let mut one_cell = Vec::new();
+    let registered: BTreeMap<String, (i64, i64)> = profile
+        .shares
+        .iter()
+        .map(|s| (s.subject.clone(), (s.num, s.den)))
+        .collect();
     for src in sources
         .iter()
         .filter(|s| s.kind == SourceKind::AiscReconciliation)
     {
         let shares = share_bases(profile, &sources, &src.quarter);
         let scopes = [
-            (&src.workbook.sheets, &mut visible),
-            (&src.workbook.hidden_sheets, &mut hidden),
+            (&src.workbook.sheets, &mut visible, true),
+            (&src.workbook.hidden_sheets, &mut hidden, false),
         ];
-        for (sheets, scope) in scopes {
+        for (sheets, scope, shown) in scopes {
             for sheet in sheets {
                 match locate_table(sheet, subjects) {
                     Ok(None) => {}
@@ -954,6 +1001,17 @@ pub fn assess(
                             &mut scope.instances,
                             &mut scope.unregistered_headers,
                         );
+                        if shown {
+                            one_cell_checks(
+                                &src.file_name,
+                                sheet,
+                                &table,
+                                subjects,
+                                &shares,
+                                &registered,
+                                &mut one_cell,
+                            );
+                        }
                     }
                 }
             }
@@ -1056,6 +1114,7 @@ pub fn assess(
         unregistered_headers: unregistered,
         mine_stats,
         hidden_scope: hidden,
+        one_cell,
         ledger_anchor,
     }
 }
@@ -1556,6 +1615,142 @@ mod tests {
         assert_eq!(
             state_of(&r, "L14", IdentityFamily::CosPerOunce).code(),
             "iv"
+        );
+    }
+
+    fn one_cell<'a>(r: &'a PublicAssuranceReport, column: &str) -> &'a crate::aisc::OneCellCheck {
+        let found: Vec<_> = r.one_cell.iter().filter(|c| c.column == column).collect();
+        assert_eq!(found.len(), 1, "one check for column {column}");
+        found[0]
+    }
+
+    /// bd-prmn.8: K.4's one-cell check covers every registered-subject column once, at the column's basis, and
+    /// agrees with the ledger's cost-of-sales-per-ounce states; it is reported, not counted.
+    #[test]
+    fn test_one_cell_check_on_synthetic_columns() {
+        let r = run_synthetic_assurance(&[]).expect("synthetic");
+        let states: Vec<(&str, &str)> = r
+            .one_cell
+            .iter()
+            .map(|c| (c.column.as_str(), c.state()))
+            .collect();
+        // B–H and K–M are registered subjects; I ("Footnote") and J ("Mystery Mine") are not.
+        assert_eq!(
+            states,
+            [
+                ("B", "pass"),
+                ("C", "pass"),
+                ("D", "pass"),
+                ("E", "refused"),
+                ("F", "refused"),
+                ("G", "refused"),
+                ("H", "pass"),
+                ("K", "pass"),
+                ("L", "fail"),
+                ("M", "pass"),
+            ]
+        );
+        // Site D's operands are valid, so its 100% check is still reported: 1000·1000/400 = 2500, printed 2500.
+        for (column, reason, at_full) in [
+            ("E", "no registered share", Some(true)),
+            ("F", "all-zero column", None),
+            ("G", "unrounded stored value", None),
+        ] {
+            assert_eq!(
+                one_cell(&r, column).outcome,
+                OneCellOutcome::Refused {
+                    reason,
+                    at_full,
+                    at_share: None
+                },
+                "{column}"
+            );
+        }
+        assert!(one_cell(&r, "H").region);
+        // Site H: 1000·¾·400/150 = 2000 at its stated share; at 100% the rate would be 2666.67.
+        assert_eq!(
+            one_cell(&r, "K").outcome,
+            OneCellOutcome::Checked {
+                basis: (3, 4),
+                pass: true,
+                at_full: false,
+                at_share: Some(true),
+                // [1000·3·799/(4·4001), 1000·3·801/(4·3999)] = [149.7750…, 150.2250…].
+                implied_oz: ("149.775".to_string(), "150.226".to_string()),
+            }
+        );
+        // Site I prints 2200: it fails at both bases; ounces in [1000·3·799/(4·4401), 1000·3·801/(4·4399)]
+        // = [136.1622…, 136.5651…] would close it, against the printed 150.
+        assert_eq!(
+            one_cell(&r, "L").outcome,
+            OneCellOutcome::Checked {
+                basis: (3, 4),
+                pass: false,
+                at_full: false,
+                at_share: Some(false),
+                implied_oz: ("136.162".to_string(), "136.566".to_string()),
+            }
+        );
+        // Every failing column is a (iv) cost-of-sales-per-ounce instance of the ledger, and the reverse.
+        let fails: Vec<String> = r
+            .one_cell
+            .iter()
+            .filter(|c| c.state() == "fail")
+            .map(|c| format!("{}!{}", c.sheet, c.column))
+            .collect();
+        let undecidable: Vec<String> = r
+            .instances
+            .iter()
+            .filter(|i| i.family == IdentityFamily::CosPerOunce && i.state.code() == "iv")
+            .map(|i| format!("{}!{}", i.sheet, i.column))
+            .collect();
+        assert_eq!(fails, undecidable);
+        let json = r.to_json();
+        assert!(
+            json.contains(
+                "\"columns\":10,\"pass\":6,\"fail\":1,\"refused\":3,\"failing\":[{\"file\":\"Synthetic_AISC.xlsx\",\
+                 \"sheet\":\"Q1 2030\",\"column\":\"L\",\"subject\":\"Site I\",\"basis\":\"3/4\",\"at_full\":false,\
+                 \"at_share\":false,\"implied_oz\":[\"136.162\",\"136.566\"]}]},\"hidden_scope\":"
+            ),
+            "{json}"
+        );
+    }
+
+    /// bd-prmn.8: a column registered at the wrong share fails at that basis and K.4's verdict names it a basis
+    /// rule; with the right share and Site I's miss counted as a known item, the verdict is site-specific.
+    #[test]
+    fn test_one_cell_wrong_share_is_basis_rule() {
+        let site_i = |c: &crate::aisc::OneCellCheck| c.subject == "Site I";
+        let r = run_synthetic_assurance(&[]).expect("synthetic");
+        let v = crate::aisc::one_cell_verdict(&r.one_cell, &site_i);
+        assert_eq!(
+            (v.fail, v.k4_fail, v.other_fail, v.verdict),
+            (1, 1, 0, "site-specific")
+        );
+
+        let mut profile = synthetic::synthetic_profile();
+        for s in profile.shares.iter_mut().filter(|s| s.subject == "Site H") {
+            (s.num, s.den) = (3, 5);
+        }
+        let r = synthetic_run_with(&profile, &[], "Site H (60%)1");
+        match &one_cell(&r, "K").outcome {
+            OneCellOutcome::Checked {
+                basis: (3, 5),
+                pass: false,
+                at_full: false,
+                at_share: Some(false),
+                ..
+            } => {}
+            other => panic!("K: {other:?}"),
+        }
+        let v = crate::aisc::one_cell_verdict(&r.one_cell, &site_i);
+        assert_eq!(
+            (v.fail, v.k4_fail, v.other_fail, v.verdict),
+            (2, 1, 1, "basis rule")
+        );
+        assert_eq!(
+            v.pattern,
+            [(("Site H".to_string(), (3, 5), Some(false)), 1)]
         );
     }
 
@@ -2645,6 +2840,175 @@ mod tests {
     /// BD-331.S2 on the real files: the hidden scope. Every count is from the hidden census
     /// (`python3 -I scripts/oracle/hidden_census.py .`, which runs census2.py and share_census.py unchanged on
     /// the hidden sheets). One JSON line per hidden instance and per hidden sheet, then a summary (`--nocapture`).
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/ and python3"]
+    fn barrick_one_cell_matches_independent_reader() {
+        let root = workspace_root();
+        let profile = load_issuer_profile(&root, "barrick")
+            .expect("registry")
+            .through("2026Q2")
+            .expect("bound");
+        let r =
+            run_public_assurance(&profile, &root).expect("registered files present and unaltered");
+        let out = std::process::Command::new("python3")
+            .arg("-I")
+            .arg(root.join("scripts/oracle/one_cell_cos.py"))
+            .arg(&root)
+            .current_dir(&root)
+            .output()
+            .expect("python3 runs");
+        assert!(
+            out.status.success(),
+            "one_cell_cos.py failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).expect("utf-8 oracle output");
+        let mut lines: Vec<&str> = stdout.lines().collect();
+        let oracle_summary = lines.pop().expect("summary line");
+        let key = |line: &str| {
+            let f: Vec<&str> = line.splitn(4, "\", \"").collect();
+            f[..3].join("|")
+        };
+        let oracle: BTreeMap<String, &str> = lines.iter().map(|l| (key(l), *l)).collect();
+        assert_eq!(oracle.len(), lines.len(), "one oracle line per column");
+
+        // The K.4 items (Appendix K.4 "Still open"; E691, E817, E819), as one_cell_cos.py states them.
+        let year = |sheet: &str| {
+            sheet
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .find(|t| {
+                    t.len() == 4 && t.starts_with("20") && t.bytes().all(|b| b.is_ascii_digit())
+                })
+                .map(str::to_string)
+        };
+        let k4_item = |c: &crate::aisc::OneCellCheck| {
+            let y = year(&c.sheet);
+            match c.subject.as_str() {
+                "Veladero" => matches!(y.as_deref(), Some("2024" | "2025")),
+                "Hemlo" => matches!(c.sheet.as_str(), "Q4 2025" | "2025"),
+                "North Mara" => matches!(c.sheet.as_str(), "Q2 2026" | "YTD Q2 2026"),
+                "Latin America & Asia Pacific" => y.as_deref() == Some("2023"),
+                _ => false,
+            }
+        };
+        let text = |s: Option<&str>| s.map_or_else(|| "null".to_string(), |s| format!("\"{s}\""));
+        let mut mismatches = Vec::new();
+        for c in &r.one_cell {
+            let (basis, reason, at_full, at_share, lo, hi) = match &c.outcome {
+                OneCellOutcome::Refused {
+                    reason,
+                    at_full,
+                    at_share,
+                } => (None, Some(*reason), *at_full, *at_share, None, None),
+                OneCellOutcome::Checked {
+                    basis: (a, b),
+                    at_full,
+                    at_share,
+                    implied_oz: (lo, hi),
+                    ..
+                } => (
+                    Some(format!("{a}/{b}")),
+                    None,
+                    Some(*at_full),
+                    *at_share,
+                    Some(lo.as_str()),
+                    Some(hi.as_str()),
+                ),
+            };
+            let flag = |b: Option<bool>| b.map_or_else(|| "null".to_string(), |b| b.to_string());
+            let got = format!(
+                "{{\"file\": \"{}\", \"sheet\": \"{}\", \"column\": \"{}\", \"subject\": \"{}\", \"kind\": \"{}\", \
+                 \"basis\": {}, \"state\": \"{}\", \"reason\": {}, \"at_full\": {}, \"at_share\": {}, \
+                 \"implied_oz_lo\": {}, \"implied_oz_hi\": {}, \"k4_item\": {}}}",
+                c.file,
+                c.sheet,
+                c.column,
+                c.subject,
+                if c.region { "region" } else { "site" },
+                text(basis.as_deref()),
+                c.state(),
+                text(reason),
+                flag(at_full),
+                flag(at_share),
+                text(lo),
+                text(hi),
+                k4_item(c)
+            );
+            // RISK-31: the lines carry implied ounces, so a mismatch is named by its key and field names only.
+            let fields =
+                |line: &str| -> Vec<String> { line.split(", \"").map(str::to_string).collect() };
+            match oracle.get(&key(&got)) {
+                Some(want) if *want == got => {}
+                Some(want) => {
+                    let differ: Vec<String> = fields(want)
+                        .iter()
+                        .zip(fields(&got))
+                        .filter(|(w, g)| *w != g)
+                        .map(|(w, _)| w.split("\":").next().unwrap_or("").to_string())
+                        .collect();
+                    mismatches.push(format!("{} differs in {differ:?}", key(&got)));
+                }
+                None => mismatches.push(format!("{} not in the oracle", key(&got))),
+            }
+        }
+        assert_eq!(r.one_cell.len(), oracle.len(), "columns checked");
+        assert!(
+            mismatches.is_empty(),
+            "differ from one_cell_cos.py: {mismatches:?}"
+        );
+
+        let v = crate::aisc::one_cell_verdict(&r.one_cell, &k4_item);
+        let count = |state: &str| r.one_cell.iter().filter(|c| c.state() == state).count();
+        let pattern: Vec<String> = v
+            .pattern
+            .iter()
+            .map(|((s, (a, b), other), n)| {
+                format!(
+                    "{{\"subject\": \"{s}\", \"basis\": \"{a}/{b}\", \"passes_at_other_basis\": {}, \"columns\": {n}}}",
+                    other.map_or_else(|| "null".to_string(), |o| o.to_string())
+                )
+            })
+            .collect();
+        let got = format!(
+            "{{\"columns\": {}, \"pass\": {}, \"fail\": {}, \"refused\": {}, \"k4_fail\": {}, \"other_fail\": {}, \
+             \"verdict\": \"{}\", \"pattern\": [{}]",
+            r.one_cell.len(),
+            count("pass"),
+            count("fail"),
+            count("refused"),
+            v.k4_fail,
+            v.other_fail,
+            v.verdict,
+            pattern.join(", ")
+        );
+        println!("{got}}}");
+        assert!(
+            oracle_summary.starts_with(&got),
+            "summary differs from one_cell_cos.py"
+        );
+        assert_eq!(
+            (r.one_cell.len(), count("pass"), v.fail, count("refused")),
+            (519, 374, 82, 63)
+        );
+        assert_eq!((v.k4_fail, v.other_fail, v.verdict), (17, 65, "basis rule"));
+        // Every failing column is a (iv) cost-of-sales-per-ounce instance of the ledger, and the reverse.
+        let mut fails: Vec<String> = r
+            .one_cell
+            .iter()
+            .filter(|c| c.state() == "fail")
+            .map(|c| format!("{}:{}!{}", c.file, c.sheet, c.column))
+            .collect();
+        let mut undecidable: Vec<String> = r
+            .instances
+            .iter()
+            .filter(|i| i.family == IdentityFamily::CosPerOunce && i.state.code() == "iv")
+            .map(|i| format!("{}:{}!{}", i.file, i.sheet, i.column))
+            .collect();
+        fails.sort_unstable();
+        undecidable.sort_unstable();
+        assert_eq!(fails, undecidable);
+    }
+
     #[test]
     #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
     fn barrick_hidden_scope_matches_census() {

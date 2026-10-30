@@ -31,6 +31,12 @@ The public lane of M0 (`fmine assure public`).
   - **Hidden scope** (BD-331.S2): the same families run over hidden worksheets into `hidden_scope`. Each instance
     is labelled "sheet not displayed to readers". It is bound into the state root in its own section and never
     counted in the totals, `by_family` or `GATE-BULL-01`.
+  - **One-cell check** (bd-prmn.8, Appendix K.4): a diagnostic, never a state and not in the state root. On
+    every registered-subject column of the visible tables, cost of sales per ounce is checked against
+    1000·s·N/Q at the column's basis. The basis is the registered, label-confirmed share where an NCI line is
+    non-zero, and 100% otherwise. Each column reports the check at 100%, the check at the registered share,
+    and the implied ounce interval. `one_cell_verdict` counts the failures outside a caller's K.4 items:
+    "site-specific" if there are none, otherwise "basis rule".
 - `mine_stats` (bd-gwf1.1): a label-anchored reader for the quarterly Mine Statistics workbooks (W1 §3, §4, §13).
   It finds blocks by `For the (three|six|nine|twelve) months`, takes site names from the row above (carried left
   across merged blanks), and strips trailing footnote numbers from labels. The `QTD`/`YTD` summary columns are
@@ -76,7 +82,9 @@ The public lane of M0 (`fmine assure public`).
   RateMiss, ShareBasis, ExplanationBasis, DEFAULT_MISSING_FACT, SHARE_MISSING_FACT, RowAnchor, AnchorRule,
   ROW_ANCHORS (the seven rows `locate_table` anchors on, BD-339.S4), locate_table,
   ledger_for_table, rate_interval_holds, scaled_rate_holds, feasible_share, feasible_share_text,
-  find_share_footnote, find_qtd_sheet, confirm_share_label, reconstruction_closes, match_subject, cell_text}`.
+  find_share_footnote, find_qtd_sheet, confirm_share_label, reconstruction_closes, match_subject, cell_text,
+  OneCellCheck, OneCellOutcome, OneCellVerdict, FailGroup, implied_ounces, one_cell_checks, one_cell_verdict}`
+  (bd-prmn.8); `PublicAssuranceReport::one_cell`, the payload's `one_cell_cos` section.
   `IdentityState::Consistent` carries `basis` (the stated share, footnote and label it used, or `None`);
   `IdentityState::Explained` carries `basis: ExplanationBasis`; `IdentityState::Undecidable` carries
   `missing_fact` and `closing_document`; `IdentityState::RefusedAt` is (v) naming a cell or file.
@@ -150,6 +158,13 @@ The public lane of M0 (`fmine assure public`).
   - **Synthetic:** M16 is a stated (ii), and a changed or empty quote keeps it (iv). The hidden `Q4 2029` table's
     (iii) is reported and never counted. A changed hidden cell moves the root and no visible state. Hidden sheets
     leave the census and its digest unchanged.
+- `PO-PUB-7` (K.4 one-cell check, bd-prmn.8, MOR_CASE E836):
+  - **Real files** (ignored test `barrick_one_cell_matches_independent_reader`): 519 columns give 374 pass,
+    82 fail and 63 refused. On every column, every field equals `scripts/oracle/one_cell_cos.py` (same origin),
+    including the summary. The failing columns are exactly the 82 cost-of-sales-per-ounce (iv). Of the 82, 17 are
+    K.4 items and 65 are not, so the verdict is "basis rule". The root does not move.
+  - **Synthetic:** 10 columns, and Site I fails at both bases with known implied ounces. A share registered
+    wrong for Site H (3/5, labelled 60%) fails at that basis and gives "basis rule".
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.

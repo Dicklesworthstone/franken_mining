@@ -836,6 +836,264 @@ pub struct RateMiss {
     pub r: i64,
 }
 
+/// One column of Appendix K.4's cheapest common test (bd-prmn.8): the printed cost of sales per ounce against
+/// 1000·s·N/Q at the column's basis. A diagnostic: never a ledger state and not in the state root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OneCellCheck {
+    pub file: String,
+    pub sheet: String,
+    pub column: String,
+    pub subject: String,
+    pub region: bool,
+    pub outcome: OneCellOutcome,
+}
+
+/// What the one-cell check found for one column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OneCellOutcome {
+    /// No basis to check at. When only the basis is refused (the operands are valid integers), `at_full` and
+    /// `at_share` still report the checks at 100% and at the registered share; otherwise both are `None`.
+    Refused {
+        reason: &'static str,
+        at_full: Option<bool>,
+        at_share: Option<bool>,
+    },
+    Checked {
+        /// The share `(num, den)` the column is stated on: `(1, 1)` at 100%, the registered, label-confirmed
+        /// share where a non-controlling-interest line is non-zero.
+        basis: (i64, i64),
+        pass: bool,
+        /// The check at 100%.
+        at_full: bool,
+        /// The check at the subject's registered share, for a site that has one, whatever the column's basis.
+        at_share: Option<bool>,
+        /// The ounces (000s) that would close the check at `basis`, three places, rounded outward.
+        implied_oz: (String, String),
+    },
+}
+
+impl OneCellCheck {
+    /// `pass`, `fail` or `refused`.
+    #[must_use]
+    pub fn state(&self) -> &'static str {
+        match self.outcome {
+            OneCellOutcome::Refused { .. } => "refused",
+            OneCellOutcome::Checked { pass: true, .. } => "pass",
+            OneCellOutcome::Checked { pass: false, .. } => "fail",
+        }
+    }
+}
+
+/// The ounces Q for which 1000·s·N/Q meets [r − ½, r + ½] for some N ∈ [n − ½, n + ½], at s = a/b (n, r, a, b
+/// ≥ 1): [1000·a·(2n − 1)/(b·(2r + 1)), 1000·a·(2n + 1)/(b·(2r − 1))], to three places, rounded outward.
+#[must_use]
+pub fn implied_ounces(n: i64, r: i64, a: i64, b: i64) -> (String, String) {
+    let (n, r, a, b) = (i128::from(n), i128::from(r), i128::from(a), i128::from(b));
+    let three = |num: i128, den: i128, up: bool| {
+        let t = if up {
+            (num * 1000 + den - 1) / den
+        } else {
+            num * 1000 / den
+        };
+        format!("{}.{:03}", t / 1000, t % 1000)
+    };
+    (
+        three(1000 * a * (2 * n - 1), b * (2 * r + 1), false),
+        three(1000 * a * (2 * n + 1), b * (2 * r - 1), true),
+    )
+}
+
+/// Appendix K.4's one-cell check on every registered-subject column of one located table (bd-prmn.8). `shares`
+/// is what the run confirmed (as for the ledger); `registered` each subject's registered share, confirmed or not.
+pub fn one_cell_checks<S: AsRef<str>>(
+    file: &str,
+    sheet: &Sheet,
+    table: &AiscTable,
+    subjects: &[S],
+    shares: &BTreeMap<String, ShareBasis>,
+    registered: &BTreeMap<String, (i64, i64)>,
+    out: &mut Vec<OneCellCheck>,
+) {
+    let footnote = find_share_footnote(sheet).is_some();
+    for c in sheet
+        .row_cells(table.header_row)
+        .iter()
+        .filter(|c| c.col >= 2)
+    {
+        let Some(header) = cell_text(sheet, table.header_row, c.col) else {
+            continue;
+        };
+        if header.to_lowercase() == "footnote" {
+            continue;
+        }
+        let Some(subject) = match_subject(&header, subjects) else {
+            continue;
+        };
+        let share = shares.get(subject);
+        let region = matches!(share, Some(ShareBasis::Region));
+        let site_share = registered.get(subject).copied().filter(|_| !region);
+        out.push(OneCellCheck {
+            file: file.to_string(),
+            sheet: sheet.name.clone(),
+            column: col_index_to_letters(c.col),
+            subject: subject.to_string(),
+            region,
+            outcome: one_cell_outcome(sheet, table, c.col, footnote, share, site_share),
+        });
+    }
+}
+
+fn one_cell_outcome(
+    sheet: &Sheet,
+    t: &AiscTable,
+    col: u32,
+    footnote: bool,
+    share: Option<&ShareBasis>,
+    site_share: Option<(i64, i64)>,
+) -> OneCellOutcome {
+    let v = |row: u32| val(sheet, row, col);
+    let refused = |reason: &'static str| OneCellOutcome::Refused {
+        reason,
+        at_full: None,
+        at_share: None,
+    };
+    let mut used: Vec<u32> = t.block1.clone();
+    used.push(t.tcc_row);
+    used.extend(&t.block2);
+    used.extend([
+        t.aisc_row,
+        t.ounces_row,
+        t.cos_rate_row,
+        t.tcc_rate_row,
+        t.aisc_rate_row,
+    ]);
+    if used
+        .iter()
+        .all(|&r| matches!(v(r), Val::Place) || v(r) == Val::Num(0.0))
+    {
+        return refused("all-zero column");
+    }
+    let (vn, vq, vr) = (v(t.cos_row), v(t.ounces_row), v(t.cos_rate_row));
+    if !matches!(vr, Val::Num(_)) {
+        return refused("rate not published");
+    }
+    if !matches!(vq, Val::Num(_)) {
+        return refused("ounces not numeric");
+    }
+    if vr == Val::Num(0.0) || vq == Val::Num(0.0) {
+        return refused("zero rate or ounces");
+    }
+    if !matches!(vn, Val::Num(_)) {
+        return refused("cost of sales not numeric");
+    }
+    let (Some(n), Some(q), Some(r)) = (as_int(vn), as_int(vq), as_int(vr)) else {
+        return refused("unrounded stored value");
+    };
+    if n < 1 || q < 1 || r < 1 {
+        return refused("non-positive operand");
+    }
+    let at_full = rate_interval_holds(n, 1, q, r);
+    let at_share = site_share.map(|(a, b)| scaled_rate_holds(n, 1, q, r, a, b));
+    let nci = t
+        .nci_rows
+        .iter()
+        .any(|&row| matches!(v(row), Val::Num(x) if x != 0.0));
+    let unbased = |reason: &'static str| OneCellOutcome::Refused {
+        reason,
+        at_full: Some(at_full),
+        at_share,
+    };
+    let basis = if !nci {
+        (1, 1)
+    } else {
+        match share {
+            Some(ShareBasis::Region) => {
+                return unbased("regional numerator needs member weighting");
+            }
+            _ if !footnote => return unbased("attributable-basis footnote not found"),
+            None => return unbased("no registered share"),
+            Some(ShareBasis::Unconfirmed { .. }) => {
+                return unbased("registered share not confirmed by label");
+            }
+            Some(ShareBasis::Confirmed { num, den, .. }) => (*num, *den),
+        }
+    };
+    let (a, b) = basis;
+    OneCellOutcome::Checked {
+        basis,
+        pass: scaled_rate_holds(n, 1, q, r, a, b),
+        at_full,
+        at_share,
+        implied_oz: implied_ounces(n, r, a, b),
+    }
+}
+
+/// K.4's verdict over a run's one-cell checks: the failing columns outside the items `k4_item` names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OneCellVerdict {
+    pub fail: usize,
+    pub k4_fail: usize,
+    pub other_fail: usize,
+    /// "site-specific" when no column outside the K.4 items fails, otherwise "basis rule".
+    pub verdict: &'static str,
+    /// The failing columns outside the K.4 items by group, most first.
+    pub pattern: Vec<(FailGroup, usize)>,
+}
+
+/// A group of failing columns: (subject, basis, passes at the other basis).
+pub type FailGroup = (String, (i64, i64), Option<bool>);
+
+/// Groups the failing checks outside `k4_item` (Appendix K.4: "if only these columns fail, the cause is
+/// site-specific, not a basis rule"). The other basis is the registered share for a column on 100%, and 100%
+/// for a column on a share.
+#[must_use]
+pub fn one_cell_verdict(
+    checks: &[OneCellCheck],
+    k4_item: &dyn Fn(&OneCellCheck) -> bool,
+) -> OneCellVerdict {
+    let mut groups: BTreeMap<FailGroup, usize> = BTreeMap::new();
+    let (mut fail, mut k4_fail) = (0, 0);
+    for c in checks {
+        let OneCellOutcome::Checked {
+            basis,
+            pass: false,
+            at_full,
+            at_share,
+            ..
+        } = &c.outcome
+        else {
+            continue;
+        };
+        fail += 1;
+        if k4_item(c) {
+            k4_fail += 1;
+            continue;
+        }
+        let other = if *basis == (1, 1) {
+            *at_share
+        } else {
+            Some(*at_full)
+        };
+        *groups
+            .entry((c.subject.clone(), *basis, other))
+            .or_default() += 1;
+    }
+    let mut pattern: Vec<_> = groups.into_iter().collect();
+    pattern.sort_by(|x, y| y.1.cmp(&x.1).then_with(|| x.0.0.cmp(&y.0.0)));
+    let other_fail = fail - k4_fail;
+    OneCellVerdict {
+        fail,
+        k4_fail,
+        other_fail,
+        verdict: if other_fail == 0 {
+            "site-specific"
+        } else {
+            "basis rule"
+        },
+        pattern,
+    }
+}
+
 /// Builds the identity ledger for one located table. `explain` is offered every per-ounce miss and may
 /// return an explained state (it must itself re-verify the component); otherwise the miss is (iv). `shares`
 /// holds what the run knows about each subject's ownership share for this release (BD-331.S3).
@@ -1129,6 +1387,32 @@ mod tests {
         // but not [1026.5, 1027.5].
         assert!(rate_interval_holds(100, 4, 100, 1025));
         assert!(!rate_interval_holds(100, 4, 100, 1027));
+    }
+
+    /// bd-prmn.8: the one-cell check and its implied ounces on hand-computed columns.
+    #[test]
+    fn one_cell_implied_ounces_known_answers() {
+        // n = 100, q = 50, r = 2000: 1000·100/50 = 2000 exactly, inside.
+        assert!(rate_interval_holds(100, 1, 50, 2000));
+        // The implied ounces at 100%: [1000·199/4001, 1000·201/3999] = [49.7375…, 50.2625…], which holds 50.
+        assert_eq!(
+            implied_ounces(100, 2000, 1, 1),
+            ("49.737".to_string(), "50.263".to_string())
+        );
+        // r = 2100: [1000·199/4201, 1000·201/4199] = [47.3696…, 47.8685…] misses [49.5, 50.5], so it fails.
+        assert!(!rate_interval_holds(100, 1, 50, 2100));
+        assert_eq!(
+            implied_ounces(100, 2100, 1, 1),
+            ("47.369".to_string(), "47.869".to_string())
+        );
+        // At s = 3/4 the implied ounces scale by 3/4: [1000·3·199/(4·4201), 1000·3·201/(4·4199)]
+        // = [35.5272…, 35.9014…]; q = 36 lies in [35.5, 36.5] and meets it, so the scaled check passes.
+        assert_eq!(
+            implied_ounces(100, 2100, 3, 4),
+            ("35.527".to_string(), "35.902".to_string())
+        );
+        assert!(scaled_rate_holds(100, 1, 36, 2100, 3, 4));
+        assert!(!scaled_rate_holds(100, 1, 34, 2100, 3, 4));
     }
 
     #[test]
