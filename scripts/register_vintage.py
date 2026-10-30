@@ -6,7 +6,9 @@ Subcommands, each printing one JSON line per step:
   oracle <workspace> <dir>                               the independent reader on the fetched files, blind
   diff <workspace> <dir> <bound>                         dir/run_all.json and dir/run_through.json vs the oracle
 
-The oracle step runs scripts/oracle/fidelity.py and census2.py unchanged. census2.py reads
+The oracle step runs scripts/oracle/fidelity.py and census2.py unchanged, census2.py in its --displayed mode
+because the fmine ledger scores displayed values (bd-jg43.3), so the two ledger counts the diff prints are
+comparable. census2.py reads
 <root>/corpus_of_input_docs/downloaded/mine_stats, so the step builds that layout in <dir>/oracle_root. It holds
 links to the registered files present in the corpus and the fetched files under their candidate names. Its
 output, dir/oracle.jsonl, is written and its sha256 and time are recorded in dir/log.jsonl before any fmine
@@ -139,7 +141,7 @@ def cmd_oracle(ws, dir_):
         src = os.path.join(registered, r["file"])
         if r["file"] not in names and os.path.exists(src):
             os.symlink(src, os.path.join(corpus, r["file"]))
-    _, res = census2.run(root)
+    _, res = census2.run(root, displayed=True)
     counts = {}
     for x in res:
         counts[x[5]] = counts.get(x[5], 0) + 1
