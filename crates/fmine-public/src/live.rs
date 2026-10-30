@@ -22,8 +22,8 @@ use fmine_io::styles::NumberFormat;
 use fmine_io::xlsx::{CellValue, ExtractedCell, Sheet, build_minimal_xlsx, parse_a1_ref};
 
 use crate::aisc::{
-    Calc, IdentityInstance, IdentityState, Operand, OperandRole, OperandValue, rate_interval_holds,
-    rate_range_text,
+    AnchorRule, Calc, IdentityInstance, IdentityState, Operand, OperandRole, OperandValue,
+    ROW_ANCHORS, locate_table, rate_interval_holds, rate_range_text,
 };
 use crate::sources::IssuerProfile;
 use crate::{LoadedSource, PublicAssuranceReport};
@@ -524,16 +524,26 @@ fn plan(
 /// Sets one operand's cell in `sources` and recomputes that file's census. False when the file, sheet or cell
 /// reference is not loaded.
 fn set_leaf(sources: &mut [LoadedSource], o: &Operand, new: &OperandValue) -> bool {
-    let Some(src) = sources.iter_mut().find(|s| s.file_name == o.file) else {
+    parse_a1_ref(&o.cell)
+        .is_some_and(|(row, col)| edit_cell(sources, &o.file, &o.sheet, row, col, new))
+}
+
+/// Sets `(row, col)` of a visible sheet in `sources` and recomputes that file's census.
+fn edit_cell(
+    sources: &mut [LoadedSource],
+    file: &str,
+    sheet: &str,
+    row: u32,
+    col: u32,
+    new: &OperandValue,
+) -> bool {
+    let Some(src) = sources.iter_mut().find(|s| s.file_name == file) else {
         return false;
     };
-    let Some((row, col)) = parse_a1_ref(&o.cell) else {
+    let Some(ws) = src.workbook.sheets.iter_mut().find(|s| s.name == sheet) else {
         return false;
     };
-    let Some(sheet) = src.workbook.sheets.iter_mut().find(|s| s.name == o.sheet) else {
-        return false;
-    };
-    set_cell(sheet, row, col, new);
+    set_cell(ws, row, col, new);
     src.census = src.workbook.cell_census();
     true
 }
@@ -687,6 +697,119 @@ fn judge_leaf(
         None
     };
     check
+}
+
+/// One label check (BD-338.S3): an anchor label of a located table, mutated so it should stop matching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabelCheck {
+    pub file: String,
+    pub sheet: String,
+    pub cell: String,
+    /// The anchor's role from [`ROW_ANCHORS`], never the cell's own text.
+    pub anchor: &'static str,
+    /// "append_x", or "prepend_x" for a prefix anchor, which an appended letter can never break.
+    pub mutation: &'static str,
+    /// "table_refusal", "instances_changed" or "none" (a failure).
+    pub effect: &'static str,
+}
+
+impl LabelCheck {
+    #[must_use]
+    pub fn pass(&self) -> bool {
+        self.effect != "none"
+    }
+
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"kind\":\"label\",\"file\":\"{}\",\"sheet\":\"{}\",\"cell\":\"{}\",\"anchor\":\"{}\",\
+             \"mutation\":\"{}\",\"effect\":\"{}\",\"pass\":{}}}",
+            self.file,
+            self.sheet,
+            self.cell,
+            self.anchor,
+            self.mutation,
+            self.effect,
+            self.pass()
+        )
+    }
+}
+
+/// Mutates each of the seven anchor labels of the table on each `(file, sheet)` of `tables`, one at a time, and
+/// reruns `run`. Each must give a new table refusal on that sheet or change its instances. A sheet with no
+/// located table gives no checks; the caller counts them.
+pub fn prove_labels(
+    base: &[LoadedSource],
+    run: &dyn Fn(Vec<LoadedSource>) -> PublicAssuranceReport,
+    subjects: &[String],
+    tables: &[(String, String)],
+) -> Vec<LabelCheck> {
+    let before = run(base.to_vec());
+    let on = |r: &PublicAssuranceReport, file: &str, sheet: &str| {
+        let refused = r
+            .table_refusals
+            .iter()
+            .any(|t| t.file == file && t.sheet == sheet);
+        let instances: Vec<IdentityInstance> = r
+            .instances
+            .iter()
+            .filter(|i| i.file == file && i.sheet == sheet)
+            .cloned()
+            .collect();
+        (refused, instances)
+    };
+    let mut out = Vec::new();
+    for (file, sheet) in tables {
+        let ws = base
+            .iter()
+            .find(|s| s.file_name == *file)
+            .and_then(|s| s.workbook.sheets.iter().find(|w| w.name == *sheet));
+        let Some(ws) = ws else { continue };
+        let Ok(Some(t)) = locate_table(ws, subjects) else {
+            continue;
+        };
+        let (refused_before, instances_before) = on(&before, file, sheet);
+        let rows = [
+            t.cos_row,
+            t.tcc_row,
+            t.aisc_row,
+            t.ounces_row,
+            t.cos_rate_row,
+            t.tcc_rate_row,
+            t.aisc_rate_row,
+        ];
+        for (row, anchor) in rows.into_iter().zip(&ROW_ANCHORS) {
+            let text = match ws.cell(row, 1).map(|c| &c.value) {
+                Some(CellValue::Text(s)) => s.clone(),
+                _ => continue,
+            };
+            let (mutation, new) = match anchor.rule {
+                AnchorRule::Prefix => ("prepend_x", format!("x{text}")),
+                AnchorRule::Exact => ("append_x", format!("{text}x")),
+            };
+            let mut sources = base.to_vec();
+            if !edit_cell(&mut sources, file, sheet, row, 1, &OperandValue::Token(new)) {
+                continue;
+            }
+            let (refused, instances) = on(&run(sources), file, sheet);
+            let effect = if refused && !refused_before {
+                "table_refusal"
+            } else if instances != instances_before {
+                "instances_changed"
+            } else {
+                "none"
+            };
+            out.push(LabelCheck {
+                file: file.clone(),
+                sheet: sheet.clone(),
+                cell: format!("A{row}"),
+                anchor: anchor.role,
+                mutation,
+                effect,
+            });
+        }
+    }
+    out
 }
 
 /// Runs a leaf check on every operand of every visible instance of `run(base)`. `run` is the pipeline under
@@ -1273,6 +1396,71 @@ mod tests {
         assert_eq!(checks.len(), 54);
         let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
         assert!(failures.is_empty(), "{failures:?}");
+    }
+
+    /// BD-338.S3, labels, on the real lane: the seven anchor labels of the current-quarter table in each of the 8
+    /// AISC workbooks (`'Q2 2026'` in `Barrick_Q2_2026_AISC.xlsx`, and so on): 56 runs, none without effect.
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+    fn barrick_live_label_sample_never_no_effect() {
+        let (profile, sources) = barrick();
+        let tables: Vec<(String, String)> = sources
+            .iter()
+            .filter(|s| s.kind == crate::sources::SourceKind::AiscReconciliation)
+            .filter_map(|s| {
+                let (year, q) = s.quarter.split_once('Q')?;
+                Some((s.file_name.clone(), format!("Q{q} {year}")))
+            })
+            .collect();
+        assert_eq!(tables.len(), 8);
+        let run = |s: Vec<LoadedSource>| crate::assess(&profile, Lane::Public, s);
+        let checks = prove_labels(&sources, &run, &profile.subjects, &tables);
+        for c in &checks {
+            println!("{}", c.to_json());
+        }
+        assert_eq!(checks.len(), 56);
+        let none: Vec<String> = checks
+            .iter()
+            .filter(|c| !c.pass())
+            .map(LabelCheck::to_json)
+            .collect();
+        assert!(none.is_empty(), "{none:#?}");
+    }
+
+    /// The ounces anchor is a prefix: appending "x" to synthetic A13 changes nothing, and prepending "x" refuses
+    /// the table with "no 'Ounces sold' row".
+    #[test]
+    fn test_label_perturbation_prefix_label_is_prepended() {
+        let base = assess_synthetic(synthetic_sources());
+        let label = "Ounces sold - attributable basis (000s ounces)";
+        let appended = edited("A13", OperandValue::Token(format!("{label}x")));
+        assert_eq!(appended.instances, base.instances);
+        assert!(appended.table_refusals.is_empty());
+        let prepended = edited("A13", OperandValue::Token(format!("x{label}")));
+        let refusals: Vec<(&str, &str)> = prepended
+            .table_refusals
+            .iter()
+            .map(|t| (t.sheet.as_str(), t.reason.as_str()))
+            .collect();
+        assert_eq!(
+            refusals,
+            [(synthetic::SYNTHETIC_TABLE_SHEET, "no 'Ounces sold' row")]
+        );
+        // All seven anchors of the synthetic table, each mutated alone, have an effect.
+        let tables = [(
+            synthetic::SYNTHETIC_AISC_FILE.to_string(),
+            synthetic::SYNTHETIC_TABLE_SHEET.to_string(),
+        )];
+        let checks = prove_labels(
+            &synthetic_sources(),
+            &assess_synthetic,
+            &synthetic::synthetic_profile().subjects,
+            &tables,
+        );
+        assert_eq!(checks.len(), 7);
+        assert!(checks.iter().all(LabelCheck::pass), "{checks:#?}");
+        assert_eq!(checks[3].mutation, "prepend_x");
+        assert_eq!(checks[3].effect, "table_refusal");
     }
 
     /// The real M1 (B7 H-P3-6): Kibali's `'Q2 2024'!O11` in `Barrick_Q3_2024_AISC.xlsx` kept at its literal value,

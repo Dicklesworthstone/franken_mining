@@ -127,7 +127,18 @@ The public lane of M0 (`fmine assure public`).
     - a label to "x".
   - **Skips:** a state decided before arithmetic, a share refusal's non-cause leaves, and an unrounded value
     are skipped, each with its reason.
-  - **Not yet:** the budgeted real-lane sample (S3) and hidden-scope instances.
+  - **Not yet:** hidden-scope instances.
+- `live::{prove_leaves_in, one_leaf_per_instance, prove_labels, LabelCheck}` (BD-338.S3): the real-lane
+  frame and the label sample.
+  - `prove_labels` mutates each of the seven anchor labels of a located table (append "x"; prepend it for the
+    ounces prefix). Each must give a table refusal or changed instances.
+  - **Real lane** (ignored, local runs):
+    - files: 54 of 54;
+    - leaves (one per instance): 2,444 pass, 0 fail, 151 skipped;
+    - labels: 56 of 56, 48 table refusals and 8 changed instances;
+    - the Kibali O11 literal mutant is caught.
+  - **Finding:** a broken cost-of-sales label makes `locate_table` return `Ok(None)`. The table drops out with no
+    refusal; only the table count and the root show it.
 - `aisc::Calc` and `IdentityInstance::calc` (bd-sjrh.1): a footing's printed total, component sum and k; a
   rate's r, n, k and q, as the ledger read them. They are not in `detail()`, the payload or the root.
   `OperandRole::Counted` marks lines read only for their count: rate lines, and block 1 under the AISC
