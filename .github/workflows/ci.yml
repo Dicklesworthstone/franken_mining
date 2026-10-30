@@ -60,6 +60,10 @@ jobs:
       - name: Forecast record e2e
         if: matrix.profile == 'dev'
         run: bash scripts/forecast_record_e2e.sh
+      # The FY2026 rules were committed before any forecast (BD-334.S2); the test needs this full-history checkout.
+      - name: Rules precede forecasts
+        if: matrix.profile == 'dev'
+        run: cargo test -p xtask forecast::tests::test_rules_commit_precedes_forecasts -- --ignored --exact
       # No issuer workbook is ever committed (OPEN-R7-1); synthetic workbooks are written outside the tree.
       - name: No workbook in git
         run: test -z "$(git ls-files '*.xlsx' '*.xls')"

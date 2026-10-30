@@ -520,9 +520,82 @@ mod tests {
         );
     }
 
+    // Ignored by default: it needs the repository's history, which a source copy (an rch worker, a package)
+    // lacks. CI runs it with --ignored on a full-history checkout.
     #[test]
+    #[ignore = "needs the git history; CI runs it with --ignored"]
     fn test_rules_commit_precedes_forecasts() {
         let res = rules_order(&workspace_root());
         assert!(res.is_ok(), "{res:?}");
+    }
+
+    /// A throwaway repository under the system temp dir with one commit per entry, each writing the named files.
+    fn repo(name: &str, commits: &[&[&str]]) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let dir = std::env::temp_dir().join(format!(
+            "fmine-rules-order-{}-{nanos}-{name}",
+            std::process::id()
+        ));
+        fs::create_dir_all(dir.join("forecasts/fy2026")).expect("repo dir");
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args([
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                ])
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args)
+                .output()
+                .expect("git runs");
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        git(&["init", "-q"]);
+        for (k, files) in commits.iter().enumerate() {
+            for f in *files {
+                fs::write(dir.join(f), format!("{k}\n")).expect("write");
+            }
+            git(&["add", "."]);
+            git(&["commit", "-q", "-m", &format!("commit {k}")]);
+        }
+        dir
+    }
+
+    #[test]
+    fn test_rules_order_refuses_forecasts_not_after_rules() {
+        let ordered = repo("ordered", &[&[FY2026_RULES], &[FY2026_FORECASTS]]);
+        assert!(rules_order(&ordered).is_ok());
+        for (name, commits) in [
+            (
+                "forecasts_first",
+                &[&[FY2026_FORECASTS][..], &[FY2026_RULES][..]][..],
+            ),
+            ("same_commit", &[&[FY2026_RULES, FY2026_FORECASTS][..]][..]),
+        ] {
+            let err = rules_order(&repo(name, commits)).expect_err(name);
+            assert!(
+                err[0].contains("does not follow the rules commit"),
+                "{name}: {err:?}"
+            );
+        }
+        let no_rules = repo("no_rules", &[&[FY2026_FORECASTS]]);
+        let err = rules_order(&no_rules).expect_err("no rules commit");
+        assert!(err[0].contains("no commit adds"), "{err:?}");
+        // A depth-1 clone of the ordered history: its one commit would seem to add both files at once.
+        let shallow = ordered.with_extension("shallow");
+        let out = Command::new("git")
+            .args(["clone", "-q", "--depth", "1"])
+            .arg(format!("file://{}", ordered.display()))
+            .arg(&shallow)
+            .output()
+            .expect("git clone runs");
+        assert!(out.status.success(), "{out:?}");
+        let err = rules_order(&shallow).expect_err("shallow clone");
+        assert!(err[0].contains("shallow clone"), "{err:?}");
     }
 }
