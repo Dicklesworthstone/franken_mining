@@ -184,8 +184,10 @@ The public lane of M0 (`fmine assure public`).
   - `parse_ownership`: `100%` first, then a final `(x%)` after a one- or two-digit footnote run. No `%` gives
     `Unprinted`, never 100%.
   - `classify`: `—` and other dashes give `Nil { Unknown }`, `n/a` gives `NotApplicable`, and no cell gives
-    `Missing`, each keeping the token as stored. A numeric zero where a registered disposal or withholding
-    applies is `Nil`; a non-zero number there stays a `Number`, flagged. Text or a formula error refuses.
+    `Missing`, each keeping the token as stored. A number keeps its stored text and its displayed text, or the
+    display refusal code. A numeric zero where a registered disposal or withholding applies is `Nil`; a
+    non-zero number there stays a `Number`, flagged. Text, a formula error or a number without stored text
+    refuses.
   - `SubjectStatus`, `status_for`: the `[[subject_status]]` rows of the issuer registry, carried on
     `IssuerProfile::subject_statuses`. A disposal covers the periods that begin after its closing date.
   - **Not yet:** no run reads claims through the key. The Mine Stats and AISC readers adopt it in S2 and S3.

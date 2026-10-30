@@ -273,10 +273,13 @@ pub enum NilReason {
 /// A printed value, typed, with its token as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublicValue {
-    /// A number with its stored text. `under_status` flags a non-zero number printed where a disposed or withheld
-    /// status applies; it stays visible.
+    /// A number with its stored text, and its text as displayed under the cell's number format
+    /// ([`fmine_io::numfmt::Displayed::text`]), or the code of the display refusal when the format has no exact
+    /// rendering. `under_status` flags a non-zero number printed where a disposed or withheld status applies; it
+    /// stays visible.
     Number {
         stored: String,
+        displayed: Result<String, &'static str>,
         under_status: Option<StatusKind>,
     },
     Nil {
@@ -295,9 +298,9 @@ pub enum PublicValue {
 /// - No cell: `Missing`.
 /// - A dash (`-`, `–`, `—`): `Nil { Unknown }`; `n/a` or `N/A`: `NotApplicable`. Both keep the token as stored,
 ///   whitespace included.
-/// - A number: its stored text. Zero where a disposed or withheld status applies is `Nil` with token `"0"` (as
-///   stored); any other number there is flagged.
-/// - Text or a formula error refuses.
+/// - A number: its stored and displayed text. Zero where a disposed or withheld status applies is `Nil` with
+///   token `"0"` (as stored); any other number there is flagged.
+/// - Text, a formula error, or a number without its stored text refuses.
 pub fn classify(
     cell: Option<&ExtractedCell>,
     status: Option<StatusKind>,
@@ -310,7 +313,14 @@ pub fn classify(
     };
     match &cell.value {
         CellValue::Number(v) => {
-            let stored = cell.number_text.clone().unwrap_or_else(|| v.to_string());
+            let Some(stored) = cell.number_text.clone() else {
+                return Err(refuse());
+            };
+            let displayed = match cell.displayed() {
+                Some(Ok(d)) => Ok(d.text()),
+                Some(Err(r)) => Err(r.code),
+                None => return Err(refuse()),
+            };
             let nil_reason = match status {
                 Some(StatusKind::Disposed) => Some(NilReason::Disposed),
                 Some(StatusKind::Withheld) => Some(NilReason::Withheld),
@@ -323,10 +333,12 @@ pub fn classify(
                 },
                 Some(_) => PublicValue::Number {
                     stored,
+                    displayed,
                     under_status: status,
                 },
                 None => PublicValue::Number {
                     stored,
+                    displayed,
                     under_status: None,
                 },
             })
@@ -610,12 +622,43 @@ mod tests {
         }
     }
 
+    /// A number shown under General, which prints an integer as stored.
+    fn shown(stored: &str, under_status: Option<StatusKind>) -> PublicValue {
+        PublicValue::Number {
+            stored: stored.to_string(),
+            displayed: Ok(stored.to_string()),
+            under_status,
+        }
+    }
+
     #[test]
     fn test_token_mapping_four_types() {
         assert_eq!(
             classify(Some(&number("1691", 1691.0)), None),
+            Ok(shown("1691", None))
+        );
+        // A format can print a stored zero as a dash: the number keeps both texts.
+        let em_dash = ExtractedCell {
+            format: NumberFormat::Custom {
+                id: 164,
+                code: r#"_(#,##0_);_(\(#,##0\);_("—"_);_(@_)"#.to_string(),
+            },
+            ..number("0", 0.0)
+        };
+        assert_eq!(
+            classify(Some(&em_dash), None),
             Ok(PublicValue::Number {
-                stored: "1691".to_string(),
+                stored: "0".to_string(),
+                displayed: Ok("—".to_string()),
+                under_status: None
+            })
+        );
+        // General has no exact rendering of a non-integer: the refusal code is kept, the stored text too.
+        assert_eq!(
+            classify(Some(&number("1.25", 1.25)), None),
+            Ok(PublicValue::Number {
+                stored: "1.25".to_string(),
+                displayed: Err(fmine_io::numfmt::GENERAL_NON_INTEGER),
                 under_status: None
             })
         );
@@ -645,7 +688,11 @@ mod tests {
             value: CellValue::FormulaError("#REF!".to_string()),
             ..number("0", 0.0)
         };
-        for c in [text, error] {
+        let no_stored_text = ExtractedCell {
+            number_text: None,
+            ..number("0", 0.0)
+        };
+        for c in [text, error, no_stored_text] {
             assert_eq!(
                 classify(Some(&c), None),
                 Err(KeyRefusal::CellToken {
@@ -685,10 +732,7 @@ mod tests {
         // E116's 1691 stays visible, flagged.
         assert_eq!(
             classify(Some(&number("1691", 1691.0)), disposed),
-            Ok(PublicValue::Number {
-                stored: "1691".to_string(),
-                under_status: Some(StatusKind::Disposed)
-            })
+            Ok(shown("1691", Some(StatusKind::Disposed)))
         );
         // Withheld 2025Q1–Q3: H1 and nine months lie inside; the full year does not.
         for (period, applies) in [
@@ -719,13 +763,7 @@ mod tests {
             evidence: "W1".to_string(),
         }];
         let st = status_for(&cm, "Long Canyon", &p(2024, PeriodKind::Quarter(1)));
-        assert_eq!(
-            classify(Some(&number("0", 0.0)), st),
-            Ok(PublicValue::Number {
-                stored: "0".to_string(),
-                under_status: None
-            })
-        );
+        assert_eq!(classify(Some(&number("0", 0.0)), st), Ok(shown("0", None)));
     }
 
     /// A disposal on 1 December (Tongon) or 26 November (Hemlo) leaves the December quarter and the full year
@@ -740,13 +778,7 @@ mod tests {
             ] {
                 let st = status_for(&s, subject, &period);
                 assert_eq!(st, None, "{subject} {period:?}");
-                assert_eq!(
-                    classify(Some(&number("0", 0.0)), st),
-                    Ok(PublicValue::Number {
-                        stored: "0".to_string(),
-                        under_status: None
-                    })
-                );
+                assert_eq!(classify(Some(&number("0", 0.0)), st), Ok(shown("0", None)));
             }
             assert_eq!(
                 status_for(&s, subject, &p(2026, PeriodKind::Quarter(1))),
