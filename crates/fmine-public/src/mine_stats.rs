@@ -21,8 +21,13 @@
 //! The issuer registry's `[[mine_stats_label]]` rows are the label vocabulary ([`LabelVocabulary`]). When it is
 //! given, a data row whose `(section, label)` is not registered is refused by locator.
 //!
-//! Not yet here (bd-gwf1.1 stays open for them): units per label, region-map versions (v0/v1/v2) and the
-//! W1-DR-01 and W1-DR-02 corrections as data. The sub-row list (`CHILD_ROWS`) is still code.
+//! Which rows are sub-rows of the row above comes from the same vocabulary (a label registered under a
+//! section); W1's list (`CHILD_ROWS`) stands in only for a read without one. A summary header must print the
+//! unit its field id promises (thousand ounces, kilotonnes, $/oz, $/lb), and a header naming no known field is
+//! refused, never dropped.
+//!
+//! Not yet here (bd-gwf1.1 stays open for them): region-map versions (v0/v1/v2) and the W1-DR-01 and W1-DR-02
+//! corrections as data.
 
 use std::collections::BTreeSet;
 
@@ -305,7 +310,12 @@ fn read_summary(sheet: &Sheet, fq: u8, read: &mut MineStatsRead) {
                     let header = py_str(sheet, r + 1, c)?;
                     match summary_field(&header) {
                         Ok(Some(id)) => Some((c, id, header)),
-                        Ok(None) => None,
+                        // A renamed field must not drop its column silently.
+                        Ok(None) => {
+                            let reason = format!("summary header {header:?} names no known field");
+                            refuse(read, sheet, r + 1, c, reason);
+                            None
+                        }
                         Err(reason) => {
                             refuse(read, sheet, r + 1, c, reason);
                             None
@@ -362,6 +372,16 @@ fn read_minestats(
     vocabulary: Option<&LabelVocabulary>,
     read: &mut MineStatsRead,
 ) {
+    // A sub-row is a label the registry lists under a section; W1's list stands in only when no vocabulary is
+    // registered (test_child_rows_equal_the_registered_sections keeps the two equal).
+    let children: BTreeSet<String> = match vocabulary {
+        Some(v) => v
+            .iter()
+            .filter(|(section, _)| section.is_some())
+            .map(|(_, label)| label.to_lowercase())
+            .collect(),
+        None => CHILD_ROWS.iter().map(|s| (*s).to_string()).collect(),
+    };
     let max_row = max_row(sheet);
     let mut r = 1;
     while r <= max_row {
@@ -415,8 +435,7 @@ fn read_minestats(
                 break;
             }
             let (label, footnote) = strip_footnote(printed);
-            let section = if parent.is_some() && CHILD_ROWS.contains(&label.to_lowercase().as_str())
-            {
+            let section = if parent.is_some() && children.contains(&label.to_lowercase()) {
                 parent.clone()
             } else {
                 parent = Some(label.clone());
@@ -608,6 +627,21 @@ fn summary_field(header: &str) -> Result<Option<String>, String> {
             "summary header {header:?} names field {field} but no metal (gold, copper, $/oz, $/lb)"
         ));
     };
+    // The unit the field id promises must be the one printed: ounces in thousands, copper in kilotonnes, costs
+    // per ounce or per pound. Any other unit is refused rather than emitted under a wrong unit.
+    let quantity = matches!(field, "prod_100" | "prod_attr" | "sold_attr");
+    let spellings: &[&str] = match (quantity, metal) {
+        (true, "au") => &["(000s oz"],
+        (true, _) => &["(kt ", "(thousands of tonnes"],
+        (false, "au") => &["($/oz)"],
+        (false, _) => &["($/lb)"],
+    };
+    if !spellings.iter().any(|u| raw.contains(u)) {
+        return Err(format!(
+            "summary header {header:?} names field {field} but not its unit {:?}",
+            spellings[0].trim_matches(|c| c == '(' || c == ')' || c == ' ')
+        ));
+    }
     Ok(Some(match (field, metal) {
         ("prod_100" | "prod_attr" | "sold_attr", "au") => format!("au_{field}_koz"),
         ("prod_100" | "prod_attr" | "sold_attr", _) => format!("cu_{field}_kt"),
@@ -1305,6 +1339,63 @@ mod tests {
             read.refusals[0].locator, "2030Q2:Minestats1!A8",
             "a sub-row is keyed by its section too"
         );
+    }
+
+    /// The registry decides which rows are sub-rows; W1's list, used without a vocabulary, must say the same.
+    #[test]
+    fn test_child_rows_equal_the_registered_sections() {
+        let profile = load_issuer_profile(&workspace_root(), "barrick").expect("registry");
+        let registered: BTreeSet<String> = profile
+            .mine_stats_labels
+            .iter()
+            .filter(|(section, _)| section.is_some())
+            .map(|(_, label)| label.to_lowercase())
+            .collect();
+        let code: BTreeSet<String> = CHILD_ROWS.iter().map(|s| (*s).to_string()).collect();
+        assert_eq!(registered, code);
+    }
+
+    /// A unit the reader does not know refuses by locator: a summary header in ounces rather than thousands,
+    /// a summary header naming no field, and (under the vocabulary) a `Minestats*` label in millions.
+    #[test]
+    fn test_unknown_unit_is_refused_by_locator() {
+        let (ms, mut qtd) = fixture(false);
+        put(&mut qtd, 2, 4, t("Gold produced (oz attributable)1"));
+        let read = read_mine_stats(&workbook((ms, qtd)), "2030Q2", None).expect("read");
+        assert_eq!(read.refusals.len(), 1, "{:?}", read.refusals);
+        assert_eq!(read.refusals[0].locator, "2030Q2:QTD!B4");
+        assert!(
+            read.refusals[0].reason.contains("not its unit \"000s oz\""),
+            "{}",
+            read.refusals[0].reason
+        );
+        assert!(
+            read.values
+                .iter()
+                .all(|v| !(v.view == View::Summary && v.locator.ends_with("!B5"))),
+            "the column is not emitted under a wrong unit"
+        );
+
+        let (ms, mut qtd) = fixture(false);
+        put(&mut qtd, 9, 4, t("Gold output (000s oz attributable)"));
+        let read = read_mine_stats(&workbook((ms, qtd)), "2030Q2", None).expect("read");
+        assert_eq!(read.refusals.len(), 1, "{:?}", read.refusals);
+        assert_eq!(read.refusals[0].locator, "2030Q2:QTD!I4");
+        assert!(read.refusals[0].reason.contains("names no known field"));
+
+        let base = read_mine_stats(&workbook(fixture(false)), "2030Q2", None).expect("read");
+        let vocabulary: LabelVocabulary = base
+            .values
+            .iter()
+            .filter(|v| v.view == View::Minestats)
+            .map(|v| (v.section.clone(), v.label.clone()))
+            .collect();
+        let (mut ms, qtd) = fixture(false);
+        put(&mut ms, 1, 5, t("Tonnes processed (millions)"));
+        let read =
+            read_mine_stats(&workbook((ms, qtd)), "2030Q2", Some(&vocabulary)).expect("read");
+        assert_eq!(read.refusals.len(), 1, "{:?}", read.refusals);
+        assert_eq!(read.refusals[0].locator, "2030Q2:Minestats1!A5");
     }
 
     fn workspace_root() -> PathBuf {
