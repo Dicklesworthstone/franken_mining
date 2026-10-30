@@ -25,8 +25,9 @@ use fmine_io::xlsx::{
 };
 
 use crate::aisc::{
-    IdentityFamily, IdentityInstance, IdentityState, RateMiss, UnregisteredHeader, cell_text,
-    ledger_for_table, locate_table, reconstruction_closes,
+    IdentityFamily, IdentityInstance, IdentityState, RateMiss, ShareBasis, UnregisteredHeader,
+    cell_text, confirm_share_label, find_qtd_sheet, ledger_for_table, locate_table,
+    reconstruction_closes,
 };
 use crate::mine_stats::{CellRefusal, LabelVocabulary, MineStatsRead, read_mine_stats};
 pub use crate::sources::load_issuer_profile;
@@ -271,12 +272,14 @@ impl PublicAssuranceReport {
             match &i.state {
                 IdentityState::Consistent {
                     alternate_consistent: true,
+                    ..
                 } if footing => a.footing_consistent += 1,
                 IdentityState::IssuerDiscrepancy(c) if c.alternate_consistent => {
                     a.footing_consistent += 1
                 }
                 IdentityState::Consistent {
                     alternate_consistent: true,
+                    ..
                 } => a.rate_consistent += 1,
                 _ => {}
             }
@@ -684,6 +687,52 @@ fn try_reconstruction(
     }
 }
 
+/// What the run knows about each subject's ownership share for the release `quarter` (BD-331.S3): regions as
+/// such, and each registered share confirmed or not against the same-release Mine Stats quarter-to-date label.
+fn share_bases(
+    profile: &IssuerProfile,
+    sources: &[LoadedSource],
+    quarter: &str,
+) -> BTreeMap<String, ShareBasis> {
+    let mut out: BTreeMap<String, ShareBasis> = profile
+        .regions
+        .iter()
+        .map(|r| (r.clone(), ShareBasis::Region))
+        .collect();
+    if profile.shares.is_empty() {
+        return out;
+    }
+    let stats = sources
+        .iter()
+        .find(|s| s.kind == SourceKind::MineStats && s.quarter == quarter);
+    let qtd = match stats {
+        None => Err(format!("no Mine Stats workbook loaded for {quarter}")),
+        Some(s) => find_qtd_sheet(&s.workbook.sheets, quarter)
+            .map(|sheet| (s.file_name.as_str(), sheet))
+            .map_err(|why| format!("{}: {why}", s.file_name)),
+    };
+    for share in &profile.shares {
+        let basis = match &qtd {
+            Err(why) => ShareBasis::Unconfirmed { why: why.clone() },
+            Ok((file, sheet)) => {
+                match confirm_share_label(sheet, &share.label, share.num, share.den) {
+                    Ok(cell) => ShareBasis::Confirmed {
+                        num: share.num,
+                        den: share.den,
+                        evidence: share.evidence.clone(),
+                        label_cell: format!("{file}:{}!{cell}", sheet.name),
+                    },
+                    Err(why) => ShareBasis::Unconfirmed {
+                        why: format!("{file}: {why}"),
+                    },
+                }
+            }
+        };
+        out.insert(share.subject.clone(), basis);
+    }
+    out
+}
+
 /// Builds the identity ledger over every AISC table in `sources` and commits the run to a state root.
 #[must_use]
 pub fn assess(
@@ -702,6 +751,7 @@ pub fn assess(
         .iter()
         .filter(|s| s.kind == SourceKind::AiscReconciliation)
     {
+        let shares = share_bases(profile, &sources, &src.quarter);
         for sheet in &src.workbook.sheets {
             match locate_table(sheet, subjects) {
                 Ok(None) => {}
@@ -728,6 +778,7 @@ pub fn assess(
                         sheet,
                         &table,
                         subjects,
+                        &shares,
                         &mut explain,
                         &mut instances,
                         &mut unregistered,
@@ -861,8 +912,20 @@ pub fn run_barrick_m0_assurance(root: &Path) -> Result<PublicAssuranceReport, Re
 pub fn run_synthetic_assurance(
     edits: &[(String, fmine_io::xlsx::MinimalCell)],
 ) -> Result<PublicAssuranceReport, Refusal> {
+    let sources = load_synthetic(synthetic::synthetic_workbooks(edits))?;
+    Ok(assess(
+        &synthetic::synthetic_profile(),
+        Lane::Synthetic,
+        sources,
+    ))
+}
+
+/// Parses in-memory synthetic workbooks `(file, kind, quarter, bytes)` into loaded sources.
+fn load_synthetic(
+    files: Vec<(&'static str, SourceKind, &'static str, Vec<u8>)>,
+) -> Result<Vec<LoadedSource>, Refusal> {
     let mut sources = Vec::new();
-    for (file, kind, quarter, bytes) in synthetic::synthetic_workbooks(edits) {
+    for (file, kind, quarter, bytes) in files {
         let workbook = Workbook::from_bytes(file, &bytes)
             .map_err(|e| Refusal::from_code("FMINE-REF-502", format!("synthetic {file}: {e}")))?;
         let census = workbook.cell_census();
@@ -877,11 +940,7 @@ pub fn run_synthetic_assurance(
             census,
         });
     }
-    Ok(assess(
-        &synthetic::synthetic_profile(),
-        Lane::Synthetic,
-        sources,
-    ))
+    Ok(sources)
 }
 
 #[cfg(test)]
@@ -912,9 +971,10 @@ mod tests {
         assert_eq!(r.lane, Lane::Synthetic);
         assert!(!r.gate_eligible());
         assert_eq!(r.ledger_anchor.cell_id, "CELL-SYNTHETIC");
-        assert_eq!((r.aisc_tables, r.instances.len()), (1, 35));
+        assert_eq!((r.aisc_tables, r.instances.len()), (1, 45));
         let totals: Vec<usize> = STATE_CODES.iter().map(|c| r.count_state(c)).collect();
-        assert_eq!(totals, vec![21, 1, 1, 1, 6, 5]);
+        // Columns K and L (BD-331.S3) add nine (i) and one (iv) to the 35 instances of columns B–H.
+        assert_eq!(totals, vec![30, 1, 1, 2, 6, 5]);
 
         match state_of(&r, "C8", IdentityFamily::TccFooting) {
             IdentityState::IssuerDiscrepancy(c) => {
@@ -935,10 +995,32 @@ mod tests {
         assert_eq!(
             state_of(&r, "E14", IdentityFamily::CosPerOunce),
             &IdentityState::Refused {
-                reason: "attributable share needed"
+                reason: "no registered share"
             }
         );
         assert_eq!(state_of(&r, "E15", IdentityFamily::TccPerOunce).code(), "i");
+        // Stated share 3/4: K prints 1000·¾·400/150 = 2000 (i); L prints 2200 (iv).
+        assert_eq!(
+            state_of(&r, "K14", IdentityFamily::CosPerOunce),
+            &IdentityState::Consistent {
+                alternate_consistent: true,
+                basis: Some(
+                    "stated share 3/4 (synthetic); footnote Q1 2030!A30; label \
+                     Synthetic_Mine_Stats.xlsx:QTD!A5"
+                        .to_string()
+                ),
+            }
+        );
+        match state_of(&r, "L14", IdentityFamily::CosPerOunce) {
+            IdentityState::Undecidable { detail } => {
+                assert!(detail.contains("allow s in [0.8210, 0.8290]"), "{detail}");
+                assert!(
+                    detail.contains("missing fact: the attributable cost of sales or ounces"),
+                    "{detail}"
+                );
+            }
+            other => panic!("L14: {other:?}"),
+        }
         for (cell, family) in [
             ("G8", IdentityFamily::TccFooting),
             ("G11", IdentityFamily::AiscFooting),
@@ -992,7 +1074,7 @@ mod tests {
         ));
         assert!(json.contains("\"sign_flip_witness\":\"C6\""));
         assert!(
-            json.contains("\"totals\":{\"i\":21,\"ii\":1,\"iii\":1,\"iv\":1,\"v\":6,\"np\":5}")
+            json.contains("\"totals\":{\"i\":30,\"ii\":1,\"iii\":1,\"iv\":2,\"v\":6,\"np\":5}")
         );
         // The flags, the no-claim line and the next actions belong to the CLI envelope, not the payload.
         for field in ["\"flags\"", "\"no_claim\"", "\"next_actions\""] {
@@ -1110,6 +1192,128 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
     }
 
+    /// The synthetic workbooks with Site H's `QTD` label replaced, assessed under `profile`.
+    fn synthetic_run_with(
+        profile: &IssuerProfile,
+        edits: &[(String, MinimalCell)],
+        site_h_label: &str,
+    ) -> PublicAssuranceReport {
+        let mut files = synthetic::synthetic_workbooks(edits);
+        for f in &mut files {
+            if f.0 == synthetic::SYNTHETIC_STATS_FILE {
+                f.3 = synthetic::synthetic_stats_workbook(site_h_label);
+            }
+        }
+        let sources = load_synthetic(files).expect("synthetic workbooks parse");
+        assess(profile, Lane::Synthetic, sources)
+    }
+
+    const NO_FOOTNOTE: IdentityState = IdentityState::Refused {
+        reason: "attributable-basis footnote not found on the sheet",
+    };
+
+    /// BD-331.S3: a registered share the same-release label does not print is (v), naming the cell.
+    #[test]
+    fn test_share_label_mismatch_gives_v() {
+        let profile = synthetic::synthetic_profile();
+        let r = synthetic_run_with(&profile, &[], "Site H (80%)1");
+        assert_eq!(
+            state_of(&r, "K14", IdentityFamily::CosPerOunce),
+            &IdentityState::RefusedAt {
+                reason: "registered share not confirmed by label",
+                at: "Synthetic_Mine_Stats.xlsx: QTD!A5 prints 80%, registered 3/4".to_string(),
+            }
+        );
+        // Site I's label still prints 75%, so its rate is still checked.
+        assert_eq!(
+            state_of(&r, "L14", IdentityFamily::CosPerOunce).code(),
+            "iv"
+        );
+        let r = synthetic_run_with(&profile, &[], "Site Hx (75%)");
+        assert_eq!(
+            state_of(&r, "K14", IdentityFamily::CosPerOunce).detail(),
+            "registered share not confirmed by label: Synthetic_Mine_Stats.xlsx: no column-A label \
+             'Site H (x%)' on QTD"
+        );
+    }
+
+    /// BD-331.S3: the footnote is found by what it says, whatever its letter or row.
+    #[test]
+    fn test_footnote_located_by_text_not_letter() {
+        let other_note = (
+            String::from("A30"),
+            MinimalCell::Text("h.  Ounces sold are in thousands.".to_string()),
+        );
+        let moved = [
+            other_note.clone(),
+            (
+                String::from("A41"),
+                MinimalCell::Text(synthetic::SYNTHETIC_SHARE_FOOTNOTE.replacen("h.", "k.", 1)),
+            ),
+        ];
+        let r = run_synthetic_assurance(&moved).expect("synthetic");
+        match state_of(&r, "K14", IdentityFamily::CosPerOunce) {
+            IdentityState::Consistent { basis: Some(b), .. } => {
+                assert!(b.contains("footnote Q1 2030!A41"), "{b}")
+            }
+            other => panic!("K14: {other:?}"),
+        }
+        // Planted negative: letter "h" stays at A30, but nothing states the attributable basis.
+        let r = run_synthetic_assurance(&[other_note]).expect("synthetic");
+        for cell in ["K14", "L14"] {
+            assert_eq!(
+                state_of(&r, cell, IdentityFamily::CosPerOunce),
+                &NO_FOOTNOTE
+            );
+        }
+    }
+
+    /// BD-331.S3: a region's cost-of-sales rate stays (v), now for the reason that applies.
+    #[test]
+    fn test_regions_keep_v_new_reason() {
+        let nci = [(String::from("H7"), MinimalCell::Number(-10.0))];
+        let r = run_synthetic_assurance(&nci).expect("synthetic");
+        assert_eq!(
+            state_of(&r, "H14", IdentityFamily::CosPerOunce),
+            &IdentityState::Refused {
+                reason: "regional numerator needs member weighting"
+            }
+        );
+        // Unregistered as a region, the same column is refused for having no share instead.
+        let mut profile = synthetic::synthetic_profile();
+        profile.regions.clear();
+        let r = synthetic_run_with(&profile, &nci, "Site H (75%)1");
+        assert_eq!(
+            state_of(&r, "H14", IdentityFamily::CosPerOunce),
+            &IdentityState::Refused {
+                reason: "no registered share"
+            }
+        );
+        assert!(
+            r.instances
+                .iter()
+                .all(|i| i.state.detail() != "attributable share needed")
+        );
+    }
+
+    /// BD-331.S3 mutation: without its registered share, Site H's rate is (v), not consistent.
+    #[test]
+    fn test_drop_registered_share_yields_v() {
+        let mut profile = synthetic::synthetic_profile();
+        profile.shares.retain(|s| s.subject != "Site H");
+        let r = synthetic_run_with(&profile, &[], "Site H (75%)1");
+        assert_eq!(
+            state_of(&r, "K14", IdentityFamily::CosPerOunce),
+            &IdentityState::Refused {
+                reason: "no registered share"
+            }
+        );
+        assert_eq!(
+            state_of(&r, "L14", IdentityFamily::CosPerOunce).code(),
+            "iv"
+        );
+    }
+
     /// A complete run through a TOML registry in default CI (the real-corpus runs are ignored tests): the two
     /// synthetic workbooks plus a third, later Mine Stats file are written to a scratch corpus, registered by
     /// digest in a generated TOML, and loaded with no code-side profile. The ledger equals the in-code synthetic
@@ -1128,8 +1332,12 @@ mod tests {
         let totals: Vec<usize> = STATE_CODES.iter().map(|c| r.count_state(c)).collect();
         assert_eq!(
             totals,
-            vec![21, 1, 1, 1, 6, 5],
+            vec![30, 1, 1, 2, 6, 5],
             "same ledger as the in-code synthetic profile"
+        );
+        assert_eq!(
+            (&profile.regions, &profile.shares),
+            (&code_profile.regions, &code_profile.shares)
         );
         assert_eq!(r.sources.len(), 3);
         assert_eq!(r.ledger_anchor.commit_sequence, 3);
@@ -1146,7 +1354,7 @@ mod tests {
         assert_eq!(bounded.sources.len(), 2);
         assert_eq!(bounded.through.as_deref(), Some("2030Q1"));
         let totals: Vec<usize> = STATE_CODES.iter().map(|c| bounded.count_state(c)).collect();
-        assert_eq!(totals, vec![21, 1, 1, 1, 6, 5]);
+        assert_eq!(totals, vec![30, 1, 1, 2, 6, 5]);
         assert_ne!(
             bounded.ledger_anchor.state_root, r.ledger_anchor.state_root,
             "the source set is in the root"
@@ -1333,7 +1541,9 @@ mod tests {
                 get(CosPerOunce, "v"),
                 get(CosPerOunce, "np")
             ],
-            [111, 17, 379, 12]
+            // BD-331.S3 (census E826): of the 379 rates refused before for a non-zero non-controlling-interest
+            // line, 260 fit the stated share (i) and 65 miss (iv); 51 region and 3 Long Canyon stay (v).
+            [111 + 260, 17 + 65, 379 - 325, 12]
         );
         assert_eq!(
             [
@@ -1356,7 +1566,8 @@ mod tests {
             r.alternate_counts(),
             AlternateCounts {
                 footing_consistent: 1008,
-                rate_consistent: 994
+                // A stated-share fit sums one line (k = 1), so the alternative construction accepts all 260.
+                rate_consistent: 994 + 260
             }
         );
 
@@ -1423,11 +1634,98 @@ mod tests {
         assert_eq!(iv_subjects.iter().filter(|s| **s == "Hemlo").count(), 3);
         assert_eq!(iv_subjects.iter().filter(|s| **s == "Kibali").count(), 2);
 
-        // Regression pin (not independent; see the doc comment).
+        // Regression pin (not independent; see the doc comment). It moved from 9283f896… with BD-331.S3, whose
+        // 325 changed states were checked instance by instance against census E826.
         assert_eq!(
             r.ledger_anchor.state_root.to_hex(),
-            "9283f89649b8e51b63e271532d8227b801ee0e6dce522d7a1b5e60c9ad389bb2"
+            "be22f27186a4b923e366594c8e5376c4a0d3bb2fd3df23766417e03658adba82"
         );
+    }
+
+    /// BD-331.S3 on the real files. Every count is from the independent census E826
+    /// (`python3 -I scripts/oracle/share_census.py .`, written without reading this crate). Prints one JSON line
+    /// per cost-of-sales rate the rule decides, then a summary line (`--nocapture` to see them).
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+    fn barrick_share_rule_matches_census() {
+        let profile = load_issuer_profile(&workspace_root(), "barrick")
+            .and_then(|p| p.through("2026Q2"))
+            .expect("registry");
+        let r = run_public_assurance(&profile, &workspace_root())
+            .expect("registered files present and unaltered");
+        // fit, miss, unconfirmed, regions_v, no_registered_share, no_footnote
+        let mut summary = [0_usize; 6];
+        let mut by_subject: BTreeMap<String, [usize; 3]> = BTreeMap::new();
+        for i in r
+            .instances
+            .iter()
+            .filter(|i| i.family == IdentityFamily::CosPerOunce)
+        {
+            let (slot, detail) = match &i.state {
+                IdentityState::Consistent { basis: Some(b), .. } => (0, b.as_str()),
+                IdentityState::Undecidable { detail } if detail.contains("1000·s·N/Q") => {
+                    (1, detail.as_str())
+                }
+                IdentityState::RefusedAt { at, .. } => (2, at.as_str()),
+                IdentityState::Refused {
+                    reason: "regional numerator needs member weighting",
+                } => (3, ""),
+                IdentityState::Refused {
+                    reason: "no registered share",
+                } => (4, ""),
+                s if *s == NO_FOOTNOTE => (5, ""),
+                IdentityState::Refused {
+                    reason: "attributable share needed",
+                } => panic!("{} {} {} keeps the old reason", i.file, i.sheet, i.cell),
+                _ => continue,
+            };
+            summary[slot] += 1;
+            if slot < 3 {
+                by_subject.entry(i.subject.clone()).or_default()[slot] += 1;
+            }
+            let interval = detail
+                .split_once("allow s in [")
+                .and_then(|(_, rest)| rest.split_once(']'))
+                .and_then(|(inside, _)| inside.split_once(", "));
+            let (s_lo, s_hi) = interval.unwrap_or(("null", "null"));
+            let share = detail
+                .split_once("stated share ")
+                .and_then(|(_, rest)| rest.split_once(' '))
+                .map_or_else(|| "null".to_string(), |(s, _)| js(s));
+            println!(
+                "{{\"file\":{},\"sheet\":{},\"cell\":{},\"subject\":{},\"share\":{share},\"state\":{},\
+                 \"s_lo\":{s_lo},\"s_hi\":{s_hi},\"detail\":{}}}",
+                js(&i.file),
+                js(&i.sheet),
+                js(&i.cell),
+                js(&i.subject),
+                js(i.state.code()),
+                js(&i.state.detail())
+            );
+        }
+        let [fit, miss, unconfirmed, regions_v, no_share, no_footnote] = summary;
+        let sites = fit + miss + unconfirmed + no_share + no_footnote;
+        println!(
+            "{{\"sites\":{sites},\"fit\":{fit},\"miss\":{miss},\"unconfirmed\":{unconfirmed},\
+             \"regions_v\":{regions_v},\"no_registered_share\":{no_share},\"no_footnote\":{no_footnote}}}"
+        );
+        assert_eq!((sites, summary), (328, [260, 65, 0, 51, 3, 0]));
+        let census: BTreeMap<String, [usize; 3]> = [
+            ("Bulyanhulu", 31, 3),
+            ("Carlin", 9, 25),
+            ("Cortez", 31, 3),
+            ("Loulo-Gounkoto", 23, 0),
+            ("Nevada Gold Mines", 11, 23),
+            ("North Mara", 30, 4),
+            ("Phoenix", 34, 0),
+            ("Pueblo Viejo", 29, 5),
+            ("Tongon", 30, 0),
+            ("Turquoise Ridge", 32, 2),
+        ]
+        .into_iter()
+        .map(|(s, fit, miss)| (s.to_string(), [fit, miss, 0]))
+        .collect();
+        assert_eq!(by_subject, census);
     }
 
     #[test]

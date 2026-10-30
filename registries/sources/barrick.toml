@@ -229,14 +229,86 @@ name = "Tongon"
 [[subject]]
 name = "Bulyanhulu"
 
+# Regions are segment roll-ups of sites held at different shares (FACT: Africa & Middle East combines
+# Loulo-Gounkoto 80%, Kibali 45%, Tongon 89.7%, North Mara and Bulyanhulu 84%).
+
 [[subject]]
 name = "North America"
+kind = "region"
 
 [[subject]]
 name = "Latin America & Asia Pacific"
+kind = "region"
 
 [[subject]]
 name = "Africa & Middle East"
+kind = "region"
+
+# BD-331.S3: Barrick's stated ownership shares. The AISC footnote states gold cost of sales per ounce on an
+# attributable basis using Barrick's ownership share, so the run checks that rate at these shares, but only
+# after the same-release Mine Stats QTD label prints the same share. Long Canyon has no registered share.
+# Twiga (North Mara, Bulyanhulu): the Government of Tanzania's 16% is free-carried (E135), so 84%.
+
+[[share]]
+subject = "Nevada Gold Mines"
+num = 123
+den = 200
+evidence = "E457"
+label = "Nevada Gold Mines LLC"
+
+[[share]]
+subject = "Carlin"
+num = 123
+den = 200
+evidence = "E457"
+
+[[share]]
+subject = "Cortez"
+num = 123
+den = 200
+evidence = "E457"
+
+[[share]]
+subject = "Turquoise Ridge"
+num = 123
+den = 200
+evidence = "E457"
+
+[[share]]
+subject = "Phoenix"
+num = 123
+den = 200
+evidence = "E457"
+
+[[share]]
+subject = "Pueblo Viejo"
+num = 3
+den = 5
+evidence = "E672"
+
+[[share]]
+subject = "Loulo-Gounkoto"
+num = 4
+den = 5
+evidence = "E670"
+
+[[share]]
+subject = "North Mara"
+num = 21
+den = 25
+evidence = "E135"
+
+[[share]]
+subject = "Bulyanhulu"
+num = 21
+den = 25
+evidence = "E135"
+
+[[share]]
+subject = "Tongon"
+num = 897
+den = 1000
+evidence = "E487"
 
 # E816: Africa & Middle East AISC per ounce, Q1 2025 (two vintages) and H1 2025. The rule text is part of
 # the state root (it is in each instance's detail), so it must not change by a byte.

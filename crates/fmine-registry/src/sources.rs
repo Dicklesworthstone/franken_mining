@@ -66,6 +66,19 @@ pub struct MineStatsLabelRow {
     pub label: String,
 }
 
+/// One registered ownership share (BD-331.S3): the issuer's stated share `num/den` in a site, which the run
+/// confirms against the same-release Mine Stats label before using it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareRow {
+    pub subject: String,
+    pub num: u64,
+    pub den: u64,
+    /// Where the share comes from (an E id, or a named document).
+    pub evidence: String,
+    /// The Mine Stats label, when it differs from the subject name (`Nevada Gold Mines LLC`).
+    pub label: Option<String>,
+}
+
 /// A checked issuer registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourcesRegistry {
@@ -74,6 +87,10 @@ pub struct SourcesRegistry {
     pub retrieved_utc: String,
     pub sources: Vec<SourceRow>,
     pub subjects: Vec<String>,
+    /// The subjects registered with `kind = "region"`: segment roll-ups of sites, never one share.
+    pub regions: Vec<String>,
+    /// Stated shares, one per site at most, in file order.
+    pub shares: Vec<ShareRow>,
     pub reconstructions: Vec<ReconstructionRow>,
     /// The Mine Statistics label vocabulary, in file order. Empty when the issuer registers none, in which case
     /// labels are read without a vocabulary check.
@@ -261,6 +278,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "reconstruction",
             "label_check",
             "mine_stats_label",
+            "share",
         ]
         .contains(&row.table.as_str())
         {
@@ -348,12 +366,23 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
     }
 
     let mut subjects = Vec::new();
+    let mut regions = Vec::new();
     for row in doc.rows_of("subject") {
         let f = Fields::of_row(row);
-        f.only(&["name"])?;
+        f.only(&["name", "kind"])?;
         let (name, line) = f.string("name")?;
         if subjects.contains(&name) {
             return fail(line, format!("duplicate subject {name:?}"));
+        }
+        match f.optional_string("kind")?.as_deref() {
+            None | Some("site") => {}
+            Some("region") => regions.push(name.clone()),
+            Some(other) => {
+                return fail(
+                    row.line,
+                    format!("subject kind {other:?} is not \"site\" or \"region\""),
+                );
+            }
         }
         subjects.push(name);
     }
@@ -462,12 +491,48 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         mine_stats_labels.push(entry);
     }
 
+    let mut shares: Vec<ShareRow> = Vec::new();
+    for row in doc.rows_of("share") {
+        let f = Fields::of_row(row);
+        f.only(&["subject", "num", "den", "evidence", "label"])?;
+        let (subject, subject_line) = f.string("subject")?;
+        if !subjects.contains(&subject) {
+            return fail(
+                subject_line,
+                format!("subject {subject:?} is not a registered [[subject]]"),
+            );
+        }
+        if regions.contains(&subject) {
+            return fail(
+                subject_line,
+                format!("{subject:?} is a region: a share is registered for a site"),
+            );
+        }
+        if shares.iter().any(|s| s.subject == subject) {
+            return fail(subject_line, format!("duplicate [[share]] for {subject:?}"));
+        }
+        let (num, _) = f.positive_int("num")?;
+        let (den, den_line) = f.positive_int("den")?;
+        if num > den {
+            return fail(den_line, format!("share {num}/{den} exceeds 1"));
+        }
+        shares.push(ShareRow {
+            subject,
+            num,
+            den,
+            evidence: f.string("evidence")?.0,
+            label: f.optional_string("label")?,
+        });
+    }
+
     Ok(SourcesRegistry {
         issuer,
         corpus_dir,
         retrieved_utc,
         sources,
         subjects,
+        regions,
+        shares,
         reconstructions,
         mine_stats_labels,
     })
@@ -668,6 +733,65 @@ mod tests {
             "[[mine_stats_label]]\nsection = \"\"\nlabel = \"X\"\n",
         ));
         assert!(e.reason.contains("non-empty"), "{e}");
+    }
+
+    /// BD-331.S3: `[[share]]` rows for sites and `kind = "region"` subjects.
+    #[test]
+    fn test_shares_and_regions_parse_and_refuse() {
+        let b = source_b("aisc_reconciliation", SHA_B);
+        let rows = "[[subject]]\nname = \"Region North\"\nkind = \"region\"\n\n\
+                    [[share]]\nsubject = \"Site A\"\nnum = 123\nden = 200\nevidence = \"E457\"\n\
+                    label = \"Site A LLC\"\n";
+        let reg = parse_sources_registry(&minimal(&b, rows)).expect("accepted");
+        assert_eq!(reg.regions, ["Region North"]);
+        assert_eq!(
+            reg.shares,
+            vec![ShareRow {
+                subject: "Site A".into(),
+                num: 123,
+                den: 200,
+                evidence: "E457".into(),
+                label: Some("Site A LLC".into()),
+            }]
+        );
+        let plain = parse_sources_registry(&minimal(&b, "")).expect("accepted");
+        assert!(plain.regions.is_empty() && plain.shares.is_empty());
+
+        for (extra, why) in [
+            (
+                "[[share]]\nsubject = \"Site Z\"\nnum = 1\nden = 2\nevidence = \"E1\"\n",
+                "not a registered [[subject]]",
+            ),
+            (
+                "[[subject]]\nname = \"R\"\nkind = \"region\"\n\n\
+                 [[share]]\nsubject = \"R\"\nnum = 1\nden = 2\nevidence = \"E1\"\n",
+                "is a region",
+            ),
+            (
+                "[[share]]\nsubject = \"Site A\"\nnum = 3\nden = 2\nevidence = \"E1\"\n",
+                "exceeds 1",
+            ),
+            (
+                "[[share]]\nsubject = \"Site A\"\nnum = 0\nden = 2\nevidence = \"E1\"\n",
+                "positive integer",
+            ),
+            (
+                "[[share]]\nsubject = \"Site A\"\nnum = 1\nden = 2\nevidence = \"E1\"\n\n\
+                 [[share]]\nsubject = \"Site A\"\nnum = 1\nden = 2\nevidence = \"E2\"\n",
+                "duplicate [[share]]",
+            ),
+            (
+                "[[share]]\nsubject = \"Site A\"\nnum = 1\nden = 2\n",
+                "has no evidence",
+            ),
+            (
+                "[[subject]]\nname = \"R\"\nkind = \"segment\"\n",
+                "is not \"site\" or \"region\"",
+            ),
+        ] {
+            let e = refusal(&minimal(&b, extra));
+            assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
+        }
     }
 
     #[test]

@@ -543,3 +543,28 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     could not be reproduced. It now keeps the token as stored. The real-lane state root did not move.
   - **Not covered.** The metric-label registry (labels, units, region maps v0–v2, W1-DR-01 and W1-DR-02 as data) and
     the refusal of unregistered labels are not built. The read is not yet in the state root or the identity ledger.
+- **E826** The stated share rule (BD-331.S3, bd-prmn.3) over the 379 cost-of-sales-per-ounce rates that E822 refused
+  as "attributable share needed" (FACT, execution). Independent census: `python3 -I scripts/oracle/share_census.py .`,
+  written 2026-10-30 by a separate agent that did not read `crates/` or `rate_census.py`; it ran before the Rust.
+  - **Rule.** Each AISC sheet's footnote, found by text (A35 "h" in 2024Q3–2025Q1, A35 "g" in 2025Q2, A36 "h" in
+    2025Q3, A32 "g" from 2025Q4), states the rate on an attributable basis using Barrick's ownership share. The rate
+    is checked as 1000·s·N/Q on exact interval corners, at the registered share s: NGM and its four sites 61.5%
+    (E457), Pueblo Viejo 60% (E672), Loulo-Gounkoto 80% (E670), North Mara and Bulyanhulu 84% (E135), Tongon 89.7%
+    (E487). The same-release Mine Stats `QTD` label must print the same share; all 325 labels do.
+  - **Result.** 328 site instances: 260 fit (i); 65 miss (iv); 3 Long Canyon have no registered share (v). The
+    51 region instances stay (v): "regional numerator needs member weighting". None keeps "attributable share
+    needed". The 65 misses are 39 distinct data points, because periods repeat across vintages: Carlin 15, NGM 14,
+    North Mara 3, Pueblo Viejo 3, Cortez 2, Bulyanhulu 1, Turquoise Ridge 1.
+  - **Fit and miss by subject.** Carlin 9/25, NGM 11/23, Cortez 31/3, Turquoise Ridge 32/2, Phoenix 34/0, Pueblo
+    Viejo 29/5, North Mara 30/4, Bulyanhulu 31/3, Loulo-Gounkoto 23/0, Tongon 30/0. Every 61.5% miss interval ends
+    below 0.615 (highest upper bound 0.6146, rounded up); every Pueblo Viejo miss interval ends below 0.600 (highest
+    0.5998). INFERENCE: one-sided misses suggest a consistent basis difference, not rounding. North Mara Q2 2026,
+    (n, q, r) = (117, 37, 2736), allows only s in [0.849751…, 0.880847…], which excludes 0.84.
+  - **Rust equals the census** on all 379 instances: state, subject, footnote cell and label cell. On the 65 miss
+    intervals, Rust rounds outward to four places and the census rounds to nearest, so each Rust bound lies within
+    0.0001 of the census bound and contains it. Ignored test `barrick_share_rule_matches_census` pins the counts.
+  - **Judgement call.** The 2026 footnotes say "Gold COS/oz is calculated as cost of sales…", not "Gold cost of
+    sales per ounce…". Both readers accept this wording because the rate row there is labelled "COS/oz". It decides
+    73 instances: 63 fit and 10 miss.
+  - **State root** `be22f27186a4b923e366594c8e5376c4a0d3bb2fd3df23766417e03658adba82` (2026-10-30), replacing
+    `9283f896…` (E822). Totals: i 2380, ii 3, iii 4, iv 82, v 66, np 60.

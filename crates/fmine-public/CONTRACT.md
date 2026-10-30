@@ -57,14 +57,19 @@ The public lane of M0 (`fmine assure public`).
   and the next actions (`PublicAssuranceReport::next_actions`) are envelope fields, which `fmine-cli` prints.
 
 ## 4. Public API Surface
-- `sources::{SourceKind, RegisteredSource, RegisteredReconstruction, IssuerProfile, load_issuer_profile,
-  registry_path, registered_issuers, is_issuer_name, is_through_bound}`; `IssuerProfile::{from_registry, through}`
+- `sources::{SourceKind, RegisteredSource, RegisteredReconstruction, RegisteredShare, IssuerProfile,
+  load_issuer_profile, registry_path, registered_issuers, is_issuer_name, is_through_bound}`;
+  `IssuerProfile::{from_registry, through}`; `IssuerProfile::{regions, shares}` (BD-331.S3)
 - `aisc::{IdentityFamily, IdentityState, IdentityInstance, FootingCertificate, UnregisteredHeader, AiscTable,
-  RateMiss, locate_table, ledger_for_table, rate_interval_holds, reconstruction_closes, match_subject, cell_text}`
+  RateMiss, ShareBasis, locate_table, ledger_for_table, rate_interval_holds, scaled_rate_holds, feasible_share,
+  feasible_share_text, find_share_footnote, find_qtd_sheet, confirm_share_label, reconstruction_closes,
+  match_subject, cell_text}`. `IdentityState::Consistent` carries `basis` (the stated share, footnote and label it
+  used, or `None`); `IdentityState::RefusedAt` is (v) naming a cell or file.
 - `mine_stats::{View, MineStatsCell, MineStatsValue, CellRefusal, MineStatsRead, LabelVocabulary, read_mine_stats,
   strip_footnote, printed_share, site_name, is_m0_target}`
-- `synthetic::{synthetic_aisc_cells, synthetic_workbooks, synthetic_profile, write_issuer_workspace,
-  SYNTHETIC_ISSUER, SYNTHETIC_SUBJECTS, SYNTHETIC_LATER_STATS_FILE}`
+- `synthetic::{synthetic_aisc_cells, synthetic_workbooks, synthetic_stats_workbook, synthetic_share_label_cells,
+  synthetic_profile, write_issuer_workspace, SYNTHETIC_ISSUER, SYNTHETIC_SUBJECTS, SYNTHETIC_SHARES,
+  SYNTHETIC_SHARE_FOOTNOTE, SYNTHETIC_LATER_STATS_FILE}`
 - `Lane`, `LoadedSource`, `TableRefusal`, `AlternateCounts`, `PublicAssuranceReport`, `load_registered_sources`,
   `assess`, `run_public_assurance`, `run_barrick_m0_assurance`, `run_synthetic_assurance`, `cell_to_public_claim`,
   `NO_CLAIM`; `PublicAssuranceReport::next_actions`
@@ -77,17 +82,26 @@ The public lane of M0 (`fmine assure public`).
 - Instance-level refusals (state (v)) carry a reason:
   - an unrounded stored value;
   - a non-numeric line;
-  - "attributable share needed" when a non-zero non-controlling-interest line separates the bases of cost of sales
-    and ounces;
   - one of rate and ounces being zero.
+- Cost of sales per ounce in a column with a non-zero non-controlling-interest line (BD-331.S3) is checked at the
+  subject's registered share, s: 1000·s·N/Q on exact corners. A fit is (i), and its `basis` cites the share, the
+  footnote and the label. A miss is (iv), giving the feasible share interval, rounded outward, and the missing
+  fact. The instance is (v) instead when:
+  - the sheet has no attributable-basis footnote, found by text;
+  - the subject is a registered region ("regional numerator needs member weighting");
+  - the subject has no registered share;
+  - the same-release Mine Stats quarter-to-date label is missing, repeated or prints another share
+    (`RefusedAt`, naming the cell);
+  - an operand is not positive.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-PUB-1` (real files through 2026Q2, ignored test; recorded in MOR_CASE E820–E823): the census and digest of
   every registered workbook equal an independent reader's. The test also pins the state root as a regression
   value (not independent).
   - **Ledger:** 34 visible AISC tables, 2,595 instances. Footing: 1,004 (i), 4 (iii), 6 (v), 24 not published.
-    Per ounce: 1,116 (i), 3 (ii), 17 (iv), 385 (v), 36 not published.
-  - **Alternative construction:** 1,008 footing and 994 rate instances consistent.
+    Per ounce, after the stated share rule (E826): 1,376 (i), 3 (ii), 82 (iv), 60 (v), 36 not published. Before
+    it, the counts were 1,116 (i), 17 (iv) and 385 (v).
+  - **Alternative construction:** 1,008 footing and 1,254 rate instances consistent.
   - **Identities:** each (ii) and (iii) instance is identified.
 - `PO-PUB-2` (synthetic): every seeded answer is reproduced, including the sign-flip witness. Perturbing one cell
   moves the state root and the affected state. A wrong component label leaves the instance in (iv).
@@ -100,6 +114,13 @@ The public lane of M0 (`fmine assure public`).
   - **Synthetic** (default suite): an inserted site, an inserted row, renumbered footnotes and a misspelled
     month give the same values. Each refusal names its cell: an unknown token, a repeated label, an unknown
     period and a formula error.
+- `PO-PUB-5` (stated share rule, BD-331.S3, MOR_CASE E826):
+  - **Real files** (ignored test `barrick_share_rule_matches_census`): of the 379 instances refused before, the 328
+    site instances split into 260 (i), 65 (iv) and 3 with no registered share. The 51 region instances stay (v).
+    The counts and per-subject fit/miss equal the independent census. On every instance, Rust also equals it on
+    state, subject, footnote cell and label cell; that check was run outside the test.
+  - **Synthetic:** K14 fits at 3/4, and L14 misses with the interval [0.8210, 0.8290]. Further tests cover a
+    mismatched or missing label, a moved footnote letter and a removed footnote, a region, and a dropped share.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.

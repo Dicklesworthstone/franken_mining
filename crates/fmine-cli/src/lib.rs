@@ -598,7 +598,7 @@ mod tests {
             "\"payload\":{\"issuer\":\"synthetic\",\"lane\":\"synthetic\",\"gate_eligible\":false"
         ));
         assert!(
-            json.contains("\"totals\":{\"i\":21,\"ii\":1,\"iii\":1,\"iv\":1,\"v\":6,\"np\":5}")
+            json.contains("\"totals\":{\"i\":30,\"ii\":1,\"iii\":1,\"iv\":2,\"v\":6,\"np\":5}")
         );
         // The next actions sit in the envelope, not the payload.
         assert_eq!(
@@ -800,20 +800,19 @@ mod tests {
         let json = env.to_json();
         assert!(json.contains("\"lane\":\"public\",\"gate_eligible\":true"));
         assert!(json.contains("\"through\":\"2026Q2\""));
-        // Regression pin of this implementation's output (MOR_CASE E822), not an independent value.
+        // Regression pin of this implementation's output (MOR_CASE E822, E826), not an independent value.
         assert!(json.contains(
-            "\"state_root\":\"9283f89649b8e51b63e271532d8227b801ee0e6dce522d7a1b5e60c9ad389bb2\""
+            "\"state_root\":\"be22f27186a4b923e366594c8e5376c4a0d3bb2fd3df23766417e03658adba82\""
         ));
         assert!(json.contains("\"aisc_tables\":34,\"instances\":2595"));
-        assert!(
-            json.contains(
-                "\"totals\":{\"i\":2120,\"ii\":3,\"iii\":4,\"iv\":17,\"v\":391,\"np\":60}"
-            )
-        );
+        assert!(json.contains(
+            // BD-331.S3 (census E826): 260 stated-share fits move v → i and 65 misses v → iv.
+            "\"totals\":{\"i\":2380,\"ii\":3,\"iii\":4,\"iv\":82,\"v\":66,\"np\":60}"
+        ));
         // The public-lane envelope: the root as certificate, the no-claim line, and its two next actions.
         assert_eq!(
             env.certificate.as_deref(),
-            Some("9283f89649b8e51b63e271532d8227b801ee0e6dce522d7a1b5e60c9ad389bb2")
+            Some("be22f27186a4b923e366594c8e5376c4a0d3bb2fd3df23766417e03658adba82")
         );
         assert_eq!(env.no_claim, Some(fmine_public::NO_CLAIM));
         let commands: Vec<&str> = env

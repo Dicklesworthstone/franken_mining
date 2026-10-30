@@ -68,6 +68,18 @@ pub struct RegisteredReconstruction {
     pub rule: String,
 }
 
+/// The issuer's stated ownership share in a site (BD-331.S3), used for the per-ounce rates the issuer states on
+/// an attributable basis. The run uses it only after the same-release Mine Stats label prints the same share.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredShare {
+    pub subject: String,
+    pub num: i64,
+    pub den: i64,
+    pub evidence: String,
+    /// The Mine Stats label text before `(x%)`; the subject name unless registered otherwise.
+    pub label: String,
+}
+
 /// Everything a public-lane run needs to know about one issuer: where its files live, which files, which
 /// header names are reporting subjects in its AISC tables, and its registered reconstructions.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +92,10 @@ pub struct IssuerProfile {
     /// Reporting subjects (sites, joint ventures, regions) as printed in AISC table headers, before the
     /// issuer's one-letter footnote suffix.
     pub subjects: Vec<String>,
+    /// Subjects that are regions (segment roll-ups of sites at different shares).
+    pub regions: Vec<String>,
+    /// Registered stated shares, at most one per site.
+    pub shares: Vec<RegisteredShare>,
     pub reconstructions: Vec<RegisteredReconstruction>,
     /// The registered Mine Statistics label vocabulary as `(section, label)`. When it is non-empty, a data row
     /// whose label is not in it is refused by locator (bd-gwf1.1); when empty, labels are read unchecked.
@@ -131,12 +147,30 @@ impl IssuerProfile {
                 rule: r.rule,
             });
         }
+        let mut shares = Vec::with_capacity(reg.shares.len());
+        for s in reg.shares {
+            let (Ok(num), Ok(den)) = (i64::try_from(s.num), i64::try_from(s.den)) else {
+                return Err(format!(
+                    "share {}/{} of {} is out of range",
+                    s.num, s.den, s.subject
+                ));
+            };
+            shares.push(RegisteredShare {
+                label: s.label.unwrap_or_else(|| s.subject.clone()),
+                subject: s.subject,
+                num,
+                den,
+                evidence: s.evidence,
+            });
+        }
         Ok(Self {
             issuer: reg.issuer,
             corpus_dir: reg.corpus_dir,
             retrieved_utc: reg.retrieved_utc,
             sources,
             subjects: reg.subjects,
+            regions: reg.regions,
+            shares,
             reconstructions,
             mine_stats_labels: reg
                 .mine_stats_labels

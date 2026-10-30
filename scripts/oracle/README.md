@@ -15,6 +15,7 @@ then they sit in `corpus_of_input_docs/downloaded/mine_stats/`.
 |---|---|---|
 | E820 extraction fidelity | `python3 -I scripts/oracle/fidelity.py corpus_of_input_docs/downloaded/mine_stats/*.xlsx` | one line per file: visible and hidden sheets, numeric, placeholder, formula-error and text counts, numeric digest; totals 101, 6, 30388, 3952, 1092, 6537 |
 | E821 and E822 identity ledger | `python3 -I scripts/oracle/census2.py .` | `AISC tables (visible): 34 instances: 2595`; footing i 1004, iii 4, v 6, np 24; per ounce i 1116, ii 3, iv 17, v 385, np 36 |
+| E826 stated share rule (2026-10-30) | `python3 -I scripts/oracle/share_census.py .` | 379 lines, then `{"sites": 328, "fit": 260, "miss": 65, "unconfirmed": 0, "regions_v": 51, "no_footnote": 0, "no_registered_share": 3}` |
 
 | Script | What it is |
 |---|---|
@@ -22,6 +23,7 @@ then they sit in `corpus_of_input_docs/downloaded/mine_stats/`.
 | `census2.py` | Identity-ledger census, visible sheets only; the reference for `fmine-public`'s ledger. |
 | `census.py` | Version 1 of the census. It counts hidden sheets too (superseded by E821). Kept because `census2.py` imports its subject list. |
 | `xl.py` | Minimal xlsx loader used by both censuses. |
+| `share_census.py` | BD-331.S3 stated-share census over `census2.py`'s "attributable share needed" instances; written by a separate agent that did not read `crates/` or `rate_census.py`. |
 | `format_census.py` | Number-format census (cell-number-formats bead); research check. |
 | `vintage_census.py` | Cross-vintage stored-value comparison; research check. |
 | `rate_census.py` | Per-ounce check that mirrors `aisc.rs`; NOT independent evidence. |

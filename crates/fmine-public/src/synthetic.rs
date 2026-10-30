@@ -15,6 +15,10 @@
 //! - H "Region North": AISC per ounce 2830 closes only with the registered component in the synthetic
 //!   Mine Stats workbook, `Minestats3!B32` = 13 (explained).
 //! - I "Footnote" is skipped; J "Mystery Mine" is not a registered subject.
+//! - K "Site H" and L "Site I": a non-zero non-controlling-interest line and a registered share of 3/4 that the
+//!   synthetic Mine Stats `QTD` sheet confirms. The stated share rule (footnote `A30`, BD-331.S3) gives
+//!   cost of sales per ounce 1000·¾·400/150 = 2000: K prints 2000 (consistent at the stated share), L prints 2200,
+//!   whose feasible share interval [0.8210, 0.8290] excludes 3/4 (undecidable). Site D has no registered share.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -23,7 +27,9 @@ use fmine_core::hash::sha256;
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, build_minimal_xlsx};
 
 use crate::aisc::IdentityFamily;
-use crate::sources::{IssuerProfile, RegisteredReconstruction, SourceKind, registry_path};
+use crate::sources::{
+    IssuerProfile, RegisteredReconstruction, RegisteredShare, SourceKind, registry_path,
+};
 
 /// The issuer name reserved for the synthetic lane: a run under it is never gate-eligible.
 pub const SYNTHETIC_ISSUER: &str = "synthetic";
@@ -31,7 +37,7 @@ pub const SYNTHETIC_AISC_FILE: &str = "Synthetic_AISC.xlsx";
 pub const SYNTHETIC_STATS_FILE: &str = "Synthetic_Mine_Stats.xlsx";
 pub const SYNTHETIC_TABLE_SHEET: &str = "Q1 2030";
 
-pub const SYNTHETIC_SUBJECTS: [&str; 8] = [
+pub const SYNTHETIC_SUBJECTS: [&str; 10] = [
     "Site A",
     "Site B",
     "Site C",
@@ -40,7 +46,16 @@ pub const SYNTHETIC_SUBJECTS: [&str; 8] = [
     "Site F",
     "Site G",
     "Region North",
+    "Site H",
+    "Site I",
 ];
+
+/// Registered shares of the synthetic lane `(subject, num, den)`, printed as `(75%)` on the `QTD` sheet.
+pub const SYNTHETIC_SHARES: [(&str, i64, i64); 2] = [("Site H", 3, 4), ("Site I", 3, 4)];
+
+/// The synthetic statement of the share rule, with a footnote letter the real files never use at this cell.
+pub const SYNTHETIC_SHARE_FOOTNOTE: &str = "h.  Cost of sales per ounce: Gold cost of sales per ounce is \
+calculated as cost of sales divided by ounces sold (both on an attributable basis using the issuer's ownership share).";
 
 /// The synthetic lane's profile: its subjects and its one registered reconstruction. It has no registered
 /// sources because the synthetic workbooks are built in memory (`synthetic_workbooks`), never read from disk.
@@ -53,6 +68,17 @@ pub fn synthetic_profile() -> IssuerProfile {
         retrieved_utc: String::new(),
         sources: Vec::new(),
         subjects: SYNTHETIC_SUBJECTS.iter().map(|x| s(x)).collect(),
+        regions: vec![s("Region North")],
+        shares: SYNTHETIC_SHARES
+            .iter()
+            .map(|&(subject, num, den)| RegisteredShare {
+                subject: s(subject),
+                num,
+                den,
+                evidence: s("synthetic"),
+                label: s(subject),
+            })
+            .collect(),
         reconstructions: vec![RegisteredReconstruction {
             evidence_id: s("SYNTHETIC"),
             table_file: s(SYNTHETIC_AISC_FILE),
@@ -113,6 +139,7 @@ pub fn synthetic_aisc_cells() -> Vec<(String, MinimalCell)> {
         t("J2", "Mystery Mine"),
         n("J5", 1.0),
         (String::from("B20"), MinimalCell::Error("#REF!".to_string())),
+        t("A30", SYNTHETIC_SHARE_FOOTNOTE),
     ];
     let headers = [
         ("B", "Site A"),
@@ -122,13 +149,15 @@ pub fn synthetic_aisc_cells() -> Vec<(String, MinimalCell)> {
         ("F", "Site E"),
         ("G", "Site F"),
         ("H", "Region North"),
+        ("K", "Site H"),
+        ("L", "Site I"),
     ];
     for (col, h) in headers {
         cells.push(t(&format!("{col}2"), h));
     }
     // Rows 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16.
     let rows = [5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16];
-    let columns: [(&str, [f64; 11]); 6] = [
+    let columns: [(&str, [f64; 11]); 8] = [
         (
             "B",
             [
@@ -165,6 +194,18 @@ pub fn synthetic_aisc_cells() -> Vec<(String, MinimalCell)> {
                 300.0, -60.0, 0.0, 240.0, 0.0, 30.0, 270.0, 100.0, 3000.0, 2400.0, 2830.0,
             ],
         ),
+        (
+            "K",
+            [
+                400.0, -100.0, -75.0, 225.0, 10.0, 15.0, 250.0, 150.0, 2000.0, 1500.0, 1667.0,
+            ],
+        ),
+        (
+            "L",
+            [
+                400.0, -100.0, -75.0, 225.0, 10.0, 15.0, 250.0, 150.0, 2200.0, 1500.0, 1667.0,
+            ],
+        ),
     ];
     for (col, values) in columns {
         for (row, v) in rows.iter().zip(values) {
@@ -180,6 +221,43 @@ pub fn synthetic_aisc_cells() -> Vec<(String, MinimalCell)> {
         });
     }
     cells
+}
+
+/// Cells of the synthetic Mine Stats `QTD` sheet: the share labels in column A, Site H's as given (tests pass a
+/// different printed share to break the confirmation).
+#[must_use]
+pub fn synthetic_share_label_cells(site_h_label: &str) -> Vec<(String, MinimalCell)> {
+    vec![
+        t("A1", "Summary of Operations"),
+        t("A3", "For the three months ended March 31,"),
+        n("B3", 2030.0),
+        t("A5", site_h_label),
+        t("A6", "Site I (75%)"),
+    ]
+}
+
+/// The synthetic Mine Stats workbook: the `QTD` share labels (Site H's as given) and the `Minestats3` component.
+#[must_use]
+pub fn synthetic_stats_workbook(site_h_label: &str) -> Vec<u8> {
+    build_minimal_xlsx(&[
+        MinimalSheet {
+            name: "QTD".to_string(),
+            hidden: false,
+            cells: synthetic_share_label_cells(site_h_label),
+        },
+        MinimalSheet {
+            name: "Minestats3".to_string(),
+            hidden: false,
+            cells: vec![
+                t("A1", "Mine Statistics (Gold)"),
+                t("B2", "Site G (60%)1"),
+                t("A3", "For the three months ended March 31,"),
+                t("B3", "2030"),
+                t("A32", "Minesite sustaining3"),
+                n("B32", 13.0),
+            ],
+        },
+    ])
 }
 
 /// Builds the synthetic workbooks; `edits` replace or add cells of the AISC table sheet (for perturbation
@@ -205,18 +283,7 @@ pub fn synthetic_workbooks(
             cells: vec![n("A1", 1.0)],
         },
     ]);
-    let stats = build_minimal_xlsx(&[MinimalSheet {
-        name: "Minestats3".to_string(),
-        hidden: false,
-        cells: vec![
-            t("A1", "Mine Statistics (Gold)"),
-            t("B2", "Site G (60%)1"),
-            t("A3", "For the three months ended March 31,"),
-            t("B3", "2030"),
-            t("A32", "Minesite sustaining3"),
-            n("B32", 13.0),
-        ],
-    }]);
+    let stats = synthetic_stats_workbook("Site H (75%)1");
     vec![
         (SYNTHETIC_STATS_FILE, SourceKind::MineStats, "2030Q1", stats),
         (
@@ -273,7 +340,19 @@ pub fn write_issuer_workspace(ws: &Path) -> std::io::Result<PathBuf> {
     }
     let profile = synthetic_profile();
     for s in &profile.subjects {
-        let _ = write!(toml, "\n[[subject]]\nname = \"{s}\"\n");
+        let kind = if profile.regions.contains(s) {
+            "kind = \"region\"\n"
+        } else {
+            ""
+        };
+        let _ = write!(toml, "\n[[subject]]\nname = \"{s}\"\n{kind}");
+    }
+    for s in &profile.shares {
+        let _ = write!(
+            toml,
+            "\n[[share]]\nsubject = \"{}\"\nnum = {}\nden = {}\nevidence = \"{}\"\n",
+            s.subject, s.num, s.den, s.evidence
+        );
     }
     for rec in &profile.reconstructions {
         let _ = write!(

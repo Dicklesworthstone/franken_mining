@@ -59,8 +59,9 @@ impl IdentityFamily {
             }
             Self::AiscFooting => "US$M; attributable total cash costs plus sustaining lines",
             Self::CosPerOunce => {
-                "cost of sales US$M (100% consolidated) over attributable ounces sold (thousands); \
-                 refused when a non-zero non-controlling-interest line shows the two bases differ"
+                "cost of sales US$M (100% consolidated) over attributable ounces sold (thousands); when a \
+                 non-zero non-controlling-interest line shows the two bases differ, the issuer's footnote states \
+                 both on an attributable basis, so the rate is checked at the registered share s: 1000·s·N/Q"
             }
             Self::TccPerOunce => {
                 "attributable total cash costs US$M over attributable ounces sold (thousands)"
@@ -90,8 +91,12 @@ pub struct FootingCertificate {
 /// The state of one identity instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityState {
-    /// (i) The printed numbers satisfy the declared construction.
-    Consistent { alternate_consistent: bool },
+    /// (i) The printed numbers satisfy the declared construction. `basis` cites the stated share, footnote and
+    /// label when the construction needed one (BD-331.S3).
+    Consistent {
+        alternate_consistent: bool,
+        basis: Option<String>,
+    },
     /// (ii) The numbers close only with a registered reconstruction, re-verified on this run.
     Explained {
         evidence_id: String,
@@ -105,6 +110,8 @@ pub enum IdentityState {
     Undecidable { detail: String },
     /// (v) The instance cannot be scored from what is printed.
     Refused { reason: &'static str },
+    /// (v) Refused because of a named cell or file (`at`).
+    RefusedAt { reason: &'static str, at: String },
     /// The issuer published nothing for this instance (excluded from the ledger by name).
     NotPublished { reason: &'static str },
 }
@@ -118,7 +125,7 @@ impl IdentityState {
             Self::Explained { .. } => "ii",
             Self::IssuerDiscrepancy(_) => "iii",
             Self::Undecidable { .. } => "iv",
-            Self::Refused { .. } => "v",
+            Self::Refused { .. } | Self::RefusedAt { .. } => "v",
             Self::NotPublished { .. } => "np",
         }
     }
@@ -130,7 +137,7 @@ impl IdentityState {
             Self::Explained { .. } => "explained_reconstructed",
             Self::IssuerDiscrepancy(_) => "issuer_discrepancy",
             Self::Undecidable { .. } => "undecidable_from_public_data",
-            Self::Refused { .. } => "refused",
+            Self::Refused { .. } | Self::RefusedAt { .. } => "refused",
             Self::NotPublished { .. } => "not_published",
         }
     }
@@ -141,7 +148,11 @@ impl IdentityState {
         match self {
             Self::Consistent {
                 alternate_consistent,
-            } => format!("alternate_construction_consistent={alternate_consistent}"),
+                basis,
+            } => match basis {
+                None => format!("alternate_construction_consistent={alternate_consistent}"),
+                Some(b) => format!("alternate_construction_consistent={alternate_consistent}; {b}"),
+            },
             Self::Explained {
                 evidence_id,
                 component,
@@ -159,8 +170,163 @@ impl IdentityState {
             ),
             Self::Undecidable { detail } => detail.clone(),
             Self::Refused { reason } | Self::NotPublished { reason } => (*reason).to_string(),
+            Self::RefusedAt { reason, at } => format!("{reason}: {at}"),
         }
     }
+}
+
+/// What the run knows about one subject's ownership share, for the per-ounce rate the issuer states on an
+/// attributable basis (BD-331.S3). A subject with no entry has no registered share.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShareBasis {
+    /// A registered share `num/den` that the same-release Mine Stats label prints; `label_cell` names it.
+    Confirmed {
+        num: i64,
+        den: i64,
+        evidence: String,
+        label_cell: String,
+    },
+    /// A registered share the label does not confirm; `why` names the cell, or the label or sheet not found.
+    Unconfirmed { why: String },
+    /// A region: its numerator rolls up member sites held at different shares.
+    Region,
+}
+
+/// Locates, by its text, the footnote stating that cost of sales per ounce is cost of sales over ounces sold,
+/// both on an attributable basis. Its letter and row differ between vintages, so neither is used. Returns the
+/// first matching cell in row order.
+#[must_use]
+pub fn find_share_footnote(sheet: &Sheet) -> Option<String> {
+    const PHRASES: [&str; 4] = [
+        "is calculated as cost of sales",
+        "divided by ounces sold",
+        "attributable basis using",
+        "ownership share",
+    ];
+    sheet.cells_by_coord.keys().find_map(|&(row, col)| {
+        let text = cell_text(sheet, row, col)?.to_lowercase();
+        PHRASES
+            .iter()
+            .all(|p| text.contains(p))
+            .then(|| format!("{}{row}", col_index_to_letters(col)))
+    })
+}
+
+const QUARTER_END_MONTHS: [&str; 4] = ["march", "june", "september", "december"];
+
+/// Finds the quarter-to-date "Summary of Operations" sheet of a Mine Stats workbook for `quarter` (`YYYYQn`) by
+/// content: A1 reads "Summary of Operations", and a column-A period line in rows 1–10 reads "For the three
+/// months ended <last month of the quarter>" with the year as the first number on that row. Exactly one sheet
+/// must match.
+///
+/// # Errors
+/// Why no single sheet qualifies.
+pub fn find_qtd_sheet<'a>(sheets: &'a [Sheet], quarter: &str) -> Result<&'a Sheet, String> {
+    let (year, q) = quarter
+        .split_once('Q')
+        .and_then(|(y, q)| Some((y.parse::<f64>().ok()?, q.parse::<usize>().ok()?)))
+        .filter(|&(_, q)| (1..=4).contains(&q))
+        .ok_or_else(|| format!("quarter {quarter:?} is not YYYYQn"))?;
+    let period = format!("for the three months ended {}", QUARTER_END_MONTHS[q - 1]);
+    let qualifies = |s: &&Sheet| {
+        cell_text(s, 1, 1).is_some_and(|t| t.to_lowercase() == "summary of operations")
+            && (1..=10).any(|row| {
+                cell_text(s, row, 1).is_some_and(|t| t.to_lowercase().starts_with(&period))
+                    && s.row_cells(row)
+                        .iter()
+                        .filter(|c| c.col >= 2)
+                        .find_map(|c| c.value.as_number())
+                        == Some(year)
+            })
+    };
+    let found: Vec<&Sheet> = sheets.iter().filter(qualifies).collect();
+    match found.as_slice() {
+        [one] => Ok(one),
+        [] => Err(format!(
+            "no sheet with A1 'Summary of Operations' and a column-A line '{period}' for {quarter}"
+        )),
+        many => Err(format!(
+            "{} sheets qualify as the {quarter} quarter-to-date sheet",
+            many.len()
+        )),
+    }
+}
+
+/// Confirms a registered share against the issuer's label: exactly one column-A cell of `sheet` must read
+/// `<label> (<p>%)`, after stripping trailing footnote digits, with p/100 = num/den exactly. Returns that cell.
+///
+/// # Errors
+/// The cell and the share it prints when they differ, or that the label is missing or repeated.
+pub fn confirm_share_label(
+    sheet: &Sheet,
+    label: &str,
+    num: i64,
+    den: i64,
+) -> Result<String, String> {
+    let mut found: Vec<(String, String)> = Vec::new();
+    for &(row, col) in sheet.cells_by_coord.keys() {
+        if col != 1 {
+            continue;
+        }
+        let Some(text) = cell_text(sheet, row, col) else {
+            continue;
+        };
+        let pct = text
+            .trim_end_matches(|c: char| c.is_ascii_digit())
+            .strip_prefix(label)
+            .map(str::trim_start)
+            .and_then(|rest| rest.strip_prefix('('))
+            .and_then(|rest| rest.strip_suffix("%)"));
+        if let Some(pct) = pct {
+            found.push((format!("A{row}"), pct.to_string()));
+        }
+    }
+    let (cell, pct) = match found.as_slice() {
+        [one] => one,
+        [] => {
+            return Err(format!(
+                "no column-A label '{label} (x%)' on {}",
+                sheet.name
+            ));
+        }
+        many => {
+            let cells: Vec<&str> = many.iter().map(|(c, _)| c.as_str()).collect();
+            return Err(format!(
+                "label '{label}' repeats on {} at {}",
+                sheet.name,
+                cells.join(", ")
+            ));
+        }
+    };
+    let printed = decimal_fraction(pct);
+    let matches = printed.is_some_and(|(p_num, p_den)| {
+        i128::from(p_num) * i128::from(den) == i128::from(num) * 100 * i128::from(p_den)
+    });
+    if matches {
+        Ok(cell.clone())
+    } else {
+        Err(format!(
+            "{}!{cell} prints {pct}%, registered {num}/{den}",
+            sheet.name
+        ))
+    }
+}
+
+/// `"61.5"` → `(615, 10)`: a non-negative decimal with at most four places, as an exact fraction.
+fn decimal_fraction(s: &str) -> Option<(i64, i64)> {
+    let (whole, frac) = s.split_once('.').unwrap_or((s, ""));
+    if whole.is_empty()
+        || frac.len() > 4
+        || !whole
+            .bytes()
+            .chain(frac.bytes())
+            .all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let den = 10_i64.pow(u32::try_from(frac.len()).ok()?);
+    let num = format!("{whole}{frac}").parse::<i64>().ok()?;
+    Some((num, den))
 }
 
 /// One identity instance: a family checked in one subject column of one table.
@@ -386,17 +552,26 @@ fn cmp_frac(a_num: i128, a_den: i128, b_num: i128, b_den: i128) -> Ordering {
 /// spanned by the four corners. In doubled integers a corner is 1000·(2n ± k)/(2q ± 1).
 #[must_use]
 pub fn rate_interval_holds(n: i64, k: i64, q: i64, r: i64) -> bool {
-    let (n2, k, q2, r2) = (
+    scaled_rate_holds(n, k, q, r, 1, 1)
+}
+
+/// [`rate_interval_holds`] for the rate 1000·s·N/Q at a stated share s = `s_num/s_den` > 0 (BD-331.S3). A positive
+/// factor keeps each edge monotone, so the corners are 1000·s_num·(2n ± k)/(s_den·(2q ± 1)).
+#[must_use]
+pub fn scaled_rate_holds(n: i64, k: i64, q: i64, r: i64, s_num: i64, s_den: i64) -> bool {
+    let (n2, k, q2, r2, a, b) = (
         2 * i128::from(n),
         i128::from(k),
         2 * i128::from(q),
         2 * i128::from(r),
+        i128::from(s_num),
+        i128::from(s_den),
     );
     let corners = [
-        (1000 * (n2 - k), q2 - 1),
-        (1000 * (n2 - k), q2 + 1),
-        (1000 * (n2 + k), q2 - 1),
-        (1000 * (n2 + k), q2 + 1),
+        (1000 * a * (n2 - k), b * (q2 - 1)),
+        (1000 * a * (n2 - k), b * (q2 + 1)),
+        (1000 * a * (n2 + k), b * (q2 - 1)),
+        (1000 * a * (n2 + k), b * (q2 + 1)),
     ];
     // Lower bound of the rate interval is (r2 − 1)/2, upper (r2 + 1)/2.
     let reaches_low = corners
@@ -433,6 +608,101 @@ fn rate_range_text(n: i64, k: i64, q: i64) -> String {
     format!("[{}, {}]", fmt(corners[0], false), fmt(corners[3], true))
 }
 
+/// The shares s for which the printed n, q, r fit 1000·s·N/Q (N = n ± k/2, Q = q ± 1/2, R = r ± 1/2, all
+/// positive), as exact fractions `(num, den)`: s ∈ [(r − ½)(q − ½)/(1000(n + k/2)), (r + ½)(q + ½)/(1000(n − k/2))].
+/// The ratio R·Q/(1000·N) is continuous on the box, so every share in between is attained.
+#[must_use]
+pub fn feasible_share(n: i64, k: i64, q: i64, r: i64) -> Option<((i128, i128), (i128, i128))> {
+    let (n, k, q, r) = (i128::from(n), i128::from(k), i128::from(q), i128::from(r));
+    if 2 * n - k < 1 || k < 0 || q < 1 || r < 1 {
+        return None;
+    }
+    Some((
+        ((2 * r - 1) * (2 * q - 1), 2000 * (2 * n + k)),
+        ((2 * r + 1) * (2 * q + 1), 2000 * (2 * n - k)),
+    ))
+}
+
+/// A positive fraction as decimal text with four places, rounded down or up (display only).
+fn four_places((num, den): (i128, i128), round_up: bool) -> String {
+    let scaled = num * 10_000;
+    let t = if round_up {
+        (scaled + den - 1) / den
+    } else {
+        scaled / den
+    };
+    format!("{}.{:04}", t / 10_000, t % 10_000)
+}
+
+/// [`feasible_share`] as `[lo, hi]` to four places, rounded outward so the text contains the exact interval.
+#[must_use]
+pub fn feasible_share_text(n: i64, k: i64, q: i64, r: i64) -> Option<String> {
+    feasible_share(n, k, q, r)
+        .map(|(lo, hi)| format!("[{}, {}]", four_places(lo, false), four_places(hi, true)))
+}
+
+/// The state of a cost-of-sales-per-ounce instance whose column has a non-zero non-controlling-interest line
+/// (BD-331.S3). The sheet's footnote states the rate on an attributable basis, so the rate is checked at the
+/// subject's registered, label-confirmed share; regions and sites without a confirmed share stay (v).
+fn stated_share_state(
+    sheet: &str,
+    footnote: Option<&str>,
+    share: Option<&ShareBasis>,
+    miss: RateMiss,
+) -> IdentityState {
+    let Some(footnote) = footnote else {
+        return IdentityState::Refused {
+            reason: "attributable-basis footnote not found on the sheet",
+        };
+    };
+    let (num, den, evidence, label_cell) = match share {
+        Some(ShareBasis::Region) => {
+            return IdentityState::Refused {
+                reason: "regional numerator needs member weighting",
+            };
+        }
+        None => {
+            return IdentityState::Refused {
+                reason: "no registered share",
+            };
+        }
+        Some(ShareBasis::Unconfirmed { why }) => {
+            return IdentityState::RefusedAt {
+                reason: "registered share not confirmed by label",
+                at: why.clone(),
+            };
+        }
+        Some(ShareBasis::Confirmed {
+            num,
+            den,
+            evidence,
+            label_cell,
+        }) => (*num, *den, evidence, label_cell),
+    };
+    let Some(interval) = feasible_share_text(miss.n, miss.k, miss.q, miss.r) else {
+        return IdentityState::Refused {
+            reason: "stated share rule needs positive cost of sales, ounces and rate",
+        };
+    };
+    let cited = format!(
+        "stated share {num}/{den} ({evidence}); footnote {sheet}!{footnote}; label {label_cell}"
+    );
+    if scaled_rate_holds(miss.n, miss.k, miss.q, miss.r, num, den) {
+        IdentityState::Consistent {
+            alternate_consistent: scaled_rate_holds(miss.n, 1, miss.q, miss.r, num, den),
+            basis: Some(cited),
+        }
+    } else {
+        IdentityState::Undecidable {
+            detail: format!(
+                "printed {} outside 1000·s·N/Q at {cited}, for N = {} ± {}/2, Q = {} ± 1/2; the printed numbers \
+                 allow s in {interval}; missing fact: the attributable cost of sales or ounces the issuer used",
+                miss.r, miss.n, miss.k, miss.q
+            ),
+        }
+    }
+}
+
 /// Whether adding a component c (printed, so c ± 1/2) to the numerator closes the rate interval:
 /// [n − k/2 + c − 1/2, n + k/2 + c + 1/2] ∩ [(r − ½)(q − ½)/1000, (r + ½)(q + ½)/1000] ≠ ∅ (q, r > 0).
 /// Scaled by 4000 to integers.
@@ -465,16 +735,20 @@ pub struct RateMiss {
 }
 
 /// Builds the identity ledger for one located table. `explain` is offered every per-ounce miss and may
-/// return an explained state (it must itself re-verify the component); otherwise the miss is (iv).
+/// return an explained state (it must itself re-verify the component); otherwise the miss is (iv). `shares`
+/// holds what the run knows about each subject's ownership share for this release (BD-331.S3).
+#[allow(clippy::too_many_arguments)]
 pub fn ledger_for_table<S: AsRef<str>>(
     file: &str,
     sheet: &Sheet,
     table: &AiscTable,
     subjects: &[S],
+    shares: &BTreeMap<String, ShareBasis>,
     explain: &mut dyn FnMut(&str, IdentityFamily, RateMiss) -> Option<IdentityState>,
     instances: &mut Vec<IdentityInstance>,
     unregistered: &mut Vec<UnregisteredHeader>,
 ) {
+    let footnote = find_share_footnote(sheet);
     let header_cells: Vec<(u32, String, String)> = sheet
         .row_cells(table.header_row)
         .iter()
@@ -508,8 +782,19 @@ pub fn ledger_for_table<S: AsRef<str>>(
                 state,
             });
         };
-        column_ledger(sheet, table, col, subject, explain, &mut push);
+        let share = shares.get(subject);
+        let stated = StatedShare {
+            footnote: footnote.as_deref(),
+            share,
+        };
+        column_ledger(sheet, table, col, subject, &stated, explain, &mut push);
     }
+}
+
+/// The stated-share inputs of one column: the sheet's attributable-basis footnote and the subject's share.
+struct StatedShare<'a> {
+    footnote: Option<&'a str>,
+    share: Option<&'a ShareBasis>,
 }
 
 fn column_ledger(
@@ -517,6 +802,7 @@ fn column_ledger(
     t: &AiscTable,
     col: u32,
     subject: &str,
+    stated: &StatedShare<'_>,
     explain: &mut dyn FnMut(&str, IdentityFamily, RateMiss) -> Option<IdentityState>,
     push: &mut dyn FnMut(IdentityFamily, u32, IdentityState),
 ) {
@@ -615,14 +901,6 @@ fn column_ledger(
                 IdentityState::Refused {
                     reason: "numerator total is a placeholder",
                 }
-            } else if family == IdentityFamily::CosPerOunce
-                && t.nci_rows
-                    .iter()
-                    .any(|&r| matches!(v(r), Val::Num(x) if x != 0.0))
-            {
-                IdentityState::Refused {
-                    reason: "attributable share needed",
-                }
             } else {
                 let k = lines
                     .iter()
@@ -634,9 +912,16 @@ fn column_ledger(
                     q: line_value(q),
                     r: line_value(rv),
                 };
-                if rate_interval_holds(miss.n, miss.k, miss.q, miss.r) {
+                let nci = t
+                    .nci_rows
+                    .iter()
+                    .any(|&r| matches!(v(r), Val::Num(x) if x != 0.0));
+                if family == IdentityFamily::CosPerOunce && nci {
+                    stated_share_state(&sheet.name, stated.footnote, stated.share, miss)
+                } else if rate_interval_holds(miss.n, miss.k, miss.q, miss.r) {
                     IdentityState::Consistent {
                         alternate_consistent: rate_interval_holds(miss.n, 1, miss.q, miss.r),
+                        basis: None,
                     }
                 } else if let Some(explained) = explain(subject, family, miss) {
                     explained
@@ -697,6 +982,7 @@ fn footing_state(
     if sum == printed {
         return IdentityState::Consistent {
             alternate_consistent,
+            basis: None,
         };
     }
     let sign_flip_witness = lines
@@ -759,5 +1045,208 @@ mod tests {
         assert_eq!(match_subject("Kibaliab", &subjects), None);
         assert_eq!(match_subject("North Marab", &subjects), Some("North Mara"));
         assert_eq!(match_subject("Kibali (45%)", &subjects), None);
+    }
+
+    /// BD-331.S3 known answer: North Mara, `Barrick_Q2_2026_AISC.xlsx` 'Q2 2026', (n, q, r) = (117, 37, 2736).
+    #[test]
+    fn test_scaled_rate_north_mara_q2_2026_misses() {
+        assert!(!scaled_rate_holds(117, 1, 37, 2736, 21, 25));
+        // s ∈ [5471·73/(2000·235), 5473·75/(2000·233)] = [0.849751…, 0.880847…].
+        assert_eq!(
+            feasible_share(117, 1, 37, 2736),
+            Some(((399_383, 470_000), (410_475, 466_000)))
+        );
+        // Rounded outward; the bead's [0.8498, 0.8808] is the same exact interval rounded to nearest.
+        assert_eq!(
+            feasible_share_text(117, 1, 37, 2736).as_deref(),
+            Some("[0.8497, 0.8809]")
+        );
+        assert!(scaled_rate_holds(117, 1, 37, 2736, 85, 100));
+        assert!(scaled_rate_holds(117, 1, 37, 2736, 88, 100));
+        assert!(!scaled_rate_holds(117, 1, 37, 2736, 89, 100));
+    }
+
+    #[test]
+    fn test_scaled_rate_fit_synthetic() {
+        // Synthetic Site H: 1000·¾·400/150 = 2000 fits; 2200 does not.
+        assert!(scaled_rate_holds(400, 1, 150, 2000, 3, 4));
+        assert!(!scaled_rate_holds(400, 1, 150, 2200, 3, 4));
+        // 4399·299/(2000·801) = 0.821037…, 4401·301/(2000·799) = 0.828974…
+        assert_eq!(
+            feasible_share_text(400, 1, 150, 2200).as_deref(),
+            Some("[0.8210, 0.8290]")
+        );
+        // At s = 1 the scaled test is the unscaled one.
+        for (n, k, q, r) in [(79, 1, 68, 1162), (79, 1, 68, 1141), (200, 5, 100, 2400)] {
+            assert_eq!(
+                scaled_rate_holds(n, k, q, r, 1, 1),
+                rate_interval_holds(n, k, q, r)
+            );
+        }
+        // Non-positive inputs have no share interval (the run refuses them).
+        assert_eq!(feasible_share(0, 1, 37, 2736), None);
+        assert_eq!(feasible_share(117, 1, 0, 2736), None);
+        assert_eq!(feasible_share(117, 1, 37, -5), None);
+    }
+
+    /// The corner test and the feasible interval are the same rule: s fits iff lo ≤ s ≤ hi, end points included.
+    #[test]
+    fn test_corner_test_agrees_with_feasible_interval() {
+        let shares = [
+            (21, 25),
+            (123, 200),
+            (3, 5),
+            (4, 5),
+            (897, 1000),
+            (3, 4),
+            (1, 1),
+        ];
+        let mut fits = 0;
+        for n in [1, 2, 7, 117, 400] {
+            for q in [1, 3, 37, 150] {
+                for r in [1, 500, 2000, 2736, 9000] {
+                    let Some(((ln, ld), (hn, hd))) = feasible_share(n, 1, q, r) else {
+                        panic!("positive inputs have an interval")
+                    };
+                    for (a, b) in shares {
+                        let (a128, b128) = (i128::from(a), i128::from(b));
+                        let inside = cmp_frac(a128, b128, ln, ld) != Ordering::Less
+                            && cmp_frac(a128, b128, hn, hd) != Ordering::Greater;
+                        assert_eq!(
+                            scaled_rate_holds(n, 1, q, r, a, b),
+                            inside,
+                            "n={n} q={q} r={r} s={a}/{b}"
+                        );
+                        fits += usize::from(inside);
+                    }
+                }
+            }
+        }
+        // Both outcomes occur, so the agreement is not vacuous.
+        assert!(fits > 0 && fits < 5 * 4 * 5 * shares.len(), "{fits}");
+    }
+
+    fn sheet_of(name: &str, cells: Vec<(String, fmine_io::xlsx::MinimalCell)>) -> Sheet {
+        use fmine_io::xlsx::{MinimalSheet, Workbook, build_minimal_xlsx};
+        let bytes = build_minimal_xlsx(&[MinimalSheet {
+            name: name.to_string(),
+            hidden: false,
+            cells,
+        }]);
+        let wb = Workbook::from_bytes("t.xlsx", &bytes).expect("parses");
+        wb.sheet(name).expect("sheet").clone()
+    }
+
+    fn text(cell: &str, s: &str) -> (String, fmine_io::xlsx::MinimalCell) {
+        (
+            cell.to_string(),
+            fmine_io::xlsx::MinimalCell::Text(s.to_string()),
+        )
+    }
+
+    #[test]
+    fn test_share_label_confirmation() {
+        let qtd = sheet_of(
+            "QTD",
+            vec![
+                text("A5", "Carlin (61.5%)"),
+                text("A9", "Nevada Gold Mines LLC (61.5%)2"),
+                text("A10", "Cortez Hills (61.5%)"),
+                text("A19", "North Mara (84%)"),
+                text("B19", "North Mara (85%)"),
+            ],
+        );
+        assert_eq!(
+            confirm_share_label(&qtd, "Carlin", 123, 200).as_deref(),
+            Ok("A5")
+        );
+        // Trailing footnote digits are stripped; the registered label carries the "LLC".
+        assert_eq!(
+            confirm_share_label(&qtd, "Nevada Gold Mines LLC", 123, 200).as_deref(),
+            Ok("A9")
+        );
+        assert!(confirm_share_label(&qtd, "Nevada Gold Mines", 123, 200).is_err());
+        // Only column A is read, and the printed share must equal the registered one exactly.
+        assert_eq!(
+            confirm_share_label(&qtd, "North Mara", 21, 25).as_deref(),
+            Ok("A19")
+        );
+        assert_eq!(
+            confirm_share_label(&qtd, "North Mara", 17, 20),
+            Err("QTD!A19 prints 84%, registered 17/20".to_string())
+        );
+        // "Cortez" is not a prefix match for "Cortez Hills".
+        assert_eq!(
+            confirm_share_label(&qtd, "Cortez", 123, 200),
+            Err("no column-A label 'Cortez (x%)' on QTD".to_string())
+        );
+        let twice = sheet_of(
+            "QTD",
+            vec![text("A5", "Tongon (89.7%)"), text("A30", "Tongon (89.7%)6")],
+        );
+        assert_eq!(
+            confirm_share_label(&twice, "Tongon", 897, 1000),
+            Err("label 'Tongon' repeats on QTD at A5, A30".to_string())
+        );
+        assert_eq!(decimal_fraction("89.7"), Some((897, 10)));
+        assert_eq!(decimal_fraction("84"), Some((84, 1)));
+        for bad in ["", ".5", "8.4.1", "61.55555", "-5", "x"] {
+            assert_eq!(decimal_fraction(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn test_qtd_sheet_found_by_content() {
+        use fmine_io::xlsx::MinimalCell;
+        let qtd = |name: &str, period: &str, year: f64| {
+            sheet_of(
+                name,
+                vec![
+                    text("A1", "Summary of Operations"),
+                    text("A3", period),
+                    ("B3".to_string(), MinimalCell::Number(year)),
+                ],
+            )
+        };
+        let sheets = vec![
+            qtd("YTD", "For the six months ended June 30,", 2026.0),
+            qtd("Q", "For the three months ended June 30,", 2026.0),
+            qtd("Prior", "For the three months ended June 30,", 2025.0),
+        ];
+        assert_eq!(
+            find_qtd_sheet(&sheets, "2026Q2").map(|s| s.name.as_str()),
+            Ok("Q")
+        );
+        assert_eq!(
+            find_qtd_sheet(&sheets, "2025Q2").map(|s| s.name.as_str()),
+            Ok("Prior")
+        );
+        assert!(find_qtd_sheet(&sheets, "2026Q1").is_err());
+        assert!(find_qtd_sheet(&sheets, "2026Q5").is_err());
+    }
+
+    #[test]
+    fn test_share_footnote_found_by_text() {
+        let s = sheet_of(
+            "Q2 2026",
+            vec![
+                text("A30", "f.  Other footnote."),
+                text(
+                    "A32",
+                    "g.  COS/oz - Gold COS/oz is calculated as cost of sales across our gold operations \
+                     (excluding sites in closure or care and maintenance) divided by ounces sold (both on an \
+                     attributable basis using Barrick's ownership share). ",
+                ),
+            ],
+        );
+        assert_eq!(find_share_footnote(&s).as_deref(), Some("A32"));
+        let none = sheet_of(
+            "Q2 2026",
+            vec![text(
+                "A32",
+                "g.  Gold COS/oz is calculated as cost of sales divided by ounces sold.",
+            )],
+        );
+        assert_eq!(find_share_footnote(&none), None);
     }
 }
