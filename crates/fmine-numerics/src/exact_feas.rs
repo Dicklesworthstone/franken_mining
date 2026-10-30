@@ -2892,20 +2892,49 @@ mod tests {
             implied_interval(&cells, &ids, &r, &ounces, false),
             Err(ImpliedError::Infeasible)
         );
-        // Total cash costs J10 39 at J20 886 per ounce allow Q ∈ [1000·38.5/886.5, 1000·39.5/885.5] ⊇ the
-        // interval, so it is unchanged. The numerator is at step 1, the narrowest: more lines only widen it.
-        cells.push(veladero("J10", 39, "39"));
-        cells.push(veladero("J20", 886, "886"));
-        ids.push(ratio(
-            "tcc_per_oz",
-            &veladero_locator("J20"),
-            &veladero_locator("J10"),
-            &ounces,
-            int(1000),
-        ));
+        // Adding the other two rates, each numerator with aisc.rs's k half-widths. k counts the numeric line
+        // cells (`aisc.rs` `Calc::Rate`): all of J5:J9 for total cash costs (k = 5) and all of J5:J9 and J11:J16
+        // for AISC (k = 11), read locally from the workbook's cell types, not values.
+        let with_rates = |cells: &mut Vec<Cell>, ids: &mut Vec<Identity>, aisc_k: i128| {
+            cells.push(Cell {
+                step: int(5),
+                ..veladero("J10", 39, "39")
+            });
+            cells.push(veladero("J20", 886, "886"));
+            cells.push(Cell {
+                step: int(aisc_k),
+                ..veladero("J17", 84, "84")
+            });
+            cells.push(veladero("J21", 1915, "1,915"));
+            for (id, rate, num) in [("tcc_per_oz", "J20", "J10"), ("aisc_per_oz", "J21", "J17")] {
+                ids.push(ratio(
+                    id,
+                    &veladero_locator(rate),
+                    &veladero_locator(num),
+                    &ounces,
+                    int(1000),
+                ));
+            }
+        };
+        // TCC 39 ± 2.5 at 886 and AISC 84 ± 5.5 at 1,915 allow Q in [1000·36.5/886.5, 1000·41.5/885.5] and
+        // [1000·78.5/1915.5, 1000·89.5/1914.5], both ⊇ the interval: it is unchanged, as E691's inference says.
+        let (mut all_cells, mut all_ids) = (cells.clone(), ids.clone());
+        with_rates(&mut all_cells, &mut all_ids, 11);
+        assert_eq!(
+            implied_interval(&all_cells, &all_ids, &r, &ounces, true),
+            Ok(implied)
+        );
+        // The inference needs k ≥ 2 for AISC: at k = 1 its [1000·83.5/1915.5, 1000·84.5/1914.5] binds on both
+        // sides, giving [167000/3831, 169000/3829] ≈ [43.59, 44.14].
+        with_rates(&mut cells, &mut ids, 1);
         assert_eq!(
             implied_interval(&cells, &ids, &r, &ounces, true),
-            Ok(implied)
+            Ok(Interval {
+                lo: q(167_000, 3831),
+                hi: q(169_000, 3829),
+                lo_strict: false,
+                hi_strict: false
+            })
         );
     }
 
