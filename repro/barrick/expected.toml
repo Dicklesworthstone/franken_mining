@@ -224,3 +224,22 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "The Mine Stats ledger adds summary against site sheet (frame v7); no AISC state moves."
 evidence = "BD-331.S4, bd-prmn.4, E842"
+
+# Observed from the release binary of d263206 (git archive, own target directory; exit 0, empty stderr). No AISC
+# state moves: the totals equal 8b990a0's. The root moves because the Mine Stats ledger adds the sum families in
+# the v7 frame: sites to region 306 (282 (i), 24 (v) withheld) and region to total 204 (i), decided alone and never
+# posed, so the 2,091 components and 27 infeasible are unchanged. No registry file row or cell changes.
+[[expected]]
+commit = "d263206"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "493a8ab1cd46249c178d8da8bc67c69c280574d2e1b6d08ca85444b873a254c3"
+anchor_id = "anc_f153ce2165605f84c6b01ea193b1cba1"
+totals_i = 2436
+totals_ii = 3
+totals_iii = 4
+totals_iv = 92
+totals_v = 0
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "The Mine Stats ledger adds the sum families 3-4 (frame v7, no format change); no AISC state moves."
+evidence = "BD-331.S4, bd-prmn.4, E843"

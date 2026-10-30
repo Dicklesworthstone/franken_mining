@@ -995,3 +995,51 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     observed from the release binary of 8b990a0 (exit 0, empty stderr), with AISC totals unchanged;
     `repro/barrick/expected.toml` has the row. The synthetic port root moves too; at v6 the old root returns.
   - **Verification.** Self-verified on this machine only; nothing has run in CI.
+- **E843** Mine Stats sites to region and region to total (the plan's families 3 and 4) decided in exact
+  arithmetic (BD-331.S4, bd-prmn.4; FACT, execution, 2026-10-30, owner machine).
+  - **Rule.** `fmine-public::mine_ledger`, on each summary sheet, gold flow field and column group:
+    - A region row = Σ its registered members in the release's map (`[[region_member]]`). A member's row is
+      found by its subject or by its registered Mine Stats label, so "Nevada Gold Mines LLC" for the subject
+      "Nevada Gold Mines". A member printed under both names is refused at the row printed first.
+    - `Total Gold` = Σ the regions of the release's map, not every region row printed. `Total Copper` = Σ the
+      copper block's site rows, in row order.
+    - Refused, in order: a withheld member for the period (E818); a region with no member in the map
+      (`region_not_in_map`); a missing row; a member under both names; a blank. All placeholders are not
+      published; any placeholder but the nil token is refused. The nil token is exactly 0, with a `nil_token`
+      certificate.
+    - Each sum is decided alone by |Σ parts − total| ≤ Σ half-steps over every operand: the kernel's answer
+      for one sum with every box rounded once. Sums are never posed jointly, because a sum links every site of
+      a block and would merge the other families' components past the exhaustive correction search.
+  - **Independent reader.** The census's families 3–4 (c697b13) were written first by a subagent from a rule
+    statement, without reading the crate. The rule statement and the Rust share one origin (this agent).
+  - **Result.**
+    - The ignored test `barrick_mine_ledger_matches_census` runs the census. All 5,174 instance lines are equal,
+      with a sum's member cells compared as a set: the census lists a map's members in its rule's order, the
+      ledger in registry row order, and they differ only for North America from 2025Q4.
+    - Sites to region 306: 282 (i), 41 of them by the nil token; 24 (v), Loulo-Gounkoto withheld (E818).
+      Region to total 204: 204 (i). These counts are pinned in the test. The other families, the 2,091
+      components and the 27 infeasible are unchanged.
+  - **Not claimed.**
+    - No sum is (iii) in this corpus, so the real files show only the consistent and refused paths.
+    - The Nevada Gold Mines LLC sub-sum (Carlin, Cortez, Turquoise Ridge, Phoenix, and Long Canyon in 2024) is
+      not posed; it needs a registry table. Making the LLC a region would drop its ownership instances.
+    - A member under both names, a region outside the map and a missing member do not occur here; synthetic
+      tests only.
+    - Whether a region row and its members are independent prints is not examined.
+    - The ledger's counts stay apart from the AISC totals; no AISC state moves.
+  - **Tests.** Seven synthetic tests, default suite:
+    - the slack bound on both sides, for gold (148–152 against 150) and for copper (54–60 against 57, the
+      bound included);
+    - a region discrepancy that neither reaches the total nor forms a component;
+    - the nil token, all nil, `n/a` and a blank;
+    - the label, its absence, and both names in either order;
+    - a region outside the map, a missing member, and a map region with no row;
+    - a withheld member by period;
+    - the closed form against the kernel on 400 pseudo-random sums of mixed steps.
+  - **Planted negatives, each reverted.** Each fails at least one test: a strict bound (three tests); no row
+    order for a member under both names; the nil token read as a placeholder; `Total Gold` over every
+    registered region.
+  - **Root.** The sum families add instances to frame v7 with no format change. The root moves to
+    `493a8ab1…`, observed from the release binary of d263206 (exit 0, empty stderr), with AISC totals
+    unchanged; `repro/barrick/expected.toml` has the row, and the ignored expected-root test passes on it.
+  - **Verification.** Self-verified on this machine only; nothing has run in CI.
