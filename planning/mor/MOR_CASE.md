@@ -735,3 +735,50 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     (`repro/barrick/expected.toml`, row appended, observed from the binary of 3a73653).
   - **Next research hour.** The Q4 2025 release's basis change, read across the six subjects. Then the Nevada
     (61.5%) share rule, which fails for Carlin in 25 of 34 columns and for NGM in 23 of 34.
+- **E837** The Q4 2025 one-cell failures have no single cause, and no issuer statement closes them (bd-10om;
+  FACT, documents and arithmetic, 2026-10-30, owner machine; null result).
+  - **What was read.**
+    - `Barrick_Q4_2025_MD-A.pdf`, year-end 2025:
+      - the per-segment reconciliation, three months to 12/31/25, p. 61, with footnotes g ("cost of sales …
+        divided by ounces sold (both on an attributable basis using Barrick's ownership share)") and h ("may not
+        calculate … due to rounding");
+      - the consolidated reconciliation and its footnotes a–i;
+      - "Other Mines – Gold", p. 37, footnote d: Hemlo was sold on 2025-11-26, with results up to closing;
+      - Veladero's Q4 narrative.
+    - `Barrick_Q4_2025_Mine_Stats.xlsx`: sales and cost of sales per ounce, `Minestats1!N36`/`N38` (Hemlo 27,
+      1,738) and `Minestats2!B28`/`B30` (Veladero 47, 1,526).
+    - Every one of these documents prints the AISC workbook's operands. `Barrick_Q1_2026_AISC.xlsx` reprints the
+      Q4 2025 and 2025 sheets unchanged.
+    - No note names an ounce or cost basis for the per-ounce rates other than footnote g. The one Q4 2025
+      adjustment the notes do name is Loulo-Gounkoto's $283 million fair-value inventory removal, which concerns
+      none of the six subjects.
+  - **The failures split three ways.** The arithmetic is exact, with each printed figure x read as x ± ½.
+    - **Hemlo and Veladero: the rates use fewer ounces than the "ounces sold" line.**
+      - Veladero Q4 2025. Cost of sales 67, total cash costs 39 and AISC 84 against 1,526, 886 and 1,915 $/oz
+        imply ounces in [43.564, 44.248], [43.429, 44.608] and [43.592, 44.137]. The common range
+        [43.592, 44.137] misses the printed 47.
+      - Hemlo Q4 2025. 44, 43 and 51 against 1,738, 1,707 and 1,976 imply [25.022, 25.612], [24.890, 25.491]
+        and [25.550, 26.069]. That is just short of a common count, and far from the printed 27.
+      - The rates themselves are not in doubt. The narrative's "COS/oz and TCC/oz in Q4 2025 were both 13% higher"
+        than Q3 matches the printed rates (1,352 to 1,526, 787 to 886); the operands give 67/47 ≈ 1,426.
+      - A Q4-only exclusion fits both the quarter and the year, under the ledger's posing (E836):
+        - Veladero: Q4 gap [2.25, 3.94] koz, FY gap [1.07, 3.03], overlap [2.25, 3.03];
+        - Hemlo: Q4 [0.89, 2.48], FY [1.06, 2.67], overlap [1.06, 2.48].
+      - Ounces produced (Hemlo 26, Veladero 48; FY 123 and 230) close only Hemlo's Q4 cost of sales, so
+        production is not the rule.
+    - **Carlin, Cortez and Nevada Gold Mines: the Nevada share rule, not a Q4 item.** At 1000·s·N/Q, the six
+      columns need s in:
+      - Q4 2025: Carlin [0.61020, 0.61439], Cortez [0.60661, 0.61319], NGM [0.60981, 0.61192];
+      - FY 2025: Carlin [0.61182, 0.61340], Cortez [0.61222, 0.61444], NGM [0.61273, 0.61362].
+      None contains the registered 0.615. These columns are part of E826's and E836's Nevada misses, not of the
+      period.
+    - **Kibali Q4 2025 (printed twice): the opposite direction, at 100%.** 123 and 78 against 1,557 need a
+      factor in [0.97675, 0.99807]: the printed ounces are 0.15–1.84 koz below what the rate implies.
+  - **Verdict.** No single rule closes the 17 columns, and none is stated. The registered missing facts
+    stand, and no state, registry row or root changes. E836's "a shared period" is a coincidence of three
+    effects; only Hemlo's and Veladero's is specific to Q4 2025.
+  - **What would decide it.** A Hemlo and Veladero ounce quantity, of about 1–2.5 koz and 2.25–3 koz, excluded
+    from the per-ounce denominator in Q4 2025 only. Look for it in the Q4 2025 financial statements' inventory
+    or revenue notes (for example, ounces delivered under a sale agreement or provisionally priced), or ask
+    investor relations. Hemlo's sale on 2025-11-26 is one candidate for Hemlo. Nothing in the documents read
+    suggests one for Veladero.
