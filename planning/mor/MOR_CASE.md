@@ -658,3 +658,11 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
   Their `url_basis` changes from "W1 naming rule" (INFERENCE) to "fetched and verified 2026-10-30". The Q1 2025
   path `2025/01/` breaks the naming rule, yet it is the URL the registry already held, and it served the
   registered bytes. No URL needed correcting. The fetch ran on the owner machine, not in CI.
+- **E832** The kit README's commands, followed on a fresh clone of 7658f55 (BD-339.S4, bd-s4oy.4; FACT,
+  execution, 2026-10-30). The run was by the applying agent, not by the owner. The clone came from the local
+  repository because GitHub did not yet hold the commit.
+  - **Fetch.** `repro/barrick/fetch.sh`: `{"stage":"fetch_summary","files":18,"ok":18,"failed":[]}`, a second
+    clean download of all 18 files that matched the registry.
+  - **Tests.** `cargo test -p fmine-public -p fmine-cli -- --ignored`: 6 of 6 passed.
+  - **Root.** `cargo run -q -p fmine-cli -- assure public --issuer barrick --through 2026Q2` printed certificate
+    `fb8b38c2…` and anchor `anc_8874c61ae1fd136b9b64ed92deb763c9`, equal to `expected.toml`'s last row.
