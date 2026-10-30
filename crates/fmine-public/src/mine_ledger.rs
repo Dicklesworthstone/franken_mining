@@ -39,7 +39,7 @@
 //!   the members' weighted means sit at vertices of the weight box, and a feasible answer carries a witness checked
 //!   exactly. A conflict is (iv), naming the region's and members' costs in dollars, not (iii): the issuer may
 //!   weight by quantities it does not publish. Never posed jointly. The AISC tables' regional check
-//!   (`aisc::regional_state`) still uses the kernel's McCormick relaxation, which can only refute.
+//!   (`aisc::regional_state`) runs the same decision where the kernel's McCormick relaxation does not refute.
 //!
 //! Exclusions by name come first: a subject whose registered status is `withheld` for the whole period of an
 //! operand (Loulo-Gounkoto Q1–Q3 2025, E818; for a region sum, a member's), and a region whose registered
@@ -51,9 +51,9 @@
 //!
 //! Every decided instance but the sums and sold-weighted rates is then posed jointly. Instances that share a cell
 //! form a component: a 100% cell is in its ownership identity and in quarter sums, and a cumulative is the total
-//! of one sum and an operand of the next. For each infeasible component the kernel's blame gives every minimum correction set, with
-//! the range each of its cells can take, never a corrected value. A component can be infeasible though each of
-//! its identities is consistent alone (`joint_only`); its instances stay (i).
+//! of one sum and an operand of the next. For each infeasible component the kernel's blame gives every minimum
+//! correction set, with the range each of its cells can take, never a corrected value. A component can be
+//! infeasible though each of its identities is consistent alone (`joint_only`); its instances stay (i).
 //!
 //! A cell the Mine Stats reader refused is not in its values, so an instance that needs it is refused as a
 //! missing row; the reader's refusals are reported with the read.
@@ -1283,7 +1283,7 @@ fn at_most(x: Rat, y: Rat) -> Option<bool> {
 }
 
 /// A closed box `[lo, hi]`.
-type Interval = (Rat, Rat);
+pub(crate) type Interval = (Rat, Rat);
 
 /// Whether `R·Σwᵢ = Σ rᵢ·wᵢ` holds for true values in the closed boxes `region` = [e, f] (R) and `parts` =
 /// ([aᵢ, bᵢ] for rᵢ, [cᵢ, dᵢ] for wᵢ), every cᵢ > 0. `None` on overflow, past 16 parts, or a witness that fails
@@ -1295,8 +1295,12 @@ type Interval = (Rat, Rat);
 /// U ≥ e; along the segment between them U crosses e, where L ≤ U = e ≤ f. L and U are linear-fractional with a
 /// positive denominator, so their extremes over the weight box are at its vertices. A feasible answer is returned
 /// with a witness: weights at a vertex or at that crossing, R = max(e, L(w)), rates on the segment from (aᵢ) to
-/// (bᵢ), each value checked against its box and the identity checked exactly.
-fn weighted_mean_holds(region: Interval, parts: &[(Interval, Interval)]) -> Option<bool> {
+/// (bᵢ), each value checked against its box and the identity checked exactly. The AISC tables' regional rule uses
+/// it too (`aisc::regional_state`).
+pub(crate) fn weighted_mean_holds(
+    region: Interval,
+    parts: &[(Interval, Interval)],
+) -> Option<bool> {
     let n = parts.len();
     if n == 0 || n > 16 {
         return None;

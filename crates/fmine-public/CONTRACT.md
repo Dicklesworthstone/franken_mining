@@ -160,8 +160,9 @@ The public lane of M0 (`fmine assure public`).
   - **Test:** `test_operands_cover_every_input_cell` perturbs every other synthetic cell, one at a time, and
     fails on any state change it causes that the operands do not cite.
   `IdentityState::Consistent` carries `basis`: `ConsistentBasis::Share` (the stated share, footnote and label
-  it used), `ConsistentBasis::Members` (a region's weighting, `relaxation_only`: no conflict shown, no value
-  proved; the report counts these), or `None`;
+  it used), `ConsistentBasis::MembersExact` (a region's weighting, reached by a weighted mean checked exactly),
+  `ConsistentBasis::Members` (a region's weighting, `relaxation_only`: no conflict shown, no value proved; the
+  report counts these), or `None`;
   `IdentityState::Explained` carries `basis: ExplanationBasis`; `IdentityState::Undecidable` carries
   `missing_fact` and `closing_document`; `IdentityState::RefusedAt` is (v) naming a cell or file.
 - `mine_stats::{View, MineStatsCell, MineStatsValue, CellRefusal, MineStatsRead, LabelVocabulary, read_mine_stats,
@@ -298,8 +299,14 @@ The public lane of M0 (`fmine assure public`).
   `exact_feas::region_against_members` poses the weighted mean with no numerator (the table prints consolidated
   cost of sales, not the attributable numerator). Its McCormick relaxation either refutes the rate with a
   checked certificate (iv, `region_outside_members`, carrying the weighting and the certificate digest, with
-  `REGION_MISSING_FACT`), or does not: (i) with `ConsistentBasis::Members`, `relaxation_only`. The rounded-once
-  alternative is reported, never scored. The instance is (v) instead, naming a cell where it has one, when:
+  `REGION_MISSING_FACT`), or does not. Then the exact decision (`mine_ledger::weighted_mean_holds`, the
+  members' ounces free of the region's box as under the component sum) gives (i) with
+  `ConsistentBasis::MembersExact` when weights and rates in their boxes reach the rate, the witness checked
+  exactly; (iv) `region_outside_members` with the certificate `EXACT_REGION_REFUTATION` when none do (a
+  safety net: no synthetic case was found where the relaxation misses a refutation); and (i) with
+  `ConsistentBasis::Members`, `relaxation_only`, only when it gives no answer (overflow, more than 16 members).
+  The rounded-once alternative is reported, never scored. The instance is (v) instead, naming a cell where it
+  has one, when:
   - a member's rate or ounces is anything else, or its ounces are negative (`region_member_operand`, at the
     rate's cell when the rate is not whole, else the ounces'), or a member heads two columns (at the second
     header);
@@ -316,7 +323,8 @@ The public lane of M0 (`fmine assure public`).
   append-only, and a default-CI test checks each row's form and that its anchor derives from its root.
   - **Ledger:** 34 visible AISC tables, 2,595 instances. Footing: 1,010 (i), 4 (iii), 24 not published.
     Per ounce, after the region rule (E840): 1,426 (i), 3 (ii), 92 (iv), 36 not published, none (v); 41 of the
-    (i) are `relaxation_only`. Before the stated share rule (E826) the counts were 1,116 (i), 17 (iv) and 385
+    (i) are regions, each proved by the exact decision since E845 (before it, `relaxation_only`), none
+    `relaxation_only`. Before the stated share rule (E826) the counts were 1,116 (i), 17 (iv) and 385
     (v); E838 (displayed values) and E840 took the rest out of (v).
   - **Alternative construction:** 1,014 footing and 1,304 rate instances consistent.
   - **Identities:** each (ii) and (iii) instance is identified.
@@ -381,17 +389,20 @@ The public lane of M0 (`fmine assure public`).
     65 are not, so the verdict is "basis rule". The root does not move.
   - **Synthetic:** 10 columns, and Site I fails at both bases with known implied ounces. A share registered
     wrong for Site H (3/5, labelled 60%) fails at that basis and gives "basis rule".
-- `PO-PUB-10` (region against members, BD-331.S4, MOR_CASE E840):
+- `PO-PUB-10` (region against members, BD-331.S4, MOR_CASE E840, E845):
   - **Real files** (ignored test `barrick_regions_match_region_census`): the 51 visible and 3 hidden regional
-    rates the stated-share census leaves to member weighting are decided: visible 41 not refuted (i,
-    `relaxation_only`) and 10 refuted (iv); hidden 2 and 1. Each instance's verdict, reason, cell and used,
-    absent and excluded members equal `scripts/oracle/region_census.py` (57a5aa5, an exact vertex check written
-    before the Rust and without reading it), run in the test. The 41 are also consistent under the rounded-once
-    alternative (the kernel's result; no independent reader computes it).
-  - **Synthetic** (default suite): Region North over Site H and Site I is not refuted at 2099, 2100 and 2101,
-    and refuted at 2098, 2102, 1900 and 2300, where the exact bound is [2099⅙, 2100⅚]. Every refusal and
-    exclusion names its cell or member; a footnote-less sheet and a release before the members' first keep the
-    earlier refusals.
+    rates the stated-share census leaves to member weighting are decided: visible 41 consistent (i,
+    `MembersExact`, each with a witness checked exactly) and 10 refuted (iv, each by a McCormick certificate);
+    hidden 2 and 1. None is `relaxation_only` (the test pins 41 and 2 exact, 0 relaxation-only). Each instance's
+    verdict, reason, cell and used, absent and excluded members equal `scripts/oracle/region_census.py`
+    (57a5aa5, an exact vertex check written before the Rust and without reading it), run in the test. The 41 are
+    also consistent under the rounded-once alternative (the kernel's relaxation; no independent reader computes
+    it).
+  - **Synthetic** (default suite): Region North over Site H and Site I is (i), exactly, at 2099, 2100 and 2101,
+    and refuted at 2098, 2102, 1900 and 2300, where the exact bound is [2099⅙, 2100⅚]. Over Site H at 1000 and
+    Site I at 2000 on one ounce each the bound is [1249½, 1750½]: 1249 and 1751 touch it and are (i), exactly;
+    1248 and 1752 are refuted. Every refusal and exclusion names its cell or member; a footnote-less sheet and a
+    release before the members' first keep the earlier refusals.
 - `PO-PUB-11` (Mine Stats ownership, quarter sums, summary against site sheet, the sum families and the
   sold-weighted rate, BD-331.S4, bd-prmn.4, MOR_CASE E841, E842, E843, E844):
   - **Real files** (ignored test `barrick_mine_ledger_matches_census`): 10 releases, 5,480 instances. Ownership

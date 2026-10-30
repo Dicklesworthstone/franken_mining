@@ -1790,6 +1790,10 @@ fn encode_state(enc: &mut Encoder, state: &IdentityState) {
                     enc.put_u8(2);
                     weighting(enc, w);
                 }
+                Some(ConsistentBasis::MembersExact(w)) => {
+                    enc.put_u8(3);
+                    weighting(enc, w);
+                }
             }
         }
         IdentityState::Explained {
@@ -2532,8 +2536,8 @@ mod tests {
 
     /// BD-331.S4: a region's rate is weighed against its registered members. Site H prints 2000 and Site I 2200,
     /// each on 150 ounces, so with every printed value ± ½ the weighted mean lies in [2099⅙, 2100⅚]: Region
-    /// North at 2100 is not refuted, (i) `relaxation_only`; at 2300 or 1900 the McCormick relaxation refutes it
-    /// with a checked certificate, (iv), naming what public data leaves open.
+    /// North at 2100 is (i), proved by the exact decision, not `relaxation_only`; at 2300 or 1900 the McCormick
+    /// relaxation refutes it with a checked certificate, (iv), naming what public data leaves open.
     #[test]
     fn test_region_weighed_against_members() {
         let profile = region_profile("2030Q1");
@@ -2551,16 +2555,16 @@ mod tests {
             h14,
             &IdentityState::Consistent {
                 alternate_consistent: true,
-                basis: Some(ConsistentBasis::Members(weighting.clone())),
+                basis: Some(ConsistentBasis::MembersExact(weighting.clone())),
             }
         );
         assert_eq!(
             h14.detail(),
-            "alternate_construction_consistent=true; relaxation_only; weighted by ounces sold over Site H \
+            "alternate_construction_consistent=true; exact weighted mean; weighted by ounces sold over Site H \
              K14/K13, Site I L14/L13"
         );
-        assert_eq!(r.relaxation_only(), 1);
-        assert!(r.to_json().contains("\"relaxation_only\":1,"));
+        assert_eq!(r.relaxation_only(), 0);
+        assert!(r.to_json().contains("\"relaxation_only\":0,"));
         let region = r
             .instances
             .iter()
@@ -2614,6 +2618,46 @@ mod tests {
         }
     }
 
+    /// BD-331.S4: the exact decision's bounds are closed. Site H prints 1000 and Site I 2000, each on 1 ounce, so
+    /// with every value ± ½ the members' weighted means span exactly [1249½, 1750½], reached only with both
+    /// weights and both rates at a corner of their boxes. 1249 ± ½ and 1751 ± ½ touch that range at one point and
+    /// are (i), proved; 1248 and 1752 are (iv), refuted by the McCormick relaxation.
+    #[test]
+    fn test_region_exact_bounds_are_closed() {
+        let profile = region_profile("2030Q1");
+        let light = [
+            ("H13", MinimalCell::Number(2.0)),
+            ("K13", MinimalCell::Number(1.0)),
+            ("L13", MinimalCell::Number(1.0)),
+            ("K14", MinimalCell::Number(1000.0)),
+            ("L14", MinimalCell::Number(2000.0)),
+        ];
+        for rate in [1249.0, 1751.0] {
+            let r = region_run(&profile, rate, &light);
+            assert!(
+                matches!(
+                    state_of(&r, "H14", IdentityFamily::CosPerOunce),
+                    IdentityState::Consistent {
+                        basis: Some(ConsistentBasis::MembersExact(_)),
+                        ..
+                    }
+                ),
+                "{rate}"
+            );
+            assert_eq!(r.relaxation_only(), 0);
+        }
+        for rate in [1248.0, 1752.0] {
+            let r = region_run(&profile, rate, &light);
+            match state_of(&r, "H14", IdentityFamily::CosPerOunce) {
+                IdentityState::Undecidable {
+                    why: Undecided::RegionOutsideMembers { certificate, .. },
+                    ..
+                } => assert_eq!(certificate.len(), 64, "{rate}: {certificate}"),
+                other => panic!("{rate}: {other:?}"),
+            }
+        }
+    }
+
     /// BD-331.S4: members that sold nothing (rate and ounces both zero, or both placeholders) are left out by
     /// name, and a registered member the sheet does not print is named as absent; the rest are weighed.
     #[test]
@@ -2635,7 +2679,7 @@ mod tests {
                 state_of(&r, "H14", IdentityFamily::CosPerOunce),
                 &IdentityState::Consistent {
                     alternate_consistent: true,
-                    basis: Some(ConsistentBasis::Members(MemberWeighting {
+                    basis: Some(ConsistentBasis::MembersExact(MemberWeighting {
                         used: vec![weighed("Site H", "K", 2000, 150)],
                         excluded: vec!["Site I".to_string()],
                         absent: Vec::new(),
@@ -2657,7 +2701,7 @@ mod tests {
         let r = region_run(&with_absent, 2100.0, &[]);
         match state_of(&r, "H14", IdentityFamily::CosPerOunce) {
             IdentityState::Consistent {
-                basis: Some(ConsistentBasis::Members(w)),
+                basis: Some(ConsistentBasis::MembersExact(w)),
                 ..
             } => assert_eq!(w.absent, ["Site Z"]),
             other => panic!("{other:?}"),
@@ -3463,9 +3507,9 @@ mod tests {
         assert!(ledger_moved > 0);
     }
 
-    /// BD-331.S4: the same sweep with Region North weighed against Site H and Site I (not refuted at 2100). Every
-    /// cell that moves the region's state is among its operands, the member cells included, and the region's
-    /// state does move with each member's rate and ounces.
+    /// BD-331.S4: the same sweep with Region North weighed against Site H and Site I (consistent at 2100, exactly).
+    /// Every cell that moves the region's state is among its operands, the member cells included, and the
+    /// region's state does move with each member's rate and ounces.
     #[test]
     fn test_region_operands_cover_every_input_cell() {
         let profile = region_profile("2030Q1");
@@ -3479,7 +3523,14 @@ mod tests {
             Lane::Synthetic,
             load_synthetic(synthetic::synthetic_workbooks(&edits)).expect("parse"),
         );
-        assert_eq!(r.relaxation_only(), 1);
+        assert!(matches!(
+            state_of(&r, "H14", IdentityFamily::CosPerOunce),
+            IdentityState::Consistent {
+                basis: Some(ConsistentBasis::MembersExact(_)),
+                ..
+            }
+        ));
+        assert_eq!(r.relaxation_only(), 0);
         let (_, deps) = observed_dependencies(&profile, &edits);
         let missing = uncited(&r, &deps);
         assert!(missing.is_empty(), "{missing:#?}");
@@ -5275,7 +5326,7 @@ mod tests {
     fn region_record(i: &IdentityInstance) -> Option<String> {
         let (verdict, reason, at, weighting) = match &i.state {
             IdentityState::Consistent {
-                basis: Some(ConsistentBasis::Members(w)),
+                basis: Some(ConsistentBasis::Members(w) | ConsistentBasis::MembersExact(w)),
                 ..
             } => ("not_refuted", None, None, Some(w)),
             IdentityState::Undecidable {
@@ -5381,7 +5432,27 @@ mod tests {
             assert_eq!(census_summary, summary, "{scope}");
             assert_eq!(ours, census, "{scope}");
         }
-        assert_eq!(r.relaxation_only(), 41);
+        // The census's check is exact (vertex enumeration), and so is the ledger's since E845: every region the
+        // census does not refute is (i) with a checked witness, none `relaxation_only`.
+        let exact = |instances: &[IdentityInstance]| {
+            instances
+                .iter()
+                .filter(|i| {
+                    matches!(
+                        i.state,
+                        IdentityState::Consistent {
+                            basis: Some(ConsistentBasis::MembersExact(_)),
+                            ..
+                        }
+                    )
+                })
+                .count()
+        };
+        assert_eq!(
+            (exact(&r.instances), exact(&r.hidden_scope.instances)),
+            (41, 2)
+        );
+        assert_eq!(r.relaxation_only(), 0);
     }
 
     /// A share as the census prints it: the percentage as an exact decimal (`61.5`, `84`).

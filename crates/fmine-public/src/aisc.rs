@@ -19,7 +19,9 @@
 //! A region's cost-of-sales rate (BD-331.S4) is checked against its registered members for the release, weighted
 //! by attributable ounces sold: the members' ounces must foot to the region's under the component sum, and the
 //! McCormick relaxation of `rate·Σwᵢ = Σ rateᵢ·wᵢ` either refutes the rate with a checked certificate (iv) or
-//! does not, which is (i) qualified `relaxation_only`: no conflict shown, no value proved.
+//! does not. Then the exact decision (`mine_ledger::weighted_mean_holds`) finds weights and rates in their boxes
+//! that reach the rate, checked exactly, which is (i) `MembersExact`, or none, which is (iv); only when it gives
+//! no answer is the rate (i) qualified `relaxation_only`: no conflict shown, no value proved.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -102,7 +104,7 @@ pub struct FootingCertificate {
 pub enum IdentityState {
     /// (i) The printed numbers satisfy the declared construction. `basis` cites the stated share, footnote and
     /// label when the construction needed one (BD-331.S3), or the members a region's rate was weighed against,
-    /// which is `relaxation_only` (BD-331.S4).
+    /// exactly or `relaxation_only` (BD-331.S4).
     Consistent {
         alternate_consistent: bool,
         basis: Option<ConsistentBasis>,
@@ -299,9 +301,13 @@ impl StatedShare {
 pub enum ConsistentBasis {
     /// The registered, label-confirmed share the rate was checked at (BD-331.S3).
     Share(StatedShare),
-    /// A region the McCormick relaxation of its members' weighted mean does not refute (BD-331.S4,
-    /// `relaxation_only`): no conflict is shown, and no value is proved.
+    /// A region the McCormick relaxation of its members' weighted mean does not refute and the exact decision
+    /// gave no answer for (BD-331.S4, `relaxation_only`): no conflict is shown, and no value is proved.
     Members(MemberWeighting),
+    /// A region some weighted mean of its members reaches exactly (BD-331.S4): weights and rates inside their
+    /// printed boxes whose weighted mean is a rate inside the region's, checked exactly
+    /// (`mine_ledger::weighted_mean_holds`).
+    MembersExact(MemberWeighting),
 }
 
 impl ConsistentBasis {
@@ -310,6 +316,7 @@ impl ConsistentBasis {
         match self {
             Self::Share(s) => s.text(),
             Self::Members(m) => format!("relaxation_only; {}", m.text()),
+            Self::MembersExact(m) => format!("exact weighted mean; {}", m.text()),
         }
     }
 }
@@ -393,7 +400,8 @@ pub enum Undecided {
     },
     /// A region's rate lies outside every weighted mean its members' printed rates and ounces allow
     /// (BD-331.S4): the McCormick certificate (`certificate`, its digest) refutes "the region is these members,
-    /// weighted by attributable ounces sold". It blames no cell.
+    /// weighted by attributable ounces sold", or, where the relaxation does not, the exact decision does
+    /// (`certificate` is then [`EXACT_REGION_REFUTATION`]). It blames no cell.
     RegionOutsideMembers {
         weighting: MemberWeighting,
         certificate: String,
@@ -511,6 +519,14 @@ impl Undecided {
                     check.text()
                 )
             }
+            Self::RegionOutsideMembers {
+                weighting,
+                certificate,
+            } if certificate == EXACT_REGION_REFUTATION => format!(
+                "the region's rate lies outside every weighted mean of its members' printed rates, {}; refuted by \
+                 the exact decision, which the McCormick relaxation does not refute",
+                weighting.text()
+            ),
             Self::RegionOutsideMembers {
                 weighting,
                 certificate,
@@ -1652,8 +1668,10 @@ impl MemberVal {
 /// numbers with ounces not zero, and left out as having sold nothing when both are zero or both placeholders;
 /// anything else refuses, naming the cell (the rate's if it is not whole, else the ounces'). The weighed members'
 /// ounces must sum to the region's (the declared component sum). Then the McCormick relaxation of the weighted
-/// mean: a checked certificate is (iv), no refutation is (i) `relaxation_only`. The alternative construction
-/// (the region's ounces rounded once) is reported, never scored.
+/// mean: a checked certificate is (iv). Where it does not refute, the exact decision runs: weights reaching the
+/// rate, their witness checked, are (i) `MembersExact`; none is (iv) ([`EXACT_REGION_REFUTATION`]); no answer
+/// (overflow, more than 16 members) leaves (i) `relaxation_only`. The alternative construction (the region's
+/// ounces rounded once) is reported, never scored.
 fn regional_state(
     sheet: &Sheet,
     t: &AiscTable,
@@ -1733,14 +1751,51 @@ fn regional_state(
             missing_fact: REGION_MISSING_FACT.to_string(),
             closing_document: None,
         },
-        Ok((None, alternate_consistent)) => IdentityState::Consistent {
-            alternate_consistent,
-            basis: Some(ConsistentBasis::Members(weighting)),
+        Ok((None, alternate_consistent)) => match exact_region_holds(miss.r, &weighting) {
+            Some(true) => IdentityState::Consistent {
+                alternate_consistent,
+                basis: Some(ConsistentBasis::MembersExact(weighting)),
+            },
+            Some(false) => IdentityState::Undecidable {
+                why: Undecided::RegionOutsideMembers {
+                    weighting,
+                    certificate: EXACT_REGION_REFUTATION.to_string(),
+                },
+                missing_fact: REGION_MISSING_FACT.to_string(),
+                closing_document: None,
+            },
+            None => IdentityState::Consistent {
+                alternate_consistent,
+                basis: Some(ConsistentBasis::Members(weighting)),
+            },
         },
         Err(_) => IdentityState::Refused {
             reason: RefusedReason::KernelIndeterminate,
         },
     }
+}
+
+/// The `certificate` of a region the exact decision refutes where the McCormick relaxation does not (BD-331.S4).
+pub const EXACT_REGION_REFUTATION: &str = "exact_weighted_mean";
+
+/// The exact decision on a region's printed rate `r` against its weighed members, every printed value a whole
+/// number standing for its closed box ±½, the members' ounces free of the region's (the component sum):
+/// `Some(true)` with a witness checked exactly, `Some(false)` when no weights reach the rate, `None` on overflow
+/// or more than 16 members.
+fn exact_region_holds(r: i64, weighting: &MemberWeighting) -> Option<bool> {
+    let half = Rat::from_integer(1)
+        .checked_div(Rat::from_integer(2))
+        .ok()?;
+    let closed = |v: i64| -> Option<crate::mine_ledger::Interval> {
+        let v = Rat::from_integer(i128::from(v));
+        Some((v.checked_sub(half).ok()?, v.checked_add(half).ok()?))
+    };
+    let parts = weighting
+        .used
+        .iter()
+        .map(|m| Some((closed(m.rate)?, closed(m.ounces)?)))
+        .collect::<Option<Vec<_>>>()?;
+    crate::mine_ledger::weighted_mean_holds(closed(r)?, &parts)
 }
 
 /// The kernel's verdict on a region against its weighed members: under the component sum, the digest of a checked
