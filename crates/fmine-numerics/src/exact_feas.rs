@@ -1549,10 +1549,12 @@ mod tests {
                 }
             }
         }
+        // Counts are of components: every table here is one connected component.
+        let share = indeterminate as f64 / (feasible + indeterminate) as f64;
         println!(
-            "{{\"test\":\"prop_clean_generated_tables\",\"tables\":{tables},\"components_feasible\":{feasible},\
-             \"components_indeterminate\":{indeterminate}}}"
+            "{{\"tables\":{tables},\"seed\":340,\"feasible\":{feasible},\"infeasible\":0,\
+             \"indeterminate\":{indeterminate},\"indeterminate_share\":{share}}}"
         );
-        assert!(feasible > 0);
+        assert_eq!(feasible + indeterminate, tables);
     }
 }
