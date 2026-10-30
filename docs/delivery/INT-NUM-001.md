@@ -1,11 +1,20 @@
-# INT-NUM-001: Numerics Foundations Admission & Determinism Scope Record
+# INT-NUM-001: Numerics Foundations Admission and Determinism Scope Record
 
 - **Bead:** `bd-308` (`WP-00`)
-- **Date:** 2026-10-29
-- **Foundation Rows:** `FD-FSCI-01`, `FD-FP-01`, `FD-FNP-01`, `FD-FJ-01` (`franken-stack.lock`)
-- **Verified Closures & Rules (`§27.3`, `§29`, `§34.2`):**
-  1. **L-5 Compliance:** `fsci-* =0.4.0` is consumed with `default-features = false` (no `asupersync` feature split). `fp-io` is excluded (`KILL-6` path taken: `fp-io` pulls `arrow`, `parquet`, and `chrono`; `fmine-io` provides pure-Rust CSV/XLSX/OMF readers). `fj` is consumed via `fj-core`, `fj-lax`, `fj-ad` only (excluding `fj-api` / `fj-ffi`).
-  2. **Cross-ISA Determinism Scope (`§29.1`):**
-     - `BitwisePortable` kernels (`fmine-core::det`, `fmine-core::rand`, `fmine-core::hash`, `fmine-units`, `fmine-time`, `fmine-claim`, `fmine-calib`, `fmine-metrics`) use `fmine_core::det` fixed-polynomial transcendentals and integer/rational arithmetic, producing bit-identical digests across `x86_64-linux`, `aarch64-darwin`, and `wasm32`.
-     - `TargetDeterministic` linear-algebra/optimization solves record target triple and certificate tolerance (`FMT-CERT-1`).
-- **Verdict:** **PASS**.
+- **Date:** 2026-10-29 (rewritten 2026-10-30 by BD-323.S3)
+- **Foundation Rows:** `FD-FSCI-00`, `FD-FP-00`, `FD-FNP-00`, `FD-FJ-00` (`franken-stack.lock`)
+- **Closures and rules (`§27.3`, `§29`, `§34.2`):**
+  1. **L-5:** FACT: `fsci`, `fp`, `fnp` and `fj` are not consumed; no fsci, fp, fnp or fj crate is in `Cargo.lock`
+     (16 workspace packages, 0 `source` lines at `6a14976`). Intentions, when admitted: `fsci-* =0.4.0` with
+     `default-features = false`; `fp` without `fp-io` (`KILL-6`: `fp-io` pulls `arrow`, `parquet` and `chrono`;
+     `fmine-io` reads CSV and XLSX in pure Rust); `fj` through `fj-core`, `fj-lax` and `fj-ad` only.
+  2. **Cross-ISA determinism scope (`§29.1`):**
+     - FACT: the modules marked `//! Determinism: BitwisePortable` are the seven fmine-core files `lib.rs`, `id.rs`,
+       `det.rs`, `hash.rs`, `anchor.rs`, `rand.rs` and `codec.rs`. Their tests, including the 10k-input golden
+       hash, pass on `x86_64-linux` and `aarch64-darwin` (`ci:40974504857@748da79`). `wasm32` is untested.
+     - OPEN: `fmine-calib` and `fmine-metrics::lmdi` call std `exp` and `ln` (R7-C019), so they are not
+       BitwisePortable until NEW-det (`bd-hp2j`) lands.
+     - `TargetDeterministic` linear-algebra and optimization solves record the target triple and certificate
+       tolerance (`FMT-CERT-1`) once they exist.
+- **Status:** FD-row fallback taken (own kernels in `fmine-numerics`); admission PENDING until a foundation enters
+  `Cargo.lock`.

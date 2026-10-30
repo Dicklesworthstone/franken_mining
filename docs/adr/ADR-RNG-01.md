@@ -5,7 +5,7 @@
 - **Decision:**
   1. Production randomness comes from **one** generator family: lifted `frankensim` `Philox4x32-10` and scrambled `Sobol/Owen` quasi-Monte Carlo sequences in `fmine_core::rand`.
   2. Every random draw is counter-based and keyed by the canonical 6-tuple `(seed_root, partition, domain, var_group, realization, brick_or_entity_id)` so stream values are invariant to thread count, tile scheduling order, and polygon boundary updates (`"strata_bg"`).
-  3. `fnp-random` is confined to dev/oracle cross-checks (`FD-FNP-01`).
+  3. `fnp-random` is confined to dev/oracle cross-checks (`FD-FNP-00`).
 - **Consequences:** Single golden-stream surface across `aarch64-darwin`, `x86_64-linux`, and `wasm32`; zero sequential RNG state contention; deterministic `CRN` variance reduction on every `DecisionCard`.
 
 ---
