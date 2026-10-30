@@ -30,7 +30,8 @@ The `forecast-*` commands are the exception: they write a record's digest files 
 - `check_all(root: &Path) -> Result<LocReport, Vec<String>>`
 - `forecast::{rules_hash, record_hash, record_verify}` (BD-334.S1; commands `forecast-rules-hash <rules.toml>`,
   `forecast-record-hash <dir>`, `forecast-record-verify <dir>`): the IO around the pure `fmine_calib::record`.
-  They write `rules.sha256` and `record.sha256` but never overwrite one with a different digest. `record_verify`
+  They write `rules.sha256` and `record.sha256`, and replace a different digest only while no proof (`.tsr`,
+  `.ots`) stands beside it. `record_verify`
   takes the record's time only from `record.tsr`, after `openssl ts -verify` against `tsa_chain.pem` passes
   (`forecast::proof_times_from_text` reads the reply's time stamp and accuracy). `rules_hash` refuses rules that
   do not parse or still carry an `OPEN` marker, and the record is validated against the dates its rules state.

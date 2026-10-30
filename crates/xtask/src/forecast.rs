@@ -9,8 +9,8 @@
 //! - `forecast-rules-order` checks in git history that the FY2026 rules were committed before any forecast
 //!   (BD-334.S2).
 //!
-//! A time comes only from a verified proof, never from a clock. A digest file is never overwritten with a
-//! different digest: once stamped, a changed file is refused rather than re-hashed. The rules must parse and carry
+//! A time comes only from a verified proof, never from a clock. A digest file is replaced only while no proof
+//! stands beside it: once stamped, a changed file is refused rather than re-hashed. The rules must parse and carry
 //! no `OPEN` marker before they are hashed, and the record is judged against the dates its rules state.
 
 use std::fs;
@@ -38,16 +38,25 @@ fn read(path: &Path) -> Res<Vec<u8>> {
     fs::read(path).map_err(|e| vec![format!("cannot read {}: {e}", path.display())])
 }
 
-/// Writes `hex` to `path`, unless the file already holds a different digest.
+/// Writes `hex` to `path` (`<stem>.sha256`). A file holding a different digest is replaced only while no proof
+/// (`<stem>.tsr` or `<stem>.ots`) stands beside it: once stamped, a changed file is refused, never re-hashed.
 fn write_digest(path: &Path, hex: &str) -> Res<()> {
     match fs::read_to_string(path) {
         Ok(old) if old.trim_end() == hex => return Ok(()),
         Ok(old) => {
-            return fail(format!(
-                "{} already holds {}, not {hex}: a hashed file changed; restore it or start a new record",
-                path.display(),
-                old.trim_end()
-            ));
+            let stamp = ["tsr", "ots"]
+                .iter()
+                .map(|x| path.with_extension(x))
+                .find(|p| p.exists());
+            if let Some(stamp) = stamp {
+                return fail(format!(
+                    "{} already holds {}, not {hex}, and {} stamps it: a stamped file changed; restore it or \
+                     start a new version",
+                    path.display(),
+                    old.trim_end(),
+                    stamp.display()
+                ));
+            }
         }
         Err(e) if e.kind() == ErrorKind::NotFound => {}
         Err(e) => return fail(format!("cannot read {}: {e}", path.display())),
@@ -564,6 +573,27 @@ mod tests {
             git(&["commit", "-q", "-m", &format!("commit {k}")]);
         }
         dir
+    }
+
+    #[test]
+    fn test_digest_frozen_only_once_stamped() {
+        let dir = repo("digest", &[]);
+        let path = dir.join("rules.sha256");
+        let (a, b) = ("a".repeat(64), "b".repeat(64));
+        assert!(write_digest(&path, &a).is_ok());
+        // Not yet stamped: a revised file is re-hashed.
+        assert!(write_digest(&path, &b).is_ok());
+        assert_eq!(fs::read_to_string(&path).expect("digest"), format!("{b}\n"));
+        for proof in ["rules.tsr", "rules.ots"] {
+            let stamped = repo(proof, &[]);
+            let p = stamped.join("rules.sha256");
+            assert!(write_digest(&p, &a).is_ok());
+            fs::write(stamped.join(proof), "proof").expect("proof");
+            assert!(write_digest(&p, &a).is_ok(), "the same digest stands");
+            let err = write_digest(&p, &b).expect_err("stamped");
+            assert!(err[0].contains("stamps it"), "{err:?}");
+            assert_eq!(fs::read_to_string(&p).expect("digest"), format!("{a}\n"));
+        }
     }
 
     #[test]
