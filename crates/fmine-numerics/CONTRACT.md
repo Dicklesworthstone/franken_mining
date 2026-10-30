@@ -14,7 +14,8 @@ Implements Cholesky SPD factorization (`cholesky_solve`), Brent root-finding (`b
 Pure `BitwisePortable` mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`.
 
 ## 4. Public API Surface
-- `cholesky_solve`, `brent_root`, `norm_cdf`, `norm_inv`
+- `cholesky_solve`, `norm_cdf`, `norm_inv`
+- `brent_root` → `Result<Root, RootError>`: `NoSignChange`, `NonFinite` (endpoint or iterate) and `NotConverged` refuse; an unconverged iterate is never returned (bd-t1dk)
 - `eproc::{BettingEProcess, EProcStatus}`
 - `voi::{VoiProblem, VoiSummary}`
 - `risk::{TailRiskSummary, compute_cvar, max_drawdown}`

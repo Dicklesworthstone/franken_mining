@@ -1,6 +1,9 @@
 //! Deterministic numerical kernels (`WP-02`, `BD-022`):
+//! Determinism: DeterministicPerIsa (`norm_cdf` and `norm_inv` call std `exp`, `ln` and `sqrt`; `brent_root` and
+//! `cholesky_solve` use only `+ − × ÷` and `sqrt`).
 //! - Dense SPD Cholesky solver (`cholesky_solve`, `FMINE-REF-301`)
-//! - Brent's bracketed root-finder (`brent_root`)
+//! - Brent's bracketed root-finder (`brent_root`), which refuses on a missing sign change, a non-finite value or
+//!   non-convergence and never returns an unconverged iterate (bd-t1dk)
 //! - Standard normal CDF (`norm_cdf`) and Acklam inverse quantile (`norm_inv`)
 //! - Lifted `frankensim` modules: `eproc`, `voi`, `risk`, `tropical`.
 
@@ -65,16 +68,64 @@ pub fn cholesky_solve(a: &[f64], b: &[f64], n: usize) -> Result<Vec<f64>, Refusa
     Ok(x)
 }
 
+/// A converged root from [`brent_root`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Root {
+    /// The root estimate.
+    pub x: f64,
+    /// `f(x)`.
+    pub f_x: f64,
+    /// The final bracket `(lo, hi)` around `x` (ordered).
+    pub bracket: (f64, f64),
+    /// Iterations used.
+    pub iterations: usize,
+}
+
+/// Why [`brent_root`] refused. There is no best-effort result.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RootError {
+    /// `f(a)` and `f(b)` have the same strict sign, so `[a, b]` does not bracket a root.
+    NoSignChange { fa: f64, fb: f64 },
+    /// `f` returned NaN or an infinity at `at` (an endpoint or an iterate).
+    NonFinite { at: f64 },
+    /// `max_iter` iterations ran without meeting `tol`.
+    NotConverged { iterations: usize, bracket_width: f64, f_b: f64 },
+}
+
+impl std::fmt::Display for RootError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSignChange { fa, fb } => write!(f, "no sign change on the bracket: f(a) {fa}, f(b) {fb}"),
+            Self::NonFinite { at } => write!(f, "f is not finite at {at}"),
+            Self::NotConverged { iterations, bracket_width, f_b } => write!(
+                f,
+                "no convergence after {iterations} iterations (bracket width {bracket_width}, f(b) {f_b})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RootError {}
+
 /// Finds a root $x \in [a, b]$ of $f(x) = 0$ using deterministic bisection-secant (Dekker/Brent)
 /// to tolerance `tol`.
-pub fn brent_root<F>(mut a: f64, mut b: f64, tol: f64, max_iter: usize, mut f: F) -> Option<f64>
+///
+/// Returns [`RootError::NotConverged`] when `max_iter` runs out; before bd-t1dk it returned the last iterate,
+/// which is not a root.
+pub fn brent_root<F>(mut a: f64, mut b: f64, tol: f64, max_iter: usize, mut f: F) -> Result<Root, RootError>
 where
     F: FnMut(f64) -> f64,
 {
     let mut fa = f(a);
+    if !fa.is_finite() {
+        return Err(RootError::NonFinite { at: a });
+    }
     let mut fb = f(b);
-    if !fa.is_finite() || !fb.is_finite() || (fa > 0.0 && fb > 0.0) || (fa < 0.0 && fb < 0.0) {
-        return None;
+    if !fb.is_finite() {
+        return Err(RootError::NonFinite { at: b });
+    }
+    if (fa > 0.0 && fb > 0.0) || (fa < 0.0 && fb < 0.0) {
+        return Err(RootError::NoSignChange { fa, fb });
     }
     if fa.abs() < fb.abs() {
         std::mem::swap(&mut a, &mut b);
@@ -85,9 +136,15 @@ where
     let mut d = b - a;
     let mut e = d;
 
-    for _ in 0..max_iter {
+    let done = |x: f64, f_x: f64, other: f64, iterations: usize| Root {
+        x,
+        f_x,
+        bracket: (x.min(other), x.max(other)),
+        iterations,
+    };
+    for iter in 0..max_iter {
         if fb.abs() <= tol {
-            return Some(b);
+            return Ok(done(b, fb, c, iter));
         }
         if (fb > 0.0 && fc > 0.0) || (fb < 0.0 && fc < 0.0) {
             c = a;
@@ -106,7 +163,7 @@ where
         let tol1 = 2.0 * f64::EPSILON * b.abs() + 0.5 * tol;
         let xm = 0.5 * (c - b);
         if xm.abs() <= tol1 {
-            return Some(b);
+            return Ok(done(b, fb, c, iter));
         }
         if e.abs() >= tol1 && fa.abs() > fb.abs() {
             let s = fb / fa;
@@ -145,8 +202,11 @@ where
             b -= tol1;
         }
         fb = f(b);
+        if !fb.is_finite() {
+            return Err(RootError::NonFinite { at: b });
+        }
     }
-    Some(b)
+    Err(RootError::NotConverged { iterations: max_iter, bracket_width: (c - b).abs(), f_b: fb })
 }
 
 /// Standard normal cumulative distribution function $\Phi(z)$ (Abramowitz & Stegun 7.1.26, error $< 1.5 \times 10^{-7}$).
@@ -235,12 +295,65 @@ mod tests {
     #[test]
     fn test_brent_root_and_normal_roundtrip() {
         let root = brent_root(1.0, 2.0, 1e-12, 100, |x| x * x - 2.0).expect("sqrt(2)");
-        assert!((root - std::f64::consts::SQRT_2).abs() < 1e-11);
+        assert!((root.x - std::f64::consts::SQRT_2).abs() < 1e-11);
+        assert!(root.f_x.abs() <= 1e-12, "f(x) = {}", root.f_x);
+        assert!(root.bracket.0 <= root.x && root.x <= root.bracket.1);
 
         for &p in &[0.01, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99] {
             let z = norm_inv(p);
             let p_back = norm_cdf(z);
             assert!((p_back - p).abs() < 1e-5, "failed at p={p}: got {p_back}");
+        }
+    }
+
+    /// Regression for the 2026-10-29 defect (bd-t1dk): with `max_iter` too small, `brent_root` returned the last
+    /// iterate as `Some(x)` although `x` is not a root.
+    #[test]
+    fn test_brent_refuses_non_convergence_and_bad_inputs() {
+        let err = brent_root(0.0, 2.0, 1e-15, 3, |x| x * x * x - 2.0).expect_err("3 iterations are too few");
+        assert!(matches!(err, RootError::NotConverged { iterations: 3, .. }), "{err:?}");
+
+        assert_eq!(
+            brent_root(1.0, 2.0, 1e-12, 100, |x| x * x + 1.0),
+            Err(RootError::NoSignChange { fa: 2.0, fb: 5.0 })
+        );
+        assert_eq!(
+            brent_root(1.0, 2.0, 1e-12, 100, |_| f64::NAN),
+            Err(RootError::NonFinite { at: 1.0 })
+        );
+        // Finite at both ends, NaN everywhere inside: the first interior iterate refuses.
+        let err = brent_root(1.0, 2.0, 1e-12, 100, |x| if x > 1.0 && x < 2.0 { f64::NAN } else { x - 1.5 })
+            .expect_err("interior NaN");
+        assert!(matches!(err, RootError::NonFinite { at } if at > 1.0 && at < 2.0), "{err:?}");
+    }
+
+    /// Seeded property over monotone cubics `(x − r)^3 + k (x − r)` with a known root `r`: converged results lie
+    /// within tolerance of `r`, and an `Ok` is never returned without convergence.
+    #[test]
+    fn test_brent_property_monotone_cubics() {
+        use fmine_core::rand::{PhiloxStream, RngKey};
+        let mut rng = PhiloxStream::new(RngKey {
+            seed_root: 0xB2E7,
+            partition: 0,
+            domain: 0,
+            var_group: 0,
+            realization: 0,
+            brick: 0,
+        });
+        for case in 0..500 {
+            let r = -5.0 + 10.0 * rng.next_f64_open01();
+            let k = 0.1 + 5.0 * rng.next_f64_open01();
+            let lo = r - (0.1 + 10.0 * rng.next_f64_open01());
+            let hi = r + (0.1 + 10.0 * rng.next_f64_open01());
+            let f = |x: f64| (x - r).powi(3) + k * (x - r);
+            let root = brent_root(lo, hi, 1e-12, 200, f).unwrap_or_else(|e| panic!("case {case}: {e}"));
+            assert!((root.x - r).abs() <= 1e-9, "case {case}: x {} vs r {r}", root.x);
+            // With two iterations the result is either a genuine convergence or a refusal, never a bare iterate.
+            match brent_root(lo, hi, 1e-12, 2, f) {
+                Ok(early) => assert!(early.f_x.abs() <= 1e-12 || early.bracket.1 - early.bracket.0 <= 1e-9),
+                Err(RootError::NotConverged { iterations, .. }) => assert_eq!(iterations, 2),
+                Err(other) => panic!("case {case}: {other:?}"),
+            }
         }
     }
 }

@@ -269,6 +269,8 @@ pub enum ScoreError {
     AlphaOutOfDomain(f64),
     /// The interval's lower bound exceeds its upper bound.
     InvertedInterval { lo: f64, hi: f64 },
+    /// A model parameter is outside its documented domain.
+    InvalidParameter { name: &'static str, value: f64 },
 }
 
 impl std::fmt::Display for ScoreError {
@@ -278,6 +280,7 @@ impl std::fmt::Display for ScoreError {
             Self::NonPositiveStdDev(s) => write!(f, "predictive std_dev must be positive, got {s}"),
             Self::AlphaOutOfDomain(a) => write!(f, "interval level alpha must lie in (0, 1), got {a}"),
             Self::InvertedInterval { lo, hi } => write!(f, "interval is inverted: lo {lo} > hi {hi}"),
+            Self::InvalidParameter { name, value } => write!(f, "parameter {name} = {value} is outside its domain"),
         }
     }
 }
@@ -317,17 +320,30 @@ impl ReferenceClassPrior {
     };
 
     /// Computes the moment-matched blended mean and standard deviation for an internal baseline `base`.
-    #[must_use]
-    pub fn blend(&self, base_mean: f64, base_std: f64) -> (f64, f64) {
-        let eps = self.epsilon.clamp(0.0, 1.0);
+    ///
+    /// Refuses an `epsilon` outside `[0, 1]`, a negative `base_std` and non-finite inputs (bd-8wrk: `epsilon` was
+    /// clamped).
+    pub fn blend(&self, base_mean: f64, base_std: f64) -> Result<(f64, f64), ScoreError> {
+        let eps = self.epsilon;
+        if !(eps.is_finite() && (0.0..=1.0).contains(&eps)) {
+            return Err(ScoreError::InvalidParameter { name: "epsilon", value: eps });
+        }
+        if !(base_mean.is_finite() && base_std.is_finite()) {
+            return Err(ScoreError::NonFinite);
+        }
+        if base_std < 0.0 {
+            return Err(ScoreError::NonPositiveStdDev(base_std));
+        }
         let ref_mean = base_mean * self.ref_mean_multiplier;
         let ref_std = base_mean.abs() * self.ref_std_multiplier;
 
         let blended_mean = (1.0 - eps) * base_mean + eps * ref_mean;
         let m2_int = base_std * base_std + base_mean * base_mean;
         let m2_ref = ref_std * ref_std + ref_mean * ref_mean;
+        // A mixture's variance is non-negative; `max(0.0)` only removes a rounding residue of order ε·m2 when the
+        // two components coincide. It is not a domain clamp.
         let blended_var = ((1.0 - eps) * m2_int + eps * m2_ref - blended_mean * blended_mean).max(0.0);
-        (blended_mean, blended_var.sqrt())
+        Ok((blended_mean, blended_var.sqrt()))
     }
 }
 
@@ -363,17 +379,35 @@ pub struct SpatialFrontPitMonitor {
 
 impl SpatialFrontPitMonitor {
     /// Creates a new `SpatialFrontPitMonitor` with exponential variogram parameters and significance `alpha`.
-    #[must_use]
-    pub fn new(nugget_var: f64, sill_var: f64, range_m: f64, max_neighbors: usize, alpha: f64) -> Self {
-        Self {
-            nugget_var: nugget_var.max(1e-6),
-            sill_var: sill_var.max(1e-6),
-            range_m: range_m.max(1.0),
-            max_neighbors: max_neighbors.clamp(1, 16),
+    ///
+    /// Refuses (rather than floors or clamps, bd-8wrk) a nugget or sill below 1e-6, a range below 1 m, a
+    /// neighbourhood outside 1..=16 and `alpha` outside (0, 1).
+    pub fn new(
+        nugget_var: f64,
+        sill_var: f64,
+        range_m: f64,
+        max_neighbors: usize,
+        alpha: f64,
+    ) -> Result<Self, ScoreError> {
+        let check = |name: &'static str, value: f64, ok: bool| {
+            if value.is_finite() && ok { Ok(()) } else { Err(ScoreError::InvalidParameter { name, value }) }
+        };
+        check("nugget_var", nugget_var, nugget_var >= 1e-6)?;
+        check("sill_var", sill_var, sill_var >= 1e-6)?;
+        check("range_m", range_m, range_m >= 1.0)?;
+        check("max_neighbors", max_neighbors as f64, (1..=16).contains(&max_neighbors))?;
+        if !(alpha.is_finite() && alpha > 0.0 && alpha < 1.0) {
+            return Err(ScoreError::AlphaOutOfDomain(alpha));
+        }
+        Ok(Self {
+            nugget_var,
+            sill_var,
+            range_m,
+            max_neighbors,
             history: Vec::new(),
             mean_eproc: BettingEProcess::new(0.5, alpha * 0.5),
             spread_eproc: BettingEProcess::new(0.25, alpha * 0.5),
-        }
+        })
     }
 
     fn covariance(&self, a: &SpatialSample, b: &SpatialSample) -> f64 {
@@ -546,7 +580,10 @@ mod tests {
     #[test]
     fn test_reference_class_epsilon_contamination_gb32() {
         // Reko Diq Phase 1 internal estimate $5.6B blended with greenfield reference class.
-        let (mean, std) = ReferenceClassPrior::GREENFIELD_PORPHYRY_CAPEX.blend(5_600.0, 400.0);
+        let (mean, std) = ReferenceClassPrior::GREENFIELD_PORPHYRY_CAPEX.blend(5_600.0, 400.0).expect("valid");
+        let bad = ReferenceClassPrior { epsilon: 1.5, ..ReferenceClassPrior::GREENFIELD_PORPHYRY_CAPEX };
+        assert_eq!(bad.blend(5_600.0, 400.0), Err(ScoreError::InvalidParameter { name: "epsilon", value: 1.5 }));
+        assert!(ReferenceClassPrior::GREENFIELD_PORPHYRY_CAPEX.blend(5_600.0, -1.0).is_err());
         assert!(mean > 5_600.0, "reference class must lift expected capex");
         assert!(std > 400.0, "reference class must widen capex dispersion");
 
@@ -570,10 +607,26 @@ mod tests {
         assert_eq!(claim.evidence, EvidenceClass::Assumed);
     }
 
+    /// bd-8wrk: the monitor's constructor used to floor nugget and sill at 1e-6, range at 1 m, and clamp the
+    /// neighbourhood to 1..=16. Out-of-domain parameters now refuse.
+    #[test]
+    fn test_spatial_monitor_refuses_out_of_domain_parameters() {
+        let p = |name: &'static str, value: f64| Err(ScoreError::InvalidParameter { name, value });
+        assert_eq!(SpatialFrontPitMonitor::new(0.0, 0.75, 30.0, 6, 0.02).map(|_| ()), p("nugget_var", 0.0));
+        assert_eq!(SpatialFrontPitMonitor::new(0.25, -1.0, 30.0, 6, 0.02).map(|_| ()), p("sill_var", -1.0));
+        assert_eq!(SpatialFrontPitMonitor::new(0.25, 0.75, 0.5, 6, 0.02).map(|_| ()), p("range_m", 0.5));
+        assert_eq!(SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 0, 0.02).map(|_| ()), p("max_neighbors", 0.0));
+        assert_eq!(SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 17, 0.02).map(|_| ()), p("max_neighbors", 17.0));
+        assert_eq!(
+            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 1.0).map(|_| ()),
+            Err(ScoreError::AlphaOutOfDomain(1.0))
+        );
+    }
+
     #[test]
     fn test_vecchia_spatial_front_pit_eprocess_gb08() {
         // 1. Under well-specified spatial innovations, monitor does not trip false alarm.
-        let mut monitor_ok = SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 0.02);
+        let mut monitor_ok = SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 0.02).expect("valid parameters");
         let mut rng = PhiloxStream::new(RngKey {
             seed_root: 777,
             partition: 1,
@@ -598,7 +651,7 @@ mod tests {
         }
 
         // 2. Under systematic +1.5g/t unmodeled high-grade shear zone, monitor trips alarm.
-        let mut monitor_shift = SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 0.05);
+        let mut monitor_shift = SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 0.05).expect("valid parameters");
         let mut tripped = false;
         for i in 0..60 {
             let x = (i as f64) * 10.0;

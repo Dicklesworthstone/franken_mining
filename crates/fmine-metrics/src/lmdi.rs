@@ -63,6 +63,8 @@ impl LmdiWaterfall {
 pub fn logarithmic_mean(a: f64, b: f64) -> f64 {
     let diff = a - b;
     let mean = 0.5 * (a + b);
+    // `max(1e-15)` only selects the series branch near a = b; it never changes the returned value's inputs, and
+    // callers refuse non-positive states (FMINE-REF-301) before reaching here. Not a domain clamp.
     if diff.abs() / mean.max(1e-15) < 1e-7 {
         let u = diff / (a + b);
         mean * (1.0 - (u * u) / 3.0 - 4.0 * u.powi(4) / 45.0)
