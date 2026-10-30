@@ -101,12 +101,12 @@ impl Sheet {
         let needle_lower = needle.to_ascii_lowercase();
         let mut rows = Vec::new();
         for (&(r, c), cell) in &self.cells_by_coord {
-            if c <= 4 {
-                if let CellValue::Text(t) = &cell.value {
-                    if t.to_ascii_lowercase().contains(&needle_lower) && !rows.contains(&r) {
-                        rows.push(r);
-                    }
-                }
+            if c <= 4
+                && let CellValue::Text(t) = &cell.value
+                && t.to_ascii_lowercase().contains(&needle_lower)
+                && !rows.contains(&r)
+            {
+                rows.push(r);
             }
         }
         rows

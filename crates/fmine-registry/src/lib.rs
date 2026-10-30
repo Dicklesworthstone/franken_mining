@@ -139,23 +139,23 @@ fn extract_unique_key(
         if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
             continue;
         }
-        if let Some((k, v)) = line.split_once('=') {
-            if k.trim() == key {
-                let val = v.trim().trim_matches('"').to_string();
-                if val.is_empty() {
-                    return Err(RegistryError::SchemaViolation {
-                        registry: registry_name.to_string(),
-                        detail: format!("empty value for key '{key}'"),
-                    });
-                }
-                if !seen.insert(val.clone()) {
-                    return Err(RegistryError::DuplicateId {
-                        registry: registry_name.to_string(),
-                        id: val,
-                    });
-                }
-                ordered.push(val);
+        if let Some((k, v)) = line.split_once('=')
+            && k.trim() == key
+        {
+            let val = v.trim().trim_matches('"').to_string();
+            if val.is_empty() {
+                return Err(RegistryError::SchemaViolation {
+                    registry: registry_name.to_string(),
+                    detail: format!("empty value for key '{key}'"),
+                });
             }
+            if !seen.insert(val.clone()) {
+                return Err(RegistryError::DuplicateId {
+                    registry: registry_name.to_string(),
+                    id: val,
+                });
+            }
+            ordered.push(val);
         }
     }
     if ordered.is_empty() {

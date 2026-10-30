@@ -141,12 +141,11 @@ fn parse_html_cell_value(text: &str) -> CellValue {
         } else {
             (false, clean.as_str())
         };
-    if !digits.is_empty() {
-        if let Ok(v) = digits.parse::<f64>() {
-            if v.is_finite() {
-                return CellValue::Number(if neg { -v } else { v });
-            }
-        }
+    if !digits.is_empty()
+        && let Ok(v) = digits.parse::<f64>()
+        && v.is_finite()
+    {
+        return CellValue::Number(if neg { -v } else { v });
     }
     CellValue::Text(t.to_string())
 }

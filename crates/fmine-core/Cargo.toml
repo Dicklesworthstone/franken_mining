@@ -3,6 +3,7 @@ name = "fmine-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 description = "FrankenMining S0 substrate: typed runtime IDs, FMT-ANCHOR-1, FMNE binary codec + CRC32C, lifted BLAKE3/SHA-256, deterministic math, and Philox4x32-10 + Sobol/Owen RNG"
 
 [lints]

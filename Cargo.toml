@@ -22,7 +22,8 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+# 1.88: let-chains (edition 2024) and slice::as_chunks. Clippy's incompatible_msrv checks std APIs against it.
+rust-version = "1.88"
 license = "MIT"
 authors = ["Jeffrey Emanuel", "FrankenMining Contributors"]
 repository = "https://github.com/Dicklesworthstone/franken_mining"
@@ -36,6 +37,10 @@ unused_must_use = "deny"
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 correctness = { level = "deny", priority = -1 }
+# AGENTS.md: no unwrap/expect/panic in production code; tests may use them (clippy.toml allow-*-in-tests).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
 
 [workspace.metadata.fmine]
 production_language = "rust"

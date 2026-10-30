@@ -237,10 +237,10 @@ pub fn locate_table<S: AsRef<str>>(
 ) -> Result<Option<AiscTable>, String> {
     let mut labels: BTreeMap<u32, String> = BTreeMap::new();
     for &(row, col) in sheet.cells_by_coord.keys() {
-        if col == 1 {
-            if let Some(t) = cell_text(sheet, row, 1) {
-                labels.insert(row, t.to_lowercase());
-            }
+        if col == 1
+            && let Some(t) = cell_text(sheet, row, 1)
+        {
+            labels.insert(row, t.to_lowercase());
         }
     }
     let first = |names: &[&str]| -> Option<u32> {

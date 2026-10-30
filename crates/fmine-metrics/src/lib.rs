@@ -427,7 +427,7 @@ mod tests {
         let mut calls = 0_u32;
         let err = solve_cutoff_grade(14.5, 8_500.0, 0.0025, |_| {
             calls += 1;
-            if calls % 2 == 0 { 0.5 } else { 0.9 }
+            if calls.is_multiple_of(2) { 0.5 } else { 0.9 }
         })
         .expect_err("alternating recovery cannot converge");
         match err {

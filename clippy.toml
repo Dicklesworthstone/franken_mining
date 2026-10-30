@@ -1,0 +1,4 @@
+# Tests may unwrap, expect and panic; production code may not (Cargo.toml [workspace.lints.clippy], bd-l736).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

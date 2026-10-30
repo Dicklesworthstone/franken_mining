@@ -3,6 +3,7 @@ name = "xtask"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 publish = false
 description = "FrankenMining workspace governance, layer DAG, LOC budget, lift provenance, and capability checks (GATE-LAYERS-00)"
 

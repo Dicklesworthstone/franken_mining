@@ -683,10 +683,12 @@ pub fn strip_footnote(label: &str) -> (String, Option<u8>) {
     let digits = s.bytes().rev().take_while(u8::is_ascii_digit).count();
     let cut = s.len() - digits;
     let before = s[..cut].chars().next_back();
-    if (1..=2).contains(&digits) && before.is_some_and(|c| !py_space(c)) && !s.ends_with("%)") {
-        if let Ok(n) = s[cut..].parse::<u8>() {
-            return (py_strip(&s[..cut]).to_string(), Some(n));
-        }
+    if (1..=2).contains(&digits)
+        && before.is_some_and(|c| !py_space(c))
+        && !s.ends_with("%)")
+        && let Ok(n) = s[cut..].parse::<u8>()
+    {
+        return (py_strip(&s[..cut]).to_string(), Some(n));
     }
     (s, None)
 }
