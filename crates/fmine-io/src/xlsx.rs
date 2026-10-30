@@ -8,6 +8,7 @@ use fmine_core::anchor::SourceAnchor;
 use fmine_core::hash::sha256;
 
 use crate::IoError;
+use crate::styles::{NumberFormat, Styles, decimal_is_non_integer, parse_styles, styles_part_name};
 use crate::zip_inflate::{read_zip_entries, write_stored_zip};
 
 /// Typed cell value preserving the distinction between `0.0`, `Placeholder` (`"-"`/`"N/A"`),
@@ -57,6 +58,18 @@ pub struct ExtractedCell {
     /// e.g. `"0"`, `"2026"` or `"1.25"`; `None` for every other kind. Readers that must tell an integer-typed
     /// cell from a float-typed one, or report the printed token, use this instead of re-formatting the `f64`.
     pub number_text: Option<String>,
+    /// The cell's `s` attribute (an index into `cellXfs`), if it has one (bd-jg43.1).
+    pub style: Option<u32>,
+    /// The number format the style resolves to; built-in 0 (General) when the workbook has no styles part.
+    pub format: NumberFormat,
+}
+
+/// Numeric cells of one number format in `Workbook::format_census`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FormatCount {
+    pub numeric: usize,
+    /// Numeric cells whose stored decimal text is not an integer (decided exactly, never on the `f64`).
+    pub non_integer: usize,
 }
 
 /// Item quarantined by `G-BULL-1` (`BD-271`) during workbook ingestion.
@@ -187,6 +200,28 @@ impl Workbook {
         census
     }
 
+    /// Numeric cells of the visible sheets by number-format code (`NumberFormat::code`), each with how many
+    /// store a non-integer decimal (bd-jg43.1). `cell_census` is unaffected.
+    #[must_use]
+    pub fn format_census(&self) -> BTreeMap<String, FormatCount> {
+        let mut out: BTreeMap<String, FormatCount> = BTreeMap::new();
+        for cell in self.sheets.iter().flat_map(|s| s.cells_by_coord.values()) {
+            if let CellValue::Number(_) = cell.value {
+                let count = out.entry(cell.format.code()).or_default();
+                count.numeric += 1;
+                if cell
+                    .number_text
+                    .as_deref()
+                    .and_then(decimal_is_non_integer)
+                    .unwrap_or(false)
+                {
+                    count.non_integer += 1;
+                }
+            }
+        }
+        out
+    }
+
     /// Parses an `.xlsx` workbook from in-memory bytes and computes its SHA-256 digest.
     pub fn from_bytes(artifact_path: impl Into<String>, bytes: &[u8]) -> Result<Self, IoError> {
         let artifact_path = artifact_path.into();
@@ -210,6 +245,19 @@ impl Workbook {
             .map(|b| String::from_utf8_lossy(b).into_owned())
             .unwrap_or_default();
         let rel_targets = parse_workbook_rels(&rels_text);
+        // The styles part (bd-jg43.1): the one the relationships name, else xl/styles.xml; with neither, every
+        // cell is General. A styles part that does not parse refuses the workbook.
+        let styles_key = styles_part_name(&rels_text)
+            .filter(|k| entries.contains_key(k))
+            .or_else(|| {
+                entries
+                    .contains_key("xl/styles.xml")
+                    .then(|| "xl/styles.xml".to_string())
+            });
+        let styles = styles_key
+            .and_then(|k| entries.get(&k))
+            .map(|b| parse_styles(&String::from_utf8_lossy(b)))
+            .transpose()?;
 
         let mut sheets = Vec::new();
         let mut hidden_sheets = Vec::new();
@@ -239,8 +287,9 @@ impl Workbook {
                         &sheet_name,
                         &sheet_xml,
                         &shared_strings,
+                        styles.as_ref(),
                         &mut ignored,
-                    );
+                    )?;
                     hidden_sheets.push(Sheet {
                         name: sheet_name.clone(),
                         cells_by_coord: cells,
@@ -255,8 +304,9 @@ impl Workbook {
                     &sheet_name,
                     &sheet_xml,
                     &shared_strings,
+                    styles.as_ref(),
                     &mut quarantined,
-                );
+                )?;
                 sheets.push(Sheet {
                     name: sheet_name,
                     cells_by_coord: cells,
@@ -376,8 +426,9 @@ fn parse_worksheet_cells(
     sheet_name: &str,
     xml: &str,
     shared_strings: &[String],
+    styles: Option<&Styles>,
     quarantined: &mut Vec<QuarantineItem>,
-) -> BTreeMap<(u32, u32), ExtractedCell> {
+) -> Result<BTreeMap<(u32, u32), ExtractedCell>, IoError> {
     let mut cells = BTreeMap::new();
     let mut pos = 0;
     while let Some(c_idx) = xml[pos..].find("<c ") {
@@ -404,6 +455,16 @@ fn parse_worksheet_cells(
             continue;
         };
         let cell_type = extract_attr(open_tag, "t").unwrap_or_default();
+        let style = extract_attr_exact(open_tag, "s")
+            .map(|s| {
+                s.parse::<u32>().map_err(|_| {
+                    IoError::Xml(format!(
+                        "{sheet_name}!{cell_ref}: style index {s:?} is not an unsigned integer"
+                    ))
+                })
+            })
+            .transpose()?;
+        let format = styles.map_or(NumberFormat::Builtin(0), |st| st.format_of(style));
         let formula = extract_element_text(c_body, "f").map(|s| decode_xml_entities(&s));
         let raw_v = extract_element_text(c_body, "v")
             .or_else(|| extract_element_text(c_body, "t"))
@@ -464,10 +525,12 @@ fn parse_worksheet_cells(
                 value,
                 formula,
                 number_text,
+                style,
+                format,
             },
         );
     }
-    cells
+    Ok(cells)
 }
 
 fn classify_string_cell(
@@ -626,7 +689,7 @@ pub fn parse_a1_ref(cell_ref: &str) -> Option<(u32, u32)> {
     }
 }
 
-fn iter_xml_start_tags<'a>(xml: &'a str, tag_name: &'a str) -> Vec<&'a str> {
+pub(crate) fn iter_xml_start_tags<'a>(xml: &'a str, tag_name: &'a str) -> Vec<&'a str> {
     let mut out = Vec::new();
     let pat = format!("<{tag_name}");
     let mut pos = 0;
@@ -651,6 +714,33 @@ fn extract_attr(tag: &str, attr_name: &str) -> Option<String> {
     let start = tag.find(&pat)? + pat.len();
     let end = tag[start..].find('"')? + start;
     Some(tag[start..end].to_string())
+}
+
+/// The value of attribute `name` in a start tag, matched as a whole name: preceded by whitespace and followed
+/// by `=` (whitespace allowed around it), with either quote style. `cs="9"` does not match `s`. The value is
+/// returned undecoded.
+pub(crate) fn extract_attr_exact(tag: &str, name: &str) -> Option<String> {
+    let bytes = tag.as_bytes();
+    let mut from = 0;
+    while let Some(i) = tag[from..].find(name) {
+        let at = from + i;
+        from = at + name.len();
+        if at == 0 || !bytes[at - 1].is_ascii_whitespace() {
+            continue;
+        }
+        let Some(rest) = tag[from..].trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let quote = rest.chars().next()?;
+        if quote != '"' && quote != '\'' {
+            return None;
+        }
+        let body = &rest[1..];
+        let end = body.find(quote)?;
+        return Some(body[..end].to_string());
+    }
+    None
 }
 
 fn extract_element_text(xml: &str, tag_name: &str) -> Option<String> {

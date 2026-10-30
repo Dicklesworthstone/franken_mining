@@ -1863,6 +1863,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
     }
 
+    /// bd-jg43.1 parity: reading styles changes no census count and no numeric digest. The values were printed
+    /// by this test at commit 345e2ba, before the styles reader existed, and pasted here.
+    #[test]
+    fn test_census_unchanged_by_style_reading() {
+        let got: Vec<String> = synthetic::synthetic_workbooks(&[])
+            .into_iter()
+            .map(|(name, _, _, bytes)| {
+                let c = Workbook::from_bytes(name, &bytes)
+                    .expect("synthetic workbook")
+                    .cell_census();
+                format!(
+                    "{name} {} {} {} {} {} {} {}",
+                    c.visible_sheets,
+                    c.hidden_sheets,
+                    c.numeric_cells,
+                    c.placeholder_cells,
+                    c.formula_error_cells,
+                    c.text_cells,
+                    hex(&c.numeric_digest)
+                )
+            })
+            .collect();
+        let want = [
+            "Synthetic_Mine_Stats.xlsx 2 0 2 0 0 9 ed492958121280b991212c61d01c9c2a257a551dfb07af145f1f6c117e646c21",
+            "Synthetic_AISC.xlsx 1 2 107 4 1 28 7db9df6e5bceec22d9195ea3680e67a774b97275dcc4be0f4e67580828ee79ed",
+        ];
+        assert_eq!(got, want, "{got:#?}");
+    }
+
     fn kit_readme() -> String {
         std::fs::read_to_string(
             workspace_root()
@@ -2340,6 +2369,99 @@ mod tests {
         if let Err(why) = r.check_expected(last) {
             panic!("{why}");
         }
+    }
+
+    /// bd-jg43.1 on the real files: `Workbook::format_census` equals the independent reader
+    /// (`python3 -I scripts/oracle/formats.py`, committed at 345e2ba before the Rust existed), run here on the
+    /// same files. Lines are compared whole in the oracle's canonical JSON. The totals are also checked against
+    /// the table written into the bead before either reader ran. One line per file, one per mismatch, then a
+    /// summary (`--nocapture`).
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/ and python3"]
+    fn test_format_census_matches_independent_reader() {
+        let root = workspace_root();
+        let profile = load_issuer_profile(&root, "barrick")
+            .expect("registry")
+            .through("2026Q2")
+            .expect("bound");
+        let mut names: Vec<&str> = profile
+            .sources
+            .iter()
+            .map(|s| s.file_name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names.len(), 18);
+        let paths: Vec<PathBuf> = names
+            .iter()
+            .map(|n| root.join(&profile.corpus_dir).join(n))
+            .collect();
+        let out = std::process::Command::new("python3")
+            .arg("-I")
+            .arg(root.join("scripts/oracle/formats.py"))
+            .args(&paths)
+            .current_dir(&root)
+            .output()
+            .expect("python3 runs");
+        assert!(
+            out.status.success(),
+            "formats.py failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).expect("utf-8 oracle output");
+        let oracle: Vec<&str> = stdout.lines().collect();
+        assert_eq!(oracle.len(), 19, "18 file lines and a summary");
+
+        let render = |formats: &BTreeMap<String, fmine_io::xlsx::FormatCount>| {
+            let body: Vec<String> = formats
+                .iter()
+                .map(|(code, c)| format!("{}:[{},{}]", js(code), c.numeric, c.non_integer))
+                .collect();
+            format!("{{{}}}", body.join(","))
+        };
+        let mut total: BTreeMap<String, fmine_io::xlsx::FormatCount> = BTreeMap::new();
+        let mut mismatches = 0;
+        for ((name, path), want) in names.iter().zip(&paths).zip(&oracle) {
+            let wb = Workbook::from_file(path).expect("registered workbook");
+            let census = wb.format_census();
+            for (code, c) in &census {
+                let t = total.entry(code.clone()).or_default();
+                t.numeric += c.numeric;
+                t.non_integer += c.non_integer;
+            }
+            let got = format!(
+                "{{\"file\":{},\"sha256\":\"{}\",\"formats\":{}}}",
+                js(name),
+                hex(&wb.sha256),
+                render(&census)
+            );
+            let equal = got == *want;
+            let open = got.strip_suffix('}').expect("rendered object");
+            println!("{open},\"oracle_equal\":{equal}}}");
+            if !equal {
+                mismatches += 1;
+                println!("{{\"file\":{},\"rust\":{got},\"oracle\":{want}}}", js(name));
+            }
+        }
+        let numeric_total: usize = total.values().map(|c| c.numeric).sum();
+        let non_integer_total: usize = total.values().map(|c| c.non_integer).sum();
+        let summary = format!(
+            "{{\"files\":18,\"formats\":{},\"numeric_total\":{numeric_total},\"non_integer_total\":{non_integer_total}}}",
+            render(&total)
+        );
+        let pass = mismatches == 0 && summary == oracle[18];
+        let open = summary.strip_suffix('}').expect("rendered object");
+        println!("{open},\"pass\":{pass}}}");
+        assert_eq!(
+            mismatches, 0,
+            "per-file format census differs from formats.py"
+        );
+        assert_eq!(summary, oracle[18]);
+        // The bead's table (bd-jg43.1, written from a scratch read before either reader): 10 formats, 30,388
+        // numeric cells (E820's total), 6,256 of them non-integer.
+        assert_eq!(
+            (total.len(), numeric_total, non_integer_total),
+            (10, 30_388, 6_256)
+        );
     }
 
     /// BD-331.S2 on the real files: every (iv), visible or hidden, names a missing fact. One JSON line per (iv)

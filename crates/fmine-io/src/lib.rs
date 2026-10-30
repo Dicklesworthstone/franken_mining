@@ -1,6 +1,7 @@
 //! Label-anchored `.xlsx` (`xlsx`) and HTML (`extract_html_tables`) filing table extractors
 //! with SHA-256 provenance and `G-BULL-1` / `G-BULL-2` quarantine (`WP-03`, `BD-056`, `BD-057`, `BD-271`).
 
+pub mod styles;
 pub mod xlsx;
 pub mod zip_inflate;
 
@@ -159,6 +160,117 @@ mod tests {
 
     fn cell(r: &str, c: MinimalCell) -> (String, MinimalCell) {
         (r.to_string(), c)
+    }
+
+    /// A one-sheet workbook with the given styles part (`None`: no styles part) and sheet XML rows.
+    fn styled_workbook(styles: Option<&str>, rows: &str) -> Vec<u8> {
+        let wb = r#"<workbook xmlns:r="r"><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
+        let mut rels = String::from(
+            r#"<Relationships><Relationship Id="rId1" Type="http://x/worksheet" Target="worksheets/sheet1.xml"/>"#,
+        );
+        if styles.is_some() {
+            rels.push_str(
+                r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#,
+            );
+        }
+        rels.push_str("</Relationships>");
+        let sheet = format!("<worksheet><sheetData>{rows}</sheetData></worksheet>");
+        let mut entries: Vec<(&str, &[u8])> = vec![
+            ("xl/workbook.xml", wb.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+            ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+        ];
+        if let Some(s) = styles {
+            entries.push(("xl/styles.xml", s.as_bytes()));
+        }
+        zip_inflate::write_stored_zip(&entries)
+    }
+
+    const STYLES: &str = r##"<styleSheet><numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.0&quot;x&quot;"/></numFmts><cellXfs count="3"><xf numFmtId="0"/><xf numFmtId="164"/><xf numFmtId="4"/></cellXfs></styleSheet>"##;
+
+    /// bd-jg43.1 end to end: each cell's `s` resolves through cellXfs; a cell without `s` uses xf 0; an index
+    /// past cellXfs stays a bad index; the census counts non-integers on the stored text.
+    #[test]
+    fn test_cells_carry_style_and_format() {
+        let rows = r#"<row r="1"><c r="A1" s="1"><v>-37.899642999999998</v></c><c r="B1"><v>12</v></c><c r="C1" s="2"><v>1.5E+1</v></c><c r="D1" s="7"><v>3</v></c><c r="E1" s="1"><v>2.5</v></c></row>"#;
+        let wb = Workbook::from_bytes("styled.xlsx", &styled_workbook(Some(STYLES), rows))
+            .expect("styled workbook");
+        let s = &wb.sheets[0];
+        let a1 = s.cell(1, 1).expect("A1");
+        assert_eq!(a1.style, Some(1));
+        assert_eq!(
+            a1.format,
+            styles::NumberFormat::Custom {
+                id: 164,
+                code: "#,##0.0\"x\"".to_string()
+            }
+        );
+        assert_eq!(
+            s.cell(1, 2).map(|c| (c.style, c.format.clone())),
+            Some((None, styles::NumberFormat::Builtin(0)))
+        );
+        assert_eq!(
+            s.cell(1, 3).map(|c| c.format.code()),
+            Some("#,##0.00".to_string())
+        );
+        assert_eq!(
+            s.cell(1, 4).map(|c| c.format.clone()),
+            Some(styles::NumberFormat::BadStyleIndex(7))
+        );
+        let census = wb.format_census();
+        let count = |code: &str| census.get(code).map(|c| (c.numeric, c.non_integer));
+        assert_eq!(count("#,##0.0\"x\""), Some((2, 2)));
+        assert_eq!(count("General"), Some((1, 0)));
+        assert_eq!(count("#,##0.00"), Some((1, 0)), "1.5E+1 is the integer 15");
+        assert_eq!(count("bad style index 7"), Some((1, 0)));
+    }
+
+    /// bd-jg43.1: the stored text survives verbatim (E823 K8).
+    #[test]
+    fn test_raw_text_preserved_exactly() {
+        let rows = r#"<row r="1"><c r="A1"><v>-37.899642999999998</v></c></row>"#;
+        let wb = Workbook::from_bytes("raw.xlsx", &styled_workbook(None, rows)).expect("workbook");
+        assert_eq!(
+            wb.sheets[0]
+                .cell(1, 1)
+                .and_then(|c| c.number_text.as_deref()),
+            Some("-37.899642999999998")
+        );
+    }
+
+    /// bd-jg43.1: with no styles part every cell is built-in 0, whatever its `s`.
+    #[test]
+    fn test_workbook_without_styles_is_general() {
+        let rows = r#"<row r="1"><c r="A1" s="5"><v>1</v></c><c r="B1"><v>2</v></c></row>"#;
+        let wb =
+            Workbook::from_bytes("plain.xlsx", &styled_workbook(None, rows)).expect("workbook");
+        for col in [1, 2] {
+            assert_eq!(
+                wb.sheets[0].cell(1, col).map(|c| c.format.clone()),
+                Some(styles::NumberFormat::Builtin(0))
+            );
+        }
+        assert_eq!(wb.sheets[0].cell(1, 1).and_then(|c| c.style), Some(5));
+    }
+
+    /// bd-jg43.1 negative control: `cs="9"` must not be read as `s`; a non-integer `s` refuses the workbook.
+    #[test]
+    fn test_extract_attr_exact_ignores_suffix_match() {
+        assert_eq!(xlsx::extract_attr_exact(r#"<c r="A1" cs="9">"#, "s"), None);
+        assert_eq!(
+            xlsx::extract_attr_exact(r#"<c r="A1" cs="9" s='2'>"#, "s").as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            xlsx::extract_attr_exact("<c r=\"A1\"\n\ts = \"3\">", "s").as_deref(),
+            Some("3")
+        );
+        let rows = r#"<row r="1"><c r="A1" cs="9"><v>1</v></c></row>"#;
+        let wb = Workbook::from_bytes("cs.xlsx", &styled_workbook(Some(STYLES), rows))
+            .expect("workbook");
+        assert_eq!(wb.sheets[0].cell(1, 1).and_then(|c| c.style), None);
+        let bad = r#"<row r="1"><c r="A1" s="x"><v>1</v></c></row>"#;
+        assert!(Workbook::from_bytes("bad.xlsx", &styled_workbook(Some(STYLES), bad)).is_err());
     }
 
     /// BD-321: a missing workbook is an error that names the path, even under `corpus_of_input_docs/`

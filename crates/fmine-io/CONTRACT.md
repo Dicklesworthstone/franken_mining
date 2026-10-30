@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Ingestion`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["xlsx", "zip_inflate"]`
+- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles"]`
 
 ## 2. Mathematical & Domain Formulation
 Pure-Rust ZIP and RFC 1951 DEFLATE (`zip_inflate`); `.xlsx` workbook, shared-string and worksheet extraction
@@ -27,8 +27,14 @@ Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a
 ## 4. Public API Surface
 - `IoError`, `HtmlTable`, `extract_html_tables`
 - `zip_inflate::{read_zip_entries, inflate_raw, write_stored_zip}`
-- `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, MinimalCell, MinimalSheet,
-  build_minimal_xlsx, col_index_to_letters, parse_a1_ref}`
+- `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, FormatCount, MinimalCell,
+  MinimalSheet, build_minimal_xlsx, col_index_to_letters, parse_a1_ref}`; `Workbook::format_census`;
+  `ExtractedCell::{style, format}` (bd-jg43.1)
+- `styles::{Styles, NumberFormat, BUILTIN_FORMATS, builtin_code, parse_styles, styles_part_name,
+  decimal_is_non_integer}` (bd-jg43.1): a cell's `s` resolves through `cellXfs` to a `numFmts` code or an
+  ECMA-376 §18.8.30 built-in. Without `s` it uses xf 0, and with no styles part every cell is General. An index
+  past `cellXfs` is `BadStyleIndex` and an id neither listed nor built in is `Unknown`; neither is clamped. A
+  styles part that does not parse, or an `s` that is not an unsigned integer, refuses the workbook.
 
 ## 5. Guards & Typed Refusals
 - `G-BULL-1`: formula-error cells and `hidden`/`veryHidden` sheets go to `Workbook::quarantined`. Hidden sheets are
