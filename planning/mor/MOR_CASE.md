@@ -941,3 +941,57 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     `instances` array, and the real-file citation test, which splits at the first such key, failed. The key is
     now `"anchors"`; the root does not move.
   - **Verification.** Self-verified on this machine only; nothing has run in CI.
+- **E842** Mine Stats summary against site sheet (the plan's family 7) decided by the exact kernel (BD-331.S4,
+  bd-prmn.4; FACT, execution, 2026-10-30, owner machine).
+  - **Data.** W1-DR-02 is registry data: two `[[mine_stats_label_alias]]` rows in
+    `registries/sources/barrick.toml` read the 2024 copper rows "Production (millions of pounds)" and "Sales
+    (millions of pounds)" as the thousands-of-tonnes rows in releases 2024Q1 to 2024Q4; no value is converted.
+    The parser refuses an unregistered label, a label read as itself, a bad or reversed quarter, two rows of one
+    label over overlapping releases, and a missing `evidence`.
+  - **Rule.** `fmine-public::mine_ledger`. Each summary value of attributable production and sales, cost of
+    sales, TCC or C1 and AISC equals the same site's value on a `Minestats*` sheet of the metal (A1 title),
+    same release, period and year.
+    - Subjects with no column on such a sheet (regions, `Total Gold`) pose none.
+    - Refused, in order: a site on two sheets of one metal; a withheld subject (E818); a missing row; a label
+      printed twice in a block (the reader now lists the first row of such a label); a blank.
+    - Two tokens (`—`, `— `, `n/a` only) are not published; `n/a` against a number is refused; any other
+      token or an unreadable number is refused.
+    - The nil token against a number reads as number = 0 and is decided alone, with a `nil_token` certificate.
+    - Two numbers are one equal identity over their closed boxes, posed jointly with ownership and quarter
+      sums. The exhaustive correction search now runs up to 32 cells, within the kernel's 10,000-run cap: site
+      prints make components of 21 cells, one over the kernel's default.
+  - **Independent reader.** The census's family 7 (a736c26) was written first by a subagent from a rule
+    statement, without reading the crate. The rule statement and the Rust share one origin (this agent).
+  - **Result.**
+    - The ignored test `barrick_mine_ledger_matches_census` runs the census. All 4,664 instance lines (each with
+      its certificate), the 27 infeasible component lines, the three family summaries and every implied range
+      are equal.
+    - Site sheet 3,130: 2,982 (i), 1 (iii), 42 (v: 40 withheld, 2 blank), 105 np. Ownership and quarter sums
+      are unchanged. 2,091 components, 27 infeasible, 2 only jointly; their ids now name site-sheet cells
+      (E113's component is `2026Q1:Minestats1!B31`).
+    - E113, E114 and E115 still hold with the same one minimum set each. E116 is one (iii) at
+      `2026Q2:YTD!E11` against the nil token at `2026Q2:Minestats1!N103`, decided alone.
+  - **Not claimed.**
+    - The rule poses the summary and the site sheet as two independent prints. A site print equal to its
+      summary value pins that cell, so a correction set that dropped only the summary cell now also needs the
+      site print. Whether the two prints are independent evidence is not examined.
+    - A label printed twice and a site on two sheets do not occur in this corpus; synthetic tests only.
+    - The ledger's counts stay apart from the AISC totals; no AISC state moves.
+  - **Tests.** Seven synthetic tests, default suite:
+    - pairing by label as matched;
+    - the nil token as zero, two tokens, and `n/a`;
+    - another nil spelling refused;
+    - the refusal order;
+    - the alias by release, and beside its registered row;
+    - a label printed twice;
+    - a site print making an ownership component infeasible only jointly, with its two minimum sets and
+      ranges derived by hand before the run.
+  - **Planted negatives, each reverted.**
+    - With the alias rows moved to 2023 the real-file comparison fails at a 2024 copper row.
+    - Without the repeated-label check its synthetic test fails.
+    - Reading every nil spelling as the nil token first passed every test. The test of another spelling was
+      added after that, and fails under the plant.
+  - **Root.** Frame v7 binds the family and each instance's certificate. The root moves to `9ebec2e7…`,
+    observed from the release binary of 8b990a0 (exit 0, empty stderr), with AISC totals unchanged;
+    `repro/barrick/expected.toml` has the row. The synthetic port root moves too; at v6 the old root returns.
+  - **Verification.** Self-verified on this machine only; nothing has run in CI.

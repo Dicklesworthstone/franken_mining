@@ -204,3 +204,23 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "The state root binds the Mine Stats ledger (frame v6); no AISC state moves."
 evidence = "BD-331.S4, bd-prmn.4, E841"
+
+# Observed from the release binary of 8b990a0 (git archive, own target directory; exit 0, empty stderr). No AISC
+# state moves: the totals equal 35955e4's. The root moves because frame v7 adds the Mine Stats ledger's site-sheet
+# family (3,130 instances: 2,982 (i), 1 (iii), the E116 nil token, 42 (v), 105 np) and each instance's
+# certificate; ownership and quarter sums are unchanged, and 27 of 2,091 components are infeasible. The registry
+# epoch covers file rows only, so the new [[mine_stats_label_alias]] rows leave it unchanged.
+[[expected]]
+commit = "8b990a0"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "9ebec2e7af2483037fa0de743ca6db54cf690386bd8fd3163c69fc6041a0bd74"
+anchor_id = "anc_38d657c27d8da10fd825eaa7ec27386f"
+totals_i = 2436
+totals_ii = 3
+totals_iii = 4
+totals_iv = 92
+totals_v = 0
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "The Mine Stats ledger adds summary against site sheet (frame v7); no AISC state moves."
+evidence = "BD-331.S4, bd-prmn.4, E842"
