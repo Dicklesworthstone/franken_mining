@@ -58,13 +58,15 @@ The public lane of M0 (`fmine assure public`).
 ## 3. Authority, Epistemics & Representation
 - Every reported exception cites file, file SHA-256, `sheet!cell`, subject, family and ownership basis
   (`IdentityFamily::basis`).
-- The `LedgerAnchor` state root (BLAKE3 over an `M0AS` v3 frame) binds:
+- The `LedgerAnchor` state root (BLAKE3 over an `M0AS` v4 frame) binds:
   - every input's SHA-256, numeric digest and census;
-  - every instance's state and detail;
+  - every instance's state as codes, numbers and locators (`encode_state`), never its prose, with a tag before
+    each optional part;
+  - each instance's operands (role, locator, value);
   - unregistered headers and table refusals;
-  - the same three for the hidden scope, in their own section.
+  - the same for the hidden scope, in its own section.
 
-  Changing any input cell moves the root.
+  Changing any input cell moves the root; rewording a message does not (bd-sjrh.1 part 4).
 - The report payload carries `lane` and `gate_eligible`. The no-claim line (`NO_CLAIM`), the four INV-002 flags
   and the next actions (`PublicAssuranceReport::next_actions`) are envelope fields, which `fmine-cli` prints.
 
@@ -142,8 +144,9 @@ The public lane of M0 (`fmine assure public`).
     ("no cost-of-sales row on the release's own quarter sheet") or is missing ("the release's own quarter sheet
     is missing").
 - `aisc::Calc` and `IdentityInstance::calc` (bd-sjrh.1): a footing's printed total, component sum and k; a
-  rate's r, n, k and q, as the ledger read them. They are not in `detail()` or the root; `citation` renders them
-  in the payload.
+  rate's r, n, k and q, as the ledger read them. `citation` renders them in the payload, and the root binds the
+  operands they come from. `OperandRole::Counted` marks lines read only for their count: rate lines, and block 1
+  under the AISC footing.
 - `citation::{Cited, RULES, RULES_VERSION, extracted, derived, cited_json, locator}` (bd-sjrh.1 part 3): the
   cited numbers of an instance.
   - **Extracted:** each operand is `{"role","v"|"token"|"blank"|"unrounded","at","sha256"}`.
@@ -158,11 +161,16 @@ The public lane of M0 (`fmine assure public`).
   - **Size:** the real payload is about 7.3 MB.
   - **Not yet:**
     - totals and census counts as count citations;
-    - the uncited-number validator (S2);
-    - structured states (part 1);
-    - frame v3 (part 4).
-  `OperandRole::Counted` marks lines read only for their count: rate lines, and block 1 under the AISC
-  footing.
+    - the uncited-number validator (S2).
+- **Structured states** (bd-sjrh.1 part 1):
+  - `aisc::{RefusedReason, NotPublishedReason}`: each has a unique snake_case `code()` and a `why()` text with no
+    digits.
+  - `aisc::{Undecided, ReconstructionCheck}`: a (iv) is `RateOutside(RateMiss)`, `ShareOutside` or
+    `ReconstructionNotApplied { evidence_id, check }`. Each check (quote, file, sheet, label, whole number,
+    closes) carries its own fields.
+  - `aisc::StatedShare` is a stated-share basis, and `aisc::CitedCell` an explained component.
+  - `IdentityState::reason_code()` gives the code that the payload's exception records and refused and
+    not-published groups carry as `reason_code`. `detail()` renders the same prose as before.
 - `Lane`, `LoadedSource`, `TableRefusal`, `AlternateCounts`, `HiddenScope`, `HIDDEN_SCOPE`,
   `PublicAssuranceReport`, `load_registered_sources`, `assess`, `run_public_assurance`, `run_barrick_m0_assurance`,
   `run_synthetic_assurance`, `cell_to_public_claim`, `NO_CLAIM`; `PublicAssuranceReport::next_actions`

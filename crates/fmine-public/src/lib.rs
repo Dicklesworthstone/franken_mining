@@ -27,10 +27,11 @@ use fmine_io::xlsx::{
 };
 
 use crate::aisc::{
-    DEFAULT_MISSING_FACT, ExplanationBasis, IdentityFamily, IdentityInstance, IdentityState,
-    OneCellCheck, OneCellOutcome, Operand, OperandRole, OperandValue, RateMiss, ShareBasis,
-    UnregisteredHeader, cell_text, confirm_share_label, find_qtd_sheet, ledger_for_table,
-    locate_table, one_cell_checks, operand_at, reconstruction_closes,
+    CitedCell, DEFAULT_MISSING_FACT, ExplanationBasis, IdentityFamily, IdentityInstance,
+    IdentityState, OneCellCheck, OneCellOutcome, Operand, OperandRole, OperandValue, RateMiss,
+    ReconstructionCheck, ShareBasis, StatedShare, Undecided, UnregisteredHeader, cell_text,
+    confirm_share_label, find_qtd_sheet, ledger_for_table, locate_table, one_cell_checks,
+    operand_at, reconstruction_closes,
 };
 use crate::mine_stats::{CellRefusal, LabelVocabulary, MineStatsRead, read_mine_stats};
 pub use crate::sources::load_issuer_profile;
@@ -361,6 +362,9 @@ impl PublicAssuranceReport {
             js(i.family.as_str()),
             js(&i.state.detail())
         );
+        if let Some(code) = i.state.reason_code() {
+            let _ = write!(o, ",\"reason_code\":{}", js(code));
+        }
         if let Some(scope) = scope {
             let _ = write!(o, ",\"scope\":{}", js(scope));
         }
@@ -660,9 +664,12 @@ impl PublicAssuranceReport {
         o.push_str(&exceptions.join(","));
         o.push_str("],");
         for (key, code) in [("refused", "v"), ("not_published", "np")] {
-            let mut by_reason: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            let mut by_reason: BTreeMap<String, (&str, Vec<String>)> = BTreeMap::new();
             for i in self.instances.iter().filter(|i| i.state.code() == code) {
-                by_reason.entry(i.state.detail()).or_default().push(format!(
+                let entry = by_reason
+                    .entry(i.state.detail())
+                    .or_insert_with(|| (i.state.reason_code().unwrap_or_default(), Vec::new()));
+                entry.1.push(format!(
                     "{}:{}!{}:{}",
                     i.file,
                     i.sheet,
@@ -671,13 +678,14 @@ impl PublicAssuranceReport {
                 ));
             }
             let _ = write!(o, "{}:[", js(key));
-            for (n, (reason, cells)) in by_reason.iter().enumerate() {
+            for (n, (reason, (reason_code, cells))) in by_reason.iter().enumerate() {
                 let cells: Vec<String> = cells.iter().map(|c| js(c)).collect();
                 let _ = write!(
                     o,
-                    "{}{{\"reason\":{},\"count\":{},\"instances\":[{}]}}",
+                    "{}{{\"reason\":{},\"reason_code\":{},\"count\":{},\"instances\":[{}]}}",
                     if n == 0 { "" } else { "," },
                     js(reason),
+                    js(reason_code),
                     cells.len(),
                     cells.join(",")
                 );
@@ -912,12 +920,12 @@ fn try_reconstruction(
     miss: RateMiss,
 ) -> Option<IdentityState> {
     let rec = find_reconstruction(recs, file, sheet, subject, family)?;
-    let fail = |why: String| {
+    let fail = |check: ReconstructionCheck| {
         Some(IdentityState::Undecidable {
-            detail: format!(
-                "registered reconstruction {} not applied: {why}",
-                rec.evidence_id
-            ),
+            why: Undecided::ReconstructionNotApplied {
+                evidence_id: rec.evidence_id.clone(),
+                check,
+            },
             missing_fact: DEFAULT_MISSING_FACT.to_string(),
             closing_document: None,
         })
@@ -943,14 +951,17 @@ fn try_reconstruction(
             .as_deref()
             .is_some_and(|t| t.starts_with(quote_prefix))
         {
-            return fail(format!(
-                "stated quote {doc}:{locator} reads {:?}, expected text starting {quote_prefix:?}",
-                quote.unwrap_or_default()
-            ));
+            return fail(ReconstructionCheck::QuoteMismatch {
+                at: format!("{doc}:{locator}"),
+                found: quote.unwrap_or_default(),
+                expected_prefix: quote_prefix.clone(),
+            });
         }
     }
     let Some(src) = sources.iter().find(|s| s.file_name == rec.component_file) else {
-        return fail(format!("{} not loaded", rec.component_file));
+        return fail(ReconstructionCheck::ComponentFileNotLoaded {
+            file: rec.component_file.clone(),
+        });
     };
     let Some(cs) = src
         .workbook
@@ -958,16 +969,18 @@ fn try_reconstruction(
         .iter()
         .find(|s| s.name == rec.component_sheet)
     else {
-        return fail(format!("no visible sheet '{}'", rec.component_sheet));
+        return fail(ReconstructionCheck::NoSheet {
+            sheet: rec.component_sheet.clone(),
+        });
     };
     for (cell, prefix) in &rec.label_checks {
         let text = parse_a1_ref(cell).and_then(|(r, c)| cell_text(cs, r, c));
         if !text.as_deref().is_some_and(|t| t.starts_with(prefix)) {
-            return fail(format!(
-                "{}!{cell} reads {:?}, expected text starting {prefix:?}",
-                rec.component_sheet,
-                text.unwrap_or_default()
-            ));
+            return fail(ReconstructionCheck::LabelMismatch {
+                at: format!("{}!{cell}", rec.component_sheet),
+                found: text.unwrap_or_default(),
+                expected_prefix: prefix.clone(),
+            });
         }
     }
     let value = parse_a1_ref(&rec.component_cell)
@@ -976,16 +989,17 @@ fn try_reconstruction(
     let c = match value {
         Some(v) if v.fract() == 0.0 && v.abs() < 1e15 => v as i64,
         _ => {
-            return fail(format!(
-                "{}!{} is not a whole number",
-                rec.component_sheet, rec.component_cell
-            ));
+            return fail(ReconstructionCheck::NotWhole {
+                at: format!("{}!{}", rec.component_sheet, rec.component_cell),
+            });
         }
     };
-    let component = format!(
-        "{}:{}!{}={c}",
-        rec.component_file, rec.component_sheet, rec.component_cell
-    );
+    let component = CitedCell {
+        file: rec.component_file.clone(),
+        sheet: rec.component_sheet.clone(),
+        cell: rec.component_cell.clone(),
+        value: c,
+    };
     if reconstruction_closes(miss.n, miss.k, miss.q, miss.r, c) {
         Some(IdentityState::Explained {
             evidence_id: rec.evidence_id.clone(),
@@ -994,9 +1008,7 @@ fn try_reconstruction(
             basis: rec.basis.clone(),
         })
     } else {
-        fail(format!(
-            "adding {component} does not close the rate interval"
-        ))
+        fail(ReconstructionCheck::DoesNotClose { component })
     }
 }
 
@@ -1200,8 +1212,9 @@ pub fn assess(
     } = visible;
 
     // The state root binds every input digest, every census and every instance's state, so changing any
-    // input cell changes the root. Version 3 adds the hidden-scope section (BD-331.S2).
-    let mut enc = Encoder::new_frame(*b"M0AS", 3);
+    // input cell changes the root. Version 3 adds the hidden-scope section (BD-331.S2). Version 4 binds each
+    // state as reason codes and fields, never its prose, and each instance's operands (bd-sjrh.1).
+    let mut enc = Encoder::new_frame(*b"M0AS", 4);
     enc.put_str(issuer);
     enc.put_str(lane.as_str());
     enc.put_u64(sources.len() as u64);
@@ -1240,7 +1253,27 @@ pub fn assess(
             ] {
                 enc.put_str(field);
             }
-            enc.put_str(&i.state.detail());
+            encode_state(&mut enc, &i.state);
+            enc.put_u64(i.operands.len() as u64);
+            for o in &i.operands {
+                enc.put_str(o.role.as_str());
+                enc.put_str(&citation::locator(o));
+                match &o.value {
+                    OperandValue::Int(x) => {
+                        enc.put_u8(0);
+                        enc.put_i64(*x);
+                    }
+                    OperandValue::Token(t) => {
+                        enc.put_u8(1);
+                        enc.put_str(t);
+                    }
+                    OperandValue::Blank => enc.put_u8(2),
+                    OperandValue::Unrounded(t) => {
+                        enc.put_u8(3);
+                        enc.put_str(t);
+                    }
+                }
+            }
         }
         enc.put_u64(unregistered.len() as u64);
         for h in unregistered {
@@ -1314,6 +1347,137 @@ fn ledger_anchor(issuer: &str, lane: Lane, sources: usize, state_root: Digest32)
 
 /// Names the fact that would decide a (iv) instance: the registered `(subject, family)` row if there is one,
 /// otherwise the text the ledger gave it (its family default, or the stated share rule's).
+/// Binds a state into the root frame (v4) as codes, numbers and locators, with a tag before every optional
+/// part, so rewording any prose leaves the root alone.
+fn encode_state(enc: &mut Encoder, state: &IdentityState) {
+    let opt = |enc: &mut Encoder, s: Option<&str>| match s {
+        None => enc.put_u8(0),
+        Some(s) => {
+            enc.put_u8(1);
+            enc.put_str(s);
+        }
+    };
+    let miss = |enc: &mut Encoder, m: &RateMiss| {
+        for x in [m.r, m.n, m.k, m.q] {
+            enc.put_i64(x);
+        }
+    };
+    let share = |enc: &mut Encoder, s: &StatedShare| {
+        enc.put_i64(s.num);
+        enc.put_i64(s.den);
+        for t in [&s.evidence, &s.footnote, &s.label_cell] {
+            enc.put_str(t);
+        }
+    };
+    let cell = |enc: &mut Encoder, c: &CitedCell| {
+        for t in [&c.file, &c.sheet, &c.cell] {
+            enc.put_str(t);
+        }
+        enc.put_i64(c.value);
+    };
+    match state {
+        IdentityState::Consistent {
+            alternate_consistent,
+            basis,
+        } => {
+            enc.put_u8(u8::from(*alternate_consistent));
+            match basis {
+                None => enc.put_u8(0),
+                Some(b) => {
+                    enc.put_u8(1);
+                    share(enc, b);
+                }
+            }
+        }
+        IdentityState::Explained {
+            evidence_id,
+            rule,
+            component,
+            basis,
+        } => {
+            enc.put_str(evidence_id);
+            enc.put_str(rule);
+            cell(enc, component);
+            match basis {
+                ExplanationBasis::Reconstructed => enc.put_u8(0),
+                ExplanationBasis::Stated {
+                    doc,
+                    locator,
+                    quote_prefix,
+                } => {
+                    enc.put_u8(1);
+                    for t in [doc, locator, quote_prefix] {
+                        enc.put_str(t);
+                    }
+                }
+            }
+        }
+        IdentityState::IssuerDiscrepancy(c) => {
+            for x in [c.printed, c.component_sum, c.residual] {
+                enc.put_i64(x);
+            }
+            enc.put_str(&c.total_cell);
+            enc.put_u64(c.line_cells.len() as u64);
+            for l in &c.line_cells {
+                enc.put_str(l);
+            }
+            opt(enc, c.sign_flip_witness.as_deref());
+            enc.put_u8(u8::from(c.alternate_consistent));
+        }
+        IdentityState::Undecidable {
+            why,
+            missing_fact,
+            closing_document,
+        } => {
+            enc.put_str(why.code());
+            match why {
+                Undecided::RateOutside(m) => miss(enc, m),
+                Undecided::ShareOutside {
+                    miss: m,
+                    share: s,
+                    s_interval,
+                } => {
+                    miss(enc, m);
+                    share(enc, s);
+                    enc.put_str(s_interval);
+                }
+                Undecided::ReconstructionNotApplied { evidence_id, check } => {
+                    enc.put_str(evidence_id);
+                    enc.put_str(check.code());
+                    match check {
+                        ReconstructionCheck::QuoteMismatch {
+                            at,
+                            found,
+                            expected_prefix,
+                        }
+                        | ReconstructionCheck::LabelMismatch {
+                            at,
+                            found,
+                            expected_prefix,
+                        } => {
+                            for t in [at, found, expected_prefix] {
+                                enc.put_str(t);
+                            }
+                        }
+                        ReconstructionCheck::ComponentFileNotLoaded { file: t }
+                        | ReconstructionCheck::NoSheet { sheet: t }
+                        | ReconstructionCheck::NotWhole { at: t } => enc.put_str(t),
+                        ReconstructionCheck::DoesNotClose { component } => cell(enc, component),
+                    }
+                }
+            }
+            enc.put_str(missing_fact);
+            opt(enc, closing_document.as_deref());
+        }
+        IdentityState::Refused { reason } => enc.put_str(reason.code()),
+        IdentityState::RefusedAt { reason, at } => {
+            enc.put_str(reason.code());
+            enc.put_str(at);
+        }
+        IdentityState::NotPublished { reason } => enc.put_str(reason.code()),
+    }
+}
+
 fn name_missing_fact(instance: &mut IdentityInstance, registered: &[RegisteredMissingFact]) {
     let IdentityState::Undecidable {
         missing_fact,
@@ -1394,6 +1558,7 @@ fn load_synthetic(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aisc::{NotPublishedReason, RefusedReason};
     use fmine_io::xlsx::MinimalCell;
     use std::path::PathBuf;
 
@@ -1435,13 +1600,27 @@ mod tests {
             other => panic!("C8 TCC footing: {other:?}"),
         }
         match state_of(&r, "D16", IdentityFamily::AiscPerOunce) {
-            IdentityState::Undecidable {
-                detail,
+            s @ IdentityState::Undecidable {
+                why,
                 missing_fact,
                 closing_document,
             } => {
+                // Structured (bd-sjrh.1): r 2400, N = D11 200 over k 5 lines, Q = D13 100.
+                assert_eq!(
+                    why,
+                    &Undecided::RateOutside(RateMiss {
+                        n: 200,
+                        k: 5,
+                        q: 100,
+                        r: 2400
+                    })
+                );
                 // 405000/199 = 2035.1758…: the upper bound rounds up (it printed 2035.175 before 2026-10-29).
-                assert!(detail.contains("[1965.174, 2035.176]"), "{detail}");
+                assert!(
+                    s.detail().contains("[1965.174, 2035.176]"),
+                    "{}",
+                    s.detail()
+                );
                 // Site C's registered missing fact replaces the family default (BD-331.S2).
                 assert_eq!(
                     missing_fact,
@@ -1454,29 +1633,45 @@ mod tests {
         assert_eq!(
             state_of(&r, "E14", IdentityFamily::CosPerOunce),
             &IdentityState::Refused {
-                reason: "no registered share"
+                reason: RefusedReason::NoRegisteredShare
             }
         );
         assert_eq!(state_of(&r, "E15", IdentityFamily::TccPerOunce).code(), "i");
         // Stated share 3/4: K prints 1000·¾·400/150 = 2000 (i); L prints 2200 (iv).
+        let k14 = state_of(&r, "K14", IdentityFamily::CosPerOunce);
         assert_eq!(
-            state_of(&r, "K14", IdentityFamily::CosPerOunce),
+            k14,
             &IdentityState::Consistent {
                 alternate_consistent: true,
-                basis: Some(
-                    "stated share 3/4 (synthetic); footnote Q1 2030!A30; label \
-                     Synthetic_Mine_Stats.xlsx:QTD!A5"
-                        .to_string()
-                ),
+                basis: Some(StatedShare {
+                    num: 3,
+                    den: 4,
+                    evidence: "synthetic".to_string(),
+                    footnote: "Q1 2030!A30".to_string(),
+                    label_cell: "Synthetic_Mine_Stats.xlsx:QTD!A5".to_string(),
+                }),
             }
+        );
+        assert_eq!(
+            k14.detail(),
+            "alternate_construction_consistent=true; stated share 3/4 (synthetic); footnote Q1 2030!A30; label \
+             Synthetic_Mine_Stats.xlsx:QTD!A5"
         );
         match state_of(&r, "L14", IdentityFamily::CosPerOunce) {
             s @ IdentityState::Undecidable {
-                detail,
-                missing_fact,
-                ..
+                why, missing_fact, ..
             } => {
-                assert!(detail.contains("allow s in [0.8210, 0.8290]"), "{detail}");
+                assert!(
+                    matches!(why, Undecided::ShareOutside { miss, share, s_interval }
+                        if miss.r == 2200 && share.num == 3 && share.den == 4
+                            && s_interval == "[0.8210, 0.8290]"),
+                    "{why:?}"
+                );
+                assert!(
+                    s.detail().contains("allow s in [0.8210, 0.8290]"),
+                    "{}",
+                    s.detail()
+                );
                 assert_eq!(missing_fact, aisc::SHARE_MISSING_FACT);
                 assert!(
                     s.detail().ends_with(
@@ -1498,7 +1693,7 @@ mod tests {
             assert_eq!(
                 state_of(&r, cell, family),
                 &IdentityState::Refused {
-                    reason: "unrounded stored value; needs cell number format"
+                    reason: RefusedReason::Unrounded
                 }
             );
         }
@@ -1510,7 +1705,19 @@ mod tests {
         );
         match state_of(&r, "H16", IdentityFamily::AiscPerOunce) {
             IdentityState::Explained { component, .. } => {
-                assert_eq!(component, "Synthetic_Mine_Stats.xlsx:Minestats3!B32=13");
+                assert_eq!(
+                    component,
+                    &CitedCell {
+                        file: "Synthetic_Mine_Stats.xlsx".to_string(),
+                        sheet: "Minestats3".to_string(),
+                        cell: "B32".to_string(),
+                        value: 13,
+                    }
+                );
+                assert_eq!(
+                    component.text(),
+                    "Synthetic_Mine_Stats.xlsx:Minestats3!B32=13"
+                );
             }
             other => panic!("H16: {other:?}"),
         }
@@ -1603,7 +1810,17 @@ mod tests {
         ];
         let r = assess(&profile, Lane::Synthetic, sources);
         match state_of(&r, "H16", IdentityFamily::AiscPerOunce) {
-            IdentityState::Undecidable { detail, .. } => assert!(detail.contains("B3"), "{detail}"),
+            s @ IdentityState::Undecidable {
+                why: Undecided::ReconstructionNotApplied { check, .. },
+                ..
+            } => {
+                assert!(
+                    matches!(check, ReconstructionCheck::LabelMismatch { at, expected_prefix, .. }
+                        if at == "Minestats3!B3" && expected_prefix == "2031"),
+                    "{check:?}"
+                );
+                assert!(s.detail().contains("B3"), "{}", s.detail());
+            }
             other => panic!("H16: {other:?}"),
         }
     }
@@ -1685,7 +1902,7 @@ mod tests {
     }
 
     const NO_FOOTNOTE: IdentityState = IdentityState::Refused {
-        reason: "attributable-basis footnote not found on the sheet",
+        reason: RefusedReason::FootnoteNotFound,
     };
 
     /// BD-331.S3: a registered share the same-release label does not print is (v), naming the cell.
@@ -1696,7 +1913,7 @@ mod tests {
         assert_eq!(
             state_of(&r, "K14", IdentityFamily::CosPerOunce),
             &IdentityState::RefusedAt {
-                reason: "registered share not confirmed by label",
+                reason: RefusedReason::ShareNotConfirmed,
                 at: "Synthetic_Mine_Stats.xlsx: QTD!A5 prints 80%, registered 3/4".to_string(),
             }
         );
@@ -1730,7 +1947,7 @@ mod tests {
         let r = run_synthetic_assurance(&moved).expect("synthetic");
         match state_of(&r, "K14", IdentityFamily::CosPerOunce) {
             IdentityState::Consistent { basis: Some(b), .. } => {
-                assert!(b.contains("footnote Q1 2030!A41"), "{b}")
+                assert_eq!(b.footnote, "Q1 2030!A41");
             }
             other => panic!("K14: {other:?}"),
         }
@@ -1752,7 +1969,7 @@ mod tests {
         assert_eq!(
             state_of(&r, "H14", IdentityFamily::CosPerOunce),
             &IdentityState::Refused {
-                reason: "regional numerator needs member weighting"
+                reason: RefusedReason::RegionalNumerator
             }
         );
         // Unregistered as a region, the same column is refused for having no share instead.
@@ -1762,7 +1979,7 @@ mod tests {
         assert_eq!(
             state_of(&r, "H14", IdentityFamily::CosPerOunce),
             &IdentityState::Refused {
-                reason: "no registered share"
+                reason: RefusedReason::NoRegisteredShare
             }
         );
         assert!(
@@ -1781,7 +1998,7 @@ mod tests {
         assert_eq!(
             state_of(&r, "K14", IdentityFamily::CosPerOunce),
             &IdentityState::Refused {
-                reason: "no registered share"
+                reason: RefusedReason::NoRegisteredShare
             }
         );
         assert_eq!(
@@ -1961,6 +2178,112 @@ mod tests {
             .find(|w| w.0 == synthetic::SYNTHETIC_AISC_FILE)
             .map(|w| fmine_core::hash::sha256(&w.3).to_hex())
             .expect("synthetic AISC workbook")
+    }
+
+    /// bd-sjrh.1 part 1: every refusal and not-published reason has a unique snake_case code and a reason text
+    /// with no digits, and so does each next action's text.
+    #[test]
+    fn test_reason_codes_and_why_have_no_digits() {
+        let pairs: Vec<(&str, &str)> = RefusedReason::ALL
+            .iter()
+            .map(|r| (r.code(), r.why()))
+            .chain(NotPublishedReason::ALL.iter().map(|r| (r.code(), r.why())))
+            .collect();
+        assert_eq!(pairs.len(), 15);
+        for (code, why) in &pairs {
+            assert!(
+                !code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
+                "{code}"
+            );
+            assert!(!why.bytes().any(|b| b.is_ascii_digit()), "{why}");
+        }
+        let codes: std::collections::BTreeSet<&str> = pairs.iter().map(|p| p.0).collect();
+        assert_eq!(codes.len(), pairs.len());
+        let r = run_synthetic_assurance(&[]).expect("synthetic run");
+        for (_, why) in r.next_actions() {
+            assert!(!why.bytes().any(|b| b.is_ascii_digit()), "{why}");
+        }
+        // Each state's code reaches the payload: E14's refusal, G8's and D16's.
+        let json = r.to_json();
+        for code in [
+            "\"reason_code\":\"no_registered_share\"",
+            "\"reason_code\":\"unrounded_stored_value\"",
+            "\"reason_code\":\"rate_outside_interval\"",
+            "\"reason_code\":\"all_zero_column\"",
+        ] {
+            assert!(json.contains(code), "{code}");
+        }
+    }
+
+    /// bd-sjrh.1 part 4, frame v4: the root is deterministic, and moves when one cell does (B8 400 → 401).
+    #[test]
+    fn test_frame_v4_root_deterministic_and_moves_on_cell_edit() {
+        let root = |edits: &[(String, MinimalCell)]| {
+            run_synthetic_assurance(edits)
+                .expect("synthetic run")
+                .ledger_anchor
+                .state_root
+                .to_hex()
+        };
+        let base = root(&[]);
+        assert_eq!(base, root(&[]));
+        assert_ne!(
+            base,
+            root(&[("B8".to_string(), MinimalCell::Number(401.0))])
+        );
+    }
+
+    /// bd-sjrh.1 part 4: the frame binds a state's fields. Two (iv) states that differ only in a reconstruction
+    /// check's quoted text bind differently, an absent closing document binds apart from an empty one, and an input
+    /// that moves without changing D16's state code still moves its bound fields (q).
+    #[test]
+    fn test_frame_v4_binds_fields_and_operands() {
+        let bytes = |s: &IdentityState| {
+            let mut enc = Encoder::new_frame(*b"TEST", 1);
+            encode_state(&mut enc, s);
+            enc.finish()
+        };
+        let mismatch = |found: &str| IdentityState::Undecidable {
+            why: Undecided::ReconstructionNotApplied {
+                evidence_id: "E1".to_string(),
+                check: ReconstructionCheck::LabelMismatch {
+                    at: "S!A1".to_string(),
+                    found: found.to_string(),
+                    expected_prefix: "x".to_string(),
+                },
+            },
+            missing_fact: "m".to_string(),
+            closing_document: None,
+        };
+        assert_eq!(bytes(&mismatch("a")), bytes(&mismatch("a")));
+        assert_ne!(bytes(&mismatch("a")), bytes(&mismatch("b")));
+        // None and Some("") are told apart by their tags.
+        let with_doc = |d: Option<&str>| match mismatch("a") {
+            IdentityState::Undecidable {
+                why, missing_fact, ..
+            } => IdentityState::Undecidable {
+                why,
+                missing_fact,
+                closing_document: d.map(str::to_string),
+            },
+            other => other,
+        };
+        assert_ne!(bytes(&with_doc(None)), bytes(&with_doc(Some(""))));
+        // D13 100 → 101 keeps D16 (iv) but changes q in its fields and its operand.
+        let d16 = |edits: &[(String, MinimalCell)]| {
+            run_synthetic_assurance(edits)
+                .expect("synthetic run")
+                .instances
+                .into_iter()
+                .find(|i| i.cell == "D16" && i.family == IdentityFamily::AiscPerOunce)
+                .expect("D16")
+        };
+        let (a, b) = (
+            d16(&[]),
+            d16(&[("D13".to_string(), MinimalCell::Number(101.0))]),
+        );
+        assert_eq!((a.state.code(), b.state.code()), ("iv", "iv"));
+        assert_ne!(bytes(&a.state), bytes(&b.state));
     }
 
     /// bd-sjrh.1 part 3: C8 (hand-read from `synthetic.rs`: C5 300, C6 −50, C7 0, C8 350) renders as three cited
@@ -2381,24 +2704,36 @@ mod tests {
     /// refused and the instance stays (iv), naming the quote cell. The reconstructed (ii) needs no quote.
     #[test]
     fn test_stated_quote_mismatch_keeps_iv() {
-        for text in [
-            "i.  Site J's all-in sustaining costs per ounce exclude Site G's capital.",
-            "",
+        // The quote is read with its runs of whitespace collapsed; an empty cell reads as "".
+        for (text, found_text) in [
+            (
+                "i.  Site J's all-in sustaining costs per ounce exclude Site G's capital.",
+                "i. Site J's all-in sustaining costs per ounce exclude Site G's capital.",
+            ),
+            ("", ""),
         ] {
             let edit = [(String::from("A31"), MinimalCell::Text(text.to_string()))];
             let r = run_synthetic_assurance(&edit).expect("synthetic");
             match state_of(&r, "M16", IdentityFamily::AiscPerOunce) {
-                IdentityState::Undecidable {
-                    detail,
-                    missing_fact,
-                    ..
+                s @ IdentityState::Undecidable {
+                    why, missing_fact, ..
                 } => {
                     assert!(
-                        detail.starts_with(
+                        matches!(why, Undecided::ReconstructionNotApplied {
+                            evidence_id,
+                            check: ReconstructionCheck::QuoteMismatch { at, found, .. },
+                        } if evidence_id == "SYNTHETIC-STATED"
+                            && at == "Synthetic_AISC.xlsx:Q1 2030!A31"
+                            && found == found_text),
+                        "{why:?}"
+                    );
+                    assert!(
+                        s.detail().starts_with(
                             "registered reconstruction SYNTHETIC-STATED not applied: stated quote \
                              Synthetic_AISC.xlsx:Q1 2030!A31 reads"
                         ),
-                        "{detail}"
+                        "{}",
+                        s.detail()
                     );
                     assert_eq!(missing_fact, aisc::DEFAULT_MISSING_FACT);
                 }
@@ -3118,7 +3453,7 @@ mod tests {
                     "{}|{}|{}|{}",
                     i.file,
                     i.sheet,
-                    component,
+                    component.text(),
                     i.state.label()
                 )),
                 _ => None,
@@ -3787,46 +4122,36 @@ mod tests {
             .iter()
             .filter(|i| i.family == IdentityFamily::CosPerOunce)
         {
-            let (slot, detail) = match &i.state {
-                IdentityState::Consistent { basis: Some(b), .. } => (0, b.as_str()),
-                IdentityState::Undecidable { detail, .. } if detail.contains("1000·s·N/Q") => {
-                    (1, detail.as_str())
-                }
-                IdentityState::RefusedAt { at, .. } => (2, at.as_str()),
+            let slot = match &i.state {
+                IdentityState::Consistent { basis: Some(_), .. } => 0,
+                IdentityState::Undecidable {
+                    why: Undecided::ShareOutside { .. },
+                    ..
+                } => 1,
+                IdentityState::RefusedAt { .. } => 2,
                 IdentityState::Refused {
-                    reason: "regional numerator needs member weighting",
-                } => (3, ""),
+                    reason: RefusedReason::RegionalNumerator,
+                } => 3,
                 IdentityState::Refused {
-                    reason: "no registered share",
-                } => (4, ""),
-                s if *s == NO_FOOTNOTE => (5, ""),
-                IdentityState::Refused {
-                    reason: "attributable share needed",
-                } => panic!("{} {} {} keeps the old reason", i.file, i.sheet, i.cell),
+                    reason: RefusedReason::NoRegisteredShare,
+                } => 4,
+                s if *s == NO_FOOTNOTE => 5,
                 _ => continue,
             };
             summary[slot] += 1;
             if slot < 3 {
                 by_subject.entry(i.subject.clone()).or_default()[slot] += 1;
             }
-            let interval = detail
-                .split_once("allow s in [")
-                .and_then(|(_, rest)| rest.split_once(']'))
-                .and_then(|(inside, _)| inside.split_once(", "));
-            let (s_lo, s_hi) = interval.unwrap_or(("null", "null"));
-            let share = detail
-                .split_once("stated share ")
-                .and_then(|(_, rest)| rest.split_once(' '))
-                .map_or_else(|| "null".to_string(), |(s, _)| js(s));
+            // Locators and codes only: the feasible share interval and the detail carry issuer values (RISK-31).
             println!(
-                "{{\"file\":{},\"sheet\":{},\"cell\":{},\"subject\":{},\"share\":{share},\"state\":{},\
-                 \"s_lo\":{s_lo},\"s_hi\":{s_hi},\"detail\":{}}}",
+                "{{\"file\":{},\"sheet\":{},\"cell\":{},\"subject\":{},\"state\":{},\"reason_code\":{},\
+                 \"slot\":{slot}}}",
                 js(&i.file),
                 js(&i.sheet),
                 js(&i.cell),
                 js(&i.subject),
                 js(i.state.code()),
-                js(&i.state.detail())
+                js(i.state.reason_code().unwrap_or("none"))
             );
         }
         let [fit, miss, unconfirmed, regions_v, no_share, no_footnote] = summary;

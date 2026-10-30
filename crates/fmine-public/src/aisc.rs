@@ -95,14 +95,14 @@ pub enum IdentityState {
     /// label when the construction needed one (BD-331.S3).
     Consistent {
         alternate_consistent: bool,
-        basis: Option<String>,
+        basis: Option<StatedShare>,
     },
     /// (ii) The numbers close only with a registered reconstruction, re-verified on this run. `basis` says
     /// whether an issuer note states the rule (BD-331.S2).
     Explained {
         evidence_id: String,
         rule: String,
-        component: String,
+        component: CitedCell,
         basis: ExplanationBasis,
     },
     /// (iii) The printed total differs from the sum of its printed lines.
@@ -111,16 +111,293 @@ pub enum IdentityState {
     /// reconstruction explains it. `missing_fact` names what would decide it (prose, no digits), and
     /// `closing_document` a document known to hold that fact, if any (BD-331.S2).
     Undecidable {
-        detail: String,
+        why: Undecided,
         missing_fact: String,
         closing_document: Option<String>,
     },
     /// (v) The instance cannot be scored from what is printed.
-    Refused { reason: &'static str },
+    Refused { reason: RefusedReason },
     /// (v) Refused because of a named cell or file (`at`).
-    RefusedAt { reason: &'static str, at: String },
+    RefusedAt { reason: RefusedReason, at: String },
     /// The issuer published nothing for this instance (excluded from the ledger by name).
-    NotPublished { reason: &'static str },
+    NotPublished { reason: NotPublishedReason },
+}
+
+/// Why an instance is refused (v): a stable snake_case code and a reason with no digits (bd-sjrh.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefusedReason {
+    FootnoteNotFound,
+    RegionalNumerator,
+    NoRegisteredShare,
+    ShareNotConfirmed,
+    ShareRuleNeedsPositive,
+    OuncesNotNumeric,
+    OneOfRateAndOuncesZero,
+    NumeratorLineNotNumeric,
+    NumeratorPlaceholder,
+    LineNotNumeric,
+    Unrounded,
+}
+
+impl RefusedReason {
+    pub const ALL: [Self; 11] = [
+        Self::FootnoteNotFound,
+        Self::RegionalNumerator,
+        Self::NoRegisteredShare,
+        Self::ShareNotConfirmed,
+        Self::ShareRuleNeedsPositive,
+        Self::OuncesNotNumeric,
+        Self::OneOfRateAndOuncesZero,
+        Self::NumeratorLineNotNumeric,
+        Self::NumeratorPlaceholder,
+        Self::LineNotNumeric,
+        Self::Unrounded,
+    ];
+
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::FootnoteNotFound => "attributable_footnote_not_found",
+            Self::RegionalNumerator => "regional_numerator_needs_weighting",
+            Self::NoRegisteredShare => "no_registered_share",
+            Self::ShareNotConfirmed => "share_not_confirmed_by_label",
+            Self::ShareRuleNeedsPositive => "share_rule_needs_positive_inputs",
+            Self::OuncesNotNumeric => "ounces_not_numeric",
+            Self::OneOfRateAndOuncesZero => "one_of_rate_and_ounces_zero",
+            Self::NumeratorLineNotNumeric => "numerator_line_not_numeric",
+            Self::NumeratorPlaceholder => "numerator_total_placeholder",
+            Self::LineNotNumeric => "line_not_numeric",
+            Self::Unrounded => "unrounded_stored_value",
+        }
+    }
+
+    #[must_use]
+    pub const fn why(self) -> &'static str {
+        match self {
+            Self::FootnoteNotFound => "attributable-basis footnote not found on the sheet",
+            Self::RegionalNumerator => "regional numerator needs member weighting",
+            Self::NoRegisteredShare => "no registered share",
+            Self::ShareNotConfirmed => "registered share not confirmed by label",
+            Self::ShareRuleNeedsPositive => {
+                "stated share rule needs positive cost of sales, ounces and rate"
+            }
+            Self::OuncesNotNumeric => "ounces not numeric",
+            Self::OneOfRateAndOuncesZero => "one of rate and ounces is zero",
+            Self::NumeratorLineNotNumeric => "numerator line not numeric",
+            Self::NumeratorPlaceholder => "numerator total is a placeholder",
+            Self::LineNotNumeric => "line not numeric",
+            Self::Unrounded => "unrounded stored value; needs cell number format",
+        }
+    }
+}
+
+/// Why an instance is not published: a stable snake_case code and a reason with no digits (bd-sjrh.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotPublishedReason {
+    AllZeroColumn,
+    RateNotPublished,
+    ZeroRateAndOunces,
+    TotalNotPublished,
+}
+
+impl NotPublishedReason {
+    pub const ALL: [Self; 4] = [
+        Self::AllZeroColumn,
+        Self::RateNotPublished,
+        Self::ZeroRateAndOunces,
+        Self::TotalNotPublished,
+    ];
+
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::AllZeroColumn => "all_zero_column",
+            Self::RateNotPublished => "rate_not_published",
+            Self::ZeroRateAndOunces => "zero_rate_and_ounces",
+            Self::TotalNotPublished => "total_not_published",
+        }
+    }
+
+    #[must_use]
+    pub const fn why(self) -> &'static str {
+        match self {
+            Self::AllZeroColumn => "all-zero column",
+            Self::RateNotPublished => "rate not published",
+            Self::ZeroRateAndOunces => "zero rate and zero ounces",
+            Self::TotalNotPublished => "total not published",
+        }
+    }
+}
+
+/// A registered share the run confirmed against its Mine Stats label, at the sheet's attributable-basis
+/// footnote (BD-331.S3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatedShare {
+    pub num: i64,
+    pub den: i64,
+    pub evidence: String,
+    /// `sheet!cell` of the footnote.
+    pub footnote: String,
+    pub label_cell: String,
+}
+
+impl StatedShare {
+    #[must_use]
+    pub fn text(&self) -> String {
+        format!(
+            "stated share {}/{} ({}); footnote {}; label {}",
+            self.num, self.den, self.evidence, self.footnote, self.label_cell
+        )
+    }
+}
+
+/// A whole-number cell a (ii) explanation read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CitedCell {
+    pub file: String,
+    pub sheet: String,
+    pub cell: String,
+    pub value: i64,
+}
+
+impl CitedCell {
+    #[must_use]
+    pub fn text(&self) -> String {
+        format!("{}:{}!{}={}", self.file, self.sheet, self.cell, self.value)
+    }
+}
+
+/// What leaves a (iv) instance undecided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Undecided {
+    /// The printed rate lies outside 1000·N/Q for every N and Q the printed inputs allow.
+    RateOutside(RateMiss),
+    /// The printed rate lies outside 1000·s·N/Q at the stated share; the printed numbers allow s in
+    /// `s_interval`.
+    ShareOutside {
+        miss: RateMiss,
+        share: StatedShare,
+        s_interval: String,
+    },
+    /// A registered reconstruction applies to the instance but failed `check` on this run.
+    ReconstructionNotApplied {
+        evidence_id: String,
+        check: ReconstructionCheck,
+    },
+}
+
+/// The check a registered reconstruction failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReconstructionCheck {
+    /// The stated quote at `at` (`doc:sheet!cell`) no longer starts with `expected_prefix`.
+    QuoteMismatch {
+        at: String,
+        found: String,
+        expected_prefix: String,
+    },
+    ComponentFileNotLoaded {
+        file: String,
+    },
+    NoSheet {
+        sheet: String,
+    },
+    /// The label at `at` (`sheet!cell`) does not start with `expected_prefix`.
+    LabelMismatch {
+        at: String,
+        found: String,
+        expected_prefix: String,
+    },
+    /// The component at `at` (`sheet!cell`) is not a whole number.
+    NotWhole {
+        at: String,
+    },
+    DoesNotClose {
+        component: CitedCell,
+    },
+}
+
+impl ReconstructionCheck {
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::QuoteMismatch { .. } => "quote_mismatch",
+            Self::ComponentFileNotLoaded { .. } => "component_file_not_loaded",
+            Self::NoSheet { .. } => "no_sheet",
+            Self::LabelMismatch { .. } => "label_mismatch",
+            Self::NotWhole { .. } => "component_not_whole",
+            Self::DoesNotClose { .. } => "does_not_close",
+        }
+    }
+
+    fn text(&self) -> String {
+        match self {
+            Self::QuoteMismatch {
+                at,
+                found,
+                expected_prefix,
+            } => format!(
+                "stated quote {at} reads {found:?}, expected text starting {expected_prefix:?}"
+            ),
+            Self::ComponentFileNotLoaded { file } => format!("{file} not loaded"),
+            Self::NoSheet { sheet } => format!("no visible sheet '{sheet}'"),
+            Self::LabelMismatch {
+                at,
+                found,
+                expected_prefix,
+            } => format!("{at} reads {found:?}, expected text starting {expected_prefix:?}"),
+            Self::NotWhole { at } => format!("{at} is not a whole number"),
+            Self::DoesNotClose { component } => {
+                format!(
+                    "adding {} does not close the rate interval",
+                    component.text()
+                )
+            }
+        }
+    }
+}
+
+impl Undecided {
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::RateOutside(_) => "rate_outside_interval",
+            Self::ShareOutside { .. } => "rate_outside_interval_at_stated_share",
+            Self::ReconstructionNotApplied { .. } => "reconstruction_not_applied",
+        }
+    }
+
+    #[must_use]
+    pub fn text(&self) -> String {
+        match self {
+            Self::RateOutside(m) => format!(
+                "printed {} outside 1000·N/Q range {} for N = {} ± {}/2, Q = {} ± 1/2",
+                m.r,
+                rate_range_text(m.n, m.k, m.q),
+                m.n,
+                m.k,
+                m.q
+            ),
+            Self::ShareOutside {
+                miss: m,
+                share,
+                s_interval,
+            } => format!(
+                "printed {} outside 1000·s·N/Q at {}, for N = {} ± {}/2, Q = {} ± 1/2; the printed numbers allow s \
+                 in {s_interval}",
+                m.r,
+                share.text(),
+                m.n,
+                m.k,
+                m.q
+            ),
+            Self::ReconstructionNotApplied { evidence_id, check } => {
+                format!(
+                    "registered reconstruction {evidence_id} not applied: {}",
+                    check.text()
+                )
+            }
+        }
+    }
 }
 
 impl IdentityState {
@@ -165,7 +442,10 @@ impl IdentityState {
                 basis,
             } => match basis {
                 None => format!("alternate_construction_consistent={alternate_consistent}"),
-                Some(b) => format!("alternate_construction_consistent={alternate_consistent}; {b}"),
+                Some(b) => format!(
+                    "alternate_construction_consistent={alternate_consistent}; {}",
+                    b.text()
+                ),
             },
             Self::Explained {
                 evidence_id,
@@ -173,9 +453,12 @@ impl IdentityState {
                 basis,
                 ..
             } => match basis {
-                ExplanationBasis::Reconstructed => format!("{evidence_id}: {component}"),
+                ExplanationBasis::Reconstructed => format!("{evidence_id}: {}", component.text()),
                 ExplanationBasis::Stated { doc, locator, .. } => {
-                    format!("{evidence_id}: {component}; stated at {doc}:{locator}")
+                    format!(
+                        "{evidence_id}: {}; stated at {doc}:{locator}",
+                        component.text()
+                    )
                 }
             },
             Self::IssuerDiscrepancy(c) => format!(
@@ -189,15 +472,30 @@ impl IdentityState {
                     .unwrap_or_default()
             ),
             Self::Undecidable {
-                detail,
+                why,
                 missing_fact,
                 closing_document,
             } => match closing_document {
-                None => format!("{detail}; missing fact: {missing_fact}"),
-                Some(d) => format!("{detail}; missing fact: {missing_fact} (closed by {d})"),
+                None => format!("{}; missing fact: {missing_fact}", why.text()),
+                Some(d) => format!(
+                    "{}; missing fact: {missing_fact} (closed by {d})",
+                    why.text()
+                ),
             },
-            Self::Refused { reason } | Self::NotPublished { reason } => (*reason).to_string(),
-            Self::RefusedAt { reason, at } => format!("{reason}: {at}"),
+            Self::Refused { reason } => reason.why().to_string(),
+            Self::NotPublished { reason } => reason.why().to_string(),
+            Self::RefusedAt { reason, at } => format!("{}: {at}", reason.why()),
+        }
+    }
+
+    /// The stable snake_case code of a (iv), (v) or not-published reason; `None` for the other states.
+    #[must_use]
+    pub const fn reason_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Undecidable { why, .. } => Some(why.code()),
+            Self::Refused { reason } | Self::RefusedAt { reason, .. } => Some(reason.code()),
+            Self::NotPublished { reason } => Some(reason.code()),
+            _ => None,
         }
     }
 }
@@ -923,25 +1221,16 @@ fn stated_share_state(
     share: Option<&ShareBasis>,
     miss: RateMiss,
 ) -> IdentityState {
+    let refused = |reason| IdentityState::Refused { reason };
     let Some(footnote) = footnote else {
-        return IdentityState::Refused {
-            reason: "attributable-basis footnote not found on the sheet",
-        };
+        return refused(RefusedReason::FootnoteNotFound);
     };
     let (num, den, evidence, label_cell) = match share {
-        Some(ShareBasis::Region) => {
-            return IdentityState::Refused {
-                reason: "regional numerator needs member weighting",
-            };
-        }
-        None => {
-            return IdentityState::Refused {
-                reason: "no registered share",
-            };
-        }
+        Some(ShareBasis::Region) => return refused(RefusedReason::RegionalNumerator),
+        None => return refused(RefusedReason::NoRegisteredShare),
         Some(ShareBasis::Unconfirmed { why }) => {
             return IdentityState::RefusedAt {
-                reason: "registered share not confirmed by label",
+                reason: RefusedReason::ShareNotConfirmed,
                 at: why.clone(),
             };
         }
@@ -952,26 +1241,28 @@ fn stated_share_state(
             label_cell,
         }) => (*num, *den, evidence, label_cell),
     };
-    let Some(interval) = feasible_share_text(miss.n, miss.k, miss.q, miss.r) else {
-        return IdentityState::Refused {
-            reason: "stated share rule needs positive cost of sales, ounces and rate",
-        };
+    let Some(s_interval) = feasible_share_text(miss.n, miss.k, miss.q, miss.r) else {
+        return refused(RefusedReason::ShareRuleNeedsPositive);
     };
-    let cited = format!(
-        "stated share {num}/{den} ({evidence}); footnote {sheet}!{footnote}; label {label_cell}"
-    );
+    let share = StatedShare {
+        num,
+        den,
+        evidence: evidence.clone(),
+        footnote: format!("{sheet}!{footnote}"),
+        label_cell: label_cell.clone(),
+    };
     if scaled_rate_holds(miss.n, miss.k, miss.q, miss.r, num, den) {
         IdentityState::Consistent {
             alternate_consistent: scaled_rate_holds(miss.n, 1, miss.q, miss.r, num, den),
-            basis: Some(cited),
+            basis: Some(share),
         }
     } else {
         IdentityState::Undecidable {
-            detail: format!(
-                "printed {} outside 1000·s·N/Q at {cited}, for N = {} ± {}/2, Q = {} ± 1/2; the printed numbers \
-                 allow s in {interval}",
-                miss.r, miss.n, miss.k, miss.q
-            ),
+            why: Undecided::ShareOutside {
+                miss,
+                share,
+                s_interval,
+            },
             missing_fact: SHARE_MISSING_FACT.to_string(),
             closing_document: None,
         }
@@ -1307,7 +1598,7 @@ pub fn ledger_for_table<S: AsRef<str>>(
         let mut push = |family: IdentityFamily, row: u32, state: IdentityState, calc: Calc| {
             let all_zero = state
                 == IdentityState::NotPublished {
-                    reason: "all-zero column",
+                    reason: NotPublishedReason::AllZeroColumn,
                 };
             instances.push(IdentityInstance {
                 file: file.to_string(),
@@ -1330,7 +1621,7 @@ pub fn ledger_for_table<S: AsRef<str>>(
             });
         };
         let share = shares.get(subject);
-        let stated = StatedShare {
+        let stated = ShareInputs {
             footnote: footnote.as_deref(),
             share,
         };
@@ -1339,7 +1630,7 @@ pub fn ledger_for_table<S: AsRef<str>>(
 }
 
 /// The stated-share inputs of one column: the sheet's attributable-basis footnote and the subject's share.
-struct StatedShare<'a> {
+struct ShareInputs<'a> {
     footnote: Option<&'a str>,
     share: Option<&'a ShareBasis>,
 }
@@ -1349,7 +1640,7 @@ fn column_ledger(
     t: &AiscTable,
     col: u32,
     subject: &str,
-    stated: &StatedShare<'_>,
+    stated: &ShareInputs<'_>,
     explain: &mut dyn FnMut(&str, IdentityFamily, RateMiss) -> Option<IdentityState>,
     push: &mut dyn FnMut(IdentityFamily, u32, IdentityState, Calc),
 ) {
@@ -1379,7 +1670,7 @@ fn column_ledger(
                 family,
                 row,
                 IdentityState::NotPublished {
-                    reason: "all-zero column",
+                    reason: NotPublishedReason::AllZeroColumn,
                 },
                 Calc::None,
             );
@@ -1410,37 +1701,28 @@ fn column_ledger(
             _ => (t.aisc_row, all_lines.clone()),
         };
         let mut calc = Calc::None;
+        let refused = |reason| IdentityState::Refused { reason };
         let state = if !matches!(rv, Val::Num(_)) {
             IdentityState::NotPublished {
-                reason: "rate not published",
+                reason: NotPublishedReason::RateNotPublished,
             }
         } else if !matches!(q, Val::Num(_)) {
-            IdentityState::Refused {
-                reason: "ounces not numeric",
-            }
+            refused(RefusedReason::OuncesNotNumeric)
         } else if rv == Val::Num(0.0) && q == Val::Num(0.0) {
             IdentityState::NotPublished {
-                reason: "zero rate and zero ounces",
+                reason: NotPublishedReason::ZeroRateAndOunces,
             }
         } else if rv == Val::Num(0.0) || q == Val::Num(0.0) {
-            IdentityState::Refused {
-                reason: "one of rate and ounces is zero",
-            }
+            refused(RefusedReason::OneOfRateAndOuncesZero)
         } else {
             let mut cells = vec![rate_row, t.ounces_row, numerator_row];
             cells.extend(&lines);
             if cells.iter().any(|&r| non_numeric(v(r))) {
-                IdentityState::Refused {
-                    reason: "numerator line not numeric",
-                }
+                refused(RefusedReason::NumeratorLineNotNumeric)
             } else if !cells.iter().all(|&r| int_or_place(v(r))) {
-                IdentityState::Refused {
-                    reason: "unrounded stored value; needs cell number format",
-                }
+                refused(RefusedReason::Unrounded)
             } else if as_int(v(numerator_row)).is_none() {
-                IdentityState::Refused {
-                    reason: "numerator total is a placeholder",
-                }
+                refused(RefusedReason::NumeratorPlaceholder)
             } else {
                 let k = lines
                     .iter()
@@ -1468,14 +1750,7 @@ fn column_ledger(
                     explained
                 } else {
                     IdentityState::Undecidable {
-                        detail: format!(
-                            "printed {} outside 1000·N/Q range {} for N = {} ± {}/2, Q = {} ± 1/2",
-                            miss.r,
-                            rate_range_text(miss.n, miss.k, miss.q),
-                            miss.n,
-                            miss.k,
-                            miss.q
-                        ),
+                        why: Undecided::RateOutside(miss),
                         missing_fact: DEFAULT_MISSING_FACT.to_string(),
                         closing_document: None,
                     }
@@ -1497,19 +1772,19 @@ fn footing_state(
 ) -> (IdentityState, Calc) {
     if !matches!(v(total), Val::Num(_)) {
         let state = IdentityState::NotPublished {
-            reason: "total not published",
+            reason: NotPublishedReason::TotalNotPublished,
         };
         return (state, Calc::None);
     }
     if lines.iter().any(|&r| non_numeric(v(r))) {
         let state = IdentityState::Refused {
-            reason: "line not numeric",
+            reason: RefusedReason::LineNotNumeric,
         };
         return (state, Calc::None);
     }
     if !lines.iter().chain([&total]).all(|&r| int_or_place(v(r))) {
         let state = IdentityState::Refused {
-            reason: "unrounded stored value; needs cell number format",
+            reason: RefusedReason::Unrounded,
         };
         return (state, Calc::None);
     }

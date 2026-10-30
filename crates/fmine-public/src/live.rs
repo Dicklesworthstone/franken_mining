@@ -22,8 +22,8 @@ use fmine_io::styles::NumberFormat;
 use fmine_io::xlsx::{CellValue, ExtractedCell, Sheet, build_minimal_xlsx, parse_a1_ref};
 
 use crate::aisc::{
-    AnchorRule, Calc, IdentityInstance, IdentityState, Operand, OperandRole, OperandValue,
-    ROW_ANCHORS, locate_table, rate_interval_holds, rate_range_text,
+    AnchorRule, Calc, IdentityInstance, IdentityState, NotPublishedReason, Operand, OperandRole,
+    OperandValue, ROW_ANCHORS, RefusedReason, locate_table, rate_interval_holds, rate_range_text,
 };
 use crate::sources::IssuerProfile;
 use crate::{LoadedSource, PublicAssuranceReport};
@@ -405,11 +405,11 @@ pub fn leaf_summary(checks: &[LeafCheck], elapsed_ms: u128) -> String {
 }
 
 /// Refusals that come from the stated-share rule, whose NCI lines and label cells decide them.
-const SHARE_RULE_REFUSALS: [&str; 4] = [
-    "attributable-basis footnote not found on the sheet",
-    "regional numerator needs member weighting",
-    "no registered share",
-    "registered share not confirmed by label",
+const SHARE_RULE_REFUSALS: [RefusedReason; 4] = [
+    RefusedReason::FootnoteNotFound,
+    RefusedReason::RegionalNumerator,
+    RefusedReason::NoRegisteredShare,
+    RefusedReason::ShareNotConfirmed,
 ];
 
 fn locator(o: &Operand) -> String {
@@ -462,29 +462,31 @@ fn plan(
         Int(v) => (P::PlusOne, Int(v + 1)),
         _ => (P::ToOne, Int(1)),
     };
-    let reason = match &i.state {
-        IdentityState::NotPublished { reason }
-        | IdentityState::Refused { reason }
-        | IdentityState::RefusedAt { reason, .. } => Some(*reason),
-        _ => None,
-    };
-    match reason {
-        Some("all-zero column") => {
+    match &i.state {
+        IdentityState::NotPublished {
+            reason: NotPublishedReason::AllZeroColumn,
+        } => {
             let (p, v) = bump(&o.value);
             return Ok((p, v, Expect::State));
         }
-        Some("rate not published") if o.role == R::Rate => {
+        IdentityState::NotPublished {
+            reason: NotPublishedReason::RateNotPublished,
+        } if o.role == R::Rate => {
             return Ok((P::ToOne, Int(1), Expect::State));
         }
-        Some(reason) if SHARE_RULE_REFUSALS.contains(&reason) => {
+        IdentityState::Refused { reason } | IdentityState::RefusedAt { reason, .. }
+            if SHARE_RULE_REFUSALS.contains(reason) =>
+        {
             return match o.role {
                 R::NciLine => nci_plan(i, o),
                 R::LabelCheck => Ok((P::BreakText, Token("x".to_string()), Expect::State)),
                 _ => Err("refused_by_share_rule"),
             };
         }
-        Some(_) => return Err("decided_before_arithmetic"),
-        None => {}
+        IdentityState::NotPublished { .. }
+        | IdentityState::Refused { .. }
+        | IdentityState::RefusedAt { .. } => return Err("decided_before_arithmetic"),
+        _ => {}
     }
     match (o.role, i.calc, &o.value) {
         (R::Total, Calc::Footing { printed, .. }, Int(x)) => {
@@ -1165,7 +1167,7 @@ mod tests {
     #[test]
     fn test_flip_margin_all_zero_column_leaves_np() {
         let all_zero = IdentityState::NotPublished {
-            reason: "all-zero column",
+            reason: NotPublishedReason::AllZeroColumn,
         };
         let base = assess_synthetic(synthetic_sources());
         let r = edited("F5", OperandValue::Int(1));
