@@ -26,8 +26,10 @@
 //! unit its field id promises (thousand ounces, kilotonnes, $/oz, $/lb), and a header naming no known field is
 //! refused, never dropped.
 //!
-//! Not yet here (bd-gwf1.1 stays open for them): region-map versions (v0/v1/v2) and the W1-DR-01 and W1-DR-02
-//! corrections as data.
+//! The reader reports what the file prints. W1-DR-01 (Porgera's stale share) is registry data read by the
+//! ledger (`mine_ledger`, `[[printed_share_correction]]`), and the ledger asks the region map
+//! (`[[region_member]]`) by release; values carry no map version. Not yet here (bd-gwf1.1 stays open for it):
+//! the W1-DR-02 correction as data.
 
 use std::collections::BTreeSet;
 

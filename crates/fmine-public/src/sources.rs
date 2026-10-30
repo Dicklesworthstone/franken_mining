@@ -10,10 +10,10 @@
 use std::path::{Path, PathBuf};
 
 use fmine_evidence::Refusal;
-pub use fmine_registry::sources::RegionMemberRow;
 use fmine_registry::sources::{
     BasisRow, SourcesRegistry, SubjectStatusRow, is_quarter, load_sources_registry,
 };
+pub use fmine_registry::sources::{PrintedShareCorrection, RegionMemberRow};
 
 use crate::aisc::{ExplanationBasis, IdentityFamily};
 use crate::key::{StatusKind, SubjectStatus};
@@ -123,6 +123,8 @@ pub struct IssuerProfile {
     pub subject_statuses: Vec<SubjectStatus>,
     /// The region map (BD-331.S4): which sites each region rolls up, by release quarter.
     pub region_members: Vec<RegionMemberRow>,
+    /// Printed shares the Mine Stats ledger replaces with a registered one (BD-331.S4, W1-DR-01).
+    pub printed_share_corrections: Vec<PrintedShareCorrection>,
     /// The `--through YYYYQn` bound applied, if any; later rows were dropped before loading.
     pub through: Option<String>,
 }
@@ -229,6 +231,7 @@ impl IssuerProfile {
                 .map(subject_status)
                 .collect::<Result<_, _>>()?,
             region_members: reg.region_members,
+            printed_share_corrections: reg.printed_share_corrections,
             through: None,
         })
     }

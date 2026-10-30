@@ -2881,13 +2881,16 @@ mod tests {
     /// (`fmine assure public --synthetic`), b50f7779…, pinned the result. bd-jg43.3 then changed the inputs on
     /// purpose (column G styled, column N added, frame v5), so this is now a regression pin of that commit's
     /// output: the five moved and five new states are pinned one by one by the synthetic tests in `lib.rs`.
+    /// Frame v6 (bd-prmn.4) appends the Mine Stats ledger section, empty here: at v5 without it the root is
+    /// still 54f1201b…, checked when the pin moved.
     #[test]
     fn test_port_keeps_synthetic_root() {
         let run = crate::run_synthetic_assurance(&[]).expect("synthetic run");
         assert_eq!(run.instances.len() + run.hidden_scope.instances.len(), 60);
+        assert_eq!(run.mine_ledger, crate::mine_ledger::MineLedger::default());
         assert_eq!(
             run.ledger_anchor.state_root.to_hex(),
-            "54f1201b0996d6c9cca01a9e6d0a80f0b2965d44ccd1e7affae2dbcad59f2dda"
+            "fd7864f904ef3721e874460a4b0a4fce782d9d24381554faec39266163b6374d"
         );
     }
 

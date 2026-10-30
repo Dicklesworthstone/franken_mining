@@ -10,6 +10,7 @@ pub mod aisc;
 pub mod citation;
 pub mod key;
 pub mod live;
+pub mod mine_ledger;
 pub mod mine_stats;
 pub mod sources;
 pub mod synthetic;
@@ -34,6 +35,7 @@ use crate::aisc::{
     UnregisteredHeader, cell_text, confirm_share_label, find_qtd_sheet, ledger_for_table,
     locate_table, one_cell_checks, operand_at, reconstruction_holds,
 };
+use crate::mine_ledger::{LedgerFile, LedgerRules, MineLedger, mine_ledger};
 use crate::mine_stats::{CellRefusal, LabelVocabulary, MineStatsRead, read_mine_stats};
 pub use crate::sources::load_issuer_profile;
 use crate::sources::{
@@ -223,10 +225,12 @@ pub struct PublicAssuranceReport {
     pub table_refusals: Vec<TableRefusal>,
     pub instances: Vec<IdentityInstance>,
     pub unregistered_headers: Vec<UnregisteredHeader>,
-    /// The label-anchored read of each registered Mine Stats workbook, by file name (bd-gwf1.1). Not in the
-    /// state root yet: it enters with the Mine Stats claims (BD-332.S3), so the root still moves only when an
-    /// input file or the AISC ledger does.
+    /// The label-anchored read of each registered Mine Stats workbook, by file name (bd-gwf1.1). The read itself
+    /// is not in the state root (it enters with the Mine Stats claims, BD-332.S3); the ledger over it is.
     pub mine_stats: Vec<(String, MineStatsRead)>,
+    /// The Mine Stats identity ledger (BD-331.S4): ownership and quarter sums on the summary sheets. Bound into
+    /// the state root in its own section; counted apart from `instances` and the totals.
+    pub mine_ledger: MineLedger,
     /// The same families run over hidden worksheets (BD-331.S2). Bound into the state root in its own section
     /// and never counted in `instances`, the totals or `GATE-BULL-01`.
     pub hidden_scope: HiddenScope,
@@ -328,6 +332,118 @@ impl PublicAssuranceReport {
             }
         }
         a
+    }
+
+    /// The `mine_stats_ledger` section (BD-331.S4): counts per family and state (refusals by reason), every (iii)
+    /// instance, and every jointly infeasible component with its minimum correction sets and implied ranges.
+    fn mine_ledger_json(&self, o: &mut String) {
+        use mine_ledger::{Family, State};
+        let l = &self.mine_ledger;
+        let list = |cells: &[String]| cells.iter().map(|c| js(c)).collect::<Vec<_>>().join(",");
+        o.push_str("\"mine_stats_ledger\":{\"construction\":\"rounded_once\",\"families\":[");
+        for (n, family) in [Family::Ownership, Family::QuarterSum]
+            .into_iter()
+            .enumerate()
+        {
+            let mut by_reason: BTreeMap<&str, usize> = BTreeMap::new();
+            for i in l.instances.iter().filter(|i| i.family == family) {
+                if let State::Refused { reason, .. } = &i.state {
+                    *by_reason.entry(reason.code()).or_insert(0) += 1;
+                }
+            }
+            let _ = write!(
+                o,
+                "{}{{\"family\":{},\"n\":{}",
+                if n == 0 { "" } else { "," },
+                js(family.as_str()),
+                l.instances.iter().filter(|i| i.family == family).count()
+            );
+            for code in ["i", "iii", "v", "np"] {
+                let _ = write!(o, ",{}:{}", js(code), l.count(family, code));
+            }
+            let reasons: Vec<String> = by_reason
+                .iter()
+                .map(|(r, k)| format!("{}:{k}", js(r)))
+                .collect();
+            let _ = write!(o, ",\"v_by_reason\":{{{}}}}}", reasons.join(","));
+        }
+        let _ = write!(
+            o,
+            "],\"components\":{},\"infeasible_components\":{},\"joint_only\":{},\"indeterminate\":[{}],\
+             \"discrepancies\":[",
+            l.components,
+            l.infeasible.len(),
+            l.infeasible.iter().filter(|c| c.joint_only).count(),
+            l.indeterminate
+                .iter()
+                .map(|(id, why)| js(&format!("{id}: {why}")))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let iii: Vec<String> = l
+            .instances
+            .iter()
+            .filter(|i| i.state == State::Discrepancy)
+            .map(|i| {
+                let cells: Vec<String> = i.cells.iter().flatten().cloned().collect();
+                format!(
+                    "{{\"family\":{},\"subject\":{},\"field\":{},\"group\":{},\"period\":{},\"anchor\":{},\
+                     \"cells\":[{}],\"share\":{},\"printed_share\":{},\"component\":{}}}",
+                    js(i.family.as_str()),
+                    js(&i.subject),
+                    js(&i.field),
+                    js(i.group.as_str()),
+                    js(&i.period.code()),
+                    js(&i.anchor),
+                    list(&cells),
+                    i.share
+                        .map_or_else(|| "null".to_string(), |s| js(&mine_ledger::rat_text(s))),
+                    i.printed_share.as_deref().map_or_else(|| "null".to_string(), js),
+                    i.component.as_deref().map_or_else(|| "null".to_string(), js)
+                )
+            })
+            .collect();
+        o.push_str(&iii.join(","));
+        o.push_str("],\"infeasible\":[");
+        let comps: Vec<String> = l
+            .infeasible
+            .iter()
+            .map(|c| {
+                let anchors: Vec<String> = c
+                    .instances
+                    .iter()
+                    .map(|&k| l.instances[k].anchor.clone())
+                    .collect();
+                let sets: Vec<String> = c
+                    .corrections
+                    .iter()
+                    .map(|s| {
+                        let implied: Vec<String> = s
+                            .implied
+                            .iter()
+                            .map(|(cell, r)| format!("{}:{}", js(cell), js(&mine_ledger::range_text(r))))
+                            .collect();
+                        format!(
+                            "{{\"cells\":[{}],\"implied\":{{{}}}}}",
+                            list(&s.cells),
+                            implied.join(",")
+                        )
+                    })
+                    .collect();
+                format!(
+                    "{{\"component\":{},\"cells\":[{}],\"instances\":[{}],\"joint_only\":{},\"minimum\":{},\
+                     \"corrections\":[{}]}}",
+                    js(&c.id),
+                    list(&c.cells),
+                    list(&anchors),
+                    c.joint_only,
+                    c.minimum,
+                    sets.join(",")
+                )
+            })
+            .collect();
+        o.push_str(&comps.join(","));
+        o.push_str("]},");
     }
 
     /// The `one_cell_cos` section (bd-prmn.8): counts over every checked column, then each failing column.
@@ -630,6 +746,7 @@ impl PublicAssuranceReport {
             o.push_str("]}");
         }
         o.push_str("],");
+        self.mine_ledger_json(&mut o);
 
         let counts = self.state_counts();
         let alt = self.alternate_counts();
@@ -1238,12 +1355,55 @@ pub fn assess(
         table_refusals,
     } = visible;
 
+    let vocabulary: LabelVocabulary = profile.mine_stats_labels.iter().cloned().collect();
+    let vocabulary = (!vocabulary.is_empty()).then_some(vocabulary);
+    let mine_stats: Vec<(String, MineStatsRead)> = sources
+        .iter()
+        .filter(|s| s.kind == SourceKind::MineStats)
+        .map(|s| {
+            // The registry already checks the quarter format; a refusal here is kept, never dropped.
+            let read = read_mine_stats(&s.workbook, &s.quarter, vocabulary.as_ref())
+                .unwrap_or_else(|refusal| MineStatsRead {
+                    quarter: s.quarter.clone(),
+                    blocks: 0,
+                    values: Vec::new(),
+                    refusals: vec![CellRefusal {
+                        locator: s.file_name.clone(),
+                        reason: refusal.to_string(),
+                    }],
+                    hidden_sheets: Vec::new(),
+                });
+            (s.file_name.clone(), read)
+        })
+        .collect();
+    let mine_ledger = {
+        let files: Vec<LedgerFile<'_>> = sources
+            .iter()
+            .filter(|s| s.kind == SourceKind::MineStats)
+            .zip(&mine_stats)
+            .map(|(s, (_, read))| LedgerFile {
+                quarter: &s.quarter,
+                read,
+                workbook: &s.workbook,
+            })
+            .collect();
+        mine_ledger(
+            &files,
+            &LedgerRules {
+                regions: &profile.regions,
+                region_members: &profile.region_members,
+                statuses: &profile.subject_statuses,
+                corrections: &profile.printed_share_corrections,
+            },
+        )
+    };
+
     // The state root binds every input digest, every census and every instance's state, so changing any
     // input cell changes the root. Version 3 adds the hidden-scope section (BD-331.S2). Version 4 binds each
     // state as reason codes and fields, never its prose, and each instance's operands (bd-sjrh.1). Version 5
     // binds each file's displayed values, which the ledger now scores (bd-jg43.3): their digest and the shown,
-    // token and refused counts.
-    let mut enc = Encoder::new_frame(*b"M0AS", 5);
+    // token and refused counts. Version 6 adds the Mine Stats ledger section (BD-331.S4).
+    let mut enc = Encoder::new_frame(*b"M0AS", 6);
     enc.put_str(issuer);
     enc.put_str(lane.as_str());
     enc.put_u64(sources.len() as u64);
@@ -1318,29 +1478,9 @@ pub fn assess(
             enc.put_str(&format!("{}:{}:{}", t.file, t.sheet, t.reason));
         }
     }
+    encode_mine_ledger(&mut enc, &mine_ledger);
     let state_root = blake3_hash(&enc.finish());
     let ledger_anchor = ledger_anchor(issuer, lane, sources.len(), state_root);
-    let vocabulary: LabelVocabulary = profile.mine_stats_labels.iter().cloned().collect();
-    let vocabulary = (!vocabulary.is_empty()).then_some(vocabulary);
-    let mine_stats = sources
-        .iter()
-        .filter(|s| s.kind == SourceKind::MineStats)
-        .map(|s| {
-            // The registry already checks the quarter format; a refusal here is kept, never dropped.
-            let read = read_mine_stats(&s.workbook, &s.quarter, vocabulary.as_ref())
-                .unwrap_or_else(|refusal| MineStatsRead {
-                    quarter: s.quarter.clone(),
-                    blocks: 0,
-                    values: Vec::new(),
-                    refusals: vec![CellRefusal {
-                        locator: s.file_name.clone(),
-                        reason: refusal.to_string(),
-                    }],
-                    hidden_sheets: Vec::new(),
-                });
-            (s.file_name.clone(), read)
-        })
-        .collect();
     PublicAssuranceReport {
         issuer: issuer.to_string(),
         lane,
@@ -1352,9 +1492,81 @@ pub fn assess(
         instances,
         unregistered_headers: unregistered,
         mine_stats,
+        mine_ledger,
         hidden_scope: hidden,
         one_cell,
         ledger_anchor,
+    }
+}
+
+/// Binds the Mine Stats ledger into the root frame (v6): every instance's identity, operands and state as codes
+/// and locators, the share used and the share printed, then every infeasible component with its correction sets
+/// and implied ranges.
+fn encode_mine_ledger(enc: &mut Encoder, ledger: &MineLedger) {
+    let opt = |enc: &mut Encoder, s: Option<&str>| match s {
+        None => enc.put_u8(0),
+        Some(s) => {
+            enc.put_u8(1);
+            enc.put_str(s);
+        }
+    };
+    enc.put_u64(ledger.instances.len() as u64);
+    for i in &ledger.instances {
+        for field in [
+            i.family.as_str(),
+            &i.subject,
+            &i.field,
+            i.group.as_str(),
+            &i.period.code(),
+            &i.anchor,
+            i.state.code(),
+        ] {
+            enc.put_str(field);
+        }
+        enc.put_u64(i.cells.len() as u64);
+        for c in &i.cells {
+            opt(enc, c.as_deref());
+        }
+        match &i.state {
+            mine_ledger::State::Refused { reason, at } => {
+                enc.put_str(reason.code());
+                if let mine_ledger::Reason::Withheld { evidence } = reason {
+                    enc.put_str(evidence);
+                }
+                opt(enc, at.as_deref());
+            }
+            _ => enc.put_u8(0),
+        }
+        opt(enc, i.share.map(mine_ledger::rat_text).as_deref());
+        opt(enc, i.printed_share.as_deref());
+        opt(enc, i.component.as_deref());
+    }
+    enc.put_u64(ledger.components as u64);
+    enc.put_u64(ledger.infeasible.len() as u64);
+    for c in &ledger.infeasible {
+        enc.put_str(&c.id);
+        enc.put_u64(c.cells.len() as u64);
+        for cell in &c.cells {
+            enc.put_str(cell);
+        }
+        enc.put_u8(u8::from(c.joint_only));
+        enc.put_u8(u8::from(c.minimum));
+        enc.put_u64(c.corrections.len() as u64);
+        for set in &c.corrections {
+            enc.put_u64(set.cells.len() as u64);
+            for cell in &set.cells {
+                enc.put_str(cell);
+            }
+            enc.put_u64(set.implied.len() as u64);
+            for (cell, range) in &set.implied {
+                enc.put_str(cell);
+                enc.put_str(&mine_ledger::range_text(range));
+            }
+        }
+    }
+    enc.put_u64(ledger.indeterminate.len() as u64);
+    for (id, reason) in &ledger.indeterminate {
+        enc.put_str(&format!("{id}:{reason}"));
     }
 }
 
@@ -4942,6 +5154,296 @@ mod tests {
             assert_eq!(ours, census, "{scope}");
         }
         assert_eq!(r.relaxation_only(), 41);
+    }
+
+    /// A share as the census prints it: the percentage as an exact decimal (`61.5`, `84`).
+    fn percent_text(s: fmine_numerics::exact_feas::Rat) -> String {
+        use fmine_numerics::exact_feas::Rat;
+        let mut p = s.checked_mul(Rat::from_integer(100)).expect("percent");
+        let mut places = 0;
+        while p.den() != 1 {
+            p = p.checked_mul(Rat::from_integer(10)).expect("decimal");
+            places += 1;
+            assert!(places < 8, "share {s:?} is not a short decimal");
+        }
+        let digits = format!("{:0>width$}", p.num(), width = places + 1);
+        let (int, frac) = digits.split_at(digits.len() - places);
+        if places == 0 {
+            int.to_string()
+        } else {
+            format!("{int}.{frac}")
+        }
+    }
+
+    /// One Mine Stats ledger instance in `mine_stats_census.py`'s line format. The census names the withheld
+    /// exclusion by its evidence (`excluded_e818`) and writes cumulative periods with a space (`2026 H1`).
+    fn mine_census_line(l: &mine_ledger::MineLedger, i: &mine_ledger::Instance) -> String {
+        use crate::key::PeriodKind;
+        use mine_ledger::{Reason, State};
+        let opt = |s: Option<String>| s.map_or_else(|| "null".to_string(), |s| js(&s));
+        let period = match i.period.kind {
+            PeriodKind::Quarter(q) => format!("{}Q{q}", i.period.year),
+            PeriodKind::H1 => format!("{} H1", i.period.year),
+            PeriodKind::NineMonths => format!("{} 9M", i.period.year),
+            PeriodKind::FullYear => format!("{} FY", i.period.year),
+        };
+        let (reason, at) = match &i.state {
+            State::Refused { reason, at } => (
+                Some(match reason {
+                    Reason::Withheld { evidence } => {
+                        format!("excluded_{}", evidence.to_lowercase())
+                    }
+                    other => other.code().to_string(),
+                }),
+                at.clone(),
+            ),
+            _ => (None, None),
+        };
+        let cells: Vec<String> = i.cells.iter().map(|c| opt(c.clone())).collect();
+        let corrections = i.component.as_ref().map(|id| {
+            let c = l
+                .infeasible
+                .iter()
+                .find(|c| &c.id == id)
+                .expect("component");
+            let sets: Vec<String> = c
+                .corrections
+                .iter()
+                .map(|s| {
+                    format!(
+                        "[{}]",
+                        s.cells.iter().map(|x| js(x)).collect::<Vec<_>>().join(",")
+                    )
+                })
+                .collect();
+            format!("[{}]", sets.join(","))
+        });
+        format!(
+            "{{\"family\":{},\"subject\":{},\"field\":{},\"group\":{},\"period\":{},\"anchor\":{},\"cells\":[{}],\
+             \"state\":{},\"reason\":{},\"at\":{},\"share\":{},\"printed_share\":{},\"component\":{},\
+             \"corrections\":{}}}",
+            js(i.family.as_str()),
+            js(&i.subject),
+            js(&i.field),
+            js(i.group.as_str()),
+            js(&period),
+            js(&i.anchor),
+            cells.join(","),
+            js(i.state.code()),
+            opt(reason),
+            opt(at),
+            opt(i.share.map(percent_text)),
+            opt(i.printed_share.clone()),
+            opt(i.component.clone()),
+            corrections.unwrap_or_else(|| "null".to_string())
+        )
+    }
+
+    /// BD-331.S4 (bd-prmn.4): the Mine Stats ledger's ownership and quarter-sum instances equal the independent
+    /// census (`scripts/oracle/mine_stats_census.py`, e66f7dc, written from the rule without reading this crate)
+    /// line by line: states, reasons, operands, shares, components and every minimum correction set. Then the
+    /// implied ranges of every set, compared in memory and named by component only (RISK-31).
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/ and python3"]
+    fn barrick_mine_ledger_matches_census() {
+        use mine_ledger::Family;
+        let root = workspace_root();
+        let profile = load_issuer_profile(&root, "barrick")
+            .and_then(|p| p.through("2026Q2"))
+            .expect("registry");
+        let r =
+            run_public_assurance(&profile, &root).expect("registered files present and unaltered");
+        let l = &r.mine_ledger;
+        let script = "import json, subprocess, sys\n\
+            values = sys.argv[1:] == ['--values']\n\
+            out = subprocess.run([sys.executable, '-I', 'scripts/oracle/mine_stats_census.py'] + sys.argv[1:] + \
+            ['corpus_of_input_docs/downloaded/mine_stats'], capture_output=True, text=True, check=True).stdout\n\
+            if not values:\n    print(out, end='')\n\
+            else:\n    for line in out.splitlines():\n        x = json.loads(line)\n        \
+            if 'joint_only' not in x or 'cells' not in x:\n            continue\n        \
+            for k, d in enumerate(x['implied']):\n            for loc in sorted(d):\n                \
+            lo, hi = d[loc]\n                \
+            print('\\t'.join([x['component'], str(k), loc, 'unbounded' if 'unbounded' in (lo, hi) else lo + ',' + hi]))\n";
+        let census = |flags: &[&str]| {
+            let out = std::process::Command::new("python3")
+                .args(["-I", "-c", script])
+                .args(flags)
+                .current_dir(&root)
+                .output()
+                .expect("python3 runs");
+            assert!(
+                out.status.success(),
+                "mine_stats_census.py failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8(out.stdout).expect("utf-8 census output")
+        };
+        let stdout = census(&[]);
+        let lines: Vec<&str> = stdout.lines().collect();
+        let instances: Vec<&str> = lines
+            .iter()
+            .copied()
+            .filter(|x| x.contains("\"anchor\":"))
+            .collect();
+        let ours: Vec<String> = l.instances.iter().map(|i| mine_census_line(l, i)).collect();
+        assert_eq!(ours.len(), instances.len(), "instance count");
+        for (a, b) in ours.iter().zip(&instances) {
+            assert_eq!(a, b);
+        }
+        let components: Vec<&str> = lines
+            .iter()
+            .copied()
+            .filter(|x| x.contains("\"joint_only\":") && x.contains("\"instances\":"))
+            .collect();
+        let ours: Vec<String> = l
+            .infeasible
+            .iter()
+            .map(|c| {
+                let list = |xs: &[String]| xs.iter().map(|x| js(x)).collect::<Vec<_>>().join(",");
+                let anchors: Vec<String> = c.instances.iter().map(|&k| l.instances[k].anchor.clone()).collect();
+                let sets: Vec<String> = c.corrections.iter().map(|s| format!("[{}]", list(&s.cells))).collect();
+                format!(
+                    "{{\"component\":{},\"cells\":[{}],\"instances\":[{}],\"joint_only\":{},\"corrections\":[{}]}}",
+                    js(&c.id),
+                    list(&c.cells),
+                    list(&anchors),
+                    c.joint_only,
+                    sets.join(",")
+                )
+            })
+            .collect();
+        assert_eq!(ours, components);
+        assert!(
+            l.infeasible.iter().all(|c| c.minimum),
+            "every correction search exhaustive"
+        );
+        assert!(l.indeterminate.is_empty(), "{:?}", l.indeterminate);
+        // The summary lines, as the census prints them.
+        for family in [Family::Ownership, Family::QuarterSum] {
+            let mut by_reason: BTreeMap<String, usize> = BTreeMap::new();
+            for i in l.instances.iter().filter(|i| i.family == family) {
+                if let mine_ledger::State::Refused { reason, .. } = &i.state {
+                    let code = match reason {
+                        mine_ledger::Reason::Withheld { evidence } => {
+                            format!("excluded_{}", evidence.to_lowercase())
+                        }
+                        other => other.code().to_string(),
+                    };
+                    *by_reason.entry(code).or_insert(0) += 1;
+                }
+            }
+            let reasons: Vec<String> = by_reason
+                .iter()
+                .map(|(r, k)| format!("{}:{k}", js(r)))
+                .collect();
+            let line = format!(
+                "{{\"family\":{},\"n\":{},\"i\":{},\"iii\":{},\"v\":{},\"np\":{},\"v_by_reason\":{{{}}}}}",
+                js(family.as_str()),
+                l.instances.iter().filter(|i| i.family == family).count(),
+                l.count(family, "i"),
+                l.count(family, "iii"),
+                l.count(family, "v"),
+                l.count(family, "np"),
+                reasons.join(",")
+            );
+            println!("{line}");
+            assert!(lines.contains(&line.as_str()), "{line}");
+        }
+        let summary = format!(
+            "{{\"components\":{},\"infeasible_components\":{},\"joint_only\":{}}}",
+            l.components,
+            l.infeasible.len(),
+            l.infeasible.iter().filter(|c| c.joint_only).count()
+        );
+        println!("{summary}");
+        assert!(lines.contains(&summary.as_str()), "{summary}");
+        assert_eq!(
+            summary,
+            r#"{"components":299,"infeasible_components":27,"joint_only":2}"#
+        );
+
+        // Implied ranges: one line per (component, set, cell), never printed.
+        let census_ranges: Vec<String> =
+            census(&["--values"]).lines().map(str::to_string).collect();
+        let mut ours = Vec::new();
+        for c in &l.infeasible {
+            for (k, s) in c.corrections.iter().enumerate() {
+                for (cell, range) in &s.implied {
+                    let text = match range {
+                        Ok(i) => {
+                            assert!(
+                                !i.lo_strict && !i.hi_strict,
+                                "{}: closed boxes give closed ends",
+                                c.id
+                            );
+                            format!(
+                                "{},{}",
+                                mine_ledger::rat_text(i.lo),
+                                mine_ledger::rat_text(i.hi)
+                            )
+                        }
+                        Err(why) => why.clone(),
+                    };
+                    ours.push(format!("{}\t{k}\t{cell}\t{text}", c.id));
+                }
+            }
+        }
+        assert!(!ours.is_empty(), "implied ranges compared");
+        assert_eq!(ours.len(), census_ranges.len(), "implied range count");
+        let differ: Vec<&str> = ours
+            .iter()
+            .zip(&census_ranges)
+            .filter(|(a, b)| a != b)
+            .filter_map(|(a, _)| a.split('\t').next())
+            .collect();
+        assert!(
+            differ.is_empty(),
+            "implied ranges differ in components {differ:?}"
+        );
+
+        // The plan's known answers (C1 DR-01, DR-02, DR-04): each a pair of (iii) on one shared cell.
+        let state = |family: Family, anchor: &str| {
+            l.instances
+                .iter()
+                .find(|i| i.family == family && i.anchor == anchor)
+                .unwrap_or_else(|| panic!("no {} instance at {anchor}", family.as_str()))
+        };
+        for (e, own, sum, set) in [
+            ("E113", "2026Q1:QTD!C5", "2026Q2:YTD!B5", "2026Q1:QTD!B5"),
+            ("E114", "2026Q2:YTD!C7", "2026Q2:YTD!B7", "2026Q2:YTD!B7"),
+            ("E115", "2026Q2:QTD!C28", "2026Q2:YTD!B28", "2026Q2:QTD!B28"),
+        ] {
+            let (o, s) = (
+                state(Family::Ownership, own),
+                state(Family::QuarterSum, sum),
+            );
+            assert_eq!((o.state.code(), s.state.code()), ("iii", "iii"), "{e}");
+            assert_eq!(o.component, s.component, "{e}: one component");
+            let c = l
+                .infeasible
+                .iter()
+                .find(|c| Some(&c.id) == o.component.as_ref())
+                .expect("component");
+            let sets: Vec<&[String]> = c.corrections.iter().map(|s| s.cells.as_slice()).collect();
+            assert_eq!(
+                sets,
+                [[set.to_string()].as_slice()],
+                "{e}: the one minimum set"
+            );
+        }
+        // E113: the range B5 can take from the other cells holds 281; the ledger never prints 281 as a value.
+        let b5 = l
+            .infeasible
+            .iter()
+            .flat_map(|c| &c.corrections)
+            .flat_map(|s| &s.implied)
+            .find(|(cell, _)| cell == "2026Q1:QTD!B5")
+            .and_then(|(_, r)| r.as_ref().ok())
+            .expect("B5's implied range");
+        assert!(
+            b5.contains(fmine_numerics::exact_feas::Rat::from_integer(281))
+                .expect("exact")
+        );
     }
 
     #[test]

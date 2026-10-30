@@ -401,6 +401,19 @@ num = 897
 den = 1000
 evidence = "E487"
 
+# BD-331.S4: a printed share the Mine Stats ledger replaces. W1-DR-01 (CONFIRMED label conflict): the Q2 and Q3
+# 2024 QTD and YTD sheets print "Porgera (47.5%)", Barrick's share before the 2020 shutdown (50% of Barrick
+# Niugini's 95%); Q1_2024:QTD!A15, Q4_2024:QTD!A15 and Q2_2024:Minestats2!F2 print 24.5% (50% of BNL's 49% after
+# the December 2023 restart), and the values fit 24.5% (Q3_2024:QTD!B15 72 x 0.245 = 17.6 against C15 18).
+# Not a [[share]] row: the AISC ledger reads those, and Porgera's per-ounce rates are not checked at a share.
+
+[[printed_share_correction]]
+subject = "Porgera"
+printed = "47.5"
+num = 49
+den = 200
+evidence = "W1-DR-01"
+
 # bd-a28f.1: statuses that change how a subject's printed zeros read. A numeric zero in a period a disposal or
 # a withholding covers is Nil with its token kept, never a value; a non-zero number there stays visible, flagged.
 # Care and maintenance is recorded but leaves zeros as numbers.

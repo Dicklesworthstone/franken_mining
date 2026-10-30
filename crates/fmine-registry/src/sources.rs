@@ -154,6 +154,18 @@ pub struct ShareRow {
     pub label: Option<String>,
 }
 
+/// A share a Mine Stats label prints that the issuer's own figures contradict (BD-331.S4, W1-DR-01): where the
+/// label of `subject` prints `printed` percent, the run uses `num/den` and keeps the printed share beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrintedShareCorrection {
+    pub subject: String,
+    /// The percentage as printed inside `(…%)`, e.g. `47.5`.
+    pub printed: String,
+    pub num: u64,
+    pub den: u64,
+    pub evidence: String,
+}
+
 /// A checked issuer registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourcesRegistry {
@@ -176,6 +188,8 @@ pub struct SourcesRegistry {
     pub subject_statuses: Vec<SubjectStatusRow>,
     /// Region members, in file order; a site is in at most one region for any release.
     pub region_members: Vec<RegionMemberRow>,
+    /// Printed shares the run corrects, at most one per `(subject, printed)`, in file order.
+    pub printed_share_corrections: Vec<PrintedShareCorrection>,
 }
 
 impl SourcesRegistry {
@@ -410,6 +424,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "missing_fact",
             "subject_status",
             "region_member",
+            "printed_share_correction",
         ]
         .contains(&row.table.as_str())
         {
@@ -880,6 +895,53 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         region_members.push(row_member);
     }
 
+    let mut printed_share_corrections: Vec<PrintedShareCorrection> = Vec::new();
+    for row in doc.rows_of("printed_share_correction") {
+        let f = Fields::of_row(row);
+        f.only(&["subject", "printed", "num", "den", "evidence"])?;
+        let (subject, subject_line) = f.string("subject")?;
+        let (printed, printed_line) = f.string("printed")?;
+        if !subjects.contains(&subject) || regions.contains(&subject) {
+            return fail(
+                subject_line,
+                format!("{subject:?} is not a registered site"),
+            );
+        }
+        let decimal = |s: &str| {
+            let (int, frac) = s.split_once('.').unwrap_or((s, "0"));
+            !int.is_empty()
+                && !frac.is_empty()
+                && int.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit())
+        };
+        if !decimal(&printed) {
+            return fail(
+                printed_line,
+                format!("printed {printed:?} must be a percentage as printed, e.g. \"47.5\""),
+            );
+        }
+        if printed_share_corrections
+            .iter()
+            .any(|c| c.subject == subject && c.printed == printed)
+        {
+            return fail(
+                subject_line,
+                format!("duplicate [[printed_share_correction]] for {subject:?} at {printed}%"),
+            );
+        }
+        let (num, _) = f.positive_int("num")?;
+        let (den, den_line) = f.positive_int("den")?;
+        if num > den {
+            return fail(den_line, format!("share {num}/{den} exceeds 1"));
+        }
+        printed_share_corrections.push(PrintedShareCorrection {
+            subject,
+            printed,
+            num,
+            den,
+            evidence: f.string("evidence")?.0,
+        });
+    }
+
     Ok(SourcesRegistry {
         issuer,
         corpus_dir,
@@ -893,6 +955,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         missing_facts,
         subject_statuses,
         region_members,
+        printed_share_corrections,
     })
 }
 
@@ -1355,6 +1418,58 @@ mod tests {
                 "[[region_member]]\nregion = \"North\"\nmember = \"Site A\"\nfirst = \"2030Q1\"\nshare = 1\n"
                     .to_string(),
                 "share",
+            ),
+        ] {
+            let e = refusal(&minimal(&b, &format!("{head}{extra}")));
+            assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
+        }
+    }
+
+    /// BD-331.S4 (W1-DR-01): `[[printed_share_correction]]` rows. A site's printed share maps to a registered one;
+    /// every malformed row refuses at its line.
+    #[test]
+    fn test_printed_share_corrections_parse_and_refuse() {
+        let b = source_b("aisc_reconciliation", SHA_B);
+        let head = "[[subject]]\nname = \"North\"\nkind = \"region\"\n\n";
+        let row = |subject: &str, printed: &str, num: u64, den: u64| {
+            format!(
+                "[[printed_share_correction]]\nsubject = \"{subject}\"\nprinted = \"{printed}\"\nnum = {num}\n\
+                 den = {den}\nevidence = \"W1-DR-01\"\n\n"
+            )
+        };
+        let reg = parse_sources_registry(&minimal(
+            &b,
+            &format!("{head}{}", row("Site A", "47.5", 49, 200)),
+        ))
+        .expect("accepted");
+        assert_eq!(
+            reg.printed_share_corrections,
+            vec![PrintedShareCorrection {
+                subject: "Site A".to_string(),
+                printed: "47.5".to_string(),
+                num: 49,
+                den: 200,
+                evidence: "W1-DR-01".to_string(),
+            }]
+        );
+        let plain = parse_sources_registry(&minimal(&b, head)).expect("accepted");
+        assert!(plain.printed_share_corrections.is_empty());
+        for (extra, why) in [
+            (row("North", "47.5", 49, 200), "not a registered site"),
+            (row("Site Z", "47.5", 49, 200), "not a registered site"),
+            (row("Site A", "47.5%", 49, 200), "percentage as printed"),
+            (row("Site A", ".5", 49, 200), "percentage as printed"),
+            (row("Site A", "47.", 49, 200), "percentage as printed"),
+            (row("Site A", "47.5", 201, 200), "exceeds 1"),
+            (row("Site A", "47.5", 0, 200), "num"),
+            (
+                format!("{}{}", row("Site A", "47.5", 49, 200), row("Site A", "47.5", 1, 2)),
+                "duplicate [[printed_share_correction]]",
+            ),
+            (
+                "[[printed_share_correction]]\nsubject = \"Site A\"\nprinted = \"47.5\"\nnum = 1\nden = 2\n"
+                    .to_string(),
+                "evidence",
             ),
         ] {
             let e = refusal(&minimal(&b, &format!("{head}{extra}")));

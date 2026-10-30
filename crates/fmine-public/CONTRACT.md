@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "synthetic", "live", "citation", "key"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
@@ -54,8 +54,20 @@ The public lane of M0 (`fmine assure public`).
   label and section. Numeric zero stays `Number`. Cells outside the token set, unknown periods and labels
   repeated within a block are refused by locator. With the issuer's `[[mine_stats_label]]` vocabulary (Barrick:
   56 pairs from W1's read, frozen before the Q3 2026 release), a data row whose `(section, label)` is not
-  registered is refused too. Units and the W1-DR-01/02 corrections are not data yet. The region map is
-  (`[[region_member]]`, BD-331.S4), but Mine Stats values do not yet carry its version.
+  registered is refused too. W1-DR-01 is data (`[[printed_share_correction]]`, read by `mine_ledger`); units and
+  W1-DR-02 are not yet. The region map is (`[[region_member]]`, BD-331.S4); values do not carry its version, and
+  `mine_ledger` asks it by release.
+- `mine_ledger` (BD-331.S4, bd-prmn.4): two Mine Stats identity families on the `QTD`/`YTD` summary sheets,
+  decided by the exact kernel. Ownership: attributable = s × 100% per site row and column group, s the share the
+  label prints or its registered correction (the printed share kept beside); regions and metal totals pose none;
+  a row with no printed share is refused, never read as 100%. Quarter sums: H1 = Q1 + Q2, 9M = H1 + Q3,
+  FY = 9M + Q4 on the 100%, attributable and sold columns, anchored on each `YTD` cell. Exclusions by name come
+  first (a `withheld` status covering an operand's period; a region whose members differ between the operands'
+  releases), then a missing row or release, a blank, all placeholders (not published), some placeholders, an
+  unreadable number. Each value as displayed stands for its closed box [v − step/2, v + step/2], the step from
+  the displayed decimals (General non-integers are refused). Every decided instance is then posed jointly; each
+  infeasible component reports every minimum correction set and the range each of its cells can take, never a
+  corrected value, and whether it is infeasible only jointly.
 - `synthetic`: invented workbooks in the real layout, seeded with one known answer per state. They are never
   gate-eligible. `write_issuer_workspace` writes them, plus a later title-only vintage, with a digest registry
   under the reserved issuer name `synthetic`; `run_public_assurance` runs that name in the synthetic lane.
@@ -68,14 +80,18 @@ The public lane of M0 (`fmine assure public`).
 ## 3. Authority, Epistemics & Representation
 - Every reported exception cites file, file SHA-256, `sheet!cell`, subject, family and ownership basis
   (`IdentityFamily::basis`).
-- The `LedgerAnchor` state root (BLAKE3 over an `M0AS` v5 frame) binds:
+- The `LedgerAnchor` state root (BLAKE3 over an `M0AS` v6 frame) binds:
   - every input's SHA-256, numeric digest and census, and (v5, bd-jg43.3) its displayed-value digest with the
     shown, token and refused counts (`Workbook::displayed_census`);
   - every instance's state as codes, numbers and locators (`encode_state`), never its prose, with a tag before
     each optional part;
   - each instance's operands (role, locator, value);
   - unregistered headers and table refusals;
-  - the same for the hidden scope, in its own section.
+  - the same for the hidden scope, in its own section;
+  - (v6, bd-prmn.4) the Mine Stats ledger in its own section: each instance's family, subject, field, group,
+    period, anchor, cells, state code, reason and evidence, share and component, then each infeasible
+    component's cells, flags and correction sets with their implied ranges. Its counts stay apart from the
+    AISC totals.
 
   Changing any input cell moves the root; rewording a message does not (bd-sjrh.1 part 4).
 - The report payload carries `lane` and `gate_eligible`. The no-claim line (`NO_CLAIM`), the four INV-002 flags
@@ -122,6 +138,10 @@ The public lane of M0 (`fmine assure public`).
   `missing_fact` and `closing_document`; `IdentityState::RefusedAt` is (v) naming a cell or file.
 - `mine_stats::{View, MineStatsCell, MineStatsValue, CellRefusal, MineStatsRead, LabelVocabulary, read_mine_stats,
   strip_footnote, printed_share, site_name, is_m0_target}`
+- `mine_ledger::{mine_ledger, MineLedger, LedgerRules, LedgerFile, Instance, Family, Group, State, Reason,
+  Component, Correction, FLOW_FIELDS, range_text, rat_text}`; `PublicAssuranceReport::mine_ledger`, the
+  payload's `mine_stats_ledger` section (counts by family and state, (v) by reason, discrepancies, and each
+  infeasible component with its correction sets and implied ranges).
 - `synthetic::{synthetic_aisc_cells, synthetic_hidden_cells, synthetic_workbooks, synthetic_stats_workbook,
   synthetic_share_label_cells, synthetic_profile, write_issuer_workspace, SYNTHETIC_ISSUER, SYNTHETIC_SUBJECTS,
   SYNTHETIC_SHARES, SYNTHETIC_SHARE_FOOTNOTE, SYNTHETIC_STATED_QUOTE, SYNTHETIC_HIDDEN_SHEET,
@@ -338,6 +358,20 @@ The public lane of M0 (`fmine assure public`).
     and refuted at 2098, 2102, 1900 and 2300, where the exact bound is [2099⅙, 2100⅚]. Every refusal and
     exclusion names its cell or member; a footnote-less sheet and a release before the members' first keep the
     earlier refusals.
+- `PO-PUB-11` (Mine Stats ownership and quarter sums, BD-331.S4, bd-prmn.4, MOR_CASE E841):
+  - **Real files** (ignored test `barrick_mine_ledger_matches_census`): 10 releases, 1,534 instances. Ownership
+    592: 470 (i), 29 (iii), 73 (v), 20 np; quarter sums 942: 883 (i), 9 (iii), 26 (v), 24 np. 299 components,
+    27 infeasible (2 only jointly), every one with all its minimum correction sets. Every instance line,
+    component line, summary and implied range equals `scripts/oracle/mine_stats_census.py` (e66f7dc, written
+    first by a separate reader, exact Fourier–Motzkin over fractions), run in the test. The plan's known
+    answers hold: E113, E114 and E115 are each a pair of (iii) on one component whose one minimum set is the
+    shared cell, and E113's B5 can take 281.
+  - **Synthetic** (default suite): the E113 shape (one shared cell, the one minimum set); a component
+    infeasible only jointly, with its three minimum sets and ranges derived by hand ([201/4, 201/4] twice,
+    [202, 203]); an unprinted share refused where 100% would hold; a registered share with the printed one
+    beside; `withheld` and region-map exclusions; placeholders, blanks and a repeated row; the same stored text
+    decided by its displayed format; row and file order changing no state; a sign flip, a dropped share and a
+    missing release moving the state.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.
