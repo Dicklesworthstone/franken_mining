@@ -1031,6 +1031,22 @@ pub fn assess(
         .filter(|s| s.kind == SourceKind::AiscReconciliation)
     {
         let shares = share_bases(profile, &sources, &src.quarter);
+        // A registered reconciliation holds a table on its own quarter's sheet ("Q2 2026" for 2026Q2). If that
+        // sheet is missing or its cost-of-sales label stops matching, the run refuses the table by name; it
+        // never drops it silently (BD-338.S3's label sample found the silent drop).
+        let own_sheet = src
+            .quarter
+            .split_once('Q')
+            .map(|(year, q)| format!("Q{q} {year}"));
+        if let Some(own) = &own_sheet
+            && !src.workbook.sheets.iter().any(|s| s.name == *own)
+        {
+            visible.table_refusals.push(TableRefusal {
+                file: src.file_name.clone(),
+                sheet: own.clone(),
+                reason: "the release's own quarter sheet is missing".to_string(),
+            });
+        }
         let scopes = [
             (&src.workbook.sheets, &mut visible, true),
             (&src.workbook.hidden_sheets, &mut hidden, false),
@@ -1038,6 +1054,14 @@ pub fn assess(
         for (sheets, scope, shown) in scopes {
             for sheet in sheets {
                 match locate_table(sheet, subjects) {
+                    Ok(None) if shown && own_sheet.as_ref() == Some(&sheet.name) => {
+                        scope.table_refusals.push(TableRefusal {
+                            file: src.file_name.clone(),
+                            sheet: sheet.name.clone(),
+                            reason: "no cost-of-sales row on the release's own quarter sheet"
+                                .to_string(),
+                        });
+                    }
                     Ok(None) => {}
                     Err(reason) => scope.table_refusals.push(TableRefusal {
                         file: src.file_name.clone(),
@@ -2139,6 +2163,58 @@ mod tests {
         // Every instance but the unrounded column's depends on something the sweep can move.
         assert!(deps.len() >= 30, "{}", deps.len());
         assert!(missing.is_empty(), "{missing:#?}");
+    }
+
+    /// A broken cost-of-sales label on the release's own quarter sheet refuses the table by name instead of
+    /// dropping it (BD-338.S3 finding).
+    #[test]
+    fn test_own_quarter_table_label_broken_refuses() {
+        let r = run_synthetic_assurance(&[(
+            "A5".to_string(),
+            MinimalCell::Text("Cost of sales applicable to gold productionx".to_string()),
+        )])
+        .expect("synthetic run");
+        let refusals: Vec<(&str, &str)> = r
+            .table_refusals
+            .iter()
+            .map(|t| (t.sheet.as_str(), t.reason.as_str()))
+            .collect();
+        assert_eq!(
+            refusals,
+            [(
+                synthetic::SYNTHETIC_TABLE_SHEET,
+                "no cost-of-sales row on the release's own quarter sheet"
+            )]
+        );
+        assert!(r.instances.is_empty());
+    }
+
+    /// A reconciliation without its own quarter's sheet refuses that sheet by name; a table on a renamed sheet is
+    /// still read.
+    #[test]
+    fn test_own_quarter_sheet_missing_refuses() {
+        let mut sources = load_synthetic(synthetic::synthetic_workbooks(&[])).expect("parse");
+        for s in &mut sources {
+            for sheet in &mut s.workbook.sheets {
+                if sheet.name == synthetic::SYNTHETIC_TABLE_SHEET {
+                    sheet.name = "Q1 2031".to_string();
+                }
+            }
+        }
+        let r = assess(&synthetic::synthetic_profile(), Lane::Synthetic, sources);
+        let refusals: Vec<(&str, &str)> = r
+            .table_refusals
+            .iter()
+            .map(|t| (t.sheet.as_str(), t.reason.as_str()))
+            .collect();
+        assert_eq!(
+            refusals,
+            [(
+                synthetic::SYNTHETIC_TABLE_SHEET,
+                "the release's own quarter sheet is missing"
+            )]
+        );
+        assert_eq!(r.aisc_tables, 1);
     }
 
     /// The coverage check catches a dropped operand: C8 without C6.

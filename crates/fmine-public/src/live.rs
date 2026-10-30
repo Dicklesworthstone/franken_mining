@@ -1419,12 +1419,14 @@ mod tests {
             println!("{}", c.to_json());
         }
         assert_eq!(checks.len(), 56);
-        let none: Vec<String> = checks
+        // Each table is on its release's own quarter sheet, so every broken anchor refuses it by name, the
+        // cost-of-sales label included.
+        let other: Vec<String> = checks
             .iter()
-            .filter(|c| !c.pass())
+            .filter(|c| c.effect != "table_refusal")
             .map(LabelCheck::to_json)
             .collect();
-        assert!(none.is_empty(), "{none:#?}");
+        assert!(other.is_empty(), "{other:#?}");
     }
 
     /// The ounces anchor is a prefix: appending "x" to synthetic A13 changes nothing, and prepending "x" refuses
@@ -1458,9 +1460,11 @@ mod tests {
             &tables,
         );
         assert_eq!(checks.len(), 7);
-        assert!(checks.iter().all(LabelCheck::pass), "{checks:#?}");
+        assert!(
+            checks.iter().all(|c| c.effect == "table_refusal"),
+            "{checks:#?}"
+        );
         assert_eq!(checks[3].mutation, "prepend_x");
-        assert_eq!(checks[3].effect, "table_refusal");
     }
 
     /// The real M1 (B7 H-P3-6): Kibali's `'Q2 2024'!O11` in `Barrick_Q3_2024_AISC.xlsx` kept at its literal value,
