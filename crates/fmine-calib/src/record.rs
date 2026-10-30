@@ -261,6 +261,28 @@ pub enum RecordError {
     NotExact,
     /// An exact operation left the `i128` range.
     Overflow,
+    /// The rules still carry an `OPEN` marker: an undecided point cannot be stamped.
+    OpenMarker {
+        line: usize,
+    },
+    /// A second row with the same id (a site name, or a baseline id for the same target).
+    DuplicateId {
+        line: usize,
+        id: String,
+    },
+    /// A baseline names a target the rules do not declare.
+    UnknownTarget {
+        line: usize,
+        target: String,
+    },
+    /// A target with no baseline cannot be scored against one.
+    TargetWithoutBaseline {
+        target: String,
+    },
+    /// The rules declare no row of a table they need.
+    NoRows {
+        table: &'static str,
+    },
 }
 
 impl fmt::Display for RecordError {
@@ -271,9 +293,9 @@ impl fmt::Display for RecordError {
                 write!(f, "line {line}: unknown table [[{table}]]")
             }
             Self::UnknownKey { line, key } => write!(f, "line {line}: unknown key {key:?}"),
-            Self::Missing { line: 0, key } => write!(f, "the manifest has no {key}"),
+            Self::Missing { line: 0, key } => write!(f, "no top-level {key}"),
             Self::Missing { line, key } => {
-                write!(f, "the [[input]] row on line {line} has no {key}")
+                write!(f, "the row starting on line {line} has no {key}")
             }
             Self::BadValue {
                 line,
@@ -296,6 +318,23 @@ impl fmt::Display for RecordError {
                  empirical CDF"
             ),
             Self::Overflow => write!(f, "an exact operation left the i128 range"),
+            Self::OpenMarker { line } => {
+                write!(
+                    f,
+                    "line {line}: an OPEN point must be decided before the rules are stamped"
+                )
+            }
+            Self::DuplicateId { line, id } => write!(f, "line {line}: {id:?} is listed twice"),
+            Self::UnknownTarget { line, target } => {
+                write!(
+                    f,
+                    "line {line}: baseline target {target:?} is not a declared [[target]]"
+                )
+            }
+            Self::TargetWithoutBaseline { target } => {
+                write!(f, "target {target:?} has no [[baseline]]")
+            }
+            Self::NoRows { table } => write!(f, "no [[{table}]] row"),
         }
     }
 }
@@ -454,6 +493,292 @@ pub fn parse_manifest(text: &str) -> Result<RecordManifest, RecordError> {
         return Err(RecordError::NoInputs);
     }
     Ok(manifest)
+}
+
+/// A forecast target: what is forecast and what is scored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    pub id: String,
+    pub quantity: String,
+    pub scored_quantity: String,
+}
+
+/// A pre-written rule for a change of basis (a divestment, a re-segmentation, an ownership change).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BasisRule {
+    pub id: String,
+    pub rule: String,
+}
+
+/// One baseline for one target, given in words and resolved at scoring.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaselineRule {
+    pub id: String,
+    pub target: String,
+    pub rule: String,
+    pub source: String,
+    /// The 1-based line of the row's `[[baseline]]` header.
+    pub line: usize,
+}
+
+/// A site's place in the record's universe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SiteStatus {
+    Live,
+    /// Listed and counted, never dropped: its releases print no value (a divestment, say).
+    NotPublished,
+}
+
+/// One site of the universe, named as the label its locator points at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RulesSite {
+    pub name: String,
+    pub status: SiteStatus,
+    pub locator: String,
+    /// Why a `NotPublished` site prints nothing; `None` for a live site.
+    pub reason: Option<String>,
+}
+
+/// A parsed `rules.toml`: the typed parts code scores with. The prose (the interval score's formula, the report,
+/// the calibration claim, the outcome vintage, the excluded rows) must be present but is bound only by the
+/// rules' digest.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordRules {
+    pub rules_id: String,
+    /// The record these rules govern; its manifest carries the same id.
+    pub record_id: String,
+    /// The source registry's issuer id.
+    pub issuer: String,
+    pub alpha: Rat,
+    pub estimator: Estimator,
+    pub rho_low: Rat,
+    pub rho_high: Rat,
+    pub coverage_level: Rat,
+    pub calibration_claim_min_n: u64,
+    pub dates: RecordDates,
+    pub targets: Vec<Target>,
+    pub basis_rules: Vec<BasisRule>,
+    pub baselines: Vec<BaselineRule>,
+    pub sites: Vec<RulesSite>,
+}
+
+const RULES_PROSE_KEYS: [&str; 5] = [
+    "interval_score",
+    "report",
+    "calibration_claim",
+    "outcome_vintage",
+    "excluded_rows",
+];
+const RULES_TOP_KEYS: [&str; 16] = [
+    "rules_id",
+    "record_id",
+    "issuer",
+    "alpha",
+    "quantile_estimator",
+    "rho_low",
+    "rho_high",
+    "coverage_level",
+    "calibration_claim_min_n",
+    "nowcast_from_utc",
+    "proof_by_utc",
+    "interval_score",
+    "report",
+    "calibration_claim",
+    "outcome_vintage",
+    "excluded_rows",
+];
+
+/// Whether `s` holds the word `OPEN`, the marker of a point still to be decided.
+#[must_use]
+pub fn has_open_marker(s: &str) -> bool {
+    s.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| w == "OPEN")
+}
+
+/// A decimal in (0, 1), or in [0, 1) when `zero_ok`.
+fn unit_decimal(s: &str, zero_ok: bool) -> Option<Rat> {
+    let x = Rat::from_decimal_str(s).ok()?;
+    let below_one = x.checked_cmp(Rat::from_integer(1)).ok()? == Ordering::Less;
+    let lower = if zero_ok {
+        x.signum() >= 0
+    } else {
+        x.signum() > 0
+    };
+    (below_one && lower).then_some(x)
+}
+
+/// Parses `rules.toml` (BD-334.S2): every key required, no other key or table, each value of its type, no `OPEN`
+/// marker in any value, unique ids, every baseline on a declared target and every target with a baseline.
+pub fn parse_rules(text: &str) -> Result<RecordRules, RecordError> {
+    let doc = parse_subset(text).map_err(|e| RecordError::Syntax {
+        line: e.line,
+        reason: e.reason,
+    })?;
+    let mut values = doc
+        .top
+        .iter()
+        .chain(doc.rows.iter().flat_map(|r| r.fields.iter()));
+    if let Some(f) = values.find(|f| matches!(&f.value, TomlValue::Str(s) if has_open_marker(s))) {
+        return Err(RecordError::OpenMarker { line: f.line });
+    }
+    let top = Fields {
+        fields: &doc.top,
+        line: 0,
+    };
+    top.check_keys(&RULES_TOP_KEYS)?;
+    for key in RULES_PROSE_KEYS {
+        top.text(key)?;
+    }
+    let (mut targets, mut basis_rules, mut baselines, mut sites) = (
+        Vec::<Target>::new(),
+        Vec::<BasisRule>::new(),
+        Vec::<BaselineRule>::new(),
+        Vec::<RulesSite>::new(),
+    );
+    for row in &doc.rows {
+        let r = Fields {
+            fields: &row.fields,
+            line: row.line,
+        };
+        let text = |key| r.text(key).map(|(s, _)| s.to_string());
+        let duplicate = |id: &str| RecordError::DuplicateId {
+            line: row.line,
+            id: id.to_string(),
+        };
+        match row.table.as_str() {
+            "target" => {
+                r.check_keys(&["id", "quantity", "scored_quantity"])?;
+                let id = text("id")?;
+                if targets.iter().any(|t| t.id == id) {
+                    return Err(duplicate(&id));
+                }
+                targets.push(Target {
+                    id,
+                    quantity: text("quantity")?,
+                    scored_quantity: text("scored_quantity")?,
+                });
+            }
+            "basis_rule" => {
+                r.check_keys(&["id", "rule"])?;
+                let id = text("id")?;
+                if basis_rules.iter().any(|b| b.id == id) {
+                    return Err(duplicate(&id));
+                }
+                basis_rules.push(BasisRule {
+                    id,
+                    rule: text("rule")?,
+                });
+            }
+            "baseline" => {
+                r.check_keys(&["id", "target", "rule", "source"])?;
+                let (id, target) = (text("id")?, text("target")?);
+                if baselines.iter().any(|b| b.id == id && b.target == target) {
+                    return Err(duplicate(&format!("{id} for {target}")));
+                }
+                baselines.push(BaselineRule {
+                    id,
+                    target,
+                    rule: text("rule")?,
+                    source: text("source")?,
+                    line: row.line,
+                });
+            }
+            "site" => {
+                r.check_keys(&["name", "status", "locator", "reason"])?;
+                let name = text("name")?;
+                if sites.iter().any(|s| s.name == name) {
+                    return Err(duplicate(&name));
+                }
+                let status = r.parsed("status", "\"live\" or \"not_published\"", |s| match s {
+                    "live" => Some(SiteStatus::Live),
+                    "not_published" => Some(SiteStatus::NotPublished),
+                    _ => None,
+                })?;
+                let reason = match status {
+                    SiteStatus::NotPublished => Some(text("reason")?),
+                    SiteStatus::Live => match r.field("reason") {
+                        Ok(f) => {
+                            return Err(RecordError::BadValue {
+                                line: f.line,
+                                key: "reason",
+                                expected: "absent for a live site",
+                            });
+                        }
+                        Err(_) => None,
+                    },
+                };
+                sites.push(RulesSite {
+                    name,
+                    status,
+                    locator: text("locator")?,
+                    reason,
+                });
+            }
+            other => {
+                return Err(RecordError::UnknownTable {
+                    line: row.line,
+                    table: other.to_string(),
+                });
+            }
+        }
+    }
+    if let Some(b) = baselines
+        .iter()
+        .find(|b| !targets.iter().any(|t| t.id == b.target))
+    {
+        return Err(RecordError::UnknownTarget {
+            line: b.line,
+            target: b.target.clone(),
+        });
+    }
+    if let Some(t) = targets
+        .iter()
+        .find(|t| !baselines.iter().any(|b| b.target == t.id))
+    {
+        return Err(RecordError::TargetWithoutBaseline {
+            target: t.id.clone(),
+        });
+    }
+    if targets.is_empty() {
+        return Err(RecordError::NoRows { table: "target" });
+    }
+    if sites.is_empty() {
+        return Err(RecordError::NoRows { table: "site" });
+    }
+    let rho_low = top.parsed("rho_low", "a decimal in [0, 1)", |s| unit_decimal(s, true))?;
+    let rho_high = top.parsed("rho_high", "a decimal in [rho_low, 1)", |s| {
+        unit_decimal(s, true).filter(|x| x.checked_cmp(rho_low).ok() != Some(Ordering::Less))
+    })?;
+    let utc = "a time YYYY-MM-DDTHH:MM:SSZ";
+    Ok(RecordRules {
+        rules_id: top.text("rules_id")?.0.to_string(),
+        record_id: top.text("record_id")?.0.to_string(),
+        issuer: top.text("issuer")?.0.to_string(),
+        alpha: top.parsed("alpha", "a decimal in (0, 1)", |s| unit_decimal(s, false))?,
+        estimator: top.parsed(
+            "quantile_estimator",
+            "\"inverse_ecdf\" or \"linear\"",
+            |s| match s {
+                "inverse_ecdf" => Some(Estimator::InverseEcdf),
+                "linear" => Some(Estimator::Linear),
+                _ => None,
+            },
+        )?,
+        rho_low,
+        rho_high,
+        coverage_level: top.parsed("coverage_level", "a decimal in (0, 1)", |s| {
+            unit_decimal(s, false)
+        })?,
+        calibration_claim_min_n: top.positive("calibration_claim_min_n")?,
+        dates: RecordDates {
+            nowcast_from: top.parsed("nowcast_from_utc", utc, parse_utc)?,
+            proof_by: top.parsed("proof_by_utc", utc, parse_utc)?,
+        },
+        targets,
+        basis_rules,
+        baselines,
+        sites,
+    })
 }
 
 /// The interval `[lower_utc, upper_utc]` a time proof places the record's digest in: an RFC 3161 `genTime` ±
@@ -1063,5 +1388,98 @@ mod tests {
                 validate(&m, &[], None, FY2026_DATES).contains(&Finding::AuthorRoleNotARoleId);
             assert_eq!(found, !ok, "{role}");
         }
+    }
+
+    fn rules_text() -> String {
+        "rules_id = \"R-v1\"\nrecord_id = \"FM-SYNTHETIC-v1\"\nissuer = \"synthetic\"\nalpha = \"0.2\"\n\
+         interval_score = \"IS\"\nquantile_estimator = \"inverse_ecdf\"\nrho_low = \"0\"\nrho_high = \"0.5\"\n\
+         coverage_level = \"0.95\"\nreport = \"n\"\ncalibration_claim_min_n = 35\ncalibration_claim = \"none\"\n\
+         nowcast_from_utc = \"2026-11-09T11:00:00Z\"\nproof_by_utc = \"2026-12-31T23:59:59Z\"\n\
+         outcome_vintage = \"first\"\nexcluded_rows = \"roll-ups\"\n\n\
+         [[target]]\nid = \"production\"\nquantity = \"koz\"\nscored_quantity = \"Q4\"\n\n\
+         [[basis_rule]]\nid = \"divestment\"\nrule = \"listed\"\n\n\
+         [[baseline]]\nid = \"persistence\"\ntarget = \"production\"\nrule = \"q3\"\nsource = \"wb\"\n\n\
+         [[site]]\nname = \"Synthetic A\"\nstatus = \"live\"\nlocator = \"S!A1\"\n\n\
+         [[site]]\nname = \"Synthetic B\"\nstatus = \"not_published\"\nlocator = \"S!A2\"\nreason = \"sold\"\n"
+            .to_string()
+    }
+
+    #[test]
+    fn test_rules_parse() {
+        let rules = parse_rules(&rules_text()).expect("synthetic rules");
+        assert_eq!(rules.alpha, r(1, 5));
+        assert_eq!(rules.estimator, Estimator::InverseEcdf);
+        assert_eq!((rules.rho_low, rules.rho_high), (i(0), r(1, 2)));
+        assert_eq!(rules.coverage_level, r(19, 20));
+        assert_eq!(rules.calibration_claim_min_n, 35);
+        assert_eq!(rules.dates, FY2026_DATES);
+        assert_eq!(rules.baselines[0].target, "production");
+        assert_eq!(rules.sites[0].reason, None);
+        assert_eq!(rules.sites[1].status, SiteStatus::NotPublished);
+        assert_eq!(rules.sites[1].reason.as_deref(), Some("sold"));
+    }
+
+    #[test]
+    fn test_rules_refusals() {
+        let base = rules_text();
+        let refused = |text: String| parse_rules(&text).expect_err("refused");
+        let with = |from: &str, to: &str| base.replacen(from, to, 1);
+        assert!(matches!(
+            refused(with("\"q3\"", "\"OPEN: which quarter\"")),
+            RecordError::OpenMarker { .. }
+        ));
+        assert!(parse_rules(&with("\"q3\"", "\"OpenTimestamps, REOPENED\"")).is_ok());
+        assert!(matches!(
+            refused(with("target = \"production\"", "target = \"cost\"")),
+            RecordError::UnknownTarget { target, .. } if target == "cost"
+        ));
+        assert!(matches!(
+            refused(with("Synthetic B", "Synthetic A")),
+            RecordError::DuplicateId { id, .. } if id == "Synthetic A"
+        ));
+        assert!(matches!(
+            refused(with(
+                "locator = \"S!A1\"",
+                "locator = \"S!A1\"\nreason = \"x\""
+            )),
+            RecordError::BadValue { key: "reason", .. }
+        ));
+        assert!(matches!(
+            refused(with("reason = \"sold\"\n", "")),
+            RecordError::Missing { key: "reason", .. }
+        ));
+        for alpha in ["0", "1", "-0.2", "0.2x"] {
+            assert!(matches!(
+                refused(with("alpha = \"0.2\"", &format!("alpha = \"{alpha}\""))),
+                RecordError::BadValue { key: "alpha", .. }
+            ));
+        }
+        assert!(matches!(
+            refused(with("rho_low = \"0\"", "rho_low = \"0.6\"")),
+            RecordError::BadValue {
+                key: "rho_high",
+                ..
+            }
+        ));
+        let no_baseline = format!(
+            "{base}\n[[target]]\nid = \"unit_cost\"\nquantity = \"$/oz\"\nscored_quantity = \"Q4\"\n"
+        );
+        assert_eq!(
+            refused(no_baseline),
+            RecordError::TargetWithoutBaseline {
+                target: "unit_cost".to_string()
+            }
+        );
+        assert!(matches!(
+            refused(format!("{base}\n[[input]]\ndoc_id = \"x\"\n")),
+            RecordError::UnknownTable { .. }
+        ));
+        assert_eq!(
+            refused(with("report = \"n\"\n", "")),
+            RecordError::Missing {
+                line: 0,
+                key: "report"
+            }
+        );
     }
 }

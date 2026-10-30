@@ -12,7 +12,8 @@ Enforces the structural invariants of the workspace (`L-1`..`L-7`, `PO-NUM-2`, `
 
 ## 3. Authority, Epistemics & Representation
 Pure static verifier over repository source files and TOML registries; produces deterministic pass/fail diagnostics (`GATE-LAYERS-00`).
-The `forecast-*` commands are the exception: they write a record's digest files and run `openssl ts` (BD-334.S1).
+The `forecast-*` commands are the exception: they write a record's digest files and run `openssl ts` and `git`
+(BD-334.S1, S2).
 
 ## 4. Public API Surface
 - `check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>>`
@@ -31,8 +32,13 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   `forecast-record-hash <dir>`, `forecast-record-verify <dir>`): the IO around the pure `fmine_calib::record`.
   They write `rules.sha256` and `record.sha256` but never overwrite one with a different digest. `record_verify`
   takes the record's time only from `record.tsr`, after `openssl ts -verify` against `tsa_chain.pem` passes
-  (`forecast::proof_times_from_text` reads the reply's time stamp and accuracy). `scripts/forecast_record_e2e.sh`
-  runs all three on a synthetic record with a throwaway local TSA (`test_tsa`, never a record's proof).
+  (`forecast::proof_times_from_text` reads the reply's time stamp and accuracy). `rules_hash` refuses rules that
+  do not parse or still carry an `OPEN` marker, and the record is validated against the dates its rules state.
+  `scripts/forecast_record_e2e.sh` runs all three on a synthetic record with a throwaway local TSA (`test_tsa`,
+  never a record's proof); `scripts/verify_rules_timestamp.sh` checks the rules' proofs with openssl/ots alone.
+- `forecast::rules_order` (BD-334.S2; command `forecast-rules-order`): the commit adding
+  `forecasts/fy2026/rules.toml` is a strict ancestor of every commit touching `forecasts/fy2026/forecasts.csv`;
+  refuses a shallow clone, whose history cannot show the order.
 
 ## 5. Guards & Typed Refusals
 Fails CI (`exit 2`) on any upward layer edge (`L-1`), banned dependency (`L-5`), `open_child_region` escalation outside `fmine-runtime` (`L-3`), lift provenance mismatch (`L-7`), undeclared module family (`§28.4`), bare `f64` physical quantity in `K`/`E` public signatures (`L-6`), `std` transcendental in `BitwisePortable` modules (`PO-NUM-2`), LOC ceiling overrun (`§28.4`), or oracle crate in a production closure (`GATE-ORACLE-01`).
@@ -49,7 +55,7 @@ Deterministic error collection across all files in lexicographical path order.
 
 ## 9. Lifted Code & Foundation Dependencies
 `fmine-registry` (the source registries and TOML subset) and `fmine-calib` (the pure forecast record); `openssl` on
-`PATH` for `forecast-record-verify` only.
+`PATH` for `forecast-record-verify` and `git` for `forecast-rules-order` only.
 
 ## 10. Non-Goals & Scope Boundary
 Never linked by any production crate.

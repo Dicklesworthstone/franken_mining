@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
-# End-to-end test of the public forecast record (BD-334.S1): a synthetic record in a scratch directory is
+# End-to-end test of the public forecast record (BD-334.S1, S2): a synthetic record in a scratch directory is
 # hashed, stamped by a throwaway local RFC 3161 authority and verified, then each planted defect must be refused.
 # The authority is `test_tsa`: it shows the commands work, never a record's time. No network, no corpus, no
-# issuer data.
+# issuer data. The rules are the committed FY2026 rules with the record id renamed to the synthetic record.
 #
 # Steps:
 # - rules: forecast-rules-hash writes rules.sha256, equal to the FMRUL1 frame hashed by the shell;
+# - rules_stamp, rules_verify: the rules' digest stamped by the test TSA, and scripts/verify_rules_timestamp.sh
+#   reports it verified against the TSA's root, and unverified against its leaf alone;
 # - hash: forecast-record-hash writes record.sha256, equal to the FMREC1 frame hashed by the shell;
 # - stamp: `openssl ts -query` and `-reply` with the test TSA write record.tsr;
 # - verify: forecast-record-verify passes (after 31 Dec 2026 it must refuse instead: any FY2026 proof made then
 #   is after the deadline);
-# - planted defects, each refused with its own reason: a byte added to forecasts.csv; rules.toml changed after
-#   hashing; record.sha256 re-hashed over a changed manifest; a chain that is not the TSA's; a registered file
-#   listed with another sha256; an information cut-off after the proof.
+# - planted defects, each refused with its own reason: an OPEN marker left in the rules; a byte added to
+#   forecasts.csv; rules.toml changed after hashing; record.sha256 re-hashed over a changed manifest; a manifest
+#   naming another record; a chain that is not the TSA's; a registered file listed with another sha256; an
+#   information cut-off after the proof.
 #
 # Output: one JSON line per step {step, ok, digest, detail}, then {"steps": N, "failures": M}. Exits 1 if any step
 # fails. The scratch directory is left in place and named in the first line.
@@ -100,21 +103,21 @@ if ! (cd "$tsa" &&
   finish
 fi
 log test_tsa true "" "throwaway root and timeStamping leaf, labelled test_tsa"
-stamp() { # dir: stamp record.sha256 into record.tsr and install the test chain
+stamp_digest() { # hex out.tsr: an RFC 3161 reply from the test TSA over the digest hex
   (cd "$tsa" &&
-    openssl ts -query -digest "$(cat "$1/record.sha256")" -sha256 -cert -out "$1/request.tsq" &&
-    openssl ts -reply -config tsa.cnf -section tsa_config -queryfile "$1/request.tsq" -inkey tsa.key \
-      -signer tsa.pem -out "$1/record.tsr") >"$1/stamp.log" 2>&1 && cp "$tsa/ca.pem" "$1/tsa_chain.pem"
+    openssl ts -query -digest "$1" -sha256 -cert -out "$2.tsq" &&
+    openssl ts -reply -config tsa.cnf -section tsa_config -queryfile "$2.tsq" -inkey tsa.key \
+      -signer tsa.pem -out "$2") >"$2.log" 2>&1
+}
+stamp() { # dir: stamp record.sha256 into record.tsr and install the test chain
+  stamp_digest "$(cat "$1/record.sha256")" "$1/record.tsr" && cp "$tsa/ca.pem" "$1/tsa_chain.pem"
 }
 
-# --- a synthetic record --------------------------------------------------------------------------------------
+# --- the rules -----------------------------------------------------------------------------------------------
 rec="$scratch/rec"
 mkdir -p "$rec"
-cat >"$rec/rules.toml" <<'EOF'
-# Synthetic rules for the end-to-end test of BD-334.S1; not the FY2026 rules.
-[[scoring]]
-rule = "interval score, alpha = 0.2"
-EOF
+sed 's/^record_id = "FM-FY2026-v1"$/record_id = "FM-SYNTHETIC-v1"/' "$root/forecasts/fy2026/rules.toml" \
+  >"$rec/rules.toml"
 out="$(xt forecast-rules-hash "$rec/rules.toml")"
 rules_hex="$( { printf 'FMRUL1\n%s\n' "$(size "$rec/rules.toml")"; cat "$rec/rules.toml"; } | sha)"
 if [ "$(cat "$rec/rules.sha256" 2>/dev/null)" = "$rules_hex" ]; then
@@ -123,12 +126,36 @@ else
   log rules false "" "$out"
 fi
 
+mkdir -p "$scratch/tsa_root" "$scratch/tsa_leaf"
+cp "$tsa/ca.pem" "$scratch/tsa_root/test_tsa.pem"
+cp "$tsa/tsa.pem" "$scratch/tsa_leaf/test_tsa_leaf.pem"
+if stamp_digest "$rules_hex" "$rec/rules.tsr"; then
+  log rules_stamp true "$rules_hex" "rules.tsr from test_tsa"
+else
+  log rules_stamp false "" "$(tail -3 "$rec/rules.tsr.log")"
+fi
+out="$(bash "$here/verify_rules_timestamp.sh" "$rec" "$scratch/tsa_root" 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qF '"verified":true' &&
+  printf '%s' "$out" | grep -qF '{"proofs":1,"verified":1}'; then
+  log rules_verify true "$rules_hex" "$out"
+else
+  log rules_verify false "" "exit $rc: $out"
+fi
+refused rules_verify_wrong_chain '"verified":false' bash "$here/verify_rules_timestamp.sh" "$rec" "$scratch/tsa_leaf"
+
+d="$scratch/open_marker"
+mkdir -p "$d"
+{ echo '# OPEN: the quantile estimator'; cat "$rec/rules.toml"; } >"$d/rules.toml"
+refused open_marker "OPEN point must be decided" xt forecast-rules-hash "$d/rules.toml"
+
+# --- a synthetic record --------------------------------------------------------------------------------------
 now="$(date -u +%s)"
 label=forecast
 [ "$now" -ge 1794222000 ] && label=nowcast # 2026-11-09T11:00:00Z, the Q3 2026 release
-write_manifest() { # dir cutoff doc_id sha256
+write_manifest() { # dir cutoff doc_id sha256 [record_id]
   cat >"$1/manifest.toml" <<EOF
-record_id = "FM-SYNTHETIC-v1"
+record_id = "${5:-FM-SYNTHETIC-v1}"
 author_role = "public-lane-author"
 information_cutoff_utc = "$2"
 label = "$label"
@@ -165,7 +192,7 @@ fi
 if stamp "$rec"; then
   log stamp true "$record_hex" "record.tsr from test_tsa"
 else
-  log stamp false "" "$(tail -3 "$rec/stamp.log")"
+  log stamp false "" "$(tail -3 "$rec/record.tsr.log")"
 fi
 
 if [ "$now" -le 1798761599 ]; then # 2026-12-31T23:59:59Z
@@ -192,8 +219,14 @@ printf '# changed after hashing\n' >>"$d/rules.toml"
 refused changed_rules "rules_sha256 differs" xt forecast-record-verify "$d"
 
 d="$(copy rehash)"
-sed 's/FM-SYNTHETIC-v1/FM-SYNTHETIC-v2/' "$rec/manifest.toml" >"$d/manifest.toml"
+sed 's/^author_role = .*/author_role = "public-lane-reviewer"/' "$rec/manifest.toml" >"$d/manifest.toml"
 refused rehash "already holds" xt forecast-record-hash "$d"
+
+d="$scratch/other_record"
+mkdir -p "$d"
+cp "$rec/rules.toml" "$rec/forecasts.csv" "$d/"
+write_manifest "$d" 2026-10-01T00:00:00Z Synthetic_Workbook.xlsx "$ab" FM-OTHER-v1
+refused other_record "is not the rules' record" xt forecast-record-hash "$d"
 
 d="$(copy wrong_chain)"
 cp "$tsa/tsa.pem" "$d/tsa_chain.pem"

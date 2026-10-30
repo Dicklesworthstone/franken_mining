@@ -30,6 +30,10 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
     role id; with a proof, a cut-off not before it, a label that disagrees with it, a proof after the deadline.
     Times come only from a proof (`ProofTimes`), never from a clock; `FY2026_DATES` holds the Q3 release
     (2026-11-09T11:00Z) and the 31 Dec 2026 deadline;
+  - `parse_rules` → `RecordRules` (BD-334.S2): α, the quantile estimator, the n_eff correlation range, the
+    coverage level, the dates, the targets, basis rules, baselines (each on a declared target, every target with
+    one) and the named site universe (`live`/`not_published`, never dropped); refuses an `OPEN` marker in any
+    value, a duplicate id and every malformed or missing key;
   - `interval_score` on exact rationals (refuses α outside (0, 1) and l > u), `quantile` (Hyndman–Fan types 1
     and 7) and `persistence_interval` (inverse ECDF only: exact, since exp of a quantile of log ratios is then an
     observed ratio; the linear estimator's bounds are irrational and refuse with `NotExact`)

@@ -1,0 +1,155 @@
+# FY2026 forecast record: the rules, fixed and time-proved before any forecast exists (BD-334.S2; plan §21.6, "The
+# FY2026 forecast record"). The record's manifest binds this file by its FMRUL1 digest (rules.sha256), so the
+# baselines and the scoring rule cannot be chosen after seeing the forecasts.
+#
+# Never edited once stamped: a change is rules-v2, stamped and listed beside this file.
+# Written in fmine-registry's TOML subset (top-level keys, then [[table]] rows; no floats, so decimals are strings)
+# and parsed by fmine_calib::record::parse_rules. Issuer values are never copied here: rules cite locators only.
+
+rules_id = "FM-FY2026-rules-v1"
+record_id = "FM-FY2026-v1"
+# The source registry's issuer id (registries/sources/barrick.toml); public releases only.
+issuer = "barrick"
+
+# 80% central intervals: p10 and p90.
+alpha = "0.2"
+interval_score = "IS = (u - l) + (2/alpha)(l - y) if y < l; + (2/alpha)(y - u) if y > u; computed exactly on rationals (Gneiting and Raftery 2007)"
+
+# The persistence baseline's quantiles. The inverse empirical CDF (Hyndman-Fan type 1) always returns an observed
+# ratio, so point x quantile is exact; type 7 would interpolate log ratios and give irrational bounds.
+quantile_estimator = "inverse_ecdf"
+
+# One period gives no estimate of how correlated the sites' errors are, so n_eff is reported over a stated range
+# under equicorrelation, n_eff = n / (1 + (n - 1) rho): from independence (rho 0) to a strong common shock (rho 0.5).
+rho_low = "0"
+rho_high = "0.5"
+coverage_level = "0.95"
+report = "per target: n scored, the NOT_PUBLISHED and NOT_AVAILABLE sites by name, n_eff at rho_low and rho_high, coverage k of n with its two-sided Clopper-Pearson interval at coverage_level, and the mean interval score of the forecasts and of each baseline over the sites where all three exist"
+calibration_claim_min_n = 35
+calibration_claim = "no positive calibration claim is made from fewer than calibration_claim_min_n independent outcomes; one period of about a dozen sites demonstrates the protocol, not skill (R7-C118)"
+
+# A record whose proof's upper time is at or after the Q3 2026 release (06:00 ET on 9 Nov 2026, which is 11:00 UTC
+# once US daylight saving ends on 1 Nov; E454) is a nowcast and is scored separately (R7-C119).
+nowcast_from_utc = "2026-11-09T11:00:00Z"
+proof_by_utc = "2026-12-31T23:59:59Z"
+
+outcome_vintage = "an outcome is the value as first published in the named release; a later restatement never replaces it"
+excluded_rows = "Nevada Gold Mines LLC and the region and Total Gold rows are sums of the listed sites, so scoring them would count one error twice; Long Canyon has no 2026 row (it is excluded from Total Gold); copper sites are outside both targets"
+
+[[target]]
+id = "production"
+quantity = "gold produced, thousand ounces, 100% basis: Mine Stats summary column B (E456)"
+scored_quantity = "Q4-implied = FY2026 (YTD sheet, column B, Q4 2026 release) - 9M2026 (YTD sheet, column B, Q3 2026 release), per site"
+
+[[target]]
+id = "unit_cost"
+quantity = "all-in sustaining costs, US$ per attributable ounce sold, as printed in the Mine Stats summary (E110)"
+scored_quantity = "the Q4 2026 value as printed (QTD sheet, Q4 2026 release), per site: a per-ounce rate is not additive, so FY - 9M is not defined for it"
+
+[[basis_rule]]
+id = "divestment"
+rule = "a site sold, deconsolidated or closed is NOT_PUBLISHED for every period its release prints no value: listed and counted, never dropped"
+
+[[basis_rule]]
+id = "resegmentation"
+rule = "a site split, merged or renamed is scored against its successor only if the outcome release maps it by name or footnote; otherwise NOT_PUBLISHED"
+
+[[basis_rule]]
+id = "ownership_change"
+rule = "production on the 100% basis is unaffected; the unit cost uses the basis printed in the outcome release, flagged basis_changed when the share differs from the Q2 2026 label"
+
+[[basis_rule]]
+id = "placeholder"
+rule = "a cell printed as a dash is NOT_PUBLISHED; a printed number, zero included, is the outcome"
+
+[[baseline]]
+id = "issuer_guidance"
+target = "production"
+rule = "the last per-site FY2026 production guidance range Barrick published before the manifest's information cut-off, converted to the 100% basis by dividing by the share in its own label when stated attributably; Q4-implied range = [low - 9M, high - 9M] with 9M as in the production target; a point guidance g is the interval [g, g]; a site with no guidance is NOT_AVAILABLE for this baseline, listed and counted"
+source = "cited by document and page only (RISK-31) and resolved at scoring by two readers (BD-341)"
+
+[[baseline]]
+id = "issuer_guidance"
+target = "unit_cost"
+rule = "the last per-site FY2026 all-in sustaining cost guidance range Barrick published before the manifest's information cut-off, used unchanged as the Q4 interval; a point guidance g is [g, g]; a site with no guidance is NOT_AVAILABLE for this baseline, listed and counted"
+source = "cited by document and page only (RISK-31) and resolved at scoring by two readers (BD-341)"
+
+[[baseline]]
+id = "run_rate_persistence"
+target = "production"
+rule = "point = the Q3 2026 QTD column B value (Q3 2026 release); 80% interval = point x [q10, q90] of the pooled ratios Q(t+1)/Q(t) of QTD column B over the live sites' consecutive quarters 2024Q1-2026Q2, each quarter as first published, by quantile_estimator; a pair with either value not a positive printed number is left out of the pool and counted"
+source = "the ten registered Mine Stats workbooks, 2024Q1-2026Q2 (registries/sources/barrick.toml), and the Q3 2026 release"
+
+[[baseline]]
+id = "run_rate_persistence"
+target = "unit_cost"
+rule = "point = the Q3 2026 QTD all-in sustaining cost per ounce (Q3 2026 release); 80% interval = point x [q10, q90] of the pooled ratios of consecutive QTD values over the live sites, 2024Q1-2026Q2, as for production"
+source = "the ten registered Mine Stats workbooks, 2024Q1-2026Q2 (registries/sources/barrick.toml), and the Q3 2026 release"
+
+# The universe: every gold site row of the Q2 2026 Mine Stats QTD sheet, in its order.
+[[site]]
+name = "Carlin"
+status = "live"
+locator = "Q2_2026:QTD!A5"
+
+[[site]]
+name = "Cortez"
+status = "live"
+locator = "Q2_2026:QTD!A6"
+
+[[site]]
+name = "Turquoise Ridge"
+status = "live"
+locator = "Q2_2026:QTD!A7"
+
+[[site]]
+name = "Phoenix"
+status = "live"
+locator = "Q2_2026:QTD!A8"
+
+[[site]]
+name = "Pueblo Viejo"
+status = "live"
+locator = "Q2_2026:QTD!A10"
+
+[[site]]
+name = "Hemlo"
+status = "not_published"
+locator = "Q2_2026:QTD!A11"
+reason = "sale closed 26 Nov 2025; 2026 cells are dashes (E485, E486, E488)"
+
+[[site]]
+name = "Veladero"
+status = "live"
+locator = "Q2_2026:QTD!A13"
+
+[[site]]
+name = "Porgera"
+status = "live"
+locator = "Q2_2026:QTD!A14"
+
+[[site]]
+name = "Loulo-Gounkoto"
+status = "live"
+locator = "Q2_2026:QTD!A16"
+
+[[site]]
+name = "Kibali"
+status = "live"
+locator = "Q2_2026:QTD!A17"
+
+[[site]]
+name = "Tongon"
+status = "not_published"
+locator = "Q2_2026:QTD!A18"
+reason = "sale closed 1 Dec 2025; 2026 cells are dashes (E487, E488)"
+
+[[site]]
+name = "North Mara"
+status = "live"
+locator = "Q2_2026:QTD!A19"
+
+[[site]]
+name = "Bulyanhulu"
+status = "live"
+locator = "Q2_2026:QTD!A20"

@@ -4599,6 +4599,9 @@ are a scoreable, externally time-proved record, not a promise:
   rule for re-segmentation, divestment or ownership change; unit costs per ounce sold carry their own basis rule.
 - **Scored quantity and baselines.** The Q4-implied value (FY − published 9M), scored with the interval score
   against two pre-registered baselines: Barrick's last stated per-site guidance and a run-rate persistence forecast.
+  A per-ounce cost is not additive, so FY − 9M is undefined for it: the unit cost is scored on the Q4 value as
+  printed (QTD). The rules (`forecasts/fy2026/rules.toml`: estimator, n_eff range, the named 13-site universe with
+  Hemlo and Tongon `NOT_PUBLISHED`, guidance and basis rules) are hashed and time-proved before any forecast.
 - **Deadline and time proof.** Hashed and pushed to the public repository with an RFC 3161 receipt or a completed
   OpenTimestamps proof by 31 Dec 2026, before any M0 content reaches an issuer insider, and before any January
   production release (Barrick issued mid-January Q4 releases for 2020–2024; R7-C154). Caller-supplied timestamps do
