@@ -309,16 +309,30 @@ pub fn proof_times_from_text(text: &str) -> Result<ProofTimes, String> {
         let [s, ms, us] = parts[..] else {
             return Err(format!("unreadable accuracy {parts:?}"));
         };
-        accuracy_part(s, "seconds", 1)?
-            + accuracy_part(ms, "millis", 1_000)?
-            + accuracy_part(us, "micros", 1_000_000)?
+        [
+            accuracy_part(s, "seconds", 1)?,
+            accuracy_part(ms, "millis", 1_000)?,
+            accuracy_part(us, "micros", 1_000_000)?,
+        ]
+        .into_iter()
+        .try_fold(0_u64, u64::checked_add)
+        .ok_or("accuracy overflows")?
     };
     let accuracy = i64::try_from(accuracy).map_err(|_| "accuracy overflows".to_string())?;
     let partial = i64::from(fraction.bytes().any(|b| b != b'0'));
-    Ok(ProofTimes {
-        lower_utc: t - accuracy,
-        upper_utc: t + partial + accuracy,
-    })
+    // An accuracy wide enough to leave the representable times widens nothing: it refuses.
+    match (
+        t.checked_sub(accuracy),
+        t.checked_add(partial).and_then(|u| u.checked_add(accuracy)),
+    ) {
+        (Some(lower_utc), Some(upper_utc)) => Ok(ProofTimes {
+            lower_utc,
+            upper_utc,
+        }),
+        _ => Err(format!(
+            "accuracy of {accuracy} s overflows the proof interval"
+        )),
+    }
 }
 
 /// `forecast-record-verify <dir>`: both digests recomputed, the RFC 3161 reply checked and its interval
@@ -436,6 +450,14 @@ mod tests {
             REPLY.replace("GMT", "UTC"),
             REPLY.replace("Oct", "Okt"),
             REPLY.replace("Accuracy:", "Precision:"),
+            REPLY.replace("0x01 seconds", "0x7fffffffffffffff seconds"),
+            REPLY
+                .replace("2026 GMT", "1960 GMT")
+                .replace("0x01 seconds", "0x7fffffffffffffff seconds"),
+            REPLY.replace(
+                "0x01 seconds, unspecified millis",
+                "0xffffffffffffffff seconds, 0xffffffffffffffff millis",
+            ),
         ] {
             assert!(proof_times_from_text(&bad).is_err(), "{bad}");
         }
