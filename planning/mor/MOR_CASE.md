@@ -1043,3 +1043,65 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     `493a8ab1…`, observed from the release binary of d263206 (exit 0, empty stderr), with AISC totals
     unchanged; `repro/barrick/expected.toml` has the row, and the ignored expected-root test passes on it.
   - **Verification.** Self-verified on this machine only; nothing has run in CI.
+- **E844** Mine Stats sold-weighted regional rate (the plan's family 5) decided in exact arithmetic (BD-331.S4,
+  bd-prmn.4; FACT, execution, 2026-10-30, owner machine).
+  - **Rule.** `fmine-public::mine_ledger`, on each summary sheet, column group and gold rate field (cost of
+    sales, TCC and AISC per ounce):
+    - A region's rate R = its members' rates weighted by attributable ounces sold, R·Σwᵢ = Σ rᵢ·wᵢ, members
+      found as in E843 and taken in row order.
+    - Refused, in order: a withheld member (E818), a region not in the map, a missing row, a member under both
+      names, a blank. All placeholders are not published.
+    - A member whose sold cell is the nil token sold nothing and leaves the identity, with a `nil_token`
+      certificate. Any other placeholder left in it refuses, so a rate is never read as 0; so do no member left
+      (`weights_all_nil`) and a weight printed at or below 0 (`weight_not_positive`).
+    - Decided alone: the extremes of the members' weighted means sit at vertices of the weight box (at most 16
+      members), and a feasible answer carries a witness checked exactly. Never posed jointly.
+    - A conflict is (iv) `cost_totals_unpublished`, not (iii): the issuer may weight by quantities it does not
+      print. These are the Mine Stats ledger's first (iv).
+  - **Independent reader.** The census's family 5 (ac07fee) was written first by a subagent from a rule
+    statement, without reading the crate: a separable exact test, cross-checked against vertex enumeration, with
+    an exact witness for every (i). The rule statement and the Rust share one origin (this agent). Unlike
+    families 3 and 4, this agent read the census code before writing the Rust. The Rust uses its own derivation
+    (vertices and a path witness), but a synthetic test reuses the census's separable test as its oracle, so
+    the two readers are less independent than for earlier families.
+  - **Result.**
+    - The ignored test `barrick_mine_ledger_matches_census` runs the census. All 5,480 instance lines are equal,
+      with a rate's member cells compared as a set; the family's counts are pinned. The other families, the
+      2,091 components and the 27 infeasible are unchanged.
+    - Sold-weighted rate 306: 252 (i), 30 (iv), 24 (v: Loulo-Gounkoto withheld, E818), none not published.
+    - Nil sold cells (the census reader, kinds only): Porgera in Latin America & Asia Pacific on 9 sheet and
+      column-group pairs, 27 instances, 24 (iv) and 3 (i); Tongon (9 instances) and Hemlo (9), all (i).
+      Loulo-Gounkoto's nil cells all fall in withheld periods.
+    - 28 of the 30 (iv) are Latin America & Asia Pacific: the 24 with Porgera's sold nil (2023 periods 18, Q1
+      2024 6), and Q2 2024 cost of sales and AISC, printed in the 2024Q2 file (`QTD!E16`, `QTD!G16`) and again
+      in the 2025Q2 file (`QTD!L15`, `QTD!N15`). The other two are Q4 2025: North America cost of sales
+      (`2025Q4:QTD!E12`) and South America & Asia Pacific TCC (`2025Q4:QTD!F15`).
+    - The census's E817 check holds: 21 Latin America & Asia Pacific instances with a 2023 period, 18 (iv) and
+      3 (i), the three (i) all TCC. Every 2023 cost-of-sales rate of the region is (iv), as E839 found on the
+      AISC files; its Q2 2024 cost of sales is (iv), as E840 found with every member weighed.
+  - **Not claimed.**
+    - A (iv) names what is missing, the region's and members' costs in dollars; it blames no cell.
+    - Hypothesis, not tested: the region's costs include a member that sold nothing (Porgera in 2023 and Q1
+      2024). The four Q2 2024 and two Q4 2025 conflicts are unexplained.
+    - The weights are attributable ounces sold, the rule's choice; other weightings are not tried.
+    - A zero or negative weight and all members nil do not occur here; synthetic tests only. Overflow and more
+      than 16 members (refused as a kernel refusal) have no test.
+    - The AISC tables' regional check (E840) still uses the McCormick relaxation, which can only refute. Moving
+      it to this exact decision is possible and not done.
+    - The ledger's counts stay apart from the AISC totals; no AISC state moves.
+  - **Tests.** Four synthetic tests, default suite:
+    - a region rate between its weighted-mean bounds and (iv) on either side, with cells in row order when the
+      registry lists the members in reverse, and AISC (iv) never posed jointly;
+    - a nil-sold member dropped, all nil, a rate placeholder refused, a zero and a negative weight (the
+      negative case added after e5f2035; refusing only zero fails it);
+    - refusals by name, missing row and both names;
+    - the exact decision against a separable test on 600 pseudo-random cases (both outcomes at least 50 times),
+      and the kernel's McCormick relaxation, which refutes at least 50 of them and never a feasible one.
+  - **Planted negatives, each reverted.** Each fails at least one test: one vertex only; a conflict as (iii);
+    no row order; a broken witness (R = e); a nil-sold member kept.
+  - **Root.** The frame binds the need code after the `iv` state code, where other states put a zero byte;
+    frame v7 is kept, since the state code says which branch follows. The root moves to `2a38e094…`, observed
+    from the release binary of e5f2035 (exit 0, empty stderr), with AISC totals unchanged;
+    `repro/barrick/expected.toml` has the row, and the ignored expected-root test passes on it (and fails with
+    one digit of the root changed).
+  - **Verification.** Self-verified on this machine only; nothing has run in CI.

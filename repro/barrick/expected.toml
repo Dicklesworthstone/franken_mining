@@ -243,3 +243,22 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "The Mine Stats ledger adds the sum families 3-4 (frame v7, no format change); no AISC state moves."
 evidence = "BD-331.S4, bd-prmn.4, E843"
+
+# Observed from the release binary of e5f2035 (git archive, own target directory; exit 0, empty stderr). No AISC
+# state moves: the totals equal d263206's. The root moves because the Mine Stats ledger adds the sold-weighted
+# rate (family 5): 306 instances, 252 (i), 30 (iv) cost_totals_unpublished, 24 (v) withheld, decided alone and
+# never posed, so the 2,091 components and 27 infeasible are unchanged. No registry file row or cell changes.
+[[expected]]
+commit = "e5f2035"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "2a38e094719cffffeb3859b704b7b5e9e8622d446eea84e9c822494dc153f6f0"
+anchor_id = "anc_8d042819a53b0c3f86924829de12e877"
+totals_i = 2436
+totals_ii = 3
+totals_iii = 4
+totals_iv = 92
+totals_v = 0
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "The Mine Stats ledger adds the sold-weighted rate, family 5 (frame v7, iv binds its need); no AISC moves."
+evidence = "BD-331.S4, bd-prmn.4, E844"

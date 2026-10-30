@@ -3251,6 +3251,11 @@ mod tests {
             cos(CARLIN, zero, "1250"),
             (refused(Reason::WeightNotPositive, at("D6")), false)
         );
+        let negative = ["0", "0", "-5", "1500", "1200", "1700"];
+        assert_eq!(
+            cos(CARLIN, negative, "1250"),
+            (refused(Reason::WeightNotPositive, at("D6")), false)
+        );
         // A blank comes first; all placeholders are not published.
         let blank = ["100", "100", "100", "", "1200", "1700"];
         assert_eq!(
