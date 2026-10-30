@@ -18,6 +18,7 @@ then they sit in `corpus_of_input_docs/downloaded/mine_stats/`.
 | E826 stated share rule (2026-10-30) | `python3 -I scripts/oracle/share_census.py .` | 379 lines, then `{"sites": 328, "fit": 263, "miss": 65, "unconfirmed": 0, "regions_v": 51, "no_footnote": 0, "no_registered_share": 0}` (Long Canyon registered on E827) |
 | E828 hidden scope (2026-10-30) | `python3 -I scripts/oracle/hidden_census.py .` | 435 lines, then `{"hidden_sheets": 6, "instances": 435, "footing": {"i": 169, "iii": 1, "np": 4}, "per_oz": {"i": 235, "iv": 17, "np": 6, "v": 3}}` |
 | bd-jg43.1 number formats (2026-10-30) | `python3 -I scripts/oracle/formats.py corpus_of_input_docs/downloaded/mine_stats/*.xlsx` | 18 file lines, then 10 formats, `"numeric_total":30388,"non_integer_total":6256` |
+| bd-jg43.2 displayed values (2026-10-30) | `python3 -I scripts/oracle/formats.py --displayed corpus_of_input_docs/downloaded/mine_stats/*.xlsx` | 18 file lines with `displayed_digest`, then `{"files":18,"shown":27367,"token":2873,"refused":148}` |
 
 | Script | What it is |
 |---|---|
@@ -28,6 +29,6 @@ then they sit in `corpus_of_input_docs/downloaded/mine_stats/`.
 | `share_census.py` | BD-331.S3 stated-share census over `census2.py`'s "attributable share needed" instances; written by a separate agent that did not read `crates/` or `rate_census.py`. |
 | `hidden_census.py` | BD-331.S2 hidden scope. It runs `census2.py` and `share_census.py` unchanged on the hidden AISC sheets and adds no ledger logic. Written by the agent that implemented the Rust hidden scope, before that code ran on the corpus. |
 | `format_census.py` | Number-format census (cell-number-formats bead); research check. |
-| `formats.py` | bd-jg43.1 number-format census per file: format code to [numeric, non-integer], with non-integer decided on the exact stored decimal. Written and run before the Rust styles reader, by the agent that then wrote it. It counts numeric cells as `fidelity.py` does. |
+| `formats.py` | bd-jg43.1 number-format census per file: format code to [numeric, non-integer], with non-integer decided on the exact stored decimal. Written and run before the Rust styles reader, by the agent that then wrote it. It counts numeric cells as `fidelity.py` does. `--displayed` (bd-jg43.2) adds each numeric cell's displayed text and a per-file digest; it was written before the Rust interpreter, by the same agent, and its two rounding rules are hypotheses until the LibreOffice cross-check runs. |
 | `vintage_census.py` | Cross-vintage stored-value comparison; research check. |
 | `rate_census.py` | Per-ounce check that mirrors `aisc.rs`; NOT independent evidence. |

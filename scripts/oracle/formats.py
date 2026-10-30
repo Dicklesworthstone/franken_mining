@@ -13,10 +13,34 @@ Spec:
 
 Output: one JSON line per file, {"file","sha256","formats":{code:[numeric,non_integer]}}, then
 {"files","formats","numeric_total","non_integer_total"} with formats summed over files.
-usage: python3 -I formats.py <file.xlsx>...
+
+--displayed (bd-jg43.2; written before the Rust interpreter). Each numeric cell's displayed text:
+- the code splits on ";" outside quotes, escapes ("\\x"), padding ("_x"), fill ("*x") and brackets. More than four
+  sections is unsupported; the fourth is text and is not read;
+- each of the first three sections is read for digit placeholders 0 # ?, the first ".", "%" and quoted literals.
+  Unsupported, refusing the whole code: an empty section, an E or e, an ASCII letter, "/", "@", a bracket
+  other than a colour ([Red], [Color7]) and in particular a condition ([>100]), a second "." or "%", a comma
+  after the last digit placeholder (scaling), more than 30 decimals. The zero section (third) with no 0
+  placeholder and no "." shows its quoted literals as a token, and with none of them is unsupported. The first and
+  second sections must hold a 0 placeholder;
+- section by the stored value: the second for a negative when there are two or more sections, the third for
+  zero when there are three or more, else the first. HYPOTHESIS (the LibreOffice cross-check decides): the
+  sections format |v|, and the minus comes from the negative section or, with one section, from the value;
+- value: the stored text as an exact decimal, x100 for "%", then rounded half away from zero to 15
+  significant digits and then to d decimals. HYPOTHESIS, as above;
+- text: "-" when negative, the digits with exactly d decimals, "%" for a percentage; or the token verbatim; or
+  REFUSED:<code>, with codes general_non_integer, general_too_wide (General shows an integer of 10 or more
+  digits by column width), unsupported_format, unknown_format_id, bad_style_index, out_of_range (the value
+  times 10^d is 10^38 or more) and bad_stored_text. General shows an integer as itself;
+- the per-file digest is SHA-256 over "{sheet}\\t{cell}\\t{text}\\n" for the numeric cells of the visible sheets,
+  sheets in workbook order and cells in (row, column) order.
+Output: per file {"file","sha256","shown","token","refused","displayed_digest"}, then {"files","shown","token",
+"refused"}. With --cells as well, one {"file","sheet","cell","raw","format","text"} line per numeric cell
+precedes each file line.
+usage: python3 -I formats.py [--displayed [--cells]] <file.xlsx>...
 """
-import hashlib, json, math, posixpath, sys, zipfile
-from decimal import Decimal, InvalidOperation
+import hashlib, json, math, posixpath, re, sys, zipfile
+from decimal import ROUND_HALF_UP, Context, Decimal, InvalidOperation, localcontext
 from xml.etree import ElementTree as ET
 
 M = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -81,6 +105,207 @@ def non_integer(text):
     return d != d.to_integral_value()
 
 
+COLOURS = {"black", "blue", "cyan", "green", "magenta", "red", "white", "yellow"}
+BOUND = 10 ** 38
+
+
+class Unsupported(Exception):
+    pass
+
+
+def split_sections(code):
+    """The code's sections, each a list of (kind, text): kind is lit, esc, pad, fill, bracket or ch."""
+    sections, cur, i = [], [], 0
+    while i < len(code):
+        ch = code[i]
+        if ch == '"':
+            j = code.find('"', i + 1)
+            if j < 0:
+                raise Unsupported("unterminated quote")
+            cur.append(("lit", code[i + 1:j]))
+            i = j + 1
+        elif ch in "\\_*":
+            if i + 1 >= len(code):
+                raise Unsupported("dangling " + ch)
+            cur.append(({"\\": "esc", "_": "pad", "*": "fill"}[ch], code[i + 1]))
+            i += 2
+        elif ch == "[":
+            j = code.find("]", i)
+            if j < 0:
+                raise Unsupported("unterminated bracket")
+            cur.append(("bracket", code[i + 1:j]))
+            i = j + 1
+        elif ch == ";":
+            sections.append(cur)
+            cur = []
+            i += 1
+        else:
+            cur.append(("ch", ch))
+            i += 1
+    sections.append(cur)
+    return sections
+
+
+def read_section(toks, index):
+    """(decimals, percent, token) of numeric section `index` (0, 1 or 2); token is None unless it shows one."""
+    if not toks:
+        raise Unsupported("empty section")
+    decimals, percent, has_zero, point, literal, last_ph, commas = 0, False, False, False, "", -1, []
+    for k, (kind, text) in enumerate(toks):
+        if kind == "lit":
+            literal += text
+        elif kind == "bracket":
+            low = text.lower()
+            if text[:1] in ("<", ">", "="):
+                raise Unsupported("condition [%s]" % text)
+            if not (low in COLOURS or (low.startswith("color") and low[5:].isdigit())):
+                raise Unsupported("bracket [%s]" % text)
+        elif kind == "ch":
+            if text in "0#?":
+                last_ph = k
+                has_zero = has_zero or text == "0"
+                decimals += point
+            elif text == ".":
+                if point:
+                    raise Unsupported("second decimal point")
+                point = True
+            elif text == "%":
+                if percent:
+                    raise Unsupported("second %")
+                percent = True
+            elif text == ",":
+                commas.append(k)
+            elif text in "eE":
+                raise Unsupported("scientific notation")
+            elif text.isascii() and text.isalpha():
+                raise Unsupported("letter %s (date, time or keyword)" % text)
+            elif text == "/":
+                raise Unsupported("fraction")
+            elif text == "@":
+                raise Unsupported("text placeholder")
+    if any(k > last_ph for k in commas):
+        raise Unsupported("scaling comma")
+    if decimals > 30:
+        raise Unsupported("more than 30 decimals")
+    if index == 2 and not has_zero and not point:
+        if not literal:
+            raise Unsupported("zero section shows no digit or literal")
+        return decimals, percent, literal
+    if not has_zero:
+        raise Unsupported("no 0 placeholder")
+    return decimals, percent, None
+
+
+def parse_format(code):
+    sections = split_sections(code)
+    if len(sections) > 4:
+        raise Unsupported("more than four sections")
+    return [read_section(sections[i], i) for i in range(min(len(sections), 3))], len(sections)
+
+
+CTX = Context(prec=1000, Emax=10 ** 6, Emin=-10 ** 6)
+
+
+def displayed(raw, code):
+    """(kind, text): kind is shown, token or refused."""
+    if code.startswith("bad style index "):
+        return "refused", "REFUSED:bad_style_index"
+    if code.startswith("unknown numFmtId "):
+        return "refused", "REFUSED:unknown_format_id"
+    try:
+        v = Decimal(raw)
+    except InvalidOperation:
+        return "refused", "REFUSED:bad_stored_text"
+    sign = "-" if v < 0 else ""
+    with localcontext(CTX):
+        try:
+            if code.lower() == "general":
+                if v != v.to_integral_value():
+                    return "refused", "REFUSED:general_non_integer"
+                if abs(v) >= 10 ** 10:
+                    return "refused", "REFUSED:general_too_wide"
+                return "shown", sign + format(abs(v).quantize(Decimal(1)), "f")
+            try:
+                specs, n = parse_format(code)
+            except Unsupported:
+                return "refused", "REFUSED:unsupported_format"
+            idx = 1 if v < 0 and n >= 2 else 2 if v == 0 and n >= 3 else 0
+            d, pct, token = specs[idx]
+            if token is not None:
+                return "token", token
+            negative = idx == 1 or (n == 1 and v < 0)
+            m = abs(v)
+            if pct:
+                m = m.scaleb(2)
+            if m:
+                m = m.quantize(Decimal(1).scaleb(m.adjusted() - 14), rounding=ROUND_HALF_UP)
+            m = m.quantize(Decimal(1).scaleb(-d), rounding=ROUND_HALF_UP)
+            if m.scaleb(d) >= BOUND:
+                return "refused", "REFUSED:out_of_range"
+        except InvalidOperation:
+            return "refused", "REFUSED:out_of_range"
+    return "shown", ("-" if negative else "") + format(m, "f") + ("%" if pct else "")
+
+
+def row_col(ref):
+    m = re.fullmatch(r"([A-Z]+)([0-9]+)", ref or "")
+    if not m:
+        return None
+    col = 0
+    for ch in m.group(1):
+        col = col * 26 + ord(ch) - 64
+    return int(m.group(2)), col
+
+
+def read_displayed(path, cells_out):
+    data = open(path, "rb").read()
+    z = zipfile.ZipFile(path)
+    names = set(z.namelist())
+    wb = ET.fromstring(z.read("xl/workbook.xml"))
+    rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels")).findall(P + "Relationship")
+    target = {r.get("Id"): r.get("Target") for r in rels}
+    styles = styles_of(z, names, rels)
+    name = posixpath.basename(path)
+    kinds = {"shown": 0, "token": 0, "refused": 0}
+    listing = []
+    for sh in wb.find(M + "sheets").findall(M + "sheet"):
+        if sh.get("state", "visible") in ("hidden", "veryHidden"):
+            continue
+        key = part("xl", target[sh.get(R + "id")])
+        if key not in names:
+            continue
+        by_coord = {}
+        for c in ET.fromstring(z.read(key)).iter(M + "c"):
+            t = c.get("t", "")
+            if t in ("e", "s", "str", "inlineStr"):
+                continue
+            v = c.find(M + "v")
+            if v is None:
+                v = c.find(M + "is/" + M + "t")
+            text = (v.text or "").strip() if v is not None else ""
+            if not text:
+                continue
+            try:
+                if not math.isfinite(float(text)):
+                    continue
+            except ValueError:
+                continue
+            rc = row_col(c.get("r"))
+            if rc is None:
+                continue
+            code = code_of(styles, int(c.get("s", "0")))
+            by_coord[rc] = (c.get("r"), text, code, displayed(text, code))
+        for rc in sorted(by_coord):
+            ref, text, code, (kind, shown) = by_coord[rc]
+            kinds[kind] += 1
+            listing.append("%s\t%s\t%s\n" % (sh.get("name"), ref, shown))
+            if cells_out:
+                print(json.dumps({"file": name, "sheet": sh.get("name"), "cell": ref, "raw": text,
+                                  "format": code, "text": shown}, ensure_ascii=False, separators=(",", ":")))
+    return {"file": name, "sha256": hashlib.sha256(data).hexdigest(), **kinds,
+            "displayed_digest": hashlib.sha256("".join(listing).encode("utf-8")).hexdigest()}
+
+
 def read(path):
     data = open(path, "rb").read()
     z = zipfile.ZipFile(path)
@@ -119,7 +344,20 @@ def read(path):
             "formats": dict(sorted(counts.items()))}
 
 
-if __name__ == "__main__":
+def main_displayed(paths, cells_out):
+    total = {"shown": 0, "token": 0, "refused": 0}
+    for p in paths:
+        o = read_displayed(p, cells_out)
+        print(json.dumps(o, ensure_ascii=False, separators=(",", ":")))
+        for k in total:
+            total[k] += o[k]
+    print(json.dumps({"files": len(paths), **total}, separators=(",", ":")))
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["--displayed"]:
+    cells = sys.argv[2:3] == ["--cells"]
+    main_displayed(sys.argv[3:] if cells else sys.argv[2:], cells)
+elif __name__ == "__main__":
     total = {}
     files = 0
     for p in sys.argv[1:]:
