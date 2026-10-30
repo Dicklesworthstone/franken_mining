@@ -22,3 +22,10 @@ jobs:
         run: cargo check --workspace --all-targets --profile ${{ matrix.profile }}
       - name: Run workspace test suite
         run: cargo test --workspace --profile ${{ matrix.profile }}
+      # The source registry is data read at run time (bd-s9j3.1): a vintage is registered by editing
+      # registries/sources/<issuer>.toml, so the release binary must not carry a registry digest.
+      - name: No compiled-in source registry
+        if: matrix.profile == 'release'
+        run: |
+          cargo build -p fmine-cli --release
+          ! LC_ALL=C grep -a -q e2e1243ec0549f4c487c773869876e2acade401a0b6cd1141adf4b9296aec840 target/release/fmine
