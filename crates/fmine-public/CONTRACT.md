@@ -67,8 +67,9 @@ The public lane of M0 (`fmine assure public`).
 ## 3. Authority, Epistemics & Representation
 - Every reported exception cites file, file SHA-256, `sheet!cell`, subject, family and ownership basis
   (`IdentityFamily::basis`).
-- The `LedgerAnchor` state root (BLAKE3 over an `M0AS` v4 frame) binds:
-  - every input's SHA-256, numeric digest and census;
+- The `LedgerAnchor` state root (BLAKE3 over an `M0AS` v5 frame) binds:
+  - every input's SHA-256, numeric digest and census, and (v5, bd-jg43.3) its displayed-value digest with the
+    shown, token and refused counts (`Workbook::displayed_census`);
   - every instance's state as codes, numbers and locators (`encode_state`), never its prose, with a tag before
     each optional part;
   - each instance's operands (role, locator, value);
@@ -167,7 +168,7 @@ The public lane of M0 (`fmine assure public`).
       `range_hi` (`aisc.rate_interval`, rounded outward).
   - **Payload:** every exception record carries `cited`, and an issuer discrepancy's certificate cites printed,
     component sum and residual. The top-level `instances` array holds one `{"at","family","state","cited"}`
-    record per counted instance: 50 synthetic and 2,595 real.
+    record per counted instance: 55 synthetic (column N, bd-jg43.3) and 2,595 real.
   - **Size:** the real payload is about 7.3 MB.
   - **Not yet:**
     - totals and census counts as count citations;
@@ -207,8 +208,14 @@ The public lane of M0 (`fmine assure public`).
   substitutes content. The same code (until BD-328 assigns one) refuses a missing or malformed registry, naming the
   file and line, and a `through` bound that leaves no rows.
 - `FMINE-REF-401` from `cell_to_public_claim` on text or formula-error cells.
+- The ledger scores displayed values (bd-jg43.3, E838): the declared construction sums the numbers as printed,
+  so a numeric cell enters as `fmine-io`'s displayed value under its number format, never as the stored double.
+  A whole displayed number (d = 0) enters as itself and a zero section's token (the dash) as 0. An operand
+  with no whole displayed number is still a printed number, and its instance is refused (`RefusedAt`), naming
+  the cell and the format code, for a General non-integer, a format with decimals or a percentage shown, or a
+  format the interpreter refuses (a date, a scaling comma, a condition, an unknown id).
 - Instance-level refusals (state (v)) carry a reason:
-  - an unrounded stored value;
+  - an operand with no whole displayed number (above);
   - a non-numeric line;
   - one of rate and ounces being zero.
 - Cost of sales per ounce in a column with a non-zero non-controlling-interest line (BD-331.S3) is checked at the
@@ -236,7 +243,9 @@ The public lane of M0 (`fmine assure public`).
   - **Alternative construction:** 1,008 footing and 1,257 rate instances consistent.
   - **Identities:** each (ii) and (iii) instance is identified.
 - `PO-PUB-2` (synthetic): every seeded answer is reproduced, including the sign-flip witness. Perturbing one cell
-  moves the state root and the affected state. A wrong component label leaves the instance in (iv).
+  moves the state root and the affected state. A wrong component label leaves the instance in (iv). Column G's
+  stored 100.4 under `#,##0` is scored as the displayed 100, and column N's General non-integer and date-format
+  ounces are refused by cell and format code (bd-jg43.3).
 - `PO-PUB-3`: a workspace without the files refuses, naming every registered file; the count follows the registry
   rows (a row added to a copy of the TOML changes it with no code edit).
 - `PO-PUB-4` (Mine Stats reader, MOR_CASE E825):

@@ -18,7 +18,9 @@ values in `f64` `Display` form. The format is fixed so an independently written 
 (`GATE-BULL-01` part 1).
 
 `build_minimal_xlsx` writes a minimal valid workbook (stored ZIP, inline strings) so tests and the synthetic lane
-can use a real filing's layout without shipping any issuer's bytes.
+can use a real filing's layout without shipping any issuer's bytes. `build_minimal_xlsx_styled` (bd-jg43.3) adds a
+styles part (`MinimalStyles`: custom formats and `cellXfs`) for `MinimalCell::Styled` cells; with `None` its bytes
+are exactly `build_minimal_xlsx`'s (golden test).
 
 ## 3. Authority, Epistemics & Representation
 Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a `SourceAnchor`
@@ -28,7 +30,8 @@ Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a
 - `IoError`, `HtmlTable`, `extract_html_tables`
 - `zip_inflate::{read_zip_entries, inflate_raw, write_stored_zip}`
 - `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, FormatCount, MinimalCell,
-  MinimalSheet, build_minimal_xlsx, col_index_to_letters, parse_a1_ref}`; `Workbook::format_census`;
+  MinimalSheet, MinimalStyles, build_minimal_xlsx, build_minimal_xlsx_styled, col_index_to_letters,
+  parse_a1_ref}`; `Workbook::format_census`;
   `ExtractedCell::{style, format}` (bd-jg43.1)
 - `styles::{Styles, NumberFormat, BUILTIN_FORMATS, builtin_code, parse_styles, styles_part_name,
   decimal_is_non_integer}` (bd-jg43.1): a cell's `s` resolves through `cellXfs` to a `numFmts` code or an

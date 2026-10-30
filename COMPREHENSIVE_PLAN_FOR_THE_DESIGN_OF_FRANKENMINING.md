@@ -9307,8 +9307,10 @@ push and is tracked as BD-323.
 Still open:
 - item 2 (BD-323);
 - findings 5, 7 and 8;
-- GATE-BULL-01 part 3 (issuer consistency across vintages);
-- reading cell number formats, so that E823's twelve refusals can be scored.
+- GATE-BULL-01 part 3 (issuer consistency across vintages).
+
+Cell number formats are now read and the ledger scores displayed values (bd-jg43.1–.3, MOR_CASE E833, E834 and
+E838). E823's twelve refusals are all (i). The LibreOffice cross-check of the display rules is still to run.
 
 ### K.3 Corrections folded into this plan
 

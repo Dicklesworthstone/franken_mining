@@ -11,7 +11,12 @@
 //!   [1965.174, 2035.176] (undecidable; bounds rounded outward).
 //! - E "Site D": a non-zero non-controlling-interest line, so cost of sales per ounce is refused.
 //! - F "Site E": every used cell zero or a dash (not published).
-//! - G "Site F": a stored value of 100.4 (refused: unrounded).
+//! - G "Site F": stored values 100.4 and 80.4 under `#,##0`, so the ledger takes the displayed 100 and 80
+//!   (bd-jg43.3): TCC 100 − 20 + 0 = 80 and AISC 80 + 2 + 18 = 100 foot, and the rates fit their intervals
+//!   (cost of sales [1970.297, 2030.303] holds 2008, TCC with k = 3 [1554.455, 1646.465] holds 1608, AISC with
+//!   k = 5 [1930.693, 2070.707] holds 2008).
+//! - N "Site G": a General non-integer at N6 and a date format (id 14) at N13, so the TCC footing and all three
+//!   rates are refused by cell and format code; its AISC footing (rows 8 to 11) foots.
 //! - H "Region North": AISC per ounce 2830 closes only with the registered component in the synthetic
 //!   Mine Stats workbook, `Minestats3!B32` = 13 (explained).
 //! - I "Footnote" is skipped; J "Mystery Mine" is not a registered subject.
@@ -29,7 +34,9 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use fmine_core::hash::sha256;
-use fmine_io::xlsx::{MinimalCell, MinimalSheet, build_minimal_xlsx};
+use fmine_io::xlsx::{
+    MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx, build_minimal_xlsx_styled,
+};
 
 use crate::aisc::{ExplanationBasis, IdentityFamily};
 use crate::sources::{
@@ -155,6 +162,25 @@ fn t(r: &str, s: &str) -> (String, MinimalCell) {
     (r.to_string(), MinimalCell::Text(s.to_string()))
 }
 
+/// The cell styles of the synthetic AISC workbook: 0 General, 1 `#,##0` (built-in 3), 2 `m/d/yyyy` (built-in 14).
+#[must_use]
+pub fn synthetic_aisc_styles() -> MinimalStyles {
+    MinimalStyles {
+        num_fmts: Vec::new(),
+        xfs: vec![0, 3, 14],
+    }
+}
+
+fn styled(r: &str, raw: &str, xf: u32) -> (String, MinimalCell) {
+    (
+        r.to_string(),
+        MinimalCell::Styled {
+            raw: raw.to_string(),
+            xf,
+        },
+    )
+}
+
 /// Cells of the synthetic AISC table sheet.
 #[must_use]
 pub fn synthetic_aisc_cells() -> Vec<(String, MinimalCell)> {
@@ -194,13 +220,14 @@ pub fn synthetic_aisc_cells() -> Vec<(String, MinimalCell)> {
         ("K", "Site H"),
         ("L", "Site I"),
         ("M", "Site J"),
+        ("N", "Site G"),
     ];
     for (col, h) in headers {
         cells.push(t(&format!("{col}2"), h));
     }
     // Rows 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16.
     let rows = [5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16];
-    let columns: [(&str, [f64; 11]); 9] = [
+    let columns: [(&str, [f64; 11]); 8] = [
         (
             "B",
             [
@@ -223,12 +250,6 @@ pub fn synthetic_aisc_cells() -> Vec<(String, MinimalCell)> {
             "E",
             [
                 1000.0, -200.0, -160.0, 640.0, 10.0, 150.0, 800.0, 400.0, 2500.0, 1600.0, 2000.0,
-            ],
-        ),
-        (
-            "G",
-            [
-                100.4, -20.0, 0.0, 80.4, 2.0, 18.0, 100.4, 50.0, 2008.0, 1608.0, 2008.0,
             ],
         ),
         (
@@ -259,6 +280,46 @@ pub fn synthetic_aisc_cells() -> Vec<(String, MinimalCell)> {
     for (col, values) in columns {
         for (row, v) in rows.iter().zip(values) {
             cells.push(n(&format!("{col}{row}"), v));
+        }
+    }
+    // Stored text and cell style (`synthetic_aisc_styles`) of the two formatted columns.
+    let formatted: [(&str, [(&str, u32); 11]); 2] = [
+        (
+            "G",
+            [
+                ("100.4", 1),
+                ("-20", 1),
+                ("0", 1),
+                ("80.4", 1),
+                ("2", 1),
+                ("18", 1),
+                ("100.4", 1),
+                ("50", 1),
+                ("2008", 1),
+                ("1608", 1),
+                ("2008", 1),
+            ],
+        ),
+        (
+            "N",
+            [
+                ("300", 0),
+                ("-50.5", 0),
+                ("0", 0),
+                ("250", 0),
+                ("10", 0),
+                ("40", 0),
+                ("300", 0),
+                ("45000", 2),
+                ("2000", 0),
+                ("1667", 0),
+                ("2000", 0),
+            ],
+        ),
+    ];
+    for (col, values) in formatted {
+        for (row, (raw, xf)) in rows.iter().zip(values) {
+            cells.push(styled(&format!("{col}{row}"), raw, xf));
         }
     }
     for row in rows {
@@ -340,23 +401,26 @@ pub fn synthetic_workbooks(
         cells.retain(|(existing, _)| existing != r);
         cells.push((r.clone(), c.clone()));
     }
-    let aisc = build_minimal_xlsx(&[
-        MinimalSheet {
-            name: SYNTHETIC_TABLE_SHEET.to_string(),
-            hidden: false,
-            cells,
-        },
-        MinimalSheet {
-            name: "Scratch".to_string(),
-            hidden: true,
-            cells: vec![n("A1", 1.0)],
-        },
-        MinimalSheet {
-            name: SYNTHETIC_HIDDEN_SHEET.to_string(),
-            hidden: true,
-            cells: synthetic_hidden_cells(),
-        },
-    ]);
+    let aisc = build_minimal_xlsx_styled(
+        &[
+            MinimalSheet {
+                name: SYNTHETIC_TABLE_SHEET.to_string(),
+                hidden: false,
+                cells,
+            },
+            MinimalSheet {
+                name: "Scratch".to_string(),
+                hidden: true,
+                cells: vec![n("A1", 1.0)],
+            },
+            MinimalSheet {
+                name: SYNTHETIC_HIDDEN_SHEET.to_string(),
+                hidden: true,
+                cells: synthetic_hidden_cells(),
+            },
+        ],
+        Some(&synthetic_aisc_styles()),
+    );
     let stats = synthetic_stats_workbook("Site H (75%)1");
     vec![
         (SYNTHETIC_STATS_FILE, SourceKind::MineStats, "2030Q1", stats),

@@ -1344,7 +1344,8 @@ mod tests {
             .collect();
         skipped.sort();
         skipped.dedup();
-        let mut want: Vec<String> = ["G8", "G11", "G14", "G15", "G16", "E14"]
+        // Column N's N6 (General non-integer) and N13 (a date) have no whole displayed value (bd-jg43.3).
+        let mut want: Vec<String> = ["N8", "N11", "N14", "N15", "N16", "E14"]
             .iter()
             .map(|c| aisc(c))
             .collect();
@@ -1365,11 +1366,11 @@ mod tests {
                 ("label_check", None),
             ]
         );
-        // 50 instances; all but Site F's five have a checked leaf.
+        // 55 instances, each with a leaf record; column N's four refusals have only skipped leaves (bd-jg43.3).
         let instances: Vec<&str> = checks.iter().map(|c| c.instance.as_str()).collect();
         let mut distinct = instances.clone();
         distinct.dedup();
-        assert_eq!(distinct.len(), 50);
+        assert_eq!(distinct.len(), 55);
         assert!(checks.iter().filter(|c| c.pass()).count() > 250);
     }
 

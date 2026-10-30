@@ -18,7 +18,8 @@
 
 use std::collections::BTreeMap;
 
-use fmine_io::xlsx::{CellValue, Sheet, col_index_to_letters, parse_a1_ref};
+use fmine_io::numfmt;
+use fmine_io::xlsx::{CellValue, ExtractedCell, Sheet, col_index_to_letters, parse_a1_ref};
 use fmine_numerics::exact_feas::{self as xf, Rat};
 
 /// The five identity families of one subject column.
@@ -138,13 +139,17 @@ pub enum RefusedReason {
     NumeratorLineNotNumeric,
     NumeratorPlaceholder,
     LineNotNumeric,
-    Unrounded,
+    /// An operand's number has no displayed value the declared construction can use (bd-jg43.3): see
+    /// [`Undisplayable`].
+    GeneralNonInteger,
+    UnsupportedFormat,
+    DecimalsShown,
     /// The exact kernel made no claim (BD-331.S6): a cap, an overflow, a refused posing or a checker rejection.
     KernelIndeterminate,
 }
 
 impl RefusedReason {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 14] = [
         Self::FootnoteNotFound,
         Self::RegionalNumerator,
         Self::NoRegisteredShare,
@@ -155,7 +160,9 @@ impl RefusedReason {
         Self::NumeratorLineNotNumeric,
         Self::NumeratorPlaceholder,
         Self::LineNotNumeric,
-        Self::Unrounded,
+        Self::GeneralNonInteger,
+        Self::UnsupportedFormat,
+        Self::DecimalsShown,
         Self::KernelIndeterminate,
     ];
 
@@ -172,7 +179,9 @@ impl RefusedReason {
             Self::NumeratorLineNotNumeric => "numerator_line_not_numeric",
             Self::NumeratorPlaceholder => "numerator_total_placeholder",
             Self::LineNotNumeric => "line_not_numeric",
-            Self::Unrounded => "unrounded_stored_value",
+            Self::GeneralNonInteger => "general_format_non_integer",
+            Self::UnsupportedFormat => "unsupported_number_format",
+            Self::DecimalsShown => "displayed_decimals_not_supported",
             Self::KernelIndeterminate => "exact_kernel_indeterminate",
         }
     }
@@ -192,7 +201,11 @@ impl RefusedReason {
             Self::NumeratorLineNotNumeric => "numerator line not numeric",
             Self::NumeratorPlaceholder => "numerator total is a placeholder",
             Self::LineNotNumeric => "line not numeric",
-            Self::Unrounded => "unrounded stored value; needs cell number format",
+            Self::GeneralNonInteger => "general format with non-integer stored value",
+            Self::UnsupportedFormat => "unsupported number format",
+            Self::DecimalsShown => {
+                "decimals displayed; the declared construction sums whole displayed numbers"
+            }
             Self::KernelIndeterminate => "the exact kernel made no claim",
         }
     }
@@ -763,7 +776,7 @@ pub enum OperandValue {
     /// A placeholder, text or formula error, as stored.
     Token(String),
     Blank,
-    /// A number that is not a whole number, in `f64` display form.
+    /// A number with no whole displayed value under its format (bd-jg43.3), as its stored text.
     Unrounded(String),
 }
 
@@ -780,13 +793,18 @@ pub struct Operand {
 /// The operand at `(row, col)` of `sheet` in `file`.
 #[must_use]
 pub fn operand_at(file: &str, sheet: &Sheet, row: u32, col: u32, role: OperandRole) -> Operand {
-    let value = match sheet.cell(row, col).map(|c| &c.value) {
+    let value = match sheet.cell(row, col) {
         None => OperandValue::Blank,
-        Some(CellValue::Number(x)) => as_int(Val::Num(*x))
-            .map_or_else(|| OperandValue::Unrounded(x.to_string()), OperandValue::Int),
-        Some(CellValue::Placeholder(t) | CellValue::Text(t) | CellValue::FormulaError(t)) => {
-            OperandValue::Token(t.clone())
-        }
+        Some(c) => match &c.value {
+            // The displayed whole number is what the table prints and what the identity sums.
+            CellValue::Number(x) => as_int(number_val(c)).map_or_else(
+                || OperandValue::Unrounded(c.number_text.clone().unwrap_or_else(|| x.to_string())),
+                OperandValue::Int,
+            ),
+            CellValue::Placeholder(t) | CellValue::Text(t) | CellValue::FormulaError(t) => {
+                OperandValue::Token(t.clone())
+            }
+        },
     };
     Operand {
         role,
@@ -858,7 +876,7 @@ fn family_operands(
             let nci = t
                 .nci_rows
                 .iter()
-                .any(|&r| matches!(val(sheet, r, col), Val::Num(x) if x != 0.0));
+                .any(|&r| non_zero_number(val(sheet, r, col)));
             if let Some((r, c)) = footnote.filter(|_| nci).and_then(parse_a1_ref) {
                 out.push(operand_at(file, sheet, r, c, R::LabelCheck));
             }
@@ -1076,22 +1094,106 @@ pub fn locate_table<S: AsRef<str>>(
     }))
 }
 
+/// Why a numeric cell has no displayed whole number for the declared construction (bd-jg43.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Undisplayable {
+    /// General (no format) with a non-integer stored value: what it displays depends on the column width.
+    GeneralNonInteger,
+    /// A format the interpreter refuses (date, scientific, conditional, an unknown id, …) or a bad stored text.
+    UnsupportedFormat,
+    /// The format shows decimals or a percentage: not a whole displayed number.
+    DecimalsShown,
+}
+
+impl Undisplayable {
+    const fn reason(self) -> RefusedReason {
+        match self {
+            Self::GeneralNonInteger => RefusedReason::GeneralNonInteger,
+            Self::UnsupportedFormat => RefusedReason::UnsupportedFormat,
+            Self::DecimalsShown => RefusedReason::DecimalsShown,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Val {
     Blank,
     Place,
+    /// A number as displayed under its cell's format: always a whole number below 2^53.
     Num(f64),
+    /// A number is printed, but not as a whole displayed number; never scored.
+    Undisplayable(Undisplayable),
     /// Text or a formula error: present but not a number.
     Other,
 }
 
-fn val(sheet: &Sheet, row: u32, col: u32) -> Val {
-    match sheet.cell(row, col).map(|c| &c.value) {
-        None => Val::Blank,
-        Some(CellValue::Placeholder(_)) => Val::Place,
-        Some(CellValue::Number(v)) => Val::Num(*v),
-        Some(CellValue::Text(_) | CellValue::FormulaError(_)) => Val::Other,
+/// The table's construction sums the numbers as printed (E815), so a numeric cell enters as its displayed value
+/// (bd-jg43.2's interpreter over the stored decimal text), never as the stored double: a stored -37.899643
+/// under `#,##0` enters as -38 (E823).
+fn number_val(cell: &ExtractedCell) -> Val {
+    const LIMIT: u128 = 1 << 53;
+    match cell.displayed() {
+        // A zero section's token (the dash under `"-"`) stands for 0; BD-332 keeps the token itself (E497).
+        Some(Ok(d)) if d.token.is_some() => Val::Num(0.0),
+        Some(Ok(d)) if d.d == 0 && !d.percent && d.scaled.unsigned_abs() < LIMIT => {
+            Val::Num(d.scaled as f64)
+        }
+        Some(Ok(d)) if d.d > 0 || d.percent => Val::Undisplayable(Undisplayable::DecimalsShown),
+        Some(Err(r)) if r.code == numfmt::GENERAL_NON_INTEGER => {
+            Val::Undisplayable(Undisplayable::GeneralNonInteger)
+        }
+        _ => Val::Undisplayable(Undisplayable::UnsupportedFormat),
     }
+}
+
+fn val(sheet: &Sheet, row: u32, col: u32) -> Val {
+    match sheet.cell(row, col) {
+        None => Val::Blank,
+        Some(c) => match &c.value {
+            CellValue::Placeholder(_) => Val::Place,
+            CellValue::Number(_) => number_val(c),
+            CellValue::Text(_) | CellValue::FormulaError(_) => Val::Other,
+        },
+    }
+}
+
+/// A number is printed in the cell, whether or not it displays as a whole number.
+const fn printed_number(v: Val) -> bool {
+    matches!(v, Val::Num(_) | Val::Undisplayable(_))
+}
+
+/// A printed number that is not zero, or one whose displayed value is unknown (counted as possibly non-zero).
+fn non_zero_number(v: Val) -> bool {
+    matches!(v, Val::Undisplayable(_)) || matches!(v, Val::Num(x) if x != 0.0)
+}
+
+/// The reason for the first operand with no whole displayed number; `UnsupportedFormat` if none is found.
+fn undisplayable_reason(vals: impl IntoIterator<Item = Val>) -> RefusedReason {
+    vals.into_iter()
+        .find_map(|v| match v {
+            Val::Undisplayable(u) => Some(u.reason()),
+            _ => None,
+        })
+        .unwrap_or(RefusedReason::UnsupportedFormat)
+}
+
+/// (v) for the first of `rows` with no whole displayed number, naming its cell and format code (`at`).
+fn undisplayable_state(
+    rows: &[u32],
+    v: &dyn Fn(u32) -> Val,
+    at: &dyn Fn(u32) -> String,
+) -> IdentityState {
+    rows.iter()
+        .find_map(|&r| match v(r) {
+            Val::Undisplayable(u) => Some(IdentityState::RefusedAt {
+                reason: u.reason(),
+                at: at(r),
+            }),
+            _ => None,
+        })
+        .unwrap_or(IdentityState::Refused {
+            reason: RefusedReason::UnsupportedFormat,
+        })
 }
 
 /// Whole number within the exactly representable range.
@@ -1550,20 +1652,20 @@ fn one_cell_outcome(
         return refused("all-zero column");
     }
     let (vn, vq, vr) = (v(t.cos_row), v(t.ounces_row), v(t.cos_rate_row));
-    if !matches!(vr, Val::Num(_)) {
+    if !printed_number(vr) {
         return refused("rate not published");
     }
-    if !matches!(vq, Val::Num(_)) {
+    if !printed_number(vq) {
         return refused("ounces not numeric");
     }
     if vr == Val::Num(0.0) || vq == Val::Num(0.0) {
         return refused("zero rate or ounces");
     }
-    if !matches!(vn, Val::Num(_)) {
+    if !printed_number(vn) {
         return refused("cost of sales not numeric");
     }
     let (Some(n), Some(q), Some(r)) = (as_int(vn), as_int(vq), as_int(vr)) else {
-        return refused("unrounded stored value");
+        return refused(undisplayable_reason([vn, vq, vr]).why());
     };
     if n < 1 || q < 1 || r < 1 {
         return refused("non-positive operand");
@@ -1572,10 +1674,7 @@ fn one_cell_outcome(
     let (Ok(at_full), Ok(at_share)) = (at((1, 1)), site_share.map(at).transpose()) else {
         return refused("exact kernel made no claim");
     };
-    let nci = t
-        .nci_rows
-        .iter()
-        .any(|&row| matches!(v(row), Val::Num(x) if x != 0.0));
+    let nci = t.nci_rows.iter().any(|&row| non_zero_number(v(row)));
     let unbased = |reason: &'static str| OneCellOutcome::Refused {
         reason,
         at_full: Some(at_full),
@@ -1763,6 +1862,14 @@ fn column_ledger(
 ) {
     let v = |row: u32| val(sheet, row, col);
     let cell_ref = |row: u32| format!("{}{row}", col_index_to_letters(col));
+    // A refused operand by cell and format code, e.g. `N13 (m/d/yyyy)` (bd-jg43.3).
+    let format_at = |row: u32| {
+        let code = sheet
+            .cell(row, col)
+            .map(|c| c.format.code())
+            .unwrap_or_default();
+        format!("{} ({code})", cell_ref(row))
+    };
     let rate_rows = [
         (IdentityFamily::CosPerOunce, t.cos_rate_row),
         (IdentityFamily::TccPerOunce, t.tcc_rate_row),
@@ -1803,8 +1910,9 @@ fn column_ledger(
         (IdentityFamily::TccFooting, t.tcc_row, &t.block1),
         (IdentityFamily::AiscFooting, t.aisc_row, &tcc_and_block2),
     ] {
-        let (state, calc) =
-            footing_state(&v, &cell_ref, total, lines, family, &t.block1, &all_lines);
+        let (state, calc) = footing_state(
+            &v, &cell_ref, &format_at, total, lines, family, &t.block1, &all_lines,
+        );
         push(family, total, state, calc);
     }
 
@@ -1819,11 +1927,11 @@ fn column_ledger(
         };
         let mut calc = Calc::None;
         let refused = |reason| IdentityState::Refused { reason };
-        let state = if !matches!(rv, Val::Num(_)) {
+        let state = if !printed_number(rv) {
             IdentityState::NotPublished {
                 reason: NotPublishedReason::RateNotPublished,
             }
-        } else if !matches!(q, Val::Num(_)) {
+        } else if !printed_number(q) {
             refused(RefusedReason::OuncesNotNumeric)
         } else if rv == Val::Num(0.0) && q == Val::Num(0.0) {
             IdentityState::NotPublished {
@@ -1837,14 +1945,11 @@ fn column_ledger(
             if cells.iter().any(|&r| non_numeric(v(r))) {
                 refused(RefusedReason::NumeratorLineNotNumeric)
             } else if !cells.iter().all(|&r| int_or_place(v(r))) {
-                refused(RefusedReason::Unrounded)
+                undisplayable_state(&cells, &v, &format_at)
             } else if as_int(v(numerator_row)).is_none() {
                 refused(RefusedReason::NumeratorPlaceholder)
             } else {
-                let k = lines
-                    .iter()
-                    .filter(|&&r| matches!(v(r), Val::Num(_)))
-                    .count() as i64;
+                let k = lines.iter().filter(|&&r| printed_number(v(r))).count() as i64;
                 let miss = RateMiss {
                     n: line_value(v(numerator_row)),
                     k,
@@ -1852,10 +1957,7 @@ fn column_ledger(
                     r: line_value(rv),
                 };
                 calc = Calc::Rate(miss);
-                let nci = t
-                    .nci_rows
-                    .iter()
-                    .any(|&r| matches!(v(r), Val::Num(x) if x != 0.0));
+                let nci = t.nci_rows.iter().any(|&r| non_zero_number(v(r)));
                 let at = |k| rate_holds(miss.n, k, miss.q, miss.r, (1, 1));
                 if family == IdentityFamily::CosPerOunce && nci {
                     stated_share_state(&sheet.name, stated.footnote, stated.share, miss)
@@ -1881,16 +1983,18 @@ fn column_ledger(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn footing_state(
     v: &dyn Fn(u32) -> Val,
     cell_ref: &dyn Fn(u32) -> String,
+    format_at: &dyn Fn(u32) -> String,
     total: u32,
     lines: &[u32],
     family: IdentityFamily,
     block1: &[u32],
     all_lines: &[u32],
 ) -> (IdentityState, Calc) {
-    if !matches!(v(total), Val::Num(_)) {
+    if !printed_number(v(total)) {
         let state = IdentityState::NotPublished {
             reason: NotPublishedReason::TotalNotPublished,
         };
@@ -1902,11 +2006,9 @@ fn footing_state(
         };
         return (state, Calc::None);
     }
-    if !lines.iter().chain([&total]).all(|&r| int_or_place(v(r))) {
-        let state = IdentityState::Refused {
-            reason: RefusedReason::Unrounded,
-        };
-        return (state, Calc::None);
+    let operands: Vec<u32> = lines.iter().chain([&total]).copied().collect();
+    if !operands.iter().all(|&r| int_or_place(v(r))) {
+        return (undisplayable_state(&operands, v, format_at), Calc::None);
     }
     let sum: i64 = lines.iter().map(|&r| line_value(v(r))).sum();
     let printed = line_value(v(total));
@@ -1915,10 +2017,7 @@ fn footing_state(
     } else {
         all_lines
     };
-    let k_alt = alt_lines
-        .iter()
-        .filter(|&&r| matches!(v(r), Val::Num(_)))
-        .count() as i64;
+    let k_alt = alt_lines.iter().filter(|&&r| printed_number(v(r))).count() as i64;
     let calc = Calc::Footing {
         printed,
         component_sum: sum,
@@ -1937,10 +2036,7 @@ fn footing_state(
     if family == IdentityFamily::AiscFooting
         && let Some(tcc) = alt_terms.first_mut()
     {
-        tcc.2 = block1
-            .iter()
-            .filter(|&&r| matches!(v(r), Val::Num(_)))
-            .count() as i64;
+        tcc.2 = block1.iter().filter(|&&r| printed_number(v(r))).count() as i64;
     }
     let total_cell = cell_ref(total);
     let refused = IdentityState::Refused {
@@ -1999,6 +2095,176 @@ fn footing_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Column K of a one-sheet workbook: `(row, stored text, number format id)`, formats listed as `custom`.
+    fn styled_column(cells: &[(u32, &str, u32)], custom: &[(u32, &str)]) -> Sheet {
+        use fmine_io::xlsx::{
+            MinimalCell, MinimalSheet, MinimalStyles, Workbook, build_minimal_xlsx_styled,
+        };
+        let mut xfs: Vec<u32> = Vec::new();
+        let cells = cells
+            .iter()
+            .map(|&(row, raw, fmt)| {
+                let xf = xfs.iter().position(|&f| f == fmt).unwrap_or_else(|| {
+                    xfs.push(fmt);
+                    xfs.len() - 1
+                });
+                let raw = raw.to_string();
+                (
+                    format!("K{row}"),
+                    MinimalCell::Styled { raw, xf: xf as u32 },
+                )
+            })
+            .collect();
+        let styles = MinimalStyles {
+            num_fmts: custom.iter().map(|&(id, c)| (id, c.to_string())).collect(),
+            xfs,
+        };
+        let bytes = build_minimal_xlsx_styled(
+            &[MinimalSheet {
+                name: "S".to_string(),
+                hidden: false,
+                cells,
+            }],
+            Some(&styles),
+        );
+        let wb = Workbook::from_bytes("t.xlsx", &bytes).expect("parses");
+        wb.sheet("S").expect("sheet").clone()
+    }
+
+    /// TCC footing of column K (11) over lines 5–8 and the total at row 10, read through `val`.
+    fn k_footing(sheet: &Sheet) -> (IdentityState, Calc) {
+        let v = |r: u32| val(sheet, r, 11);
+        let cell_ref = |r: u32| format!("K{r}");
+        let format_at = |r: u32| {
+            let code = sheet
+                .cell(r, 11)
+                .map(|c| c.format.code())
+                .unwrap_or_default();
+            format!("K{r} ({code})")
+        };
+        let lines = [5, 6, 7, 8];
+        let family = IdentityFamily::TccFooting;
+        footing_state(
+            &v, &cell_ref, &format_at, 10, &lines, family, &lines, &lines,
+        )
+    }
+
+    /// E823's quoted values under `#,##0` (id 3): 241 − 38 − 37.899643 − 33 = 132.100357 stored.
+    fn e823_column() -> Sheet {
+        styled_column(
+            &[
+                (5, "241", 3),
+                (6, "-38", 3),
+                (7, "-37.899643", 3),
+                (8, "-33", 3),
+                (10, "132.100357", 3),
+            ],
+            &[],
+        )
+    }
+
+    /// bd-jg43.3: on displayed values E823's footing closes in integers, 241 − 38 − 38 − 33 = 132 against a
+    /// printed 132, so it is (i) where the stored values were refused.
+    #[test]
+    fn test_e823_tcc_footing_fixture_scores_on_displayed() {
+        let (state, calc) = k_footing(&e823_column());
+        assert_eq!(
+            state,
+            IdentityState::Consistent {
+                alternate_consistent: true,
+                basis: None
+            }
+        );
+        assert_eq!(
+            calc,
+            Calc::Footing {
+                printed: 132,
+                component_sum: 132,
+                k_alt: 4
+            }
+        );
+    }
+
+    /// The E823 fixture tells the displayed reading from two wrong ones: the stored doubles (the ledger before
+    /// bd-jg43.3) refuse it, and truncating instead of rounding (−37.899643 → −37) makes it a discrepancy.
+    #[test]
+    fn test_mutation_ledger_on_stored_value_fails_e823_fixture() {
+        let sheet = e823_column();
+        let stored = |r: u32| match sheet.cell(r, 11).map(|c| &c.value) {
+            Some(CellValue::Number(x)) => Val::Num(*x),
+            _ => Val::Blank,
+        };
+        let truncated = |r: u32| match sheet.cell(r, 11).map(|c| &c.value) {
+            Some(CellValue::Number(x)) => Val::Num(x.trunc()),
+            _ => Val::Blank,
+        };
+        let cell_ref = |r: u32| format!("K{r}");
+        let lines = [5, 6, 7, 8];
+        let family = IdentityFamily::TccFooting;
+        let run = |v: &dyn Fn(u32) -> Val| {
+            footing_state(v, &cell_ref, &cell_ref, 10, &lines, family, &lines, &lines).0
+        };
+        assert_eq!(run(&stored).code(), "v");
+        assert_eq!(run(&truncated).code(), "iii");
+        assert_eq!(k_footing(&sheet).0.code(), "i");
+    }
+
+    /// A zero line shown as the zero section's dash is the number 0 (BD-332 keeps the token itself): the footing
+    /// sums it as 0 and counts it as a printed line.
+    #[test]
+    fn test_zero_token_counts_as_zero_in_footing() {
+        let sheet = styled_column(
+            &[
+                (5, "300", 164),
+                (6, "-50", 164),
+                (7, "0", 164),
+                (8, "-20", 164),
+                (10, "230", 164),
+            ],
+            &[(164, "#,##0;(#,##0);\"-\"")],
+        );
+        assert_eq!(val(&sheet, 7, 11), Val::Num(0.0));
+        let (state, calc) = k_footing(&sheet);
+        assert_eq!(state.code(), "i");
+        assert_eq!(
+            calc,
+            Calc::Footing {
+                printed: 230,
+                component_sum: 230,
+                k_alt: 4
+            }
+        );
+    }
+
+    /// A line shown with a decimal (`#,##0.0`) is not a whole displayed number: the footing is refused, naming
+    /// the cell and its format code.
+    #[test]
+    fn test_d_gt_0_operand_refused_with_reason() {
+        let sheet = styled_column(
+            &[
+                (5, "300", 3),
+                (6, "-50.4", 164),
+                (7, "0", 3),
+                (8, "-20", 3),
+                (10, "230", 3),
+            ],
+            &[(164, "#,##0.0")],
+        );
+        let (state, calc) = k_footing(&sheet);
+        assert_eq!(
+            state,
+            IdentityState::RefusedAt {
+                reason: RefusedReason::DecimalsShown,
+                at: "K6 (#,##0.0)".to_string(),
+            }
+        );
+        assert_eq!(
+            state.detail(),
+            "decimals displayed; the declared construction sums whole displayed numbers: K6 (#,##0.0)"
+        );
+        assert_eq!(calc, Calc::None);
+    }
 
     /// [`rate_holds`] at a share, decided.
     fn holds_at(n: i64, k: i64, q: i64, r: i64, share: (i64, i64)) -> bool {
@@ -2251,15 +2517,17 @@ mod tests {
     }
 
     /// BD-331.S6: the port changed no state. At cd423b9 the two kernels ran side by side on all 55 synthetic
-    /// instances with no difference; the corner kernel is gone, and this root, its root at 9aab4a6
-    /// (`fmine assure public --synthetic`), pins the result.
+    /// instances with no difference; the corner kernel is gone, and its root at 9aab4a6
+    /// (`fmine assure public --synthetic`), b50f7779…, pinned the result. bd-jg43.3 then changed the inputs on
+    /// purpose (column G styled, column N added, frame v5), so this is now a regression pin of that commit's
+    /// output: the five moved and five new states are pinned one by one by the synthetic tests in `lib.rs`.
     #[test]
     fn test_port_keeps_synthetic_root() {
         let run = crate::run_synthetic_assurance(&[]).expect("synthetic run");
-        assert_eq!(run.instances.len() + run.hidden_scope.instances.len(), 55);
+        assert_eq!(run.instances.len() + run.hidden_scope.instances.len(), 60);
         assert_eq!(
             run.ledger_anchor.state_root.to_hex(),
-            "b50f77791da2521dec709b02577305cbb51f42973514195443a59323c8d96ab3"
+            "54f1201b0996d6c9cca01a9e6d0a80f0b2965d44ccd1e7affae2dbcad59f2dda"
         );
     }
 
@@ -2332,7 +2600,10 @@ mod tests {
         let (block1, block2) = ([1, 2], [4, 5]);
         let all: Vec<u32> = block1.iter().chain(&block2).copied().collect();
         let footing = |total, lines: &[u32], family| {
-            footing_state(&v, &cell_ref, total, lines, family, &block1, &all).0
+            footing_state(
+                &v, &cell_ref, &cell_ref, total, lines, family, &block1, &all,
+            )
+            .0
         };
         // TCC: residual 1 within (1 + 2)/2.
         let IdentityState::IssuerDiscrepancy(tcc) = footing(3, &block1, IdentityFamily::TccFooting)
@@ -2476,6 +2747,7 @@ mod tests {
         let (state, calc) = footing_state(
             &v,
             &cell_ref,
+            &cell_ref,
             6,
             &block1,
             IdentityFamily::TccFooting,
@@ -2508,6 +2780,7 @@ mod tests {
         let block1 = [1, 2, 3, 4, 5];
         let (state, calc) = footing_state(
             &v,
+            &cell_ref,
             &cell_ref,
             6,
             &block1,

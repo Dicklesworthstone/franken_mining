@@ -257,8 +257,10 @@ def row_col(ref):
     return int(m.group(2)), col
 
 
-def read_displayed(path, cells_out):
-    data = open(path, "rb").read()
+def read_displayed(path, cells_out, into=None):
+    """The file line; with `into` (a dict), also each numeric cell's (kind, text) by (sheet, cell)."""
+    with open(path, "rb") as fh:
+        data = fh.read()
     z = zipfile.ZipFile(path)
     names = set(z.namelist())
     wb = ET.fromstring(z.read("xl/workbook.xml"))
@@ -298,6 +300,8 @@ def read_displayed(path, cells_out):
         for rc in sorted(by_coord):
             ref, text, code, (kind, shown) = by_coord[rc]
             kinds[kind] += 1
+            if into is not None:
+                into[(sh.get("name"), ref)] = (kind, shown)
             listing.append("%s\t%s\t%s\n" % (sh.get("name"), ref, shown))
             if cells_out:
                 print(json.dumps({"file": name, "sheet": sh.get("name"), "cell": ref, "raw": text,
@@ -307,7 +311,8 @@ def read_displayed(path, cells_out):
 
 
 def read(path):
-    data = open(path, "rb").read()
+    with open(path, "rb") as fh:
+        data = fh.read()
     z = zipfile.ZipFile(path)
     names = set(z.namelist())
     wb = ET.fromstring(z.read("xl/workbook.xml"))

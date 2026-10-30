@@ -1216,8 +1216,10 @@ pub fn assess(
 
     // The state root binds every input digest, every census and every instance's state, so changing any
     // input cell changes the root. Version 3 adds the hidden-scope section (BD-331.S2). Version 4 binds each
-    // state as reason codes and fields, never its prose, and each instance's operands (bd-sjrh.1).
-    let mut enc = Encoder::new_frame(*b"M0AS", 4);
+    // state as reason codes and fields, never its prose, and each instance's operands (bd-sjrh.1). Version 5
+    // binds each file's displayed values, which the ledger now scores (bd-jg43.3): their digest and the shown,
+    // token and refused counts.
+    let mut enc = Encoder::new_frame(*b"M0AS", 5);
     enc.put_str(issuer);
     enc.put_str(lane.as_str());
     enc.put_u64(sources.len() as u64);
@@ -1225,6 +1227,8 @@ pub fn assess(
         enc.put_str(&s.file_name);
         enc.put_fixed(&s.workbook.sha256);
         enc.put_fixed(&s.census.numeric_digest);
+        let displayed = s.workbook.displayed_census();
+        enc.put_fixed(&displayed.digest);
         for n in [
             s.census.visible_sheets,
             s.census.hidden_sheets,
@@ -1232,6 +1236,9 @@ pub fn assess(
             s.census.placeholder_cells,
             s.census.formula_error_cells,
             s.census.text_cells,
+            displayed.shown,
+            displayed.token,
+            displayed.refused,
         ] {
             enc.put_u64(n as u64);
         }
@@ -1561,7 +1568,7 @@ fn load_synthetic(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aisc::{NotPublishedReason, RefusedReason};
+    use crate::aisc::{Calc, NotPublishedReason, RefusedReason};
     use fmine_io::xlsx::MinimalCell;
     use std::path::PathBuf;
 
@@ -1581,17 +1588,115 @@ mod tests {
         }
     }
 
+    fn calc_of(r: &PublicAssuranceReport, cell: &str, family: IdentityFamily) -> Calc {
+        match r
+            .instances
+            .iter()
+            .find(|i| i.cell == cell && i.family == family)
+        {
+            Some(i) => i.calc,
+            None => panic!("no instance at {cell} {family:?}"),
+        }
+    }
+
+    /// Site F (column G) stores 100.4 and 80.4 under `#,##0` (bd-jg43.3): the ledger takes the displayed 100 and
+    /// 80, so both footings foot and the three rates fall in their intervals (worked in `synthetic.rs`'s header).
+    #[test]
+    fn test_synthetic_g_column_scored_on_displayed_values() {
+        let r = run_synthetic_assurance(&[]).expect("synthetic run");
+        let footing = |printed, component_sum, k_alt| Calc::Footing {
+            printed,
+            component_sum,
+            k_alt,
+        };
+        let rate = |n, k, q, r| Calc::Rate(RateMiss { n, k, q, r });
+        for (cell, family, calc) in [
+            ("G8", IdentityFamily::TccFooting, footing(80, 80, 3)),
+            ("G11", IdentityFamily::AiscFooting, footing(100, 100, 5)),
+            ("G14", IdentityFamily::CosPerOunce, rate(100, 1, 50, 2008)),
+            ("G15", IdentityFamily::TccPerOunce, rate(80, 3, 50, 1608)),
+            ("G16", IdentityFamily::AiscPerOunce, rate(100, 5, 50, 2008)),
+        ] {
+            assert_eq!(state_of(&r, cell, family).code(), "i", "{cell}");
+            assert_eq!(calc_of(&r, cell, family), calc, "{cell}");
+        }
+        // The operands carry the displayed whole numbers, never the stored 100.4.
+        let g14 = r
+            .instances
+            .iter()
+            .find(|i| i.cell == "G14" && i.family == IdentityFamily::CosPerOunce)
+            .expect("G14");
+        assert!(
+            g14.operands
+                .iter()
+                .any(|o| o.cell == "G5" && o.value == aisc::OperandValue::Int(100))
+        );
+    }
+
+    /// Site G (column N) holds a General non-integer at N6: the TCC footing is refused naming the cell and the
+    /// format code, while the AISC footing, which does not read N6, foots.
+    #[test]
+    fn test_synthetic_site_g_general_non_integer_refused() {
+        let r = run_synthetic_assurance(&[]).expect("synthetic run");
+        let n8 = state_of(&r, "N8", IdentityFamily::TccFooting);
+        assert_eq!(
+            n8,
+            &IdentityState::RefusedAt {
+                reason: RefusedReason::GeneralNonInteger,
+                at: "N6 (General)".to_string(),
+            }
+        );
+        assert_eq!(n8.reason_code(), Some("general_format_non_integer"));
+        assert_eq!(
+            n8.detail(),
+            "general format with non-integer stored value: N6 (General)"
+        );
+        assert_eq!(state_of(&r, "N11", IdentityFamily::AiscFooting).code(), "i");
+        assert_eq!(
+            calc_of(&r, "N11", IdentityFamily::AiscFooting),
+            Calc::Footing {
+                printed: 300,
+                component_sum: 300,
+                k_alt: 5
+            }
+        );
+    }
+
+    /// Site G's ounces (N13) are under a date format: all three rates are refused naming that cell and its code.
+    #[test]
+    fn test_synthetic_site_g_date_format_refused() {
+        let r = run_synthetic_assurance(&[]).expect("synthetic run");
+        for (cell, family) in [
+            ("N14", IdentityFamily::CosPerOunce),
+            ("N15", IdentityFamily::TccPerOunce),
+            ("N16", IdentityFamily::AiscPerOunce),
+        ] {
+            let s = state_of(&r, cell, family);
+            assert_eq!(
+                s,
+                &IdentityState::RefusedAt {
+                    reason: RefusedReason::UnsupportedFormat,
+                    at: "N13 (mm-dd-yy)".to_string(),
+                },
+                "{cell}"
+            );
+            assert_eq!(s.reason_code(), Some("unsupported_number_format"));
+            assert_eq!(calc_of(&r, cell, family), Calc::None);
+        }
+    }
+
     #[test]
     fn synthetic_lane_reproduces_every_seeded_answer() {
         let r = run_synthetic_assurance(&[]).expect("synthetic run");
         assert_eq!(r.lane, Lane::Synthetic);
         assert!(!r.gate_eligible());
         assert_eq!(r.ledger_anchor.cell_id, "CELL-SYNTHETIC");
-        assert_eq!((r.aisc_tables, r.instances.len()), (1, 50));
+        assert_eq!((r.aisc_tables, r.instances.len()), (1, 55));
         let totals: Vec<usize> = STATE_CODES.iter().map(|c| r.count_state(c)).collect();
         // Columns K and L (BD-331.S3) add nine (i) and one (iv) to the 35 instances of columns B–H; column M
-        // (BD-331.S2) adds four (i) and one stated (ii).
-        assert_eq!(totals, vec![34, 2, 1, 2, 6, 5]);
+        // (BD-331.S2) adds four (i) and one stated (ii). On displayed values (bd-jg43.3) G's five (v) are (i), and
+        // column N "Site G" adds four (v) and one (i).
+        assert_eq!(totals, vec![40, 2, 1, 2, 5, 5]);
 
         match state_of(&r, "C8", IdentityFamily::TccFooting) {
             IdentityState::IssuerDiscrepancy(c) => {
@@ -1686,20 +1791,7 @@ mod tests {
             }
             other => panic!("L14: {other:?}"),
         }
-        for (cell, family) in [
-            ("G8", IdentityFamily::TccFooting),
-            ("G11", IdentityFamily::AiscFooting),
-            ("G14", IdentityFamily::CosPerOunce),
-            ("G15", IdentityFamily::TccPerOunce),
-            ("G16", IdentityFamily::AiscPerOunce),
-        ] {
-            assert_eq!(
-                state_of(&r, cell, family),
-                &IdentityState::Refused {
-                    reason: RefusedReason::Unrounded
-                }
-            );
-        }
+        // Columns G and N: test_synthetic_g_column_scored_on_displayed_values and the two Site G tests.
         assert!(
             r.instances
                 .iter()
@@ -1755,8 +1847,9 @@ mod tests {
         ));
         assert!(json.contains("\"sign_flip_witness\":\"C6\""));
         assert!(
-            // Site J (BD-331.S2) adds four (i) and one stated (ii); the hidden table is not counted.
-            json.contains("\"totals\":{\"i\":34,\"ii\":2,\"iii\":1,\"iv\":2,\"v\":6,\"np\":5}")
+            // Site J (BD-331.S2) adds four (i) and one stated (ii); the hidden table is not counted. Columns G and
+            // N on displayed values (bd-jg43.3): five (v) become (i), and N adds one (i) and four (v).
+            json.contains("\"totals\":{\"i\":40,\"ii\":2,\"iii\":1,\"iv\":2,\"v\":5,\"np\":5}")
         );
         assert!(json.contains(
             "\"hidden_scope\":{\"scope\":\"sheet not displayed to readers\",\"counted\":false,\
@@ -2026,7 +2119,8 @@ mod tests {
             .iter()
             .map(|c| (c.column.as_str(), c.state()))
             .collect();
-        // B–H and K–M are registered subjects; I ("Footnote") and J ("Mystery Mine") are not.
+        // B–H and K–N are registered subjects; I ("Footnote") and J ("Mystery Mine") are not. G passes on its
+        // displayed values (bd-jg43.3); N's ounces are under a date format.
         assert_eq!(
             states,
             [
@@ -2035,18 +2129,19 @@ mod tests {
                 ("D", "pass"),
                 ("E", "refused"),
                 ("F", "refused"),
-                ("G", "refused"),
+                ("G", "pass"),
                 ("H", "pass"),
                 ("K", "pass"),
                 ("L", "fail"),
                 ("M", "pass"),
+                ("N", "refused"),
             ]
         );
         // Site D's operands are valid, so its 100% check is still reported: 1000·1000/400 = 2500, printed 2500.
         for (column, reason, at_full) in [
             ("E", "no registered share", Some(true)),
             ("F", "all-zero column", None),
-            ("G", "unrounded stored value", None),
+            ("N", "unsupported number format", None),
         ] {
             assert_eq!(
                 one_cell(&r, column).outcome,
@@ -2100,7 +2195,7 @@ mod tests {
         let json = r.to_json();
         assert!(
             json.contains(
-                "\"columns\":10,\"pass\":6,\"fail\":1,\"refused\":3,\"failing\":[{\"file\":\"Synthetic_AISC.xlsx\",\
+                "\"columns\":11,\"pass\":7,\"fail\":1,\"refused\":3,\"failing\":[{\"file\":\"Synthetic_AISC.xlsx\",\
                  \"sheet\":\"Q1 2030\",\"column\":\"L\",\"subject\":\"Site I\",\"basis\":\"3/4\",\"at_full\":false,\
                  \"at_share\":false,\"implied_oz\":[\"136.162\",\"136.566\"]}]},\"hidden_scope\":"
             ),
@@ -2192,8 +2287,9 @@ mod tests {
             .map(|r| (r.code(), r.why()))
             .chain(NotPublishedReason::ALL.iter().map(|r| (r.code(), r.why())))
             .collect();
-        // 16 since BD-331.S6 added `exact_kernel_indeterminate`.
-        assert_eq!(pairs.len(), 16);
+        // 16 since BD-331.S6 added `exact_kernel_indeterminate`; 18 since bd-jg43.3 split the unrounded refusal
+        // into three by the operand's format.
+        assert_eq!(pairs.len(), 18);
         for (code, why) in &pairs {
             assert!(
                 !code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
@@ -2207,11 +2303,12 @@ mod tests {
         for (_, why) in r.next_actions() {
             assert!(!why.bytes().any(|b| b.is_ascii_digit()), "{why}");
         }
-        // Each state's code reaches the payload: E14's refusal, G8's and D16's.
+        // Each state's code reaches the payload: E14's refusal, N8's, N14's and D16's.
         let json = r.to_json();
         for code in [
             "\"reason_code\":\"no_registered_share\"",
-            "\"reason_code\":\"unrounded_stored_value\"",
+            "\"reason_code\":\"general_format_non_integer\"",
+            "\"reason_code\":\"unsupported_number_format\"",
             "\"reason_code\":\"rate_outside_interval\"",
             "\"reason_code\":\"all_zero_column\"",
         ] {
@@ -2354,8 +2451,8 @@ mod tests {
         // One record per counted instance, each with operands.
         let (_, records) = json.split_once("\"instances\":[").expect("instances array");
         let records = records.split_once("],\"one_cell_cos\"").expect("end").0;
-        assert_eq!(records.matches("\"cited\":{\"operands\":[{").count(), 50);
-        assert_eq!(records.matches("{\"at\":").count(), 50);
+        assert_eq!(records.matches("\"cited\":{\"operands\":[{").count(), 55);
+        assert_eq!(records.matches("{\"at\":").count(), 55);
     }
 
     /// bd-sjrh.1: C8's footing is computed from its total and block 1 (hand-read from `synthetic.rs`).
@@ -2904,23 +3001,26 @@ mod tests {
         hidden_cells.push(("B8".to_string(), MinimalCell::Number(400.0)));
         for f in &mut files {
             if f.0 == synthetic::SYNTHETIC_AISC_FILE {
-                f.3 = fmine_io::xlsx::build_minimal_xlsx(&[
-                    fmine_io::xlsx::MinimalSheet {
-                        name: synthetic::SYNTHETIC_TABLE_SHEET.to_string(),
-                        hidden: false,
-                        cells: synthetic::synthetic_aisc_cells(),
-                    },
-                    fmine_io::xlsx::MinimalSheet {
-                        name: "Scratch".to_string(),
-                        hidden: true,
-                        cells: vec![("A1".to_string(), MinimalCell::Number(1.0))],
-                    },
-                    fmine_io::xlsx::MinimalSheet {
-                        name: synthetic::SYNTHETIC_HIDDEN_SHEET.to_string(),
-                        hidden: true,
-                        cells: hidden_cells.clone(),
-                    },
-                ]);
+                f.3 = fmine_io::xlsx::build_minimal_xlsx_styled(
+                    &[
+                        fmine_io::xlsx::MinimalSheet {
+                            name: synthetic::SYNTHETIC_TABLE_SHEET.to_string(),
+                            hidden: false,
+                            cells: synthetic::synthetic_aisc_cells(),
+                        },
+                        fmine_io::xlsx::MinimalSheet {
+                            name: "Scratch".to_string(),
+                            hidden: true,
+                            cells: vec![("A1".to_string(), MinimalCell::Number(1.0))],
+                        },
+                        fmine_io::xlsx::MinimalSheet {
+                            name: synthetic::SYNTHETIC_HIDDEN_SHEET.to_string(),
+                            hidden: true,
+                            cells: hidden_cells.clone(),
+                        },
+                    ],
+                    Some(&synthetic::synthetic_aisc_styles()),
+                );
             }
         }
         let moved = assess(
@@ -2959,7 +3059,7 @@ mod tests {
         let totals: Vec<usize> = STATE_CODES.iter().map(|c| r.count_state(c)).collect();
         assert_eq!(
             totals,
-            vec![34, 2, 1, 2, 6, 5],
+            vec![40, 2, 1, 2, 5, 5],
             "same ledger as the in-code synthetic profile"
         );
         assert_eq!(r.hidden_scope.instances.len(), 5);
@@ -2982,7 +3082,7 @@ mod tests {
         assert_eq!(bounded.sources.len(), 2);
         assert_eq!(bounded.through.as_deref(), Some("2030Q1"));
         let totals: Vec<usize> = STATE_CODES.iter().map(|c| bounded.count_state(c)).collect();
-        assert_eq!(totals, vec![34, 2, 1, 2, 6, 5]);
+        assert_eq!(totals, vec![40, 2, 1, 2, 5, 5]);
         assert_ne!(
             bounded.ledger_anchor.state_root, r.ledger_anchor.state_root,
             "the source set is in the root"
@@ -2991,32 +3091,66 @@ mod tests {
     }
 
     /// bd-jg43.1 parity: reading styles changes no census count and no numeric digest. The values were printed
-    /// by this test at commit 345e2ba, before the styles reader existed, and pasted here.
+    /// by this test at commit 345e2ba, before the styles reader existed, and pasted here. bd-jg43.3 styled the
+    /// AISC workbook and added column N (11 numbers and the header "Site G"): its census must equal that of the
+    /// same cells written as plain numbers with no styles part.
     #[test]
     fn test_census_unchanged_by_style_reading() {
+        let line = |name: &str, bytes: &[u8]| {
+            let c = Workbook::from_bytes(name, bytes)
+                .expect("synthetic workbook")
+                .cell_census();
+            format!(
+                "{name} {} {} {} {} {} {} {}",
+                c.visible_sheets,
+                c.hidden_sheets,
+                c.numeric_cells,
+                c.placeholder_cells,
+                c.formula_error_cells,
+                c.text_cells,
+                hex(&c.numeric_digest)
+            )
+        };
         let got: Vec<String> = synthetic::synthetic_workbooks(&[])
             .into_iter()
-            .map(|(name, _, _, bytes)| {
-                let c = Workbook::from_bytes(name, &bytes)
-                    .expect("synthetic workbook")
-                    .cell_census();
-                format!(
-                    "{name} {} {} {} {} {} {} {}",
-                    c.visible_sheets,
-                    c.hidden_sheets,
-                    c.numeric_cells,
-                    c.placeholder_cells,
-                    c.formula_error_cells,
-                    c.text_cells,
-                    hex(&c.numeric_digest)
-                )
+            .map(|(name, _, _, bytes)| line(name, &bytes))
+            .collect();
+        assert_eq!(
+            got[0],
+            "Synthetic_Mine_Stats.xlsx 2 0 2 0 0 9 ed492958121280b991212c61d01c9c2a257a551dfb07af145f1f6c117e646c21"
+        );
+        let plain: Vec<(String, MinimalCell)> = synthetic::synthetic_aisc_cells()
+            .into_iter()
+            .map(|(r, c)| match c {
+                MinimalCell::Styled { raw, .. } => {
+                    (r, MinimalCell::Number(raw.parse().expect("decimal")))
+                }
+                other => (r, other),
             })
             .collect();
-        let want = [
-            "Synthetic_Mine_Stats.xlsx 2 0 2 0 0 9 ed492958121280b991212c61d01c9c2a257a551dfb07af145f1f6c117e646c21",
-            "Synthetic_AISC.xlsx 1 2 107 4 1 28 7db9df6e5bceec22d9195ea3680e67a774b97275dcc4be0f4e67580828ee79ed",
-        ];
-        assert_eq!(got, want, "{got:#?}");
+        let unstyled = fmine_io::xlsx::build_minimal_xlsx(&[
+            fmine_io::xlsx::MinimalSheet {
+                name: synthetic::SYNTHETIC_TABLE_SHEET.to_string(),
+                hidden: false,
+                cells: plain,
+            },
+            fmine_io::xlsx::MinimalSheet {
+                name: "Scratch".to_string(),
+                hidden: true,
+                cells: vec![("A1".to_string(), MinimalCell::Number(1.0))],
+            },
+            fmine_io::xlsx::MinimalSheet {
+                name: synthetic::SYNTHETIC_HIDDEN_SHEET.to_string(),
+                hidden: true,
+                cells: synthetic::synthetic_hidden_cells(),
+            },
+        ]);
+        assert_eq!(got[1], line(synthetic::SYNTHETIC_AISC_FILE, &unstyled));
+        assert!(
+            got[1].starts_with("Synthetic_AISC.xlsx 1 2 118 4 1 29 "),
+            "{}",
+            got[1]
+        );
     }
 
     fn kit_readme() -> String {
@@ -3359,6 +3493,8 @@ mod tests {
         let counts = r.state_counts();
         let get = |f: IdentityFamily, c: &'static str| counts.get(&(f, c)).copied().unwrap_or(0);
         use IdentityFamily::{AiscFooting, AiscPerOunce, CosPerOunce, TccFooting, TccPerOunce};
+        // bd-jg43.3 (`census2.py --displayed`, E838): on displayed values E823's three (v) per footing family
+        // and per TCC and AISC rate are (i).
         assert_eq!(
             [
                 get(TccFooting, "i"),
@@ -3366,7 +3502,7 @@ mod tests {
                 get(TccFooting, "v"),
                 get(TccFooting, "np")
             ],
-            [502, 2, 3, 12]
+            [505, 2, 0, 12]
         );
         assert_eq!(
             [
@@ -3375,7 +3511,7 @@ mod tests {
                 get(AiscFooting, "v"),
                 get(AiscFooting, "np")
             ],
-            [502, 2, 3, 12]
+            [505, 2, 0, 12]
         );
         assert_eq!(
             [
@@ -3394,7 +3530,7 @@ mod tests {
                 get(TccPerOunce, "v"),
                 get(TccPerOunce, "np")
             ],
-            [504, 3, 12]
+            [507, 0, 12]
         );
         assert_eq!(
             [
@@ -3403,14 +3539,15 @@ mod tests {
                 get(AiscPerOunce, "v"),
                 get(AiscPerOunce, "np")
             ],
-            [501, 3, 3, 12]
+            [504, 3, 0, 12]
         );
         assert_eq!(
             r.alternate_counts(),
             AlternateCounts {
-                footing_consistent: 1008,
+                // `census2.py --displayed`: 1,014 and 1,000 (E838; 1,008 and 994 on stored values).
+                footing_consistent: 1014,
                 // A stated-share fit sums one line (k = 1), so the alternative construction accepts all 263.
-                rate_consistent: 994 + 263
+                rate_consistent: 1000 + 263
             }
         );
 
@@ -3571,6 +3708,139 @@ mod tests {
         if let Err(why) = r.check_expected(last) {
             panic!("{why}");
         }
+    }
+
+    /// bd-jg43.3 on the real files: E823's 12 Loulo-Gounkoto instances (column K of `Q1 2026` in the Q1 2026
+    /// workbook and of `Q2 2026` and `Q1 2026` in the Q2 2026 workbook; TCC and AISC footings and rates) leave
+    /// (v), and every instance's state equals `census2.py --displayed`, run here, except the cost-of-sales rates
+    /// that census leaves to the stated-share rule (`share_census.py`, checked by its own test). One line per
+    /// E823 instance and a summary (`--nocapture`); operands are logged by cell, never by value (RISK-31).
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/ and python3"]
+    fn test_e823_twelve_instances_leave_v() {
+        let root = workspace_root();
+        let profile = load_issuer_profile(&root, "barrick")
+            .and_then(|p| p.through("2026Q2"))
+            .expect("registry");
+        let r = run_public_assurance(&profile, &root).expect("registered files present");
+        let script = "import json, sys\nsys.path.insert(0, 'scripts/oracle')\nimport census2\n\
+                      _, res = census2.run('.', displayed=True)\n\
+                      for x in res:\n    print(json.dumps([x[0], x[1], x[2], x[4], x[5], str(x[6])]))\n";
+        let out = std::process::Command::new("python3")
+            .args(["-I", "-c", script])
+            .current_dir(&root)
+            .output()
+            .expect("python3 runs");
+        assert!(
+            out.status.success(),
+            "census2.py failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let family = |f: &str| match f {
+            "TCC" => "tcc_footing",
+            "AISC" => "aisc_footing",
+            "COS/oz" => "cos_per_oz",
+            "TCC/oz" => "tcc_per_oz",
+            _ => "aisc_per_oz",
+        };
+        // (file, sheet, column, family) → (state, detail) as the census decides it.
+        let mut census: BTreeMap<(String, String, String, String), (String, String)> =
+            BTreeMap::new();
+        let stdout = String::from_utf8(out.stdout).expect("utf-8 census output");
+        for line in stdout.lines() {
+            let f: Vec<String> = line
+                .trim_matches(['[', ']'])
+                .split("\", \"")
+                .map(|s| s.trim_matches('"').to_string())
+                .collect();
+            assert_eq!(f.len(), 6, "{line}");
+            let key = (
+                f[0].clone(),
+                f[1].clone(),
+                f[2].clone(),
+                family(&f[3]).to_string(),
+            );
+            census.insert(key, (f[4].clone(), f[5].clone()));
+        }
+        assert_eq!(census.len(), r.instances.len());
+        let (mut compared, mut share_rule, mut differ) = (0, 0, Vec::new());
+        for i in &r.instances {
+            let key = (
+                i.file.clone(),
+                i.sheet.clone(),
+                i.column.clone(),
+                i.family.as_str().to_string(),
+            );
+            let Some((state, detail)) = census.get(&key) else {
+                panic!("census has no {key:?}");
+            };
+            if i.family == IdentityFamily::CosPerOunce && detail == "attributable share needed" {
+                share_rule += 1;
+                continue;
+            }
+            compared += 1;
+            if state != i.state.code() {
+                differ.push(format!(
+                    "{}:{}!{} {}",
+                    i.file,
+                    i.sheet,
+                    i.cell,
+                    i.family.as_str()
+                ));
+            }
+        }
+        let e823: Vec<&IdentityInstance> = r
+            .instances
+            .iter()
+            .filter(|i| {
+                i.column == "K"
+                    && i.subject == "Loulo-Gounkoto"
+                    && matches!(
+                        (i.file.as_str(), i.sheet.as_str()),
+                        ("Barrick_Q1_2026_AISC.xlsx", "Q1 2026")
+                            | ("Barrick_Q2_2026_AISC.xlsx", "Q2 2026" | "Q1 2026")
+                    )
+                    && i.family != IdentityFamily::CosPerOunce
+            })
+            .collect();
+        for i in &e823 {
+            let cells: Vec<String> = i.operands.iter().map(|o| js(&o.cell)).collect();
+            println!(
+                "{{\"file\":{},\"sheet\":{},\"cell\":{},\"family\":\"{}\",\"state_before\":\"v\",\
+                 \"state_after\":\"{}\",\"displayed_operands\":[{}]}}",
+                js(&i.file),
+                js(&i.sheet),
+                js(&i.cell),
+                i.family.as_str(),
+                i.state.code(),
+                cells.join(",")
+            );
+        }
+        let alt = r.alternate_counts();
+        let n = |c: &str| r.count_state(c);
+        println!(
+            "{{\"instances\":{},\"i\":{},\"ii\":{},\"iii\":{},\"iv\":{},\"v\":{},\"np\":{},\
+             \"alternate_footing\":{},\"alternate_rates\":{},\"state_root\":\"{}\",\"compared\":{compared},\
+             \"share_rule\":{share_rule},\"oracle_equal\":{}}}",
+            r.instances.len(),
+            n("i"),
+            n("ii"),
+            n("iii"),
+            n("iv"),
+            n("v"),
+            n("np"),
+            alt.footing_consistent,
+            alt.rate_consistent,
+            r.ledger_anchor.state_root.to_hex(),
+            differ.is_empty()
+        );
+        assert!(
+            differ.is_empty(),
+            "states differ from census2.py --displayed: {differ:?}"
+        );
+        assert_eq!((compared, share_rule), (2595 - 379, 379));
+        assert_eq!(e823.len(), 12);
+        assert!(e823.iter().all(|i| i.state.code() == "i"));
     }
 
     /// bd-jg43.1 on the real files: `Workbook::format_census` equals the independent reader

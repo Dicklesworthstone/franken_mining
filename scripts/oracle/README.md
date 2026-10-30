@@ -20,11 +20,12 @@ then they sit in `corpus_of_input_docs/downloaded/mine_stats/`.
 | bd-jg43.1 number formats (2026-10-30) | `python3 -I scripts/oracle/formats.py corpus_of_input_docs/downloaded/mine_stats/*.xlsx` | 18 file lines, then 10 formats, `"numeric_total":30388,"non_integer_total":6256` |
 | bd-prmn.8 K.4 one-cell check (2026-10-30) | `python3 -I scripts/oracle/one_cell_cos.py --quiet .` | `{"columns": 519, "pass": 374, "fail": 82, "refused": 63, "k4_fail": 17, "other_fail": 65, "verdict": "basis rule", ...}` |
 | bd-jg43.2 displayed values (2026-10-30) | `python3 -I scripts/oracle/formats.py --displayed corpus_of_input_docs/downloaded/mine_stats/*.xlsx` | 18 file lines with `displayed_digest`, then `{"files":18,"shown":27367,"token":2873,"refused":148}` |
+| E838 ledger on displayed values (2026-10-30) | `python3 -I scripts/oracle/census2.py --displayed .` | `AISC tables (visible): 34 instances: 2595`; footing i 1010, iii 4, np 24; per ounce i 1122, ii 3, iv 17, v 379, np 36; alt construction 1014 and 1000 |
 
 | Script | What it is |
 |---|---|
 | `fidelity.py` | Extraction-fidelity reader; its docstring is the digest spec shared with `numeric_cells_digest`. |
-| `census2.py` | Identity-ledger census, visible sheets only; the reference for `fmine-public`'s ledger. |
+| `census2.py` | Identity-ledger census, visible sheets only; the reference for `fmine-public`'s ledger. `--displayed` (bd-jg43.3) reads each numeric cell as `formats.py --displayed` shows it; it was added after the Rust change ran, by the agent that wrote both, so it is a same-author check (E838). |
 | `census.py` | Version 1 of the census. It counts hidden sheets too (superseded by E821). Kept because `census2.py` imports its subject list. |
 | `xl.py` | Minimal xlsx loader used by both censuses. |
 | `share_census.py` | BD-331.S3 stated-share census over `census2.py`'s "attributable share needed" instances; written by a separate agent that did not read `crates/` or `rate_census.py`. |

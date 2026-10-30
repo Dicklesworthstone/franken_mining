@@ -621,8 +621,9 @@ mod tests {
         assert!(json.contains(
             "\"payload\":{\"issuer\":\"synthetic\",\"lane\":\"synthetic\",\"gate_eligible\":false"
         ));
+        // bd-jg43.3: column G scored on displayed values, column N "Site G" refused by format.
         assert!(
-            json.contains("\"totals\":{\"i\":34,\"ii\":2,\"iii\":1,\"iv\":2,\"v\":6,\"np\":5}")
+            json.contains("\"totals\":{\"i\":40,\"ii\":2,\"iii\":1,\"iv\":2,\"v\":5,\"np\":5}")
         );
         // The next actions sit in the envelope, not the payload.
         assert_eq!(
@@ -849,8 +850,9 @@ mod tests {
              \"aisc_tables\":6,\"instances\":435,\"by_state\":{\"i\":404,\"ii\":0,\"iii\":1,\"iv\":17,\"v\":3,\"np\":10}"
         ));
         assert!(json.contains(
-            // BD-331.S3 (census E826): 263 stated-share fits move v → i and 65 misses v → iv.
-            "\"totals\":{\"i\":2383,\"ii\":3,\"iii\":4,\"iv\":82,\"v\":63,\"np\":60}"
+            // BD-331.S3 (census E826): 263 stated-share fits move v → i and 65 misses v → iv. bd-jg43.3 (census
+            // E838): E823's 12 Loulo-Gounkoto instances move v → i on displayed values.
+            "\"totals\":{\"i\":2395,\"ii\":3,\"iii\":4,\"iv\":82,\"v\":51,\"np\":60}"
         ));
         // The public-lane envelope: the root as certificate, the no-claim line, and its two next actions.
         assert_eq!(env.certificate.as_deref(), Some(last.state_root.as_str()));

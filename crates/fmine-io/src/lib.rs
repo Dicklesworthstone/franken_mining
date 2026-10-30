@@ -155,7 +155,11 @@ fn parse_html_cell_value(text: &str) -> CellValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::xlsx::{MinimalCell, MinimalSheet, QuarantineItem, Workbook, build_minimal_xlsx};
+    use crate::styles::NumberFormat;
+    use crate::xlsx::{
+        MinimalCell, MinimalSheet, MinimalStyles, QuarantineItem, Workbook, build_minimal_xlsx,
+        build_minimal_xlsx_styled,
+    };
     use fmine_core::hash::sha256;
     use std::path::PathBuf;
 
@@ -285,6 +289,93 @@ mod tests {
             Err(IoError::FileRead { path: p, .. }) => assert!(p.ends_with("no-such-workbook.xlsx")),
             other => panic!("expected FileRead, got {other:?}"),
         }
+    }
+
+    /// The styled writer adds nothing when given no styles (bd-jg43.3): the digest is the one HEAD's writer
+    /// (dfc23c5, before `build_minimal_xlsx_styled` existed) gives for this input, computed on that tree.
+    #[test]
+    fn test_minimal_xlsx_without_styles_byte_identical() {
+        let sheets = [
+            MinimalSheet {
+                name: "Q1 2026".to_string(),
+                hidden: false,
+                cells: vec![
+                    cell(
+                        "A1",
+                        MinimalCell::Text("Cost of sales & <other>".to_string()),
+                    ),
+                    cell("B2", MinimalCell::Number(-37.899_643)),
+                    cell("C3", MinimalCell::Error("#REF!".to_string())),
+                    cell("AA10", MinimalCell::Number(2008.0)),
+                ],
+            },
+            MinimalSheet {
+                name: "Hidden".to_string(),
+                hidden: true,
+                cells: vec![],
+            },
+        ];
+        let bytes = build_minimal_xlsx(&sheets);
+        assert_eq!(bytes.len(), 1618);
+        assert_eq!(
+            sha256(&bytes).to_hex(),
+            "88255e9f00ef93004c46bc33063ad34db3b0d0d0a486c67cc53f81fa4c96ff36"
+        );
+        assert_eq!(build_minimal_xlsx_styled(&sheets, None), bytes);
+    }
+
+    /// The styles part the writer adds is read back: custom and built-in formats by cell style, the stored text
+    /// kept, and the displayed values derived from it; an unstyled cell stays General.
+    #[test]
+    fn test_minimal_xlsx_styled_round_trip_formats() {
+        let styles = MinimalStyles {
+            num_fmts: vec![(164, "#,##0;(#,##0);\"-\"".to_string())],
+            xfs: vec![0, 3, 164, 14, 4],
+        };
+        let styled = |raw: &str, xf| MinimalCell::Styled {
+            raw: raw.to_string(),
+            xf,
+        };
+        let bytes = build_minimal_xlsx_styled(
+            &[MinimalSheet {
+                name: "S".to_string(),
+                hidden: false,
+                cells: vec![
+                    cell("A1", styled("-37.899642999999998", 1)),
+                    cell("A2", styled("-20", 2)),
+                    cell("A3", styled("0", 2)),
+                    cell("A4", styled("45000", 3)),
+                    cell("A5", styled("2.5", 4)),
+                    cell("A6", MinimalCell::Number(1.5)),
+                ],
+            }],
+            Some(&styles),
+        );
+        let wb = Workbook::from_bytes("styled.xlsx", &bytes).expect("parse styled workbook");
+        let s = wb.sheet("S").expect("sheet");
+        let c = |row| s.cell(row, 1).expect("cell");
+        assert_eq!(c(1).format, NumberFormat::Builtin(3));
+        assert_eq!(c(1).number_text.as_deref(), Some("-37.899642999999998"));
+        assert_eq!(
+            c(2).format,
+            NumberFormat::Custom {
+                id: 164,
+                code: "#,##0;(#,##0);\"-\"".to_string()
+            }
+        );
+        assert_eq!(c(4).format, NumberFormat::Builtin(14));
+        assert_eq!(c(6).format, NumberFormat::Builtin(0));
+        let shown = |row| match c(row).displayed() {
+            Some(Ok(d)) => d.text(),
+            other => format!("{other:?}"),
+        };
+        assert_eq!(shown(1), "-38");
+        assert_eq!(shown(2), "-20");
+        assert_eq!(shown(3), "-");
+        assert_eq!(shown(5), "2.50");
+        let code = |row| c(row).displayed().and_then(Result::err).map(|r| r.code);
+        assert_eq!(code(4), Some(numfmt::UNSUPPORTED_FORMAT));
+        assert_eq!(code(6), Some(numfmt::GENERAL_NON_INTEGER));
     }
 
     /// Writer → parser round trip on a synthetic workbook: typed cells, G-BULL-1/2 quarantine, the cell census

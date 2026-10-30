@@ -652,6 +652,19 @@ pub enum MinimalCell {
     Text(String),
     /// A formula-error token such as `#REF!`, written as an error-typed cell.
     Error(String),
+    /// A number stored as this decimal text, with cell style `xf` (an index into [`MinimalStyles::xfs`]).
+    Styled {
+        raw: String,
+        xf: u32,
+    },
+}
+
+/// The styles part for [`build_minimal_xlsx_styled`] (bd-jg43.3): custom number formats by id, and the cell
+/// styles (`cellXfs`), each naming its number format id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MinimalStyles {
+    pub num_fmts: Vec<(u32, String)>,
+    pub xfs: Vec<u32>,
 }
 
 /// One worksheet for [`build_minimal_xlsx`]: cells keyed by A1 reference.
@@ -667,6 +680,16 @@ pub struct MinimalSheet {
 /// any issuer's bytes. Cells whose reference does not parse are skipped.
 #[must_use]
 pub fn build_minimal_xlsx(sheets: &[MinimalSheet]) -> Vec<u8> {
+    build_minimal_xlsx_styled(sheets, None)
+}
+
+/// [`build_minimal_xlsx`] with a styles part (`xl/styles.xml` and its workbook relationship) when `styles` is
+/// given; with `None` the bytes are exactly [`build_minimal_xlsx`]'s.
+#[must_use]
+pub fn build_minimal_xlsx_styled(
+    sheets: &[MinimalSheet],
+    styles: Option<&MinimalStyles>,
+) -> Vec<u8> {
     let mut wb_xml = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>",
     );
@@ -702,6 +725,12 @@ pub fn build_minimal_xlsx(sheets: &[MinimalSheet]) -> Vec<u8> {
                 MinimalCell::Error(t) => {
                     format!("<c r=\"{cell_ref}\" t=\"e\"><v>{}</v></c>", escape_xml(t))
                 }
+                MinimalCell::Styled { raw, xf } => {
+                    format!(
+                        "<c r=\"{cell_ref}\" s=\"{xf}\"><v>{}</v></c>",
+                        escape_xml(raw)
+                    )
+                }
             };
             rows.entry(row).or_default().insert(col, xml);
         }
@@ -719,11 +748,39 @@ pub fn build_minimal_xlsx(sheets: &[MinimalSheet]) -> Vec<u8> {
         sheet_xmls.push((format!("xl/worksheets/sheet{n}.xml"), xml));
     }
     wb_xml.push_str("</sheets></workbook>");
+    let styles_xml = styles.map(|s| {
+        rels_xml.push_str(&format!(
+            "<Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>",
+            sheets.len() + 1
+        ));
+        let mut xml = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">",
+        );
+        if !s.num_fmts.is_empty() {
+            xml.push_str(&format!("<numFmts count=\"{}\">", s.num_fmts.len()));
+            for (id, code) in &s.num_fmts {
+                xml.push_str(&format!(
+                    "<numFmt numFmtId=\"{id}\" formatCode=\"{}\"/>",
+                    escape_xml(code)
+                ));
+            }
+            xml.push_str("</numFmts>");
+        }
+        xml.push_str(&format!("<cellXfs count=\"{}\">", s.xfs.len()));
+        for id in &s.xfs {
+            xml.push_str(&format!("<xf numFmtId=\"{id}\"/>"));
+        }
+        xml.push_str("</cellXfs></styleSheet>");
+        xml
+    });
     rels_xml.push_str("</Relationships>");
     let mut entries: Vec<(&str, &[u8])> = vec![
         ("xl/workbook.xml", wb_xml.as_bytes()),
         ("xl/_rels/workbook.xml.rels", rels_xml.as_bytes()),
     ];
+    if let Some(xml) = &styles_xml {
+        entries.push(("xl/styles.xml", xml.as_bytes()));
+    }
     for (name, xml) in &sheet_xmls {
         entries.push((name.as_str(), xml.as_bytes()));
     }

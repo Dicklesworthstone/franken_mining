@@ -15,12 +15,24 @@ Rules (DESIGN, stated before the Rust run):
   non-integer -> refused; COS with a non-zero non-controlling-interest line -> refused;
   inside -> consistent (i); outside -> undecidable (iv), or explained (ii) when a registered reconstruction closes
 - alternate construction (subtotal rounded once) is reported, not scored
+
+--displayed (bd-jg43.3; added 2026-10-30 AFTER the Rust change had run on the corpus, by the agent that wrote it,
+so it is a same-author check, not independent evidence). The construction sums the numbers as printed, so a
+numeric cell enters as formats.py --displayed's text for it (formats.py was written before the Rust interpreter):
+- a shown text with no "." and no "%" (d = 0) is that whole number;
+- a zero section's token (the dash) is the number 0;
+- any other numeric cell is still printed (it counts as published), but it has no whole displayed number, and the
+  step that refused a non-integer refuses it instead, naming the first such operand's reason: "general format
+  with non-integer stored value" (REFUSED:general_non_integer), "decimals displayed" (d > 0 or a percentage),
+  or "unsupported number format" (every other REFUSED code).
+Operands are taken in the order lines then total (footing) and rate, ounces, numerator, lines (per ounce).
 """
 import glob, html, os, re, sys, zipfile
 from fractions import Fraction as F
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from xl import load
 from census import SUBJECTS, colname
+import formats
 
 PLACE = {"-", "–", "—", "N/A", "n/a", "NA", "na"}
 
@@ -47,7 +59,8 @@ def visible(path):
     return out
 
 
-def val(c, ref):
+def val(c, ref, shown=None):
+    """("num", value) with a float, or with a refusal reason (str) when `shown` gives no whole displayed number."""
     v = c.get(ref)
     if v is None:
         return ("blank", None)
@@ -55,9 +68,24 @@ def val(c, ref):
     if s in PLACE:
         return ("place", None)
     try:
-        return ("num", float(s))
+        x = float(s)
     except ValueError:
         return ("text", s)
+    if shown is None or ref not in shown:
+        return ("num", x)
+    kind, text = shown[ref]
+    if kind == "token":
+        return ("num", 0.0)
+    if kind == "refused":
+        return ("num", "general format with non-integer stored value" if text == "REFUSED:general_non_integer"
+                else "unsupported number format")
+    if "." in text or text.endswith("%"):
+        return ("num", "decimals displayed")
+    return ("num", float(int(text)))
+
+
+def undisplayable(vs, rows):
+    return next(vs[r][1] for r in rows if vs[r][0] == "num" and isinstance(vs[r][1], str))
 
 
 # registered reconstructions (E816): (aisc file, sheet, subject, identity) -> (mine stats file, sheet, cell)
@@ -71,15 +99,19 @@ RECON = {
 }
 
 
-def run(root):
+def run(root, displayed=False):
     d = os.path.join(root, "corpus_of_input_docs/downloaded/mine_stats")
     res = []  # (file, sheet, col, subject, family, state, detail)
     sheets = 0
     for f in sorted(glob.glob(os.path.join(d, "*AISC.xlsx"))):
         fn = os.path.basename(f)
         allc = load(f)
+        texts = {}
+        if displayed:
+            formats.read_displayed(f, False, texts)
         for sh in visible(f):
             c = allc[sh]
+            shown = {ref: t for (s, ref), t in texts.items() if s == sh} if displayed else None
             lab = {r: norm(c["A%d" % r]).lower() for r in range(1, 200) if c.get("A%d" % r) is not None}
             one = lambda *n: [r for r, l in lab.items() if l in n]
             rc, rt, ra = one("cost of sales applicable to gold production"), one("total cash costs"), \
@@ -111,12 +143,14 @@ def run(root):
                     res.append(w + ("column", "v", "unregistered header"))
                     continue
                 used = b1 + [rt] + b2 + [ra, ro] + list(rates.values())
-                vs = {r: val(c, f"{col}{r}") for r in used}
+                vs = {r: val(c, f"{col}{r}", shown) for r in used}
                 if all(v[0] == "place" or (v[0] == "num" and v[1] == 0) for v in vs.values()):
                     for fam in ("TCC", "AISC", "COS/oz", "TCC/oz", "AISC/oz"):
                         res.append(w + (fam, "np", "all-zero column"))
                     continue
-                isint = lambda r: vs[r][0] == "num" and vs[r][1] == int(vs[r][1])
+                isint = lambda r: vs[r][0] == "num" and isinstance(vs[r][1], float) and vs[r][1] == int(vs[r][1])
+                # Stored values: a non-integer; displayed values: the first operand with no whole number.
+                why = lambda rows: undisplayable(vs, rows) if displayed else "unrounded stored value"
                 lineval = lambda r: 0 if vs[r][0] == "place" else int(vs[r][1])
                 # footing
                 for fam, tot, lines in (("TCC", rt, b1), ("AISC", ra, [rt] + b2)):
@@ -126,7 +160,7 @@ def run(root):
                     if bad:
                         res.append(w + (fam, "v", "line not numeric")); continue
                     if not all(isint(r) or vs[r][0] == "place" for r in lines + [tot]):
-                        res.append(w + (fam, "v", "unrounded stored value")); continue
+                        res.append(w + (fam, "v", why(lines + [tot]))); continue
                     s = sum(lineval(r) for r in lines)
                     p = int(vs[tot][1])
                     alt = abs(p - s) * 2 <= 1 + (len([r for r in lines if vs[r][0] == "num"]) if fam == "TCC"
@@ -155,7 +189,7 @@ def run(root):
                     if any(vs[r][0] in ("blank", "text") for r in cells):
                         res.append(w + (fam, "v", "numerator line not numeric")); continue
                     if not all(isint(r) or vs[r][0] == "place" for r in cells):
-                        res.append(w + (fam, "v", "unrounded stored value")); continue
+                        res.append(w + (fam, "v", why(cells))); continue
                     if m == "COS" and any(vs[r][0] == "num" and vs[r][1] != 0 for r in nci):
                         res.append(w + (fam, "v", "attributable share needed")); continue
                     k = sum(1 for r in nrows if vs[r][0] == "num")
@@ -185,7 +219,8 @@ def run(root):
 
 
 if __name__ == "__main__":
-    sheets, res = run(sys.argv[1])
+    args = sys.argv[1:]
+    sheets, res = run(args[-1], displayed="--displayed" in args)
     from collections import Counter
     print("AISC tables (visible):", sheets, "instances:", len(res))
     print(Counter((x[4] if "/" not in x[4] else "per-oz", x[5]) for x in res))

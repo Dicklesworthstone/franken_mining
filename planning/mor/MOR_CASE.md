@@ -493,7 +493,8 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
 
   At stored precision both footings close exactly: 241 − 38 − 37.899643 − 33 = 132.100357 (FACT, arithmetic). The
   ledger refuses these 12 instances because the declared construction needs the displayed values, and those
-  depend on the cell number format, which the reader does not yet read.
+  depend on the cell number format, which the reader does not yet read. (Since E838 the ledger reads them,
+  and all 12 are (i).)
 
 **frankensim materials corpus, re-counted (lead agent, 2026-10-29).** Id E824 is new and corrects E009.
 
@@ -782,3 +783,35 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     or revenue notes (for example, ounces delivered under a sale agreement or provisionally priced), or ask
     investor relations. Hemlo's sale on 2025-11-26 is one candidate for Hemlo. Nothing in the documents read
     suggests one for Veladero.
+- **E838** The identity ledger on displayed values (NEW-cell.S3, bd-jg43.3, BD-331.S5; FACT, execution,
+  2026-10-30, owner machine).
+  - **Change.** The declared construction sums the numbers as printed, so each numeric operand now enters as its
+    displayed value (E834's interpreter), never as the stored double. A whole displayed number enters as itself,
+    and a zero section's dash as 0. An operand with no whole displayed number refuses its instance, naming the
+    cell and the format code: a General non-integer, decimals or a percentage shown, or a refused format.
+  - **Real files.** Exactly E823's 12 Loulo-Gounkoto instances move, all from (v) to (i).
+    - They are column K of `Barrick_Q1_2026_AISC.xlsx` `'Q1 2026'` and of `Barrick_Q2_2026_AISC.xlsx`
+      `'Q2 2026'` and `'Q1 2026'`, in the TCC and AISC footings and rates.
+    - No other instance record changes, operands included. The hidden scope, the sources and the Mine Stats
+      sections are equal.
+    - Totals are i 2,395, ii 3, iii 4, iv 82, v 51 and np 60. The only (v) left are the 51 regional rates.
+    - The alternative construction accepts 1,014 footings and 1,263 rates (1,008 and 1,257 before).
+  - **Census.** `census2.py --displayed` reads each cell through `formats.py --displayed`, which was committed
+    before the Rust interpreter.
+    - Footing: i 1,010, iii 4, np 24.
+    - Per ounce: i 1,122, ii 3, iv 17, v 379, np 36. The 379 are the stated-share census's input (E826).
+    - Alternative construction: 1,014 and 1,000.
+    - `test_e823_twelve_instances_leave_v` runs the census and finds all 2,216 instances it decides equal to
+      the Rust states.
+  - **Same origin.** The `--displayed` mode was written from the bead's stated rule, but after the Rust change
+    had run on the corpus, by the agent that wrote both. It counts once with the Rust. The text it reads is
+    E834's, whose hypotheses still await the LibreOffice cross-check.
+  - **Planted negative.** Reading a zero token as 1 instead of 0 failed the census comparison and the
+    zero-token unit test. The change was reverted.
+  - **Root.** The `M0AS` frame v5 also binds each file's displayed digest and counts. The run's root is
+    `e95d0b238954c56b21c5977b55de0b988517a500600bbe76d4a878d7d47393a6`; its `repro/barrick/expected.toml` row
+    names the code commit.
+  - **Synthetic.** Column G, 100.4 stored under `#,##0`, is scored on 100: its five (v) become (i). The new
+    column N, "Site G", re-seeds the refusals. A General non-integer at N6 refuses the TCC footing, and
+    date-format ounces at N13 refuse the three rates; each names the cell and the format code. The lane now has
+    55 instances: i 40, ii 2, iii 1, iv 2, v 5, np 5.
