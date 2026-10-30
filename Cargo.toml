@@ -22,8 +22,9 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# 1.88: let-chains (edition 2024) and slice::as_chunks. Clippy's incompatible_msrv checks std APIs against it.
-rust-version = "1.88"
+# The only compiler ever used or tested: rust-toolchain.toml's nightly-2026-08-31 is rustc 1.100 (bd-l736;
+# franken_surveillance_system declares the same). Clippy reads it as the MSRV for its version-gated lints.
+rust-version = "1.100"
 license = "MIT"
 authors = ["Jeffrey Emanuel", "FrankenMining Contributors"]
 repository = "https://github.com/Dicklesworthstone/franken_mining"

@@ -275,7 +275,7 @@ Every load-bearing statement in code comments, docs, commit messages and reports
 | Item | Pin |
 |---|---|
 | Async runtime | asupersync `=0.5.0`, the sole async runtime, one package id per closure (plan §31.4 lists its defects and mitigations) |
-| Toolchain | `nightly-2026-08-31` (`rust-toolchain.toml`), Rust 2024 edition, one Cargo workspace |
+| Toolchain | `nightly-2026-08-31` (`rust-toolchain.toml`, rustc 1.100), Rust 2024 edition, one Cargo workspace; every crate inherits `rust-version = "1.100"` |
 | Sibling revisions | Exact revisions in `franken-stack.lock` |
 | frankensim | Lift-only: each lifted file carries a provenance header matching `registries/lifts.toml` (`xtask check-lifts`) |
 | franken_accounting | A subprocess at a pinned revision; no FA crate anywhere |

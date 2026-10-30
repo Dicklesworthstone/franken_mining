@@ -15,7 +15,7 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy (warnings denied)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   check-and-test:
     name: ${{ matrix.os }} (${{ matrix.profile }})
