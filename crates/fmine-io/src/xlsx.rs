@@ -8,6 +8,7 @@ use fmine_core::anchor::SourceAnchor;
 use fmine_core::hash::sha256;
 
 use crate::IoError;
+use crate::numfmt::{self, DisplayRefusal, Displayed};
 use crate::styles::{NumberFormat, Styles, decimal_is_non_integer, parse_styles, styles_part_name};
 use crate::zip_inflate::{read_zip_entries, write_stored_zip};
 
@@ -70,6 +71,38 @@ pub struct FormatCount {
     pub numeric: usize,
     /// Numeric cells whose stored decimal text is not an integer (decided exactly, never on the `f64`).
     pub non_integer: usize,
+}
+
+impl ExtractedCell {
+    /// For a numeric cell, its displayed value under its number format, or why it has none (bd-jg43.2);
+    /// `None` for every other kind.
+    #[must_use]
+    pub fn displayed(&self) -> Option<Result<Displayed, DisplayRefusal>> {
+        let CellValue::Number(_) = self.value else {
+            return None;
+        };
+        Some(match &self.number_text {
+            Some(raw) => numfmt::display(raw, &self.format),
+            None => Err(DisplayRefusal {
+                code: numfmt::BAD_STORED_TEXT,
+                reason: "numeric cell without stored text".to_string(),
+            }),
+        })
+    }
+}
+
+/// Displayed values over the visible sheets (bd-jg43.2): the digest of every numeric cell's displayed text and
+/// how the cells divide into shown numbers, zero tokens and refusals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayedCensus {
+    /// SHA-256 over `"{sheet}\t{cell_ref}\t{text}\n"` for every numeric cell, in `CellCensus::numeric_digest`'s
+    /// order. `text` is `Displayed::text` or `REFUSED:<code>`.
+    pub digest: [u8; 32],
+    pub shown: usize,
+    pub token: usize,
+    pub refused: usize,
+    /// Each refusal as `"{sheet}!{cell_ref}: {code}: {reason}"`; the reason names the format code.
+    pub refusals: Vec<String>,
 }
 
 /// Item quarantined by `G-BULL-1` (`BD-271`) during workbook ingestion.
@@ -220,6 +253,47 @@ impl Workbook {
             }
         }
         out
+    }
+
+    /// The displayed value of every numeric cell of the visible sheets (bd-jg43.2). `cell_census` is unaffected.
+    #[must_use]
+    pub fn displayed_census(&self) -> DisplayedCensus {
+        let mut census = DisplayedCensus {
+            digest: [0; 32],
+            shown: 0,
+            token: 0,
+            refused: 0,
+            refusals: Vec::new(),
+        };
+        let mut listing = String::new();
+        for sheet in &self.sheets {
+            for cell in sheet.cells_by_coord.values() {
+                let Some(displayed) = cell.displayed() else {
+                    continue;
+                };
+                let text = match displayed {
+                    Ok(d) => {
+                        if d.token.is_some() {
+                            census.token += 1;
+                        } else {
+                            census.shown += 1;
+                        }
+                        d.text()
+                    }
+                    Err(r) => {
+                        census.refused += 1;
+                        census.refusals.push(format!(
+                            "{}!{}: {}: {}",
+                            sheet.name, cell.cell_ref, r.code, r.reason
+                        ));
+                        format!("REFUSED:{}", r.code)
+                    }
+                };
+                listing.push_str(&format!("{}\t{}\t{text}\n", sheet.name, cell.cell_ref));
+            }
+        }
+        census.digest = sha256(listing.as_bytes()).0;
+        census
     }
 
     /// Parses an `.xlsx` workbook from in-memory bytes and computes its SHA-256 digest.

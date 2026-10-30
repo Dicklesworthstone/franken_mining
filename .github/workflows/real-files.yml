@@ -21,6 +21,7 @@ on:
       - "crates/fmine-io/**"
       - "registries/sources/**"
       - "repro/barrick/**"
+      - "scripts/oracle/**"
 
 permissions:
   contents: read
@@ -55,6 +56,27 @@ jobs:
         with:
           path: corpus_of_input_docs/downloaded/mine_stats
           key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  # bd-jg43.2: LibreOffice's "as shown" text against the displayed values (formats.py --displayed, which
+  # fmine-io equals on every file). It decides the section and rounding hypotheses. Issuer cell values stay out of
+  # the log (no --values); only the script's synthetic fixture prints values.
+  as-shown:
+    name: displayed values vs LibreOffice (ubuntu-latest)
+    needs: [ubuntu]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: corpus_of_input_docs/downloaded/mine_stats
+          key: barrick-corpus-${{ runner.os }}-${{ hashFiles('registries/sources/barrick.toml') }}
+      - name: Fetch and verify the registered workbooks
+        run: repro/barrick/fetch.sh
+      - name: Install LibreOffice Calc
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libreoffice-calc
+      - name: Compare
+        run: bash scripts/oracle/as_shown_check.sh corpus_of_input_docs/downloaded/mine_stats/*.xlsx
 
   # Weekly, and on a dispatch without the negative control: the same run on macOS, for the determinism check.
   macos:

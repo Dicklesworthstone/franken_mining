@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Ingestion`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles"]`
+- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt"]`
 
 ## 2. Mathematical & Domain Formulation
 Pure-Rust ZIP and RFC 1951 DEFLATE (`zip_inflate`); `.xlsx` workbook, shared-string and worksheet extraction
@@ -35,6 +35,12 @@ Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a
   ECMA-376 §18.8.30 built-in. Without `s` it uses xf 0, and with no styles part every cell is General. An index
   past `cellXfs` is `BadStyleIndex` and an id neither listed nor built in is `Unknown`; neither is clamped. A
   styles part that does not parse, or an `s` that is not an unsigned integer, refuses the workbook.
+- `numfmt::{parse_format, display, FormatSpec, Section, Displayed, DisplayRefusal, Unsupported}` and the refusal
+  codes; `ExtractedCell::displayed`, `Workbook::displayed_census`, `DisplayedCensus` (bd-jg43.2). The displayed
+  value comes from the stored decimal text by exact digit arithmetic, never `f64`. The section is chosen by the
+  stored sign. The value, x100 for `%`, is rounded half away from zero to 15 significant digits and then to the
+  section's decimals. Section choice and both roundings are hypotheses that the LibreOffice cross-check decides.
+  Every format construct outside the supported subset refuses the code by name, as do General non-integers.
 
 ## 5. Guards & Typed Refusals
 - `G-BULL-1`: formula-error cells and `hidden`/`veryHidden` sheets go to `Workbook::quarantined`. Hidden sheets are

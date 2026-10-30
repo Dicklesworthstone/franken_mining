@@ -1,6 +1,7 @@
 //! Label-anchored `.xlsx` (`xlsx`) and HTML (`extract_html_tables`) filing table extractors
 //! with SHA-256 provenance and `G-BULL-1` / `G-BULL-2` quarantine (`WP-03`, `BD-056`, `BD-057`, `BD-271`).
 
+pub mod numfmt;
 pub mod styles;
 pub mod xlsx;
 pub mod zip_inflate;

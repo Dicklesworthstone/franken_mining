@@ -2464,6 +2464,114 @@ mod tests {
         );
     }
 
+    /// bd-jg43.2 on the real files: `Workbook::displayed_census` equals `python3 -I scripts/oracle/formats.py
+    /// --displayed` (committed at 58d5c98 before the Rust interpreter) per file, compared as whole canonical
+    /// lines: shown, token and refused counts and the displayed digest. E823's Loulo-Gounkoto cells are checked
+    /// by value. One line per file, then a summary (`--nocapture`).
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/ and python3"]
+    fn test_displayed_digest_matches_independent_reader() {
+        let root = workspace_root();
+        let profile = load_issuer_profile(&root, "barrick")
+            .expect("registry")
+            .through("2026Q2")
+            .expect("bound");
+        let mut names: Vec<&str> = profile
+            .sources
+            .iter()
+            .map(|s| s.file_name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names.len(), 18);
+        let paths: Vec<PathBuf> = names
+            .iter()
+            .map(|n| root.join(&profile.corpus_dir).join(n))
+            .collect();
+        let out = std::process::Command::new("python3")
+            .arg("-I")
+            .arg(root.join("scripts/oracle/formats.py"))
+            .arg("--displayed")
+            .args(&paths)
+            .current_dir(&root)
+            .output()
+            .expect("python3 runs");
+        assert!(
+            out.status.success(),
+            "formats.py --displayed failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).expect("utf-8 oracle output");
+        let oracle: Vec<&str> = stdout.lines().collect();
+        assert_eq!(oracle.len(), 19, "18 file lines and a summary");
+
+        let (mut shown, mut token, mut refused, mut mismatches) = (0, 0, 0, 0);
+        for ((name, path), want) in names.iter().zip(&paths).zip(&oracle) {
+            let wb = Workbook::from_file(path).expect("registered workbook");
+            let c = wb.displayed_census();
+            shown += c.shown;
+            token += c.token;
+            refused += c.refused;
+            let got = format!(
+                "{{\"file\":{},\"sha256\":\"{}\",\"shown\":{},\"token\":{},\"refused\":{},\"displayed_digest\":\"{}\"}}",
+                js(name),
+                hex(&wb.sha256),
+                c.shown,
+                c.token,
+                c.refused,
+                hex(&c.digest)
+            );
+            let equal = got == *want;
+            let open = got.strip_suffix('}').expect("rendered object");
+            println!("{open},\"oracle\":{want},\"pass\":{equal}}}");
+            mismatches += usize::from(!equal);
+            assert!(
+                c.refusals
+                    .iter()
+                    .all(|r| r.contains(": general_non_integer: "))
+            );
+        }
+        let summary =
+            format!("{{\"files\":18,\"shown\":{shown},\"token\":{token},\"refused\":{refused}}}");
+        println!("{summary}");
+        assert_eq!(
+            mismatches, 0,
+            "displayed census differs from formats.py --displayed"
+        );
+        assert_eq!(summary, oracle[18]);
+        assert_eq!(shown + token + refused, 30_388, "E820's numeric total");
+
+        // E823: Loulo-Gounkoto's unrounded column K (Other K8, TCC K10, AISC K17) displays as integers. Q1 2026
+        // stores -37.899642999999998, 132.100357, 133.100357; Q2 2026 stores -7.822133, 164.17786699999999,
+        // 194.17786699999999. Rounded by hand to 0 decimals.
+        for (file, sheet, want) in [
+            (
+                "Barrick_Q1_2026_AISC.xlsx",
+                "Q1 2026",
+                ["-38", "132", "133"],
+            ),
+            ("Barrick_Q2_2026_AISC.xlsx", "Q2 2026", ["-8", "164", "194"]),
+            (
+                "Barrick_Q2_2026_AISC.xlsx",
+                "Q1 2026",
+                ["-38", "132", "133"],
+            ),
+        ] {
+            let wb = Workbook::from_file(&root.join(&profile.corpus_dir).join(file))
+                .expect("registered workbook");
+            let sh = wb.sheet(sheet).expect("sheet");
+            let text = |r: u32| {
+                sh.cell(r, 11)
+                    .and_then(|c| c.displayed())
+                    .map(|d| d.map(|d| d.text()).unwrap_or_default())
+            };
+            // No values in the failure message (RISK-31: the BD-339 CI log carries no issuer cell values).
+            assert!(
+                [text(8), text(10), text(17)] == want.map(|w| Some(w.to_string())),
+                "{file} {sheet}: K8, K10 or K17 does not display as expected"
+            );
+        }
+    }
+
     /// BD-331.S2 on the real files: every (iv), visible or hidden, names a missing fact. One JSON line per (iv)
     /// (`--nocapture`).
     #[test]
