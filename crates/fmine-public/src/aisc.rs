@@ -442,6 +442,75 @@ pub fn match_subject<'a, S: AsRef<str>>(header: &str, subjects: &'a [S]) -> Opti
 
 const COS_LABEL: &str = "cost of sales applicable to gold production";
 
+/// How a [`RowAnchor`] name matches a column-A label (lower-case, whitespace-collapsed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorRule {
+    /// The label equals one of the names.
+    Exact,
+    /// The label starts with one of the names (the ounces row carries a unit suffix).
+    Prefix,
+}
+
+/// One row `locate_table` anchors on: the first column-A label, in row order, that matches any of `names`.
+/// `role` names the row in a table-level refusal ("no '{role}' row").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowAnchor {
+    pub role: &'static str,
+    pub names: &'static [&'static str],
+    pub rule: AnchorRule,
+}
+
+impl RowAnchor {
+    /// Whether a lower-case, whitespace-collapsed label matches this anchor.
+    #[must_use]
+    pub fn matches(&self, label: &str) -> bool {
+        match self.rule {
+            AnchorRule::Exact => self.names.contains(&label),
+            AnchorRule::Prefix => self.names.iter().any(|n| label.starts_with(n)),
+        }
+    }
+}
+
+/// The seven rows of an AISC table, in the order `locate_table` reads them (BD-339.S4). The first, cost of
+/// sales, decides whether a sheet holds an AISC table at all. The reproduction kit's README prints this list.
+pub const ROW_ANCHORS: [RowAnchor; 7] = [
+    RowAnchor {
+        role: "Cost of sales",
+        names: &[COS_LABEL],
+        rule: AnchorRule::Exact,
+    },
+    RowAnchor {
+        role: "Total cash costs",
+        names: &["total cash costs"],
+        rule: AnchorRule::Exact,
+    },
+    RowAnchor {
+        role: "All-in sustaining costs",
+        names: &["all-in sustaining costs"],
+        rule: AnchorRule::Exact,
+    },
+    RowAnchor {
+        role: "Ounces sold",
+        names: &["ounces sold"],
+        rule: AnchorRule::Prefix,
+    },
+    RowAnchor {
+        role: "Cost of sales per ounce",
+        names: &["cost of sales per ounce", "cos/oz"],
+        rule: AnchorRule::Exact,
+    },
+    RowAnchor {
+        role: "Total cash costs per ounce",
+        names: &["total cash costs per ounce", "tcc/oz"],
+        rule: AnchorRule::Exact,
+    },
+    RowAnchor {
+        role: "All-in sustaining costs per ounce",
+        names: &["all-in sustaining costs per ounce", "aisc/oz"],
+        rule: AnchorRule::Exact,
+    },
+];
+
 /// Locates the AISC table on a sheet. `Ok(None)` when the sheet has no cost-of-sales row (not an AISC
 /// table); `Err` when it has one but the remaining structure cannot be found (a table-level refusal).
 pub fn locate_table<S: AsRef<str>>(
@@ -456,40 +525,23 @@ pub fn locate_table<S: AsRef<str>>(
             labels.insert(row, t.to_lowercase());
         }
     }
-    let first = |names: &[&str]| -> Option<u32> {
+    let find = |anchor: &RowAnchor| -> Option<u32> {
         labels
             .iter()
-            .find(|(_, l)| names.contains(&l.as_str()))
+            .find(|(_, l)| anchor.matches(l))
             .map(|(r, _)| *r)
     };
-    let Some(cos_row) = first(&[COS_LABEL]) else {
+    let [cos, tcc, aisc, ounces, cos_rate, tcc_rate, aisc_rate] = &ROW_ANCHORS;
+    let Some(cos_row) = find(cos) else {
         return Ok(None);
     };
-    let need = |row: Option<u32>, what: &str| row.ok_or_else(|| format!("no '{what}' row"));
-    let tcc_row = need(first(&["total cash costs"]), "Total cash costs")?;
-    let aisc_row = need(
-        first(&["all-in sustaining costs"]),
-        "All-in sustaining costs",
-    )?;
-    let ounces_row = need(
-        labels
-            .iter()
-            .find(|(_, l)| l.starts_with("ounces sold"))
-            .map(|(r, _)| *r),
-        "Ounces sold",
-    )?;
-    let cos_rate_row = need(
-        first(&["cost of sales per ounce", "cos/oz"]),
-        "Cost of sales per ounce",
-    )?;
-    let tcc_rate_row = need(
-        first(&["total cash costs per ounce", "tcc/oz"]),
-        "Total cash costs per ounce",
-    )?;
-    let aisc_rate_row = need(
-        first(&["all-in sustaining costs per ounce", "aisc/oz"]),
-        "All-in sustaining costs per ounce",
-    )?;
+    let need = |anchor: &RowAnchor| find(anchor).ok_or_else(|| format!("no '{}' row", anchor.role));
+    let tcc_row = need(tcc)?;
+    let aisc_row = need(aisc)?;
+    let ounces_row = need(ounces)?;
+    let cos_rate_row = need(cos_rate)?;
+    let tcc_rate_row = need(tcc_rate)?;
+    let aisc_rate_row = need(aisc_rate)?;
     if !(cos_row < tcc_row && tcc_row < aisc_row) {
         return Err("cost of sales, total cash costs and AISC rows are out of order".to_string());
     }
@@ -529,7 +581,8 @@ pub fn locate_table<S: AsRef<str>>(
             header_row = Some(row);
         }
     }
-    let header_row = need(header_row, "header with a registered subject")?;
+    let header_row =
+        header_row.ok_or_else(|| "no 'header with a registered subject' row".to_string())?;
     Ok(Some(AiscTable {
         cos_row,
         tcc_row,

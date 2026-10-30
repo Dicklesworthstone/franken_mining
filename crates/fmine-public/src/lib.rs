@@ -1863,6 +1863,70 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
     }
 
+    fn kit_readme() -> String {
+        std::fs::read_to_string(
+            workspace_root()
+                .join("repro")
+                .join("barrick")
+                .join("README.md"),
+        )
+        .expect("kit README")
+    }
+
+    /// BD-339.S4 golden: the kit README's generated section equals the generator's output from the code's row
+    /// anchors and the registry. On a mismatch it prints the section to paste; tests never write files.
+    #[test]
+    fn test_kit_readme_selectors_match_code() {
+        let readme = kit_readme();
+        let profile = load_issuer_profile(&workspace_root(), "barrick").expect("registry");
+        let want = sources::kit_selectors_markdown(&profile);
+        let got = sources::kit_readme_section(&readme).expect("both markers");
+        assert!(
+            got == want.trim_matches('\n'),
+            "repro/barrick/README.md's generated section differs; paste this between the markers:\n{}\n{}{}",
+            sources::KIT_SELECTORS_BEGIN,
+            want,
+            sources::KIT_SELECTORS_END
+        );
+    }
+
+    /// BD-339.S4: the golden comparison sees a one-subject drift in either direction.
+    #[test]
+    fn test_kit_readme_golden_detects_drift() {
+        let readme = kit_readme();
+        let section = sources::kit_readme_section(&readme).expect("both markers");
+        let mut profile = load_issuer_profile(&workspace_root(), "barrick").expect("registry");
+        let first = profile.subjects[0].clone();
+        assert_eq!(
+            section,
+            sources::kit_selectors_markdown(&profile).trim_matches('\n')
+        );
+        let renamed = readme.replacen(&format!("\n- {first}\n"), "\n- Renamed subject\n", 1);
+        assert_ne!(renamed, readme, "the subject line is in the README");
+        assert_ne!(
+            sources::kit_readme_section(&renamed).expect("both markers"),
+            sources::kit_selectors_markdown(&profile).trim_matches('\n')
+        );
+        profile.subjects.remove(0);
+        assert_ne!(
+            section,
+            sources::kit_selectors_markdown(&profile).trim_matches('\n')
+        );
+    }
+
+    /// BD-339.S4: the kit README carries the no-affiliation sentence verbatim and the RISK-31 instruction.
+    #[test]
+    fn test_kit_readme_states_no_affiliation_and_risk_31() {
+        let readme = kit_readme();
+        assert!(readme.contains(
+            "FrankenMining is not affiliated with Barrick; these are Barrick's public files, fetched from \
+             Barrick's host"
+        ));
+        assert!(
+            readme.contains("RISK-31: do not redistribute the files; fetch them from the issuer.")
+        );
+    }
+
     /// BD-339.S1: the expected-roots file parses and every row is well formed. Each anchor is the one the run
     /// derives from its root (18 sources, public lane), so a typo in either is caught without the corpus.
     #[test]

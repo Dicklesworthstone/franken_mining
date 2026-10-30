@@ -329,6 +329,106 @@ pub fn load_expected_roots(path: &Path) -> Result<Vec<ExpectedRoot>, String> {
     Ok(rows)
 }
 
+/// Markers around the generated section of `repro/<issuer>/README.md`.
+pub const KIT_SELECTORS_BEGIN: &str = "<!-- BEGIN GENERATED SELECTORS -->";
+pub const KIT_SELECTORS_END: &str = "<!-- END GENERATED SELECTORS -->";
+
+/// The selectors section of `repro/<issuer>/README.md` (BD-339.S4). It is rendered from the code's row anchors
+/// and the issuer's registry, so the README cannot drift from either: the row anchors, the registered subjects,
+/// the footnote rule, the reconstructions with their label checks, and one row per registered file. It holds
+/// no value read from a workbook.
+#[must_use]
+pub fn kit_selectors_markdown(profile: &IssuerProfile) -> String {
+    use crate::aisc::{AnchorRule, ExplanationBasis, ROW_ANCHORS};
+    let code = |s: &str| format!("`{s}`");
+    let mut out = String::from(
+        "### Row anchors\n\n\
+         A sheet's column-A labels are read lower-cased with whitespace collapsed. Each row below is the first \
+         label, top to bottom, that matches one of its labels. A sheet with no cost-of-sales row holds no AISC \
+         table; one that has it but lacks another row is refused as a table, naming the row.\n\n\
+         | Row | Labels | Match |\n|---|---|---|\n",
+    );
+    for a in ROW_ANCHORS {
+        let names: Vec<String> = a.names.iter().map(|n| code(n)).collect();
+        let rule = match a.rule {
+            AnchorRule::Exact => "equals",
+            AnchorRule::Prefix => "starts with",
+        };
+        out.push_str(&format!("| {} | {} | {rule} |\n", a.role, names.join(", ")));
+    }
+    out.push_str(
+        "\n### Subjects\n\n\
+         A column header names a subject when it equals a registered subject, or is the subject followed by one \
+         lower-case footnote letter. Any other header is reported as unregistered. Regions are segment \
+         roll-ups.\n\n",
+    );
+    for s in &profile.subjects {
+        let region = if profile.regions.contains(s) {
+            " (region)"
+        } else {
+            ""
+        };
+        out.push_str(&format!("- {s}{region}\n"));
+    }
+    out.push_str(
+        "\n### Reconstructions\n\n\
+         An identity that closes only when a component published elsewhere is added. The run re-reads the \
+         component cell and checks that each listed cell's text starts with the listed prefix; if any check \
+         fails, the instance stays undecidable.\n\n\
+         | Evidence | Table | Subject | Family | Component | Label checks | Basis |\n|---|---|---|---|---|---|---|\n",
+    );
+    for r in &profile.reconstructions {
+        let checks: Vec<String> = r
+            .label_checks
+            .iter()
+            .map(|(cell, prefix)| format!("{} starts {}", code(cell), code(prefix)))
+            .collect();
+        let basis = match &r.basis {
+            ExplanationBasis::Reconstructed => "reconstructed".to_string(),
+            ExplanationBasis::Stated { doc, locator, .. } => {
+                format!("stated at {}", code(&format!("{doc}:{locator}")))
+            }
+        };
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {basis} |\n",
+            r.evidence_id,
+            code(&format!("{} {}", r.table_file, r.sheet)),
+            r.subject,
+            r.family.as_str(),
+            code(&format!(
+                "{} {}!{}",
+                r.component_file, r.component_sheet, r.component_cell
+            )),
+            checks.join("; "),
+        ));
+    }
+    out.push_str(
+        "\n### Registered files\n\n\
+         | File | Kind | Quarter | URL | URL basis | Bytes | SHA-256 |\n|---|---|---|---|---|---|---|\n",
+    );
+    for s in &profile.sources {
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
+            code(&s.file_name),
+            s.kind.as_str(),
+            s.quarter,
+            s.url,
+            s.url_basis,
+            s.bytes,
+            code(&s.sha256_hex)
+        ));
+    }
+    out
+}
+
+/// The text between the generated-section markers of a kit README, or `None` if either marker is missing.
+#[must_use]
+pub fn kit_readme_section(readme: &str) -> Option<&str> {
+    let start = readme.find(KIT_SELECTORS_BEGIN)? + KIT_SELECTORS_BEGIN.len();
+    let len = readme[start..].find(KIT_SELECTORS_END)?;
+    Some(readme[start..start + len].trim_matches('\n'))
+}
+
 /// An issuer name as used on the command line and as a registry file stem.
 #[must_use]
 pub fn is_issuer_name(s: &str) -> bool {

@@ -67,10 +67,14 @@ The public lane of M0 (`fmine assure public`).
   IssuerProfile, load_issuer_profile, registry_path, registered_issuers, is_issuer_name, is_through_bound}`;
   `IssuerProfile::{from_registry, through}`; `IssuerProfile::{regions, shares}` (BD-331.S3);
   `IssuerProfile::missing_facts`, `RegisteredReconstruction::basis` (BD-331.S2);
-  `ExpectedRoot`, `expected_roots_path`, `load_expected_roots` (BD-339.S1)
+  `ExpectedRoot`, `expected_roots_path`, `load_expected_roots` (BD-339.S1);
+  `kit_selectors_markdown`, `kit_readme_section`, `KIT_SELECTORS_BEGIN`, `KIT_SELECTORS_END` (BD-339.S4: the
+  generated section of `repro/<issuer>/README.md`, from the row anchors and the registry; a golden test
+  compares)
 - `PublicAssuranceReport::{registry_epoch, census_digest_of_digests, check_expected}` (BD-339.S1)
 - `aisc::{IdentityFamily, IdentityState, IdentityInstance, FootingCertificate, UnregisteredHeader, AiscTable,
-  RateMiss, ShareBasis, ExplanationBasis, DEFAULT_MISSING_FACT, SHARE_MISSING_FACT, locate_table,
+  RateMiss, ShareBasis, ExplanationBasis, DEFAULT_MISSING_FACT, SHARE_MISSING_FACT, RowAnchor, AnchorRule,
+  ROW_ANCHORS (the seven rows `locate_table` anchors on, BD-339.S4), locate_table,
   ledger_for_table, rate_interval_holds, scaled_rate_holds, feasible_share, feasible_share_text,
   find_share_footnote, find_qtd_sheet, confirm_share_label, reconstruction_closes, match_subject, cell_text}`.
   `IdentityState::Consistent` carries `basis` (the stated share, footnote and label it used, or `None`);
