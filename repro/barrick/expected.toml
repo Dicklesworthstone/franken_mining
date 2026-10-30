@@ -128,3 +128,22 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "M0AS frame v4: structured details and operands; no state or reason changed."
 evidence = "bd-sjrh.1, b17d47d"
+
+# Observed from the release binary of bb8a1a2's code (the last code change; built in its own target directory
+# from the clean working tree) on the registry of the commit that appends this row. Against b1b3d1c8… only the
+# missing-fact text and detail of five (iv) moved (Kibali 2, Hemlo 3); every other payload field is equal.
+# bb8a1a2 itself (BD-331.S6, the exact kernel) left the root at b1b3d1c8….
+[[expected]]
+commit = "bb8a1a2"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "4863607085a43fc6e4a1a107885a0e498d1f803758e81b03a7aedc5f1adfa14b"
+anchor_id = "anc_f09448f0f0b70ec572d6320aaaf94481"
+totals_i = 2383
+totals_ii = 3
+totals_iii = 4
+totals_iv = 82
+totals_v = 63
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "Missing-fact text of Kibali's and Hemlo's (iv) per subject: no shared Q4 2025 cause exists."
+evidence = "bd-10om, E837"

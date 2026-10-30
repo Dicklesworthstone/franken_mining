@@ -357,7 +357,9 @@ evidence = "E489"
 # evidence. An instance with no row names its family's default (crates/fmine-public/src/lib.rs).
 
 # E836 (K.4's one-cell check, bd-prmn.8) replaced Kibali's and Hemlo's "the attributable ounces sold used for
-# the rate" (E817): all their misses sit on the Q4 2025 and 2025 sheets, where six subjects fail.
+# the rate" (E817): all their misses sit on the Q4 2025 and 2025 sheets, where six subjects fail. E837 (bd-10om)
+# found no single cause there. Hemlo's three rates imply fewer ounces than its printed ounces sold; Kibali's
+# ounces fall below what its rate implies; the Nevada sites are E826's share misses. So the text is per subject.
 [[missing_fact]]
 subject = "Veladero"
 family = "cos_per_oz"
@@ -367,14 +369,14 @@ evidence = "E691, E836"
 [[missing_fact]]
 subject = "Kibali"
 family = "cos_per_oz"
-text = "a period-wide cost of sales or ounce basis: the one-cell check fails in the same period for six subjects"
-evidence = "E817, E836"
+text = "the cost of sales or ounce basis of its fourth-quarter rate: the printed ounces fall below what the rate implies"
+evidence = "E817, E836, E837"
 
 [[missing_fact]]
 subject = "Hemlo"
 family = "cos_per_oz"
-text = "a period-wide cost of sales or ounce basis: the one-cell check fails in the same period for six subjects"
-evidence = "E817, E836"
+text = "the ounces behind its fourth-quarter and full-year rates: all three per-ounce rates imply fewer ounces than the ounces sold printed"
+evidence = "E817, E836, E837"
 
 # E816: Africa & Middle East AISC per ounce, Q1 2025 (two vintages) and H1 2025. The rule text is part of
 # the state root (it is in each instance's detail), so it must not change by a byte.

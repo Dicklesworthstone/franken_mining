@@ -3810,10 +3810,11 @@ mod tests {
             "Veladero".to_string(),
             "the ounce series behind the per-ounce rows (E691, E836)".to_string(),
         );
-        let attributable =
-            "a period-wide cost of sales or ounce basis: the one-cell check fails in the same \
-                            period for six subjects (E817, E836)"
-                .to_string();
+        // E837 (bd-10om): one text per subject, no longer a shared period-wide one.
+        let kibali = "the cost of sales or ounce basis of its fourth-quarter rate: the printed ounces fall \
+                      below what the rate implies (E817, E836, E837)";
+        let hemlo = "the ounces behind its fourth-quarter and full-year rates: all three per-ounce rates \
+                     imply fewer ounces than the ounces sold printed (E817, E836, E837)";
         let visible = |subject: &str, fact: &str| {
             r.instances
                 .iter()
@@ -3825,8 +3826,8 @@ mod tests {
                 .count()
         };
         assert_eq!(visible(&velad.0, &velad.1), 12);
-        assert_eq!(visible("Kibali", &attributable), 2);
-        assert_eq!(visible("Hemlo", &attributable), 3);
+        assert_eq!(visible("Kibali", kibali), 2);
+        assert_eq!(visible("Hemlo", hemlo), 3);
         let share = r
             .instances
             .iter()
