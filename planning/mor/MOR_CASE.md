@@ -622,3 +622,21 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     `barrick_real_files_match_the_independent_reader`, which named the field and both values;
     `test_cli_assure_public_barrick_real_files`; and the default-CI `test_expected_roots_file_is_well_formed`,
     because the anchor derived from the flipped root no longer matched. With the digit restored, all three pass.
+- **E830** Clean-clone reproduction (BD-339.S2, bd-s4oy.2; FACT, execution, 2026-10-30, owner machine).
+  - **Fetch.** `git clone` of commit 9c33dbb into a scratch directory, with no corpus, then
+    `repro/barrick/fetch.sh`. It downloaded 18 files from the issuer's CDN, one GET each, 2 s apart, none
+    redirected. Every file matched its registered size and sha256. The issuer still serves the bytes
+    registered on 2026-10-29. Summary line: `{"stage":"fetch_summary","files":18,"ok":18,"failed":[]}`.
+  - **Tests.** In the clone, `cargo test -p fmine-public -p fmine-cli -- --ignored` passed 6 of 6, including
+    the root and anchor of `repro/barrick/expected.toml`'s last row (E829). A reader with a clean checkout and
+    the issuer's own files obtains the same state root.
+  - **Planted flip** in the clone's copy of `Barrick_Q3_2025_AISC.xlsx` (byte 100; the owner corpus was not
+    touched). fetch.sh exited 1 with "present file does not match the registry: register a new vintage (do not
+    edit the digest)" and left the file as it was. `fmine doctor` stayed exit 0, status ok, with 17 of 18
+    verified and that file `present: true, bytes_ok: true, digest_ok: false`.
+  - **Owner corpus.** `fmine doctor` reports 18 of 18 verified. fetch.sh verifies the 18 present files and
+    downloads nothing.
+  - **No `sources.tsv`.** The bead planned one for the case where the TOML registry had not landed. It had
+    landed, so the registry is the one copy. `test_fetch_list_equals_registry` checks that fetch.sh's awk
+    reading equals the Rust loader's. Planted once, two ways, and both failed it: a parser keeping `_` in byte
+    counts, and a listing without the URL prefix.
