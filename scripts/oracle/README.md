@@ -1,0 +1,27 @@
+# Independent readers for the public lane
+
+These Python scripts (standard library only) read the registered Barrick workbooks without using `fmine-io` or
+`fmine-public`. `fidelity.py` and `census2.py` were written and their outputs pinned before the Rust code was
+written against them (MOR_CASE, "M0 machine run", E820–E823). The others are research checks, and their headers
+say what they are independent of.
+
+Rule: a mismatch between a script here and the Rust output is a defect in one of the two until proven otherwise.
+Never resolve it by editing a script to agree with the Rust output.
+
+The workbooks are not in git (OPEN-R7-1). `repro/barrick/fetch.sh` (BD-339) will fetch and verify them; until
+then they sit in `corpus_of_input_docs/downloaded/mine_stats/`.
+
+| Evidence | Command (repository root) | Expected (2026-10-29) |
+|---|---|---|
+| E820 extraction fidelity | `python3 -I scripts/oracle/fidelity.py corpus_of_input_docs/downloaded/mine_stats/*.xlsx` | one line per file: visible and hidden sheets, numeric, placeholder, formula-error and text counts, numeric digest; totals 101, 6, 30388, 3952, 1092, 6537 |
+| E821 and E822 identity ledger | `python3 -I scripts/oracle/census2.py .` | `AISC tables (visible): 34 instances: 2595`; footing i 1004, iii 4, v 6, np 24; per ounce i 1116, ii 3, iv 17, v 385, np 36 |
+
+| Script | What it is |
+|---|---|
+| `fidelity.py` | Extraction-fidelity reader; its docstring is the digest spec shared with `numeric_cells_digest`. |
+| `census2.py` | Identity-ledger census, visible sheets only; the reference for `fmine-public`'s ledger. |
+| `census.py` | Version 1 of the census. It counts hidden sheets too (superseded by E821). Kept because `census2.py` imports its subject list. |
+| `xl.py` | Minimal xlsx loader used by both censuses. |
+| `format_census.py` | Number-format census (cell-number-formats bead); research check. |
+| `vintage_census.py` | Cross-vintage stored-value comparison; research check. |
+| `rate_census.py` | Per-ounce check that mirrors `aisc.rs`; NOT independent evidence. |
