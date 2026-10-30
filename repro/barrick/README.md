@@ -51,6 +51,46 @@ not. `repro/barrick/ci_real_files.sh` runs the whole sequence the way CI does.
 | Root mismatch while every fetch verified | The code changed without a new `expected.toml` row, or the run is not deterministic. File a defect. |
 | Counts mismatch | An extraction or ledger defect. File a defect. |
 
+## Registering a new quarter
+
+A new quarter is data: two `[[source]]` rows in `registries/sources/barrick.toml`, run by a binary built before
+the files existed (bd-s9j3; GATE-BULL-01's blind-layout clause). For Q3 2026 the issuer publishes at
+2026-11-09 11:00Z.
+
+Before the release, push the revision that will run and record its commit and binary digest:
+
+```sh
+git rev-parse HEAD
+cargo build --release --locked -p fmine-cli
+shasum -a 256 target/release/fmine
+```
+
+On release day:
+
+1. Take each URL from the issuer's quarterly results page. Never construct one: the naming rule has already
+   changed once (`Barrick_Q3_2024_AISC.xlsx`, then `AISC_Q1_2025.xlsx`, and Q1 2025 sits under `2025/01/`).
+2. Download each file into a new, empty directory, and note its byte count and SHA-256.
+3. Append one `[[source]]` row per file, copying the fields of the 2026Q2 rows.
+   - `quarter = "2026Q3"`, with `path` relative to `url_prefix` and `url_basis = "fetched and verified <date>"`.
+   - Name the files `Barrick_Q3_2026_Mine_Stats.xlsx` and `Barrick_Q3_2026_AISC.xlsx`. The independent readers
+     find AISC files by the `*AISC.xlsx` pattern.
+   - Edit nothing else: subjects and labels were frozen before the release. `git diff --stat` must list only
+     the registry.
+4. Run `repro/barrick/fetch.sh`. It downloads the two files again and keeps them only when they match the rows.
+5. Run the independent readers before the Rust run, and keep their summary lines:
+   - `fidelity.py`, `census2.py`, `share_census.py` and `hidden_census.py`;
+   - the commands are in `scripts/oracle/README.md`.
+6. Check that `shasum -a 256 target/release/fmine` equals the recorded digest. Then run:
+   - `target/release/fmine doctor`;
+   - `target/release/fmine assure public --issuer barrick`;
+   - `target/release/fmine assure public --issuer barrick --through 2026Q2`. Its root must still equal the
+     last row of `expected.toml`, which stays the 2026Q2 record.
+7. Record a new E id holding:
+   - the commit, binary digest and push time;
+   - the two rows;
+   - the independent readers' numbers;
+   - the new root and counts, and the instances that differ from the 2026Q2 run.
+
 ## Do not redistribute the files
 
 RISK-31: do not redistribute the files; fetch them from the issuer. Do not mirror them, commit them or attach
