@@ -116,6 +116,7 @@ dependencies = [
  "fmine-evidence",
  "fmine-io",
  "fmine-metrics",
+ "fmine-numerics",
  "fmine-registry",
  "fmine-time",
  "fmine-units",

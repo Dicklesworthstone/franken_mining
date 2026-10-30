@@ -294,6 +294,8 @@ The public lane of M0 (`fmine assure public`).
 ## 9. Lifted Code & Foundation Dependencies
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io` (and, in the manifest, `fmine-units`,
   `fmine-time`, `fmine-metrics`, not used by this crate since BD-321).
+- Dev-dependency `fmine-numerics` (bd-4wvl.2): `tests/exact_feas_oracle.rs` runs the exact kernel against
+  `aisc.rs` as its oracle. No run uses the kernel yet; BD-331.S6 ports the ledger onto it.
 
 ## 10. Non-Goals & Scope Boundary
 - Operates only on public disclosures (`ConfidentialityTier::Public`).

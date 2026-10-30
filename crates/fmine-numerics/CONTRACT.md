@@ -20,19 +20,36 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
 - `voi::{VoiProblem, VoiSummary}`
 - `risk::{TailRiskSummary, compute_cvar, max_drawdown}`
 - `tropical::{TropicalEdge, TropicalDag, TropicalScheduleResult}`
-- `exact_feas` (bd-4wvl.1, BD-340.S1): exact rounding-interval feasibility over `Rat = fmine_units::ExactQty`.
-  - `Cell`, `Convention::{Closed, HalfUp, HalfDown, HalfEven, Truncate}` and `Convention::interval`;
-    `Identity { id, family, closure, kind: Sum | Equal | Scale }` and `Identity::row`.
+- `exact_feas` (bd-4wvl.1 BD-340.S1, bd-4wvl.2 BD-340.S2): exact rounding-interval feasibility over
+  `Rat = fmine_units::ExactQty`.
+  - `Cell`, `Convention::{Closed, HalfUp, HalfDown, HalfEven, Truncate}` and `Convention::interval`; `End`
+    and `Bound` (ranges with open or infinite ends).
+  - `Identity { id, family, closure, kind: Sum | Equal | Scale | Ratio }` and `Identity::row` (linear kinds).
+    `Ratio { rate, num, den, factor }` is linearised when its rate cell is in no other identity
+    (otherwise `Indeterminate`, "bilinear") and its denominator keeps one sign.
+  - `Rules { convention, constructions }`. `Construction::{ComponentSum, RoundedOnce}` is declared per
+    family before a run; a `Sum` whose family has none is refused. `ComponentSum` requires the printed
+    footing (else `Certificate::Residual`) and drops the total's own box.
   - `solve` and `solve_with_caps` give one `Component` per connected group of cells, with
     `Outcome::{Feasible { witness }, Infeasible { certificate }, NotRefuted, Indeterminate { reason }}`.
+    `Certificate` is `Farkas { multipliers }` by row id, or `Residual { identity, residual }`.
     `NotRefuted` is reserved for relaxations (S6).
-  - `check_witness` and `check_certificate` are independent of the simplex. Every reported outcome passed
-    one; a rejected one is `Indeterminate`.
-  - `certificate_digest`: hex BLAKE3 of an `XFCT` v1 frame, independent of input order.
-  - Input is refused with `XfRefusal`: a non-positive step, an off-grid half-even value, a duplicate cell
-    or identity, an unknown cell, bad signs, or a degenerate row.
-  - Caps: 256 cells per component (`MAX_VARIABLES`) and 10⁴ pivots (`MAX_PIVOTS`). A cap or an overflow
-    gives `Indeterminate`.
+  - `check_witness` (identities checked exactly, ratios as ratios) and `check_certificate` (residuals
+    recomputed; Farkas ranges over the linearised rows) are independent of the simplex. Every reported
+    outcome passed one; a rejected one is `Indeterminate`. The certificate checker shares the linearisation:
+    a linearisation fault is caught by the `aisc.rs` oracle tests, not by the checker.
+  - `implied_interval(cells, identities, rules, var, free_own_box)`: the exact interval of a cell, with
+    open ends, each end re-decided by checked runs; `ImpliedError::{Refused, Infeasible, Unbounded,
+    Indeterminate}`. A rate cell gives `Indeterminate`.
+  - `certificate_digest`: hex BLAKE3 of an `XFCT` v2 frame (v2 binds the constructions), independent of
+    input order.
+  - Input is refused with `XfRefusal`:
+    - a non-positive step, or an off-grid half-even value;
+    - a duplicate cell or identity, or an unknown cell or variable;
+    - bad signs, a degenerate row, or a ratio row requested;
+    - an undeclared construction, or a denominator interval that contains zero.
+  - Caps: 256 cells per component (`MAX_VARIABLES`) and 10⁴ pivots per run (`MAX_PIVOTS`). A cap or an
+    overflow gives `Indeterminate`.
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-301` (`NonSpdCovarianceMatrix`) when Cholesky diagonal pivot `<= 1e-12` or cycle detected in `TropicalDag`.
