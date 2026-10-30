@@ -165,3 +165,22 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "The ledger scores displayed values (M0AS frame v5 binds them): E823's 12 instances leave (v)."
 evidence = "bd-jg43.3, E838"
+
+# Observed from the release binary of 360cc39 (git archive, own target directory; exit 0, empty stderr). Against
+# e95d0b2… the 51 visible regional cost-of-sales rates leave (v): 41 to (i), relaxation_only, and 10 to (iv); in the
+# hidden scope 2 to (i) and 1 to (iv). The alternates move to 1014 and 1304. The registry epoch covers the file rows
+# only, so the new [[region_member]] rows leave it unchanged.
+[[expected]]
+commit = "360cc39"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "f1f58188f612b679bb8d0b34403c398ed941bb7c310a73fb4948f61d67c0891b"
+anchor_id = "anc_9cd66f7f821ca5bc90bb60973de0dac3"
+totals_i = 2436
+totals_ii = 3
+totals_iii = 4
+totals_iv = 92
+totals_v = 0
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "Regional cost of sales per ounce decided against registered members: the last 51 visible (v) leave."
+evidence = "BD-331.S4, bd-prmn.4, E840"

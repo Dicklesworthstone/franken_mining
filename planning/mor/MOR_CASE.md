@@ -889,6 +889,7 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     - Weighing a member whose ounces print zero failed two synthetic tests. The real-file comparison passed: on
       this corpus every excluded member prints tokens, not zeros.
     - Not naming absent members failed a synthetic test and the real-file comparison.
-  - **Root.** The registry epoch and the state root move. The `repro/barrick/expected.toml` row is observed from
-    the release binary of the code commit.
+  - **Root.** The state root moves to `f1f58188…`, observed from the release binary of 360cc39 (exit 0, empty
+    stderr); `repro/barrick/expected.toml` has the row. The registry epoch hashes the file rows only, so it does
+    not move (360cc39's commit message says it does; that was wrong).
   - **Verification.** Self-verified on this machine only; nothing has run in CI.

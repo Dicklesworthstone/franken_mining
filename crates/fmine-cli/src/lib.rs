@@ -844,15 +844,17 @@ mod tests {
             last.commit
         );
         assert!(json.contains("\"aisc_tables\":34,\"instances\":2595"));
-        // BD-331.S2 (census E828): the hidden scope is reported, labelled and never counted.
+        // BD-331.S2 (census E828): the hidden scope is reported, labelled and never counted. BD-331.S4 (region
+        // census, E840): its three regional rates move v → i twice and v → iv once.
         assert!(json.contains(
             "\"hidden_scope\":{\"scope\":\"sheet not displayed to readers\",\"counted\":false,\
-             \"aisc_tables\":6,\"instances\":435,\"by_state\":{\"i\":404,\"ii\":0,\"iii\":1,\"iv\":17,\"v\":3,\"np\":10}"
+             \"aisc_tables\":6,\"instances\":435,\"by_state\":{\"i\":406,\"ii\":0,\"iii\":1,\"iv\":18,\"v\":0,\"np\":10}"
         ));
         assert!(json.contains(
             // BD-331.S3 (census E826): 263 stated-share fits move v → i and 65 misses v → iv. bd-jg43.3 (census
-            // E838): E823's 12 Loulo-Gounkoto instances move v → i on displayed values.
-            "\"totals\":{\"i\":2395,\"ii\":3,\"iii\":4,\"iv\":82,\"v\":51,\"np\":60}"
+            // E838): E823's 12 Loulo-Gounkoto instances move v → i on displayed values. BD-331.S4 (region census,
+            // E840): of the 51 regional rates, 41 move v → i and 10 v → iv.
+            "\"totals\":{\"i\":2436,\"ii\":3,\"iii\":4,\"iv\":92,\"v\":0,\"np\":60}"
         ));
         // The public-lane envelope: the root as certificate, the no-claim line, and its two next actions.
         assert_eq!(env.certificate.as_deref(), Some(last.state_root.as_str()));
