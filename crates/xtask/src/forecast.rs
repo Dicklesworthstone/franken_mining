@@ -18,9 +18,14 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Command;
 
+use std::collections::BTreeMap;
+
 use fmine_calib::record::{
-    self, ProofTimes, RecordDates, RecordManifest, RecordRules, RegisteredDigest, format_utc,
-    parse_hex32, parse_utc,
+    self, BaselineKind, ProofTimes, Quarter, Rat, RecordDates, RecordManifest, RecordRules,
+    RegisteredDigest, SiteStatus, format_utc, parse_hex32, parse_utc,
+};
+use fmine_public::mine_stats::{
+    LabelVocabulary, MineStatsCell, MineStatsValue, View, read_mine_stats,
 };
 
 /// The FY2026 rules, relative to the workspace root.
@@ -142,6 +147,7 @@ fn load(root: &Path, dir: &Path) -> Res<Loaded> {
             manifest.record_id, rules.record_id
         ));
     }
+    record::parse_forecasts(&csv, &rules).map_err(|e| vec![e.to_string()])?;
     let registered = registered_digests(root)?;
     let findings = findings(&manifest, &registered, None, rules.dates);
     if !findings.is_empty() {
@@ -173,6 +179,225 @@ fn findings(
         .iter()
         .map(|f| format!("manifest.toml: {f}"))
         .collect()
+}
+
+/// An exact value as `n` or `n/d`.
+fn exact_text(x: Rat) -> String {
+    if x.den() == 1 {
+        x.num().to_string()
+    } else {
+        format!("{}/{}", x.num(), x.den())
+    }
+}
+
+/// The value a persistence series takes for `site` in quarter `q`: the summary field's three-month value as first
+/// published, i.e. from the quarter's own release (its current-year block, period `q`). `None` when it is not a
+/// positive printed number: a placeholder, a blank, a zero or no row. Two candidate cells refuse. Messages carry
+/// locators, never values (RISK-31).
+fn series_value(
+    values: &[MineStatsValue],
+    q: Quarter,
+    site: &str,
+    field: &str,
+) -> Result<Option<Rat>, String> {
+    let period = q.to_string();
+    let mut hits = values.iter().filter(|v| {
+        v.view == View::Summary
+            && v.months == 3
+            && v.period == period
+            && v.site == site
+            && v.label == field
+    });
+    let first = hits.next();
+    if let (Some(a), Some(b)) = (first, hits.next()) {
+        return Err(format!(
+            "{period} {site} {field}: two cells, {} and {}",
+            a.locator, b.locator
+        ));
+    }
+    match first {
+        Some(MineStatsValue {
+            value: MineStatsCell::Number { raw_text, .. },
+            locator,
+            ..
+        }) => {
+            let x = Rat::from_decimal_str(raw_text)
+                .map_err(|_| format!("{locator}: the stored number is not an exact decimal"))?;
+            Ok((x.signum() > 0).then_some(x))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// One live site's persistence interval: `point × [q_lo, q_hi]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SiteInterval {
+    pub point: Rat,
+    pub lower: Rat,
+    pub upper: Rat,
+}
+
+/// A run-rate persistence baseline of the FY2026 rules, computed from the registered Mine Stats workbooks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistenceBaseline {
+    pub target: String,
+    pub pool_from: Quarter,
+    pub pool_through: Quarter,
+    pub point: Quarter,
+    /// Ratios in the pool, and consecutive pairs left out of it (either value not a positive printed number).
+    pub ratios: usize,
+    pub left_out: usize,
+    /// The ratios at α/2 and 1 − α/2.
+    pub q_lo: Rat,
+    pub q_hi: Rat,
+    /// Per live site, its interval, or `None` where the point is not a positive printed number. `None` as a whole
+    /// until the point quarter's workbook is registered.
+    pub intervals: Option<Vec<(String, Option<SiteInterval>)>>,
+}
+
+/// Every `run_rate_persistence` baseline of `forecasts/fy2026/rules.toml`, from the issuer's registered workbooks
+/// read label-anchored under the registered vocabulary. Refuses a workbook with any refused cell, a pool quarter
+/// that is not registered and an ambiguous cell; the pool, the point quarter, α and the estimator come from the
+/// rules alone.
+pub fn persistence_baselines(root: &Path) -> Res<Vec<PersistenceBaseline>> {
+    let rules = parse_rules_bytes(&read(&root.join(FY2026_RULES))?, FY2026_RULES)?;
+    let profile =
+        fmine_public::load_issuer_profile(root, &rules.issuer).map_err(|e| vec![e.to_string()])?;
+    let vocabulary: LabelVocabulary = profile.mine_stats_labels.iter().cloned().collect();
+    let sources =
+        fmine_public::load_registered_sources(&profile, root).map_err(|e| vec![e.to_string()])?;
+    let mut reads: BTreeMap<Quarter, Vec<MineStatsValue>> = BTreeMap::new();
+    for src in sources
+        .iter()
+        .filter(|s| s.kind == fmine_public::sources::SourceKind::MineStats)
+    {
+        let q = Quarter::parse(&src.quarter)
+            .ok_or_else(|| vec![format!("{}: quarter {:?}", src.file_name, src.quarter)])?;
+        let read = read_mine_stats(&src.workbook, &src.quarter, Some(&vocabulary))
+            .map_err(|e| vec![format!("{}: {e}", src.file_name)])?;
+        if !read.refusals.is_empty() {
+            return fail(format!(
+                "{}: {} refused cells; a baseline is computed only from a clean read",
+                src.file_name,
+                read.refusals.len()
+            ));
+        }
+        reads.insert(q, read.values);
+    }
+    let live: Vec<&str> = rules
+        .sites
+        .iter()
+        .filter(|s| s.status == SiteStatus::Live)
+        .map(|s| s.name.as_str())
+        .collect();
+    let mut out = Vec::new();
+    for b in &rules.baselines {
+        let BaselineKind::Persistence {
+            pool_from,
+            pool_through,
+            point,
+        } = b.kind
+        else {
+            continue;
+        };
+        let Some(target) = rules.targets.iter().find(|t| t.id == b.target) else {
+            return fail(format!("baseline target {:?} is not declared", b.target));
+        };
+        let mut series = Vec::with_capacity(live.len());
+        for site in &live {
+            let mut s = Vec::new();
+            for q in pool_from.through(pool_through) {
+                let values = reads.get(&q).ok_or_else(|| {
+                    vec![format!(
+                        "{q} is in the pool, but no Mine Stats workbook is registered for it"
+                    )]
+                })?;
+                s.push(series_value(values, q, site, &target.field).map_err(|e| vec![e])?);
+            }
+            series.push(s);
+        }
+        let (ratios, left_out) =
+            record::pooled_ratios(&series).map_err(|e| vec![format!("{}: {e}", b.target)])?;
+        let (q_lo, q_hi) = record::ratio_quantiles(&ratios, rules.alpha, rules.estimator)
+            .map_err(|e| vec![format!("{}: {e}", b.target)])?;
+        let intervals = match reads.get(&point) {
+            None => None,
+            Some(values) => {
+                let mut rows = Vec::with_capacity(live.len());
+                for site in &live {
+                    let iv = match series_value(values, point, site, &target.field)
+                        .map_err(|e| vec![e])?
+                    {
+                        None => None,
+                        Some(point) => {
+                            let (lower, upper) = record::persistence_interval(
+                                &ratios,
+                                point,
+                                rules.alpha,
+                                rules.estimator,
+                            )
+                            .map_err(|e| vec![format!("{site} {}: {e}", b.target)])?;
+                            Some(SiteInterval {
+                                point,
+                                lower,
+                                upper,
+                            })
+                        }
+                    };
+                    rows.push(((*site).to_string(), iv));
+                }
+                Some(rows)
+            }
+        };
+        out.push(PersistenceBaseline {
+            target: b.target.clone(),
+            pool_from,
+            pool_through,
+            point,
+            ratios: ratios.len(),
+            left_out,
+            q_lo,
+            q_hi,
+            intervals,
+        });
+    }
+    Ok(out)
+}
+
+/// `forecast-baseline`: one JSON line per persistence baseline (the pool's size, the pairs left out and the two
+/// ratio quantiles), then, once the point quarter is registered, one `site,target,point,lower,upper` line per live
+/// site, exact (`n/d`). The site lines hold issuer-derived values: the command needs the corpus, so it never runs
+/// in CI (RISK-31).
+pub fn baseline_lines(root: &Path) -> Res<Vec<String>> {
+    let mut lines = Vec::new();
+    for b in persistence_baselines(root)? {
+        lines.push(format!(
+            "{{\"baseline\":\"run_rate_persistence\",\"target\":\"{}\",\"pool\":\"{}..{}\",\"ratios\":{},\
+             \"left_out\":{},\"q_lo\":\"{}\",\"q_hi\":\"{}\",\"point_quarter\":\"{}\",\"point_registered\":{}}}",
+            b.target,
+            b.pool_from,
+            b.pool_through,
+            b.ratios,
+            b.left_out,
+            exact_text(b.q_lo),
+            exact_text(b.q_hi),
+            b.point,
+            b.intervals.is_some()
+        ));
+        for (site, iv) in b.intervals.iter().flatten() {
+            lines.push(match iv {
+                Some(iv) => format!(
+                    "{site},{},{},{},{}",
+                    b.target,
+                    exact_text(iv.point),
+                    exact_text(iv.lower),
+                    exact_text(iv.upper)
+                ),
+                None => format!("{site},{},NOT_PUBLISHED", b.target),
+            });
+        }
+    }
+    Ok(lines)
 }
 
 /// `forecast-rules-hash <rules.toml>`: the rules' `FMRUL1` digest, written to `rules.sha256` beside them. Rules
@@ -465,6 +690,115 @@ mod tests {
 
     fn workspace_root() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn cell(
+        view: View,
+        months: u8,
+        period: &str,
+        site: &str,
+        label: &str,
+        value: MineStatsCell,
+    ) -> MineStatsValue {
+        MineStatsValue {
+            locator: format!("{period}:{site}:{label}"),
+            sheet: "QTD".to_string(),
+            cell: "B5".to_string(),
+            view,
+            months,
+            period: period.to_string(),
+            period_label: String::new(),
+            site_raw: site.to_string(),
+            site: site.to_string(),
+            printed_share: None,
+            label: label.to_string(),
+            label_as_printed: label.to_string(),
+            footnote: None,
+            section: None,
+            value,
+        }
+    }
+
+    fn number(text: &str) -> MineStatsCell {
+        MineStatsCell::Number {
+            raw_text: text.to_string(),
+            value: text.parse().expect("f64"),
+        }
+    }
+
+    /// The series value is the quarter's own three-month summary cell: not a comparative year, a longer period,
+    /// a Minestats row or another field. Placeholders, zero and no row are `None`; two candidates refuse.
+    #[test]
+    fn test_series_value_takes_the_first_published_quarter() {
+        let f = "au_prod_100_koz";
+        let q = Quarter::parse("2026Q2").expect("quarter");
+        let values = vec![
+            cell(View::Summary, 3, "2025Q2", "Carlin", f, number("300")),
+            cell(View::Summary, 6, "2026H1", "Carlin", f, number("700")),
+            cell(View::Minestats, 3, "2026Q2", "Carlin", f, number("1")),
+            cell(
+                View::Summary,
+                3,
+                "2026Q2",
+                "Carlin",
+                "au_prod_attr_koz",
+                number("250"),
+            ),
+            cell(View::Summary, 3, "2026Q2", "Carlin", f, number("4.105E2")),
+            cell(
+                View::Summary,
+                3,
+                "2026Q2",
+                "Hemlo",
+                f,
+                MineStatsCell::Nil {
+                    token: "—".into()
+                },
+            ),
+            cell(View::Summary, 3, "2026Q2", "Tongon", f, number("0")),
+            cell(View::Summary, 3, "2026Q2", "Kibali", f, number("1")),
+            cell(View::Summary, 3, "2026Q2", "Kibali", f, number("2")),
+        ];
+        let at = |site| series_value(&values, q, site, f);
+        assert_eq!(at("Carlin"), Ok(Some(Rat::new(821, 2).expect("rat"))));
+        assert_eq!(at("Hemlo"), Ok(None));
+        assert_eq!(at("Tongon"), Ok(None));
+        assert_eq!(at("Porgera"), Ok(None));
+        assert!(at("Kibali").expect_err("two cells").contains("two cells"));
+        assert_eq!(exact_text(Rat::new(821, 2).expect("rat")), "821/2");
+        assert_eq!(exact_text(Rat::from_integer(7)), "7");
+    }
+
+    /// The FY2026 persistence baselines on the ten registered workbooks (local corpus): both targets pool the 11
+    /// live sites' 9 consecutive pairs, 2024Q1-2026Q2, and with the 2026Q3 workbook not yet registered no site gets
+    /// an interval. Prints counts only (RISK-31).
+    #[test]
+    #[ignore = "needs the registered Mine Stats workbooks under corpus_of_input_docs/"]
+    fn test_fy2026_persistence_baselines_on_registered_files() {
+        let baselines = persistence_baselines(&workspace_root()).expect("baselines");
+        assert_eq!(
+            baselines
+                .iter()
+                .map(|b| b.target.as_str())
+                .collect::<Vec<_>>(),
+            ["production", "unit_cost"]
+        );
+        let one = Rat::from_integer(1);
+        for b in &baselines {
+            eprintln!(
+                "{}: {} ratios, {} pairs left out",
+                b.target, b.ratios, b.left_out
+            );
+            assert_eq!(b.ratios + b.left_out, 11 * 9, "{}", b.target);
+            assert!(
+                b.ratios >= 50,
+                "{}: most pairs are printed numbers",
+                b.target
+            );
+            assert_eq!(b.q_lo.checked_cmp(one), Ok(std::cmp::Ordering::Less));
+            assert_eq!(b.q_hi.checked_cmp(one), Ok(std::cmp::Ordering::Greater));
+            assert_eq!(b.intervals, None, "2026Q3 is not registered yet");
+        }
     }
 
     fn committed_rules() -> (Vec<u8>, RecordRules) {

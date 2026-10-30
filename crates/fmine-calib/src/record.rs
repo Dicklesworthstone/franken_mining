@@ -17,7 +17,7 @@ use std::fmt;
 use std::ops::Range;
 
 use fmine_core::hash::{Digest32, sha256};
-use fmine_numerics::exact_feas::Rat;
+pub use fmine_numerics::exact_feas::Rat;
 use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
 use fmine_time::CivilDate;
 
@@ -283,6 +283,21 @@ pub enum RecordError {
     NoRows {
         table: &'static str,
     },
+    /// A baseline id the scoring code has no rule for.
+    UnknownBaseline {
+        line: usize,
+        id: String,
+    },
+    /// A line of `forecasts.csv` that is not a forecast of the rules' universe (1-based; line 1 is the header).
+    Forecast {
+        line: usize,
+        reason: String,
+    },
+    /// A live site × target of the rules with no forecast row.
+    MissingForecast {
+        site: String,
+        target: String,
+    },
 }
 
 impl fmt::Display for RecordError {
@@ -335,6 +350,14 @@ impl fmt::Display for RecordError {
                 write!(f, "target {target:?} has no [[baseline]]")
             }
             Self::NoRows { table } => write!(f, "no [[{table}]] row"),
+            Self::UnknownBaseline { line, id } => write!(
+                f,
+                "line {line}: baseline {id:?} is neither issuer_guidance nor run_rate_persistence"
+            ),
+            Self::Forecast { line, reason } => write!(f, "forecasts.csv line {line}: {reason}"),
+            Self::MissingForecast { site, target } => {
+                write!(f, "forecasts.csv has no {target} forecast for {site}")
+            }
         }
     }
 }
@@ -495,12 +518,102 @@ pub fn parse_manifest(text: &str) -> Result<RecordManifest, RecordError> {
     Ok(manifest)
 }
 
+/// A reporting quarter, `YYYYQn`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Quarter {
+    pub year: i32,
+    /// 1–4.
+    pub q: u8,
+}
+
+impl Quarter {
+    /// `2026Q3`; anything else is `None`.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        let (y, q) = s.split_once('Q')?;
+        if y.len() != 4 || !y.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let q = match q {
+            "1" => 1,
+            "2" => 2,
+            "3" => 3,
+            "4" => 4,
+            _ => return None,
+        };
+        Some(Self {
+            year: y.parse().ok()?,
+            q,
+        })
+    }
+
+    #[must_use]
+    pub const fn next(self) -> Self {
+        if self.q == 4 {
+            Self {
+                year: self.year + 1,
+                q: 1,
+            }
+        } else {
+            Self {
+                year: self.year,
+                q: self.q + 1,
+            }
+        }
+    }
+
+    /// The quarters from `self` to `last`, both included; empty when `last` is earlier.
+    #[must_use]
+    pub fn through(self, last: Self) -> Vec<Self> {
+        let mut out = Vec::new();
+        let mut q = self;
+        while q <= last {
+            out.push(q);
+            q = q.next();
+        }
+        out
+    }
+}
+
+impl fmt::Display for Quarter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}Q{}", self.year, self.q)
+    }
+}
+
+/// How a target's outcome is read from the outcome release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// `fy_minus_9m`: the full year (YTD sheet, Q4 release) minus the nine months (YTD sheet, Q3 release); an
+    /// additive quantity only.
+    FyMinus9m,
+    /// `q4_qtd`: the Q4 value as printed (QTD sheet, Q4 release); a per-unit rate, which is not additive.
+    Q4Qtd,
+}
+
 /// A forecast target: what is forecast and what is scored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     pub id: String,
     pub quantity: String,
     pub scored_quantity: String,
+    /// The Mine Stats summary field id the target is read from (e.g. `au_prod_100_koz`).
+    pub field: String,
+    pub outcome: Outcome,
+}
+
+/// What a baseline row computes. The id decides it, so the scoring code never reads the prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaselineKind {
+    /// `issuer_guidance`: the issuer's own range, transcribed at scoring by two readers (BD-341).
+    IssuerGuidance,
+    /// `run_rate_persistence`: `point` quarter's value × the quantiles of the ratios of consecutive quarters
+    /// `pool_from..=pool_through`.
+    Persistence {
+        pool_from: Quarter,
+        pool_through: Quarter,
+        point: Quarter,
+    },
 }
 
 /// A pre-written rule for a change of basis (a divestment, a re-segmentation, an ownership change).
@@ -514,6 +627,7 @@ pub struct BasisRule {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaselineRule {
     pub id: String,
+    pub kind: BaselineKind,
     pub target: String,
     pub rule: String,
     pub source: String,
@@ -647,7 +761,7 @@ pub fn parse_rules(text: &str) -> Result<RecordRules, RecordError> {
         };
         match row.table.as_str() {
             "target" => {
-                r.check_keys(&["id", "quantity", "scored_quantity"])?;
+                r.check_keys(&["id", "quantity", "scored_quantity", "field", "outcome"])?;
                 let id = text("id")?;
                 if targets.iter().any(|t| t.id == id) {
                     return Err(duplicate(&id));
@@ -656,6 +770,16 @@ pub fn parse_rules(text: &str) -> Result<RecordRules, RecordError> {
                     id,
                     quantity: text("quantity")?,
                     scored_quantity: text("scored_quantity")?,
+                    field: r.parsed("field", "a field id of [a-z0-9_]", |s| {
+                        s.bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                            .then(|| s.to_string())
+                    })?,
+                    outcome: r.parsed("outcome", "\"fy_minus_9m\" or \"q4_qtd\"", |s| match s {
+                        "fy_minus_9m" => Some(Outcome::FyMinus9m),
+                        "q4_qtd" => Some(Outcome::Q4Qtd),
+                        _ => None,
+                    })?,
                 });
             }
             "basis_rule" => {
@@ -670,13 +794,52 @@ pub fn parse_rules(text: &str) -> Result<RecordRules, RecordError> {
                 });
             }
             "baseline" => {
-                r.check_keys(&["id", "target", "rule", "source"])?;
-                let (id, target) = (text("id")?, text("target")?);
+                let id = text("id")?;
+                let kind = match id.as_str() {
+                    "issuer_guidance" => {
+                        r.check_keys(&["id", "target", "rule", "source"])?;
+                        BaselineKind::IssuerGuidance
+                    }
+                    "run_rate_persistence" => {
+                        r.check_keys(&[
+                            "id",
+                            "target",
+                            "rule",
+                            "source",
+                            "pool_from",
+                            "pool_through",
+                            "point_quarter",
+                        ])?;
+                        let quarter = |key| r.parsed(key, "a quarter YYYYQn", Quarter::parse);
+                        let (pool_from, pool_through) =
+                            (quarter("pool_from")?, quarter("pool_through")?);
+                        let point = quarter("point_quarter")?;
+                        // One pair at least, and the point after the pool: a point inside the pool would score
+                        // the baseline on its own sample.
+                        if pool_through <= pool_from || point <= pool_through {
+                            return Err(RecordError::BadValue {
+                                line: r.field("point_quarter")?.line,
+                                key: "point_quarter",
+                                expected: "after pool_through, itself after pool_from",
+                            });
+                        }
+                        BaselineKind::Persistence {
+                            pool_from,
+                            pool_through,
+                            point,
+                        }
+                    }
+                    _ => {
+                        return Err(RecordError::UnknownBaseline { line: row.line, id });
+                    }
+                };
+                let target = text("target")?;
                 if baselines.iter().any(|b| b.id == id && b.target == target) {
                     return Err(duplicate(&format!("{id} for {target}")));
                 }
                 baselines.push(BaselineRule {
                     id,
+                    kind,
                     target,
                     rule: text("rule")?,
                     source: text("source")?,
@@ -1025,6 +1188,17 @@ pub fn quantile(sample: &[Rat], p: Rat, est: Estimator) -> Result<Rat, RecordErr
 pub fn persistence_interval(
     ratios: &[Rat],
     point: Rat,
+    alpha: Rat,
+    est: Estimator,
+) -> Result<(Rat, Rat), RecordError> {
+    let (lo, hi) = ratio_quantiles(ratios, alpha, est)?;
+    Ok((exact(point.checked_mul(lo))?, exact(point.checked_mul(hi))?))
+}
+
+/// The ratios at levels α/2 and 1 − α/2 (q10 and q90 at α = 0.2), each an observed ratio under the inverse ECDF.
+pub fn ratio_quantiles(
+    ratios: &[Rat],
+    alpha: Rat,
     est: Estimator,
 ) -> Result<(Rat, Rat), RecordError> {
     if est == Estimator::Linear {
@@ -1033,13 +1207,131 @@ pub fn persistence_interval(
     if ratios.iter().any(|r| r.signum() <= 0) {
         return Err(RecordError::NonPositiveRatio);
     }
-    let level = |n| exact(Rat::new(n, 10));
-    let q10 = quantile(ratios, level(1)?, est)?;
-    let q90 = quantile(ratios, level(9)?, est)?;
+    let one = Rat::from_integer(1);
+    if alpha.signum() <= 0 || exact(alpha.checked_cmp(one))? != Ordering::Less {
+        return Err(RecordError::AlphaOutOfDomain);
+    }
+    let half = exact(alpha.checked_div(Rat::from_integer(2)))?;
     Ok((
-        exact(point.checked_mul(q10))?,
-        exact(point.checked_mul(q90))?,
+        quantile(ratios, half, est)?,
+        quantile(ratios, exact(one.checked_sub(half))?, est)?,
     ))
+}
+
+/// The persistence pool: every ratio `v[t+1] / v[t]` of consecutive quarters within each site's series. A pair
+/// with either value `None` (not a positive printed number) is left out and counted, never imputed.
+pub fn pooled_ratios(series: &[Vec<Option<Rat>>]) -> Result<(Vec<Rat>, usize), RecordError> {
+    let (mut ratios, mut left_out) = (Vec::new(), 0);
+    for s in series {
+        for pair in s.windows(2) {
+            match (pair[0], pair[1]) {
+                (Some(a), Some(b)) if a.signum() > 0 && b.signum() > 0 => {
+                    ratios.push(exact(b.checked_div(a))?);
+                }
+                _ => left_out += 1,
+            }
+        }
+    }
+    Ok((ratios, left_out))
+}
+
+/// One row of `forecasts.csv`: a live site's interval for one target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForecastRow {
+    pub site: String,
+    pub target: String,
+    pub point: Rat,
+    pub lo: Rat,
+    pub hi: Rat,
+}
+
+/// The header `forecasts.csv` must carry under these rules: `site,target,point,p10,p90,uncalibrated` at α = 0.2.
+pub fn forecasts_header(rules: &RecordRules) -> Result<String, RecordError> {
+    let lo = exact(rules.alpha.checked_mul(Rat::from_integer(50)))?;
+    if lo.den() != 1 {
+        return Err(RecordError::AlphaOutOfDomain);
+    }
+    let lo = lo.num();
+    Ok(format!(
+        "site,target,point,p{lo},p{},uncalibrated",
+        100 - lo
+    ))
+}
+
+/// Parses `forecasts.csv` against the rules (BD-334.S3): the rules' header; then exactly one row for each live
+/// site × target and none for a `not_published` site or anything outside the universe; decimals with
+/// 0 ≤ lower ≤ point ≤ upper; and `uncalibrated` = `true`, since one period cannot calibrate (plan §21.6).
+/// Lines end in `\n`; no field holds a comma, quote or surrounding space.
+pub fn parse_forecasts(csv: &[u8], rules: &RecordRules) -> Result<Vec<ForecastRow>, RecordError> {
+    let bad = |line: usize, reason: String| RecordError::Forecast { line, reason };
+    let text = std::str::from_utf8(csv).map_err(|_| bad(0, "not UTF-8".to_string()))?;
+    let body = text
+        .strip_suffix('\n')
+        .ok_or_else(|| bad(text.lines().count(), "the last line has no \\n".to_string()))?;
+    let mut lines = body.split('\n');
+    let header = forecasts_header(rules)?;
+    if lines.next() != Some(header.as_str()) {
+        return Err(bad(1, format!("the header must be {header:?}")));
+    }
+    let mut rows: Vec<ForecastRow> = Vec::new();
+    for (k, line) in lines.enumerate() {
+        let n = k + 2;
+        let cells: Vec<&str> = line.split(',').collect();
+        let [site, target, point, lo, hi, flag] = cells[..] else {
+            return Err(bad(n, format!("{} fields, not 6", cells.len())));
+        };
+        match rules.sites.iter().find(|s| s.name == site) {
+            None => return Err(bad(n, format!("{site:?} is not a site of the rules"))),
+            Some(s) if s.status == SiteStatus::NotPublished => {
+                return Err(bad(
+                    n,
+                    format!("{site} is not_published: it is listed, not forecast"),
+                ));
+            }
+            Some(_) => {}
+        }
+        if !rules.targets.iter().any(|t| t.id == target) {
+            return Err(bad(n, format!("{target:?} is not a target of the rules")));
+        }
+        if rows.iter().any(|r| r.site == site && r.target == target) {
+            return Err(bad(n, format!("a second {target} forecast for {site}")));
+        }
+        if flag != "true" {
+            return Err(bad(n, "uncalibrated must be true".to_string()));
+        }
+        let number = |s: &str| {
+            Rat::from_decimal_str(s)
+                .ok()
+                .filter(|x| x.signum() >= 0)
+                .ok_or_else(|| bad(n, format!("{s:?} is not a non-negative decimal")))
+        };
+        let (point, lo, hi) = (number(point)?, number(lo)?, number(hi)?);
+        let le = |a: Rat, b: Rat| exact(a.checked_cmp(b)).map(|o| o != Ordering::Greater);
+        if !(le(lo, point)? && le(point, hi)?) {
+            return Err(bad(
+                n,
+                "the bounds must satisfy lower <= point <= upper".to_string(),
+            ));
+        }
+        rows.push(ForecastRow {
+            site: site.to_string(),
+            target: target.to_string(),
+            point,
+            lo,
+            hi,
+        });
+    }
+    for s in rules.sites.iter().filter(|s| s.status == SiteStatus::Live) {
+        for t in &rules.targets {
+            if !rows.iter().any(|r| r.site == s.name && r.target == t.id) {
+                return Err(RecordError::MissingForecast {
+                    site: s.name.clone(),
+                    target: t.id.clone(),
+                });
+            }
+        }
+    }
+    Ok(rows)
 }
 
 #[cfg(test)]
@@ -1218,18 +1510,125 @@ mod tests {
     fn test_persistence_inverse_ecdf_is_exact() {
         // Ten ratios 0.91..=1.00: n p = 1 and 9, so q10 = 0.91 and q90 = 0.99; point 200 gives [182, 198].
         let ratios: Vec<Rat> = (91..=100).map(|k| r(k, 100)).collect();
+        let a = r(1, 5);
         assert_eq!(
-            persistence_interval(&ratios, i(200), Estimator::InverseEcdf),
+            persistence_interval(&ratios, i(200), a, Estimator::InverseEcdf),
             Ok((i(182), i(198)))
         );
+        // α = 0.4: levels 0.2 and 0.8, n p = 2 and 8, so the 2nd and 8th ratios.
         assert_eq!(
-            persistence_interval(&ratios, i(200), Estimator::Linear),
+            persistence_interval(&ratios, i(200), r(2, 5), Estimator::InverseEcdf),
+            Ok((i(184), i(196)))
+        );
+        assert_eq!(
+            persistence_interval(&ratios, i(200), a, Estimator::Linear),
             Err(RecordError::NotExact)
         );
         assert_eq!(
-            persistence_interval(&[i(1), i(0)], i(200), Estimator::InverseEcdf),
+            persistence_interval(&[i(1), i(0)], i(200), a, Estimator::InverseEcdf),
             Err(RecordError::NonPositiveRatio)
         );
+        for alpha in [i(0), i(1)] {
+            assert_eq!(
+                persistence_interval(&ratios, i(200), alpha, Estimator::InverseEcdf),
+                Err(RecordError::AlphaOutOfDomain)
+            );
+        }
+    }
+
+    /// Two sites over four quarters: A gives 110/100, 121/110 and 133.1/121 (each 1.1); B's gap leaves its two
+    /// pairs out, and a zero leaves a pair out too, both counted.
+    #[test]
+    fn test_pooled_ratios_leave_out_and_count() {
+        let a = vec![Some(i(100)), Some(i(110)), Some(i(121)), Some(r(1331, 10))];
+        let b = vec![Some(i(50)), None, Some(i(40)), Some(i(0))];
+        let (ratios, left_out) = pooled_ratios(&[a, b]).expect("pool");
+        assert_eq!(ratios, vec![r(11, 10); 3]);
+        assert_eq!(left_out, 3);
+        assert_eq!(pooled_ratios(&[vec![Some(i(1))]]), Ok((vec![], 0)));
+    }
+
+    #[test]
+    fn test_quarters() {
+        let q = |s| Quarter::parse(s).expect("quarter");
+        assert_eq!(q("2024Q4").next(), q("2025Q1"));
+        assert_eq!(q("2024Q1").through(q("2026Q2")).len(), 10);
+        assert!(q("2025Q1").through(q("2024Q4")).is_empty());
+        assert_eq!(q("2026Q3").to_string(), "2026Q3");
+        for bad in [
+            "2026Q0", "2026Q5", "26Q1", "2026q1", "2026-Q1", "2026Q", "Q1",
+        ] {
+            assert_eq!(Quarter::parse(bad), None, "{bad}");
+        }
+    }
+
+    fn forecasts_csv(rows: &[&str]) -> Vec<u8> {
+        let mut s = String::from("site,target,point,p10,p90,uncalibrated\n");
+        for row in rows {
+            s.push_str(row);
+            s.push('\n');
+        }
+        s.into_bytes()
+    }
+
+    #[test]
+    fn test_forecasts_parse_against_the_rules() {
+        let rules = parse_rules(&rules_text()).expect("rules");
+        assert_eq!(
+            forecasts_header(&rules).as_deref(),
+            Ok("site,target,point,p10,p90,uncalibrated")
+        );
+        let ok = forecasts_csv(&["Synthetic A,production,100,90.5,1.1e2,true"]);
+        assert_eq!(
+            parse_forecasts(&ok, &rules),
+            Ok(vec![ForecastRow {
+                site: "Synthetic A".to_string(),
+                target: "production".to_string(),
+                point: i(100),
+                lo: r(181, 2),
+                hi: i(110),
+            }])
+        );
+        let line = |e| match e {
+            Err(RecordError::Forecast { line, .. }) => line,
+            other => panic!("{other:?}"),
+        };
+        let a = "Synthetic A,production,100,90,110,true";
+        for (rows, at) in [
+            (vec![a, a], 3),
+            (vec!["Synthetic B,production,1,1,1,true"], 2),
+            (vec!["Synthetic C,production,1,1,1,true"], 2),
+            (vec!["Synthetic A,unit_cost,1,1,1,true"], 2),
+            (vec!["Synthetic A,production,100,90,110,false"], 2),
+            (vec!["Synthetic A,production,100,101,110,true"], 2),
+            (vec!["Synthetic A,production,100,90,99,true"], 2),
+            (vec!["Synthetic A,production,-1,-2,0,true"], 2),
+            (vec!["Synthetic A,production,1e,1,1,true"], 2),
+            (vec!["Synthetic A,production,100,90,110"], 2),
+            (vec!["Synthetic A, production,100,90,110,true"], 2),
+        ] {
+            assert_eq!(
+                line(parse_forecasts(&forecasts_csv(&rows), &rules)),
+                at,
+                "{rows:?}"
+            );
+        }
+        assert_eq!(
+            parse_forecasts(&forecasts_csv(&[]), &rules),
+            Err(RecordError::MissingForecast {
+                site: "Synthetic A".to_string(),
+                target: "production".to_string()
+            })
+        );
+        let crlf = String::from_utf8(ok.clone())
+            .expect("utf8")
+            .replace('\n', "\r\n");
+        assert!(parse_forecasts(crlf.as_bytes(), &rules).is_err());
+        assert_eq!(line(parse_forecasts(&ok[..ok.len() - 1], &rules)), 2);
+        let other_header = String::from_utf8(ok)
+            .expect("utf8")
+            .replace("p10,p90", "lo,hi");
+        assert_eq!(line(parse_forecasts(other_header.as_bytes(), &rules)), 1);
     }
 
     #[test]
@@ -1396,9 +1795,11 @@ mod tests {
          coverage_level = \"0.95\"\nreport = \"n\"\ncalibration_claim_min_n = 35\ncalibration_claim = \"none\"\n\
          nowcast_from_utc = \"2026-11-09T11:00:00Z\"\nproof_by_utc = \"2026-12-31T23:59:59Z\"\n\
          outcome_vintage = \"first\"\nexcluded_rows = \"roll-ups\"\n\n\
-         [[target]]\nid = \"production\"\nquantity = \"koz\"\nscored_quantity = \"Q4\"\n\n\
+         [[target]]\nid = \"production\"\nquantity = \"koz\"\nscored_quantity = \"Q4\"\n\
+         field = \"au_prod_100_koz\"\noutcome = \"fy_minus_9m\"\n\n\
          [[basis_rule]]\nid = \"divestment\"\nrule = \"listed\"\n\n\
-         [[baseline]]\nid = \"persistence\"\ntarget = \"production\"\nrule = \"q3\"\nsource = \"wb\"\n\n\
+         [[baseline]]\nid = \"run_rate_persistence\"\ntarget = \"production\"\nrule = \"q3\"\nsource = \"wb\"\n\
+         pool_from = \"2024Q1\"\npool_through = \"2026Q2\"\npoint_quarter = \"2026Q3\"\n\n\
          [[site]]\nname = \"Synthetic A\"\nstatus = \"live\"\nlocator = \"S!A1\"\n\n\
          [[site]]\nname = \"Synthetic B\"\nstatus = \"not_published\"\nlocator = \"S!A2\"\nreason = \"sold\"\n"
             .to_string()
@@ -1414,6 +1815,19 @@ mod tests {
         assert_eq!(rules.calibration_claim_min_n, 35);
         assert_eq!(rules.dates, FY2026_DATES);
         assert_eq!(rules.baselines[0].target, "production");
+        let q = |s| Quarter::parse(s).expect("quarter");
+        assert_eq!(
+            rules.baselines[0].kind,
+            BaselineKind::Persistence {
+                pool_from: q("2024Q1"),
+                pool_through: q("2026Q2"),
+                point: q("2026Q3"),
+            }
+        );
+        assert_eq!(
+            (rules.targets[0].field.as_str(), rules.targets[0].outcome),
+            ("au_prod_100_koz", Outcome::FyMinus9m)
+        );
         assert_eq!(rules.sites[0].reason, None);
         assert_eq!(rules.sites[1].status, SiteStatus::NotPublished);
         assert_eq!(rules.sites[1].reason.as_deref(), Some("sold"));
@@ -1461,8 +1875,50 @@ mod tests {
                 ..
             }
         ));
+        assert!(matches!(
+            refused(with("id = \"run_rate_persistence\"", "id = \"persistence\"")),
+            RecordError::UnknownBaseline { id, .. } if id == "persistence"
+        ));
+        for (from, to) in [
+            ("point_quarter = \"2026Q3\"", "point_quarter = \"2026Q2\""),
+            ("pool_through = \"2026Q2\"", "pool_through = \"2024Q1\""),
+        ] {
+            assert!(matches!(
+                refused(with(from, to)),
+                RecordError::BadValue {
+                    key: "point_quarter",
+                    ..
+                }
+            ));
+        }
+        assert!(matches!(
+            refused(with("pool_from = \"2024Q1\"", "pool_from = \"2024Q5\"")),
+            RecordError::BadValue {
+                key: "pool_from",
+                ..
+            }
+        ));
+        assert!(matches!(
+            refused(with("pool_from = \"2024Q1\"\n", "")),
+            RecordError::Missing {
+                key: "pool_from",
+                ..
+            }
+        ));
+        assert!(matches!(
+            refused(with("outcome = \"fy_minus_9m\"", "outcome = \"fy\"")),
+            RecordError::BadValue { key: "outcome", .. }
+        ));
+        assert!(matches!(
+            refused(with(
+                "field = \"au_prod_100_koz\"",
+                "field = \"Gold produced\""
+            )),
+            RecordError::BadValue { key: "field", .. }
+        ));
         let no_baseline = format!(
-            "{base}\n[[target]]\nid = \"unit_cost\"\nquantity = \"$/oz\"\nscored_quantity = \"Q4\"\n"
+            "{base}\n[[target]]\nid = \"unit_cost\"\nquantity = \"$/oz\"\nscored_quantity = \"Q4\"\n\
+             field = \"aisc_usd_per_oz\"\noutcome = \"q4_qtd\"\n"
         );
         assert_eq!(
             refused(no_baseline),

@@ -40,11 +40,16 @@ excluded_rows = "Nevada Gold Mines LLC and the region and Total Gold rows are su
 id = "production"
 quantity = "gold produced, thousand ounces, 100% basis: Mine Stats summary column B (E456)"
 scored_quantity = "Q4-implied = FY2026 (YTD sheet, column B, Q4 2026 release) - 9M2026 (YTD sheet, column B, Q3 2026 release), per site"
+# The summary field id the label-anchored reader gives column B's header, and the outcome rule above as code reads it.
+field = "au_prod_100_koz"
+outcome = "fy_minus_9m"
 
 [[target]]
 id = "unit_cost"
 quantity = "all-in sustaining costs, US$ per attributable ounce sold, as printed in the Mine Stats summary (E110)"
 scored_quantity = "the Q4 2026 value as printed (QTD sheet, Q4 2026 release), per site: a per-ounce rate is not additive, so FY - 9M is not defined for it"
+field = "aisc_usd_per_oz"
+outcome = "q4_qtd"
 
 [[basis_rule]]
 id = "divestment"
@@ -79,12 +84,19 @@ id = "run_rate_persistence"
 target = "production"
 rule = "point = the Q3 2026 QTD column B value (Q3 2026 release); 80% interval = point x [q10, q90] of the pooled ratios Q(t+1)/Q(t) of QTD column B over the live sites' consecutive quarters 2024Q1-2026Q2, each quarter as first published, by quantile_estimator; a pair with either value not a positive printed number is left out of the pool and counted"
 source = "the ten registered Mine Stats workbooks, 2024Q1-2026Q2 (registries/sources/barrick.toml), and the Q3 2026 release"
+# The rule above as code reads it (xtask forecast-baseline): the pool's quarters and the point's quarter.
+pool_from = "2024Q1"
+pool_through = "2026Q2"
+point_quarter = "2026Q3"
 
 [[baseline]]
 id = "run_rate_persistence"
 target = "unit_cost"
 rule = "point = the Q3 2026 QTD all-in sustaining cost per ounce (Q3 2026 release); 80% interval = point x [q10, q90] of the pooled ratios of consecutive QTD values over the live sites, 2024Q1-2026Q2, as for production"
 source = "the ten registered Mine Stats workbooks, 2024Q1-2026Q2 (registries/sources/barrick.toml), and the Q3 2026 release"
+pool_from = "2024Q1"
+pool_through = "2026Q2"
+point_quarter = "2026Q3"
 
 # The universe: every gold site row of the Q2 2026 Mine Stats QTD sheet, in its order.
 [[site]]

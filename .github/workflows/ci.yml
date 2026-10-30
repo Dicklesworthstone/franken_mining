@@ -55,8 +55,9 @@ jobs:
         if: matrix.profile == 'dev'
         run: bash scripts/test_register_vintage.sh
       # The public forecast record (BD-334.S1): hash, an RFC 3161 round trip with a throwaway local TSA, verify,
-      # then six planted defects refused (a changed forecast, changed rules, a re-hash, a wrong chain, a digest
-      # that differs from the source registry, a cut-off after the proof).
+      # then planted defects refused (an OPEN marker, a changed forecast, a missing or a sold site's forecast,
+      # changed rules, a re-hash, another record, a wrong chain, a digest that differs from the source registry, a
+      # cut-off after the proof).
       - name: Forecast record e2e
         if: matrix.profile == 'dev'
         run: bash scripts/forecast_record_e2e.sh

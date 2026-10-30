@@ -85,6 +85,14 @@ fn main() -> ExitCode {
             cmd,
             xtask::forecast::rules_order(&root).map(|line| println!("{line}")),
         ),
+        "forecast-baseline" => run_one(
+            cmd,
+            xtask::forecast::baseline_lines(&root).map(|lines| {
+                for line in lines {
+                    println!("{line}");
+                }
+            }),
+        ),
         "check-all" => match xtask::check_all(&root) {
             Ok(report) => {
                 println!(

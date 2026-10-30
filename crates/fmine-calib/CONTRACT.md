@@ -31,12 +31,19 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
     Times come only from a proof (`ProofTimes`), never from a clock; `FY2026_DATES` holds the Q3 release
     (2026-11-09T11:00Z) and the 31 Dec 2026 deadline;
   - `parse_rules` → `RecordRules` (BD-334.S2): α, the quantile estimator, the n_eff correlation range, the
-    coverage level, the dates, the targets, basis rules, baselines (each on a declared target, every target with
-    one) and the named site universe (`live`/`not_published`, never dropped); refuses an `OPEN` marker in any
-    value, a duplicate id and every malformed or missing key;
+    coverage level, the dates, the targets (each with its Mine Stats summary field id and its `Outcome`,
+    `fy_minus_9m` or `q4_qtd`), basis rules, baselines (each on a declared target, every target with one; the id
+    decides the `BaselineKind`, and `run_rate_persistence` carries its pool's `Quarter`s and the point quarter
+    after them) and the named site universe (`live`/`not_published`, never dropped); refuses an `OPEN` marker in
+    any value, a duplicate id, an unknown baseline id and every malformed or missing key;
+  - `parse_forecasts(csv, rules)` → `Vec<ForecastRow>` (BD-334.S3): the header `forecasts_header` derives from α
+    (`site,target,point,p10,p90,uncalibrated` at 0.2), exactly one row per live site × target, none for a
+    `not_published` site, exact decimals with 0 ≤ lower ≤ point ≤ upper, and `uncalibrated` = `true`;
   - `interval_score` on exact rationals (refuses α outside (0, 1) and l > u), `quantile` (Hyndman–Fan types 1
-    and 7) and `persistence_interval` (inverse ECDF only: exact, since exp of a quantile of log ratios is then an
-    observed ratio; the linear estimator's bounds are irrational and refuse with `NotExact`)
+    and 7), `pooled_ratios` (consecutive-quarter ratios per site; a pair with a value that is not a positive
+    number is left out and counted, never imputed), `ratio_quantiles` (the ratios at α/2 and 1 − α/2) and
+    `persistence_interval` (point × those ratios; inverse ECDF only: exact, since exp of a quantile of log ratios
+    is then an observed ratio; the linear estimator's bounds are irrational and refuse with `NotExact`)
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-403` (`RetroactiveForecastEdit`, `INV-008`)

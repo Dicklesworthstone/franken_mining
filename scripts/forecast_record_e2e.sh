@@ -12,10 +12,11 @@
 # - stamp: `openssl ts -query` and `-reply` with the test TSA write record.tsr;
 # - verify: forecast-record-verify passes (after 31 Dec 2026 it must refuse instead: any FY2026 proof made then
 #   is after the deadline);
-# - planted defects, each refused with its own reason: an OPEN marker left in the rules; a byte added to
-#   forecasts.csv; rules.toml changed after hashing; record.sha256 re-hashed over a changed manifest; a manifest
-#   naming another record; a chain that is not the TSA's; a registered file listed with another sha256; an
-#   information cut-off after the proof.
+# - planted defects, each refused with its own reason: an OPEN marker left in the rules; a forecast changed
+#   after hashing; a live site × target with no forecast; a forecast for a not_published site; rules.toml
+#   changed after hashing; record.sha256 re-hashed over a changed manifest; a manifest naming another record; a
+#   chain that is not the TSA's; a registered file listed with another sha256; an information cut-off after the
+#   proof.
 #
 # Output: one JSON line per step {step, ok, digest, detail}, then {"steps": N, "failures": M}. Exits 1 if any step
 # fails. The scratch directory is left in place and named in the first line.
@@ -174,7 +175,14 @@ EOF
 }
 ab=abababababababababababababababababababababababababababababababab
 write_manifest "$rec" 2026-10-01T00:00:00Z Synthetic_Workbook.xlsx "$ab"
-printf 'site,target,point,p10,p90,uncalibrated\nSynthetic A,production_koz,100,90,110,true\n' >"$rec/forecasts.csv"
+# Invented numbers, one row per live site of the committed rules × target (the record refuses any other set).
+{
+  printf 'site,target,point,p10,p90,uncalibrated\n'
+  awk -F'"' '/^\[\[/{n=""} /^name = /{n=$2} /^status = "live"$/{if(n!="")print n}' "$rec/rules.toml" |
+    while IFS= read -r site; do
+      printf '%s,production,100,90,110,true\n%s,unit_cost,1500,1350.5,1700,true\n' "$site" "$site"
+    done
+} >"$rec/forecasts.csv"
 
 out="$(xt forecast-record-hash "$rec")"
 record_hex="$( {
@@ -211,8 +219,16 @@ fi
 copy() { cp -R "$rec" "$scratch/$1" && printf '%s' "$scratch/$1"; }
 
 d="$(copy flipped_csv)"
-printf 'Synthetic B,production_koz,1,1,1,true\n' >>"$d/forecasts.csv"
+sed 's/^Carlin,production,100,/Carlin,production,101,/' "$rec/forecasts.csv" >"$d/forecasts.csv"
 refused flipped_csv "hash to" xt forecast-record-verify "$d"
+
+d="$(copy missing_site)"
+grep -v '^Kibali,unit_cost,' "$rec/forecasts.csv" >"$d/forecasts.csv"
+refused missing_site "no unit_cost forecast for Kibali" xt forecast-record-hash "$d"
+
+d="$(copy sold_site)"
+printf 'Hemlo,production,1,1,1,true\n' >>"$d/forecasts.csv"
+refused sold_site "not_published" xt forecast-record-hash "$d"
 
 d="$(copy changed_rules)"
 printf '# changed after hashing\n' >>"$d/rules.toml"

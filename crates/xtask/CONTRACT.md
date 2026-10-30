@@ -33,8 +33,14 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   They write `rules.sha256` and `record.sha256`, and replace a different digest only while no proof (`.tsr`,
   `.ots`) stands beside it. `record_verify`
   takes the record's time only from `record.tsr`, after `openssl ts -verify` against `tsa_chain.pem` passes
-  (`forecast::proof_times_from_text` reads the reply's time stamp and accuracy). `rules_hash` refuses rules that
-  do not parse or still carry an `OPEN` marker, and the record is validated against the dates its rules state.
+  (`forecast::proof_times_from_text` reads the reply's time stamp and accuracy; an accuracy that overflows the
+  interval refuses). `rules_hash` refuses rules that do not parse or still carry an `OPEN` marker; the record is
+  validated against the dates its rules state, and its `forecasts.csv` against their universe and targets.
+- `forecast::persistence_baselines` (command `forecast-baseline`): each `run_rate_persistence` baseline of the
+  FY2026 rules from the registered Mine Stats workbooks (read through `fmine-public` under the registered
+  vocabulary; a workbook with a refused cell refuses): the pool's size, the pairs left out, the two ratio
+  quantiles and, once the point quarter's workbook is registered, each live site's exact interval. It needs the
+  corpus, so it never runs in CI (RISK-31).
   `scripts/forecast_record_e2e.sh` runs all three on a synthetic record with a throwaway local TSA (`test_tsa`,
   never a record's proof); `scripts/verify_rules_timestamp.sh` checks the rules' proofs with openssl/ots alone.
 - `forecast::rules_order` (BD-334.S2; command `forecast-rules-order`): the commit adding
@@ -55,8 +61,9 @@ Deterministic error collection across all files in lexicographical path order.
 - `GATE-ORACLE-01` (`BD-013`)
 
 ## 9. Lifted Code & Foundation Dependencies
-`fmine-registry` (the source registries and TOML subset) and `fmine-calib` (the pure forecast record); `openssl` on
-`PATH` for `forecast-record-verify` and `git` for `forecast-rules-order` only.
+`fmine-registry` (the source registries and TOML subset), `fmine-calib` (the pure forecast record) and
+`fmine-public` (the label-anchored Mine Stats reader, for `forecast-baseline`); `openssl` on `PATH` for
+`forecast-record-verify` and `git` for `forecast-rules-order` only.
 
 ## 10. Non-Goals & Scope Boundary
 Never linked by any production crate.
