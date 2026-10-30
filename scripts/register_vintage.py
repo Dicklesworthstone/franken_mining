@@ -30,11 +30,20 @@ def refuse(msg, code=2):
     sys.exit(code)
 
 
+def text_lines(path):
+    with open(path, encoding="utf-8") as h:
+        return h.readlines()
+
+
+def jsonl(path):
+    return [json.loads(s) for s in text_lines(path) if s.strip()]
+
+
 def registry(ws):
     """(top-level keys, [[source]] rows) of registries/sources/barrick.toml, in the subset fetch.sh reads."""
     path = os.path.join(ws, "registries", "sources", "barrick.toml")
     top, rows, table, row = {}, [], None, None
-    for n, raw in enumerate(open(path, encoding="utf-8"), 1):
+    for n, raw in enumerate(text_lines(path), 1):
         s = raw.strip()
         if not s or s.startswith("#"):
             continue
@@ -91,7 +100,7 @@ def candidate(issuer, prefix, url, nbytes, sha, utc):
 
 
 def fetched(dir_):
-    return [json.loads(s) for s in open(os.path.join(dir_, "fetch.jsonl"), encoding="utf-8") if s.strip()]
+    return jsonl(os.path.join(dir_, "fetch.jsonl"))
 
 
 def cmd_rows(ws, dir_, dry_run):
@@ -159,8 +168,7 @@ def cmd_oracle(ws, dir_):
     utc = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     with open(os.path.join(dir_, "log.jsonl"), "a", encoding="utf-8") as h:
         h.write(json.dumps({"stage": "oracle_sealed", "oracle_sha256": digest, "utc": utc}) + "\n")
-    for s in open(out, encoding="utf-8"):
-        o = json.loads(s)
+    for o in jsonl(out):
         if "file" in o:
             line(stage="oracle", file=o["file"], numeric=o["numeric"], digest=o["digest"],
                  instances=o["instances"], oracle_sha256=digest, utc=utc)
@@ -169,8 +177,8 @@ def cmd_oracle(ws, dir_):
 
 def sealed(dir_):
     """The oracle record: its sha256 must still match, and its time precedes every fmine run."""
-    log = [json.loads(s) for s in open(os.path.join(dir_, "log.jsonl"), encoding="utf-8") if s.strip()]
-    seals = [o for o in log if o.get("stage") == "oracle_sealed"]
+    log = jsonl(os.path.join(dir_, "log.jsonl"))
+    seals =[o for o in log if o.get("stage") == "oracle_sealed"]
     if len(seals) != 1:
         refuse("expected one oracle_sealed record in %s/log.jsonl, found %d" % (dir_, len(seals)))
     if sha256_file(os.path.join(dir_, "oracle.jsonl")) != seals[0]["oracle_sha256"]:
@@ -185,8 +193,8 @@ def cmd_sealed(dir_):
 
 def cmd_diff(ws, dir_, bound):
     seal = sealed(dir_)
-    runs = {k: json.load(open(os.path.join(dir_, "run_%s.json" % k), encoding="utf-8")) for k in ("all", "through")}
-    for o in (json.loads(s) for s in open(os.path.join(dir_, "log.jsonl"), encoding="utf-8") if s.strip()):
+    runs = {k: json.loads("".join(text_lines(os.path.join(dir_, "run_%s.json" % k)))) for k in ("all", "through")}
+    for o in jsonl(os.path.join(dir_, "log.jsonl")):
         if o.get("stage") == "fmine" and not o["utc"] > seal["utc"]:
             refuse("an fmine run at %s does not follow the oracle seal at %s" % (o["utc"], seal["utc"]))
     for k, v in runs.items():
@@ -194,7 +202,7 @@ def cmd_diff(ws, dir_, bound):
             refuse("the fmine run on %s has no payload (status %s, exit %s)" % (k, v.get("status"),
                                                                                  v.get("exit_code")), 1)
     pay = {k: v["payload"] for k, v in runs.items()}
-    oracle = [json.loads(s) for s in open(os.path.join(dir_, "oracle.jsonl"), encoding="utf-8") if s.strip()]
+    oracle = jsonl(os.path.join(dir_, "oracle.jsonl"))
     per_file = {o["file"]: o for o in oracle if "file" in o}
     sources = {s["file"]: s for s in pay["all"]["sources"]}
     census_equal = True
