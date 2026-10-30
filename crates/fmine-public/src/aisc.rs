@@ -231,7 +231,10 @@ const COS_LABEL: &str = "cost of sales applicable to gold production";
 
 /// Locates the AISC table on a sheet. `Ok(None)` when the sheet has no cost-of-sales row (not an AISC
 /// table); `Err` when it has one but the remaining structure cannot be found (a table-level refusal).
-pub fn locate_table<S: AsRef<str>>(sheet: &Sheet, subjects: &[S]) -> Result<Option<AiscTable>, String> {
+pub fn locate_table<S: AsRef<str>>(
+    sheet: &Sheet,
+    subjects: &[S],
+) -> Result<Option<AiscTable>, String> {
     let mut labels: BTreeMap<u32, String> = BTreeMap::new();
     for &(row, col) in sheet.cells_by_coord.keys() {
         if col == 1 {

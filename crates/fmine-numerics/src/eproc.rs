@@ -114,6 +114,9 @@ mod tests {
             let u = 0.5 + 0.5 * rng_alt.next_f64_open01();
             ep_alt.observe(u);
         }
-        assert!(ep_alt.rejected_null(), "must reject under shifted mean 0.75");
+        assert!(
+            ep_alt.rejected_null(),
+            "must reject under shifted mean 0.75"
+        );
     }
 }

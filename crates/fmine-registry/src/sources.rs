@@ -108,11 +108,16 @@ fn fail<T>(line: usize, reason: impl Into<String>) -> Result<T, SourcesError> {
 #[must_use]
 pub fn is_quarter(s: &str) -> bool {
     let b = s.as_bytes();
-    b.len() == 6 && b[..4].iter().all(u8::is_ascii_digit) && b[4] == b'Q' && (b'1'..=b'4').contains(&b[5])
+    b.len() == 6
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[4] == b'Q'
+        && (b'1'..=b'4').contains(&b[5])
 }
 
 fn is_lower_hex64(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    s.len() == 64
+        && s.bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
 /// A relative path with no empty, `.` or `..` component and no backslash.
@@ -144,7 +149,12 @@ impl<'a> Fields<'a> {
             if !allowed.contains(&f.key.as_str()) {
                 return fail(
                     f.line,
-                    format!("unknown key {:?} in {} (allowed: {})", f.key, self.what, allowed.join(", ")),
+                    format!(
+                        "unknown key {:?} in {} (allowed: {})",
+                        f.key,
+                        self.what,
+                        allowed.join(", ")
+                    ),
                 );
             }
         }
@@ -184,23 +194,44 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         line: 0,
         what: "the top level".to_string(),
     };
-    top.only(&["schema", "issuer", "corpus_dir", "retrieved_utc", "url_prefix"])?;
+    top.only(&[
+        "schema",
+        "issuer",
+        "corpus_dir",
+        "retrieved_utc",
+        "url_prefix",
+    ])?;
     let (schema, schema_line) = top.string("schema")?;
     if schema != SOURCES_SCHEMA {
-        return fail(schema_line, format!("schema {schema:?} is not {SOURCES_SCHEMA:?}"));
+        return fail(
+            schema_line,
+            format!("schema {schema:?} is not {SOURCES_SCHEMA:?}"),
+        );
     }
     let (issuer, issuer_line) = top.string("issuer")?;
-    if !issuer.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_') {
-        return fail(issuer_line, format!("issuer {issuer:?} must be lowercase letters, digits or _"));
+    if !issuer
+        .bytes()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
+    {
+        return fail(
+            issuer_line,
+            format!("issuer {issuer:?} must be lowercase letters, digits or _"),
+        );
     }
     let (corpus_dir, corpus_line) = top.string("corpus_dir")?;
     if !is_plain_relative(&corpus_dir) {
-        return fail(corpus_line, format!("corpus_dir {corpus_dir:?} must be a plain relative path"));
+        return fail(
+            corpus_line,
+            format!("corpus_dir {corpus_dir:?} must be a plain relative path"),
+        );
     }
     let (retrieved_utc, _) = top.string("retrieved_utc")?;
     let (url_prefix, prefix_line) = top.string("url_prefix")?;
     if !url_prefix.starts_with("https://") || !url_prefix.ends_with('/') {
-        return fail(prefix_line, "url_prefix must start with https:// and end with /");
+        return fail(
+            prefix_line,
+            "url_prefix must start with https:// and end with /",
+        );
     }
 
     for row in &doc.rows {
@@ -213,7 +244,15 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
     let (mut files, mut paths, mut digests) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
     for row in doc.rows_of("source") {
         let f = Fields::of_row(row);
-        f.only(&["file", "kind", "quarter", "path", "url_basis", "bytes", "sha256"])?;
+        f.only(&[
+            "file",
+            "kind",
+            "quarter",
+            "path",
+            "url_basis",
+            "bytes",
+            "sha256",
+        ])?;
         let (file, file_line) = f.string("file")?;
         let (kind, kind_line) = f.string("kind")?;
         let (quarter, quarter_line) = f.string("quarter")?;
@@ -228,19 +267,37 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             return fail(file_line, format!("duplicate file {file:?}"));
         }
         if !SOURCE_KINDS.contains(&kind.as_str()) {
-            return fail(kind_line, format!("kind {kind:?} is not registered ({})", SOURCE_KINDS.join(", ")));
+            return fail(
+                kind_line,
+                format!(
+                    "kind {kind:?} is not registered ({})",
+                    SOURCE_KINDS.join(", ")
+                ),
+            );
         }
         if !is_quarter(&quarter) {
-            return fail(quarter_line, format!("quarter {quarter:?} is not YYYYQ1..YYYYQ4"));
+            return fail(
+                quarter_line,
+                format!("quarter {quarter:?} is not YYYYQ1..YYYYQ4"),
+            );
         }
         if !is_plain_relative(&path) {
-            return fail(path_line, format!("path {path:?} must be a plain relative path"));
+            return fail(
+                path_line,
+                format!("path {path:?} must be a plain relative path"),
+            );
         }
         if !paths.insert(path.clone()) {
             return fail(path_line, format!("duplicate path {path:?}"));
         }
         if !URL_BASES.contains(&url_basis.as_str()) {
-            return fail(basis_line, format!("url_basis {url_basis:?} is not registered ({})", URL_BASES.join(", ")));
+            return fail(
+                basis_line,
+                format!(
+                    "url_basis {url_basis:?} is not registered ({})",
+                    URL_BASES.join(", ")
+                ),
+            );
         }
         if !is_lower_hex64(&sha256) {
             return fail(sha_line, "sha256 must be 64 lowercase hex characters");
@@ -312,17 +369,32 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         let (set, set_line) = f.string("label_checks")?;
         for (file, line) in [(&table_file, table_line), (&component_file, component_line)] {
             if !files.contains(file) {
-                return fail(line, format!("{file:?} is not a registered [[source]] file"));
+                return fail(
+                    line,
+                    format!("{file:?} is not a registered [[source]] file"),
+                );
             }
         }
         if !subjects.contains(&subject) {
-            return fail(subject_line, format!("subject {subject:?} is not a registered [[subject]]"));
+            return fail(
+                subject_line,
+                format!("subject {subject:?} is not a registered [[subject]]"),
+            );
         }
         if !IDENTITY_FAMILIES.contains(&family.as_str()) {
-            return fail(family_line, format!("family {family:?} is not registered ({})", IDENTITY_FAMILIES.join(", ")));
+            return fail(
+                family_line,
+                format!(
+                    "family {family:?} is not registered ({})",
+                    IDENTITY_FAMILIES.join(", ")
+                ),
+            );
         }
         let Some((_, checks)) = label_sets.iter().find(|(s, _)| *s == set) else {
-            return fail(set_line, format!("label-check set {set:?} has no [[label_check]] rows"));
+            return fail(
+                set_line,
+                format!("label-check set {set:?} has no [[label_check]] rows"),
+            );
         };
         used_sets.insert(set.clone());
         reconstructions.push(ReconstructionRow {
@@ -339,7 +411,10 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         });
     }
     if let Some((set, _)) = label_sets.iter().find(|(s, _)| !used_sets.contains(s)) {
-        return fail(0, format!("label-check set {set:?} is used by no [[reconstruction]]"));
+        return fail(
+            0,
+            format!("label-check set {set:?} is used by no [[reconstruction]]"),
+        );
     }
 
     Ok(SourcesRegistry {
@@ -359,9 +434,18 @@ pub fn load_sources_registry(path: &Path) -> Result<SourcesRegistry, SourcesErro
         reason: format!("cannot read {}: {e}", path.display()),
     })?;
     let reg = parse_sources_registry(&text)?;
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
     if reg.issuer != stem {
-        return fail(0, format!("issuer {:?} does not match the file name {stem:?}", reg.issuer));
+        return fail(
+            0,
+            format!(
+                "issuer {:?} does not match the file name {stem:?}",
+                reg.issuer
+            ),
+        );
     }
     Ok(reg)
 }
@@ -399,7 +483,8 @@ mod tests {
 
     #[test]
     fn test_registry_row_order_preserved() {
-        let reg = parse_sources_registry(&minimal(&source_b("aisc_reconciliation", SHA_B), "")).expect("valid");
+        let reg = parse_sources_registry(&minimal(&source_b("aisc_reconciliation", SHA_B), ""))
+            .expect("valid");
         let files: Vec<&str> = reg.sources.iter().map(|s| s.file.as_str()).collect();
         assert_eq!(files, ["A.xlsx", "B.xlsx"]);
         assert_eq!(reg.sources[1].url, "https://example.org/files/q2/B.xlsx");
@@ -416,14 +501,26 @@ mod tests {
     #[test]
     fn test_registry_check_rejects_bad_hex() {
         let upper = SHA_B.to_uppercase();
-        assert!(refusal(&minimal(&source_b("aisc_reconciliation", &upper), "")).reason.contains("lowercase hex"));
-        assert!(refusal(&minimal(&source_b("aisc_reconciliation", "abc"), "")).reason.contains("lowercase hex"));
+        assert!(
+            refusal(&minimal(&source_b("aisc_reconciliation", &upper), ""))
+                .reason
+                .contains("lowercase hex")
+        );
+        assert!(
+            refusal(&minimal(&source_b("aisc_reconciliation", "abc"), ""))
+                .reason
+                .contains("lowercase hex")
+        );
     }
 
     #[test]
     fn test_registry_check_rejects_unknown_kind() {
         let e = refusal(&minimal(&source_b("annual_report", SHA_B), ""));
-        assert!(e.reason.contains("kind \"annual_report\" is not registered"), "{e}");
+        assert!(
+            e.reason
+                .contains("kind \"annual_report\" is not registered"),
+            "{e}"
+        );
     }
 
     #[test]
@@ -436,13 +533,21 @@ mod tests {
         assert!(e.reason.contains("\"C.xlsx\" is not a registered"), "{e}");
         // The same row against a registered file is accepted and resolves its label checks.
         let ok = recon.replace("C.xlsx", "B.xlsx");
-        let reg = parse_sources_registry(&minimal(&source_b("aisc_reconciliation", SHA_B), &ok)).expect("valid");
-        assert_eq!(reg.reconstructions[0].label_checks, vec![("A1".to_string(), "x".to_string())]);
+        let reg = parse_sources_registry(&minimal(&source_b("aisc_reconciliation", SHA_B), &ok))
+            .expect("valid");
+        assert_eq!(
+            reg.reconstructions[0].label_checks,
+            vec![("A1".to_string(), "x".to_string())]
+        );
         // An unknown family, subject or label set is refused too.
         for (from, to, needle) in [
             ("aisc_per_oz", "aisc_per_tonne", "family"),
             ("subject = \"Site A\"", "subject = \"Site Z\"", "subject"),
-            ("label_checks = \"set1\"", "label_checks = \"set2\"", "label-check set"),
+            (
+                "label_checks = \"set1\"",
+                "label_checks = \"set2\"",
+                "label-check set",
+            ),
         ] {
             let bad = ok.replacen(from, to, 1);
             let e = refusal(&minimal(&source_b("aisc_reconciliation", SHA_B), &bad));
@@ -463,13 +568,26 @@ mod tests {
             let e = refusal(&minimal(&b.replacen(from, to, 1), ""));
             assert!(e.reason.contains(needle), "{needle}: {e}");
         }
-        assert!(refusal(&minimal(&b, "").replace("fmine.sources.v1", "v0")).reason.contains("schema"));
-        assert!(refusal(&minimal(&b, "[[extra]]\nx = 1\n")).reason.contains("unknown table"));
+        assert!(
+            refusal(&minimal(&b, "").replace("fmine.sources.v1", "v0"))
+                .reason
+                .contains("schema")
+        );
+        assert!(
+            refusal(&minimal(&b, "[[extra]]\nx = 1\n"))
+                .reason
+                .contains("unknown table")
+        );
     }
 
     #[test]
     fn test_quarter_format() {
         assert!(is_quarter("2026Q2") && is_quarter("2026Q4"));
-        assert!(!is_quarter("2026Q0") && !is_quarter("2026q2") && !is_quarter("26Q2") && !is_quarter("2026Q22"));
+        assert!(
+            !is_quarter("2026Q0")
+                && !is_quarter("2026q2")
+                && !is_quarter("26Q2")
+                && !is_quarter("2026Q22")
+        );
     }
 }

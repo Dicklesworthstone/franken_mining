@@ -165,11 +165,8 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
 /// Validate downward-only layer dependencies (`L-1`, `BD-004`).
 pub fn check_layers(root: &Path) -> Result<(), Vec<String>> {
     let report = check_loc_budget(root)?;
-    let crate_layers: BTreeMap<String, String> = report
-        .rows
-        .into_iter()
-        .map(|r| (r.name, r.layer))
-        .collect();
+    let crate_layers: BTreeMap<String, String> =
+        report.rows.into_iter().map(|r| (r.name, r.layer)).collect();
 
     let topo_path = root.join("registries/workspace_topology.toml");
     let topo_text = fs::read_to_string(&topo_path)
@@ -227,7 +224,9 @@ pub fn check_layers(root: &Path) -> Result<(), Vec<String>> {
             continue;
         }
         let Some(from_layer) = crate_layers.get(&pkg_name) else {
-            errors.push(format!("crate {pkg_name} not registered in loc_budget.toml"));
+            errors.push(format!(
+                "crate {pkg_name} not registered in loc_budget.toml"
+            ));
             continue;
         };
         let Some(&from_rank) = ranks.get(from_layer) else {
@@ -306,7 +305,10 @@ pub fn check_deps(root: &Path) -> Result<(), Vec<String>> {
     for raw_line in deny_text.lines() {
         let line = raw_line.trim();
         if line.starts_with("{ name =") {
-            if let Some(val) = strip_kv_str(line.trim_matches(|c| c == '{' || c == '}' || c == ','), "name") {
+            if let Some(val) = strip_kv_str(
+                line.trim_matches(|c| c == '{' || c == '}' || c == ','),
+                "name",
+            ) {
                 banned.insert(val);
             }
         }
@@ -360,11 +362,8 @@ pub fn check_oracle(root: &Path) -> Result<(), Vec<String>> {
 /// and ban `std::fs`, `std::net`, `std::process`, `SystemTime::now` in `S0`, `K`, and `E` production `src/` files.
 pub fn check_caps(root: &Path) -> Result<(), Vec<String>> {
     let report = check_loc_budget(root)?;
-    let crate_layers: BTreeMap<String, String> = report
-        .rows
-        .into_iter()
-        .map(|r| (r.name, r.layer))
-        .collect();
+    let crate_layers: BTreeMap<String, String> =
+        report.rows.into_iter().map(|r| (r.name, r.layer)).collect();
 
     let mut errors = Vec::new();
     for member_toml in workspace_member_manifests(root)? {
@@ -404,11 +403,15 @@ pub fn check_caps_in_source(
             path.display()
         ));
     }
-    let is_pure_layer = (layer == "S0" && pkg_name != "fmine-registry")
-        || layer.starts_with('K')
-        || layer == "E";
+    let is_pure_layer =
+        (layer == "S0" && pkg_name != "fmine-registry") || layer.starts_with('K') || layer == "E";
     if is_pure_layer {
-        for forbidden in ["std::fs::", "std::net::", "std::process::Command", "SystemTime::now"] {
+        for forbidden in [
+            "std::fs::",
+            "std::net::",
+            "std::process::Command",
+            "SystemTime::now",
+        ] {
             if prod_code.contains(forbidden) {
                 return Err(format!(
                     "{}: forbidden capability `{forbidden}` in {pkg_name} ({layer}); K/E/S0 kernels must be pure (L-3)",
@@ -542,11 +545,8 @@ pub fn check_scope(root: &Path) -> Result<(), Vec<String>> {
 /// in `K` or `E` public function signatures.
 pub fn check_claims(root: &Path) -> Result<(), Vec<String>> {
     let report = check_loc_budget(root)?;
-    let crate_layers: BTreeMap<String, String> = report
-        .rows
-        .into_iter()
-        .map(|r| (r.name, r.layer))
-        .collect();
+    let crate_layers: BTreeMap<String, String> =
+        report.rows.into_iter().map(|r| (r.name, r.layer)).collect();
 
     let mut errors = Vec::new();
     for member_toml in workspace_member_manifests(root)? {
@@ -630,7 +630,13 @@ pub fn check_det_in_source(path: &Path, prod_code: &str) -> Result<(), String> {
     if !prod_code.contains("Determinism: BitwisePortable") {
         return Ok(());
     }
-    for banned in ["f64::sin(", "f64::cos(", "f64::exp(", "f64::ln(", "f64::atan2("] {
+    for banned in [
+        "f64::sin(",
+        "f64::cos(",
+        "f64::exp(",
+        "f64::ln(",
+        "f64::atan2(",
+    ] {
         if prod_code.contains(banned) {
             return Err(format!(
                 "{}: banned std transcendental `{banned}` in BitwisePortable module (PO-NUM-2; use fmine_core::det)",
@@ -647,7 +653,8 @@ pub fn check_det_in_source(path: &Path, prod_code: &str) -> Result<(), String> {
 /// matches its file name. A missing directory is an error: the public lane cannot run without it.
 pub fn check_sources_registry(root: &Path) -> Result<(), Vec<String>> {
     let dir = root.join("registries").join("sources");
-    let entries = fs::read_dir(&dir).map_err(|e| vec![format!("cannot read {}: {e}", dir.display())])?;
+    let entries =
+        fs::read_dir(&dir).map_err(|e| vec![format!("cannot read {}: {e}", dir.display())])?;
     let mut files: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|e| e.path())
@@ -655,7 +662,10 @@ pub fn check_sources_registry(root: &Path) -> Result<(), Vec<String>> {
         .collect();
     files.sort();
     if files.is_empty() {
-        return Err(vec![format!("no *.toml source registries in {}", dir.display())]);
+        return Err(vec![format!(
+            "no *.toml source registries in {}",
+            dir.display()
+        )]);
     }
     let errors: Vec<String> = files
         .iter()
@@ -665,7 +675,11 @@ pub fn check_sources_registry(root: &Path) -> Result<(), Vec<String>> {
                 .map(|e| format!("registry-check {}: {e}", p.display()))
         })
         .collect();
-    if errors.is_empty() { Ok(()) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 /// Run all `GATE-LAYERS-00` checks (`BD-015`).
@@ -927,10 +941,17 @@ mod tests {
         assert_ne!(dup, text, "the edit must apply");
         fs::write(dir.join("barrick.toml"), dup).expect("write");
         let errs = check_sources_registry(&scratch).expect_err("duplicate digest");
-        assert!(errs[0].contains("barrick.toml: line ") && errs[0].contains("duplicate sha256"), "{errs:?}");
+        assert!(
+            errs[0].contains("barrick.toml: line ") && errs[0].contains("duplicate sha256"),
+            "{errs:?}"
+        );
         fs::write(dir.join("other.toml"), text).expect("write");
         let errs = check_sources_registry(&scratch).expect_err("issuer/file-name mismatch");
-        assert!(errs.iter().any(|e| e.contains("does not match the file name")), "{errs:?}");
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("does not match the file name")),
+            "{errs:?}"
+        );
         let _ = fs::remove_dir_all(&scratch);
     }
 

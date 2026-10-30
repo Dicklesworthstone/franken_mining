@@ -9,7 +9,9 @@ use fmine_public::sources::{load_issuer_profile, registry_path};
 
 #[test]
 fn altered_registered_file_is_refused_with_both_digests() {
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
     let profile = load_issuer_profile(&repo, "barrick").expect("registry");
     let n = profile.sources.len();
 

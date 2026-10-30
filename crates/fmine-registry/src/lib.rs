@@ -95,7 +95,10 @@ impl RegistryCatalog {
             if !refusal_codes.iter().any(|c| c == spec.code) {
                 return Err(RegistryError::SchemaViolation {
                     registry: "refusals.toml".to_string(),
-                    detail: format!("missing refusal code {} required by fmine-evidence", spec.code),
+                    detail: format!(
+                        "missing refusal code {} required by fmine-evidence",
+                        spec.code
+                    ),
                 });
             }
         }

@@ -29,8 +29,8 @@ use crate::aisc::{
     ledger_for_table, locate_table, reconstruction_closes,
 };
 use crate::mine_stats::{CellRefusal, MineStatsRead, read_mine_stats};
-use crate::sources::{IssuerProfile, RegisteredReconstruction, SourceKind};
 pub use crate::sources::load_issuer_profile;
+use crate::sources::{IssuerProfile, RegisteredReconstruction, SourceKind};
 
 /// Converts an extracted cell into a public-basis `Claim<Option<f64>>` (`BD-058`): a number is the value as
 /// published, a placeholder is a known unknown, and text or a formula error is refused.
@@ -312,7 +312,9 @@ impl PublicAssuranceReport {
             o,
             "\"retrieved_utc\":{},\"through\":{},\"sources\":[",
             js(&self.retrieved_utc),
-            self.through.as_deref().map_or_else(|| "null".to_string(), js)
+            self.through
+                .as_deref()
+                .map_or_else(|| "null".to_string(), js)
         );
         for (n, s) in self.sources.iter().enumerate() {
             let c = &s.census;
@@ -368,7 +370,11 @@ impl PublicAssuranceReport {
                 read.count("na"),
                 read.count("missing"),
                 js(&read.digest().to_hex()),
-                read.hidden_sheets.iter().map(|h| js(h)).collect::<Vec<_>>().join(",")
+                read.hidden_sheets
+                    .iter()
+                    .map(|h| js(h))
+                    .collect::<Vec<_>>()
+                    .join(",")
             );
             for (k, r) in read.refusals.iter().enumerate() {
                 let _ = write!(
@@ -689,7 +695,11 @@ fn try_reconstruction(
 
 /// Builds the identity ledger over every AISC table in `sources` and commits the run to a state root.
 #[must_use]
-pub fn assess(profile: &IssuerProfile, lane: Lane, sources: Vec<LoadedSource>) -> PublicAssuranceReport {
+pub fn assess(
+    profile: &IssuerProfile,
+    lane: Lane,
+    sources: Vec<LoadedSource>,
+) -> PublicAssuranceReport {
     let issuer = profile.issuer.as_str();
     let subjects = profile.subjects.as_slice();
     let reconstructions = profile.reconstructions.as_slice();
@@ -801,13 +811,17 @@ pub fn assess(profile: &IssuerProfile, lane: Lane, sources: Vec<LoadedSource>) -
         .filter(|s| s.kind == SourceKind::MineStats)
         .map(|s| {
             // The registry already checks the quarter format; a refusal here is kept, never dropped.
-            let read = read_mine_stats(&s.workbook, &s.quarter).unwrap_or_else(|refusal| MineStatsRead {
-                quarter: s.quarter.clone(),
-                blocks: 0,
-                values: Vec::new(),
-                refusals: vec![CellRefusal { locator: s.file_name.clone(), reason: refusal.to_string() }],
-                hidden_sheets: Vec::new(),
-            });
+            let read =
+                read_mine_stats(&s.workbook, &s.quarter).unwrap_or_else(|refusal| MineStatsRead {
+                    quarter: s.quarter.clone(),
+                    blocks: 0,
+                    values: Vec::new(),
+                    refusals: vec![CellRefusal {
+                        locator: s.file_name.clone(),
+                        reason: refusal.to_string(),
+                    }],
+                    hidden_sheets: Vec::new(),
+                });
             (s.file_name.clone(), read)
         })
         .collect();
@@ -861,7 +875,11 @@ pub fn run_synthetic_assurance(
             census,
         });
     }
-    Ok(assess(&synthetic::synthetic_profile(), Lane::Synthetic, sources))
+    Ok(assess(
+        &synthetic::synthetic_profile(),
+        Lane::Synthetic,
+        sources,
+    ))
 }
 
 #[cfg(test)]
@@ -1040,7 +1058,11 @@ mod tests {
             refusal.what
         );
         for src in &profile.sources {
-            assert!(refusal.what.contains(&src.file_name), "{} not named", src.file_name);
+            assert!(
+                refusal.what.contains(&src.file_name),
+                "{} not named",
+                src.file_name
+            );
         }
     }
 
@@ -1051,8 +1073,12 @@ mod tests {
         let ws = std::env::temp_dir().join(format!("fmine-public-rows-{}", std::process::id()));
         let reg_dir = ws.join("registries").join("sources");
         std::fs::create_dir_all(&reg_dir).expect("temp registry dir");
-        let text = std::fs::read_to_string(sources::registry_path(&workspace_root(), "barrick")).expect("read");
-        let base = load_issuer_profile(&workspace_root(), "barrick").expect("registry").sources.len();
+        let text = std::fs::read_to_string(sources::registry_path(&workspace_root(), "barrick"))
+            .expect("read");
+        let base = load_issuer_profile(&workspace_root(), "barrick")
+            .expect("registry")
+            .sources
+            .len();
         let added = "\n[[source]]\nfile = \"Barrick_Q3_2026_Mine_Stats.xlsx\"\nkind = \"mine_stats\"\n\
                      quarter = \"2026Q3\"\npath = \"2026/q3/Barrick_Q3_2026_Mine_Stats.xlsx\"\n\
                      url_basis = \"W1 naming rule\"\nbytes = 1\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000001\"\n";
@@ -1061,10 +1087,17 @@ mod tests {
         assert_eq!(profile.sources.len(), base + 1);
         let refusal = run_public_assurance(&profile, &ws).expect_err("no corpus");
         let n = base + 1;
-        assert!(refusal.what.contains(&format!("{n} of {n} registered barrick workbooks unusable")));
+        assert!(
+            refusal
+                .what
+                .contains(&format!("{n} of {n} registered barrick workbooks unusable"))
+        );
         assert!(refusal.what.contains("Barrick_Q3_2026_Mine_Stats.xlsx"));
         // `--through 2026Q2` drops the added row again.
-        assert_eq!(profile.through("2026Q2").expect("bound").sources.len(), base);
+        assert_eq!(
+            profile.through("2026Q2").expect("bound").sources.len(),
+            base
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 
@@ -1081,9 +1114,17 @@ mod tests {
         let later = fmine_io::xlsx::build_minimal_xlsx(&[fmine_io::xlsx::MinimalSheet {
             name: "Minestats3".to_string(),
             hidden: false,
-            cells: vec![("A1".to_string(), MinimalCell::Text("Mine Statistics (Gold)".to_string()))],
+            cells: vec![(
+                "A1".to_string(),
+                MinimalCell::Text("Mine Statistics (Gold)".to_string()),
+            )],
         }]);
-        files.push(("Synthetic_Q2_Mine_Stats.xlsx", SourceKind::MineStats, "2030Q2", later));
+        files.push((
+            "Synthetic_Q2_Mine_Stats.xlsx",
+            SourceKind::MineStats,
+            "2030Q2",
+            later,
+        ));
         let mut toml = String::from(
             "schema = \"fmine.sources.v1\"\nissuer = \"synthetic\"\ncorpus_dir = \"corpus\"\n\
              retrieved_utc = \"synthetic\"\nurl_prefix = \"https://example.invalid/\"\n",
@@ -1120,7 +1161,10 @@ mod tests {
             rec.rule
         );
         for (cell, prefix) in &rec.label_checks {
-            let _ = write!(toml, "\n[[label_check]]\nset = \"synthetic\"\ncell = \"{cell}\"\nprefix = \"{prefix}\"\n");
+            let _ = write!(
+                toml,
+                "\n[[label_check]]\nset = \"synthetic\"\ncell = \"{cell}\"\nprefix = \"{prefix}\"\n"
+            );
         }
         let reg = sources::registry_path(&ws, "synthetic");
         std::fs::create_dir_all(reg.parent().expect("dir")).expect("registry dir");
@@ -1131,16 +1175,24 @@ mod tests {
         assert_eq!(profile.reconstructions, code_profile.reconstructions);
         let r = run_public_assurance(&profile, &ws).expect("all three files verify by digest");
         let totals: Vec<usize> = STATE_CODES.iter().map(|c| r.count_state(c)).collect();
-        assert_eq!(totals, vec![21, 1, 1, 1, 6, 5], "same ledger as the in-code synthetic profile");
+        assert_eq!(
+            totals,
+            vec![21, 1, 1, 1, 6, 5],
+            "same ledger as the in-code synthetic profile"
+        );
         assert_eq!(r.sources.len(), 3);
         assert_eq!(r.ledger_anchor.commit_sequence, 3);
 
-        let bounded = run_public_assurance(&profile.through("2030Q1").expect("bound"), &ws).expect("run");
+        let bounded =
+            run_public_assurance(&profile.through("2030Q1").expect("bound"), &ws).expect("run");
         assert_eq!(bounded.sources.len(), 2);
         assert_eq!(bounded.through.as_deref(), Some("2030Q1"));
         let totals: Vec<usize> = STATE_CODES.iter().map(|c| bounded.count_state(c)).collect();
         assert_eq!(totals, vec![21, 1, 1, 1, 6, 5]);
-        assert_ne!(bounded.ledger_anchor.state_root, r.ledger_anchor.state_root, "the source set is in the root");
+        assert_ne!(
+            bounded.ledger_anchor.state_root, r.ledger_anchor.state_root,
+            "the source set is in the root"
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 
@@ -1269,7 +1321,11 @@ mod tests {
                 "954f03ad421d6d20ca4c062e5b11b239ee3c46e97e5ceb4cb49dade616f71d1e",
             ),
         ];
-        assert_eq!(r.sources.len(), oracle.len(), "every loaded file has an oracle row");
+        assert_eq!(
+            r.sources.len(),
+            oracle.len(),
+            "every loaded file has an oracle row"
+        );
         for &(file, counts, digest) in oracle {
             let s = r.sources.iter().find(|s| s.file_name == file).expect(file);
             let c = &s.census;

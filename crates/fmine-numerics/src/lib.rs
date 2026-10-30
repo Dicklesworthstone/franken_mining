@@ -22,7 +22,11 @@ pub fn cholesky_solve(a: &[f64], b: &[f64], n: usize) -> Result<Vec<f64>, Refusa
     if n == 0 || a.len() != n * n || b.len() != n {
         return Err(Refusal::from_code(
             "FMINE-REF-301",
-            format!("invalid matrix dimensions n={n}, a.len()={}, b.len()={}", a.len(), b.len()),
+            format!(
+                "invalid matrix dimensions n={n}, a.len()={}, b.len()={}",
+                a.len(),
+                b.len()
+            ),
         ));
     }
     let mut l = vec![0.0_f64; n * n];
@@ -89,15 +93,25 @@ pub enum RootError {
     /// `f` returned NaN or an infinity at `at` (an endpoint or an iterate).
     NonFinite { at: f64 },
     /// `max_iter` iterations ran without meeting `tol`.
-    NotConverged { iterations: usize, bracket_width: f64, f_b: f64 },
+    NotConverged {
+        iterations: usize,
+        bracket_width: f64,
+        f_b: f64,
+    },
 }
 
 impl std::fmt::Display for RootError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoSignChange { fa, fb } => write!(f, "no sign change on the bracket: f(a) {fa}, f(b) {fb}"),
+            Self::NoSignChange { fa, fb } => {
+                write!(f, "no sign change on the bracket: f(a) {fa}, f(b) {fb}")
+            }
             Self::NonFinite { at } => write!(f, "f is not finite at {at}"),
-            Self::NotConverged { iterations, bracket_width, f_b } => write!(
+            Self::NotConverged {
+                iterations,
+                bracket_width,
+                f_b,
+            } => write!(
                 f,
                 "no convergence after {iterations} iterations (bracket width {bracket_width}, f(b) {f_b})"
             ),
@@ -112,7 +126,13 @@ impl std::error::Error for RootError {}
 ///
 /// Returns [`RootError::NotConverged`] when `max_iter` runs out; before bd-t1dk it returned the last iterate,
 /// which is not a root.
-pub fn brent_root<F>(mut a: f64, mut b: f64, tol: f64, max_iter: usize, mut f: F) -> Result<Root, RootError>
+pub fn brent_root<F>(
+    mut a: f64,
+    mut b: f64,
+    tol: f64,
+    max_iter: usize,
+    mut f: F,
+) -> Result<Root, RootError>
 where
     F: FnMut(f64) -> f64,
 {
@@ -206,7 +226,11 @@ where
             return Err(RootError::NonFinite { at: b });
         }
     }
-    Err(RootError::NotConverged { iterations: max_iter, bracket_width: (c - b).abs(), f_b: fb })
+    Err(RootError::NotConverged {
+        iterations: max_iter,
+        bracket_width: (c - b).abs(),
+        f_b: fb,
+    })
 }
 
 /// Standard normal cumulative distribution function $\Phi(z)$ (Abramowitz & Stegun 7.1.26, error $< 1.5 \times 10^{-7}$).
@@ -310,8 +334,12 @@ mod tests {
     /// iterate as `Some(x)` although `x` is not a root.
     #[test]
     fn test_brent_refuses_non_convergence_and_bad_inputs() {
-        let err = brent_root(0.0, 2.0, 1e-15, 3, |x| x * x * x - 2.0).expect_err("3 iterations are too few");
-        assert!(matches!(err, RootError::NotConverged { iterations: 3, .. }), "{err:?}");
+        let err = brent_root(0.0, 2.0, 1e-15, 3, |x| x * x * x - 2.0)
+            .expect_err("3 iterations are too few");
+        assert!(
+            matches!(err, RootError::NotConverged { iterations: 3, .. }),
+            "{err:?}"
+        );
 
         assert_eq!(
             brent_root(1.0, 2.0, 1e-12, 100, |x| x * x + 1.0),
@@ -322,9 +350,18 @@ mod tests {
             Err(RootError::NonFinite { at: 1.0 })
         );
         // Finite at both ends, NaN everywhere inside: the first interior iterate refuses.
-        let err = brent_root(1.0, 2.0, 1e-12, 100, |x| if x > 1.0 && x < 2.0 { f64::NAN } else { x - 1.5 })
-            .expect_err("interior NaN");
-        assert!(matches!(err, RootError::NonFinite { at } if at > 1.0 && at < 2.0), "{err:?}");
+        let err = brent_root(1.0, 2.0, 1e-12, 100, |x| {
+            if x > 1.0 && x < 2.0 {
+                f64::NAN
+            } else {
+                x - 1.5
+            }
+        })
+        .expect_err("interior NaN");
+        assert!(
+            matches!(err, RootError::NonFinite { at } if at > 1.0 && at < 2.0),
+            "{err:?}"
+        );
     }
 
     /// Seeded property over monotone cubics `(x − r)^3 + k (x − r)` with a known root `r`: converged results lie
@@ -346,11 +383,18 @@ mod tests {
             let lo = r - (0.1 + 10.0 * rng.next_f64_open01());
             let hi = r + (0.1 + 10.0 * rng.next_f64_open01());
             let f = |x: f64| (x - r).powi(3) + k * (x - r);
-            let root = brent_root(lo, hi, 1e-12, 200, f).unwrap_or_else(|e| panic!("case {case}: {e}"));
-            assert!((root.x - r).abs() <= 1e-9, "case {case}: x {} vs r {r}", root.x);
+            let root =
+                brent_root(lo, hi, 1e-12, 200, f).unwrap_or_else(|e| panic!("case {case}: {e}"));
+            assert!(
+                (root.x - r).abs() <= 1e-9,
+                "case {case}: x {} vs r {r}",
+                root.x
+            );
             // With two iterations the result is either a genuine convergence or a refusal, never a bare iterate.
             match brent_root(lo, hi, 1e-12, 2, f) {
-                Ok(early) => assert!(early.f_x.abs() <= 1e-12 || early.bracket.1 - early.bracket.0 <= 1e-9),
+                Ok(early) => {
+                    assert!(early.f_x.abs() <= 1e-12 || early.bracket.1 - early.bracket.0 <= 1e-9)
+                }
                 Err(RootError::NotConverged { iterations, .. }) => assert_eq!(iterations, 2),
                 Err(other) => panic!("case {case}: {other:?}"),
             }

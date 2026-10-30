@@ -65,7 +65,9 @@ pub fn synthetic_profile() -> IssuerProfile {
             .iter()
             .map(|(c, p)| (s(c), s(p)))
             .collect(),
-            rule: s("Synthetic: the region's AISC numerator includes Site G's minesite sustaining capital."),
+            rule: s(
+                "Synthetic: the region's AISC numerator includes Site G's minesite sustaining capital.",
+            ),
         }],
         through: None,
     }

@@ -50,7 +50,9 @@ impl ForecastLedger {
         if registered_ns > freeze_time_ns {
             return Err(Refusal::from_code(
                 "FMINE-REF-403",
-                format!("forecast registered at {registered_ns} after freeze_time {freeze_time_ns}"),
+                format!(
+                    "forecast registered at {registered_ns} after freeze_time {freeze_time_ns}"
+                ),
             ));
         }
         // A forecast that cannot be scored is refused at entry, so `evaluate_model` never meets one. The code is
@@ -58,14 +60,17 @@ impl ForecastLedger {
         if !mean.is_finite() || !(std_dev.is_finite() && std_dev > 0.0) {
             return Err(Refusal::from_code(
                 "FMINE-REF-403",
-                format!("forecast needs a finite mean and a positive finite std_dev, got mean {mean}, std_dev {std_dev}"),
+                format!(
+                    "forecast needs a finite mean and a positive finite std_dev, got mean {mean}, std_dev {std_dev}"
+                ),
             ));
         }
         let model_key = model_key.into();
         let z80 = 1.281_551_565_544_600_4;
         let p10 = mean - z80 * std_dev;
         let p90 = mean + z80 * std_dev;
-        let payload = format!("{model_key}:{registered_ns}:{freeze_time_ns}:{mean:.8}:{std_dev:.8}");
+        let payload =
+            format!("{model_key}:{registered_ns}:{freeze_time_ns}:{mean:.8}:{std_dev:.8}");
         let forecast_id = ObjectId::from_canonical_bytes(PrefixKind::Forecast, payload.as_bytes());
         if self.records.contains_key(&forecast_id) {
             return Err(Refusal::from_code(
@@ -278,9 +283,15 @@ impl std::fmt::Display for ScoreError {
         match self {
             Self::NonFinite => write!(f, "score inputs must be finite"),
             Self::NonPositiveStdDev(s) => write!(f, "predictive std_dev must be positive, got {s}"),
-            Self::AlphaOutOfDomain(a) => write!(f, "interval level alpha must lie in (0, 1), got {a}"),
-            Self::InvertedInterval { lo, hi } => write!(f, "interval is inverted: lo {lo} > hi {hi}"),
-            Self::InvalidParameter { name, value } => write!(f, "parameter {name} = {value} is outside its domain"),
+            Self::AlphaOutOfDomain(a) => {
+                write!(f, "interval level alpha must lie in (0, 1), got {a}")
+            }
+            Self::InvertedInterval { lo, hi } => {
+                write!(f, "interval is inverted: lo {lo} > hi {hi}")
+            }
+            Self::InvalidParameter { name, value } => {
+                write!(f, "parameter {name} = {value} is outside its domain")
+            }
         }
     }
 }
@@ -326,7 +337,10 @@ impl ReferenceClassPrior {
     pub fn blend(&self, base_mean: f64, base_std: f64) -> Result<(f64, f64), ScoreError> {
         let eps = self.epsilon;
         if !(eps.is_finite() && (0.0..=1.0).contains(&eps)) {
-            return Err(ScoreError::InvalidParameter { name: "epsilon", value: eps });
+            return Err(ScoreError::InvalidParameter {
+                name: "epsilon",
+                value: eps,
+            });
         }
         if !(base_mean.is_finite() && base_std.is_finite()) {
             return Err(ScoreError::NonFinite);
@@ -342,7 +356,8 @@ impl ReferenceClassPrior {
         let m2_ref = ref_std * ref_std + ref_mean * ref_mean;
         // A mixture's variance is non-negative; `max(0.0)` only removes a rounding residue of order ε·m2 when the
         // two components coincide. It is not a domain clamp.
-        let blended_var = ((1.0 - eps) * m2_int + eps * m2_ref - blended_mean * blended_mean).max(0.0);
+        let blended_var =
+            ((1.0 - eps) * m2_int + eps * m2_ref - blended_mean * blended_mean).max(0.0);
         Ok((blended_mean, blended_var.sqrt()))
     }
 }
@@ -390,12 +405,20 @@ impl SpatialFrontPitMonitor {
         alpha: f64,
     ) -> Result<Self, ScoreError> {
         let check = |name: &'static str, value: f64, ok: bool| {
-            if value.is_finite() && ok { Ok(()) } else { Err(ScoreError::InvalidParameter { name, value }) }
+            if value.is_finite() && ok {
+                Ok(())
+            } else {
+                Err(ScoreError::InvalidParameter { name, value })
+            }
         };
         check("nugget_var", nugget_var, nugget_var >= 1e-6)?;
         check("sill_var", sill_var, sill_var >= 1e-6)?;
         check("range_m", range_m, range_m >= 1.0)?;
-        check("max_neighbors", max_neighbors as f64, (1..=16).contains(&max_neighbors))?;
+        check(
+            "max_neighbors",
+            max_neighbors as f64,
+            (1..=16).contains(&max_neighbors),
+        )?;
         if !(alpha.is_finite() && alpha > 0.0 && alpha < 1.0) {
             return Err(ScoreError::AlphaOutOfDomain(alpha));
         }
@@ -505,7 +528,9 @@ mod tests {
         assert_eq!(err_late.code, "FMINE-REF-403");
 
         // Recording outcome after freeze_time succeeds once, then refuses mutation.
-        ledger.record_outcome(fid, 3_000, 3.6).expect("first outcome");
+        ledger
+            .record_outcome(fid, 3_000, 3.6)
+            .expect("first outcome");
         let err_mut = ledger
             .record_outcome(fid, 3_500, 4.0)
             .expect_err("must reject outcome mutation");
@@ -530,16 +555,34 @@ mod tests {
     /// interval became width 0, and a non-positive std_dev was floored to 1e-12. Each now refuses.
     #[test]
     fn test_scores_refuse_out_of_domain_inputs() {
-        assert_eq!(winkler_interval_score(1.0, 3.0, 0.0, 2.0), Err(ScoreError::AlphaOutOfDomain(0.0)));
-        assert_eq!(winkler_interval_score(1.0, 3.0, 1.0, 2.0), Err(ScoreError::AlphaOutOfDomain(1.0)));
+        assert_eq!(
+            winkler_interval_score(1.0, 3.0, 0.0, 2.0),
+            Err(ScoreError::AlphaOutOfDomain(0.0))
+        );
+        assert_eq!(
+            winkler_interval_score(1.0, 3.0, 1.0, 2.0),
+            Err(ScoreError::AlphaOutOfDomain(1.0))
+        );
         assert_eq!(
             winkler_interval_score(3.0, 1.0, 0.2, 2.0),
             Err(ScoreError::InvertedInterval { lo: 3.0, hi: 1.0 })
         );
-        assert_eq!(winkler_interval_score(1.0, 3.0, 0.2, f64::NAN), Err(ScoreError::NonFinite));
-        assert_eq!(gaussian_crps(2.0, 0.0, 2.0), Err(ScoreError::NonPositiveStdDev(0.0)));
-        assert_eq!(gaussian_log_score(2.0, -1.0, 2.0), Err(ScoreError::NonPositiveStdDev(-1.0)));
-        assert_eq!(gaussian_log_score(f64::INFINITY, 1.0, 2.0), Err(ScoreError::NonFinite));
+        assert_eq!(
+            winkler_interval_score(1.0, 3.0, 0.2, f64::NAN),
+            Err(ScoreError::NonFinite)
+        );
+        assert_eq!(
+            gaussian_crps(2.0, 0.0, 2.0),
+            Err(ScoreError::NonPositiveStdDev(0.0))
+        );
+        assert_eq!(
+            gaussian_log_score(2.0, -1.0, 2.0),
+            Err(ScoreError::NonPositiveStdDev(-1.0))
+        );
+        assert_eq!(
+            gaussian_log_score(f64::INFINITY, 1.0, 2.0),
+            Err(ScoreError::NonFinite)
+        );
         // A degenerate interval (lo == hi) is valid and scores its miss penalty only.
         assert_eq!(winkler_interval_score(2.0, 2.0, 0.5, 3.0), Ok(4.0));
     }
@@ -552,7 +595,11 @@ mod tests {
         let mut ids = Vec::new();
         for (i, mean) in [10.0, 20.0, 30.0].into_iter().enumerate() {
             let t = 1_000 * (i as i64 + 1);
-            ids.push(ledger.register("m", t, t + 100, mean, 1.0).expect("register"));
+            ids.push(
+                ledger
+                    .register("m", t, t + 100, mean, 1.0)
+                    .expect("register"),
+            );
         }
         // Outcomes: exactly on the mean, inside the 80% band, far outside it.
         for (fid, y) in ids.iter().zip([10.0, 20.5, 35.0]) {
@@ -567,23 +614,56 @@ mod tests {
         let width = 2.0 * z80;
         let expected_winkler = (3.0 * width + (2.0 / 0.2) * (35.0 - (30.0 + z80))) / 3.0;
         assert!((report.mean_winkler_80 - expected_winkler).abs() < 1e-9);
-        assert_eq!(ledger.evaluate_model("absent").expect("empty").flag, CalibrationFlag::Unscored);
+        assert_eq!(
+            ledger.evaluate_model("absent").expect("empty").flag,
+            CalibrationFlag::Unscored
+        );
 
-        assert!(ledger.register("m", 1, 2, 1.0, 0.0).is_err(), "zero std_dev refused");
-        assert!(ledger.register("m", 1, 2, 1.0, f64::NAN).is_err(), "NaN std_dev refused");
-        assert!(ledger.register("m", 1, 2, f64::NAN, 1.0).is_err(), "NaN mean refused");
+        assert!(
+            ledger.register("m", 1, 2, 1.0, 0.0).is_err(),
+            "zero std_dev refused"
+        );
+        assert!(
+            ledger.register("m", 1, 2, 1.0, f64::NAN).is_err(),
+            "NaN std_dev refused"
+        );
+        assert!(
+            ledger.register("m", 1, 2, f64::NAN, 1.0).is_err(),
+            "NaN mean refused"
+        );
         let fid = ledger.register("n", 1, 2, 1.0, 1.0).expect("register");
-        assert!(ledger.record_outcome(fid, 3, f64::NAN).is_err(), "NaN outcome refused");
-        assert!(ledger.record_outcome(fid, 3, 1.0).is_ok(), "the refused write left the record open");
+        assert!(
+            ledger.record_outcome(fid, 3, f64::NAN).is_err(),
+            "NaN outcome refused"
+        );
+        assert!(
+            ledger.record_outcome(fid, 3, 1.0).is_ok(),
+            "the refused write left the record open"
+        );
     }
 
     #[test]
     fn test_reference_class_epsilon_contamination_gb32() {
         // Reko Diq Phase 1 internal estimate $5.6B blended with greenfield reference class.
-        let (mean, std) = ReferenceClassPrior::GREENFIELD_PORPHYRY_CAPEX.blend(5_600.0, 400.0).expect("valid");
-        let bad = ReferenceClassPrior { epsilon: 1.5, ..ReferenceClassPrior::GREENFIELD_PORPHYRY_CAPEX };
-        assert_eq!(bad.blend(5_600.0, 400.0), Err(ScoreError::InvalidParameter { name: "epsilon", value: 1.5 }));
-        assert!(ReferenceClassPrior::GREENFIELD_PORPHYRY_CAPEX.blend(5_600.0, -1.0).is_err());
+        let (mean, std) = ReferenceClassPrior::GREENFIELD_PORPHYRY_CAPEX
+            .blend(5_600.0, 400.0)
+            .expect("valid");
+        let bad = ReferenceClassPrior {
+            epsilon: 1.5,
+            ..ReferenceClassPrior::GREENFIELD_PORPHYRY_CAPEX
+        };
+        assert_eq!(
+            bad.blend(5_600.0, 400.0),
+            Err(ScoreError::InvalidParameter {
+                name: "epsilon",
+                value: 1.5
+            })
+        );
+        assert!(
+            ReferenceClassPrior::GREENFIELD_PORPHYRY_CAPEX
+                .blend(5_600.0, -1.0)
+                .is_err()
+        );
         assert!(mean > 5_600.0, "reference class must lift expected capex");
         assert!(std > 400.0, "reference class must widen capex dispersion");
 
@@ -612,11 +692,26 @@ mod tests {
     #[test]
     fn test_spatial_monitor_refuses_out_of_domain_parameters() {
         let p = |name: &'static str, value: f64| Err(ScoreError::InvalidParameter { name, value });
-        assert_eq!(SpatialFrontPitMonitor::new(0.0, 0.75, 30.0, 6, 0.02).map(|_| ()), p("nugget_var", 0.0));
-        assert_eq!(SpatialFrontPitMonitor::new(0.25, -1.0, 30.0, 6, 0.02).map(|_| ()), p("sill_var", -1.0));
-        assert_eq!(SpatialFrontPitMonitor::new(0.25, 0.75, 0.5, 6, 0.02).map(|_| ()), p("range_m", 0.5));
-        assert_eq!(SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 0, 0.02).map(|_| ()), p("max_neighbors", 0.0));
-        assert_eq!(SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 17, 0.02).map(|_| ()), p("max_neighbors", 17.0));
+        assert_eq!(
+            SpatialFrontPitMonitor::new(0.0, 0.75, 30.0, 6, 0.02).map(|_| ()),
+            p("nugget_var", 0.0)
+        );
+        assert_eq!(
+            SpatialFrontPitMonitor::new(0.25, -1.0, 30.0, 6, 0.02).map(|_| ()),
+            p("sill_var", -1.0)
+        );
+        assert_eq!(
+            SpatialFrontPitMonitor::new(0.25, 0.75, 0.5, 6, 0.02).map(|_| ()),
+            p("range_m", 0.5)
+        );
+        assert_eq!(
+            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 0, 0.02).map(|_| ()),
+            p("max_neighbors", 0.0)
+        );
+        assert_eq!(
+            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 17, 0.02).map(|_| ()),
+            p("max_neighbors", 17.0)
+        );
         assert_eq!(
             SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 1.0).map(|_| ()),
             Err(ScoreError::AlphaOutOfDomain(1.0))
@@ -626,7 +721,8 @@ mod tests {
     #[test]
     fn test_vecchia_spatial_front_pit_eprocess_gb08() {
         // 1. Under well-specified spatial innovations, monitor does not trip false alarm.
-        let mut monitor_ok = SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 0.02).expect("valid parameters");
+        let mut monitor_ok =
+            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 0.02).expect("valid parameters");
         let mut rng = PhiloxStream::new(RngKey {
             seed_root: 777,
             partition: 1,
@@ -651,7 +747,8 @@ mod tests {
         }
 
         // 2. Under systematic +1.5g/t unmodeled high-grade shear zone, monitor trips alarm.
-        let mut monitor_shift = SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 0.05).expect("valid parameters");
+        let mut monitor_shift =
+            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 0.05).expect("valid parameters");
         let mut tripped = false;
         for i in 0..60 {
             let x = (i as f64) * 10.0;
@@ -669,6 +766,9 @@ mod tests {
                 break;
             }
         }
-        assert!(tripped, "Vecchia spatial PIT e-process must detect shifted bench grade");
+        assert!(
+            tripped,
+            "Vecchia spatial PIT e-process must detect shifted bench grade"
+        );
     }
 }

@@ -218,7 +218,10 @@ mod tests {
             sheet.cell(1, 3).and_then(|c| c.number_text.as_deref()),
             Some("-0.125")
         );
-        assert_eq!(sheet.cell(2, 2).map(|c| c.number_text.is_none()), Some(true));
+        assert_eq!(
+            sheet.cell(2, 2).map(|c| c.number_text.is_none()),
+            Some(true)
+        );
         // Regression (bd-gwf1.1): the trailing space of the issuer's `'— '` token is kept, not trimmed.
         assert_eq!(
             sheet.cell(3, 2).map(|c| c.value.clone()),

@@ -206,14 +206,28 @@ pub enum CutoffError {
 impl std::fmt::Display for CutoffError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NonPositiveCost(c) => write!(f, "processing and G&A cost must be positive and finite, got {c}"),
-            Self::NonPositivePrice(p) => write!(f, "net metal price must be positive and finite, got {p}"),
-            Self::NonPositiveGuess(g) => write!(f, "initial grade guess must be positive and finite, got {g}"),
+            Self::NonPositiveCost(c) => write!(
+                f,
+                "processing and G&A cost must be positive and finite, got {c}"
+            ),
+            Self::NonPositivePrice(p) => {
+                write!(f, "net metal price must be positive and finite, got {p}")
+            }
+            Self::NonPositiveGuess(g) => write!(
+                f,
+                "initial grade guess must be positive and finite, got {g}"
+            ),
             Self::RecoveryOutOfDomain { at_grade, value } => {
                 write!(f, "recovery {value} at grade {at_grade} is outside (0, 1]")
             }
-            Self::NotConverged { iterations, last_step } => {
-                write!(f, "no convergence after {iterations} iterations (last step {last_step})")
+            Self::NotConverged {
+                iterations,
+                last_step,
+            } => {
+                write!(
+                    f,
+                    "no convergence after {iterations} iterations (last step {last_step})"
+                )
             }
         }
     }
@@ -249,7 +263,10 @@ where
         if rec.is_finite() && rec > 0.0 && rec <= 1.0 {
             Ok(rec)
         } else {
-            Err(CutoffError::RecoveryOutOfDomain { at_grade: g, value: rec })
+            Err(CutoffError::RecoveryOutOfDomain {
+                at_grade: g,
+                value: rec,
+            })
         }
     };
     let image = |rec: f64| processing_and_ga_usd_per_t / (net_metal_price_usd_per_unit * rec);
@@ -260,11 +277,18 @@ where
         last_step = (next_g - g).abs();
         if last_step < CUTOFF_TOL {
             let residual = (next_g - image(recovery_at(next_g)?)).abs();
-            return Ok(CutoffSolution { grade: next_g, iterations: iter, residual });
+            return Ok(CutoffSolution {
+                grade: next_g,
+                iterations: iter,
+                residual,
+            });
         }
         g = 0.5 * g + 0.5 * next_g;
     }
-    Err(CutoffError::NotConverged { iterations: CUTOFF_MAX_ITER, last_step })
+    Err(CutoffError::NotConverged {
+        iterations: CUTOFF_MAX_ITER,
+        last_step,
+    })
 }
 
 #[cfg(test)]
@@ -375,11 +399,17 @@ mod tests {
         ));
         assert_eq!(
             solve_cutoff_grade(14.5, 8_500.0, 0.0025, |_| 1.2),
-            Err(CutoffError::RecoveryOutOfDomain { at_grade: 0.0025, value: 1.2 })
+            Err(CutoffError::RecoveryOutOfDomain {
+                at_grade: 0.0025,
+                value: 1.2
+            })
         );
         assert_eq!(
             solve_cutoff_grade(14.5, 8_500.0, 0.0025, |_| 0.0),
-            Err(CutoffError::RecoveryOutOfDomain { at_grade: 0.0025, value: 0.0 })
+            Err(CutoffError::RecoveryOutOfDomain {
+                at_grade: 0.0025,
+                value: 0.0
+            })
         );
         assert!(matches!(
             solve_cutoff_grade(14.5, 8_500.0, 0.0025, |_| f64::NAN),
@@ -401,7 +431,10 @@ mod tests {
         })
         .expect_err("alternating recovery cannot converge");
         match err {
-            CutoffError::NotConverged { iterations, last_step } => {
+            CutoffError::NotConverged {
+                iterations,
+                last_step,
+            } => {
                 assert_eq!(iterations, CUTOFF_MAX_ITER);
                 assert!(last_step >= CUTOFF_TOL);
             }
@@ -437,11 +470,15 @@ mod tests {
                         sol.grade
                     );
                 }
-                Err(CutoffError::NotConverged { .. } | CutoffError::RecoveryOutOfDomain { .. }) => {}
+                Err(CutoffError::NotConverged { .. } | CutoffError::RecoveryOutOfDomain { .. }) => {
+                }
                 Err(other) => panic!("case {case}: valid inputs refused with {other:?}"),
             }
             let bad = 1.0 + rng.next_f64_open01();
-            assert!(solve_cutoff_grade(cost, price, 0.005, |_| bad).is_err(), "case {case}");
+            assert!(
+                solve_cutoff_grade(cost, price, 0.005, |_| bad).is_err(),
+                "case {case}"
+            );
         }
     }
 }

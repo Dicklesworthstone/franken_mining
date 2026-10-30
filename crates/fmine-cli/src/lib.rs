@@ -418,7 +418,14 @@ mod tests {
         std::fs::copy(registry_path(&workspace_root(), "barrick"), &reg).expect("copy registry");
         let ws_arg = ws.display().to_string();
         let (cmd, _, ws_parsed) = parse_args(
-            &args(&["assure", "public", "--issuer", "barrick", "--workspace", &ws_arg]),
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--workspace",
+                &ws_arg,
+            ]),
             &workspace_root(),
         )
         .expect("parse");
@@ -431,7 +438,16 @@ mod tests {
 
         // --through narrows the refusal to the rows at or before the bound.
         let (cmd, _, _) = parse_args(
-            &args(&["assure", "public", "--issuer", "barrick", "--through", "2024Q4", "--workspace", &ws_arg]),
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2024Q4",
+                "--workspace",
+                &ws_arg,
+            ]),
             &workspace_root(),
         )
         .expect("parse");
@@ -451,9 +467,19 @@ mod tests {
     /// A workspace without the issuer's registry file makes the issuer unknown: a usage error, exit 2.
     #[test]
     fn test_cli_unknown_issuer_without_registry_is_usage_error() {
-        let empty = workspace_root().join("crates").join("fmine-cli").join("no-such-workspace");
+        let empty = workspace_root()
+            .join("crates")
+            .join("fmine-cli")
+            .join("no-such-workspace");
         let err = parse_args(
-            &args(&["assure", "public", "--issuer", "barrick", "--workspace", &empty.display().to_string()]),
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--workspace",
+                &empty.display().to_string(),
+            ]),
             &workspace_root(),
         )
         .expect_err("no registry there");
@@ -468,11 +494,30 @@ mod tests {
             &["assure", "public"][..],
             &["assure", "public", "--issuer", "barrick", "--synthetic"][..],
             &["assure", "private"][..],
-            &["assure", "public", "--issuer", "barrick", "--through", "2026Q5"][..],
-            &["assure", "public", "--issuer", "barrick", "--through", "2026-Q2"][..],
+            &[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2026Q5",
+            ][..],
+            &[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2026-Q2",
+            ][..],
             &["assure", "public", "--issuer", "barrick", "--through"][..],
             &["assure", "public", "--synthetic", "--through", "2026Q2"][..],
-            &["assure", "public", "--issuer", "../registries/sources/barrick"][..],
+            &[
+                "assure",
+                "public",
+                "--issuer",
+                "../registries/sources/barrick",
+            ][..],
             &[][..],
         ] {
             assert!(
@@ -512,7 +557,14 @@ mod tests {
     fn test_cli_assure_public_barrick_real_files() {
         let root = workspace_root();
         let (cmd, _, ws) = parse_args(
-            &args(&["assure", "public", "--issuer", "barrick", "--through", "2026Q2"]),
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2026Q2",
+            ]),
             &root,
         )
         .expect("parse");
@@ -539,7 +591,10 @@ mod tests {
         let env_doc = execute_command(&CliCommand::Doctor, &root);
         assert_eq!(env_doc.exit_code, 0);
         assert!(env_doc.to_json().contains("\"registries_ok\":true"));
-        let n = load_issuer_profile(&root, "barrick").expect("registry").sources.len();
+        let n = load_issuer_profile(&root, "barrick")
+            .expect("registry")
+            .sources
+            .len();
         assert!(
             env_doc.to_json().contains(&format!(
                 "{{\"issuer\":\"barrick\",\"registry_ok\":true,\"sources_registered\":{n},"

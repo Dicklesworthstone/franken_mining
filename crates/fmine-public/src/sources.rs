@@ -146,7 +146,10 @@ impl IssuerProfile {
         if self.sources.is_empty() {
             return Err(Refusal::from_code(
                 "FMINE-REF-502",
-                format!("no registered {} workbooks at or before {bound}", self.issuer),
+                format!(
+                    "no registered {} workbooks at or before {bound}",
+                    self.issuer
+                ),
             ));
         }
         self.through = Some(bound.to_string());
@@ -157,7 +160,9 @@ impl IssuerProfile {
 /// An issuer name as used on the command line and as a registry file stem.
 #[must_use]
 pub fn is_issuer_name(s: &str) -> bool {
-    !s.is_empty() && s.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
+    !s.is_empty()
+        && s.bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
 }
 
 /// Whether `s` is a valid `--through` bound (`YYYYQ1` … `YYYYQ4`).
@@ -204,10 +209,16 @@ pub fn load_issuer_profile(workspace: &Path, issuer: &str) -> Result<IssuerProfi
     }
     let path = registry_path(workspace, issuer);
     let reg = load_sources_registry(&path).map_err(|e| {
-        Refusal::from_code("FMINE-REF-502", format!("source registry {}: {e}", path.display()))
+        Refusal::from_code(
+            "FMINE-REF-502",
+            format!("source registry {}: {e}", path.display()),
+        )
     })?;
     IssuerProfile::from_registry(reg).map_err(|e| {
-        Refusal::from_code("FMINE-REF-502", format!("source registry {}: {e}", path.display()))
+        Refusal::from_code(
+            "FMINE-REF-502",
+            format!("source registry {}: {e}", path.display()),
+        )
     })
 }
 
@@ -216,7 +227,9 @@ mod tests {
     use super::*;
 
     fn workspace_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
     }
 
     // The field-by-field golden test against the former Rust constants passed at commit 997b65e and was removed
@@ -239,10 +252,19 @@ mod tests {
         let h1_2025 = p.clone().through("2025Q2").expect("rows remain");
         assert_eq!(h1_2025.through.as_deref(), Some("2025Q2"));
         assert!(h1_2025.sources.len() < all);
-        assert!(h1_2025.sources.iter().all(|s| s.quarter.as_str() <= "2025Q2"));
+        assert!(
+            h1_2025
+                .sources
+                .iter()
+                .all(|s| s.quarter.as_str() <= "2025Q2")
+        );
         assert!(h1_2025.sources.iter().any(|s| s.quarter == "2025Q2"));
         // Order is preserved: the filtered rows are a prefix-respecting subsequence of the registry.
-        let names: Vec<&str> = h1_2025.sources.iter().map(|s| s.file_name.as_str()).collect();
+        let names: Vec<&str> = h1_2025
+            .sources
+            .iter()
+            .map(|s| s.file_name.as_str())
+            .collect();
         let kept: Vec<&str> = p
             .sources
             .iter()
@@ -253,25 +275,42 @@ mod tests {
         assert_eq!(p.clone().through("2099Q4").expect("all").sources.len(), all);
         let e = p.through("2023Q4").expect_err("nothing that early");
         assert_eq!(e.code, "FMINE-REF-502");
-        assert!(is_through_bound("2026Q2") && !is_through_bound("2026Q5") && !is_through_bound("2026-Q2"));
+        assert!(
+            is_through_bound("2026Q2")
+                && !is_through_bound("2026Q5")
+                && !is_through_bound("2026-Q2")
+        );
     }
 
     #[test]
     fn test_missing_or_malformed_registry_refuses_naming_file_and_line() {
-        let dir = std::env::temp_dir().join(format!("fmine-public-registry-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("fmine-public-registry-{}", std::process::id()));
         let sources = dir.join("registries").join("sources");
         std::fs::create_dir_all(&sources).expect("temp registry dir");
         let e = load_issuer_profile(&dir, "nobody").expect_err("no file");
         assert_eq!(e.code, "FMINE-REF-502");
         assert!(e.what.contains("nobody.toml"), "{}", e.what);
-        let text = std::fs::read_to_string(registry_path(&workspace_root(), "barrick")).expect("read");
+        let text =
+            std::fs::read_to_string(registry_path(&workspace_root(), "barrick")).expect("read");
         let broken = text.replacen("bytes = 43_668", "bytes = 43.668", 1);
-        let line = broken.lines().position(|l| l == "bytes = 43.668").map(|i| i + 1).expect("edited");
+        let line = broken
+            .lines()
+            .position(|l| l == "bytes = 43.668")
+            .map(|i| i + 1)
+            .expect("edited");
         std::fs::write(sources.join("barrick.toml"), broken).expect("write");
         let e = load_issuer_profile(&dir, "barrick").expect_err("float refused");
-        assert!(e.what.contains(&format!("line {line}: ")) && e.what.contains("floats"), "{}", e.what);
+        assert!(
+            e.what.contains(&format!("line {line}: ")) && e.what.contains("floats"),
+            "{}",
+            e.what
+        );
         assert!(load_issuer_profile(&dir, "../etc").is_err());
-        assert_eq!(registered_issuers(&workspace_root()), vec!["barrick".to_string()]);
+        assert_eq!(
+            registered_issuers(&workspace_root()),
+            vec!["barrick".to_string()]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

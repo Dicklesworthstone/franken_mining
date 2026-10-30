@@ -244,9 +244,7 @@ fn parse_integer(token: &str) -> Result<i64, String> {
     } else {
         plain
     };
-    signed
-        .parse::<i64>()
-        .map_err(|e| format!("{token:?}: {e}"))
+    signed.parse::<i64>().map_err(|e| format!("{token:?}: {e}"))
 }
 
 #[cfg(test)]
@@ -275,8 +273,14 @@ mod tests {
             sources[0].get("file").map(|f| &f.value),
             Some(&TomlValue::Str("a \"b\" \\ c".to_string()))
         );
-        assert_eq!(sources[0].get("bytes").map(|f| &f.value), Some(&TomlValue::Int(43_668)));
-        assert_eq!(sources[1].get("bytes").map(|f| (&f.value, f.line)), Some((&TomlValue::Int(-7), 10)));
+        assert_eq!(
+            sources[0].get("bytes").map(|f| &f.value),
+            Some(&TomlValue::Int(43_668))
+        );
+        assert_eq!(
+            sources[1].get("bytes").map(|f| (&f.value, f.line)),
+            Some((&TomlValue::Int(-7), 10))
+        );
         assert_eq!(doc.rows_of("subject").count(), 1);
         // Row order is file order across tables.
         let order: Vec<&str> = doc.rows.iter().map(|r| r.table.as_str()).collect();
@@ -322,7 +326,11 @@ mod tests {
         assert!(refused_at("x = \"a\\nb\"\n").1.contains("escape"));
         assert!(refused_at("x = \"open\n").1.contains("unterminated"));
         assert!(refused_at("x = \"v\" junk\n").1.contains("unexpected text"));
-        assert!(refused_at("x = 99999999999999999999\n").1.contains("too large"));
+        assert!(
+            refused_at("x = 99999999999999999999\n")
+                .1
+                .contains("too large")
+        );
     }
 
     #[test]
