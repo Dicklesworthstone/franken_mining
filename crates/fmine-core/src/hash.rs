@@ -310,8 +310,8 @@ impl Blake3 {
 
     fn add_chunk_chaining_value(&mut self, mut new_cv: [u32; 8], mut total_chunks: u64) {
         while total_chunks & 1 == 0 {
-            new_cv = parent_output(self.key_words, self.flags, self.pop_cv(), new_cv)
-                .chaining_value();
+            new_cv =
+                parent_output(self.key_words, self.flags, self.pop_cv(), new_cv).chaining_value();
             total_chunks >>= 1;
         }
         self.push_cv(new_cv);
@@ -383,11 +383,11 @@ pub fn sha256(input: &[u8]) -> Digest32 {
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
 
-    for chunk in padded.chunks_exact(64) {
+    // `padded` is a whole number of 64-byte blocks, so the remainder of `as_chunks` is empty.
+    for chunk in padded.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
-        for i in 0..16 {
-            let off = i * 4;
-            w[i] = u32::from_be_bytes([chunk[off], chunk[off + 1], chunk[off + 2], chunk[off + 3]]);
+        for (word, bytes) in w.iter_mut().zip(chunk.as_chunks::<4>().0) {
+            *word = u32::from_be_bytes(*bytes);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);

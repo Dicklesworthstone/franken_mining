@@ -264,6 +264,8 @@ pub fn verify_unweighted_additive(
 /// - `calibration_failed = left.calibration_failed || right.calibration_failed` (`NL-8`)
 /// - `uu_terms` = deduplicated union of `left.uu_terms` and `right.uu_terms` (`NL-5`)
 /// - `parents` = `[left.claim_id, right.claim_id]`
+// Eight arguments, each a distinct part of the composed Claim; a parameter struct would only rename them.
+#[allow(clippy::too_many_arguments)]
 pub fn compose_binary<A, B, R>(
     metric_key: impl Into<String>,
     left: &Claim<A>,

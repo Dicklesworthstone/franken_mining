@@ -185,7 +185,10 @@ impl MassFraction {
 
 /// Converts wet tonnes to dry tonnes: `dry = wet * (1 - moisture)`.
 #[must_use]
-pub fn wet_to_dry(wet_tonnes: Qty<Mass, Wet, Neutral>, moisture: MoistureFraction) -> Qty<Mass, Dry, Neutral> {
+pub fn wet_to_dry(
+    wet_tonnes: Qty<Mass, Wet, Neutral>,
+    moisture: MoistureFraction,
+) -> Qty<Mass, Dry, Neutral> {
     Qty::new(wet_tonnes.value() * (1.0 - moisture.value()))
 }
 
@@ -225,10 +228,13 @@ impl Grade<Contained> {
     }
 }
 
+/// A dry mass with the grade it carries.
+pub type DryMassGrade<R> = (Qty<Mass, Dry, Neutral>, Grade<R>);
+
 /// Computes the mass-weighted mean grade across `(dry_tonnes, grade)` pairs (`INV-012`).
 pub fn mass_weighted_mean<R: Copy>(
-    samples: &[(Qty<Mass, Dry, Neutral>, Grade<R>)],
-) -> Result<(Qty<Mass, Dry, Neutral>, Grade<R>), UnitsError> {
+    samples: &[DryMassGrade<R>],
+) -> Result<DryMassGrade<R>, UnitsError> {
     let mut total_mass = 0.0_f64;
     let mut total_metal_grams = 0.0_f64;
     for &(mass, grade) in samples {
@@ -462,7 +468,10 @@ impl Money {
         }
         Ok(Self {
             ccy: self.ccy,
-            minor: self.minor.checked_add(rhs.minor).ok_or(UnitsError::Overflow)?,
+            minor: self
+                .minor
+                .checked_add(rhs.minor)
+                .ok_or(UnitsError::Overflow)?,
         })
     }
 
@@ -476,7 +485,10 @@ impl Money {
         }
         Ok(Self {
             ccy: self.ccy,
-            minor: self.minor.checked_sub(rhs.minor).ok_or(UnitsError::Overflow)?,
+            minor: self
+                .minor
+                .checked_sub(rhs.minor)
+                .ok_or(UnitsError::Overflow)?,
         })
     }
 
@@ -708,8 +720,8 @@ mod tests {
 
         let g1 = Grade::<Contained>::from_g_per_t(2.5);
         let g2 = Grade::<Contained>::from_g_per_t(1.5);
-        let (tot_dry, blended) = mass_weighted_mean(&[(dry, g1), (Qty::new(920.0), g2)])
-            .expect("valid weighted mean");
+        let (tot_dry, blended) =
+            mass_weighted_mean(&[(dry, g1), (Qty::new(920.0), g2)]).expect("valid weighted mean");
         assert!((tot_dry.value() - 1_840.0).abs() < 1e-12);
         assert!((blended.g_per_t() - 2.0).abs() < 1e-12);
 
@@ -765,9 +777,11 @@ mod tests {
             .convert_basis(ChemBasis::NitrateNO3)
             .expect("stoichiometric N -> NO3 conversion");
         assert!((sample_as_no3.mg_per_l - 349.7174).abs() < 0.01);
-        assert!(sample_as_no3
-            .exceeds_strict(who_limit_no3)
-            .expect("same basis comparison"));
+        assert!(
+            sample_as_no3
+                .exceeds_strict(who_limit_no3)
+                .expect("same basis comparison")
+        );
     }
 
     #[test]

@@ -273,9 +273,10 @@ pub fn erf(x: f64) -> f64 {
     // Abramowitz & Stegun 7.1.26 / rational Chebyshev approximation (max error < 1.5e-7,
     // refined with one Newton-like step against asymptotic expansion for high accuracy).
     let t = 1.0 / (1.0 + 0.327_591_1 * a);
-    let poly = t * (0.254_829_592
-        + t * (-0.284_496_736
-            + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
+    let poly = t
+        * (0.254_829_592
+            + t * (-0.284_496_736
+                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
     let y = 1.0 - poly * exp(-a * a);
     sign * y
 }

@@ -76,6 +76,8 @@ impl VoiProblem {
         let n_actions = self.payoffs[0].len();
 
         let mut preposterior_ev = 0.0_f64;
+        // `z` indexes a column of the likelihood matrix across every row `s`, which no single iterator gives.
+        #[allow(clippy::needless_range_loop)]
         for z in 0..n_signals {
             // For signal z, choose action a maximizing sum_s P(s) * P(z | s) * u(s, a).
             let mut best_joint_for_z = f64::NEG_INFINITY;

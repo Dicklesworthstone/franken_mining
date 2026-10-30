@@ -345,8 +345,12 @@ mod tests {
 
     #[test]
     fn test_civil_calendar_roundtrip_1900_to_2200() {
-        let start = CivilDate::new(1900, 1, 1).expect("1900-01-01").to_epoch_days();
-        let end = CivilDate::new(2200, 12, 31).expect("2200-12-31").to_epoch_days();
+        let start = CivilDate::new(1900, 1, 1)
+            .expect("1900-01-01")
+            .to_epoch_days();
+        let end = CivilDate::new(2200, 12, 31)
+            .expect("2200-12-31")
+            .to_epoch_days();
         for d in start..=end {
             let civil = CivilDate::from_epoch_days(d);
             assert_eq!(civil.to_epoch_days(), d, "roundtrip failed at day {d}");
@@ -420,6 +424,10 @@ mod tests {
             for_physical_period: ValidTime::new(0, 24 * NS_PER_HOUR).unwrap(),
             purpose: QueryPurpose::RetrospectiveAccounting,
         };
-        assert!(close_query.check_admissible(&stamp).expect("admissible at close"));
+        assert!(
+            close_query
+                .check_admissible(&stamp)
+                .expect("admissible at close")
+        );
     }
 }

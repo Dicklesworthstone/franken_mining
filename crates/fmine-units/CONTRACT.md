@@ -15,7 +15,7 @@ Enforces compile-time and runtime guards against silent unit, moisture-basis, cu
 
 ## 4. Public API Surface
 - `Qty<D, B, R>`, `MoistureFraction`, `MassFraction`, `to_dry_mass`, `to_wet_mass`
-- `Grade<R>`, `mass_weighted_mean`
+- `Grade<R>`, `mass_weighted_mean`, `DryMassGrade<R>` (a dry mass with its grade)
 - `ExactQty`
 - `Currency`, `Money`, `allocate_pro_rata`
 - `ChemBasis`, `No3Loading`, `check_who_no3_limit`

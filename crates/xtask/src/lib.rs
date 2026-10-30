@@ -200,10 +200,10 @@ pub fn check_layers(root: &Path) -> Result<(), Vec<String>> {
         }
 
         if in_ranks {
-            if let Some((k, v)) = line.split_once('=') {
-                if let Ok(r) = v.trim().parse::<usize>() {
-                    ranks.insert(k.trim().to_string(), r);
-                }
+            if let Some((k, v)) = line.split_once('=')
+                && let Ok(r) = v.trim().parse::<usize>()
+            {
+                ranks.insert(k.trim().to_string(), r);
             }
         } else if in_edge {
             if let Some(val) = strip_kv_str(line, "from") {
@@ -284,12 +284,13 @@ pub fn validate_layer_edge(
             "upward layer dependency forbidden (L-1): {from_crate} ({from_layer}, rank {from_rank}) -> {to_crate} ({to_layer}, rank {to_rank})"
         ));
     }
-    if from_rank == to_rank && from_layer != "T" {
-        if !allowed_same_layer.contains(&(from_crate.to_string(), to_crate.to_string())) {
-            return Err(format!(
-                "undeclared same-layer dependency (L-1): {from_crate} ({from_layer}) -> {to_crate} ({to_layer}); register in workspace_topology.toml"
-            ));
-        }
+    if from_rank == to_rank
+        && from_layer != "T"
+        && !allowed_same_layer.contains(&(from_crate.to_string(), to_crate.to_string()))
+    {
+        return Err(format!(
+            "undeclared same-layer dependency (L-1): {from_crate} ({from_layer}) -> {to_crate} ({to_layer}); register in workspace_topology.toml"
+        ));
     }
     Ok(())
 }
@@ -304,13 +305,13 @@ pub fn check_deps(root: &Path) -> Result<(), Vec<String>> {
     let mut banned = BTreeSet::new();
     for raw_line in deny_text.lines() {
         let line = raw_line.trim();
-        if line.starts_with("{ name =") {
-            if let Some(val) = strip_kv_str(
+        if line.starts_with("{ name =")
+            && let Some(val) = strip_kv_str(
                 line.trim_matches(|c| c == '{' || c == '}' || c == ','),
                 "name",
-            ) {
-                banned.insert(val);
-            }
+            )
+        {
+            banned.insert(val);
         }
     }
 
@@ -841,10 +842,10 @@ fn parse_cargo_manifest(
             if let Some((k, _)) = line.split_once('=') {
                 deps.push(k.trim().to_string());
             }
-        } else if section == "dev-dependencies" {
-            if let Some((k, _)) = line.split_once('=') {
-                dev_deps.push(k.trim().to_string());
-            }
+        } else if section == "dev-dependencies"
+            && let Some((k, _)) = line.split_once('=')
+        {
+            dev_deps.push(k.trim().to_string());
         }
     }
     Ok((name, deps, dev_deps))
@@ -853,18 +854,14 @@ fn parse_cargo_manifest(
 fn parse_allowed_modules(contract: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for line in contract.lines() {
-        if line.contains("Allowed Module Families:") {
-            if let Some((_, rhs)) = line.split_once(':') {
-                let cleaned = rhs
-                    .replace('*', "")
-                    .replace('`', "")
-                    .replace('[', "")
-                    .replace(']', "");
-                for token in cleaned.split(',') {
-                    let m = token.trim().trim_matches('"');
-                    if !m.is_empty() {
-                        out.insert(m.to_string());
-                    }
+        if line.contains("Allowed Module Families:")
+            && let Some((_, rhs)) = line.split_once(':')
+        {
+            let cleaned = rhs.replace(['*', '`', '[', ']'], "");
+            for token in cleaned.split(',') {
+                let m = token.trim().trim_matches('"');
+                if !m.is_empty() {
+                    out.insert(m.to_string());
                 }
             }
         }

@@ -71,11 +71,7 @@ pub enum KnowledgeState {
 
 impl KnowledgeState {
     /// All 3 variants.
-    pub const ALL: [Self; 3] = [
-        Self::UnknownUnknown,
-        Self::KnownUnknown,
-        Self::KnownKnown,
-    ];
+    pub const ALL: [Self; 3] = [Self::UnknownUnknown, Self::KnownUnknown, Self::KnownKnown];
 
     /// Weakest-link composition (`KK ∧ KU = KU`, any `UU` yields `UU`).
     #[must_use]
@@ -144,7 +140,10 @@ mod tests {
             assert_eq!(a.combine(EvidenceClass::Exact), a);
             assert_eq!(EvidenceClass::Exact.combine(a), a);
             // Annihilator law: a ∧ Placeholder = Placeholder
-            assert_eq!(a.combine(EvidenceClass::Placeholder), EvidenceClass::Placeholder);
+            assert_eq!(
+                a.combine(EvidenceClass::Placeholder),
+                EvidenceClass::Placeholder
+            );
             // Idempotence: a ∧ a = a
             assert_eq!(a.combine(a), a);
 

@@ -6,6 +6,17 @@ on:
   pull_request:
 
 jobs:
+  # AGENTS.md "Compiler Checks" (bd-l736): formatting and clippy, warnings denied. One OS is enough; lints do
+  # not depend on the target here.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy (warnings denied)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
   check-and-test:
     name: ${{ matrix.os }} (${{ matrix.profile }})
     runs-on: ${{ matrix.os }}

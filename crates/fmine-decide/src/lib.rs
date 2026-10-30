@@ -126,7 +126,10 @@ impl DecisionCard {
         let title = title.into();
         let recommended_action = recommended_action.into();
         let runner_up_action = runner_up_action.into();
-        let tag = format!("{title}:{recommended_action}:{}", expected_npv_usd_m.claim_id);
+        let tag = format!(
+            "{title}:{recommended_action}:{}",
+            expected_npv_usd_m.claim_id
+        );
         let decision_id = ObjectId::from_canonical_bytes(PrefixKind::Decision, tag.as_bytes());
 
         Ok(Self {
@@ -188,7 +191,11 @@ impl DecisionCard {
         for v in &self.top_voi_items {
             out.push_str(&format!(
                 "- **{}**: EVSI `${:.2}M`, Cost `${:.2}M`, Net VOI `${:.2}M` (BCR `{:.2}x`)\n",
-                v.campaign_id, v.summary.evsi, v.cost_usd_m, v.summary.net_voi, v.benefit_cost_ratio
+                v.campaign_id,
+                v.summary.evsi,
+                v.cost_usd_m,
+                v.summary.net_voi,
+                v.benefit_cost_ratio
             ));
         }
         out
@@ -239,15 +246,30 @@ mod tests {
     fn test_decision_card_uu_and_flip_margin_guards() {
         // Missing UuTerm on KnownUnknown claim must refuse with FMINE-REF-404.
         let bad_claim = make_npv_claim(false, EvidenceClass::Calibrated);
-        let err = DecisionCard::build("Pushback 4", "Proceed", "Defer", bad_claim, 40.0, vec![], vec![])
-            .expect_err("must refuse missing UU");
+        let err = DecisionCard::build(
+            "Pushback 4",
+            "Proceed",
+            "Defer",
+            bad_claim,
+            40.0,
+            vec![],
+            vec![],
+        )
+        .expect_err("must refuse missing UU");
         assert_eq!(err.code, "FMINE-REF-404");
 
         // Placeholder claim must refuse with FMINE-REF-401.
         let red_claim = make_npv_claim(true, EvidenceClass::Placeholder);
-        let err_red =
-            DecisionCard::build("Pushback 4", "Proceed", "Defer", red_claim, 40.0, vec![], vec![])
-                .expect_err("must refuse Placeholder claim");
+        let err_red = DecisionCard::build(
+            "Pushback 4",
+            "Proceed",
+            "Defer",
+            red_claim,
+            40.0,
+            vec![],
+            vec![],
+        )
+        .expect_err("must refuse Placeholder claim");
         assert_eq!(err_red.code, "FMINE-REF-401");
 
         // Valid calibrated claim with UuTerm succeeds and computes flip margin.
