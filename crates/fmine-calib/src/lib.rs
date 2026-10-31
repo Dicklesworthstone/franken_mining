@@ -1,8 +1,8 @@
 //! Frozen forecast ledger (`INV-008`), proper scoring rules (`CRPS`, log, Winkler),
 //! `CalibrationFlag` auto-downgrade (`NL-8`), `REFCLASS-` $\varepsilon$-contamination (`GB-32`),
 //! and Vecchia/Rosenblatt spatial PIT e-process monitoring (`GB-08`, `BD-311`).
-//! Determinism: DeterministicPerIsa (transcendentals via `fmine_core::det`; BitwisePortable once its cross-host
-//! digest exists, bd-hp2j.3).
+//! Determinism: DeterministicPerIsa (transcendentals via `fmine_core::det`; BitwisePortable once one CI run passes
+//! the file's three digests on both hosts, bd-hp2j.3).
 
 use std::collections::BTreeMap;
 
@@ -309,6 +309,90 @@ pub fn digest_gaussian_crps(key: RngKey) -> String {
 #[must_use]
 pub fn digest_gaussian_log_score(key: RngKey) -> String {
     digest_scores(key, gaussian_log_score)
+}
+
+/// The values behind [`digest_calib_rest`]; a refusal is `u64::MAX`.
+fn calib_rest_bits(key: RngKey) -> Vec<u64> {
+    let inputs = score_digest_inputs(key);
+    let mut bits = Vec::with_capacity(34_104);
+    let prior = ReferenceClassPrior::GREENFIELD_PORPHYRY_CAPEX;
+    for &(mean, std_dev, y) in &inputs {
+        let (lo, hi) = (mean - 1.28 * std_dev, mean + 1.28 * std_dev);
+        bits.push(winkler_interval_score(lo, hi, 0.2, y).map_or(u64::MAX, f64::to_bits));
+        match prior.blend(mean, std_dev) {
+            Ok((m, s)) => bits.extend([m.to_bits(), s.to_bits()]),
+            Err(_) => bits.extend([u64::MAX; 2]),
+        }
+    }
+    let mut ledger = ForecastLedger::new();
+    for (i, &(mean, std_dev, y)) in inputs.iter().step_by(100).enumerate() {
+        let t = i as i64;
+        let scored = ledger
+            .register("digest", t, t, mean, std_dev)
+            .and_then(|id| ledger.record_outcome(id, t + 1, y));
+        bits.push(scored.map_or(u64::MAX, |()| 0));
+    }
+    match ledger.evaluate_model("digest") {
+        Ok(r) => bits.extend(
+            [
+                r.mean_crps,
+                r.mean_winkler_80,
+                r.empirical_coverage_80,
+                r.mean_standardized_bias,
+            ]
+            .map(f64::to_bits),
+        ),
+        Err(_) => bits.extend([u64::MAX; 4]),
+    }
+    let mut rng = PhiloxStream::new(key);
+    let mut unit = || rng.next_f64_open01();
+    match SpatialFrontPitMonitor::new(0.05, 1.0, 50.0, 8, 0.05) {
+        Ok(mut monitor) => {
+            for i in 0..1_000 {
+                // A bias that flips at sample 200 takes the e-processes to both betting limits and the alarm.
+                let bias = if i < 200 { 3.0 } else { -3.0 };
+                let sample = SpatialSample {
+                    x: 500.0 * unit(),
+                    y: 500.0 * unit(),
+                    z: 100.0 * unit(),
+                    prior_mean: 5.0,
+                    observed_value: 3.0 + bias + 4.0 * unit(),
+                };
+                match monitor.observe_sample(sample) {
+                    Ok((u, alarm)) => bits.extend([
+                        u.to_bits(),
+                        u64::from(alarm),
+                        monitor.mean_eproc.wealth.to_bits(),
+                        monitor.spread_eproc.wealth.to_bits(),
+                    ]),
+                    Err(_) => bits.extend([u64::MAX; 4]),
+                }
+            }
+        }
+        Err(_) => bits.extend([u64::MAX; 4_000]),
+    }
+    bits
+}
+
+/// The digest of the rest of this file, so that one class covers all of it (bd-hp2j.3). On
+/// [`score_digest_inputs`]: each Winkler score and reference-class blend, then a ledger of every hundredth input
+/// and its report. Then 1,000 samples through [`SpatialFrontPitMonitor`], which also runs `BettingEProcess`.
+#[must_use]
+pub fn digest_calib_rest(key: RngKey) -> String {
+    let bytes: Vec<u8> = calib_rest_bits(key)
+        .into_iter()
+        .flat_map(u64::to_le_bytes)
+        .collect();
+    blake3_hash(&bytes).to_hex()
+}
+
+/// [`digest_calib_rest`] under [`SCORE_DIGEST_KEY`] (partition 2).
+#[must_use]
+pub fn golden_digest_calib_rest_10k() -> String {
+    digest_calib_rest(RngKey {
+        partition: 2,
+        ..SCORE_DIGEST_KEY
+    })
 }
 
 /// [`digest_gaussian_crps`] under [`SCORE_DIGEST_KEY`].
@@ -629,6 +713,36 @@ mod tests {
         "d3a20c177f23259db387f4451373c8662dbd4d3178ec2b24e6b0e05d05b75f65";
     const GAUSSIAN_LOG_SCORE_10K: &str =
         "b59d447a25e88d6a669ac00492a8bb883be9a28ac4db057865be3cf659a8b1a8";
+    const CALIB_REST_10K: &str = "0652013fb792cbe11d0da7eb5b378ca8f2af427cdd42447f3a9fd792348af9c5";
+
+    #[test]
+    fn test_golden_digest_calib_rest_10k() {
+        let d = golden_digest_calib_rest_10k();
+        let key = RngKey {
+            partition: 2,
+            ..SCORE_DIGEST_KEY
+        };
+        println!("{}", digest_line("calib_rest", key, &d));
+        assert_eq!(d, CALIB_REST_10K);
+    }
+
+    /// A digest of refusals would agree across hosts and prove nothing, so every part must produce values.
+    #[test]
+    fn test_calib_rest_digest_runs_every_part_and_changes_with_key() {
+        let key = RngKey {
+            partition: 2,
+            ..SCORE_DIGEST_KEY
+        };
+        let bits = calib_rest_bits(key);
+        assert_eq!(bits.len(), 30_000 + 100 + 4 + 4_000);
+        assert!(!bits.contains(&u64::MAX));
+        assert!(bits[30_104..].chunks(4).any(|sample| sample[1] == 1));
+        let other = RngKey {
+            seed_root: key.seed_root + 1,
+            ..key
+        };
+        assert_ne!(digest_calib_rest(other), digest_calib_rest(key));
+    }
 
     #[test]
     fn test_golden_digest_gaussian_crps_10k() {

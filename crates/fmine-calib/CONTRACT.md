@@ -17,8 +17,12 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 - `ForecastEntry`, `ForecastResolution`, `ForecastLedger`
 - `gaussian_crps`, `gaussian_log_score`, `winkler_interval_score` → `Result<f64, ScoreError>` (non-finite inputs, non-positive std_dev, alpha outside (0, 1) and inverted intervals refuse; nothing is clamped, bd-8wrk)
 - `golden_digest_gaussian_crps_10k`, `golden_digest_gaussian_log_score_10k` (bd-hp2j.3): BLAKE3 over the score bits
-  on 10,000 `SCORE_DIGEST_KEY` triples (|z| up to 12). The committed values were first observed on aarch64-macos;
-  `lib.rs` declares `BitwisePortable` only after ubuntu-latest and macos-14 agree in one CI run.
+  on 10,000 `SCORE_DIGEST_KEY` triples (|z| up to 12).
+- `golden_digest_calib_rest_10k` (bd-hp2j.3): the rest of `lib.rs`, so one class covers the file: Winkler scores,
+  reference-class blends, a ledger's report, and 1,000 samples through `SpatialFrontPitMonitor`, whose bias flips
+  to reach both betting limits and the alarm (this also runs `BettingEProcess`). A refusal hashes as `u64::MAX`.
+- All three committed values were first observed on aarch64-macos; `lib.rs` declares `BitwisePortable` only after
+  ubuntu-latest and macos-14 agree in one CI run.
 - `ForecastLedger::evaluate_model` → `Result<CalibrationReport, ScoreError>`; `register` and `record_outcome` refuse non-finite or non-positive-std forecasts and non-finite outcomes at entry
 - `ProjectArchetype`, `ReferenceClassPrior`
 - `SpatialFrontPitMonitor`
