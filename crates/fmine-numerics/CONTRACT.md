@@ -105,6 +105,31 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
     candidate `(name, factor)` fits a `UnitPair { observed, reference }` when factor × the observed range meets
     the reference range. `UnitFinding::{Identified, Ambiguous (FMINE-REF-104), NoFit}` counts only candidates
     that fit every pair.
+- `exact_feas::generator` (bd-4wvl.7, BD-340.S7; `Exact`): clean random tables for the soundness, metamorphic
+  and power tests. (`gen` is a reserved word in edition 2024, so the module is `generator`.)
+  - `generate(key, &GenSpec) -> Result<Generated, GenError>` and `generate_vintage(key, spec, vintage)`: one
+    `Block::{Sum (depth ≤ 3, negative lines), HalfYear, Breakdowns (COD-02's shape), Share (SHARES), Ratio,
+    Reprint, WeightedMean}` per table, exact true values (ties by chance, or every value on a half step in a
+    tie table), printed under one drawn construction and one drawn rule. The shape comes from the key's Philox
+    stream from counter 0, the values from counters set by the vintage, so vintages share the shape.
+    `Breakdowns` is always `RoundedOnce`. S5's roll-forward has no block yet.
+  - `round(x, step, rule)`: half-up, half-down, half-even or truncate; `Closed` is refused (`NotARoundingRule`).
+  - `Generated::{rules, bracket, witness}`: `bracket` is `Closed` for a round-to-nearest table and `Truncate`
+    for a truncated one, since `Closed` (v ± h) does not contain a truncation interval [v, v + 2h).
+- `exact_feas::power` (bd-4wvl.7, BD-340.S7; `DeterministicPerIsa`, the Clopper–Pearson bounds are `f64`
+  through `fmine_core::det`):
+  - `Injection::{SignFlip, Transposition, Neighbour, WrongShare, StaleVintage, Units}`; `inject` and
+    `inject_at` change one printed value and give its error, slack (Σ half-steps over the smallest identity
+    naming the cell) and bin in `BINS` ([0, ½), [½, 1), [1, 2), [2, 4), ≥ 4; DESIGN).
+  - `joint_detects` (some component `Infeasible`), `baseline_detects` (some identity alone over its own cells,
+    through the same kernel), `joint_only`, `blame_accuracy` (hit and exact) and `size1_blame`.
+  - `clopper_pearson(k, n, alpha) -> Option<(f64, f64)>` by bisection on the exact binomial tails; `None` for
+    `k > n` or `alpha` outside (0, 1).
+  - `power_study(&PowerSpec, Detector) -> Result<PowerTable, PowerError>`: per kind and bin the counts with
+    their `n`; a clean table the joint solver finds infeasible stops it (`CleanConflict`). Tables are decided
+    under their bracket with their own construction. The baseline's alarms on clean tables are counted apart.
+  - `KillReport { joint_only_detections, size1, discoveries, implied_consumers }`, plan K.5 row 3: `fired()`
+    is computed (all four empty; a `None` entry counts as empty), never stored.
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-207` (numerical certificate failed, proposed; exit 3) from Cholesky when the matrix is not square or

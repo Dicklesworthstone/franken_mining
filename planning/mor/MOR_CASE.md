@@ -1486,3 +1486,45 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
       if its own record is pushed before 2026-11-09T11:00Z.
     - **Linux.** The real-files job's `offline` stage (a fresh network namespace) has not run in CI yet.
     - **Verification.** Self-verified on this machine; no independent verifier has re-run it.
+- **E855** The exact-feasibility kernel's power study and kill report (bd-4wvl.7, BD-340.S7; FACT, execution,
+  2026-10-31).
+  - **Run.** `test_power_study_full_and_kill_report` (`crates/xtask/tests/public_exact_feas_blame.rs`, ignored; the
+    real-files job runs that file's ignored tests): seed 3407, 10³ injections per kind over `GenSpec::all()` (every
+    block, both constructions, the four rounding rules, tie tables). Each table is decided under its bracket
+    (`Closed`, or `Truncate` for a truncated one) with its own construction. 74.7 s, debug build, aarch64-macos.
+  - **Kill report** (plan K.5 row 3), every entry computed in the test and `fired` by `KillReport::fired()`:
+    - joint-only detections: sign flip 0, transposition 9, neighbour 0, wrong share 0, stale vintage 0, units 45,
+      COD-02 1;
+    - one-cell blame: E113 true, E114 true, E144 null;
+    - discoveries: E147 null, E698 true, E815 true;
+    - implied-interval consumers: BD-331, BD-349;
+    - **`fired: false`.**
+  - **Where the joint solver adds detections.** Every joint-only detection is an error under twice its slack:
+    units 22 of 119 in [0, ½), 14 of 118 in [½, 1), 9 of 161 in [1, 2); transposition 3 of 28, 3 of 11, 3 of 16.
+    From twice the slack up, the single-identity baseline finds what the joint solver finds. Units in [0, ½): joint
+    52 of 119 (95% Clopper–Pearson 0.346–0.531), baseline 31 of 119.
+  - **Blame**, over the joint detections: the injected cell is in a correction set 745 to 996 times per kind, and
+    is the only correction 234 to 496 times. Blame makes no claim on a table with a weighted mean (S6); those are
+    most of the 101 to 141 indeterminate blames per kind.
+  - **Soundness.** `prop_clean_generated_tables_have_no_certified_conflict` (`exact_feas::generator`): 10⁴ clean
+    tables, each solved under its rule and its bracket: 17,022 feasible, 2,978 not refuted (the weighted means),
+    0 indeterminate, 0 infeasible. The study also solved its 12,188 clean tables before injecting: none infeasible.
+  - **Metamorphic.** 4,000 one-level sums printed `RoundedOnce` (half-up, half-down, half-even) and solved as
+    `ComponentSum`: 1,258 conflicts against Σ(1 − p₀(k)) = 1,308.69, σ = 29.42, z = −1.72 (bound ±4).
+  - **Found on the way.** `Closed` (v ± h) does not contain a truncation interval [v, v + 2h). Under `Closed`, clean
+    truncated tables were certified infeasible. A truncated table's tie-agnostic reading is `Truncate`
+    (`Generated::bracket`). This was fixed before any power number was seen, and the generator has not changed
+    since. S4's tie discovery states that every strict interval lies inside the closed one, which does not hold
+    for `Truncate` when the steps differ; that is checked separately.
+  - **Not claimed.**
+    - **Pending.** E144 waits on S5 (roll-forward) and E147 on S4 part 4 (deck); both are `null`. `fired` stays false
+      whatever they show, since four other entries are not empty. The bead's "every field is filled" is not met.
+    - **Baseline.** It is this kernel run one identity at a time, not BD-331's own code. Alone, an identity keeps the
+      box of a total that another identity foots under `ComponentSum`, so the baseline flags clean tables: 18 to 22
+      of 1,000 per kind, and 161 of the 7,188 drawn for wrong share. Its detections include such alarms, which can
+      only lower the joint-only counts.
+    - **Synthetic.** The rates are of generated tables (DESIGN's blocks, value ranges and bins), not issuer tables.
+      Bins with small n have wide intervals, and several bins are empty for most kinds.
+    - **Consumers.** Read from source: BD-331's `mine_ledger.rs` and BD-349's `packet.rs` read a correction set's
+      `.implied` outside their test modules. The two candidates are a hand-written list.
+    - **Verification.** Self-verified on this machine; nothing has run in CI; no independent verifier.

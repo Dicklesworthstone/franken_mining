@@ -422,4 +422,150 @@ mod blame {
         );
         assert_eq!(passed, cells_checked);
     }
+
+    /// bd-4wvl.7 (BD-340.S7): the full power study (10³ injections per kind) and the kill report of plan K.5
+    /// row 3. Every entry is computed here, none set by hand:
+    /// - joint-only detections: the study's, by kind, and COD-02's shared total;
+    /// - one-cell blame on E113 and E114 (S3's fixtures above);
+    /// - discovery on E698 (S4's tie fixture, as the bead transcribes it) and E815 (S4 on the registered AISC
+    ///   tables);
+    /// - implied-interval consumers: the beads whose production source reads a correction set's implied ranges.
+    ///
+    /// E144 (S5's roll-forward) and E147 (S4 part 4's deck) have not landed and stay `null`. No cell value is
+    /// logged (RISK-31).
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+    fn test_power_study_full_and_kill_report() {
+        use fmine_numerics::exact_feas::discover::{
+            Discovered, Printed, TieFinding, discover_tie_conventions,
+        };
+        use fmine_numerics::exact_feas::generator::{GenSpec, SUM_FAMILY};
+        use fmine_numerics::exact_feas::power::{
+            KillReport, PowerSpec, joint_detects, joint_only, power_study, size1_blame,
+        };
+
+        let start = std::time::Instant::now();
+        let spec = PowerSpec {
+            seed: 3407,
+            per_kind: 1000,
+            generator: GenSpec::all(),
+            max_tables: 100_000,
+        };
+        let study = power_study(&spec, joint_detects).expect("the study runs");
+        for line in study.log_lines() {
+            println!("{line}");
+        }
+        for r in &study.rows {
+            assert_eq!(r.injections(), 1000, "{:?}", r.injection);
+        }
+
+        let mut joint_only_detections = study.joint_only_by_kind();
+        let cent = q(1, 100);
+        let synthetic = |l: &str, printed: Rat, step: Rat| Cell {
+            locator: l.to_string(),
+            sha256: "0".repeat(64),
+            token: format!("{}/{}", printed.num(), printed.den()),
+            printed,
+            step,
+            scope: Scope::Visible,
+        };
+        let cod02 = vec![
+            synthetic("T", int(10), int(1)),
+            synthetic("a1", q(26, 5), cent),
+            synthetic("a2", q(26, 5), cent),
+            synthetic("b1", q(24, 5), cent),
+            synthetic("b2", q(24, 5), cent),
+        ];
+        let footing = |id: &str, lines: [&str; 2]| Identity {
+            id: id.to_string(),
+            family: SUM_FAMILY.to_string(),
+            closure: Closure::Definitional,
+            kind: IdentityKind::Sum {
+                total: "T".to_string(),
+                lines: lines.iter().map(|l| (*l).to_string()).collect(),
+                signs: vec![1, 1],
+            },
+        };
+        let cod02_ids = vec![footing("A", ["a1", "a2"]), footing("B", ["b1", "b2"])];
+        let cod02_rules =
+            Rules::new(Convention::Closed).with(SUM_FAMILY, Construction::RoundedOnce);
+        let cod02_joint_only =
+            joint_only(&cod02, &cod02_ids, &cod02_rules, joint_detects).expect("solves");
+        joint_only_detections.push(("COD-02".to_string(), u64::from(cod02_joint_only)));
+
+        let (e113_cells, e113_ids) = e113(&[]);
+        let e113_size1 = size1_blame(&e113_cells, &e113_ids, &rules()).expect("blames");
+        let h1 = loc(Q2, "YTD", "B7");
+        let e114_ids = vec![
+            half_year("tr_h1", &h1, &loc(Q1, "QTD", "B7"), &loc(Q2, "QTD", "B7")),
+            share("tr_h1_share", &loc(Q2, "YTD", "C7"), &h1, q(123, 200)),
+        ];
+        let e114_size1 = size1_blame(&cells("E114", &[]), &e114_ids, &rules()).expect("blames");
+
+        let printed = |document: &str, quantity: &str, v: Rat| Printed {
+            document: document.to_string(),
+            quantity: quantity.to_string(),
+            printed: v,
+            step: q(1, 10),
+        };
+        let e698 = discover_tie_conventions(&[
+            printed("deck", "depletion", q(36, 10)),
+            printed("deck", "net_change", q(17, 10)),
+            printed("mda", "depletion", q(37, 10)),
+            printed("mda", "net_change", q(18, 10)),
+        ])
+        .expect("discovery");
+        let e698_found = e698
+            .findings
+            .iter()
+            .any(|(_, f)| matches!(f, TieFinding::Identified(_)));
+        let root = workspace_root();
+        let profile = load_issuer_profile(&root, "barrick")
+            .and_then(|p| p.through("2026Q2"))
+            .expect("registry");
+        let assurance = fmine_public::run_public_assurance(&profile, &root)
+            .expect("registered files present and unaltered");
+        let e815_found = assurance
+            .construction_discovery()
+            .expect("discovery")
+            .iter()
+            .any(|(_, d)| d.report.discovered != Discovered::Ambiguous);
+
+        // A bead consumes implied intervals when its production source (before its test module) reads a
+        // correction set's `.implied`.
+        let consumers = [
+            ("BD-331", "crates/fmine-public/src/mine_ledger.rs"),
+            ("BD-349", "crates/fmine-cli/src/packet.rs"),
+        ];
+        let mut implied_consumers = Vec::new();
+        for (bead, path) in consumers {
+            let text = std::fs::read_to_string(root.join(path)).expect("readable source");
+            let production = text.split("#[cfg(test)]").next().unwrap_or("");
+            if production.contains(".implied") {
+                implied_consumers.push(bead.to_string());
+            }
+        }
+
+        let report = KillReport {
+            joint_only_detections,
+            size1: vec![
+                ("E113".to_string(), Some(e113_size1)),
+                ("E114".to_string(), Some(e114_size1)),
+                ("E144".to_string(), None),
+            ],
+            discoveries: vec![
+                ("E147".to_string(), None),
+                ("E698".to_string(), Some(e698_found)),
+                ("E815".to_string(), Some(e815_found)),
+            ],
+            implied_consumers,
+        };
+        println!(
+            "{}",
+            report.log_line(spec.seed, start.elapsed().as_secs_f64())
+        );
+        // The known answers S3 and S4 already establish.
+        assert!(cod02_joint_only && e113_size1 && e114_size1 && e698_found && e815_found);
+        assert_eq!(report.pending(), ["E144", "E147"]);
+    }
 }
