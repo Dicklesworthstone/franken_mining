@@ -14,7 +14,22 @@ Implements the append-only pre-registration `ForecastLedger` (`INV-008`, `FMINE-
 Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) and monitors spatial front miscalibration (`G-CAL-1`).
 
 ## 4. Public API Surface
-- `ForecastEntry`, `ForecastResolution`, `ForecastLedger`
+- `FrozenForecast`, `ForecastPayload`, `ForecastLedger`
+- BD-343: `freeze_cohort(CohortSpec)` freezes sorted membership, the resolution rule, eligible sources and
+  `AssessmentPolicy` before outcomes. The digest binds the complete payload, including exact float bits.
+  Payloads are Gaussian, an interval with a stated or explicitly absent level, quantiles, or an event probability.
+- `append_outcome` records hash-chained `Published`, `Restated` and `Missing` events with separate availability
+  and recording times. A restatement must name the latest numeric predecessor and a new cited source vintage.
+  The original forecast is never mutated. Eligibility and a declared physical outcome domain are checked.
+- `assess(cohort, as_of_ns, FirstPublished | LatestAsOf)` retains an immutable assessment. Both event times must
+  be at or before the cut. Later events cannot be backdated into an already assessed cut. Every member remains
+  visible, including Pending, Overdue, NotPublished, Withdrawn, DefinitionChanged and Divested outcomes.
+- An `AssessmentSummary` carries all denominator counts; observed coverage and whole-cohort coverage bounds;
+  observed and whole-cohort score bounds; the effective sample range under the frozen correlation assumptions.
+  Brier bounds are finite. Interval-score upper bounds need a registered physical outcome domain; an unresolved
+  CRPS has no finite upper bound. These are completion bounds, never confidence intervals. Guidance with no
+  nominal level remains descriptive. A positive calibration flag requires complete resolution and a conservative
+  effective sample at least the frozen threshold (default 35). The default correlation range is [0, 0.5].
 - `gaussian_crps`, `gaussian_log_score`, `winkler_interval_score` → `Result<f64, ScoreError>` (non-finite inputs, non-positive std_dev, alpha outside (0, 1) and inverted intervals refuse; nothing is clamped, bd-8wrk)
 - `golden_digest_gaussian_crps_10k`, `golden_digest_gaussian_log_score_10k` (bd-hp2j.3): BLAKE3 over the score bits
   on 10,000 `SCORE_DIGEST_KEY` triples (|z| up to 12).
@@ -23,7 +38,11 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   to reach both betting limits and the alarm (this also runs `BettingEProcess`). A refusal hashes as `u64::MAX`.
 - All three committed values were first observed on aarch64-macos; `lib.rs` declares `BitwisePortable` only after
   ubuntu-latest and macos-15 agree in one CI run.
-- `ForecastLedger::evaluate_model` → `Result<CalibrationReport, ScoreError>`; `register` and `record_outcome` refuse non-finite or non-positive-std forecasts and non-finite outcomes at entry
+- `ForecastLedger::evaluate_model` → `Result<CalibrationReport, ScoreError>` delegates to the assessment engine
+  and exposes `n_members`, `n_scored`, `n_unresolved` and whole-cohort coverage bounds. This compatibility snapshot
+  is always Unscored or Descriptive, since it has no frozen membership. Existing Gaussian `register` ids are
+  retained; new `register_payload` ids hash exact canonical bytes. `record_outcome` is an uncited internal
+  compatibility path and cannot supply a frozen public cohort.
 - `ProjectArchetype`, `ReferenceClassPrior`
 - `SpatialFrontPitMonitor`
 - `record` (BD-334.S1, the public forecast record of plan §21.6), all pure:
@@ -54,17 +73,25 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 
 ## 5. Guards & Typed Refusals
 `ForecastLedger` refusals, by condition (`test_ledger_refusals_by_condition`):
-- `FMINE-REF-206` (late registration, exit 3): `register` at or after the outcome's availability, and
-  `record_outcome` at or before the freeze (`INV-008`).
-- `FMINE-REF-507` (frozen record mutation, exit 6): a second `register` of one forecast id, or a second outcome.
+- `FMINE-REF-206` (late registration, exit 3): exact payload registration at or after the outcome time; cohort
+  freeze before registration, at or after the outcome time, or after any recorded outcome; an early or backdated
+  outcome; an assessment before its cohort. Compatibility `register` retains equality at the freeze boundary;
+  such a forecast cannot enter a cohort, which needs a strictly later freeze before the outcome.
+- `FMINE-REF-507` (frozen record mutation, exit 6): a second registration of one forecast id, a reused cohort
+  name, a second one-shot outcome, an invalid restatement predecessor or reused source vintage, or reinterpretation
+  of a withdrawn, changed-definition or divested target as its old quantity without a new resolution rule.
 - `FMINE-REF-109` (outside physical domain, exit 3): a non-finite mean or outcome, or `std_dev <= 0`.
-- `FMINE-REF-201` (no claim in domain, exit 3): an outcome for a forecast id the ledger does not hold.
+- `FMINE-REF-201` (no claim in domain, exit 3): an unknown forecast/cohort, or an ineligible outcome source.
 
 206 and 507 are proposed codes (`docs/adr/ADR-REFUSALS-01.md`).
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-CAL-1`: Expected Gaussian CRPS is uniquely minimized at the true data-generating $(\mu_0, \sigma_0)$.
 - `PO-CAL-2`: Retroactive forecast registration (`t_registered >= t_outcome_avail`) is refused with `FMINE-REF-206`.
+- BD-343: exhaustive binary completions through 12 members verify coverage and Brier bounds; the E474 test uses
+  independently captured source cells and registered hashes beside a synthetic forecast; delayed record times,
+  restatement replay, source eligibility, frozen membership, interval bounds and minimum-effective-n gates have
+  focused tests in `ledger::tests`.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Miscalibrated spatial fronts trip `BettingEProcess` at `E_t >= 20.0` (`alpha = 0.05`) and downgrade downstream claims.
@@ -78,3 +105,9 @@ Miscalibrated spatial fronts trip `BettingEProcess` at `E_t >= 20.0` (`alpha = 0
 
 ## 10. Non-Goals & Scope Boundary
 Pure calibration and scoring kernel; does not perform file I/O (`L-3`).
+
+The cohort store is in memory. Its canonical assessment bytes can be retained by an adapter; this slice adds no
+durable ledger or external timestamp authority. Caller-supplied times are ordering inputs, not time proofs
+(BD-047/BD-068). It does not infer a fallback after a target's definition changes, estimate correlation, or claim
+calibration for an issuer guidance range with no stated level. Clopper–Pearson intervals remain part of the public
+forecast-score report work; cohort completion bounds do not substitute for them.
