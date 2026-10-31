@@ -2456,7 +2456,8 @@ NSR_sp = Σ_metal g_s,m · R_p,m(domain_s) · payable_p,m · (price_m − TC/RC/
   - When recovery depends on grade (or on TCM/Au), the cut-off is a fixed point g = cost/(net·R(g)).
     Turquoise Ridge's 5.66 g/t underground cut-off reproduces only as that fixed point (g = 5.665, R = 79.6%;
     INFERENCE, E182).
-  - **Published cut-off reproduction** is an M0 check (seven cut-offs reproduced; E182–E184). It catches the
+  - **Published cut-off reproduction** is an M0 check (seven cut-offs: six round to the printed figure, and the
+    Cortez Hills longhole roaster row is 0.1336 against 0.133, within its inputs' rounding; E182–E184). It catches the
     $/t vs $/st trap: Cortez cut-offs reproduce only with ×0.90718, and with the AB495 tax omitted (E183).
 - **Extensions:**
   - Material between the marginal and opportunity-cost cut-offs goes to a stockpile when its discounted

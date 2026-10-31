@@ -5,7 +5,7 @@
 - **Layer:** `E` (Enterprise & Decision)
 - **Subsystem:** `Enterprise`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["lmdi"]`
+- **Allowed Module Families:** `["lmdi", "cutoff"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), exact 5-factor Logarithmic Mean Divisia Index (`lmdi`, `GB-26`), and fixed-point marginal cut-off grade solver (`solve_cutoff_grade`; synthetic known answer only, the published cut-offs E182–E184 are not yet reproduced).
@@ -18,16 +18,23 @@ Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when 
 - `PriceDeck` (`barrick_reserve(year)`), `GeoBreakdown`, `compute_geo`
 - `ReserveReplacementBridge`
 - `solve_cutoff_grade` → `Result<CutoffSolution, CutoffError>`
+- `cutoff::{parse_cases, reproduce, CutoffCase, CutoffReport, CutoffState, Printed, Recovery}` (BD-274): the
+  published cut-offs in `registries/published_cutoffs.toml`, recomputed on exact rationals from the printed inputs.
+  Each comes back `Reproduced`, `WithinInputRounding` or `Conflict`; `CutoffReport::to_json` prints exact results to
+  six places, never through a float.
 - `lmdi::{LmdiState, LmdiWaterfall, decompose_aisc_lmdi, logarithmic_mean}`
 - `lmdi::{golden_digest_logarithmic_mean_10k, golden_digest_decompose_aisc_lmdi_10k}` (bd-hp2j.3): BLAKE3 over the
   output bits on 10,000 inputs from `LMDI_DIGEST_KEY` (series branch, both branches, ratios to e^300, magnitudes
   near the subnormals; seeded positive state pairs). The committed values were first observed on aarch64-macos;
-  `lmdi.rs` declares `BitwisePortable` only after ubuntu-latest and macos-14 agree in one CI run.
+  `lmdi.rs` declares `BitwisePortable` only after ubuntu-latest and macos-15 agree in one CI run.
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-203` (`ConsolidationBridgeMissing`, `G-BULL-3`)
 - `FMINE-REF-109` (outside physical domain, proposed; exit 3) on non-positive or non-finite LMDI state inputs.
 - `CutoffError` (non-positive cost, price or guess; recovery outside (0, 1]; no convergence in 100 iterations): no input is clamped (bd-8wrk).
+- `cutoff::CutoffFailure`: a malformed registry row, a non-positive net value or recovery, or a float solver that
+  disagrees with the exact fixed point. A printed figure beyond its inputs' rounding is a result (`Conflict`), not a
+  failure.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-MET-1`: `LmdiWaterfall::sum_of_factors() == total_delta` to `< 1e-10` (synthetic two-period case, `+$1,285/oz`; its numbers were once mislabelled as Barrick's, R7-C054).

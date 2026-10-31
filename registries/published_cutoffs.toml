@@ -1,0 +1,117 @@
+# Published cut-off grades and the inputs printed beside them (BD-274, plan §15; E182-E184).
+#
+# Every value is a token as the report prints it, so its rounding step is known: `fmine-metrics::cutoff` recomputes
+# the grade on exact rationals at the printed inputs and at the ends of their rounding. The gold price is the
+# report's assumption, not a measurement, so it is taken as exact.
+#
+# A row's cost, tax and royalty inputs are the ones the report uses. Cortez lists an AB495 rate in its text and leaves
+# it out of the arithmetic, and its costs are in $/t while its cut-offs are in oz/st, so those rows carry no
+# tax_percent and report in oz/st (E183).
+
+schema = "fmine.published_cutoffs.v1"
+
+[[cutoff]]
+id = "turquoise-ridge-ug-resource"
+document = "Turquoise Ridge Complex NI 43-101 Technical Report, March 2024"
+page = 168
+table = "Table 14-5"
+evidence = "E182"
+unit = "g/t"
+published = "5.66"
+gold_price_usd_per_oz = "1700"
+cost_usd_per_t = "243.89"
+royalty_percent = "0.00"
+tax_percent = "1.02"
+refining_usd_per_oz = "0.38"
+recovery_intercept_percent = "100.79"
+recovery_slope = "155.7"
+tcm_percent = "0.771"
+
+[[cutoff]]
+id = "carlin-gold-quarry-roaster-in-pit"
+document = "Carlin Complex NI 43-101 Technical Report, March 2025"
+page = 213
+table = "Table 15-9, with Table 15-3 (p. 210), Table 13-16 (p. 147) and Table 4-2 (p. 57)"
+evidence = "E184"
+unit = "g/t"
+published = "1.08"
+gold_price_usd_per_oz = "1400"
+cost_usd_per_t = "41.20"
+tax_percent = "1.07"
+refining_usd_per_oz = "0.38"
+recovery_percent = "85.4"
+
+[[cutoff]]
+id = "cortez-hills-ug-cut-and-fill-oxide"
+document = "Cortez Complex NI 43-101 Technical Report, March 2022"
+page = 212
+table = "Table 15-3"
+evidence = "E183"
+unit = "oz/st"
+published = "0.118"
+published_metric = "4.05"
+gold_price_usd_per_oz = "1200"
+cost_usd_per_t = "120.70"
+sustaining_usd_per_t = "5.45"
+royalty_usd_per_oz = "41.40"
+recovery_percent = "84"
+
+[[cutoff]]
+id = "cortez-hills-ug-cut-and-fill-roaster"
+document = "Cortez Complex NI 43-101 Technical Report, March 2022"
+page = 212
+table = "Table 15-3"
+evidence = "E183"
+unit = "oz/st"
+published = "0.152"
+published_metric = "5.21"
+gold_price_usd_per_oz = "1200"
+cost_usd_per_t = "159.62"
+sustaining_usd_per_t = "5.45"
+royalty_usd_per_oz = "41.40"
+recovery_percent = "85"
+
+[[cutoff]]
+id = "cortez-hills-ug-longhole-oxide"
+document = "Cortez Complex NI 43-101 Technical Report, March 2022"
+page = 212
+table = "Table 15-3"
+evidence = "E183"
+unit = "oz/st"
+published = "0.099"
+published_metric = "3.39"
+gold_price_usd_per_oz = "1200"
+cost_usd_per_t = "100.71"
+sustaining_usd_per_t = "5.45"
+royalty_usd_per_oz = "41.40"
+recovery_percent = "84"
+
+[[cutoff]]
+id = "cortez-hills-ug-longhole-roaster"
+document = "Cortez Complex NI 43-101 Technical Report, March 2022"
+page = 212
+table = "Table 15-3"
+evidence = "E183"
+unit = "oz/st"
+published = "0.133"
+published_metric = "4.56"
+gold_price_usd_per_oz = "1200"
+cost_usd_per_t = "139.62"
+sustaining_usd_per_t = "5.45"
+royalty_usd_per_oz = "41.40"
+recovery_percent = "85"
+
+[[cutoff]]
+id = "goldrush-longhole-roaster"
+document = "Cortez Complex NI 43-101 Technical Report, March 2022"
+page = 214
+table = "Table 15-4"
+evidence = "E183"
+unit = "oz/st"
+published = "0.117"
+published_metric = "4.0"
+gold_price_usd_per_oz = "1200"
+cost_usd_per_t = "133.61"
+sustaining_usd_per_t = "1.71"
+royalty_usd_per_oz = "19.76"
+recovery_percent = "88.6"

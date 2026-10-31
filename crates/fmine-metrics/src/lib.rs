@@ -5,9 +5,10 @@
 //! - Versioned `PriceDeck` and `compute_geo` (`GB-27`, `BD-063`, `BD-273`)
 //! - `ReserveReplacementBridge` (one stated basis per bridge; `E603–E604`, `BD-064`)
 //! - Exact LMDI 5-factor waterfall (`lmdi`, `GB-26`, `BD-065`, `BD-274`)
-//! - Fixed-point cut-off grade solver (`solve_cutoff_grade`, `BD-275`). It is tested on a synthetic recovery
-//!   curve only; reproducing the published cut-offs (E182–E184, BD-274) needs the reports' cost and price inputs.
+//! - Fixed-point cut-off grade solver (`solve_cutoff_grade`, `BD-275`) and the published cut-offs reproduced from
+//!   the reports' printed inputs (`cutoff`, E182–E184, `BD-274`)
 
+pub mod cutoff;
 pub mod lmdi;
 
 use fmine_core::anchor::SourceAnchor;
