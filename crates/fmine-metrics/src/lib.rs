@@ -11,6 +11,7 @@
 
 pub mod cutoff;
 pub mod definitions;
+pub mod guidance;
 pub mod lmdi;
 
 use fmine_core::anchor::SourceAnchor;
