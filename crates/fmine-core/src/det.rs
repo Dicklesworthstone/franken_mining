@@ -1,4 +1,4 @@
-//! Provenance: frankensim crates/fs-math/src/det.rs @ 20463525d9775a18c1b237d2676f364f367175ab; licence MIT; Changes: inlined double-double erf/erfc and added norm_cdf/norm_ppf; Left out: external payne module for |x| > 2^20
+//! Provenance: frankensim crates/fs-math/src/det.rs @ 20463525d9775a18c1b237d2676f364f367175ab; licence LicenseRef-MIT-OpenAI-Anthropic-Rider; Changes: inlined double-double erf/erfc and added norm_cdf/norm_ppf; Left out: external payne module for |x| > 2^20
 //! Determinism: BitwisePortable
 
 use crate::hash::blake3_hash;

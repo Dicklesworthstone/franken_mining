@@ -48,7 +48,27 @@ fn main() -> ExitCode {
         "check-deps" => run_one("check-deps", xtask::check_deps(&root)),
         "check-oracle" => run_one("check-oracle", xtask::check_oracle(&root)),
         "check-caps" => run_one("check-caps", xtask::check_caps(&root)),
-        "check-lifts" => run_one("check-lifts", xtask::check_lifts(&root)),
+        "check-lifts" => match args.get(1).map(String::as_str) {
+            None => run_one("check-lifts", xtask::lifts::check_lifts(&root)),
+            Some("--upstream") => {
+                let Some(upstream) = args.get(2).map(PathBuf::from) else {
+                    eprintln!("usage: xtask check-lifts [--upstream <frankensim checkout>]");
+                    return ExitCode::from(2);
+                };
+                run_one(
+                    "check-lifts --upstream",
+                    xtask::lifts::check_upstream(&root, &upstream).map(|log| {
+                        for line in log {
+                            println!("{line}");
+                        }
+                    }),
+                )
+            }
+            Some(other) => {
+                eprintln!("unknown check-lifts flag {other}");
+                ExitCode::from(2)
+            }
+        },
         "check-scope" => run_one("check-scope", xtask::check_scope(&root)),
         "check-claims" => run_one("check-claims", xtask::check_claims(&root)),
         "check-det" => run_one(

@@ -1,13 +1,24 @@
-# registries/lifts.toml — Provenance Registry for Code Lifted from frankensim (§27.1, L-7, BD-007)
-# Every file lifted from frankensim starts with:
-# //! Provenance: frankensim <source> @ <commit>; licence MIT; Changes: <...>; Left out: <...>
+# registries/lifts.toml — provenance registry for code from frankensim (§27.1, L-7, BD-007, bd-5vex)
+#
+# [[lift]]: a file that really derives from `source` at `commit`. Its first line is the §27.1 header:
+#   //! Provenance: frankensim <source> @ <commit>; licence <licence>; Changes: <...>; Left out: <...>
+# `licence` is frankensim's: MIT with the OpenAI/Anthropic rider (LICENSE at the commit), under asupersync's
+# SPDX-style id for the same text. Whether the rider is acceptable is RISK-17 (owner and counsel).
+#
+# [[analogue]]: original code with an upstream counterpart worth watching (GATE-FSIM-DRIFT). Nothing was copied,
+# so it carries no provenance header and claims no licence from upstream. It opens with:
+#   //! Original FrankenMining code (not lifted). Upstream analogue: frankensim <upstream> @ <short commit> (not copied).
+# A real lift of one of these is a per-module decision under BD-022.
+#
+# `xtask check-lifts` checks all of this in CI; `check-lifts --upstream <path>` recomputes each sha256 locally.
 
-schema_version = 1
+schema_version = 2
 
 [[lift]]
 source = "crates/fs-math/src/det.rs"
 commit = "20463525d9775a18c1b237d2676f364f367175ab"
 sha256_at_lift = "5a47f0b02639d3c866c48c4db79edc35b41776fc1c8bd6aa4b2ebcede5423149"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
 target = "crates/fmine-core/src/det.rs"
 guard_test = "det::tests::test_golden_hash_10k_inputs"
 
@@ -15,47 +26,39 @@ guard_test = "det::tests::test_golden_hash_10k_inputs"
 source = "crates/fs-blake3/src/lib.rs"
 commit = "20463525d9775a18c1b237d2676f364f367175ab"
 sha256_at_lift = "7ea44c785744564c6cd6a844fad088a99b3995991d6c8a06b952c467ee0287f1"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
 target = "crates/fmine-core/src/hash.rs"
 guard_test = "hash::tests::test_official_blake3_vectors"
 
 [[lift]]
-source = "crates/fs-rand/src/lib.rs"
+source = "crates/fs-rand/src/philox.rs"
 commit = "20463525d9775a18c1b237d2676f364f367175ab"
-sha256_at_lift = "de9aa316b548b38acff961f534ffd4c58a33b227bd832848161f814a29f7cb31"
+sha256_at_lift = "2cb5bbfe21d6bf5438283476ed82fd291c7461d888f5877ba221d7254c13b4e3"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
 target = "crates/fmine-core/src/rand.rs"
 guard_test = "rand::tests::test_philox4x32_known_answers"
 
-[[lift]]
-source = "crates/fs-evidence/src/lib.rs"
-commit = "20463525d9775a18c1b237d2676f364f367175ab"
-sha256_at_lift = "3c62314c2886ebcddc6f59f5d88658be3ec6c6de88bd54489539dda51c28c142"
+[[analogue]]
 target = "crates/fmine-evidence/src/lattice.rs"
-guard_test = "lattice::tests::test_compose_never_promotes"
+upstream = "crates/fs-evidence/src/lib.rs"
+note = "Same subject, none of its identifiers. NEW-evidence-lattice-plan-types does a real lift of color.rs."
 
-[[lift]]
-source = "crates/fs-eproc/src/lib.rs"
-commit = "20463525d9775a18c1b237d2676f364f367175ab"
-sha256_at_lift = "9994ee20810b22e9edbe621c693ed01715a135eefabf1b82b45c36a80a6e64ba"
+[[analogue]]
 target = "crates/fmine-numerics/src/eproc.rs"
-guard_test = "eproc::tests::test_betting_eprocess_ville_bound"
+upstream = "crates/fs-eproc/src/lib.rs"
+note = "Upstream has BettingEProcess; this is an independent implementation."
 
-[[lift]]
-source = "crates/fs-voi/src/lib.rs"
-commit = "20463525d9775a18c1b237d2676f364f367175ab"
-sha256_at_lift = "14316488b05a09757d4433b4170c82006e180e74c04f2e6a98dd9ba639162cdf"
+[[analogue]]
 target = "crates/fmine-numerics/src/voi.rs"
-guard_test = "voi::tests::test_normal_evsi_closed_form"
+upstream = "crates/fs-voi/src/lib.rs"
+note = "Value of information; upstream has no EVSI."
 
-[[lift]]
-source = "crates/fs-robust/src/lib.rs"
-commit = "20463525d9775a18c1b237d2676f364f367175ab"
-sha256_at_lift = "f6d650c95e8e52bd71d8c412234c7611003cf6cf35db5ab6adee1f95d8ac5e69"
+[[analogue]]
 target = "crates/fmine-numerics/src/risk.rs"
-guard_test = "risk::tests::test_cvar_rockafellar_uryasev"
+upstream = "crates/fs-robust/src/lib.rs"
+note = "Upstream has CVaR; this is an independent implementation."
 
-[[lift]]
-source = "crates/fs-tropical/src/lib.rs"
-commit = "20463525d9775a18c1b237d2676f364f367175ab"
-sha256_at_lift = "ba020576bd3229ab9f6507b7de4f9785a6289cb59077b0da824aa8d71bb1f767"
+[[analogue]]
 target = "crates/fmine-numerics/src/tropical.rs"
-guard_test = "tropical::tests::test_max_plus_critical_cycle"
+upstream = "crates/fs-tropical/src/lib.rs"
+note = "Upstream has max-plus in its tests only."

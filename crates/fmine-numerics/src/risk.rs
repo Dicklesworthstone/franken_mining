@@ -1,5 +1,5 @@
-//! Provenance: frankensim crates/fs-robust/src/lib.rs @ 20463525d9775a18c1b237d2676f364f367175ab;
-//! license: MIT/Apache-2.0. Coherent tail risk (`VaR`, `CVaR`) and drawdown metrics (`BD-022`).
+//! Original FrankenMining code (not lifted). Upstream analogue: frankensim crates/fs-robust/src/lib.rs @ 20463525d (not copied).
+//! Coherent tail risk (`VaR`, `CVaR`) and drawdown metrics (`BD-022`).
 //! Determinism: DeterministicPerIsa (no cross-host digest test; plan §29.2, bd-hp2j.1).
 
 /// Summary of empirical loss distribution tail risk (`VaR_alpha`, `CVaR_alpha`).

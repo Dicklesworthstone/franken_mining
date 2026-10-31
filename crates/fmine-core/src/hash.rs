@@ -1,4 +1,4 @@
-//! Provenance: frankensim crates/fs-blake3/src/lib.rs @ 20463525d9775a18c1b237d2676f364f367175ab; licence MIT; Changes: added SHA-256 and MMR parent helper for FMT-LEDGER-1 chains; Left out: fs-blake3::identity submodule
+//! Provenance: frankensim crates/fs-blake3/src/lib.rs @ 20463525d9775a18c1b237d2676f364f367175ab; licence LicenseRef-MIT-OpenAI-Anthropic-Rider; Changes: added SHA-256 and MMR parent helper for FMT-LEDGER-1 chains; Left out: fs-blake3::identity submodule
 //! Determinism: BitwisePortable
 
 use core::fmt;

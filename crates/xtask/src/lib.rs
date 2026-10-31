@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod forecast;
+pub mod lifts;
 pub mod refusals;
 
 /// Summary row for a single crate's LOC budget (`BD-003`, `BD-012`).
@@ -425,69 +426,6 @@ pub fn check_caps_in_source(
         }
     }
     Ok(())
-}
-
-/// Check `registries/lifts.toml` against provenance headers in lifted files (`L-7`, `BD-007`).
-pub fn check_lifts(root: &Path) -> Result<(), Vec<String>> {
-    let lifts_path = root.join("registries/lifts.toml");
-    let text = fs::read_to_string(&lifts_path)
-        .map_err(|e| vec![format!("failed to read {}: {e}", lifts_path.display())])?;
-
-    let mut errors = Vec::new();
-    let mut source = String::new();
-    let mut commit = String::new();
-    let mut target = String::new();
-    let mut in_lift = false;
-
-    let verify_one = |src: &str, rev: &str, tgt: &str, errs: &mut Vec<String>| {
-        if tgt.is_empty() {
-            return;
-        }
-        let target_path = root.join(tgt);
-        if !target_path.exists() {
-            // Target crate may not be sliced yet; only enforce once target file exists.
-            return;
-        }
-        let content = fs::read_to_string(&target_path).unwrap_or_default();
-        let first_line = content.lines().next().unwrap_or("");
-        let expected_prefix = format!("//! Provenance: frankensim {src} @ {rev};");
-        if !first_line.starts_with(&expected_prefix) {
-            errs.push(format!(
-                "lift header mismatch in {}: expected first line starting with `{expected_prefix}`, found `{first_line}`",
-                target_path.display()
-            ));
-        }
-    };
-
-    for raw_line in text.lines() {
-        let line = raw_line.trim();
-        if line == "[[lift]]" {
-            if in_lift {
-                verify_one(&source, &commit, &target, &mut errors);
-            }
-            source.clear();
-            commit.clear();
-            target.clear();
-            in_lift = true;
-        } else if in_lift {
-            if let Some(v) = strip_kv_str(line, "source") {
-                source = v;
-            } else if let Some(v) = strip_kv_str(line, "commit") {
-                commit = v;
-            } else if let Some(v) = strip_kv_str(line, "target") {
-                target = v;
-            }
-        }
-    }
-    if in_lift {
-        verify_one(&source, &commit, &target, &mut errors);
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
 }
 
 /// Check that every workspace crate has a 10-section `CONTRACT.md` and every module `src/lib.rs` declares, at
@@ -926,7 +864,7 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
     if let Err(e) = check_caps(root) {
         all_errors.extend(e);
     }
-    if let Err(e) = check_lifts(root) {
+    if let Err(e) = lifts::check_lifts(root) {
         all_errors.extend(e);
     }
     if let Err(e) = check_scope(root) {

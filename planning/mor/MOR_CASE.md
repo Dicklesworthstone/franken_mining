@@ -1423,3 +1423,31 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     - **Bootstrap.** `xtask` depends transitively on `fmine-evidence`, so a registry change that removes a variant
       in use needs the generated file edited before `gen-refusals` can build.
     - **Verification.** Self-verified on this machine; nothing has run in CI.
+- **E852** Lift provenance corrected (bd-5vex; FACT, execution, 2026-10-31).
+  - **Measured** against frankensim at `20463525d`, as distinct trimmed lines over 25 characters:
+    - `det.rs`: 82 of 198 shared with `fs-math/src/det.rs`. `hash.rs`: 84 of 176 with `fs-blake3/src/lib.rs`.
+    - `rand.rs`: 20 of 92 with `fs-rand/src/philox.rs`, and 2 with `fs-rand/src/lib.rs`, the file its row named.
+    - `lattice`, `eproc`, `voi`, `risk` and `tropical`: 0–2 lines with the declared source, and at most 2 with any
+      Rust file of the same upstream crate. They are original code that carried lift headers.
+  - **Changed.**
+    - `registries/lifts.toml` (schema 2) has 3 `[[lift]]` rows and 5 `[[analogue]]` rows. The five files say they
+      are original and claim nothing from upstream, and GATE-FSIM-DRIFT keeps their upstream link.
+    - The `rand` row now cites `philox.rs` with that file's sha256, `2cb5bbfe…`. Its `Left out:` named a declaration
+      in `lib.rs`; it now names `philox4x32_10_batch`, the one item of `philox.rs` not taken.
+    - Every lift says `LicenseRef-MIT-OpenAI-Anthropic-Rider`. The headers said MIT, omitting the rider, or
+      MIT/Apache-2.0, a grant upstream does not give.
+    - `check-lifts` was a prefix test that skipped a missing target. It now applies six rules (`xtask/src/lifts.rs`).
+  - **Run.** Default suite 438 passed, 0 failed, 23 ignored. `check-lifts --upstream` on the checkout: all three
+    digests match, at 41%, 47% and 21% shared.
+  - **Planted negatives, each reverted by hand:**
+    - a renamed `test_golden_hash_10k_inputs` fails rule (c);
+    - `licence MIT` in `hash.rs` fails rule (b);
+    - a provenance line back in `voi.rs` fails rule (f) twice.
+  - **Not claimed.**
+    - **CI cannot prove a source.** The old `rand` row, replayed with a matching header and digest, passes every CI
+      rule. Only the local `--upstream` run flags it, at 2%. A wrong source that is self-consistent needs that run.
+    - **Thin margin.** `rand.rs` sits at 21% against the local 20% flag, so growth in that file could trip it.
+    - **Deviation from the bead.** Its known answer, `det.rs` at or above 0.5, no longer holds: the file grew from
+      152 to 198 lines. The test pins the unchanged shared count of 82 instead.
+    - **Licence.** This states the licence accurately. Whether the rider is acceptable stays RISK-17 (BD-326).
+    - **Verification.** Self-verified on this machine; nothing has run in CI.

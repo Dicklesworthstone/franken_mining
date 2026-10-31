@@ -5,7 +5,7 @@
 [![Status](https://img.shields.io/badge/status-design%20plan%20%C2%B7%20scaffold%20in%20progress-orange)](#honest-status)
 [![Runtime](https://img.shields.io/badge/runtime-asupersync%200.5.0-6f42c1)](#oracles-and-pins)
 [![Core](https://img.shields.io/badge/core-Rust%202024-b7410e)](#architecture)
-[![Plan](https://img.shields.io/badge/plan-485%20beads%20%C2%B7%20E001%E2%80%93E851-2ea44f)](COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md)
+[![Plan](https://img.shields.io/badge/plan-485%20beads%20%C2%B7%20E001%E2%80%93E852-2ea44f)](COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md)
 [![License](https://img.shields.io/badge/license-MIT%20%2B%20AI%20rider-yellow)](LICENSE)
 
 </div>
@@ -63,7 +63,7 @@ of the whole operation. See [Alongside your systems](#alongside-your-systems-and
 | Question | Answer |
 |---|---|
 | Is there a design? | **Yes.** §0–§39 plus Appendices A–J. Every load-bearing statement is labelled FACT, DESIGN, HYPOTHESIS, TARGET or OPEN, and every FACT cites an evidence row |
-| Is it evidenced? | **Yes, with a register.** [`planning/mor/MOR_CASE.md`](planning/mor/MOR_CASE.md) holds E001–E851. The corpus rows (E101–E399) were re-read by a second reader against the PDFs and workbooks: 273 exact, 18 confirmed with nuance, 3 page-locator fixes, 0 substantive errors. The research rows (E401–E655) still await a second reader |
+| Is it evidenced? | **Yes, with a register.** [`planning/mor/MOR_CASE.md`](planning/mor/MOR_CASE.md) holds E001–E852. The corpus rows (E101–E399) were re-read by a second reader against the PDFs and workbooks: 273 exact, 18 confirmed with nuance, 3 page-locator fixes, 0 substantive errors. The research rows (E401–E655) still await a second reader |
 | Has it been reviewed? | **Five audits and six hypothesis passes.** AUDIT_1–AUDIT_5 covered domain accuracy, suite fit, internal consistency, a corpus second read and a second-wave review of equations, guards and the bead graph. Brenner passes B1–B6 covered subsurface, prospectivity, planning and capital, substrate, wedge and pre-mortem, and operations, plant, tailings and workforce. Their corrections are folded in (plan Appendix H) |
 | Is there a work plan? | **Yes.** 21 work packages and 485 beads with 917 dependency edges, acyclic. Instantiated in `.beads/` for `br` |
 | Is there code? | **Yes, and the public lane runs.** `fmine assure public --issuer barrick` runs end to end on the 18 registered workbooks (not in git) and reproduces the state root pinned in `repro/barrick/expected.toml`. The M0 gate is not passed: the M0 report, the security pack and the hashed FY2026 forecasts are still open |
@@ -338,7 +338,7 @@ their exports. Not a general MILP solver. Not an aggregate ESG score.
 ```text
 COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md   the technical constitution
 AGENTS.md                                               the operating contract for agents
-planning/mor/MOR_CASE.md                                the evidence register (E001–E851)
+planning/mor/MOR_CASE.md                                the evidence register (E001–E852)
 planning/corpus/                                        evidence notes on the source documents (C1–C6)
 planning/research/                                      research R1–R8 and primary-source passes W1–W5
 planning/brenner/                                       hypothesis passes B1–B6

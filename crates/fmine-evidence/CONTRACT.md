@@ -43,7 +43,7 @@ for any string outside the catalogue. Nothing defaults.
 - `GATE-CLAIM-01`
 
 ## 9. Lifted Code & Foundation Dependencies
-- `crates/fs-evidence/src/lattice.rs` @ `20463525d9775a18c1b237d2676f364f367175ab` -> `src/lattice.rs`
+No lifted code. `src/lattice.rs` is original, listed as an `[[analogue]]` row in `registries/lifts.toml`.
 
 ## 10. Non-Goals & Scope Boundary
 Does not store claim payloads or provenance DAGs (`fmine-claim`).

@@ -20,7 +20,13 @@ The `forecast-*` commands are the exception: they write a record's digest files 
 - `check_layers(root: &Path) -> Result<(), Vec<String>>`
 - `check_deps(root: &Path) -> Result<(), Vec<String>>`
 - `check_caps(root: &Path) -> Result<(), Vec<String>>`
-- `check_lifts(root: &Path) -> Result<(), Vec<String>>`
+- `lifts::{check_lifts, check_upstream}` (bd-5vex; command `check-lifts`, run by `check-all`, and
+  `check-lifts --upstream <path>`, local only): `registries/lifts.toml` schema 2. `check_lifts` fails on (a) a
+  missing target; (b) a header without all four §27.1 fields, or disagreeing with its row; (c) a `guard_test` not
+  in the target's test module; (d) a malformed `commit` or `sha256_at_lift`, or a licence other than
+  `UPSTREAM_LICENCE`; (f) a provenance line with no `[[lift]]` row, or an `[[analogue]]` not opening with
+  `ORIGINAL_HEADER`. `check_upstream` (e) recomputes each sha256 through `git show` and flags a target under
+  `MIN_OVERLAP_PERCENT`; CI has no frankensim checkout, so it never runs there.
 - `check_scope(root: &Path) -> Result<(), Vec<String>>`
 - `check_claims(root: &Path) -> Result<(), Vec<String>>`
 - `check_det(root: &Path) -> Result<DetReport, Vec<String>>` (bd-hp2j.1; command `check-det`, and `check-all`

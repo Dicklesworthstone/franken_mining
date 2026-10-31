@@ -1,5 +1,5 @@
-//! Provenance: frankensim crates/fs-evidence/src/lib.rs @ 20463525d9775a18c1b237d2676f364f367175ab;
-//! license: MIT/Apache-2.0. Adapted for FrankenMining (`§7.1–§7.3`, `BD-037`, `BD-038`).
+//! Original FrankenMining code (not lifted). Upstream analogue: frankensim crates/fs-evidence/src/lib.rs @ 20463525d (not copied).
+//! Evidence classes and knowledge states (`§7.1–§7.3`, `BD-037`, `BD-038`).
 
 /// Epistemic evidence class ordered from strongest (`Exact`) to weakest (`Placeholder`).
 ///

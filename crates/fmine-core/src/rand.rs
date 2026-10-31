@@ -1,4 +1,4 @@
-//! Provenance: frankensim crates/fs-rand/src/lib.rs @ 20463525d9775a18c1b237d2676f364f367175ab; licence MIT; Changes: added FrankenMining 6-tuple RngKey (seed_root, partition, domain, var_group, r, brick) per ADR-RNG-01 and Sobol/Owen 2D scrambling; Left out: fs-rand checkpoint transport declaration
+//! Provenance: frankensim crates/fs-rand/src/philox.rs @ 20463525d9775a18c1b237d2676f364f367175ab; licence LicenseRef-MIT-OpenAI-Anthropic-Rider; Changes: added FrankenMining 6-tuple RngKey (seed_root, partition, domain, var_group, r, brick) per ADR-RNG-01 and Sobol/Owen 2D scrambling; Left out: philox4x32_10_batch
 //! Determinism: BitwisePortable
 
 use crate::det;

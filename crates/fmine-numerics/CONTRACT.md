@@ -125,9 +125,9 @@ Indefinite matrices fail closed with `FMINE-REF-207`; cyclic precedence graphs g
 - `GATE-FSIM-DRIFT`
 
 ## 9. Lifted Code & Foundation Dependencies
-- `crates/fs-eproc/src/lib.rs` @ `20463525d9775a18c1b237d2676f364f367175ab` -> `src/eproc.rs`
-- `crates/fs-voi/src/lib.rs` @ `20463525d9775a18c1b237d2676f364f367175ab` -> `src/voi.rs`
-- `crates/fs-robust/src/lib.rs` @ `20463525d9775a18c1b237d2676f364f367175ab` -> `src/risk.rs`
+No lifted code. `src/eproc.rs`, `src/voi.rs`, `src/risk.rs` and `src/tropical.rs` are original, listed as
+`[[analogue]]` rows in `registries/lifts.toml` so GATE-FSIM-DRIFT still watches their upstream counterparts. A real
+lift of any of them is a per-module decision under BD-022.
 
 ## 10. Non-Goals & Scope Boundary
 Zero I/O (`std::fs`, `std::net`) or domain-specific accounting rules (`L-3`).

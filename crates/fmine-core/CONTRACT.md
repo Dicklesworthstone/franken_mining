@@ -48,7 +48,9 @@ Corrupted binary frames or anchors fail closed with `CodecError::CrcMismatch` or
 ## 9. Lifted Code & Foundation Dependencies
 - `crates/fs-math/src/det.rs` @ `20463525d9775a18c1b237d2676f364f367175ab` -> `src/det.rs`
 - `crates/fs-blake3/src/lib.rs` @ `20463525d9775a18c1b237d2676f364f367175ab` -> `src/hash.rs`
-- `crates/fs-rand/src/lib.rs` @ `20463525d9775a18c1b237d2676f364f367175ab` -> `src/rand.rs`
+- `crates/fs-rand/src/philox.rs` @ `20463525d9775a18c1b237d2676f364f367175ab` -> `src/rand.rs`
+
+Each lift is under `LicenseRef-MIT-OpenAI-Anthropic-Rider`, frankensim's licence at that commit.
 
 ## 10. Non-Goals & Scope Boundary
 Contains zero domain quantities (`fmine-units`), zero civil/quad-temporal calendars (`fmine-time`), and zero I/O or async runtime dependencies (`L-2`).
