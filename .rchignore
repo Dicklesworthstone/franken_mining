@@ -1,0 +1,19 @@
+# rch copies the working tree to build workers and does not read .gitignore.
+# Everything held out of git for data reasons is held off the workers too; keep in step with .gitignore.
+corpus_of_input_docs/
+*.pdf
+*.PDF
+*.xlsx
+*.xls
+registries/transcriptions/
+C5_reko_diq_esia.md
+private/
+site_data/
+tenancy/
+*.private.*
+*.mnpi.*
+.env
+.env.*
+runs/
+out/
+ws/

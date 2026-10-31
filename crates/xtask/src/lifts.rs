@@ -491,7 +491,16 @@ mod tests {
     /// Rule (e) against a real git repository: the digest and the overlap are read through `git show`.
     #[test]
     fn test_rule_e_upstream_digest_and_overlap() {
+        // Removes the fixture even when an assertion fails: a `.git` left in an rch worker's temp dir, which sits
+        // inside the project, makes rch refuse every later sync to that worker.
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
         let base = std::env::temp_dir().join(format!("fmine-lifts-{}", std::process::id()));
+        let _cleanup = Cleanup(base.clone());
         let (up, ws) = (base.join("up"), base.join("ws"));
         let source_text = (0..10)
             .map(|i| format!("let upstream_line_number_{i} = {i};\n"))
@@ -545,7 +554,6 @@ mod tests {
         write(&sha, &fresh);
         let log = check_upstream(&ws, &up).expect_err("not a lift");
         assert!(log[0].contains("\"not_a_lift\":true"), "{log:?}");
-        let _ = fs::remove_dir_all(&base);
     }
 
     fn workspace_root() -> std::path::PathBuf {

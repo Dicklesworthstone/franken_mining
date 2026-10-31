@@ -894,20 +894,39 @@ mod tests {
         assert!(res.is_ok(), "{res:?}");
     }
 
-    /// A throwaway repository under the system temp dir with one commit per entry, each writing the named files.
-    fn repo(name: &str, commits: &[&[&str]]) -> std::path::PathBuf {
+    /// A throwaway repository, removed on drop so that a failing test leaves nothing behind. On an rch worker the
+    /// temp dir sits inside the project, and one leftover `.git` there makes rch refuse every later sync of this
+    /// project to that worker (`RCH_SYNC_LIVE_CHECKOUT_REFUSED`).
+    struct Repo(std::path::PathBuf);
+
+    impl Drop for Repo {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for Repo {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    /// A repository under the system temp dir with one commit per entry, each writing the named files.
+    fn repo(name: &str, commits: &[&[&str]]) -> Repo {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir = std::env::temp_dir().join(format!(
+        let dir = Repo(std::env::temp_dir().join(format!(
             "fmine-rules-order-{}-{nanos}-{name}",
             std::process::id()
-        ));
+        )));
         fs::create_dir_all(dir.join("forecasts/fy2026")).expect("repo dir");
         let git = |args: &[&str]| {
             let out = Command::new("git")
                 .arg("-C")
-                .arg(&dir)
+                .arg(&*dir)
                 .args([
                     "-c",
                     "user.name=test",
@@ -973,11 +992,11 @@ mod tests {
         let err = rules_order(&no_rules).expect_err("no rules commit");
         assert!(err[0].contains("no commit adds"), "{err:?}");
         // A depth-1 clone of the ordered history: its one commit would seem to add both files at once.
-        let shallow = ordered.with_extension("shallow");
+        let shallow = Repo(ordered.with_extension("shallow"));
         let out = Command::new("git")
             .args(["clone", "-q", "--depth", "1"])
             .arg(format!("file://{}", ordered.display()))
-            .arg(&shallow)
+            .arg(&*shallow)
             .output()
             .expect("git clone runs");
         assert!(out.status.success(), "{out:?}");

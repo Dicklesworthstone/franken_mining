@@ -433,6 +433,10 @@ Always base new target dirs on `${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}`, never bare
 laptop, check free disk (`sbh check --need 20G`). Report the exact command and result; if a check did not run,
 say so.
 
+rch copies the working tree to workers and does not read `.gitignore`, so anything held out of git for data reasons
+also goes in `.rchignore`. A test that creates a git repository removes it on drop, even on panic: on a worker the
+temp dir sits inside the project, and a leftover `.git` there makes rch refuse every later sync to that worker.
+
 ---
 
 ## Documentation
