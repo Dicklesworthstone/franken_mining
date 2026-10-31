@@ -1603,7 +1603,13 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
       expected answer to the size-2 reading.
   - **Kill report.** E144 is now computed, as size-1 blame on this system: `true`, but the one cell it names is the
     2025 close, not the bead's net change. Every entry is filled, `fired: false` and nothing is pending. The
-    re-run took 77.9 s and gave E855's other counts.
+    re-run took 77.9 s and gave E855's other counts. This is bd-4wvl.7's complete report (plan K.5 row 3):
+    - joint-only detections: sign flip 0, transposition 9, neighbour 0, wrong share 0, stale vintage 0, units 45,
+      COD-02 1;
+    - size-1 blame: E113, E114 and E144 `true`;
+    - discoveries: E147, E698 and E815 `true`;
+    - implied-interval consumers: BD-331, BD-349;
+    - **`fired: false`**, seed 3407.
   - **Not done** (bd-4wvl.5 stays open):
     - **Binding.** Registered transcriptions are not yet bound as `Scope::Pdf` cells with registered identities
       in `fmine-public`. That crate sits at 20,977 of its 21,000-line ceiling; the binding needs an owner
