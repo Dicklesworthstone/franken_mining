@@ -1,5 +1,5 @@
-//! Known-answer, refusal and rounding-enclosure checks for the typed AISC bridge.
-//! Determinism: DeterministicPerIsa (inherits the tested kernel's cross-host qualification).
+//! Determinism: DeterministicPerIsa
+//! Independent known answers, exact signed properties and outward rounding-box checks.
 
 use super::*;
 use fmine_core::rand::PhiloxStream;

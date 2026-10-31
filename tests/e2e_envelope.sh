@@ -81,6 +81,8 @@ run "assure public" 0 ok 1 - -- assure public --synthetic
 run "doctor" 0 ok 0 - -- doctor
 run "robot-docs" 0 ok 0 - -- robot-docs
 run "claim show" 3 refused 0 FMINE-REF-201 -- claim show clm_0001
+run "claim why" 3 refused 0 FMINE-REF-201 -- claim why clm_0001
+run "claim trace" 3 refused 0 FMINE-REF-201 -- claim trace clm_0001
 run "unknown" 2 usage_error 0 - -- frobnicate
 run "assure public" 2 usage_error 0 - -- assure public --issuer newmont
 run "doctor" 2 usage_error 0 - -- doctor --deep

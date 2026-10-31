@@ -15,7 +15,11 @@ use fmine_public::aisc::{
     self, ExplanationBasis, IdentityInstance, IdentityState, OperandRole, OperandValue,
 };
 use fmine_public::citation::{self, Cited};
-use fmine_public::key::KeyedCell;
+use fmine_public::key::consistency::{
+    Comparison, VintageItem, VintageReport, VintageScope, VintageState,
+    compare_vintages_with_disclosures,
+};
+use fmine_public::key::{KeyedCell, PublicValue, raw_token};
 use fmine_public::mine_ledger::{self, Component, Instance, State};
 use fmine_public::sources::SourceKind;
 use fmine_public::{Lane, PublicAssuranceReport};
@@ -35,6 +39,8 @@ pub enum PacketKind {
     ReconstructionUnstated,
     ExplanationStated,
     InputRefused,
+    VintageChange,
+    VintageConflict,
 }
 
 impl PacketKind {
@@ -48,6 +54,8 @@ impl PacketKind {
             Self::ReconstructionUnstated => "reconstruction_unstated",
             Self::ExplanationStated => "explanation_stated",
             Self::InputRefused => "input_refused",
+            Self::VintageChange => "vintage_change",
+            Self::VintageConflict => "vintage_conflict",
         }
     }
 
@@ -67,6 +75,12 @@ impl PacketKind {
             }
             Self::InputRefused => {
                 "The identity was refused. The missing or unusable input must be resolved before a numerical conclusion is drawn."
+            }
+            Self::VintageChange => {
+                "Unexplained difference between cited cells in registered releases. Neither assertion is selected as true."
+            }
+            Self::VintageConflict => {
+                "The registered comparison retains conflicting source assertions; their value and ownership basis require a cited reconciliation."
             }
         }
     }
@@ -411,7 +425,14 @@ impl ChallengePacket {
                 operand.sha256
             );
         }
-        out.push_str("\n## Arithmetic and retained evidence\n\nThe cited records below retain each construction, operand role, missing input and available certificate. A sign-flip witness is a possible explanation, not a determination of cause. Correction ranges are alternatives, not replacement values.\n\n");
+        if matches!(
+            self.kind,
+            PacketKind::VintageChange | PacketKind::VintageConflict
+        ) {
+            out.push_str("\n## Vintage comparisons and registered disclosures\n\nEach finding retains the earliest registered, immediately previous and current assertions, with both comparisons. The earliest registered release need not be the issuer's first publication. Silence means no applicable verified note in the registered documents; it does not establish absence of disclosure elsewhere. Registered notes describe their exact coverage. No assertion is selected as true, and rounding-only status is unassessed.\n\n");
+        } else {
+            out.push_str("\n## Arithmetic and retained evidence\n\nThe cited records below retain each construction, operand role, missing input and available certificate. A sign-flip witness is a possible explanation, not a determination of cause. Correction ranges are alternatives, not replacement values.\n\n");
+        }
         for finding in &self.findings {
             let _ = writeln!(
                 out,
@@ -608,8 +629,10 @@ fn add_operand(packet: &mut ChallengePacket, operand: PacketOperand) -> Result<(
 }
 
 /// Produce complete internal-review drafts from all visible AISC `ii`/`iii`/`iv`/`v` instances, Mine Stats
-/// `iii`/`iv`/`v` instances and jointly infeasible components. Hidden and not-published instances remain outside
-/// this population. Grouping never drops a finding or assumes that two different missing facts have one cause.
+/// `iii`/`iv`/`v` instances, jointly infeasible components and unresolved cross-vintage changes/conflicts.
+/// Disclosed-only changes and non-comparable scopes remain informational in the assurance report. Hidden and
+/// not-published instances remain outside this population. Grouping retains every current-release finding,
+/// including both first/prior comparisons, without combining different periods, units or ownership bases.
 /// Missing registered source bytes refuse the build; a missing input already recorded by the ledger stays `v`.
 pub fn packets_from_report(
     report: &PublicAssuranceReport,
@@ -629,6 +652,23 @@ pub fn packets_from_report(
     for component in &report.mine_ledger.infeasible {
         add_component(&mut groups, report, component)?;
     }
+    for (vintages, scope, kind) in [
+        (
+            &report.mine_stats_vintages,
+            VintageScope::MineStats,
+            SourceKind::MineStats,
+        ),
+        (
+            &report.aisc_vintages,
+            VintageScope::Aisc,
+            SourceKind::AiscReconciliation,
+        ),
+    ] {
+        validate_vintage_report(report, vintages, scope, kind)?;
+        for item in &vintages.items {
+            add_vintage(&mut groups, report, vintages, item)?;
+        }
+    }
     let mut packets = Vec::with_capacity(groups.len());
     for mut packet in groups.into_values() {
         packet.findings.sort_by_cached_key(Finding::to_json);
@@ -638,6 +678,299 @@ pub fn packets_from_report(
     }
     packets.sort_by_key(ChallengePacket::id);
     Ok(packets)
+}
+
+/// Source-bound Claims alone do not authenticate a comparison verdict. Recompute each family once from
+/// the canonical projection, then compare the complete result, including population and chronology.
+fn validate_vintage_report(
+    report: &PublicAssuranceReport,
+    supplied: &VintageReport,
+    scope: VintageScope,
+    kind: SourceKind,
+) -> Result<(), Refusal> {
+    let all_files: BTreeSet<_> = report
+        .sources
+        .iter()
+        .map(|s| s.file_name.as_str())
+        .collect();
+    if let Some(claim) = report.public_claims.cells.values().find(|c| {
+        c.locator
+            .split_once(':')
+            .is_none_or(|(file, _)| !all_files.contains(file))
+    }) {
+        return Err(input_refusal(format!(
+            "canonical vintage Claim needs its source at {}",
+            claim.locator
+        )));
+    }
+    let files: BTreeSet<_> = report
+        .sources
+        .iter()
+        .filter(|s| s.kind == kind)
+        .map(|s| s.file_name.as_str())
+        .collect();
+    let claims: Vec<_> = report
+        .public_claims
+        .cells
+        .values()
+        .filter(|c| {
+            c.locator
+                .split_once(':')
+                .is_some_and(|(file, _)| files.contains(file))
+        })
+        .cloned()
+        .collect();
+    let checked = compare_vintages_with_disclosures(&claims, scope, Some(&report.disclosures));
+    let canonical = |mut r: VintageReport| {
+        for item in &mut r.items {
+            for cells in [&mut item.first, &mut item.previous, &mut item.current] {
+                cells.sort_by_cached_key(KeyedCell::to_json);
+            }
+            for c in
+                std::iter::once(&mut item.against_first).chain(item.against_previous.iter_mut())
+            {
+                c.disclosures.sort_by_cached_key(|d| d.to_json());
+            }
+        }
+        r.items.sort_by_cached_key(|i| {
+            format!(
+                "{:?}:{:?}:{:?}:{}:{}",
+                i.first.iter().map(KeyedCell::to_json).collect::<Vec<_>>(),
+                i.previous
+                    .iter()
+                    .map(KeyedCell::to_json)
+                    .collect::<Vec<_>>(),
+                i.current.iter().map(KeyedCell::to_json).collect::<Vec<_>>(),
+                comparison_json(&i.against_first),
+                i.against_previous
+                    .as_ref()
+                    .map_or_else(|| "null".into(), comparison_json)
+            )
+        });
+        r.to_json()
+    };
+    if canonical(supplied.clone()) != canonical(checked) {
+        return Err(unusable(format!(
+            "{} vintage findings differ from the comparison of the canonical source Claims",
+            scope.as_str()
+        )));
+    }
+    Ok(())
+}
+
+fn unresolved_vintage(state: VintageState) -> bool {
+    matches!(
+        state,
+        VintageState::ChangedWithoutRegisteredExplanation
+            | VintageState::RestatedSilent
+            | VintageState::Conflict
+    )
+}
+
+/// The comparison's Claim must be the canonical projection of the cell being cited, not merely share its id.
+/// Re-reading the stored token also catches a mutated projection whose digest still names the original file.
+fn vintage_operand(
+    report: &PublicAssuranceReport,
+    claim: &KeyedCell,
+    role: &str,
+) -> Result<PacketOperand, Refusal> {
+    let operand = read_operand(report, &claim.locator, role, None)?;
+    if operand.claim.as_ref() != Some(claim) {
+        return Err(unusable(format!(
+            "vintage assertion is absent from or differs from the canonical Claim at {}",
+            claim.locator
+        )));
+    }
+    let token = operand
+        .stored_text
+        .as_deref()
+        .unwrap_or_else(|| match &operand.value {
+            OperandValue::Token(token) | OperandValue::Unrounded(token) => token,
+            OperandValue::Int(_) | OperandValue::Blank => "",
+        });
+    let display_matches = match &claim.claim.value {
+        PublicValue::Number {
+            displayed: Ok(text),
+            ..
+        } => operand.displayed_text.as_ref() == Some(text) && operand.display_refusal.is_none(),
+        PublicValue::Number {
+            displayed: Err(code),
+            ..
+        } => operand.display_refusal.as_deref() == Some(*code),
+        PublicValue::Missing => operand.value == OperandValue::Blank,
+        _ => true,
+    };
+    if token != raw_token(&claim.claim.value) || !display_matches {
+        return Err(unusable(format!(
+            "vintage Claim value differs from the loaded source at {}",
+            claim.locator
+        )));
+    }
+    Ok(operand)
+}
+
+fn comparison_json(comparison: &Comparison) -> String {
+    let mut disclosures: Vec<_> = comparison.disclosures.iter().map(|d| d.to_json()).collect();
+    disclosures.sort();
+    format!(
+        "{{\"state\":{},\"reason\":{},\"token_glyph_changed\":{},\"rounding_only\":null,\"disclosures\":[{}]}}",
+        js(comparison.state.as_str()),
+        comparison.reason.map_or_else(|| "null".into(), js),
+        comparison.token_glyph_changed,
+        disclosures.join(",")
+    )
+}
+
+fn add_vintage(
+    groups: &mut BTreeMap<GroupKey, ChallengePacket>,
+    report: &PublicAssuranceReport,
+    vintages: &VintageReport,
+    item: &VintageItem,
+) -> Result<(), Refusal> {
+    let comparisons: Vec<_> = std::iter::once(&item.against_first)
+        .chain(item.against_previous.iter())
+        .collect();
+    let unresolved: Vec<_> = comparisons
+        .iter()
+        .copied()
+        .filter(|c| unresolved_vintage(c.state))
+        .collect();
+    if unresolved.is_empty() {
+        return Ok(());
+    }
+    let current = item
+        .current
+        .iter()
+        .min_by_key(|c| &c.locator)
+        .ok_or_else(|| unusable("vintage finding has no current assertion"))?;
+    if item.first.is_empty() || (item.against_previous.is_some() != !item.previous.is_empty()) {
+        return Err(unusable(
+            "vintage finding lacks its compared source assertions",
+        ));
+    }
+    if vintages
+        .disclosure_registry_digest
+        .is_some_and(|d| d != report.disclosures.digest())
+        || vintages
+            .disclosure_registry_complete
+            .is_some_and(|c| c != report.disclosures.is_complete())
+    {
+        return Err(Refusal::new(
+            RefusalCode::DigestMismatch505,
+            "vintage finding names a different disclosure registry",
+        ));
+    }
+    let kind = if unresolved.iter().any(|c| c.state == VintageState::Conflict) {
+        PacketKind::VintageConflict
+    } else {
+        PacketKind::VintageChange
+    };
+    let state = if kind == PacketKind::VintageConflict {
+        VintageState::Conflict
+    } else if unresolved
+        .iter()
+        .any(|c| c.state == VintageState::RestatedSilent)
+    {
+        VintageState::RestatedSilent
+    } else {
+        VintageState::ChangedWithoutRegisteredExplanation
+    };
+    if state == VintageState::RestatedSilent && vintages.disclosure_registry_complete != Some(true)
+    {
+        return Err(unusable(
+            "a silent vintage finding requires a complete verified disclosure registry",
+        ));
+    }
+    let reasons: BTreeSet<_> = unresolved.iter().filter_map(|c| c.reason).collect();
+    let packet = packet_for(
+        groups,
+        report,
+        GroupKey {
+            origin: "vintage",
+            subject: current.key.subject.clone(),
+            family: format!("{}:{}", vintages.scope.as_str(), current.key.line.label),
+            kind,
+            // Private grouping key only; the canonical packet body binds each complete key and source Claim.
+            discriminator: format!("{:?}:{reasons:?}", current.key.series_key()),
+        },
+        "registered semantic-key comparison; first and immediately previous releases retained; no preferred vintage",
+    );
+    for (role, claims) in [
+        ("first_registered", &item.first),
+        ("immediately_previous", &item.previous),
+        ("current_release", &item.current),
+    ] {
+        for claim in claims {
+            add_operand(packet, vintage_operand(report, claim, role)?)?;
+        }
+    }
+    for (comparison, from) in std::iter::once((&item.against_first, &item.first))
+        .chain(item.against_previous.as_ref().map(|c| (c, &item.previous)))
+    {
+        for note in &comparison.disclosures {
+            if from.len() != 1
+                || item.current.len() != 1
+                || !report
+                    .disclosures
+                    .matching(&from[0].key, &current.key)
+                    .contains(note)
+            {
+                return Err(unusable(
+                    "vintage disclosure does not match the verified source scope",
+                ));
+            }
+            let operand = read_operand(report, &note.at, "registered_disclosure", None)?;
+            if operand.sha256 != note.sha256 {
+                return Err(Refusal::new(
+                    RefusalCode::DigestMismatch505,
+                    format!("vintage disclosure source digest differs at {}", note.at),
+                ));
+            }
+            // Registry verification permits whitespace-only differences in a complete quotation. Keep the
+            // exact source token in the operand and the registered quote in its scoped citation.
+            if !matches!(&operand.value, OperandValue::Token(text)
+                if text.split_whitespace().eq(note.quoted_text.split_whitespace()))
+            {
+                return Err(unusable(format!(
+                    "vintage disclosure quote differs at {}",
+                    note.at
+                )));
+            }
+            add_operand(packet, operand)?;
+        }
+    }
+    let claims_json = |claims: &[KeyedCell]| {
+        let mut claims: Vec<_> = claims.iter().map(KeyedCell::to_json).collect();
+        claims.sort();
+        format!("[{}]", claims.join(","))
+    };
+    packet.findings.push(Finding {
+        period: current.key.valid_period.code(),
+        at: current.locator.clone(),
+        state: state.as_str().to_string(),
+        evidence_json: format!(
+            "{{\"scope\":{},\"input_claims_digest\":{},\"disclosure_registry_digest\":{},\
+             \"disclosure_registry_complete\":{},\"against_first\":{},\"against_previous\":{},\
+             \"first\":{},\"previous\":{},\"current\":{},\
+             \"interpretation_limit\":\"Neither assertion is selected as true. Silence means no applicable verified note in the registered documents, not absence of disclosure elsewhere.\"}}",
+            js(vintages.scope.as_str()), js(&vintages.input_claims_digest.to_hex()),
+            vintages.disclosure_registry_digest.map_or_else(|| "null".into(), |d| js(&d.to_hex())),
+            vintages.disclosure_registry_complete.map_or_else(|| "null".into(), |c| c.to_string()),
+            comparison_json(&item.against_first),
+            item.against_previous.as_ref().map_or_else(|| "null".into(), comparison_json),
+            claims_json(&item.first), claims_json(&item.previous), claims_json(&item.current)
+        ),
+    });
+    packet.closing_documents.insert(ClosingDocument {
+        document: if kind == PacketKind::VintageConflict {
+            "issuer statement of ownership basis or reconciliation of concurrent assertions"
+        } else {
+            "issuer reconciliation or applicable disclosure note for the cited comparative figures"
+        }.to_string(),
+        locator: Some(current.locator.clone()),
+        would_show: "the reason for the cited difference and its applicable period, unit and ownership basis, with a source for the resolution".to_string(),
+    });
+    Ok(())
 }
 
 fn add_aisc(
@@ -1184,6 +1517,517 @@ mod tests {
         }
     }
 
+    fn vintage_fixture(values: &[Option<MinimalCell>], with_ytd: bool) -> PublicAssuranceReport {
+        let mut profile = synthetic::synthetic_profile();
+        profile.reconstructions.clear();
+        let releases = ["2030Q2", "2031Q2", "2032Q2", "2033Q2"];
+        let sources = values
+            .iter()
+            .enumerate()
+            .map(|(i, value)| {
+                let mut sheets = vec![summary(
+                    "QTD",
+                    "three",
+                    &[("Site A (50%)", ["100", "50", "50", "100"])],
+                )];
+                if with_ytd {
+                    sheets.push(summary(
+                        "YTD",
+                        "six",
+                        &[("Site A (50%)", ["200", "100", "100", "100"])],
+                    ));
+                }
+                for sheet in &mut sheets {
+                    sheet.cells.retain(|(at, _)| at != "E5");
+                    if let Some(value) = value {
+                        sheet.cells.push(("E5".into(), value.clone()));
+                    }
+                }
+                mine_source(&format!("vintage-{i}.xlsx"), releases[i], sheets)
+            })
+            .collect();
+        assess(&profile, Lane::Synthetic, sources)
+    }
+
+    fn vintage_packets(report: &PublicAssuranceReport) -> Vec<ChallengePacket> {
+        packets_from_report(report)
+            .expect("cited packets")
+            .into_iter()
+            .filter(|p| {
+                matches!(
+                    p.kind,
+                    PacketKind::VintageChange | PacketKind::VintageConflict
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn vintage_changes_keep_first_previous_current_without_duplicate_findings() {
+        let mut report = vintage_fixture(
+            &[
+                Some(MinimalCell::Number(100.0)),
+                Some(MinimalCell::Number(200.0)),
+                Some(MinimalCell::Number(100.0)),
+            ],
+            true,
+        );
+        let packets = vintage_packets(&report);
+        assert_eq!(packets.len(), 2, "Q2 and H1 changes remain separate");
+        let periods: BTreeSet<_> = packets
+            .iter()
+            .flat_map(|p| &p.findings)
+            .map(|f| f.period.as_str())
+            .collect();
+        assert_eq!(periods, BTreeSet::from(["2030Q2", "2030H1"]));
+        for packet in &packets {
+            assert_eq!(
+                packet.finding_count(),
+                2,
+                "each later appearance occurs once"
+            );
+            assert_eq!(packet.operands.len(), 3);
+            let second = packet
+                .findings
+                .iter()
+                .find(|f| f.at.starts_with("vintage-2"))
+                .expect("reversion remains a finding against the prior release");
+            assert!(
+                second
+                    .evidence_json
+                    .contains("\"against_first\":{\"state\":\"unchanged\"")
+            );
+            assert!(
+                second
+                    .evidence_json
+                    .contains("\"against_previous\":{\"state\":\"restated_silent\"")
+            );
+            assert!(second.evidence_json.contains("\"rounding_only\":null"));
+            for operand in packet.operands.values() {
+                let claim = operand.claim.as_ref().expect("canonical Claim");
+                assert!(
+                    second
+                        .evidence_json
+                        .contains(&claim.claim.claim_id.to_string())
+                );
+                assert!(second.evidence_json.contains(&operand.sha256));
+            }
+            assert!(!packet.external_use_allowed());
+            assert!(
+                packet
+                    .to_markdown()
+                    .contains("absence of disclosure elsewhere")
+            );
+            packet.validate().expect("valid vintage packet");
+        }
+        report.sources.reverse();
+        report.mine_stats_vintages.items.reverse();
+        for item in &mut report.mine_stats_vintages.items {
+            item.first.reverse();
+            item.previous.reverse();
+            item.current.reverse();
+        }
+        assert_eq!(
+            packets
+                .iter()
+                .map(ChallengePacket::to_json)
+                .collect::<Vec<_>>(),
+            vintage_packets(&report)
+                .iter()
+                .map(ChallengePacket::to_json)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn vintage_packets_preserve_number_nil_not_applicable_and_missing() {
+        let report = vintage_fixture(
+            &[
+                Some(MinimalCell::Number(100.0)),
+                Some(MinimalCell::Text("—".into())),
+                Some(MinimalCell::Text("n/a".into())),
+                None,
+            ],
+            false,
+        );
+        let packets = vintage_packets(&report);
+        assert_eq!(packets.len(), 1);
+        let packet = &packets[0];
+        assert_eq!(packet.finding_count(), 3);
+        assert_eq!(packet.operands.len(), 4);
+        let values: Vec<_> = packet
+            .operands
+            .values()
+            .map(|o| &o.claim.as_ref().expect("Claim").claim.value)
+            .collect();
+        assert!(
+            values
+                .iter()
+                .any(|v| matches!(v, PublicValue::Number { .. }))
+        );
+        assert!(
+            values
+                .iter()
+                .any(|v| matches!(v, PublicValue::Nil { token, .. } if token == "—"))
+        );
+        assert!(
+            values
+                .iter()
+                .any(|v| matches!(v, PublicValue::NotApplicable { token } if token == "n/a"))
+        );
+        assert!(values.iter().any(|v| matches!(v, PublicValue::Missing)));
+    }
+
+    #[test]
+    fn vintage_packets_reject_missing_forged_and_mutated_source_assertions() {
+        let mut report = vintage_fixture(
+            &[
+                Some(MinimalCell::Number(100.0)),
+                Some(MinimalCell::Number(200.0)),
+            ],
+            false,
+        );
+        let item = report
+            .mine_stats_vintages
+            .items
+            .iter_mut()
+            .find(|i| i.against_first.state == VintageState::RestatedSilent)
+            .expect("change");
+        let original = item.current[0].clone();
+        item.current[0].claim.value = PublicValue::Number {
+            stored: "999".into(),
+            displayed: Ok("999".into()),
+            under_status: None,
+        };
+        assert_eq!(
+            packets_from_report(&report).expect_err("forged Claim").code,
+            "FMINE-REF-208"
+        );
+        let forged = report
+            .mine_stats_vintages
+            .items
+            .iter()
+            .find(|i| i.current[0].locator == original.locator)
+            .expect("change")
+            .current[0]
+            .clone();
+        report
+            .public_claims
+            .cells
+            .insert(original.locator.clone(), forged);
+        assert_eq!(
+            packets_from_report(&report)
+                .expect_err("source value differs despite matching projection")
+                .code,
+            "FMINE-REF-208"
+        );
+        report
+            .public_claims
+            .cells
+            .insert(original.locator.clone(), original.clone());
+        report
+            .mine_stats_vintages
+            .items
+            .iter_mut()
+            .find(|i| i.current[0].locator == original.locator)
+            .expect("change")
+            .current[0] = original.clone();
+        report.sources.retain(|s| s.file_name != "vintage-0.xlsx");
+        assert_eq!(
+            packets_from_report(&report)
+                .expect_err("missing compared source")
+                .code,
+            "FMINE-REF-506"
+        );
+    }
+
+    #[test]
+    fn vintage_packets_refuse_forged_verdicts_and_predecessor_chronology() {
+        let mut unchanged = vintage_fixture(
+            &[
+                Some(MinimalCell::Number(100.0)),
+                Some(MinimalCell::Number(100.0)),
+            ],
+            false,
+        );
+        assert!(vintage_packets(&unchanged).is_empty());
+        let first = unchanged.public_claims.cells["vintage-0.xlsx:QTD!E5"].clone();
+        let current = unchanged.public_claims.cells["vintage-1.xlsx:QTD!E5"].clone();
+        let forged = Comparison {
+            state: VintageState::RestatedSilent,
+            reason: Some("value"),
+            token_glyph_changed: false,
+            disclosures: Vec::new(),
+        };
+        unchanged.mine_stats_vintages.items.push(VintageItem {
+            first: vec![first.clone()],
+            previous: vec![first],
+            current: vec![current],
+            against_first: forged.clone(),
+            against_previous: Some(forged),
+        });
+        assert_eq!(
+            packets_from_report(&unchanged)
+                .expect_err("unchanged source pair cannot be called silent")
+                .code,
+            "FMINE-REF-208"
+        );
+        let mut report = vintage_fixture(
+            &[
+                Some(MinimalCell::Number(100.0)),
+                Some(MinimalCell::Number(200.0)),
+                Some(MinimalCell::Number(300.0)),
+            ],
+            false,
+        );
+        let third = report
+            .mine_stats_vintages
+            .items
+            .iter_mut()
+            .find(|i| i.current[0].locator.starts_with("vintage-2"))
+            .expect("third release");
+        third.previous = third.first.clone();
+        assert_eq!(
+            packets_from_report(&report)
+                .expect_err("wrong predecessor")
+                .code,
+            "FMINE-REF-208"
+        );
+    }
+
+    #[test]
+    fn vintage_ownership_conflicts_keep_printed_and_registered_basis() {
+        let mut profile = synthetic::synthetic_profile();
+        profile.reconstructions.clear();
+        profile
+            .printed_share_corrections
+            .push(fmine_public::sources::PrintedShareCorrection {
+                subject: "Site A".into(),
+                printed: "50".into(),
+                num: 1,
+                den: 4,
+                evidence: "SYNTHETIC-BASIS".into(),
+            });
+        let report = assess(
+            &profile,
+            Lane::Synthetic,
+            vec![mine_source(
+                "basis.xlsx",
+                "2030Q2",
+                vec![summary(
+                    "QTD",
+                    "three",
+                    &[("Site A (50%)", ["100", "50", "50", "100"])],
+                )],
+            )],
+        );
+        let packets = vintage_packets(&report);
+        assert!(!packets.is_empty());
+        for packet in packets {
+            assert_eq!(packet.kind, PacketKind::VintageConflict);
+            assert_eq!(packet.finding_count(), 1);
+            let json = packet.to_json();
+            assert!(json.contains("registered_basis_correction"));
+            assert!(json.contains("SYNTHETIC-BASIS"));
+            assert!(json.contains("\"printed_basis\":"));
+            assert!(!packet.external_use_allowed());
+        }
+    }
+
+    #[test]
+    fn aisc_vintage_change_uses_the_same_packet_path_and_canonical_claims() {
+        let mut profile = synthetic::synthetic_profile();
+        profile.reconstructions.clear();
+        let sources = [
+            ("first-aisc.xlsx", "2030Q1", 300.0),
+            ("later-aisc.xlsx", "2030Q2", 301.0),
+        ]
+        .into_iter()
+        .map(|(file, release, value)| {
+            let mut cells: Vec<_> = synthetic::synthetic_aisc_cells()
+                .into_iter()
+                .filter(|(at, _)| at.starts_with('A') || at.starts_with('B'))
+                .collect();
+            cells.retain(|(at, _)| at != "B5");
+            cells.push(("B5".into(), MinimalCell::Number(value)));
+            let mut source = mine_source(
+                file,
+                release,
+                vec![MinimalSheet {
+                    name: synthetic::SYNTHETIC_TABLE_SHEET.into(),
+                    hidden: false,
+                    cells,
+                }],
+            );
+            source.kind = SourceKind::AiscReconciliation;
+            source
+        })
+        .collect();
+        let report = assess(&profile, Lane::Synthetic, sources);
+        let packets = vintage_packets(&report);
+        assert_eq!(packets.len(), 1);
+        let packet = &packets[0];
+        assert!(packet.family.starts_with("aisc:"));
+        assert_eq!(packet.kind, PacketKind::VintageChange);
+        assert_eq!(packet.finding_count(), 1);
+        assert_eq!(packet.findings[0].state, "restated_silent");
+        for (at, value) in [
+            ("first-aisc.xlsx:Q1 2030!B5", 300),
+            ("later-aisc.xlsx:Q1 2030!B5", 301),
+        ] {
+            assert_eq!(packet.operands[at].value, OperandValue::Int(value));
+            assert_eq!(
+                packet.operands[at].claim.as_ref(),
+                report.public_claims.cells.get(at)
+            );
+        }
+    }
+
+    fn disclosed_vintage_fixture(first_uses_old_section: bool) -> PublicAssuranceReport {
+        use fmine_public::sources::{RegisteredSource, RestatementNoteRow, RestatementScopeRow};
+        let mut profile = synthetic::synthetic_profile();
+        profile.reconstructions.clear();
+        profile.mine_stats_labels = ["Costs per ounce ($/oz)", "Costs per ounce"]
+            .into_iter()
+            .map(|section| {
+                (
+                    Some(section.to_string()),
+                    "Cost of sales ($/oz)".to_string(),
+                )
+            })
+            .collect();
+        let mut sources = Vec::new();
+        for (i, release) in ["2030Q2", "2031Q2", "2032Q2"].into_iter().enumerate() {
+            let section = if i == 0 && first_uses_old_section {
+                "Costs per ounce ($/oz)"
+            } else {
+                "Costs per ounce"
+            };
+            let sheet = MinimalSheet {
+                name: "Minestats1".into(),
+                hidden: false,
+                cells: vec![
+                    ("B3".into(), MinimalCell::Text("Site A (50%)".into())),
+                    (
+                        "A4".into(),
+                        MinimalCell::Text("For the three months ended June 30,".into()),
+                    ),
+                    ("B4".into(), MinimalCell::Number(2030.0)),
+                    ("A5".into(), MinimalCell::Text(section.into())),
+                    (
+                        "A6".into(),
+                        MinimalCell::Text("Cost of sales ($/oz)".into()),
+                    ),
+                    ("B6".into(), MinimalCell::Number([100.0, 200.0, 300.0][i])),
+                    (
+                        "A8".into(),
+                        MinimalCell::Text(
+                            "Comparative figures\n  reflect the stated calculation.".into(),
+                        ),
+                    ),
+                ],
+            };
+            sources.push(mine_source(
+                &format!("disclosure-{i}.xlsx"),
+                release,
+                vec![sheet],
+            ));
+        }
+        profile.sources = sources
+            .iter()
+            .map(|s| RegisteredSource {
+                file_name: s.file_name.clone(),
+                kind: s.kind,
+                quarter: s.quarter.clone(),
+                url: s.url.clone(),
+                url_basis: s.url_basis.clone(),
+                bytes: s.bytes,
+                sha256_hex: Digest32(s.workbook.sha256).to_hex(),
+            })
+            .collect();
+        profile.restatement_notes.push(RestatementNoteRow {
+            id: "SYNTHETIC-NOTE".into(),
+            file_name: "disclosure-2.xlsx".into(),
+            locator: "Minestats1!A8".into(),
+            quoted_text: "Comparative figures reflect the stated calculation.".into(),
+            from_quarter: "2032Q2".into(),
+            evidence: "SYNTHETIC".into(),
+            sha256: Digest32(sources[2].workbook.sha256).to_hex(),
+        });
+        profile.restatement_scopes.push(RestatementScopeRow {
+            note: "SYNTHETIC-NOTE".into(),
+            subject: "Site A".into(),
+            period_from: "2030Q2".into(),
+            period_to: "2030Q2".into(),
+            line: "site:costs per ounce:cost of sales ($/oz)".into(),
+            occurrence: 0,
+        });
+        let report = assess(&profile, Lane::Synthetic, sources);
+        assert!(
+            report.disclosures.is_complete(),
+            "{}",
+            report.disclosures.to_json()
+        );
+        report
+    }
+
+    #[test]
+    fn vintage_packets_keep_scoped_disclosures_without_promoting_explained_changes() {
+        let mut report = disclosed_vintage_fixture(true);
+        let packets = vintage_packets(&report);
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].finding_count(), 2);
+        let third = packets[0]
+            .findings
+            .iter()
+            .find(|f| f.at.starts_with("disclosure-2"))
+            .expect("first comparison stays unexplained across section alias");
+        assert!(
+            third
+                .evidence_json
+                .contains("\"against_first\":{\"state\":\"restated_silent\"")
+        );
+        assert!(
+            third
+                .evidence_json
+                .contains("\"against_previous\":{\"state\":\"restated_disclosed\"")
+        );
+        assert!(third.evidence_json.contains("SYNTHETIC-NOTE"));
+        let note = &packets[0].operands["disclosure-2.xlsx:Minestats1!A8"];
+        assert!(note.roles.contains("registered_disclosure"));
+        assert_eq!(
+            note.value,
+            OperandValue::Token("Comparative figures\n  reflect the stated calculation.".into())
+        );
+        assert!(
+            note.claim.is_none(),
+            "source note is not a manufactured numerical Claim"
+        );
+        let disclosed_only = disclosed_vintage_fixture(false);
+        let retained = vintage_packets(&disclosed_only);
+        assert_eq!(retained.len(), 1);
+        assert_eq!(
+            retained[0].finding_count(),
+            1,
+            "only the earlier, uncovered change remains"
+        );
+        assert!(retained[0].findings[0].at.starts_with("disclosure-1"));
+        let third = report
+            .mine_stats_vintages
+            .items
+            .iter_mut()
+            .find(|i| i.current[0].locator.starts_with("disclosure-2"))
+            .expect("third");
+        third.against_previous.as_mut().expect("prior").disclosures[0].quoted_text =
+            "invented note".into();
+        assert_eq!(
+            packets_from_report(&report)
+                .expect_err("forged disclosure")
+                .code,
+            "FMINE-REF-208"
+        );
+    }
+
     #[test]
     fn mine_stats_discrepancies_unknown_costs_and_blanks_remain_distinct() {
         let mut profile = synthetic::synthetic_profile();
@@ -1337,6 +2181,95 @@ mod tests {
         assert!(!md.contains("<script>"));
         assert!(md.contains("&lt;script&gt;\\|\\[claim\\]"));
         assert!(md.contains("\\u0060\\u0060\\u0060"));
+    }
+
+    #[test]
+    #[ignore = "requires the registered public workbook corpus"]
+    fn barrick_vintage_packets_match_nine_silent_changes_and_e474() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let report = fmine_public::run_barrick_m0_assurance(&root).expect("registered assurance");
+        let packets = vintage_packets(&report);
+        let mine_packets: Vec<_> = packets
+            .iter()
+            .filter(|p| p.family.starts_with("mine_stats:"))
+            .collect();
+        let silent: Vec<_> = mine_packets
+            .iter()
+            .flat_map(|p| &p.findings)
+            .filter(|f| f.state == "restated_silent")
+            .collect();
+        assert_eq!(
+            silent.len(),
+            9,
+            "E474 plus W1-DR-09's eight changes, each retained once"
+        );
+        for original in [
+            "Barrick_Q1_2024_Mine_Stats.xlsx:QTD!G23",
+            "Barrick_Q3_2024_Mine_Stats.xlsx:Minestats3!F57",
+            "Barrick_Q2_2025_Mine_Stats.xlsx:Minestats1!F107",
+            "Barrick_Q2_2025_Mine_Stats.xlsx:Minestats1!F108",
+            "Barrick_Q2_2024_Mine_Stats.xlsx:Minestats2!F14",
+            "Barrick_Q2_2024_Mine_Stats.xlsx:Minestats2!F27",
+            "Barrick_Q2_2024_Mine_Stats.xlsx:Minestats2!F63",
+            "Barrick_Q2_2024_Mine_Stats.xlsx:Minestats2!F76",
+            "Barrick_Q2_2025_Mine_Stats.xlsx:Minestats3!B8",
+        ] {
+            assert_eq!(
+                silent
+                    .iter()
+                    .filter(|f| f.evidence_json.contains(original))
+                    .count(),
+                1,
+                "one packet finding for independently recorded source {original}"
+            );
+        }
+        assert_eq!(
+            mine_packets
+                .iter()
+                .filter(|p| p.kind == PacketKind::VintageConflict)
+                .map(|p| p.finding_count())
+                .sum::<usize>(),
+            60
+        );
+        let e474 = mine_packets
+            .iter()
+            .find(|p| {
+                p.findings
+                    .iter()
+                    .any(|f| f.at == "Barrick_Q1_2025_Mine_Stats.xlsx:QTD!N22")
+            })
+            .expect("E474 packet");
+        for (at, value) in [
+            ("Barrick_Q1_2024_Mine_Stats.xlsx:QTD!G23", 1479),
+            ("Barrick_Q1_2025_Mine_Stats.xlsx:QTD!N22", 1474),
+        ] {
+            let operand = &e474.operands[at];
+            assert_eq!(operand.value, OperandValue::Int(value));
+            let claim = operand.claim.as_ref().expect("source Claim");
+            assert_eq!(claim, &report.public_claims.cells[at]);
+            assert_eq!(operand.sha256, claim.key.reporting_vintage.file_sha256);
+        }
+        for packet in &packets {
+            packet.validate().expect("complete source-cited packet");
+            assert!(!packet.external_use_allowed());
+            assert!(packet.findings.iter().all(|f| f.state != "not_comparable"));
+        }
+        let envelope = crate::challenge_envelope(&report).expect("end-to-end challenge envelope");
+        let json = envelope.to_json();
+        assert!(json.contains("\"schema\":\"fmine.challenge_packets.v1\""));
+        assert!(json.contains(&e474.id().to_string()));
+        assert!(json.contains("\"human_check\":null,\"external_use_allowed\":false"));
+        assert!(!json.contains("\"external_use_allowed\":true"));
+        assert!(
+            envelope
+                .rendered_markdown
+                .as_ref()
+                .expect("readable packets")
+                .contains("Vintage comparisons and registered disclosures")
+        );
+        println!(
+            "E474/W1: 9 silent changes and 60 ownership-conflict findings retain canonical source Claims; JSON/Markdown packet envelope checked"
+        );
     }
 
     #[test]
