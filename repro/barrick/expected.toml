@@ -11,9 +11,9 @@
 # census_digest_of_digests: sha256 over "{file}\t{numeric_digest}\n" in registry order. Both can be computed
 # without this code: the numeric digests come from `python3 -I scripts/oracle/fidelity.py`.
 #
-# Every row was observed on 2026-10-30 by building that commit from `git archive` in its own target directory
-# and running the CLI on the registered corpus. Rows before 04684ff come from code that had no --through flag;
-# it read the same 18 files.
+# Rows through 9b4c453 were observed on 2026-10-30 by building that commit from `git archive` in its own target
+# directory and running the CLI on the registered corpus. Later rows document their own run. Rows before
+# 04684ff come from code that had no --through flag; it read the same 18 files.
 
 schema = "fmine.expected_roots.v1"
 issuer = "barrick"
@@ -299,3 +299,24 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "The Mine Stats ledger adds the site-sheet quarter sums, family 2 on the Minestats* sheets; no AISC moves."
 evidence = "BD-331.S4, bd-prmn.4, E846"
+
+# Observed 2026-10-31 from the pinned nightly debug binary of the exact source tree in 51f1058, running
+# `fmine assure public --issuer barrick --through 2026Q2`: exit 0, empty stderr, all 18 registered sources.
+# Frame v8 binds the structured waterfall digest. No AISC state, source row, numeric census or Claim id moves.
+# The new report has 84 gold pairs (40 LMDI, four signed fallbacks, 40 refused), plus 18 copper, 15 region and
+# 12 company scope exclusions. Independent source-only arithmetic lives in waterfall_census.py; this root
+# remains a regression value, not its oracle. The prior v7 epoch above remains unchanged.
+[[expected]]
+commit = "51f10580371e9022c62cb18725beab95e177d63a"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "23c09036ca1d44c3e324c28d9365773a523b06a5f8f21f948f0aacdb3219bd7c"
+anchor_id = "anc_834993175b2a158f099d71937bb5c914"
+totals_i = 2436
+totals_ii = 3
+totals_iii = 4
+totals_iv = 92
+totals_v = 0
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "M0AS frame v8 binds public waterfall outcomes, source Claim digests, exact gaps and interval bars; no identity state moves."
+evidence = "BD-333.S1-S3, commit:547af4f, commit:51f1058, record:repro/barrick/waterfall_census.py, test:xtask::public_waterfall::barrick_waterfall_counts_and_north_mara_match_independent_census"

@@ -141,4 +141,4 @@ pub const fn value_kind(v: &PublicValue) -> &'static str {
     }
 }
 
-// Cross-crate inventory contracts live in xtask/tests/public_claim_inventory.rs.
+// Cross-crate inventory checks live in xtask/tests/public_mine_stats_inventory.rs.

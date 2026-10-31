@@ -932,7 +932,7 @@ pub struct KeyingRefusal {
     pub reason: String,
 }
 
-/// Numeric and placeholder AISC operands keyed independently of their spreadsheet coordinates (BD-332.S2).
+/// Numeric and placeholder AISC cells keyed independently of their spreadsheet coordinates (BD-332.S2).
 /// Textual `LabelCheck` operands remain context references. Numeric operands in Mine Stats files are keyed by
 /// that reader's adapter, which knows their block periods and units.
 #[derive(Debug, Clone, Default)]
@@ -944,9 +944,11 @@ pub struct AiscClaimIndex {
     pub unregistered_all_zero: Vec<String>,
 }
 
-/// Builds one public Claim per distinct AISC operand, keeping every reporting vintage. The subject is read
-/// from the operand's own column, including a regional identity's member columns. A row's basis remains
-/// `Unprinted` unless its printed label explicitly states an attributable basis and a share is registered.
+/// Builds one public Claim per distinct AISC operand and visible co-product rate, keeping every reporting
+/// vintage. The subject is read from the cell's own registered column, including regional member columns.
+/// A row's basis remains `Unprinted` unless its label explicitly states an attributable basis and a share
+/// is registered. Co-product rates have their own semantic line; they do not enter the by-product identity
+/// ledger or inherit its arithmetic conclusions.
 #[must_use]
 pub fn key_aisc_operands(
     profile: &IssuerProfile,
@@ -962,6 +964,7 @@ pub fn key_aisc_operands(
         .map(|o| (format!("{}:{}!{}", o.file, o.sheet, o.cell), o))
         .collect();
     let mut tables: BTreeMap<(String, String), Result<AiscTable, String>> = BTreeMap::new();
+    let mut coproduct_rows: BTreeMap<(String, String), BTreeSet<u32>> = BTreeMap::new();
     let mut index = AiscClaimIndex::default();
     for (locator, operand) in operands {
         let result = (|| {
@@ -986,7 +989,10 @@ pub fn key_aisc_operands(
                 })
                 .as_ref()
                 .map_err(Clone::clone)?;
-            key_aisc_operand(profile, source, sheet, table, operand).map(Some)
+            let rows = coproduct_rows
+                .entry((operand.file.clone(), operand.sheet.clone()))
+                .or_insert_with(|| coproduct_rate_rows(sheet));
+            key_aisc_operand(profile, source, sheet, table, rows, operand).map(Some)
         })();
         match result {
             Ok(Some(cell)) => {
@@ -994,6 +1000,63 @@ pub fn key_aisc_operands(
             }
             Ok(None) => {}
             Err(reason) => index.refusals.push(KeyingRefusal { locator, reason }),
+        }
+    }
+    // FACT: the published co-product rate is outside the by-product identity operands (for example,
+    // Barrick_Q1_2025_AISC.xlsx:Q1 2024!C22). Re-read its visible row and registered subject columns rather
+    // than manufacturing a numeric identity merely to make the published Claim available.
+    for source in sources
+        .values()
+        .filter(|s| s.kind == SourceKind::AiscReconciliation)
+    {
+        for sheet in &source.workbook.sheets {
+            let rows = coproduct_rows
+                .entry((source.file_name.clone(), sheet.name.clone()))
+                .or_insert_with(|| coproduct_rate_rows(sheet));
+            if rows.is_empty() {
+                continue;
+            }
+            let table = tables
+                .entry((source.file_name.clone(), sheet.name.clone()))
+                .or_insert_with(|| {
+                    locate_table(sheet, &profile.subjects)?
+                        .ok_or_else(|| "the worksheet has no AISC table".to_string())
+                });
+            let table = match table.as_ref() {
+                Ok(table) => table,
+                Err(reason) => {
+                    for row in rows.iter() {
+                        index.refusals.push(KeyingRefusal {
+                            locator: format!("{}:{}!A{row}", source.file_name, sheet.name),
+                            reason: reason.clone(),
+                        });
+                    }
+                    continue;
+                }
+            };
+            for header in sheet.row_cells(table.header_row) {
+                if header.col < 2
+                    || cell_text(sheet, table.header_row, header.col)
+                        .and_then(|h| match_subject(&h, &profile.subjects))
+                        .is_none()
+                {
+                    continue;
+                }
+                for &row in rows.iter() {
+                    let operand =
+                        operand_at(&source.file_name, sheet, row, header.col, OperandRole::Rate);
+                    let locator = format!("{}:{}!{}", operand.file, operand.sheet, operand.cell);
+                    if index.cells.contains_key(&locator) {
+                        continue;
+                    }
+                    match key_aisc_operand(profile, source, sheet, table, rows, &operand) {
+                        Ok(cell) => {
+                            index.cells.insert(locator, cell);
+                        }
+                        Err(reason) => index.refusals.push(KeyingRefusal { locator, reason }),
+                    }
+                }
+            }
         }
     }
     let mut unregistered = BTreeSet::new();
@@ -1023,6 +1086,7 @@ fn key_aisc_operand(
     source: &LoadedSource,
     sheet: &Sheet,
     table: &AiscTable,
+    coproduct_rows: &BTreeSet<u32>,
     operand: &Operand,
 ) -> Result<KeyedCell, String> {
     let (row, col) =
@@ -1040,7 +1104,8 @@ fn key_aisc_operand(
         status_for(&profile.subject_statuses, subject, &period),
     )
     .map_err(|e| e.to_string())?;
-    let rows = aisc_key_rows(table);
+    let mut rows = aisc_key_rows(table);
+    rows.extend(coproduct_rows);
     if !rows.contains(&row) {
         return Err("the operand is outside the table's registered metric rows".to_string());
     }
@@ -1052,7 +1117,9 @@ fn key_aisc_operand(
         .count();
     let unit = if row == table.ounces_row {
         "koz"
-    } else if [table.cos_rate_row, table.tcc_rate_row, table.aisc_rate_row].contains(&row) {
+    } else if [table.cos_rate_row, table.tcc_rate_row, table.aisc_rate_row].contains(&row)
+        || coproduct_rows.contains(&row)
+    {
         "usd_per_oz"
     } else {
         "usd_m"
@@ -1100,6 +1167,21 @@ fn key_aisc_operand(
     }
     cell.cite_status(profile);
     Ok(cell)
+}
+
+const COPRODUCT_RATE_LABEL: &str = "total cash costs per ounce (on a co-product basis)";
+
+fn coproduct_rate_rows(sheet: &Sheet) -> BTreeSet<u32> {
+    sheet
+        .cells_by_coord
+        .keys()
+        .filter_map(|&(row, col)| {
+            (col == 1
+                && cell_text(sheet, row, col)
+                    .is_some_and(|label| label.eq_ignore_ascii_case(COPRODUCT_RATE_LABEL)))
+            .then_some(row)
+        })
+        .collect()
 }
 
 fn aisc_key_rows(table: &AiscTable) -> BTreeSet<u32> {

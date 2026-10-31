@@ -78,7 +78,7 @@ bash repro/barrick/fetch.sh
 cargo run -p fmine-cli -- assure public --issuer barrick > run.json
 ```
 
-**FACT, the registered-corpus tests in `fmine-public`:** the Mine Stats Claim inventory contains 22,732
+**FACT, the registered-corpus integration tests:** the Mine Stats Claim inventory contains 22,732
 observations, with no mapping refusals. Each Claim retains its publication vintage, period, ownership basis,
 unit, raw token, displayed value and source cell/hash. Numeric zeros at registered disposed sites remain
 `nil` with reason `disposed`; missing cells, dashes and `n/a` remain distinct.
@@ -88,17 +88,88 @@ The JSON payload includes `public_claims.cells` (the canonical AISC and Mine Sta
 against both the earliest registered and previous releases). The comparison tests
 reproduce E474 and all eight W1-DR-09 changes, while listing ownership conflicts and changed regional membership
 separately. The comparison population reconciles with W1 T16: 6,391 passes plus nine changes, with 30
-regional-membership changes listed separately. A difference does not identify which publication is correct;
-disclosure-note search remains open.
+regional-membership changes listed separately. The nine changes are classified as `restated_silent` because
+no applicable verified note is registered. All 30 region-map exclusions cite E461's exact workbook note and
+remain `not_comparable`. A difference does not identify which publication is correct, and this classification
+does not establish whether an explanation exists outside the registered evidence.
+
+The same engine compares the AISC workbooks under `issuer_consistency.aisc_vintages`: 9,541 appearances,
+5,819 series and 3,722 later comparisons, all unchanged in the registered corpus. This includes 359 explicitly
+labelled co-product cash-cost rates, kept distinct from the by-product rates used by the identity ledger.
+
+Disclosure coverage comes from explicit `restatement_note` and `restatement_scope` registry rows. Each run
+checks the source digest and complete quoted cell text, then matches exact subjects, lines, occurrences and
+whole reporting periods. A future note cannot explain an earlier release. Missing, altered or unusable note
+evidence leaves a change unassessed rather than silently declaring it unexplained. The JSON reports source
+Claims, applicable note citations, the claim-population digest and the checked disclosure-registry digest.
 
 Inspect a comparison's `current[].claim_id` or `first[].claim_id`, then resolve it directly:
 
 ```bash
 cargo run -p fmine-cli -- claim show clm_REPLACE_WITH_THE_EMITTED_ID
+cargo run -p fmine-cli -- claim why clm_REPLACE_WITH_THE_EMITTED_ID
+cargo run -p fmine-cli -- claim trace clm_REPLACE_WITH_THE_EMITTED_ID
 ```
 
-This rechecks the registered source hashes and returns the complete source Claim. It refuses missing or
-altered inputs. These additions do not constitute a pass of the full M0 gate.
+All three views recheck the registered source hashes and refuse missing or altered inputs. `show` returns
+the complete source Claim; `why` explains its evidence, knowledge state, colour and actual admission guards;
+`trace` follows its source anchors to the registered workbook, cell, URL and digest. Assessments that the
+public projection has not made, including clock freshness and flip margin, remain explicitly absent.
+Exact Claim IDs emitted by the built-in synthetic run also resolve, retaining their synthetic evidence.
+These additions do not constitute a pass of the full M0 gate.
+
+To resolve a Claim against a particular assurance snapshot, use the same issuer and release bound:
+
+```bash
+cargo run -p fmine-cli -- claim show clm_REPLACE_WITH_THE_EMITTED_ID --issuer barrick --through 2026Q2
+```
+
+The response includes both the assurance root and the keyed Claim projection digest. Missing ids and altered
+source files refuse instead of returning a stale cached Claim.
+
+### Export evidence challenges
+
+```bash
+cargo run -p fmine-cli -- assure challenges --issuer barrick --through 2026Q2 > challenges.json
+cargo run -p fmine-cli -- assure challenges --issuer barrick --through 2026Q2 --format markdown > challenges.md
+```
+
+DESIGN (BD-349): these packets turn visible AISC and Mine Stats exceptions, including joint inconsistencies,
+into cited review material. Each preserves the original finding, source filenames and hashes, displayed values,
+Claim references, checked arithmetic, correction alternatives and the evidence needed to close the question.
+Packet ids and a packet-set digest bind their content separately from the unchanged assurance root. They are
+internal-review drafts: human checks remain unfilled and external use remains disabled. Cross-vintage packets
+retain the earliest, previous and current canonical assertions, both comparison results and any applicable
+verified note. Periods, units and ownership bases remain distinct. The renderer rechecks the classifications
+against the canonical comparison engine before exporting them. On the registered corpus through 2026Q2,
+all nine known unexplained changes and all 60 ownership-conflict findings appear once in the exported packets;
+E474 retains both the original 1,479 and later 1,474 USD/oz assertions with their source cells. Disclosed-only
+changes and non-comparable region boundaries stay in the assurance report. PDF transcription conflicts are
+not yet packetized. Use `--synthetic` in place of the issuer selector for an invented known-answer demonstration.
+
+### Calculate guidance completion requirements
+
+```bash
+cargo run -p fmine-cli -- guidance completion --synthetic
+cargo run -p fmine-cli -- guidance completion --issuer barrick --site north-mara --through 2026Q2 --as-of 2026-10-31
+```
+
+DESIGN (BD-342): the public command requires registered, hash-verified documents and two agreeing reader
+entries in the local, ignored `registries/transcriptions/<issuer>.toml`. Use the existing transcription schema
+with quantities `guidance_<site_key_with_underscores>_production_koz` and
+`guidance_<site_key_with_underscores>_aisc_usd_per_oz`, an annual period such as `2026FY`, units `koz` and
+`usd_per_oz`, and an explicit ownership basis (`100%` or `attributable:n/d`). The AISC basis must also carry
+`;aisc=issuer-reported-per-sold-oz`. Both guidance rows must come from the same latest eligible registered
+document. Missing or conflicting evidence refuses; no real guidance values are bundled in the code.
+
+The result reports exact remaining production and an AISC spending/rate frontier. AISC uses summed costs and
+sold ounces; it never averages quarterly rates or treats production as sales. Remaining sales explicitly assume
+the preceding year's sales for the same remaining months, with source Claims and rounding intervals retained.
+The report includes the guidance vintage, as-of selection and all source hashes. Workbook availability uses its
+verified retrieval date conservatively where no publication date is registered. This is a **T3 conditional
+arithmetic requirement**, not a capacity finding or a probability of meeting guidance. Its content digest is in
+the payload; it creates no forecast registration or ledger certificate. Full historical/technical envelopes and
+the remaining BD-342/M0 gates stay open.
 
 ---
 
@@ -313,18 +384,18 @@ The workspace runs under these rules:
 
 ---
 
-## Command surface (planned)
+## Command surface
 
 ```bash
 fmine assure public --issuer barrick    # M0: reproduce, cite or refuse every published site metric
 fmine claim show <id>                   # a Claim with its evidence class, knowledge state, UU term and provenance
-fmine claim why <id>                    # why it has the colour, flip margin and staleness it has
-fmine claim trace <id>                  # the provenance DAG back to source cells and ledger anchors
+fmine claim why <id>                    # evidence, colour, admission guards and unassessed fields
+fmine claim trace <id>                  # source anchors, registered files and unresolved parent IDs
 fmine doctor                            # hash chains, pins, LOC budgets, obligations
 fmine robot-docs                        # machine-readable docs and NDJSON schemas for agents
 ```
 
-Every verb is registered in `registries/verbs.toml`. Every command prints human text and, with `--json`, a stable
+Every verb is registered in `registries/verbs.toml`. Every command prints human text and, with `--format json`, a stable
 NDJSON envelope with documented exit codes. Agents get certified numbers or typed refusals, never prose.
 
 ---

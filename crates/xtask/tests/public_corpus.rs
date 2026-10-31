@@ -8,7 +8,7 @@ mod corpus {
     use std::path::{Path, PathBuf};
 
     use fmine_core::hash::Digest32;
-    use fmine_io::xlsx::Workbook;
+    use fmine_io::xlsx::{MinimalCell, Workbook};
     use fmine_numerics::exact_feas::discover::UnitFinding;
     use fmine_public::aisc::{
         self, Calc, ConsistentBasis, IdentityFamily, IdentityInstance, IdentityState,
@@ -17,7 +17,7 @@ mod corpus {
     use fmine_public::sources::IssuerProfile;
     use fmine_public::{
         AlternateCounts, discovery_json, load_issuer_profile, mine_ledger, run_public_assurance,
-        sources,
+        sources, synthetic,
     };
 
     const NO_FOOTNOTE: IdentityState = IdentityState::Refused {
@@ -32,6 +32,69 @@ mod corpus {
 
     fn hex(bytes: &[u8; 32]) -> String {
         Digest32(*bytes).to_hex()
+    }
+
+    /// bd-jg43.1 parity: reading styles changes no census count and no numeric digest. The values were printed
+    /// by this test at commit 345e2ba, before the styles reader existed, and pasted here. bd-jg43.3 styled the
+    /// AISC workbook and added column N (11 numbers and the header "Site G"): its census must equal that of the
+    /// same cells written as plain numbers with no styles part.
+    #[test]
+    fn test_census_unchanged_by_style_reading() {
+        let line = |name: &str, bytes: &[u8]| {
+            let c = Workbook::from_bytes(name, bytes)
+                .expect("synthetic workbook")
+                .cell_census();
+            format!(
+                "{name} {} {} {} {} {} {} {}",
+                c.visible_sheets,
+                c.hidden_sheets,
+                c.numeric_cells,
+                c.placeholder_cells,
+                c.formula_error_cells,
+                c.text_cells,
+                hex(&c.numeric_digest)
+            )
+        };
+        let got: Vec<String> = synthetic::synthetic_workbooks(&[])
+            .into_iter()
+            .map(|(name, _, _, bytes)| line(name, &bytes))
+            .collect();
+        assert_eq!(
+            got[0],
+            "Synthetic_Mine_Stats.xlsx 2 0 2 0 0 9 ed492958121280b991212c61d01c9c2a257a551dfb07af145f1f6c117e646c21"
+        );
+        let plain: Vec<(String, MinimalCell)> = synthetic::synthetic_aisc_cells()
+            .into_iter()
+            .map(|(r, c)| match c {
+                MinimalCell::Styled { raw, .. } => {
+                    (r, MinimalCell::Number(raw.parse().expect("decimal")))
+                }
+                other => (r, other),
+            })
+            .collect();
+        let unstyled = fmine_io::xlsx::build_minimal_xlsx(&[
+            fmine_io::xlsx::MinimalSheet {
+                name: synthetic::SYNTHETIC_TABLE_SHEET.to_string(),
+                hidden: false,
+                cells: plain,
+            },
+            fmine_io::xlsx::MinimalSheet {
+                name: "Scratch".to_string(),
+                hidden: true,
+                cells: vec![("A1".to_string(), MinimalCell::Number(1.0))],
+            },
+            fmine_io::xlsx::MinimalSheet {
+                name: synthetic::SYNTHETIC_HIDDEN_SHEET.to_string(),
+                hidden: true,
+                cells: synthetic::synthetic_hidden_cells(),
+            },
+        ]);
+        assert_eq!(got[1], line(synthetic::SYNTHETIC_AISC_FILE, &unstyled));
+        assert!(
+            got[1].starts_with("Synthetic_AISC.xlsx 1 2 118 4 1 29 "),
+            "{}",
+            got[1]
+        );
     }
 
     fn js(s: &str) -> String {

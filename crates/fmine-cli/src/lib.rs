@@ -1,5 +1,7 @@
 //! FrankenMining CLI (`fmine`) implementation (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+pub mod packet;
+
 use std::path::{Path, PathBuf};
 
 use fmine_core::hash::sha256;
@@ -29,11 +31,40 @@ pub enum CliCommand {
     },
     /// `fmine assure public --synthetic`: the known-answer run over synthetic workbooks (never gate-eligible).
     AssureSynthetic,
+    /// Prepare cited internal-review evidence challenges from an assurance snapshot (BD-349).
+    AssureChallenges {
+        /// `None` selects the explicitly requested synthetic lane.
+        issuer: Option<String>,
+        through: Option<String>,
+    },
+    /// Necessary conditions for completing cited annual guidance under historical sales persistence (BD-342).
+    GuidanceCompletion {
+        issuer: String,
+        site: String,
+        through: String,
+        as_of: String,
+    },
+    /// Invented evidence exercising the same guidance completion adapter and exact kernel.
+    GuidanceSynthetic,
     /// `fmine doctor` (`BD-115`).
     Doctor,
     /// Read an existing public Claim from a verified issuer snapshot or the explicit synthetic lane
-    /// (`BD-115`). Without a selector, search the registered source projections.
+    /// (`BD-115`). Without a selector, search the current canonical projections.
     ClaimShow {
+        id: String,
+        issuer: Option<String>,
+        through: Option<String>,
+        synthetic: bool,
+    },
+    /// `fmine claim why <id>`: evidence, interpretation and the actual Claim admission guards.
+    ClaimWhy {
+        id: String,
+        issuer: Option<String>,
+        through: Option<String>,
+        synthetic: bool,
+    },
+    /// `fmine claim trace <id>`: source anchors and the available provenance boundary.
+    ClaimTrace {
         id: String,
         issuer: Option<String>,
         through: Option<String>,
@@ -94,6 +125,8 @@ pub struct Envelope {
     pub no_claim: Option<&'static str>,
     pub payload_json: String,
     pub refusal: Option<Refusal>,
+    /// Optional human rendition of the same result. JSON envelopes never include presentation text.
+    pub rendered_markdown: Option<String>,
 }
 
 impl Envelope {
@@ -110,6 +143,7 @@ impl Envelope {
             no_claim: None,
             payload_json,
             refusal: None,
+            rendered_markdown: None,
         }
     }
 
@@ -235,12 +269,14 @@ pub fn run(args: &[String], default_root: &Path) -> (String, u8) {
     let (env, format) = invoke(args, default_root);
     let text = match format {
         OutputFormat::Json => env.to_json(),
-        OutputFormat::Markdown => format!(
-            "# fmine `{}` ({})\n\n```json\n{}\n```",
-            env.verb,
-            env.status,
-            env.to_json()
-        ),
+        OutputFormat::Markdown => env.rendered_markdown.clone().unwrap_or_else(|| {
+            format!(
+                "# fmine `{}` ({})\n\n```json\n{}\n```",
+                env.verb,
+                env.status,
+                env.to_json()
+            )
+        }),
     };
     (text, env.exit_code)
 }
@@ -264,10 +300,30 @@ fn verb_hint(args: &[String]) -> &'static str {
     let mut i = 0;
     while let Some(arg) = args.get(i) {
         match arg.as_str() {
-            "--format" | "--workspace" | "--issuer" | "--through" => i += 2,
+            "--format" | "--workspace" | "--issuer" | "--through" | "--site" | "--as-of" => i += 2,
             flag if flag.starts_with("--") => i += 1,
-            "assure" => return "assure public",
-            "claim" => return "claim show",
+            "assure" => {
+                return if args.get(i + 1).map(String::as_str) == Some("challenges") {
+                    "assure challenges"
+                } else {
+                    "assure public"
+                };
+            }
+            "guidance" => return "guidance completion",
+            "claim" => {
+                i += 1;
+                while let Some(arg) = args.get(i) {
+                    match arg.as_str() {
+                        "--format" | "--workspace" | "--issuer" | "--through" | "--site"
+                        | "--as-of" => i += 2,
+                        flag if flag.starts_with("--") => i += 1,
+                        "why" => return "claim why",
+                        "trace" => return "claim trace",
+                        _ => return "claim show",
+                    }
+                }
+                return "claim show";
+            }
             "doctor" => return "doctor",
             "robot-docs" => return "robot-docs",
             _ => return "unknown",
@@ -287,6 +343,8 @@ pub fn parse_args(
     let mut issuer: Option<String> = None;
     let mut synthetic = false;
     let mut through = None;
+    let mut site = None;
+    let mut as_of = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -323,6 +381,18 @@ pub fn parse_args(
                 through = Some(val.clone());
             }
             "--synthetic" => synthetic = true,
+            "--site" => {
+                i += 1;
+                site = Some(args.get(i).ok_or("missing value for --site")?.clone());
+            }
+            "--as-of" => {
+                i += 1;
+                let value = args.get(i).ok_or("missing value for --as-of")?;
+                if !fmine_registry::sources::is_date(value) {
+                    return Err("--as-of must be a calendar date YYYY-MM-DD".to_string());
+                }
+                as_of = Some(value.clone());
+            }
             flag if flag.starts_with("--") => return Err(format!("unknown flag '{flag}'")),
             arg => positional.push(arg.to_string()),
         }
@@ -339,7 +409,7 @@ pub fn parse_args(
     // The words each verb takes, the verb included. A surplus word or a flag the verb does not take is a usage
     // error, never ignored, so every next action that parses means what it says.
     let words = match positional[0].as_str() {
-        "assure" => 2,
+        "assure" | "guidance" => 2,
         "claim" => 3,
         "doctor" | "robot-docs" => 1,
         other => return Err(format!("unknown verb '{other}'")),
@@ -350,22 +420,26 @@ pub fn parse_args(
             positional[..words].join(" ")
         ));
     }
-    if !matches!(positional[0].as_str(), "assure" | "claim")
+    if !matches!(positional[0].as_str(), "assure" | "claim" | "guidance")
         && (issuer.is_some() || synthetic || through.is_some())
     {
         return Err(
-            "--issuer, --synthetic and --through require 'assure public' or 'claim show'"
+            "--issuer, --synthetic and --through require an assurance, claim or guidance command"
                 .to_string(),
         );
+    }
+    if positional[0] != "guidance" && (site.is_some() || as_of.is_some()) {
+        return Err("--site and --as-of require 'guidance completion'".to_string());
     }
 
     let cmd = match positional[0].as_str() {
         "assure" => {
-            if positional.get(1).map(String::as_str) != Some("public") {
+            let challenges = positional.get(1).map(String::as_str) == Some("challenges");
+            if !challenges && positional.get(1).map(String::as_str) != Some("public") {
                 return Err("expected 'fmine assure public --issuer <issuer>' or 'fmine assure public --synthetic'".to_string());
             }
             let registered = || registered_issuers(&workspace).join(", ");
-            match (issuer.as_deref(), synthetic) {
+            let selected = match (issuer.as_deref(), synthetic) {
                 (Some(_), true) => return Err("--issuer and --synthetic are exclusive".to_string()),
                 (None, true) if through.is_some() => {
                     return Err("--through applies to --issuer runs only".to_string());
@@ -390,16 +464,60 @@ pub fn parse_args(
                         through,
                     }
                 }
+            };
+            if challenges {
+                match selected {
+                    CliCommand::AssurePublic { issuer, through } => CliCommand::AssureChallenges {
+                        issuer: Some(issuer),
+                        through,
+                    },
+                    CliCommand::AssureSynthetic => CliCommand::AssureChallenges {
+                        issuer: None,
+                        through: None,
+                    },
+                    _ => return Err("expected an assurance source".to_string()),
+                }
+            } else {
+                selected
+            }
+        }
+        "guidance" => {
+            if positional.get(1).map(String::as_str) != Some("completion") {
+                return Err("expected 'fmine guidance completion'".to_string());
+            }
+            if synthetic {
+                if issuer.is_some() || site.is_some() || through.is_some() || as_of.is_some() {
+                    return Err(
+                        "guidance --synthetic takes no issuer, site, through or as-of selection"
+                            .to_string(),
+                    );
+                }
+                CliCommand::GuidanceSynthetic
+            } else {
+                let issuer =
+                    issuer.ok_or("guidance completion requires --issuer or --synthetic")?;
+                if !is_issuer_name(&issuer) || !registry_path(&workspace, &issuer).is_file() {
+                    return Err(format!("unknown issuer '{issuer}'"));
+                }
+                CliCommand::GuidanceCompletion {
+                    issuer,
+                    site: site
+                        .filter(|s| !s.is_empty())
+                        .ok_or("guidance completion requires --site")?,
+                    through: through.ok_or("guidance completion requires --through YYYYQn")?,
+                    as_of: as_of.ok_or("guidance completion requires --as-of YYYY-MM-DD")?,
+                }
             }
         }
         "doctor" => CliCommand::Doctor,
         "claim" => {
-            if positional.get(1).map(String::as_str) != Some("show") {
-                return Err("expected 'fmine claim show <id>'".to_string());
-            }
+            let action = positional.get(1).map(String::as_str);
+            let Some(action @ ("show" | "why" | "trace")) = action else {
+                return Err("expected 'fmine claim show|why|trace <id>'".to_string());
+            };
             let id = positional
                 .get(2)
-                .ok_or("missing <id> for 'fmine claim show <id>'")?
+                .ok_or_else(|| format!("missing <id> for 'fmine claim {action} <id>'"))?
                 .clone();
             if issuer.is_some() && synthetic {
                 return Err("--issuer and --synthetic are exclusive".to_string());
@@ -412,11 +530,25 @@ pub fn parse_args(
             {
                 return Err(format!("unknown issuer '{name}'"));
             }
-            CliCommand::ClaimShow {
-                id,
-                issuer,
-                through,
-                synthetic,
+            match action {
+                "why" => CliCommand::ClaimWhy {
+                    id,
+                    issuer,
+                    through,
+                    synthetic,
+                },
+                "trace" => CliCommand::ClaimTrace {
+                    id,
+                    issuer,
+                    through,
+                    synthetic,
+                },
+                _ => CliCommand::ClaimShow {
+                    id,
+                    issuer,
+                    through,
+                    synthetic,
+                },
             }
         }
         "robot-docs" => CliCommand::RobotDocs,
@@ -478,23 +610,14 @@ fn report_envelope(
 
 /// A Claim lookup is a read of the current verified projection, never construction from a supplied id.
 /// Both the identity-ledger root and the keyed projection digest are exposed: interpretation changes can
-/// change the latter without moving the former (BD-332).
-fn public_claim_envelope(report: &fmine_public::PublicAssuranceReport, id: &str) -> Envelope {
-    let source = match report.lane {
-        fmine_public::Lane::Synthetic => "--synthetic".to_string(),
-        fmine_public::Lane::Public => format!(
-            "--issuer {}{}",
-            report.issuer,
-            report
-                .through
-                .as_ref()
-                .map_or_else(String::new, |q| format!(" --through {q}"))
-        ),
-    };
-    let actions = vec![NextAction::new(
-        format!("fmine assure public {source}"),
-        "the verified source snapshot containing these public Claims",
-    )];
+/// change the latter without moving the former (BD-332). Inspection views retain this same snapshot.
+fn public_claim_envelope(
+    report: &fmine_public::PublicAssuranceReport,
+    profile: &fmine_public::sources::IssuerProfile,
+    id: &str,
+    view: ClaimView,
+    selector: &str,
+) -> Envelope {
     let Some(cell) = report
         .public_claims
         .cells
@@ -502,7 +625,7 @@ fn public_claim_envelope(report: &fmine_public::PublicAssuranceReport, id: &str)
         .find(|cell| cell.claim.claim_id.to_string() == id)
     else {
         return Envelope::refused(
-            "claim show",
+            view.verb(),
             Refusal::new(
                 RefusalCode::NoClaimInDomain201,
                 format!(
@@ -510,14 +633,25 @@ fn public_claim_envelope(report: &fmine_public::PublicAssuranceReport, id: &str)
                     report.issuer
                 ),
             ),
-            actions,
+            vec![NextAction::new(
+                format!("fmine assure public {selector}"),
+                "the verified source snapshot containing these public Claims",
+            )],
         );
     };
     let digest = fmine_public::key::claims_digest(report.public_claims.cells.values()).to_hex();
+    let inspection = match view {
+        ClaimView::Show => String::new(),
+        ClaimView::Why => format!(",\"why\":{}", fmine_public::key::inspect::why_json(cell)),
+        ClaimView::Trace => format!(
+            ",\"trace\":{}",
+            fmine_public::key::inspect::trace_json(cell, profile)
+        ),
+    };
     let payload = format!(
         "{{\"schema\":\"fmine.claim_read.v1\",\"issuer\":\"{}\",\"lane\":\"{}\",\
          \"read_mode\":\"verified_source_projection\",\"claims_digest\":\"{digest}\",\
-         \"claim\":{},\"stale\":{},\"calibration_failed\":{},\"decision_uu_present\":{}}}",
+         \"claim\":{},\"stale\":{},\"calibration_failed\":{},\"decision_uu_present\":{}{inspection}}}",
         escape_json(&report.issuer),
         report.lane.as_str(),
         cell.to_json(),
@@ -526,12 +660,68 @@ fn public_claim_envelope(report: &fmine_public::PublicAssuranceReport, id: &str)
         !cell.claim.uu_terms.is_empty(),
     );
     Envelope::report(
-        "claim show",
+        view.verb(),
         report.ledger_anchor.anchor_id().to_string(),
         report.ledger_anchor.state_root.to_hex(),
         payload,
-        actions,
+        claim_actions(id, view, selector),
     )
+}
+
+fn challenge_envelope(report: &fmine_public::PublicAssuranceReport) -> Result<Envelope, Refusal> {
+    let packets = packet::packets_from_report(report)?;
+    let bodies: Vec<String> = packets
+        .iter()
+        .map(packet::ChallengePacket::to_json)
+        .collect();
+    let packet_set = format!("[{}]", bodies.join(","));
+    let digest = sha256(packet_set.as_bytes()).to_hex();
+    let payload = format!(
+        "{{\"schema\":\"fmine.challenge_packets.v1\",\"issuer\":\"{}\",\"lane\":\"{}\",\
+         \"source_state_root\":\"{}\",\"packet_set_sha256\":\"{digest}\",\"count\":{},\"packets\":{packet_set}}}",
+        escape_json(&report.issuer),
+        report.lane.as_str(),
+        report.ledger_anchor.state_root.to_hex(),
+        packets.len()
+    );
+    let mut env = Envelope::report(
+        "assure challenges",
+        report.ledger_anchor.anchor_id().to_string(),
+        report.ledger_anchor.state_root.to_hex(),
+        payload,
+        report
+            .next_actions()
+            .into_iter()
+            .map(|(command, why)| NextAction::new(command, why))
+            .collect(),
+    );
+    env.rendered_markdown = Some(format!(
+        "# Evidence challenge packets\n\n{}\n\nSource state root: `{}`\n\nPacket set SHA-256: `{digest}`\n\n{}",
+        packet::REVIEW_BOUNDARY,
+        report.ledger_anchor.state_root.to_hex(),
+        packets
+            .iter()
+            .map(packet::ChallengePacket::to_markdown)
+            .collect::<Vec<_>>()
+            .join("\n---\n\n")
+    ));
+    Ok(env)
+}
+
+fn guidance_envelope(
+    result: Result<fmine_public::guidance::GuidanceCompletionReport, Refusal>,
+) -> Envelope {
+    let actions = vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
+    match result {
+        Ok(report) => {
+            let mut env = Envelope::ok("guidance completion", report.to_json(), actions);
+            // The payload digest binds evidence and assumptions. This computation has no authority-ledger
+            // registration, so both the ledger certificate and anchor deliberately remain absent.
+            env.no_claim = Some(fmine_public::guidance::NO_CLAIM);
+            env
+        }
+        Err(refusal) => Envelope::refused("guidance completion", refusal, actions),
+    }
 }
 
 /// Executes a parsed `CliCommand` against `workspace_root` and returns an `FMT-ENV-1` `Envelope`.
@@ -572,6 +762,40 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             Ok(report) => report_envelope(&report, None),
             Err(refusal) => Envelope::refused("assure public", refusal, to_doctor()),
         },
+        CliCommand::AssureChallenges { issuer, through } => {
+            let report = match issuer {
+                Some(name) => load_issuer_profile(workspace_root, name)
+                    .and_then(|p| match through {
+                        Some(bound) => p.through(bound),
+                        None => Ok(p),
+                    })
+                    .and_then(|p| run_public_assurance(&p, workspace_root)),
+                None if through.is_none() => run_synthetic_assurance(&[]),
+                None => {
+                    return Envelope::usage_error(
+                        "assure challenges",
+                        "--through requires --issuer",
+                    );
+                }
+            };
+            match report.and_then(|r| challenge_envelope(&r)) {
+                Ok(env) => env,
+                Err(refusal) => Envelope::refused("assure challenges", refusal, to_doctor()),
+            }
+        }
+        CliCommand::GuidanceCompletion {
+            issuer,
+            site,
+            through,
+            as_of,
+        } => guidance_envelope(fmine_public::guidance::run_public(
+            workspace_root,
+            issuer,
+            site,
+            through,
+            as_of,
+        )),
+        CliCommand::GuidanceSynthetic => guidance_envelope(fmine_public::guidance::run_synthetic()),
         CliCommand::Doctor => match RegistryCatalog::load_from_root(workspace_root) {
             Ok(cat) => {
                 // One entry per registries/sources/<issuer>.toml: registered, present and verified counts with
@@ -652,38 +876,70 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             issuer,
             through,
             synthetic,
+        }
+        | CliCommand::ClaimWhy {
+            id,
+            issuer,
+            through,
+            synthetic,
+        }
+        | CliCommand::ClaimTrace {
+            id,
+            issuer,
+            through,
+            synthetic,
         } => {
+            let view = match cmd {
+                CliCommand::ClaimWhy { .. } => ClaimView::Why,
+                CliCommand::ClaimTrace { .. } => ClaimView::Trace,
+                _ => ClaimView::Show,
+            };
             if issuer.is_some() && *synthetic || through.is_some() && issuer.is_none() {
                 return Envelope::usage_error(
-                    "claim show",
+                    view.verb(),
                     "choose --issuer [--through YYYYQn] or --synthetic",
                 );
             }
-            let snapshot = if let Some(name) = issuer {
+            let selected = if let Some(name) = issuer {
                 if !is_issuer_name(name) || !registry_path(workspace_root, name).is_file() {
-                    return Envelope::usage_error(
-                        "claim show",
-                        &format!("unknown issuer '{name}'"),
-                    );
+                    return Envelope::usage_error(view.verb(), &format!("unknown issuer '{name}'"));
                 }
+                let selector = format!(
+                    "--issuer {name}{}",
+                    through
+                        .as_ref()
+                        .map_or_else(String::new, |q| format!(" --through {q}"))
+                );
                 let loaded =
                     load_issuer_profile(workspace_root, name).and_then(|p| match through {
                         Some(bound) => p.through(bound),
                         None => Ok(p),
                     });
-                Some(loaded.and_then(|p| run_public_assurance(&p, workspace_root)))
+                Some((
+                    selector,
+                    loaded.and_then(|profile| {
+                        run_public_assurance(&profile, workspace_root)
+                            .map(|report| (report, profile))
+                    }),
+                ))
             } else if *synthetic {
-                Some(run_synthetic_assurance(&[]))
+                Some((
+                    "--synthetic".to_string(),
+                    run_synthetic_assurance(&[])
+                        .map(|report| (report, fmine_public::synthetic::synthetic_profile())),
+                ))
             } else {
                 None
             };
-            if let Some(snapshot) = snapshot {
+            if let Some((selector, snapshot)) = selected {
                 return match snapshot {
-                    Ok(report) => public_claim_envelope(&report, id),
-                    Err(refusal) => Envelope::refused("claim show", refusal, to_doctor()),
+                    Ok((report, profile)) => {
+                        public_claim_envelope(&report, &profile, id, view, &selector)
+                    }
+                    Err(refusal) => Envelope::refused(view.verb(), refusal, to_doctor()),
                 };
             }
-            show_public_claim(id, workspace_root)
+            inspect_public_claim(id, workspace_root, view)
         }
         CliCommand::RobotDocs => {
             let refusals: Vec<String> = CATALOG
@@ -703,7 +959,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 .map(|i| format!("\"{}\"", escape_json(i)))
                 .collect();
             let payload = format!(
-                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{ENVELOPE_FIELDS},\"verbs\":[\"assure public --issuer <issuer> [--through YYYYQn]\",\"assure public --synthetic\",\"doctor\",\"claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"robot-docs\"],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok\",\"2\":\"usage error (unknown verb, flag, issuer or --through bound); the envelope still prints\"}},\"refusals\":[{}]}}",
+                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{ENVELOPE_FIELDS},\"verbs\":[\"assure public --issuer <issuer> [--through YYYYQn]\",\"assure public --synthetic\",\"assure challenges --issuer <issuer> [--through YYYYQn]\",\"assure challenges --synthetic\",\"guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD\",\"guidance completion --synthetic\",\"doctor\",\"claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"claim trace <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"robot-docs\"],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok\",\"2\":\"usage error (unknown verb, flag, issuer or --through bound); the envelope still prints\"}},\"claim_inspection\":{{\"lookup\":\"Exact canonical IDs from the synthetic run or hash-verified registered sources; explicit selectors bind the ledger snapshot and claims digest\",\"why\":\"Recorded evidence, interpretation, computed color and Claim admission guards; absent assessments remain absent\",\"trace\":\"Available source anchors and registered provenance; unresolved parents are explicit\"}},\"refusals\":[{}]}}",
                 issuers.join(","),
                 refusals.join(",")
             );
@@ -716,23 +972,77 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     }
 }
 
-/// DESIGN (BD-332, BD-115): resolve an emitted public Claim from verified source bytes. Mine Stats uses its
-/// direct reader; AISC uses the existing assurance projection, keeping one authoritative set of Claim IDs.
-fn show_public_claim(id: &str, root: &Path) -> Envelope {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClaimView {
+    Show,
+    Why,
+    Trace,
+}
+
+impl ClaimView {
+    const fn verb(self) -> &'static str {
+        match self {
+            Self::Show => "claim show",
+            Self::Why => "claim why",
+            Self::Trace => "claim trace",
+        }
+    }
+}
+
+fn claim_actions(id: &str, view: ClaimView, selector: &str) -> Vec<NextAction> {
+    let mut actions = Vec::new();
+    for (next, why) in [
+        (
+            ClaimView::Show,
+            "the canonical value, semantic key and source citation",
+        ),
+        (
+            ClaimView::Why,
+            "the recorded evidence and Claim admission guards",
+        ),
+        (
+            ClaimView::Trace,
+            "the source anchors and available provenance",
+        ),
+    ] {
+        if next != view {
+            actions.push(NextAction::new(
+                format!("fmine {} {id} {selector}", next.verb()),
+                why,
+            ));
+        }
+    }
+    actions.push(NextAction::new(
+        format!("fmine assure public {selector}"),
+        "the verified source snapshot containing these public Claims",
+    ));
+    actions
+}
+
+/// DESIGN (BD-332, BD-115): all three views resolve the same canonical Claim. Synthetic IDs must match an
+/// existing fixture Claim exactly; registered public IDs still require verified source bytes. Mine Stats
+/// uses its direct reader and AISC the existing assurance projection, without a parallel Claim store.
+fn inspect_public_claim(id: &str, root: &Path, view: ClaimView) -> Envelope {
+    let verb = view.verb();
     let actions = || vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
-    let found = |cell: &fmine_public::key::KeyedCell, issuer: &str| {
-        Envelope::ok(
-            "claim show",
-            cell.to_json(),
-            vec![NextAction::new(
-                format!("fmine assure public --issuer {issuer}"),
-                "the source inventory, identity checks and publication-vintage comparisons",
-            )],
-        )
+    let found = |cell: &fmine_public::key::KeyedCell,
+                 profile: &fmine_public::sources::IssuerProfile,
+                 built_in: bool| {
+        let payload = match view {
+            ClaimView::Show => cell.to_json(),
+            ClaimView::Why => fmine_public::key::inspect::why_json(cell),
+            ClaimView::Trace => fmine_public::key::inspect::trace_json(cell, profile),
+        };
+        let selector = if built_in {
+            "--synthetic".into()
+        } else {
+            format!("--issuer {}", profile.issuer)
+        };
+        Envelope::ok(verb, payload, claim_actions(id, view, &selector))
     };
     if !id.starts_with("clm_") || id.parse::<fmine_core::id::ObjectId>().is_err() {
         return Envelope::refused(
-            "claim show",
+            verb,
             Refusal::new(
                 RefusalCode::NoClaimInDomain201,
                 format!("invalid public claim id '{id}'"),
@@ -740,11 +1050,28 @@ fn show_public_claim(id: &str, root: &Path) -> Envelope {
             actions(),
         );
     }
+    if let Ok(report) = run_synthetic_assurance(&[])
+        && let Some(cell) = report
+            .public_claims
+            .cells
+            .values()
+            .find(|cell| cell.claim.claim_id.to_string() == id)
+    {
+        return found(cell, &fmine_public::synthetic::synthetic_profile(), true);
+    }
     let mut input_errors = Vec::new();
     let mut source_failure = None;
     for issuer in registered_issuers(root) {
-        let claims = load_issuer_profile(root, &issuer)
-            .and_then(|p| fmine_public::key::mine_stats::load_claims(&p, root));
+        let profile = match load_issuer_profile(root, &issuer) {
+            Ok(profile) => profile,
+            Err(refusal) => {
+                if source_failure.is_none() {
+                    source_failure = Some(refusal);
+                }
+                continue;
+            }
+        };
+        let claims = fmine_public::key::mine_stats::load_claims(&profile, root);
         match claims {
             Ok(claims) => {
                 if let Some(c) = claims
@@ -752,7 +1079,7 @@ fn show_public_claim(id: &str, root: &Path) -> Envelope {
                     .iter()
                     .find(|c| c.claim.claim_id.to_string() == id)
                 {
-                    return found(c, &issuer);
+                    return found(c, &profile, false);
                 }
                 input_errors.extend(
                     claims
@@ -760,9 +1087,7 @@ fn show_public_claim(id: &str, root: &Path) -> Envelope {
                         .into_iter()
                         .map(|r| format!("{}: {}", r.locator, r.reason)),
                 );
-                match load_issuer_profile(root, &issuer)
-                    .and_then(|p| run_public_assurance(&p, root))
-                {
+                match run_public_assurance(&profile, root) {
                     Ok(report) => {
                         if let Some(c) = report
                             .public_claims
@@ -770,7 +1095,7 @@ fn show_public_claim(id: &str, root: &Path) -> Envelope {
                             .values()
                             .find(|c| c.claim.claim_id.to_string() == id)
                         {
-                            return found(c, &issuer);
+                            return found(c, &profile, false);
                         }
                     }
                     Err(refusal) if source_failure.is_none() => source_failure = Some(refusal),
@@ -785,7 +1110,7 @@ fn show_public_claim(id: &str, root: &Path) -> Envelope {
         }
     }
     if let Some(refusal) = source_failure {
-        return Envelope::refused("claim show", refusal, actions());
+        return Envelope::refused(verb, refusal, actions());
     }
     let detail = if input_errors.is_empty() {
         String::new()
@@ -793,7 +1118,7 @@ fn show_public_claim(id: &str, root: &Path) -> Envelope {
         format!("; unreadable claim inputs: {}", input_errors.join("; "))
     };
     Envelope::refused(
-        "claim show",
+        verb,
         Refusal::new(
             RefusalCode::NoClaimInDomain201,
             format!("public claim '{id}' is absent from the registered public sources{detail}"),
@@ -865,6 +1190,137 @@ mod tests {
             )
         );
         assert!(!env.payload_json.contains("next_actions"));
+    }
+
+    #[test]
+    fn test_challenge_command_renders_cited_json_and_readable_markdown() {
+        let query = args(&["assure", "challenges", "--synthetic"]);
+        let (env, _) = invoke(&query, &workspace_root());
+        assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
+        assert_eq!(env.verb, "assure challenges");
+        assert!(
+            env.payload_json
+                .contains("\"schema\":\"fmine.challenge_packets.v1\"")
+        );
+        assert!(env.payload_json.contains("\"subject\":\"Site B\""));
+        assert!(env.payload_json.contains("\"component_sum\":{\"v\":250,"));
+        assert!(env.payload_json.contains("\"sign_flip_witness\":\"C6\""));
+        assert!(env.payload_json.contains("\"external_use_allowed\":false"));
+        assert!(env.to_json().contains(FLAGS));
+        assert_eq!(invoke(&query, &workspace_root()).0.to_json(), env.to_json());
+        let (markdown, exit) = run(
+            &args(&[
+                "assure",
+                "challenges",
+                "--synthetic",
+                "--format",
+                "markdown",
+            ]),
+            &workspace_root(),
+        );
+        assert_eq!(exit, 0);
+        assert!(markdown.starts_with("# Evidence challenge packets\n"));
+        assert!(markdown.contains("## Closing evidence requested"));
+        assert!(markdown.contains("## Source operands"));
+        assert!(markdown.contains("invented synthetic workbooks"));
+        assert!(!markdown.contains("external_use_allowed\":true"));
+    }
+
+    #[test]
+    fn test_guidance_command_is_exact_cited_and_explicitly_conditional() {
+        let query = args(&["guidance", "completion", "--synthetic"]);
+        let (env, _) = invoke(&query, &workspace_root());
+        assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
+        assert_eq!(env.verb, "guidance completion");
+        assert!(env.payload_json.contains("\"lane\":\"synthetic\""));
+        assert!(env.payload_json.contains("\"envelope_tier\":\"T3\""));
+        // Invented target 200..230 minus actual 68 rounded to the nearest koz gives [131.5,162.5].
+        assert!(
+            env.payload_json
+                .contains("\"lo\":\"263/2\",\"hi\":\"325/2\"")
+        );
+        assert!(
+            env.payload_json
+                .contains("ASSUMPTION: repeat preceding-year")
+        );
+        assert!(env.payload_json.contains("\"source_claims\":[{"));
+        assert!(
+            env.anchor_id.is_none(),
+            "a computation is not a registered forecast"
+        );
+        assert!(
+            env.certificate.is_none(),
+            "a content digest is not a ledger root"
+        );
+        let digest = fmine_public::guidance::run_synthetic()
+            .expect("synthetic guidance")
+            .digest
+            .to_hex();
+        assert!(
+            env.payload_json
+                .contains(&format!("\"digest\":\"{digest}\""))
+        );
+        assert_eq!(env.no_claim, Some(fmine_public::guidance::NO_CLAIM));
+        assert_eq!(invoke(&query, &workspace_root()).0, env);
+    }
+
+    #[test]
+    fn test_new_commands_refuse_missing_evidence_and_reject_mixed_selectors() {
+        let ws = no_corpus_workspace("new-commands-no-corpus");
+        let (env, _) = invoke(&args(&["assure", "challenges", "--issuer", "barrick"]), &ws);
+        assert_eq!(env.status, "refused");
+        assert_eq!(env.refusal.expect("missing source").code, "FMINE-REF-506");
+        assert_eq!(env.payload_json, "null");
+        let (env, _) = invoke(
+            &args(&[
+                "guidance",
+                "completion",
+                "--issuer",
+                "barrick",
+                "--site",
+                "north-mara",
+                "--through",
+                "2026Q2",
+                "--as-of",
+                "2026-10-31",
+            ]),
+            &ws,
+        );
+        assert_eq!(env.status, "refused");
+        assert_eq!(env.refusal.expect("missing guidance").code, "FMINE-REF-201");
+        assert_eq!(env.payload_json, "null");
+        for bad in [
+            vec!["assure", "challenges"],
+            vec!["assure", "challenges", "--synthetic", "--issuer", "barrick"],
+            vec![
+                "guidance",
+                "completion",
+                "--synthetic",
+                "--through",
+                "2026Q2",
+            ],
+            vec![
+                "guidance",
+                "completion",
+                "--issuer",
+                "barrick",
+                "--site",
+                "north-mara",
+            ],
+            vec![
+                "guidance",
+                "completion",
+                "--synthetic",
+                "--as-of",
+                "2026-02-30",
+            ],
+            vec!["doctor", "--site", "north-mara"],
+        ] {
+            assert!(
+                parse_args(&args(&bad), &workspace_root()).is_err(),
+                "{bad:?}"
+            );
+        }
     }
 
     const STATE_I: &str = "\"state\":\"i\"";
@@ -1200,6 +1656,17 @@ mod tests {
             &["assure", "public", "issuer=barrick"][..],
             &["assure", "public", "--synthetic", "now"][..],
             &["claim", "show", "clm_0001", "clm_0002"][..],
+            &["claim", "why", "clm_0001", "extra"][..],
+            &["claim", "trace"][..],
+            &["claim", "invent", "clm_0001"][..],
+            &[
+                "claim",
+                "why",
+                "clm_0001",
+                "--synthetic",
+                "--issuer",
+                "barrick",
+            ][..],
             &["doctor", "--issuer", "barrick"][..],
             &["robot-docs", "--synthetic"][..],
         ] {
@@ -1235,19 +1702,130 @@ mod tests {
 
     #[test]
     fn test_cli_claim_show_refuses_invalid_id() {
-        let env = execute_command(
-            &CliCommand::ClaimShow {
-                id: "clm_0001".to_string(),
-                issuer: None,
-                through: None,
-                synthetic: false,
-            },
-            &workspace_root(),
+        for action in ["show", "why", "trace"] {
+            let env = invoke(&args(&["claim", action, "clm_0001"]), &workspace_root()).0;
+            assert_eq!((env.exit_code, env.status), (3, "refused"));
+            assert_eq!(env.verb, format!("claim {action}"));
+            let json = env.to_json();
+            assert!(json.contains("\"code\":\"FMINE-REF-201\""), "{json}");
+            assert!(json.contains("invalid public claim id"), "{json}");
+        }
+    }
+
+    /// BD-115: hand-written inspection payloads around the independently tested canonical cell JSON.
+    /// The synthetic source is not registered on disk and remains an assumption with an unbounded color.
+    #[test]
+    fn test_claim_show_why_trace_golden() {
+        let report = run_synthetic_assurance(&[]).expect("synthetic report");
+        let cell = report
+            .public_claims
+            .cells
+            .get("Synthetic_AISC.xlsx:Q1 2030!B5")
+            .expect("source cell");
+        let id = cell.claim.claim_id.to_string();
+        let canonical = cell.to_json();
+        assert!(canonical.contains("\"stored\":\"500\",\"displayed\":\"500\""));
+        let uu_refusal = "{\"code\":\"FMINE-REF-204\",\"exit_code\":3,\
+            \"what\":\"Unbudgeted unknowns: a decision-facing claim carries no unknown-unknown (UU) budget (G-UU, INV-015): \
+            claim 'cost of sales applicable to gold production' has epistemic status KnownUnknown(Parametric) but zero UuTerm scenarios\",\
+            \"fix\":\"Attach an explicit UU term (an unmodelled budget or a flip margin).\"}";
+        let why = format!(
+            "{{\"schema\":\"fmine.claim.why.v1\",\"claim\":{canonical},\
+             \"interpretation\":\"The source number and its displayed text are preserved; extraction does not verify its truth.\",\
+             \"evidence_class\":\"Assumed\",\"epistemic_status\":\"KnownUnknown(Parametric)\",\"knowledge_state\":\"Unknown\",\
+             \"representation\":\"Deterministic\",\"support\":\"PeriodAggregate\",\"additivity\":\"ExtensiveAdditive\",\"confidentiality\":\"Public\",\
+             \"color\":{{\"status\":\"available\",\"value\":{{\"kind\":\"estimated\",\"estimator\":\"class:assumed\",\
+             \"dispersion\":null,\"dispersion_status\":\"unbounded\"}},\"refusal\":null}},\
+             \"uu_terms\":[],\"uu_guard\":{{\"status\":\"refused\",\"refusal\":{uu_refusal}}},\
+             \"public_export_guard\":{{\"status\":\"passed\",\"refusal\":null}},\
+             \"decision_admission\":{{\"scope\":\"Claim color and UU guards only\",\"claim_guards_pass\":false,\
+             \"first_refusal\":{uu_refusal},\"decision_context\":null,\"flip_margin\":null}},\
+             \"calibration\":{{\"failed\":false,\"assessment\":null}},\
+             \"freshness\":{{\"recorded_stale\":false,\"assessment\":\"not_assessed\",\
+             \"reason\":\"This source projection has no clock or dependency-invalidation replay.\"}}}}"
         );
-        assert_eq!((env.exit_code, env.status), (3, "refused"));
-        let json = env.to_json();
-        assert!(json.contains("\"code\":\"FMINE-REF-201\""), "{json}");
-        assert!(json.contains("invalid public claim id"), "{json}");
+        let trace = format!(
+            "{{\"schema\":\"fmine.claim.trace.v1\",\"claim\":{canonical},\"scope\":\"source_leaf\",\
+             \"complete_for_claim\":true,\"parents\":[],\"unresolved_parents\":[],\
+             \"anchors\":[{{\"artifact_path\":\"Synthetic_AISC.xlsx\",\"sha256\":\"{}\",\
+             \"locator\":\"Q1 2030!B5\",\"registered_source\":null}}],\"supersedes\":null,\"recorded_stale\":false,\
+             \"boundary\":\"Source cells and their registered interpretation are the leaves of this public projection; no upstream measurement history or dependency replay is asserted.\"}}",
+            cell.key.reporting_vintage.file_sha256,
+        );
+        for (action, want) in [("show", canonical), ("why", why), ("trace", trace)] {
+            let argv = args(&["claim", action, &id]);
+            let (env, format) = invoke(&argv, &workspace_root());
+            assert_eq!(
+                (env.status, env.exit_code, format),
+                ("ok", 0, OutputFormat::Json)
+            );
+            assert_eq!(env.verb, format!("claim {action}"));
+            assert_eq!(env.payload_json, want, "{action}");
+            assert_eq!(env.to_json().matches(FLAGS).count(), 1);
+            assert_eq!(env.certificate, None);
+            assert!(
+                env.next_actions
+                    .iter()
+                    .all(|a| resolves(&a.command, &workspace_root()))
+            );
+            assert!(
+                env.next_actions
+                    .iter()
+                    .any(|a| a.command == "fmine assure public --synthetic")
+            );
+            assert_eq!(invoke(&argv, &workspace_root()).0.to_json(), env.to_json());
+        }
+    }
+
+    #[test]
+    fn test_claim_why_uses_recorded_guards_and_trace_keeps_unresolved_parents() {
+        let report = run_synthetic_assurance(&[]).expect("synthetic report");
+        let mut cell = report.public_claims.cells["Synthetic_AISC.xlsx:Q1 2030!B5"].clone();
+        cell.claim.uu_terms.push(fmine_claim::UuTerm {
+            scenario_id: "synthetic-downside".into(),
+            description: "Invented test scenario".into(),
+            downside_exposure_usd_m: 2.5,
+            trigger_indicator: "synthetic trigger".into(),
+        });
+        let why = fmine_public::key::inspect::why_json(&cell);
+        assert!(why.contains("\"claim_guards_pass\":true"));
+        assert!(why.contains("\"downside_exposure_usd_m\":2.5"));
+        assert!(why.contains("synthetic-downside"));
+        assert!(why.contains("\"decision_context\":null"));
+        cell.claim.calibration_failed = true;
+        cell.claim.stale = true;
+        let why = fmine_public::key::inspect::why_json(&cell);
+        assert!(why.contains("FMINE-REF-205"));
+        assert!(why.contains("\"claim_guards_pass\":false"));
+        assert!(why.contains("\"recorded_stale\":true"));
+        assert!(why.contains("\"assessment\":\"not_assessed\""));
+        let parent = fmine_core::id::ObjectId::from_canonical_bytes(
+            fmine_core::id::PrefixKind::Claim,
+            b"unresolved-synthetic-parent",
+        );
+        cell.claim.parents.push(parent);
+        let trace = fmine_public::key::inspect::trace_json(
+            &cell,
+            &fmine_public::synthetic::synthetic_profile(),
+        );
+        assert!(trace.contains("\"scope\":\"partial_provenance\",\"complete_for_claim\":false"));
+        assert!(trace.contains(&format!("\"unresolved_parents\":[\"{parent}\"]")));
+    }
+
+    #[test]
+    fn test_claim_inspection_absent_id_is_not_replaced_by_a_synthetic_claim() {
+        let missing = fmine_core::id::ObjectId::from_canonical_bytes(
+            fmine_core::id::PrefixKind::Claim,
+            b"absent-public-claim",
+        )
+        .to_string();
+        let ws = scratch("claim-absent");
+        for action in ["show", "why", "trace"] {
+            let env = invoke(&args(&["claim", action, &missing]), &ws).0;
+            assert_eq!((env.status, env.exit_code), ("refused", 3));
+            assert_eq!(env.refusal.expect("refusal").code, "FMINE-REF-201");
+            assert_eq!(env.payload_json, "null");
+        }
     }
 
     #[test]
@@ -1266,25 +1844,40 @@ mod tests {
             .values()
             .find(|c| c.locator.starts_with(&format!("{}:", source.file_name)))
             .expect("emitted AISC claim");
-        let command = CliCommand::ClaimShow {
-            id: claim.claim.claim_id.to_string(),
-            issuer: None,
-            through: None,
-            synthetic: false,
-        };
-        let env = execute_command(&command, &ws);
-        assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
-        assert_eq!(env.payload_json, claim.to_json());
-        assert!(env.payload_json.contains("\"evidence\":\"synthetic\""));
-        assert!(env.to_json().contains(FLAGS_JSON));
+        let id = claim.claim.claim_id.to_string();
+        for action in ["show", "why", "trace"] {
+            let env = invoke(&args(&["claim", action, &id]), &ws).0;
+            assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
+            if action == "show" {
+                assert_eq!(env.payload_json, claim.to_json());
+            }
+            if action == "why" {
+                assert!(env.payload_json.contains("\"claim_guards_pass\":false"));
+                assert!(env.payload_json.contains("FMINE-REF-204"));
+            }
+            if action == "trace" {
+                assert!(env.payload_json.contains("\"scope\":\"source_leaf\""));
+                assert!(
+                    env.payload_json
+                        .contains(&format!("\"url\":\"{}\"", source.url))
+                );
+                assert!(!env.payload_json.contains("\"registered_source\":null"));
+            }
+            assert!(env.payload_json.contains("\"evidence\":\"synthetic\""));
+            assert!(env.to_json().contains(FLAGS_JSON));
+            assert!(env.next_actions.iter().all(|a| resolves(&a.command, &ws)));
+        }
+
         let path = ws.join(&profile.corpus_dir).join(&source.file_name);
         let mut bytes = std::fs::read(&path).expect("source bytes");
         bytes.push(0);
         std::fs::write(&path, bytes).expect("alter the registered source");
-        let refused = execute_command(&command, &ws);
-        assert_eq!((refused.status, refused.exit_code), ("refused", 8));
-        assert_eq!(refused.refusal.expect("refusal").code, "FMINE-REF-505");
-        assert_eq!(refused.payload_json, "null");
+        for action in ["show", "why", "trace"] {
+            let refused = invoke(&args(&["claim", action, &id]), &ws).0;
+            assert_eq!((refused.status, refused.exit_code), ("refused", 8));
+            assert_eq!(refused.refusal.expect("refusal").code, "FMINE-REF-505");
+            assert_eq!(refused.payload_json, "null");
+        }
     }
 
     #[test]
@@ -1311,6 +1904,29 @@ mod tests {
         assert_eq!(env.payload_json, first.to_json());
         assert!(env.to_json().contains("1479"));
         assert!(env.to_json().contains(FLAGS_JSON));
+        let id = first.claim.claim_id.to_string();
+        let why = invoke(&args(&["claim", "why", &id]), &root).0;
+        assert_eq!((why.status, why.exit_code), ("ok", 0));
+        assert!(why.payload_json.contains("Assertion { source: Issuer }"));
+        assert!(why.payload_json.contains("\"knowledge_state\":\"Known\""));
+        assert!(why.payload_json.contains("FMINE-REF-205"));
+        assert!(!why.payload_json.contains("FMINE-REF-204"));
+        assert!(why.payload_json.contains("\"claim_guards_pass\":false"));
+        let trace = invoke(&args(&["claim", "trace", &id]), &root).0;
+        assert_eq!((trace.status, trace.exit_code), ("ok", 0));
+        assert!(trace.payload_json.contains("\"complete_for_claim\":true"));
+        assert!(
+            trace
+                .payload_json
+                .contains(&first.key.reporting_vintage.file_sha256)
+        );
+        let source = profile
+            .sources
+            .iter()
+            .find(|s| s.file_name == "Barrick_Q1_2024_Mine_Stats.xlsx")
+            .expect("registered source");
+        assert!(trace.payload_json.contains(&source.url));
+        assert!(trace.payload_json.contains("\"locator\":\"QTD!G23\""));
     }
 
     #[test]
@@ -1327,44 +1943,50 @@ mod tests {
                 })
                 .expect("numeric and placeholder Claims");
             let id = cell.claim.claim_id.to_string();
-            let (env, _) = invoke(
-                &args(&["claim", "show", &id, "--synthetic"]),
+            for action in ["show", "why", "trace"] {
+                let query = args(&["claim", action, &id, "--synthetic"]);
+                let (env, _) = invoke(&query, &workspace_root());
+                assert_eq!((env.exit_code, env.status), (0, "ok"), "{}", env.to_json());
+                assert!(env.payload_json.contains(&cell.to_json()));
+                assert!(env.payload_json.contains("\"lane\":\"synthetic\""));
+                assert_eq!(
+                    env.certificate,
+                    Some(report.ledger_anchor.state_root.to_hex())
+                );
+                assert!(env.payload_json.contains(
+                    &fmine_public::key::claims_digest(report.public_claims.cells.values()).to_hex()
+                ));
+                if action != "show" {
+                    assert!(env.payload_json.contains(&format!("\"{action}\":{{")));
+                }
+                assert!(env.to_json().contains(FLAGS));
+                assert_eq!(
+                    invoke(&query, &workspace_root()).0,
+                    env,
+                    "the same source snapshot reads byte-identically"
+                );
+                assert!(
+                    env.next_actions
+                        .iter()
+                        .all(|a| a.command.ends_with("--synthetic"))
+                );
+            }
+        }
+        for action in ["show", "why", "trace"] {
+            let (unknown, _) = invoke(
+                &args(&["claim", action, "clm_invented", "--synthetic"]),
                 &workspace_root(),
             );
-            assert_eq!((env.exit_code, env.status), (0, "ok"), "{}", env.to_json());
-            assert!(env.payload_json.contains(&cell.to_json()));
-            assert!(env.payload_json.contains("\"lane\":\"synthetic\""));
-            assert_eq!(
-                env.certificate,
-                Some(report.ledger_anchor.state_root.to_hex())
-            );
-            assert!(env.payload_json.contains(
-                &fmine_public::key::claims_digest(report.public_claims.cells.values()).to_hex()
-            ));
-            assert!(env.to_json().contains(FLAGS));
-            assert_eq!(
-                invoke(
-                    &args(&["claim", "show", &id, "--synthetic"]),
-                    &workspace_root()
-                )
-                .0,
-                env,
-                "the same source snapshot reads byte-identically"
+            assert_eq!((unknown.exit_code, unknown.status), (3, "refused"));
+            assert_eq!(unknown.payload_json, "null");
+            assert!(
+                unknown
+                    .refusal
+                    .expect("missing id refusal")
+                    .what
+                    .contains("absent")
             );
         }
-        let (unknown, _) = invoke(
-            &args(&["claim", "show", "clm_invented", "--synthetic"]),
-            &workspace_root(),
-        );
-        assert_eq!((unknown.exit_code, unknown.status), (3, "refused"));
-        assert_eq!(unknown.payload_json, "null");
-        assert!(
-            unknown
-                .refusal
-                .expect("missing id refusal")
-                .what
-                .contains("absent")
-        );
     }
 
     #[test]
@@ -1400,7 +2022,8 @@ mod tests {
     fn test_claim_show_rechecks_registered_source_bytes() {
         let ws = synthetic_workspace("claim-source-integrity");
         let profile = load_issuer_profile(&ws, "synthetic").expect("registered synthetic source");
-        let report = run_public_assurance(&profile, &ws).expect("verified report");
+        let bounded = profile.clone().through("2030Q1").expect("bound");
+        let report = run_public_assurance(&bounded, &ws).expect("verified report");
         let cell = report
             .public_claims
             .cells
@@ -1408,21 +2031,72 @@ mod tests {
             .next()
             .expect("public claim");
         let id = cell.claim.claim_id.to_string();
-        let query = args(&["claim", "show", &id, "--issuer", "synthetic"]);
-        let (read, _) = invoke(&query, &ws);
-        assert_eq!(read.exit_code, 0, "{}", read.to_json());
-        assert!(read.payload_json.contains(&cell.to_json()));
+        let later = profile
+            .sources
+            .iter()
+            .find(|s| s.quarter == "2030Q2")
+            .expect("later source");
+        std::fs::write(
+            ws.join(&profile.corpus_dir).join(&later.file_name),
+            b"altered later source",
+        )
+        .expect("alter later scratch fixture");
+        for action in ["show", "why", "trace"] {
+            let query = args(&[
+                "claim",
+                action,
+                &id,
+                "--issuer",
+                "synthetic",
+                "--through",
+                "2030Q1",
+            ]);
+            let (read, _) = invoke(&query, &ws);
+            assert_eq!(read.exit_code, 0, "{}", read.to_json());
+            assert!(read.payload_json.contains(&cell.to_json()));
+            assert_eq!(
+                read.certificate,
+                Some(report.ledger_anchor.state_root.to_hex())
+            );
+            assert!(
+                read.next_actions
+                    .iter()
+                    .all(|a| a.command.ends_with("--issuer synthetic --through 2030Q1"))
+            );
+            assert!(read.next_actions.iter().all(|a| resolves(&a.command, &ws)));
+            let unbounded = invoke(&args(&["claim", action, &id, "--issuer", "synthetic"]), &ws).0;
+            assert_eq!(
+                unbounded.refusal.expect("later source mismatch").code,
+                "FMINE-REF-505"
+            );
+            let wrong_lane = invoke(&args(&["claim", action, &id, "--synthetic"]), &ws).0;
+            assert_eq!(
+                wrong_lane.refusal.expect("id absent from fixture").code,
+                "FMINE-REF-201"
+            );
+        }
         let path = ws
             .join(&profile.corpus_dir)
-            .join(&profile.sources[0].file_name);
+            .join(&bounded.sources[0].file_name);
         std::fs::write(path, b"altered registered source").expect("alter scratch fixture");
-        let (refused, _) = invoke(&query, &ws);
-        assert_eq!((refused.exit_code, refused.status), (8, "refused"));
-        assert_eq!(
-            refused.refusal.expect("digest refusal").code,
-            "FMINE-REF-505"
-        );
-        assert_eq!(refused.payload_json, "null");
+        for action in ["show", "why", "trace"] {
+            let query = args(&[
+                "claim",
+                action,
+                &id,
+                "--issuer",
+                "synthetic",
+                "--through",
+                "2030Q1",
+            ]);
+            let (refused, _) = invoke(&query, &ws);
+            assert_eq!((refused.exit_code, refused.status), (8, "refused"));
+            assert_eq!(
+                refused.refusal.expect("digest refusal").code,
+                "FMINE-REF-505"
+            );
+            assert_eq!(refused.payload_json, "null");
+        }
     }
 
     /// Gate run on the real registered workbooks (public lane; the files are not in git). Run with
@@ -1815,6 +2489,8 @@ mod tests {
             ("doctor", envelope_for(&["doctor"])),
             ("robot-docs", envelope_for(&["robot-docs"])),
             ("claim show", envelope_for(&["claim", "show", "clm_0001"])),
+            ("claim why", envelope_for(&["claim", "why", "clm_0001"])),
+            ("claim trace", envelope_for(&["claim", "trace", "clm_0001"])),
             ("usage error (parse_args)", envelope_for(&["frobnicate"])),
             (
                 "usage error (execute_command)",
@@ -1831,7 +2507,7 @@ mod tests {
 
     /// `env` as JSON with the values that move with the ledger masked (an ok payload, the anchor id and the
     /// certificate) and the refusal's `what` text, which is refusal content rather than envelope frame (one names
-    /// a scratch path; the claim show text is checked in test_cli_claim_show_refuses_invalid_id). The
+    /// a scratch path; invalid claim IDs are checked in test_cli_claim_show_refuses_invalid_id). The
     /// refusal code, exit code and fix stay, so BD-328's code migration (bd-h0q1.3) shows up here.
     fn frame(env: &Envelope) -> String {
         let mut e = env.clone();
@@ -1913,6 +2589,18 @@ mod tests {
                  \"refusal\":{{\"code\":\"FMINE-REF-201\",\"exit_code\":3,\"what\":\"<what>\",\
                  \"fix\":\"{fix_201}\"}}}}",
                 head("claim show", "refused", 3, "null")
+            ),
+            format!(
+                "{}\"certificate\":null,\"warnings\":[],\"next_actions\":[{doctor}],\"payload\":null,\
+                 \"refusal\":{{\"code\":\"FMINE-REF-201\",\"exit_code\":3,\"what\":\"<what>\",\
+                 \"fix\":\"{fix_201}\"}}}}",
+                head("claim why", "refused", 3, "null")
+            ),
+            format!(
+                "{}\"certificate\":null,\"warnings\":[],\"next_actions\":[{doctor}],\"payload\":null,\
+                 \"refusal\":{{\"code\":\"FMINE-REF-201\",\"exit_code\":3,\"what\":\"<what>\",\
+                 \"fix\":\"{fix_201}\"}}}}",
+                head("claim trace", "refused", 3, "null")
             ),
             format!(
                 "{}\"certificate\":null,\"warnings\":[],\"next_actions\":[{robot_docs}],\
@@ -2055,7 +2743,7 @@ mod tests {
                 checked += 1;
             }
         }
-        assert_eq!(checked, 10);
+        assert_eq!(checked, 12);
         let _ = std::fs::remove_dir_all(&ok_ws);
         let _ = std::fs::remove_dir_all(&none_ws);
     }
@@ -2072,6 +2760,9 @@ mod tests {
             ),
             (&["--format", "xml", "doctor"][..], "doctor"),
             (&["claim", "show"][..], "claim show"),
+            (&["claim", "why"][..], "claim why"),
+            (&["claim", "trace"][..], "claim trace"),
+            (&["claim", "--format", "json", "trace"][..], "claim trace"),
         ] {
             let (text, exit) = run(&args(bad), &root);
             assert_eq!(exit, 2, "{bad:?}");

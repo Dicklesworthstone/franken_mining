@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
-use crate::toml_subset::{SubsetError, TomlField, TomlRow, TomlValue, parse_subset};
+use crate::toml_subset::{SubsetError, TomlDoc, TomlField, TomlRow, TomlValue, parse_subset};
 
 /// Schema id a sources registry must declare.
 pub const SOURCES_SCHEMA: &str = "fmine.sources.v1";
@@ -213,6 +213,36 @@ impl MineStatsLabelAlias {
     }
 }
 
+/// A registered issuer disclosure (BD-504e.2). Runtime consumers must re-read the exact quoted cell from the
+/// registered bytes before the note can explain a change; parsing this row alone does not verify the quote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestatementNoteRow {
+    pub id: String,
+    pub file_name: String,
+    /// A single unquoted worksheet name and canonical A1 cell, `sheet!cell`.
+    pub locator: String,
+    pub quoted_text: String,
+    /// Earliest reporting release allowed to use the note, never before its source file's release.
+    pub from_quarter: String,
+    pub evidence: String,
+    /// Derived from the referenced `[[source]]`; never supplied independently in the note row.
+    pub sha256: String,
+}
+
+/// Exact coverage of one registered note. No wildcard expands a subject or line. A consumer must require the
+/// complete valid period (including H1/FY endpoints) inside this inclusive quarter window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestatementScopeRow {
+    pub note: String,
+    pub subject: String,
+    pub period_from: String,
+    pub period_to: String,
+    /// The public key's exact canonical line label, checked against observed keys by the runtime consumer.
+    pub line: String,
+    /// Zero-based occurrence, as in the canonical public key; defaults to zero when omitted.
+    pub occurrence: u32,
+}
+
 /// A checked issuer registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourcesRegistry {
@@ -242,6 +272,9 @@ pub struct SourcesRegistry {
     /// Registered PDF documents (bd-plx1), in file order. Their file names and digests are unique across
     /// workbooks and documents together, since a citation names a file.
     pub documents: Vec<DocumentRow>,
+    /// Explicit issuer disclosures and their exact scopes, in registry order. Empty for older registries.
+    pub restatement_notes: Vec<RestatementNoteRow>,
+    pub restatement_scopes: Vec<RestatementScopeRow>,
 }
 
 impl SourcesRegistry {
@@ -348,6 +381,201 @@ fn is_plain_relative(s: &str) -> bool {
         && !s.starts_with('/')
         && !s.contains('\\')
         && s.split('/').all(|c| !c.is_empty() && c != "." && c != "..")
+}
+
+fn is_single_cell_locator(locator: &str) -> bool {
+    let Some((sheet, cell)) = locator.split_once('!') else {
+        return false;
+    };
+    if sheet.is_empty()
+        || sheet.trim() != sheet
+        || sheet.starts_with('\'')
+        || sheet.ends_with('\'')
+        || sheet.chars().count() > 31
+        || sheet
+            .chars()
+            .any(|c| c.is_control() || "[]:*?/\\!".contains(c))
+    {
+        return false;
+    }
+    let letters = cell.bytes().take_while(u8::is_ascii_uppercase).count();
+    if letters == 0 || letters > 3 {
+        return false;
+    }
+    let (column, row) = cell.split_at(letters);
+    let col = column
+        .bytes()
+        .fold(0_u32, |n, c| n * 26 + u32::from(c - b'A' + 1));
+    col <= 16_384
+        && row.starts_with(|c: char| ('1'..='9').contains(&c))
+        && row.bytes().all(|c| c.is_ascii_digit())
+        && row.parse::<u32>().is_ok_and(|r| r <= 1_048_576)
+}
+
+fn parse_restatements(
+    doc: &TomlDoc,
+    sources: &[SourceRow],
+    subjects: &[String],
+) -> Result<(Vec<RestatementNoteRow>, Vec<RestatementScopeRow>), SourcesError> {
+    let mut notes: Vec<RestatementNoteRow> = Vec::new();
+    for row in doc.rows_of("restatement_note") {
+        let f = Fields::of_row(row);
+        f.only(&[
+            "id",
+            "file_name",
+            "locator",
+            "quoted_text",
+            "from_quarter",
+            "evidence",
+        ])?;
+        let (id, id_line) = f.string("id")?;
+        if !id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
+        {
+            return fail(
+                id_line,
+                "restatement note id must use letters, digits, _ or -",
+            );
+        }
+        let (file_name, file_line) = f.string("file_name")?;
+        let Some(source) = sources.iter().find(|s| s.file == file_name) else {
+            return fail(
+                file_line,
+                format!("restatement file {file_name:?} is not a registered [[source]]"),
+            );
+        };
+        let (locator, locator_line) = f.string("locator")?;
+        if !is_single_cell_locator(&locator) {
+            return fail(
+                locator_line,
+                "restatement locator must be one sheet!A1 cell within worksheet bounds",
+            );
+        }
+        let (quoted_text, quote_line) = f.string("quoted_text")?;
+        if quoted_text.trim().is_empty() || quoted_text.chars().any(char::is_control) {
+            return fail(
+                quote_line,
+                "quoted_text must contain nonblank text without control characters",
+            );
+        }
+        let (from_quarter, from_line) = f.string("from_quarter")?;
+        if !is_quarter(&from_quarter) || from_quarter < source.quarter {
+            return fail(
+                from_line,
+                "from_quarter must be YYYYQ1..YYYYQ4 at or after the source release",
+            );
+        }
+        if notes.iter().any(|n| n.id == id) {
+            return fail(id_line, format!("duplicate restatement note {id:?}"));
+        }
+        if notes
+            .iter()
+            .any(|n| n.file_name == file_name && n.locator == locator)
+        {
+            return fail(locator_line, "duplicate restatement note source cell");
+        }
+        let (evidence, evidence_line) = f.string("evidence")?;
+        if evidence.trim().is_empty() {
+            return fail(evidence_line, "restatement evidence must not be blank");
+        }
+        notes.push(RestatementNoteRow {
+            id,
+            file_name,
+            locator,
+            quoted_text,
+            from_quarter,
+            evidence,
+            sha256: source.sha256.clone(),
+        });
+    }
+    let mut scopes: Vec<RestatementScopeRow> = Vec::new();
+    for row in doc.rows_of("restatement_scope") {
+        let f = Fields::of_row(row);
+        f.only(&[
+            "note",
+            "subject",
+            "period_from",
+            "period_to",
+            "line",
+            "occurrence",
+        ])?;
+        let (note, note_line) = f.string("note")?;
+        if !notes.iter().any(|n| n.id == note) {
+            return fail(
+                note_line,
+                format!("scope note {note:?} is not a registered [[restatement_note]]"),
+            );
+        }
+        let (subject, subject_line) = f.string("subject")?;
+        if !subjects.contains(&subject) {
+            return fail(
+                subject_line,
+                format!("scope subject {subject:?} is not registered"),
+            );
+        }
+        let (period_from, from_line) = f.string("period_from")?;
+        let (period_to, to_line) = f.string("period_to")?;
+        if !is_quarter(&period_from) {
+            return fail(from_line, "period_from must be YYYYQ1..YYYYQ4");
+        }
+        if !is_quarter(&period_to) || period_to < period_from {
+            return fail(
+                to_line,
+                "period_to must be YYYYQ1..YYYYQ4 at or after period_from",
+            );
+        }
+        let (line, line_number) = f.string("line")?;
+        if line.trim() != line
+            || line
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '*' | '?'))
+        {
+            return fail(
+                line_number,
+                "scope line must be an exact nonblank label without wildcards",
+            );
+        }
+        let occurrence = match row.get("occurrence") {
+            None => 0,
+            Some(TomlField {
+                value: TomlValue::Int(n),
+                line,
+                ..
+            }) => u32::try_from(*n).map_err(|_| SourcesError {
+                line: *line,
+                reason: "occurrence must be a zero-based u32 integer".into(),
+            })?,
+            Some(f) => return fail(f.line, "occurrence must be a zero-based u32 integer"),
+        };
+        if scopes.iter().any(|s| {
+            s.note == note
+                && s.subject == subject
+                && s.line == line
+                && s.occurrence == occurrence
+                && s.period_from <= period_to
+                && period_from <= s.period_to
+        }) {
+            return fail(row.line, "duplicate or overlapping restatement scope");
+        }
+        scopes.push(RestatementScopeRow {
+            note,
+            subject,
+            period_from,
+            period_to,
+            line,
+            occurrence,
+        });
+    }
+    for (note, row) in notes.iter().zip(doc.rows_of("restatement_note")) {
+        if !scopes.iter().any(|s| s.note == note.id) {
+            return fail(
+                row.line,
+                format!("unused restatement note {:?}: no scope", note.id),
+            );
+        }
+    }
+    Ok((notes, scopes))
 }
 
 /// Reads the fields of one row (or of the top level), refusing missing, mistyped and unknown keys.
@@ -479,6 +707,8 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "printed_share_correction",
             "mine_stats_label_alias",
             "document",
+            "restatement_note",
+            "restatement_scope",
         ]
         .contains(&row.table.as_str())
         {
@@ -1137,6 +1367,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         });
     }
 
+    let (restatement_notes, restatement_scopes) = parse_restatements(&doc, &sources, &subjects)?;
     Ok(SourcesRegistry {
         issuer,
         corpus_dir,
@@ -1153,6 +1384,8 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         printed_share_corrections,
         mine_stats_label_aliases,
         documents,
+        restatement_notes,
+        restatement_scopes,
     })
 }
 
@@ -1208,6 +1441,273 @@ mod tests {
             Ok(r) => panic!("accepted: {r:?}"),
             Err(e) => e,
         }
+    }
+
+    const RESTATEMENT_NOTE: &str = "\n[[restatement_note]]\nid = \"N1\"\nfile_name = \"B.xlsx\"\n\
+        locator = \"Q2 2030!A40\"\nquoted_text = \"Comparative information has been restated.\"\n\
+        from_quarter = \"2030Q2\"\nevidence = \"synthetic note\"\n";
+    const RESTATEMENT_SCOPE: &str = "\n[[restatement_scope]]\nnote = \"N1\"\nsubject = \"Site A\"\n\
+        period_from = \"2029Q1\"\nperiod_to = \"2030Q2\"\nline = \"summary:aisc_usd_per_oz\"\n";
+
+    fn restatement_registry(extra: &str) -> String {
+        minimal(&source_b("aisc_reconciliation", SHA_B), extra)
+    }
+
+    #[test]
+    fn test_restatement_registry_keeps_exact_scope_and_derives_source_digest() {
+        let old = parse_sources_registry(&restatement_registry("")).expect("old registry");
+        assert!(old.restatement_notes.is_empty() && old.restatement_scopes.is_empty());
+        let text = format!("{RESTATEMENT_NOTE}{RESTATEMENT_SCOPE}");
+        let reg = parse_sources_registry(&restatement_registry(&text)).expect("disclosure");
+        assert_eq!(
+            reg.restatement_notes,
+            [RestatementNoteRow {
+                id: "N1".into(),
+                file_name: "B.xlsx".into(),
+                locator: "Q2 2030!A40".into(),
+                quoted_text: "Comparative information has been restated.".into(),
+                from_quarter: "2030Q2".into(),
+                evidence: "synthetic note".into(),
+                sha256: SHA_B.into(),
+            }]
+        );
+        assert_eq!(
+            reg.restatement_scopes,
+            [RestatementScopeRow {
+                note: "N1".into(),
+                subject: "Site A".into(),
+                period_from: "2029Q1".into(),
+                period_to: "2030Q2".into(),
+                line: "summary:aisc_usd_per_oz".into(),
+                occurrence: 0,
+            }]
+        );
+        // An explicit occurrence selects another canonical row; it is never treated as a wildcard.
+        let text = format!("{text}{RESTATEMENT_SCOPE}occurrence = 1\n");
+        let reg = parse_sources_registry(&restatement_registry(&text)).expect("second occurrence");
+        assert_eq!(
+            reg.restatement_scopes
+                .iter()
+                .map(|s| s.occurrence)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+    }
+
+    #[test]
+    fn test_restatement_registry_rejects_malformed_and_unbound_rows() {
+        let valid = format!("{RESTATEMENT_NOTE}{RESTATEMENT_SCOPE}");
+        for (from, to, reason) in [
+            ("id = \"N1\"", "id = \"*\"", "note id"),
+            (
+                "file_name = \"B.xlsx\"",
+                "file_name = \"unknown.xlsx\"",
+                "registered [[source]]",
+            ),
+            ("locator = \"Q2 2030!A40\"", "locator = \"A40\"", "sheet!A1"),
+            (
+                "quoted_text = \"Comparative information has been restated.\"",
+                "quoted_text = \"   \"",
+                "quoted_text",
+            ),
+            (
+                "from_quarter = \"2030Q2\"",
+                "from_quarter = \"2030Q1\"",
+                "source release",
+            ),
+            (
+                "from_quarter = \"2030Q2\"",
+                "from_quarter = \"2030Q5\"",
+                "from_quarter",
+            ),
+            (
+                "evidence = \"synthetic note\"",
+                "evidence = \" \"",
+                "evidence",
+            ),
+            ("note = \"N1\"", "note = \"unknown\"", "scope note"),
+            ("subject = \"Site A\"", "subject = \"*\"", "subject"),
+            (
+                "period_from = \"2029Q1\"",
+                "period_from = \"2029H1\"",
+                "period_from",
+            ),
+            (
+                "period_to = \"2030Q2\"",
+                "period_to = \"2028Q4\"",
+                "period_to",
+            ),
+            (
+                "period_to = \"2030Q2\"",
+                "period_to = \"2030Q0\"",
+                "period_to",
+            ),
+            (
+                "line = \"summary:aisc_usd_per_oz\"",
+                "line = \"summary:*\"",
+                "exact",
+            ),
+            (
+                "line = \"summary:aisc_usd_per_oz\"",
+                "line = \" \"",
+                "exact",
+            ),
+        ] {
+            let e = refusal(&restatement_registry(&valid.replacen(from, to, 1)));
+            assert!(e.line > 0 && e.reason.contains(reason), "{from}: {e}");
+        }
+        for occurrence in ["-1", "4294967296", "\"0\""] {
+            let e = refusal(&restatement_registry(&format!(
+                "{valid}occurrence = {occurrence}\n"
+            )));
+            assert!(e.reason.contains("occurrence"), "{e}");
+        }
+        for locator in [
+            "!A1",
+            "QTD!",
+            "QTD!A0",
+            "QTD!A01",
+            "QTD!a1",
+            "QTD!A1:B2",
+            "QTD!XFE1",
+            "QTD!A1048577",
+            "QTD!A1!B2",
+            "QTD!$A$1",
+            "QTD\t!A1",
+        ] {
+            assert!(!is_single_cell_locator(locator), "{locator}");
+        }
+        assert!(is_single_cell_locator("QTD!XFD1048576"));
+        assert!(
+            refusal(&restatement_registry(&format!("{valid}unknown = 1\n")))
+                .reason
+                .contains("unknown key")
+        );
+        let extra_digest =
+            RESTATEMENT_NOTE.to_string() + "sha256 = \"unbound\"\n" + RESTATEMENT_SCOPE;
+        assert!(
+            refusal(&restatement_registry(&extra_digest))
+                .reason
+                .contains("unknown key")
+        );
+    }
+
+    #[test]
+    fn test_restatement_registry_rejects_missing_duplicate_and_unused_rows() {
+        for (row, other, keys) in [
+            (
+                RESTATEMENT_NOTE,
+                RESTATEMENT_SCOPE,
+                &[
+                    "id",
+                    "file_name",
+                    "locator",
+                    "quoted_text",
+                    "from_quarter",
+                    "evidence",
+                ][..],
+            ),
+            (
+                RESTATEMENT_SCOPE,
+                RESTATEMENT_NOTE,
+                &["note", "subject", "period_from", "period_to", "line"][..],
+            ),
+        ] {
+            for key in keys {
+                let without: String = row
+                    .lines()
+                    .filter(|l| !l.starts_with(&format!("{key} = ")))
+                    .map(|l| format!("{l}\n"))
+                    .collect();
+                let e = refusal(&restatement_registry(&format!("{other}{without}")));
+                assert!(e.reason.contains(&format!("no {key}")), "{key}: {e}");
+            }
+        }
+        let no_note = refusal(&restatement_registry(RESTATEMENT_SCOPE));
+        assert!(no_note.reason.contains("scope note"), "{no_note}");
+        let unused = refusal(&restatement_registry(RESTATEMENT_NOTE));
+        assert!(
+            unused.reason.contains("unused restatement note"),
+            "{unused}"
+        );
+        let valid = format!("{RESTATEMENT_NOTE}{RESTATEMENT_SCOPE}");
+        for (extra, reason) in [
+            (RESTATEMENT_NOTE.to_string(), "duplicate restatement note"),
+            (
+                RESTATEMENT_NOTE.replace("N1", "N2"),
+                "duplicate restatement note source cell",
+            ),
+            (RESTATEMENT_SCOPE.to_string(), "duplicate or overlapping"),
+            (
+                RESTATEMENT_SCOPE
+                    .replace("2029Q1", "2030Q1")
+                    .replace("2030Q2", "2030Q3"),
+                "overlapping",
+            ),
+        ] {
+            let e = refusal(&restatement_registry(&format!("{valid}{extra}")));
+            assert!(e.reason.contains(reason), "{e}");
+        }
+    }
+
+    /// FACT E461: pinned from the independently read, SHA-256-checked Q4 2025 workbook, QTD!A33.
+    #[test]
+    fn test_barrick_e461_restatement_registry_golden() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let reg =
+            load_sources_registry(&root.join("registries/sources/barrick.toml")).expect("registry");
+        assert_eq!(reg.restatement_notes.len(), 1);
+        let note = &reg.restatement_notes[0];
+        assert_eq!(
+            (
+                &*note.id,
+                &*note.file_name,
+                &*note.locator,
+                &*note.from_quarter,
+                &*note.evidence
+            ),
+            (
+                "E461",
+                "Barrick_Q4_2025_Mine_Stats.xlsx",
+                "QTD!A33",
+                "2025Q4",
+                "E461"
+            )
+        );
+        assert_eq!(
+            note.sha256,
+            "94f6692acfa5f133b97ae028f172cc9c5e7527945788da7bd9a06ffd11c7eec4"
+        );
+        assert_eq!(
+            note.quoted_text,
+            "4 Starting Q4 2025, we have presented Pueblo Viejo as part of North America instead of South America & Asia Pacific. Comparative information has been restated."
+        );
+        let lines = [
+            "summary:au_prod_100_koz",
+            "summary:au_prod_attr_koz",
+            "summary:au_sold_attr_koz",
+            "summary:cos_usd_per_oz",
+            "summary:tcc_usd_per_oz",
+            "summary:aisc_usd_per_oz",
+        ];
+        let mut want = Vec::new();
+        for subject in [
+            "North America",
+            "Latin America & Asia Pacific",
+            "South America & Asia Pacific",
+        ] {
+            for line in lines {
+                want.push(RestatementScopeRow {
+                    note: "E461".into(),
+                    subject: subject.into(),
+                    period_from: "2024Q1".into(),
+                    period_to: "2025Q4".into(),
+                    line: line.into(),
+                    occurrence: 0,
+                });
+            }
+        }
+        assert_eq!(reg.restatement_scopes, want);
     }
 
     #[test]

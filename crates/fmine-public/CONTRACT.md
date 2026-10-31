@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
 - **LOC Budget:** `18k planned / 21k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "waterfall"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "guidance", "waterfall"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
@@ -104,6 +104,13 @@ The public lane of M0 (`fmine assure public`).
 - `synthetic`: invented workbooks in the real layout, seeded with one known answer per state. They are never
   gate-eligible. `write_issuer_workspace` writes them, plus a later title-only vintage, with a digest registry
   under the reserved issuer name `synthetic`; `run_public_assurance` runs that name in the synthetic lane.
+- `guidance` (BD-342): selects an agreed production/AISC guidance pair from the latest eligible registered
+  document at the explicit as-of date, verifies its bytes and connects it to the requested Mine Stats YTD
+  Claims. Units, period, ownership and the issuer-reported per-sold-ounce AISC definition must agree. A pending
+  row in an equally recent or later eligible document prevents silent fallback to an older agreed pair.
+  Remaining sales explicitly assume the preceding year's same remaining-month sales, derived from its original
+  FY and YTD releases. Production is never substituted for sales. Workbook availability uses the verified
+  retrieval date conservatively because those registry rows have no publication timestamp.
 - `key` (BD-332.S2/S3): projects visible AISC arithmetic operands and Mine Stats reads into source-anchored
   `Claim<PublicValue>` values. Subject, period, release, basis, scope, unit and semantic line belong to the key;
   coordinates remain citations. The raw readers and numerical identity ledgers retain their existing behavior.
@@ -179,6 +186,12 @@ The public lane of M0 (`fmine assure public`).
   generated section of `repro/<issuer>/README.md`, from the row anchors and the registry; a golden test
   compares)
 - `PublicAssuranceReport::{registry_epoch, census_digest_of_digests, check_expected}` (BD-339.S1)
+- `PublicAssuranceReport::exception_json` exposes the existing cited exception projection for the CLI packet
+  renderer without changing its numerical state or the assurance root.
+- `guidance::{run_public, run_synthetic, GuidanceCompletionReport, NO_CLAIM}` (BD-342). The report carries exact
+  input/output Claims, source and intermediate historical Claims, accepted guidance rows, source hashes,
+  explicit sales assumption and a content digest. It is T3 and never gate-eligible; the digest is not a forecast
+  registration or ledger root. Source epistemics and unknown-unknown terms survive quantity conversion.
 - `aisc::{IdentityFamily, IdentityState, IdentityInstance, FootingCertificate, UnregisteredHeader, AiscTable,
   RateMiss, ShareBasis, ExplanationBasis, DEFAULT_MISSING_FACT, SHARE_MISSING_FACT, RowAnchor, AnchorRule,
   ConsistentBasis, MemberWeighting, WeightedMember, REGION_MISSING_FACT (BD-331.S4),
@@ -198,7 +211,7 @@ The public lane of M0 (`fmine assure public`).
   value, both as displayed (`mine_ledger::displayed_number`). Units kt and Mlb (1 Mlb = 45,359,237/10⁸ kt,
   from `AVDP_LB_TO_GRAMS_NUM`) are tried on those numbers alone, apart from the registered alias. The section
   holds counts only and is not in the state root.
-- `transcribe::{load_transcription_report, transcription_json, TranscriptionReport, CheckedDocument,
+- `transcribe::{load_transcription_report, load_transcription_report_as_of, transcription_json, TranscriptionReport, CheckedDocument,
   TieOutcome}`, `sources::{DocumentRow, transcriptions_path}`, `IssuerProfile::documents` and
   `PublicAssuranceReport::transcriptions` (bd-plx1, bd-4wvl.4 part 2). When
   `<workspace>/registries/transcriptions/<issuer>.toml` exists and the run has no `--through` bound (documents
@@ -212,6 +225,9 @@ The public lane of M0 (`fmine assure public`).
   - feeds the accepted point values that two or more documents print under one quantity key to
     `discover_tie_conventions`. A quantity whose prints no convention reconciles (its `Closed` meet is empty)
     is a conflict, listed with its locators, and the discovery re-runs without it.
+  - The guidance-specific as-of loader filters future documents before byte checks, reader agreement and tie
+    analysis; it still validates registry syntax and document identities. General assurance checks all cited
+    documents as before.
   - The payload's `transcriptions` section, after `unit_discovery`, holds citations (file, kind,
     `published_at` and its basis, sha256), counts, the accepted-rows digest, pending locators, conflicts and each
     document's convention finding (FMINE-REF-104 when ambiguous); never a transcribed value. It is `null` when
@@ -362,24 +378,42 @@ The public lane of M0 (`fmine assure public`).
   - `key::mine_stats::{KeyedClaims, build_claims, load_claims}` is a thin inventory over that same adapter,
     not another Claim implementation. `mine_stats_claims` reports its typed-value census, named refusals and
     canonical `claims_digest`. The direct reader supports `fmine claim show` without running the identity solver.
-- `key::consistency::{VintageReport, VintageState, compare_vintages}` and
-  `PublicAssuranceReport::mine_stats_vintages` add `issuer_consistency.mine_stats_vintages` beside the AISC
-  findings. Every Mine Stats appearance is counted. Comparisons retain both the earliest registered and
+- `key::consistency::{VintageReport, VintageState, compare_vintages_with_disclosures}` and
+  `PublicAssuranceReport::{mine_stats_vintages, aisc_vintages}` add separate value-comparison populations
+  under `issuer_consistency`. Every keyed appearance is counted. Comparisons retain both the earliest registered and
   previous release, match semantic keys rather than cell coordinates, and compare displayed decimals exactly.
   Percentage glyphs are normalized to the key's stored-number unit using exact rationals. Unknown conversions
   and refused displays remain `not_comparable`; no stored precision is substituted for displayed precision.
-  - Changed values or token classes are `changed_without_registered_explanation`; no disclosure search or
-    choice of a true vintage is implied. Same-release ambiguity and corrected ownership remain explicit
-    conflicts. Region-map changes are `not_comparable`, with both source assertions retained.
+  - Changed values or token classes are `restated_disclosed` only when an applicable verified registry note
+    covers them, otherwise `restated_silent` after a complete check. An omitted or incomplete check leaves
+    `changed_without_registered_explanation`. These findings never select a true vintage or establish that
+    no disclosure exists elsewhere. Same-release ambiguity and actual printed ownership disagreements remain
+    conflicts; registered share provenance alone is not a conflict. Region-map changes remain `not_comparable`,
+    with both assertions and any verified explanatory note retained.
   - The real-source regression checks E474 and all eight W1-DR-09 changes. W1 T16's 6,391/9 is passes/failures:
     the six per-release populations equal 6,400 in total after excluding the 30 cited region-map changes.
     The full classification differs from that pass/fail table because basis conflicts and display refusals
-    remain visible. The comparison itself does not change the separate keyed projection digest or
-    identity-ledger states; the waterfall's addition advances the assurance frame to v8 below.
+    remain visible. Comparison JSON binds the canonical input-claims digest and disclosure-registry digest;
+    the comparison does not alter the numerical-ledger states. The waterfall's addition advances the
+    assurance frame to v8 below.
+- `key::disclosure::VerifiedDisclosureRegistry` checks `restatement_note` and `restatement_scope` rows
+  once per run. It verifies registered file identity, size and SHA-256, then matches the complete quote
+  (modulo whitespace) at a visible non-formula source cell. Every exact subject/line/occurrence scope must
+  bind to an observed canonical period and a unique unit. Coverage includes the entire reporting period;
+  future notes never explain an earlier release. The `--through` cut drops later notes before verification.
+  Missing sources, mismatched bytes and unusable quotes/scopes yield typed refusals and prohibit silent
+  classification for uncovered changes. E461 is registered at Q4 2025 `QTD!A33`, covering 18 exact regional
+  summary selectors for 2024–2025. Existing `region_member` rows remain the sole membership map.
+- `key::inspect::{why_json, trace_json}` exposes actual Claim evidence, guards and source provenance for
+  the CLI's show/why/trace views. Absent decision, calibration and clock assessments stay absent; unresolved
+  parent IDs mark a partial trace. No upstream measurement history or arbitrary derived-Claim store is inferred.
 - `aisc::{AiscClaimIndex, KeyingRefusal, key_aisc_operands}` (BD-332.S2): one keyed Claim per distinct arithmetic
-  operand, with the subject read from that operand's own column (including regional member inputs), canonical
+  operand and per explicitly labelled co-product cash-cost rate, with the subject read from its own column
+  (including regional member inputs), canonical
   metric labels, repeated-label occurrence indices and units `usd_m`, `koz` or `usd_per_oz`. An operand must
-  still agree with its loaded source cell. Textual label checks remain context references; consulted Mine
+  still agree with its loaded source cell. Co-product rows retain their distinct line and `usd_per_oz` unit;
+  they do not add numerical identity instances. Their row positions are discovered once per worksheet.
+  Textual label checks remain context references; consulted Mine
   Stats cells use `from_mine_stats`. All-zero columns lacking a registered subject status are named in
   `unregistered_all_zero`; their zeros do not become evidence of withholding or disposal.
   - **Explicitly partial ownership wiring:** a row stays `Unprinted` unless its printed label states an
@@ -405,9 +439,9 @@ The public lane of M0 (`fmine assure public`).
     include operand role, semantic key and displayed arithmetic value/token, so swapping inputs is not
     persistence and moving a cell is not a restatement. An unkeyed operand makes `operands_changed` null and
     cannot prove persistence or correction.
-  - This is the earliest **registered** appearance, not necessarily the issuer's first publication. Full
-    part 3b disclosure classification across all public figures and a composite gate result remain open;
-    Mine Stats value comparisons are reported separately under `mine_stats_vintages` as described above.
+  - This is the earliest **registered** appearance, not necessarily the issuer's first publication. Value
+    comparisons and registered-note classification are reported separately under `mine_stats_vintages`
+    and `aisc_vintages`; a composite issuer-consistency gate result remains open.
 
 - `waterfall::{pair_sites, WaterfallReport}` (BD-333): the existing assurance payload includes same-quarter
   year-on-year AISC bridges, with first-published sources only. A missing first-release reconciliation is
@@ -642,7 +676,7 @@ The public lane of M0 (`fmine assure public`).
     Mlb none, so kt is identified. The synthetic Mine Stats print no row in pounds: 0 pairs, no fit.
   - **Share** (`aisc::tests::test_feasible_share_matches_kernel_share_interval`): `feasible_share` equals the
     kernel's `share_interval` on all 15,800 grid points with 2n − k ≥ 1.
-- `PO-PUB-13` (transcriptions, bd-plx1; synthetic documents and rows, `transcribe::tests`):
+- `PO-PUB-13` (transcriptions, bd-plx1; synthetic documents and rows, `crates/xtask/tests/public_transcriptions.rs`):
   - E698's shape signed as printed ((3.6) and 1.7 against (3.7) and 1.8, step 0.1): 3 of 16 assignments fit
     properly, the `Closed` check fits at points only, the deck's convention is `truncate` and the MD&A's is any
     of `half_up`, `half_down`, `half_even` (FMINE-REF-104). The section names no transcribed value, and the
@@ -694,28 +728,41 @@ The public lane of M0 (`fmine assure public`).
     later break. Binomial intervals match independent known answers and their edge cases; empty/invalid and
     over-budget samples return no interval. No pass threshold is inferred from these counts.
 
+- FACT (BD-342, `guidance::tests`): synthetic sources exercise the complete registry-to-report path, exact
+  production and sales intervals, latest eligible vintage, exclusion of future guidance, missing/incomplete
+  pairs, pending newer evidence, incompatible ownership and definition, altered documents, unusable source
+  support and metadata preservation. Real values remain external inputs, not embedded source constants.
+
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.
 - A header that names no registered subject becomes an `UnregisteredHeader`.
 - Neither stops the run, and neither is ever guessed.
 
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
-- `GATE-BULL-01`: parts 1 and 2 retain their existing numerical ledger. Part 3a now reports AISC
-  first-registered within-vintage counts, and part 3c reports adjacent histories. Part 3b's full restatement
-  classifier and a complete issuer-consistency gate score remain outstanding; Mine Stats comparisons now
-  reproduce the independent T16 population and all nine known changes without asserting disclosure status.
+- `GATE-BULL-01`: parts 1 and 2 retain their existing numerical ledger. Part 3a reports AISC first-registered
+  within-vintage counts, and part 3c reports adjacent histories. Part 3b compares keyed AISC and Mine Stats
+  values with verified registered-note coverage. The Mine Stats population reproduces T16 and all nine
+  known changes, with 30 region-map exclusions citing E461. A complete issuer-consistency gate record remains
+  outstanding; these projections alone do not establish a full M0 gate pass.
 
 ## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io` and `fmine-metrics` for the typed public
-  waterfall (BD-333). `fmine-units` and `fmine-time` remain declared in the manifest.
+- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io` and `fmine-metrics` for exact guidance
+  requirements (BD-342) and the typed public waterfall (BD-333). `fmine-units` and `fmine-time` remain
+  declared in the manifest.
 - Depends on `fmine-numerics` (BD-331.S6): the ledger's exact kernel (`exact_feas`, BD-340).
   `crates/xtask/tests/public_exact_feas_oracle.rs` keeps the old closed-form corner rule as an independent oracle for rates (at a
   share, and the (iv) range exactly); `test_property_footings_match_closed_form` does the same for footings.
 - Depends on `fmine-registry` for source/status/basis registries. Cross-crate oracle and registry tests live in
   `crates/xtask/tests/public_exact_feas_blame.rs`, `public_exact_feas_oracle.rs`, `public_laap_2023.rs` and
   `public_registry.rs`; the prior integration entry files retain documentation redirects.
+- Public inventory, vintage-comparison and transcription integration tests also live in
+  `crates/xtask/tests/public_mine_stats_inventory.rs`, `public_mine_stats_vintages.rs` and
+  `public_transcriptions.rs`, preserving the crate's existing LOC ceiling.
 
 ## 10. Non-Goals & Scope Boundary
 - Operates only on public disclosures (`ConfidentialityTier::Public`).
 - Makes no reserve, resource, geotechnical, regulatory or investment claim.
 - Implies no issuer affiliation.
+- Guidance uses only the registered evidence population, not an assertion that no later issuer guidance
+  exists. Historical sales persistence is an assumption, not a production/sales equality or a capacity bound.
+  The adapter does not yet assemble the kernel's joint historical T1 envelope or a technical-report T2 envelope.

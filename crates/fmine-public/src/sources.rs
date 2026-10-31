@@ -14,7 +14,8 @@ use fmine_registry::sources::{
     BasisRow, SourcesRegistry, SubjectStatusRow, is_quarter, load_sources_registry,
 };
 pub use fmine_registry::sources::{
-    DocumentRow, MineStatsLabelAlias, PrintedShareCorrection, RegionMemberRow,
+    DocumentRow, MineStatsLabelAlias, PrintedShareCorrection, RegionMemberRow, RestatementNoteRow,
+    RestatementScopeRow,
 };
 
 use crate::aisc::{ExplanationBasis, IdentityFamily};
@@ -132,6 +133,10 @@ pub struct IssuerProfile {
     /// Registered PDF documents (bd-plx1). A run reads none of their values; it checks the bytes of those its
     /// transcription registry cites ([`crate::transcribe`]).
     pub documents: Vec<DocumentRow>,
+    /// Explicit, source-bound disclosure notes and their exact semantic coverage. Runtime verification
+    /// re-reads each quote before a comparison can classify a change as disclosed.
+    pub restatement_notes: Vec<RestatementNoteRow>,
+    pub restatement_scopes: Vec<RestatementScopeRow>,
     /// The `--through YYYYQn` bound applied, if any; later rows were dropped before loading.
     pub through: Option<String>,
 }
@@ -241,6 +246,8 @@ impl IssuerProfile {
             printed_share_corrections: reg.printed_share_corrections,
             mine_stats_label_aliases: reg.mine_stats_label_aliases,
             documents: reg.documents,
+            restatement_notes: reg.restatement_notes,
+            restatement_scopes: reg.restatement_scopes,
             through: None,
         })
     }
@@ -269,6 +276,15 @@ impl IssuerProfile {
                 ),
             ));
         }
+        self.restatement_notes.retain(|note| {
+            note.from_quarter.as_str() <= bound
+                && self.sources.iter().any(|s| s.file_name == note.file_name)
+        });
+        self.restatement_scopes.retain(|scope| {
+            self.restatement_notes
+                .iter()
+                .any(|note| note.id == scope.note)
+        });
         self.through = Some(bound.to_string());
         Ok(self)
     }
@@ -626,6 +642,26 @@ mod tests {
                 .all(|s| s.quarter.as_str() <= "2025Q2")
         );
         assert!(h1_2025.sources.iter().any(|s| s.quarter == "2025Q2"));
+        assert!(
+            h1_2025.restatement_notes.is_empty(),
+            "E461 must not leak into an earlier cut"
+        );
+        assert!(h1_2025.restatement_scopes.is_empty());
+        let q4_2025 = p.clone().through("2025Q4").expect("E461 release");
+        assert!(
+            q4_2025
+                .restatement_notes
+                .iter()
+                .any(|note| note.id == "E461")
+        );
+        assert_eq!(
+            q4_2025
+                .restatement_scopes
+                .iter()
+                .filter(|scope| scope.note == "E461")
+                .count(),
+            18
+        );
         // Order is preserved: the filtered rows are a prefix-respecting subsequence of the registry.
         let names: Vec<&str> = h1_2025
             .sources

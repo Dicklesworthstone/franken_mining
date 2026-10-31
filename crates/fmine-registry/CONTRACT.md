@@ -27,6 +27,19 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   stale unit and read as a registered one in files released from `first` to `last`: `label` and `reads_as`
   (both registered `[[mine_stats_label]]` labels, never the same one), release quarters `first` and `last` ≥
   `first`, `evidence`; no two rows of one label over overlapping releases. Values are never converted.
+- `sources::{RestatementNoteRow, RestatementScopeRow}`, `SourcesRegistry::{restatement_notes,
+  restatement_scopes}` (BD-504e.2/.3): optional `[[restatement_note]]` rows bind an `id` to a registered
+  workbook `file_name`, one `locator` (`sheet!cell`), exact `quoted_text`, release `from_quarter` and
+  `evidence`. The row's `sha256` is derived from that workbook's registered source digest. Activation
+  cannot precede the source's release. Each `[[restatement_scope]]` names a registered `note` and
+  `subject`, an exact canonical `line`, inclusive `period_from` / `period_to` quarters, and optional
+  zero-based `occurrence` (default `0`). Unknown fields, malformed or missing bindings, unused notes,
+  duplicate note ids or cells, and overlapping scopes for the same note and selector refuse. Wildcards
+  are not supported; registries without these rows retain empty vectors. Runtime additionally verifies
+  the exact quote against the digest-bound workbook and each selector against observed canonical claims
+  with one unit. A scope covers a claim only when its full period lies within the quarter bounds.
+  `region_members` remains the sole membership map. The E461 golden test pins the source digest and quote
+  plus all 18 region-summary selectors for 2024Q1 through 2025Q4.
 - `sources::{DocumentRow, DOCUMENT_KINDS, PUBLISHED_AT_BASES}`, `SourcesRegistry::documents`, `sources::is_date`
   (bd-plx1): optional `[[document]]` rows, one PDF each: a bare `file` and a sha256 unique across workbooks and
   documents, optional `dir` (a plain relative path; default `corpus_dir`), `kind` (`mda`, `aif`,
