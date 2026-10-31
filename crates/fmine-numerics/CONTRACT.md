@@ -33,6 +33,9 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
   - `Identity { id, family, closure, kind: Sum | Equal | Scale | Ratio | WeightedMean }` and
     `Identity::row` (linear kinds). `Ratio { rate, num, den, factor }` is linearised when its rate cell is in
     no other identity (otherwise `Indeterminate`, "bilinear") and its denominator keeps one sign.
+  - `Identity::roll_forward(id, family, open, moves, close)` (bd-4wvl.5, BD-340.S5): `close = open + Σ
+    signᵢ·moveᵢ`, built as the `Sum` with `close` as total and `open` as first line; the family's
+    construction is declared in `Rules` like any sum's.
   - `WeightedMean { rate, parts }` (bd-4wvl.6, BD-340.S6), `rate·Σwᵢ = Σ rateᵢ·wᵢ`, is relaxed: `W = Σwᵢ`
     and the four McCormick rows per product over its factors' closed hulls (every factor needs a finite range,
     else `Indeterminate`). An infeasible relaxation is `Infeasible` with a checked Farkas certificate over the

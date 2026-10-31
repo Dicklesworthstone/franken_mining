@@ -1578,3 +1578,41 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
       that depends on the registry, outside that section, fails it, and only it. The construction and unit
       discoveries have no off switch: they read a finished report through `&self`, after the root is fixed.
     - **Verification.** Self-verified on this machine; nothing has run in CI.
+- **E857** The roll-forward family and E144 (bd-4wvl.5, BD-340.S5, kernel part only; FACT, execution, 2026-10-31,
+  owner machine).
+  - **Kernel.** `Identity::roll_forward` builds `close = open + Σ ±moves` as the `Sum` with `close` as its total.
+    Solve, blame and implied intervals apply unchanged. The bead names an `IdentityKind::RollForward`; this
+    constructor gives the same row with no new kind to match.
+  - **E144 data.** The Fourmile deck's copper table (p.14, attributable Mlb): 2019–2025 and both total rows,
+    under `RoundedOnce` and `Closed`.
+    - The 2023–2025 cells are bd-plx1's two-reader cells.
+    - The 2019–2022 cells and the totals are C1's and my `pdftotext` read.
+  - **E144 result.** The 2025 roll-forward is certified infeasible either way.
+    - **Annual roll-forwards only.** Three minimum single-cell corrections: the 2025 depletion, the net change and
+      the close. None is singled out.
+    - **With the total rows** as sums over their member rows (the bead's rule), an exhaustive search (cap raised
+      to 32 cells) gives one minimum set: the 2025 close. The net change cannot move alone. The printed total
+      30,252 is 31 + 178 + 642 + 728 + 28,542 + 131, the printed rows with +131.
+  - **The bead's E144 does not hold.** It reads "{net-change cell}, size 1, minimum", closing both the balance and
+    the total row, and that fails under the bead's own membership rule.
+    - The reading that −131 implies is size 2: the net change and the total, which would print 29,990.
+    - The GEO table favours it over the close. The 2025 GEO net change of 1.4 needs copper's net change to be
+      negative: 1.7 + 131 · 3.25/1,500 = 1.98, while −131 gives 1.42 (E856).
+    - The kernel has no weighted-sum identity to carry that GEO relation.
+    - **Owner decision:** keep the total rows and take the 2025 close as the kernel's minimum, or amend the
+      expected answer to the size-2 reading.
+  - **Kill report.** E144 is now computed, as size-1 blame on this system: `true`, but the one cell it names is the
+    2025 close, not the bead's net change. Every entry is filled, `fired: false` and nothing is pending. The
+    re-run took 77.9 s and gave E855's other counts.
+  - **Not done** (bd-4wvl.5 stays open):
+    - **Binding.** Registered transcriptions are not yet bound as `Scope::Pdf` cells with registered identities
+      in `fmine-public`. That crate sits at 20,977 of its 21,000-line ceiling; the binding needs an owner
+      BUDGET-AMEND.
+    - **E692** needs the Q4 2024 MD&A p.77's 2019–2022 and total rows. No two readers have transcribed them.
+    - **E147** is not bound to registered rows. **E698** on the registered rows is E850's result and equals S4's
+      fixture.
+    - **Refusal code.** A missing PDF refuses with FMINE-REF-506 since E851, not the bead's 502.
+  - **Planted negatives**, each on a scratch copy, each failing: the open line negated; every move's sign read as
+    +1.
+  - **Not claimed.** The 2019–2022 and total cells have one reader plus mine. Self-verified on this machine;
+    nothing has run in CI.

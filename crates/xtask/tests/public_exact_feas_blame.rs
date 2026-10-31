@@ -426,12 +426,12 @@ mod blame {
     /// bd-4wvl.7 (BD-340.S7): the full power study (10³ injections per kind) and the kill report of plan K.5
     /// row 3. Every entry is computed here, none set by hand:
     /// - joint-only detections: the study's, by kind, and COD-02's shared total;
-    /// - one-cell blame on E113 and E114 (S3's fixtures above);
+    /// - one-cell blame on E113 and E114 (S3's fixtures above) and E144 (S5's copper roll-forward fixture);
     /// - discovery on E698 (S4's tie fixture, as the bead transcribes it), E147 (S4's deck fixture, the deck's 2024
     ///   row as `C1_barrick_public_stats.md` transcribes it) and E815 (S4 on the registered AISC tables);
     /// - implied-interval consumers: the beads whose production source reads a correction set's implied ranges.
     ///
-    /// E144 (S5's roll-forward) has not landed and stays `null`. No cell value is logged (RISK-31).
+    /// No cell value is logged (RISK-31).
     #[test]
     #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
     fn test_power_study_full_and_kill_report() {
@@ -501,6 +501,61 @@ mod blame {
             share("tr_h1_share", &loc(Q2, "YTD", "C7"), &h1, q(123, 200)),
         ];
         let e114_size1 = size1_blame(&cells("E114", &[]), &e114_ids, &rules()).expect("blames");
+        // E144: the deck's copper roll-forward (p.14, Mlb) with its total rows, as S5's kernel test
+        // `exact_feas::tests::test_e144_copper_rollforward_single_cell_correction` has it. Its single cell is the
+        // 2025 close, not the bead's net change.
+        let deck = "Fourmile_Feb2026.pdf:p14:Copper";
+        let pdf = |l: &str, v: i128| Cell {
+            locator: format!("{deck}:{l}"),
+            sha256: "89c22cd73d2fcc9447ee859dfd9a52b33f2f37591ccb4bc0f7407a1d5d19697a".to_string(),
+            token: v.to_string(),
+            printed: int(v),
+            step: int(1),
+            scope: Scope::Pdf,
+        };
+        let at = |l: String| format!("{deck}:{l}");
+        let mut e144_cells: Vec<Cell> = (2019..)
+            .zip([13_494, 12_691, 12_233, 12_252, 12_391, 40_201, 39_361])
+            .map(|(y, v)| pdf(&format!("pp_{y}"), v))
+            .collect();
+        let rows = (2020..).zip(
+            [-834, -636, -623, -589, -731, -708]
+                .into_iter()
+                .zip([31, 178, 642, 728, 28_542, 131]),
+        );
+        for (y, (d, n)) in rows {
+            e144_cells.push(pdf(&format!("depl_{y}"), d));
+            e144_cells.push(pdf(&format!("net_{y}"), n));
+        }
+        e144_cells.push(pdf("total_depl", -4_121));
+        e144_cells.push(pdf("total_net", 30_252));
+        let mut e144_ids: Vec<Identity> = (2020..=2025)
+            .map(|y| {
+                let (d, n) = (at(format!("depl_{y}")), at(format!("net_{y}")));
+                Identity::roll_forward(
+                    &format!("copper_rf_{y}"),
+                    "roll_forward",
+                    &at(format!("pp_{}", y - 1)),
+                    &[(&d, 1), (&n, 1)],
+                    &at(format!("pp_{y}")),
+                )
+            })
+            .collect();
+        for prefix in ["net", "depl"] {
+            e144_ids.push(Identity {
+                id: format!("copper_total_{prefix}"),
+                family: "roll_forward".to_string(),
+                closure: Closure::Definitional,
+                kind: IdentityKind::Sum {
+                    total: at(format!("total_{prefix}")),
+                    lines: (2020..=2025).map(|y| at(format!("{prefix}_{y}"))).collect(),
+                    signs: vec![1; 6],
+                },
+            });
+        }
+        let e144_rules =
+            Rules::new(Convention::Closed).with("roll_forward", Construction::RoundedOnce);
+        let e144_size1 = size1_blame(&e144_cells, &e144_ids, &e144_rules).expect("blames");
 
         let printed = |document: &str, quantity: &str, v: Rat| Printed {
             document: document.to_string(),
@@ -575,7 +630,7 @@ mod blame {
             size1: vec![
                 ("E113".to_string(), Some(e113_size1)),
                 ("E114".to_string(), Some(e114_size1)),
-                ("E144".to_string(), None),
+                ("E144".to_string(), Some(e144_size1)),
             ],
             discoveries: vec![
                 ("E147".to_string(), Some(e147_found)),
@@ -590,8 +645,14 @@ mod blame {
         );
         // The known answers S3 and S4 already establish.
         assert!(
-            cod02_joint_only && e113_size1 && e114_size1 && e147_found && e698_found && e815_found
+            cod02_joint_only
+                && e113_size1
+                && e114_size1
+                && e144_size1
+                && e147_found
+                && e698_found
+                && e815_found
         );
-        assert_eq!(report.pending(), ["E144"]);
+        assert!(report.pending().is_empty());
     }
 }

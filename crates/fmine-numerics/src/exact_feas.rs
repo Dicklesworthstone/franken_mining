@@ -435,6 +435,34 @@ pub struct Row {
 }
 
 impl Identity {
+    /// A roll-forward, `close = open + Σ signᵢ·moveᵢ` (bd-4wvl.5, BD-340.S5): a [`IdentityKind::Sum`] with `close`
+    /// as its total and `open` its first line, so it is solved and blamed as any sum. A move printed in brackets
+    /// (a depletion) is a negative value with sign +1. The family's construction is declared in [`Rules`].
+    #[must_use]
+    pub fn roll_forward(
+        id: &str,
+        family: &str,
+        open: &str,
+        moves: &[(&str, i8)],
+        close: &str,
+    ) -> Self {
+        Self {
+            id: id.to_string(),
+            family: family.to_string(),
+            closure: Closure::Definitional,
+            kind: IdentityKind::Sum {
+                total: close.to_string(),
+                lines: std::iter::once(open)
+                    .chain(moves.iter().map(|(m, _)| *m))
+                    .map(str::to_string)
+                    .collect(),
+                signs: std::iter::once(1)
+                    .chain(moves.iter().map(|(_, s)| *s))
+                    .collect(),
+            },
+        }
+    }
+
     /// The row of a linear identity: `Σ signᵢ·lineᵢ − total`, `a − b` or `target − factor·source`, all `= 0`.
     /// Coefficients of a repeated locator are added; a row whose coefficients all cancel is refused as
     /// degenerate. A `Ratio` has no single row (its linearisation depends on the rate's interval).
@@ -5107,5 +5135,153 @@ mod tests {
         );
         assert_eq!(not_refuted + indeterminate, tables);
         assert_eq!(planted_refuted, tables);
+    }
+
+    /// bd-4wvl.5 (S5): a roll-forward is the sum with its close as total and its open as first line.
+    #[test]
+    fn test_rollforward_identity_linear_known_answer() {
+        let rf = Identity::roll_forward(
+            "rf",
+            "sum",
+            "open",
+            &[("add", 1), ("depl", 1), ("sold", -1)],
+            "close",
+        );
+        let row = rf.row().expect("row");
+        let coefficient = |l: &str| row.coefficients.get(l).copied();
+        assert_eq!(
+            ["open", "add", "depl", "sold", "close"].map(coefficient),
+            [
+                Some(int(1)),
+                Some(int(1)),
+                Some(int(1)),
+                Some(int(-1)),
+                Some(int(-1))
+            ]
+        );
+        assert_eq!(row.rhs, int(0));
+        // 100 + 10 + (5) − 3 = 102: a close printed 102 is feasible; 105 is past the four lines' half-steps.
+        let cells = |close: i128| {
+            [
+                ("open", 100),
+                ("add", 10),
+                ("depl", -5),
+                ("sold", 3),
+                ("close", close),
+            ]
+            .map(|(l, v)| cell(l, int(v), int(1)))
+        };
+        let solved = |close| {
+            solve(
+                &cells(close),
+                std::slice::from_ref(&rf),
+                &rules(Convention::Closed),
+            )
+        };
+        assert!(matches!(
+            solved(102).expect("solves")[0].outcome,
+            Outcome::Feasible { .. }
+        ));
+        assert!(matches!(
+            solved(105).expect("solves")[0].outcome,
+            Outcome::Infeasible { .. }
+        ));
+    }
+
+    /// E144 (bd-4wvl.5): the Fourmile deck's copper roll-forward (p.14, attributable Mlb, as C1 and bd-plx1
+    /// transcribe it). 2025 prints 40,201 + (708) + 131 against a close of 39,361; −131 would close it.
+    ///
+    /// The bead expects the net-change cell alone, size 1. The kernel finds otherwise once the multi-year total
+    /// rows are registered as sums over their member rows (the bead's own rule): the printed net-change total
+    /// 30,252 is the sum of the printed rows with +131, so the net change cannot move without the total. The one
+    /// single-cell correction left is the 2025 close.
+    #[test]
+    fn test_e144_copper_rollforward_single_cell_correction() {
+        let pp = [13_494, 12_691, 12_233, 12_252, 12_391, 40_201, 39_361];
+        let depletion = [-834, -636, -623, -589, -731, -708];
+        let net = [31, 178, 642, 728, 28_542, 131];
+        let mut cells: Vec<Cell> = Vec::new();
+        let mut push = |l: String, v: i128| {
+            let mut c = cell(&l, int(v), int(1));
+            c.scope = Scope::Pdf;
+            cells.push(c);
+        };
+        for (y, v) in (2019..).zip(pp) {
+            push(format!("pp_{y}"), v);
+        }
+        for (y, (d, n)) in (2020..).zip(depletion.into_iter().zip(net)) {
+            push(format!("depl_{y}"), d);
+            push(format!("net_{y}"), n);
+        }
+        push("total_depl".to_string(), -4_121);
+        push("total_net".to_string(), 30_252);
+        let annual: Vec<Identity> = (2020..=2025)
+            .map(|y| {
+                let (open, d, n) = (
+                    format!("pp_{}", y - 1),
+                    format!("depl_{y}"),
+                    format!("net_{y}"),
+                );
+                Identity::roll_forward(
+                    &format!("rf_{y}"),
+                    "sum",
+                    &open,
+                    &[(&d, 1), (&n, 1)],
+                    &format!("pp_{y}"),
+                )
+            })
+            .collect();
+        let members = |prefix: &str| -> Vec<String> {
+            (2020..=2025).map(|y| format!("{prefix}_{y}")).collect()
+        };
+        let total = |id: &str, prefix: &str| {
+            let lines = members(prefix);
+            sum(
+                id,
+                &format!("total_{prefix}"),
+                &lines.iter().map(String::as_str).collect::<Vec<_>>(),
+            )
+        };
+        let all = [
+            annual.clone(),
+            vec![
+                total("total_net_row", "net"),
+                total("total_depl_row", "depl"),
+            ],
+        ]
+        .concat();
+        let r = rules(Convention::Closed);
+        let corrections = |ids: &[Identity]| {
+            let blamed: Vec<ComponentBlame> =
+                blame_with_caps(&cells, ids, &r, 32, MAX_BLAME_RUNS).expect("blames");
+            let [one] = blamed.as_slice() else {
+                panic!("one infeasible component: {blamed:?}")
+            };
+            let BlameOutcome::Blamed(b) = &one.outcome else {
+                panic!("{:?}", one.outcome)
+            };
+            (
+                b.label,
+                b.corrections
+                    .iter()
+                    .map(|s| s.cells.clone())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        // The 2025 roll-forward alone: three single cells close it, so none is singled out.
+        let one = |l: &str| vec![l.to_string()];
+        assert_eq!(
+            corrections(&annual),
+            (
+                CorrectionLabel::Minimum,
+                vec![one("depl_2025"), one("net_2025"), one("pp_2025")]
+            )
+        );
+        // With the total rows: only the 2025 close. A conflict is certified either way.
+        assert_eq!(
+            corrections(&all),
+            (CorrectionLabel::Minimum, vec![one("pp_2025")])
+        );
+        assert!(power::size1_blame(&cells, &all, &r).expect("blames"));
     }
 }
