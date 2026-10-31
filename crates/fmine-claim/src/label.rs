@@ -55,7 +55,8 @@ pub enum LabelError {
 }
 
 /// The registered ventures and walls. The ids are data, loaded by the caller from the deployment's registry (site
-/// registries live in the private overlay, §31.1); a label can name only an id held here.
+/// registries live in the private overlay, §31.1). Ids are minted only here, so every id in a label is well formed
+/// and was held by some registry; any caller can build one, so this is not a trust root.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LabelRegistry {
     ventures: BTreeSet<String>,

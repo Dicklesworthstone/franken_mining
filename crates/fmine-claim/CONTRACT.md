@@ -12,10 +12,12 @@ Implements `Claim<T>`, `Representation`, `SpatialSupport`, `AdditivityClass`, `C
 
 `Confidentiality` (§31.1) is a product lattice: an internal bit, a set of ventures and a set of MNPI walls. Join is
 OR on the bit and union on each set; `a ⊑ b` holds when each part of `a` sits under `b`'s. Public is bottom.
-Ventures and walls come only from a `LabelRegistry`, which refuses malformed or repeated ids, so a label cannot name
-one the deployment did not register. Distinct walls, and distinct ventures, are incomparable: there is no total
-order, and `<` does not compile (`compile_fail` doctest). §31.1 writes the labels as a chain; the product refines it
-so that two ventures, or two walls, never collapse into one tier. The owner should confirm the refinement.
+Ventures and walls come only from a `LabelRegistry`, which refuses malformed or repeated ids, so every id in a label
+is well formed and was held by some registry. Any caller can build a registry, so it is not a trust root: the
+deployment builds its own from its venture and wall list. Distinct walls, and distinct ventures, are incomparable:
+there is no total order, and `<` does not compile (`compile_fail` doctest). §31.1 writes the labels as a chain; the
+product refines it so that two ventures, or two walls, never collapse into one tier. The owner should confirm the
+refinement.
 `compose_binary` labels a result with the join of its parents' labels, so composing can only raise a label.
 
 A label's claim-id bytes keep the old tier bytes, 0 for public and 1 for internal, so no existing claim id moves; any
