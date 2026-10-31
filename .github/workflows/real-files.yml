@@ -80,9 +80,9 @@ jobs:
 
   # Weekly, and on a dispatch without the negative control: the same run on macOS, for the determinism check.
   macos:
-    name: real files (macos-14)
+    name: real files (macos-15)
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.corrupt_one_cached_file)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     outputs:
       root: ${{ steps.run.outputs.root }}

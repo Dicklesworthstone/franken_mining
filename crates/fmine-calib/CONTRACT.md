@@ -22,7 +22,7 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   reference-class blends, a ledger's report, and 1,000 samples through `SpatialFrontPitMonitor`, whose bias flips
   to reach both betting limits and the alarm (this also runs `BettingEProcess`). A refusal hashes as `u64::MAX`.
 - All three committed values were first observed on aarch64-macos; `lib.rs` declares `BitwisePortable` only after
-  ubuntu-latest and macos-14 agree in one CI run.
+  ubuntu-latest and macos-15 agree in one CI run.
 - `ForecastLedger::evaluate_model` → `Result<CalibrationReport, ScoreError>`; `register` and `record_outcome` refuse non-finite or non-positive-std forecasts and non-finite outcomes at entry
 - `ProjectArchetype`, `ReferenceClassPrior`
 - `SpatialFrontPitMonitor`

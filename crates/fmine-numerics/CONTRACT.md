@@ -19,7 +19,7 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
 - `golden_digest_norm_cdf_inv_10k`, `golden_digest_cholesky_brent_10k` (bd-hp2j.3): BLAKE3 over the output bits on
   10,000 `NUMERICS_DIGEST_KEY` inputs (|z| up to 12, p from 1e-304 to 1 − 1e-16; seeded 3×3 SPD systems and cube
   roots). `cholesky_solve` and `brent_root` get their own digest so that one class can cover `lib.rs`. The values
-  were first observed on aarch64-macos; the class flips only after ubuntu-latest and macos-14 agree in one CI run.
+  were first observed on aarch64-macos; the class flips only after ubuntu-latest and macos-15 agree in one CI run.
 - `brent_root` → `Result<Root, RootError>`: `NoSignChange`, `NonFinite` (endpoint or iterate) and `NotConverged` refuse; an unconverged iterate is never returned (bd-t1dk)
 - `eproc::{BettingEProcess, EProcStatus}`
 - `voi::{VoiProblem, VoiSummary}`

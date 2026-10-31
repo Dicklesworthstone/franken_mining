@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-15]
         profile: [dev, release]
     steps:
       # Full history: test_rules_commit_precedes_forecasts orders the rules and forecast commits (BD-334.S2).
