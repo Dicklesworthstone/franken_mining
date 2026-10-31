@@ -14,12 +14,17 @@ Cells compared:
 LibreOffice's text becomes canonical text: whitespace removed (padding and fill), grouping commas removed, and
 "(x)" read as "-x". A disagreement is investigated. It is never settled by copying either reader's output.
 
+One fixture case stays undecided (UNDECIDED): with one section, LibreOffice drops the minus when a negative rounds to
+zero, and formats.py and fmine-io keep it. Excel has not been tested. Its only effect is the sign on a shown zero, and
+none of the registered cells takes this case. The check fails if one does, or if LibreOffice starts to agree, so the
+exception cannot outlive what justifies it.
+
 RISK-31: issuer cell values are logged only with --values (owner machine). Without it, a registered-file
 line carries the file, sheet, cell, format and the result, never a value.
 
 Output: one JSON line per compared cell, then {"files","cells","disagreements","fixture_cells",
-"fixture_disagreements"}. Exit 0 when nothing disagrees, 1 when something does, 2 when LibreOffice is missing
-or a sheet's CSV is missing.
+"fixture_disagreements","fixture_undecided","registered_undecided"}. Exit 0 when nothing unexpected disagrees and no
+registered cell is undecided, 1 otherwise, 2 when LibreOffice is missing or a sheet's CSV is missing.
 usage: python3 -I as_shown_check.py --soffice <path> [--values] <file.xlsx>...
 """
 import csv, json, os, random, re, shutil, subprocess, sys, tempfile, zipfile
@@ -50,6 +55,8 @@ FIXTURE = [
     ("0.12345", "0.00%"),             # 12.35%
     ("1234567.125", "#,##0.00"),      # 1,234,567.13
 ]
+# Fixture cases the two readers split on, as (raw stored text, format code).
+UNDECIDED = {("-0.3", "0")}
 BUILTIN_IDS = {"0": 1, "0.00": 2, "#,##0": 3, "#,##0.00": 4, "0%": 9, "0.00%": 10}
 
 
@@ -101,6 +108,12 @@ def oracle_cells(path):
     out = subprocess.run([sys.executable, "-I", os.path.join(HERE, "formats.py"), "--displayed", "--cells", path],
                          check=True, capture_output=True, text=True).stdout
     return [json.loads(line) for line in out.splitlines() if '"cell"' in line]
+
+
+def undecided(cell):
+    """A negative that a one-section format shows as zero, the case LibreOffice does not decide."""
+    digits = cell["text"].lstrip("-").rstrip("%").replace(".", "")
+    return cell["text"].startswith("-") and bool(digits) and not digits.strip("0") and ";" not in cell["format"]
 
 
 def sample(cells, name):
@@ -175,13 +188,16 @@ def main(argv):
     work = tempfile.mkdtemp(prefix="as_shown_")
     fixture = os.path.join(work, "fixture.xlsx")
     write_fixture(fixture)
-    totals = {"files": len(files), "cells": 0, "disagreements": 0, "fixture_cells": 0, "fixture_disagreements": 0}
+    totals = {"files": len(files), "cells": 0, "disagreements": 0, "fixture_cells": 0, "fixture_disagreements": 0,
+              "fixture_undecided": 0, "registered_undecided": 0}
     for path, is_fixture in [(fixture, True)] + [(f, False) for f in files]:
         name = os.path.basename(path)
         outdir = os.path.join(work, "csv", name)
         os.makedirs(outdir)
         sheets = as_shown(soffice, path, outdir)
         cells = oracle_cells(path)
+        if not is_fixture:
+            totals["registered_undecided"] += sum(undecided(c) for c in cells)
         for c in (cells if is_fixture else sample(cells, name)):
             lo = lookup(sheets, c["sheet"], c["cell"])
             agree = canonical(lo) == c["text"]
@@ -192,9 +208,11 @@ def main(argv):
             print(json.dumps(line, ensure_ascii=False, separators=(",", ":")))
             prefix = "fixture_" if is_fixture else ""
             totals[prefix + "cells"] += 1
-            totals[prefix + "disagreements"] += not agree
+            split = is_fixture and (c["raw"], c["format"]) in UNDECIDED
+            totals["fixture_undecided"] += split
+            totals[prefix + "disagreements"] += agree if split else not agree
     print(json.dumps(totals, separators=(",", ":")))
-    sys.exit(1 if totals["disagreements"] or totals["fixture_disagreements"] else 0)
+    sys.exit(1 if totals["disagreements"] or totals["fixture_disagreements"] or totals["registered_undecided"] else 0)
 
 
 if __name__ == "__main__":
