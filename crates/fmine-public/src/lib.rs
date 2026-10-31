@@ -9,6 +9,7 @@
 
 pub mod aisc;
 pub mod citation;
+pub mod consistency;
 pub mod key;
 pub mod live;
 pub mod mine_ledger;
@@ -251,6 +252,11 @@ pub struct PublicAssuranceReport {
     /// The label-anchored read of each registered Mine Stats workbook, by file name (bd-gwf1.1). The read itself
     /// is not in the state root (it enters with the Mine Stats claims, BD-332.S3); the ledger over it is.
     pub mine_stats: Vec<(String, MineStatsRead)>,
+    /// Source-anchored, keyed public figures from AISC operands and Mine Stats. Their separate projection
+    /// digest binds status/basis interpretations without changing the established identity-ledger root.
+    pub public_claims: aisc::AiscClaimIndex,
+    /// Earliest registered AISC identities and cited changes across all visible registered vintages.
+    pub issuer_consistency: consistency::AiscConsistency,
     /// The Mine Stats identity ledger (BD-331.S4): ownership and quarter sums on the summary sheets. Bound into
     /// the state root in its own section; counted apart from `instances` and the totals.
     pub mine_ledger: MineLedger,
@@ -924,6 +930,42 @@ impl PublicAssuranceReport {
             o.push_str("]}");
         }
         o.push_str("],");
+        let _ = write!(
+            o,
+            "\"public_claims\":{{\"schema\":\"fmine.public_claims.v1\",\"digest\":{},\"cells\":[",
+            js(&key::claims_digest(self.public_claims.cells.values()).to_hex())
+        );
+        for (n, cell) in self.public_claims.cells.values().enumerate() {
+            if n != 0 {
+                o.push(',');
+            }
+            o.push_str(&cell.to_json());
+        }
+        o.push_str("],\"refusals\":[");
+        for (n, refusal) in self.public_claims.refusals.iter().enumerate() {
+            let _ = write!(
+                o,
+                "{}{{\"at\":{},\"reason\":{}}}",
+                if n == 0 { "" } else { "," },
+                js(&refusal.locator),
+                js(&refusal.reason)
+            );
+        }
+        let _ = write!(
+            o,
+            "],\"unregistered_all_zero\":[{}]}},",
+            self.public_claims
+                .unregistered_all_zero
+                .iter()
+                .map(|s| js(s))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let _ = write!(
+            o,
+            "\"issuer_consistency\":{},",
+            self.issuer_consistency.to_json()
+        );
         self.mine_ledger_json(&mut o);
 
         let counts = self.state_counts();
@@ -1729,6 +1771,26 @@ fn assess_inner(
     } = visible;
 
     let (mine_stats, mine_ledger) = mine_stats_section(profile, &sources, memo);
+    let mut public_claims = aisc::key_aisc_operands(profile, &sources, &instances);
+    for (file, read) in &mine_stats {
+        if let Some(source) = sources.iter().find(|s| s.file_name == *file) {
+            for value in &read.values {
+                match key::from_mine_stats(profile, &source.workbook, &source.quarter, value) {
+                    Ok(cell) => {
+                        public_claims.cells.insert(cell.locator.clone(), cell);
+                    }
+                    Err(reason) => public_claims.refusals.push(aisc::KeyingRefusal {
+                        locator: format!("{file}:{}!{}", value.sheet, value.cell),
+                        reason: reason.to_string(),
+                    }),
+                }
+            }
+        }
+    }
+    public_claims
+        .refusals
+        .sort_by(|a, b| (&a.locator, &a.reason).cmp(&(&b.locator, &b.reason)));
+    let issuer_consistency = consistency::aisc_consistency(&public_claims, &instances);
 
     // The state root binds every input digest, every census and every instance's state, so changing any
     // input cell changes the root. Version 3 adds the hidden-scope section (BD-331.S2). Version 4 binds each
@@ -1825,6 +1887,8 @@ fn assess_inner(
         instances,
         unregistered_headers: unregistered,
         mine_stats,
+        public_claims,
+        issuer_consistency,
         mine_ledger,
         hidden_scope: hidden,
         one_cell,

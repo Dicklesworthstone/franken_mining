@@ -115,3 +115,31 @@ dimension = "MoneyPerMass"
 scale_num = 10000000
 scale_den = 311034768
 description = "US dollars per troy ounce (= 1/31.1034768 US$ per gram exact)"
+
+[[unit]]
+code = "usd_per_lb"
+dimension = "MoneyPerMass"
+scale_num = 100000
+scale_den = 45359237
+description = "US dollars per avoirdupois pound (= 1/453.59237 US$ per gram exact)"
+
+[[unit]]
+code = "usd_per_t"
+dimension = "MoneyPerMass"
+scale_num = 1
+scale_den = 1000000
+description = "US dollars per metric tonne (= 1/1000000 US$ per gram exact)"
+
+[[unit]]
+code = "percent"
+dimension = "Dimensionless"
+scale_num = 1
+scale_den = 100
+description = "Percentage points as stored; an Excel fraction displayed with % remains mass_fraction"
+
+[[unit]]
+code = "ratio"
+dimension = "Dimensionless"
+scale_num = 1
+scale_den = 1
+description = "An explicitly dimensionless ratio, including the published waste-to-ore strip ratio"

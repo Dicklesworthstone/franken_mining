@@ -27,7 +27,19 @@ git clone https://github.com/Dicklesworthstone/franken_mining
 cd franken_mining
 repro/barrick/fetch.sh
 cargo test -p fmine-public -p fmine-cli -- --ignored
+cargo test -p xtask --test public_exact_feas_blame --test public_laap_2023 \
+  --test public_keys_aisc --test public_keys_mine_stats --test public_consistency -- --ignored
 ```
+
+To reproduce the first-registered AISC counts independently of Rust after fetching the workbooks:
+
+```sh
+python3 -I repro/barrick/first_vintage_aisc_census.py
+```
+
+This aggregates the existing Python displayed-value, share and region readers, keeping all-file counts
+beside first-registered counts and the cited Kibali/Porgera histories. It prints computed counts rather than
+a pass/fail verdict; the Rust integration test pins the independently obtained answers.
 
 `fetch.sh` reads `registries/sources/barrick.toml`. It downloads only the files that are missing, two seconds
 apart, saves each under its registered name only when its size and SHA-256 match, and verifies every file

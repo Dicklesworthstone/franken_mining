@@ -719,7 +719,7 @@ mod tests {
         let x = rng.next_f64_open01() * 10.0 - 5.0;
         let width = rng.next_f64_open01() * 3.0;
         match rng.next_u64() % 8 {
-            0 | 1 | 2 => Color::Verified {
+            0..=2 => Color::Verified {
                 lo: x,
                 hi: x + width,
             },

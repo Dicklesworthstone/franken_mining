@@ -42,6 +42,9 @@ xlsx_guard() {
 
 stage fetch repro/barrick/fetch.sh
 stage test_public cargo test -p fmine-public -- --ignored --skip barrick_live_leaves_one_per_instance
+stage test_public_integration cargo test -p xtask \
+  --test public_exact_feas_blame --test public_laap_2023 \
+  --test public_keys_aisc --test public_keys_mine_stats --test public_consistency -- --ignored
 stage live_leaves cargo test --release -p fmine-public --lib -- --ignored --exact \
   live::tests::barrick_live_leaves_one_per_instance --nocapture
 stage test_cli cargo test -p fmine-cli -- --ignored

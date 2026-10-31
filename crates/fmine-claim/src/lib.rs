@@ -801,7 +801,7 @@ mod tests {
                     let class = classes[(rng.next_u64() % classes.len() as u64) as usize];
                     let mut claim = leaf(if i % 2 == 0 { "even" } else { "odd" }, class);
                     claim.state = states[(rng.next_u64() % states.len() as u64) as usize];
-                    if rng.next_u64() % 2 == 0 {
+                    if rng.next_u64().is_multiple_of(2) {
                         claim = claim.with_regime(regime(), "qaqc");
                     }
                     let weakest = claim.color().ok().map(|c| c.rank());

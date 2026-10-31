@@ -9,9 +9,17 @@
 //! - A numeric zero where a disposed or withheld status applies is `Nil`, its token kept; a non-zero number there
 //!   stays a number, flagged ([`classify`]).
 
+use std::collections::BTreeMap;
 use std::fmt;
 
-use fmine_io::xlsx::{CellValue, ExtractedCell};
+use fmine_claim::{AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport};
+use fmine_core::codec::Encoder;
+use fmine_core::hash::{Digest32, blake3_hash};
+use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, KuKind};
+use fmine_io::xlsx::{CellValue, ExtractedCell, Workbook, parse_a1_ref};
+
+use crate::mine_stats::{MineStatsValue, View};
+use crate::sources::IssuerProfile;
 
 /// What a period's length is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -67,6 +75,10 @@ pub enum KeyRefusal {
     PrintedShare { label: String },
     /// A data cell holding text or a formula error instead of a number or a registered token.
     CellToken { cell: String },
+    /// A Mine Stats period or cell reference that cannot be bound to the source workbook.
+    SourceBinding { locator: String, reason: String },
+    /// No explicit supported unit in the row, section or summary field.
+    Unit { label: String },
 }
 
 impl fmt::Display for KeyRefusal {
@@ -81,6 +93,8 @@ impl fmt::Display for KeyRefusal {
             Self::CellToken { cell } => {
                 write!(f, "{cell} holds neither a number nor a registered token")
             }
+            Self::SourceBinding { locator, reason } => write!(f, "{locator}: {reason}"),
+            Self::Unit { label } => write!(f, "no supported explicit unit for {label:?}"),
         }
     }
 }
@@ -138,6 +152,25 @@ pub enum OwnershipBasis {
     },
     /// No share is printed. Never read as 100%.
     Unprinted,
+}
+
+/// The effective basis used to compare figures across releases, independently of share provenance.
+/// The exact share and an unprinted basis remain distinct; [`PublicKey`] retains the source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SeriesOwnershipBasis {
+    Consolidated100,
+    Attributable { num: i64, den: i64 },
+    Unprinted,
+}
+
+impl From<OwnershipBasis> for SeriesOwnershipBasis {
+    fn from(basis: OwnershipBasis) -> Self {
+        match basis {
+            OwnershipBasis::Consolidated100 => Self::Consolidated100,
+            OwnershipBasis::Attributable { num, den, .. } => Self::Attributable { num, den },
+            OwnershipBasis::Unprinted => Self::Unprinted,
+        }
+    }
 }
 
 const fn gcd(mut a: i64, mut b: i64) -> i64 {
@@ -292,6 +325,578 @@ pub enum PublicValue {
     Missing,
 }
 
+/// The exact source token, including whitespace; a missing cell has no token.
+#[must_use]
+pub fn raw_token(value: &PublicValue) -> &str {
+    match value {
+        PublicValue::Number { stored, .. } => stored,
+        PublicValue::Nil { token, .. } | PublicValue::NotApplicable { token } => token,
+        PublicValue::Missing => "",
+    }
+}
+
+/// A public figure with both its semantic key and its source-anchored Claim (BD-332).
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyedCell {
+    /// Full file name, sheet and cell, not the release shorthand used by the raw Mine Stats reader.
+    pub locator: String,
+    pub key: PublicKey,
+    pub claim: Claim<PublicValue>,
+    /// Kept beside the effective basis when an evidenced registry row corrects a printed share.
+    pub printed_basis: OwnershipBasis,
+    pub basis_evidence: Option<String>,
+    /// Registry evidence for an applicable disposed, withheld or care-and-maintenance status.
+    pub status_evidence: Option<String>,
+    /// Printed label and the evidence for any registered unit correction; no quantity is rescaled.
+    pub label_as_printed: Option<String>,
+    pub unit_evidence: Option<String>,
+}
+
+fn encode_value(enc: &mut Encoder, value: &PublicValue) {
+    match value {
+        PublicValue::Number {
+            stored,
+            displayed,
+            under_status,
+        } => {
+            enc.put_u8(0);
+            enc.put_str(stored);
+            match displayed {
+                Ok(text) => {
+                    enc.put_u8(0);
+                    enc.put_str(text);
+                }
+                Err(code) => {
+                    enc.put_u8(1);
+                    enc.put_str(code);
+                }
+            }
+            enc.put_u8(match under_status {
+                None => 0,
+                Some(StatusKind::Disposed) => 1,
+                Some(StatusKind::Withheld) => 2,
+                Some(StatusKind::CareAndMaintenance) => 3,
+            });
+        }
+        PublicValue::Nil { token, reason } => {
+            enc.put_u8(1);
+            enc.put_str(token);
+            enc.put_u8(match reason {
+                NilReason::Unknown => 0,
+                NilReason::Withheld => 1,
+                NilReason::Disposed => 2,
+            });
+        }
+        PublicValue::NotApplicable { token } => {
+            enc.put_u8(2);
+            enc.put_str(token);
+        }
+        PublicValue::Missing => enc.put_u8(3),
+    }
+}
+
+/// Builds an issuer assertion or an explicitly unknown placeholder. DESIGN: the identity commits to the
+/// typed interpretation as well as the raw token, so changing a status rule cannot reuse a numeric Claim id.
+#[must_use]
+pub fn public_claim(
+    workbook: &Workbook,
+    sheet: &str,
+    cell_ref: &str,
+    key: PublicKey,
+    value: PublicValue,
+) -> KeyedCell {
+    let mut enc = Encoder::new_frame(*b"PVAL", 1);
+    encode_value(&mut enc, &value);
+    let tag = format!(
+        "{}|{}",
+        key.canonical_tag(raw_token(&value)),
+        blake3_hash(&enc.finish()).to_hex()
+    );
+    let (representation, evidence, epistemic, state) =
+        if matches!(value, PublicValue::Number { .. }) {
+            let synthetic = key.issuer == crate::synthetic::SYNTHETIC_ISSUER;
+            (
+                Representation::Deterministic,
+                if synthetic {
+                    EvidenceClass::Assumed
+                } else {
+                    EvidenceClass::ISSUER
+                },
+                if synthetic {
+                    EpistemicStatus::KnownUnknown(KuKind::Parametric)
+                } else {
+                    EpistemicStatus::KnownKnown
+                },
+                if synthetic {
+                    KnowledgeState::Unknown
+                } else {
+                    KnowledgeState::Known
+                },
+            )
+        } else {
+            (
+                Representation::Placeholder {
+                    token: raw_token(&value).to_string(),
+                },
+                EvidenceClass::Assumed,
+                EpistemicStatus::KnownUnknown(KuKind::Parametric),
+                KnowledgeState::Unknown,
+            )
+        };
+    let additivity = match key.unit.as_str() {
+        "usd_m" | "koz" | "kt" | "Mlb" => AdditivityClass::ExtensiveAdditive,
+        "g_per_t" | "wt_pct" | "percent" | "mass_fraction" | "usd_per_oz" | "usd_per_lb"
+        | "usd_per_t" => AdditivityClass::IntensiveWeighted,
+        _ => AdditivityClass::NonAdditive,
+    };
+    let anchor = workbook.make_anchor(sheet, cell_ref);
+    let file = std::path::Path::new(&anchor.artifact_path)
+        .file_name()
+        .and_then(|p| p.to_str())
+        .unwrap_or(&anchor.artifact_path);
+    let locator = format!("{file}:{sheet}!{cell_ref}");
+    let claim = Claim::new(
+        &key.line.label,
+        value,
+        &tag,
+        representation,
+        SpatialSupport::PeriodAggregate,
+        additivity,
+        evidence,
+        epistemic,
+        state,
+        ConfidentialityTier::Public,
+        vec![],
+        vec![],
+        vec![anchor],
+    );
+    KeyedCell {
+        locator,
+        printed_basis: key.ownership_basis,
+        key,
+        claim,
+        basis_evidence: None,
+        status_evidence: None,
+        label_as_printed: None,
+        unit_evidence: None,
+    }
+}
+
+/// Groups figures without losing earlier vintages or colliding cells. Order is independent of input order.
+#[must_use]
+pub fn series(cells: &[KeyedCell]) -> BTreeMap<SeriesKey, Vec<&KeyedCell>> {
+    let mut grouped: BTreeMap<SeriesKey, Vec<&KeyedCell>> = BTreeMap::new();
+    for cell in cells {
+        grouped.entry(cell.key.series_key()).or_default().push(cell);
+    }
+    for values in grouped.values_mut() {
+        values.sort_by(|a, b| {
+            (&a.key.reporting_vintage, &a.locator).cmp(&(&b.key.reporting_vintage, &b.locator))
+        });
+    }
+    grouped
+}
+
+/// DESIGN: a region's comparability follows its registered membership at the release, including when a
+/// later release restates a comparative. A missing map stays release-specific, never implicitly comparable.
+#[must_use]
+pub fn scope_for(profile: &IssuerProfile, subject: &str, release: &str) -> Scope {
+    if profile.regions.iter().any(|s| s == subject) {
+        let mut members: Vec<&str> = profile
+            .region_members
+            .iter()
+            .filter(|r| r.region == subject && r.holds_for(release))
+            .map(|r| r.member.as_str())
+            .collect();
+        members.sort_unstable();
+        members.dedup();
+        let map_version = if members.is_empty() {
+            format!("unregistered:{release}")
+        } else {
+            let mut enc = Encoder::new_frame(*b"RMAP", 1);
+            for member in members {
+                enc.put_str(member);
+            }
+            blake3_hash(&enc.finish()).to_hex()
+        };
+        Scope::Region { map_version }
+    } else if matches!(subject, "Total Gold" | "Total Copper") {
+        Scope::Company
+    } else {
+        Scope::Site
+    }
+}
+
+/// A Mine Stats period already read from the block header. No calendar is inferred from its position.
+pub fn parse_period_code(code: &str) -> Option<Period> {
+    if !code.is_ascii() || code.len() < 6 {
+        return None;
+    }
+    let y = year(&code[..4])?;
+    let kind = match &code[4..] {
+        "Q1" => PeriodKind::Quarter(1),
+        "Q2" => PeriodKind::Quarter(2),
+        "Q3" => PeriodKind::Quarter(3),
+        "Q4" => PeriodKind::Quarter(4),
+        "H1" => PeriodKind::H1,
+        "9M" => PeriodKind::NineMonths,
+        "FY" => PeriodKind::FullYear,
+        _ => return None,
+    };
+    Some(Period { year: y, kind })
+}
+
+fn normalized(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn mine_stats_unit(
+    value: &MineStatsValue,
+    label: &str,
+    cell: Option<&ExtractedCell>,
+) -> Result<&'static str, KeyRefusal> {
+    let unit = if value.view == View::Summary {
+        if label.ends_with("_koz") {
+            Some("koz")
+        } else if label.ends_with("_kt") {
+            Some("kt")
+        } else if label.ends_with("_usd_per_oz") {
+            Some("usd_per_oz")
+        } else if label.ends_with("_usd_per_lb") {
+            Some("usd_per_lb")
+        } else {
+            None
+        }
+    } else {
+        let context = normalized(value.section.as_deref().unwrap_or(label));
+        let percent_format = cell
+            .and_then(|c| c.displayed())
+            .and_then(Result::ok)
+            .filter(|d| d.token.is_none())
+            .map(|d| d.percent)
+            .unwrap_or_else(|| {
+                cell.and_then(|c| fmine_io::numfmt::parse_format(&c.format.code()).ok())
+                    .is_some_and(|f| {
+                        let numeric: Vec<_> = f
+                            .sections
+                            .iter()
+                            .filter(|s| s.zero_token.is_none())
+                            .collect();
+                        !numeric.is_empty() && numeric.iter().all(|s| s.percent)
+                    })
+            });
+        if context.contains("($/tonne)") {
+            Some("usd_per_t")
+        } else if context.contains("($/oz)") || context == "costs per ounce" {
+            Some("usd_per_oz")
+        } else if context.contains("($/lb)") || context == "costs per pound" {
+            Some("usd_per_lb")
+        } else if context.contains("($ millions)") {
+            Some("usd_m")
+        } else if context.contains("(grams per tonne)") {
+            Some("g_per_t")
+        } else if context.contains("(percent)") || context == "average grade" {
+            // Excel's percent format scales only the presentation. The stored number's unit stays a
+            // fraction; `0.91` and `91%` are both preserved, never silently relabelled as 0.91 percent.
+            if percent_format {
+                Some("mass_fraction")
+            } else if context.contains("(percent)") {
+                Some("percent")
+            } else {
+                None
+            }
+        } else if context.contains("(thousands of ounces)") {
+            Some("koz")
+        } else if context.contains("(millions of pounds)") {
+            Some("Mlb")
+        } else if context.contains("(thousands of tonnes)")
+            || (context.starts_with("tonnes ") && context.contains("(thousands)"))
+        {
+            Some("kt")
+        } else if context == "strip ratio" {
+            Some("ratio")
+        } else {
+            None
+        }
+    };
+    unit.ok_or_else(|| KeyRefusal::Unit {
+        label: format!("{} / {label}", value.section.as_deref().unwrap_or("")),
+    })
+}
+
+/// Binds one raw Mine Stats value to its workbook and registry (BD-332.S3). The raw reader remains the sole
+/// extractor; only this adapter applies disposal/withholding and the evidenced printed-share/unit corrections.
+pub fn from_mine_stats(
+    profile: &IssuerProfile,
+    workbook: &Workbook,
+    release: &str,
+    value: &MineStatsValue,
+) -> Result<KeyedCell, KeyRefusal> {
+    let binding = |reason: &str| KeyRefusal::SourceBinding {
+        locator: value.locator.clone(),
+        reason: reason.to_string(),
+    };
+    let period = parse_period_code(&value.period).ok_or_else(|| binding("unparsed period"))?;
+    if !fmine_registry::sources::is_quarter(release) {
+        return Err(binding("unparsed reporting release"));
+    }
+    if value.locator != format!("{release}:{}!{}", value.sheet, value.cell) {
+        return Err(binding(
+            "read locator differs from the requested release or cell",
+        ));
+    }
+    if !profile.sources.is_empty() {
+        let anchor = workbook.make_anchor(&value.sheet, &value.cell);
+        let file = std::path::Path::new(&anchor.artifact_path)
+            .file_name()
+            .and_then(|p| p.to_str());
+        if !profile.sources.iter().any(|s| {
+            Some(s.file_name.as_str()) == file
+                && s.quarter == release
+                && s.sha256_hex == Digest32(workbook.sha256).to_hex()
+        }) {
+            return Err(binding(
+                "source file, digest and release do not match the registry",
+            ));
+        }
+    }
+    let sheet = workbook
+        .sheet(&value.sheet)
+        .ok_or_else(|| binding("source sheet absent"))?;
+    let (row, col) = parse_a1_ref(&value.cell).ok_or_else(|| binding("invalid cell reference"))?;
+    let cell = sheet.cell(row, col);
+    // The extracted value and source cell must still agree; callers cannot pair a read with another workbook.
+    let matches = match (&value.value, cell.map(|c| &c.value)) {
+        (
+            crate::mine_stats::MineStatsCell::Number { raw_text, value: x },
+            Some(CellValue::Number(y)),
+        ) => {
+            x.to_bits() == y.to_bits()
+                && cell.and_then(|c| c.number_text.as_ref()) == Some(raw_text)
+        }
+        (
+            crate::mine_stats::MineStatsCell::Nil { token }
+            | crate::mine_stats::MineStatsCell::NotApplicable { token },
+            Some(CellValue::Placeholder(t)),
+        ) => token == t,
+        (crate::mine_stats::MineStatsCell::Missing, None) => true,
+        _ => false,
+    };
+    if !matches {
+        return Err(binding("read does not match the source cell"));
+    }
+    let alias = profile
+        .mine_stats_label_aliases
+        .iter()
+        .find(|a| a.label == value.label && a.holds_for(release));
+    let label = alias.map_or(value.label.as_str(), |a| a.reads_as.as_str());
+    let unit = mine_stats_unit(value, label, cell)?;
+    let subject = profile
+        .shares
+        .iter()
+        .find(|s| s.label == value.site)
+        .map_or(value.site.as_str(), |s| s.subject.as_str());
+    let printed = parse_ownership(&value.site_raw)?;
+    let correction = profile.printed_share_corrections.iter().find(|c| {
+        c.subject == subject && value.printed_share.as_deref() == Some(c.printed.as_str())
+    });
+    let basis = if value.view == View::Summary && value.label.contains("_prod_100_") {
+        OwnershipBasis::Consolidated100
+    } else if let Some(c) = correction {
+        let num = i64::try_from(c.num).map_err(|_| binding("registered share out of range"))?;
+        let den = i64::try_from(c.den).map_err(|_| binding("registered share out of range"))?;
+        if num <= 0 || den <= 0 || num > den {
+            return Err(binding("invalid registered share"));
+        }
+        let g = gcd(num, den);
+        OwnershipBasis::Attributable {
+            num: num / g,
+            den: den / g,
+            source: ShareSource::Registry,
+        }
+    } else {
+        printed
+    };
+    let line = if value.view == View::Summary {
+        format!("summary:{}", normalized(label))
+    } else {
+        format!(
+            "site:{}:{}",
+            normalized(value.section.as_deref().unwrap_or("")),
+            normalized(label)
+        )
+    };
+    let key = PublicKey {
+        issuer: profile.issuer.clone(),
+        subject: subject.to_string(),
+        valid_period: period,
+        reporting_vintage: Vintage {
+            release: release.to_string(),
+            file_sha256: Digest32(workbook.sha256).to_hex(),
+        },
+        ownership_basis: basis,
+        scope: scope_for(profile, subject, release),
+        unit: unit.to_string(),
+        line: LineKey {
+            label: line,
+            occurrence: 0,
+        },
+    };
+    let typed = classify(
+        cell,
+        status_for(&profile.subject_statuses, subject, &period),
+    )?;
+    let mut keyed = public_claim(workbook, &value.sheet, &value.cell, key, typed);
+    keyed.printed_basis = printed;
+    keyed.basis_evidence = correction
+        .filter(|_| !value.label.contains("_prod_100_"))
+        .map(|c| c.evidence.clone());
+    keyed.label_as_printed = Some(value.label_as_printed.clone());
+    keyed.unit_evidence = alias.map(|a| a.evidence.clone());
+    keyed.cite_status(profile);
+    Ok(keyed)
+}
+
+/// A separate digest for the keyed projection. It preserves the existing identity-ledger root and binds
+/// status/basis interpretations, source anchors and all typed values for consumers of this projection.
+#[must_use]
+pub fn claims_digest<'a>(cells: impl IntoIterator<Item = &'a KeyedCell>) -> Digest32 {
+    let mut ordered: Vec<&KeyedCell> = cells.into_iter().collect();
+    ordered.sort_by(|a, b| (&a.key, &a.locator).cmp(&(&b.key, &b.locator)));
+    let mut enc = Encoder::new_frame(*b"PCLM", 1);
+    enc.put_u64(ordered.len() as u64);
+    for cell in ordered {
+        enc.put_str(&cell.locator);
+        enc.put_str(&cell.claim.claim_id.to_string());
+        enc.put_str(&cell.key.canonical_tag(raw_token(&cell.claim.value)));
+        encode_value(&mut enc, &cell.claim.value);
+        let mut printed = cell.key.clone();
+        printed.ownership_basis = cell.printed_basis;
+        enc.put_str(&printed.canonical_tag(""));
+        enc.put_str(cell.basis_evidence.as_deref().unwrap_or(""));
+        enc.put_str(cell.status_evidence.as_deref().unwrap_or(""));
+        enc.put_str(cell.label_as_printed.as_deref().unwrap_or(""));
+        enc.put_str(cell.unit_evidence.as_deref().unwrap_or(""));
+    }
+    blake3_hash(&enc.finish())
+}
+
+fn basis_json(basis: OwnershipBasis) -> String {
+    match basis {
+        OwnershipBasis::Consolidated100 => "{\"kind\":\"consolidated100\"}".to_string(),
+        OwnershipBasis::Unprinted => "{\"kind\":\"unprinted\"}".to_string(),
+        OwnershipBasis::Attributable { num, den, source } => format!(
+            "{{\"kind\":\"attributable\",\"share\":\"{num}/{den}\",\"source\":\"{}\"}}",
+            if source == ShareSource::Printed {
+                "printed"
+            } else {
+                "registry"
+            }
+        ),
+    }
+}
+
+impl KeyedCell {
+    pub(crate) fn cite_status(&mut self, profile: &IssuerProfile) {
+        self.status_evidence = profile
+            .subject_statuses
+            .iter()
+            .find(|s| s.subject == self.key.subject && s.applies(&self.key.valid_period))
+            .map(|s| s.evidence.clone());
+    }
+
+    /// Stable robot output. `unit` describes the stored number; `displayed` preserves formatting such as `%`.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        use crate::js;
+        let scope = match &self.key.scope {
+            Scope::Site => "{\"kind\":\"site\"}".to_string(),
+            Scope::JointVenture => "{\"kind\":\"joint_venture\"}".to_string(),
+            Scope::Company => "{\"kind\":\"company\"}".to_string(),
+            Scope::Region { map_version } => format!(
+                "{{\"kind\":\"region\",\"map_version\":{}}}",
+                js(map_version)
+            ),
+        };
+        let value = match &self.claim.value {
+            PublicValue::Number {
+                stored,
+                displayed,
+                under_status,
+            } => format!(
+                "{{\"kind\":\"number\",\"stored\":{},\"displayed\":{},\"display_refusal\":{},\"under_status\":{}}}",
+                js(stored),
+                displayed
+                    .as_ref()
+                    .ok()
+                    .map_or_else(|| "null".to_string(), |s| js(s)),
+                displayed
+                    .as_ref()
+                    .err()
+                    .map_or_else(|| "null".to_string(), |s| js(s)),
+                under_status.map_or("null", |s| match s {
+                    StatusKind::Disposed => "\"after_disposal\"",
+                    StatusKind::Withheld => "\"withheld\"",
+                    StatusKind::CareAndMaintenance => "\"care_and_maintenance\"",
+                })
+            ),
+            PublicValue::Nil { token, reason } => format!(
+                "{{\"kind\":\"nil\",\"token\":{},\"reason\":\"{}\"}}",
+                js(token),
+                match reason {
+                    NilReason::Unknown => "unknown",
+                    NilReason::Withheld => "withheld",
+                    NilReason::Disposed => "disposed",
+                }
+            ),
+            PublicValue::NotApplicable { token } => {
+                format!("{{\"kind\":\"not_applicable\",\"token\":{}}}", js(token))
+            }
+            PublicValue::Missing => "{\"kind\":\"missing\"}".to_string(),
+        };
+        let optional = |s: &Option<String>| s.as_deref().map_or_else(|| "null".to_string(), js);
+        format!(
+            "{{\"claim_id\":{},\"at\":{},\"sha256\":{},\"issuer\":{},\"subject\":{},\"period\":{},\"vintage\":{},\
+             \"ownership_basis\":{},\"printed_basis\":{},\"basis_evidence\":{},\"status_evidence\":{},\"scope\":{},\"unit\":{},\
+             \"line\":{},\"occurrence\":{},\"label_as_printed\":{},\"unit_evidence\":{},\"value\":{},\
+             \"evidence\":\"{}\",\"knowledge\":\"{}\"}}",
+            js(&self.claim.claim_id.to_string()),
+            js(&self.locator),
+            js(&self.key.reporting_vintage.file_sha256),
+            js(&self.key.issuer),
+            js(&self.key.subject),
+            js(&self.key.valid_period.code()),
+            js(&self.key.reporting_vintage.release),
+            basis_json(self.key.ownership_basis),
+            basis_json(self.printed_basis),
+            optional(&self.basis_evidence),
+            optional(&self.status_evidence),
+            scope,
+            js(&self.key.unit),
+            js(&self.key.line.label),
+            self.key.line.occurrence,
+            optional(&self.label_as_printed),
+            optional(&self.unit_evidence),
+            value,
+            if self.key.issuer == crate::synthetic::SYNTHETIC_ISSUER {
+                "synthetic"
+            } else if self.claim.evidence == EvidenceClass::ISSUER {
+                "issuer_assertion"
+            } else {
+                "assumed"
+            },
+            if self.claim.state == KnowledgeState::Known {
+                "known"
+            } else {
+                "unknown"
+            },
+        )
+    }
+}
+
 /// Types one data cell. `status` is the status that applies to the cell's subject and period
 /// ([`status_for`]).
 ///
@@ -379,13 +984,13 @@ pub struct LineKey {
     pub occurrence: u32,
 }
 
-/// The same figure across releases: a [`PublicKey`] without its vintage.
+/// The same figure across releases: a [`PublicKey`] without its vintage or share provenance.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SeriesKey {
     pub issuer: String,
     pub subject: String,
     pub valid_period: Period,
-    pub ownership_basis: OwnershipBasis,
+    pub ownership_basis: SeriesOwnershipBasis,
     pub scope: Scope,
     pub unit: String,
     pub line: LineKey,
@@ -412,7 +1017,7 @@ impl PublicKey {
             issuer: self.issuer.clone(),
             subject: self.subject.clone(),
             valid_period: self.valid_period,
-            ownership_basis: self.ownership_basis,
+            ownership_basis: self.ownership_basis.into(),
             scope: self.scope.clone(),
             unit: self.unit.clone(),
             line: self.line.clone(),
@@ -464,13 +1069,7 @@ impl PublicKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fmine_claim::{
-        AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport,
-    };
-    use fmine_core::rand::{PhiloxStream, RngKey};
-    use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState};
     use fmine_io::styles::NumberFormat;
-    use std::collections::BTreeMap;
 
     fn p(year: u16, kind: PeriodKind) -> Period {
         Period { year, kind }
@@ -809,194 +1408,9 @@ mod tests {
         ));
     }
 
-    /// The claim id differs whenever any key field or the raw token differs: 10⁴ (key, token) pairs drawn from
-    /// small alphabets that include the tag's own separators, so near-collisions are common.
-    #[test]
-    fn test_property_claim_id_injective_on_key_and_token() {
-        let mut rng = PhiloxStream::new(RngKey {
-            seed_root: 332,
-            partition: 1,
-            domain: 0,
-            var_group: 0,
-            realization: 0,
-            brick: 0,
-        });
-        let alphabet = ["", "a", "b", "|", ":", "1:", "a|b", "|1:a"];
-        let mut pick = |n: usize| (rng.next_u64() % n as u64) as usize;
-        let mut seen: BTreeMap<String, (PublicKey, String)> = BTreeMap::new();
-        let mut ids = std::collections::BTreeSet::new();
-        for _ in 0..10_000 {
-            let s = |i: usize| alphabet[i].to_string();
-            let kinds = [
-                PeriodKind::Quarter(1),
-                PeriodKind::Quarter(2),
-                PeriodKind::H1,
-                PeriodKind::FullYear,
-            ];
-            let bases = [
-                OwnershipBasis::Consolidated100,
-                OwnershipBasis::Unprinted,
-                OwnershipBasis::Attributable {
-                    num: 1,
-                    den: 2,
-                    source: ShareSource::Printed,
-                },
-                OwnershipBasis::Attributable {
-                    num: 1,
-                    den: 2,
-                    source: ShareSource::Registry,
-                },
-            ];
-            let key = PublicKey {
-                issuer: s(pick(3)),
-                subject: s(pick(8)),
-                valid_period: p(2024 + pick(2) as u16, kinds[pick(4)]),
-                reporting_vintage: Vintage {
-                    release: s(pick(4)),
-                    file_sha256: s(pick(3)),
-                },
-                ownership_basis: bases[pick(4)],
-                scope: match pick(3) {
-                    0 => Scope::Site,
-                    1 => Scope::Company,
-                    _ => Scope::Region {
-                        map_version: s(pick(8)),
-                    },
-                },
-                unit: s(pick(8)),
-                line: LineKey {
-                    label: s(pick(8)),
-                    occurrence: pick(2) as u32,
-                },
-            };
-            let raw = s(pick(8));
-            let tag = key.canonical_tag(&raw);
-            if let Some(prev) = seen.get(&tag) {
-                assert_eq!(prev, &(key.clone(), raw.clone()), "tag collision: {tag}");
-                continue;
-            }
-            let claim = Claim::new(
-                "public.aisc",
-                0_i64,
-                &tag,
-                Representation::Deterministic,
-                SpatialSupport::PeriodAggregate,
-                AdditivityClass::IntensiveWeighted,
-                EvidenceClass::Derived,
-                EpistemicStatus::KnownKnown,
-                KnowledgeState::Known,
-                ConfidentialityTier::Public,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            );
-            assert!(ids.insert(claim.claim_id), "claim id collision: {tag}");
-            seen.insert(tag, (key, raw));
-        }
-        // The draws revisit pairs, and every distinct pair got its own tag and id.
-        assert!(seen.len() > 5_000, "{}", seen.len());
-        assert_eq!(ids.len(), seen.len());
-    }
-
-    fn workspace_root() -> std::path::PathBuf {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-    }
-
-    /// The registered statuses, hand-written from E486–E489 and E818, and what each covers.
-    #[test]
-    fn test_subject_status_registry_golden() {
-        let profile = crate::sources::load_issuer_profile(&workspace_root(), "barrick")
-            .expect("barrick registry loads");
-        let row = |subject: &str, kind, first, last, evidence: &str| SubjectStatus {
-            subject: subject.to_string(),
-            kind,
-            first,
-            last,
-            evidence: evidence.to_string(),
-        };
-        assert_eq!(
-            profile.subject_statuses,
-            vec![
-                row(
-                    "Hemlo",
-                    StatusKind::Disposed,
-                    (2025, 12),
-                    None,
-                    "E486, E488"
-                ),
-                row(
-                    "Tongon",
-                    StatusKind::Disposed,
-                    (2026, 1),
-                    None,
-                    "E487, E488"
-                ),
-                row(
-                    "Loulo-Gounkoto",
-                    StatusKind::Withheld,
-                    (2025, 1),
-                    Some((2025, 9)),
-                    "E818"
-                ),
-                row(
-                    "Long Canyon",
-                    StatusKind::CareAndMaintenance,
-                    (2024, 1),
-                    None,
-                    "E489"
-                ),
-            ]
-        );
-        let s = &profile.subject_statuses;
-        let q = |y, n| p(y, PeriodKind::Quarter(n));
-        for (subject, period, want) in [
-            ("Hemlo", q(2025, 4), None),
-            ("Hemlo", p(2025, PeriodKind::FullYear), None),
-            ("Hemlo", q(2026, 1), Some(StatusKind::Disposed)),
-            ("Hemlo", p(2026, PeriodKind::H1), Some(StatusKind::Disposed)),
-            ("Tongon", q(2025, 4), None),
-            ("Tongon", q(2026, 2), Some(StatusKind::Disposed)),
-            ("Loulo-Gounkoto", q(2024, 4), None),
-            ("Loulo-Gounkoto", q(2025, 1), Some(StatusKind::Withheld)),
-            (
-                "Loulo-Gounkoto",
-                p(2025, PeriodKind::NineMonths),
-                Some(StatusKind::Withheld),
-            ),
-            ("Loulo-Gounkoto", q(2025, 4), None),
-            ("Long Canyon", q(2023, 4), None),
-            (
-                "Long Canyon",
-                q(2026, 2),
-                Some(StatusKind::CareAndMaintenance),
-            ),
-            ("Kibali", q(2026, 2), None),
-        ] {
-            assert_eq!(
-                status_for(s, subject, &period),
-                want,
-                "{subject} {period:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_units_registry_has_usd_m_usd_per_oz() {
-        let catalog = fmine_registry::RegistryCatalog::load_from_root(&workspace_root())
-            .expect("registries load");
-        for code in ["usd_m", "usd_per_oz"] {
-            assert!(
-                catalog.unit_symbols.iter().any(|u| u == code),
-                "{code} not registered"
-            );
-        }
-    }
-
     /// First publication and comparative: same series, different vintage, different tag.
     #[test]
-    fn test_series_key_drops_only_the_vintage() {
+    fn test_series_key_groups_vintages_without_changing_canonical_tags() {
         let first = PublicKey {
             issuer: "barrick".to_string(),
             subject: "Total Gold".to_string(),

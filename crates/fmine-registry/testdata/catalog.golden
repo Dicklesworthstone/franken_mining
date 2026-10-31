@@ -1,4 +1,4 @@
-[units] 16
+[units] 20
 t
 kt
 Mt
@@ -15,6 +15,10 @@ wt_pct
 mass_fraction
 usd_m
 usd_per_oz
+usd_per_lb
+usd_per_t
+percent
+ratio
 [crs] 10
 EPSG:4326
 EPSG:32611
