@@ -318,6 +318,10 @@ pub struct TieDiscovery {
     pub assignments: Vec<Assignment>,
     pub closed: Assignment,
     pub findings: Vec<(String, TieFinding)>,
+    /// Quantities with no true value even when every document is `Closed`, in name order. Every strict interval
+    /// lies inside the closed one, so no convention reconciles their prints: one of them is not a rounding of
+    /// the same value (a misprint, or a different quantity under one key). They make every assignment `Empty`.
+    pub conflicts: Vec<String>,
 }
 
 /// Why a tie discovery was refused.
@@ -438,10 +442,18 @@ pub fn discover_tie_conventions(printed: &[Printed]) -> Result<TieDiscovery, Tie
             (name.clone(), finding)
         })
         .collect();
+    let mut conflicts = Vec::new();
+    for (q, range) in &closed.ranges {
+        let overflow = |e: UnitsError| TieRefusal::Interval(String::new(), q.clone(), e.into());
+        if range.is_empty().map_err(overflow)? {
+            conflicts.push(q.clone());
+        }
+    }
     Ok(TieDiscovery {
         assignments,
         closed,
         findings,
+        conflicts,
     })
 }
 
@@ -972,6 +984,41 @@ mod tests {
         assert_eq!(
             discover_tie_conventions(&many),
             Err(TieRefusal::DocumentCount(5))
+        );
+    }
+
+    /// E692's shape: one document prints a quantity as 6.7 and a later one as 79. No rounding reconciles them, so
+    /// the quantity is a conflict and every assignment is `Empty`; a quantity both print alike is no conflict.
+    #[test]
+    fn test_tie_conflicts_name_irreconcilable_quantities() {
+        let cells = [
+            printed("first", "net_change_2024", "6.7", "0.1"),
+            printed("later", "net_change_2024", "79", "1"),
+            printed("first", "net_change_2023", "6.7", "0.1"),
+            printed("later", "net_change_2023", "6.7", "0.1"),
+        ];
+        let t = discover_tie_conventions(&cells).expect("discovery");
+        assert_eq!(t.conflicts, ["net_change_2024"]);
+        assert!(t.assignments.iter().all(|a| a.fit == Fit::Empty));
+        assert!(
+            t.findings
+                .iter()
+                .all(|(_, f)| *f == TieFinding::NoProperFit)
+        );
+        // Without the conflicting quantity the same documents fit, and no conflict is named.
+        let t = discover_tie_conventions(&cells[2..]).expect("discovery");
+        assert!(t.conflicts.is_empty());
+        assert!(t.assignments.iter().any(|a| a.fit == Fit::Proper));
+        // Prints a step apart touch at one closed point: no conflict, though no strict pair may fit properly.
+        let touching = [
+            printed("first", "q", "3.6", "0.1"),
+            printed("later", "q", "3.7", "0.1"),
+        ];
+        assert!(
+            discover_tie_conventions(&touching)
+                .expect("discovery")
+                .conflicts
+                .is_empty()
         );
     }
 

@@ -1333,3 +1333,48 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     checked against an independent census. `test_discovery_never_changes_verdict` is not written: discovery is
     a read-only report, and the expected-root test shows the root unmoved.
   - **Verification.** Self-verified on this machine only; nothing has run in CI.
+- **E850** Registered PDF documents and two-reader transcriptions (bd-plx1), and the tie discovery on them
+  (bd-4wvl.4 part 2; FACT, execution, 2026-10-31, owner machine, unless marked).
+  - **Documents.** `barrick.toml` registers three `[[document]]` rows: the Q4 2024 and Q4 2025 MD&As and the
+    Fourmile deck, with bytes, sha256, page count, URL and `published_at`. On 2026-10-31 each URL served the
+    registered bytes. The MD&As are Ex. 99.2 of SEC 6-Ks 0001193125-25-025337 (accepted 2025-02-12) and
+    0001193125-26-039501 (accepted 2026-02-05), whose MD&A text states the same "prepared as of" date as p.1 of
+    the registered bytes.
+  - **Deck vintage.** The registered deck's PDF ModDate is 2026-04-16 (CreationDate 2026-02-25), so its
+    `published_at` is 2026-04-16 (INFERENCE). When this revision, or the first one, was posted is not
+    established: the issuer's event page refuses our fetcher. E698's "two filings of February 2026" holds for
+    the deck's text only so far as the April revision kept it (OPEN).
+  - **Readers.** Two blind readers transcribed 65 cells on a fixed locator spec that held no tokens: reader A
+    from page images only, reader B from `pdftotext -layout`, checked on images. Neither saw the evidence notes
+    or the other's file. All 65 agree on token, quantity, unit, basis and period.
+    - Both reported that the deck's copper and GEO tables print the 2025 row as "2025" with a superscript 6,
+      where its gold table prints "2025g". The locator was corrected to "2025⁶" in both files, the one edit to
+      either.
+    - Both flagged, unprompted, that the Q4 2024 MD&A's 2024f GEO net change repeats its 2023e value (E692).
+  - **Run.** `fmine assure public --issuer barrick` on a scratch workspace with the registry: 130 entries, 65
+    accepted, none pending. The accepted-rows digest is
+    `606d890bff6700321d74b986f23dc4086e301da0c481c9db479739beb8236869`.
+    - **Tie** over the three documents, after one conflict was taken out: `geo_net_change_2024`, named at its
+      three locators, is E692's misprint found mechanically.
+    - **Fits.** The 23 remaining shared quantities fit properly under 12 of 64 assignments, and under `Closed`
+      at points only.
+    - **Conventions.** The deck's is identified as truncation. The Q4 2025 MD&A's is any of half-up, half-down
+      or half-even, and the Q4 2024 MD&A's any of the four (both FMINE-REF-104).
+    - **Root.** The state root is `d37903cf…`, equal to the expected root of 9b4c453: transcriptions are
+      report-only.
+  - **Signs.** E849's fixture used magnitudes; read signed, as the tables print them, the deck's convention is
+    still truncation.
+  - **Planted negatives, each reverted:**
+    - the token left out of the agreement check fails the disagreement tests (registry, run and xtask);
+    - a length-or-digest check weakened to length-and-digest accepts one altered byte, and the run test fails;
+    - conflicts never reported fail the kernel and run conflict tests.
+  - **Not claimed.**
+    - **Values stay out of git.** The transcription registry and its values stay in the scratch workspace
+      (OPEN-R7-1); the repository holds the mechanism, synthetic tests and the document rows only.
+    - **Same lineage.** Both readers are Claude subagents of one session: their agreement raises confidence,
+      not authority.
+    - **Inference.** "The deck truncates" is the kernel's inference from 65 cells under a one-convention-per-
+      document model; no filing states it.
+    - **Convention set.** The convention set lacks half-away-from-zero, which differs from half-up on negative
+      prints.
+    - **Verification.** Self-verified on this machine; nothing has run in CI.

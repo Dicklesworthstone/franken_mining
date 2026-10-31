@@ -2,6 +2,7 @@
 
 pub mod sources;
 pub mod toml_subset;
+pub mod transcriptions;
 
 use std::collections::BTreeSet;
 use std::fmt;

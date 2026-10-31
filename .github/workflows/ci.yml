@@ -77,9 +77,10 @@ jobs:
       - name: Rules precede forecasts
         if: matrix.profile == 'dev'
         run: cargo test -p xtask forecast::tests::test_rules_commit_precedes_forecasts -- --ignored --exact
-      # No issuer workbook is ever committed (OPEN-R7-1); synthetic workbooks are written outside the tree.
-      - name: No workbook in git
-        run: test -z "$(git ls-files '*.xlsx' '*.xls')"
+      # No issuer workbook or PDF is ever committed (OPEN-R7-1, bd-plx1), and no transcription row; synthetic
+      # files are written outside the tree.
+      - name: No workbook, PDF or transcription in git
+        run: test -z "$(git ls-files '*.xlsx' '*.xls' '*.pdf' '*.PDF' 'registries/transcriptions/')"
       # The source registry is data read at run time (bd-s9j3.1): a vintage is registered by editing
       # registries/sources/<issuer>.toml, so the release binary must not carry a registry digest.
       - name: No compiled-in source registry

@@ -153,6 +153,7 @@ pub fn synthetic_profile() -> IssuerProfile {
         region_members: Vec::new(),
         printed_share_corrections: Vec::new(),
         mine_stats_label_aliases: Vec::new(),
+        documents: Vec::new(),
         through: None,
     }
 }

@@ -31,6 +31,32 @@ pub const IDENTITY_FAMILIES: [&str; 5] = [
     "aisc_per_oz",
 ];
 
+/// Registered document kinds (`fmine_public::sources::DocumentKind::as_str`, bd-plx1): PDF filings whose values
+/// enter only as transcription rows, since the repository has no PDF reader.
+pub const DOCUMENT_KINDS: [&str; 4] = ["mda", "aif", "investor_deck", "partner_filing"];
+/// The prefixes a document's `published_at_basis` starts with: what the date rests on, then the citation.
+pub const PUBLISHED_AT_BASES: [&str; 2] = ["FACT: ", "INFERENCE: "];
+
+/// One registered PDF document (bd-plx1). A run that cites a transcribed value checks the document's bytes the
+/// way it checks a workbook's; it never reads values from the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentRow {
+    pub file: String,
+    /// The directory holding the file, relative to the workspace root: `dir` when given, else `corpus_dir`.
+    pub dir: String,
+    /// One of [`DOCUMENT_KINDS`].
+    pub kind: String,
+    pub url: String,
+    pub url_basis: String,
+    /// `YYYY-MM-DD`: the earliest date its basis shows these bytes, or their text, were public.
+    pub published_at: String,
+    /// Starts with one of [`PUBLISHED_AT_BASES`].
+    pub published_at_basis: String,
+    pub pages: u64,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
 /// One registered workbook.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceRow {
@@ -213,6 +239,9 @@ pub struct SourcesRegistry {
     pub printed_share_corrections: Vec<PrintedShareCorrection>,
     /// Stale Mine Statistics labels read as registered ones, at most one per label for any release, in file order.
     pub mine_stats_label_aliases: Vec<MineStatsLabelAlias>,
+    /// Registered PDF documents (bd-plx1), in file order. Their file names and digests are unique across
+    /// workbooks and documents together, since a citation names a file.
+    pub documents: Vec<DocumentRow>,
 }
 
 impl SourcesRegistry {
@@ -255,7 +284,7 @@ impl From<SubsetError> for SourcesError {
     }
 }
 
-fn fail<T>(line: usize, reason: impl Into<String>) -> Result<T, SourcesError> {
+pub(crate) fn fail<T>(line: usize, reason: impl Into<String>) -> Result<T, SourcesError> {
     Err(SourcesError {
         line,
         reason: reason.into(),
@@ -307,7 +336,7 @@ pub fn is_date(date: &str) -> bool {
     (1..=days).contains(&d)
 }
 
-fn is_lower_hex64(s: &str) -> bool {
+pub(crate) fn is_lower_hex64(s: &str) -> bool {
     s.len() == 64
         && s.bytes()
             .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
@@ -322,14 +351,14 @@ fn is_plain_relative(s: &str) -> bool {
 }
 
 /// Reads the fields of one row (or of the top level), refusing missing, mistyped and unknown keys.
-struct Fields<'a> {
-    fields: &'a [TomlField],
-    line: usize,
-    what: String,
+pub(crate) struct Fields<'a> {
+    pub(crate) fields: &'a [TomlField],
+    pub(crate) line: usize,
+    pub(crate) what: String,
 }
 
 impl<'a> Fields<'a> {
-    fn of_row(row: &'a TomlRow) -> Self {
+    pub(crate) fn of_row(row: &'a TomlRow) -> Self {
         Self {
             fields: &row.fields,
             line: row.line,
@@ -337,7 +366,7 @@ impl<'a> Fields<'a> {
         }
     }
 
-    fn only(&self, allowed: &[&str]) -> Result<(), SourcesError> {
+    pub(crate) fn only(&self, allowed: &[&str]) -> Result<(), SourcesError> {
         for f in self.fields {
             if !allowed.contains(&f.key.as_str()) {
                 return fail(
@@ -354,7 +383,7 @@ impl<'a> Fields<'a> {
         Ok(())
     }
 
-    fn string(&self, key: &str) -> Result<(String, usize), SourcesError> {
+    pub(crate) fn string(&self, key: &str) -> Result<(String, usize), SourcesError> {
         match self.fields.iter().find(|f| f.key == key) {
             Some(TomlField {
                 value: TomlValue::Str(s),
@@ -375,7 +404,7 @@ impl<'a> Fields<'a> {
         }
     }
 
-    fn positive_int(&self, key: &str) -> Result<(u64, usize), SourcesError> {
+    pub(crate) fn positive_int(&self, key: &str) -> Result<(u64, usize), SourcesError> {
         match self.fields.iter().find(|f| f.key == key) {
             Some(TomlField {
                 value: TomlValue::Int(n),
@@ -449,6 +478,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "region_member",
             "printed_share_correction",
             "mine_stats_label_alias",
+            "document",
         ]
         .contains(&row.table.as_str())
         {
@@ -533,6 +563,103 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
     }
     if sources.is_empty() {
         return fail(0, "no [[source]] rows");
+    }
+
+    let mut documents = Vec::new();
+    for row in doc.rows_of("document") {
+        let f = Fields::of_row(row);
+        f.only(&[
+            "file",
+            "dir",
+            "kind",
+            "url",
+            "url_basis",
+            "published_at",
+            "published_at_basis",
+            "pages",
+            "bytes",
+            "sha256",
+        ])?;
+        let (file, file_line) = f.string("file")?;
+        let (kind, kind_line) = f.string("kind")?;
+        let (url, url_line) = f.string("url")?;
+        let (url_basis, basis_line) = f.string("url_basis")?;
+        let (published_at, date_line) = f.string("published_at")?;
+        let (published_at_basis, pub_basis_line) = f.string("published_at_basis")?;
+        let (pages, _) = f.positive_int("pages")?;
+        let (bytes, _) = f.positive_int("bytes")?;
+        let (sha256, sha_line) = f.string("sha256")?;
+        if file.contains('/') || file.contains('\\') || file.starts_with('.') {
+            return fail(file_line, format!("file {file:?} must be a bare file name"));
+        }
+        if !files.insert(file.clone()) {
+            return fail(file_line, format!("duplicate file {file:?}"));
+        }
+        let dir = match f.optional_string("dir")? {
+            Some(d) if !is_plain_relative(&d) => {
+                return fail(row.line, format!("dir {d:?} must be a plain relative path"));
+            }
+            Some(d) => d,
+            None => corpus_dir.clone(),
+        };
+        if !DOCUMENT_KINDS.contains(&kind.as_str()) {
+            return fail(
+                kind_line,
+                format!(
+                    "document kind {kind:?} is not registered ({})",
+                    DOCUMENT_KINDS.join(", ")
+                ),
+            );
+        }
+        if !url.starts_with("https://") || url.ends_with('/') {
+            return fail(url_line, "url must start with https:// and name a file");
+        }
+        if !is_url_basis(&url_basis) {
+            return fail(
+                basis_line,
+                format!(
+                    "url_basis {url_basis:?} is not registered ({}, or \"{URL_BASIS_FETCHED}YYYY-MM-DD\")",
+                    URL_BASES.join(", ")
+                ),
+            );
+        }
+        if !is_date(&published_at) {
+            return fail(
+                date_line,
+                format!("published_at {published_at:?} is not YYYY-MM-DD"),
+            );
+        }
+        if !PUBLISHED_AT_BASES.iter().any(|p| {
+            published_at_basis
+                .strip_prefix(p)
+                .is_some_and(|r| !r.trim().is_empty())
+        }) {
+            return fail(
+                pub_basis_line,
+                format!(
+                    "published_at_basis must start with {} and cite its source",
+                    PUBLISHED_AT_BASES.map(|p| format!("{p:?}")).join(" or ")
+                ),
+            );
+        }
+        if !is_lower_hex64(&sha256) {
+            return fail(sha_line, "sha256 must be 64 lowercase hex characters");
+        }
+        if !digests.insert(sha256.clone()) {
+            return fail(sha_line, format!("duplicate sha256 {sha256}"));
+        }
+        documents.push(DocumentRow {
+            file,
+            dir,
+            kind,
+            url,
+            url_basis,
+            published_at,
+            published_at_basis,
+            pages,
+            bytes,
+            sha256,
+        });
     }
 
     let mut subjects = Vec::new();
@@ -1025,6 +1152,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         region_members,
         printed_share_corrections,
         mine_stats_label_aliases,
+        documents,
     })
 }
 
@@ -1707,5 +1835,116 @@ mod tests {
                 && !is_quarter("26Q2")
                 && !is_quarter("2026Q22")
         );
+    }
+
+    /// A `[[document]]` row with one field replaced (`key = value` lines, `None` drops the key).
+    fn document(replace: &[(&str, Option<&str>)]) -> String {
+        let fields = [
+            ("file", "\"D.pdf\""),
+            ("dir", "\"corpus/docs\""),
+            ("kind", "\"mda\""),
+            ("url", "\"https://example.org/files/D.pdf\""),
+            ("url_basis", "\"fetched and verified 2030-02-01\""),
+            ("published_at", "\"2030-01-15\""),
+            (
+                "published_at_basis",
+                "\"FACT: filing index accepted 2030-01-15\"",
+            ),
+            ("pages", "12"),
+            ("bytes", "30"),
+            (
+                "sha256",
+                "\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"",
+            ),
+        ];
+        let mut out = String::from("\n[[document]]\n");
+        for (key, value) in fields {
+            match replace.iter().find(|(k, _)| *k == key) {
+                Some((_, None)) => {}
+                Some((_, Some(v))) => out.push_str(&format!("{key} = {v}\n")),
+                None => out.push_str(&format!("{key} = {value}\n")),
+            }
+        }
+        for (key, value) in replace {
+            if let (false, Some(v)) = (fields.iter().any(|(k, _)| k == key), value) {
+                out.push_str(&format!("{key} = {v}\n"));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn test_documents_parse_and_refuse() {
+        let reg = parse_sources_registry(&minimal("", &document(&[]))).expect("valid");
+        assert_eq!(
+            reg.documents,
+            [DocumentRow {
+                file: "D.pdf".to_string(),
+                dir: "corpus/docs".to_string(),
+                kind: "mda".to_string(),
+                url: "https://example.org/files/D.pdf".to_string(),
+                url_basis: "fetched and verified 2030-02-01".to_string(),
+                published_at: "2030-01-15".to_string(),
+                published_at_basis: "FACT: filing index accepted 2030-01-15".to_string(),
+                pages: 12,
+                bytes: 30,
+                sha256: "c".repeat(64),
+            }]
+        );
+        // No dir: the registry's corpus_dir. No documents at all is a valid registry.
+        let reg = parse_sources_registry(&minimal("", &document(&[("dir", None)]))).expect("valid");
+        assert_eq!(reg.documents[0].dir, "corpus/demo");
+        assert!(
+            parse_sources_registry(&minimal("", ""))
+                .expect("valid")
+                .documents
+                .is_empty()
+        );
+        let sha_a = format!("\"{SHA_A}\"");
+        for (replace, why) in [
+            (
+                vec![("kind", Some("\"annual_report\""))],
+                "document kind \"annual_report\" is not registered",
+            ),
+            (
+                vec![("file", Some("\"A.xlsx\""))],
+                "duplicate file \"A.xlsx\"",
+            ),
+            (vec![("file", Some("\"docs/D.pdf\""))], "bare file name"),
+            (vec![("sha256", Some(sha_a.as_str()))], "duplicate sha256"),
+            (vec![("dir", Some("\"../corpus\""))], "plain relative path"),
+            (
+                vec![("url", Some("\"http://example.org/D.pdf\""))],
+                "https://",
+            ),
+            (
+                vec![("url_basis", Some("\"guessed\""))],
+                "url_basis \"guessed\"",
+            ),
+            (
+                vec![("published_at", Some("\"2030-02-30\""))],
+                "is not YYYY-MM-DD",
+            ),
+            (
+                vec![("published_at_basis", Some("\"filing index\""))],
+                "must start with",
+            ),
+            (
+                vec![("published_at_basis", Some("\"FACT: \""))],
+                "cite its source",
+            ),
+            (
+                vec![("pages", Some("0"))],
+                "pages must be a positive integer",
+            ),
+            (vec![("published_at", None)], "has no published_at"),
+            (
+                vec![("quarter", Some("\"2030Q1\""))],
+                "unknown key \"quarter\"",
+            ),
+        ] {
+            let e = refusal(&minimal("", &document(&replace)));
+            assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
+        }
     }
 }

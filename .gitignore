@@ -29,8 +29,13 @@ flamegraph.svg
 # planning/corpus/ and planning/research/, which cite documents by file, page and cell.
 /corpus_of_input_docs/
 *.pdf
+*.PDF
 *.xlsx
 *.xls
+
+# Values transcribed by hand from those documents (bd-plx1) are held back pending the owner's decision
+# OPEN-R7-1 (committing transcribed values). The mechanism and its synthetic tests are committed; the rows are not.
+/registries/transcriptions/
 
 # Held back from the public repository pending owner review: notes on a source document whose
 # cover carries a confidentiality notice. Do not force-add.

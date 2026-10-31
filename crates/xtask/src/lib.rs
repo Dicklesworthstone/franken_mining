@@ -812,8 +812,13 @@ pub fn check_det_in_source<'a>(
 ///
 /// On success it returns one JSON log line per registry, in file-name order:
 /// `{"stage":"registry","issuer","sources","subjects","reconstructions","label_checks","mine_stats_labels",
-/// "check":"pass"}`. `label_checks` counts the checks the run makes: a set shared by two reconstructions
-/// counts once for each.
+/// "documents","check":"pass"}`. `label_checks` counts the checks the run makes: a set shared by two
+/// reconstructions counts once for each.
+///
+/// When `registries/transcriptions/<issuer>.toml` exists (git-ignored, so never in CI; bd-plx1), it must parse
+/// against the issuer's registered documents and pass the two-reader check with no disagreement; its line is
+/// `{"stage":"transcriptions","issuer","entries","accepted","single_reader","check":"pass"}`. The documents'
+/// bytes are checked at run time, not here.
 pub fn check_sources_registry(root: &Path) -> Result<Vec<String>, Vec<String>> {
     let dir = root.join("registries").join("sources");
     let entries =
@@ -833,21 +838,65 @@ pub fn check_sources_registry(root: &Path) -> Result<Vec<String>, Vec<String>> {
     let mut lines = Vec::new();
     let mut errors = Vec::new();
     for p in &files {
-        match fmine_registry::sources::load_sources_registry(p) {
-            Ok(reg) => lines.push(format!(
-                "{{\"stage\":\"registry\",\"issuer\":\"{}\",\"sources\":{},\"subjects\":{},\"reconstructions\":{},\
-                 \"label_checks\":{},\"mine_stats_labels\":{},\"check\":\"pass\"}}",
-                reg.issuer.replace('\\', "\\\\").replace('"', "\\\""),
-                reg.sources.len(),
-                reg.subjects.len(),
-                reg.reconstructions.len(),
-                reg.reconstructions
-                    .iter()
-                    .map(|r| r.label_checks.len())
-                    .sum::<usize>(),
-                reg.mine_stats_labels.len()
-            )),
-            Err(e) => errors.push(format!("registry-check {}: {e}", p.display())),
+        let reg = match fmine_registry::sources::load_sources_registry(p) {
+            Ok(reg) => reg,
+            Err(e) => {
+                errors.push(format!("registry-check {}: {e}", p.display()));
+                continue;
+            }
+        };
+        let issuer = reg.issuer.replace('\\', "\\\\").replace('"', "\\\"");
+        lines.push(format!(
+            "{{\"stage\":\"registry\",\"issuer\":\"{issuer}\",\"sources\":{},\"subjects\":{},\"reconstructions\":{},\
+             \"label_checks\":{},\"mine_stats_labels\":{},\"documents\":{},\"check\":\"pass\"}}",
+            reg.sources.len(),
+            reg.subjects.len(),
+            reg.reconstructions.len(),
+            reg.reconstructions
+                .iter()
+                .map(|r| r.label_checks.len())
+                .sum::<usize>(),
+            reg.mine_stats_labels.len(),
+            reg.documents.len()
+        ));
+        let tp = root
+            .join("registries")
+            .join("transcriptions")
+            .join(format!("{}.toml", reg.issuer));
+        if !tp.is_file() {
+            continue;
+        }
+        match fmine_registry::transcriptions::load_transcriptions(&tp, &reg.issuer, &reg.documents)
+        {
+            Err(e) => errors.push(format!("registry-check {}: {e}", tp.display())),
+            Ok(t) => {
+                let a = fmine_registry::transcriptions::agree(&t);
+                if a.is_consistent() {
+                    lines.push(format!(
+                        "{{\"stage\":\"transcriptions\",\"issuer\":\"{issuer}\",\"entries\":{},\"accepted\":{},\
+                         \"single_reader\":{},\"check\":\"pass\"}}",
+                        t.entries.len(),
+                        a.accepted.len(),
+                        a.single_reader.len()
+                    ));
+                } else {
+                    let at: Vec<String> = a
+                        .disagreements
+                        .iter()
+                        .map(|d| format!("{} ({})", d.locator, d.fields.join(", ")))
+                        .chain(
+                            a.quantity_clashes
+                                .iter()
+                                .map(|(doc, q, _)| format!("{doc} quantity {q} at two locators")),
+                        )
+                        .collect();
+                    errors.push(format!(
+                        "registry-check {}: readers disagree at {}",
+                        tp.display(),
+                        at.join("; ")
+                    ));
+                }
+            }
         }
     }
     if errors.is_empty() {
@@ -1258,17 +1307,24 @@ mod tests {
             })
             .sum();
         assert_eq!(
-            lines,
-            vec![format!(
+            lines[0],
+            format!(
                 "{{\"stage\":\"registry\",\"issuer\":\"barrick\",\"sources\":{},\"subjects\":{},\
-                 \"reconstructions\":{},\"label_checks\":{},\"mine_stats_labels\":{},\"check\":\"pass\"}}",
+                 \"reconstructions\":{},\"label_checks\":{},\"mine_stats_labels\":{},\"documents\":{},\
+                 \"check\":\"pass\"}}",
                 count("[[source]]"),
                 count("[[subject]]"),
                 count("[[reconstruction]]"),
                 applied,
-                count("[[mine_stats_label]]")
-            )]
+                count("[[mine_stats_label]]"),
+                count("[[document]]")
+            )
         );
+        // A local (git-ignored) transcription registry adds its own line; CI and a fresh clone have none.
+        let local = root
+            .join("registries/transcriptions/barrick.toml")
+            .is_file();
+        assert_eq!(lines.len(), 1 + usize::from(local), "{lines:?}");
         let scratch = std::env::temp_dir().join(format!("xtask-registry-{}", std::process::id()));
         let dir = scratch.join("registries").join("sources");
         fs::create_dir_all(&dir).expect("scratch dir");
@@ -1284,13 +1340,57 @@ mod tests {
             errs[0].contains("barrick.toml: line ") && errs[0].contains("duplicate sha256"),
             "{errs:?}"
         );
-        fs::write(dir.join("other.toml"), text).expect("write");
+        fs::write(dir.join("other.toml"), &text).expect("write");
         let errs = check_sources_registry(&scratch).expect_err("issuer/file-name mismatch");
         assert!(
             errs.iter()
                 .any(|e| e.contains("does not match the file name")),
             "{errs:?}"
         );
+        let _ = fs::remove_dir_all(&scratch);
+
+        // bd-plx1: a transcription registry beside the sources registry is checked against its documents and
+        // the two-reader rule. Synthetic rows (labels and tokens are invented) on a registered document.
+        let scratch = std::env::temp_dir().join(format!("xtask-transcribe-{}", std::process::id()));
+        fs::create_dir_all(scratch.join("registries/sources")).expect("scratch dir");
+        fs::create_dir_all(scratch.join("registries/transcriptions")).expect("scratch dir");
+        fs::write(scratch.join("registries/sources/barrick.toml"), &text).expect("write");
+        let sha = "63b3af0b98436900159f6ddac7f2920a0178f0e8651f1ee262d07bbaa690d281";
+        let entry = |reader: &str, token: &str| {
+            format!(
+                "\n[[entry]]\ndoc = \"Barrick_Q4_2025_MD-A.pdf\"\ndoc_sha256 = \"{sha}\"\npage = 1\n\
+                 table = \"Synthetic table\"\nrow = \"Synthetic row\"\ncol = \"Synthetic column\"\n\
+                 token = \"{token}\"\nquantity = \"synthetic\"\nunit = \"none\"\nbasis = \"none\"\n\
+                 period = \"none\"\nreader = \"{reader}\"\n"
+            )
+        };
+        let write = |rows: &[String]| {
+            fs::write(
+                scratch.join("registries/transcriptions/barrick.toml"),
+                format!(
+                    "schema = \"fmine.transcriptions.v1\"\nissuer = \"barrick\"\n{}",
+                    rows.concat()
+                ),
+            )
+            .expect("write");
+        };
+        write(&[entry("reader_a", "1"), entry("reader_b", "1")]);
+        let lines = check_sources_registry(&scratch).expect("agreeing rows pass");
+        assert_eq!(
+            lines[1],
+            "{\"stage\":\"transcriptions\",\"issuer\":\"barrick\",\"entries\":2,\"accepted\":1,\
+             \"single_reader\":0,\"check\":\"pass\"}"
+        );
+        write(&[entry("reader_a", "1"), entry("reader_b", "2")]);
+        let errs = check_sources_registry(&scratch).expect_err("disagreeing rows fail");
+        assert!(
+            errs[0].contains("readers disagree at Barrick_Q4_2025_MD-A.pdf:p1:")
+                && errs[0].ends_with("(token)"),
+            "{errs:?}"
+        );
+        write(&[entry("reader_a", "1").replace(sha, &"0".repeat(64))]);
+        let errs = check_sources_registry(&scratch).expect_err("other bytes fail");
+        assert!(errs[0].contains("read from other bytes"), "{errs:?}");
         let _ = fs::remove_dir_all(&scratch);
     }
 

@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "transcribe"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
@@ -167,6 +167,23 @@ The public lane of M0 (`fmine assure public`).
   value, both as displayed (`mine_ledger::displayed_number`). Units kt and Mlb (1 Mlb = 45,359,237/10⁸ kt,
   from `AVDP_LB_TO_GRAMS_NUM`) are tried on those numbers alone, apart from the registered alias. The section
   holds counts only and is not in the state root.
+- `transcribe::{load_transcription_report, transcription_json, TranscriptionReport, CheckedDocument,
+  TieOutcome}`, `sources::{DocumentRow, transcriptions_path}`, `IssuerProfile::documents` and
+  `PublicAssuranceReport::transcriptions` (bd-plx1, bd-4wvl.4 part 2). When
+  `<workspace>/registries/transcriptions/<issuer>.toml` exists and the run has no `--through` bound (documents
+  carry no release quarter), `run_public_assurance`:
+  - checks the bytes and sha256 of every document the registry cites, and refuses (`FMINE-REF-502`, exit 8)
+    naming each missing or altered file; uncited documents are never read, so CI, which caches only the
+    workbooks, needs none;
+  - applies the two-reader check and refuses (`FMINE-REF-502`) naming each locator where readers disagree, with
+    the differing field names and never their values; a locator one reader has entered is pending and listed;
+  - feeds the accepted point values that two or more documents print under one quantity key to
+    `discover_tie_conventions`. A quantity whose prints no convention reconciles (its `Closed` meet is empty)
+    is a conflict, listed with its locators, and the discovery re-runs without it.
+  - The payload's `transcriptions` section, after `unit_discovery`, holds citations (file, kind,
+    `published_at` and its basis, sha256), counts, the accepted-rows digest, pending locators, conflicts and each
+    document's convention finding (FMINE-REF-104 when ambiguous); never a transcribed value. It is `null` when
+    the registry is absent and is not in the state root.
 - `aisc::{Operand, OperandRole, OperandValue, operand_at}` and `IdentityInstance::operands` (bd-sjrh.1, part 2
   of BD-329.S1). Each instance cites every cell its state was computed from, with its role (total, line,
   rate, ounces, numerator, NCI line, component, label check, member rate, member ounces) and its value as read.
@@ -487,6 +504,16 @@ The public lane of M0 (`fmine assure public`).
     Mlb none, so kt is identified. The synthetic Mine Stats print no row in pounds: 0 pairs, no fit.
   - **Share** (`aisc::tests::test_feasible_share_matches_kernel_share_interval`): `feasible_share` equals the
     kernel's `share_interval` on all 15,800 grid points with 2n − k ≥ 1.
+- `PO-PUB-13` (transcriptions, bd-plx1; synthetic documents and rows, `transcribe::tests`):
+  - E698's shape signed as printed ((3.6) and 1.7 against (3.7) and 1.8, step 0.1): 3 of 16 assignments fit
+    properly, the `Closed` check fits at points only, the deck's convention is `truncate` and the MD&A's is any
+    of `half_up`, `half_down`, `half_even` (FMINE-REF-104). The section names no transcribed value, and the
+    state root is unchanged without the registry.
+  - E692's shape (6.7 against 79): a conflict naming both locators; the re-run without it finds the same deck
+    convention.
+  - Refusals, each `FMINE-REF-502` exit 8: a reader's planted different token (the locator and `token` named,
+    no value); one altered byte of a cited document; a missing cited document. A `--through` run reads no
+    transcriptions. A lone reader's locator is pending, not refused.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.

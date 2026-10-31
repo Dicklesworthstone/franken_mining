@@ -1067,6 +1067,77 @@ mod tests {
         ws
     }
 
+    /// bd-plx1's e2e at the envelope: a synthetic workspace with one registered document and a two-reader
+    /// transcription registry runs and prints the `transcriptions` section; one reader's altered token refuses
+    /// (exit 8) naming the locator; a removed document refuses (exit 8) naming the file. Rows are invented.
+    #[test]
+    fn test_assure_public_transcriptions_refuse_by_locator_and_document() {
+        let ws = synthetic_workspace("transcribe");
+        let doc: &[u8] = b"%PDF-1.7 synthetic document, never parsed";
+        std::fs::write(ws.join("corpus").join("Doc.pdf"), doc).expect("document");
+        let sha = fmine_core::hash::sha256(doc).to_hex();
+        let reg = registry_path(&ws, "synthetic");
+        let mut toml = std::fs::read_to_string(&reg).expect("registry");
+        toml.push_str(&format!(
+            "\n[[document]]\nfile = \"Doc.pdf\"\nkind = \"mda\"\nurl = \"https://example.invalid/Doc.pdf\"\n\
+             url_basis = \"W1 table\"\npublished_at = \"2030-02-01\"\npublished_at_basis = \"FACT: synthetic\"\n\
+             pages = 3\nbytes = {}\nsha256 = \"{sha}\"\n",
+            doc.len()
+        ));
+        std::fs::write(&reg, toml).expect("registry");
+        let rows = |second: &str| {
+            let entry = |reader: &str, token: &str| {
+                format!(
+                    "\n[[entry]]\ndoc = \"Doc.pdf\"\ndoc_sha256 = \"{sha}\"\npage = 2\ntable = \"Table\"\nrow = \"Row\"\n\
+                     col = \"Col\"\ntoken = \"{token}\"\nquantity = \"q\"\nunit = \"Moz\"\nbasis = \"attributable\"\n\
+                     period = \"2030\"\nreader = \"{reader}\"\n"
+                )
+            };
+            format!(
+                "schema = \"fmine.transcriptions.v1\"\nissuer = \"synthetic\"\n{}{}",
+                entry("reader_a", "(1.5)"),
+                entry("reader_b", second)
+            )
+        };
+        let path = fmine_public::sources::transcriptions_path(&ws, "synthetic");
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+        let cmd = CliCommand::AssurePublic {
+            issuer: "synthetic".to_string(),
+            through: None,
+        };
+        std::fs::write(&path, rows("(1.5)")).expect("rows");
+        let env = execute_command(&cmd, &ws);
+        assert_eq!((env.exit_code, env.status), (0, "ok"), "{}", env.to_json());
+        assert!(
+            env.to_json()
+                .contains("\"entries\":2,\"accepted\":1,\"accepted_digest\":"),
+            "{}",
+            env.to_json()
+        );
+        std::fs::write(&path, rows("(1.6)")).expect("rows");
+        let env = execute_command(&cmd, &ws);
+        assert_eq!((env.exit_code, env.status), (8, "refused"));
+        let json = env.to_json();
+        assert!(
+            json.contains("at Doc.pdf:p2:Table:Row/Col (reader_a, reader_b: token)"),
+            "{json}"
+        );
+        assert!(
+            !json.contains("1.6") && json.contains("\"payload\":null"),
+            "{json}"
+        );
+        std::fs::write(&path, rows("(1.5)")).expect("rows");
+        std::fs::remove_file(ws.join("corpus").join("Doc.pdf")).expect("remove document");
+        let env = execute_command(&cmd, &ws);
+        assert_eq!((env.exit_code, env.status), (8, "refused"));
+        assert!(
+            env.to_json().contains("missing: Doc.pdf"),
+            "{}",
+            env.to_json()
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
     fn envelope_for(a: &[&str]) -> Envelope {
         invoke(&args(a), &workspace_root()).0
     }

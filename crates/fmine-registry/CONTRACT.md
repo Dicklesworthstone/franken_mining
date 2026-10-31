@@ -5,7 +5,7 @@
 - **Layer:** `S0` (Substrate)
 - **Subsystem:** `Bedrock`
 - **LOC Budget:** `10k planned / 12k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["catalog", "parser", "sources", "toml_subset"]`
+- **Allowed Module Families:** `["catalog", "parser", "sources", "toml_subset", "transcriptions"]`
 
 ## 2. Mathematical & Domain Formulation
 Parses and validates the 8 canonical TOML registries in `registries/` (`loc_budget`, `workspace_topology`, `lifts`, `units`, `crs`, `calendars`, `refusals`, `verbs`) and verifies 1:1 alignment between `registries/refusals.toml` and `fmine_evidence::REFUSAL_CATALOG`.
@@ -27,6 +27,28 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   stale unit and read as a registered one in files released from `first` to `last`: `label` and `reads_as`
   (both registered `[[mine_stats_label]]` labels, never the same one), release quarters `first` and `last` ≥
   `first`, `evidence`; no two rows of one label over overlapping releases. Values are never converted.
+- `sources::{DocumentRow, DOCUMENT_KINDS, PUBLISHED_AT_BASES}`, `SourcesRegistry::documents`, `sources::is_date`
+  (bd-plx1): optional `[[document]]` rows, one PDF each: a bare `file` and a sha256 unique across workbooks and
+  documents, optional `dir` (a plain relative path; default `corpus_dir`), `kind` (`mda`, `aif`,
+  `investor_deck` or `partner_filing`), an `https://` `url` naming a file, a registered `url_basis`,
+  `published_at` (a calendar date) with `published_at_basis` starting `"FACT: "` or `"INFERENCE: "` and citing
+  its source, positive `pages` and `bytes`. No value is ever read from a document.
+- `transcriptions::{parse_transcriptions, load_transcriptions, TranscriptionRegistry, EntryRow, Locator, Token,
+  Decimal, parse_token, agree, Agreement, Accepted, Disagreement, TRANSCRIPTIONS_SCHEMA, MAX_SCALE}` (bd-plx1):
+  `registries/transcriptions/<issuer>.toml` (`fmine.transcriptions.v1`; git-ignored pending OPEN-R7-1). Each
+  `[[entry]]` is one reader's read of one cell: `doc` (a registered document) and `doc_sha256` (its registered
+  digest, so a re-posted document is a new vintage), `page` (at most the document's `pages`), `table`, `row`,
+  `col` (labels as printed), `token` (exactly as printed), `quantity` (a key two documents share when they print
+  the same quantity), `unit`, `basis`, `period`, `reader` (a role id, never a name); one entry per reader and
+  locator, and per reader, document and quantity. `parse_token` reads "(708)" as −708, "6.7" as 67 at scale 1
+  (step 0.1), "1,423" as 1423, and "200 - 230" or "200–230" as a range; a dash, "n/a" or bad grouping refuses
+  with a reason that names no value. `agree` accepts a locator only when two or more readers entered it with
+  the same token, quantity, unit, basis and period; a disagreement lists the readers and the differing fields
+  (never their values) and is never resolved, a third reader included; a lone reader's locator is pending; one
+  quantity agreed at two locators of one document accepts neither. `Agreement::digest` is the sha256 of the
+  accepted rows without readers, so a third reader who agrees reproduces it. Locators are cited
+  `<doc>:p<page>:<table>:<row>/<col>`: bd-plx1's form with the table added, since one page can print two tables
+  with the same labels.
 
 ## 5. Guards & Typed Refusals
 - `RegistryError::MissingEntry`, `RegistryError::CatalogMismatch`, `RegistryError::Io`.

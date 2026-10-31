@@ -14,6 +14,7 @@ pub mod mine_ledger;
 pub mod mine_stats;
 pub mod sources;
 pub mod synthetic;
+pub mod transcribe;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -243,6 +244,10 @@ pub struct PublicAssuranceReport {
     /// tables (bd-prmn.8). A diagnostic: it changes no instance's state and is not in the state root.
     pub one_cell: Vec<OneCellCheck>,
     pub ledger_anchor: LedgerAnchor,
+    /// Values transcribed from registered PDF documents and the tie discovery over them (bd-plx1), when the
+    /// workspace has a transcription registry and the run has no `--through` bound. Report-only; not in the
+    /// state root.
+    pub transcriptions: Option<transcribe::TranscriptionReport>,
 }
 
 /// How every hidden-scope instance is labelled.
@@ -1048,6 +1053,9 @@ impl PublicAssuranceReport {
         );
         self.construction_discovery_json(&mut o);
         self.unit_discovery_json(&mut o);
+        o.push_str(&transcribe::transcription_json(
+            self.transcriptions.as_ref(),
+        ));
         o.push_str("\"quarantine\":[");
         let mut first = true;
         for s in &self.sources {
@@ -1157,7 +1165,7 @@ pub fn discovery_json(scope: &str, d: &FootingDiscovery) -> String {
 }
 
 /// JSON string literal.
-fn js(s: &str) -> String {
+pub(crate) fn js(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for ch in s.chars() {
@@ -1803,6 +1811,7 @@ fn assess_inner(
         hidden_scope: hidden,
         one_cell,
         ledger_anchor,
+        transcriptions: None,
     }
 }
 
@@ -2094,12 +2103,21 @@ pub fn run_public_assurance(
     root: &Path,
 ) -> Result<PublicAssuranceReport, Refusal> {
     let sources = load_registered_sources(profile, root)?;
+    // Documents carry no release quarter, so a `--through` run, which reproduces an earlier registry, reads no
+    // transcriptions.
+    let transcriptions = if profile.through.is_some() {
+        None
+    } else {
+        transcribe::load_transcription_report(profile, root)?
+    };
     let lane = if profile.issuer == synthetic::SYNTHETIC_ISSUER {
         Lane::Synthetic
     } else {
         Lane::Public
     };
-    Ok(assess(profile, lane, sources))
+    let mut report = assess(profile, lane, sources);
+    report.transcriptions = transcriptions;
+    Ok(report)
 }
 
 /// The Barrick M0 run (`GATE-BULL-01`): registry and corpus both under `root`.
@@ -4029,13 +4047,14 @@ mod tests {
         assert!(section.starts_with("{\"report_only\":"), "{section}");
         assert!(json.contains("\"table_refusals\":0},\"construction_discovery\":{"));
         // The unit discovery follows; the synthetic Mine Stats print no row labelled in pounds, so nothing is
-        // paired and nothing is found.
+        // paired and nothing is found. The in-memory synthetic run has no transcription registry (bd-plx1).
         let u = r.copper_unit_discovery().expect("unit discovery");
         assert_eq!((u.pairs, &u.finding), (0, &UnitFinding::NoFit));
         assert!(json.contains(
             "]},\"unit_discovery\":{\"report_only\":\"which unit the copper rows labelled (millions of pounds) are \
              in, from their site-sheet pairs; never a state, not in the state root\",\"pairs\":0,\
-             \"fits\":{\"kt\":0,\"Mlb\":0},\"finding\":\"no_fit\",\"reason_code\":null},\"quarantine\":["
+             \"fits\":{\"kt\":0,\"Mlb\":0},\"finding\":\"no_fit\",\"reason_code\":null},\"transcriptions\":null,\
+             \"quarantine\":["
         ));
         for (scope, d) in &found {
             let instances = if *scope == "visible" {

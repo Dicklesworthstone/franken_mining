@@ -183,6 +183,47 @@ url_basis = "fetched and verified 2026-10-30"
 bytes = 49_738
 sha256 = "66515a4ae4305de130b72fa1a3a78bf6aa51ac5a10350fc43732bb621c6d0e99"
 
+# PDF documents (bd-plx1). A run reads no values from them: a value printed only in a PDF enters as a
+# two-reader transcription row in registries/transcriptions/barrick.toml (git-ignored pending OPEN-R7-1), and a
+# run that cites one checks the document's bytes against this row. These are the documents behind E692 and
+# E698. Digests and page counts match W1 section 2.2 (the MD&As) and C1's file table (the deck). On 2026-10-31
+# each URL served the registered bytes, checked by sha256 (E850). published_at is the earliest date its basis
+# shows the text was public.
+
+[[document]]
+file = "Barrick_Q4_2024_MD-A.pdf"
+kind = "mda"
+url = "https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/2024/q4/Barrick_Q4_2024_MD-A.pdf"
+url_basis = "fetched and verified 2026-10-31"
+published_at = "2025-02-12"
+published_at_basis = "FACT: SEC 6-K 0001193125-25-025337 (accepted 2025-02-12 21:37:59, filing date 2025-02-13) carries as Ex. 99.2 the MD&A prepared as of February 11, 2025, as p.1 of these bytes states"
+pages = 147
+bytes = 2_338_137
+sha256 = "43dcfca7aadc48b47ade474b60405db0c027434f68095823e5e9adbac6cf4924"
+
+[[document]]
+file = "Barrick_Q4_2025_MD-A.pdf"
+kind = "mda"
+url = "https://s25.q4cdn.com/322814910/files/doc_financial/quarterly_results/2025/q4/Barrick_Q4_2025_MD-A.pdf"
+url_basis = "fetched and verified 2026-10-31"
+published_at = "2026-02-05"
+published_at_basis = "FACT: SEC 6-K 0001193125-26-039501 (accepted and filed 2026-02-05) carries as Ex. 99.2 the MD&A prepared as of February 4, 2026, as p.1 of these bytes states"
+pages = 140
+bytes = 2_286_439
+sha256 = "63b3af0b98436900159f6ddac7f2920a0178f0e8651f1ee262d07bbaa690d281"
+
+[[document]]
+file = "Fourmile_Feb2026.pdf"
+dir = "corpus_of_input_docs"
+kind = "investor_deck"
+url = "https://s25.q4cdn.com/322814910/files/doc_presentations/2026/Fourmile_Feb2026.pdf"
+url_basis = "fetched and verified 2026-10-31"
+published_at = "2026-04-16"
+published_at_basis = "INFERENCE: the PDF's ModDate is 2026-04-16 (CreationDate 2026-02-25), so these bytes were not final before 2026-04-16; when this revision was posted is not established"
+pages = 15
+bytes = 2_855_996
+sha256 = "89c22cd73d2fcc9447ee859dfd9a52b33f2f37591ccb4bc0f7407a1d5d19697a"
+
 # Reporting subjects as printed in the AISC table headers, before the issuer's one-letter footnote suffix
 # (FACT: every header of the 34 visible AISC tables matches exactly one).
 
