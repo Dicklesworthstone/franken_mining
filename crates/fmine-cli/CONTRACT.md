@@ -106,6 +106,14 @@ verified source snapshot as assurance. Without a selector they search the curren
   Packet ids bind their content, and `packet_set_sha256` binds the deterministic ordered set separately from
   the unchanged assurance root. `human_check` is null and external use is hardwired false; generation cannot
   manufacture review or identify a culprit from a sign-flip witness or correction alternative.
+  - Unresolved Mine Stats/AISC vintage changes and ownership or ambiguous-release conflicts also produce
+    packets. Each finding retains first registered, immediately previous and current canonical Claims,
+    both comparison states and any verified disclosure note. Grouping keeps period, unit, ownership,
+    scope and line occurrence distinct. The builder recomputes each document family's comparison once
+    from canonical Claims, refusing forged verdicts, predecessor chronology or disclosure metadata.
+    Disclosed-only changes, unchanged/first/single appearances and non-comparable scope boundaries remain
+    in the assurance report without becoming challenges. No vintage is selected as true; silence means
+    no applicable note in registered documents. Packet IDs and immutable draft restrictions apply unchanged.
 - DESIGN (BD-342): guidance delegates acquisition to `fmine_public::guidance` and arithmetic to
   `fmine_metrics::guidance`. Its payload digest binds the cited inputs and explicit scenario. `anchor_id` and
   `certificate` remain null because this is not a registered forecast or ledger snapshot. Missing two-reader
@@ -150,7 +158,7 @@ None: every failure is a usage error or a typed refusal.
 ## 10. Non-Goals & Scope Boundary
 - Computes nothing itself: all calculation is delegated to the `V`/`E`/`K`/`S0` crates.
 - Never writes to any external system.
-- Challenge packets do not yet cover cross-vintage comparisons, PDF transcription conflicts, hidden or
+- Challenge packets do not yet cover PDF transcription conflicts, hidden or
   not-published instances. Human review and external-release sequencing remain open.
 - Guidance completion is a T3 necessary-arithmetic report under a declared scenario, not a probability of
   meeting guidance, a technical capacity envelope or a completed M0 gate.

@@ -138,9 +138,14 @@ DESIGN (BD-349): these packets turn visible AISC and Mine Stats exceptions, incl
 into cited review material. Each preserves the original finding, source filenames and hashes, displayed values,
 Claim references, checked arithmetic, correction alternatives and the evidence needed to close the question.
 Packet ids and a packet-set digest bind their content separately from the unchanged assurance root. They are
-internal-review drafts: human checks remain unfilled and external use remains disabled. Cross-vintage and PDF
-transcription conflicts are not yet packetized. Use `--synthetic` in place of the issuer selector for an invented
-known-answer demonstration.
+internal-review drafts: human checks remain unfilled and external use remains disabled. Cross-vintage packets
+retain the earliest, previous and current canonical assertions, both comparison results and any applicable
+verified note. Periods, units and ownership bases remain distinct. The renderer rechecks the classifications
+against the canonical comparison engine before exporting them. On the registered corpus through 2026Q2,
+all nine known unexplained changes and all 60 ownership-conflict findings appear once in the exported packets;
+E474 retains both the original 1,479 and later 1,474 USD/oz assertions with their source cells. Disclosed-only
+changes and non-comparable region boundaries stay in the assurance report. PDF transcription conflicts are
+not yet packetized. Use `--synthetic` in place of the issuer selector for an invented known-answer demonstration.
 
 ### Calculate guidance completion requirements
 
