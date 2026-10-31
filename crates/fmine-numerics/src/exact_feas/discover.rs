@@ -1,6 +1,13 @@
-//! Discovery of a `Sum` family's rounding construction (bd-4wvl.4, BD-340.S4, part 1): which of `ComponentSum`
-//! and `RoundedOnce` the printed footings of one family fit. A report, never a verdict: it reads finished
-//! footings and changes no state.
+//! Discovery reports (bd-4wvl.4, BD-340.S4). A report, never a verdict: it changes no state.
+//!
+//! **Part 2, tie convention** ([`discover_tie_conventions`]): one convention per document, never per cell.
+//! Every assignment of a strict convention to each document is tried; a quantity's true value lies in the meet
+//! of its documents' intervals. An assignment fits properly, only at tie points, or not at all. A document is
+//! identified when every proper fit gives it the same convention. The tie-agnostic `Closed` check is reported
+//! apart.
+//!
+//! **Part 1, construction**: which of `ComponentSum` and `RoundedOnce` the printed footings of one family fit,
+//! read from finished footings.
 //!
 //! - **Statistic.** The number of totals that foot exactly: the printed total equals the sum of its printed
 //!   summands. `ComponentSum` accepts exactly those. `RoundedOnce` accepts a footing whose residual is within
@@ -29,10 +36,12 @@
 //! Determinism: DeterministicPerIsa (p₀ and the expected count are exact rationals; the tails are `f64` through
 //! `fmine_core::det`, in a fixed order).
 
+use std::cmp::Ordering;
+
 use fmine_core::det;
 use fmine_units::UnitsError;
 
-use super::Rat;
+use super::{Bound, Convention, End, Interval, IntervalError, Rat};
 
 /// Footings with more summands are indeterminate.
 pub const MAX_K: u32 = 20;
@@ -238,6 +247,375 @@ pub fn discover_construction(footings: &[Footing]) -> Result<ConstructionReport,
     })
 }
 
+/// The conventions a tie discovery assigns, one per document: the four that decide a tie.
+pub const STRICT_CONVENTIONS: [Convention; 4] = [
+    Convention::HalfUp,
+    Convention::HalfDown,
+    Convention::HalfEven,
+    Convention::Truncate,
+];
+
+/// At most this many documents in one tie discovery (4⁴ assignments).
+pub const MAX_DOCUMENTS: usize = 4;
+
+/// One quantity as one document prints it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Printed {
+    pub document: String,
+    pub quantity: String,
+    pub printed: Rat,
+    /// The rounding step: positive, since an exact value has no convention to find.
+    pub step: Rat,
+}
+
+/// How one assignment fits every quantity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fit {
+    /// Some quantity has no true value both documents round to their prints.
+    Empty,
+    /// Every quantity has one, but some only at a single tie point.
+    Points,
+    /// Every quantity has a range of true values of positive width.
+    Proper,
+}
+
+/// One convention per document, and the true range it leaves each quantity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Assignment {
+    /// By document, in name order.
+    pub conventions: Vec<(String, Convention)>,
+    /// By quantity, in name order: the meet of every document's interval.
+    pub ranges: Vec<(String, Bound)>,
+    pub fit: Fit,
+}
+
+/// What a tie discovery finds for one document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TieFinding {
+    /// Every proper fit gives the document this convention.
+    Identified(Convention),
+    /// Proper fits give it several (FMINE-REF-104).
+    Ambiguous(Vec<Convention>),
+    /// No assignment fits properly.
+    NoProperFit,
+}
+
+impl TieFinding {
+    /// [`NON_IDENTIFIABLE`] for an ambiguous finding, else `None`.
+    #[must_use]
+    pub const fn reason_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Ambiguous(_) => Some(NON_IDENTIFIABLE),
+            Self::Identified(_) | Self::NoProperFit => None,
+        }
+    }
+}
+
+/// A tie discovery: every assignment of one strict convention per document, the tie-agnostic check with every
+/// document `Closed`, and each document's finding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TieDiscovery {
+    pub assignments: Vec<Assignment>,
+    pub closed: Assignment,
+    pub findings: Vec<(String, TieFinding)>,
+}
+
+/// Why a tie discovery was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TieRefusal {
+    /// A step of zero or below, at `document`/`quantity`.
+    NonPositiveStep(String, String),
+    /// One document prints one quantity twice.
+    Duplicate(String, String),
+    /// More than [`MAX_DOCUMENTS`] documents, or fewer than two.
+    DocumentCount(usize),
+    /// A printed value off its own step's grid (half-even needs its parity), or an overflow.
+    Interval(String, String, IntervalError),
+}
+
+/// A single point: both ends equal and closed.
+fn is_point(b: &Bound) -> Result<bool, UnitsError> {
+    Ok(match (b.lo, b.hi) {
+        (Some(lo), Some(hi)) => {
+            !lo.strict && !hi.strict && lo.at.checked_cmp(hi.at)? == Ordering::Equal
+        }
+        _ => false,
+    })
+}
+
+/// Which tie convention each document prints under. Conventions are assigned per document, never per cell: an
+/// assignment gives every quantity of a document the same one. Each quantity's true value lies in the meet of
+/// its documents' intervals. A quantity printed by one document only constrains nothing and is still reported.
+pub fn discover_tie_conventions(printed: &[Printed]) -> Result<TieDiscovery, TieRefusal> {
+    let mut documents: Vec<String> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for p in printed {
+        if p.step.signum() <= 0 {
+            return Err(TieRefusal::NonPositiveStep(
+                p.document.clone(),
+                p.quantity.clone(),
+            ));
+        }
+        if !seen.insert((p.document.clone(), p.quantity.clone())) {
+            return Err(TieRefusal::Duplicate(
+                p.document.clone(),
+                p.quantity.clone(),
+            ));
+        }
+        documents.push(p.document.clone());
+    }
+    documents.sort();
+    documents.dedup();
+    if !(2..=MAX_DOCUMENTS).contains(&documents.len()) {
+        return Err(TieRefusal::DocumentCount(documents.len()));
+    }
+    let mut quantities: Vec<String> = printed.iter().map(|p| p.quantity.clone()).collect();
+    quantities.sort();
+    quantities.dedup();
+    let assess = |pick: &dyn Fn(usize) -> Convention| -> Result<Assignment, TieRefusal> {
+        let mut ranges = Vec::new();
+        let mut fit = Fit::Proper;
+        for q in &quantities {
+            let mut range = Bound::FREE;
+            for p in printed.iter().filter(|p| &p.quantity == q) {
+                let d = documents.iter().position(|d| d == &p.document).unwrap_or(0);
+                let refuse = |e| TieRefusal::Interval(p.document.clone(), q.clone(), e);
+                let h = p
+                    .step
+                    .checked_div(Rat::from_integer(2))
+                    .map_err(|e| refuse(e.into()))?;
+                let iv = pick(d).interval(p.printed, h).map_err(refuse)?;
+                range = range.meet(Bound::of(iv)).map_err(|e| refuse(e.into()))?;
+            }
+            let overflow = |e: UnitsError| TieRefusal::Interval(String::new(), q.clone(), e.into());
+            if range.is_empty().map_err(overflow)? {
+                fit = Fit::Empty;
+            } else if fit == Fit::Proper && is_point(&range).map_err(overflow)? {
+                fit = Fit::Points;
+            }
+            ranges.push((q.clone(), range));
+        }
+        let conventions = documents
+            .iter()
+            .enumerate()
+            .map(|(d, name)| (name.clone(), pick(d)))
+            .collect();
+        Ok(Assignment {
+            conventions,
+            ranges,
+            fit,
+        })
+    };
+    let n = documents.len();
+    let total = STRICT_CONVENTIONS.len().pow(n as u32);
+    let mut assignments = Vec::with_capacity(total);
+    for index in 0..total {
+        // Document d takes digit d of `index` in base 4, the first document most significant.
+        let pick = |d: usize| {
+            let digit = (index / STRICT_CONVENTIONS.len().pow((n - 1 - d) as u32))
+                % STRICT_CONVENTIONS.len();
+            STRICT_CONVENTIONS[digit]
+        };
+        assignments.push(assess(&pick)?);
+    }
+    let closed = assess(&|_| Convention::Closed)?;
+    let findings = documents
+        .iter()
+        .enumerate()
+        .map(|(d, name)| {
+            let mut found: Vec<Convention> = assignments
+                .iter()
+                .filter(|a| a.fit == Fit::Proper)
+                .map(|a| a.conventions[d].1)
+                .collect();
+            found.sort();
+            found.dedup();
+            let finding = match found.as_slice() {
+                [] => TieFinding::NoProperFit,
+                [one] => TieFinding::Identified(*one),
+                _ => TieFinding::Ambiguous(found),
+            };
+            (name.clone(), finding)
+        })
+        .collect();
+    Ok(TieDiscovery {
+        assignments,
+        closed,
+        findings,
+    })
+}
+
+/// One printed factor of a share or unit relation: its value and rounding step (zero: exact).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Factor {
+    pub printed: Rat,
+    pub step: Rat,
+}
+
+/// Why a share or unit relation was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShareRefusal {
+    /// A constant of zero or below, or a factor whose true range is not wholly positive.
+    NotPositive,
+    NegativeStep,
+    Interval(IntervalError),
+}
+
+impl From<IntervalError> for ShareRefusal {
+    fn from(e: IntervalError) -> Self {
+        Self::Interval(e)
+    }
+}
+
+impl From<UnitsError> for ShareRefusal {
+    fn from(e: UnitsError) -> Self {
+        Self::Interval(e.into())
+    }
+}
+
+/// The true values a factor prints as, under `convention`; a zero step is the exact point.
+fn factor_interval(f: Factor, convention: Convention) -> Result<Interval, ShareRefusal> {
+    match f.step.signum() {
+        -1 => Err(ShareRefusal::NegativeStep),
+        0 => Ok(Interval {
+            lo: f.printed,
+            hi: f.printed,
+            lo_strict: false,
+            hi_strict: false,
+        }),
+        _ => Ok(convention.interval(f.printed, f.step.checked_div(Rat::from_integer(2))?)?),
+    }
+}
+
+/// The shares s = c·Π numerators / Π denominators over the true values of printed factors, each a different
+/// cell with a wholly positive range (part 3; x_t = s·x_s is one numerator over one denominator). The ratio
+/// rises with each numerator and falls with each denominator, and the box is connected, so every value between
+/// the corner ends is attained; an end is open when a factor end it comes from is open.
+pub fn share_interval(
+    c: Rat,
+    numerators: &[Factor],
+    denominators: &[Factor],
+    convention: Convention,
+) -> Result<Bound, ShareRefusal> {
+    if c.signum() <= 0 {
+        return Err(ShareRefusal::NotPositive);
+    }
+    let (mut lo, mut hi) = (
+        End {
+            at: c,
+            strict: false,
+        },
+        End {
+            at: c,
+            strict: false,
+        },
+    );
+    for (f, numerator) in numerators
+        .iter()
+        .map(|f| (f, true))
+        .chain(denominators.iter().map(|f| (f, false)))
+    {
+        let iv = factor_interval(*f, convention)?;
+        if iv.lo.signum() <= 0 {
+            return Err(ShareRefusal::NotPositive);
+        }
+        let (to_lo, to_hi) = if numerator {
+            ((iv.lo, iv.lo_strict), (iv.hi, iv.hi_strict))
+        } else {
+            ((iv.hi, iv.hi_strict), (iv.lo, iv.lo_strict))
+        };
+        let apply = |e: End, (at, strict): (Rat, bool)| -> Result<End, UnitsError> {
+            Ok(End {
+                at: if numerator {
+                    e.at.checked_mul(at)?
+                } else {
+                    e.at.checked_div(at)?
+                },
+                strict: e.strict || strict,
+            })
+        };
+        lo = apply(lo, to_lo)?;
+        hi = apply(hi, to_hi)?;
+    }
+    Ok(Bound {
+        lo: Some(lo),
+        hi: Some(hi),
+    })
+}
+
+/// A value printed in an unknown unit, and the same quantity printed in the reference unit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnitPair {
+    pub observed: Factor,
+    pub reference: Factor,
+}
+
+/// What a unit discovery finds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnitFinding {
+    /// Exactly one candidate fits every pair.
+    Identified(String),
+    /// Several do (FMINE-REF-104).
+    Ambiguous(Vec<String>),
+    /// None does.
+    NoFit,
+}
+
+impl UnitFinding {
+    /// [`NON_IDENTIFIABLE`] for an ambiguous finding, else `None`.
+    #[must_use]
+    pub const fn reason_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Ambiguous(_) => Some(NON_IDENTIFIABLE),
+            Self::Identified(_) | Self::NoFit => None,
+        }
+    }
+}
+
+/// A unit discovery: per candidate, how many pairs it fits; and the finding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitDiscovery {
+    pub fits: Vec<(String, usize)>,
+    pub pairs: usize,
+    pub finding: UnitFinding,
+}
+
+/// Which unit the observed values are in (part 5). A candidate `(name, factor)` turns an observed value into
+/// the reference unit; it fits a pair when factor × the observed range meets the reference range.
+pub fn discover_unit(
+    pairs: &[UnitPair],
+    candidates: &[(String, Rat)],
+    convention: Convention,
+) -> Result<UnitDiscovery, ShareRefusal> {
+    let mut fits = Vec::new();
+    for (name, factor) in candidates {
+        let mut fitted = 0;
+        for p in pairs {
+            let scaled = share_interval(*factor, &[p.observed], &[], convention)?;
+            let reference = Bound::of(factor_interval(p.reference, convention)?);
+            if !scaled.meet(reference)?.is_empty()? {
+                fitted += 1;
+            }
+        }
+        fits.push((name.clone(), fitted));
+    }
+    let all: Vec<String> = fits
+        .iter()
+        .filter(|(_, n)| !pairs.is_empty() && *n == pairs.len())
+        .map(|(name, _)| name.clone())
+        .collect();
+    let finding = match all.as_slice() {
+        [] => UnitFinding::NoFit,
+        [one] => UnitFinding::Identified(one.clone()),
+        _ => UnitFinding::Ambiguous(all),
+    };
+    Ok(UnitDiscovery {
+        fits,
+        pairs: pairs.len(),
+        finding,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use fmine_core::rand::{PhiloxStream, RngKey};
@@ -404,5 +782,304 @@ mod tests {
             (r.n, r.indeterminate, r.discovered),
             (0, 1, Discovered::Ambiguous)
         );
+    }
+
+    fn dec(s: &str) -> Rat {
+        Rat::from_decimal_str(s).expect("decimal")
+    }
+
+    fn printed(document: &str, quantity: &str, value: &str, step: &str) -> Printed {
+        Printed {
+            document: document.to_string(),
+            quantity: quantity.to_string(),
+            printed: dec(value),
+            step: dec(step),
+        }
+    }
+
+    fn end(at: &str, strict: bool) -> Option<super::super::End> {
+        Some(super::super::End {
+            at: dec(at),
+            strict,
+        })
+    }
+
+    fn assignment(t: &TieDiscovery, deck: Convention, mda: Convention) -> &Assignment {
+        t.assignments
+            .iter()
+            .find(|a| a.conventions == [("deck".to_string(), deck), ("mda".to_string(), mda)])
+            .expect("every pair is assessed")
+    }
+
+    /// E698 as the bead transcribes it: the Fourmile deck prints depletion 3.6 and net change 1.7 (Moz), the
+    /// Q4 2025 MD&A 3.7 and 1.8, all at step 0.1.
+    #[test]
+    fn test_e698_convention_pairs_fixture() {
+        use Convention::{Closed, HalfDown, HalfEven, HalfUp, Truncate};
+        let cells = [
+            printed("deck", "depletion", "3.6", "0.1"),
+            printed("deck", "net_change", "1.7", "0.1"),
+            printed("mda", "depletion", "3.7", "0.1"),
+            printed("mda", "net_change", "1.8", "0.1"),
+        ];
+        let t = discover_tie_conventions(&cells).expect("discovery");
+        assert_eq!(t.assignments.len(), 16);
+        // No single strict convention fits both documents.
+        for c in STRICT_CONVENTIONS {
+            assert_eq!(assignment(&t, c, c).fit, Fit::Empty, "{c:?}");
+        }
+        // Deck Truncate with MD&A HalfUp: depletion in [3.65, 3.70), net change in [1.75, 1.80).
+        let a = assignment(&t, Truncate, HalfUp);
+        assert_eq!(a.fit, Fit::Proper);
+        let range = |lo: (&str, bool), hi: (&str, bool)| Bound {
+            lo: end(lo.0, lo.1),
+            hi: end(hi.0, hi.1),
+        };
+        assert_eq!(
+            a.ranges,
+            [
+                (
+                    "depletion".to_string(),
+                    range(("3.65", false), ("3.7", true))
+                ),
+                (
+                    "net_change".to_string(),
+                    range(("1.75", false), ("1.8", true))
+                )
+            ]
+        );
+        // Deck HalfDown with MD&A HalfUp, and Closed in both, fit only at the tie points.
+        let points = [
+            (
+                "depletion".to_string(),
+                range(("3.65", false), ("3.65", false)),
+            ),
+            (
+                "net_change".to_string(),
+                range(("1.75", false), ("1.75", false)),
+            ),
+        ];
+        let a = assignment(&t, HalfDown, HalfUp);
+        assert_eq!((a.fit, &a.ranges[..]), (Fit::Points, &points[..]));
+        assert_eq!(
+            t.closed.conventions,
+            [("deck".to_string(), Closed), ("mda".to_string(), Closed)]
+        );
+        assert_eq!(
+            (t.closed.fit, &t.closed.ranges[..]),
+            (Fit::Points, &points[..])
+        );
+        // Only deck Truncate fits properly, with the MD&A at any of three: the deck's convention is found, the
+        // MD&A's is not (FMINE-REF-104).
+        let proper: Vec<(Convention, Convention)> = t
+            .assignments
+            .iter()
+            .filter(|a| a.fit == Fit::Proper)
+            .map(|a| (a.conventions[0].1, a.conventions[1].1))
+            .collect();
+        assert_eq!(
+            proper,
+            [
+                (Truncate, HalfUp),
+                (Truncate, HalfDown),
+                (Truncate, HalfEven)
+            ]
+        );
+        assert_eq!(
+            t.findings,
+            [
+                ("deck".to_string(), TieFinding::Identified(Truncate)),
+                (
+                    "mda".to_string(),
+                    TieFinding::Ambiguous(vec![HalfUp, HalfDown, HalfEven])
+                )
+            ]
+        );
+        assert_eq!(t.findings[1].1.reason_code(), Some("FMINE-REF-104"));
+        assert_eq!(t.findings[0].1.reason_code(), None);
+    }
+
+    /// One convention per document: two quantities that would each fit under their own per-cell choice, but under
+    /// no one choice per document, find no proper fit.
+    #[test]
+    fn test_convention_is_per_document_not_per_cell() {
+        // q1 fits only with A truncating (3.6 then 3.7); q2 only with B truncating (1.8 in A, 1.7 in B). Each
+        // needs the other document to round to nearest, so no one convention per document fits both.
+        let cells = [
+            printed("A", "q1", "3.6", "0.1"),
+            printed("A", "q2", "1.8", "0.1"),
+            printed("B", "q1", "3.7", "0.1"),
+            printed("B", "q2", "1.7", "0.1"),
+        ];
+        let t = discover_tie_conventions(&cells).expect("discovery");
+        assert!(t.assignments.iter().all(|a| a.fit != Fit::Proper));
+        assert!(
+            t.findings
+                .iter()
+                .all(|(_, f)| *f == TieFinding::NoProperFit)
+        );
+        // Every assignment gives both quantities of a document the same convention: the API has no per-cell
+        // choice to make.
+        for a in &t.assignments {
+            assert_eq!(a.conventions.len(), 2);
+        }
+        // Each quantity alone fits properly (A Truncate, B HalfUp for q1): it is the per-document rule that fails.
+        let alone =
+            discover_tie_conventions(&[cells[0].clone(), cells[2].clone()]).expect("q1 alone");
+        assert_eq!(
+            alone.findings[0].1,
+            TieFinding::Identified(Convention::Truncate)
+        );
+    }
+
+    #[test]
+    fn test_tie_discovery_refusals() {
+        let one = [printed("A", "q", "3.6", "0.1")];
+        assert_eq!(
+            discover_tie_conventions(&one),
+            Err(TieRefusal::DocumentCount(1))
+        );
+        let zero = [
+            printed("A", "q", "3.6", "0"),
+            printed("B", "q", "3.7", "0.1"),
+        ];
+        assert_eq!(
+            discover_tie_conventions(&zero),
+            Err(TieRefusal::NonPositiveStep("A".into(), "q".into()))
+        );
+        let twice = [
+            printed("A", "q", "3.6", "0.1"),
+            printed("A", "q", "3.7", "0.1"),
+            printed("B", "q", "3.7", "0.1"),
+        ];
+        assert_eq!(
+            discover_tie_conventions(&twice),
+            Err(TieRefusal::Duplicate("A".into(), "q".into()))
+        );
+        // 3.65 is off the 0.1 grid: half-even cannot know its parity.
+        let off = [
+            printed("A", "q", "3.65", "0.1"),
+            printed("B", "q", "3.7", "0.1"),
+        ];
+        assert!(matches!(
+            discover_tie_conventions(&off),
+            Err(TieRefusal::Interval(_, _, IntervalError::OffGrid))
+        ));
+        let many: Vec<Printed> = ["A", "B", "C", "D", "E"]
+            .iter()
+            .map(|d| printed(d, "q", "3.6", "0.1"))
+            .collect();
+        assert_eq!(
+            discover_tie_conventions(&many),
+            Err(TieRefusal::DocumentCount(5))
+        );
+    }
+
+    fn whole(n: i128) -> Factor {
+        Factor {
+            printed: Rat::from_integer(n),
+            step: Rat::from_integer(1),
+        }
+    }
+
+    /// E819, North Mara Q2 2026: cost of sales 117, ounces 37 (koz), cost of sales per ounce 2,736. The share s
+    /// with r = 1000·s·N/Q lies in [2735.5·36.5/117,500, 2736.5·37.5/116,500] = [0.8498, 0.8808] to four places,
+    /// which excludes the registered 0.84.
+    #[test]
+    fn test_e819_share_interval() {
+        let thousandth = rat(1, 1000);
+        let s = share_interval(
+            thousandth,
+            &[whole(2736), whole(37)],
+            &[whole(117)],
+            Convention::Closed,
+        )
+        .expect("interval");
+        let (lo, hi) = (s.lo.expect("lo"), s.hi.expect("hi"));
+        assert_eq!((lo.at, lo.strict), (rat(399_383, 470_000), false));
+        assert_eq!((hi.at, hi.strict), (rat(410_475, 466_000), false));
+        // To four places, nearest: 0.8498 and 0.8808.
+        let within = |x: Rat, a: Rat, b: Rat| {
+            x.checked_cmp(a) != Ok(Ordering::Less) && x.checked_cmp(b) == Ok(Ordering::Less)
+        };
+        assert!(within(lo.at, rat(84_975, 100_000), rat(84_985, 100_000)));
+        assert!(within(hi.at, rat(88_075, 100_000), rat(88_085, 100_000)));
+        assert_eq!(s.contains(rat(84, 100)), Ok(false), "the registered 0.84");
+        assert_eq!(s.contains(rat(85, 100)), Ok(true));
+        assert_eq!(s.contains(rat(88, 100)), Ok(true));
+        assert_eq!(s.contains(rat(89, 100)), Ok(false));
+        // Half-up: the lower end comes from a denominator's open upper end, the upper from numerators' open ends.
+        let s = share_interval(
+            thousandth,
+            &[whole(2736), whole(37)],
+            &[whole(117)],
+            Convention::HalfUp,
+        )
+        .expect("interval");
+        assert_eq!(
+            (s.lo.map(|e| e.strict), s.hi.map(|e| e.strict)),
+            (Some(true), Some(true))
+        );
+        // x_t = s·x_s, one numerator over one denominator: 45 of 100 is s ∈ [44.5/100.5, 45.5/99.5].
+        let s = share_interval(rat(1, 1), &[whole(45)], &[whole(100)], Convention::Closed)
+            .expect("x_t");
+        assert_eq!(
+            (s.lo.map(|e| e.at), s.hi.map(|e| e.at)),
+            (Some(rat(89, 201)), Some(rat(91, 199)))
+        );
+        assert_eq!(
+            share_interval(rat(0, 1), &[whole(45)], &[], Convention::Closed),
+            Err(ShareRefusal::NotPositive)
+        );
+        assert_eq!(
+            share_interval(rat(1, 1), &[whole(0)], &[], Convention::Closed),
+            Err(ShareRefusal::NotPositive),
+            "a printed 0 may be a true negative"
+        );
+        let negative = Factor {
+            printed: rat(5, 1),
+            step: rat(-1, 1),
+        };
+        assert_eq!(
+            share_interval(rat(1, 1), &[negative], &[], Convention::Closed),
+            Err(ShareRefusal::NegativeStep)
+        );
+    }
+
+    /// E463 in shape: 2024 copper rows labelled "(millions of pounds)" print the summary's kilotonnes (30 and 29
+    /// here, synthetic). Under kt every pair fits; under Mlb (1 Mlb = 45,359,237/10⁸ kt, from
+    /// `AVDP_LB_TO_GRAMS_NUM`) none does.
+    #[test]
+    fn test_e463_unit_kt_fixture() {
+        use fmine_units::{AVDP_LB_TO_GRAMS_DEN, AVDP_LB_TO_GRAMS_NUM};
+        // kt per Mlb: 10⁶ lb at NUM/DEN g each, over 10⁹ g per kt.
+        let kt_per_mlb = rat(AVDP_LB_TO_GRAMS_NUM, AVDP_LB_TO_GRAMS_DEN * 1000);
+        assert_eq!(kt_per_mlb, rat(45_359_237, 100_000_000));
+        let pair = |v: i128| UnitPair {
+            observed: whole(v),
+            reference: whole(v),
+        };
+        let candidates = [
+            ("kt".to_string(), rat(1, 1)),
+            ("Mlb".to_string(), kt_per_mlb),
+        ];
+        let u =
+            discover_unit(&[pair(30), pair(29)], &candidates, Convention::Closed).expect("unit");
+        assert_eq!(u.fits, [("kt".to_string(), 2), ("Mlb".to_string(), 0)]);
+        assert_eq!(u.finding, UnitFinding::Identified("kt".to_string()));
+        assert_eq!(u.finding.reason_code(), None);
+        // Candidates within rounding of each other cannot be told apart.
+        let close = [
+            ("a".to_string(), rat(1, 1)),
+            ("b".to_string(), rat(101, 100)),
+        ];
+        let u = discover_unit(&[pair(30)], &close, Convention::Closed).expect("unit");
+        assert_eq!(
+            u.finding,
+            UnitFinding::Ambiguous(vec!["a".to_string(), "b".to_string()])
+        );
+        assert_eq!(u.finding.reason_code(), Some("FMINE-REF-104"));
+        let u = discover_unit(&[], &candidates, Convention::Closed).expect("no pairs");
+        assert_eq!(u.finding, UnitFinding::NoFit);
     }
 }

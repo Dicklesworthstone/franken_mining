@@ -88,6 +88,21 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
     `ALPHA` (10⁻⁶); exactly one left is discovered; both or neither is `Ambiguous`, which carries
     `NON_IDENTIFIABLE` (FMINE-REF-104). Past `MAX_K` a footing is `indeterminate` and not scored.
   - The tails take footings as independent: the caller passes each distinct footing once.
+  - `discover_tie_conventions(&[Printed { document, quantity, printed, step }]) -> Result<TieDiscovery,
+    TieRefusal>` (part 2): one convention per document, never per cell. Every assignment of
+    `STRICT_CONVENTIONS` (half-up, half-down, half-even, truncate) to 2 to `MAX_DOCUMENTS` (4) documents gets
+    each quantity's meet of intervals and a `Fit::{Empty, Points, Proper}`; `closed` is every document
+    `Closed`. `TieFinding::{Identified, Ambiguous (FMINE-REF-104), NoProperFit}` per document is read from the
+    proper fits only. Refused: a step of zero or below, a quantity printed twice by one document, a document
+    count outside 2 to 4, a value off its step's grid (half-even), an overflow.
+  - `share_interval(c, numerators, denominators, convention) -> Result<Bound, ShareRefusal>` (part 3): the
+    exact range of s = c·Π numerators / Π denominators over each `Factor { printed, step }`'s rounding box
+    (a zero step is exact), with each end open when a factor end it comes from is open. Every factor must be a
+    different cell with a wholly positive range; `ShareRefusal::{NotPositive, NegativeStep, Interval}`.
+  - `discover_unit(pairs, candidates, convention) -> Result<UnitDiscovery, ShareRefusal>` (part 5): a
+    candidate `(name, factor)` fits a `UnitPair { observed, reference }` when factor × the observed range meets
+    the reference range. `UnitFinding::{Identified, Ambiguous (FMINE-REF-104), NoFit}` counts only candidates
+    that fit every pair.
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-301` (`NonSpdCovarianceMatrix`) when Cholesky diagonal pivot `<= 1e-12` or cycle detected in `TropicalDag`.

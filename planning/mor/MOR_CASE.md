@@ -1296,3 +1296,35 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     missing) and `fmine-time` (calendar window), not in the catalogue's sense (bd-h0q1). The tie, share, deck
     and unit discoveries (S4 parts 2 to 5) are not started.
   - **Verification.** Self-verified on this machine only; nothing has run in CI.
+- **E849** Tie convention, share and unit discovery (bd-4wvl.4, BD-340.S4 parts 2, 3 and 5; FACT, execution,
+  2026-10-31, owner machine). The deck (part 4, E147) is not started: its GEO formula and inputs are still OPEN.
+  - **Tie, on E698's fixture** (the bead's transcription: deck depletion 3.6 and net change 1.7, Q4 2025 MD&A
+    3.7 and 1.8, step 0.1). `discover_tie_conventions` assigns one strict convention per document, never per
+    cell, and tries all 16 pairs.
+    - No single strict convention fits both documents.
+    - Deck truncate with MD&A half-up leaves depletion in [3.65, 3.70) and net change in [1.75, 1.80).
+    - Deck half-down with MD&A half-up, and `Closed` in both, fit only at the tie points 3.65 and 1.75.
+    - **New:** the proper fits are deck truncate with the MD&A at half-up, half-down or half-even. The deck's
+      convention is found (truncate); the MD&A's is not (FMINE-REF-104). The bead's "(Truncate, HalfUp)" is
+      one of the three; telling them apart needs another MD&A print at a tie.
+    - Two quantities that each fit under their own per-cell choice, but under no one convention per document,
+      find no proper fit (`test_convention_is_per_document_not_per_cell`).
+  - **Share.** `share_interval` gives s = c·Π numerators / Π denominators over each factor's rounding box. E819
+    (North Mara Q2 2026: 117, 37, 2,736, c = 1/1000) is exactly [399,383/470,000, 410,475/466,000] = [0.8498,
+    0.8808] to four places, and excludes 0.84. It equals BD-331.S3's closed form `aisc::feasible_share` on all
+    15,800 grid points with 2n − k ≥ 1.
+  - **Unit, on the real files** (`test_e463_copper_unit_real_files`). The site-sheet pairs whose `Minestats4`
+    row is labelled "(millions of pounds)" are 112, all in the 2024 files. kt fits all 112 and Mlb none
+    (1 Mlb = 45,359,237/10⁸ kt), so kt is identified from the numbers alone. W1-DR-02's alias only names the
+    row.
+  - **Payload.** A `unit_discovery` section after `construction_discovery`, with counts only and not in the
+    root. The tie and share results are kernel functions with fixtures; no real-file binding yet (S5 binds
+    the registered transcriptions).
+  - **Planted negatives, each reverted:** point fits read as proper (the E698 and per-document tests fail); a
+    denominator's ends left unswapped (the E819 test and the cross-check fail); the label filter dropped (272
+    pairs, every copper pair through 2026Q2, against the pinned 112).
+  - **Not claimed.** The tie fixture's four numbers are the bead's transcription, not re-read from the deck or
+    the MD&A here. The share cross-check compares two derivations by the same agent lineage. The 112 is not
+    checked against an independent census. `test_discovery_never_changes_verdict` is not written: discovery is
+    a read-only report, and the expected-root test shows the root unmoved.
+  - **Verification.** Self-verified on this machine only; nothing has run in CI.

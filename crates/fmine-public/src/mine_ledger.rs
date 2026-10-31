@@ -631,6 +631,15 @@ fn operand(v: &MineStatsValue, workbook: &Workbook) -> Operand {
     }
 }
 
+/// A reader value as the ledger takes it, `(value, step)` as displayed, if it is a number.
+#[must_use]
+pub fn displayed_number(v: &MineStatsValue, workbook: &Workbook) -> Option<(Rat, Rat)> {
+    match operand(v, workbook) {
+        Operand::Number { value, step } => Some((value, step)),
+        _ => None,
+    }
+}
+
 fn is_flow(field: &str) -> bool {
     FLOW_FIELDS.iter().flatten().any(|f| *f == field)
 }

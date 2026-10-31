@@ -161,6 +161,12 @@ The public lane of M0 (`fmine assure public`).
   `discovery_json` (bd-4wvl.4): the payload's `construction_discovery` section, after `hidden_scope`, holds one
   object per family and scope. It carries counts and log tails only, never a cell value; a tail of −∞ is
   `null`.
+- `PublicAssuranceReport::copper_unit_discovery` and the payload's `unit_discovery` section, after
+  `construction_discovery` (bd-4wvl.4 part 5, E463). The site-sheet instances on `cu_prod_attr_kt` and
+  `cu_sold_attr_kt` whose site row is labelled "(millions of pounds)" pair the site value with the summary
+  value, both as displayed (`mine_ledger::displayed_number`). Units kt and Mlb (1 Mlb = 45,359,237/10⁸ kt,
+  from `AVDP_LB_TO_GRAMS_NUM`) are tried on those numbers alone, apart from the registered alias. The section
+  holds counts only and is not in the state root.
 - `aisc::{Operand, OperandRole, OperandValue, operand_at}` and `IdentityInstance::operands` (bd-sjrh.1, part 2
   of BD-329.S1). Each instance cites every cell its state was computed from, with its role (total, line,
   rate, ounces, numerator, NCI line, component, label check, member rate, member ounces) and its value as read.
@@ -477,6 +483,10 @@ The public lane of M0 (`fmine assure public`).
   - **Default suite:** on the synthetic ledger every pair is `Ambiguous` (FMINE-REF-104), and the counts are
     the (i) and (iii) footings. A doubled instance list leaves the report unchanged; the same numbers under
     another subject double the distinct count.
+  - **Unit** (ignored test `test_e463_copper_unit_real_files`, MOR_CASE E849): 112 pairs, kt fits all 112 and
+    Mlb none, so kt is identified. The synthetic Mine Stats print no row in pounds: 0 pairs, no fit.
+  - **Share** (`aisc::tests::test_feasible_share_matches_kernel_share_interval`): `feasible_share` equals the
+    kernel's `share_interval` on all 15,800 grid points with 2n − k ≥ 1.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.

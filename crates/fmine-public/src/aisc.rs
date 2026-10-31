@@ -2867,6 +2867,48 @@ mod tests {
         assert!(!holds_at(117, 1, 37, 2736, (89, 100)));
     }
 
+    /// The closed form against the kernel's share interval (bd-4wvl.4 part 3), which derives it from each
+    /// factor's rounding box: r and q at step 1, N = n at step k (k summed lines), 1/1000 the constant.
+    #[test]
+    fn test_feasible_share_matches_kernel_share_interval() {
+        use xf::discover::{Factor, share_interval};
+        let at = |v: i64, step: i64| Factor {
+            printed: Rat::from_integer(i128::from(v)),
+            step: Rat::from_integer(i128::from(step)),
+        };
+        let mut compared = 0;
+        for n in 1..=40 {
+            for k in 0..=3 {
+                for q in 1..=20 {
+                    for r in [1, 7, 950, 1501, 2736] {
+                        let Some(((ln, ld), (hn, hd))) = feasible_share(n, k, q, r) else {
+                            continue;
+                        };
+                        let s = share_interval(
+                            Rat::new(1, 1000).expect("1/1000"),
+                            &[at(r, 1), at(q, 1)],
+                            &[at(n, k)],
+                            xf::Convention::Closed,
+                        )
+                        .expect("kernel interval");
+                        let ends = (
+                            s.lo.map(|e| (e.at, e.strict)),
+                            s.hi.map(|e| (e.at, e.strict)),
+                        );
+                        let want = (
+                            Some((Rat::new(ln, ld).expect("lo"), false)),
+                            Some((Rat::new(hn, hd).expect("hi"), false)),
+                        );
+                        assert_eq!(ends, want, "n {n} k {k} q {q} r {r}");
+                        compared += 1;
+                    }
+                }
+            }
+        }
+        // 40·4·20·5 = 16,000 points, less (n, k) = (1, 2) and (1, 3) at 100 each, which have 2n − k < 1.
+        assert_eq!(compared, 15_800, "every grid point with 2n − k ≥ 1");
+    }
+
     #[test]
     fn test_scaled_rate_fit_synthetic() {
         // Synthetic Site H: 1000·¾·400/150 = 2000 fits; 2200 does not.

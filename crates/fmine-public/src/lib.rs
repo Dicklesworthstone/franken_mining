@@ -29,6 +29,8 @@ use fmine_evidence::{EvidenceClass, KnowledgeState, Refusal};
 use fmine_io::xlsx::{
     CellCensus, CellValue, ExtractedCell, QuarantineItem, Workbook, parse_a1_ref,
 };
+use fmine_numerics::exact_feas::discover::{ShareRefusal, UnitDiscovery, UnitFinding};
+use fmine_numerics::exact_feas::{self as xf, Rat};
 
 use crate::aisc::{
     CitedCell, ConsistentBasis, DEFAULT_MISSING_FACT, ExplanationBasis, FootingDiscovery,
@@ -528,6 +530,90 @@ impl PublicAssuranceReport {
         Ok(out)
     }
 
+    /// E463 (bd-4wvl.4 part 5): which unit the `Minestats*` copper production and sales rows labelled "(millions
+    /// of pounds)" are in, from their site-sheet pairs alone. The registered alias (W1-DR-02) only names the row;
+    /// this asks the numbers, kt (the summary's unit) against Mlb. A report: no state, not in the state root.
+    pub fn copper_unit_discovery(&self) -> Result<UnitDiscovery, ShareRefusal> {
+        use fmine_numerics::exact_feas::discover::{Factor, UnitPair, discover_unit};
+        let mut at: BTreeMap<&str, (&mine_stats::MineStatsValue, &Workbook)> = BTreeMap::new();
+        for (file, read) in &self.mine_stats {
+            let Some(source) = self.sources.iter().find(|s| &s.file_name == file) else {
+                continue;
+            };
+            for v in &read.values {
+                at.insert(v.locator.as_str(), (v, &source.workbook));
+            }
+        }
+        let number = |locator: &Option<String>| {
+            let (v, workbook) = at.get(locator.as_deref()?)?;
+            let (printed, step) = mine_ledger::displayed_number(v, workbook)?;
+            Some((v, Factor { printed, step }))
+        };
+        let mut pairs = Vec::new();
+        for i in &self.mine_ledger.instances {
+            if i.family != mine_ledger::Family::SiteSheet
+                || !matches!(i.field.as_str(), "cu_prod_attr_kt" | "cu_sold_attr_kt")
+            {
+                continue;
+            }
+            let [summary, site] = i.cells.as_slice() else {
+                continue;
+            };
+            if let (Some((_, reference)), Some((v, observed))) = (number(summary), number(site))
+                && v.label_as_printed.contains("(millions of pounds)")
+            {
+                pairs.push(UnitPair {
+                    observed,
+                    reference,
+                });
+            }
+        }
+        let kt_per_mlb = Rat::new(
+            fmine_units::AVDP_LB_TO_GRAMS_NUM,
+            fmine_units::AVDP_LB_TO_GRAMS_DEN * 1000,
+        )?;
+        let candidates = [
+            ("kt".to_string(), Rat::from_integer(1)),
+            ("Mlb".to_string(), kt_per_mlb),
+        ];
+        discover_unit(&pairs, &candidates, xf::Convention::Closed)
+    }
+
+    /// The `unit_discovery` section (bd-4wvl.4 part 5): counts only.
+    fn unit_discovery_json(&self, o: &mut String) {
+        o.push_str(
+            "\"unit_discovery\":{\"report_only\":\"which unit the copper rows labelled (millions of pounds) are \
+             in, from their site-sheet pairs; never a state, not in the state root\",",
+        );
+        match self.copper_unit_discovery() {
+            Err(e) => {
+                let _ = write!(o, "\"refused\":{}}},", js(&format!("{e:?}")));
+            }
+            Ok(u) => {
+                let fits: Vec<String> = u
+                    .fits
+                    .iter()
+                    .map(|(name, n)| format!("{}:{n}", js(name)))
+                    .collect();
+                let finding = match &u.finding {
+                    UnitFinding::Identified(name) => name.clone(),
+                    UnitFinding::Ambiguous(_) => "ambiguous".to_string(),
+                    UnitFinding::NoFit => "no_fit".to_string(),
+                };
+                let _ = write!(
+                    o,
+                    "\"pairs\":{},\"fits\":{{{}}},\"finding\":{},\"reason_code\":{}}},",
+                    u.pairs,
+                    fits.join(","),
+                    js(&finding),
+                    u.finding
+                        .reason_code()
+                        .map_or_else(|| "null".to_string(), js)
+                );
+            }
+        }
+    }
+
     /// The `construction_discovery` section (bd-4wvl.4): one entry per footing family and scope.
     fn construction_discovery_json(&self, o: &mut String) {
         let _ = write!(
@@ -961,6 +1047,7 @@ impl PublicAssuranceReport {
             hidden.table_refusals.len()
         );
         self.construction_discovery_json(&mut o);
+        self.unit_discovery_json(&mut o);
         o.push_str("\"quarantine\":[");
         let mut first = true;
         for s in &self.sources {
@@ -3941,6 +4028,15 @@ mod tests {
             .expect("section");
         assert!(section.starts_with("{\"report_only\":"), "{section}");
         assert!(json.contains("\"table_refusals\":0},\"construction_discovery\":{"));
+        // The unit discovery follows; the synthetic Mine Stats print no row labelled in pounds, so nothing is
+        // paired and nothing is found.
+        let u = r.copper_unit_discovery().expect("unit discovery");
+        assert_eq!((u.pairs, &u.finding), (0, &UnitFinding::NoFit));
+        assert!(json.contains(
+            "]},\"unit_discovery\":{\"report_only\":\"which unit the copper rows labelled (millions of pounds) are \
+             in, from their site-sheet pairs; never a state, not in the state root\",\"pairs\":0,\
+             \"fits\":{\"kt\":0,\"Mlb\":0},\"finding\":\"no_fit\",\"reason_code\":null},\"quarantine\":["
+        ));
         for (scope, d) in &found {
             let instances = if *scope == "visible" {
                 &r.instances
@@ -5253,6 +5349,31 @@ mod tests {
                 discovery_json(scope, d)
             );
         }
+    }
+
+    /// bd-4wvl.4 part 5 (E463, W1-DR-02) on the real files: the 2024 copper rows labelled "(millions of pounds)"
+    /// are in kt, found from their site-sheet pairs (counts only).
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+    fn test_e463_copper_unit_real_files() {
+        let root = workspace_root();
+        let profile = load_issuer_profile(&root, "barrick")
+            .expect("registry")
+            .through("2026Q2")
+            .expect("bound");
+        let r =
+            run_public_assurance(&profile, &root).expect("registered files present and unaltered");
+        let u = r.copper_unit_discovery().expect("unit discovery");
+        println!(
+            "{{\"pairs\":{},\"fits\":{:?},\"finding\":{:?}}}",
+            u.pairs, u.fits, u.finding
+        );
+        assert_eq!(
+            u.pairs, 112,
+            "the 2024 rows labelled in pounds, paired with the summary"
+        );
+        assert_eq!(u.fits, [("kt".to_string(), 112), ("Mlb".to_string(), 0)]);
+        assert_eq!(u.finding, UnitFinding::Identified("kt".to_string()));
     }
 
     /// BD-331.S2 on the real files: the hidden scope. Every count is from the hidden census
