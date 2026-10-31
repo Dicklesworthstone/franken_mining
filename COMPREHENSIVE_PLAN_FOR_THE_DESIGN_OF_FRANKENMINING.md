@@ -7366,25 +7366,25 @@ that keeps delivering value without data (B5 M2′).
 | GATE-DATA-05 Personal data | Privacy impact assessment and works-council review completed before person-level ingest (GATE-MUST-03) | Before Muster at any site | Aggregate-only workforce analytics |
 | GATE-DATA-06 Exploration effort | Effort data (drilling, geophysics, geochemistry coverage) with licence for one public district (OPEN-LODE-1) | Month 15 (M4) | Tract-mode exploration with Manski bounds (KILL-LODE-2) |
 
-**The probability that matters most.** P(site data by month 7) was elicited at 0.5 (B5 §5.3). The research pass
-replaces it with an evidence-based **0.3 for Lumwana (plausible range 0.15–0.45)** (INFERENCE, E599):
-- P(executive and Lumwana site sponsor committed, data list accepted, by month 4) ≈ 0.6 (0.45–0.75);
-- × P(agreement, insider list and blackout in force by month 4–5 | sponsor) ≈ 0.8 (0.65–0.9);
-- × P(security review passed and 8–12 quarters imported by month 7 | both) ≈ 0.6 (0.4–0.75).
+**The assumption that matters most.** Whether site data arrives by month 7 is this plan's largest scheduling
+assumption. The plan does not rely on it, because M2′ delivers without site data. It is a planning input, never a
+forecast of anyone's decision. Three steps must all finish in time (INFERENCE, E599):
+- an executive and a Lumwana site sponsor committed, with the data list accepted, by month 4;
+- the agreement, insider list and blackout in force by month 4–5;
+- the security review passed and 8–12 quarters imported by month 7.
 
 The fastest Barrick precedent, Avathon, went from first collaboration (December 2025) to software at selected U.S.
 sites in Q2 2026, inside the North American perimeter (FACT[secondary], E591). It is a benchmark for pace, not a
-forecast for FrankenMining. The alternates are lower: North Mara/Bulyanhulu about 0.15–0.2, Kibali about
-0.1–0.15, NGM and Pueblo Viejo below 0.1.
+forecast for FrankenMining. The alternates follow Lumwana in this order: North Mara/Bulyanhulu, Kibali, then NGM
+and Pueblo Viejo.
 
-The wedge choice is unchanged: it is the only option that is useful at p = 0 and decisive at p = 1, and at p = 0.3
-H-f's EV is 4.7 against 2.3 for the next options (GB-38, §37.2). What changes is planning weight: **M2′ is the modal
-path (≈ 0.7 with Lumwana alone; ≈ 0.5 if the alternates are pursued in parallel and independently, which they are
-not, because they share the executive sponsor and Barrick's corporate security review; R7-C126) and is resourced from
-M1**, not held in reserve. p moves only on observable signals (W4 §6.5): a named
-Lumwana site sponsor by month 2 (×2 odds), a security questionnaire issued within 30 days (×1.5), or one sample
-month of the reconciliation pack by month 4 (×3) raise it; no site sponsor by month 3 (×0.5) lowers it; no draft
-agreement at GATE-DATA-01 sets p ≤ 0.1 and triggers M2′.
+The wedge choice is unchanged: it is the only option that is useful without site data and decisive with it, and H-f
+leads at every p in GB-38 (§37.2). What changes is planning weight: **M2′ is fully planned and is resourced from M1**,
+not held in reserve. Pursuing the alternates in parallel adds little, because they share the executive sponsor and the
+corporate security review (R7-C126). Planning weight moves only on observable signals (W4 §6.5): a named Lumwana site
+sponsor by month 2, a security questionnaire issued within 30 days, or one sample month of the reconciliation pack by
+month 4 moves it towards M2; no site sponsor by month 3 moves it towards M2′; no draft agreement at GATE-DATA-01
+triggers M2′.
 
 ### 34.5 The program gate (month 12)
 
@@ -7478,7 +7478,7 @@ records that the default, not a decision, is governing. Nothing is decided by si
 | RISK-17 / OPEN-STRATA-6 | Is the MIT + OpenAI/Anthropic rider acceptable for lifted code in a client-facing product? | Owner + counsel | Before M2 | Lift only into internal builds; no client distribution |
 | OPEN-B4-01 | Residency statutes: narrowed by W3 (72 rows, 12 countries); counsel confirms the eight W3 §7 clauses | Counsel | Before any regional node | W3 rows as registered; `in_country_only` for every unknown pair |
 | OPEN-B4-02 | asupersync 0.6 bump: unreleased (crates.io max 0.5.0; E653–E655); coordinated by the suite maintainer once 0.6.x publishes and fgdb, FA and fastmcp move | Suite maintainer | GATE-PIN-06 | Stay on `=0.5.0` with §31.4 mitigations |
-| B5 p | P(site data by month 7) | Sponsor | Month 4 | 0.3 for Lumwana (0.15–0.45; W4, E599); M2′ is the modal path, resourced from M1 |
+| B5 p | Site data by month 7 | Sponsor | Month 4 | Not assumed (W4, E599); M2′ is fully planned, resourced from M1 |
 | OPEN-PUSH-1 | Does `UntrustedCandidate` import of external plans respect the closed-dependency rule? | Owner | Pushback start (M4) | External plans enter as data files only, never as linked code |
 | OPEN-B4-07 | MNPI insider-list format per listing venue | Counsel | Before M2 | The strictest known format |
 | OPEN-HALL-4 | Does a software-prepared data-verification index change QP liability? | Counsel | Before GATE-DATA-01 (month 4; R7-C138) | Index labelled as support material only |
@@ -7572,8 +7572,6 @@ Brenner pass B5 tested seven first wedges. The verdicts:
   | H-d | 3 | 2 | 0 | 2.0 | 2.5 | 3.0 |
   | H-b | 3 | 1 | 1.0 | 0.0 | 1.0 | 2.0 |
   | H-c | 2 | 0 | 2.0 | −2.0 | −1.0 | 0.0 |
-
-  At the research-pass estimate p = 0.3 (§34.4): H-f 4.7; H-a, H-e and H-d 2.3; H-b 0.6; H-c −1.4.
 - **Intuition.** H-f dominates at every p under these values. That makes the dominant uncertainty (data access)
   irrelevant to *which* wedge to start. It matters only for *when* M2 delivers.
 - **Assumptions.**
@@ -8808,7 +8806,7 @@ correction), never overwrites.
 | E401–E449 | Host-state events: Mali 2023 Code and the Loulo-Gounkoto dispute, Porgera, Cobre Panamá, DRC Code 2018, Twiga | `planning/research/W2` |
 | E451–E499 | Barrick Mine Stats Q1 2024–Q2 2026: retrieval, layout, discrepancies, site series | `planning/research/W1` |
 | E501–E549 | Data-residency and mining-data statutes, 12 countries | `planning/research/W3` |
-| E551–E599 | M2 site choice and P(site data by month 7) | `planning/research/W4` |
+| E551–E599 | M2 site choice and site-data timing | `planning/research/W4` |
 | E601–E649 | Primary-source verification of the plan's figures | `planning/research/W5` |
 | E651–E655 | Crate-name and asupersync-pin checks made directly | `planning/mor/MOR_CASE.md` |
 
@@ -9207,7 +9205,7 @@ bump) were checked directly. No agent edited the plan; the fold-in was done afte
 | W1 | The missing Mine Stats workbooks | All ten quarters Q1 2024–Q2 2026 retrieved with MD&As and AISC workbooks; Q3 2026 releases 9 Nov 2026. Structural identities hold everywhere; 17 new discrepancy candidates; Copper-Total recovery is a constant 94%; a Porgera label of 47.5% against values at 24.5%; the corporate AISC layer is positive in all 16 periods | §21.6, §37.3, I.2, I.5, I.6, I.9 |
 | W2 | Porgera 2020, Cobre Panamá 2023, Mali 2023 Code | All primary-sourced. Mali's code is Loi n°2023-040, applied retroactively to Loulo-Gounkoto ($200M, Apr 2026; royalty about 18%); Porgera's 2017 extension application existed; DRC Art. 80 renewal costs +5% State equity | §10.1, §21, §23.4, RISK-26 |
 | W3 | Data-residency statutes (OPEN-B4-01) | 72 statute-cited rows for 12 countries; hard localisation in Zambia, Tanzania, DRC and Mali for personal data; Reko Diq governed by its agreement and BMR 2002 | §26.14, §31.2, RISK-21, BD-292 |
-| W4 | M2 site and P(site data by month 7) | Keep Lumwana (only wholly owned operating mine; grade-adjusted recovery gap 1.7–2.7 points, $30–57M/yr); p = 0.3, so M2′ is the modal path | §34.4, §37.2, §37.3 |
+| W4 | M2 site and site-data timing | Keep Lumwana (only wholly owned operating mine; grade-adjusted recovery gap 1.7–2.7 points, $30–57M/yr); site data by month 7 is not assumed, so M2′ is fully planned | §34.4, §37.2, §37.3 |
 | W5 | The plan's industry and Barrick figures | 72 claims: 49 verified, 2 corrected (Tanami 2 history; the 190%/504% bases), 15 partly right, 4 secondary-only, 2 unverifiable | Part I, §11, §14, §16, §21, §23, Appendix G |
 | Direct | `fmine` naming; asupersync 0.6 | `fmine` is free on crates.io; asupersync 0.6 is unreleased and only frankensympy's runtime crates follow main | §28.1, §31.4 |
 
