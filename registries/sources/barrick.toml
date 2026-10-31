@@ -368,6 +368,144 @@ region = "Africa & Middle East"
 member = "Bulyanhulu"
 first = "2024Q1"
 
+# FACT E461: exact text at QTD!A33 in the registered Q4 2025 Mine Stats workbook, including its footnote number.
+# The note binds to that source's registered digest. These are exact canonical summary lines, not a wildcard.
+# DESIGN: scopes retain both printed region names; they do not alias subjects or override [[region_member]].
+# The source prints FY2024 comparatives (earliest start 2024Q1); coverage ends at its own quarter, 2025Q4.
+[[restatement_note]]
+id = "E461"
+file_name = "Barrick_Q4_2025_Mine_Stats.xlsx"
+locator = "QTD!A33"
+quoted_text = "4 Starting Q4 2025, we have presented Pueblo Viejo as part of North America instead of South America & Asia Pacific. Comparative information has been restated."
+from_quarter = "2025Q4"
+evidence = "E461"
+
+[[restatement_scope]]
+note = "E461"
+subject = "North America"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:au_prod_100_koz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "North America"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:au_prod_attr_koz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "North America"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:au_sold_attr_koz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "North America"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:cos_usd_per_oz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "North America"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:tcc_usd_per_oz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "North America"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:aisc_usd_per_oz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "Latin America & Asia Pacific"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:au_prod_100_koz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "Latin America & Asia Pacific"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:au_prod_attr_koz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "Latin America & Asia Pacific"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:au_sold_attr_koz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "Latin America & Asia Pacific"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:cos_usd_per_oz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "Latin America & Asia Pacific"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:tcc_usd_per_oz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "Latin America & Asia Pacific"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:aisc_usd_per_oz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "South America & Asia Pacific"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:au_prod_100_koz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "South America & Asia Pacific"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:au_prod_attr_koz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "South America & Asia Pacific"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:au_sold_attr_koz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "South America & Asia Pacific"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:cos_usd_per_oz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "South America & Asia Pacific"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:tcc_usd_per_oz"
+
+[[restatement_scope]]
+note = "E461"
+subject = "South America & Asia Pacific"
+period_from = "2024Q1"
+period_to = "2025Q4"
+line = "summary:aisc_usd_per_oz"
+
 # BD-331.S3: Barrick's stated ownership shares. The AISC footnote states gold cost of sales per ounce on an
 # attributable basis using Barrick's ownership share, so the run checks that rate at these shares, but only
 # after the same-release Mine Stats QTD label prints the same share.

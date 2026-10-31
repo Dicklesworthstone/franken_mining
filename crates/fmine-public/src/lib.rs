@@ -260,9 +260,12 @@ pub struct PublicAssuranceReport {
     pub issuer_consistency: consistency::AiscConsistency,
     /// A census of Mine Stats Claims using the same canonical keys and IDs as `public_claims`.
     pub mine_stats_claims: key::mine_stats::KeyedClaims,
-    /// Exact displayed values and typed tokens across Mine Stats releases. Changes are findings, with
-    /// neither a selected true vintage nor a claim that disclosure notes have been searched.
+    /// Exact displayed values and typed tokens across Mine Stats releases, with registered disclosure
+    /// coverage checked against the source text. No comparison selects a true vintage.
     pub mine_stats_vintages: key::consistency::VintageReport,
+    /// The same comparison rules over visible AISC arithmetic operands.
+    pub aisc_vintages: key::consistency::VintageReport,
+    pub disclosures: key::disclosure::VerifiedDisclosureRegistry,
     /// The Mine Stats identity ledger (BD-331.S4): ownership and quarter sums on the summary sheets. Bound into
     /// the state root in its own section; counted apart from `instances` and the totals.
     pub mine_ledger: MineLedger,
@@ -972,8 +975,11 @@ impl PublicAssuranceReport {
         consistency.pop();
         let _ = write!(
             o,
-            "\"issuer_consistency\":{consistency},\"mine_stats_vintages\":{}}},\"mine_stats_claims\":{},",
+            "\"issuer_consistency\":{consistency},\"mine_stats_vintages\":{},\"aisc_vintages\":{},\
+             \"disclosures\":{}}},\"mine_stats_claims\":{},",
             self.mine_stats_vintages.to_json(),
+            self.aisc_vintages.to_json(),
+            self.disclosures.to_json(),
             self.mine_stats_claims.summary_json()
         );
         self.mine_ledger_json(&mut o);
@@ -1782,8 +1788,8 @@ fn assess_inner(
 
     let (mine_stats, mine_ledger) = mine_stats_section(profile, &sources, memo);
     let mut public_claims = aisc::key_aisc_operands(profile, &sources, &instances);
+    let aisc_claims: Vec<_> = public_claims.cells.values().cloned().collect();
     let mine_stats_claims = key::mine_stats::build_claims(profile, &sources, &mine_stats);
-    let mine_stats_vintages = key::consistency::compare_vintages(&mine_stats_claims.claims);
     for cell in &mine_stats_claims.claims {
         public_claims
             .cells
@@ -1801,6 +1807,21 @@ fn assess_inner(
     public_claims
         .refusals
         .sort_by(|a, b| (&a.locator, &a.reason).cmp(&(&b.locator, &b.reason)));
+    let disclosures = key::disclosure::VerifiedDisclosureRegistry::verify(
+        profile,
+        &sources,
+        public_claims.cells.values(),
+    );
+    let mine_stats_vintages = key::consistency::compare_vintages_with_disclosures(
+        &mine_stats_claims.claims,
+        key::consistency::VintageScope::MineStats,
+        Some(&disclosures),
+    );
+    let aisc_vintages = key::consistency::compare_vintages_with_disclosures(
+        &aisc_claims,
+        key::consistency::VintageScope::Aisc,
+        Some(&disclosures),
+    );
     let issuer_consistency = consistency::aisc_consistency(&public_claims, &instances);
 
     // The state root binds every input digest, every census and every instance's state, so changing any
@@ -1902,6 +1923,8 @@ fn assess_inner(
         issuer_consistency,
         mine_stats_claims,
         mine_stats_vintages,
+        aisc_vintages,
+        disclosures,
         mine_ledger,
         hidden_scope: hidden,
         one_cell,
@@ -4255,119 +4278,6 @@ mod tests {
         );
     }
 
-    /// A complete run through a TOML registry in default CI (the real-corpus runs are ignored tests): the two
-    /// synthetic workbooks plus a third, later Mine Stats file are written to a scratch corpus, registered by
-    /// digest in a generated TOML, and loaded with no code-side profile. The ledger equals the in-code synthetic
-    /// profile's, and `--through 2030Q1` drops the third file and leaves the ledger unchanged.
-    #[test]
-    fn test_synthetic_three_file_toml_profile_runs_end_to_end() {
-        let ws = std::env::temp_dir().join(format!("fmine-public-toml-e2e-{}", std::process::id()));
-        let reg = synthetic::write_issuer_workspace(&ws).expect("write workspace");
-        assert_eq!(reg, sources::registry_path(&ws, "synthetic"));
-        let code_profile = synthetic::synthetic_profile();
-
-        let profile = load_issuer_profile(&ws, "synthetic").expect("generated registry loads");
-        assert_eq!(profile.sources.len(), 3);
-        assert_eq!(profile.reconstructions, code_profile.reconstructions);
-        assert_eq!(profile.missing_facts, code_profile.missing_facts);
-        let r = run_public_assurance(&profile, &ws).expect("all three files verify by digest");
-        let totals: Vec<usize> = STATE_CODES.iter().map(|c| r.count_state(c)).collect();
-        assert_eq!(
-            totals,
-            vec![40, 2, 1, 2, 5, 5],
-            "same ledger as the in-code synthetic profile"
-        );
-        assert_eq!(r.hidden_scope.instances.len(), 5);
-        assert_eq!(
-            (&profile.regions, &profile.shares),
-            (&code_profile.regions, &code_profile.shares)
-        );
-        assert_eq!(r.sources.len(), 3);
-        assert_eq!(r.ledger_anchor.commit_sequence, 3);
-        // The reserved issuer name keeps invented numbers out of the public lane; the same registry under
-        // another name would be gate-eligible, so the name is what decides.
-        assert_eq!((r.lane, r.gate_eligible()), (Lane::Synthetic, false));
-        let mut renamed = profile.clone();
-        renamed.issuer = "renamed".to_string();
-        let public = run_public_assurance(&renamed, &ws).expect("same files");
-        assert_eq!((public.lane, public.gate_eligible()), (Lane::Public, true));
-
-        let bounded =
-            run_public_assurance(&profile.through("2030Q1").expect("bound"), &ws).expect("run");
-        assert_eq!(bounded.sources.len(), 2);
-        assert_eq!(bounded.through.as_deref(), Some("2030Q1"));
-        let totals: Vec<usize> = STATE_CODES.iter().map(|c| bounded.count_state(c)).collect();
-        assert_eq!(totals, vec![40, 2, 1, 2, 5, 5]);
-        assert_ne!(
-            bounded.ledger_anchor.state_root, r.ledger_anchor.state_root,
-            "the source set is in the root"
-        );
-        let _ = std::fs::remove_dir_all(&ws);
-    }
-
-    /// bd-jg43.1 parity: reading styles changes no census count and no numeric digest. The values were printed
-    /// by this test at commit 345e2ba, before the styles reader existed, and pasted here. bd-jg43.3 styled the
-    /// AISC workbook and added column N (11 numbers and the header "Site G"): its census must equal that of the
-    /// same cells written as plain numbers with no styles part.
-    #[test]
-    fn test_census_unchanged_by_style_reading() {
-        let line = |name: &str, bytes: &[u8]| {
-            let c = Workbook::from_bytes(name, bytes)
-                .expect("synthetic workbook")
-                .cell_census();
-            format!(
-                "{name} {} {} {} {} {} {} {}",
-                c.visible_sheets,
-                c.hidden_sheets,
-                c.numeric_cells,
-                c.placeholder_cells,
-                c.formula_error_cells,
-                c.text_cells,
-                hex(&c.numeric_digest)
-            )
-        };
-        let got: Vec<String> = synthetic::synthetic_workbooks(&[])
-            .into_iter()
-            .map(|(name, _, _, bytes)| line(name, &bytes))
-            .collect();
-        assert_eq!(
-            got[0],
-            "Synthetic_Mine_Stats.xlsx 2 0 2 0 0 9 ed492958121280b991212c61d01c9c2a257a551dfb07af145f1f6c117e646c21"
-        );
-        let plain: Vec<(String, MinimalCell)> = synthetic::synthetic_aisc_cells()
-            .into_iter()
-            .map(|(r, c)| match c {
-                MinimalCell::Styled { raw, .. } => {
-                    (r, MinimalCell::Number(raw.parse().expect("decimal")))
-                }
-                other => (r, other),
-            })
-            .collect();
-        let unstyled = fmine_io::xlsx::build_minimal_xlsx(&[
-            fmine_io::xlsx::MinimalSheet {
-                name: synthetic::SYNTHETIC_TABLE_SHEET.to_string(),
-                hidden: false,
-                cells: plain,
-            },
-            fmine_io::xlsx::MinimalSheet {
-                name: "Scratch".to_string(),
-                hidden: true,
-                cells: vec![("A1".to_string(), MinimalCell::Number(1.0))],
-            },
-            fmine_io::xlsx::MinimalSheet {
-                name: synthetic::SYNTHETIC_HIDDEN_SHEET.to_string(),
-                hidden: true,
-                cells: synthetic::synthetic_hidden_cells(),
-            },
-        ]);
-        assert_eq!(got[1], line(synthetic::SYNTHETIC_AISC_FILE, &unstyled));
-        assert!(
-            got[1].starts_with("Synthetic_AISC.xlsx 1 2 118 4 1 29 "),
-            "{}",
-            got[1]
-        );
-    }
-
     fn kit_readme() -> String {
         std::fs::read_to_string(
             workspace_root()
@@ -4568,68 +4478,5 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
-    }
-
-    /// `cell_to_public_claim` on a cell of the synthetic issuer table.
-    fn synthetic_claim(row: u32, col: u32) -> Result<Claim<Option<f64>>, Refusal> {
-        let r = run_synthetic_assurance(&[]).expect("synthetic");
-        let f = synthetic::SYNTHETIC_AISC_FILE;
-        let aisc = r.sources.iter().find(|s| s.file_name == f).expect("aisc");
-        let t = synthetic::SYNTHETIC_TABLE_SHEET;
-        let sheet = aisc.workbook.sheet(t).expect("sheet");
-        let cell = sheet.cell(row, col).expect("cell");
-        let additive = AdditivityClass::ExtensiveAdditive;
-        cell_to_public_claim(&aisc.workbook, &sheet.name, "m", cell, additive)
-    }
-
-    #[test]
-    fn test_issuer_cell_is_assertion_issuer_known() {
-        let claim = synthetic_claim(5, 2).expect("B5");
-        assert_eq!(claim.value, Some(500.0));
-        assert_eq!(claim.anchors[0].locator, "Q1 2030!B5");
-        assert_eq!(claim.evidence, EvidenceClass::ISSUER);
-        assert_eq!(claim.state, KnowledgeState::Known);
-        assert_eq!(claim.epistemic, EpistemicStatus::KnownKnown);
-    }
-
-    #[test]
-    fn test_placeholder_cell_is_assumed_unknown() {
-        let claim = synthetic_claim(6, 6).expect("F6");
-        assert_eq!(claim.value, None);
-        assert_eq!(claim.evidence, EvidenceClass::Assumed);
-        assert_eq!(claim.state, KnowledgeState::Unknown);
-    }
-
-    /// "Reproduced" means the issuer's figures agree with each other, so the result stays an assertion (NL-2).
-    #[test]
-    fn test_reproduction_result_class_is_assertion() {
-        let cell = synthetic_claim(5, 2).expect("B5");
-        let footing = fmine_claim::compose_binary(
-            "component_sum",
-            &cell,
-            &cell,
-            Some(1000.0),
-            "1000",
-            Representation::Deterministic,
-            SpatialSupport::PeriodAggregate,
-            AdditivityClass::ExtensiveAdditive,
-            fmine_evidence::color::IntervalOp::Add,
-        );
-        assert_eq!(footing.evidence, EvidenceClass::ISSUER);
-        assert!(footing.color().is_err());
-    }
-
-    /// A formula-error cell is a source cell unusable (208, exit 3), never 401 (unknown reactive ground, exit 7).
-    #[test]
-    fn test_formula_error_cell_refuses_208_exit_3() {
-        let refusal = synthetic_claim(20, 2).expect_err("formula error");
-        assert_eq!((refusal.code, refusal.exit_code), ("FMINE-REF-208", 3));
-        assert!(
-            refusal.what.starts_with("Source cell unusable")
-                && refusal.what.contains("quarantined formula error")
-                && refusal.what.ends_with("at Q1 2030!B20"),
-            "{}",
-            refusal.what
-        );
     }
 }

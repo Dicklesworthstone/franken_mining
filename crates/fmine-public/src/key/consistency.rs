@@ -1,13 +1,35 @@
 //! DESIGN (BD-504e.3): compare source assertions across registered releases by semantic key. A changed
-//! value is a finding, never a choice of which release is true. No disclosure-note registry is consulted by
-//! this slice, so a change never claims that the issuer omitted a note. Hidden sheets never enter its input.
+//! value is a finding, never a choice of which release is true. A verified registry supplies disclosure
+//! citations; an absent or incomplete registry never proves silence. Hidden sheets never enter its input.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use fmine_core::hash::Digest32;
 use fmine_numerics::exact_feas::Rat;
 
-use super::{KeyedCell, PublicValue, Scope, SeriesKey, SeriesOwnershipBasis};
+use super::disclosure::{DisclosureCitation, VerifiedDisclosureRegistry};
+use super::{
+    KeyedCell, OwnershipBasis, PublicValue, Scope, SeriesKey, SeriesOwnershipBasis, claims_digest,
+};
 use crate::js;
+
+/// The caller supplies visible canonical Claims for exactly this public document family.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum VintageScope {
+    #[default]
+    MineStats,
+    Aisc,
+}
+
+impl VintageScope {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MineStats => "mine_stats",
+            Self::Aisc => "aisc",
+        }
+    }
+}
 
 /// One classification for each appearance of a candidate figure in a release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -16,6 +38,8 @@ pub enum VintageState {
     SingleVintage,
     Unchanged,
     ChangedWithoutRegisteredExplanation,
+    RestatedDisclosed,
+    RestatedSilent,
     Conflict,
     NotComparable,
 }
@@ -28,6 +52,8 @@ impl VintageState {
             Self::SingleVintage => "single_vintage",
             Self::Unchanged => "unchanged",
             Self::ChangedWithoutRegisteredExplanation => "changed_without_registered_explanation",
+            Self::RestatedDisclosed => "restated_disclosed",
+            Self::RestatedSilent => "restated_silent",
             Self::Conflict => "conflict",
             Self::NotComparable => "not_comparable",
         }
@@ -36,11 +62,13 @@ impl VintageState {
 
 /// A comparison never converts units or ownership interests. `reason` identifies the changed value class
 /// or the precise reason a numerical comparison was not made.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Comparison {
     pub state: VintageState,
     pub reason: Option<&'static str>,
     pub token_glyph_changed: bool,
+    /// Only verified, temporally applicable notes covering the actual canonical keys appear here.
+    pub disclosures: Vec<DisclosureCitation>,
 }
 
 impl Comparison {
@@ -49,12 +77,25 @@ impl Comparison {
             state,
             reason,
             token_glyph_changed: false,
+            disclosures: Vec::new(),
         }
     }
 
-    fn to_json(self) -> String {
+    fn to_json(&self) -> String {
+        let disclosures = self
+            .disclosures
+            .iter()
+            .map(DisclosureCitation::to_json)
+            .collect::<Vec<_>>()
+            .join(",");
+        let interpretation = if self.state == VintageState::RestatedSilent {
+            js("Value differs between vintages; no note found in registered documents.")
+        } else {
+            "null".to_string()
+        };
         format!(
-            "{{\"state\":{},\"reason\":{},\"token_glyph_changed\":{},\"rounding_only\":null}}",
+            "{{\"state\":{},\"reason\":{},\"token_glyph_changed\":{},\"rounding_only\":null,\
+             \"disclosures\":[{disclosures}],\"interpretation\":{interpretation}}}",
             js(self.state.as_str()),
             self.reason.map_or_else(|| "null".into(), js),
             self.token_glyph_changed,
@@ -85,6 +126,7 @@ impl VintageItem {
             "{{\"against_first\":{},\"against_previous\":{},\"first\":[{}],\"previous\":[{}],\"current\":[{}]}}",
             self.against_first.to_json(),
             self.against_previous
+                .as_ref()
                 .map_or_else(|| "null".into(), Comparison::to_json),
             claims(&self.first),
             claims(&self.previous),
@@ -103,7 +145,7 @@ pub struct VintageCounts {
 }
 
 impl VintageCounts {
-    fn count(&mut self, comparison: Comparison, later: bool) {
+    fn count(&mut self, comparison: &Comparison, later: bool) {
         self.appearances += 1;
         self.comparisons += usize::from(later);
         *self.states.entry(comparison.state).or_default() += 1;
@@ -127,6 +169,11 @@ impl VintageCounts {
 /// groups additionally relate keys across a basis or region-map change solely to report non-comparability.
 #[derive(Debug, Clone, Default)]
 pub struct VintageReport {
+    pub scope: VintageScope,
+    pub input_claims_digest: Digest32,
+    pub disclosure_registry_digest: Option<Digest32>,
+    /// `None` means unassessed; an incomplete registry cannot establish the absence of a covering note.
+    pub disclosure_registry_complete: Option<bool>,
     pub series: usize,
     pub candidate_groups: usize,
     pub multi_vintage: usize,
@@ -138,6 +185,14 @@ pub struct VintageReport {
 impl VintageReport {
     #[must_use]
     pub fn to_json(&self) -> String {
+        let disclosure_check = match self.disclosure_registry_complete {
+            None => "not_performed",
+            Some(true) => "verified_registry",
+            Some(false) => "incomplete_registry",
+        };
+        let disclosure_digest = self
+            .disclosure_registry_digest
+            .map_or_else(|| "null".into(), |d| js(&d.to_hex()));
         let vintages = self
             .by_vintage
             .iter()
@@ -151,12 +206,16 @@ impl VintageReport {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "{{\"rules_version\":\"mine-stats-vintages/1\",\"scope\":\"mine_stats\",\
+            "{{\"rules_version\":\"public-vintages/2\",\"scope\":{},\
              \"first_registered_caveat\":\"The earliest registered release need not be the issuer's first publication.\",\
-             \"disclosure_check\":\"not_performed\",\
-             \"interpretation_limit\":\"A difference does not establish which assertion is true or whether the issuer disclosed a reason.\",\
+             \"disclosure_check\":{},\"input_claims_digest\":{},\
+             \"disclosure_registry_digest\":{disclosure_digest},\
+             \"interpretation_limit\":\"A difference does not establish which assertion is true. Silence means no applicable verified note in the registered documents; it does not establish absence of disclosure elsewhere.\",\
              \"series\":{},\"candidate_groups\":{},\"multi_vintage\":{},\"totals\":{},\
              \"by_vintage\":{{{vintages}}},\"items\":[{items}]}}",
+            js(self.scope.as_str()),
+            js(disclosure_check),
+            js(&self.input_claims_digest.to_hex()),
             self.series,
             self.candidate_groups,
             self.multi_vintage,
@@ -190,7 +249,11 @@ fn intrinsic(c: &[&KeyedCell]) -> Option<Comparison> {
         ));
     }
     let c = c[0];
-    if c.basis_evidence.is_some() {
+    if c.basis_evidence.is_some()
+        && c.printed_basis != OwnershipBasis::Unprinted
+        && SeriesOwnershipBasis::from(c.printed_basis)
+            != SeriesOwnershipBasis::from(c.key.ownership_basis)
+    {
         return Some(Comparison::new(
             VintageState::Conflict,
             Some("registered_basis_correction"),
@@ -280,6 +343,7 @@ fn compare(from: &[&KeyedCell], to: &[&KeyedCell]) -> Comparison {
             state: VintageState::Unchanged,
             reason: None,
             token_glyph_changed: glyph,
+            disclosures: Vec::new(),
         }
     } else {
         Comparison::new(
@@ -294,6 +358,44 @@ fn compare(from: &[&KeyedCell], to: &[&KeyedCell]) -> Comparison {
 /// order, row position and column position do not choose a source or affect the report.
 #[must_use]
 pub fn compare_vintages(claims: &[KeyedCell]) -> VintageReport {
+    compare_vintages_with_disclosures(claims, VintageScope::MineStats, None)
+}
+
+fn assess_disclosure(
+    mut comparison: Comparison,
+    from: &[&KeyedCell],
+    to: &[&KeyedCell],
+    registry: Option<&VerifiedDisclosureRegistry>,
+) -> Comparison {
+    let Some(registry) = registry else {
+        return comparison;
+    };
+    let changed = comparison.state == VintageState::ChangedWithoutRegisteredExplanation;
+    if (changed || comparison.reason == Some("region_map")) && from.len() == 1 && to.len() == 1 {
+        // Coverage uses the actual keys, never the relaxed ownership, region or section candidate key.
+        comparison.disclosures = registry.matching(&from[0].key, &to[0].key);
+        if changed {
+            comparison.state = if !comparison.disclosures.is_empty() {
+                VintageState::RestatedDisclosed
+            } else if registry.is_complete() {
+                VintageState::RestatedSilent
+            } else {
+                VintageState::ChangedWithoutRegisteredExplanation
+            };
+        }
+    }
+    comparison
+}
+
+/// Compare one document family's canonical Claims and optionally assess disclosures against a verified
+/// registry. Uncovered changes become `restated_silent` only after a complete registry check; a region-map
+/// boundary stays `not_comparable` even when a verified note explains it. Both comparisons keep citations.
+#[must_use]
+pub fn compare_vintages_with_disclosures(
+    claims: &[KeyedCell],
+    scope: VintageScope,
+    registry: Option<&VerifiedDisclosureRegistry>,
+) -> VintageReport {
     let mut groups: BTreeMap<SeriesKey, BTreeMap<&str, Vec<&KeyedCell>>> = BTreeMap::new();
     let mut series = BTreeSet::new();
     for c in claims {
@@ -305,11 +407,6 @@ pub fn compare_vintages(claims: &[KeyedCell]) -> VintageReport {
             .or_default()
             .push(c);
     }
-    let mut report = VintageReport {
-        series: series.len(),
-        candidate_groups: groups.len(),
-        ..VintageReport::default()
-    };
     for releases in groups.values_mut() {
         for group in releases.values_mut() {
             group.sort_by(|a, b| {
@@ -318,6 +415,24 @@ pub fn compare_vintages(claims: &[KeyedCell]) -> VintageReport {
                     .then_with(|| a.to_json().cmp(&b.to_json()))
             });
         }
+    }
+    // A conflicting caller can supply multiple values at the same canonical locator. Establish their
+    // deterministic tie order before the canonical digest's key/locator sort, without dropping any input.
+    let input_claims_digest = claims_digest(
+        groups
+            .values()
+            .flat_map(|releases| releases.values().flat_map(|group| group.iter().copied())),
+    );
+    let mut report = VintageReport {
+        scope,
+        input_claims_digest,
+        disclosure_registry_digest: registry.map(VerifiedDisclosureRegistry::digest),
+        disclosure_registry_complete: registry.map(VerifiedDisclosureRegistry::is_complete),
+        series: series.len(),
+        candidate_groups: groups.len(),
+        ..VintageReport::default()
+    };
+    for releases in groups.values() {
         report.multi_vintage += usize::from(releases.len() > 1);
         let Some(first) = releases.values().next() else {
             continue;
@@ -336,25 +451,29 @@ pub fn compare_vintages(claims: &[KeyedCell]) -> VintageReport {
                     )
                 })
             } else {
-                compare(first, current)
+                assess_disclosure(compare(first, current), first, current, registry)
             };
-            let against_previous = (index != 0).then(|| compare(previous, current));
-            report.totals.count(against_first, index != 0);
+            let against_previous = (index != 0).then(|| {
+                assess_disclosure(compare(previous, current), previous, current, registry)
+            });
+            report.totals.count(&against_first, index != 0);
             report
                 .by_vintage
                 .entry((*release).to_string())
                 .or_default()
-                .count(against_first, index != 0);
-            let exceptional = |c: Comparison| {
+                .count(&against_first, index != 0);
+            let exceptional = |c: &Comparison| {
                 c.token_glyph_changed
                     || matches!(
                         c.state,
                         VintageState::ChangedWithoutRegisteredExplanation
+                            | VintageState::RestatedDisclosed
+                            | VintageState::RestatedSilent
                             | VintageState::Conflict
                             | VintageState::NotComparable
                     )
             };
-            if exceptional(against_first) || against_previous.is_some_and(exceptional) {
+            if exceptional(&against_first) || against_previous.as_ref().is_some_and(exceptional) {
                 let owned = |g: &[&KeyedCell]| g.iter().map(|c| (*c).clone()).collect();
                 report.items.push(VintageItem {
                     first: owned(first),
@@ -374,217 +493,4 @@ pub fn compare_vintages(claims: &[KeyedCell]) -> VintageReport {
     report
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Public-API comparison checks live in xtask/tests/public_mine_stats_vintages.rs.
-
-    /// FACT: E474, W1-DR-09 and W1's T16 population predate this comparator. W1 lists passes/failures:
-    /// 6,391 + 9 = 6,400 comparisons, excluding 30 region-map changes. Our additional display/basis states
-    /// remain diagnostics; this test does not claim that GATE-BULL-01 part 3 passed.
-    #[test]
-    #[ignore = "needs the registered Barrick Mine Stats workbooks under corpus_of_input_docs/"]
-    fn real_mine_stats_vintages_keep_e474_and_basis_conflicts() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|p| p.parent())
-            .expect("workspace")
-            .to_path_buf();
-        let profile = crate::sources::load_issuer_profile(&root, "barrick").expect("profile");
-        let sources = crate::load_registered_sources(&profile, &root).expect("verified sources");
-        let vocabulary = profile.mine_stats_labels.iter().cloned().collect();
-        let mut claims = Vec::new();
-        for source in sources
-            .iter()
-            .filter(|s| s.kind == crate::sources::SourceKind::MineStats)
-        {
-            let read = crate::mine_stats::read_mine_stats(
-                &source.workbook,
-                &source.quarter,
-                Some(&vocabulary),
-            )
-            .expect("read");
-            assert!(read.refusals.is_empty(), "{:?}", read.refusals);
-            for value in &read.values {
-                claims.push(
-                    crate::key::from_mine_stats(&profile, &source.workbook, &source.quarter, value)
-                        .expect("canonical source-backed Claim"),
-                );
-            }
-        }
-        let r = compare_vintages(&claims);
-        // FACT: these 20 Pueblo Viejo pairs have the same metric/unit/value in the independent W1 read.
-        // Only the section's redundant ($/oz) changes; never rewrite the canonical keys to make them match.
-        let by_locator: BTreeMap<_, _> = claims.iter().map(|c| (c.locator.as_str(), c)).collect();
-        let section_pairs = [
-            (
-                "Barrick_Q4_2024_Mine_Stats.xlsx",
-                "Barrick_Q4_2025_Mine_Stats.xlsx",
-                &[
-                    ("B33", "M41"),
-                    ("B34", "M42"),
-                    ("B35", "M43"),
-                    ("B36", "M44"),
-                    ("B82", "M102"),
-                    ("B83", "M103"),
-                    ("B84", "M104"),
-                    ("B85", "M105"),
-                ][..],
-            ),
-            (
-                "Barrick_Q1_2025_Mine_Stats.xlsx",
-                "Barrick_Q1_2026_Mine_Stats.xlsx",
-                &[
-                    ("B33", "M41"),
-                    ("B34", "M42"),
-                    ("B35", "M43"),
-                    ("B36", "M44"),
-                ][..],
-            ),
-            (
-                "Barrick_Q2_2025_Mine_Stats.xlsx",
-                "Barrick_Q2_2026_Mine_Stats.xlsx",
-                &[
-                    ("B33", "M43"),
-                    ("B34", "M44"),
-                    ("B35", "M45"),
-                    ("B36", "M46"),
-                    ("B82", "M106"),
-                    ("B83", "M107"),
-                    ("B84", "M108"),
-                    ("B85", "M109"),
-                ][..],
-            ),
-        ];
-        for (from_file, to_file, cells) in section_pairs {
-            for (from_cell, to_cell) in cells {
-                let first = by_locator[format!("{from_file}:Minestats2!{from_cell}").as_str()];
-                let later = by_locator[format!("{to_file}:Minestats1!{to_cell}").as_str()];
-                assert_eq!(first.key.subject, "Pueblo Viejo");
-                assert_ne!(first.key.series_key(), later.key.series_key());
-                assert_eq!(candidate_key(first), candidate_key(later));
-                assert_eq!(compare(&[first], &[later]).state, VintageState::Unchanged);
-            }
-        }
-        let e474 = r
-            .items
-            .iter()
-            .find(|i| {
-                i.current
-                    .iter()
-                    .any(|c| c.locator == "Barrick_Q1_2025_Mine_Stats.xlsx:QTD!N22")
-            })
-            .expect("E474 later cell");
-        assert!(
-            e474.first
-                .iter()
-                .any(|c| c.locator == "Barrick_Q1_2024_Mine_Stats.xlsx:QTD!G23")
-        );
-        assert_eq!(
-            e474.against_first.state,
-            VintageState::ChangedWithoutRegisteredExplanation
-        );
-        assert_eq!(e474.against_first.reason, Some("value"));
-        let changed: BTreeSet<_> = r
-            .items
-            .iter()
-            .filter(|i| i.against_first.state == VintageState::ChangedWithoutRegisteredExplanation)
-            .map(|i| i.first[0].locator.as_str())
-            .collect();
-        // FACT: the original locators of E474 and W1-DR-09's eight changes were captured before this code.
-        assert_eq!(
-            changed,
-            BTreeSet::from([
-                "Barrick_Q1_2024_Mine_Stats.xlsx:QTD!G23",
-                "Barrick_Q3_2024_Mine_Stats.xlsx:Minestats3!F57",
-                "Barrick_Q2_2025_Mine_Stats.xlsx:Minestats1!F107",
-                "Barrick_Q2_2025_Mine_Stats.xlsx:Minestats1!F108",
-                "Barrick_Q2_2024_Mine_Stats.xlsx:Minestats2!F14",
-                "Barrick_Q2_2024_Mine_Stats.xlsx:Minestats2!F27",
-                "Barrick_Q2_2024_Mine_Stats.xlsx:Minestats2!F63",
-                "Barrick_Q2_2024_Mine_Stats.xlsx:Minestats2!F76",
-                "Barrick_Q2_2025_Mine_Stats.xlsx:Minestats3!B8",
-            ])
-        );
-        let mut region_changes = BTreeMap::<&str, usize>::new();
-        for item in r
-            .items
-            .iter()
-            .filter(|i| !i.previous.is_empty() && i.against_first.reason == Some("region_map"))
-        {
-            *region_changes
-                .entry(&item.current[0].key.reporting_vintage.release)
-                .or_default() += 1;
-        }
-        // W1 §5.1 lists passes/failures, not total/failures; §13 explicitly states 6,400 cells.
-        for (release, passed, changed, regions) in [
-            ("2025Q1", 645, 1, 0),
-            ("2025Q2", 1_288, 4, 0),
-            ("2025Q3", 1_291, 1, 0),
-            ("2025Q4", 1_268, 0, 12),
-            ("2026Q1", 634, 0, 6),
-            ("2026Q2", 1_265, 3, 12),
-        ] {
-            let counts = &r.by_vintage[release];
-            assert_eq!(
-                region_changes.get(release).copied().unwrap_or(0),
-                regions,
-                "{release} region boundary"
-            );
-            assert_eq!(
-                counts.comparisons,
-                passed + changed + regions,
-                "{release} T16 population plus explicit region changes"
-            );
-            assert_eq!(
-                counts
-                    .states
-                    .get(&VintageState::ChangedWithoutRegisteredExplanation)
-                    .copied()
-                    .unwrap_or(0),
-                changed,
-                "{release} independently recorded changes"
-            );
-        }
-        assert_eq!(region_changes.values().sum::<usize>(), 30);
-        assert_eq!(r.totals.comparisons - 30, 6_400);
-        assert!(r.items.iter().any(|i| {
-            i.against_first.reason == Some("registered_basis_correction")
-                && i.current.iter().any(|c| {
-                    c.key.subject == "Porgera" && c.basis_evidence.as_deref() == Some("W1-DR-01")
-                })
-        }));
-        assert!(
-            r.items
-                .iter()
-                .any(|i| i.against_first.reason == Some("region_map"))
-        );
-        assert_eq!(
-            r.totals.appearances,
-            r.totals.states.values().sum::<usize>()
-        );
-        let mut reversed = claims;
-        reversed.reverse();
-        assert_eq!(r.to_json(), compare_vintages(&reversed).to_json());
-        println!(
-            "{{\"test\":\"mine_stats_vintages\",\"series\":{},\"candidate_groups\":{},\"multi_vintage\":{},\"totals\":{},\"independent_census\":false}}",
-            r.series,
-            r.candidate_groups,
-            r.multi_vintage,
-            r.totals.to_json()
-        );
-        let mut reasons = BTreeMap::<&str, usize>::new();
-        for i in &r.items {
-            if let Some(reason) = i.against_first.reason {
-                *reasons.entry(reason).or_default() += 1;
-            }
-        }
-        println!("finding reasons: {reasons:?}");
-        for i in &r.items {
-            if i.against_first.state == VintageState::ChangedWithoutRegisteredExplanation {
-                println!("{}", i.to_json());
-            }
-        }
-    }
-}
+// Cross-crate vintage comparisons live in xtask/tests/public_mine_stats_vintages.rs.

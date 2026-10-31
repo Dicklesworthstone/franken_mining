@@ -78,7 +78,7 @@ bash repro/barrick/fetch.sh
 cargo run -p fmine-cli -- assure public --issuer barrick > run.json
 ```
 
-**FACT, the registered-corpus tests in `fmine-public`:** the Mine Stats Claim inventory contains 22,732
+**FACT, the registered-corpus integration tests:** the Mine Stats Claim inventory contains 22,732
 observations, with no mapping refusals. Each Claim retains its publication vintage, period, ownership basis,
 unit, raw token, displayed value and source cell/hash. Numeric zeros at registered disposed sites remain
 `nil` with reason `disposed`; missing cells, dashes and `n/a` remain distinct.
@@ -88,8 +88,20 @@ The JSON payload includes `public_claims.cells` (the canonical AISC and Mine Sta
 against both the earliest registered and previous releases). The comparison tests
 reproduce E474 and all eight W1-DR-09 changes, while listing ownership conflicts and changed regional membership
 separately. The comparison population reconciles with W1 T16: 6,391 passes plus nine changes, with 30
-regional-membership changes listed separately. A difference does not identify which publication is correct;
-disclosure-note search remains open.
+regional-membership changes listed separately. The nine changes are classified as `restated_silent` because
+no applicable verified note is registered. All 30 region-map exclusions cite E461's exact workbook note and
+remain `not_comparable`. A difference does not identify which publication is correct, and this classification
+does not establish whether an explanation exists outside the registered evidence.
+
+The same engine compares the AISC workbooks under `issuer_consistency.aisc_vintages`: 9,541 appearances,
+5,819 series and 3,722 later comparisons, all unchanged in the registered corpus. This includes 359 explicitly
+labelled co-product cash-cost rates, kept distinct from the by-product rates used by the identity ledger.
+
+Disclosure coverage comes from explicit `restatement_note` and `restatement_scope` registry rows. Each run
+checks the source digest and complete quoted cell text, then matches exact subjects, lines, occurrences and
+whole reporting periods. A future note cannot explain an earlier release. Missing, altered or unusable note
+evidence leaves a change unassessed rather than silently declaring it unexplained. The JSON reports source
+Claims, applicable note citations, the claim-population digest and the checked disclosure-registry digest.
 
 Inspect a comparison's `current[].claim_id` or `first[].claim_id`, then resolve it directly:
 

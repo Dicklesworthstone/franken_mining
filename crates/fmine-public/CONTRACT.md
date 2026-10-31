@@ -376,23 +376,41 @@ The public lane of M0 (`fmine assure public`).
   - `key::mine_stats::{KeyedClaims, build_claims, load_claims}` is a thin inventory over that same adapter,
     not another Claim implementation. `mine_stats_claims` reports its typed-value census, named refusals and
     canonical `claims_digest`. The direct reader supports `fmine claim show` without running the identity solver.
-- `key::consistency::{VintageReport, VintageState, compare_vintages}` and
-  `PublicAssuranceReport::mine_stats_vintages` add `issuer_consistency.mine_stats_vintages` beside the AISC
-  findings. Every Mine Stats appearance is counted. Comparisons retain both the earliest registered and
+- `key::consistency::{VintageReport, VintageState, compare_vintages_with_disclosures}` and
+  `PublicAssuranceReport::{mine_stats_vintages, aisc_vintages}` add separate value-comparison populations
+  under `issuer_consistency`. Every keyed appearance is counted. Comparisons retain both the earliest registered and
   previous release, match semantic keys rather than cell coordinates, and compare displayed decimals exactly.
   Percentage glyphs are normalized to the key's stored-number unit using exact rationals. Unknown conversions
   and refused displays remain `not_comparable`; no stored precision is substituted for displayed precision.
-  - Changed values or token classes are `changed_without_registered_explanation`; no disclosure search or
-    choice of a true vintage is implied. Same-release ambiguity and corrected ownership remain explicit
-    conflicts. Region-map changes are `not_comparable`, with both source assertions retained.
+  - Changed values or token classes are `restated_disclosed` only when an applicable verified registry note
+    covers them, otherwise `restated_silent` after a complete check. An omitted or incomplete check leaves
+    `changed_without_registered_explanation`. These findings never select a true vintage or establish that
+    no disclosure exists elsewhere. Same-release ambiguity and actual printed ownership disagreements remain
+    conflicts; registered share provenance alone is not a conflict. Region-map changes remain `not_comparable`,
+    with both assertions and any verified explanatory note retained.
   - The real-source regression checks E474 and all eight W1-DR-09 changes. W1 T16's 6,391/9 is passes/failures:
     the six per-release populations equal 6,400 in total after excluding the 30 cited region-map changes.
     The full classification differs from that pass/fail table because basis conflicts and display refusals
-    remain visible. The separate keyed projection digest and existing M0AS v7 root are preserved.
+    remain visible. Comparison JSON binds the canonical input-claims digest and disclosure-registry digest;
+    it does not alter the existing M0AS v7 numerical-ledger root.
+- `key::disclosure::VerifiedDisclosureRegistry` checks `restatement_note` and `restatement_scope` rows
+  once per run. It verifies registered file identity, size and SHA-256, then matches the complete quote
+  (modulo whitespace) at a visible non-formula source cell. Every exact subject/line/occurrence scope must
+  bind to an observed canonical period and a unique unit. Coverage includes the entire reporting period;
+  future notes never explain an earlier release. The `--through` cut drops later notes before verification.
+  Missing sources, mismatched bytes and unusable quotes/scopes yield typed refusals and prohibit silent
+  classification for uncovered changes. E461 is registered at Q4 2025 `QTD!A33`, covering 18 exact regional
+  summary selectors for 2024–2025. Existing `region_member` rows remain the sole membership map.
+- `key::inspect::{why_json, trace_json}` exposes actual Claim evidence, guards and source provenance for
+  the CLI's show/why/trace views. Absent decision, calibration and clock assessments stay absent; unresolved
+  parent IDs mark a partial trace. No upstream measurement history or arbitrary derived-Claim store is inferred.
 - `aisc::{AiscClaimIndex, KeyingRefusal, key_aisc_operands}` (BD-332.S2): one keyed Claim per distinct arithmetic
-  operand, with the subject read from that operand's own column (including regional member inputs), canonical
+  operand and per explicitly labelled co-product cash-cost rate, with the subject read from its own column
+  (including regional member inputs), canonical
   metric labels, repeated-label occurrence indices and units `usd_m`, `koz` or `usd_per_oz`. An operand must
-  still agree with its loaded source cell. Textual label checks remain context references; consulted Mine
+  still agree with its loaded source cell. Co-product rows retain their distinct line and `usd_per_oz` unit;
+  they do not add numerical identity instances. Their row positions are discovered once per worksheet.
+  Textual label checks remain context references; consulted Mine
   Stats cells use `from_mine_stats`. All-zero columns lacking a registered subject status are named in
   `unregistered_all_zero`; their zeros do not become evidence of withholding or disposal.
   - **Explicitly partial ownership wiring:** a row stays `Unprinted` unless its printed label states an
@@ -418,9 +436,9 @@ The public lane of M0 (`fmine assure public`).
     include operand role, semantic key and displayed arithmetic value/token, so swapping inputs is not
     persistence and moving a cell is not a restatement. An unkeyed operand makes `operands_changed` null and
     cannot prove persistence or correction.
-  - This is the earliest **registered** appearance, not necessarily the issuer's first publication. Full
-    part 3b disclosure classification across all public figures and a composite gate result remain open;
-    Mine Stats value comparisons are reported separately under `mine_stats_vintages` as described above.
+  - This is the earliest **registered** appearance, not necessarily the issuer's first publication. Value
+    comparisons and registered-note classification are reported separately under `mine_stats_vintages`
+    and `aisc_vintages`; a composite issuer-consistency gate result remains open.
 
 ## 5. Guards & Typed Refusals
 - A run names every registered file that is missing, digest-mismatched or unparseable, and never substitutes
@@ -696,10 +714,11 @@ The public lane of M0 (`fmine assure public`).
 - Neither stops the run, and neither is ever guessed.
 
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
-- `GATE-BULL-01`: parts 1 and 2 retain their existing numerical ledger. Part 3a now reports AISC
-  first-registered within-vintage counts, and part 3c reports adjacent histories. Part 3b's full restatement
-  classifier and a complete issuer-consistency gate score remain outstanding; Mine Stats comparisons now
-  reproduce the independent T16 population and all nine known changes without asserting disclosure status.
+- `GATE-BULL-01`: parts 1 and 2 retain their existing numerical ledger. Part 3a reports AISC first-registered
+  within-vintage counts, and part 3c reports adjacent histories. Part 3b compares keyed AISC and Mine Stats
+  values with verified registered-note coverage. The Mine Stats population reproduces T16 and all nine
+  known changes, with 30 region-map exclusions citing E461. A complete issuer-consistency gate record remains
+  outstanding; these projections alone do not establish a full M0 gate pass.
 
 ## 9. Lifted Code & Foundation Dependencies
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io`, and `fmine-metrics` for exact guidance
