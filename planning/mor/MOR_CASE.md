@@ -1245,9 +1245,10 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     `mine_ledger` `test_region_whose_members_change_between_releases_is_excluded` and
     `test_region_outside_the_map_and_missing_operand_rows_are_refused`. A per-value tag would repeat the
     release.
+  - **Header typo.** A synthetic test reads a block headed "For the Twelve months ended Decemer 31," (W1's
+    `Q4_2025:Minestats1!A64`) as FY with no refusal. Planted negative, reverted: a parser that also requires a
+    correctly spelled month fails it and the drift test ("Juen").
   - **Not claimed.** The mismatch log has run with a planted oracle only, never on a real disagreement. The
-    mutants are simulations built from the reads, not a second reader implementation. "Decemer"
-    (`Q4_2025:Minestats1!A64`) is covered by the real-file digest, not by a synthetic test; the synthetic fixture
-    misspells "June".
+    mutants are simulations built from the reads, not a second reader implementation.
   - **Verification.** Self-verified on this machine only; nothing has run in CI. The real-file test needs the
     registered workbooks, so BD-339's CI job cannot run it until the files can be fetched there.

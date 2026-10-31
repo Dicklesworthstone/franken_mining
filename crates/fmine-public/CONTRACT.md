@@ -351,6 +351,7 @@ The public lane of M0 (`fmine assure public`).
   - **Synthetic** (default suite): an inserted site, an inserted row, renumbered footnotes and a misspelled
     month give the same values. Each refusal names its cell: an unknown token, a repeated label, an unknown
     period and a formula error. The mismatch log names the cell and the differing field, and prints no token.
+    A block header misspelling its month ("Decemer", as in `Q4_2025:Minestats1!A64`) is read by its period word.
 - `PO-PUB-5` (stated share rule, BD-331.S3, MOR_CASE E826):
   - **Real files** (ignored test `barrick_share_rule_matches_census`): of the 379 instances refused before, the 328
     site instances split into 263 (i) and 65 (iv). The 51 region instances go to the region rule (PO-PUB-10).

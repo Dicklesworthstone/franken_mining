@@ -1264,6 +1264,23 @@ mod tests {
         );
     }
 
+    /// A block is found by its period word, not its month: W1's `Q4_2025:Minestats1!A64` prints "Decemer".
+    #[test]
+    fn test_block_header_month_typo_reads() {
+        let (mut ms, qtd) = fixture(false);
+        put(&mut ms, 1, 13, t("For the Twelve months ended Decemer 31,"));
+        let read = read_mine_stats(&workbook((ms, qtd)), "2030Q4", None).expect("read");
+        assert!(read.refusals.is_empty(), "{:?}", read.refusals);
+        let year: BTreeSet<&str> = read
+            .values
+            .iter()
+            .filter(|v| v.view == View::Minestats && v.months == 12)
+            .map(|v| v.period.as_str())
+            .collect();
+        assert_eq!(year, BTreeSet::from(["2029FY", "2030FY"]));
+        assert_eq!(read.blocks, 3, "the fixture's three blocks, none lost");
+    }
+
     /// Negative controls: each refusal names its cell, and nothing is emitted for it.
     #[test]
     fn test_refusals_name_the_cell() {
