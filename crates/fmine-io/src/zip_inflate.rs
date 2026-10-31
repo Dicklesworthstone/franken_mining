@@ -1,7 +1,19 @@
 //! Pure-Rust ZIP Central Directory reader and RFC 1951 DEFLATE decompressor for `.xlsx` files.
+//!
+//! The reader is bounded for hostile input (BD-073): no entry is allocated or inflated past its declared size, the
+//! declared sizes are capped, and a name that appears twice is refused, so this reader and a spreadsheet program
+//! cannot take different parts under one name. The CRC-32 is not checked; a registered file's integrity is its
+//! SHA-256 against the source registry.
 
 use std::collections::BTreeMap;
 use std::fmt;
+
+/// Largest uncompressed entry accepted. Barrick's 40 workbooks in the corpus peak at 0.4 MB an entry and 0.8 MB a
+/// workbook (2026-10-31), so this leaves two orders of magnitude while bounding a hostile archive's memory.
+pub const MAX_ENTRY_BYTES: usize = 64 << 20;
+
+/// Largest total of declared uncompressed sizes in one archive.
+pub const MAX_ARCHIVE_BYTES: usize = 256 << 20;
 
 /// Errors raised while reading a ZIP container or inflating a DEFLATE stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,6 +21,8 @@ pub enum ZipError {
     InvalidArchive(&'static str),
     UnsupportedMethod(u16),
     Inflate(&'static str),
+    /// A declared size past `MAX_ENTRY_BYTES` or `MAX_ARCHIVE_BYTES`.
+    Limit(&'static str),
 }
 
 impl fmt::Display for ZipError {
@@ -17,14 +31,24 @@ impl fmt::Display for ZipError {
             Self::InvalidArchive(msg) => write!(f, "invalid ZIP archive: {msg}"),
             Self::UnsupportedMethod(m) => write!(f, "unsupported ZIP compression method {m}"),
             Self::Inflate(msg) => write!(f, "RFC 1951 inflate error: {msg}"),
+            Self::Limit(msg) => write!(f, "ZIP size bound: {msg}"),
         }
     }
 }
 
 impl std::error::Error for ZipError {}
 
-/// Extracts all entries from a ZIP byte buffer into a deterministic map `filename -> uncompressed_bytes`.
+/// Extracts all entries from a ZIP byte buffer into a deterministic map `filename -> uncompressed_bytes`, within
+/// `MAX_ENTRY_BYTES` and `MAX_ARCHIVE_BYTES`.
 pub fn read_zip_entries(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
+    read_bounded(bytes, MAX_ENTRY_BYTES, MAX_ARCHIVE_BYTES)
+}
+
+fn read_bounded(
+    bytes: &[u8],
+    max_entry: usize,
+    max_archive: usize,
+) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
     if bytes.len() < 22 {
         return Err(ZipError::InvalidArchive("buffer shorter than EOCD"));
     }
@@ -47,6 +71,7 @@ pub fn read_zip_entries(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, ZipEr
     ]) as usize;
 
     let mut entries = BTreeMap::new();
+    let mut declared_total = 0_usize;
     let mut pos = cd_offset;
     for _ in 0..total_entries {
         if pos + 46 > bytes.len() || bytes[pos..pos + 4] != [0x50, 0x4b, 0x01, 0x02] {
@@ -95,13 +120,28 @@ pub fn read_zip_entries(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, ZipEr
         if data_end > bytes.len() {
             return Err(ZipError::InvalidArchive("truncated compressed payload"));
         }
+        // The bounds apply to declared sizes before anything is allocated.
+        if uncomp_size > max_entry {
+            return Err(ZipError::Limit(
+                "entry larger than MAX_ENTRY_BYTES uncompressed",
+            ));
+        }
+        declared_total = declared_total.saturating_add(uncomp_size);
+        if declared_total > max_archive {
+            return Err(ZipError::Limit(
+                "archive larger than MAX_ARCHIVE_BYTES uncompressed",
+            ));
+        }
         let slice = &bytes[data_start..data_end];
         let payload = match method {
-            0 => slice.to_vec(),
+            0 if comp_size == uncomp_size => slice.to_vec(),
+            0 => return Err(ZipError::InvalidArchive("stored entry whose sizes differ")),
             8 => inflate_raw(slice, uncomp_size)?,
             other => return Err(ZipError::UnsupportedMethod(other)),
         };
-        entries.insert(name, payload);
+        if entries.insert(name, payload).is_some() {
+            return Err(ZipError::InvalidArchive("duplicate entry name"));
+        }
     }
     Ok(entries)
 }
@@ -280,6 +320,8 @@ fn inflate_raw(data: &[u8], expected_size: usize) -> Result<Vec<u8>, ZipError> {
         13, 13,
     ];
 
+    // Output never grows past the declared size, so a stream that inflates further is refused at that size.
+    const PAST_DECLARED: ZipError = ZipError::Inflate("output exceeds the declared size");
     let mut br = BitReader::new(data);
     let mut out = Vec::with_capacity(expected_size);
 
@@ -294,6 +336,9 @@ fn inflate_raw(data: &[u8], expected_size: usize) -> Result<Vec<u8>, ZipError> {
                 if (len ^ 0xFFFF) != nlen {
                     return Err(ZipError::Inflate("stored block LEN/NLEN mismatch"));
                 }
+                if out.len() + len > expected_size {
+                    return Err(PAST_DECLARED);
+                }
                 for _ in 0..len {
                     out.push(br.read_bits(8)? as u8);
                 }
@@ -307,6 +352,9 @@ fn inflate_raw(data: &[u8], expected_size: usize) -> Result<Vec<u8>, ZipError> {
                 loop {
                     let sym = lit_table.decode(&mut br)? as usize;
                     if sym < 256 {
+                        if out.len() == expected_size {
+                            return Err(PAST_DECLARED);
+                        }
                         out.push(sym as u8);
                     } else if sym == 256 {
                         break;
@@ -323,6 +371,9 @@ fn inflate_raw(data: &[u8], expected_size: usize) -> Result<Vec<u8>, ZipError> {
                         if dist == 0 || dist > out.len() {
                             return Err(ZipError::Inflate("distance exceeds output history"));
                         }
+                        if out.len() + length > expected_size {
+                            return Err(PAST_DECLARED);
+                        }
                         for _ in 0..length {
                             let b = out[out.len() - dist];
                             out.push(b);
@@ -337,6 +388,11 @@ fn inflate_raw(data: &[u8], expected_size: usize) -> Result<Vec<u8>, ZipError> {
         if bfinal == 1 {
             break;
         }
+    }
+    if out.len() != expected_size {
+        return Err(ZipError::Inflate(
+            "output length differs from the declared size",
+        ));
     }
     Ok(out)
 }
@@ -403,4 +459,101 @@ pub fn write_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     out.extend_from_slice(&cd_offset.to_le_bytes());
     out.extend_from_slice(&0_u16.to_le_bytes());
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 78 bytes of raw DEFLATE (zlib, level 9) that inflate to 65,536 zero bytes: 840 to 1, a small zip bomb.
+    const ZEROS_64K: [u8; 78] = [
+        0xed, 0xc1, 0x01, 0x01, 0x00, 0x00, 0x00, 0x80, 0x90, 0xfe, 0xaf, 0xee, 0x08, 0x0a, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x6a,
+    ];
+
+    /// Where the central directory starts, from the end-of-central-directory record.
+    fn cd_offset(z: &[u8]) -> usize {
+        let eocd = z.len() - 22;
+        u32::from_le_bytes(z[eocd + 16..eocd + 20].try_into().expect("4 bytes")) as usize
+    }
+
+    /// One entry holding `deflated`, marked as method 8 with `declared` uncompressed bytes in both headers.
+    fn deflated_zip(deflated: &[u8], declared: u32) -> Vec<u8> {
+        let mut z = write_stored_zip(&[("a", deflated)]);
+        let cd = cd_offset(&z);
+        for (method_at, size_at) in [(8, 22), (cd + 10, cd + 24)] {
+            z[method_at..method_at + 2].copy_from_slice(&8_u16.to_le_bytes());
+            z[size_at..size_at + 4].copy_from_slice(&declared.to_le_bytes());
+        }
+        z
+    }
+
+    #[test]
+    fn test_inflation_stops_at_the_declared_size() {
+        let entries = read_zip_entries(&deflated_zip(&ZEROS_64K, 65_536)).expect("declared size");
+        assert_eq!(entries["a"], vec![0_u8; 65_536]);
+        assert_eq!(
+            read_zip_entries(&deflated_zip(&ZEROS_64K, 1_000)),
+            Err(ZipError::Inflate("output exceeds the declared size"))
+        );
+        assert_eq!(
+            read_zip_entries(&deflated_zip(&ZEROS_64K, 65_537)),
+            Err(ZipError::Inflate(
+                "output length differs from the declared size"
+            ))
+        );
+    }
+
+    /// A declared size past a bound is refused before anything is allocated, a 4 GiB claim included.
+    #[test]
+    fn test_declared_sizes_past_the_bounds_are_refused() {
+        assert_eq!(
+            read_zip_entries(&deflated_zip(&ZEROS_64K, u32::MAX)),
+            Err(ZipError::Limit(
+                "entry larger than MAX_ENTRY_BYTES uncompressed"
+            ))
+        );
+        let two = write_stored_zip(&[("a", b"12345"), ("b", b"67890")]);
+        assert_eq!(read_bounded(&two, 5, 10).expect("at the bounds").len(), 2);
+        assert_eq!(
+            read_bounded(&two, 4, 10),
+            Err(ZipError::Limit(
+                "entry larger than MAX_ENTRY_BYTES uncompressed"
+            ))
+        );
+        assert_eq!(
+            read_bounded(&two, 5, 9),
+            Err(ZipError::Limit(
+                "archive larger than MAX_ARCHIVE_BYTES uncompressed"
+            ))
+        );
+    }
+
+    /// Two parts under one name: a spreadsheet program and this reader could each take a different one.
+    #[test]
+    fn test_a_name_that_appears_twice_is_refused() {
+        let twice = write_stored_zip(&[
+            ("xl/worksheets/sheet1.xml", b"first".as_slice()),
+            ("xl/worksheets/sheet1.xml", b"second".as_slice()),
+        ]);
+        assert_eq!(
+            read_zip_entries(&twice),
+            Err(ZipError::InvalidArchive("duplicate entry name"))
+        );
+    }
+
+    #[test]
+    fn test_a_stored_entry_must_declare_its_own_length() {
+        let mut z = write_stored_zip(&[("a", b"abc".as_slice())]);
+        let cd = cd_offset(&z);
+        z[cd + 24..cd + 28].copy_from_slice(&4_u32.to_le_bytes());
+        assert_eq!(
+            read_zip_entries(&z),
+            Err(ZipError::InvalidArchive("stored entry whose sizes differ"))
+        );
+    }
 }

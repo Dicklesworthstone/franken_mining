@@ -259,6 +259,18 @@ mod tests {
     }
 
     /// bd-jg43.1 negative control: `cs="9"` must not be read as `s`; a non-integer `s` refuses the workbook.
+    /// Each entity is decoded once: `&amp;lt;` is the text `&lt;`, not `<`.
+    #[test]
+    fn test_xml_entities_decode_once() {
+        use crate::xlsx::decode_xml_entities;
+        assert_eq!(decode_xml_entities("&amp;lt;"), "&lt;");
+        assert_eq!(decode_xml_entities("&amp;amp;"), "&amp;");
+        assert_eq!(
+            decode_xml_entities("Cost &amp; Sales &lt;1&gt;"),
+            "Cost & Sales <1>"
+        );
+    }
+
     #[test]
     fn test_extract_attr_exact_ignores_suffix_match() {
         assert_eq!(xlsx::extract_attr_exact(r#"<c r="A1" cs="9">"#, "s"), None);

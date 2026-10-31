@@ -28,7 +28,7 @@ Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a
 
 ## 4. Public API Surface
 - `IoError`, `HtmlTable`, `extract_html_tables`
-- `zip_inflate::{read_zip_entries, inflate_raw, write_stored_zip}`
+- `zip_inflate::{read_zip_entries, inflate_raw, write_stored_zip, ZipError, MAX_ENTRY_BYTES, MAX_ARCHIVE_BYTES}`
 - `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, FormatCount, MinimalCell,
   MinimalSheet, MinimalStyles, build_minimal_xlsx, build_minimal_xlsx_styled, col_index_to_letters,
   parse_a1_ref}`; `Workbook::format_census`;
@@ -55,6 +55,15 @@ Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a
   `ExtractedCell::number_text`.
 - `Workbook::from_file` on a missing or unreadable path returns `IoError::FileRead` naming the path. There is no
   fallback content of any kind (`BD-321`).
+- Hostile archives (BD-073). `read_zip_entries` refuses, before allocating, an entry declaring more than
+  `MAX_ENTRY_BYTES` (64 MiB) uncompressed or an archive declaring more than `MAX_ARCHIVE_BYTES` (256 MiB):
+  `ZipError::Limit`. Inflation stops at the declared size, and an entry that inflates to any other length is refused,
+  so an 840-to-1 stream declared at 1,000 bytes never grows past 1,000. A stored entry whose two sizes differ, and a
+  name that appears twice, are `ZipError::InvalidArchive`: a spreadsheet program and this reader cannot take
+  different parts under one name. The registered workbooks peak at 0.4 MB an entry. CRC-32 is not checked; a
+  registered file's integrity is its SHA-256 against the source registry.
+- XML text decodes the five named entities and `&#10;`, `&#13;`, `&#160;`, each once (`&amp;` last); no DTD or
+  entity declaration is read, so nothing expands.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-IO-1`: on the 18 registered Barrick workbooks, the per-workbook census (visible and hidden sheets; numeric,

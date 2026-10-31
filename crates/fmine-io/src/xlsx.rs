@@ -892,12 +892,13 @@ pub(crate) fn decode_xml_entities(s: &str) -> String {
     if !s.contains('&') {
         return s.to_string();
     }
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
+    // `&amp;` goes last, so the text `&lt;` (written `&amp;lt;`) stays `&lt;` and is not decoded twice.
+    s.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&apos;", "'")
         .replace("&#10;", "\n")
         .replace("&#13;", "\r")
         .replace("&#160;", " ")
+        .replace("&amp;", "&")
 }
