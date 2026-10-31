@@ -56,7 +56,13 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `--issuer` together with `--synthetic`.
 - **Exit 3–8:** the catalog refusal's own exit code. For example, `FMINE-REF-506` (exit 5) means a registered
   file is missing or unreadable, and `FMINE-REF-505` (exit 8) that one is altered.
-- `claim show` refuses (`FMINE-REF-201`, no claim in domain, exit 3): M0 has no claim store, and the verb never
+- `claim show <id>` resolves public Mine Stats and AISC Claims by re-reading the registered, hash-verified workbook
+  inputs (BD-332.S3, BD-115). It returns the semantic key, both stored and displayed text, ownership and
+  status evidence, and the source locator/digest. Mine Stats uses its direct reader; AISC uses the existing
+  assurance projection. Neither creates a parallel claim store. An invalid or absent id refuses with
+  `FMINE-REF-201`; missing or altered source files retain
+  their typed input refusals. Source assertions remain issuer assertions and are not decision-ready.
+- Claim kinds not produced by the registered public projection refuse; the verb never
   fabricates a claim.
 - `doctor` refuses `FMINE-REF-506` when the registries cannot be read.
 - `robot-docs` lists every catalogue row as `{code, exit_code, status, summary}`, `status` being `active` or
