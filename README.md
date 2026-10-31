@@ -100,6 +100,54 @@ cargo run -p fmine-cli -- claim show clm_REPLACE_WITH_THE_EMITTED_ID
 This rechecks the registered source hashes and returns the complete source Claim. It refuses missing or
 altered inputs. These additions do not constitute a pass of the full M0 gate.
 
+To resolve a Claim against a particular assurance snapshot, use the same issuer and release bound:
+
+```bash
+cargo run -p fmine-cli -- claim show clm_REPLACE_WITH_THE_EMITTED_ID --issuer barrick --through 2026Q2
+```
+
+The response includes both the assurance root and the keyed Claim projection digest. Missing ids and altered
+source files refuse instead of returning a stale cached Claim.
+
+### Export evidence challenges
+
+```bash
+cargo run -p fmine-cli -- assure challenges --issuer barrick --through 2026Q2 > challenges.json
+cargo run -p fmine-cli -- assure challenges --issuer barrick --through 2026Q2 --format markdown > challenges.md
+```
+
+DESIGN (BD-349): these packets turn visible AISC and Mine Stats exceptions, including joint inconsistencies,
+into cited review material. Each preserves the original finding, source filenames and hashes, displayed values,
+Claim references, checked arithmetic, correction alternatives and the evidence needed to close the question.
+Packet ids and a packet-set digest bind their content separately from the unchanged assurance root. They are
+internal-review drafts: human checks remain unfilled and external use remains disabled. Cross-vintage and PDF
+transcription conflicts are not yet packetized. Use `--synthetic` in place of the issuer selector for an invented
+known-answer demonstration.
+
+### Calculate guidance completion requirements
+
+```bash
+cargo run -p fmine-cli -- guidance completion --synthetic
+cargo run -p fmine-cli -- guidance completion --issuer barrick --site north-mara --through 2026Q2 --as-of 2026-10-31
+```
+
+DESIGN (BD-342): the public command requires registered, hash-verified documents and two agreeing reader
+entries in the local, ignored `registries/transcriptions/<issuer>.toml`. Use the existing transcription schema
+with quantities `guidance_<site_key_with_underscores>_production_koz` and
+`guidance_<site_key_with_underscores>_aisc_usd_per_oz`, an annual period such as `2026FY`, units `koz` and
+`usd_per_oz`, and an explicit ownership basis (`100%` or `attributable:n/d`). The AISC basis must also carry
+`;aisc=issuer-reported-per-sold-oz`. Both guidance rows must come from the same latest eligible registered
+document. Missing or conflicting evidence refuses; no real guidance values are bundled in the code.
+
+The result reports exact remaining production and an AISC spending/rate frontier. AISC uses summed costs and
+sold ounces; it never averages quarterly rates or treats production as sales. Remaining sales explicitly assume
+the preceding year's sales for the same remaining months, with source Claims and rounding intervals retained.
+The report includes the guidance vintage, as-of selection and all source hashes. Workbook availability uses its
+verified retrieval date conservatively where no publication date is registered. This is a **T3 conditional
+arithmetic requirement**, not a capacity finding or a probability of meeting guidance. Its content digest is in
+the payload; it creates no forecast registration or ledger certificate. Full historical/technical envelopes and
+the remaining BD-342/M0 gates stay open.
+
 ---
 
 ## TL;DR

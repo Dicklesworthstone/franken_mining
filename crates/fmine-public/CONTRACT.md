@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
 - **LOC Budget:** `18k planned / 21k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "guidance"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
@@ -104,6 +104,13 @@ The public lane of M0 (`fmine assure public`).
 - `synthetic`: invented workbooks in the real layout, seeded with one known answer per state. They are never
   gate-eligible. `write_issuer_workspace` writes them, plus a later title-only vintage, with a digest registry
   under the reserved issuer name `synthetic`; `run_public_assurance` runs that name in the synthetic lane.
+- `guidance` (BD-342): selects an agreed production/AISC guidance pair from the latest eligible registered
+  document at the explicit as-of date, verifies its bytes and connects it to the requested Mine Stats YTD
+  Claims. Units, period, ownership and the issuer-reported per-sold-ounce AISC definition must agree. A pending
+  row in an equally recent or later eligible document prevents silent fallback to an older agreed pair.
+  Remaining sales explicitly assume the preceding year's same remaining-month sales, derived from its original
+  FY and YTD releases. Production is never substituted for sales. Workbook availability uses the verified
+  retrieval date conservatively because those registry rows have no publication timestamp.
 - `key` (BD-332.S2/S3): projects visible AISC arithmetic operands and Mine Stats reads into source-anchored
   `Claim<PublicValue>` values. Subject, period, release, basis, scope, unit and semantic line belong to the key;
   coordinates remain citations. The raw readers and numerical identity ledgers retain their existing behavior.
@@ -177,6 +184,12 @@ The public lane of M0 (`fmine assure public`).
   generated section of `repro/<issuer>/README.md`, from the row anchors and the registry; a golden test
   compares)
 - `PublicAssuranceReport::{registry_epoch, census_digest_of_digests, check_expected}` (BD-339.S1)
+- `PublicAssuranceReport::exception_json` exposes the existing cited exception projection for the CLI packet
+  renderer without changing its numerical state or the assurance root.
+- `guidance::{run_public, run_synthetic, GuidanceCompletionReport, NO_CLAIM}` (BD-342). The report carries exact
+  input/output Claims, source and intermediate historical Claims, accepted guidance rows, source hashes,
+  explicit sales assumption and a content digest. It is T3 and never gate-eligible; the digest is not a forecast
+  registration or ledger root. Source epistemics and unknown-unknown terms survive quantity conversion.
 - `aisc::{IdentityFamily, IdentityState, IdentityInstance, FootingCertificate, UnregisteredHeader, AiscTable,
   RateMiss, ShareBasis, ExplanationBasis, DEFAULT_MISSING_FACT, SHARE_MISSING_FACT, RowAnchor, AnchorRule,
   ConsistentBasis, MemberWeighting, WeightedMember, REGION_MISSING_FACT (BD-331.S4),
@@ -196,7 +209,7 @@ The public lane of M0 (`fmine assure public`).
   value, both as displayed (`mine_ledger::displayed_number`). Units kt and Mlb (1 Mlb = 45,359,237/10⁸ kt,
   from `AVDP_LB_TO_GRAMS_NUM`) are tried on those numbers alone, apart from the registered alias. The section
   holds counts only and is not in the state root.
-- `transcribe::{load_transcription_report, transcription_json, TranscriptionReport, CheckedDocument,
+- `transcribe::{load_transcription_report, load_transcription_report_as_of, transcription_json, TranscriptionReport, CheckedDocument,
   TieOutcome}`, `sources::{DocumentRow, transcriptions_path}`, `IssuerProfile::documents` and
   `PublicAssuranceReport::transcriptions` (bd-plx1, bd-4wvl.4 part 2). When
   `<workspace>/registries/transcriptions/<issuer>.toml` exists and the run has no `--through` bound (documents
@@ -210,6 +223,9 @@ The public lane of M0 (`fmine assure public`).
   - feeds the accepted point values that two or more documents print under one quantity key to
     `discover_tie_conventions`. A quantity whose prints no convention reconciles (its `Closed` meet is empty)
     is a conflict, listed with its locators, and the discovery re-runs without it.
+  - The guidance-specific as-of loader filters future documents before byte checks, reader agreement and tie
+    analysis; it still validates registry syntax and document identities. General assurance checks all cited
+    documents as before.
   - The payload's `transcriptions` section, after `unit_discovery`, holds citations (file, kind,
     `published_at` and its basis, sha256), counts, the accepted-rows digest, pending locators, conflicts and each
     document's convention finding (FMINE-REF-104 when ambiguous); never a transcribed value. It is `null` when
@@ -617,7 +633,7 @@ The public lane of M0 (`fmine assure public`).
     Mlb none, so kt is identified. The synthetic Mine Stats print no row in pounds: 0 pairs, no fit.
   - **Share** (`aisc::tests::test_feasible_share_matches_kernel_share_interval`): `feasible_share` equals the
     kernel's `share_interval` on all 15,800 grid points with 2n − k ≥ 1.
-- `PO-PUB-13` (transcriptions, bd-plx1; synthetic documents and rows, `transcribe::tests`):
+- `PO-PUB-13` (transcriptions, bd-plx1; synthetic documents and rows, `crates/xtask/tests/public_transcriptions.rs`):
   - E698's shape signed as printed ((3.6) and 1.7 against (3.7) and 1.8, step 0.1): 3 of 16 assignments fit
     properly, the `Closed` check fits at points only, the deck's convention is `truncate` and the MD&A's is any
     of `half_up`, `half_down`, `half_even` (FMINE-REF-104). The section names no transcribed value, and the
@@ -669,6 +685,11 @@ The public lane of M0 (`fmine assure public`).
     later break. Binomial intervals match independent known answers and their edge cases; empty/invalid and
     over-budget samples return no interval. No pass threshold is inferred from these counts.
 
+- FACT (BD-342, `guidance::tests`): synthetic sources exercise the complete registry-to-report path, exact
+  production and sales intervals, latest eligible vintage, exclusion of future guidance, missing/incomplete
+  pairs, pending newer evidence, incompatible ownership and definition, altered documents, unusable source
+  support and metadata preservation. Real values remain external inputs, not embedded source constants.
+
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.
 - A header that names no registered subject becomes an `UnregisteredHeader`.
@@ -681,16 +702,22 @@ The public lane of M0 (`fmine assure public`).
   reproduce the independent T16 population and all nine known changes without asserting disclosure status.
 
 ## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io` (and, in the manifest, `fmine-units`,
-  `fmine-time`, `fmine-metrics`, not used by this crate since BD-321).
+- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io`, and `fmine-metrics` for exact guidance
+  requirements (and, in the manifest, `fmine-units` and `fmine-time`).
 - Depends on `fmine-numerics` (BD-331.S6): the ledger's exact kernel (`exact_feas`, BD-340).
   `crates/xtask/tests/public_exact_feas_oracle.rs` keeps the old closed-form corner rule as an independent oracle for rates (at a
   share, and the (iv) range exactly); `test_property_footings_match_closed_form` does the same for footings.
 - Depends on `fmine-registry` for source/status/basis registries. Cross-crate oracle and registry tests live in
   `crates/xtask/tests/public_exact_feas_blame.rs`, `public_exact_feas_oracle.rs`, `public_laap_2023.rs` and
   `public_registry.rs`; the prior integration entry files retain documentation redirects.
+- Public inventory, vintage-comparison and transcription integration tests also live in
+  `crates/xtask/tests/public_mine_stats_inventory.rs`, `public_mine_stats_vintages.rs` and
+  `public_transcriptions.rs`, preserving the crate's existing LOC ceiling.
 
 ## 10. Non-Goals & Scope Boundary
 - Operates only on public disclosures (`ConfidentialityTier::Public`).
 - Makes no reserve, resource, geotechnical, regulatory or investment claim.
 - Implies no issuer affiliation.
+- Guidance uses only the registered evidence population, not an assertion that no later issuer guidance
+  exists. Historical sales persistence is an assumption, not a production/sales equality or a capacity bound.
+  The adapter does not yet assemble the kernel's joint historical T1 envelope or a technical-report T2 envelope.

@@ -1,5 +1,7 @@
 //! FrankenMining CLI (`fmine`) implementation (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+pub mod packet;
+
 use std::path::{Path, PathBuf};
 
 use fmine_core::hash::sha256;
@@ -29,6 +31,21 @@ pub enum CliCommand {
     },
     /// `fmine assure public --synthetic`: the known-answer run over synthetic workbooks (never gate-eligible).
     AssureSynthetic,
+    /// Prepare cited internal-review evidence challenges from an assurance snapshot (BD-349).
+    AssureChallenges {
+        /// `None` selects the explicitly requested synthetic lane.
+        issuer: Option<String>,
+        through: Option<String>,
+    },
+    /// Necessary conditions for completing cited annual guidance under historical sales persistence (BD-342).
+    GuidanceCompletion {
+        issuer: String,
+        site: String,
+        through: String,
+        as_of: String,
+    },
+    /// Invented evidence exercising the same guidance completion adapter and exact kernel.
+    GuidanceSynthetic,
     /// `fmine doctor` (`BD-115`).
     Doctor,
     /// Read an existing public Claim from a verified issuer snapshot or the explicit synthetic lane
@@ -94,6 +111,8 @@ pub struct Envelope {
     pub no_claim: Option<&'static str>,
     pub payload_json: String,
     pub refusal: Option<Refusal>,
+    /// Optional human rendition of the same result. JSON envelopes never include presentation text.
+    pub rendered_markdown: Option<String>,
 }
 
 impl Envelope {
@@ -110,6 +129,7 @@ impl Envelope {
             no_claim: None,
             payload_json,
             refusal: None,
+            rendered_markdown: None,
         }
     }
 
@@ -235,12 +255,14 @@ pub fn run(args: &[String], default_root: &Path) -> (String, u8) {
     let (env, format) = invoke(args, default_root);
     let text = match format {
         OutputFormat::Json => env.to_json(),
-        OutputFormat::Markdown => format!(
-            "# fmine `{}` ({})\n\n```json\n{}\n```",
-            env.verb,
-            env.status,
-            env.to_json()
-        ),
+        OutputFormat::Markdown => env.rendered_markdown.clone().unwrap_or_else(|| {
+            format!(
+                "# fmine `{}` ({})\n\n```json\n{}\n```",
+                env.verb,
+                env.status,
+                env.to_json()
+            )
+        }),
     };
     (text, env.exit_code)
 }
@@ -264,9 +286,16 @@ fn verb_hint(args: &[String]) -> &'static str {
     let mut i = 0;
     while let Some(arg) = args.get(i) {
         match arg.as_str() {
-            "--format" | "--workspace" | "--issuer" | "--through" => i += 2,
+            "--format" | "--workspace" | "--issuer" | "--through" | "--site" | "--as-of" => i += 2,
             flag if flag.starts_with("--") => i += 1,
-            "assure" => return "assure public",
+            "assure" => {
+                return if args.get(i + 1).map(String::as_str) == Some("challenges") {
+                    "assure challenges"
+                } else {
+                    "assure public"
+                };
+            }
+            "guidance" => return "guidance completion",
             "claim" => return "claim show",
             "doctor" => return "doctor",
             "robot-docs" => return "robot-docs",
@@ -287,6 +316,8 @@ pub fn parse_args(
     let mut issuer: Option<String> = None;
     let mut synthetic = false;
     let mut through = None;
+    let mut site = None;
+    let mut as_of = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -323,6 +354,18 @@ pub fn parse_args(
                 through = Some(val.clone());
             }
             "--synthetic" => synthetic = true,
+            "--site" => {
+                i += 1;
+                site = Some(args.get(i).ok_or("missing value for --site")?.clone());
+            }
+            "--as-of" => {
+                i += 1;
+                let value = args.get(i).ok_or("missing value for --as-of")?;
+                if !fmine_registry::sources::is_date(value) {
+                    return Err("--as-of must be a calendar date YYYY-MM-DD".to_string());
+                }
+                as_of = Some(value.clone());
+            }
             flag if flag.starts_with("--") => return Err(format!("unknown flag '{flag}'")),
             arg => positional.push(arg.to_string()),
         }
@@ -339,7 +382,7 @@ pub fn parse_args(
     // The words each verb takes, the verb included. A surplus word or a flag the verb does not take is a usage
     // error, never ignored, so every next action that parses means what it says.
     let words = match positional[0].as_str() {
-        "assure" => 2,
+        "assure" | "guidance" => 2,
         "claim" => 3,
         "doctor" | "robot-docs" => 1,
         other => return Err(format!("unknown verb '{other}'")),
@@ -350,7 +393,7 @@ pub fn parse_args(
             positional[..words].join(" ")
         ));
     }
-    if !matches!(positional[0].as_str(), "assure" | "claim")
+    if !matches!(positional[0].as_str(), "assure" | "claim" | "guidance")
         && (issuer.is_some() || synthetic || through.is_some())
     {
         return Err(
@@ -358,14 +401,18 @@ pub fn parse_args(
                 .to_string(),
         );
     }
+    if positional[0] != "guidance" && (site.is_some() || as_of.is_some()) {
+        return Err("--site and --as-of require 'guidance completion'".to_string());
+    }
 
     let cmd = match positional[0].as_str() {
         "assure" => {
-            if positional.get(1).map(String::as_str) != Some("public") {
+            let challenges = positional.get(1).map(String::as_str) == Some("challenges");
+            if !challenges && positional.get(1).map(String::as_str) != Some("public") {
                 return Err("expected 'fmine assure public --issuer <issuer>' or 'fmine assure public --synthetic'".to_string());
             }
             let registered = || registered_issuers(&workspace).join(", ");
-            match (issuer.as_deref(), synthetic) {
+            let selected = match (issuer.as_deref(), synthetic) {
                 (Some(_), true) => return Err("--issuer and --synthetic are exclusive".to_string()),
                 (None, true) if through.is_some() => {
                     return Err("--through applies to --issuer runs only".to_string());
@@ -389,6 +436,49 @@ pub fn parse_args(
                         issuer: name.to_string(),
                         through,
                     }
+                }
+            };
+            if challenges {
+                match selected {
+                    CliCommand::AssurePublic { issuer, through } => CliCommand::AssureChallenges {
+                        issuer: Some(issuer),
+                        through,
+                    },
+                    CliCommand::AssureSynthetic => CliCommand::AssureChallenges {
+                        issuer: None,
+                        through: None,
+                    },
+                    _ => return Err("expected an assurance source".to_string()),
+                }
+            } else {
+                selected
+            }
+        }
+        "guidance" => {
+            if positional.get(1).map(String::as_str) != Some("completion") {
+                return Err("expected 'fmine guidance completion'".to_string());
+            }
+            if synthetic {
+                if issuer.is_some() || site.is_some() || through.is_some() || as_of.is_some() {
+                    return Err(
+                        "guidance --synthetic takes no issuer, site, through or as-of selection"
+                            .to_string(),
+                    );
+                }
+                CliCommand::GuidanceSynthetic
+            } else {
+                let issuer =
+                    issuer.ok_or("guidance completion requires --issuer or --synthetic")?;
+                if !is_issuer_name(&issuer) || !registry_path(&workspace, &issuer).is_file() {
+                    return Err(format!("unknown issuer '{issuer}'"));
+                }
+                CliCommand::GuidanceCompletion {
+                    issuer,
+                    site: site
+                        .filter(|s| !s.is_empty())
+                        .ok_or("guidance completion requires --site")?,
+                    through: through.ok_or("guidance completion requires --through YYYYQn")?,
+                    as_of: as_of.ok_or("guidance completion requires --as-of YYYY-MM-DD")?,
                 }
             }
         }
@@ -534,6 +624,62 @@ fn public_claim_envelope(report: &fmine_public::PublicAssuranceReport, id: &str)
     )
 }
 
+fn challenge_envelope(report: &fmine_public::PublicAssuranceReport) -> Result<Envelope, Refusal> {
+    let packets = packet::packets_from_report(report)?;
+    let bodies: Vec<String> = packets
+        .iter()
+        .map(packet::ChallengePacket::to_json)
+        .collect();
+    let packet_set = format!("[{}]", bodies.join(","));
+    let digest = sha256(packet_set.as_bytes()).to_hex();
+    let payload = format!(
+        "{{\"schema\":\"fmine.challenge_packets.v1\",\"issuer\":\"{}\",\"lane\":\"{}\",\
+         \"source_state_root\":\"{}\",\"packet_set_sha256\":\"{digest}\",\"count\":{},\"packets\":{packet_set}}}",
+        escape_json(&report.issuer),
+        report.lane.as_str(),
+        report.ledger_anchor.state_root.to_hex(),
+        packets.len()
+    );
+    let mut env = Envelope::report(
+        "assure challenges",
+        report.ledger_anchor.anchor_id().to_string(),
+        report.ledger_anchor.state_root.to_hex(),
+        payload,
+        report
+            .next_actions()
+            .into_iter()
+            .map(|(command, why)| NextAction::new(command, why))
+            .collect(),
+    );
+    env.rendered_markdown = Some(format!(
+        "# Evidence challenge packets\n\n{}\n\nSource state root: `{}`\n\nPacket set SHA-256: `{digest}`\n\n{}",
+        packet::REVIEW_BOUNDARY,
+        report.ledger_anchor.state_root.to_hex(),
+        packets
+            .iter()
+            .map(packet::ChallengePacket::to_markdown)
+            .collect::<Vec<_>>()
+            .join("\n---\n\n")
+    ));
+    Ok(env)
+}
+
+fn guidance_envelope(
+    result: Result<fmine_public::guidance::GuidanceCompletionReport, Refusal>,
+) -> Envelope {
+    let actions = vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
+    match result {
+        Ok(report) => {
+            let mut env = Envelope::ok("guidance completion", report.to_json(), actions);
+            // The payload digest binds evidence and assumptions. This computation has no authority-ledger
+            // registration, so both the ledger certificate and anchor deliberately remain absent.
+            env.no_claim = Some(fmine_public::guidance::NO_CLAIM);
+            env
+        }
+        Err(refusal) => Envelope::refused("guidance completion", refusal, actions),
+    }
+}
+
 /// Executes a parsed `CliCommand` against `workspace_root` and returns an `FMT-ENV-1` `Envelope`.
 #[must_use]
 pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
@@ -572,6 +718,40 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             Ok(report) => report_envelope(&report, None),
             Err(refusal) => Envelope::refused("assure public", refusal, to_doctor()),
         },
+        CliCommand::AssureChallenges { issuer, through } => {
+            let report = match issuer {
+                Some(name) => load_issuer_profile(workspace_root, name)
+                    .and_then(|p| match through {
+                        Some(bound) => p.through(bound),
+                        None => Ok(p),
+                    })
+                    .and_then(|p| run_public_assurance(&p, workspace_root)),
+                None if through.is_none() => run_synthetic_assurance(&[]),
+                None => {
+                    return Envelope::usage_error(
+                        "assure challenges",
+                        "--through requires --issuer",
+                    );
+                }
+            };
+            match report.and_then(|r| challenge_envelope(&r)) {
+                Ok(env) => env,
+                Err(refusal) => Envelope::refused("assure challenges", refusal, to_doctor()),
+            }
+        }
+        CliCommand::GuidanceCompletion {
+            issuer,
+            site,
+            through,
+            as_of,
+        } => guidance_envelope(fmine_public::guidance::run_public(
+            workspace_root,
+            issuer,
+            site,
+            through,
+            as_of,
+        )),
+        CliCommand::GuidanceSynthetic => guidance_envelope(fmine_public::guidance::run_synthetic()),
         CliCommand::Doctor => match RegistryCatalog::load_from_root(workspace_root) {
             Ok(cat) => {
                 // One entry per registries/sources/<issuer>.toml: registered, present and verified counts with
@@ -703,7 +883,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 .map(|i| format!("\"{}\"", escape_json(i)))
                 .collect();
             let payload = format!(
-                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{ENVELOPE_FIELDS},\"verbs\":[\"assure public --issuer <issuer> [--through YYYYQn]\",\"assure public --synthetic\",\"doctor\",\"claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"robot-docs\"],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok\",\"2\":\"usage error (unknown verb, flag, issuer or --through bound); the envelope still prints\"}},\"refusals\":[{}]}}",
+                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{ENVELOPE_FIELDS},\"verbs\":[\"assure public --issuer <issuer> [--through YYYYQn]\",\"assure public --synthetic\",\"assure challenges --issuer <issuer> [--through YYYYQn]\",\"assure challenges --synthetic\",\"guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD\",\"guidance completion --synthetic\",\"doctor\",\"claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"robot-docs\"],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok\",\"2\":\"usage error (unknown verb, flag, issuer or --through bound); the envelope still prints\"}},\"refusals\":[{}]}}",
                 issuers.join(","),
                 refusals.join(",")
             );
@@ -865,6 +1045,137 @@ mod tests {
             )
         );
         assert!(!env.payload_json.contains("next_actions"));
+    }
+
+    #[test]
+    fn test_challenge_command_renders_cited_json_and_readable_markdown() {
+        let query = args(&["assure", "challenges", "--synthetic"]);
+        let (env, _) = invoke(&query, &workspace_root());
+        assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
+        assert_eq!(env.verb, "assure challenges");
+        assert!(
+            env.payload_json
+                .contains("\"schema\":\"fmine.challenge_packets.v1\"")
+        );
+        assert!(env.payload_json.contains("\"subject\":\"Site B\""));
+        assert!(env.payload_json.contains("\"component_sum\":{\"v\":250,"));
+        assert!(env.payload_json.contains("\"sign_flip_witness\":\"C6\""));
+        assert!(env.payload_json.contains("\"external_use_allowed\":false"));
+        assert!(env.to_json().contains(FLAGS));
+        assert_eq!(invoke(&query, &workspace_root()).0.to_json(), env.to_json());
+        let (markdown, exit) = run(
+            &args(&[
+                "assure",
+                "challenges",
+                "--synthetic",
+                "--format",
+                "markdown",
+            ]),
+            &workspace_root(),
+        );
+        assert_eq!(exit, 0);
+        assert!(markdown.starts_with("# Evidence challenge packets\n"));
+        assert!(markdown.contains("## Closing evidence requested"));
+        assert!(markdown.contains("## Source operands"));
+        assert!(markdown.contains("invented synthetic workbooks"));
+        assert!(!markdown.contains("external_use_allowed\":true"));
+    }
+
+    #[test]
+    fn test_guidance_command_is_exact_cited_and_explicitly_conditional() {
+        let query = args(&["guidance", "completion", "--synthetic"]);
+        let (env, _) = invoke(&query, &workspace_root());
+        assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
+        assert_eq!(env.verb, "guidance completion");
+        assert!(env.payload_json.contains("\"lane\":\"synthetic\""));
+        assert!(env.payload_json.contains("\"envelope_tier\":\"T3\""));
+        // Invented target 200..230 minus actual 68 rounded to the nearest koz gives [131.5,162.5].
+        assert!(
+            env.payload_json
+                .contains("\"lo\":\"263/2\",\"hi\":\"325/2\"")
+        );
+        assert!(
+            env.payload_json
+                .contains("ASSUMPTION: repeat preceding-year")
+        );
+        assert!(env.payload_json.contains("\"source_claims\":[{"));
+        assert!(
+            env.anchor_id.is_none(),
+            "a computation is not a registered forecast"
+        );
+        assert!(
+            env.certificate.is_none(),
+            "a content digest is not a ledger root"
+        );
+        let digest = fmine_public::guidance::run_synthetic()
+            .unwrap()
+            .digest
+            .to_hex();
+        assert!(
+            env.payload_json
+                .contains(&format!("\"digest\":\"{digest}\""))
+        );
+        assert_eq!(env.no_claim, Some(fmine_public::guidance::NO_CLAIM));
+        assert_eq!(invoke(&query, &workspace_root()).0, env);
+    }
+
+    #[test]
+    fn test_new_commands_refuse_missing_evidence_and_reject_mixed_selectors() {
+        let ws = no_corpus_workspace("new-commands-no-corpus");
+        let (env, _) = invoke(&args(&["assure", "challenges", "--issuer", "barrick"]), &ws);
+        assert_eq!(env.status, "refused");
+        assert_eq!(env.refusal.expect("missing source").code, "FMINE-REF-506");
+        assert_eq!(env.payload_json, "null");
+        let (env, _) = invoke(
+            &args(&[
+                "guidance",
+                "completion",
+                "--issuer",
+                "barrick",
+                "--site",
+                "north-mara",
+                "--through",
+                "2026Q2",
+                "--as-of",
+                "2026-10-31",
+            ]),
+            &ws,
+        );
+        assert_eq!(env.status, "refused");
+        assert_eq!(env.refusal.expect("missing guidance").code, "FMINE-REF-201");
+        assert_eq!(env.payload_json, "null");
+        for bad in [
+            vec!["assure", "challenges"],
+            vec!["assure", "challenges", "--synthetic", "--issuer", "barrick"],
+            vec![
+                "guidance",
+                "completion",
+                "--synthetic",
+                "--through",
+                "2026Q2",
+            ],
+            vec![
+                "guidance",
+                "completion",
+                "--issuer",
+                "barrick",
+                "--site",
+                "north-mara",
+            ],
+            vec![
+                "guidance",
+                "completion",
+                "--synthetic",
+                "--as-of",
+                "2026-02-30",
+            ],
+            vec!["doctor", "--site", "north-mara"],
+        ] {
+            assert!(
+                parse_args(&args(&bad), &workspace_root()).is_err(),
+                "{bad:?}"
+            );
+        }
     }
 
     const STATE_I: &str = "\"state\":\"i\"";
