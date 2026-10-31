@@ -1,5 +1,6 @@
 //! Schema-validated loader and cross-reference verifier for `registries/*.toml` (`BD-030`, `BD-031`).
 
+pub mod metrics;
 pub mod sources;
 pub mod toml_subset;
 pub mod transcriptions;

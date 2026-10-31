@@ -5,7 +5,7 @@
 - **Layer:** `S0` (Substrate)
 - **Subsystem:** `Bedrock`
 - **LOC Budget:** `10k planned / 12k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["catalog", "parser", "sources", "toml_subset", "transcriptions"]`
+- **Allowed Module Families:** `["catalog", "metrics", "parser", "sources", "toml_subset", "transcriptions"]`
 
 ## 2. Mathematical & Domain Formulation
 Parses and validates the 8 canonical TOML registries in `registries/` (`loc_budget`, `workspace_topology`, `lifts`, `units`, `crs`, `calendars`, `refusals`, `verbs`) and verifies 1:1 alignment between `registries/refusals.toml` and `fmine_evidence::CATALOG` (generated from that file; `xtask check-refusals` checks the generation).

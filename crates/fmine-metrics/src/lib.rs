@@ -5,10 +5,12 @@
 //! - Versioned `PriceDeck` and `compute_geo` (`GB-27`, `BD-063`, `BD-273`)
 //! - `ReserveReplacementBridge` (one stated basis per bridge; `E603–E604`, `BD-064`)
 //! - Exact LMDI 5-factor waterfall (`lmdi`, `GB-26`, `BD-065`, `BD-274`)
+//! - Cost per ounce and the sustaining test, read from the metric-definition registry (`definitions`, `BD-060`)
 //! - Fixed-point cut-off grade solver (`solve_cutoff_grade`, `BD-275`) and the published cut-offs reproduced from
 //!   the reports' printed inputs (`cutoff`, E182–E184, `BD-274`)
 
 pub mod cutoff;
+pub mod definitions;
 pub mod lmdi;
 
 use fmine_core::anchor::SourceAnchor;
@@ -91,19 +93,20 @@ pub struct PriceDeck {
 impl PriceDeck {
     /// Barrick's long-term mineral reserve prices for one reserve year, as printed in the 2026 Management
     /// Information Circular, p.86 GEO note (FACT, E606): 2025 $1,500/oz Au and $3.25/lb Cu; 2024 $1,400 and
-    /// $3.00; 2023 $1,300 and $3.00. The note states no silver price. `None` for any other year.
+    /// $3.00; 2023 $1,300 and $3.00. The note states no silver price. The rows live in `registries/metrics.toml`.
+    /// `None` for any other year.
     #[must_use]
     pub fn barrick_reserve(year: u16) -> Option<Self> {
-        let (gold, copper) = match year {
-            2023 => (1_300.0, 3.00),
-            2024 => (1_400.0, 3.00),
-            2025 => (1_500.0, 3.25),
-            _ => return None,
-        };
+        let registry = definitions::bundled_registry().ok()?;
+        let deck = registry
+            .geo_decks
+            .iter()
+            .find(|d| d.year == i64::from(year))?;
+        let price = |text: &str| fmine_units::ExactQty::from_decimal_str(text).ok();
         Some(Self {
             deck_id: format!("BARRICK-RESERVE-{year}"),
-            gold_usd_per_oz: gold,
-            copper_usd_per_lb: copper,
+            gold_usd_per_oz: price(&deck.gold_usd_per_oz)?.to_f64(),
+            copper_usd_per_lb: price(&deck.copper_usd_per_lb)?.to_f64(),
             silver_usd_per_oz: None,
         })
     }

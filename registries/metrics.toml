@@ -1,0 +1,271 @@
+# Metric definitions as versioned data (BD-060, plan §21.6, §39; E603, E604, E606, E611, E627, E853).
+#
+# A cost metric is the sum of its registered lines. `fmine-metrics::definitions` reads these rows: a cost line that is
+# neither registered nor listed as excluded is refused, never dropped, and every result names its definition.
+#
+# Sources for the World Gold Council rows (E853):
+# - wgc-2013 is the table of lines (a) to (z) and notes 1 to 5 of the Guidance Note on Non-GAAP Metrics, 26 June 2013,
+#   read from the PDF itself. Letters below are that table's. (l) is a subtotal and (s) is AISC, so neither is a line.
+# - wgc-2018 is the 2013 table with the changes the FAQ on the guidance page states. The 2018 PDF refused the fetch, so
+#   its table has not been read; a line that exists only there is refused here until it is registered.
+# `extends` is a space-separated list of parents. A line in a child overrides an exclusion in a parent.
+
+schema = "fmine.metrics.v1"
+
+[[definition]]
+id = "aisc@wgc-2013"
+family = "all_in_cost"
+unit = "USD/oz"
+formula = "sum of the lines below, net of by-product credits, per gold ounce sold"
+source = "WGC Guidance Note on Non-GAAP Metrics, 26 June 2013, table and notes 1-5"
+evidence = "E853"
+
+[[definition]]
+id = "aic@wgc-2013"
+family = "all_in_cost"
+unit = "USD/oz"
+formula = "AISC plus the non-sustaining lines below, per gold ounce sold"
+source = "WGC Guidance Note on Non-GAAP Metrics, 26 June 2013, table and note 3"
+evidence = "E853"
+extends = "aisc@wgc-2013"
+
+[[definition]]
+id = "aisc@wgc-2018"
+family = "all_in_cost"
+unit = "USD/oz"
+formula = "the 2013 lines plus lease payments, net of by-product and co-product credits, per gold ounce sold"
+source = "WGC guidance page, 2018 FAQ 4, 13 and 19, applied to the 2013 table"
+evidence = "E853"
+extends = "aisc@wgc-2013"
+supersedes = "aisc@wgc-2013"
+
+[[definition]]
+id = "aic@wgc-2018"
+family = "all_in_cost"
+unit = "USD/oz"
+formula = "2018 AISC plus the non-sustaining lines, per gold ounce sold"
+source = "WGC guidance page, 2018 FAQ, applied to the 2013 table"
+evidence = "E853"
+extends = "aisc@wgc-2018 aic@wgc-2013"
+supersedes = "aic@wgc-2013"
+
+[[definition]]
+id = "aisc.co_product@wgc-2018"
+family = "all_in_cost"
+unit = "USD/oz"
+formula = "total lines without credits, times the gold share of the issuer's stated allocation, per gold ounce sold"
+source = "WGC guidance page, 2018 FAQ 13: separate metrics need the allocation method disclosed and reconciled"
+evidence = "E853"
+credit_basis = "co_product"
+extends = "aisc@wgc-2018"
+
+[[definition]]
+id = "geo.reserve_deck@barrick-2026-circular"
+family = "geo"
+unit = "oz"
+formula = "gold oz + copper lb x deck copper price / deck gold price, at fixed long-term reserve prices, not realised ratios"
+source = "Barrick 2026 Circular p.46 note (5), p.86 GEO note"
+evidence = "E606"
+
+[[definition]]
+id = "reserve_replacement.gold_oz@barrick-fy2025"
+family = "reserve_replacement"
+unit = "percent"
+formula = "three-year cumulative net change in attributable gold reserve ounces / three-year cumulative depletion, excluding acquisitions and divestments"
+source = "Barrick FY2025 results release, endnote 7; Circular p.41"
+evidence = "E603"
+
+[[definition]]
+id = "reserve_replacement.geo@barrick-2026-circular"
+family = "reserve_replacement"
+unit = "percent"
+formula = "three-year net change in attributable gold equivalent ounces / depletion, with copper at reserve prices"
+source = "Barrick 2026 Circular pp.41-42 and the Reserve Replacement table, p.86"
+evidence = "E604"
+
+[[project_test]]
+definition = "aisc@wgc-2018"
+material_uplift_percent = "10"
+net_cash_months = 12
+extension_months = 12
+ore_phase_years = 5
+evidence = "E853"
+
+[[geo_deck]]
+definition = "geo.reserve_deck@barrick-2026-circular"
+year = 2023
+gold_usd_per_oz = "1300"
+copper_usd_per_lb = "3.00"
+
+[[geo_deck]]
+definition = "geo.reserve_deck@barrick-2026-circular"
+year = 2024
+gold_usd_per_oz = "1400"
+copper_usd_per_lb = "3.00"
+
+[[geo_deck]]
+definition = "geo.reserve_deck@barrick-2026-circular"
+year = 2025
+gold_usd_per_oz = "1500"
+copper_usd_per_lb = "3.25"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "a"
+item = "on_site_mining_costs"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "b"
+item = "on_site_general_and_administrative"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "c"
+item = "royalties_and_production_taxes"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "d"
+item = "realised_hedge_gains_losses_on_operating_costs"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "e"
+item = "community_costs_current_operations"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "f"
+item = "permitting_costs_current_operations"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "g"
+item = "third_party_smelting_refining_transport"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "h"
+item = "non_cash_remuneration_site_based"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "i"
+item = "stockpile_and_product_inventory_write_down"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "j"
+item = "operational_stripping_costs"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "k"
+item = "by_product_credits"
+kind = "credit"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "m"
+item = "corporate_general_and_administrative"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "n"
+item = "reclamation_accretion_and_amortisation_operating_sites"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "o"
+item = "exploration_and_study_sustaining"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "p"
+item = "capital_exploration_sustaining"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "q"
+item = "capitalised_stripping_and_underground_development_sustaining"
+
+[[line]]
+definition = "aisc@wgc-2013"
+letter = "r"
+item = "capital_expenditure_sustaining"
+
+[[line]]
+definition = "aic@wgc-2013"
+letter = "t"
+item = "community_costs_not_current_operations"
+
+[[line]]
+definition = "aic@wgc-2013"
+letter = "u"
+item = "permitting_costs_not_current_operations"
+
+[[line]]
+definition = "aic@wgc-2013"
+letter = "v"
+item = "reclamation_costs_not_current_operations"
+
+[[line]]
+definition = "aic@wgc-2013"
+letter = "w"
+item = "exploration_and_study_non_sustaining"
+
+[[line]]
+definition = "aic@wgc-2013"
+letter = "x"
+item = "capital_exploration_non_sustaining"
+
+[[line]]
+definition = "aic@wgc-2013"
+letter = "y"
+item = "capitalised_stripping_and_underground_development_non_sustaining"
+
+[[line]]
+definition = "aic@wgc-2013"
+letter = "z"
+item = "capital_expenditure_non_sustaining"
+
+# FAQ 19: the principal portion of lease payments and the financing component in the cash flow statement.
+[[line]]
+definition = "aisc@wgc-2018"
+letter = "FAQ 19"
+item = "lease_payments"
+
+[[excluded]]
+definition = "aisc@wgc-2013"
+item = "income_tax"
+
+[[excluded]]
+definition = "aisc@wgc-2013"
+item = "working_capital_changes"
+
+[[excluded]]
+definition = "aisc@wgc-2013"
+item = "financing_charges"
+
+[[excluded]]
+definition = "aisc@wgc-2013"
+item = "business_combinations_acquisitions_disposals"
+
+[[excluded]]
+definition = "aisc@wgc-2013"
+item = "impairments_on_non_current_assets"
+
+[[excluded]]
+definition = "aisc@wgc-2013"
+item = "one_time_material_severance"
+
+# FAQ 19: the 2013 note left finance leases out.
+[[excluded]]
+definition = "aisc@wgc-2013"
+item = "lease_payments"
+
+# FAQ 4: generally excluded; a company may report them separately with a reconciliation.
+[[excluded]]
+definition = "aisc@wgc-2018"
+item = "discontinued_operations"

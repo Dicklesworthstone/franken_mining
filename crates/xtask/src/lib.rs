@@ -758,6 +758,9 @@ pub fn check_det_in_source<'a>(
 /// against the issuer's registered documents and pass the two-reader check with no disagreement; its line is
 /// `{"stage":"transcriptions","issuer","entries","accepted","single_reader","check":"pass"}`. The documents'
 /// bytes are checked at run time, not here.
+///
+/// `registries/metrics.toml` must parse and pass its link rules (BD-060), one line:
+/// `{"stage":"metrics","definitions","check":"pass"}`.
 pub fn check_sources_registry(root: &Path) -> Result<Vec<String>, Vec<String>> {
     let dir = root.join("registries").join("sources");
     let entries =
@@ -837,6 +840,13 @@ pub fn check_sources_registry(root: &Path) -> Result<Vec<String>, Vec<String>> {
                 }
             }
         }
+    }
+    match fmine_registry::metrics::MetricRegistry::load_from_root(root) {
+        Ok(reg) => lines.push(format!(
+            "{{\"stage\":\"metrics\",\"definitions\":{},\"check\":\"pass\"}}",
+            reg.definitions.len()
+        )),
+        Err(e) => errors.push(format!("registry-check metrics: {e}")),
     }
     if errors.is_empty() {
         Ok(lines)

@@ -5,7 +5,7 @@
 - **Layer:** `E` (Enterprise & Decision)
 - **Subsystem:** `Enterprise`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["lmdi", "cutoff"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), exact 5-factor Logarithmic Mean Divisia Index (`lmdi`, `GB-26`), and fixed-point marginal cut-off grade solver (`solve_cutoff_grade`; synthetic known answer only, the published cut-offs E182–E184 are not yet reproduced).
@@ -18,6 +18,9 @@ Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when 
 - `PriceDeck` (`barrick_reserve(year)`), `GeoBreakdown`, `compute_geo`
 - `ReserveReplacementBridge`
 - `solve_cutoff_grade` → `Result<CutoffSolution, CutoffError>`
+- `definitions::{all_in_cost_per_oz, is_non_sustaining, bundled_registry, AllInCost, CostLine, MetricFailure, Project}`
+  (BD-060): AISC and AIC from `registries/metrics.toml`. A line the definition neither counts nor excludes is refused,
+  and every result names its definition and any successor.
 - `cutoff::{parse_cases, reproduce, CutoffCase, CutoffReport, CutoffState, Printed, Recovery}` (BD-274): the
   published cut-offs in `registries/published_cutoffs.toml`, recomputed on exact rationals from the printed inputs.
   Each comes back `Reproduced`, `WithinInputRounding` or `Conflict`; `CutoffReport::to_json` prints exact results to

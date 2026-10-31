@@ -1451,3 +1451,17 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
       152 to 198 lines. The test pins the unchanged shared count of 82 instead.
     - **Licence.** This states the licence accurately. Whether the rider is acceptable stays RISK-17 (BD-326).
     - **Verification.** Self-verified on this machine; nothing has run in CI.
+- **E853** The World Gold Council's AISC and AIC definitions, read at source (BD-060; FACT, retrieved 2026-10-31).
+  - **2013 note, read in full.** PDF at `china.gold.org/sites/default/files/documents/wgc_guidance_on_non-gaap_metrics.pdf`,
+    sha256 `df81f9d46b778a63ea96a18afa3108999b5eea323fde020a584155cda72b84f7`. Table lines (a) to (z) and notes 1–5
+    are the source of `registries/metrics.toml`'s 2013 rows. "Costs should be reported on the same basis as sales."
+  - **2018 FAQ, read as a summary of the guidance page** (`gold.org/goldhub/research/guidance-note-non-gaap-metrics-…`):
+    FAQ 7 ("at least a 10% increase", no "incremental net cash inflows within 12 months of the project commencing"),
+    FAQ 10 (extensions sustaining unless at least 12 months and an ore phase over five years), FAQ 13, FAQ 19 (lease
+    principal and the financing component).
+  - **Not read.** The 2018 PDF itself: `gold.org/download/file/13492/2018-updated-guidance-note.pdf` answered 403. So
+    `wgc-2018` is the 2013 table plus the FAQ's changes, and a line that exists only in the 2018 table is refused until
+    someone registers it. The AIC side of 2018 leases is one such gap.
+  - **Corrects R6 §4.1 in one respect.** FAQ 13 treats by-product and co-product credits alike as reducing AISC and
+    AIC. A separate co-product metric depends on an allocation the issuer states, so the registry takes that share as
+    an input and invents no method.
