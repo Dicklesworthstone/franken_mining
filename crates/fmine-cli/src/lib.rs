@@ -743,13 +743,24 @@ mod tests {
         );
     }
 
-    /// bd-306n.3 over the real workbooks: one line per workbook, then a summary.
+    /// bd-306n.3 over the real workbooks: one line per workbook, then a summary. Run at the 2026Q2 bound, so a
+    /// later quarter's registry row changes neither the file set nor E822's count.
     #[test]
     #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded_docs"]
     fn test_assure_public_reports_every_barrick_instance_as_issuer_assertion() {
         let root = workspace_root();
-        let (cmd, _, ws) =
-            parse_args(&args(&["assure", "public", "--issuer", "barrick"]), &root).expect("parse");
+        let (cmd, _, ws) = parse_args(
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2026Q2",
+            ]),
+            &root,
+        )
+        .expect("parse");
         let env = execute_command(&cmd, &ws);
         assert_eq!(env.exit_code, 0, "{}", env.to_json());
         let json = env.to_json();
@@ -776,8 +787,20 @@ mod tests {
             "{{\"files\":{},\"instances\":{total},\"non_assertion\":{other}}}",
             by_file.len()
         );
-        // Instances come from the eight AISC workbooks; the ten Mine Stats files carry none. 2595 is E822's count.
-        assert_eq!((by_file.len(), total), (8, 2595));
+        // Instances come from the registered AISC workbooks; Mine Stats files carry none.
+        let want: std::collections::BTreeSet<String> = load_issuer_profile(&root, "barrick")
+            .and_then(|profile| profile.through("2026Q2"))
+            .expect("registry")
+            .sources
+            .into_iter()
+            .filter(|s| s.kind == fmine_public::sources::SourceKind::AiscReconciliation)
+            .map(|s| s.file_name)
+            .collect();
+        let got: std::collections::BTreeSet<String> =
+            by_file.keys().map(|f| (*f).to_string()).collect();
+        assert_eq!(got, want);
+        // E822's count at the 2026Q2 bound.
+        assert_eq!(total, 2595);
         assert_eq!(other, 0);
     }
 
