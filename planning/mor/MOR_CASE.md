@@ -261,9 +261,8 @@ indexed here. Like the corpus rows, they are proposed evidence until the indepen
 - **R6 §0 item 5 (noted here; R6 is not edited).** The Mali settlement payment is $253M (FCFA ~143bn, 28 Nov 2025)
   in Barrick's own filing, not the ~$430M press figure (W2 E408; W5). The Avathon release is dated 23 Sep 2026, not
   25 Sep. R6 §6.2's Tanami line needs the E631/E632 correction.
-- **OPEN-R7-4 (owner decision, 2026-10-30; applied 2026-10-31).** E024, E025 and E034, with their appends, were
-  reworded going forward: roles instead of named executives, no pay-linkage list, no restated allegation. The
-  facts the design uses are kept; history is not rewritten.
+- **OPEN-R7-4 (owner decision, 2026-10-30).** The register records public, sourced facts that the design uses.
+  Earlier wording was changed going forward; history is not rewritten.
 
 ### Independent corpus claim audit (AUDIT_4), second-wave review (AUDIT_5), and Brenner pass B6 (2026-10-29)
 
