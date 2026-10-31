@@ -227,6 +227,57 @@ mod tests {
         }
     }
 
+    /// BD-016: seeded, so a failure reproduces. Every kind and random bytes survive display then parse, and random
+    /// text is refused with a typed error, never a panic.
+    #[test]
+    fn test_id_display_and_parse_property_seeded() {
+        use crate::rand::{PhiloxStream, RngKey};
+        let kinds = [
+            PrefixKind::Claim,
+            PrefixKind::Anchor,
+            PrefixKind::Evidence,
+            PrefixKind::Decision,
+            PrefixKind::Refusal,
+            PrefixKind::Forecast,
+            PrefixKind::Calibration,
+            PrefixKind::Discrepancy,
+            PrefixKind::Cell,
+            PrefixKind::Model,
+            PrefixKind::CorrelationCard,
+            PrefixKind::Obligation,
+            PrefixKind::Lot,
+            PrefixKind::Hole,
+            PrefixKind::Domain,
+            PrefixKind::Scenario,
+        ];
+        let mut rng = PhiloxStream::new(RngKey {
+            seed_root: 16,
+            partition: 0,
+            domain: 0,
+            var_group: 0,
+            realization: 0,
+            brick: 0,
+        });
+        let mut refused = 0;
+        for _ in 0..10_000 {
+            let kind = kinds[(rng.next_u64() % kinds.len() as u64) as usize];
+            let len = (rng.next_u64() % 40) as usize;
+            let bytes: Vec<u8> = (0..len).map(|_| rng.next_u64() as u8).collect();
+            let id = ObjectId::from_canonical_bytes(kind, &bytes);
+            assert_eq!(ObjectId::from_str(&id.to_string()), Ok(id));
+
+            let text: String = (0..(rng.next_u64() % 45))
+                .map(|_| char::from(b' ' + (rng.next_u64() % 95) as u8))
+                .collect();
+            if let Ok(parsed) = ObjectId::from_str(&text) {
+                assert_eq!(parsed.to_string(), text);
+            } else {
+                refused += 1;
+            }
+        }
+        assert_eq!(refused, 10_000, "random text should not name a real id");
+    }
+
     #[test]
     fn test_invalid_ids_refused() {
         assert_eq!(

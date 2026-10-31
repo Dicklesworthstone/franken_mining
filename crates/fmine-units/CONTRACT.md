@@ -22,6 +22,9 @@ Enforces compile-time and runtime guards against silent unit, moisture-basis, cu
 - `Currency`, `Money`, `allocate_pro_rata`
 - `ChemBasis`, `No3Loading`, `check_who_no3_limit`
 - `HazardousByproduct`, `StreamMassBalance`
+- `ImportedValue`, `UNREGISTERED_UNIT` (BD-027): an undeclared unit is stored under that tag, stays viewable with the
+  text the source declared, and refuses to combine (`FMINE-REF-107`). Two registered units refuse with `FMINE-REF-105`,
+  and so does a currency mismatch.
 
 ## 5. Guards & Typed Refusals
 `UnitsError::refusal_code` maps three variants. The crate sits below `fmine-evidence`, so each code is a string

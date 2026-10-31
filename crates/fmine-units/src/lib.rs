@@ -23,6 +23,10 @@ pub enum UnitsError {
     ZeroMassWeight,
     /// Arithmetic overflow in `ExactQty` or `Money`.
     Overflow,
+    /// `FMINE-REF-107` (undeclared unit): the value is held as [`UNREGISTERED_UNIT`], which can be read and not combined.
+    UnregisteredUnit { declared: String },
+    /// `FMINE-REF-105` (basis mismatch): two registered units with no conversion stated.
+    UnitMismatch { left: String, right: String },
 }
 
 impl UnitsError {
@@ -32,7 +36,10 @@ impl UnitsError {
     pub const fn refusal_code(&self) -> Option<&'static str> {
         match self {
             Self::MoistureOutOfBounds(_) | Self::FractionOutOfBounds(_) => Some("FMINE-REF-109"),
-            Self::ChemicalBasisMismatch { .. } => Some("FMINE-REF-105"),
+            Self::ChemicalBasisMismatch { .. }
+            | Self::CurrencyMismatch { .. }
+            | Self::UnitMismatch { .. } => Some("FMINE-REF-105"),
+            Self::UnregisteredUnit { .. } => Some("FMINE-REF-107"),
             _ => None,
         }
     }
@@ -53,7 +60,16 @@ impl fmt::Display for UnitsError {
                 "FMINE-REF-105: chemical basis mismatch ({left:?} vs {right:?})"
             ),
             Self::CurrencyMismatch { left, right } => {
-                write!(f, "currency mismatch ({left:?} vs {right:?})")
+                write!(
+                    f,
+                    "FMINE-REF-105: currency mismatch ({left:?} vs {right:?})"
+                )
+            }
+            Self::UnregisteredUnit { declared } => {
+                write!(f, "FMINE-REF-107: unit '{declared}' is not registered")
+            }
+            Self::UnitMismatch { left, right } => {
+                write!(f, "FMINE-REF-105: unit mismatch ({left} vs {right})")
             }
             Self::ZeroMassWeight => write!(f, "zero total dry mass in weighted mean"),
             Self::Overflow => write!(f, "exact arithmetic overflow"),
@@ -108,6 +124,33 @@ pub struct Payable;
 pub struct Sold;
 
 /// Phantom-typed physical quantity `Qty<D, B, R>`.
+///
+/// A sum needs one basis and one metal stage, and the compiler enforces it:
+///
+/// ```
+/// use fmine_units::{Dry, Mass, Qty};
+/// let a: Qty<Mass, Dry> = Qty::new(1.0);
+/// let b: Qty<Mass, Dry> = Qty::new(2.0);
+/// assert_eq!((a + b).value(), 3.0);
+/// ```
+///
+/// Wet and dry mass do not add (BD-023):
+///
+/// ```compile_fail,E0308
+/// use fmine_units::{Dry, Mass, Qty, Wet};
+/// let wet: Qty<Mass, Wet> = Qty::new(1.0);
+/// let dry: Qty<Mass, Dry> = Qty::new(2.0);
+/// let _ = wet + dry;
+/// ```
+///
+/// Nor do two metal stages:
+///
+/// ```compile_fail,E0308
+/// use fmine_units::{Contained, Dry, Mass, Qty, Recoverable};
+/// let contained: Qty<Mass, Dry, Contained> = Qty::new(1.0);
+/// let recoverable: Qty<Mass, Dry, Recoverable> = Qty::new(2.0);
+/// let _ = contained + recoverable;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Qty<D, B = Neutral, R = Neutral> {
     value: f64,
@@ -509,6 +552,16 @@ pub enum Currency {
 }
 
 /// Exact monetary value in `10^-4` currency units (100 minor units per cent).
+///
+/// `Money` has no `+`, so no sum can skip the currency check (BD-026). Adding goes through
+/// [`Money::checked_add`], which refuses a mismatch, and FX is only ever an explicit [`FxRate`]:
+///
+/// ```compile_fail,E0369
+/// use fmine_units::{Currency, Money};
+/// let usd = Money { ccy: Currency::USD, minor: 10_000 };
+/// let cad = Money { ccy: Currency::CAD, minor: 10_000 };
+/// let _ = usd + cad;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Money {
     pub ccy: Currency,
@@ -653,6 +706,77 @@ impl FxRate {
     }
 }
 
+// --- Undeclared Units (BD-027, plan §25, FMINE-REF-105, FMINE-REF-107) ---
+
+/// The unit tag of an imported value whose declared unit `registries/units.toml` does not hold.
+pub const UNREGISTERED_UNIT: &str = "UNREGISTERED_UNIT";
+
+/// A value at the import boundary. An undeclared unit is stored as [`UNREGISTERED_UNIT`], stays viewable with the text
+/// the source declared, and cannot be combined.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedValue {
+    value: ExactQty,
+    unit: String,
+    declared: String,
+}
+
+impl ImportedValue {
+    /// `registered` is the unit list from the registry, which this crate sits below.
+    #[must_use]
+    pub fn import(value: ExactQty, declared: &str, registered: &[String]) -> Self {
+        let unit = if registered.iter().any(|u| u == declared) {
+            declared
+        } else {
+            UNREGISTERED_UNIT
+        };
+        Self {
+            value,
+            unit: unit.to_string(),
+            declared: declared.to_string(),
+        }
+    }
+
+    /// The value, which is viewable whatever its unit.
+    #[must_use]
+    pub const fn value(&self) -> ExactQty {
+        self.value
+    }
+
+    /// The registered unit, or [`UNREGISTERED_UNIT`].
+    #[must_use]
+    pub fn unit(&self) -> &str {
+        &self.unit
+    }
+
+    /// The unit text as the source declared it.
+    #[must_use]
+    pub fn declared(&self) -> &str {
+        &self.declared
+    }
+
+    /// Adds two values in one registered unit, refusing anything else.
+    pub fn checked_add(&self, rhs: &Self) -> Result<Self, UnitsError> {
+        for side in [self, rhs] {
+            if side.unit == UNREGISTERED_UNIT {
+                return Err(UnitsError::UnregisteredUnit {
+                    declared: side.declared.clone(),
+                });
+            }
+        }
+        if self.unit != rhs.unit {
+            return Err(UnitsError::UnitMismatch {
+                left: self.unit.clone(),
+                right: rhs.unit.clone(),
+            });
+        }
+        Ok(Self {
+            value: self.value.checked_add(rhs.value)?,
+            unit: self.unit.clone(),
+            declared: self.declared.clone(),
+        })
+    }
+}
+
 // --- Chemical Species Basis Tags (BD-026, INV-012, FMINE-REF-105) ---
 
 /// Explicit chemical reporting basis for environmental and metallurgical concentrations.
@@ -794,6 +918,131 @@ impl HazardousByproduct {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// PO-UNIT-3 (BD-024): splitting or merging lots leaves the blended grade and the contained metal unchanged.
+    /// Seeded, on float masses, so the tolerance is relative.
+    #[test]
+    fn test_po_unit_3_split_and_merge_preserve_grade_and_metal() {
+        use fmine_core::rand::{PhiloxStream, RngKey};
+        let mut rng = PhiloxStream::new(RngKey {
+            seed_root: 24,
+            partition: 0,
+            domain: 0,
+            var_group: 0,
+            realization: 0,
+            brick: 0,
+        });
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0);
+        let metal = |lots: &[DryMassGrade<Contained>]| -> f64 {
+            lots.iter().map(|&(m, g)| metal_grams(m, g).value()).sum()
+        };
+        for _ in 0..2_000 {
+            let n = 1 + (rng.next_u64() % 8) as usize;
+            let lots: Vec<DryMassGrade<Contained>> = (0..n)
+                .map(|_| {
+                    (
+                        Qty::new(1.0 + rng.next_f64_open01() * 5_000.0),
+                        Grade::from_g_per_t(rng.next_f64_open01() * 30.0),
+                    )
+                })
+                .collect();
+            let (mass, grade) = mass_weighted_mean(&lots).expect("positive mass");
+
+            let mut split = Vec::with_capacity(2 * n);
+            for &(m, g) in &lots {
+                let part = rng.next_f64_open01();
+                split.push((Qty::new(m.value() * part), g));
+                split.push((Qty::new(m.value() * (1.0 - part)), g));
+            }
+            let (split_mass, split_grade) = mass_weighted_mean(&split).expect("positive mass");
+            assert!(close(mass.value(), split_mass.value()));
+            assert!(close(grade.g_per_t(), split_grade.g_per_t()));
+            assert!(close(metal(&lots), metal(&split)));
+
+            let merged: Vec<DryMassGrade<Contained>> = lots
+                .chunks(2)
+                .map(|pair| mass_weighted_mean(pair).expect("positive mass"))
+                .collect();
+            let (merged_mass, merged_grade) = mass_weighted_mean(&merged).expect("positive mass");
+            assert!(close(mass.value(), merged_mass.value()));
+            assert!(close(grade.g_per_t(), merged_grade.g_per_t()));
+            assert!(close(metal(&lots), metal(&merged)));
+        }
+    }
+
+    /// BD-026: the run-time half of the rule, next to the compile-fail doctest on `Money`.
+    #[test]
+    fn test_money_checked_add_refuses_a_currency_mismatch() {
+        let usd = Money {
+            ccy: Currency::USD,
+            minor: 10_000,
+        };
+        let cad = Money {
+            ccy: Currency::CAD,
+            minor: 10_000,
+        };
+        let err = usd.checked_add(cad).expect_err("two currencies");
+        assert_eq!(
+            err,
+            UnitsError::CurrencyMismatch {
+                left: Currency::USD,
+                right: Currency::CAD,
+            }
+        );
+        assert_eq!(err.refusal_code(), Some("FMINE-REF-105"));
+        assert_eq!(usd.checked_add(usd).expect("one currency").minor, 20_000);
+    }
+
+    fn registered() -> Vec<String> {
+        vec!["t".to_string(), "kt".to_string()]
+    }
+
+    fn imported(amount: i128, unit: &str) -> ImportedValue {
+        ImportedValue::import(ExactQty::from_integer(amount), unit, &registered())
+    }
+
+    /// BD-027, plan §25: an undeclared unit is stored as `UNREGISTERED_UNIT`, is viewable, and cannot be combined.
+    #[test]
+    fn test_unregistered_unit_is_viewable_and_refused_in_a_sum() {
+        let odd = imported(7, "bushel");
+        assert_eq!(odd.unit(), UNREGISTERED_UNIT);
+        assert_eq!(odd.declared(), "bushel");
+        assert_eq!(odd.value(), ExactQty::from_integer(7));
+        for pair in [
+            (&odd, &imported(1, "t")),
+            (&imported(1, "t"), &odd),
+            (&odd, &odd),
+        ] {
+            let err = pair.0.checked_add(pair.1).expect_err("unregistered");
+            assert_eq!(err.refusal_code(), Some("FMINE-REF-107"));
+            assert!(err.to_string().contains("bushel"));
+        }
+    }
+
+    #[test]
+    fn test_two_registered_units_refuse_and_one_unit_adds() {
+        let err = imported(1, "t")
+            .checked_add(&imported(1, "kt"))
+            .expect_err("two units");
+        assert_eq!(err.refusal_code(), Some("FMINE-REF-105"));
+        let sum = imported(1, "t")
+            .checked_add(&imported(2, "t"))
+            .expect("one unit");
+        assert_eq!((sum.value(), sum.unit()), (ExactQty::from_integer(3), "t"));
+    }
+
+    /// The codes these errors carry mean what `registries/refusals.toml` says they mean.
+    #[test]
+    fn test_refusal_codes_match_the_registry_rows() {
+        let registry = include_str!("../../../registries/refusals.toml");
+        for (code, key) in [
+            ("FMINE-REF-105", "basis_mismatch"),
+            ("FMINE-REF-107", "undeclared_unit_basis_or_tz"),
+        ] {
+            let row = format!("code = \"{code}\"\nfamily = \"1xx\"\nkey = \"{key}\"");
+            assert!(registry.contains(&row), "{code} is not {key}");
+        }
+    }
 
     /// BD-328.S3: a fraction or moisture outside its interval refuses with 109 (outside its physical domain),
     /// carrying the value as given; nothing is moved to the nearest bound.

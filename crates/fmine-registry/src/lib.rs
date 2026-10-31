@@ -191,4 +191,32 @@ mod tests {
         assert_eq!(catalog.refusal_codes, compiled);
         assert!(catalog.verb_names.iter().any(|v| v == "assure public"));
     }
+
+    /// `BD-030`: the whole catalog, in order, against `testdata/catalog.golden`, which a separate Python reader wrote
+    /// from the TOML files. The manifest digest is left out, because it moves with any registry edit.
+    #[test]
+    fn test_catalog_equals_the_golden_dump() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .to_path_buf();
+        let catalog = RegistryCatalog::load_from_root(&root).expect("registries must validate");
+        let sections = [
+            ("units", &catalog.unit_symbols),
+            ("crs", &catalog.crs_codes),
+            ("site_calendars", &catalog.site_calendar_ids),
+            ("refusals", &catalog.refusal_codes),
+            ("verbs", &catalog.verb_names),
+        ];
+        let mut dump = String::new();
+        for (name, values) in sections {
+            dump.push_str(&format!("[{name}] {}\n", values.len()));
+            for value in values {
+                dump.push_str(value);
+                dump.push('\n');
+            }
+        }
+        assert_eq!(dump, include_str!("../testdata/catalog.golden"));
+    }
 }
