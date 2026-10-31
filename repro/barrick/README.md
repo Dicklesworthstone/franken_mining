@@ -27,7 +27,7 @@ git clone https://github.com/Dicklesworthstone/franken_mining
 cd franken_mining
 repro/barrick/fetch.sh
 cargo test -p fmine-public -p fmine-cli -- --ignored
-cargo test -p xtask --test public_exact_feas_blame --test public_laap_2023 \
+cargo test -p xtask --test public_corpus --test public_exact_feas_blame --test public_laap_2023 \
   --test public_keys_aisc --test public_keys_mine_stats --test public_consistency -- --ignored
 ```
 

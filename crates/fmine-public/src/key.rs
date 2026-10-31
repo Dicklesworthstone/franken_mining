@@ -21,6 +21,9 @@ use fmine_io::xlsx::{CellValue, ExtractedCell, Workbook, parse_a1_ref};
 use crate::mine_stats::{MineStatsValue, View};
 use crate::sources::IssuerProfile;
 
+pub mod consistency;
+pub mod mine_stats;
+
 /// What a period's length is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PeriodKind {

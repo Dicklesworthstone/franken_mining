@@ -357,6 +357,22 @@ The public lane of M0 (`fmine assure public`).
     a supported percent display over a stored fraction uses `mass_fraction`, preserving both texts; an
     explicitly printed percent-unit number without that display uses `percent`. Corrections never silently
     rescale a value. Unknown units, periods or source bindings produce named keying refusals.
+  - `key::mine_stats::{KeyedClaims, build_claims, load_claims}` is a thin inventory over that same adapter,
+    not another Claim implementation. `mine_stats_claims` reports its typed-value census, named refusals and
+    canonical `claims_digest`. The direct reader supports `fmine claim show` without running the identity solver.
+- `key::consistency::{VintageReport, VintageState, compare_vintages}` and
+  `PublicAssuranceReport::mine_stats_vintages` add `issuer_consistency.mine_stats_vintages` beside the AISC
+  findings. Every Mine Stats appearance is counted. Comparisons retain both the earliest registered and
+  previous release, match semantic keys rather than cell coordinates, and compare displayed decimals exactly.
+  Percentage glyphs are normalized to the key's stored-number unit using exact rationals. Unknown conversions
+  and refused displays remain `not_comparable`; no stored precision is substituted for displayed precision.
+  - Changed values or token classes are `changed_without_registered_explanation`; no disclosure search or
+    choice of a true vintage is implied. Same-release ambiguity and corrected ownership remain explicit
+    conflicts. Region-map changes are `not_comparable`, with both source assertions retained.
+  - The real-source regression checks E474 and all eight W1-DR-09 changes. W1 T16's 6,391/9 is passes/failures:
+    the six per-release populations equal 6,400 in total after excluding the 30 cited region-map changes.
+    The full classification differs from that pass/fail table because basis conflicts and display refusals
+    remain visible. The separate keyed projection digest and existing M0AS v7 root are preserved.
 - `aisc::{AiscClaimIndex, KeyingRefusal, key_aisc_operands}` (BD-332.S2): one keyed Claim per distinct arithmetic
   operand, with the subject read from that operand's own column (including regional member inputs), canonical
   metric labels, repeated-label occurrence indices and units `usd_m`, `koz` or `usd_per_oz`. An operand must
@@ -387,8 +403,8 @@ The public lane of M0 (`fmine assure public`).
     persistence and moving a cell is not a restatement. An unkeyed operand makes `operands_changed` null and
     cannot prove persistence or correction.
   - This is the earliest **registered** appearance, not necessarily the issuer's first publication. Full
-    part 3b restatement detection/classification across all public figures, Mine Stats consistency scoring,
-    and a composite gate result are not implemented here.
+    part 3b disclosure classification across all public figures and a composite gate result remain open;
+    Mine Stats value comparisons are reported separately under `mine_stats_vintages` as described above.
 
 ## 5. Guards & Typed Refusals
 - A run names every registered file that is missing, digest-mismatched or unparseable, and never substitutes
@@ -661,7 +677,8 @@ The public lane of M0 (`fmine assure public`).
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
 - `GATE-BULL-01`: parts 1 and 2 retain their existing numerical ledger. Part 3a now reports AISC
   first-registered within-vintage counts, and part 3c reports adjacent histories. Part 3b's full restatement
-  classifier and a complete issuer-consistency gate score remain outstanding.
+  classifier and a complete issuer-consistency gate score remain outstanding; Mine Stats comparisons now
+  reproduce the independent T16 population and all nine known changes without asserting disclosure status.
 
 ## 9. Lifted Code & Foundation Dependencies
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io` (and, in the manifest, `fmine-units`,
