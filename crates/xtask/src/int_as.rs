@@ -296,8 +296,8 @@ mod tests {
     use super::*;
 
     const GIT: &str = "https://github.com/Dicklesworthstone/asupersync?rev=78b64636e#78b64636";
-    const STACK: &str = "[[foundation]]\nid = \"FD-FSIM-01\"\nname = \"frankensim\"\ngit_rev = \"aaaaaaa\"\n\n\
-                         [[foundation]]\nid = \"FD-AS-01\"\nname = \"asupersync\"\ngit_rev = \"78b64636e\"\n";
+    const STACK: &str = "[[foundation]]\nid = \"FD-FSIM-00\"\nname = \"frankensim\"\ngit_rev = \"aaaaaaa\"\n\n\
+                         [[foundation]]\nid = \"FD-AS-00\"\nname = \"asupersync\"\ngit_rev = \"78b64636e\"\n";
     const PATCHED: &str = "[workspace]\n\n[patch.crates-io]\nasupersync = { git = \"https://github.com/x\", \
                            rev = \"78b64636e\" }\n\n[profile.dev]\ndebug = 1\n";
 

@@ -3,10 +3,13 @@
 # No executive deliverable may be blocked by an unconverged sibling; each row has an explicit fallback.
 
 schema_version = 1
-updated_at = "2026-10-29"
+updated_at = "2026-10-31"
+
+# Row ids are plan Appendix F.1's `FD-…-00`; F.2 uses `-01`… for upstream asks (R7-C162). `xtask check-stack-lock`
+# keeps the two sets equal.
 
 [[foundation]]
-id = "FD-AS-01"
+id = "FD-AS-00"
 name = "asupersync"
 posture = "consume"
 pin = "=0.5.0"
@@ -16,7 +19,7 @@ admission_gate = "INT-AS-001"
 fallback = "Single-package-id patch in [patch.crates-io]; K/E crates receive Cx<cap::None> only."
 
 [[foundation]]
-id = "FD-FSIM-01"
+id = "FD-FSIM-00"
 name = "frankensim"
 posture = "lift"
 pin = "git:20463525d9775a18c1b237d2676f364f367175ab"
@@ -26,7 +29,7 @@ admission_gate = "GATE-FSIM-DRIFT"
 fallback = "KILL-3: Permanent lift-only with registries/lifts.toml provenance and golden-hash tests."
 
 [[foundation]]
-id = "FD-FA-01"
+id = "FD-FA-00"
 name = "franken_accounting"
 posture = "subprocess"
 pin = "git:41363acb"
@@ -36,7 +39,7 @@ admission_gate = "INT-FA-001"
 fallback = "Signed canonical intent outbox (PO-BED-10); zero FA crates in Cargo graph (L-4)."
 
 [[foundation]]
-id = "FD-FSCI-01"
+id = "FD-FSCI-00"
 name = "frankenscipy"
 posture = "consume"
 pin = "=0.4.0"
@@ -45,7 +48,7 @@ admission_gate = "INT-NUM-001"
 fallback = "Lifted fs-sparse and in-house deterministic kernels in fmine-numerics."
 
 [[foundation]]
-id = "FD-FP-01"
+id = "FD-FP-00"
 name = "frankenpandas"
 posture = "consume"
 pin = "git:37bb94101"
@@ -55,7 +58,7 @@ admission_gate = "INT-NUM-001"
 fallback = "KILL-6 taken for fp-io: pure-Rust CSV/XLSX/OMF/Parquet readers in fmine-io."
 
 [[foundation]]
-id = "FD-FNP-01"
+id = "FD-FNP-00"
 name = "franken_numpy"
 posture = "oracle_and_io"
 pin = "git:d32c4e04"
@@ -65,7 +68,7 @@ admission_gate = "INT-NUM-001"
 fallback = "fmine-array owns contiguous grids; fmine-core::rand owns Philox4x32-10."
 
 [[foundation]]
-id = "FD-FJ-01"
+id = "FD-FJ-00"
 name = "frankenjax"
 posture = "consume"
 pin = "git:fa93fb77"
@@ -75,7 +78,7 @@ admission_gate = "INT-NUM-001"
 fallback = "Consume fj-core, fj-lax, fj-ad only (never fj-api/fj-ffi); finite-difference / analytic Jacobians fallback."
 
 [[foundation]]
-id = "FD-FSYM-01"
+id = "FD-FSYM-00"
 name = "frankensympy"
 posture = "oracle"
 pin = "git:9d785d0"
@@ -85,7 +88,7 @@ admission_gate = "GATE-ORACLE-01"
 fallback = "Build-time/dev-only oracle; golden formulas checked into fmine-oracles."
 
 [[foundation]]
-id = "FD-FSQL-01"
+id = "FD-FSQL-00"
 name = "frankensqlite"
 posture = "consume"
 pin = "=0.4.12"
@@ -94,7 +97,7 @@ admission_gate = "INT-FSQL-001"
 fallback = "Projection-only (rebuildable from fmine-ledger); KILL-4 promotes to persistence rung L2."
 
 [[foundation]]
-id = "FD-FGDB-01"
+id = "FD-FGDB-00"
 name = "frankengraphdb"
 posture = "consume"
 pin = "git:b323bd17"
@@ -104,7 +107,7 @@ admission_gate = "INT-FGDB-001"
 fallback = "KILL-2: Drop fgdb projection; fsqlite tables + in-memory fnx serve the evidence graph."
 
 [[foundation]]
-id = "FD-FSEARCH-01"
+id = "FD-FSEARCH-00"
 name = "frankensearch"
 posture = "consume"
 pin = "=0.7.1"
@@ -113,7 +116,7 @@ admission_gate = "INT-FSEARCH-001"
 fallback = "Drop to fsqlite FTS5 with wall-scoped indexes."
 
 [[foundation]]
-id = "FD-FNX-01"
+id = "FD-FNX-00"
 name = "franken_networkx"
 posture = "consume"
 pin = "git:9d710b1c"
@@ -123,8 +126,9 @@ admission_gate = "INT-FNX-001"
 fallback = "In-house CSR precedence graph and Hochbaum pseudoflow in fmine-optimize."
 
 [[foundation]]
-id = "FD-FMCP-01"
-name = "fastmcp"
+id = "FD-FMCP-00"
+# crates.io "fastmcp" is an unrelated project (only version 0.0.0), R7-C163. F.1's row text says "fastmcp".
+name = "fastmcp-rust"
 posture = "consume"
 pin = "=0.13.0"
 confined_to = ["fmine-mcp"]
@@ -132,10 +136,20 @@ admission_gate = "INT-FMCP-001"
 fallback = "fmine CLI robot NDJSON envelope (FMT-ENV-1)."
 
 [[foundation]]
-id = "FD-FTUI-01"
+id = "FD-FTUI-00"
 name = "frankentui"
 posture = "consume"
 pin = "=0.9.0"
 confined_to = ["fmine-tui"]
 admission_gate = "INT-FTUI-001"
 fallback = "fmine CLI and markdown reports."
+
+[[foundation]]
+id = "FD-FMD-00"
+name = "franken_markdown, frankenmermaid"
+posture = "consume"
+# F.1 says "Pinned library; default features" and gives no exact pin. Set it when fmine-report first depends on them.
+pin = "OPEN"
+confined_to = ["fmine-report"]
+admission_gate = "INT-FMD-001, INT-FMERM-001"
+fallback = "Plain markdown rendering without diagrams."

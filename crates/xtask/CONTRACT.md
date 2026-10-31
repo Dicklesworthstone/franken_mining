@@ -39,6 +39,11 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   `UPSTREAM_LICENCE`; (f) a provenance line with no `[[lift]]` row, or an `[[analogue]]` not opening with
   `ORIGINAL_HEADER`. `check_upstream` (e) recomputes each sha256 through `git show` and flags a target under
   `MIN_OVERLAP_PERCENT`; CI has no frankensim checkout, so it never runs there.
+- `check_stack_lock(root: &Path) -> Result<StackLockReport, Vec<String>>` and the pure
+  `compare_lock_to_f1(lock, plan)` (BD-326.S1; command `check-stack-lock`, and `check-all` prints its line
+  `{"check":"stack-lock","lock_ids","f1_ids",…}`): the `id` set of `franken-stack.lock` equals the `| FD-… |` rows
+  from plan heading `### F.1 ` to the next heading (F.2's `-01` upstream asks are outside it). It fails on a missing
+  or extra id, a lock id not ending `-00`, a malformed or repeated id, or an empty set.
 - `check_scope(root: &Path) -> Result<(), Vec<String>>`
 - `check_claims(root: &Path) -> Result<(), Vec<String>>`
 - `check_det(root: &Path) -> Result<DetReport, Vec<String>>` (bd-hp2j.1; command `check-det`, and `check-all`
@@ -79,7 +84,7 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   refuses a shallow clone, whose history cannot show the order.
 
 ## 5. Guards & Typed Refusals
-Fails CI (`exit 2`) on any upward layer edge (`L-1`), banned dependency (`L-5`), `open_child_region` escalation outside `fmine-runtime` (`L-3`), lift provenance mismatch (`L-7`), undeclared module family (`§28.4`), bare `f64` physical quantity in `K`/`E` public signatures (`L-6`), a `K`/`E` file without a determinism class or a `std` transcendental in a `BitwisePortable` module (`PO-NUM-2`), LOC ceiling overrun (`§28.4`), or oracle crate in a production closure (`GATE-ORACLE-01`).
+Fails CI (`exit 2`) on any upward layer edge (`L-1`), banned dependency (`L-5`), `open_child_region` escalation outside `fmine-runtime` (`L-3`), lift provenance mismatch (`L-7`), undeclared module family (`§28.4`), bare `f64` physical quantity in `K`/`E` public signatures (`L-6`), a `K`/`E` file without a determinism class or a `std` transcendental in a `BitwisePortable` module (`PO-NUM-2`), LOC ceiling overrun (`§28.4`), oracle crate in a production closure (`GATE-ORACLE-01`), or a `franken-stack.lock` id set that differs from plan Appendix F.1 (`BD-326.S1`).
 
 ## 6. Proof Obligations (`PO-*`)
 Each check has a positive workspace test and a seeded negative violation unit test (`BD-003`..`BD-015`).

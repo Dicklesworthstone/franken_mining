@@ -69,6 +69,10 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        "check-stack-lock" => run_one(
+            "check-stack-lock",
+            xtask::check_stack_lock(&root).map(|r| println!("{}", r.log_line())),
+        ),
         "check-scope" => run_one("check-scope", xtask::check_scope(&root)),
         "check-claims" => run_one("check-claims", xtask::check_claims(&root)),
         "check-det" => run_one(
@@ -158,9 +162,12 @@ fn main() -> ExitCode {
                     report.total_planned,
                     report.total_ceiling
                 );
-                // check_all ran check-det and check-refusals and both passed; read again for their counts.
+                // check_all ran these checks and they passed; read again for their counts.
                 if let Ok(det) = xtask::check_det(&root) {
                     println!("{}", det.log_line());
+                }
+                if let Ok(lock) = xtask::check_stack_lock(&root) {
+                    println!("{}", lock.log_line());
                 }
                 if let Ok(report) = xtask::refusals::check_refusals(&root) {
                     println!("{}", report.log_line());

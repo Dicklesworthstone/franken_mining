@@ -912,6 +912,9 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
     if let Err(e) = int_as::check_int_as_001a(root) {
         all_errors.extend(e);
     }
+    if let Err(e) = check_stack_lock(root) {
+        all_errors.extend(e);
+    }
     if all_errors.is_empty() {
         Ok(loc_report.unwrap_or(LocReport {
             rows: Vec::new(),
@@ -922,6 +925,119 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
     } else {
         Err(all_errors)
     }
+}
+
+/// The foundation ids `check-stack-lock` compared (`BD-326.S1`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StackLockReport {
+    /// `id = "FD-…"` rows in `franken-stack.lock`.
+    pub lock_ids: usize,
+    /// `| FD-… |` rows in plan Appendix F.1.
+    pub f1_ids: usize,
+}
+
+impl StackLockReport {
+    /// `{"check":"stack-lock","lock_ids","f1_ids","missing":[],"extra":[],"bad_suffix":[]}`: a report exists only
+    /// when the three lists are empty; a failure names each id instead.
+    pub fn log_line(&self) -> String {
+        format!(
+            "{{\"check\":\"stack-lock\",\"lock_ids\":{},\"f1_ids\":{},\"missing\":[],\"extra\":[],\"bad_suffix\":[]}}",
+            self.lock_ids, self.f1_ids
+        )
+    }
+}
+
+/// `franken-stack.lock`'s foundation ids equal plan Appendix F.1's (`BD-326.S1`, R7-C162): see
+/// [`compare_lock_to_f1`].
+pub fn check_stack_lock(root: &Path) -> Result<StackLockReport, Vec<String>> {
+    let read = |name: &str| {
+        fs::read_to_string(root.join(name)).map_err(|e| vec![format!("failed to read {name}: {e}")])
+    };
+    compare_lock_to_f1(&read("franken-stack.lock")?, &read(refusals::PLAN_PATH)?)
+}
+
+/// The lock's `id = "FD-…"` rows against the `| FD-… |` rows from plan heading `### F.1 ` to the next heading
+/// (F.2's `FD-FA-01`… are upstream asks, not foundations). Fails on an id F.1 lacks or a missing F.1 id, a
+/// lock id not ending `-00`, a malformed or repeated id, or an empty set, so a moved heading is never a pass.
+pub fn compare_lock_to_f1(lock: &str, plan: &str) -> Result<StackLockReport, Vec<String>> {
+    let mut errors = Vec::new();
+    let mut lock_ids = BTreeSet::new();
+    for line in lock.lines() {
+        let code = line.split_once('#').map_or(line, |(code, _)| code).trim();
+        let Some(id) = strip_kv_str(code, "id") else {
+            continue;
+        };
+        match fd_id_suffix(&id) {
+            None => errors.push(format!("franken-stack.lock id {id} is not FD-<NAME>-<NN>")),
+            Some("00") => {}
+            Some(_) => errors.push(format!(
+                "franken-stack.lock id {id} must end -00: F.1 ids are -00, and -01… are F.2 upstream asks"
+            )),
+        }
+        if !lock_ids.insert(id.clone()) {
+            errors.push(format!("franken-stack.lock repeats id {id}"));
+        }
+    }
+    let mut f1_ids = BTreeSet::new();
+    let mut in_f1 = false;
+    for line in plan.lines() {
+        let hashes = line.bytes().take_while(|b| *b == b'#').count();
+        if (1..=3).contains(&hashes) && line[hashes..].starts_with(' ') {
+            in_f1 = line.starts_with("### F.1 ");
+            continue;
+        }
+        let Some(id) = line
+            .strip_prefix("| FD-")
+            .and_then(|rest| rest.split('|').next())
+        else {
+            continue;
+        };
+        if !in_f1 {
+            continue;
+        }
+        let id = format!("FD-{}", id.trim());
+        if fd_id_suffix(&id) != Some("00") {
+            errors.push(format!("plan Appendix F.1 row {id} is not FD-<NAME>-00"));
+        }
+        if !f1_ids.insert(id.clone()) {
+            errors.push(format!("plan Appendix F.1 repeats {id}"));
+        }
+    }
+    if lock_ids.is_empty() {
+        errors.push("franken-stack.lock has no `id = \"FD-…\"` row".to_string());
+    }
+    if f1_ids.is_empty() {
+        errors.push(
+            "plan Appendix F.1 (from `### F.1 ` to the next heading) has no `| FD-… |` row"
+                .to_string(),
+        );
+    }
+    for id in f1_ids.difference(&lock_ids) {
+        errors.push(format!(
+            "plan Appendix F.1 row {id} has no franken-stack.lock row"
+        ));
+    }
+    for id in lock_ids.difference(&f1_ids) {
+        errors.push(format!(
+            "franken-stack.lock row {id} is not in plan Appendix F.1"
+        ));
+    }
+    if errors.is_empty() {
+        Ok(StackLockReport {
+            lock_ids: lock_ids.len(),
+            f1_ids: f1_ids.len(),
+        })
+    } else {
+        Err(errors)
+    }
+}
+
+/// The two-digit suffix of a well-formed `FD-<NAME>-<NN>` id (`NAME` upper-case ASCII letters).
+fn fd_id_suffix(id: &str) -> Option<&str> {
+    let (name, suffix) = id.strip_prefix("FD-")?.rsplit_once('-')?;
+    let name_ok = !name.is_empty() && name.bytes().all(|b| b.is_ascii_uppercase());
+    let suffix_ok = suffix.len() == 2 && suffix.bytes().all(|b| b.is_ascii_digit());
+    (name_ok && suffix_ok).then_some(suffix)
 }
 
 fn strip_kv_str(line: &str, key: &str) -> Option<String> {
@@ -1750,6 +1866,150 @@ mod tests {
             "{errs:?}"
         );
         let _ = fs::remove_dir_all(&scratch);
+    }
+
+    /// The 14 foundation ids `franken-stack.lock` had before FD-FMD-00 (BD-326.S1).
+    const LOCK_14: [&str; 14] = [
+        "FD-AS-00",
+        "FD-FSIM-00",
+        "FD-FA-00",
+        "FD-FSCI-00",
+        "FD-FP-00",
+        "FD-FNP-00",
+        "FD-FJ-00",
+        "FD-FSYM-00",
+        "FD-FSQL-00",
+        "FD-FGDB-00",
+        "FD-FSEARCH-00",
+        "FD-FNX-00",
+        "FD-FMCP-00",
+        "FD-FTUI-00",
+    ];
+
+    /// A plan with Appendix F.1 holding `rows`, followed by F.2, whose upstream asks reuse `-01` ids.
+    fn plan_fixture(rows: &[&str]) -> String {
+        let f1: String = rows
+            .iter()
+            .map(|id| format!("| {id} | x | Consume | pin | gate | fallback |\n"))
+            .collect();
+        format!(
+            "## Appendix F\n\n### F.1 Foundation ledger\n\n| FD | Foundation |\n|---|---|\n{f1}\n\
+             ### F.2 Upstream asks\n\n| FD | Repo |\n|---|---|\n| FD-FA-01 | franken_accounting |\n\
+             | FD-AS-01 | asupersync |\n"
+        )
+    }
+
+    fn lock_fixture(ids: &[&str]) -> String {
+        ids.iter()
+            .map(|id| format!("[[foundation]]\nid = \"{id}\" # row\nname = \"x\"\n\n"))
+            .collect()
+    }
+
+    #[test]
+    fn test_lock_id_with_01_suffix_fails() {
+        let plan = plan_fixture(&["FD-AS-00", "FD-FA-00"]);
+        assert_eq!(
+            compare_lock_to_f1(&lock_fixture(&["FD-AS-01", "FD-FA-00"]), &plan),
+            Err(vec![
+                "franken-stack.lock id FD-AS-01 must end -00: F.1 ids are -00, and -01… are F.2 upstream asks"
+                    .to_string(),
+                "plan Appendix F.1 row FD-AS-00 has no franken-stack.lock row".to_string(),
+                "franken-stack.lock row FD-AS-01 is not in plan Appendix F.1".to_string(),
+            ])
+        );
+        let errs = compare_lock_to_f1(&lock_fixture(&["FD-AS-00", "FD-AS-00", "FD-as-00"]), &plan)
+            .expect_err("a repeated and a malformed id");
+        assert!(
+            errs.contains(&"franken-stack.lock repeats id FD-AS-00".to_string())
+                && errs
+                    .contains(&"franken-stack.lock id FD-as-00 is not FD-<NAME>-<NN>".to_string()),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
+    fn test_missing_fd_fmd_00_fails() {
+        let mut f1 = LOCK_14.to_vec();
+        f1.push("FD-FMD-00");
+        assert_eq!(
+            compare_lock_to_f1(&lock_fixture(&LOCK_14), &plan_fixture(&f1)),
+            Err(vec![
+                "plan Appendix F.1 row FD-FMD-00 has no franken-stack.lock row".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn test_extra_lock_row_not_in_f1_fails() {
+        let mut lock = LOCK_14.to_vec();
+        lock.push("FD-XYZ-00");
+        assert_eq!(
+            compare_lock_to_f1(&lock_fixture(&lock), &plan_fixture(&LOCK_14)),
+            Err(vec![
+                "franken-stack.lock row FD-XYZ-00 is not in plan Appendix F.1".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn test_f2_ask_rows_are_ignored() {
+        assert_eq!(
+            compare_lock_to_f1(
+                &lock_fixture(&["FD-AS-00", "FD-FA-00"]),
+                &plan_fixture(&["FD-AS-00", "FD-FA-00"])
+            ),
+            Ok(StackLockReport {
+                lock_ids: 2,
+                f1_ids: 2
+            })
+        );
+    }
+
+    /// An empty F.1, a moved F.1 heading and an empty lock each fail, never pass on an empty set.
+    #[test]
+    fn test_empty_f1_section_fails() {
+        let empty_f1 =
+            "plan Appendix F.1 (from `### F.1 ` to the next heading) has no `| FD-… |` row";
+        let lock = lock_fixture(&["FD-AS-00"]);
+        for plan in [
+            plan_fixture(&[]),
+            plan_fixture(&["FD-AS-00"]).replace("### F.1 ", "### F1 "),
+        ] {
+            let errs = compare_lock_to_f1(&lock, &plan).expect_err("no F.1 rows");
+            assert!(errs.contains(&empty_f1.to_string()), "{errs:?}");
+        }
+        let errs = compare_lock_to_f1("schema_version = 1\n", &plan_fixture(&["FD-AS-00"]))
+            .expect_err("no lock rows");
+        assert!(
+            errs.contains(&"franken-stack.lock has no `id = \"FD-…\"` row".to_string()),
+            "{errs:?}"
+        );
+    }
+
+    /// Positive control on the repository's own files, then the same lock with one id seeded back to `-01`.
+    #[test]
+    fn test_lock_ids_match_appendix_f1() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .to_path_buf();
+        assert_eq!(
+            check_stack_lock(&root),
+            Ok(StackLockReport {
+                lock_ids: 15,
+                f1_ids: 15
+            })
+        );
+        let lock = fs::read_to_string(root.join("franken-stack.lock")).expect("lock");
+        let plan = fs::read_to_string(root.join(refusals::PLAN_PATH)).expect("plan");
+        let seeded = lock.replace("id = \"FD-AS-00\"", "id = \"FD-AS-01\"");
+        assert_ne!(seeded, lock);
+        let errs = compare_lock_to_f1(&seeded, &plan).expect_err("a seeded -01 id");
+        assert!(
+            errs.iter().any(|e| e.contains("FD-AS-01 must end -00")),
+            "{errs:?}"
+        );
     }
 
     #[test]
