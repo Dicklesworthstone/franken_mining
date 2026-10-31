@@ -1417,13 +1417,156 @@ mod tests {
             .join("..")
     }
 
+    /// `s` as a JSON string literal.
+    fn json_str(s: &str) -> String {
+        let mut out = String::from("\"");
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                c if u32::from(c) < 0x20 => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+
+    /// One JSON line per cell where two sets of canonical lines differ, keyed by sheet and cell, with both reads.
+    /// The token (a number's bits, or the stored placeholder) is never printed, so no issuer value reaches a log
+    /// (RISK-31); `differs` names the fields that disagree, `token` among them. A cell one read lacks, or reads
+    /// more than once, differs in `presence`.
+    fn mismatch_lines(file: &str, rust: &[String], oracle: &[String]) -> Vec<String> {
+        const NAMES: [&str; 8] = [
+            "view", "period", "site_raw", "site", "label", "section", "kind", "token",
+        ];
+        type Cells = BTreeMap<(String, String), Vec<Vec<String>>>;
+        let by_cell = |lines: &[String]| {
+            let mut out = Cells::new();
+            for line in lines {
+                let mut fields = line.split('\t').map(str::to_string);
+                let sheet = fields.next().unwrap_or_default();
+                let cell = fields.next().unwrap_or_default();
+                out.entry((sheet, cell)).or_default().push(fields.collect());
+            }
+            out
+        };
+        let (rust, oracle) = (by_cell(rust), by_cell(oracle));
+        let shown = |read: Option<&Vec<Vec<String>>>| match read {
+            None => "null".to_string(),
+            Some(entries) => {
+                let objects: Vec<String> = entries
+                    .iter()
+                    .map(|f| {
+                        let pairs: Vec<String> = NAMES[..7]
+                            .iter()
+                            .zip(f)
+                            .map(|(n, v)| format!("\"{n}\":{}", json_str(v)))
+                            .collect();
+                        format!("{{{}}}", pairs.join(","))
+                    })
+                    .collect();
+                format!("[{}]", objects.join(","))
+            }
+        };
+        let keys: BTreeSet<&(String, String)> = rust.keys().chain(oracle.keys()).collect();
+        let mut out = Vec::new();
+        for key in keys {
+            let (r, o) = (rust.get(key), oracle.get(key));
+            if r == o {
+                continue;
+            }
+            let differs: Vec<String> = match (r.map(Vec::as_slice), o.map(Vec::as_slice)) {
+                (Some([a]), Some([b])) => NAMES
+                    .iter()
+                    .enumerate()
+                    .filter(|&(k, _)| a.get(k) != b.get(k))
+                    .map(|(_, n)| json_str(n))
+                    .collect(),
+                _ => vec![json_str("presence")],
+            };
+            out.push(format!(
+                "{{\"mismatch\":{},\"cell\":{},\"rust\":{},\"oracle\":{},\"differs\":[{}]}}",
+                json_str(file),
+                json_str(&format!("{}!{}", key.0, key.1)),
+                shown(r),
+                shown(o),
+                differs.join(",")
+            ));
+        }
+        out
+    }
+
+    /// The per-mismatch log of the real-file test: each differing cell is named with both reads, the field that
+    /// differs is named, and no token is printed.
+    #[test]
+    fn test_mismatch_lines_name_the_cell_and_never_the_token() {
+        let line = |cell: &str, site: &str, token: &str| {
+            format!(
+                "Minestats1\t{cell}\tminestats\t2030Q2\t{site}\t{site}\tProcessed\t-\tnumber\t{token}"
+            )
+        };
+        let rust = vec![
+            line("B4", "Site A", "4059000000000000"),
+            line("B5", "Site A", "4059000000000000"),
+            line("C4", "Site B", "4024000000000000"),
+        ];
+        let oracle = vec![
+            line("B4", "Site A", "4059000000000000"),
+            line("B5", "Site A", "405a000000000000"),
+            line("C4", "Site C", "4024000000000000"),
+            line("D4", "Site D", "4024000000000000"),
+        ];
+        assert!(mismatch_lines("f.xlsx", &rust, &rust).is_empty());
+        let out = mismatch_lines("f.xlsx", &rust, &oracle);
+        assert_eq!(out.len(), 3, "{out:#?}");
+        assert!(out[0].contains("\"cell\":\"Minestats1!B5\""), "{}", out[0]);
+        assert!(out[0].ends_with("\"differs\":[\"token\"]}"), "{}", out[0]);
+        assert!(out[1].contains("\"cell\":\"Minestats1!C4\""), "{}", out[1]);
+        assert!(
+            out[1].ends_with("\"differs\":[\"site_raw\",\"site\"]}"),
+            "{}",
+            out[1]
+        );
+        assert!(out[1].contains("\"site\":\"Site B\"") && out[1].contains("\"site\":\"Site C\""));
+        assert!(out[2].contains("\"rust\":null"), "{}", out[2]);
+        assert!(
+            out[2].ends_with("\"differs\":[\"presence\"]}"),
+            "{}",
+            out[2]
+        );
+        assert!(
+            out.iter()
+                .all(|l| !l.contains("4059") && !l.contains("405a") && !l.contains("4024")),
+            "a token reached the log"
+        );
+        assert_eq!(json_str("a\"b\\c\n"), "\"a\\\"b\\\\c\\u000a\"");
+    }
+
+    /// The first four characters of a period code are its year; the same period one year later.
+    fn year_later(period: &str) -> String {
+        match period.get(..4).and_then(|y| y.parse::<u16>().ok()) {
+            Some(year) => format!("{}{}", year + 1, &period[4..]),
+            None => period.to_string(),
+        }
+    }
+
+    fn lines_digest(mut lines: Vec<String>) -> String {
+        lines.sort();
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        sha256(text.as_bytes()).to_hex()
+    }
+
     /// GATE-BULL-01 part 1 on the ten registered Mine Stats workbooks. Every expected count and digest comes
     /// from W1's openpyxl reader (`scripts/oracle/mine_stats_extract3.py`, run 2026-10-29 before this code; its
     /// output `long_all3.json` sha256 8992ae50…81dd), turned into canonical lines by
     /// `scripts/oracle/mine_stats_lines.py`. None of it comes from this implementation.
     ///
     /// `[cells, number, numeric zero, nil, na, missing]`; "number" includes the zeros. Set
-    /// `FMINE_MINE_STATS_DUMP=<dir>` to write this reader's lines per file for a diff against the oracle's.
+    /// `FMINE_MINE_STATS_DUMP=<dir>` to write this reader's lines per file for a diff against the oracle's. Set
+    /// `FMINE_MINE_STATS_ORACLE=<dir>` to the oracle's per-file lines (`mine_stats_lines.py`'s dump,
+    /// `Q1_2024.oracle.tsv` and so on) to log one JSON line per differing cell, with both reads and no token,
+    /// before the digests are compared.
     #[test]
     #[ignore = "needs the registered Barrick Mine Stats workbooks under corpus_of_input_docs/downloaded/mine_stats/"]
     fn barrick_mine_stats_match_the_w1_reader() {
@@ -1535,6 +1678,24 @@ mod tests {
             oracle.len(),
             "every registered Mine Stats file through 2026Q2 is read"
         );
+        if let Some(dir) = std::env::var_os("FMINE_MINE_STATS_ORACLE").map(PathBuf::from) {
+            let mut differing = 0;
+            for (file, ..) in oracle {
+                let short = file
+                    .strip_prefix("Barrick_")
+                    .and_then(|f| f.strip_suffix("_Mine_Stats.xlsx"))
+                    .unwrap_or(file);
+                let text = std::fs::read_to_string(dir.join(format!("{short}.oracle.tsv")))
+                    .expect("the oracle's lines for every file");
+                let theirs: Vec<String> = text.lines().map(str::to_string).collect();
+                for line in mismatch_lines(file, &reads[*file].0.canonical_lines(), &theirs) {
+                    eprintln!("{line}");
+                    differing += 1;
+                }
+            }
+            eprintln!("{{\"mismatches\":{differing}}}");
+            assert_eq!(differing, 0, "cells where the reads differ (logged above)");
+        }
         for (file, counts, digest) in oracle {
             let (read, got, d) = reads
                 .get(*file)
@@ -1616,5 +1777,60 @@ mod tests {
                 ("zero", 4)
             ])
         );
+
+        // Mutation: two wrong readers, built from the reads (never from the oracle), fail the Q2 2026 known
+        // answer. Without footnote stripping a row label keeps its footnote number; a reader fixed to Q2 2025's
+        // rows reads Q2 2026 at the coordinates Q2 2025 used, a year later.
+        let q2_2026 = "Barrick_Q2_2026_Mine_Stats.xlsx";
+        let known = oracle
+            .iter()
+            .find(|(f, ..)| *f == q2_2026)
+            .map(|(.., d)| *d)
+            .expect("Q2 2026 known answer");
+        let read = &reads[q2_2026].0;
+        let footnoted = read.values.iter().filter(|v| v.footnote.is_some()).count();
+        let unstripped: Vec<String> = read
+            .values
+            .iter()
+            .map(|v| {
+                let mut m = v.clone();
+                if m.footnote.is_some() {
+                    m.label.clone_from(&v.label_as_printed);
+                }
+                m.canonical_line()
+            })
+            .collect();
+        let workbook = &sources
+            .iter()
+            .find(|s| s.file_name == q2_2026)
+            .expect("Q2 2026 loaded")
+            .workbook;
+        let (mut fixed, mut refused) = (Vec::new(), 0usize);
+        for v in &reads["Barrick_Q2_2025_Mine_Stats.xlsx"].0.values {
+            let at = workbook
+                .sheet(&v.sheet)
+                .zip(fmine_io::xlsx::parse_a1_ref(&v.cell));
+            match at.map(|(sheet, (row, col))| typed_cell(sheet, row, col)) {
+                Some(Ok(value)) => {
+                    let mut m = v.clone();
+                    m.period = year_later(&v.period);
+                    m.value = value;
+                    fixed.push(m.canonical_line());
+                }
+                _ => refused += 1,
+            }
+        }
+        let real: BTreeSet<String> = read.canonical_lines().into_iter().collect();
+        let misread = fixed.iter().filter(|l| !real.contains(*l)).count();
+        eprintln!("{{\"mutation\":\"no_footnote_stripping\",\"labels_changed\":{footnoted}}}");
+        eprintln!(
+            "{{\"mutation\":\"fixed_rows_of_2025Q2\",\"cells\":{},\"refused\":{refused},\
+             \"not_in_the_read\":{misread}}}",
+            fixed.len()
+        );
+        assert!(footnoted > 0, "Q2 2026 prints footnoted row labels");
+        assert_ne!(lines_digest(unstripped), known, "unstripped labels fail");
+        assert!(misread > 0, "the Q2 2026 rows moved since Q2 2025");
+        assert_ne!(lines_digest(fixed), known, "fixed rows fail");
     }
 }

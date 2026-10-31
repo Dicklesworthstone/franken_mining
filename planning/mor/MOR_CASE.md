@@ -1219,3 +1219,35 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     the ignored expected-root and port-root tests pass on it.
   - **Verification.** Self-verified on this machine only. The second reader is an AI subagent, not a person,
     and nothing has run in CI.
+- **E847** Mine Stats reader: a per-cell mismatch log against W1's read, and two mutants that fail the Q2 2026
+  known answer (bd-gwf1.1, follows E825; FACT, execution, 2026-10-30, owner machine).
+  - **Mismatch log.** In the ignored test `barrick_mine_stats_match_the_w1_reader`, `FMINE_MINE_STATS_ORACLE`
+    points at W1's per-file lines (`mine_stats_lines.py` run on `long_all3.json`, sha256 prefix `8992ae508559`,
+    into a scratch directory; the lines hold values and stay out of the repository). The test then logs one
+    JSON line per cell where the reads differ, before the digests are compared. Each line carries both reads'
+    view, period, site, label, section and kind and names the differing fields. The token is never printed, so
+    no issuer value reaches a log (RISK-31).
+    - On the ten files: 0 mismatches.
+    - Planted in a copy of the oracle's lines: one site renamed (`Q2_2026:Minestats1!B10`) and one number's bits
+      changed (`Q2_2026:Minestats1!B101`). The test logs exactly those two cells, `differs` `["site"]` and
+      `["token"]`, prints no token, and fails.
+  - **Mutation.** Both mutants are built in the test from the reads, never from the oracle, and both miss the
+    Q2 2026 digest:
+    - No footnote stripping: the 436 Q2 2026 values whose row label carries a footnote keep it.
+    - Rows fixed to Q2 2025: Q2 2026 is read at the coordinates Q2 2025 used, a year later. Of 2,567 cells read,
+      1,683 are not in the real read; 17 coordinates do not type as a value.
+    - Planted negatives, each reverted. Built from Q2 2026's own coordinates with no year shift (the correct
+      reader), the fixed-row mutant reproduces all 2,688 cells with 0 refused, and the test fails. A footnote
+      mutant that changes nothing fails it too.
+  - **Region-map version tag: not added (decision).** A value's map version is a function of its release,
+    which every locator carries. The ledger asks the registered map by release (`members_of(region, release)`)
+    in families 3, 4 and 5. Tests: `fmine-registry` `test_region_members_parse_and_refuse`;
+    `mine_ledger` `test_region_whose_members_change_between_releases_is_excluded` and
+    `test_region_outside_the_map_and_missing_operand_rows_are_refused`. A per-value tag would repeat the
+    release.
+  - **Not claimed.** The mismatch log has run with a planted oracle only, never on a real disagreement. The
+    mutants are simulations built from the reads, not a second reader implementation. "Decemer"
+    (`Q4_2025:Minestats1!A64`) is covered by the real-file digest, not by a synthetic test; the synthetic fixture
+    misspells "June".
+  - **Verification.** Self-verified on this machine only; nothing has run in CI. The real-file test needs the
+    registered workbooks, so BD-339's CI job cannot run it until the files can be fetched there.

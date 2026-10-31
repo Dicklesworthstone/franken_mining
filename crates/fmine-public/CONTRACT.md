@@ -340,13 +340,17 @@ The public lane of M0 (`fmine assure public`).
   ounces are refused by cell and format code (bd-jg43.3).
 - `PO-PUB-3`: a workspace without the files refuses, naming every registered file; the count follows the registry
   rows (a row added to a copy of the TOML changes it with no code edit).
-- `PO-PUB-4` (Mine Stats reader, MOR_CASE E825):
+- `PO-PUB-4` (Mine Stats reader, MOR_CASE E825, E847):
   - **Real files** (ignored test through 2026Q2): all ten reads equal W1's openpyxl read, digest for digest
     (22,732 cells, no refusals). Q1 and Q2 2026 hold 3,996 cells, and the seven numeric zeros sit at their
-    locators with stored text `0`. The W1 §4 M0 census is 820 cells.
+    locators with stored text `0`. The W1 §4 M0 census is 820 cells. Given the oracle's per-file lines
+    (`FMINE_MINE_STATS_ORACLE`), the test logs one JSON line per differing cell with both reads and the
+    differing fields, never the token (0 on the ten files). Mutation: a reader without footnote stripping
+    (436 labels changed) and one fixed to Q2 2025's coordinates (1,683 of 2,567 cells misread, 17 refused)
+    both miss the Q2 2026 digest.
   - **Synthetic** (default suite): an inserted site, an inserted row, renumbered footnotes and a misspelled
     month give the same values. Each refusal names its cell: an unknown token, a repeated label, an unknown
-    period and a formula error.
+    period and a formula error. The mismatch log names the cell and the differing field, and prints no token.
 - `PO-PUB-5` (stated share rule, BD-331.S3, MOR_CASE E826):
   - **Real files** (ignored test `barrick_share_rule_matches_census`): of the 379 instances refused before, the 328
     site instances split into 263 (i) and 65 (iv). The 51 region instances go to the region rule (PO-PUB-10).
