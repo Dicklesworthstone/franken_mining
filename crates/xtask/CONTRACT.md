@@ -5,7 +5,7 @@
 - **Layer:** `T` (Build/Verification tooling)
 - **Subsystem:** `Testpit`
 - **LOC Budget:** Dev-only verification binary (`GATE-LAYERS-00`)
-- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "oracle", "forecast", "refusals"]`
+- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "oracle", "forecast", "refusals", "int_as"]`
 
 ## 2. Mathematical & Domain Formulation
 Enforces the structural invariants of the workspace (`L-1`..`L-7`, `PO-NUM-2`, `GATE-ORACLE-01`, `§28.4` LOC budget ceilings) over the repository source tree and `registries/*.toml`.
@@ -14,12 +14,20 @@ Enforces the structural invariants of the workspace (`L-1`..`L-7`, `PO-NUM-2`, `
 Pure static verifier over repository source files and TOML registries; produces deterministic pass/fail diagnostics (`GATE-LAYERS-00`).
 The `forecast-*` commands are the exception: they write a record's digest files and run `openssl ts` and `git`
 (BD-334.S1, S2). `gen-refusals` is the other: it writes `crates/fmine-evidence/src/refusal_catalog.rs`.
+`check-int-as-001a`, also run by `check-all`, runs `cargo tree`.
 
 ## 4. Public API Surface
 - `check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>>`
 - `check_layers(root: &Path) -> Result<(), Vec<String>>`
 - `check_deps(root: &Path) -> Result<(), Vec<String>>`
-- `check_caps(root: &Path) -> Result<(), Vec<String>>`
+- `check_caps(root: &Path) -> Result<(), Vec<String>>`: besides `L-3`, bans `thread::spawn`, `thread::Builder`,
+  `thread::sleep`, `Instant::now` and `SystemTime::now` in production code outside `fmine-runtime` and `fmine-lab`.
+- `int_as::{check_int_as_001a, evaluate, parse_tree_line}` (BD-325; command `check-int-as-001a [--json]`, and
+  `check-all` prints its line): on each production closure, one package id for each of `SINGLE_ID`, none of
+  `BANNED_RUNTIMES` (naming the path that brought it in), and asupersync, when present, through
+  `[patch.crates-io]` at `franken-stack.lock`'s rev. Prints `NOT_APPLICABLE` while asupersync is absent, and the
+  two other checks still fail. A `cargo tree` that does not run is an error, never a pass. Criteria 1 to 8 are
+  INT-AS-001b.
 - `lifts::{check_lifts, check_upstream}` (bd-5vex; command `check-lifts`, run by `check-all`, and
   `check-lifts --upstream <path>`, local only): `registries/lifts.toml` schema 2. `check_lifts` fails on (a) a
   missing target; (b) a header without all four §27.1 fields, or disagreeing with its row; (c) a `guard_test` not

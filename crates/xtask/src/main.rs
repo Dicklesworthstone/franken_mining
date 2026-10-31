@@ -132,6 +132,23 @@ fn main() -> ExitCode {
                 }
             }),
         ),
+        "check-int-as-001a" => match xtask::int_as::check_int_as_001a(&root) {
+            Ok((report, lock)) => {
+                if args.get(1).map(String::as_str) == Some("--json") {
+                    for row in &report.rows {
+                        println!("{}", row.log_line());
+                    }
+                }
+                println!("{}", report.status_line(&lock));
+                ExitCode::SUCCESS
+            }
+            Err(errs) => {
+                for e in errs {
+                    eprintln!("ERROR [check-int-as-001a]: {e}");
+                }
+                ExitCode::from(2)
+            }
+        },
         "check-all" => match xtask::check_all(&root) {
             Ok(report) => {
                 println!(
@@ -150,6 +167,9 @@ fn main() -> ExitCode {
                     for w in &report.warnings {
                         println!("WARN [check-refusals]: {w}");
                     }
+                }
+                if let Ok((report, lock)) = xtask::int_as::check_int_as_001a(&root) {
+                    println!("{}", report.status_line(&lock));
                 }
                 ExitCode::SUCCESS
             }

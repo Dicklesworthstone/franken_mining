@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod forecast;
+pub mod int_as;
 pub mod lifts;
 pub mod refusals;
 
@@ -425,8 +426,27 @@ pub fn check_caps_in_source(
             }
         }
     }
+    if pkg_name != "fmine-runtime" && pkg_name != "fmine-lab" {
+        for forbidden in DETACHED_OR_AMBIENT {
+            if prod_code.contains(forbidden) {
+                return Err(format!(
+                    "{}: `{forbidden}` in {pkg_name}: no detached worker or ambient timer outside the runtime (criterion 9)",
+                    path.display()
+                ));
+            }
+        }
+    }
     Ok(())
 }
+
+/// INT-AS-001's criterion 9 in our own code (BD-325): every layer, except the two crates that own these.
+const DETACHED_OR_AMBIENT: [&str; 5] = [
+    "thread::spawn",
+    "thread::Builder",
+    "thread::sleep",
+    "Instant::now",
+    "SystemTime::now",
+];
 
 /// Check that every workspace crate has a 10-section `CONTRACT.md` and every module `src/lib.rs` declares, at
 /// any visibility and outside `#[cfg(test)]`, is listed in `Allowed Module Families` (`BD-002`, `BD-008`).
@@ -892,6 +912,9 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
     if let Err(e) = refusals::check_refusals(root) {
         all_errors.extend(e);
     }
+    if let Err(e) = int_as::check_int_as_001a(root) {
+        all_errors.extend(e);
+    }
     if all_errors.is_empty() {
         Ok(loc_report.unwrap_or(LocReport {
             rows: Vec::new(),
@@ -1072,6 +1095,33 @@ mod tests {
             "pub fn bad() { cx.open_child_region(); }",
         );
         assert!(res.is_err());
+    }
+
+    /// BD-325, B(ii): every layer, not only the pure ones `L-3` already covers.
+    #[test]
+    fn test_seeded_detached_worker_or_timer_fails_outside_the_runtime() {
+        let at = Path::new("crates/fmine-cli/src/lib.rs");
+        for code in [
+            "std::thread::spawn(f)",
+            "thread::spawn(f)",
+            "std::thread::Builder::new()",
+            "std::thread::sleep(d)",
+            "std::time::Instant::now()",
+            "std::time::SystemTime::now()",
+        ] {
+            let err = check_caps_in_source("fmine-cli", "U", at, code).expect_err(code);
+            assert!(err.contains("criterion 9"), "{err}");
+        }
+        for owner in ["fmine-runtime", "fmine-lab"] {
+            assert_eq!(
+                check_caps_in_source(owner, "U", at, "std::thread::spawn(f)"),
+                Ok(())
+            );
+        }
+        assert_eq!(
+            check_caps_in_source("fmine-cli", "U", at, "let t = now;"),
+            Ok(())
+        );
     }
 
     #[test]
@@ -1276,7 +1326,9 @@ mod tests {
         let local = root
             .join("registries/transcriptions/barrick.toml")
             .is_file();
-        assert_eq!(lines.len(), 1 + usize::from(local), "{lines:?}");
+        assert_eq!(lines.len(), 2 + usize::from(local), "{lines:?}");
+        let metrics = lines.last().expect("the metrics line is last");
+        assert!(metrics.starts_with("{\"stage\":\"metrics\","), "{lines:?}");
         let scratch = std::env::temp_dir().join(format!("xtask-registry-{}", std::process::id()));
         let dir = scratch.join("registries").join("sources");
         fs::create_dir_all(&dir).expect("scratch dir");
@@ -1307,6 +1359,8 @@ mod tests {
         fs::create_dir_all(scratch.join("registries/sources")).expect("scratch dir");
         fs::create_dir_all(scratch.join("registries/transcriptions")).expect("scratch dir");
         fs::write(scratch.join("registries/sources/barrick.toml"), &text).expect("write");
+        let metrics = "registries/metrics.toml";
+        fs::copy(root.join(metrics), scratch.join(metrics)).expect("copy the metrics registry");
         let sha = "63b3af0b98436900159f6ddac7f2920a0178f0e8651f1ee262d07bbaa690d281";
         let entry = |reader: &str, token: &str| {
             format!(
@@ -1390,6 +1444,8 @@ mod tests {
         let dir = scratch.join("registries").join("sources");
         fs::create_dir_all(&dir).expect("scratch dir");
         fs::write(dir.join("barrick.toml"), format!("{text}\n{row}")).expect("write");
+        let metrics = "registries/metrics.toml";
+        fs::copy(root.join(metrics), scratch.join(metrics)).expect("copy the metrics registry");
         let lines =
             check_sources_registry(&scratch).expect("registry-check passes with the row appended");
         let sources = text.lines().filter(|l| l.trim() == "[[source]]").count();
