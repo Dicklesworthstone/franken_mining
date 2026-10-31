@@ -1,4 +1,5 @@
-//! Exact Logarithmic Mean Divisia Index (`LMDI`) 5-factor AISC waterfall (`GB-26`, `BD-065`, `BD-274`).
+//! Logarithmic Mean Divisia Index (`LMDI`) AISC accounting bridge (`GB-26`, BD-333.S1).
+//! The factors close on supplied spend divided by ounces sold; printed-rate reconciliation stays separate.
 //!
 //! Every logarithm goes through `fmine_core::det` (bd-hp2j.2), never the platform libm.
 //! Determinism: DeterministicPerIsa (BitwisePortable once one CI run passes its digests on both hosts, bd-hp2j.3).
@@ -8,19 +9,24 @@ use fmine_core::hash::blake3_hash;
 use fmine_core::rand::{PhiloxStream, RngKey};
 use fmine_evidence::{Refusal, RefusalCode};
 
-/// Operational state for a single period used in the 5-factor multiplicative AISC identity:
+/// Operational state for one period in the multiplicative AISC accounting identity:
 ///
-/// $$\text{AISC} = \frac{C}{O_{\text{sold}}} = C \cdot T^{-1} \cdot G^{-1} \cdot R^{-1} \cdot S^{-1} \cdot k$$
+/// $$\text{AISC} = \frac{C}{O_{\text{sold}}} = C \cdot T^{-1} \cdot G^{-1} \cdot R^{-1} \cdot B^{-1} \cdot S^{-1}$$
 ///
 /// where:
-/// - $C$: Total AISC spend (`$M` or `$`)
+/// - $C$: Supplied total AISC spend, in the same quantity scale as ounces sold: USD/oz or thousand USD/koz.
+///   A public `$M` numerator paired with `koz` must first be multiplied by 1,000; no scale is inferred here.
 /// - $T$: Ore tonnes processed
 /// - $G$: Head grade (`g/t`)
 /// - $R$: Metallurgical recovery fraction (`(0, 1]`)
 /// - $S = O_{\text{sold}} / O_{\text{prod}}$: Sales-to-production timing ratio
-/// - $O_{\text{prod}} = T \cdot G \cdot R / k$: Produced ounces.
+/// - $B = O_{\text{prod}} / (T \cdot G \cdot R)$: Metal-balance/in-circuit factor, including constant units.
+///
+/// Both periods must use the same units and ownership basis. This legacy floating-point input does not encode
+/// either; BD-333's typed public adapter, rounding intervals and signed fallback remain separate work.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LmdiState {
+    /// Printed rate, retained for reconciliation; it never supplies a factor or the logarithmic-mean weight.
     pub aisc_per_oz: f64,
     pub total_aisc_spend: f64,
     pub tonnes_processed: f64,
@@ -30,12 +36,24 @@ pub struct LmdiState {
     pub oz_sold: f64,
 }
 
-/// Exact additive LMDI decomposition of `delta_aisc = aisc_1 - aisc_0` with zero residual (`GB-26`).
+/// Descriptive LMDI decomposition of the recomputed rate change, with printed gaps and numerical residual.
+/// Closure is an accounting identity, not evidence that a bar identifies a cause (plan §21.6, E699).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LmdiWaterfall {
+    /// Recomputed endpoint rates, each supplied spend / ounces sold.
     pub aisc_0: f64,
     pub aisc_1: f64,
+    pub printed_aisc_0: f64,
+    pub printed_aisc_1: f64,
+    /// Change in recomputed rates; the six factors sum to this up to `closure_residual`.
     pub total_delta: f64,
+    /// Each observed endpoint discrepancy, printed minus recomputed. Equal nonzero gaps remain visible.
+    pub printed_rate_gap_0: f64,
+    pub printed_rate_gap_1: f64,
+    /// Printed rate change minus recomputed rate change. A reconciliation item, never a factor bar.
+    pub printed_rate_gap: f64,
+    /// Measured `total_delta - sum_of_factors()`, never forced to zero or allocated to a bar.
+    pub closure_residual: f64,
     /// Effect of total AISC spend change: $+L(\text{AISC}_1, \text{AISC}_0) \ln(C_1 / C_0)$.
     pub spend_effect: f64,
     /// Effect of throughput change: $-L(\text{AISC}_1, \text{AISC}_0) \ln(T_1 / T_0)$.
@@ -47,12 +65,12 @@ pub struct LmdiWaterfall {
     /// Effect of sales/production timing ratio $S = O_{\text{sold}} / O_{\text{prod}}$:
     /// $-L(\text{AISC}_1, \text{AISC}_0) \ln(S_1 / S_0)$.
     pub sales_timing_effect: f64,
-    /// Effect of in-circuit inventory / rounding bridge between $T \cdot G \cdot R$ and $O_{\text{prod}}$.
+    /// Effect of $B = O_{\text{prod}} / (T \cdot G \cdot R)$, not a plug for printed-rate discrepancies.
     pub circuit_inventory_effect: f64,
 }
 
 impl LmdiWaterfall {
-    /// Sum of all decomposed factor effects (equals `total_delta` to machine precision).
+    /// Sum of the six factor effects. Printed-rate gaps are deliberately excluded.
     #[must_use]
     pub fn sum_of_factors(&self) -> f64 {
         self.spend_effect
@@ -71,9 +89,15 @@ const SERIES_SWITCH: f64 = 1e-2;
 /// The series branch: with $m = (a + b)/2$ and $u = (a - b)/(a + b)$, $\ln a - \ln b = 2\,\operatorname{atanh} u$, so
 /// $L = m / (1 + u^2/3 + u^4/5 + u^6/7 + \dots)$. For $|u| < 0.005$ the first omitted term is below $10^{-19}$.
 fn series_branch(a: f64, b: f64) -> f64 {
-    let u = (a - b) / (a + b);
+    let sum = a + b;
+    let (mean, u) = if sum.is_finite() {
+        (0.5 * sum, (a - b) / sum)
+    } else {
+        let mean = 0.5 * a + 0.5 * b;
+        (mean, (0.5 * (a - b)) / mean)
+    };
     let u2 = u * u;
-    0.5 * (a + b) / (1.0 + u2 * (1.0 / 3.0 + u2 * (1.0 / 5.0 + u2 / 7.0)))
+    mean / (1.0 + u2 * (1.0 / 3.0 + u2 * (1.0 / 5.0 + u2 / 7.0)))
 }
 
 /// The logarithm branch, on the ratio: `ln(a / b)` has no cancellation, where `ln a − ln b` loses about
@@ -91,69 +115,138 @@ fn log_branch(a: f64, b: f64) -> f64 {
     (hi - lo) / log
 }
 
-/// Logarithmic mean $L(a, b) = (a - b) / (\ln a - \ln b)$, with a series branch near $a = b$ (`GB-26`).
+/// Logarithmic mean $L(a, b) = (a - b) / (\ln a - \ln b)$ for positive finite inputs, else NaN.
+/// The near-equality test is relative at every scale; an absolute floor would misclassify tiny wide ratios.
 #[must_use]
 pub fn logarithmic_mean(a: f64, b: f64) -> f64 {
-    let mean = 0.5 * (a + b);
-    // `max(1e-15)` only selects the series branch near a = b; it never changes the returned value's inputs, and
-    // callers refuse non-positive states (FMINE-REF-109) before reaching here. Not a domain clamp.
-    if (a - b).abs() / mean.max(1e-15) < SERIES_SWITCH {
+    if !a.is_finite() || !b.is_finite() || a <= 0.0 || b <= 0.0 {
+        return f64::NAN;
+    }
+    if a == b {
+        return a;
+    }
+    let sum = a + b;
+    let mean = if sum.is_finite() {
+        0.5 * sum
+    } else {
+        0.5 * a + 0.5 * b
+    };
+    if (a - b).abs() / mean < SERIES_SWITCH {
         series_branch(a, b)
     } else {
         log_branch(a, b)
     }
 }
 
-/// Computes the exact 5-factor (+ circuit bridge) LMDI waterfall between `s0` and `s1` (`GB-26`, `BD-065`, `BD-274`).
+/// `ln(a/b)` without overflowing or underflowing a positive input ratio. In the ordinary range the ratio
+/// preserves the near-equality precision of the existing logarithmic-mean kernel.
+fn log_ratio(a: f64, b: f64) -> f64 {
+    let ratio = a / b;
+    if ratio.is_normal() {
+        det::ln(ratio)
+    } else {
+        det::ln(a) - det::ln(b)
+    }
+}
+
+/// Computes the spend-based six-effect bridge. Printed endpoints are reconciled separately (BD-333.S1).
+/// A non-finite result or closure error above 1e-9 USD/oz refuses instead of supplying a zero residual.
 pub fn decompose_aisc_lmdi(s0: &LmdiState, s1: &LmdiState) -> Result<LmdiWaterfall, Refusal> {
     // `x <= 0.0` is false for NaN, so the test is "finite and positive", which a NaN fails.
     let in_domain = |x: f64| x.is_finite() && x > 0.0;
-    for st in [s0, s1] {
+    for (period, st) in [s0, s1].into_iter().enumerate() {
         let vars = [
-            st.aisc_per_oz,
-            st.total_aisc_spend,
-            st.tonnes_processed,
-            st.head_grade_g_t,
-            st.recovery_fraction,
-            st.oz_produced,
-            st.oz_sold,
+            ("aisc_per_oz", st.aisc_per_oz),
+            ("total_aisc_spend", st.total_aisc_spend),
+            ("tonnes_processed", st.tonnes_processed),
+            ("head_grade_g_t", st.head_grade_g_t),
+            ("recovery_fraction", st.recovery_fraction),
+            ("oz_produced", st.oz_produced),
+            ("oz_sold", st.oz_sold),
         ];
-        if !vars.into_iter().all(in_domain) {
+        if let Some((name, _)) = vars.into_iter().find(|(_, x)| !in_domain(*x)) {
             return Err(Refusal::new(
                 RefusalCode::OutsidePhysicalDomain109,
-                "all LMDI state variables must be finite and strictly positive",
+                format!("LMDI period {period} {name} must be finite and strictly positive"),
+            ));
+        }
+        if st.recovery_fraction > 1.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!("LMDI period {period} recovery_fraction must not exceed one"),
             ));
         }
     }
 
-    let l_weight = logarithmic_mean(s1.aisc_per_oz, s0.aisc_per_oz);
-    let total_delta = s1.aisc_per_oz - s0.aisc_per_oz;
+    let aisc_0 = s0.total_aisc_spend / s0.oz_sold;
+    let aisc_1 = s1.total_aisc_spend / s1.oz_sold;
+    for (period, rate) in [aisc_0, aisc_1].into_iter().enumerate() {
+        if !in_domain(rate) {
+            return Err(Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                format!(
+                    "LMDI period {period} recomputed AISC is outside finite positive arithmetic"
+                ),
+            ));
+        }
+    }
+    let l_weight = logarithmic_mean(aisc_1, aisc_0);
+    let total_delta = aisc_1 - aisc_0;
+    let printed_rate_gap_0 = s0.aisc_per_oz - aisc_0;
+    let printed_rate_gap_1 = s1.aisc_per_oz - aisc_1;
+    let printed_rate_gap = (s1.aisc_per_oz - s0.aisc_per_oz) - total_delta;
 
-    // Exact identity:
-    // AISC = (aisc_per_oz * oz_sold / total_aisc_spend) * total_aisc_spend / oz_sold
-    // and oz_sold = tonnes * grade * recovery * (oz_prod / (tonnes*grade*recovery)) * (oz_sold / oz_prod)
-    let unit_spend_0 = s0.aisc_per_oz * s0.oz_sold;
-    let unit_spend_1 = s1.aisc_per_oz * s1.oz_sold;
-
-    let spend_effect = l_weight * det::ln(unit_spend_1 / unit_spend_0);
-    let throughput_effect = -l_weight * det::ln(s1.tonnes_processed / s0.tonnes_processed);
-    let grade_effect = -l_weight * det::ln(s1.head_grade_g_t / s0.head_grade_g_t);
-    let recovery_effect = -l_weight * det::ln(s1.recovery_fraction / s0.recovery_fraction);
-
-    let s_ratio_0 = s0.oz_sold / s0.oz_produced;
-    let s_ratio_1 = s1.oz_sold / s1.oz_produced;
-    let sales_timing_effect = -l_weight * det::ln(s_ratio_1 / s_ratio_0);
-
-    let circuit_0 =
-        s0.oz_produced / (s0.tonnes_processed * s0.head_grade_g_t * s0.recovery_fraction);
-    let circuit_1 =
-        s1.oz_produced / (s1.tonnes_processed * s1.head_grade_g_t * s1.recovery_fraction);
-    let circuit_inventory_effect = -l_weight * det::ln(circuit_1 / circuit_0);
+    let spend_effect = l_weight * log_ratio(s1.total_aisc_spend, s0.total_aisc_spend);
+    let tonnes = log_ratio(s1.tonnes_processed, s0.tonnes_processed);
+    let grade = log_ratio(s1.head_grade_g_t, s0.head_grade_g_t);
+    let recovery = log_ratio(s1.recovery_fraction, s0.recovery_fraction);
+    let produced = log_ratio(s1.oz_produced, s0.oz_produced);
+    let sold = log_ratio(s1.oz_sold, s0.oz_sold);
+    let throughput_effect = -l_weight * tonnes;
+    let grade_effect = -l_weight * grade;
+    let recovery_effect = -l_weight * recovery;
+    // Work in log space: finite physical inputs must not become NaN from an intermediate T*g*R or S ratio.
+    let sales_timing_effect = -l_weight * (sold - produced);
+    let circuit_inventory_effect = -l_weight * (produced - tonnes - grade - recovery);
+    let closure_residual = total_delta
+        - (spend_effect
+            + throughput_effect
+            + grade_effect
+            + recovery_effect
+            + sales_timing_effect
+            + circuit_inventory_effect);
+    if ![
+        l_weight,
+        spend_effect,
+        throughput_effect,
+        grade_effect,
+        recovery_effect,
+        sales_timing_effect,
+        circuit_inventory_effect,
+        printed_rate_gap,
+        closure_residual,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        || l_weight <= 0.0
+        || closure_residual.abs() > 1e-9
+    {
+        return Err(Refusal::new(
+            RefusalCode::NumericalCertificateFailed207,
+            "LMDI factors or reconciliation are non-finite, or closure residual exceeds 1e-9 USD/oz",
+        ));
+    }
 
     Ok(LmdiWaterfall {
-        aisc_0: s0.aisc_per_oz,
-        aisc_1: s1.aisc_per_oz,
+        aisc_0,
+        aisc_1,
+        printed_aisc_0: s0.aisc_per_oz,
+        printed_aisc_1: s1.aisc_per_oz,
         total_delta,
+        printed_rate_gap_0,
+        printed_rate_gap_1,
+        printed_rate_gap,
+        closure_residual,
         spend_effect,
         throughput_effect,
         grade_effect,
@@ -248,7 +341,7 @@ fn digest_state(rng: &mut PhiloxStream) -> LmdiState {
     let oz_produced = oz_sold * log_uniform(rng, 0.5, 2.0);
     LmdiState {
         aisc_per_oz,
-        total_aisc_spend: aisc_per_oz * oz_sold,
+        total_aisc_spend: aisc_per_oz * oz_sold * log_uniform(rng, 0.8, 1.2),
         tonnes_processed,
         head_grade_g_t,
         recovery_fraction,
@@ -257,19 +350,28 @@ fn digest_state(rng: &mut PhiloxStream) -> LmdiState {
     }
 }
 
-/// The digest of [`decompose_aisc_lmdi`] over 10,000 seeded pairs of strictly positive states: per pair,
-/// `total_delta` and the six effects in declaration order (a refusal hashes as `u64::MAX`).
+/// The v2 digest of [`decompose_aisc_lmdi`] over 10,000 seeded positive state pairs with independently supplied
+/// spend. Per pair it binds recomputed/printed endpoints, delta, endpoint gaps, gap change, measured residual
+/// and the six effects (a refusal hashes as `u64::MAX`). The v1 digest closed on printed rates and omitted gaps.
 #[must_use]
 pub fn digest_decompose_aisc_lmdi(key: RngKey) -> String {
     let mut rng = PhiloxStream::new(key);
-    let mut bits = Vec::with_capacity(70_000);
+    let mut bits = Vec::with_capacity(150_000);
     for _ in 0..10_000 {
         let s0 = digest_state(&mut rng);
         let s1 = digest_state(&mut rng);
         match decompose_aisc_lmdi(&s0, &s1) {
             Ok(w) => bits.extend(
                 [
+                    w.aisc_0,
+                    w.aisc_1,
+                    w.printed_aisc_0,
+                    w.printed_aisc_1,
                     w.total_delta,
+                    w.printed_rate_gap_0,
+                    w.printed_rate_gap_1,
+                    w.printed_rate_gap,
+                    w.closure_residual,
                     w.spend_effect,
                     w.throughput_effect,
                     w.grade_effect,
@@ -313,12 +415,14 @@ mod tests {
         )
     }
 
-    // TARGETs, first observed on aarch64-macos (bd-hp2j.3). Never regenerated on another host: a difference
-    // there is the failure this test exists to catch.
+    // Version 2 TARGETs, first observed on x86_64-linux after the deliberate BD-333.S1 corrections: relative
+    // log-mean branch selection, and supplied-spend endpoints with separate printed gaps and measured residual.
+    // Independent high-precision answers below establish the mathematics; these snapshots check regression
+    // and host agreement. Never refresh them merely to accommodate a different host (bd-hp2j.3).
     const LOGARITHMIC_MEAN_10K: &str =
-        "008970ccb3f6e8d75c423d3af688994fc222065dec26de9b47fb343af933ebe5";
+        "bf89571e2deb3f4510a7d1184f812376fa81e899443f9b25e9aab6d183f3e490";
     const DECOMPOSE_AISC_LMDI_10K: &str =
-        "cea397de741217027d16e76227c5f615b0ec883e575bf0217c8bfd9e5e344f8b";
+        "ae31929c9609d83a39953010f652a8dbb4a64bbb905f01c3552be834f92d8656";
 
     #[test]
     fn test_golden_digest_logarithmic_mean_10k() {
@@ -421,10 +525,18 @@ mod tests {
             wf.sum_of_factors(),
             wf.total_delta
         );
-        // Sales timing effect (72 koz sold vs 54 koz produced):
-        // -L(2582, 1297) * ln(72 / 54), with L ≈ 1866.35 and ln(4/3) ≈ 0.287682: about -$536.91/oz (dilutes unit
-        // AISC while spend surged).
-        assert!(wf.sales_timing_effect < -500.0 && wf.sales_timing_effect > -550.0);
+        // Independent 60-place Decimal calculation: L = 1866.3480233476275208 and the sales effect is
+        // -536.9148672729303024. These invented endpoints have no printed-rate discrepancy.
+        assert!((wf.sales_timing_effect + 536.9148672729303).abs() < 1e-9);
+        assert_eq!(
+            (
+                wf.printed_rate_gap_0,
+                wf.printed_rate_gap_1,
+                wf.printed_rate_gap
+            ),
+            (0.0, 0.0, 0.0)
+        );
+        assert_eq!(wf.closure_residual, wf.total_delta - wf.sum_of_factors());
         assert!(wf.spend_effect > 1800.0);
 
         // A non-positive state refuses with 109 (outside its physical domain), never 105 (basis mismatch).
@@ -440,6 +552,273 @@ mod tests {
             let err = decompose_aisc_lmdi(&q1, &st).expect_err("non-finite");
             assert_eq!((err.code, err.exit_code), ("FMINE-REF-109", 3), "{bad}");
         }
+    }
+
+    fn simple_state() -> LmdiState {
+        LmdiState {
+            aisc_per_oz: 100.0,
+            total_aisc_spend: 1000.0,
+            tonnes_processed: 10.0,
+            head_grade_g_t: 2.0,
+            recovery_fraction: 0.5,
+            oz_produced: 10.0,
+            oz_sold: 10.0,
+        }
+    }
+
+    fn effects(w: &LmdiWaterfall) -> [f64; 6] {
+        [
+            w.spend_effect,
+            w.throughput_effect,
+            w.grade_effect,
+            w.recovery_effect,
+            w.sales_timing_effect,
+            w.circuit_inventory_effect,
+        ]
+    }
+
+    fn assert_reconciled(w: &LmdiWaterfall) {
+        assert_eq!(w.closure_residual, w.total_delta - w.sum_of_factors());
+        assert!(w.closure_residual.abs() <= 1e-9, "{w:?}");
+        assert!(
+            (w.sum_of_factors() + w.closure_residual + w.printed_rate_gap
+                - (w.printed_aisc_1 - w.printed_aisc_0))
+                .abs()
+                < 1e-9,
+            "{w:?}"
+        );
+    }
+
+    /// Hand identity: C doubles, Q and every physical factor stay fixed. Only the cost bar can move, by 100.
+    #[test]
+    fn test_supplied_cost_drives_factors_and_printed_rate_only_drives_gaps() {
+        let p0 = LmdiState {
+            aisc_per_oz: 105.0,
+            ..simple_state()
+        };
+        let p1 = LmdiState {
+            aisc_per_oz: 209.0,
+            total_aisc_spend: 2000.0,
+            ..simple_state()
+        };
+        let w = decompose_aisc_lmdi(&p0, &p1).unwrap();
+        assert_eq!((w.aisc_0, w.aisc_1, w.total_delta), (100.0, 200.0, 100.0));
+        assert_eq!(
+            (
+                w.printed_rate_gap_0,
+                w.printed_rate_gap_1,
+                w.printed_rate_gap
+            ),
+            (5.0, 9.0, 4.0)
+        );
+        assert!((w.spend_effect - 100.0).abs() < 1e-12);
+        assert!(effects(&w)[1..].iter().all(|v| *v == 0.0));
+        assert_reconciled(&w);
+
+        let different_print = LmdiState {
+            aisc_per_oz: 409.0,
+            ..p1
+        };
+        let changed = decompose_aisc_lmdi(&p0, &different_print).unwrap();
+        assert_eq!(
+            effects(&w).map(f64::to_bits),
+            effects(&changed).map(f64::to_bits)
+        );
+        assert_eq!(changed.total_delta, 100.0);
+        assert_eq!(changed.printed_rate_gap, 204.0);
+        assert_reconciled(&changed);
+
+        // Conversely, unchanged printed rates must not hide a supplied-cost change.
+        let unchanged_print = LmdiState {
+            aisc_per_oz: 105.0,
+            ..p1
+        };
+        let changed = decompose_aisc_lmdi(&p0, &unchanged_print).unwrap();
+        assert!((changed.spend_effect - 100.0).abs() < 1e-12);
+        assert_eq!(changed.printed_rate_gap, -100.0);
+        assert_reconciled(&changed);
+    }
+
+    #[test]
+    fn test_equal_endpoint_gaps_remain_visible_when_gap_change_is_zero() {
+        let p0 = LmdiState {
+            aisc_per_oz: 105.0,
+            ..simple_state()
+        };
+        let p1 = LmdiState {
+            aisc_per_oz: 205.0,
+            total_aisc_spend: 2000.0,
+            ..simple_state()
+        };
+        let w = decompose_aisc_lmdi(&p0, &p1).unwrap();
+        assert_eq!((w.printed_rate_gap_0, w.printed_rate_gap_1), (5.0, 5.0));
+        assert_eq!(w.printed_rate_gap, 0.0);
+        assert_reconciled(&w);
+    }
+
+    /// Hand identity: fixed spend, twice the throughput/produced/sold quantity. Only throughput moves, -50.
+    #[test]
+    fn test_volume_change_closes_on_recomputed_rate() {
+        let p0 = simple_state();
+        let p1 = LmdiState {
+            aisc_per_oz: 55.0,
+            tonnes_processed: 20.0,
+            oz_produced: 20.0,
+            oz_sold: 20.0,
+            ..p0
+        };
+        let w = decompose_aisc_lmdi(&p0, &p1).unwrap();
+        assert_eq!((w.aisc_0, w.aisc_1, w.total_delta), (100.0, 50.0, -50.0));
+        assert!((w.throughput_effect + 50.0).abs() < 1e-12);
+        assert_eq!(w.spend_effect, 0.0);
+        assert_eq!(w.printed_rate_gap, 5.0);
+        assert_reconciled(&w);
+    }
+
+    /// Only C, Q and printed AISC are the bead's published North Mara inputs (BD-333.S1, E819):
+    /// Q2 2025 AISC P18/P19/P23 = 64 $M / 50 koz / 1292; Q2 2026 M17/M18 = 93 $M / 37 koz, rate 2577.
+    /// Physical factors below are invented to isolate reconciliation; this is not a site-driver attribution.
+    #[test]
+    fn test_north_mara_rate_gap_with_synthetic_physical_factors() {
+        let p0 = LmdiState {
+            aisc_per_oz: 1292.0,
+            total_aisc_spend: 64_000.0,
+            oz_sold: 50.0,
+            ..simple_state()
+        };
+        let p1 = LmdiState {
+            aisc_per_oz: 2577.0,
+            total_aisc_spend: 93_000.0,
+            oz_sold: 37.0,
+            ..simple_state()
+        };
+        let w = decompose_aisc_lmdi(&p0, &p1).unwrap();
+        assert_eq!(w.aisc_0, 1280.0);
+        assert!((w.aisc_1 - 93_000.0 / 37.0).abs() < 1e-12);
+        assert!((w.total_delta - 45_640.0 / 37.0).abs() < 1e-12);
+        assert_eq!(w.printed_rate_gap_0, 12.0);
+        assert!((w.printed_rate_gap - 1905.0 / 37.0).abs() < 1e-12);
+        assert!((w.sum_of_factors() + w.printed_rate_gap - 1285.0).abs() < 1e-9);
+        assert_reconciled(&w);
+    }
+
+    #[test]
+    fn test_grade_change_reallocates_into_balance_without_identifying_a_cause() {
+        let p0 = simple_state();
+        let p1 = LmdiState {
+            head_grade_g_t: 2.2,
+            ..p0
+        };
+        let w = decompose_aisc_lmdi(&p0, &p1).unwrap();
+        assert_eq!(w.total_delta, 0.0);
+        assert!(w.grade_effect < 0.0 && w.circuit_inventory_effect > 0.0);
+        assert!((w.grade_effect + w.circuit_inventory_effect).abs() < 1e-12);
+        assert_reconciled(&w);
+    }
+
+    #[test]
+    fn test_invalid_inputs_name_the_period_and_field() {
+        let names = [
+            "aisc_per_oz",
+            "total_aisc_spend",
+            "tonnes_processed",
+            "head_grade_g_t",
+            "recovery_fraction",
+            "oz_produced",
+            "oz_sold",
+        ];
+        for period in 0..2 {
+            for (field, name) in names.into_iter().enumerate() {
+                for bad in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                    let mut pair = [simple_state(); 2];
+                    let st = &mut pair[period];
+                    match field {
+                        0 => st.aisc_per_oz = bad,
+                        1 => st.total_aisc_spend = bad,
+                        2 => st.tonnes_processed = bad,
+                        3 => st.head_grade_g_t = bad,
+                        4 => st.recovery_fraction = bad,
+                        5 => st.oz_produced = bad,
+                        _ => st.oz_sold = bad,
+                    }
+                    let err = decompose_aisc_lmdi(&pair[0], &pair[1]).unwrap_err();
+                    assert_eq!((err.code, err.exit_code), ("FMINE-REF-109", 3));
+                    assert!(
+                        err.what.contains(&format!("period {period} {name}")),
+                        "{err:?}"
+                    );
+                }
+            }
+        }
+        let bad = LmdiState {
+            recovery_fraction: 1.01,
+            ..simple_state()
+        };
+        let err = decompose_aisc_lmdi(&simple_state(), &bad).unwrap_err();
+        assert_eq!(err.code, "FMINE-REF-109");
+        assert!(err.what.contains("period 1 recovery_fraction"));
+        let one = LmdiState {
+            recovery_fraction: 1.0,
+            ..simple_state()
+        };
+        assert_reconciled(&decompose_aisc_lmdi(&one, &one).unwrap());
+    }
+
+    #[test]
+    fn test_unrepresentable_rates_refuse_instead_of_returning_nan() {
+        for (cost, sold) in [(f64::MAX, f64::MIN_POSITIVE), (f64::MIN_POSITIVE, f64::MAX)] {
+            let bad = LmdiState {
+                total_aisc_spend: cost,
+                oz_sold: sold,
+                ..simple_state()
+            };
+            let err = decompose_aisc_lmdi(&simple_state(), &bad).unwrap_err();
+            assert_eq!((err.code, err.exit_code), ("FMINE-REF-207", 3));
+            assert!(err.what.contains("period 1 recomputed AISC"));
+        }
+        let large = LmdiState {
+            total_aisc_spend: 1e308,
+            oz_sold: 1.0,
+            ..simple_state()
+        };
+        let too_large_effect = LmdiState {
+            tonnes_processed: 1e308,
+            ..large
+        };
+        assert_eq!(
+            decompose_aisc_lmdi(&large, &too_large_effect)
+                .unwrap_err()
+                .code,
+            "FMINE-REF-207"
+        );
+    }
+
+    #[test]
+    fn test_log_space_avoids_product_overflow_and_subnormal_ratio_rounding() {
+        let large = LmdiState {
+            tonnes_processed: 1e200,
+            head_grade_g_t: 1e200,
+            ..simple_state()
+        };
+        let unchanged = decompose_aisc_lmdi(&large, &large).unwrap();
+        assert!(effects(&unchanged).iter().all(|v| *v == 0.0));
+        assert_reconciled(&unchanged);
+
+        // Independent review case: temporal cost and ounce ratios are positive subnormals, while both
+        // endpoint rates are ordinary finite numbers. Logging those rounded subnormals breaks closure.
+        let p0 = LmdiState {
+            total_aisc_spend: 1e300,
+            oz_sold: 1e297,
+            oz_produced: 1e297,
+            ..simple_state()
+        };
+        let p1 = LmdiState {
+            total_aisc_spend: 1e-20,
+            oz_sold: 1.1e-23,
+            oz_produced: 1.1e-23,
+            ..simple_state()
+        };
+        assert_reconciled(&decompose_aisc_lmdi(&p0, &p1).unwrap());
     }
 
     fn pairs(stream: u32) -> (fmine_core::rand::RngKey, Vec<(f64, f64)>) {
@@ -468,6 +847,46 @@ mod tests {
             })
             .collect();
         (key, out)
+    }
+
+    #[test]
+    fn test_logarithmic_mean_high_precision_tiny_and_large_known_answers() {
+        // Independent Python Decimal (80 decimal digits), (a-b)/(ln(a)-ln(b)), on the decimal inputs.
+        // These are mathematical expected values, not output snapshots from the candidate kernel.
+        for (a, b, expected) in [
+            (1.0, 0.001, 0.14462006247378287),
+            (1e-18, 1e-21, 1.4462006247378286e-19),
+            (1e-300, 1e-303, 1.4462006247378286e-301),
+            (1e-308, 1e-310, 2.1497576854211e-309),
+            (1.6e308, 1.5e308, 1.549462216322538e308),
+            (1.6e308, 1.599e308, 1.5994999479003842e308),
+        ] {
+            let actual = logarithmic_mean(a, b);
+            assert!(
+                (actual / expected - 1.0).abs() < 2e-14,
+                "L({a},{b})={actual}, expected {expected}"
+            );
+            assert_eq!(actual.to_bits(), logarithmic_mean(b, a).to_bits());
+        }
+        for x in [f64::from_bits(1), 1e-300, 1.0, f64::MAX] {
+            assert_eq!(logarithmic_mean(x, x), x);
+        }
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(logarithmic_mean(1.0, bad).is_nan());
+            assert!(logarithmic_mean(bad, 1.0).is_nan());
+        }
+    }
+
+    #[test]
+    fn test_logarithmic_mean_scale_invariance_for_widely_separated_rates() {
+        let unscaled = logarithmic_mean(1.0, 0.001);
+        for scale in [1e-300, 1e-18, 1e-10, 1.0, 1e100, 1e300] {
+            let actual = logarithmic_mean(scale, 0.001 * scale);
+            assert!(
+                (actual / (unscaled * scale) - 1.0).abs() < 2e-14,
+                "scale={scale}"
+            );
+        }
     }
 
     #[test]
