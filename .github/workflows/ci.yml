@@ -77,6 +77,10 @@ jobs:
       - name: Rules precede forecasts
         if: matrix.profile == 'dev'
         run: cargo test -p xtask forecast::tests::test_rules_commit_precedes_forecasts -- --ignored --exact
+      # The stamped rules still verify on a machine outside the developers' systems (BD-334.S2).
+      - name: Rules time proofs
+        if: matrix.profile == 'dev'
+        run: bash scripts/verify_rules_timestamp.sh
       # No issuer workbook or PDF is ever committed (OPEN-R7-1, bd-plx1), and no transcription row; synthetic
       # files are written outside the tree.
       - name: No workbook, PDF or transcription in git

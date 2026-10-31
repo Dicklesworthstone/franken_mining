@@ -6,7 +6,7 @@
 #
 # The FMRUL1 digest is recomputed from dir/rules.toml ("FMRUL1" LF, the byte length in decimal, LF, the bytes) and
 # must equal dir/rules.sha256. Then each proof present is checked:
-# - dir/rules.tsr, an RFC 3161 reply over that digest: `openssl ts -verify` must accept it against one of
+# - each dir/rules*.tsr, an RFC 3161 reply over that digest: `openssl ts -verify` must accept it against one of
 #   tsa_dir/*.pem. gen_time_utc is the reply's time stamp to the second, before its stated accuracy;
 # - dir/rules.ots, an OpenTimestamps proof of the FMRUL1 frame's bytes: `ots verify` must name a Bitcoin block.
 #   Without ots installed it is reported unverified, not checked.
@@ -63,26 +63,28 @@ if [ "$hex" != "$stored" ]; then
   finish
 fi
 
-if [ -f "$dir/rules.tsr" ]; then
+for tsr in "$dir"/rules*.tsr; do
+  [ -f "$tsr" ] || continue
+  name="$(basename "$tsr")"
   ok=false
   by=""
   why="no *.pem in $tsa_dir"
   for chain in "$tsa_dir"/*.pem; do
     [ -f "$chain" ] || continue
-    if out="$(openssl ts -verify -digest "$hex" -in "$dir/rules.tsr" -CAfile "$chain" 2>&1)"; then
+    if out="$(openssl ts -verify -digest "$hex" -in "$tsr" -CAfile "$chain" 2>&1)"; then
       ok=true
       by="$(basename "$chain")"
       break
     fi
     why="$(basename "$chain"): $(printf '%s' "$out" | tail -1)"
   done
-  stamp="$(openssl ts -reply -in "$dir/rules.tsr" -text 2>&1 | sed -n 's/^Time stamp: //p')"
+  stamp="$(openssl ts -reply -in "$tsr" -text 2>&1 | sed -n 's/^Time stamp: //p')"
   if [ "$ok" = true ]; then
-    emit rules.tsr rfc3161 true "$(utc "$stamp")" "$by"
+    emit "$name" rfc3161 true "$(utc "$stamp")" "$by"
   else
-    emit rules.tsr rfc3161 false "$(utc "$stamp")" "$why"
+    emit "$name" rfc3161 false "$(utc "$stamp")" "$why"
   fi
-fi
+done
 
 if [ -f "$dir/rules.ots" ]; then
   if command -v ots >/dev/null 2>&1; then
