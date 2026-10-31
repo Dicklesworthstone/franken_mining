@@ -100,10 +100,12 @@ RUN_ID: fm-2026-10-28-a. This is the case file for the Brenner/MOR hypothesis pa
 ### Industry (R6)
 
 - **E024** Barrick Mining Corp:
-  - CEO Mark Hill (permanent from February 2026); the North American Barrick IPO is targeted for end-2026.
-  - Avathon is the strategic tech partner ("Computational Knowledge Graph" plus agents) and its lead director is Barrick's Chair.
+  - The President and CEO has been permanent since February 2026; the North American Barrick IPO is targeted
+    for end-2026.
+  - Avathon is the strategic tech partner ("Computational Knowledge Graph" plus agents).
   - Komatsu FrontRunner AHS runs at NGM; Barrick uses SAP S/4HANA and Pitram.
-- **E025** Executive pay metrics: safety (including critical-control verifications), GEOs, AISC, relative TSR vs GDX, ROCE, reserve replacement, ESG. Published reserve-replacement and AISC figures are internally inconsistent across disclosures.
+- **E025** Reserve replacement and AISC are published on more than one basis across disclosures (append below), so
+  each figure needs its basis key (BD-332).
 - **E026** Industry economics:
   - Cost per discovery is $218M (2011–20); discovery to production takes ~16–18 years.
   - Schedule compliance can be as low as 30% (EY). GISTM has 77 requirements.
@@ -157,9 +159,9 @@ RUN_ID: fm-2026-10-28-a. This is the case file for the Brenner/MOR hypothesis pa
 
 ## Additions after the audit rounds and the corpus pass (2026-10-28)
 
-- **E034** Newmont served Barrick a notice of default on 3 Feb 2026, alleging NGM mismanagement and diversion of
-  resources to the wholly owned Fourmile; it was settled on 10 Aug 2026 (B5 W4; FACT V-S, press sources). NGM
-  operating data is JV-sensitive.
+- **E034** Newmont served Barrick a notice of default on 3 Feb 2026 concerning the NGM joint venture and the
+  wholly owned Fourmile; it was settled on 10 Aug 2026 (B5 W4; FACT V-S, press sources). NGM operating data is
+  JV-sensitive.
   - Corpus corroboration: Barrick "anticipates Fourmile will be incorporated into the Nevada Gold Mines joint
     venture, at fair market value, if certain criteria are met" (E139). Fourmile valuations are therefore
     transfer-price inputs and belong in a walled lane (plan §11.7, §37.3).
@@ -238,11 +240,11 @@ indexed here. Like the corpus rows, they are proposed evidence until the indepen
 ### Corrections appended after the research pass
 
 - **E024 (append-only).** The North American Barrick IPO is officially targeted for end-2026 (Q2 2026 release);
-  on 29 Sep 2026 the CEO said it may slip into January 2027 (FACT[U]; W5 E615, E616). Mark Hill has been permanent
-  President and CEO since 4 Feb 2026 (W5 E614).
+  on 29 Sep 2026 the CEO said it may slip into January 2027 (FACT[U]; W5 E615, E616). The President and CEO has
+  been permanent since 4 Feb 2026 (W5 E614).
 - **E025 (append-only).** Reserve replacement is published on two bases in the same Circular (gold ~190%, GEO 504%,
-  both 2023–25 and ex-A&D), and gold AISC on two bases ($1,423 pay, $1,637 reported). The reserve-replacement bases
-  are disclosed; the AISC pay adjustment is not (W5 E603–E608).
+  both 2023–25 and ex-A&D), and gold AISC on two bases ($1,423 and $1,637). The reserve-replacement bases are
+  disclosed; the bridge between the two AISC figures is not (W5 E603–E608).
 - **E026 (append-only).** Discovery to production averages 15.7 years (127 mines, 2002–23 starts) to 17.9 years
   (2020–23 starts) per S&P (FACT[U]); MinEx/CSIRO gives about 13 years. Bond et al. 2007: 21% of 412 interpreters
   found the correct setting (W5 E636, E639).
@@ -259,6 +261,9 @@ indexed here. Like the corpus rows, they are proposed evidence until the indepen
 - **R6 §0 item 5 (noted here; R6 is not edited).** The Mali settlement payment is $253M (FCFA ~143bn, 28 Nov 2025)
   in Barrick's own filing, not the ~$430M press figure (W2 E408; W5). The Avathon release is dated 23 Sep 2026, not
   25 Sep. R6 §6.2's Tanami line needs the E631/E632 correction.
+- **OPEN-R7-4 (owner decision, 2026-10-30; applied 2026-10-31).** E024, E025 and E034, with their appends, were
+  reworded going forward: roles instead of named executives, no pay-linkage list, no restated allegation. The
+  facts the design uses are kept; history is not rewritten.
 
 ### Independent corpus claim audit (AUDIT_4), second-wave review (AUDIT_5), and Brenner pass B6 (2026-10-29)
 
