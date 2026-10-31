@@ -10,6 +10,7 @@
 pub mod aisc;
 pub mod citation;
 pub mod consistency;
+pub mod guidance;
 pub mod key;
 pub mod live;
 pub mod mine_ledger;
@@ -670,8 +671,9 @@ impl PublicAssuranceReport {
         }
     }
 
-    /// One (ii), (iii) or (iv) instance as a JSON object; `scope` labels a hidden-scope instance.
-    fn exception_json(&self, i: &IdentityInstance, scope: Option<&str>) -> String {
+    /// One cited identity instance as a JSON object; `scope` labels a hidden-scope instance. Report surfaces
+    /// use this projection to retain the ledger's exact arithmetic and source locators in review packets.
+    pub fn exception_json(&self, i: &IdentityInstance, scope: Option<&str>) -> String {
         let mut o = format!(
             "{{\"state\":{},\"label\":{},\"file\":{},\"sha256\":{},\"sheet\":{},\"cell\":{},\
              \"subject\":{},\"family\":{},\"detail\":{}",

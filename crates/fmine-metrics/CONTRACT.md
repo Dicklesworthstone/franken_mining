@@ -17,6 +17,15 @@ weight or a bar. Each printed-minus-recomputed endpoint gap is retained, includi
 equal, and `printed_rate_gap = (P1−P0)−(A1−A0)` is a separate reconciliation item. The measured floating-point
 closure residual is retained rather than forced to zero or allocated to a factor.
 
+The typed public kernel (`lmdi::waterfall`) uses exact displayed rationals with source locators and rounding
+half-steps. Its units are fixed: cost in USD millions, sold/produced in koz, ore in thousand reported tonnes, grade
+in g/t and recovery as a fraction. It computes `A = 1000·C/Q` exactly. The dimensionless absolute metal-balance
+factor would be `B = produced·31.1034768/(tonnes·grade·recovery)` with the exact statutory troy conversion;
+only its temporal logarithmic change is evaluated, where that constant cancels. No absolute B is emitted.
+For physical inputs whose rounding boxes are not wholly in the positive domain, it supplies the exact signed
+additive fallback: line `j` is `1000·Δc_j·mean(1/Q)`, and volume is `1000·mean(C)·Δ(1/Q)`. The supplied named lines
+must sum exactly to supplied C in both periods. A rounded midpoint footing discrepancy is not a balancing line.
+
 DESIGN (BD-342): `guidance` computes exact remaining production and the conditional AISC frontier. Annual AISC
 is `(r_ytd * sold_ytd + numerator_remaining) / (sold_ytd + sold_remaining)`. The remaining sales interval is a
 separate, cited scenario; production never substitutes for sales. Requirements use exact closed intervals and
@@ -55,6 +64,29 @@ arithmetic closure does not establish causation or identify an operational expla
   - Physical product/ratio changes are evaluated in log space. A temporal quotient that underflows,
     overflows or is subnormal uses the difference of portable logarithms; a rounded subnormal quotient can
     otherwise invent a material closure discrepancy. No input is clamped.
+- `lmdi::{PrintedQty, Factor, BasisTag, WaterfallPeriod, BarPoint, Bar, RateReconciliation, Bridge,
+  decompose_aisc_waterfall}` (also in `lmdi::waterfall`):
+  - `PrintedQty` carries exact `value`, non-negative `half_step` and source `at`. A `Factor::NotPublished`
+    retains its token and source, including `n/a`; it is never converted to zero. `BasisTag` distinguishes
+    consolidated 100% from an explicit attributable fraction, including attributable 100%. The caller must
+    authenticate one common basis within each period; the pure kernel checks that both period tags agree.
+  - `Bridge::Lmdi` has six bars (`cost`, `tonnes`, `grade`, `recovery`, `balance`, `sales_timing`) and a measured
+    midpoint closure residual. `Bridge::AdditiveFallback` records every physical/domain reason, sorted named
+    signed line bars and a `volume` bar. Its points and their closure are exact rationals. Missing line
+    identities are not implicitly zero; duplicate/empty identities and a cost/line-sum mismatch refuse.
+  - Both variants have an exact `RateReconciliation` with recomputed and printed endpoints, recomputed
+    change, both endpoint gaps and the gap change. The gap is never a bar. Each bar names its rule and all
+    direct source dependencies, including the C/Q cells that set an LMDI weight. The adapter retains the
+    corresponding source Claim identities and evidence; this kernel does not authenticate workbook bytes.
+  - Every bar exposes a midpoint and an outward rounding enclosure. Integer-to-float conversion is
+    bracketed before division, elementary operations round outwards, and portable-log endpoints widen by
+    four ulps. Monotonicity bounds L using the lower/lower and upper/upper rate endpoints. Each endpoint L
+    is enclosed by interval evaluation of its definition, intersected with the proven `[min,max]` bound;
+    cancellation or an overflowing quotient retains that proven bound. No guessed ulp margin on an
+    approximate logarithmic mean narrows an enclosure. Shared dependencies remain an explicit conservative
+    over-enclosure. A box containing zero sets `sign_not_determined`, while its midpoint remains visible.
+  - `WATERFALL_RULES_VERSION = "m0-waterfall/1"` and `WATERFALL_NO_CLAIM` state the descriptive interpretation.
+    The corrected legacy API remains available; its deterministic regression digests are unchanged by this API.
 - `lmdi::{golden_digest_logarithmic_mean_10k, golden_digest_decompose_aisc_lmdi_10k}` (bd-hp2j.3): BLAKE3 over the
   output bits on 10,000 inputs from `LMDI_DIGEST_KEY` (series branch, both branches, ratios to e^300, magnitudes
   near the subnormals; seeded positive state pairs). The v2 decomposition draws independently supplied spend
@@ -86,6 +118,13 @@ arithmetic closure does not establish causation or identify an operational expla
   a non-finite effect or reconciliation, or a measured closure residual above 1e-9 USD/oz. It supplies no
   forced closure. The bare logarithmic-mean helper returns NaN outside finite positive arguments; the
   decomposition checks its domain and result before returning a waterfall.
+- The typed waterfall additionally uses `FMINE-REF-104` for a sold-quantity rounding box touching or crossing
+  zero, unmatched/ambiguous signed line identities, or a fallback line sum that differs from supplied cost;
+  `105` for unequal ownership bases; `107` for unprinted basis; `201` for a missing input source locator;
+  `109` for negative half-steps or an attributable share outside `(0,1]`; and `207` for checked-rational
+  overflow, invalid/non-finite numerical enclosures, a midpoint outside its enclosure, or failed closure.
+  Missing, non-positive or recovery-above-one physical boxes select the labelled fallback rather than a forced
+  logarithm. A non-positive total cost likewise selects the signed fallback. Its Q interval must still be positive.
 - `CutoffError` (non-positive cost, price or guess; recovery outside (0, 1]; no convergence in 100 iterations): no input is clamped (bd-8wrk).
 - `guidance` refuses unknown/conflicted inputs (`FMINE-REF-202`), stale anchors (`502`), missing citations (`201`),
   incompatible support (`102`), additivity (`103`), unit/metal-stage/ownership/definition mismatches (`105`), and
@@ -125,6 +164,23 @@ arithmetic closure does not establish causation or identify an operational expla
     input fields in both periods refuse zero, negatives, NaN and infinities by name; recovery above one,
     rate underflow/overflow and non-finite factor effects refuse. Log-space tests cover overflowing physical
     products and temporal subnormal ratios whose rounded logarithms would create a false residual.
+- `PO-MET-6` (BD-333.S1, `lmdi::waterfall::tests`):
+  - The historical invented GB-26 case gives +1,285 and sales timing −536.9148672729303 with exact zero gap.
+    A hand-computable signed-line case gives bars +675, −225, −112.5 and +537.5, summing exactly to +875;
+    endpoint gaps 3 and 5 give a separate +2 gap change. Negative total costs also produce exact signed bars.
+  - Hand-entered North Mara published C/Q/P and physical inputs are checked against an independent
+    80-digit Decimal oracle (`repro/barrick/waterfall_census.py`, calculated before the new Rust was read).
+    The exact change is `45640/37`, gap is `1905/37`, and bars plus gap give +1,285. A counterfactual grade
+    1.80→1.98 moves 174.21850713853705 USD/oz between grade and B without changing the total or gap.
+    This demonstrates non-identification. The pure test does not stand in for source/vintage/basis verification.
+  - 10,000 Philox-seeded signed line sets close exactly and match separate closed-form rational answers;
+    reordering input lines gives the same result. Seeded LMDI bar permutations close within 1e-9 USD/oz.
+    All 4,096 corners of a twelve-input LMDI rounding box and all 64 corners of a six-input additive box lie
+    within their original bar enclosures. Independent known answers cover the logarithmic-mean bound near
+    equality and at tiny scales. Straddling intervals flag the sign, with positive midpoint still shown.
+  - Mutating only printed endpoints cannot move a bar. Equal nonzero endpoint gaps remain visible.
+    Invalid basis, precision, source, Q interval, missing/duplicate lines and arithmetic overflow refuse;
+    an interval-feasible but unequal rounded line sum cannot become a plug in the additive fallback.
 - `PO-MET-6` (BD-342, `guidance::tests`, synthetic known answers):
   - The target 200–230 minus 68 yields exactly 132–162. The bead-shaped cost example uses explicitly synthetic
     sold ounces; sold quantities differing from production produce the independently calculated weighted rate.
@@ -138,8 +194,10 @@ arithmetic closure does not establish causation or identify an operational expla
     checked. Historical ordering leaves the report identical and every output retains its input provenance.
 
 ## 7. Failure Modes & Deterministic Fallbacks
-Non-positive physical inputs or missing consolidation adjustments fail closed with `Refusal`.
-LMDI numerical failures also refuse; the printed-rate discrepancy is never used as a balancing factor.
+The legacy floating API refuses non-positive physical inputs. The typed public API attempts the exact signed
+additive fallback when physical factor boxes cannot support logarithms; if the supplied lines cannot justify
+that fallback it refuses explicitly. Missing consolidation adjustments and numerical failures refuse. Neither
+path uses a printed-rate discrepancy as a balancing factor.
 
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
 - `GATE-BULL-01`
@@ -148,9 +206,9 @@ LMDI numerical failures also refuse; the printed-rate discrepancy is never used 
 - Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`.
 
 ## 10. Non-Goals & Scope Boundary
-Pure metric kernel in layer `E`; workbook parsing lives in `fmine-io` / `fmine-public` (`V`).
-BD-333.S1 remains partial: the exact-rational `PrintedQty`/basis API, rounding enclosures and sign flags,
-signed additive fallback, and public pairing/citations are not supplied by this legacy floating-point fix.
+Pure metric kernel in layer `E`; workbook parsing, first-vintage pairing, per-period basis authentication,
+source Claim bindings and public rendering live in `fmine-io` / `fmine-public` (`V`, BD-333.S2/S3). The typed
+kernel supplies the numerical and provenance-locator contract, not real-file eligibility counts or causal claims.
 
 BD-342's kernel is exact arithmetic on supplied, cited gold/koz and USD/oz quantities, with a declared positive
 cost domain. It does not acquire or transcribe guidance, register future forecasts, infer missing inputs, equate

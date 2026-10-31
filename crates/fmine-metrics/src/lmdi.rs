@@ -9,6 +9,12 @@ use fmine_core::hash::blake3_hash;
 use fmine_core::rand::{PhiloxStream, RngKey};
 use fmine_evidence::{Refusal, RefusalCode};
 
+pub mod waterfall;
+pub use waterfall::{
+    Bar, BarPoint, BasisTag, Bridge, Factor, PrintedQty, RateReconciliation, WATERFALL_NO_CLAIM,
+    WATERFALL_RULES_VERSION, WaterfallPeriod, decompose_aisc_waterfall,
+};
+
 /// Operational state for one period in the multiplicative AISC accounting identity:
 ///
 /// $$\text{AISC} = \frac{C}{O_{\text{sold}}} = C \cdot T^{-1} \cdot G^{-1} \cdot R^{-1} \cdot B^{-1} \cdot S^{-1}$$
@@ -23,7 +29,7 @@ use fmine_evidence::{Refusal, RefusalCode};
 /// - $B = O_{\text{prod}} / (T \cdot G \cdot R)$: Metal-balance/in-circuit factor, including constant units.
 ///
 /// Both periods must use the same units and ownership basis. This legacy floating-point input does not encode
-/// either; BD-333's typed public adapter, rounding intervals and signed fallback remain separate work.
+/// either; [`decompose_aisc_waterfall`] supplies the typed public API, rounding intervals and signed fallback.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LmdiState {
     /// Printed rate, retained for reconciliation; it never supplies a factor or the logarithmic-mean weight.

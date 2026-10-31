@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope"]`
+- **Allowed Module Families:** `["cli", "envelope", "packet"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -15,6 +15,10 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `assure public --issuer <issuer> [--through YYYYQn]`: the gate-eligible run over the filings in
     `registries/sources/<issuer>.toml`, optionally only those at or before a quarter;
   - `assure public --synthetic`: the known-answer run, never gate-eligible;
+  - `assure challenges --issuer <issuer> [--through YYYYQn]` or `--synthetic`: content-addressed internal-review
+    packets from visible assurance exceptions, with JSON or readable `--format markdown` output (BD-349);
+  - `guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD` or `--synthetic`:
+    cited remaining-production and AISC requirements under an explicit historical-sales scenario (BD-342);
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row
     per file, `{file, present, bytes_ok, digest_ok}` against the registry's size and sha256 (BD-339.S2). A
     mismatch is reported, never refused: doctor stays exit 0, status ok;
@@ -23,10 +27,12 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `robot-docs`.
 
 ## 3. Authority, Epistemics & Representation
-- Every invocation prints exactly one `FMT-ENV-1` envelope on stdout, a usage error included (`BD-329.S3`).
+- Every JSON invocation prints exactly one `FMT-ENV-1` envelope on stdout, a usage error included (`BD-329.S3`).
+  Markdown wraps that envelope in a JSON fence, except successful challenge exports, which render the cited
+  packets as readable sections with the source root, packet-set digest and internal-review boundary.
 - After `anchor_id` every envelope has, in this order:
   - `flags`: the four INV-002 flags, all false, from one constant (no field or setter can set one);
-  - `certificate`: the report's state root (hex), or null for a verb that writes no report;
+  - `certificate`: the report's ledger state root (hex), or null when no ledger snapshot is registered;
   - `warnings` (an array) and `next_actions` (`[{command, why}]`; every command parses with `parse_args`);
   - `no_claim`, on report envelopes only;
   - then `payload` and `refusal`.
@@ -46,6 +52,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 ## 4. Public API Surface
 - `OutputFormat`, `CliCommand`, `Envelope`, `NextAction`
 - `run` (what `fmine` prints, and its exit code), `invoke`, `parse_args`, `execute_command`
+- `packet::{packets_from_report, ChallengePacket}`; immutable packet accessors, `validate`, `to_json`,
+  `to_markdown`. The existing assurance engine computes the states; this module packages their evidence.
 
 ## 5. Guards & Typed Refusals
 - **Exit 0:** ok.
@@ -70,6 +78,17 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   refusal, so altered workbook bytes cannot yield a previously emitted Claim. This is a current projection
   read, not a durable historical store or a decision-calibration claim; `why` and `trace` remain open.
 - `doctor` refuses `FMINE-REF-506` when the registries cannot be read.
+- DESIGN (BD-349): challenge packets cover visible AISC states ii–v, Mine Stats states iii–v and infeasible
+  joint components, preserving each finding's original state, operands, Claim references, source hashes,
+  certificates, alternatives and missing-fact request. Source resolution or operand mismatches refuse.
+  Packet ids bind their content, and `packet_set_sha256` binds the deterministic ordered set separately from
+  the unchanged assurance root. `human_check` is null and external use is hardwired false; generation cannot
+  manufacture review or identify a culprit from a sign-flip witness or correction alternative.
+- DESIGN (BD-342): guidance delegates acquisition to `fmine_public::guidance` and arithmetic to
+  `fmine_metrics::guidance`. Its payload digest binds the cited inputs and explicit scenario. `anchor_id` and
+  `certificate` remain null because this is not a registered forecast or ledger snapshot. Missing two-reader
+  guidance, incompatible ownership/support, future evidence and unusable sales refuse; synthetic evidence is
+  available only through the explicit synthetic lane.
 - `robot-docs` lists every catalogue row as `{code, exit_code, status, summary}`, `status` being `active` or
   `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 
@@ -85,6 +104,10 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   and placeholder Claim ids, projection digest and ledger root; an invented id refuses. The corpus test
   `test_claim_show_reads_real_mine_stats_and_aisc_claims` covers both adapters. `test_claim_show_rechecks_registered_source_bytes`
   exercises the registered-file path and refuses a source changed after the report was built.
+- FACT (BD-342/349, CLI and packet tests): known-answer end-to-end tests cover exact rational guidance,
+  preserved assumptions/citations, deterministic JSON and Markdown, missing evidence, mixed selectors,
+  seeded discrepancy witnesses, joint-only conflicts and immutable review restrictions. The ignored real-corpus
+  packet test retains the known Kibali and Porgera findings across both registered vintages.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 None: every failure is a usage error or a typed refusal.
@@ -100,3 +123,7 @@ None: every failure is a usage error or a typed refusal.
 ## 10. Non-Goals & Scope Boundary
 - Computes nothing itself: all calculation is delegated to the `V`/`E`/`K`/`S0` crates.
 - Never writes to any external system.
+- Challenge packets do not yet cover cross-vintage comparisons, PDF transcription conflicts, hidden or
+  not-published instances. Human review and external-release sequencing remain open.
+- Guidance completion is a T3 necessary-arithmetic report under a declared scenario, not a probability of
+  meeting guidance, a technical capacity envelope or a completed M0 gate.
