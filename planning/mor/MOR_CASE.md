@@ -1572,5 +1572,9 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
       the same lineage.
     - **No real-file binding.** The transcription registry stays out of git (OPEN-R7-1).
     - **Conventions.** The set lacks half-away-from-zero.
-    - **Verdicts.** `test_discovery_never_changes_verdict` is still not written.
+    - **Verdicts.** `test_discovery_never_changes_verdict` (xtask `public_transcriptions`) runs a synthetic
+      registry whose tie discovery finds a convention and a conflict. With the registry and without it, the whole
+      payload except the `transcriptions` section is byte-identical, and so is the state root. A planted field
+      that depends on the registry, outside that section, fails it, and only it. The construction and unit
+      discoveries have no off switch: they read a finished report through `&self`, after the root is fixed.
     - **Verification.** Self-verified on this machine; nothing has run in CI.

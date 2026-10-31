@@ -226,6 +226,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
     }
 
+    /// bd-4wvl.4: discovery on and off give the same states. With a registry whose tie discovery finds both a
+    /// convention and a conflict, the whole payload but its `transcriptions` section is byte-identical to the run
+    /// without the registry, state root included: no finding reaches a verdict, a footing or another discovery.
+    #[test]
+    fn test_discovery_never_changes_verdict() {
+        let mut rows = rows();
+        for reader in ["reader_a", "reader_b"] {
+            rows.push(entry(
+                reader,
+                "Deck.pdf",
+                13,
+                "Prior net change",
+                "6.7",
+                "net_change_prior",
+            ));
+            rows.push(entry(
+                reader,
+                "Mda.pdf",
+                70,
+                "Prior net change",
+                "79",
+                "net_change_prior",
+            ));
+        }
+        let ws = workspace("on_off", &rows);
+        let on = run(&ws).expect("run");
+        let t = on.transcriptions.as_ref().expect("registry present");
+        let Some(Ok(outcome)) = &t.tie else {
+            panic!("tie: {:?}", t.tie)
+        };
+        assert_eq!(outcome.conflicts.len(), 1);
+        assert!(outcome.discovery.is_some());
+        std::fs::remove_file(transcriptions_path(&ws, "synthetic")).expect("remove registry");
+        let off = run(&ws).expect("run");
+        assert!(off.transcriptions.is_none());
+        let section = transcription_json(Some(t));
+        let on_json = on.to_json();
+        assert_eq!(on_json.matches(&section).count(), 1);
+        assert_eq!(
+            on_json.replacen(&section, &transcription_json(None), 1),
+            off.to_json()
+        );
+        assert_eq!(on.ledger_anchor.state_root, off.ledger_anchor.state_root);
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
     #[test]
     fn test_missing_or_altered_document_and_disagreement_refuse() {
         let ws = workspace("refuse", &rows());
