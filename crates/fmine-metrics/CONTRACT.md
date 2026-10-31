@@ -5,7 +5,7 @@
 - **Layer:** `E` (Enterprise & Decision)
 - **Subsystem:** `Enterprise`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["lmdi", "cutoff", "definitions"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), a spend-based Logarithmic Mean Divisia Index (`lmdi`, `GB-26`, BD-333.S1), and fixed-point marginal cut-off grade solver (`solve_cutoff_grade`; synthetic known answer only, the published cut-offs E182–E184 are not yet reproduced).
@@ -16,6 +16,12 @@ The LMDI bridge recomputes each endpoint as `A = supplied total_aisc_spend / oz_
 weight or a bar. Each printed-minus-recomputed endpoint gap is retained, including when the two gaps are
 equal, and `printed_rate_gap = (P1−P0)−(A1−A0)` is a separate reconciliation item. The measured floating-point
 closure residual is retained rather than forced to zero or allocated to a factor.
+
+DESIGN (BD-342): `guidance` computes exact remaining production and the conditional AISC frontier. Annual AISC
+is `(r_ytd * sold_ytd + numerator_remaining) / (sold_ytd + sold_remaining)`. The remaining sales interval is a
+separate, cited scenario; production never substitutes for sales. Requirements use exact closed intervals and
+retain the common YTD-sales variable when enclosing the numerator and rate. Negative computed requirements
+remain signed. These are necessary arithmetic conditions, not forecasts or probabilities.
 
 ## 3. Authority, Epistemics & Representation
 Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when `L_corp` is omitted) and checks
@@ -57,6 +63,20 @@ arithmetic closure does not establish causation or identify an operational expla
   These intentional mathematical/semantic changes invalidate the v1 snapshots; independent high-precision
   known answers establish correctness, while the v2 bit snapshots remain regression and host-agreement
   checks. `lmdi.rs` declares `BitwisePortable` only after ubuntu-latest and macos-15 agree in one CI run.
+- `guidance::{Quantity, QuantityKind, Ownership, Period, CompletionInputs, complete}` (BD-342): all physical and
+  monetary inputs/outputs are `Claim<Quantity>`, with exact rational bounds, subject, month support, ownership,
+  quantity/unit, and a named AISC definition. `Quantity::canonical_tag` binds every interpretation field.
+  `CompletionReport` carries remaining production, YTD spending, remaining spending/rate, and the frontier at
+  both annual AISC guidance limits. The exact set lives in the Claim value; `Representation::Deterministic`
+  describes the calculation, not a probability distribution. Derived evidence is no stronger than the weakest
+  parent and at most `Derived`; all source anchors, parent ids and confidentiality are preserved.
+- `guidance::{HistoricalContinuation, compare_history, check_witness}`: T1 is the finite union of supplied
+  same-period historical rounding boxes. Production, sales and AISC must come from the same earlier year and
+  remaining-month span, on the same basis. Each box is intersected with the explicitly declared remaining-sales
+  scenario. `WithinEnvelope` needs a single exact witness satisfying both guidance targets; separate marginal
+  successes across different periods do not suffice. `ExceedsEnvelope` excludes only this named envelope, not
+  physical capacity. No history is T3/`Indeterminate`. The witness checker re-evaluates source membership and
+  both production and annual-cost equations independently of witness construction.
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-203` (`ConsolidationBridgeMissing`, `G-BULL-3`)
@@ -67,6 +87,12 @@ arithmetic closure does not establish causation or identify an operational expla
   forced closure. The bare logarithmic-mean helper returns NaN outside finite positive arguments; the
   decomposition checks its domain and result before returning a waterfall.
 - `CutoffError` (non-positive cost, price or guess; recovery outside (0, 1]; no convergence in 100 iterations): no input is clamped (bd-8wrk).
+- `guidance` refuses unknown/conflicted inputs (`FMINE-REF-202`), stale anchors (`502`), missing citations (`201`),
+  incompatible support (`102`), additivity (`103`), unit/metal-stage/ownership/definition mismatches (`105`), and
+  undeclared subjects/definitions (`107`). Production inputs may be zero but not negative; this first slice needs
+  strictly positive sales and AISC throughout each input interval (`109`). Open-ended intervals are outside the
+  declared closed-rounding construction (`203`); arithmetic overflow or a failed witness is `207`. A historical
+  period at or after the guidance year refuses (`108`). Failed-calibration claims refuse (`205`).
 - `cutoff::CutoffFailure`: a malformed registry row, a non-positive net value or recovery, or a float solver that
   disagrees with the exact fixed point. A printed figure beyond its inputs' rounding is a result (`Conflict`), not a
   failure.
@@ -99,6 +125,17 @@ arithmetic closure does not establish causation or identify an operational expla
     input fields in both periods refuse zero, negatives, NaN and infinities by name; recovery above one,
     rate underflow/overflow and non-finite factor effects refuse. Log-space tests cover overflowing physical
     products and temporal subnormal ratios whose rounded logarithms would create a false residual.
+- `PO-MET-6` (BD-342, `guidance::tests`, synthetic known answers):
+  - The target 200–230 minus 68 yields exactly 132–162. The bead-shaped cost example uses explicitly synthetic
+    sold ounces; sold quantities differing from production produce the independently calculated weighted rate.
+  - Equal annual and YTD AISC cancel their shared uncertain YTD sales exactly; separately enclosing the numerator
+    and denominator would introduce spurious width. Exhaustive small interior values lie within the computed
+    frontier and attain each extremum. Signed negative remainders and budgets are preserved.
+  - Three hundred discrete historical continuations agree with direct integer production/cost inequalities.
+    Separate production and cost successes cannot produce a joint witness. An interior rational witness reaches
+    an exact guidance boundary; corrupting it fails the independent checker.
+  - Domain, zero-denominator, ownership, definition, support, missing/stale/evidence, and overflow refusals are
+    checked. Historical ordering leaves the report identical and every output retains its input provenance.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Non-positive physical inputs or missing consolidation adjustments fail closed with `Refusal`.
@@ -114,3 +151,10 @@ LMDI numerical failures also refuse; the printed-rate discrepancy is never used 
 Pure metric kernel in layer `E`; workbook parsing lives in `fmine-io` / `fmine-public` (`V`).
 BD-333.S1 remains partial: the exact-rational `PrintedQty`/basis API, rounding enclosures and sign flags,
 signed additive fallback, and public pairing/citations are not supplied by this legacy floating-point fix.
+
+BD-342's kernel is exact arithmetic on supplied, cited gold/koz and USD/oz quantities, with a declared positive
+cost domain. It does not acquire or transcribe guidance, register future forecasts, infer missing inputs, equate
+sales with production, estimate probabilities, supply T2 technical-report capacity bounds, or infer dependence
+inside a historical rounding box. Source selection and historical-box construction belong to the public adapter.
+Real North Mara parity and the full bead require independently read guidance and actual-source cells; synthetic
+known answers establish only the arithmetic and refusal behavior.
