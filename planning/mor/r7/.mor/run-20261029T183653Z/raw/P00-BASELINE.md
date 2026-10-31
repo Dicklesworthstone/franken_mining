@@ -37,7 +37,7 @@ cite the claims they rest on.
 - **Evidence rows.** C1 (E113–E116, E136–E138, T1–T15 table, M0 census), W1 (E496, E497, E499) and W5 (E603–E608).
 - **Arithmetic.** All of it in `python3 -I`: the cell-count decomposition, corporate-layer magnitudes, the 504%
   quotient, the reserve-replacement inputs, the GB-26 LMDI numbers and the GB-29 EVSI numbers.
-- **Read-only git.** `git show origin/main:<plan> | grep Chair` and `git log origin/main`.
+- **Read-only git.** `git show origin/main:<plan>` and `git log origin/main`.
 - **Not done.** The debug binary named in the brief, `$TMPDIR/rch_target_fmine/debug/fmine`, does not exist on this
   host: `/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/rch_target_fmine/` is absent. So I could not run the
   empty-workspace reversal test for C1. I started no cargo builds (E690).
@@ -70,8 +70,8 @@ cite the claims they rest on.
 - **Owner's loss order (case Decision Contract).** Worst is a false or unsupported statement reaching Barrick-class
   management, or a gate that passes vacuously or on fabricated inputs. Next is a gate that cannot be passed, or a
   silent blocking dependency. Then missed capability. Delay costs moderately.
-- **The asymmetry is steep.** One wrong Barrick number presented as "verified" to the readers the owner has access
-  to costs more than weeks of M0 delay. This is attributed to the owner's stated loss function, not asserted as fact
+- **The asymmetry is steep.** One wrong Barrick number presented as "verified" to Barrick-class readers
+  costs more than weeks of M0 delay. This is attributed to the owner's stated loss function, not asserted as fact
   about Barrick readers.
 - **Constraints.**
   - Public lane only. The corpus is gitignored, so CI never sees the workbooks.
@@ -99,7 +99,7 @@ cite the claims they rest on.
   whether the gate run must stay local, with its evidence recorded in `docs/delivery/`. Licensing is not recorded
   (case "Assumptions").
 - **U6. Will Barrick-class readers read the public repository** (plan, code comments, beads)? This decides the
-  materiality of C15 and of pushing 68e7091 as it stands.
+  materiality of pushing 68e7091 as it stands.
 
 ## CANDIDATE CLAIMS
 
@@ -242,8 +242,8 @@ cite the claims they rest on.
   - NONE_IDENTIFIED_AFTER_BOUNDED_CHECK.
 - **Reversal condition:** a Barrick source giving FY2024-only organic/greenfield RR of 190%/504%, or reserve decks
   of $1,400/$4.00.
-- **Materiality:** high. Reserve replacement weighs 15% and GEO 25% in pay metrics (E025, E605). Both are NS-02 and
-  BET-04 deliverables.
+- **Materiality:** high. Reserve replacement weighs 15% and GEO 25% in the published scorecard (E025,
+  E605). Both are NS-02 and BET-04 deliverables.
 - **Uncertainty basis:** low.
 
 ### P00-BASELINE-C5
@@ -508,25 +508,19 @@ cite the claims they rest on.
 
 ### P00-BASELINE-C15
 
-- **Type:** observation, with a HYPOTHESIS about its effect.
-- **Statement:** The public plan raises the Barrick Chair / Avathon lead-director link at lines 6923, 7170 and
-  7197, and it is already on `origin/main`. Its own F1 countermeasure is "never be the party that raises the Chair
-  conflict". Separately, AGENTS.md lines 267–268 say FrankenMining is "not … built for Barrick", while the plan's
-  pre-mortem and M2 are framed around a Barrick pilot.
+- **Type:** observation.
+- **Statement:** A first part of this claim, a board-affiliation statement, is withdrawn as not needed for the
+  design, by owner decision on 2026-10-30. Separately, AGENTS.md lines 267–268 say FrankenMining is "not … built
+  for Barrick", while the plan's pre-mortem and M2 are framed around a Barrick pilot.
 - **Scope:** the public repository text.
-- **Evidence:** new: `git show origin/main:COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md | grep -n Chair`
-  returns lines 6923, 7170 and 7197. AGENTS.md lines 267–268. Plan §35.1 F1.
-- **Inference:**
-  - Observation: the plan does what its own countermeasure forbids.
-  - HYPOTHESIS: if Barrick-class readers follow a link to the repository, the passage could weigh on the
-    relationship the owner relies on.
-  - Test of the hypothesis: none available to this pass (U6).
-- **Assumptions:** the repository link would be shared with, or found by, the intended readers. Not established.
-- **Alternative/defeater check:** the owner may judge the public discussion acceptable or already known to the
-  readers. That is a value call for the owner, not an error.
+- **Evidence:** AGENTS.md lines 267–268. Plan §35.1.
+- **Inference:** none beyond the observation.
+- **Assumptions:** none.
+- **Alternative/defeater check:** the owner may judge the framing acceptable. That is a value call for the owner,
+  not an error.
 - **Resolution condition:** owner decision on public positioning.
 - **Materiality:** moderate, conditional on U6.
-- **Uncertainty basis:** high for the effect. None for the observation.
+- **Uncertainty basis:** none for the observation.
 
 ### P00-BASELINE-C16
 

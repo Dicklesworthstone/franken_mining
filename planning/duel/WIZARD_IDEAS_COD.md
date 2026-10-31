@@ -104,7 +104,7 @@ Later capability envelopes arrive from the planned domain engines rather than be
 
 **HYPOTHESIS.** A finance team is more likely to reuse “these are the exact remaining requirements, and this
 pair conflicts” than a new probability of a miss whose calibration is still weak. It changes the meeting from
-arguing about the forecast to identifying the assumption management must defend. It also creates a practical
+debating the forecast to identifying the binding assumption. It also creates a practical
 bridge between public assurance and a site pilot: the first missing bound is a specific data request.
 
 The innovation is converting disclosure targets into an executable inverse problem. The practical advantage is
@@ -152,7 +152,7 @@ prevents individually plausible reconciliations from requiring different hidden 
 **DESIGN.** The reviewer opens a failed identity and sees the source cells, their display intervals, the
 applicable equation and one of three statements: rounding admits a common explanation; rounding cannot explain
 this conflict; or the rounding/basis information is insufficient. A partner or auditor can recompute the small
-witness without opening every workbook. Agents receive the equation and cell set, not a prose accusation.
+witness without opening every workbook. Agents receive the equation and cell set, not a prose verdict.
 
 **INFERENCE — Synthetic known answer.** Under nearest-unit rounding, a total printed as `10` can round from
 either `10.40` or `9.60`.
@@ -182,9 +182,9 @@ semantics. This avoids turning a useful repair into a general symbolic-algebra p
 
 ### Why this ranks second
 
-**HYPOTHESIS.** The public lane earns credibility when its findings withstand the issuer's obvious response:
-“That is just rounding.” A small proof that survives that response is more useful than hundreds of unexplained
-residuals. Equally valuable is suppressing false allegations when a common rounded explanation really exists.
+**HYPOTHESIS.** The public lane earns credibility when its findings withstand the obvious first question:
+“Is that just rounding?” A small proof that answers that question is more useful than hundreds of unexplained
+residuals. Equally valuable is withdrawing a false finding when a common rounded explanation really exists.
 
 This feature is unusually accretive because it improves both sides of the product promise: fewer false
 findings and stronger true findings. It reuses source anchors, exact arithmetic and the discrepancy register,
@@ -1262,7 +1262,7 @@ overlap that a later proposal would have to preserve and materially extend.
 | COD-19: Shared dependency stress — aggregate losses from one common power/logistics dependency, extending the price/country scenario links in §23 | Helm, Headframe, Crucible; executive committee reviews concentration | Two synthetic sites sharing one dated outage input; compare joint output with naive independent outages | Defer until multi-site data exist. Kill if dependency ownership cannot be established or the feature becomes a competing procurement/maintenance platform |
 | COD-20: Vendor objective reconciliation — explain why two optimizer objectives differ before comparing gaps, beyond plan feasibility in §15.4 | Pushback, Bullion, Portal; planner compares vendor candidates | Two small synthetic schedules, identical physical constraints and different declared price/cost bases; exact objective reconciliation | Defer; much overlaps three-gap certificates. Kill if objective bases are inaccessible or the ordinary certificate already answers the question |
 | COD-21: Search answer completeness — attach the searched universe to “not found,” beyond citation-only agent answers in §30 | Plumb, Portal, Adit; QP or agent checks whether a prescribed public document set contains a required item | One finite public document manifest and deterministic item query; omitted documents must change completeness status | Defer. Kill if it implies absence outside the declared universe, exposes hidden document existence, or needs unrestricted semantic search to assert completeness |
-| COD-22: Auditor-chosen spot checks — sample claims after the producer commits the population, beyond offline replay in §33.6 | Testpit, Portal, Hallmark; auditor chooses checks the producer could not cherry-pick | Public/synthetic cell population committed by digest, then an auditor seed selects samples; independent sampling and tamper tests | Defer until an auditor wants sampling. Kill if a sample pass is presented as full-population correctness or if it duplicates the auditor's existing selection tool |
+| COD-22: Auditor-chosen spot checks — sample claims after the producer commits the population, beyond offline replay in §33.6 | Testpit, Portal, Hallmark; auditor chooses checks the producer cannot pre-select | Public/synthetic cell population committed by digest, then an auditor seed selects samples; independent sampling and tamper tests | Defer until an auditor wants sampling. Kill if a sample pass is presented as full-population correctness or if it duplicates the auditor's existing selection tool |
 | COD-23: Decision stability across approved policy interpretations — separate policy uncertainty from market uncertainty, extending §22 robustness | Helm, Bullion, Hallmark; CFO reviews a choice under two admissible treatments | Two synthetic policy branches and a fixed scenario set; brute-force comparison verifies stable/changed choices | Defer. Kill if software chooses the accounting/legal interpretation or the supposedly admissible branches lack a qualified human owner |
 | COD-24: Internal transfer neutrality — show when site metrics improve only by moving value or cost to another unit, extending toll arcs in §15.6 | Bullion, Helm, Touchstone; group CFO and JV reviewer inspect an inter-complex proposal | Two synthetic sites and one transfer; group cash/metal conservation plus site KPI changes checked exactly | Defer; valuable after consolidation. Kill if inter-entity rights make neutrality inapplicable or if this merely restates an existing consolidation elimination |
 | COD-25: Stop simulation when the decision is resolved — bound ranking error as a shared scenario prefix grows, beyond a fixed ensemble in §29 | Helm, Strata, Testpit; planner or agent buys only the precision needed | Two bounded synthetic alternatives on common streams; compare a declared sequential rule with exhaustive outcomes and null controls | Defer for performance need. Kill if optional stopping invalidates the error bound, tails are unbounded without a model, or simulation is not the bottleneck |
@@ -1270,7 +1270,7 @@ overlap that a later proposal would have to preserve and materially extend.
 | COD-27: Exploration effort overlap accounting — prevent rebranded or spatially duplicated campaigns from manufacturing search coverage, beyond §11 effort inputs | Lodestar, Corebox, Portal; exploration team evaluates acquired historical data | Synthetic overlapping survey footprints and duplicated hole identities; union/coverage oracle and CRS metamorphic checks | Defer pending tract use. Kill if identity is inferred from proximity alone or raw metres are converted into detection probability without a valid model |
 | COD-28: Metallurgical sample-selection bounds — carry uncertainty from untested ore into choices, beyond coverage bands in BD-300 | Crucible, Strata, Helm; metallurgist prioritizes testwork before conversion/expansion | Synthetic ore domains with grade-dependent sample selection; bound recovery over the uncovered mass and compare with sealed truth | Strong later extension. Kill if defensible bounds are useless or the existing coverage/OutsideValidity refusal already supplies all decision value |
 | COD-29: Fixed-cohort operating bridge — separate genuine site change from exits, ownership and reporting-perimeter change, beyond bitemporal ownership in §24.3 | Bullion, Hallmark, Headframe; CFO compares periods after a divestment or commissioning | Two public/synthetic periods with a declared common cohort; exact entry/exit and ownership decomposition | Fold into comparison workflows. Kill if it hides exited operations, silently restates history or adds nothing beyond named existing aggregation layers |
-| COD-30: KPI gameability tests — construct allowed accounting/timing transformations that change the metric but not the chosen economic objective, extending §23.6 Goodhart alarms | Bullion, Helm; remuneration committee examines incentive design | Three synthetic transformations for timing, classification and transfers; exact invariant and KPI-change checks | Defer; keep as explicit stress cases. Kill if it recommends manipulating disclosures, assumes contested classifications are permitted or repeats an already visible shadow-price finding |
+| COD-30: KPI robustness tests — construct allowed accounting/timing transformations that change the metric but not the chosen economic objective, extending §23.6 Goodhart alarms | Bullion, Helm; remuneration committee reviews scorecard design | Three synthetic transformations for timing, classification and transfers; exact invariant and KPI-change checks | Defer; keep as explicit stress cases. Kill if it recommends manipulating disclosures, assumes contested classifications are permitted or repeats an already visible shadow-price finding |
 
 ## Appendix — One-line titles of all 30 candidates
 
@@ -1303,4 +1303,4 @@ overlap that a later proposal would have to preserve and materially extend.
 27. **COD-27:** Overlap-aware accounting for historical exploration effort.
 28. **COD-28:** Metallurgical sample-selection bounds for untested ore.
 29. **COD-29:** Fixed-cohort operating comparisons across perimeter changes.
-30. **COD-30:** KPI gameability tests under explicit economic invariants.
+30. **COD-30:** KPI robustness tests under explicit economic invariants.

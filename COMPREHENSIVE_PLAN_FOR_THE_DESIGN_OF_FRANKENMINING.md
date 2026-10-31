@@ -232,7 +232,7 @@ no authoritative public critique of named products (R6 §5.1).
 | Capital allocation | **Spreadsheet DCF.** One-at-a-time sensitivities; risk buried in the discount rate. | Capex overruns average +14% and about half fall outside the claimed ±15% (FACT, Bertisen & Davis, R7 §9.1), with no institutional learning. The fiscal, security, JV and entity-perimeter shocks that actually moved capital in 2025–26 are absent from single-entity DCF models: Loulo-Gounkoto's loss and return of control, the Hemlo and Tongon exits, and a North American IPO carve-out beside the 61.5%/38.5% NGM JV (R6 §6.6; §23.2, §23.4). |
 | Exploration | **Uncalibrated scores validated by random cross-validation.** | Absence of evidence is read as absence. "Not looked" and "looked and found nothing" are the same zero (FACT, E028). |
 | Tailings | **Conformance checklists.** | An offline piezometer reads as "normal" (R7 §8.4). |
-| AI operating layers (knowledge graph plus agents; the 2025–26 wave) | **Fluent reasoning over unreconciled, unversioned inputs.** | Outcome fees are not tied to a published, scored baseline (HYPOTHESIS, from B5 W1–W2). |
+| AI operating layers (knowledge graph plus agents; the 2025–26 wave) | **Reasoning over inputs that carry no reconciliation state or version.** | An answer cannot cite the reconciled figure it used, and its forecasts are not scored against a published baseline (HYPOTHESIS, from B5 W1–W2). |
 
 ### 1.2 What is already solved, and what nobody has composed
 
@@ -368,11 +368,11 @@ operation.
 
 | Reader | Their question | Where FrankenMining answers |
 |---|---|---|
-| CEO and board (e.g., Barrick CEO Mark Hill; E614) | "Which of my numbers can I trust, and which decision this quarter would change if I knew more?" | Epistemic map (§9.6), DecisionCards (§22), `CapitalEntityGraph` (§23.2) |
-| CFO and controller (e.g., Barrick CFO Helen Cai) | "Why did AISC move against guidance, which parts are controllable, and can I replay every published non-GAAP figure from source?" | Metric engine and causal waterfall (§21.6) |
-| COO, technical leadership and site GMs (e.g., Barrick Chief Technical Officer Richard Peattie; E671) | "Where is metal lost between the block model and the bullion: geology or execution?" | Reconciliation posterior (§20), Crucible (§17) |
-| Head of Exploration (e.g., Barrick EVP Exploration Joel Holliday; E671) | "Own drilling, earn-in, stake or walk away, and how sure are we? What have we actually ruled out?" | Lodestar (§11), capital (§23) |
-| Head of Mineral Resource Management and QPs/CPs (e.g., Barrick VPs Geology Sam Baldwin and Jesse Clark; E671) | "Does reconciliation confirm my model, does the evidence support my classification, and will this system ever speak for me?" | Strata (§13), Hallmark (§24); never classifies |
+| CEO and board (E614) | "Which of my numbers can I trust, and which decision this quarter would change if I knew more?" | Epistemic map (§9.6), DecisionCards (§22), `CapitalEntityGraph` (§23.2) |
+| CFO and controller | "Why did AISC move against guidance, which parts are controllable, and can I replay every published non-GAAP figure from source?" | Metric engine and causal waterfall (§21.6) |
+| COO, technical leadership and site GMs (E671) | "Where is metal lost between the block model and the bullion: geology or execution?" | Reconciliation posterior (§20), Crucible (§17) |
+| Head of Exploration (E671) | "Own drilling, earn-in, stake or walk away, and how sure are we? What have we actually ruled out?" | Lodestar (§11), capital (§23) |
+| Head of Mineral Resource Management and QPs/CPs (E671) | "Does reconciliation confirm my model, does the evidence support my classification, and will this system ever speak for me?" | Strata (§13), Hallmark (§24); never classifies |
 | Mine planner | "How far from optimal is this plan, how robust is it, and how wrong have my inputs been?" | Pushback (§15) |
 | Plant metallurgist | "What feed is coming, how will it behave, and what is my real recovery with its uncertainty?" | Crucible (§17), Touchstone (§20) |
 | Geotechnical engineer and Engineer of Record (EoR) | "What is the evidence state of each failure mode, and what is stale?" | Highwall (§14), Freeboard (§18) |
@@ -462,8 +462,8 @@ Each scenario is an acceptance narrative. The milestone in brackets is where it 
 - **NS-03 Monthly reconciliation [M2].** Before: a five-day spreadsheet exercise. After: a posterior in hours,
   with F1/F2/F3 intervals. A gross error is localized to the mill sampler, and the metallurgist attests the
   finding.
-- **NS-04 Guidance setting [M3/M5].** Before: ranges set by negotiation. After: ranges derived from calibrated
-  site intervals, shown beside the track record ("5 of the last 6 quarters inside the 80% band").
+- **NS-04 Guidance setting [M3/M5].** Before: ranges set without a track record in view. After: ranges derived
+  from calibrated site intervals, shown beside the track record ("5 of the last 6 quarters inside the 80% band").
 - **NS-05 QP support [M3].** Before: the classification rationale lives in the QP's head. After: per-domain
   evidence (data spacing, slope of regression, conditional-simulation probability, reconciliation record) sits
   beside the QP's signed act. A reconciliation section is drafted for the QP's review.
@@ -2885,10 +2885,10 @@ productive, with delays typed.
   ingested as a registered forecast: asset, failure mode, horizon, stated probability or severity.
 - It is scored when the window closes, using maintenance records and failure codes. The calibration ledger (§10)
   then holds a per-vendor, per-failure-mode track record: precision, lead time and reliability diagram.
-- **Why.** Executives are buying these platforms on business-case IRRs (INFERENCE, R6 §6.8: in the Barrick and Newmont
-  filings read, the only quantified digital results are autonomous-haulage cases; Freeport, by contrast, reports
-  214 Mlb of incremental copper from leach analytics in each of 2024 and 2025, FACT, E645). Nobody keeps the score. FrankenMining does, without
-  competing with them.
+- **Why.** These platforms are adopted on business-case IRRs (INFERENCE, R6 §6.8: in the Barrick and Newmont
+  filings read, the only quantified digital results are autonomous-haulage cases; Freeport reports 214 Mlb of
+  incremental copper from leach analytics in each of 2024 and 2025, FACT, E645). No shared score across vendors is
+  published. FrankenMining keeps one, without competing with them.
 
 ### 16.6 Ventilation and underground environment (`fmine-ops::vent`)
 
@@ -3553,20 +3553,21 @@ erosion and piping, foundation failure, and decant or spillway failure.
 - **Discharge criteria** are jurisdictional policy data. FrankenMining reports evidence against them and never
   asserts compliance.
 - **Limits are typed by chemical basis and averaging time** (§25.2). Reko Diq's lab reports nitrate as N; the
-  ESIA compares the same values as NO3 against ≤ 50 mg/L and calls FS13 "within the limits", yet on one basis
+  ESIA compares the same values as NO3 against ≤ 50 mg/L and reports FS13 as within the limits; on one basis
   FS13 is 59.3 mg/L as NO3 (INFERENCE, E322–E324). Two-week samples are not compared with annual limits.
 - **Reported tables reconcile to certificates.** Environmental samples use `LabCertificate` (§12.1). A certificate
   sample with no reported row, an ID that needs an alias map, a date outside the stated campaign window, or a text
   claim that contradicts the cell becomes a discrepancy-register entry. Fixture: the Reko Diq certificate has six
-  samples and the ESIA reports five; the omitted supply bore exceeds the ESIA's own Cr and Se limits (FACT,
+  samples and the ESIA reports five; the unreported sample, a supply bore, is above the ESIA's Cr and Se limits (FACT,
   E325–E328). Lab qualifiers travel with the value.
 - **Water-balance nodes for greenfield abstraction.** Abstraction permit vs installed capacity vs demand (Reko Diq:
   10–50 L/s permitted against 140 L/s of listed bores; E312, E313); RO product and RO reject (unstated; E318);
   camp design vs occupancy. Climate inputs are tagged `Transferred` until the on-site record passes a registered
   length (Reko Diq: a commercial modelled dataset and about 2 months on site; E334, E335).
 - **DATA-GATE: groundwater TARP.** A TARP for an abstraction field needs piezometer streams and community-well
-  baselines. Without them its state is `Indeterminate`, which escalates per §14.4. Reko Diq monitors only "record
-  of water used and source" (FACT, E333) while institutions and locals raise depletion (E330, E331).
+  baselines. Without them its state is `Indeterminate`, which escalates per §14.4. The Reko Diq ESIA's monitoring
+  table records water used and its source (FACT, E333), and institutions and local residents raise depletion
+  (E330, E331).
 
 ### 18.5 Acid rock drainage and geochemistry
 
@@ -3822,11 +3823,11 @@ refuted by geological confounding and Goodhart suppression). The crate is `fmine
   `not_verified`.
 - **Never "safe".** The output is the control evidence state across the site, not a safety score. Freshness
   windows are policy per control.
-- **CCV is already a pay metric, so it is already under Goodhart pressure.**
+- **CCV is already a pay metric, so Muster measures its quality as well as its completion.**
   - Critical control verifications are 5% of Barrick's annual incentive, with a 75% threshold and 85% maximum
     (2025 actual 84%). Barrick says it is "continuing to shift toward the use of leading indicators" (FACT, R6
     §1.5).
-  - When completion rate is paid, completion rises and quality can fall. Muster therefore reports verification
+  - A completion rate shows that checks were done, not how well. Muster therefore reports verification
     *quality* beside completion: answer variance, photo evidence, non-conformances found per verification, and
     re-verification agreement on a random audit sample.
   - "Zero non-conformances found across 300 verifications" is flagged for audit, not celebrated.
@@ -3933,9 +3934,9 @@ refuted by geological confounding and Goodhart suppression). The crate is `fmine
   - at p = 3.7%: P(X = 0) = **1.2 × 10⁻⁵**, and E against q₁ = 0.1 is **2.7 × 10⁴** ≫ 1/α = 20;
   - at p = 10%: P(X = 0) = 1.9 × 10⁻¹⁴;
   - the 95% upper bound on qp is 1.0%, so q < 10% at the point estimate and q < 27% at the lower bound.
-- **Intuition.** CCV completion is a paid scorecard metric at Barrick (5 points of the 70% scorecard, threshold 75%,
-  maximum 85%, 2025 actual 84%; FACT, E601). Paying for completion raises n and can push q toward zero. G-MUST-6
-  flags the contradiction as `Conflicted(TickAndFlickSuppressionAlarm)`.
+- **Intuition.** A completion count measures n, not the detection fraction q. CCV completion is a scorecard metric
+  at Barrick (5 points of the 70% scorecard, threshold 75%, maximum 85%, 2025 actual 84%; FACT, E601), so Muster
+  reports q beside n at every site. G-MUST-6 flags a contradiction as `Conflicted(TickAndFlickSuppressionAlarm)`.
 - **Assumptions.** The audit samples the same control population and shift mix.
 - **Flip.** If an audit of m = 50 also finds no defects, and answer-entropy and photo-timestamp checks pass, the
   streak is corroborated instead of flagged.
@@ -3990,7 +3991,7 @@ Crates:
 - **No plugs.** A survey true-up, stocktake or outturn adjustment is a *measurement* with an error model and
   evidence, never an unexplained balancing figure. "Unaccounted metal" is a posterior quantity with an interval,
   attributed where identifiable (§20.6) and explicitly unattributed where not.
-- **Published plugs are latent terms.** NGM's "GC adjustment" line sits between theoretical feed (mined −
+- **Published balancing rows are latent terms.** NGM's "GC adjustment" line sits between theoretical feed (mined −
   feeder-pad change) and GC call: −49, +20 and +25 koz across three plants (INFERENCE, C2 §4.2b). Kibali's "GC
   Adjustment" row carries −10,466 t at **−31.15 g/t** (FACT, E207); Loulo's stockpile-change row carries a
   negative grade (E208). Touchstone models each as an explicit latent term (feeder-pad survey and grade error).
@@ -4054,7 +4055,7 @@ explanations.
     grade 94% net to metal 102% (FACT, E154).
   - Public case and known answer `KA-TOUCH-KIBALI-2016-2025` (100% basis; Barrick 45%): Kibali's open-pit GC call
     held fewer ounces than the raw GC model in every year (−2% to −13%), with more tonnes and lower grade from
-    2022, while the 2025 mill MCF (out) read 100/101/101, helped by +2.6% check-out over check-in (FACT, E210–E212).
+    2022, while the 2025 mill MCF (out) read 100/101/101, with +2.6% check-out over check-in (FACT, E210–E212).
     It supplies ten years to fit a signed bias prior.
 - **Tolerance bands.** No published industry benchmark for typical F1/F2/F3 tolerance bands exists; the ±5–10%
   figure is practitioner lore (INFERENCE: a checked null in R6 §6.1). FrankenMining therefore reports intervals, not band compliance.
@@ -4185,7 +4186,7 @@ The generator produces every measurement the real graph has, with known error mo
 | Gate / kill | Threshold (TARGET) | When | Fallback |
 |---|---|---|---|
 | GATE-TOUCH-01 (R1 known answers) | Linear reconciliation unbiased with the stated covariance on synthetic flowsheets; gross errors of stated size detected at stated power | M1 | — (must pass) |
-| ✖ GATE-TOUCH-02 (bias recovery) | Over ≥ 200 replicates, 90% intervals on each injected bias cover truth **85–95%** of the time; the metal balance closes within stated uncertainty; non-identifiable pairs return FMINE-REF-104, not a number; detection power for a 5% sampler bias over one quarter stated | M1 (B5) | **Kill if coverage is outside 80–97% after one fix cycle, or identifiability is not characterised.** Fallback: no site pitch on reconciliation; lead with the metric engine (§21.6) and capital (§23) |
+| ✖ GATE-TOUCH-02 (bias recovery) | Over ≥ 200 replicates, 90% intervals on each injected bias cover truth **85–95%** of the time; the metal balance closes within stated uncertainty; non-identifiable pairs return FMINE-REF-104, not a number; detection power for a 5% sampler bias over one quarter stated | M1 (B5) | **Kill if coverage is outside 80–97% after one fix cycle, or identifiability is not characterised.** Fallback: no site proposal on reconciliation; lead with the metric engine (§21.6) and capital (§23) |
 | GATE-TOUCH-03 (parity) | Site pilot: the site's F1/F2/F3 reproduced from the same inputs, every difference explained | M2 | Parity-only deliverable |
 | ✖ GATE-TOUCH-04 (material finding) | ≥ 1 material finding (pre-registered as ≥ 1% of contained metal or ≥ a $M/yr threshold set with the sponsor) attested `Reviewed{against}` by the site QP or metallurgist as new and plausible | M2 (month 12) | B5 F8 "checked null": a well-reconciling site yields a certified clean bill, the second pilot site is engaged, and the program gate at month 12 weighs it (§37) |
 | GATE-TOUCH-05 (hindcast) | 8–12 historical quarters run rolling-origin; coverage reported with a small-sample caveat | M2 | — |
@@ -5082,8 +5083,8 @@ pub struct ScenarioIndex {          // one draw ω of the enterprise world
       four employees detained 25 Nov 2024, gold stock removed 11 Jan 2025, suspension announced and initiated
       14 Jan 2025, court-ordered six-month provisional administration and loss of control 16 Jun 2025
       (administrator in day-to-day charge from 23 Jun), settlement 24 Nov 2025 ($253M paid 28 Nov), control
-      returned 16 Dec 2025 (FACT, E248, E401–E409). Barrick's later footnote says no operating data exist for
-      Q1–Q3 2025, but the first Q1 2025 publication carries production (22 koz at 100%) and only withholds
+      returned 16 Dec 2025 (FACT, E248, E401–E409). Barrick's later footnote reports no operating data for
+      Q1–Q3 2025; the first Q1 2025 publication carries production (22 koz at 100%) and withholds only
       per-ounce data, and FY2025 production is reported as 29 koz (FACT, E122, E477, E478; W1-DR-17). After the
       reset, H1 2026 production was **152 koz Au** (64 koz in Q1; 88 koz in Q2 from 914 kt at 3.25 g/t and 92%
       recovery), with royalties of $585/oz in Q2 2026 ($629/oz in H1 2026); Q2 2026 TCC was $1,897/oz and AISC
@@ -5105,7 +5106,7 @@ pub struct ScenarioIndex {          // one draw ω of the enterprise world
     - DRC/Kibali (as of 2026-02-27): Law 007/2002 as amended by Law 18/001 of 9 Mar 2018 (regulations 8 Jun 2018);
       the Art. 276 five-year stability on existing rights lapsed about Mar 2023 (INFERENCE). Statutory gold royalty
       3.5% of gross commercial value (Art. 241, E445); Kibali's total royalty and charges are 5.7% of revenue
-      including 2% shipment fees (E243; the TR labels this inconsistently, E449), and it is exempt from the 2025
+      including 2% shipment fees (E243; the TR's pages label it differently, E449), and it is exempt from the 2025
       Finance Law's +2% export charge (E447). Super-profits tax 50% of profit from prices more than 25% above the
       BFS price, i.e. above $2,000/oz on Kibali's $1,600 (Art. 251 bis; E242, E446); CIT 30%; State 10% via SOKIMO.
       Permits: seven expire 11 May 2029 and three on 3 Jun 2030, against a LOM to 2043 (E245). Renewal is for at
@@ -5199,9 +5200,9 @@ pub struct ScenarioIndex {          // one draw ω of the enterprise world
 
 | Metric (weights FACT, R6 §1.5, §2.5) | Treatment | Why |
 |---|---|---|
-| AISC; Newmont adjusted CSC/GEO (35%) | Soft constraint per site-year; shadow price published | A ratio metric, gameable by high-grading, deferral or reclassification (GB-26) |
+| AISC; Newmont adjusted CSC/GEO (35%) | Soft constraint per site-year; shadow price published | A ratio metric: high-grading, deferral or reclassification can move it without changing value (GB-26) |
 | ROCE (Barrick 15% LTI, 10–15% range; Newmont 30% PSU) | 3-year floor constraint; shadow price | Penalizes long-gestation growth, because capital employed rises years before EBIT: a **structural bias against greenfield** made visible |
-| Reserve replacement (3-year, 15% LTI) | Computed by `fmine-metrics` under one definition; a constraint only after the definition is reconciled (190% vs 504%) | Rewards booking ounces (M&A, higher deck) |
+| Reserve replacement (3-year, 15% LTI) | Computed by `fmine-metrics` under one definition; a constraint only after the definition is reconciled (190% vs 504%) | Rises with acquisitions or a higher deck as well as with discovery |
 | GEO (25% API) | Soft floor, on a named ratio basis (GB-27) | Volume can conflict with NPV; GEO moves with the price ratio |
 | rTSR vs GDX (35% Barrick; 60% Newmont) | **Excluded from optimization**; context only | Not controllable; market-relative |
 | FCF/share, dividend policy | Liquidity constraints and minimum-cash floor | Real harm when breached |
@@ -5446,7 +5447,7 @@ pub struct CompetentPersonAct {
 - **Ownership is bitemporal (C4 P10; C5 §4.6).** Veladero went from 100% to 50% on 30 Jun 2017, inside a
   reported series, and its doré is sold to Barrick "as agent for" the partner (FACT, E273); Porgera was 95% (BNL) in
   2011; since 22 Dec 2023 it is 51% PNG stakeholders and 49% Porgera (Jersey) Ltd (50/50 Barrick–Zijin), so Barrick
-  holds 24.5% equity but 23.5% of economic benefits, and the Q2/Q3 2024 summary sheets mislabel it 47.5% while
+  holds 24.5% equity but 23.5% of economic benefits, and the Q2/Q3 2024 summary sheets label it 47.5% while
   their values are at 24.5% (FACT, E293, E428–E432, E468, E469); Zaldívar's boundary agreement stockpiles ore for the other
   owner (E292). Reko Diq's province holds 15% funded and 10% free-carried, and documents disagree on who holds
   50% (FACT, E302, E303). Series that cross a change render per interval; disagreeing documents are
@@ -6991,7 +6992,7 @@ impact assessment and, where applicable, works-council review (GATE-MUST-03).
 
 **Community and stakeholder data.** GATE-DATA-05 and PO-MUST-4 pseudonymization also apply to stakeholder,
 consultation and grievance records. Importers redact on ingest **even from public documents**: Reko Diq's ESIA
-appendices carry personal mobile numbers and name individuals, and its grievance form collects name, contact,
+appendices include individuals' names and contact details, and its grievance form collects name, contact,
 house location and signature (C5 §4.9). FrankenMining never reproduces those fields.
 
 ### 31.3 OT safety and the HumanAuthorityToken
@@ -7125,9 +7126,8 @@ OMF through lab-oracle conversion to CSV/DXF in the interim, and say so.
 
 ### 32.3 Coexistence with Avathon
 
-Barrick has an AI operating-layer partner (Avathon, E024), whose lead director is Barrick's Chair. Three postures
-were tested (B4 SQ7):
-- *Replace Avathon* is refuted as a political non-starter.
+Barrick has an AI operating-layer partner (Avathon, E024). Three postures were tested (B4 SQ7):
+- *Replace Avathon* is refuted: FrankenMining does not compete with AI operating platforms (NONGOAL-005).
 - *Feed Avathon blindly* is refuted, because blind feeds would make Avathon a second authority without anchors.
 - **Verdict C: FrankenMining is the anchor-pinned system of record, and Avathon is a cognition-plane consumer.**
 
@@ -7141,10 +7141,9 @@ were tested (B4 SQ7):
 5. When Avathon and FrankenMining disagree, the knowledge state becomes `conflicted` (E033). It is surfaced, not
    merged.
 
-This turns a potential rival into a consumer whose answers become *more* defensible by citing FrankenMining. It
-also means that Avathon's forecasts can be registered and scored like anyone's (§30.4), which is the fairest
-possible test of its value. Whether Avathon accepts anchor-pinned feeds and evidence-only write-back is
-OPEN-B4-08.
+Under this contract an AI platform's answers become *more* defensible by citing FrankenMining, and Avathon's
+forecasts can be registered and scored like anyone's (§30.4). Whether Avathon accepts anchor-pinned feeds and
+evidence-only write-back is OPEN-B4-08.
 
 ### 32.4 Proof obligations, gates and open questions
 
@@ -7383,9 +7382,9 @@ replaces it with an evidence-based **0.3 for Lumwana (plausible range 0.15–0.4
 - × P(security review passed and 8–12 quarters imported by month 7 | both) ≈ 0.6 (0.4–0.75).
 
 The fastest Barrick precedent, Avathon, went from first collaboration (December 2025) to software at selected U.S.
-sites in Q2 2026, with a Chair-level link and inside the North American perimeter (FACT[secondary], E591).
-FrankenMining has to match that pace without either advantage. The alternates are lower: North Mara/Bulyanhulu
-about 0.15–0.2, Kibali about 0.1–0.15, NGM and Pueblo Viejo below 0.1.
+sites in Q2 2026, inside the North American perimeter (FACT[secondary], E591). It is a benchmark for pace, not a
+forecast for FrankenMining. The alternates are lower: North Mara/Bulyanhulu about 0.15–0.2, Kibali about
+0.1–0.15, NGM and Pueblo Viejo below 0.1.
 
 The wedge choice is unchanged: it is the only option that is useful at p = 0 and decisive at p = 1, and at p = 0.3
 H-f's EV is 4.7 against 2.3 for the next options (GB-38, §37.2). What changes is planning weight: **M2′ is the modal
@@ -7412,18 +7411,18 @@ visible by about month 6 and a countermeasure already designed into this plan.
 
 | # | Failure story | Leading indicator | Countermeasure in this plan | Residual |
 |---|---|---|---|---|
-| F1 | **Avathon absorbed the space.** The Chair is Avathon's lead director; FrankenMining was routed to the Avathon office and starved. | Meetings redirected to NA digital leadership; "how is this different from Avathon?" | Position as the **evidence substrate agents cite** (§32.3); pilot outside NA; never pitch computer vision, maintenance or supply-chain agents; never be the party that raises the Chair conflict | **High** (political) |
+| F1 | **An incumbent AI platform absorbed the space.** FrankenMining was seen as overlapping with the AI operating layer already in place and was not taken forward. | The evaluation is folded into the existing AI-platform programme; "how is this different from the AI platform?" | Position as the **evidence substrate agents cite** (§32.3); pilot outside NA; offer no computer-vision, maintenance or supply-chain agents (NONGOAL-005) | **High** |
 | F2 | **Data never arrived.** Security review of an unknown pure-Rust vendor took 9 months. | No signed agreement or data steward by month 4 | Security pack at M0; on-prem single binary; public and synthetic lanes deliver with no data (§34.4) | Medium |
 | F3 | **MNPI breach or lane contamination.** A forecast leaked, or someone traded in a blackout. | No insider list; lanes share a machine | Two physically separate lanes; private-access people never author public forecasts; insider list and blackout for the whole team (§31.1) | Low probability, **fatal impact** |
 | F4 | **QPs refused, and legal agreed.** Probabilistic metrics read as automation of judgment and as discoverable contradictions. | QP declines attestations; legal asks to remove intervals | Never classify; the CP act makes the QP the author; `no_claim` lines; co-design with the Head of MRM from M1; counsel designs retention and privilege (§24) | Medium |
-| F5 | **The site ignored it.** A senior geologist's spreadsheet stayed the recon of record. | After 3 shadow months, the old pack still rules | **Parity first**: reproduce the site's own pack exactly; the site geologist is the named author; reduced pack time is the hook; embed a person on site (§20) | Medium |
+| F5 | **The site ignored it.** A senior geologist's spreadsheet stayed the recon of record. | After 3 shadow months, the old pack still rules | **Parity first**: reproduce the site's own pack exactly; the site geologist is the named author; reduced pack time is the benefit; embed a person on site (§20) | Medium |
 | F6 | **Yet another dashboard.** Executives said "interesting" and changed nothing. | No executive reuses a number in a meeting | The unit of delivery is a DecisionCard plus a scored forecast; the program gate (§34.5) | Medium |
 | F7 | **Overclaimed probabilities.** A "90%" interval missed 4 of 8 quarters in front of the CFO (P = 0.005 if it were calibrated: strong evidence of miscalibration, R7-C118). | Coverage below nominal; intervals narrower than reference classes | Default `uncalibrated`; track record beside every forecast; UU budgets; refuse decision-grade probabilities without calibration (§9, §10) | Medium |
 | F8 | **The value was not there.** The pilot site already reconciled well. | Attribution matches the site's commentary by month 9 | Pre-select a site with recorded variance; report the null honestly; allow one second site (§37) | Medium |
 | F9 | **The suite never converged.** 30–40% of time went to sibling fixes. | > 20% of hours on sibling repos | Dependency firewall; lift with provenance; FA through the CLI; no deliverable depends on a sibling (§27) | Low–medium |
 | F10 | **Purity cost the year.** Rebuilding parsers, CRS and samplers ate M0–M1. | M0 slips > 4 weeks; infrastructure > 40% of LOC | A wedge with minimal missing primitives; foreign tools as oracles; budget protocol (§28.4) | Medium |
-| F11 | **Key-person risk on both sides.** One relationship, one architect; Barrick leadership churn. | One person answers every question; the sponsor moves | Multi-thread sponsors (CFO, Head of MRM, a site GM); plan-first documentation; DecisionCards make reasoning transferable | **High** for a small team |
-| F12 | **The IPO ate the calendar.** The NA carve-out consumed finance, IT and MRM. | Repeated deferrals; perimeter changes | Stay off the IPO critical path; pilot in the remaining-parent perimeter | Medium |
+| F11 | **Key-person risk on both sides.** One relationship, one architect; changes of role at the client. | One person answers every question; the sponsor moves | Named counterparts in several roles (CFO, Head of MRM, a site GM); plan-first documentation; DecisionCards make reasoning transferable | **High** for a small team |
+| F12 | **The IPO took priority.** The NA carve-out drew on the same finance, IT and MRM teams. | Repeated deferrals; perimeter changes | Stay off the IPO critical path; pilot in the remaining-parent perimeter | Medium |
 | F13 | **JV partner conflict.** Operating data became dispute evidence (cf. the NGM 2026 default notice, E034). | Legal asks about partner consent | Pilot at a 100%-owned site; partner outputs only through governed channels (§31.2) | Low once the site is chosen |
 | F14 | **OEM lock-in.** Exports dropped fields or became paid services. | Exports need vendor professional services | OMF v2 from day one; snapshot importers; flat-file fallbacks; never require write or real-time APIs (§32) | Medium (real-time); low (monthly) |
 | F15 | **Procurement and vendor viability.** A tiny shop failed onboarding. | Requests for references and SOC 2 | A delivery or assurance partner as the contracting wrapper; source escrow; a support runbook | Medium |
@@ -7433,7 +7432,7 @@ visible by about month 6 and a countermeasure already designed into this plan.
 
 | ID | Risk | Severity | Mitigation | Owner |
 |---|---|---|---|---|
-| RISK-01 | Avathon positioning (F1) | High | §32.3 contract; pilot outside NA | Owner + sponsor |
+| RISK-01 | Overlap with an incumbent AI platform (F1) | High | §32.3 contract; pilot outside NA | Owner + sponsor |
 | RISK-02 | Data access (F2) | High | §34.4 gates; M2′ | Sponsor |
 | RISK-03 | MNPI breach (F3) | Fatal impact | §31.1 | Counsel + owner |
 | RISK-04 | QP and legal rejection (F4) | Medium | §24 doctrine; counsel review (OPEN-HALL-4) | Head of MRM |
@@ -7454,13 +7453,13 @@ visible by about month 6 and a countermeasure already designed into this plan.
 | RISK-19 | Human review is the FA posting bottleneck (GB-28) | Medium | Monthly trunk; delegated reviewer ask (OPEN-BULL-3) | Controller |
 | RISK-20 | Name collisions (`fm`, `fmd`, `fm-*`) | Medium | `fmine-` prefix (OPEN-B4-09) | Owner |
 | RISK-21 | Residency statutes misread: 39 of 72 researched rows are INFERENCE (W3) | High | Fail-closed default; each row carries status, confidence and `review_by`; counsel on the W3 §7 clauses before any regional node (OPEN-B4-01) | Counsel |
-| RISK-22 | Goodhart: KPI-linked pay distorts the measured quantities (AISC deferral, CCV completion) | Medium | KPI price list (§23.6); deferral detection (GB-26); CCV quality, not counts (§19) | Board remuneration committee |
+| RISK-22 | Goodhart: a metric used in pay can drift from the quantity it measures (AISC deferral, CCV completion) | Medium | KPI price list (§23.6); deferral detection (GB-26); CCV quality, not counts (§19) | Owner |
 | RISK-23 | Code changes (JORC 2026, the NI 43-101 replacement) shift disclosure requirements mid-build | Medium | Renderers as registry rows (§24); OPEN-HALL-2 | Head of MRM |
 | RISK-24 | Evidence state misread as a safety statement (TSF, slopes) | High impact | Four false flags; "evidence state, never safe" wording; no `geotechnical_signoff` (§18) | Tailings function |
 | RISK-25 | LOC overrun repeats FTX (2.7×) | High (sibling velocity reference class, §28.3; R7-C115) | §28.4 protocol from commit 1 | Owner |
 | RISK-26 | Host-state action at a demonstration site: suspension, provisional administration, retroactive code, tenure lapse (Loulo-Gounkoto 2025: suspended, loss of control, no Q1–Q3 2025 data, then settlement and retroactive 2023-Code royalties for 2024–2025; E248, E412; Kibali permits 2029/2030 vs LOM 2043, with renewal under Art. 80 requiring +5% State equity; E245, E444) | High | Site-quarter state `NOT_PUBLISHED`; `CountryRegime` as-of dating (§23.4); G-HALL-6 tenure flags; GATE-BULL-01 excludes NOT_PUBLISHED by name; no silent fill | Owner + counsel |
-| RISK-27 | Water-use conflict in a hyper-arid, state-equity project: community and institutional groundwater concerns, no drawdown monitoring (E330–E333) | High | G-FREE-7/9; groundwater DATA-GATE (§18.4); evidence state, never "no impact" | Head of Environment |
-| RISK-28 | Security forces (Frontier Corps, Levies) with no Voluntary Principles reference in the ESIA or SEP (E342) | Medium | VPSHR commitment set as registry data; 24 h human-rights grievance escalation tracked as `OB-COMMIT` | Counsel + Sustainability |
+| RISK-27 | Water-use conflict in a hyper-arid, state-equity project: community and institutional groundwater concerns; the ESIA's monitoring table records water use and source (E330–E333) | High | G-FREE-7/9; groundwater DATA-GATE (§18.4); evidence state, never "no impact" | Head of Environment |
+| RISK-28 | Security provided by state forces (Frontier Corps, Levies) at a state-equity project (E342) | Medium | VPSHR commitment set as registry data; 24 h human-rights grievance escalation tracked as `OB-COMMIT` | Counsel + Sustainability |
 | RISK-29 | Unapproved revisions ("Rev A … NOT approved"; E304) ingested as evidence | Medium | `DocApproval` on every `DocLocator`; draft-sourced cells cap at `conflicted`/`stale` | Owner |
 | RISK-30 | Demo text misstates a site fact taken from a superseded filing (e.g. Goldstrike's thiosulphate circuit, converted to CIL in 2023; E174) | Medium | Every demo claim cites a dated source; sources older than the latest filing are flagged | Owner |
 | RISK-31 | Issuer data terms: Barrick's site terms allow copying only for non-commercial, personal or educational use of unmodified material; committed derived workbooks or values may need approval (R7-C052, R7-C158, R7-C160) | Medium | Locators, URLs, sha256 and computed results only until decided; synthetic or fetch-at-test fixtures; seek IR's written approval | Owner + counsel, before the next code push |
@@ -7495,7 +7494,7 @@ records that the default, not a decision, is governing. Nothing is decided by si
 | OPEN-R7-1 | Issuer data terms: may derived Barrick workbook values be committed to the public repository? (RISK-31) The 2026-10-29 push (`748da79`) carried MOR_CASE rows that quote cell values (E820–E823). Files citing workbook cells, to read for quoted values in one pass: W1, C1, C3, C4, W4, MOR_CASE, AUDIT_4, the R7 MOR run, `repro/barrick/README.md`, `scripts/oracle/share_census.py`, `forecasts/fy2026/rules.toml` (locators only) and fmine-public's sources and tests. Undecided; the default binds new commits | Owner + counsel | Before the next push that adds derived values | Locators, URLs, sha256 and computed results only |
 | OPEN-R7-2 | Who are the two M0 reviewers, what is their relation to Barrick, and are they available by January 2027? (R7-C045) | Owner | M0 week 4 | One independent ex-major reviewer; any issuer reviewer sees forecasts only after release |
 | OPEN-R7-3 | Is the owner a public-lane author during the FY2026 forecast window, given §31.1's private-access rule? (R7-C161) | Owner | Before the forecast hash | The owner authors only if they hold no private access; otherwise a walled author set |
-| OPEN-R7-4 | Should the public plan keep naming the Barrick Chair's Avathon role (§31, §35 F1, §34.4)? (R7-C030, R7-C032) The passages were pushed unchanged on 2026-10-29; undecided | Owner | Before the next push | Keep the factual, sourced statement; drop characterisations |
+| OPEN-R7-4 | How should the public plan treat statements about Barrick's people, board and partners (§32.3, §34.4, §35 F1)? (R7-C030, R7-C032) **Resolved 2026-10-30:** the owner decided to keep factual, sourced statements, drop characterisations and anything the design does not need, and redact the same way going forward; the passages were revised on that basis | Owner | Done | — |
 | OPEN-R7-5 | What happens to the unpushed M0 commit `68e7091` (amend, follow with a fix commit, or push as is)? (Appendix K.2) **Resolved 2026-10-29:** pushed at the owner's instruction and followed by correcting commits (`543df53` … `748da79`); public history is not rewritten. K.2 step 2 was not complete at the push and is tracked as BD-323 | Owner | Done | — |
 | OPEN-B4-08 / OPEN-HEAD-2 | Will Avathon consume anchor-pinned feeds and write back evidence only? | Sponsor | M2 | Export projections offered; no write-back channel |
 | OPEN-B4-10 | Reference site node hardware | Sponsor IT | M1 | Targets stay TARGETs |
@@ -7559,8 +7558,8 @@ Brenner pass B5 tested seven first wedges. The verdicts:
 **Why H-f.**
 - It is the only option that is useful with **no data**, through the public lane and synthetic truth, and decisive
   with **some data**, at one site (GB-38).
-- It targets measurement integrity behind metrics that carry a large share of executive pay: gold AISC 18.75%,
-  copper AISC 6.25%, GEO 25% and reserve replacement 15% (E025).
+- It targets measurement integrity behind the metrics the company publishes and steers by: gold and copper AISC,
+  GEO and reserve replacement (E025).
 - **Honest wording:** software does not *move* AISC. It moves the accuracy, timeliness and attribution of AISC,
   which management then acts on.
 
@@ -7593,12 +7592,13 @@ Brenner pass B5 tested seven first wedges. The verdicts:
 - **Flip.**
   - At p = 0, H-f loses to H-a only if V_f(S2) < 2.5, i.e. the public lane impresses no one. Then weight shifts
     to H-a plus PQ-7 for the parent.
-  - If the sponsor's stated pain is exploration or capital allocation, start M4 at month 3, in parallel.
-  - If Barrick shows that reconciliation is solved, H-f loses its finding mechanism. Pivot to H-e plus PQ-7.
+  - If the sponsor's stated priority is exploration or capital allocation, start M4 at month 3, in parallel.
+  - If Barrick's existing reconciliation already attributes its variances, H-f loses its finding mechanism. Pivot
+    to H-e plus PQ-7.
 
 ### 37.3 The ladder (about 36 months from November 2026)
 
-Each milestone has an artifact, acceptance criteria (TARGETs), a kill gate with a fallback, and the pay metrics
+Each milestone has an artifact, acceptance criteria (TARGETs), a kill gate with a fallback, and the published metrics
 whose decision inputs it touches.
 
 **Clocks (DESIGN).** M0 keeps absolute dates, because its deadlines are Barrick's release dates. Steps that need
@@ -7687,7 +7687,7 @@ keeps month 0 = November 2026.
     the metal balance closes within stated uncertainty; non-identifiable pairs return FMINE-REF-104;
   - GATE-STORE-01, GATE-SYNC-01, GATE-DET-01, GATE-ROBOT-01, GATE-WALL-01 pass.
 - *Kill:* coverage outside 80–97% after one fix cycle, or identifiability not characterised. **Fallback:** no site
-  pitch on reconciliation; lead with the metric engine and H-a/PQ-7.
+  proposal on reconciliation; lead with the metric engine and H-a/PQ-7.
 
 **M2 — Site Assurance Pilot in shadow mode (engagement months 6–12; Jul–Dec 2027 on a January 2027 start). The
 12-month demonstrator.**
@@ -7698,15 +7698,15 @@ keeps month 0 = November 2026.
   the North American Barrick perimeter where Avathon is deploying (E563, E590, E591). The finding mechanism is
   **recovery-led** (W4 §5.2):
   - Headline recovery went from 89.4–89.8% (2023–24) to 91–92% (2025–H1 2026), mostly because head grade rose to
-    0.57–0.67% Cu. Against the 2013–22 grade–recovery relation, every 2025–26 quarter is still 1.7–2.7 points
-    short: 2.4–3.4% of output (3.4–4.0% in 2023–24), roughly $30–57M/yr at $4.00–5.50/lb (INFERENCE, E566, E567).
+    0.57–0.67% Cu. Every 2025–26 quarter sits 1.7–2.7 points below the site's own 2013–22 grade–recovery
+    relation: 2.4–3.4% of output (3.4–4.0% in 2023–24), roughly $30–57M/yr at $4.00–5.50/lb (INFERENCE, E566, E567).
     Metal balance reproduces the printed recovery within ±1.5 points, so the gap is not a print artefact (E127).
-  - Barrick calls 2021–25 recovery (91.15%, fresh plus transitional ore) "reasonable" and attributes changes to
-    grade and the mine plan; no mechanism is published (E569, E573). The pre-registered deliverable is therefore
-    an **attribution** of the grade-normalised gap among measurement (head and tail sampling, assay), ore type
-    (fresh vs transitional) and operations (throughput and grind, downtime, power), not "recovery is low". Grind
-    (P80) is split from throughput only where sizing data exist (LIMS or historian, GATE-DATA-04); otherwise the two
-    are reported as one cause.
+  - Barrick describes 2021–25 recovery (91.15%, fresh plus transitional ore) as reasonable and attributes changes
+    to grade and the mine plan; no breakdown by mechanism is published (E569, E573). The pre-registered
+    deliverable is therefore an **attribution** of the grade-normalised gap among measurement (head and tail
+    sampling, assay), ore type (fresh vs transitional) and operations (throughput and grind, downtime, power), not
+    "recovery is low". Grind (P80) is split from throughput only where sizing data exist (LIMS or historian,
+    GATE-DATA-04); otherwise the two are reported as one cause.
   - The same recovery card is scored against the feasibility study's 92.7% fresh-ore recovery for the 52 Mtpa
     parallel plant, which uses a similar flowsheet. One point at 240 ktpa ≈ 2.6 kt Cu/yr (E570–E572).
   - The site reports its grade reconciliation as confirming the model (E130). A grade null is the expected result
@@ -7778,7 +7778,8 @@ keeps month 0 = November 2026.
 - *Kill (month 12):*
   - No data by month 7 → **M2′**: parent-level metric and reserve assurance on public data, the Nevada
     exploration hindcast and PQ-7 deal cards.
-  - Data, but zero attested findings → report the null honestly and offer **one** second site with known pain.
+  - Data, but zero attested findings → report the null honestly and offer **one** second site with a
+    recorded variance.
   - A second null → H-f is falsified as the wedge; pivot to H-e plus PQ-7.
 
 **Program gate (month 12; §34.5).**
@@ -7803,7 +7804,7 @@ keeps month 0 = November 2026.
   - a Nevada public-district model: the thinned marked point process with effort (§11), plus a USGS three-part
     parity mode with MapMark4 as lab oracle;
   - a temporal hindcast;
-  - one Barrick region on internal data, outside NA if the Avathon conflict persists;
+  - one Barrick region on internal data, outside North America unless OPEN-B4-08 is settled (§32.3);
   - junior earn-in, stake and option DecisionCards with distance-to-Tier-One (§23.8).
 - *Acceptance:* three-part parity on a published tract (GATE-LODE-P2); hindcast PR-AUC vs baseline with CIs and
   the count of positives; coverage reported; at least one live deal evaluated **before** the decision, recorded in
@@ -8548,15 +8549,15 @@ into queries; (20) thinned Cox-process prospectivity with effort accounting; (21
    in public.
 2. **Reconciliation as joint state estimation (§20; BD-146–BD-162).** Mine-to-mill reconciliation is solved as a
    weighted, bilinear estimation over the material-flow graph, with identifiability analysis and gross-error tests,
-   instead of ratio factors. *Why:* the corpus shows published reconciliation tables with plugs, compensating
-   errors inside one factor and irreproducible cells (Appendix I); a joint estimate says which sensor or model is
-   biased and how sure that is (GB-24, GB-25). *Confidence:* high; the mathematics is standard (P754 data
-   reconciliation) and the known-answer harness is synthetic (GATE-TOUCH-01/02).
+   instead of ratio factors. *Why:* the corpus shows published reconciliation tables with balancing rows,
+   compensating errors inside one factor and cells that do not reproduce (Appendix I); a joint estimate says which
+   sensor or model is biased and how sure that is (GB-24, GB-25). *Confidence:* high; the mathematics is standard
+   (P754 data reconciliation) and the known-answer harness is synthetic (GATE-TOUCH-01/02).
 3. **The public-lane mirror (§37 M0; BD-055–BD-076, BD-271).** Reproduce Barrick's own per-site disclosures from
    its own files, cite every cell, register every discrepancy and freeze forecasts. *Why:* it needs no data
    agreement, no site access and no integration, and it shows management something they recognize on day 90. The
-   corpus pass already found real identity failures in public workbooks (Appendix I). *Confidence:* high for
-   reproduction; medium for "nothing new" risk, which is the M0 kill criterion.
+   corpus pass already found unexplained differences between cited cells in public workbooks (Appendix I).
+   *Confidence:* high for reproduction; medium for "nothing new" risk, which is the M0 kill criterion.
 4. **DecisionCards with flip margins (§22; BD-225–BD-227).** Every executive output is a card: the recommendation,
    its distribution, evidence classes, the inputs whose movement would flip it and by how much, and the VOI of
    resolving them. *Why:* it replaces dashboards (pre-mortem F6) with decisions, and it makes uncertainty
@@ -9009,9 +9010,9 @@ Evidence ids E101–E399 are rows in `planning/corpus/C1…C6`, indexed in `plan
    AISC/TCC/grade/recovery exists only in the quarterly Mine Stats workbooks. The corpus held two (Q1 and Q2 2026);
    the research pass added the other eight from Q1 2024 (W1; E451). No per-site GEO field exists in any of them
    (FACT, E148, E499). Q3 2026 (9 Nov 2026) is the only open data gate (§37.3).
-2. **Barrick's own numbers fail their own identities about 5% of the time** (84/89 under strict rounding;
-   E113–E115). GATE-BULL-01 therefore scores identities against an explicit denominator and identity rule, in
-   the three parts of §21.6 that replaced the single 95% bar, and NOT_PUBLISHED quarters are excluded by name.
+2. **Strict-rounding identity checks hold for 84 of 89 published cells, about 95%** (E113–E115). GATE-BULL-01
+   therefore scores identities against an explicit denominator and identity rule, in the three parts of §21.6 that
+   replaced the single 95% bar, and NOT_PUBLISHED quarters are excluded by name.
 3. **Company AISC is not the sold-weighted sum of its sites.** Total Gold sits $47.6–55.7/oz above its regions in
    the Q1, Q2 and H1 blocks of 2025 and 2026 (+$23.57 to +$88.66 across sixteen quarters; R7-C125) and
    NGM $8.7–19.4/oz above its mines (INFERENCE, E111, E112). These become named layers, or G-BULL-3 refuses.
@@ -9023,8 +9024,8 @@ Evidence ids E101–E399 are rows in `planning/corpus/C1…C6`, indexed in `plan
    E355); the 0.1 source is not in the corpus (FACT[U]). The flip now needs correlation and cut-off tonnage, not
    slope alone (E357, E358).
 7. **"F1" and "MCF" mean different things at different Barrick sites** (E203–E205). Touchstone gets a
-   site-specific definitions registry, and published reconciliation tables contain plugs, grades on residual
-   rows and irreproducible cells (E206–E209).
+   site-specific definitions registry, and published reconciliation tables contain balancing rows, grades on
+   residual rows and cells that do not reproduce (E206–E209).
 8. **Site acceptance criteria are deterministic FoS, not PoF** (Kibali; E214, E215). GB-39 is reframed: policy
    carries its basis, and PoF is evidence beside an FoS-only criterion.
 9. **Heap inventory is booked on a recoverable basis and labelled "contained"** (Veladero; E274–E276). A
@@ -9034,9 +9035,10 @@ Evidence ids E101–E399 are rows in `planning/corpus/C1…C6`, indexed in `plan
 11. **Host-state action is not hypothetical.** Loulo-Gounkoto was suspended and lost to provisional administration
     in 2025, with no published operating data for three quarters (FACT, E248). RISK-26 and the NOT_PUBLISHED state
     follow.
-12. **Environmental reporting fails basic reconciliation.** Nitrate reported "within limits" is over the limit on a
-    consistent chemical basis, and a certificate sample with two exceedances was omitted (E322–E326). A chemical-basis
-    axis and certificate reconciliation follow.
+12. **Environmental tables need a declared chemical basis and a certificate check.** In the draft ESIA, a nitrate
+    value reported within limits is above the limit on a consistent chemical basis, and one certificate sample
+    with two exceedances has no reported row (E322–E326). A chemical-basis axis and certificate reconciliation
+    follow.
 
 ### I.3 Disposition of the 84 proposed plan impacts
 
@@ -9091,24 +9093,24 @@ Every edit uses existing headings; new material is a bold sub-block, a table row
 | Carlin Q1 2026 100% value breaks two identities | E113 | Filed; 281 satisfies both |
 | Turquoise Ridge H1 2026 ≠ Q1 + Q2 | E114 | Filed |
 | Jabal Sayid identity breaks | E115 | Filed |
-| Hemlo H1 2026 CoS copied from Pueblo Viejo | E116 | Filed as a suspected copy |
-| Total Copper recovery 94% unreproducible: constant 0.94 in all 20 quarterly cells since 2024Q1, including 2024Q2 when Lumwana was 85% and Jabal Sayid 93% | E117, E475 | Filed; never scored |
+| Hemlo H1 2026 CoS equal to Pueblo Viejo's cell | E116 | Filed as a possible duplicate |
+| Total Copper recovery 94% not reproducible from site cells: constant 0.94 in all 20 quarterly cells since 2024Q1, including 2024Q2 when Lumwana was 85% and Jabal Sayid 93% | E117, E475 | Filed; never scored |
 | Loulo-Gounkoto Q1 2025 cells vs "no data" footnote; the first-publication footnote withheld only per-ounce data | E122, E477, E478 | Filed; NOT_PUBLISHED wins for scoring |
 | Porgera labelled 47.5% in the Q2/Q3 2024 summaries, values at 24.5% | E468, E469 | Filed; ownership from the Minestats label |
 | Q3 2025 file dates the Loulo-Gounkoto loss of control 16 Sep, every other vintage 16 Jun | E476 | Filed; 16 Jun preferred |
 | Pueblo Viejo 2024Q3 processed 1,605 kt breaks 9M additivity (implied 1,475) | E470 | Filed |
 | Carlin 2024Q2 100% value 327 fails T1 and H1 additivity (329 fits) | E471 | Filed |
-| Total Gold 2024Q1 AISC silently restated 1,479 → 1,474 | E474 | Filed; both vintages kept |
+| Total Gold 2024Q1 AISC restated 1,479 → 1,474 without a footnote | E474 | Filed; both vintages kept |
 | Loulo-Gounkoto FY2025 unit costs ≠ Q4 although FY sold = Q4 sold | E473 | Filed |
 | Hemlo FY2023 capex exceeds the sum of its quarters | E472 | Filed |
 | Copper roll-forward 2025 sign (gap 263 Mlb) | E144 | GATE-HALL-01 fixture |
 | GEO 2024 row priced at the 2025 deck | E147 | GATE-HALL-01 fixture |
 | Lumwana reserve endnote (7.95 vs 8.3 Mt) | E133 | Filed; deck endnotes never source Reserve Claims |
-| Carlin attributable table errors | E153, E193 | Render test |
+| Carlin attributable table differences | E153, E193 | Render test |
 | Kibali 2024 MCF row; Tables 6-2 vs 15-27 | E206, E241 | G-TOUCH-6, GATE-TOUCH-06 |
 | Loulo RCF plant ounces | E209 | GATE-TOUCH-06 |
 | Kibali umpire count conflict | E226 | Filed |
-| Kibali COG royalty at the wrong deck | E244 | Flagged by the regime importer |
+| Kibali COG royalty at a different deck from the stated price | E244 | Flagged by the regime importer |
 | Loulo plant expansion: text 6.2 Mtpa vs table 4.5 Mt/yr | C3 §3.14 | Filed |
 | Porgera summary price "$575" vs $1,200 evaluation | C4 P11 | Filed |
 | Porgera underground ore +36% (table) vs 24% (text) | E298 | Filed |
@@ -9124,7 +9126,7 @@ Lumwana stays the M2 primary on a grade-adjusted recovery gap (W4); Porgera, Cob
 rest on primary sources (W2). Still open:
 
 1. How does the scorecard's $1,423/oz gold AISC bridge to the $1,637/oz reported (OPEN-BULL-1)? The Circular
-   promises to disclose adjustments but shows none for AISC (E608).
+   does not itemise the AISC adjustment (E608).
 2. Is the Reko Diq "cannot disclose" state a design-stage state (OPEN-FREE-4)?
 3. Residency (OPEN-B4-01, narrowed): the eight counsel questions of W3 §7, led by the Reko Diq mineral agreement
    against BMR 2002 r.56/r.71, Zambia DPA s.70(3) against s.71(4)(b), and the scope of Tanzania's Mining Act
@@ -9196,7 +9198,7 @@ read from the xlsx cells.
 - The four textbooks are cited by page and never shipped. One copy carries a third-party watermark; another is a
   commercial scan.
 - The Reko Diq ESIA is an unapproved Rev A marked confidential. Cells sourced from it cap at `conflicted` or
-  `stale` (RISK-29). Its appendices contain personal mobile numbers and named individuals. None of that appears in
+  `stale` (RISK-29). Its appendices include individuals' names and contact details. None of that appears in
   the plan, the case file or this appendix, and the importers redact such fields on ingest (§31.2).
 
 ## Appendix J · The public-source research pass (W1–W5)
@@ -9212,7 +9214,7 @@ bump) were checked directly. No agent edited the plan; the fold-in was done afte
 
 | Pass | Question | Result | Where folded |
 |---|---|---|---|
-| W1 | The missing Mine Stats workbooks | All ten quarters Q1 2024–Q2 2026 retrieved with MD&As and AISC workbooks; Q3 2026 releases 9 Nov 2026. Structural identities hold everywhere; 17 new discrepancy candidates; Copper-Total recovery is a constant 94%; Porgera mislabelled 47.5%; the corporate AISC layer is positive in all 16 periods | §21.6, §37.3, I.2, I.5, I.6, I.9 |
+| W1 | The missing Mine Stats workbooks | All ten quarters Q1 2024–Q2 2026 retrieved with MD&As and AISC workbooks; Q3 2026 releases 9 Nov 2026. Structural identities hold everywhere; 17 new discrepancy candidates; Copper-Total recovery is a constant 94%; a Porgera label of 47.5% against values at 24.5%; the corporate AISC layer is positive in all 16 periods | §21.6, §37.3, I.2, I.5, I.6, I.9 |
 | W2 | Porgera 2020, Cobre Panamá 2023, Mali 2023 Code | All primary-sourced. Mali's code is Loi n°2023-040, applied retroactively to Loulo-Gounkoto ($200M, Apr 2026; royalty about 18%); Porgera's 2017 extension application existed; DRC Art. 80 renewal costs +5% State equity | §10.1, §21, §23.4, RISK-26 |
 | W3 | Data-residency statutes (OPEN-B4-01) | 72 statute-cited rows for 12 countries; hard localisation in Zambia, Tanzania, DRC and Mali for personal data; Reko Diq governed by its agreement and BMR 2002 | §26.14, §31.2, RISK-21, BD-292 |
 | W4 | M2 site and P(site data by month 7) | Keep Lumwana (only wholly owned operating mine; grade-adjusted recovery gap 1.7–2.7 points, $30–57M/yr); p = 0.3, so M2′ is the modal path | §34.4, §37.2, §37.3 |
@@ -9336,7 +9338,7 @@ E838). E823's twelve refusals are all (i). The LibreOffice cross-check of the di
 | 18 | §34.2 | Admission records need a tracked `Cargo.lock` with the foundation; INT-AS-001 split into 001a (WP-00) and 001b (WP-05, M1) | R7-C017, R7-C083, R7-C101, R7-C153 |
 | 19 | §34.4 | GATE-DATA-01 freezes the public lane; GATE-DATA-03 has recovery-led and grade-led thresholds; P(M2′) ≈ 0.7 with Lumwana alone, about 0.5 only if the alternates were independent | R7-C084, R7-C102, R7-C126, R7-C137 |
 | 20 | §35.1 F7, §35.2 | F7's 4-of-8 miss is strong evidence (P = 0.005); RISK-31 issuer data terms, RISK-32 synthetic figures reaching an issuer, RISK-33 overstated process records | R7-C118, R7-C160 |
-| 21 | §36.2 | OPEN-HALL-4 moved before GATE-DATA-01; OPEN-R7-1…5 added (data terms, reviewers, the owner's lane status, the Chair passages, the fate of `68e7091`) | R7-C030, R7-C032, R7-C045, R7-C138, R7-C161 |
+| 21 | §36.2 | OPEN-HALL-4 moved before GATE-DATA-01; OPEN-R7-1…5 added (data terms, reviewers, the owner's lane status, the board and partner passages, the fate of `68e7091`) | R7-C030, R7-C032, R7-C045, R7-C138, R7-C161 |
 | 22 | §37.3 M0 | Blind-test timing (push before 06:00 ET on 9 Nov 2026, else Q4 2026 at M1); named reviewer pool and disclosure sequencing (40-F filer; NP 51-201 and provincial statutes, not Reg FD); crates include BD-090 and BD-142; dependency calendar by role | R7-C025, R7-C041, R7-C086, R7-C089, R7-C090, R7-C104, R7-C116, R7-C132–R7-C135 |
 | 23 | §37.3 M2 | Recovery-led GATE-DATA-03 route; a material finding routed to Barrick's disclosure QP and committee the day it is attested; waterfall bars classed controllable, price-linked or structural | R7-C084, R7-C102, R7-C138, R7-C141 |
 | 24 | §39 | Bead rule: own-evidence close reasons, no closing over blockers, an xtask check; BD-123 accepts the FD-FMD-00 fallback | R7-C039, R7-C085, R7-C103 |

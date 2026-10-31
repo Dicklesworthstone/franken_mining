@@ -37,12 +37,12 @@ The strongest product is therefore a longitudinal commitment record, not a site 
 guidance, a revision, an outcome restatement and a changed reporting perimeter must remain different events.
 A CFO or IR reviewer should be able to answer: “Did the result meet the original target, the last target, both
 or neither, and what exactly changed between them?” A regulator or JV reviewer can examine that same public
-record without accepting FrankenMining's model of management competence.
+record without accepting any FrankenMining model of performance.
 
 This is particularly well suited to the project's wedge. Reproducing an actual is recognizable but can elicit
 “we already know that.” Reproducing the full sequence of statements tests organizational memory and makes a
-specific future review easier. A clean history is a useful result too: the product need not discover an
-issuer mistake to save the work of assembling an accurate answer (GB-38, §37.1–§37.3).
+specific future review easier. A clean history is a useful result too: the product need not find a
+discrepancy to save the work of assembling an accurate answer (GB-38, §37.1–§37.3).
 
 ### The strongest implementation path
 
@@ -118,7 +118,7 @@ repair the missing definition.
 **Objection 1: “Guidance is a business target, not a probability forecast.”** That is a reason to model its
 meaning explicitly. The first product measures attainment of a published commitment and describes its
 revisions; it does not call the range miscalibrated without a warranted probabilistic interpretation.
-This preserves useful accountability while avoiding an unfair statistical accusation.
+This keeps the record useful while avoiding an unwarranted statistical judgement.
 
 **Objection 2: “Three years are too few, and finance already has a spreadsheet.”** Three years may be far too
 few for persistent-site rankings or finite distribution-free calibration guarantees. They can still support
@@ -153,7 +153,7 @@ the result under an expressly chosen comparison basis and the portion that still
 It does not require agreement that every remaining dollar was controllable. That shared calculation is
 more useful than separate departmental narratives built from subtly different bases.
 
-The pre-release side has a second strength: a declared aggregate identity can expose a hidden corporate/JV
+The pre-release side has a second strength: a declared aggregate identity can surface an unstated corporate/JV
 layer, inconsistent denominator or incompatible draft inputs before publication. That is worth doing even
 when no probability law for hitting guidance is available. The product can therefore earn a place as a
 release-review calculation before it matures into a probabilistic guidance model.
@@ -225,18 +225,18 @@ effect cannot first be removed mechanically and then credited again inside the s
 also make the next guidance cycle more explicit about which sensitivity is disclosed, which assumptions are
 fixed and what cannot be separated from public data.
 
-Keeping the unconditional and conditioned views together can improve the working relationship between the
-site and finance. Investors' experienced result remains visible, while an operational review can use a
+Keeping the unconditional and conditioned views together gives the site and finance a common
+basis. Investors' experienced result remains visible, while an operational review can use a
 declared comparison basis without rewriting history. Eventually the same bridge can make a larger fiscal
 scenario model easier to inspect, because the marginal adjustment and its validity domain already exist as
 a small independently tested calculation rather than a hidden model coefficient.
 
 ### Pre-emptive defense against the two strongest objections
 
-**Objection 1: “This is an excuse engine that will normalize every miss away.”** The original public outcome
+**Objection 1: “This will normalize every miss away.”** The original public outcome
 and original target stay first, and every adjustment is separately sourced and named. The residual remains
 unidentified when the evidence does not support attribution. An adjustment can make a miss larger as readily
-as smaller, and a reviewer can reproduce both views without accepting the management narrative.
+as smaller, and a reviewer can reproduce both views without relying on any single narrative.
 
 **Objection 2: “The required data and joint probabilities are missing.”** Then a smaller bridge is the honest
 product. A verified price sensitivity and one matched actual can answer a bounded comparison question;
@@ -254,5 +254,5 @@ identification remain unsound; the steelman repairs their role rather than defen
 **DESIGN.** Keep the common-basis release/review workflow and gate each additional inference. My revised
 score is **610/1000**, up from 430 because the partial, explicitly conditioned calculation has more independent
 user value than I credited. It remains below the Public Track Record: its meaningful public source gate is
-tighter and its output is easier to mistake for causal exoneration. If it cannot secure one independently
+tighter and its output is easier to mistake for causal attribution. If it cannot secure one independently
 reproducible public case or a later authorized plan baseline, stop expansion rather than fill the missing bars.

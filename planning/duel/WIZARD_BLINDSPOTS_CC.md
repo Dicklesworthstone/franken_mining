@@ -358,7 +358,7 @@ counsel, and the legal judgment stays human.
 
 | Candidate | Where it is already covered |
 |---|---|
-| Pay-scorecard replay for the compensation committee | Plan §3 (the committee's question); OPEN-BULL-1 (Appendix I.7, E608). My AGY-1 steelman supplies the method (`WIZARD_STEELMAN_CC.md` B.1) |
+| Scorecard replay for the compensation committee | Plan §3 (the committee's question); OPEN-BULL-1 (Appendix I.7, E608). My AGY-1 steelman supplies the method (`WIZARD_STEELMAN_CC.md` B.1) |
 | Auditor reliance and replay | Plan §3 (audit committee and external auditor); NS-14 auditor replay (M3) |
 | Reference-class capex and schedule forecasts | Plan §23; NS-06 |
 | Hygiene of the issuer's published workbooks | My CC-03 lists broken-reference chains, hidden and external-link dependencies and stale caches as findings; the reader already quarantines hidden sheets (`crates/fmine-io/src/xlsx.rs:60`, `:166`) |
@@ -372,7 +372,7 @@ counsel, and the legal judgment stays human.
 These counts come from the 18 distinct public Barrick workbooks.
 
 - **Hidden sheets.**
-  - Every AISC workbook checked ships hidden sheets: one each in Q4 2024 and Q4 2025, two each in Q1 and Q2 2026.
+  - Every AISC workbook checked contains hidden sheets: one each in Q4 2024 and Q4 2025, two each in Q1 and Q2 2026.
   - Non-trivial values with no exact match on any visible sheet of the same file:
     - Q4 2024: 103;
     - Q4 2025: 72;

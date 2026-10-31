@@ -903,7 +903,7 @@ Kill if P(≥1) < p_drop and there is no A3 intercept.
 | OPEN-8 | Whether CPs/QPs and the ITRB accept quantitative evidence beside their categories. |
 | OPEN-9 | IAS 1.125 / IAS 37 projection policies with controllers (FACT[U]). |
 | OPEN-10 | Whether the franken-evidence schema should gain an optional claim-reference field upstream, or FM keeps projecting. The default is to project (consume, never fork, E015). |
-| OPEN-11 | Elicitation programme staffing (IDEA); scoring experts politically. |
+| OPEN-11 | Elicitation programme staffing (IDEA); how to score named experts with care. |
 | OPEN-12 | frankensim convergence (E001). The crates FM needs (fs-evidence, fs-eproc, fs-voi, fs-robust, fs-sparse) are all on the E003 liftable list; fs-oed-e2e is not, and is not needed. |
 
 **Checked nulls** (deliberately not novel): the thinned point process (R7 §1.7), the POMDP (Mern/Caers), MapMark parity, the claim object (R7 §9.5), and the calibration ledger (R7 §9.5). This pass adds the decisions, guards, typed modes, fallbacks and numbers that make them buildable and honest.

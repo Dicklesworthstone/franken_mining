@@ -270,7 +270,7 @@ excluded for every figure in the E676 payload. On real files the command cannot 
 - **Alternative check.** A Circular table with these exact inputs? Not in the corpus notes.
   NONE_IDENTIFIED_AFTER_BOUNDED_CHECK.
 - **Reversal:** a cited source for 7.429 and 12.277 on a 2024 basis.
-- **Materiality:** high. It is a named pay metric (E603 is from the 2026 Circular).
+- **Materiality:** high. It is a published scorecard metric (E603 is from the 2026 Circular).
 - **Uncertainty:** low.
 
 ### P01-G11-M0-REALITY-C7 — GATE-BULL-01, criterion by criterion: not met; one criterion holds only trivially

@@ -318,19 +318,14 @@ exactly; the obstacles are the hard-coded sheet name, coordinates and file list 
 
 ## Tail Hypotheses Worth Bounded Investigation
 
-### H001 — The public Chair/Avathon passages could weigh on the relationship the owner relies on (C032)
+### H001 — Withdrawn (C032)
 
-**Status:** HYPOTHESIS — not part of the main conclusion. **Verified dependencies:** C030 (the plan names the link
-at lines 6923, 7170, 7197), C053 (the repository is public and forked). **Asymmetric value:** avoided damage to the
-access the whole program depends on, at the cost of rewording three lines. **Disconfirmers:** the owner judges the
-passages harmless, or the intended readers already know and do not mind. **Next test:** owner review of the three
-passages. **Promotion threshold:** the owner judges the wording a risk. **Retirement threshold:** the owner keeps
-it after review.
+**Status:** withdrawn as not needed for the design, by owner decision on 2026-10-30.
 
 ## Evidence and Provenance
 
-- **Canonical ledger:** `planning/mor/r7/MOR_CLAIMS.jsonl` (171 claims: 102 VERIFIED, 59 PARTIALLY_SUPPORTED,
-  1 HYPOTHESIS, 2 REJECTED, 1 SUPERSEDED, 6 NON_MATERIAL).
+- **Canonical ledger:** `planning/mor/r7/MOR_CLAIMS.jsonl` (171 claims: 101 VERIFIED, 59 PARTIALLY_SUPPORTED,
+  2 REJECTED, 1 SUPERSEDED, 8 NON_MATERIAL).
 - **Raw proposals and audit records:** `planning/mor/r7/.mor/run-20261029T183653Z/` (`raw/P00`–`P05`, `audit/AUD01`
   –`AUD08`, `repro/`).
 - **Final snapshot:** `planning/mor/r7/.mor/run-20261029T183653Z/final/`.
@@ -343,7 +338,7 @@ it after review.
 
 - No counsel reviewed the disclosure items; C132–C137 state the regime, not legal advice.
 - The Q3 2026 workbook does not exist yet; the blind-layout question (C051) is open until 9 Nov 2026.
-- Barrick's view of the public plan and of the data terms is unknown (C032, C053, C158).
+- Barrick's view of the public plan and of the data terms is unknown (C053, C158).
 - The analysis does not say the plan's architecture is right for Barrick; it audits consistency, feasibility and
   the truth of what is claimed.
 - Model correlation: generation and audit used Claude agents; independence comes from separate contexts and from
@@ -382,9 +377,9 @@ it after review.
 | C027 | value | PARTIALLY_SUPPORTED | E754, E587, E588, E755 | Analytic part (verified): a proper score such as CRPS or the interval score, reported without a pre-registered reference forecast, shows how one forec… |
 | C028 | observation | VERIFIED | E673, E675, E676, E682 | Plan line 14 (§0 document-control Status cell) reads 'PLAN. No FrankenMining code exists.' At HEAD 68e7091 the workspace has 16 members (15 fmine-* pr… |
 | C029 | observation | VERIFIED | E604, E146, E722 | Plan line 4484 gives '504% in gold-equivalent ounces (87 Moz ÷ 17.2 Moz)', but 87/17.2 = 5.0581, or 505.8%. 504% is Barrick's published figure (E604, … |
-| C030 | observation | VERIFIED | E756, E757 | The plan on origin/main (byte-identical to HEAD) states the Barrick Chair / Avathon lead-director link at line 6923 ('whose lead director is Barrick's… |
+| C030 | observation | NON_MATERIAL | E756, E757 | Withdrawn as not needed for the design, by owner decision on 2026-10-30. |
 | C031 | observation | VERIFIED | E758, E757, E755 | AGENTS.md lines 267-268 ('not affiliated with, endorsed by or built for Barrick, Newmont or any issuer named in its fixtures') and README.md lines 36-… |
-| C032 | causal | HYPOTHESIS | E756, E757, E673 | HYPOTHESIS: if Barrick-class readers see the public plan, its Chair/Avathon passages could weigh on the relationship the owner relies on. The premise … |
+| C032 | causal | NON_MATERIAL | E756, E757, E673 | Withdrawn as not needed for the design, by owner decision on 2026-10-30. |
 | C033 | observation | PARTIALLY_SUPPORTED | E759, E760, E724, E137 | NS-01 is tagged [M0/M2] and promises bars for grade, recovery, tonnes, price-linked royalty, fuel, FX and sustaining capex (plan lines 388-391), and §… |
 | C034 | recommendation | VERIFIED | E678, E702, E730, E727 | Before 68e7091 is pushed (remote main and master are still at 30ee8f5, `git ls-remote` 2026-10-29T20:10Z), remove both silent fallbacks (`BarrickCorpu… |
 | C035 | recommendation | VERIFIED | E679, E715, E720, E700 | Remove from the M0 payload, or move to a synthetic fixture lane and label `synthetic`, every literal attributed to Barrick in the M0 code: (a) the Nor… |
@@ -405,7 +400,7 @@ it after review.
 | C050 | question | VERIFIED | E713, E113, E114, E115 | The question is pivotal, and for the ten known workbooks its empirical part is now answered. 54–59% of numeric cells take part in at least one instanc… |
 | C051 | question | VERIFIED | E454, E455, E724 | Pivotal open question: will Barrick post the Q3 2026 Mine Stats workbook with the 9 Nov 2026 06:00 ET release, in a layout a label-anchored importer c… |
 | C052 | question | VERIFIED | E767, E768, E724, E700 | Question (pivotal): may derived Barrick workbook data (fixtures, reconstructed workbooks, extracted values) be committed to the public repository? Bar… |
-| C053 | question | VERIFIED | E673 | Question: will Barrick-class readers read the public repository (plan, code comments, beads)? Pivotal for the materiality of the Chair passage (C030/C… |
+| C053 | question | VERIFIED | E673 | Question: will Barrick-class readers read the public repository (plan, code comments, beads)? Pivotal for the materiality of pushing 68e7091 as it sta… |
 | C054 | observation | VERIFIED | E715, E717, E137 | The LMDI engine (crates/fmine-metrics/src/lmdi.rs lines 75-125) decomposes AISC = C/oz_sold with oz_sold = T·G·R·B·S using log-mean weights; C is reco… |
 | C055 | observation | VERIFIED | E769, E717, E711 | Card GB-26 (plan lines 4596–4618) recomputes. In the synthetic waterfall, AISC goes from 1,600 to 1,744.98 (+144.98) and L(1,744.98, 1,600) = 1,671.44… |
 | C056 | observation | VERIFIED | E769, E740 | Card GB-29 (plan lines 4770–4786) recomputes. P(test high) = 0.57; P(high / high) = 0.895 with EV 247.37; P(high / low) = 0.209 with EV −95.35. EV wit… |
@@ -495,7 +490,7 @@ it after review.
 | C140 | recommendation | PARTIALLY_SUPPORTED | E749, E605, E607, E804 | Add §3 rows: IR / disclosure committee - 'Which of our published figures does an outside system find inconsistent, with what citation?', answered by t… |
 | C141 | observation | PARTIALLY_SUPPORTED | E749 | The CFO's §3 question asks 'which parts are controllable' (line 311); 'controllab-' appears only there and at line 5039 (rTSR 'Not controllable'), and… |
 | C142 | deductive | PARTIALLY_SUPPORTED | E748, E755, E764, E551 | GATE-BULL-03 (line 4592) and §37.3's M2 artifact (line 7473) ask for a 'per-quarter AISC waterfall from tonnes, grade and recovery to unit cost, recon… |
-| C143 | deductive | PARTIALLY_SUPPORTED | E468, E469, E551, E552 | JV partners: no material reader gap in M0–M2. M0 uses public Barrick figures, and Appendix I.6 seeds the M0 discrepancy register with the Porgera 47.5… |
+| C143 | deductive | PARTIALLY_SUPPORTED | E468, E469, E551, E552 | JV partners: no material reader gap in M0–M2. M0 uses public Barrick figures, and Appendix I.6 seeds the M0 discrepancy register with the Porgera labe… |
 | C144 | deductive | VERIFIED | E514, E749 | Regulators: the plan addresses no M0–M2 output to a regulator. §3 (lines 306–324) has no regulator row; regulators appear only as offline verifiers (l… |
 | C145 | deductive | VERIFIED | E749, E719 | QPs in M0–M1: BD-274 published cut-off reproduction (line 7725) and GATE-HALL-01 (line 5405; WP-03, M0–M1, line 7570) consume published technical-repo… |
 | C146 | deductive | PARTIALLY_SUPPORTED | E740, E804 | Retrospective DecisionCards built only from public evidence touch no disclosure rule found. NP 51-201 governs an issuer's selective disclosure, and an… |

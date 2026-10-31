@@ -542,9 +542,9 @@ pub struct ScenarioIndex {          // one draw ω of the enterprise world
 
 | Metric (weight, R6 §1.5, §2.5) | Treatment | Why |
 |---|---|---|
-| AISC; Newmont CSC/GEO 35% | Soft constraint per site-year; shadow price published | Ratio metric. Gameable by high-grading, deferral or reclassification |
+| AISC; Newmont CSC/GEO 35% | Soft constraint per site-year; shadow price published | Ratio metric. It can improve through high-grading, deferral or reclassification without adding value |
 | ROCE (Barrick 15% LTI, 10–15% range; Newmont 30% PSU) | 3-year floor constraint; shadow price | Penalizes long-gestation growth (capital employed rises years before EBIT), a **structural bias against greenfield**. The shadow price makes it visible |
-| Reserve replacement (3-yr, 15% LTI) | Computed by `fm-metrics` under **one** definition; constraint only after the definition is reconciled (190% vs 504%, R6 §1.2) | Rewards booking ounces (M&A, a higher deck), so Goodhart pressure |
+| Reserve replacement (3-yr, 15% LTI) | Computed by `fm-metrics` under **one** definition; constraint only after the definition is reconciled (190% vs 504%, R6 §1.2) | Can rise through M&A or a higher price deck as well as through discovery |
 | GEO (25% API) | Soft floor | Volume can conflict with NPV |
 | rTSR vs GDX (35% Barrick; 60% Newmont) | **Excluded** from optimization; context only | Not controllable; market-relative |
 | FCF/share; dividend policy | Liquidity constraints, e.g. a minimum-cash floor (Newmont $5B, R6 §2.4) | Real harm when breached |
@@ -728,7 +728,7 @@ pub struct DecisionCard {                    // emitted via franken_decision Dec
 | Execution far below plan | M2 | Re-plan with an updated K; short-term MPC on available faces |
 | Capex blowout | M5 | Stage-gate hold; recompute the DecisionCard with posterior overrun |
 | Country shock | Regime state change | Recompute the programme; liquidity floor binds first |
-| Pay-metric gaming pressure | M8 | Board sees the KPI price; no auto-adjustment |
+| Pressure to plan to KPI targets | M8 | Board sees the KPI price; no auto-adjustment |
 | FA unavailable | Read failure | Plan-only metrics, watermarked |
 | Lab-oracle drift | Fixture hash mismatch | Fail CI; never regenerate from the candidate (E022) |
 
@@ -870,8 +870,8 @@ Kill gates and fallbacks are in §4.4.
 
 1. **The calibration gap swamps everything.** Mitigation: the K-CAL guard; publish deterministic plus reference-class widening.
 2. **BZ weakens with many side constraints.** Mitigation: `fm-lag` plus aggregation.
-3. **Pay-metric politics:** shadow prices that embarrass the scorecard (E025). Mitigation: show, never auto-tune; board-owned τ and KPI caps.
-4. **The Avathon incumbent at Barrick NA (E024).** Mitigation: position `fm-capital` and the certificates as the auditable kernel that agents can read (R6 §7.2a/c).
+3. **KPI trade-offs made visible:** published shadow prices may show tension between scorecard metrics and value (E025). Mitigation: show, never auto-tune; board-owned τ and KPI caps.
+4. **An incumbent AI platform at Barrick NA (E024).** Mitigation: position `fm-capital` and the certificates as the auditable kernel that agents can read (R6 §7.2a/c).
 5. **Data access for conversion and haircut priors.** Mitigation: elicited priors flagged `elicited`.
 6. **Scope creep into a general MILP.** Mitigation: the explicit non-goal plus the `UntrustedCandidate` escape hatch.
 

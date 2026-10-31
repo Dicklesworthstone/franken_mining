@@ -59,13 +59,13 @@
   - how often ranges contained the outcome, and which way they missed;
   - how much of each miss came from the metal price (royalties, step royalties, super-profit taxes) and how much
     from things management controls;
-  - which sites are persistently optimistic beyond the common year shock;
+  - which sites show a persistent bias beyond the common year shock;
   - what range would have achieved a stated coverage;
 - each quarter: the probability that each full-year outcome lands inside guidance, given year-to-date actuals.
 
-*Illustrative output, not a finding:* "FY2023–25 AISC: 17 of 39 site-years inside guidance, 29 above the
-midpoint. The ranges behave like about 45% intervals. To be an 80% range, centre them 4% higher and widen them
-2.1×. Price explains about a third of the bias."
+*Illustrative output on synthetic numbers, not a finding about any issuer:* "FY2023–25 AISC: 17 of 39
+site-years inside guidance, 29 above the midpoint. The ranges behave like about 45% intervals. To be an 80% range,
+centre them 4% higher and widen them 2.1×. Price explains about a third of the bias."
 
 ### What is new against the plan
 
@@ -182,7 +182,7 @@ TARGET size: 2.5–4k LOC across `fmine-public`, `fmine-calib` and `fmine-cli`, 
 |---|---|
 | Data gate in week 1: fewer than three resolved years × ten sites retrievable with citations | Fall back to single-site guidance cards (the W4 form) until history accumulates |
 | Guidance turns out to be well calibrated | The output is then a certified clean bill for IR, and the engine stays as the scorer for FrankenMining's own forecasts |
-| Management reads the scoring as an attack | Deliver privately to the sponsor first. Show the controllable score beside the unconditional one. FrankenMining publishes nothing about the issuer |
+| The scoring is misread as a judgement on the teams that set the ranges | Deliver privately to the sponsor first. Show the controllable score beside the unconditional one. FrankenMining publishes nothing about the issuer |
 | Common shocks dominate (effective n ≈ number of years) | Refuse site rankings with a typed refusal in the REF-104 pattern, and report only the year-shock finding |
 
 ### Why I am confident
@@ -289,7 +289,7 @@ It also gives BD-272, the GATE-BULL-01 scorer, precise semantics:
 |---|---|---|
 | E113 | A Carlin 100%-basis cell breaks two identities; one corrected value satisfies both | A size-1 minimum correction set, with that value as its implied value |
 | E114, E115 | Half-year and ownership identity breaks (Turquoise Ridge, Jabal Sayid) | Certified conflicts |
-| E116 | A divested site's cell copies another site's value | A conflict located on the copied cell |
+| E116 | A divested site's cell equals another site's value | A conflict located on that cell |
 | E144 | The sign of the 2025 copper roll-forward net change | A roll-forward closure conflict |
 | E147 | The GEO net change closes only at a deck other than the one its row states | Hidden-parameter discovery: the deck that closes it |
 | E463 | Copper rows labelled in pounds hold kilotonnes | Unit discovery |
@@ -300,8 +300,8 @@ It also gives BD-272, the GATE-BULL-01 scorer, precise semantics:
 ### Workflows
 
 - **Controller and IR pre-flight.** Run on draft workbooks before release; the issuer itself gains most. The
-  defects a pre-flight catches are already on record:
-  - the Q2 2026 workbook shipped with 1,092 `#REF!` cells (E466);
+  items a pre-flight would flag are already on record:
+  - the Q2 2026 workbook contains 1,092 `#REF!` cells (E466);
   - a value was restated without a footnote (E474);
   - two AISC workbooks carry hidden external-link sheets (AUDIT_4; Appendix H.5b).
 - **Auditor and audit committee.** Proofs, not opinions.
@@ -488,7 +488,7 @@ note or an agent's output, and gives every number in it one verdict:
 |---|---|
 | `verified` | Matches a Claim; the claim id and citation are attached |
 | `value_mismatch` | The value differs from the Claim |
-| `basis_mismatch` | Sold vs produced; attributable vs 100%; by- vs co-product; pay scorecard vs non-GAAP; gold ounces vs GEO |
+| `basis_mismatch` | Sold vs produced; attributable vs 100%; by- vs co-product; scorecard vs non-GAAP; gold ounces vs GEO |
 | `period_mismatch` | The period differs |
 | `rounding_beyond_tolerance` | Differs by more than its rounding allows |
 | `stale` | The Claim has been superseded (INV-013) |
@@ -536,7 +536,7 @@ call.
 
 Lint Barrick's MD&A and results-release text against its Mine Stats and AISC workbooks. The register already holds
 real basis collisions:
-- 2025 gold AISC: $1,423/oz on the pay scorecard vs $1,637/oz non-GAAP (E605, E607);
+- 2025 gold AISC: $1,423/oz on the scorecard vs $1,637/oz non-GAAP (E605, E607);
 - 2023–25 reserve replacement: about 190% in gold ounces vs 504% in GEO (E603, E604);
 - attributable vs 100% basis at NGM (61.5% Barrick).
 
@@ -587,8 +587,8 @@ TARGET size: 2–3k LOC. A number-and-unit tokenizer goes in `fmine-io`, the mat
 
 ### Why I am confident
 
-- The failure it targets is named in the plan's own diagnosis (§1.1: "fluent reasoning over unreconciled,
-  unversioned inputs").
+- The failure it targets is named in the plan's own diagnosis (§1.1: "reasoning over inputs that carry no
+  reconciliation state or version").
 - The basis collisions are real and already in the register.
 - Cited mode is small and fully deterministic.
 - It is the cheapest way to make every number an agent writes traceable to a Claim.
@@ -683,7 +683,7 @@ TARGET size: about 1.5–2.5k LOC beyond the planned generator and reconciliatio
 |---|---|
 | Site experts reject the twin's structure | Keep the relative ranking of data subsets; drop the absolute power claims |
 | No feasible data subset has enough power | An early kill of the Lumwana mechanism: switch to the alternate site at month 1, not month 12 |
-| The card does not change sponsor engagement (BET-06 falsified for this artifact) | Retire it after the site decision |
+| The card does not move the data-access decision (BET-06 falsified for this artifact) | Retire it after the site decision |
 
 ### Why I am confident
 
@@ -762,7 +762,7 @@ grade–tonnage data separate deck from model."
 - The plan treats a JV partner as a *viewer* of walled projections and verifiable bundles. The partner's question
   in §3 is "What do I see, and can I verify it without seeing my partner's private data?" (§31.2).
 - NGM data are JV-sensitive (E034; pre-mortem F13).
-- Newmont appears in the plan only as a source of definition examples and pay weights (§21.6, §23.6).
+- Newmont appears in the plan only as a source of definition examples and scorecard weights (§21.6, §23.6).
 - Nothing reconciles one physical asset as reported by two independent, separately audited issuers.
 
 New here:
@@ -810,8 +810,8 @@ New here:
 
 - **Pre-release cross-check.** The operator's controller runs the mirror on draft figures against the partner's
   last filing, before release.
-  - FACT: Newmont's February 2026 default notice alleged operational and accounting issues (E557). The disputes
-    were settled in August 2026 (E558).
+  - INFERENCE: both partners report the asset in separately audited public filings (Newmont's side is FACT[U],
+    below), so each can check the other's attributable figures.
   - A mismatch that both partners' public filings would reveal is cheaper to find first.
 - **The partner's own check.** A JV partner verifies the operator's public numbers from public data, with no access
   to the operator's private data. This is the zero-trust layer underneath §31.2's verifiable bundles.
@@ -855,8 +855,8 @@ TARGET size: 1.5–2.5k LOC beyond idea 2's kernel.
 
 - A second, independently audited reporter of the same physical quantity is the strongest public oracle there is.
   It is stronger than any synthetic generator.
-- JV partners are a named user (§3), ownership basis is already a hard rule (AGENTS.md), and the 2026 dispute shows
-  the question is live.
+- JV partners are a named user (§3), and ownership basis is already a hard rule (AGENTS.md), so the question
+  matters to both partners.
 - It reuses idea 2's kernel almost entirely.
 
 ---
@@ -892,8 +892,8 @@ The plan names the problem in four places:
 - AISC/oz is never the objective, because "high-grading, deferring sustaining capital or reclassifying capital as
   growth can all lower it while destroying NPV" (§15.6);
 - deferral lowers AISC, so the KPI rewards it, and every sustaining card shows the hazard–AISC trade-off (§23.2);
-- the KPI price list calls AISC "gameable by high-grading, deferral or reclassification" (§23.6);
-- RISK-22 (Goodhart; owner: the board remuneration committee) lists "deferral detection (GB-26)" as a mitigation.
+- the KPI price list says high-grading, deferral or reclassification can move AISC without changing value (§23.6);
+- RISK-22 (Goodhart) lists "deferral detection (GB-26)" as a mitigation.
 
 But GB-26 shows a deferral only when someone has already labelled it (a synthetic −$20M line). Nothing in the plan
 detects deferral, stripping deferral, grade draw or reclassification when no one labels them. Detection needs a
@@ -944,11 +944,11 @@ New here:
 
 ### Workflows
 
-- **Remuneration committee (RISK-22's owner).** Before certifying an AISC-linked pay outcome, see how much of it came
-  from intertemporal shifts.
+- **Remuneration committee.** A reproducible decomposition of AISC-linked scorecard figures,
+  including any intertemporal shifts.
 - **Audit committee and CFO.** The sustaining card of §23.2, filled from data instead of assumed.
 - **COO and site GMs.** Stripping and grade-draw debt as an operating risk, with a forecast.
-- **JV partners.** An operator-neutral view of whether the asset is being run for this year's AISC.
+- **JV partners.** An operator-neutral view of intertemporal shifts in the asset's AISC.
 
 ### First shippable slice (M1)
 
@@ -983,8 +983,8 @@ TARGET size: 2–3k LOC in `fmine-metrics` and `fmine-calib`, plus the verb.
 
 ### Why it ranks here
 
-- The plan's own analysis says the most important pay metric rewards exactly these shifts. It assigns the risk to
-  the remuneration committee, yet gives that committee no instrument.
+- The plan's own analysis notes that AISC as a KPI can move with these shifts (§15.6, §23.2, §23.6). It names the
+  risk (RISK-22) but gives the remuneration committee no instrument.
 - The public data it needs are published per site today.
 - It turns a judgment call into a scored forecast, which is the project's core move.
 
@@ -1057,9 +1057,9 @@ New here:
 ### Workflows
 
 - **CFO and tax.** A pre-filing consistency check across the operating disclosure and the statutory payments report.
-- **Government relations and the CEO, before a negotiation.** What has actually been paid, at what effective rate,
-  under which terms. RISK-26 (host-state action: suspension, provisional administration, retroactive code) is the
-  risk this portfolio has already realized, at Loulo-Gounkoto in 2025.
+- **Government relations and the CEO, before fiscal discussions.** What has been paid, at what effective rate,
+  under which terms. RISK-26 (host-state action: suspension, provisional administration, retroactive code) covers
+  events such as those at Loulo-Gounkoto in 2025.
 - **Host-state regulators and revenue authorities.** Verify receipts against the operator's public operating data.
   Regulators are named users (§3).
 - **State JV partners.**
@@ -1101,8 +1101,8 @@ TARGET size: 1.5–2.5k LOC beyond idea 2's kernel.
 
 ### Why it ranks here
 
-- Host-state fiscal risk has already cost this portfolio control of a site for most of a year (RISK-26), and every
-  number in a negotiation is contested.
+- Host-state action is a registered plan risk (RISK-26), and payment figures are central to any fiscal
+  discussion.
 - As in idea 6, independent public reporters exist for the same flow.
 - It gives BD-296's fiscal rows a test made of money actually paid.
 - It sits below ideas 6 and 7 only because its key source, ESTMA, is FACT[U] until week 1.
@@ -1207,7 +1207,7 @@ TARGET size: 1–1.5k LOC on top of idea 1.
 |---|---|
 | The issuer's convention is "consolidated = sum of site ranges", so ρ̄ = 1 by construction | The finding is then that the consolidated range is a worst-case sum, and the coherent proposal is the product |
 | Three resolved years are too few to estimate the year-shock correlation | Report only the ρ̄ implied by the published ranges, with no empirical comparison |
-| Revision timing is decided by market and political judgment | The card is advisory. It shows the statistical evidence beside the decision |
+| Revision timing is a management judgement that weighs factors beyond the statistics | The card is advisory. It shows the statistical evidence beside the decision |
 | MNPI handling in the private lane | Public-lane replay only, until the wall (§31.1) exists |
 
 ### Why it ranks here
@@ -1577,17 +1577,18 @@ New here:
 1. the benchmark;
 2. a scoring rule that prices abstention;
 3. sealed tasks, committed before the documents that answer them exist;
-4. adversarial traps taken from the evidence register:
+4. hard cases taken from the evidence register:
    - copper rows labelled Mlb that hold kilotonnes (E463);
-   - a silent restatement (E474);
+   - a restatement without a footnote (E474);
    - two vintages that give different dates for the same event (E476);
    - comparatives restated after a region change (E461).
 
 ### Workflows
 
 - **CIO/CDO and procurement.** Choose and monitor AI layers by measured numerical honesty.
-  - The plan's diagnosis of AI operating layers is "fluent reasoning over unreconciled, unversioned inputs" (§1.1).
-  - Barrick is deploying one now (E590, E591).
+  - The plan's diagnosis of AI operating layers is "reasoning over inputs that carry no
+    reconciliation state or version" (§1.1).
+  - The benchmark is vendor-neutral and complements the AI platforms issuers already use (E590, E591).
 - **The agents.** Regression-test themselves before they touch real decisions.
 - **FrankenMining.** The open set doubles as GATE-ROBOT-01's task pool, and lint (idea 4) checks the agents'
   free-text answers.
@@ -1622,7 +1623,7 @@ TARGET size: about 1k LOC: task format, scorer and verb.
 ### Why it ranks here
 
 - "Which AI can we trust with our numbers?" is a question every executive committee is asking now. The project's
-  evidence register is exactly the trap set an honest benchmark needs.
+  evidence register supplies the set of hard cases an honest benchmark needs.
 - It is small.
 - It is a tool for choosing AI, not a capability users run every day, so it ranks below ideas 6–12.
 
@@ -1848,7 +1849,7 @@ Dispositions reflect both rounds.
 | 22 | Public forecast transparency log, with inclusion and consistency proofs and several independent timestamp anchors | Fold into BD-068's implementation |
 | 23 | Forecast tournament for agents and analysts, with pairwise e-value races and performance-weighted pooling | Mostly planned (§10.2, §10.6, §30.4) |
 | 24 | Public-lane GISTM evidence-state map from issuers' published conformance disclosures | Deferred to M5; high risk of being read as a safety statement |
-| 25 | Sustainability metric assurance: GHG and water intensity, with LMDI decomposition and ownership basis | Deferred; outside the wedge's pay metrics |
+| 25 | Sustainability metric assurance: GHG and water intensity, with LMDI decomposition and ownership basis | Deferred; outside the wedge's metrics |
 | 26 | Auditor for junior press-release drill intercepts ("including" arithmetic, implied remainder grade, selective reporting) | Promoted into **idea 10** (part 1 of the TargetCard) |
 | 27 | Host-state early-warning register of dated public events, feeding `CountryRegime` | Rejected for now; drifts toward news monitoring, and engines never fetch |
 | 28 | Diff between technical-report editions, each change registered as a forecast revision | Merged into #1 (phase 2) |
@@ -1862,6 +1863,6 @@ Dispositions reflect both rounds.
 | 36 | Disclosed-disruption library with pooled hazard rates | **Ideas 6–15, #15** |
 | 37 | Public-lane decomposition of closure-cost estimates and the ARO roll-forward | Mostly planned (§18.6, GOAL-014, G-FREE-11) |
 | 38 | Concentrate settlement checker: payables, TC/RC, quotational periods, provisional pricing | Planned (§21 domain pack, row 8; FD-FA-07) |
-| 39 | Reserve price-deck DecisionCard: reserve, impairment and pay effects of the deck choice | Deferred; estimating reserves at other decks needs block models (Pushback) |
+| 39 | Reserve price-deck DecisionCard: reserve, impairment and scorecard effects of the deck choice | Deferred; estimating reserves at other decks needs block models (Pushback) |
 | 40 | Definition-drift sentinel for issuers' non-GAAP reconciliations | Merged into #14 |
 | 41 | Public check of the Twiga 50/50 economic-benefit true-up (E448) | Planned inside BD-314; public data too thin for an independent check |

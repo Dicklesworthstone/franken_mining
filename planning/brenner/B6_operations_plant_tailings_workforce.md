@@ -25,13 +25,13 @@
 | B6-SQ2 | **H2-c** Four-layer validity-boxed `CorrelationCard`s + $N$-tank CSTR / 3D-heap RTD deconvolution + AMIRA P754 bilinear WLS/Bayesian reconciliation | **SURVIVE, adopted** | Core of `fmine-plant`: separates book recovery `R_card` (`Veladero` `E275`) from posterior `R_inf` (`GB-20`), deconvolves shift hold-up, and closes mine-to-market balances |
 | B6-SQ2 | **H2-d** *(Forced alternative)* Check-in vs Check-out Divergence & Smelter/Refinery Outturn Arbitrage Engine | **SURVIVE, merged into H2-c** | Tracks `MCF_out - MCF_in` (`Kibali` +2.6% `E210`), detects shared-sensor tautologies (`Loulo` `C3 §3.12`), and optimizes concentrate lot blending & umpire splitting-limit decisions (Card **B6-G2**) |
 | **B6-SQ3 · Freeboard (§18)** | **H3-a** Live "TSF Safety Score / Traffic-Light FoS Dashboard" | **KILL unconditionally** | Violates `INV-002` (`geotechnical_signoff = false`) and `G-FREE-1`. InSAR is blind to brittle static liquefaction (`E031`), and stale sensors / open manual gates (`Veladero` `E282`) make "GREEN/SAFE" lethal |
-| B6-SQ3 | **H3-b** Static document repository (SharePoint for GISTM / ESIA PDFs) | **KILL** | Fails Jagersfontein (2019–2022) and Reko Diq ESIA findings (nitrate N vs $\text{NO}_3$ basis bug `E322–E324`, omitted supply bore `E325–E328`, unmapped groundwater concerns `E331–E332`) |
+| B6-SQ3 | **H3-b** Static document repository (SharePoint for GISTM / ESIA PDFs) | **KILL** | Fails Jagersfontein (2019–2022) and the corpus ESIA checks (chemical-basis conversion `E322–E324`, certificate-to-table completeness `E325–E328`, unmapped stakeholder concerns `E331–E332`) |
 | B6-SQ3 | **H3-c** Three-valued TARP obligation automaton + generalized `RequirementSet` / `EsCommitment` matrix + coupled $\bar{B}$ / slice-Jacobian & sub-aqueous PAG co-disposal twin | **SURVIVE, adopted** | Core of `fmine-tailings`: `{NotTriggered, Triggered, Indeterminate}` where `Indeterminate` escalates like `Triggered` (`PO-FREE-1`, `FMINE-REF-404`) |
 | B6-SQ3 | **H3-d** *(Forced alternative)* Three-Measurand Closure & Perpetual-Liability Real-Option Engine | **SURVIVE, merged into H3-c** | Holds `RegulatorBond`, `IfrsProvision_IAS37`, and `StochasticClosureEstimate` side by side (`Carlin` 2.7× ratio `E188`), enforces hazardous-inventory completeness (`Veladero` Hg `E285`), and prices progressive rehab |
 | **B6-SQ4 · Muster (§19)** | **H4-a** Individual operator leaderboards & biometric/camera disciplinary scoring | **KILL** | Violates privacy/works-council law (`G-MUST-1`, `G-MUST-5`) and confounds geology/haul/equipment variance with operator skill (`G-MUST-2`) |
 | B6-SQ4 | **H4-b** Cost-minimizing roster LP that trades fatigue/overtime against mill-hour dollars | **KILL** | Violates `G-MUST-4` and `G-PUSH-1`: statutory hours, rest, and fatigue ceilings are hard constraints, never priced (`GB-23`) |
 | B6-SQ4 | **H4-c** Hard competency/roster feasibility + covariate-adjusted hierarchical productivity + DiD intervention scoring | **SURVIVE, amended** | Core of `fmine-workforce`, amended by merging **H4-d** |
-| B6-SQ4 | **H4-d** *(Forced alternative)* Goodhart-Resistant Critical Control Verification (CCV) Forensic Engine | **SURVIVE, merged into H4-c** | Models CCV field verifications (5% of Barrick executive bonus, `E025`) via Beta-Binomial capture-recapture and answer-entropy bounds so "300 checks, 0 non-conformances" triggers an audit (`OB-REVIEW`, Card **B6-G4**) |
+| B6-SQ4 | **H4-d** *(Forced alternative)* Goodhart-Resistant Critical Control Verification (CCV) Forensic Engine | **SURVIVE, merged into H4-c** | Models CCV field verifications (a published Barrick scorecard metric, `E025`) via Beta-Binomial capture-recapture and answer-entropy bounds so "300 checks, 0 non-conformances" triggers an audit (`OB-REVIEW`, Card **B6-G4**) |
 
 ---
 
@@ -79,7 +79,7 @@ An operating mine twin faces two opposite failure modes:
 
 #### H1-e — *(Forced third alternative)* Vendor-twin & OEM predictive-maintenance referee ledger
 - **Mechanism.** Treat every external predictive alert (Avathon, MineStar Health, Modular Predict, tire TKPH monitors) and every RL/heuristic dispatch recommendation as a **frozen forecast** (`Claim` in `CELL-QUAR`) with asset ID, failure mode, lead-time window, and probability. Score precision, recall, lead-time calibration, and avoided-downtime dollar value (priced at `Pushback`'s bottleneck dual) when SAP PM work orders and component tear-downs close (`PO-HEAD-5`, `GATE-HEAD-03`).
-- **Why this wins politically (Pre-mortem F1):** Instead of fighting Avathon or OEM analytics in slideware, FrankenMining becomes the referee that scores whether their alerts actually predicted failures before breakdown or merely spammed false alarms.
+- **Why this sits alongside existing platforms (Pre-mortem F1):** FrankenMining does not compete with AI-platform or OEM analytics; it scores every alert source the same way, recording whether each alert preceded the failure it predicted or was a false alarm.
 - **Verdict:** **SURVIVE, merged into H1-d.**
 
 ### 1.3 Galaxy-brain card B6-G1 · AHS Geo-Fence Bubble Contagion vs. Match Factor
@@ -158,10 +158,10 @@ An operating mine twin faces two opposite failure modes:
 
 #### H3-b — Passive document repository (SharePoint for GISTM / ESIA PDFs)
 - **Mechanism.** Store PDF reports mapped to the 77 GISTM requirements.
-- **Falsifier.** Demonstrated in the Reko Diq Early Works ESIA (`C5`) and Americas reports (`C4`):
-  - **Chemical-basis bug (`E322–E324`):** Lab certificate reports $\text{NO}_3\text{-N} = 13.4\text{ mg/L}$; the ESIA table compares that number directly against the $\le 50\text{ mg/L as NO}_3$ standard and declares it "within limits", whereas stoichiometric conversion ($13.4 \times 62.0049 / 14.0067 = \mathbf{59.3\text{ mg/L as NO}_3}$) **exceeds the limit by 18.6%**.
-  - **Omitted sample (`E325–E328`):** The lab certificate contains 6 groundwater samples; the ESIA table prints 5, omitting the camp supply bore that exceeded Cr and Se limits.
-  - **Unmapped stakeholder concerns (`E331–E332`) & miscomputed residual (`E337`):** Three institutional groundwater-depletion concerns have no ESMP commitment row, and Social Impact 4's residual significance is printed as `High/High` when the report's own matrix yields `Medium/Medium`.
+- **Falsifier.** Shown on the held-back corpus ESIA notes (`C5`) and the Americas reports (`C4`): a passive repository performs none of these checks.
+  - **Chemical-basis conversion (`E322–E324`):** a certificate value reported as $\text{NO}_3\text{-N}$ must be converted ($\times 62.0049 / 14.0067$) before it is compared with a limit stated as $\text{NO}_3$.
+  - **Certificate-to-table completeness (`E325–E328`):** every sample on a lab certificate must appear in the summary table, or its absence must be explained.
+  - **Unmapped stakeholder concerns (`E331–E332`) and matrix consistency (`E337`):** each recorded concern needs a commitment row, and each printed significance rating must match the report's own matrix.
 - **Verdict:** **KILL.**
 
 #### H3-c — Three-valued TARP obligation automaton + generalized `RequirementSet` / `EsCommitment` matrix + coupled $\bar{B}$ & sub-aqueous PAG twin
@@ -215,13 +215,13 @@ An operating mine twin faces two opposite failure modes:
 #### H4-c — Hard competency/roster feasibility + covariate-adjusted hierarchical productivity + DiD attribution
 - **Mechanism.**
   1. **Deterministic feasibility checker (`PO-MUST-1`):** Every scheduled shift checks seat coverage $\times$ unexpired `Competency` $\times$ `StatutoryAppointment` (including deputies) $\times$ `Agreement` hours-of-work envelope. Any deficit marks the plan `infeasible-labour` (`G-MUST-3`).
-  2. **Denominator-typed local-content commitments (`§19.3`, `E348`):** Every local-employment row declares owner-vs-contractor scope, locality definition, and numeric target (preventing target-free counts like Reko Diq's `317/427` owner-only figure from rendering as "compliant").
+  2. **Denominator-typed local-content commitments (`§19.3`, `E348`):** Every local-employment row declares owner-vs-contractor scope, locality definition, and numeric target (so that an owner-only count with no stated target, such as `317/427`, never renders as "compliant").
   3. **Hierarchical covariate-adjusted productivity & staggered-rollout DiD (`§19.6`):** Regress out hardness, haul distance, weather, and fleet availability before reporting shrunk crew-panel intervals; register difference-in-differences (DiD) counterfactual specifications *before* AHS or roster rollouts (`Cortez`/`Carlin` `E024`).
 - **Verdict:** **SURVIVE, amended** by merging **H4-d**.
 
 #### H4-d — *(Forced third alternative)* Goodhart-Resistant Critical Control Verification (CCV) Forensic Engine
 - **Mechanism.**
-  - **The Goodhart problem (`FACT, E025, R6 §1.5`):** Critical Control Verification (CCV) completion accounts for **5% of Barrick's annual executive scorecard** (threshold 75%, target/max 85%, 2025 actual 84%). When a safety verification count becomes a paid target, supervisors face intense pressure to complete checklists rapidly ("tick-and-flick") with zero reported non-conformances.
+  - **The Goodhart problem (`FACT, E025, R6 §1.5`):** Critical Control Verification (CCV) completion is a weighted metric in Barrick's published annual scorecard (threshold 75%, target/max 85%, 2025 actual 84%). Any verification count used as a target carries the general risk that checklists are completed quickly ("tick-and-flick") with zero reported non-conformances, so the engine measures verification quality as well as count.
   - **The forensic model (`fmine-workforce::ccv`):** Instead of reporting raw completion %, model field verifications for Material Unwanted Event (MUE) control $c$ by verifier $i$ as a **hierarchical Beta-Binomial / capture-recapture detection process**:
     1. True latent control non-conformance rate on site-month $t$: $p_{c,t} \sim \text{Beta}(\alpha_c, \beta_c)$, anchored by blinded independent safety-audit re-verifications (capture-recapture overlap);
     2. Verifier detection sensitivity $s_i \in (0, 1)$: probability that verifier $i$ records a non-conformance given one exists;
@@ -230,7 +230,7 @@ An operating mine twin faces two opposite failure modes:
 - **Falsifier.** On synthetic and historical safety-audit datasets, the capture-recapture + entropy detector fails to separate genuinely well-controlled areas ($\hat{p}_{\text{audit}} \approx 0$) from tick-and-flick suppression ($\hat{p}_{\text{audit}} \ge 0.03,\; k_{\text{supervisor}} = 0$).
 - **Verdict:** **SURVIVE, merged into H4-c.**
 
-### 4.2 Galaxy-brain card B6-G4 · Goodhart on Safety Pay: When "300 Checks, 0 Defects" Proves Blindness, Not Safety
+### 4.2 Galaxy-brain card B6-G4 · Goodhart on Safety Targets: When "300 Checks, 0 Defects" Proves Blindness, Not Safety
 
 - **Equation.**
   - Suppose critical control $c$ has a baseline non-conformance prevalence $p \in (0,1)$ established by independent blinded safety audits ($n_{\text{audit}}$ checks finding $k_{\text{audit}}$ defects, posterior $p \sim \text{Beta}(1 + k_{\text{audit}}, 1 + n_{\text{audit}} - k_{\text{audit}})$).
@@ -243,7 +243,7 @@ An operating mine twin faces two opposite failure modes:
     $$\mathbb{P}(k = 0 \mid N = 300, H_0) = \frac{48 \times 49 \times 50 \times 51}{348 \times 349 \times 350 \times 351} = \frac{5{,}997{,}600}{1.4918 \times 10^{10}} = \mathbf{0.000402\;\;(1\text{ in }2{,}487)}$$
   - Under $H_1$ ($s = 0.05$, tick-and-flick rubber-stamping, effective defect rate $s \cdot p \approx 0.38\%$): $\mathbb{P}(k = 0 \mid N = 300, H_1) = \mathbf{0.342}$.
   - Bayes factor for tick-and-flick suppression: **$B_{10} = 0.342 / 0.000402 = 851$** (decisive evidence of verification blindness).
-- **Intuition.** When CCV completion is tied to 5% of executive bonus (`E025`), a 100% completion rate with zero found non-conformances looks like a triumph on a traditional KPI scorecard. Against even a modest 6–8% independent audit defect rate, $300$ zero-defect checks is a $4 \times 10^{-4}$ event under attentive inspection — proving that the checklist is being rubber-stamped.
+- **Intuition.** When CCV completion is a scorecard target (`E025`), a 100% completion rate with zero found non-conformances reads well on a traditional KPI scorecard. Against even a modest 6–8% independent audit defect rate, $300$ zero-defect checks is a $4 \times 10^{-4}$ event under attentive inspection, which is strong evidence that verification sensitivity is low and warrants an audit.
 - **Flip.** If the independent blinded audit also finds $k_{\text{audit}} = 0$ in $n_{\text{audit}} = 50$ checks ($a = 1, b = 51$) *and* linked automated sensors (e.g. gas/ventilation/proximity telemetry) record zero threshold excursions, $\mathbb{P}(k=0 \mid N=300, H_0) = 51 / 351 = 0.145$, so $B_{10} < 3$ and no suppression alarm fires.
 
 ---
@@ -260,4 +260,4 @@ An operating mine twin faces two opposite failure modes:
    - Add **GB-42 (`B6-G3`: The Perpetual Water-Treatment Tail & Progressive Cover Option)** to `§18.8`.
 5. **`§19.5`, `§19.8` & `§19.9` (`Muster`):**
    - Add Beta-Binomial capture-recapture CCV verification-quality auditing and guard **`G-MUST-6` (`TickAndFlickSuppressionAlarm`)** when routine supervisor zero-defect runs diverge from blinded audit or sensor excursion baselines ($B_{10} \ge 20$).
-   - Add **GB-43 (`B6-G4`: Goodhart on Safety Pay — When "300 Checks, 0 Defects" Proves Blindness, Not Safety)** to `§19.9`.
+   - Add **GB-43 (`B6-G4`: Goodhart on Safety Targets — When "300 Checks, 0 Defects" Proves Blindness, Not Safety)** to `§19.9`.

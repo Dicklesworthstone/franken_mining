@@ -44,13 +44,13 @@
 
 ### The evidence
 
-1. **The user and the stakes are documented.**
+1. **The user and the measurement question are documented.**
    - FACT (E605): gold AISC carries 18.75% and copper AISC 6.25% of Barrick's 2025 company scorecard weight. The
      scored gold AISC was $1,423/oz.
-   - FACT (E607): reported FY2025 AISC was $1,637/oz, above guidance because of price-driven royalties. So the pay
-     metric is already an adjusted AISC, and the remuneration committee decides on it.
-   - FACT (plan RISK-22): "Goodhart: KPI-linked pay distorts the measured quantities (AISC deferral …)". The owner is
-     the board remuneration committee, and the named mitigation is "deferral detection (GB-26)".
+   - FACT (E607): reported FY2025 AISC was $1,637/oz, above guidance because of price-driven royalties. So the
+     scorecard metric is already an adjusted AISC, and the remuneration committee decides on it.
+   - FACT (plan RISK-22, a generic Goodhart risk): "Goodhart: a metric used in pay can drift from the quantity it
+     measures (AISC deferral …)". The named mitigation is "deferral detection (GB-26)".
    - FACT (§15.6, §23.2, §23.6): the plan names high-grading, deferral and reclassification as ways to lower AISC
      while destroying NPV.
    - GB-26 shows a deferral only when someone has already labelled it. The plan has committed to a mitigation it has

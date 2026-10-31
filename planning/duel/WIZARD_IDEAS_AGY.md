@@ -17,7 +17,7 @@
 | Rank | Idea Name | Subsystems & Crates (§0.5, §28.3) | Primary Users & Workflows | First Shippable Slice |
 |---:|---|---|---|---|
 | **1** | **`GuidanceCredibilityBridge`** — Pre-Release Multi-Site Guidance Envelope Certifier & Post-Print 6-Factor Guidance Attribution | **Bullion, Helm, Pushback, Portal, Adit** (`fmine-metrics`, `fmine-public`, `fmine-decide`, `fmine-plan`, `fmine-cli`) | Executive Committee, CFO, Investor Relations, Board Audit Committee, Equity Analysts & Agents | **M0 / Phase A** (`fmine assure guidance --issuer barrick --year 2025` over published guidance + Mine Stats `2024Q1–2026Q2`) |
-| **2** | **`WorkbookForensicAutopsy`** — Pure-Rust `.xlsx` Formula-DAG Decompiler, Dimensional Type-Checker & Automated Discrepancy Root-Cause Explainer | **Portal, Bullion, Plumb, Adit** (`fmine-io`, `fmine-units`, `fmine-public`, `fmine-cli`) | CFO/Controllers, QPs, Metallurgists, Site Analysts importing `.xlsx` sheets, M0 Public Assurance | **M0 / Phase A** (~1.1k LOC in `fmine-io` + `fmine-public` explaining `E113–E121`, `E144–E153` formula defects automatically) |
+| **2** | **`WorkbookForensicAutopsy`** — Pure-Rust `.xlsx` Formula-DAG Decompiler, Dimensional Type-Checker & Automated Discrepancy Root-Cause Explainer | **Portal, Bullion, Plumb, Adit** (`fmine-io`, `fmine-units`, `fmine-public`, `fmine-cli`) | CFO/Controllers, QPs, Metallurgists, Site Analysts importing `.xlsx` sheets, M0 Public Assurance | **M0 / Phase A** (~1.1k LOC in `fmine-io` + `fmine-public` explaining `E113–E121`, `E144–E153` discrepancies automatically) |
 | **3** | **`MineToMillShadowPriceLoop`** — Shift-Scale Bottleneck-Regime Classifier, Refractory Feed-Stability Chance Envelope & Live Dual-Price Broadcast | **Pushback, Crucible, Headframe, Touchstone, Adit** (`fmine-plan`, `fmine-plant`, `fmine-ops`, `fmine-recon`, `fmine-tui`) | Site General Manager, Plant Metallurgist, Short-Term Mine Planner, Grade-Control Geologist, Maintenance Planner | **M2–M4** (`fmine-plan::bottleneck` + `fmine-plant` shadow-price broadcast on Carlin/PV/Lumwana fixtures) |
 | **4** | **`RpeeeAndBlockModelForensics`** — 4-Factor 3D Block-Model Version Shapley Attribution, Parametric Break-Even Shell Field `λ*(b)` & Sterilization Certifier | **Hallmark, Strata, Pushback, Portal** (`fmine-reserves`, `fmine-geom`, `fmine-optimize`, `fmine-io`) | Qualified Persons (QPs), Chief Resource Geologist, Corporate Development, Long-Term Planners, JV Partners | **M2–M3** (3D `VdbGrid` 4-factor model-to-model diff on imported OMF/CSV models + `pitflow` `λ*(b)` fragility curve) |
 | **5** | **`AgentSandboxAndProseVerifier`** — Zero-Copy CoW Counterfactual Ledger Overlay (`ClaimColor::Hypothetical`) & Hallucination-Proof Prose Citation Verifier | **Adit, Bedrock, Plumb, Testpit** (`fmine-mcp`, `fmine-ledger`, `fmine-claim`, `fmine-report`, `fmine-verify`) | AI Agents (internal & Avathon), Executive Committee, IR, QPs, Planners running multi-subsystem what-ifs & drafting memos | **M0–M1** (`fmine verify-prose` CLI/MCP gate in M0; `SandboxedOverlay<AnchorHash>` in M1 with `fmine-ledger`) |
@@ -48,11 +48,11 @@
     forward guidance envelopes** (`[G_lo, G_hi]` per site, division, and consolidated group for production `koz` /
     `Mlb`, TCC `$/oz`, AISC `$/oz`, sustaining capex `$M`, and growth capex `$M`, plus the 5-year/10-year outlook
     decks) or the issuer's **published commodity-price royalty sensitivity slopes** (`ΔAISC / ΔP_Au`).
-  - Yet in the corpus (`R6 §1.4`, `§4.2`, `E108`, `E278`, `E601`, `E602`), **guidance misses and unattributed
-    guidance revisions are the #1 source of executive credibility loss, multi-billion-dollar equity drawdowns, and
-    securities-litigation exposure** for Barrick and Newmont. For example, in Q1 2026, industry AISC rose +16%
+  - Yet in the corpus (`R6 §1.4`, `§4.2`, `E108`, `E278`, `E601`, `E602`), **unattributed guidance variances and
+    revisions are among the figures that investors, analysts and boards examine most closely** at gold producers
+    such as Barrick and Newmont. For example, in Q1 2026, industry AISC rose +16%
     largely because higher realized gold prices mechanically inflated price-linked royalties (`FACT`, `R6 §4.2`),
-    while operational misses at Carlin, Pueblo Viejo, and Loulo-Gounkoto had completely different physical roots
+    while site-level variances at Carlin, Pueblo Viejo, and Loulo-Gounkoto had different physical roots
     (roaster/autoclave availability, plant-cone inventory swings `E666`, sovereign suspension `E602`).
 
 ### 1.2 Subsystems, Crates, Users & Workflows
@@ -222,12 +222,12 @@ pub struct GuidanceAttributionResult {
     `E113–E121`, `E144`, `E147`, `E153`, `E193`, or client workbooks in M2), `fmine-io` **ignores the `<f>...</f>`
     formula tags** that sit right above `<v>...</v>` inside `xl/worksheets/sheet*.xml`!
   - Because it discards `<f>`, FrankenMining can only report *that* cell `G42` is off by `4.12 koz`—it cannot tell
-    the CFO, controller, or QP **why** `G42` is wrong!
+    the CFO, controller, or QP **why** `G42` differs!
   - By adding a ~1.1k LOC pure-Rust **Spreadsheet Formula AST Parser, Dependency-Graph Builder, and Dimensional
     Theorem Checker (`fmine-io::xlsx_forensics`)**, FrankenMining automatically decompiles every `.xlsx` workbook
     on ingest, propagates `fmine-units` dimensions and bases through the cell DAG, detects the exact structural
-    spreadsheet bugs that plague mining finance and geology teams, and attaches a machine-verified **Formula Root
-    Cause** to every `DiscrepancyEntry`!
+    spreadsheet defects that occur in large mining finance and geology workbooks, and attaches a machine-verified
+    **Formula Root Cause** to every `DiscrepancyEntry`!
 
 ### 2.2 Subsystems, Crates, Users & Workflows
 - **Subsystems:** `Portal`, `Bullion`, `Plumb`, `Adit` (`§0.5`).
@@ -287,7 +287,7 @@ five deterministic graph/AST analyzers:
    Across a time-series row `(col_1, col_2, ..., col_T)` representing quarters or years, canonicalizes each cell's
    `FormulaExpr` into relative `R[Δr]C[Δc]` normal form. Flags any cell `col_t` whose normalized AST differs from its
    neighbours (e.g., 9 quarters compute `=R[-2]C[0]*R[-1]C[0]`, but `2025Q3` has a literal number or points to
-   `R[-2]C[-1]`, automatically catching copied-cell bugs like `E114`!).
+   `R[-2]C[-1]`; a candidate cause to test on identity breaks such as `E114`).
 4. **`NaiveUnweightedGradeAverage` (`G-PORT-XLSX-4`):**
    Propagates `fmine-units` types (`DryTonnes`, `WetTonnes`, `Grade`, `Recovery`, `MoneyPerOz`) from label-anchored
    rows through the `FormulaExpr` DAG:
@@ -307,9 +307,9 @@ five deterministic graph/AST analyzers:
 - **`WorkbookForensicAutopsy` output (in `< 5 ms`):**
   ```text
   [G-PORT-XLSX-2: RaggedSumOmittedAdjacentRow]
-  Cell:       2025Q2_MineStats.xlsx:Summary!J28
+  Cell:       Example_Consolidation.xlsx:Summary!J28
   Formula:    =SUM(J21:J25)
-  Defect:     Range J21:J25 stops 1 row short of contiguous numeric row J26 ("Porgera (47.5%)": 19.0 koz).
+  Defect:     Range J21:J25 stops 1 row short of contiguous numeric row J26 ("Site F": 19.0 koz).
   Counterfactual Replay: Evaluating =SUM(J21:J26) yields 501.0 koz (residual vs identity = 0.0 koz).
   ```
 
@@ -349,7 +349,7 @@ five deterministic graph/AST analyzers:
      `RefractorySulphurOxidationLimited` (autoclave/roaster `Cap_S` or `O2` plant limit `E265`) to
      `CarbonateOrPregRobWindowLimited` (`CO3/SS` or `TCM` spike `E172`, `E173`) to `TailingsRateOfRiseLimited` (`B̄ >
      B̄_crit` in `Freeboard`, `GB-42`). Currently, `Pushback` computes duals in a strategic/monthly LP, leaving shift
-     grade-control geologists, dispatchers, and plant metallurgists flying blind when a constraint shifts mid-week!
+     grade-control geologists, dispatchers, and plant metallurgists with no signal when a constraint shifts mid-week!
   2. **High-Frequency Stoichiometric Variance in Refractory Feeds:** `BD-319` enforces two-sided windows (`SS ∈
      [0.8%, 1.8%]`, `CO3 > 14%`, `TCM ∈ [0.8%, 1.2%]`) on **period-average** LP tonnes. But a roaster or autoclave
      has a **2-to-8 hour thermal/stoichiometric residence time**: a weekly average of `1.5% SS` made by alternating
@@ -663,8 +663,8 @@ Given a sealed `LedgerAnchor` `A_0` with seed root `S_0`:
 
 ### 5.4 Worked Galaxy-Brain Card (`GB-48`, Illustrative Values)
 - **Scenario:** An AI agent summarizes a Pueblo Viejo query into a draft board note:
-  > *"Pueblo Viejo will produce 650 koz for Barrick in 2026 [clm_pv26_100pct] at an AISC of $1,380/oz, and the El
-  > Llagal TSF is safe and fully conformant."*
+  > *"Pueblo Viejo will produce 650 koz for Barrick in 2026 [clm_pv26_100pct] at an AISC of $1,380/oz, and its
+  > tailings facility is safe and fully conformant."*
 - **`fmine verify-prose` output (exit code `3`, 3 structured refusals in `< 2 ms`):**
   1. `FMINE-REF-603 (BasisOrStageConflation)` at `line 1, col 27`: `[clm_pv26_100pct]` has `OwnershipBasis =
      Project100Pct` (`650 koz`), but sentence attributes it to `"for Barrick"` (`60%` share = `390 koz [clm_pv26_attr]`).
@@ -672,8 +672,8 @@ Given a sealed `LedgerAnchor` `A_0` with seed root `S_0`:
      `CalibrationFlag::Uncalibrated` with 80% interval `[590, 710] koz`; point value cannot appear without its
      interval and `[uncalibrated]` tag.
   3. `FMINE-REF-605 (ForbiddenAuthorityAssertion)` at `line 2, col 18`: Unquoted phrase `"is safe and fully
-     conformant"` violates `INV-002` and `G-FREE-1`. Suggested replacement: `"has 74/77 GISTM requirements in state
-     current and 3 in state stale as of anchor anc_9a1f"`.
+     conformant"` violates `INV-002` and `G-FREE-1`. Suggested replacement: `"has <k>/<n> GISTM requirements in
+     state current as of anchor anc_9a1f"`.
 
 ### 5.5 First Shippable Slice, Testing Strategy & Kill Criterion
 - **First shippable slice (M0–M1 / WP-02 & WP-06):**

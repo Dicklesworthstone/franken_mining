@@ -89,7 +89,7 @@ I scored them on their own text. Where my version differs, I say how, so the rea
 ### COD-02: rounding-aware contradiction finder — **830**
 
 - **Strongest point.** It is exact, sound and falsifiable at M0 on pinned public facts (E113–E115, E144, E147). It
-  improves both sides of the product: true findings get stronger, and false allegations are suppressed when a common
+  improves both sides of the product: true findings get stronger, and false findings are suppressed when a common
   rounded explanation exists. The shared-total example shows why per-identity checks miss joint contradictions.
   Its claims are carefully bounded: inclusion-minimal sets, and "indeterminate" on unknown conventions.
 - **Biggest weakness.** It keeps the registered ±1-last-digit rule unchanged beside an exact half-unit diagnostic, so
@@ -172,7 +172,7 @@ I scored them on their own text. Where my version differs, I say how, so the rea
 - **Strongest point.** It closes a real defect in today's code.
   - `FrozenForecast` holds one `realized_outcome: Option<f64>`, and `evaluate_model` silently skips unresolved
     entries (`crates/fmine-calib/src/lib.rs:16–125`).
-  - It adds outcome vintages, which matter because Barrick restates (E474).
+  - It adds outcome vintages, which matter because published comparatives can be revised (E474).
   - Whole-cohort coverage bounds are exact and cheap (7/8 observed, so 7/10 to 9/10 for the whole cohort).
   - It protects the flagship freeze-and-score promise and the FY2026 forecasts M0 must hash.
 - **Biggest weakness.** It is partly planned. PO-HEAD-5 and PO-HELM-3 already require every forecast to resolve or
@@ -206,7 +206,7 @@ I scored them on their own text. Where my version differs, I say how, so the rea
   - It needs both partners to agree on an export format, and that agreement is the hard part.
   - "First comparable divergence in a deterministic order" is order-dependent, as Codex admits.
   - It has no public oracle and is synthetic-only until partners engage.
-  - After Newmont's 2026 default notice and the settlement (E557, E558; F13), partners may not want a tool that
+  - After the 2026 NGM dispute and its settlement (E557, E558; F13), partners may not want a tool that
     pre-digests disputes.
 - **What would make it better.** Start from the public version: reconcile the same JV asset as reported in both
   partners' public filings (NGM 61.5/38.5, E457; Pueblo Viejo 60/40; Kibali 45/45/10, E560). That is testable now.
@@ -220,7 +220,7 @@ I scored them on their own text. Where my version differs, I say how, so the rea
   out of the grammar.
 - **Biggest weakness.** Three sentence forms cover a small part of a release. IR and legal drafting happens in office
   documents under counsel's review, so adoption is doubtful. A template does nothing for the free-text paragraphs,
-  where most errors live. Checking any text against the Claim store covers more ground for less code.
+  where most of the wording is. Checking any text against the Claim store covers more ground for less code.
 - **What would make it better.** Invert it into a checker for arbitrary drafts, with templates only as the fix-it
   suggestion.
 - **Duplication.** It overlaps §30.5, BD-072, BD-123, G-BULL-6 and my idea 4 (Disclosure Lint). It leans on COD-04.
@@ -279,8 +279,8 @@ I scored them on their own text. Where my version differs, I say how, so the rea
 ### COD-16: intervention benefit contracts — **480**
 
 - **Strongest point.** It names the prevention paradox correctly. A maintenance prediction followed by preventive
-  action is neither a false alarm nor a proven saving. That is a real flaw in naive vendor scoring, and it matters
-  now that an AI vendor is deploying at Barrick sites (E590, E591).
+  action is neither a false alarm nor a proven saving. That is a real flaw in naive vendor scoring, and it applies
+  to the AI platforms issuers already use (E590, E591).
 - **Biggest weakness.** The plan already covers most of it:
   - vendor predictions are registered and resolved (§16.5, PO-HEAD-5);
   - vendor benefit claims need prior forecasts (G-CRUC-5);
@@ -295,8 +295,8 @@ I scored them on their own text. Where my version differs, I say how, so the rea
 
 ## The 15 table-only candidates (not scored)
 
-- **COD-30 (KPI gameability tests)** deserved a top-15 slot. §15.6, §23.2, §23.6 and RISK-22 name AISC gaming by
-  deferral, high-grading and reclassification, but give the remuneration committee no instrument. This is close to
+- **COD-30 (KPI robustness tests)** deserved a top-15 slot. §15.6, §23.2, §23.6 and RISK-22 note that deferral,
+  high-grading and reclassification can move AISC, but give the remuneration committee no instrument. This is close to
   my idea 7.
 - **COD-29 (fixed-cohort bridges across perimeter changes)** is useful after the Hemlo and Tongon sales (E552–E554).
 - **COD-22 (auditor-chosen spot checks after the producer commits)** is a cheap, credible audit protocol.

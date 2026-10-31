@@ -25,17 +25,17 @@ Every material statement carries one of these tags:
 ## 0. Executive summary: the 20 facts that matter most
 
 1. **Barrick is now "Barrick Mining Corporation."** Shareholders approved the name on 6 May 2025 with 98.14% in favour. The NYSE ticker changed from GOLD to **B** on 9 May 2025; the TSX ticker is still ABX. [V-S] ([Engineering News](https://www.engineeringnews.co.za/article/barrick-completes-name-change-elects-directors-2025-05-07); [Barrick](https://www.barrick.com/English/news/news-details/2025/barrick-announces-name-change-to-barrick-mining-corporation-and-election-of-directors/default.aspx)). Primary filings now use the new name. [V-P]
-2. **Barrick leadership has turned over.**
-   - Mark Bristow left on 28/29 Sep 2025.
-   - **Mark Hill** became interim CEO on 29 Sep 2025 and permanent President and CEO on **4 Feb 2026**. He also joined the Board.
-   - **Helen Cai** became CFO on 1 Mar 2026, replacing Graham Shuttleworth.
-   - New Chief Legal, Compliance and Policy Officer: J. McGuire. New Chief Global Affairs Officer: Woo Lee.
-   - Chairman: **John L. Thornton**.
+2. **Barrick has a new leadership team.**
+   - The previous President and CEO left on 28/29 Sep 2025.
+   - The Group COO became interim CEO on 29 Sep 2025 and permanent President and CEO on **4 Feb 2026**, and joined the Board.
+   - A new CFO took office on 1 Mar 2026.
+   - A new Chief Legal, Compliance and Policy Officer and a new Chief Global Affairs Officer were appointed.
+   - The Chairman is non-executive.
    - [V-P] (Q2 2026 MD&A; 2026 Circular)
-3. **Barrick is splitting itself.**
+3. **Barrick is separating its North American business.**
    - "**North American Barrick**" will hold Carlin, Cortez and Turquoise Ridge (all within NGM), Pueblo Viejo, and the Fourmile, Mike and Fiberline projects.
    - Barrick plans an IPO of a minority stake: primary listing in New York, secondary in Toronto, **targeted by end-2026**. Barrick keeps a controlling majority.
-   - **Mark Hill will be CEO of North American Barrick.** Who will lead the remaining parent has not been disclosed. [V-P]
+   - **The Group CEO will be CEO of North American Barrick.** Who will lead the remaining parent has not been disclosed. [V-P]
 4. **Barrick and Newmont have settled their NGM disputes (10 Aug 2026).**
    - Fourmile (Barrick) and Mike and Fiberline (Newmont) are contributed to NGM. The combined complex is described as "nearly 100 million oz" of gold.
    - Newmont pays Barrick a **$1.95B** cash top-up, expected Q4 2026.
@@ -93,13 +93,12 @@ Every material statement carries one of these tags:
     3. Development capital.
     4. Balance sheet: a **$1B net cash target** (±$2B) and a **$5B minimum cash** floor.
     5. Ratable buybacks.
-13. **Both companies now say AI out loud.**
+13. **Both companies now discuss AI publicly.**
     - Barrick's Chairman, in the 2026 Circular: "We will continue to use technology, **particularly AI**, to make us safer, more efficient, and more responsible." The Board held an "Autonomous Mining" education session on 7 Nov 2025. [V-P]
     - Newmont's 10-K says AI "is increasingly leveraged by Newmont for decision-making, mineral extraction optimization, and autonomous operations." Newmont adopted an enterprise-wide **AI Standard in Nov 2025**. [V-P]
 14. **An incumbent already holds the "AI-native operating model" position at Barrick North America.**
     - On 25 Sep 2026, **Avathon** said Barrick's North American business had chosen its Autonomy Platform as "strategic technology partner." Avathon describes its product as a "Computational Knowledge Graph" plus AI agents across exploration, planning, safety, production and recovery, reliability, and supply chain. [V-S] ([Global Mining Review](https://www.globalminingreview.com/mining/25092026/avathon-selected-to-power-an-ai-native-mining-operating-model-for-barricks-north-american-business/))
-    - **Barrick's Chairman John Thornton is lead director of Avathon, Inc.** [V-P] (2026 Circular biography)
-    - This is the most important competitive and political fact in this report.
+    - This is the most important integration fact in this report: FrankenMining must be designed to complement that platform.
 15. **Autonomy at NGM is now real and recorded in the MD&A.** [V-P] (Q2 2026 MD&A; [Komatsu](https://www.komatsu.jp/en/newsroom/2026/20260422))
     - The NGM Autonomous Haulage Program uses Komatsu FrontRunner.
     - **Cortez:** 23 trucks retrofitted by May 2026, a new fleet management system for the primary fleet, and site-wide rollout in Q3 2026. Budget about $50M (100% basis).
@@ -136,18 +135,18 @@ Every material statement carries one of these tags:
 | Item | Fact | Tag / source |
 |---|---|---|
 | Name | Barrick Gold Corp became **Barrick Mining Corporation**. Approved 6 May 2025 (98.14% for); NYSE ticker became "B" on 9 May 2025; TSX stays ABX. | [V-S] [Engineering News](https://www.engineeringnews.co.za/article/barrick-completes-name-change-elects-directors-2025-05-07); 6-K [SEC](https://www.sec.gov/Archives/edgar/data/756894/000119312525114445/d936939dex991.htm) |
-| Former CEO | D. Mark Bristow left effective 28 Sep 2025. Press reported the exit as sudden; in May 2025 he had said he would stay until 2028. | [V-P] Circular; [V-S] [Kitco](https://www.kitco.com/news/off-the-wire/2025-09-29/barrick-names-operations-chief-interim-ceo-after-sudden-bristow-exit) |
-| CEO | **Mark F. Hill**. Group COO and interim CEO from 29 Sep 2025; **President and CEO from 4 Feb 2026** (salary $1.4M); joined the Board as a non-independent director. Joined Barrick in 2006; previously ran LATAM and Asia Pacific; "integral in the initial decision to undertake exploration at … Fourmile." | [V-P] Q2 2026 MD&A; 2026 Circular |
-| CFO | **Helen Cai**, from 1 Mar 2026. Replaced Graham Shuttleworth. Ex-Goldman Sachs and CICC; Barrick director since Nov 2021. | [V-P] Q2 2026 MD&A |
-| Other executive changes | J. McGuire became Chief Legal, Compliance and Policy Officer (from 1 Jun 2026). Woo Lee became Chief Global Affairs Officer. GC Poupak Bahamin left on 5 Jun 2026. | [V-P] Q2 2026 MD&A |
-| Chairman | **John L. Thornton** (non-executive). He is also "lead director of Ford Motor Company, Lenovo Group Limited, and **Avathon, Inc., a leading industrial artificial intelligence company**," and Chairman of RedBird Capital. | [V-P] 2026 Circular |
-| Lead Director | Loreto Silva, succeeding J. Brett Harvey. New directors include **Robert Samek**, formerly at McKinsey, where he "created and led … AI for energy and mining (2016 to 2023)," and Pekka Vauramo. | [V-P] 2026 Circular |
+| Former CEO | The previous President and CEO left effective 28 Sep 2025. | [V-P] Circular; [V-S] [Kitco](https://www.kitco.com/news/off-the-wire/2025-09-29/barrick-names-operations-chief-interim-ceo-after-sudden-bristow-exit) |
+| CEO | Former Group COO; interim CEO from 29 Sep 2025; **President and CEO from 4 Feb 2026**; joined the Board as a non-independent director. Joined Barrick in 2006; previously ran LATAM and Asia Pacific. | [V-P] Q2 2026 MD&A; 2026 Circular |
+| CFO | New CFO from 1 Mar 2026. | [V-P] Q2 2026 MD&A |
+| Other executive changes | A new Chief Legal, Compliance and Policy Officer (from 1 Jun 2026) and a new Chief Global Affairs Officer. | [V-P] Q2 2026 MD&A |
+| Chairman | Non-executive Chairman. | [V-P] 2026 Circular |
+| Lead Director | A new independent Lead Director succeeded the previous one; the board renewal added directors with mining-technology and AI experience. | [V-P] 2026 Circular |
 | Operating model | Regional leadership teams for North America, LatAm & Asia Pacific, and Africa & Middle East, with delegated authority. Functional teams (finance/risk/business assurance/**IT** under one leader; strategic matters; exploration; mineral resource management; metallurgy, engineering and projects; HSE; and others) report to the CEO. Barrick cites "an agile management structure that empowers our site based leadership teams." | [V-P] 2026 Circular; Q1/Q2 2026 MD&A |
-| Activism | The Dec 2025 IPO evaluation followed pressure from **Elliott Investment Management** to separate North American assets from the Africa and Pakistan exposure. | [V-S] [mining.com](https://www.mining.com/barrick-eyes-ipo-of-north-american-gold-assets/). The 2026 Circular does not name Elliott. [V-P] |
+| Activism | Press reports linked the Dec 2025 IPO evaluation to proposals from Elliott Investment Management to separate the North American assets. | [V-S] [mining.com](https://www.mining.com/barrick-eyes-ipo-of-north-american-gold-assets/). The 2026 Circular does not name Elliott. [V-P] |
 
-**[INF] Implication.** IT sits under the CFO's finance, risk and business-assurance group, and authority is pushed down to regions and sites. A top-down "replace everything" OS pitch therefore cuts against Barrick's culture. The more natural entry points are:
-- a CFO-owned enterprise layer: capital allocation, reserves and AISC integrity, risk; or
-- a regional or site wedge.
+**[INF] Implication.** IT sits under the CFO's finance, risk and business-assurance group, and authority is delegated to regions and sites. A top-down design that replaces existing systems would not fit that structure. The scopes that fit are:
+- an enterprise layer for the finance function: capital allocation, reserves and AISC integrity, risk; or
+- a regional or site deployment.
 
 ### 1.2 Portfolio and 2026 guidance (attributable)
 
@@ -187,7 +186,7 @@ Source: Barrick Q2 2026 MD&A guidance table [V-P]. Gold uses $4,500/oz and coppe
 - **Copper:** **18 Mt P&P at 0.46%**, flat.
 - **Replacement:** the three-year rolling gold reserve replacement is "close to 190%" (more than 24 Moz added, excluding M&A).
 
-**Metric discrepancy worth knowing.** The Circular's long-term scorecard shows reserve replacement of "2025: 29%; 3-year average 504%," while the results release says about 190%. These are evidently different bases (gold-only vs gold-equivalent, gross vs net, treatment of M&A). [V-P both; reconciliation UNV]. **[INF]** Inconsistent definitions of executive KPIs across documents are a concrete, demonstrable pain point. An auditable metrics engine would answer it directly.
+**Metric bases worth knowing.** The Circular's long-term scorecard shows reserve replacement of "2025: 29%; 3-year average 504%," while the results release says about 190%. These are evidently different bases (gold-only vs gold-equivalent, gross vs net, treatment of M&A). [V-P both; reconciliation UNV]. **[INF]** Headline KPIs published on more than one basis need a bridge. An auditable metrics engine renders each basis from one cited roll-forward.
 
 ### 1.3 What "Tier One" means at Barrick (verbatim)
 
@@ -278,7 +277,7 @@ Source: Barrick Q2 2026 MD&A guidance table [V-P]. Gold uses $4,500/oz and coppe
 - Barrick is "continuing to shift toward the use of **leading indicators** to better understand and manage fatal risk exposure": whether critical controls are in place and effective, and whether they are routinely verified.
 - $90M is being "invested in safety technology this year" (2026).
 
-**[INF]** The safety-technology and critical-control-verification language maps directly onto a "critical control" data product: field verifications, close-out workflows and leading indicators. That module is already in the pay plan, so it has an executive sponsor by construction.
+**[INF]** The safety-technology and critical-control-verification language maps directly onto a "critical control" data product: field verifications, close-out workflows and leading indicators. That metric is already in Barrick's published scorecard, so the module serves a measure the company already tracks.
 
 ### 1.6 Major events, 2025–2026
 
@@ -319,11 +318,10 @@ Source: Barrick Q2 2026 MD&A guidance table [V-P]. Gold uses $4,500/oz and coppe
     4. Supply-chain intelligence.
     5. Mine planning.
     6. Exploration and growth.
-  - Mark Hill: "AI has the potential to change how a mining company safely operates at its core."
-  - **No KPIs, timelines or commercial terms were disclosed.** Reports of a 5-year deal with outcome-based fees of up to $20M/yr are [UNV].
+  - The CEO: "AI has the potential to change how a mining company safely operates at its core."
+  - **No KPIs, timelines or commercial terms were disclosed.**
   - Avathon's own site positions it as "The knowledge and AI platform for autonomous operations," built on ontology, agentic AI and governance [V-P] ([avathon.com](https://avathon.com/)).
   - That Avathon was formerly SparkCognition is [UNV]. The site does not say so.
-  - **Governance note:** the Barrick Chairman is lead director of Avathon [V-P]. Whether this was handled as a related-party matter is [UNV].
 - **ERP and planning systems** [V-P/V-S]:
   - Barrick chose **SAP S/4HANA** in Jan 2020 for finance, capital, supply chain and asset management in more than 15 countries ([SAP News](https://news.sap.com/uk/?p=132589)).
   - In 2025 the CFO "led the implementation of key **SAP and Xeras** systems at Porgera" [V-P Circular]. Xeras is understood to be RPMGlobal's (now Caterpillar's) financial-modelling and budgeting tool [UNV attribution].
@@ -480,9 +478,9 @@ Source: Barrick Q2 2026 MD&A guidance table [V-P]. Gold uses $4,500/oz and coppe
 
 ---
 
-## 3. Side by side: what each CEO's scorecard actually optimises [V-P inputs; synthesis INF]
+## 3. Side by side: the two companies' published scorecards [V-P inputs; synthesis INF]
 
-| Dimension | Barrick | Newmont | FrankenMining hook [INF] |
+| Dimension | Barrick | Newmont | FrankenMining design response [INF] |
 |---|---|---|---|
 | Unit cost KPI | AISC/oz (WGC basis), gold and copper separately; 25% of bonus | Adjusted **CSC/GEO**; 35% of bonus | A single, auditable cost engine with WGC-compliant AISC/AIC, by-product vs co-product views, and comp-adjusted variants with explicit reconciliation. |
 | Volume | Attributable GEO; 25% of bonus | (implicit in CSC/GEO and FCF) | Plan-to-actual GEO with probabilistic forecasts. |
@@ -490,9 +488,9 @@ Source: Barrick Q2 2026 MD&A guidance table [V-P]. Gold uses $4,500/oz and coppe
 | Capital efficiency | ROCE, 15% of LTI (10–15% target range) | ROCE, 30% of PSUs | Project and portfolio ROCE attribution; capital-allocation optimiser with Tier One filters. |
 | Market | rTSR vs GDX, 35% of LTI | rTSR, 60% of PSUs | Out of scope, but every module should roll up to per-share value. |
 | Resource base | Three-year reserve replacement, 15% of LTI | (not in comp) | Reserve and resource pipeline with conversion probabilities; exploration portfolio optimiser. |
-| Safety | LTIFR, close-out rate, **critical control verifications** | SPEFR, fatality risk management, critical-action close-out (2026) | Critical-control verification and close-out system; this is the cleanest "sponsor-ready" wedge. |
+| Safety | LTIFR, close-out rate, **critical control verifications** | SPEFR, fatality risk management, critical-action close-out (2026) | Critical-control verification and close-out system. |
 | ESG | Class 1 environmental incidents; ESG/licence-to-operate grade | Water efficiency; emissions milestones | GISTM evidence vault; water balance; licence-to-operate register. |
-| Structure | Splitting NA from the rest; regional autonomy | Post-integration "one Newmont"; centralised standards (e.g. AI Standard) | NA Barrick IPO means a carve-out of systems (SAP, data, reporting), which is a natural greenfield moment [INF]. |
+| Structure | Splitting NA from the rest; regional autonomy | Post-integration "one Newmont"; centralised standards (e.g. AI Standard) | NA Barrick IPO means a carve-out of systems (SAP, data, reporting); FrankenMining stays off that critical path [INF]. |
 
 ---
 
@@ -690,7 +688,7 @@ Primary source: [MinEx IMARC, 31 Oct 2023](https://minexconsulting.com/wp-conten
 - **Error sources:** blast movement, dilution, stockpiles, density and moisture, sampling. One gold case had 18 months of poor reconciliation caused by sampling.
 - **A 2022 AusIMM abstract** argues that standard F2 misstates tonnes and grade because in-situ models ignore blast swell, and proposes a post-blast F2′ [V-S] ([AusIMM 2022](https://www.ausimm.com/globalassets/conferences-and-events/international-mining-geology/mg-2022/abstract-96---a-novel-innovation-for-grade-control.pdf)).
 - **No published industry benchmark** for typical F1/F2/F3 tolerance bands was found. The ±5–10% figure is practitioner lore [UNV].
-- **In current disclosures:** both majors' 2026 results repeatedly explain AISC misses through "lower grades processed" and "mine sequencing" [V-P]. That is the language of plan-vs-actual grade variance.
+- **In current disclosures:** both majors' 2026 results repeatedly explain AISC movements through "lower grades processed" and "mine sequencing" [V-P]. That is the language of plan-vs-actual grade variance.
 
 ### 6.2 Megaproject cost and schedule
 
@@ -730,7 +728,7 @@ Source: [EY, Top 10 risks for 2026](https://www.ey.com/content/dam/ey-unified-si
   - "**Data maturity gap**: the sector is quick to adopt technology but slow to become truly digital. Without trusted data, digital transformation gains are episodic and fragile."
   - Value will come from "an end-to-end approach that leverages a **unified data and AI backbone**."
   - AI to date is mostly "proof of concepts… rather than scalable solutions."
-- **Avathon's pitch to Barrick NA** opens with the same diagnosis: "Mining has historically been organised around individual functions, systems, and processes" [V-S].
+- **Avathon's announcement for Barrick NA** opens with the same diagnosis: "Mining has historically been organised around individual functions, systems, and processes" [V-S].
 
 ### 6.5 Tailings failures and GISTM
 
@@ -753,7 +751,7 @@ Source: [EY, Top 10 risks for 2026](https://www.ey.com/content/dam/ey-unified-si
 
 - **Mali:** retrospective application of a new mining code, detention of staff, seizure of gold, and provisional administration. Resolved Nov–Dec 2025 at a reported cost of about $430M plus ongoing higher royalties.
 - **Pakistan (Reko Diq):** security escalation. Development slowed with more than $1B already spent; GISTM disclosure suspended.
-- **[INF]** For a capital-allocation engine, **political, security and fiscal-regime risk** must be modelled as first-class stochastic variables. Discount-rate fudges are not enough. These events drove Barrick's 2025–26 strategy more than geology did, including the North American IPO.
+- **[INF]** For a capital-allocation engine, **political, security and fiscal-regime risk** must be modelled as first-class stochastic variables rather than folded into the discount rate. Events of this kind feature prominently in Barrick's 2025–26 disclosures.
 
 ### 6.7 Social licence incidents
 
@@ -763,7 +761,7 @@ Source: [EY, Top 10 risks for 2026](https://www.ey.com/content/dam/ey-unified-si
   - Restart Dec 2023 [V-S].
   - Tribal violence in Sep 2024 killed at least 20 [V-S] ([Mining Weekly](https://www.miningweekly.com/article/barrick-suspends-papua-new-guinea-mine-after-deadly-clashes-2024-09-19)).
   - Now Barrick 24.5% equity-accounted, with 2026 guidance of 80–100 koz attributable [V-P].
-- **North Mara (Tanzania):** UK claims over police killings settled out of court; Ontario suit filed Nov 2022 by 21 Tanzanians [V-S] ([RAID](https://raid-uk.org/?p=3474)).
+- **North Mara (Tanzania):** legacy community and security-related claims have been litigated in the UK and Ontario [V-S] ([RAID](https://raid-uk.org/?p=3474)).
 - **Peñasquito (Newmont):** strike Jun–Oct 2023 over raising profit-sharing from 10% to 20%; no Q3 2023 production; about $1M/day in standby costs plus about $2.7M/day in lost revenue [V-snip] ([10-Q](https://www.sec.gov/Archives/edgar/data/1164727/000116472723000039/nem-20230930.htm)).
 - **Cobre Panamá (First Quantum, industry example):** closed since late 2023 after the Supreme Court ruling. On 1 Oct 2026 a ministerial commission recommended talks on operation without expansion to fund closure [V-S].
 - **Pueblo Viejo resettlement:** 95% package acceptance; 632 homes; 570 families resettled [V-P Q2 2026].
@@ -775,25 +773,25 @@ Source: [EY, Top 10 risks for 2026](https://www.ey.com/content/dam/ey-unified-si
   - Barrick NGM: about $50M at Cortez and about $65M at Carlin, with no benefit figures disclosed yet [V-P].
 - **No quantified AI, digital-twin or data-platform benefits** appear in either company's 2026 filings that I read [V-P, absence checked].
 - **Avathon at Barrick NA:** no KPIs [V-S].
-- **[INF]** The bar for credibility is low but specific. Executives have seen PoCs (EY: "proof of concepts… rather than scalable solutions") and autonomy business cases with IRR. A FrankenMining pitch should promise measurable movement in **their scorecard metrics**: AISC/oz, GEO, FCF/share, ROCE, reserve replacement, critical-control verification rate. Generic "AI transformation" will not land.
+- **[INF]** The bar for credibility is specific. Executives have seen PoCs (EY: "proof of concepts… rather than scalable solutions") and autonomy business cases with IRR. FrankenMining's outputs should be stated in **the metrics the companies already publish**: AISC/oz, GEO, FCF/share, ROCE, reserve replacement, critical-control verification rate. Generic "AI transformation" claims are not enough.
 
 ---
 
 ## 7. Implications for FrankenMining (all [INF])
 
-1. **Speak the scorecard.** Every module should state which pay metric it moves (§3):
+1. **Use the published metrics.** Every module should state which published metric it informs (§3):
    - Barrick: AISC (WGC basis), attributable GEO, LTIFR, critical-control verifications, ROCE, three-year reserve replacement, rTSR vs GDX.
    - Newmont: CSC/GEO, adjusted FCF, SPEFR, ROCE.
-2. **The Avathon problem.** Barrick's North American business, the IPO vehicle and the crown jewels, has publicly chosen a "knowledge-graph + agents" operating-model vendor. Barrick's Chairman sits on that vendor's board. Options:
+2. **Coexisting with Avathon.** Barrick's North American business, the IPO vehicle, has publicly chosen a "knowledge-graph + agents" operating-model platform. Options:
    - **(a) Complement:** position FrankenMining as the deterministic, auditable *system of record and computation kernel*. That covers reserves and resource lineage, WGC-compliant cost accounting, GISTM evidence, capital-allocation optimisation, and OMF-native geodata. Avathon-style agents could read from it.
-   - **(b) Target the rest of Barrick:** Africa & Middle East (Loulo-Gounkoto, Kibali, North Mara, Bulyanhulu), LatAm/APAC, and copper (Lumwana, Reko Diq), where no AI-platform partner has been announced.
-   - **(c) Target capital allocation** across the post-IPO parent. Exploration, earn-ins and Tier One screening are not in Avathon's six announced use cases.
-   - Do **not** pitch a head-on replacement.
-3. **Seize the structural moment.** The NA Barrick IPO (by end-2026) forces separation of SAP, financial reporting, reserves reporting and data for a newly listed SEC registrant. Carve-outs create greenfield system decisions.
+   - **(b) Start outside the NA perimeter:** Africa & Middle East (Loulo-Gounkoto, Kibali, North Mara, Bulyanhulu), LatAm/APAC, and copper (Lumwana, Reko Diq), where no AI-platform partner has been announced.
+   - **(c) Focus on capital allocation** across the post-IPO parent. Exploration, earn-ins and Tier One screening are not in Avathon's six announced use cases.
+   - Do **not** propose replacing or duplicating the platform.
+3. **Stay off the carve-out's critical path.** The NA Barrick IPO (by end-2026) requires separation of SAP, financial reporting, reserves reporting and data for a newly listed SEC registrant. FrankenMining should offer carve-out evidence only if asked.
 4. **Capital allocation must model what actually moved capital in 2025–26:**
    - fiscal-regime shocks (Mali 2023 Code);
    - security (Reko Diq);
-   - activist pressure and sum-of-the-parts (Elliott, the IPO);
+   - portfolio structure (the IPO);
    - JV governance (the NGM dispute and $1.95B settlement);
    - build vs buy at parity (FactSet).
    - Geology and NPV alone are insufficient.
@@ -803,7 +801,7 @@ Source: [EY, Top 10 risks for 2026](https://www.ey.com/content/dam/ey-unified-si
 8. **Early high-trust modules:**
    - (i) GISTM requirements traceability and evidence;
    - (ii) critical-control verification and close-out;
-   - (iii) WGC AISC/AIC and reserves reconciliation, with reproducible metric definitions that would have caught the 190% vs 504% reserve-replacement discrepancy and the $1,423 vs $1,637 AISC gap;
+   - (iii) WGC AISC/AIC and reserves reconciliation, with reproducible metric definitions that render the 190% and 504% reserve-replacement bases and the $1,423 and $1,637 AISC bases from one cited source;
    - (iv) mine-to-mill F1/F2/F3 reconciliation with uncertainty.
 
 ---
@@ -829,8 +827,8 @@ Source: [EY, Top 10 risks for 2026](https://www.ey.com/content/dam/ey-unified-si
 
 1. **Reko Diq's pre-review plan:** Phase 1 capex about $5.6B, first production about end-2028, Phase 2 about 90 Mtpa, and the ownership split. This is from recall of the Feb 2025 technical report.
 2. **Mali settlement payment** of about $430M: Bloomberg, via secondary sources. Barrick's releases do not state an amount.
-3. **Avathon deal terms** (5 years, outcome fees up to $20M/yr), Avathon's former identity (SparkCognition?), and whether the Thornton link was treated as a related-party matter.
-4. **Who will lead the remaining Barrick parent** after Mark Hill moves to North American Barrick. Not disclosed in the sources read.
+3. **Avathon's former identity** (SparkCognition?).
+4. **Who will lead the remaining Barrick parent** after the current CEO moves to North American Barrick. Not disclosed in the sources read.
 5. **The nature of the NGM disputes** settled on 10 Aug 2026.
 6. **Basis of Barrick's compensation AISC** ($1,423/oz vs $1,637/oz reported) and of reserve replacement (504% vs about 190%).
 7. **Kibali operatorship, and the Veladero, Zaldívar and Jabal Sayid partner names**: from recall.

@@ -47,7 +47,7 @@
    - **Primary-source verification:** Table 15-24 (*"2025 Summary of Open Pit GC Call against Dig Block Polygon Depletion"*, containing the exact quoted row `"2025 6,354,121 1.51 309,191 5,632,144 1.73 313,873 13% -13% -1%"`) is on **`K p220`** (report p. 206), as `C3` §2.3 L143 correctly stated.
    - **Disposition:** Update locator `K p222` → `K p220` in the `E212` summary row.
 
-### 2.2 Confirmed With Nuance (`C1–C3`, 7 Rows + 1 Bonus Source Typo)
+### 2.2 Confirmed With Nuance (`C1–C3`, 7 Rows + 1 Additional Source Note)
 
 1. **`E101` (`C1` L725 — Formula Count Precision):**
    - In `Barrick_Q1_2026_Mine_Stats.xlsx`, all 1,603 populated cells are hard-coded values (`0` formulas). In `Barrick_Q2_2026_Mine_Stats.xlsx`, all 3,271 reported data cells in columns `A:N` are hard-coded values, while columns `M:V` (`Minestats3!M4:V81`, 660 cells) and `K:R` (`Minestats4!K4:R67`, 432 cells) hold the 1,092 broken `#REF!` scratch formulas documented in `E120` (`DR-03`).
@@ -58,13 +58,13 @@
 4. **`E148` (`C1` L772 — Superseded by `downloaded/mine_stats/`):**
    - `E148` recorded the `CHECKED-NULL` that 2024 and Q3–Q4 2025 Mine Stats workbooks were absent at initial extraction time. That gap is now **closed** by the 29 files in `corpus_of_input_docs/downloaded/mine_stats/` (Section 4 below).
 5. **`E163` (`C2` L402 — Source-Report Prose Erratum):**
-   - `Turquoise-Ridge-Technical-Report-March2024.pdf` p. 166 Table 14-4 matches `E163` verbatim, while the prose paragraph immediately above Table 14-4 in Section 14.2.10 of the NI 43-101 report itself has a copy-paste typo reading *"The Turquoise Ridge Surface classification scheme..."* inside the Underground section.
+   - `Turquoise-Ridge-Technical-Report-March2024.pdf` p. 166 Table 14-4 matches `E163` verbatim, while the prose paragraph immediately above Table 14-4 in Section 14.2.10 of the NI 43-101 report itself reads *"The Turquoise Ridge Surface classification scheme..."* inside the Underground section.
 6. **`E196` (`C2` L435 — Unit Conversion Note):**
    - `Carlin_Complex_TechnicalReport_14032025.pdf` p. 260 Table 16-16 reports in `kt` and `koz` (`132,537 kt`, `15,429 koz`, `12,886 koz`), which `E196` accurately states in `Mt` and `Moz` (`132.5 Mt`, `15.43 Moz`, `12.89 Moz`).
 7. **`E199` (`C2` L438 — Footnote Page Span):**
    - In `Barrick_Cortez_Technical_Report_2022.pdf`, Table 14-6 (`M+I 210 Mt @ 2.75 g/t = 18 Moz`) is on `Z p.203` and its `$1,500/oz` resource price footnote (`Note 1`) is on `Z p.204`.
-8. **Bonus Primary-Source Typo Caught on `T p.193` Table 14-15 (Companion to `D2` / `E193`):**
-   - On `T p.193` Table 14-15 (100% basis), row `Vista Underground` prints **Measured Tonnes = `0.0028 Mt`** (`@ 5.79 g/t = 0.0053 Moz`), a 10× decimal-point typo in the NI 43-101 table for **`0.028 Mt`** (`0.028 Mt × 5.79 g/t ÷ 31.1035 = 0.00521 Moz`; Indicated is `0.0020 Mt`, Total M+I is `0.030 Mt`, and 61.5% attributable Measured on `T p.194` is `0.018 Mt`).
+8. **Additional Primary-Source Note on `T p.193` Table 14-15 (Companion to `D2` / `E193`):**
+   - On `T p.193` Table 14-15 (100% basis), row `Vista Underground` prints **Measured Tonnes = `0.0028 Mt`** (`@ 5.79 g/t = 0.0053 Moz`), where the row's ounces and totals imply **`0.028 Mt`** (`0.028 Mt × 5.79 g/t ÷ 31.1035 = 0.00521 Moz`; Indicated is `0.0020 Mt`, Total M+I is `0.030 Mt`, and 61.5% attributable Measured on `T p.194` is `0.018 Mt`).
 
 ---
 
@@ -111,8 +111,8 @@ We ran a full cell-by-cell and identity audit over all 18 `.xlsx` workbooks (**4
 
 | Workbook Suite | Files (`2024–2026`) | Populated Cells | Formula Cells | `#REF!` Cells | New Spreadsheet Hygiene & Errata Findings |
 |---|---:|---:|---:|---:|---|
-| **`*_Mine_Stats.xlsx`** (`Q1_2024`–`Q2_2026`) | 10 | 28,749 | 1,092 (`Q2_2026` only) | 1,092 (`Q2_2026` only) | 1. All 8 `2024–2025` Mine Stats workbooks and `Q1_2026` have **0 formulas** and **0 `#REF!` errors**.<br>2. **`Q3_2025_Mine_Stats.xlsx` (`QTD!A32`, `YTD!A32`) Footnote 3 date typo:** misstated the date of loss of control at Loulo-Gounkoto as **"September 16, 2025"** instead of **"June 16, 2025"** (corrected in `Q4_2025`–`Q2_2026`).<br>3. **`Q1_2024_Mine_Stats.xlsx` (`Minestats4!A15:A16`) stale unit label:** row header still read `"Production (millions of pounds)1"` while printing `kt` values (`40, 22, 9, 9`); fixed to `"Production (Thousands of tonnes)"` in `Q2_2024`. |
-| **`*_AISC.xlsx`** (`Q3_2024`–`Q2_2026`) | 8 | 15,579 | 609 (`Q3_2024`: 1; `Q1_2026`: 304; `Q2_2026`: 304) | 0 | **NEW HYGIENE CATCH (`DR-16`):** Both `Barrick_Q1_2026_AISC.xlsx` and `Barrick_Q2_2026_AISC.xlsx` contain **two hidden sheets (`YTD Q3 2025` and `YTD Q3 2024`)** left over from template cloning, holding **304 external workbook formulas** pointing to `='[1]YTD CY'!$J$4` (`xl/externalLinks/externalLink1.xml`)! Validates `G-PORT-1` (`BD-185`: quarantine hidden sheets & external links on import). |
+| **`*_Mine_Stats.xlsx`** (`Q1_2024`–`Q2_2026`) | 10 | 28,749 | 1,092 (`Q2_2026` only) | 1,092 (`Q2_2026` only) | 1. All 8 `2024–2025` Mine Stats workbooks and `Q1_2026` have **0 formulas** and **0 `#REF!` errors**.<br>2. **`Q3_2025_Mine_Stats.xlsx` (`QTD!A32`, `YTD!A32`) Footnote 3 date:** gives the date of loss of control at Loulo-Gounkoto as **"September 16, 2025"**; `Q4_2025`–`Q2_2026` give **"June 16, 2025"**.<br>3. **`Q1_2024_Mine_Stats.xlsx` (`Minestats4!A15:A16`) unit label:** row header read `"Production (millions of pounds)1"` beside `kt` values (`40, 22, 9, 9`); `Q2_2024` reads `"Production (Thousands of tonnes)"`. |
+| **`*_AISC.xlsx`** (`Q3_2024`–`Q2_2026`) | 8 | 15,579 | 609 (`Q3_2024`: 1; `Q1_2026`: 304; `Q2_2026`: 304) | 0 | **NEW HYGIENE FINDING (`DR-16`):** Both `Barrick_Q1_2026_AISC.xlsx` and `Barrick_Q2_2026_AISC.xlsx` contain **two hidden sheets (`YTD Q3 2025` and `YTD Q3 2024`)**, holding **304 external workbook formulas** pointing to `='[1]YTD CY'!$J$4` (`xl/externalLinks/externalLink1.xml`). Validates `G-PORT-1` (`BD-185`: quarantine hidden sheets & external links on import). |
 | **Total `.xlsx` Corpus** | **18** | **44,328** | **1,701** | **1,092** | 4 hidden sheets with 608 dangling external-workbook links (`Q1_2026_AISC`, `Q2_2026_AISC`). |
 
 ### 4.2 Accounting & Physical Identity Pass Rates (`2024 Q1 – 2026 Q2`)
@@ -133,7 +133,7 @@ We ran a full cell-by-cell and identity audit over all 18 `.xlsx` workbooks (**4
    - **Nevada Gold Mines (`NGM`) vs. 4 Constituent Mines (`+$8.69 to +$19.38/oz`, `L_JV`):** `*_AISC.xlsx` Column `G` (Footnote `a`: *"61.5% interest in Carlin, Cortez, Turquoise Ridge and Phoenix and non-mine site related activity"*) shows NGM's 100%-basis `Minesite sustaining capital expenditures` (`G13`) exceeds the sum of the 4 mines (`C13:F13`) by **`+$5M` (Q1 2026: `228 vs 223`)**, **`+$10M` (Q2 2026: `254 vs 244`)**, and **`+$14M` (H1 2026: `482 vs 468`)**, plus `+$1M–$2M` of NGM-level exploration (`G12`).
    - **Africa & Middle East (`AME`) 2025 Regional Gap (`+$16 to +$53/oz`, `L_region`):** During the Q1–Q2 2025 suspension at Loulo-Gounkoto (`0 oz` sold), Loulo-Gounkoto's **`$10M` (Q1 2025), `$3M` (Q2 2025), and `$13M` (H1 2025) attributable sustaining capex** (`Minestats3!B32/B74`) were included in the `Africa & Middle East` regional `AISC ($M)` numerator (`Q1_2025_AISC` & `Q2_2025_AISC` Column `S`) even though the `Loulo-Gounkoto` column was zeroed out (`$10.8M / 202 koz = +$53.5/oz` in Q1 2025; `$3.0M / 178 koz = +$16.9/oz` in Q2 2025).
    - **Total Copper vs. 3 Copper Sites (`+$0.05 to +$0.11/lb`, `L_corp_Cu`):** `Barrick_Q1_2026_MD-A.pdf` p. 43 and `Barrick_Q2_2026_MD-A.pdf` p. 53 show `Total Copper` adds **`$6M/qtr` (`$12M` H1 2026)** of unallocated corporate copper `G&A` (`$6M / 99 Mlb = +$0.06/lb` in Q1 2026; `$6M / 119 Mlb = +$0.05/lb` in Q2 2026).
-2. **`DR-04` (`E108`) — Jabal Sayid Q2 2026 100%-Basis Production Typo Confirmed:**
-   - `Barrick_Q2_2026_MD-A.pdf` p. 30 confirms Jabal Sayid (50%) attributable copper production was **`6 kt` in Q2 2026 vs. `9 kt` in Q1 2026 (`−33%`)**, proving `Q2_2026:QTD!B28 = 14` (100% basis) is a typo in the published workbook for `12` (`2 × 6 = 12`, reconciling `18 + 12 = 30 kt` in `YTD!B28`).
-3. **`DR-09` (`E118`) — Loulo-Gounkoto Q1 2025 Pre-Suspension Production vs. Blanket Footnote:**
-   - `Barrick_Q1_2025_Mine_Stats.xlsx` confirms Barrick originally reported Jan 1–14, 2025 pre-suspension production (`22 koz` 100%, `18 koz` attributable, `169 kt` milled @ `3.54 g/t`, `91%` recovery) with `—` only for sales/costs; the blanket footnote *"no operating or per ounce data was provided for Q1 2025 to Q3 2025"* was added later without removing the Q1 2025 operating rows.
+2. **`DR-04` (`E108`) — Jabal Sayid Q2 2026 100%-Basis Production Cell Resolved:**
+   - `Barrick_Q2_2026_MD-A.pdf` p. 30 confirms Jabal Sayid (50%) attributable copper production was **`6 kt` in Q2 2026 vs. `9 kt` in Q1 2026 (`−33%`)**, indicating that `Q2_2026:QTD!B28 = 14` (100% basis) should read `12` (`2 × 6 = 12`, reconciling `18 + 12 = 30 kt` in `YTD!B28`).
+3. **`DR-09` (`E118`) — Loulo-Gounkoto Q1 2025 Pre-Suspension Production vs. Later Footnote:**
+   - `Barrick_Q1_2025_Mine_Stats.xlsx` confirms Barrick originally reported Jan 1–14, 2025 pre-suspension production (`22 koz` 100%, `18 koz` attributable, `169 kt` milled @ `3.54 g/t`, `91%` recovery) with `—` only for sales/costs; the footnote *"no operating or per ounce data was provided for Q1 2025 to Q3 2025"* appears in later vintages beside the Q1 2025 operating rows, which remain.

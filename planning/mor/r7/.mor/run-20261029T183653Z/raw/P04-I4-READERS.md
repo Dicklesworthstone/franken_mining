@@ -78,7 +78,7 @@ are four reader-blocking gaps:
 | Reader (plan §3) | M0–M2 outputs they would receive | Usable as specified? |
 |---|---|---|
 | CFO / controller | M0 metric reproduction, consolidated AISC bridge, NS-01 waterfall; M2 AISC waterfall (GATE-BULL-03) | **No at M0 as emitted** (C1). The plan's waterfall scope exceeds public data, and "controllable" is undefined (C10). |
-| Compensation / remuneration committee (not in §3; RISK-22 owner) | M0 reserve-replacement bases and AISC variants (E025) | **No as emitted** (C1). Not named as a reader (C9). |
+| Compensation / remuneration committee (not in §3) | M0 reserve-replacement bases and AISC variants (E025) | **No as emitted** (C1). Not named as a reader (C9). |
 | IR / disclosure committee (not in §3) | M0 discrepancy register over IR-host workbooks | **Unspecified** (C9). NP 51-201 s.6.8 permits issuer engagement on public-information inaccuracies. |
 | EC / board, sponsor | M0 report and FY2026 forecasts; M1 retrospective cards; M2 Site Assurance card | Historical reproduction yes. **Forecasts not usable two-way before release** (C4). |
 | QPs / Head of MRM | M0 cut-off reproduction, GATE-HALL-01; M2 attestation | M0 fits. **M2 attestation lacks routing and counsel timing** (C8). |
@@ -106,8 +106,8 @@ evidence. Each is checkable by those readers in minutes.
    - (7.429 + 12.277) ÷ 3.91 = 504.0%.
 
    The doc comment attributes the difference to "greenfield feasibility conversions (Reko Diq +13.0 Moz + Lumwana
-   Super Pit +1.7 Moz = 12.28 Moz)". 13.0 + 1.7 = 14.7, not 12.28. Told to a compensation committee, this states
-   that the 504% pay outcome rests on a non-organic basis, which the Circular does not say.
+   Super Pit +1.7 Moz = 12.28 Moz)". 13.0 + 1.7 = 14.7, not 12.28. As printed, this states
+   that the published 504% figure rests on a non-organic basis, which the Circular does not say.
 2. **`gold_fy2025.reported_aisc_per_oz: 1638`** comes from an in-code literal (`zip_inflate.rs` line 447,
    `L218`). Barrick's filed FY2025 gold AISC is $1,637/oz (E607; Q4 2025 MD&A, pdftotext page 6 line 358 and
    page 47 line 4067; new evidence).
@@ -473,8 +473,8 @@ inferred.
 1. **IR / disclosure committee.** The M0 discrepancy register audits workbooks published on Barrick's IR host
    (E451; §21.6 line 4501). NP 51-201 s.6.8 shows the issuer may legitimately engage on "inaccuracies or
    omissions with reference to publicly available information".
-2. **Compensation / remuneration committee.** The wedge is justified by pay-metric measurement integrity (§37.1
-   lines 7336–7337; E025, E605), and RISK-22's owner is the "Board remuneration committee" (line 7239).
+2. **Compensation / remuneration committee.** The wedge is justified by measurement integrity behind the
+   published scorecard metrics (§37.1 lines 7336–7337; E025, E605).
 3. **Regulators.** The case file says §3 lists IR and regulators (`MOR_CASE.md` line 48). It lists neither. No
    M0–M2 output is addressed to a regulator, so for them this is a framing correction, not a gap.
 
@@ -485,14 +485,14 @@ inferred.
   "unexplained difference between cited cells" and reach the issuer privately before any public push. The
   private-first preference is HYPOTHESIS: I found no document stating Barrick IR's preference. The basis is the
   Decision Contract's loss function plus E673 (push = publish).
-- **Compensation committee.** Question: "Is each pay-scorecard figure reproducible, on which basis?" The M0
+- **Compensation committee.** Question: "Is each scorecard figure reproducible, on which basis?" The M0
   report shows the scorecard figure beside the reported figure, for example gold AISC $1,423 (API actual) beside
   $1,637 (non-GAAP) (E605, E607). The scorecard figure carries a typed refusal "basis not located (OPEN-BULL-1)"
   rather than being omitted, and OPEN-BULL-1 gets an owner and a deadline in §36.2.
 
 **Cost.** Low. **Reversibility.** Full.
 
-**Acceptance test.** §3 has the two rows. The M0 report has a pay-metric section listing each E605 metric with a
+**Acceptance test.** §3 has the two rows. The M0 report has a scorecard-metric section listing each E605 metric with a
 reproduction state (reproduced, explained, or refused with code).
 
 **Evidence.** Plan lines cited; E025, E451, E605, E607; NP 51-201 s.6.8; MOR_CASE line 48.
@@ -545,7 +545,7 @@ not be "from tonnes, grade and recovery to unit cost reconciled to the site's re
 ## NULL OR BLOCKED RESULT (checked nulls)
 
 - **JV partners.** At M0, partner-relevant figures are attributable public values with typed ownership (§21.6;
-  §24.3 OwnershipRef). The plan already catches the Porgera 47.5%/24.5% mislabel (E468, E469). M2 is at a
+  §24.3 OwnershipRef). The plan already catches the Porgera 47.5% label on 24.5% values (E468, E469). M2 is at a
   100%-owned site (E551, E552) chosen to avoid partner consent (F13). The alternates name the consent instruments
   (Twiga paper, AngloGold consent). FA `.fab` bundles are unavailable in M0–M2 (§37.4), but §31.2's
   `fmine-verify` bundles cover verification. No gap found.

@@ -140,7 +140,7 @@ breakpoints and the admitted branches; preserve non-monotone rules rather than a
 always suffice. Rule text and its structured interpretation require a role-reviewed version. An unknown
 adjustment or restatement policy stays unresolved instead of borrowing the public non-GAAP definition by
 default. E605–E607 and OPEN-BULL-1 explain why that distinction matters, but do not supply a complete scheme
-formula or prove an actual award was wrong.
+formula or assess any actual award.
 
 Then capture one publicly disclosed corporate scheme formula and relevant metric definition, if independently
 reviewed sources expose sufficient terms. Reproduce only the disclosed factor calculation, with hashes and

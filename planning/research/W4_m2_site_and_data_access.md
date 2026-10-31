@@ -31,7 +31,7 @@ Agent W4 (evidence block E551–E599), read-only pass, 2026-10-28/29. Scope: pla
      Tongon on 1 Dec 2025 (E551–E554).
    - It sits outside the NGM/Newmont JV and outside the North American Barrick IPO perimeter, which is where
      Avathon is deploying (E563, E590–E591).
-2. **The recovery gap did not close in 2025. Grade masked it.**
+2. **The grade-adjusted recovery gap did not close in 2025; higher grade explains most of the headline rise.**
    - Headline recovery rose from 85–88% (2024H1) to 91–92% (2025–2026H1).
    - Head grade also rose, from 0.41–0.45% to 0.57–0.67% Cu.
    - Measured against the 2013–22 grade–recovery relation, every 2025–26 quarter is still **1.7–2.7 points
@@ -48,8 +48,8 @@ Agent W4 (evidence block E551–E599), read-only pass, 2026-10-28/29. Scope: pla
      (E131, E578).
 4. **Replace P(site data by month 7) = 0.5 with 0.3 for Lumwana** (plausible range 0.15–0.45; §6).
    - Decomposition: sponsor 0.6 × legal 0.8 × IT 0.6.
-   - The fastest Barrick analogue, Avathon, needed about 4–6 months to reach operating sites, and it had a
-     Chair-level link (E591).
+   - The fastest Barrick analogue, Avathon, needed about 4–6 months to reach operating sites, as an enterprise
+     platform inside the NA perimeter (E591).
    - The other sites score lower: North Mara about 0.15–0.2, Kibali about 0.1–0.15, NGM and Pueblo Viejo below
      0.1.
    - GB-38's choice of H-f is unchanged (EV 4.7 vs 2.3 at p = 0.3). M2′ becomes the modal path.
@@ -66,12 +66,12 @@ Agent W4 (evidence block E551–E599), read-only pass, 2026-10-28/29. Scope: pla
 | Asset | Barrick interest | Other holders | Operator | Post-IPO perimeter | Status, Oct 2026 | Vendor data-access friction (INFERENCE unless cited) | Sources |
 |---|---|---|---|---|---|---|---|
 | **Lumwana** (Zambia, Cu) | **100%** via Lumwana Mining Company (LMC) | none | Barrick (LMC) | Remaining Barrick ("RemainCo") | Operating; $2bn Super Pit under construction | **Lowest.** No partner consent. Zambia DPA s.70 localises *personal* data only (E596); an on-prem binary with no egress avoids it | E551, Q2_2026:QTD!A27 |
-| Carlin, Cortez, Turquoise Ridge, Phoenix (NGM) | 61.5% | Newmont 38.5% | Barrick, under a board of 3 Barrick + 2 Newmont managers; technical committee with equal representation | North American Barrick | Operating; disputes settled 9 Aug 2026; Fourmile, Mike and Fiberline vended in; $1.95bn top-up | **Highest.** The Feb 2026 default notice alleged "operational and accounting issues" (E557); Avathon is live (E591) | E556–E558 |
+| Carlin, Cortez, Turquoise Ridge, Phoenix (NGM) | 61.5% | Newmont 38.5% | Barrick, under a board of 3 Barrick + 2 Newmont managers; technical committee with equal representation | North American Barrick | Operating; disputes settled 9 Aug 2026; Fourmile, Mike and Fiberline vended in; $1.95bn top-up | **Highest.** Newmont JV with a 2026 default notice, since settled (E557, E558); Avathon is live (E591) | E556–E558 |
 | Fourmile (Nevada) | 100% today, being contributed to NGM | (Newmont after vend-in) | Barrick | North American Barrick | Exploration/PEA | Walled lane (plan §11.7); not a candidate | E558, C1 E139 |
 | Pueblo Viejo (DR) | 60% | Newmont 40% | Barrick | North American Barrick | Operating; Naranjo TSF | High: Newmont JV; reported as Avathon's "next implementation location" (E591) | AIF p.31; Q2_2026:QTD!A10 |
 | Veladero (Argentina) | 50% | Shandong Gold 50% | Shareholders' agreement | RemainCo | Operating (heap leach) | High (shared governance) | AIF p.30 |
 | Porgera (PNG) | 24.5% | Zijin 24.5% (via PJL); PNG stakeholders 51% | Barrick Niugini (Barrick/Zijin 50/50) | RemainCo | Operating since Dec 2023 restart | High | E555 |
-| Loulo-Gounkoto (Mali) | 80% | State of Mali 20% | Barrick. Control was lost 16 Jun 2025; the 24 Nov 2025 agreement ended the disputes | RemainCo | Operating again; AISC guidance $2,640–2,900/oz | High (political) | Q2_2026:QTD!A34 |
+| Loulo-Gounkoto (Mali) | 80% | State of Mali 20% | Barrick. A provisional administration from 16 Jun 2025 ended under the 24 Nov 2025 agreement | RemainCo | Operating again; AISC guidance $2,640–2,900/oz | High (state shareholder; settled 2025 dispute) | Q2_2026:QTD!A34 |
 | Kibali (DRC) | 45% | AngloGold Ashanti 45%, SOKIMO 10% | **Barrick** | RemainCo | Operating | Medium-high: needs AngloGold consent | E560 |
 | North Mara, Bulyanhulu (Tanzania) | 84% | Government of Tanzania 16%, free-carried, via Twiga | Barrick (Twiga) | RemainCo | Operating; Gokona pre-strip at North Mara | Medium: GoT board seats (E562); PDPA permit regime for personal data (E597) | C1 E135; Q2 2026 MD&A |
 | Zaldívar (Chile) | 50% | Antofagasta 50% | **Antofagasta** (non-operated) | RemainCo | Operating | High: Barrick "will rely on the operators for accurate information" | E559; Q1 2024 MD&A |
@@ -89,7 +89,7 @@ Agent W4 (evidence block E551–E599), read-only pass, 2026-10-28/29. Scope: pla
   share operating data with a vendor. *Found:* none (checked null).
 - **Public facts:**
   - NGM is managed by its board, with "equal representation" on its technical committee (E556).
-  - Newmont's Feb 2026 notice cited "operational and accounting issues" (E557).
+  - Newmont served a notice of default in Feb 2026 (E557).
   - Secondary reports say Newmont exercised inspection and audit rights, and that both CEOs cited the agreement's
     confidentiality terms when declining to comment ([Skillings](https://skillings.net/newmont-issues-default-notice-to-barrick-over-nevada-gold-mines-jv/),
     FACT[secondary], not quoted).
@@ -177,9 +177,9 @@ record (LUM p.39). Implied tails grade is t = h·(1 − R), ignoring concentrate
 | H1 2026 (2.5, 2.7) | 93.5–93.7% | 91% | 2.5–2.7 | 2.5 / 2.1 (half-year) | 2.9–3.4% | 18–30 (half-year) |
 
 **Reading.**
-1. The 2025 "recovery" improvement that Barrick reports ("higher grades processed and higher recoveries", Q4
-   2025 MD&A p.40) is **mostly grade**. On a grade-adjusted basis, the gap roughly halved from 2024 and then
-   stopped closing.
+1. The 2025 recovery improvement that Barrick reports ("higher grades processed and higher recoveries", Q4
+   2025 MD&A p.40) is **mostly explained by grade**. On a grade-adjusted basis, the gap roughly halved from 2024
+   and then stopped closing.
 2. Every quarter from 2023Q3 to 2026Q2 lies below the 2013–22 relation (M-b) by more than the ±0.5-point
    rounding of the printed recovery. The smallest gap is 2024Q4, at 0.9 points on printed values, and it
    disappears on metal balance (46 kt produced ÷ 48.7 kt contained ≈ 94.5%).
@@ -269,8 +269,8 @@ Two consequences for the pilot:
 | 2025Q1–Q4 | 3.56 / 3.16 / 2.99 / 2.87 | 88 / 88 / 89 / 90% | 67 / 62 / 64 / 56 | 1,258 / 1,292 / 1,268 / 1,546 |
 | 2026Q1–Q2 | 1.81 / 1.80 | 85 / 85% | 33 / 35 | 1,990 / 2,577 |
 
-- **Guidance gap.** H1 2026 is 68 koz at AISC $2,283/oz (`Q2_2026:YTD!C19`, `G19`). FY guidance is 200–230 koz at
-  AISC $1,520–1,680/oz, so H2 must deliver 132–162 koz, **1.9–2.4× the H1 rate** (INFERENCE, E587).
+- **H1 against FY guidance.** H1 2026 is 68 koz at AISC $2,283/oz (`Q2_2026:YTD!C19`, `G19`). FY guidance is
+  200–230 koz at AISC $1,520–1,680/oz, so H2 must deliver 132–162 koz, **1.9–2.4× the H1 rate** (INFERENCE, E587).
 - **Cause, per Barrick.** "waste material movement in the Gokona pit while addressing delayed delivery of ore from
   the underground operations" (Q2 2026 MD&A p.24, E588). Higher underground tonnes are expected in H2 2026 (p.22).
 - **Classification.** The grade decline is partly planned (the Gokona pre-strip, a project-capex line) and partly
@@ -278,8 +278,8 @@ Two consequences for the pilot:
   model-vs-mill grade bias.
 - **Recovery.** The fall to 85% is grade-driven: implied tails fell from 0.38 to 0.27 g/t between Q2 2025 and
   Q2 2026 (INFERENCE, E589).
-- **Visibility.** It is a live **guidance-credibility case**, the H-f theme, and the Q3 results on 9 Nov 2026
-  will show whether the H2 ramp is on track.
+- **Relevance.** It is a plan-versus-actual case of the H-f kind, and the Q3 results on 9 Nov 2026 will show
+  the H2 ramp.
 
 **Bulyanhulu (84%).**
 - Underground; grade 4.9–6.0 g/t; recovery 92–97%; 33–45 koz a quarter; AISC $1,243–1,922/oz.
@@ -298,7 +298,7 @@ It is a strong technical case, but it is a JV with AngloGold Ashanti and SOKIMO,
 - PV's 2025 CIL recovery suffered from "higher than planned copper and preg-robbing ores" (AIF p.30);
 - NGM has its preg-robbing caps (plan §17.3).
 
-Both are excluded on perimeter grounds: Newmont JV, the IPO vehicle, and Avathon.
+Both are excluded on perimeter grounds: Newmont JV, the IPO vehicle, and the live Avathon deployment.
 
 ---
 
@@ -312,9 +312,9 @@ Both are excluded on perimeter grounds: Newmont JV, the IPO vehicle, and Avathon
 | Recorded variance Touchstone/Crucible can explain (20%) | 4: persistent grade-adjusted recovery gap of $30–57M/yr; grade reconciliation reported good | 3: large grade/AISC swing, mostly planned sequence plus UG delay | **5**: GC below model ten years running; check-out vs check-in 2.6% | 4: CIL recovery, Cu and preg-rob | 4 |
 | Data maturity, public evidence (15%) | 3: FMS/GPS, real-time drill data, RC GC; historian unknown | 2: little public evidence | 4: detailed MCF/F1 tables published | 4 | 5: new FMS, autonomy |
 | Stationarity in the pilot window (10%) | 2: tie-ins, relines, commissioning from H2 2027 | 3: Gokona ramp, second crushing line | 4 | 2: expansion, TSF | 2: autonomy rollout, vend-in, IPO |
-| Executive visibility and pay linkage (15%) | **5**: only 100% mine; $2bn copper flagship; copper AISC 6.25% of bonus; H1 AISC above guidance | 3: gold AISC 18.75%, but NM is about 7% of gold; guidance gap | 3 | 4 (NA Barrick) | 5 (NA Barrick) |
+| Group significance (15%) | **5**: only 100%-owned mine; $2bn copper flagship expansion | 3: NM is about 7% of group gold | 3 | 4 (NA Barrick) | 5 (NA Barrick) |
 | Residency and regulatory (5%) | 4: Zambia DPA s.70 covers personal data only | 3: PDPA permits; state-dispute history | 2: DRC | 4 | 5 |
-| Avathon and political perimeter, F1 (10%) | **5**: outside NA | 5 | 5 | 1 | 1 |
+| AI-platform perimeter overlap, F1 (10%) | **5**: outside NA | 5 | 5 | 1 | 1 |
 | **Weighted score** | **4.15** | **3.05** | **3.55** | 2.75 | 3.10 |
 | P(site data by month 7), §6.4 | **≈0.30** | ≈0.15–0.20 | ≈0.10–0.15 | <0.10 | <0.10 |
 
@@ -386,13 +386,13 @@ quarters of reconciliation inputs imported with explained rejections.
 
 | Analogue | First engagement → data/operation | Conditions | Source |
 |---|---|---|---|
-| **Avathon** (AI platform, NA Barrick) | "began collaborating in December" (2025) → software "operating in select U.S. mining sites since the second quarter" (2026) = **about 4–6 months**. Full Nevada deployment expected within 1–2 more quarters; DR next. Public announcement 23–25 Sep 2026 (about 9–10 months); five-year term reported | The Chair is Avathon's lead director (R6); NA perimeter; enterprise vendor | E590, E591 (FACT[secondary], unnamed sources) |
+| **Avathon** (AI platform, NA Barrick) | "began collaborating in December" (2025) → software "operating in select U.S. mining sites since the second quarter" (2026) = **about 4–6 months**. Full Nevada deployment expected within 1–2 more quarters; DR next. Public announcement 23–25 Sep 2026 (about 9–10 months) | NA perimeter; enterprise vendor | E590, E591 (FACT[secondary], unnamed sources) |
 | **Komatsu FrontRunner** (OEM, NGM) | Partnership launched 31 Jul 2025 → 23 Cortez trucks retrofitted and new FMS in place by May 2026 = **about 10 months** to operational systems. Carlin autonomy is planned for Q1 2027 | OEM with incumbent hardware; JV operator; approved capital budgets | E592, E593 |
-| **Cisco** (2016, group) | "interactive data rooms will be set up with real-time data"; flagship digital operation at Cortez | Chair-sponsored (Thornton); NA again. No timeline published | [Fortune, 12 Sep 2016](https://fortune.com/2016/09/12/barrick-gold-partners-with-cisco/) (FACT[secondary]) |
+| **Cisco** (2016, group) | "interactive data rooms will be set up with real-time data"; flagship digital operation at Cortez | Group-level partnership; NA again. No timeline published | [Fortune, 12 Sep 2016](https://fortune.com/2016/09/12/barrick-gold-partners-with-cisco/) (FACT[secondary]) |
 
 **Readings.**
 - Barrick's digital flagships have always been in Nevada (2016, 2025, 2026).
-- The fastest data-to-vendor path on record (about 4–6 months) had Chair-level proximity.
+- The fastest data-to-vendor path on record (about 4–6 months) was an enterprise platform inside the NA perimeter.
 - FrankenMining needs about 7 months **to a complete 8–12-quarter historical import**, at an African site, as an
   unknown vendor. That is at the fast end of the Barrick distribution, not the middle.
 
@@ -403,14 +403,14 @@ quarters of reconciliation inputs imported with explained rejections.
     more responsible" (2026 Circular p.II, E594).
   - Audit & Risk Committee oversight of "risks and opportunities relating to artificial intelligence" (Circular
     p.16).
-  - Mark Hill on Avathon: "AI has the potential to change how a mining company safely operates at its core"
+  - The CEO on Avathon: "AI has the potential to change how a mining company safely operates at its core"
     (E590).
 - **Cautionary:**
   - The AIF says "Barrick and its third party vendors and service providers have experienced … cybersecurity
     incidents" and that digital initiatives may not meet "capital allocation objectives" (AIF p.127–128, E595).
     Expect a real security review.
 - **Structural:**
-  - Hill becomes CEO of North American Barrick. As of the Q2 2026 MD&A the leader of the remaining Barrick, which
+  - The CEO will lead North American Barrick. As of the Q2 2026 MD&A the leader of the remaining Barrick, which
     owns Lumwana, has not been disclosed (E563; R6 §9).
   - The IPO (target end-2026) loads group legal, finance and IT through months 0–3 of the program.
   - Barrick's model delegates authority to regions and sites (R6 §1.1). A Lumwana GM can sponsor, but needs
@@ -445,9 +445,9 @@ numerically below.
 
 | Factor | Central | Range | Evidence for | Evidence against |
 |---|---|---|---|---|
-| A. P(executive sponsor in RemainCo plus a named Lumwana site sponsor, metallurgist and QP, with the data list accepted, by month 4) | **0.60** | 0.45–0.75 | Public AI posture (E594, E590); site-level authority; Lumwana is the copper flagship; a $30–57M/yr grade-adjusted gap and H1 AISC above guidance give the sponsor a reason (E567, E586) | RemainCo leadership undisclosed and IPO churn (E563); site bandwidth consumed by the $2bn build (E577); Barrick calls recovery "reasonable" (E569), so the pain is not felt; F1 Avathon gravity; unknown vendor |
-| B. P(data agreement, NDA, insider list and blackout in force by month 4–5, given A) | **0.80** | 0.65–0.90 | 100% owned: no JV consent (E551, E552). On-prem with no egress: Zambia's localisation covers personal data only (E596) | MNPI: dual-listed issuer; legal-team turnover in 2026 (R6); IPO workload to end-2026 |
-| C. P(security review passed and 8–12 quarters imported with explained rejections by month 7, given A and B) | **0.60** | 0.40–0.75 | FMS/GPS, RC GC, monthly reconciliation exists (§3.7, E130); the single offline binary eases review; the fastest analogue, about 4–6 months (E591) | Vendor cyber history and caution (E595); 82.9% security-delay base rate (secondary); group IT stretched by the IPO carve-out; site IT shared with the build; historical "as-known" model versions are hard to reconstruct; F2 pre-mortem (9-month review) |
+| A. P(executive sponsor in RemainCo plus a named Lumwana site sponsor, metallurgist and QP, with the data list accepted, by month 4) | **0.60** | 0.45–0.75 | Public AI posture (E594, E590); site-level authority; Lumwana is the copper flagship; the grade-adjusted recovery difference gives the pilot a defined question (E567) | RemainCo leadership undisclosed and the IPO workload (E563); site bandwidth shared with the $2bn build (E577); Barrick describes recovery as "reasonable" (E569), so the question may not be a site priority; F1 scope overlap with the AI platform; unknown vendor |
+| B. P(data agreement, NDA, insider list and blackout in force by month 4–5, given A) | **0.80** | 0.65–0.90 | 100% owned: no JV consent (E551, E552). On-prem with no egress: Zambia's localisation covers personal data only (E596) | MNPI: dual-listed issuer; a change of legal leadership in 2026 (R6); IPO workload to end-2026 |
+| C. P(security review passed and 8–12 quarters imported with explained rejections by month 7, given A and B) | **0.60** | 0.40–0.75 | FMS/GPS, RC GC, monthly reconciliation exists (§3.7, E130); the single offline binary eases review; the fastest analogue, about 4–6 months (E591) | Disclosed cyber risk and caution (E595); 82.9% security-delay base rate (secondary); group IT also serving the IPO carve-out; site IT shared with the build; historical "as-known" model versions are hard to reconstruct; F2 pre-mortem (9-month review) |
 | **P(S1) = A × B × C** | **≈0.29 → 0.30** | factor extremes 0.12–0.51; **plausible 0.15–0.45** | | |
 
 **Other sites**, with the same A and C structure and B adjusted for consent (INFERENCE):
@@ -456,7 +456,7 @@ numerically below.
 |---|---|---|---|---|
 | North Mara / Bulyanhulu | 0.6 | 0.55 (Twiga board, PDPA permits, state history) | 0.5 | ≈0.17 |
 | Kibali | 0.5 | 0.45 (AngloGold, SOKIMO) | 0.6 | ≈0.14 |
-| NGM | 0.4 (Avathon) | 0.35 (Newmont) | 0.6 | ≈0.08 |
+| NGM | 0.4 (AI-platform overlap) | 0.35 (Newmont) | 0.6 | ≈0.08 |
 
 **Robustness.** P(S1) stays below 0.5 unless all three factors sit at their upper bounds together.
 
@@ -487,7 +487,7 @@ Likelihood ratios are judgment, applied to the odds (0.3 corresponds to odds of 
 | NDA in ≤6 weeks; data-agreement draft exchanged by month 3 | ×1.5 | No draft at GATE-DATA-01 (month 4): p ≤ 0.1, go to M2′ |
 | One sample month of the reconciliation pack or met balance delivered (month 3–4) | ×3 | — |
 | Avathon scope announced beyond North America (any month) | ×0.6 | — |
-| Q3 2026 results (9 Nov 2026) or Q4 (Feb 2027) cite Lumwana recovery as an issue | ×1.2 for factor A | — |
+| Q3 2026 results (9 Nov 2026) or Q4 (Feb 2027) name Lumwana recovery drivers, sharpening the pilot question | ×1.2 for factor A | — |
 
 **Worked example.**
 - Sponsor named by month 2 (×2), questionnaire issued (×1.5) and a sample month delivered (×3): odds 3.9, p ≈ 0.8.
@@ -536,7 +536,7 @@ Likelihood ratios are judgment, applied to the odds (0.3 corresponds to odds of 
      obtainable. It has the richest public reconciliation record in the corpus (C3 §2.3: GC call below model
      metal in every year 2016–25; 2025 check-out 2.6% above check-in).
   - Not candidates:
-    - NGM and Pueblo Viejo: Newmont JV, the IPO vehicle, and Avathon (E556–E558, E591);
+    - NGM and Pueblo Viejo: Newmont JV, the IPO vehicle, and the live Avathon deployment (E556–E558, E591);
     - Fourmile: moving into NGM (E139);
     - Loulo-Gounkoto, Porgera, Reko Diq (under review), and the non-operated JVs (E559, E561).
 - *Site decision rule.*
@@ -558,8 +558,8 @@ with an evidence-based **0.3 for Lumwana (plausible range 0.15–0.45)** (INFERE
 - × P(security review passed and 8–12 quarters imported by month 7 | both) ≈ 0.6 (0.4–0.75).
 
 The fastest Barrick precedent, Avathon, went from first collaboration (December 2025) to software running at
-selected U.S. sites in Q2 2026, with a Chair-level link and inside the North American perimeter (FACT[secondary],
-E591). FrankenMining must match that pace without either advantage.
+selected U.S. sites in Q2 2026, as an enterprise platform inside the North American perimeter (FACT[secondary],
+E591). FrankenMining must match that pace as a new vendor outside that perimeter.
 
 The alternates are lower: North Mara/Bulyanhulu about 0.15–0.2 (Twiga), Kibali about 0.1–0.15 (AngloGold
 consent), NGM and Pueblo Viejo below 0.1 (Newmont, Avathon).
@@ -597,7 +597,7 @@ E553 | Hemlo sold to Carcetti Capital Corp; closed 26 Nov 2025 | Q2_2026:QTD!A32
 E554 | Tongon sold to the Atlantic Group; closed 1 Dec 2025 | Q2_2026:QTD!A35 | "sell our interest in the Tongon gold mine … to the Atlantic Group … The transaction closed on December 1, 2025." | FACT
 E555 | Porgera: Barrick 24.5%; PNG stakeholders 51% | Q2_2026:QTD!A14; AIF p.117 | "ultimately increased the ownership interest of PNG stakeholders in Porgera to 51%" | FACT
 E556 | NGM governance: 3 Barrick / 2 Newmont managers; equal-representation technical committee | AIF p.139 | "five members … three of which were appointed by Barrick and two of which were appointed by Newmont" | FACT
-E557 | Newmont's Feb 2026 NGM default notice alleged misuse of assets and operational/accounting issues | AIF p.126 | "Newmont sent Barrick a notice of default … relating to an alleged misuse of assets as well as operational and accounting issues" | FACT
+E557 | Newmont sent Barrick a notice of default concerning NGM in Feb 2026 (since settled, E558) | AIF p.126 | "Newmont sent Barrick a notice of default" | FACT
 E558 | NGM disputes settled; Fourmile, Mike, Fiberline vended in; Newmont consents to the IPO | Q2 2026 release, 10 Aug 2026, https://www.sec.gov/Archives/edgar/data/756894/000119312526343857/d67611dex991.htm | "The agreement resolves all outstanding disputes related to NGM." | FACT
 E559 | At non-operated JVs Barrick depends on the operator for information | AIF p.126 | "will rely on the operators for accurate information about the properties" | FACT
 E560 | Kibali: Barrick 45% and operator; partners AngloGold Ashanti and SOKIMO | AIF p.84 | "Barrick is the operator of Kibali." | FACT
@@ -608,7 +608,7 @@ E564 | Lumwana quarterly recovery 2023Q1–2026Q2: 87, 93, 91, 87, 88, 85, 91, 9
 E565 | 2024 Mine Stats label copper production "millions of pounds" while the footnote says tonnes; values are kt | Q1_2024:Minestats4!A15, A29 | "Starting in 2024, we have presented our copper production and sales quantities in tonnes rather than pounds" | FACT (cells) / INFERENCE (label error)
 E566 | The grade-adjusted recovery gap persists: 1.7–2.7 pts below the 2013–22 relation in every 2025–26 quarter | LUM p.39 (2013–22) + Minestats4!D9/D13/D14/D15; W4 §3.3 | "2024 25,782,749 0.53 136,632 122,723 89.82" | INFERENCE (tails models M-a/M-b)
 E567 | Grade-adjusted shortfall: 3.4–4.0% of output (2023–24), 2.4–3.1% (2025), 2.9–3.4% (H1 2026); $30–57M/yr at $4.00–5.50/lb | W4 §3.3 | "Copper Produced" (LUM p.39 column) | INFERENCE
-E568 | Q2 2024 MD&A claims higher Lumwana recoveries Q2 vs Q1 2024; the cells show 88% → 85% (metal balance 89.1% → 85.2%) | Q2-24 MD&A p.47 (also p.7); Q1_2024:Minestats4!D14; Q2_2024:Minestats4!D14 | "3 thousand tonnes higher compared to the prior quarter driven by higher grades and recoveries at Lumwana" | INFERENCE (discrepancy; PLAUSIBLE)
+E568 | Q2 2024 MD&A states higher Lumwana recoveries Q2 vs Q1 2024; the cells show 88% → 85% (metal balance 89.1% → 85.2%) | Q2-24 MD&A p.47 (also p.7); Q1_2024:Minestats4!D14; Q2_2024:Minestats4!D14 | "3 thousand tonnes higher compared to the prior quarter driven by higher grades and recoveries at Lumwana" | INFERENCE (discrepancy; PLAUSIBLE)
 E569 | Barrick: 2021–25 recovery averaged 91.15% across fresh and transitional ore, described as reasonable | AIF p.102 | "consistently achieve reasonable recoveries, with an average of 91.15%, across both fresh ore and transitional material" | FACT
 E570 | Super Pit LOM basis: expected average fresh recovery 92.7% | AIF p.102 | "The expected average fresh recovery is 92.7% copper, based on the current life-of-mine plan and test work completed to date." | FACT
 E571 | Barrick expects no recovery difference between current and Super Pit ore; the new plant uses a similar flowsheet | AIF p.102 | "No material difference is expected in recovery and concentrate grades between currently processed mineralization and expected mineralization" | FACT
@@ -635,7 +635,7 @@ E591 | Avathon timeline: collaboration from December (2025); software at select 
 E592 | NGM–Komatsu FrontRunner AHS partnership launched 31 Jul 2025 | NGM release, https://s25.q4cdn.com/322814910/files/doc_news/2025/07/NGM-and-Komatsu-Launch-First-of-Its-Kind-Autonomous-Haulage-Partnership_Final.pdf | "Nevada Gold Mines (NGM) and Komatsu have officially launched a pioneering partnership" | FACT
 E593 | Cortez: 23 trucks retrofitted May 2026; new FMS for the primary fleet completed | Q2-26 MD&A p.32 | "The transition to the new Fleet Management System for the primary production fleet has been completed." | FACT
 E594 | Barrick Chair commits to AI in the 2026 Circular | 2026 Circular p.II, https://www.sec.gov/Archives/edgar/data/756894/000119312526148005/d858698dex991.htm | "We will continue to use technology, particularly AI, to make us safer, more efficient, and more responsible." | FACT
-E595 | Barrick and its vendors have had cyber incidents; digital initiatives carry no assured value | AIF p.127–128 | "Barrick and its third party vendors and service providers have experienced … cybersecurity incidents and cybersecurity breaches" | FACT
+E595 | Barrick's AIF discloses cyber incidents at Barrick and its vendors, and says digital initiatives may not meet their objectives | AIF p.127–128 | "Barrick and its third party vendors and service providers have experienced … cybersecurity incidents and cybersecurity breaches" | FACT
 E596 | Zambia DPA 2021 s.70 requires personal data to be stored and processed in Zambia, with exceptions | Afriwise, 8 Jun 2022, https://www.afriwise.com/blog/data-localisation-requirements-under-the-data-protection-act | "on servers or data centres that are located in Zambia" | FACT[secondary]
 E597 | Tanzania PDPA 2022 (in force 1 May 2023): cross-border personal-data transfers need a Commission permit | FPF overview, https://fpf.org/blog/tanzanias-personal-information-protection-act-overview-key-takeaways-and-context/ (via search extract; page not fetched) | "the transfer will be subject to obtaining a permit from the Personal Data Protection Commission" | FACT[secondary]
 E598 | Only 25% of energy and natural-resources companies get beyond digital pilots | Bain, 13 Aug 2020, https://www.bain.com/insights/scaling-digital-operations-in-energy-and-natural-resources/ | "only 25% of companies are getting beyond pilots to broader adoption" | FACT[secondary]

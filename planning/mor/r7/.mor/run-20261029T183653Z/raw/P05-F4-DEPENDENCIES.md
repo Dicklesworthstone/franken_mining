@@ -420,7 +420,7 @@ Data and timing:
   - E673 and `git ls-tree origin/main`: none of this code is public yet.
 - **Inference.** Whether isolated numeric facts and small extracts are protected, and whether the terms bind, are
   legal questions I cannot settle. What the evidence does establish:
-  - (i) the project intends commercial use with Barrick, so the "non-commercial" exception is doubtful on its face;
+  - (i) the project may be used commercially, so the "non-commercial" exception is doubtful on its face;
   - (ii) the plan has no recorded decision;
   - (iii) the decision is still cheap, because `68e7091` is unpushed and E673 notes a push is irreversible.
 - **Alternative / defeater check.**
@@ -428,11 +428,11 @@ Data and timing:
     quotations and computed checks. That is why this is a question, not a finding of breach.
   - The W1 and C1 notes already public quote short cell extracts with commentary. I do not claim those are
     infringing.
-  - The owner's stated access to Barrick top management makes written approval a plausible, cheap route.
+  - Written approval from Barrick IR is a plausible, cheap route.
 - **Resolution.** Owner and counsel decide. Or Barrick IR grants written approval for derived fixtures in a public
   repository.
-- **Materiality.** Moderate. If wrong, it surfaces at the worst moment, in front of the same management the project
-  courts. It is cheap to resolve.
+- **Materiality.** Moderate. If wrong, it surfaces at the worst moment, in front of the issuer whose data it
+  uses. It is cheap to resolve.
 - **Uncertainty basis.** Terms text retrieved through WebFetch (short verbatim fragments). Legal effect unknown.
 
 ### P05-F4-DEPENDENCIES-C10 — recommendation: add an issuer-data-terms risk with a fail-closed default, decided before pushing `68e7091`
@@ -458,8 +458,8 @@ Data and timing:
 - **Statement.**
   - §31.1 line 6723 says "No public-lane author holds private access", and BD-069 (open) requires access
     attestations.
-  - The owner directs the agents that will author the FY2026 public forecasts. The owner states they have "the ear
-    of top management of Barrick" (Decision Contract).
+  - The owner directs the agents that will author the FY2026 public forecasts. Whether the owner holds any
+    private Barrick access is not recorded.
   - The hash window (Nov 2026–Jan 2027) coincides with Barrick's pre-results period and the NewCo IPO process
     (E615, E616).
   - Is the owner inside the lane? If yes, the forecast set needs the owner's attestation that no non-public Q4 2026

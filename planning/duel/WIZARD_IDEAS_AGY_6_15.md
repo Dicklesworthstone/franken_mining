@@ -129,15 +129,15 @@ and blended assay `ā_{v,e} = (Σ_b y_{b,v} a_{b,e}) / W_v`) assigned to contrac
      polygons (`NVR1–NVR5`, Franco-Nevada, Royal Gold)** where adjacent 3D blocks have Net Smelter Return (NSR) or
      Gross Smelter Return (GSR) encumbrances differing by `1%` to `9%`! Applying a deposit-average royalty % in
      pseudoflow (`pitflow`) over-mines high-royalty claims and under-mines low-royalty claims.
-  2. **Fixed-Recovery & Tier-Stepping Metal Streams (The By-Product Stream Trap):** Major streams (e.g., Pueblo
-     Viejo's 60% Barrick share stream where silver delivery is calculated on a **fixed 70% contractual silver
+  2. **Fixed-Recovery & Tier-Stepping Metal Streams (The By-Product Stream Trap):** Some streams (e.g., a
+     by-product stream where silver delivery is calculated on a **fixed 70% contractual silver
      recovery** until `X Moz` are delivered, then steps down by half!) decouple stream liability from actual plant
      by-product recovery. When actual Ag recovery on a refractory domain is `42%` while contractual Ag delivery is
      `70% × 75% = 52.5%` of contained Ag, **mining that block creates a net silver deficit that must be subsidized out
      of gold revenue**!
   3. **Automated Cut-Off Table vs. Royalty Footnote Consistency Prover (`G-ECON-ROY-1`):** Mechanically proves whether
-     a Technical Report's cut-off grade table (`§15` / `§19` of NI 43-101 / S-K 1300) actually includes the royalties
-     and streams disclosed in `§4` (Property Description & Royalties), catching omissions like `E183` automatically!
+     a Technical Report's cut-off grade table (`§15` / `§19` of NI 43-101 / S-K 1300) includes the royalties
+     and streams disclosed in `§4` (Property Description & Royalties), flagging basis questions like `E183`.
 
 ### 7.2 Subsystems, Crates, Users & Workflows
 - **Subsystems:** `Helm`, `Bullion`, `Hallmark`, `Pushback` (`§0.5`).
@@ -206,11 +206,11 @@ Stream Step-Down Tier Earlier (`λ_tier`)**!
     joint ventures, plus sovereign partner principals for Reko Diq (`E302`).
 - **What is missing (and materially new here):**
   - During a **JV vend-in negotiation (Fourmile → NGM), a project-finance technical due diligence (Reko Diq lender
-    syndicate `E302`), an earn-in milestone audit, or an asset divestment (Tongon / Hemlo / Loulo)**, the seller and
-    buyer sit across an adversarial information boundary:
-    - The buyer/partner's QP and Independent Technical Consultant (ITC) must verify that the disclosed resource block
-      summaries, QA/QC pass rates, and LOM schedule were computed honestly from complete, un-doctored raw assays (with
-      no hidden failed CRM batches or selectively dropped barren holes);
+    syndicate `E302`), an earn-in milestone audit, or an asset divestment (Tongon / Hemlo)**, the seller and
+    buyer sit across a confidential information boundary:
+    - The buyer/partner's QP and Independent Technical Consultant (ITC) must be able to verify that the disclosed
+      resource block summaries, QA/QC pass rates, and LOM schedule were computed from complete raw assays (with
+      every failed CRM batch and every drilled hole accounted for);
     - Yet the seller **cannot expose** drillholes outside the vend-in boundary, proprietary regional `Lodestar`
       posteriors (`basis = Full`), internal corporate cost cards, or Stage-2 raw block realizations before Stage-1
       price/term milestones are signed!
@@ -232,7 +232,7 @@ Stream Step-Down Tier Earlier (`λ_tier`)**!
     bundles for Fourmile vend-in or project-finance lenders with mathematical proof of zero MNPI/outside-tenement
     leakage (`PO-SEC-1`).
   - **Counterparty QP / Lender's Independent Engineer:** Runs `fmine-verify` offline to verify conservation, QA/QC
-    completeness, and Stage-1 → Stage-2 commitment binding without trusting the seller.
+    completeness, and Stage-1 → Stage-2 commitment binding independently of the seller's own systems.
 
 ### 8.3 Technical & Mathematical Design (`DESIGN`)
 1. **Spatial & Support Redaction with Conservation Proofs:**
@@ -250,7 +250,7 @@ Stream Step-Down Tier Earlier (`λ_tier`)**!
         explicitly in the root header (proving zero silent exclusion of failed batches!);
      3. Every brick outside `Π_vend` is represented solely by an opaque sibling hash `H_ext` (zero information leak
         beyond the root hash).
-2. **Zero-Bait-and-Switch Staged Unsealing:**
+2. **Commitment-Bound Staged Unsealing:**
    When the deal advances from Stage 1 (panel summaries) to Stage 2 (full drillhole & SMU disclosure), the seller
    transmits only the 32-byte salts `{salt_k}` and the raw chunks `{Chunk_k}`. `fmine-verify` checks that every newly
    revealed hole and SMU hashes to the exact Stage-1 commitment `H(Chunk_k ∥ salt_k)` anchored months earlier!
@@ -260,8 +260,8 @@ Stream Step-Down Tier Earlier (`λ_tier`)**!
   Inferred, `E140`) while keeping adjacent 100%-owned district exploration holes (`Wall = W-DIST-EXP`) and Stage-2
   fine-scale `VdbGrid` realizations confidential during initial valuation framing.
 - **Traditional VDR risk:** Sending an acQuire database dump or Leapfrog project either leaks collar coordinates/assays
-  from adjacent tenements or forces the seller to hand-edit CSV files (breaking chain of custody and inviting
-  counterparty suspicion of cherry-picking).
+  from adjacent tenements or forces the seller to hand-edit CSV files (breaking chain of custody and leaving
+  the counterparty unable to verify completeness).
 - **`CryptographicDataRoom` (`FMT-VDR-1`) result:**
   - Stage-1 bundle is `18 MB`: proves to `fmine-verify` that `100%` of the `412` holes intersecting `Π_vend` up to
     `record_seq = 88,410` are included, `0` failed CRM batches were dropped, and panel totals match the signed
@@ -289,8 +289,8 @@ Stream Step-Down Tier Earlier (`λ_tier`)**!
 ### 9.1 What Is Already in the Plan vs. What Is Materially New
 - **Already in the plan:**
   - `§20.8` and `BD-312` introduce `StockpileVoxelTwin` on `VdbGrid`, tracking dumped parcel provenance, sulphide
-    oxidation age, and Pueblo Viejo's plant-cone latent inventory (`E666`: where a `61 kt / ~50 koz` swing in the
-    conical surge pile between pit and crusher shifted the 2025 reconciliation balance).
+    oxidation age, and Pueblo Viejo's plant-cone latent inventory (`E666`: a `70 kt` swing between crushers and
+    mills that the monthly balance must carry).
 - **What is missing (and materially new here):**
   - `BD-312` places dumped truckloads into static 3D voxels and tracks oxidation age, but **how do dumped parcels
     distribute spatially across a 30 m high stockpile face, and which voxels actually enter the loader bucket or apron
@@ -303,7 +303,7 @@ Stream Step-Down Tier Earlier (`λ_tier`)**!
        and higher clay/sulphide surface area!) arrest in the **upper crest**.
     2. **Funnel-Flow vs. Toe-Loader Reclaim Kinematics:** Reclaiming the toe with a front-end loader pulls the coarse,
        hard, lower-grade rock first (spiking SAG mill `F80` and dropping head grade!), whereas drawing from an
-       under-pile apron feeder (like Pueblo Viejo's plant cone `E666`) carves a steep **Beverloo/Nedderman kinematic
+       under-pile apron feeder carves a steep **Beverloo/Nedderman kinematic
        draw ellipsoid** directly above the feeder throat, leaving a stagnant perimeter "dead zone" of fine sulphides
        that oxidize for months until a dozer push dumps a slug of oxidized, acid-consuming, low-recovery ore into the
        mill!
@@ -477,7 +477,7 @@ Stream Step-Down Tier Earlier (`λ_tier`)**!
     existing L1 wireframe beyond tolerance.
   - `§15.2` cites Bond et al. 2007 (`E639`: only 21% of 412 interpreters identified the right tectonic setting on a
     synthetic seismic image), and `§14.1` cites Carlin's GQ7CN `~1 Mt` highwall failure (`E195`: LOM slope designs
-    rested on a stale 2008 geology model).
+    rested on a 2008 geology model).
 - **What is missing (and materially new here):**
   - In practice, resource geologists almost always upload **a single deterministic wireframe set** (`hypotheses.len() ==
     1`), because drawing three competing 3D structural interpretations by hand in Leapfrog or Vulcan takes weeks! If
@@ -572,7 +572,7 @@ Stream Step-Down Tier Earlier (`λ_tier`)**!
 - **What is missing (and materially new here):**
   1. **The Multivariate Corner Blind-Spot (Why 1D Percentile Coverage Fails):** In refractory gold and copper-gold
      circuits (Carlin roasters & autoclaves `E172`, `E173`, `E175`; Turquoise Ridge `E177`, `E181`; Pueblo Viejo `E265`),
-     metallurgical disasters occur in **joint multivariate interactions**—such as `moderate Au (50th pct) + high
+     recovery shortfalls can arise from **joint multivariate interactions**—such as `moderate Au (50th pct) + high
      preg-robbing TOC (80th pct) + low carbonate CO3 (15th pct) + high As (85th pct)`. Every single variable sits inside
      its `[5th, 95th]` 1D marginal band (so `BD-300` passes green!), yet **zero metallurgical test composites exist in
      that joint corner**!
@@ -664,15 +664,15 @@ standardized by the domain covariance `Σ_d`).
 - **What is missing (and materially new here):**
   - In the current plan, `Freeboard`'s permit/commitment register (`§18.2`), `Freeboard`'s water/TSF balances
     (`§18.3–18.4`), and `Pushback`'s production scheduler (`§15.6`) touch only through a single static TSF volume cap!
-  - In reality, **operating mines face a coupled network of time-bombed permits, volumetric exhaustion runways, and
+  - In reality, **operating mines face a coupled network of time-limited permits, volumetric exhaustion runways, and
     environmental trigger curtailments**:
     1. **Volumetric & Spatial Runway Exhaustion:** Pit-layback boundary permits, archaeological/species clearance
        buffers (`E345`), waste-dump lift height limits, and TSF stage-raise permits (`E190`, `E218`, `E219`) each
        impose a time-indexed capacity step function `Cap_k(t; T_approval_k)` where `T_approval_k` is a random variable
        governed by a regulatory agency dependency DAG and reference-class delay prior (`REFCLASS-PERMIT`).
-    2. **Environmental Trigger-to-Production Curtailment Laws:** As Veladero proved (`E278`, `E280`, `E281`), crossing
-       an environmental trigger (in-heap solution `PSSA > 3,927 MASL` or `LCRS > 270 m³/d`) **legally throttles water
-       make-up and reagent addition**, cutting gold output by `21.9%`! Similarly, Reko Diq's borefield permit (`10–50
+    2. **Environmental Trigger-to-Production Curtailment Laws:** At Veladero (`E278`, `E280`, `E281`), crossing
+       an environmental trigger (in-heap solution `PSSA > 3,927 MASL` or `LCRS > 270 m³/d`) **restricts water
+       make-up and cyanide addition** (2017: `21.87%` below budget). Similarly, Reko Diq's borefield permit (`10–50
        L/s` permitted vs `140 L/s` required, `E312`, `E313`) directly caps mill ramp-up throughput!
   - `PermitAndCommitmentCriticalPathCompiler` compiles all active permits, renewal dates, agency prerequisite edges,
     and trigger-curtailment rules into a unified **Stochastic Permit–Operations Critical Path Graph** (`fmine-tailings::
@@ -722,8 +722,8 @@ standardized by the domain covariance `Σ_d`).
   - The new TSF requires: (1) final hydrogeological baseline (`3 months`), (2) EIS Record of Decision (`REFCLASS-PERMIT`
     median `14 months`, P80 `21 months`, P90 `26 months`), and (3) Phase-1 starter embankment & liner construction
     (`10 months`, dry-season gated).
-- **Deterministic Gantt chart:** `3 + 14 + 10 = 27 months` (already `1.9 months` late at the median, often hidden by
-  optimistic `11-month` permitting assumptions!).
+- **Deterministic Gantt chart:** `3 + 14 + 10 = 27 months` (already `1.9 months` late at the median, which an
+  `11-month` permitting assumption would not show).
 - **`PermitAndCommitmentCriticalPathCompiler` output:**
   - Across `1,000` joint `(permitting × weather × production)` scenarios:
     - `P(T_ready > t_choke) = 78%`!
@@ -740,7 +740,7 @@ standardized by the domain covariance `Σ_d`).
   - **Parity:** Deterministic critical path (`σ = 0`) matches `fmine-numerics::tropical` (`crates/fmine-numerics/src/
     lib.rs:283–347`) exactly.
   - **Known answers:** Injecting Veladero's 2017 cyanide/water restriction (`E278`) into the curtailment rule reproduces
-    the `-21.9%` production drop vs unrestricted plan capacity.
+    the `21.87%` production shortfall against budget.
 - **Kill criterion (`KILL-FREE-PERM-1`):**
   - If agency review durations in a jurisdiction lack an admissible reference class (`< 5` historical permits), report
     only deterministic `t_choke − T_min_statutory` slack and the `$/month` curtailment shadow price (`G-HIGH-2` pattern:
@@ -766,10 +766,10 @@ standardized by the domain covariance `Σ_d`).
      (Turquoise Ridge, Goldrush, Kibali, Loulo/Yalea/Gara, Bulyanhulu), mining primary stopes sheds in-situ stress onto
      adjacent unmined secondary stopes! If a naive MILP schedule mines from both ends of an orebody toward the middle,
      it creates a **diminishing central rib or sill pillar** where induced tangential stress `σ_θ` triples—causing
-     seismic lockouts, blasthole squeezing, and `3×` higher wall sloughing (which at Turquoise Ridge dumps high-`TCM`
-     waste into the autoclave feed, `E187`)!
+     seismic lockouts, blasthole squeezing, and `3×` higher wall sloughing (at Turquoise Ridge, dilution carries
+     in-situ `TCM` at zero gold into the autoclave feed, `E187`)!
   2. **Endogenous Paste-Fill Binder Recipe vs. Stope Exposure Window Co-Optimization:** Because `Loulo`-style paste
-     fill *degrades* after `56–112 days` from sulphate attack (`E233`), a primary stope filled with cheap `3.5%` binder
+     fill *degrades* after `56–112 days` from sulphate attack (`E233`), a primary stope filled with a `3.5%` binder
      has a **two-sided time window `[t_cure_min, t_degrade_max]`** during which the adjacent secondary stope *must* be
      mined before `FillStrength(t)` falls back below `UCS_design` and trips `FMINE-REF-504` (`G-HEAD-7`)! Either the
      scheduler mines the secondary stope inside `[t_cure_min, t_degrade_max]`, or it must specify a higher-binder/slag-

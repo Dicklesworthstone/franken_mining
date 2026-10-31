@@ -559,7 +559,7 @@ The rule (I-12): production code is lifted (with provenance and licence check) o
 - B: FM feeds Avathon blindly.
 - C (forced third): **FM as the anchor-pinned system of record; Avathon is a cognition-plane consumer** (I-20).
 
-A is refuted: it is a political non-starter, since Avathon's lead director is Barrick's Chair. B is refuted: blind feeds would make Avathon a second authority without anchors.
+A is refuted: Avathon is Barrick's announced AI-platform partner (E024), and FM works alongside existing platforms, not in place of them. B is refuted: blind feeds would make Avathon a second authority without anchors.
 
 **Verdict C**, with this contract:
 1. Avathon reads per-venture **export projections** (`FMT-EXPORT`, anchor + certificate on every row). Every Avathon answer can cite an FM anchor.
@@ -739,7 +739,7 @@ Runtime: transitions go through one `step(state, event) → Result<state, Refusa
 | RISK-B4-04 | FA external-subledger caps (S4) force coarse summaries | Medium | Merkle-folded rows; deterministic splitting |
 | RISK-B4-05 | The suite never converges on one asupersync; frankensim stays on a path dependency | Medium | Lift-only; formats in S0 keep a split-posture option open |
 | RISK-B4-06 | Residency statutes per country unknown | High | Registry fail-closed; regional nodes; OPEN-B4-01 |
-| RISK-B4-07 | Avathon positions itself as system of record | Medium (strategic) | Anchor-pinned export contract; evidence-only write-back |
+| RISK-B4-07 | An incumbent AI platform also holds records for quantities FM certifies, giving two sources of truth | Medium (strategic) | Anchor-pinned export contract; evidence-only write-back |
 | RISK-B4-08 | fgdb unreleased; projection churn | Low (projection only) | KILL-2 |
 | RISK-B4-09 | OMF v2 Parquet dependency | Medium | KILL-6 |
 | RISK-B4-10 | The ledger working set for the largest site cell exceeds node memory | Medium | Cell sharding by project or year; GATE-STORE-01 sizing |

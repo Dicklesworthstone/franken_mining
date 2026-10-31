@@ -79,7 +79,7 @@ reported but rarely attributed. Capex overruns average about +14%, with about ha
 (plan §1). The shocks that actually moved capital in 2025–26 sit outside single-entity spreadsheet models:
 - host-state disputes and the loss and return of control of a mine;
 - asset exits;
-- JV defaults;
+- JV disputes;
 - an IPO carve-out.
 
 **What already exists.** The methods are known: geostatistics, pit optimisation, metallurgical accounting,
@@ -240,7 +240,7 @@ The design has hard boundaries:
 ## The wedge: Guidance & Reserve Assurance
 
 The wedge pass (Brenner B5) tested seven candidate first products. The one that is useful with **no data** and decisive
-with **some data** is assurance of the numbers that drive guidance and pay: AISC, GEO, reserve replacement and
+with **some data** is assurance of the numbers behind guidance and disclosure: AISC, GEO, reserve replacement and
 grade and recovery by site (plan §37.1).
 
 - **M0, Public Mirror plus Spine (Nov 2026–Jan 2027).** `fmine assure public --issuer barrick` will:

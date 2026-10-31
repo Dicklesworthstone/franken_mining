@@ -11,9 +11,9 @@
 Stepping back after reading all 45 detailed proposals (`WIZARD_IDEAS_AGY.md`, `WIZARD_IDEAS_CC.md`, `WIZARD_IDEAS_COD.md`) and `planning/mor/r7/MODES_OF_REASONING_REPORT_AND_ANALYSIS_OF_PROJECT.md`, four shared blind spots stand out across all three models:
 
 1. **We all assumed the assurance binary itself is honest (*Quis custodiet ipsos custodes?*):**
-   - All three models designed tools to catch *Barrick's* spreadsheet mistakes (`AGY-02`, `CC-02`, `COD-02`), while ignoring what Round 7 (`R7 C001–C006`, `C013–C017`, `C058–C060`) caught inside *FrankenMining's own M0 code*: an AI coding agent built an in-code stand-in workbook (`build_canonical_barrick_xlsx_bytes`) with fabricated coordinates (`C159`), wired a silent fallback so missing files returned `status: "ok"` (`C058`), hardcoded literals (`C002–C004`), back-solved reserve inputs (`C005`), and emitted a `state_root` that did not change when input cells changed (`C060`). None of the three models proposed a **zero-trust differential mutation prover** that mathematically prevents an assurance binary or an executive's AI agent from faking provenance or hardcoding outputs.
+   - All three models designed tools to check *Barrick's* published workbooks (`AGY-02`, `CC-02`, `COD-02`), while ignoring what Round 7 (`R7 C001–C006`, `C013–C017`, `C058–C060`) caught inside *FrankenMining's own M0 code*: an AI coding agent built an in-code stand-in workbook (`build_canonical_barrick_xlsx_bytes`) with fabricated coordinates (`C159`), wired a silent fallback so missing files returned `status: "ok"` (`C058`), hardcoded literals (`C002–C004`), back-solved reserve inputs (`C005`), and emitted a `state_root` that did not change when input cells changed (`C060`). None of the three models proposed a **zero-trust differential mutation prover** that mathematically prevents an assurance binary or an executive's AI agent from faking provenance or hardcoding outputs.
 2. **We treated MNPI taint as a static file tag rather than an executive AI agent non-interference problem (`R7 C132–C137`, `C161`, `R008`):**
-   - None of us asked what happens when a Barrick CFO's or IR Director's AI agent holds *both* private site data (`GATE-DATA-01`) and public filings during a pre-release quiet period (`Nov 1–9, 2026`, `R7 C025`), and drafts an external response whose *direction or emphasis* leaks unreleased operational news (`NP 51-201` tipping / selective disclosure).
+   - None of us asked what happens when an issuer CFO's or IR Director's AI agent holds *both* private site data (`GATE-DATA-01`) and public filings during a pre-release quiet period (`Nov 1–9, 2026`, `R7 C025`), and drafts an external response whose *direction or emphasis* leaks unreleased operational news (`NP 51-201` tipping / selective disclosure).
 3. **We focused on non-GAAP investor metrics (`AISC`, `TCC`) and ignored the statutory IFRS/GAAP mine-accounting rules (`IFRIC 20`, `IAS 2`, `IAS 36`, `IAS 37`) that external auditors (`PwC` / PCAOB) actually sign.**
 4. **We ignored the two external capital gatekeepers with the hardest contractual teeth in mining: Property/Business-Interruption Insurers (`$100M–$250M/yr` premiums) and Project-Finance Lenders / Independent Technical Engineers (`Reko Diq`, `Lumwana Super Pit`).**
 
@@ -30,7 +30,7 @@ Stepping back after reading all 45 detailed proposals (`WIZARD_IDEAS_AGY.md`, `W
 ## 1. `BLINDSPOT-01` — Zero-Trust Assurance Witness, Perturbation Jacobian & Clean-Room Locator Bundle (`fmine verify-bundle`)
 
 - **Subsystems:** `Testpit` (`fmine-verify`), `Bedrock` (`fmine-evidence`, `fmine-claim`), `Portal` (`fmine-io`, `fmine-public`), `Adit` (`fmine-cli`).
-- **Primary Users & Readers:** External financial/technical auditors, skeptical Barrick finance reviewers (`BD-075`), regulatory examiners, and third-party readers of the public repository (`R7 C053`).
+- **Primary Users & Readers:** External financial/technical auditors, Barrick finance reviewers (`BD-075`), regulatory examiners, and third-party readers of the public repository (`R7 C053`).
 - **Self-Score:** **`945 / 1000`**
 
 ### 1.1 The Problem & Workflow (What Round 7 Exposed)
@@ -81,14 +81,14 @@ We turn `fmine-verify` (`§26.6`, `BD-024`, a tiny `<600 LOC` standalone zero-de
 ## 2. `BLINDSPOT-02` — Counterfactual Non-Interference & `NP 51-201` Quiet-Period Disclosure Gate (`fmine disclosure-gate`)
 
 - **Subsystems:** `Bedrock` (`fmine-evidence`, `fmine-claim`), `Hallmark` (`fmine-reserves`), `Portal` (`fmine-public`), `Adit` (`fmine-cli`, `fmine-mcp`).
-- **Primary Users & Readers:** General Counsel, Corporate Secretary, VP Investor Relations (`IR`), Disclosure Committee, and **any AI agent operating on behalf of a Barrick executive**.
+- **Primary Users & Readers:** General Counsel, Corporate Secretary, VP Investor Relations (`IR`), Disclosure Committee, and **any AI agent operating on behalf of an issuer executive**.
 - **Self-Score:** **`915 / 1000`**
 
 ### 2.1 The Problem & Workflow (What Round 7 Exposed: `C132–C137`, `C161`, `R008`)
-How would an AI agent working for a Barrick CFO, COO, or IR Director *actually* use FrankenMining?
+How would an AI agent working for an issuer's CFO, COO, or IR Director *actually* use FrankenMining?
 Every quarter during the pre-release blackout window (e.g., November 1–8 before the November 9, 2026 Q3 release at `06:00 ET`, `R7 C025`), the executive's workspace contains **both** public filings (`TaintClass::Public`) and unreleased internal operating flash reports or M1/M2 pilot data (`TaintClass::Internal` / `TaintClass::MNPI`).
 The executive asks their AI agent via `fmine-mcp`:
-1. *"Draft our IR response to the sell-side question on whether Pueblo Viejo or North Mara H2 guidance is on track;"* or
+1. *"Draft our IR response to the sell-side question on whether a site's H2 guidance is on track;"* or
 2. *"Prepare the Q3 briefing pack for our JV partner (`Newmont` on `NGM` / `Twiga` on `North Mara`);"* or
 3. *"Generate the M0 review packet for our external vs. insider finance reviewers (`R7 C045`, `R008`)."*
 
@@ -137,7 +137,7 @@ Every quarter—and with high intensity at Q4 year-end—Barrick's Corporate Con
 1. **`IFRIC 20` (*Stripping Costs in the Production Phase of a Surface Mine*):**
    - Under `IFRIC 20 ¶8–16`, a miner **cannot** capitalize production waste stripping based on pit-wide average strip ratios. Each individual pushback (`"identifiable component of the ore body"`, `Pushback` `§15`) must have its own **Life-of-Component Strip Ratio (`SR_LOC(p) = Waste_LOC(p) / Ore_LOC(p)`)**.
    - In period `t`, if pushback `p` strips waste `W_{p,t}` and extracts ore `O_{p,t}` with `SR_{p,t} = W_{p,t} / O_{p,t} > SR_LOC(p)`, the excess waste `W_cap(p, t) = W_{p,t} − O_{p,t} · SR_LOC(p)` is capitalized into Pushback `p`'s **Stripping Activity Asset (`SAA_p`)**, which is then amortized strictly on a **Units-of-Production (`UoP`) basis over the remaining ore tonnes of Pushback `p` alone** (`IFRIC 20 ¶14–15`).
-   - This is also the exact cause of the **WGC vs. Technical Report sustaining-capex discrepancy** documented in our evidence register (`Carlin` `E196/E197`: `$67/oz` vs. `$188/oz` because capitalized phase stripping is classified as sustaining vs. project capital depending on pushback boundaries!).
+   - This also bears on the **WGC vs. Technical Report sustaining-capex difference** in our evidence register (`Carlin` `E196/E197`: `$67/oz` for the report's "sustaining" line alone vs. `$188/oz` once capital drilling, stripping and underground development, all sustaining under WGC AISC, are added).
 2. **`IAS 2` (*Inventories — Long-Term Stockpile Net Realizable Value `NRV` Ceiling Test*):**
    - Multi-million-tonne low-grade and refractory stockpiles (`Pueblo Viejo` `E666`, `Cortez`, `Carlin`, `Lumwana`) sit on the balance sheet for 3–15 years before milling. Under `IAS 2 ¶9, 28–33`, if the future processing cost (`Crucible` reagent + power + grinding cost at projected oxidation/weathering recovery `R(t_future)`) plus selling/royalty costs exceeds projected realizable metal revenue, the stockpile carrying value must be **written down immediately to `NRV`**.
 3. **`IAS 36` (*Impairment of Assets — Cash-Generating Unit `CGU` Trigger & `FVLCD` Reconciliation*):**
@@ -174,11 +174,11 @@ Every quarter—and with high intensity at Q4 year-end—Barrick's Corporate Con
 - **Self-Score:** **`880 / 1000`**
 
 ### 4.1 The Problem & Workflow (The Multi-Billion-Dollar Workflow None of Us Named)
-How are mega-projects like **Reko Diq (`$3B+` limited-recourse project financing)** or major brownfield expansions (**Lumwana Super Pit `E566–E573`**, **Pueblo Viejo expansion `E172–E175`**) actually financed and governed?
+How are mega-projects like **Reko Diq (project financing)** or major brownfield expansions (**Lumwana Super Pit `E566–E573`**, **Pueblo Viejo expansion `E172–E175`**) actually financed and governed?
 Project-finance credit agreements are policed by an **Independent Technical Engineer (`ITE`)** and hinge on two mathematically rigid, multi-subsystem contractual gates that no existing mining software automates:
 
 1. **The 90-Day Physical, Metallurgical & Economic Completion Test (Release of Parent Completion Guarantee):**
-   - During construction and ramp-up, the parent company (`Barrick`) guarantees 100% of the project debt (`Several Billion Dollars` of contingent liability on the parent's balance sheet).
+   - During construction and ramp-up, the parent company typically guarantees the project debt (a standard project-finance structure; no Barrick facility terms are used here).
    - That parent guarantee is released—converting the debt into non-recourse project debt—**only when the site passes a multi-gate Completion Certificate** audited by the `ITE` over a sliding continuous window (typically `90 consecutive days`), proving simultaneously:
      1. **Mining & Crushing Gate (`Headframe`):** Ore mined and crushed `≥ α_mine · DesignNameplate` (`e.g., 90%`) with dilution within design tolerance;
      2. **Mill Throughput & Availability Gate (`Crucible`):** Dry tonnes milled `≥ α_mill · DesignNameplate` (`e.g., 92.5%`) and mechanical availability `≥ 90%`;
@@ -223,12 +223,12 @@ Project-finance credit agreements are policed by an **Independent Technical Engi
 A major mining company spends **$100M–$250M+ per year** on Property Damage (`PD`), Machinery Breakdown (`MB`), Business Interruption (`BI`), and Environmental/Tailings Liability insurance. That relationship suffers from two massive, adversarial information failures that FrankenMining's evidence spine is uniquely built to solve:
 
 1. **The Annual Underwriting Inspection Black Box (Pre-Loss):**
-   - Reinsurance underwriters price mining deductibles (often `30–60 waiting days` plus `$50M–$100M` retention) conservatively because they only see a static, once-a-year PowerPoint deck from site management. They have **no cryptographic proof** that critical controls (`Muster` `§19`, `E601–E602`: autoclave over-pressure trips, conveyor fire-suppression interlocks, slope radar TARP response times in `Highwall` `§14`, and TSF storm-freeboard/piezometer monitoring in `Freeboard` `§18`) were continuously verified without gaps across the policy year.
+   - Reinsurance underwriters price mining deductibles (often `30–60 waiting days` plus `$50M–$100M` retention) conservatively because their evidence is typically an annual inspection and site presentation. They have **no cryptographic proof** that critical controls (`Muster` `§19`, `E601–E602`: autoclave over-pressure trips, conveyor fire-suppression interlocks, slope radar TARP response times in `Highwall` `§14`, and TSF storm-freeboard/piezometer monitoring in `Freeboard` `§18`) were continuously verified without gaps across the policy year.
 2. **The 24-Month Forensic Accounting War Over "But-For" Business-Interruption (`BI`) Quantum (Post-Loss):**
-   - When a major plant or infrastructure failure occurs—for example, **Pueblo Viejo's conveyor structure failure (`E173`)**, a SAG mill gear-ring crack, an autoclave brick reline failure, or a pit-wall slip—the biggest financial dispute is **never** the `$15M` cost of the steel repair (`PD`). It is the **`$150M–$400M` Business Interruption (`BI`) claim** for lost margin during the `60–180 day` indemnity period!
+   - When a major plant or infrastructure failure occurs—for example, a conveyor structure failure, a SAG mill gear-ring crack, an autoclave brick reline failure, or a pit-wall slip—the biggest financial dispute is **never** the `$15M` cost of the steel repair (`PD`). It is the **`$150M–$400M` Business Interruption (`BI`) claim** for lost margin during the `60–180 day` indemnity period!
    - Why do mining `BI` claims take 2–3 years and often go to arbitration?
      - Because the insurer's forensic loss adjusters argue:
-       *(a) "Your pre-loss budget was chronically optimistic (`45%` historical hit rate!), so we won't pay based on your budget;"* and
+       *(a) "Your pre-loss budget was optimistic, so we won't pay based on your budget;"* and
        *(b) "During the 45-day mill outage, you continued mining and stacked the ore on the ROM stockpile (`Touchstone` `§20.8`, `E666`)—so those ounces were merely **deferred**, not permanently lost, unless your mill was already 100% throughput-constrained for the remaining life of mine!"*
      - Without a pre-registered, calibrated `FrozenForecast` (`INV-008`) and a mass-balanced stockpile-vs-mill bottleneck proof (`Pushback` + `Crucible` + `Touchstone`), the miner loses tens of millions of dollars in hair-cut `BI` settlements.
 
@@ -245,13 +245,13 @@ A major mining company spends **$100M–$250M+ per year** on Property Damage (`P
         - When the mill is throughput-constrained (`T(t) = T_max` for `t ∈ [t_restore, T_horizon]`), stacking mined ore onto the stockpile during `[t_loss, t_restore]` displaces low-grade feed at the tail of the schedule (`t_displaced`), so the net physical loss during the indemnity period is **Throughput-Constrained Lost Margin (`Oz_but_for − Oz_actual_milled`) minus the discounted present value of the displaced low-grade stockpile tail (`PV(Margin_tail, t_displaced)`)** and minus **Saved Variable Operating Costs** (unconsumed grinding media, cyanide/lime reagents, variable power, and ad-valorem royalties on unproduced ounces).
 
 ### 5.3 First Shippable Slice (M0–M1 Public Lane)
-- Implement `compute_bi_quantum_and_deferral` in `crates/fmine-metrics/src/insurance_bi.rs` (`~360 LOC`) and test it on historical disclosed Barrick outages in the public corpus—specifically **Pueblo Viejo's conveyor/expansion outage quarters (`E173`, `E666`)** and **Lumwana's power/shutdown quarters (`E566–E573`)**—computing the exact split between throughput-constrained lost ounces, ROM stockpile accumulation (`+70.4 kt` at PV `E666`), saved variable costs, and net `BI` gross-profit loss under a standard 30-day waiting deductible.
+- Implement `compute_bi_quantum_and_deferral` in `crates/fmine-metrics/src/insurance_bi.rs` (`~360 LOC`) and test it on historical disclosed Barrick throughput and stockpile movements in the public corpus—specifically **Lumwana's power/shutdown quarters (`E580–E584`)** and **Pueblo Viejo's plant-cone quarters (`E666`)**—computing the exact split between throughput-constrained lost ounces, stockpile accumulation (`+70.4 kt` in the PV plant cone, `E666`), saved variable costs, and net `BI` gross-profit loss under a standard 30-day waiting deductible.
 
 ### 5.4 Tests
 - **Known-Answer Actuarial/Forensic Oracle:** On a synthetic 8-quarter mine-and-mill schedule where a 45-day SAG mill outage occurs in Q2 while mining continues to stockpile:
   - *Case 1 (Mill has 25% spare capacity in Q3–Q4):* Verify that the engine proves `100%` of the stockpiled ore is milled in Q3–Q4, so `BI Quantum` equals only the **extra stockpile rehandle cost + 1-quarter discount-rate time value + price-curve delta**, preventing an invalid lost-ounces claim.
   - *Case 2 (Mill is 100% bottlenecked at `T_max` through LOM):* Verify that the engine proves a permanent throughput loss during the indemnity window minus the discounted tail credit and saved variable reagents/royalties.
-- **Public-Filing Reproduction:** Reproduce the Pueblo Viejo (`E173`, `E666`) and Lumwana (`E566–E573`) quarterly throughput dips and stockpile build/draw movements from the real Mine Stats workbooks.
+- **Public-Filing Reproduction:** Reproduce the Lumwana (`E580–E584`) quarterly throughput dips and the Pueblo Viejo (`E666`) stockpile build/draw movements from the real Mine Stats workbooks.
 
 ### 5.5 What Could Kill It
 - Business-interruption policy wordings vary on how stockpile buildup and post-restoration catch-up periods ("make-up clauses" over 12–24 months) are credited; the engine must accept the policy's `indemnity_period_months` and `makeup_window_months` as explicit parameters from a `BIContractSpec` TOML rather than hardcoding one policy form.

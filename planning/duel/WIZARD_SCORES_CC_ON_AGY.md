@@ -112,9 +112,9 @@ I scored them on their own text. Discount my view on those four.
 
 ### AGY-2: WorkbookForensicAutopsy (formula-graph decompiler, unit checker and root-cause explainer) — **620**
 
-- **Strongest point.** Site LOM, cut-off and metallurgical-balance workbooks hide plugs, skipped rows and unit
-  slips in their formula graphs. The five detectors are concrete and testable. "The parsed formula evaluates to
-  Excel's cached value" is a real Parity claim.
+- **Strongest point.** Site LOM, cut-off and metallurgical-balance workbooks can contain hard-coded totals, skipped
+  rows and unit slips in their formula graphs. The five detectors are concrete and testable. "The parsed formula
+  evaluates to Excel's cached value" is a real Parity claim.
 - **Biggest weakness: the M0 premise is wrong twice.**
   - **Most published workbooks have no formulas.** FACT (counted this session):
     - of the 18 distinct Barrick workbooks in the corpus, 14 contain no `<f>` element;
@@ -245,9 +245,9 @@ I scored them on their own text. Discount my view on those four.
 
 ### AGY-8: CryptographicDataRoom (staged, redacted, verifiable data-room bundles) — **400**
 
-- **Strongest point.** Salted commitments that bind Stage-2 disclosures to Stage-1 hashes are a cheap, real defence
-  against bait-and-switch. They build on the plan's existing CAS, Merkle/MMR ledger and GATE-WALL-01 differential
-  test.
+- **Strongest point.** Salted commitments that bind Stage-2 disclosures to Stage-1 hashes are a cheap, real check
+  that later disclosures match earlier ones. They build on the plan's existing CAS, Merkle/MMR ledger and
+  GATE-WALL-01 differential test.
 - **Biggest weakness.**
   - **Commitments prove consistency, not completeness.** "0 failed CRM batches dropped" and "100% of the 412 holes"
     hold only if the seller's ledger was externally time-anchored before the deal.

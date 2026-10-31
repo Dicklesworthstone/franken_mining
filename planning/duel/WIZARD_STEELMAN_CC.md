@@ -165,17 +165,17 @@ the finance worksheet is still HYPOTHESIS.
      error as averaging across supports, which the plan forbids by type (INV-014).
    - The fix is a type: guidance carries its conditioning (price deck, FX, perimeter), and a comparison either
      aligns the conditions or refuses.
-   - This also exposes a systematic bias: in rising-price years the headline punishes management for the gold
-     price, and in falling-price years it flatters them.
-2. **The issuer already performs this normalization, privately, and pays on it.**
+   - This also exposes a systematic bias: in rising-price years the headline comparison attributes the gold-price
+     effect to operations, and in falling-price years it does the reverse.
+2. **The issuer already performs this normalisation for its scorecard.**
    - FACT (E605): gold AISC carries 18.75% of the 2025 company API scorecard, with a scored actual of $1,423/oz.
    - FACT (E607): reported FY2025 AISC was $1,637/oz, above guidance because of price-driven royalties.
-   - INFERENCE (E608): the Circular promises to disclose adjustments, but none is shown for AISC.
+   - INFERENCE (E608): the Circular does not show an AISC adjustment bridge between the two figures.
    - The plan lists this gap as open (Appendix I.7, OPEN-BULL-1). It gives the compensation committee the
      question "are the scorecard metrics we pay on measured the same way every year, at the price deck and basis
      we fixed?" (§3).
-   - So AGY-1 is not an analyst's nicety. It is the public, reproducible version of a computation that already
-     sets part of executive pay, and its first output is the plan's own OPEN-BULL-1 answer.
+   - So AGY-1 is not an analyst's nicety. It is the public, reproducible version of a scorecard normalisation the
+     issuer already performs, and its first output is the plan's own OPEN-BULL-1 answer.
 3. **The price channel can be observed per site, so it needs no published sensitivity.**
    - I faulted AGY for relying on a royalty sensitivity β that is not in the register.
    - FACT (counted this session, row labels and counts only): both the Q4 2025 and Q2 2026 Mine Stats workbooks
@@ -222,8 +222,8 @@ the finance worksheet is still HYPOTHESIS.
 
   The six-factor split waits for site budgets (M2).
 - **Step 4: the OPEN-BULL-1 table.** It shows reported $1,637/oz, the price-explained part computed from royalty
-  rows, the scored $1,423/oz, and the remainder labelled "not explained by price; adjustment basis undisclosed
-  (E608)". Wording: evidence state, never an allegation.
+  rows, the scored $1,423/oz, and the remainder labelled "not explained by price; adjustment not itemised in the
+  Circular (E608)". Wording: evidence state, never an allegation.
 - **Size.** About 400–500 LOC plus the fixture (INFERENCE). Most of the work is in capturing fiscal terms.
 
 ### B.3 Second-order benefits Gemini did not state
@@ -234,11 +234,11 @@ the finance worksheet is still HYPOTHESIS.
     forecast would beat it for reasons unrelated to skill.
   - A price-conditioned guidance baseline makes the Reconciliation claim fair (§33.1).
 - **It gives RISK-22 the instrument it lacks.**
-  - The risk register names the remuneration committee as owner of "KPI-linked pay distorts the measured
-    quantities" (§35.2).
+  - The risk register lists "Goodhart: a metric used in pay can drift from the quantity it measures" (RISK-22,
+    §35.2), with deferral detection (GB-26) as its mitigation.
   - A normalization method fixed in advance applies symmetrically: in a falling-price year it raises the
-    normalized AISC above the reported figure. Applying the same rule both ways is the defense against one-sided
-    adjustments.
+    normalized AISC above the reported figure. Applying the same rule both ways keeps the adjustment symmetric
+    by construction.
 - **It sharpens COD-01.** Required H2 costs can be stated at the deck price and at spot, separating "the price will
   make you miss" from "operations must improve" (A.3).
 - **It gives agents the correct sentence.** An executive's agent asked "did we miss AISC guidance?" should say
@@ -255,7 +255,8 @@ the finance worksheet is still HYPOTHESIS.
      - one exact factor from an observed channel (the royalty rows);
      - one discrete factor from cited events (scope);
      - one residual it refuses to split.
-   - The price term is the one in dispute (headline against pay), and it is the one that can be identified.
+   - The price term is the one that separates the headline figure from the scorecard figure, and it is the one
+     that can be identified.
 2. **"It is not new: §21.6 uses guidance, GB-26 has the waterfall, and CC-01 and COD-01 overlap"** (both
    reviewers).
    - §21.6 uses guidance unconditionally as a comparator, which is the flaw in B.3.
@@ -270,8 +271,8 @@ the finance worksheet is still HYPOTHESIS.
   taxes and price-linked community payments break the simple identity, and the royalty row may bundle them. Many
   sites may refuse until CC-08 captures fiscal terms.
 - **The $214/oz gap may not be mainly price.** It may include perimeter or other items the bridge cannot see. The
-  bridge can bound only the price part, and its "unexplained remainder" will read as an accusation however neutral
-  the wording.
+  bridge can bound only the price part, so the remainder must be presented as not explained by price, never as a
+  finding.
 - **Inputs are still OPEN.** The FY2025 deck and per-site ranges are not in the register.
 - **The symmetry test needs a falling-price year**, and 2025–2026 offers none.
 - **The submitted package still has its errors:** the μ² term, the quantile claim, the 0.70¹² independence
@@ -282,11 +283,11 @@ the finance worksheet is still HYPOTHESIS.
 **AGY-1: 540 → 640** for the narrowed bridge described here. Steelmanning changed my mind on two points:
 - the price channel can be observed per site through the royalty rows, so it is identifiable without a published
   sensitivity;
-- the idea answers a question the plan already lists as open and that already sets part of executive pay
+- the idea answers a question the plan already lists as open, on scorecard figures the issuer publishes
   (OPEN-BULL-1, E605–E608).
 
 It stays below COD-01 because its exact factor depends on fiscal-term capture, and its headline output (the
-unexplained pay remainder) carries reputational risk.
+remainder not explained by price) needs careful presentation.
 
 ---
 

@@ -22,7 +22,7 @@ case imports those ids by reference and adds E673–E699 for this run.
 - **Success criterion.** A ranked set of independently audited corrections and recommendations that can be
   written into the plan with evidence ids, plus checked nulls where the plan holds up.
 - **Loss function (attributed to the owner's stated goals).** Costliest: a false or unsupported statement reaching
-  Barrick-class management (the owner says they have "the ear of top management of Barrick"), and a gate that
+  Barrick-class management, and a gate that
   passes vacuously or on fabricated inputs. Next: a gate that cannot be passed as written; a dependency that
   silently blocks M0–M2. Then: missed high-value capability. Delay is a moderate cost.
 - **Constraints.** Public lane only (no MNPI, no site data, no personal data); source documents never committed;
@@ -648,7 +648,7 @@ Imported evidence (defined in the standing register and the corpus and research 
 - E617 — imported; defined in `planning/research/W5_figure_verification.md`
 - E618 — imported; defined in `planning/research/W5_figure_verification.md`
 - E619 — imported; defined in `planning/research/W5_figure_verification.md`
-- E620 — imported; defined in `planning/research/W5_figure_verification.md`
+- E620 — imported; defined in `planning/research/W5_figure_verification.md`, where it is WITHDRAWN (no design use)
 - E621 — imported; defined in `planning/research/W5_figure_verification.md`
 - E622 — imported; defined in `planning/research/W5_figure_verification.md`
 - E623 — imported; defined in `planning/research/W5_figure_verification.md`
@@ -752,15 +752,15 @@ Evidence discovered by the generation passes (indexed by the normalizer):
 - E746 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) §37.4 lines 7549–7554 (no executive deliverable blocked by a sibling; M0–M2 consumed column) and §38 lines 7567–7580 (INT-AS-001 at "Commit 1" 7567; WP-04 7571; WP-07 7574; WP-10 7577; WP-13 at M3 7580) [P02, P03, P05]
 - E747 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) INV-002 line 535, INV-009 line 542, §30.1 lines 6556–6588 (envelope fields 6556–6572; no naked numbers in `data` 6570; exit codes 6576–6588, usage exit 2 at 6579, exit 6 conflict at 6583) [P01, P02]
 - E748 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) §21.8 lines 4572–4592 (G-BULL-2 4572; G-BULL-6 4576; GATE-BULL-01 row 4590; GATE-BULL-02 at M1 4591; GATE-BULL-03 4592) [P00, P02, P03, P04]
-- E749 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) §3 lines 306–324 (reader questions: CFO line 311 incl. "controllable"; QP 314; audit committee 320; counsel 321) and §37.1 lines 7336–7337 (wedge justified by pay-metric measurement integrity) [P04]
+- E749 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) §3 lines 306–324 (reader questions: CFO line 311 incl. "controllable"; QP 314; audit committee 320; counsel 321) and §37.1 lines 7336–7337 (wedge justified by measurement integrity behind published metrics) [P04]
 - E750 — Execution: `/private/tmp/claude-501/-Users-jemanuel-projects-franken-mining/2ba72fbb-c45d-4fd8-93cf-c08cb26d7a18/scratchpad/r7_repro/P03-B11-QUANT/` `t3_scan.py`, `t3_scan_round.py`, `t8_scan.py`, `ceiling.py`, `ceiling_layers_excluded.py` → `t3_out.txt`, `t3_round_out.txt`, `t8_out.txt`, `ceiling_out.txt`, `ceiling_layers_excluded_out.txt` — identity census over the ten Mine Stats workbooks (denominator 18,860 cells) [P03]
 - E751 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) §21.6 lines 4495–4496 (FY2026 per-site forecasts frozen and hashed before the February 2027 release) [P00, P03, P05]
 - E752 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) §37.3 M1 lines 7407–7417 (window 7407; scoring 7412; acceptance 7413–7417 incl. GATE-SYNC-01 at 7417) [P00, P02, P03, P05]
 - E753 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) §10.1 lines 867–886 (registration stores horizon and resolution source, lines 875–877; `author`) and §10.2 lines 886–900 (CRPS/coverage line 892; `PairwiseRace` line 897) [P04, P05]
 - E754 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) §2 lines 294–297 (BET-02 incl. "four scored quarters" line 294; BET-04/05) [P00, P04]
 - E755 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) §37.3 M2 lines 7429–7487 (Lumwana value 7429–7437; recovery card vs 92.7% 7436–7437; recovery-capable set 7446–7448; North Mara H1 2026 line 7457; site-decision calendar 7466–7469; waterfall 7473; acceptance 7476–7481; M2′ 7484–7487) [P00, P02, P03, P04]
-- E756 — Git: `git show origin/main:COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md | grep -n Chair` — lines 6923, 7170, 7197 discuss the Barrick Chair / Avathon lead-director link [P00]
-- E757 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) §35 lines 7188–7247 (§35.1 F1 Chair countermeasure; F3 7199; F4 7200; F7 7203; RISK-03 7220; RISK-22 7239) [P00, P04, P05]
+- E756 — Withdrawn as not needed for the design, by owner decision on 2026-10-30 [P00]
+- E757 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) §35 lines 7188–7247 (§35.1 F1; F3 7199; F4 7200; F7 7203; RISK-03 7220; RISK-22 7239) [P00, P04, P05]
 - E758 — Docs: `AGENTS.md` lines 267–268 ("not … built for Barrick") and `README.md` lines 36–39 ("Not affiliated … not built for Barrick") [P00, P04]
 - E759 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) §5 NS-01 lines 388–391 ([M0/M2]; bars for grade, recovery, tonnes, price-linked royalty, fuel, FX, sustaining capex) [P00, P04]
 - E760 — Plan text: plan (`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` at HEAD `68e7091`, E682) §21.6 lines 4525–4528 (TCC → AISC only a residual; component split stays OPEN) [P00, P04]
@@ -839,7 +839,7 @@ builds: the host is short of disk (E690) and the results above are already recor
 
 ## Owner Facts, Values, and Authorities
 
-- The owner wants a plan good enough for Barrick top management, built on public Barrick data as the demo,
+- The owner wants a plan good enough for Barrick-class executives, built on public Barrick data as the demo,
   general to Barrick/Newmont-class gold, copper, silver and tin miners (owner messages, this project).
 - The owner authorized the other agent (ProudCompass) whose plan edits and M0 code are under review.
 - Owner rules in AGENTS.md govern: no file deletion, no destructive git, no branches, public lane only,

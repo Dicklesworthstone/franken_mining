@@ -406,7 +406,7 @@ That sums to 17.85%, against Barrick's stated 18% average. So the Loulo royalty 
 - **Mali.**
   - The implementing decree's number (2024-0396/PT-RM, seen only in a search snippet), and the decree text giving the TAV schedule. The schedule above rests on B2Gold's filing (issuer primary).
   - The amount of seized gold in tonnes.
-  - The arrest warrant against Barrick's CEO (secondary press only; not used).
+  - Other press-reported proceedings (secondary press only; not used).
 - **PNG.** The royalty, production levy and CIT under New Porgera's Fiscal Stability Agreement are not disclosed in the filings read.
 - **DRC.**
   - Whether SOKIMO's 10% satisfies Art. 71(d), and how the Art. 80(h) 5% would be shared between Barrick and AngloGold at renewal (DATA-GATE).

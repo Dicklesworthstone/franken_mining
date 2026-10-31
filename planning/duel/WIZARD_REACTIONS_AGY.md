@@ -41,7 +41,7 @@ While their technical catches on formulas were fair and constructive, both revie
      - Third, public NI 43-101 / S-K 1300 technical reports in our corpus (`Lumwana`, `Reko Diq`, `Jabal Sayid`, `E176`) publish explicit concentrate payability %, TC/RC schedules, and penalty schedules, providing immediate deterministic parity oracles (`COD` recognized this and scored `AGY-06` at `675`, its `#3` rank).
 
 2. **Conflating a 1-character sign typo (`+⅙` vs. `−⅙`) with invalidity of 3D brick-level reserve forensics (`AGY-04`, scored `450` by `CC` and `340` by `COD`):**
-   - We examine this in full in `WIZARD_REBUTTAL_AGY.md` (Defense 2). With the `− ⅙ Δρ Δg` sign fixed, the 4-factor brick-level Shapley decomposition is exact to machine precision (`0` residual even when `p_0 = 0` or `p_1 = 1` where logarithmic LMDI divides by zero) and catches the #1 silent reserve inflation failure mode (unflagged density edits `ρ` vs. wireframe geometry edits `p`) that table-level roll-forwards (`BD-070`/`BD-222`) cannot see.
+   - We examine this in full in `WIZARD_REBUTTAL_AGY.md` (Defense 2). With the `− ⅙ Δρ Δg` sign fixed, the 4-factor brick-level Shapley decomposition is exact to machine precision (`0` residual even when `p_0 = 0` or `p_1 = 1` where logarithmic LMDI divides by zero) and separates unlogged density changes (`ρ`) from wireframe geometry changes (`p`), a split that table-level roll-forwards (`BD-070`/`BD-222`) cannot see.
 
 3. **Claiming downhole deflection economics "belongs to the drilling contractor" (`AGY-10`, scored `350` by `CC` vs. `620` by `COD`):**
    - `CC` argued that downhole steering belongs to the contractor and `Survey` already has an interference flag. In reality, drilling contractors get paid by the metre drilled unless the contract specifies target-piercing tolerances; deciding whether an in-progress `1,100 m` hole whose ISCWSA covariance ellipse has drifted `18 m` off the `35 m` Indicated grid centre (`E142`) warrants a `$28k` gyro run + directional wedge *before the hole passes the maximum dogleg kick-off depth `z_max_kickoff`* vs. risking a `$320k` redrill after rig demobilization (`E656`) is 100% the resource geologist's capital decision.
@@ -64,7 +64,7 @@ While their technical catches on formulas were fair and constructive, both revie
 - **Scores:** `CC = 620` | `COD = 545` | **Revised AGY Self-Score: `780`** *(down from `890`)*
 - **What we accept & fix:**
   1. Acknowledge that `crates/fmine-io/src/xlsx.rs:54, 335` already populates `ExtractedCell.formula: Option<String>` and that 14 of 18 historical Barrick workbooks on disk have flat values (`0` `<f>` tags), while 3 workbooks (`2026Q1/Q2 AISC`, `2026Q2 Mine Stats`) carry `~1,700` formulas.
-  2. Label `RangeDropOffByOne` and `HardcodedPlugOverride` outputs as **Candidate Forensic Hypotheses** (`EvidenceClass::Inferred`, requiring human review) rather than proof of intent.
+  2. Label `RangeDropOffByOne` and `HardcodedPlugOverride` outputs as **Candidate Forensic Hypotheses** (`EvidenceClass::Inferred`, requiring human review) rather than established findings.
 - **Where we push back:** Plumbing `ExtractedCell.formula` through `fmine-public` to audit the `~1,700` live formulas in the 2026 Barrick workbooks plus M1–M2 site reconciliation workbooks (`OPEN-TOUCH-1`, pre-mortem `F5`) is a tiny (`~400 LOC`), high-payoff extension of `BD-058` / `BD-061`.
 - **Disposition:** **NARROW & MERGE into `BD-058` / `BD-061`** (`fmine-public` formula-AST retention for the 2026 formula-bearing sheets + M1 site workbooks).
 

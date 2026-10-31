@@ -111,7 +111,7 @@ can consume the same checker.
 
 **Score: 625 / 1000.**
 
-A concrete, justified smaller data request and a registered null-result plan directly address the sponsor and
+A concrete, justified smaller data request and a registered null-result plan directly address the data-access and
 IT bottleneck in §34.4 and §37.3, which is a more useful product than another readiness checklist.
 Matching Lumwana's quarterly public aggregates cannot identify sampler-error covariance, ore-type effects and
 measurement bias well enough to establish real-site detection power, so accurate simulation power under the
@@ -148,7 +148,7 @@ should not treat its asset-specific adjustments as universally transferable.
 
 **Score: 450 / 1000.**
 
-The remuneration committee genuinely needs protection against apparent AISC improvement bought by deferral,
+The remuneration committee needs a reproducible way to separate AISC improvement from intertemporal shifts,
 and the proposal correctly connects this to §15.6, §23.2, §23.6 and RISK-22.
 But spending below a hierarchical or LOM baseline does not identify deferred work, an economic debt or its
 eventual repayment, while high processed grade can reflect planned sequencing, stockpiles and improved
