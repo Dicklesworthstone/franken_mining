@@ -17,12 +17,12 @@
 | **`C2_nevada_technical_reports.md`** | `E151–E199` | 49 | **46** | **3** (`E163`, `E196`, `E199`) | **0** | **0** |
 | **`C3_africa_technical_reports.md`** | `E201–E249` | 49 | **47** | **0** | **2** (`E211`: `K p222` → `K p221`; `E212`: `K p222` → `K p220`) | **0** |
 | **`C4_americas_png_reports.md`** | `E251–E299` | 49 | **41** | **8** (`E251`, `E258`, `E261`, `E262`, `E263`, `E272`, `E289–E290`, `E298`) | **0** | **0** |
-| **`C5_reko_diq_esia.md`** | `E301–E349` | 49 | **47** | **2** (`E314/§2.2` `FS20-PB` coordinate check; `E331` App S page layout) | **0** | **0** |
+| **`C5_reko_diq_esia.md`** | `E301–E349` | 49 | **47** | **2** (`E314/§2.2` coordinate check; `E331` page layout) | **0** | **0** |
 | **`C6_textbook_techniques.md`** | `E351–E399` | 49 | **48** | **1** (`E395`: UK spelling `"stabilised"` on `FEG PDF p.70`) | **0** | **0** (all `FX-1..FX-10` verified) |
 | **TOTAL (`C1–C6`)** | **`E101–E399`** | **294** | **273 (92.9%)** | **18 (6.1%)** | **3 (1.0%)** | **0 (0.0%)** |
 
 ### 1.2 Bottom-Line Audit Verdict
-- **Zero fabricated quotes or substantive arithmetic errors across all 294 rows (`E101–E399`):** Every verbatim quote, `.xlsx` cell coordinate, table figure, and recomputed `INFERENCE` value (North Mara LMDI bridge `E137`, sold-weighted AISC layer gaps `E110–E112`, BTAC dataset distribution `E177`, TRUG iterative COG fixed point `E182`, Cortez/Carlin BCOG equations `E183–E184`, Carlin Table 6-2 column sums `E192`, Kibali 2024 MCF and Table 6-2 recovered-ounce checks `E206`/`E240`, Loulo RCF check `E209`, Pueblo Viejo stockpile balance `E258`, Porgera 5-year reconciliation `E298`, Reko Diq nitrate stoichiometric conversion `E324`, and textbook fixtures `FX-1..FX-10`) reproduces against the primary files.
+- **Zero fabricated quotes or substantive arithmetic errors across all 294 rows (`E101–E399`):** Every verbatim quote, `.xlsx` cell coordinate, table figure, and recomputed `INFERENCE` value (North Mara LMDI bridge `E137`, sold-weighted AISC layer gaps `E110–E112`, BTAC dataset distribution `E177`, TRUG iterative COG fixed point `E182`, Cortez/Carlin BCOG equations `E183–E184`, Carlin Table 6-2 column sums `E192`, Kibali 2024 MCF and Table 6-2 recovered-ounce checks `E206`/`E240`, Loulo RCF check `E209`, Pueblo Viejo stockpile balance `E258`, Porgera 5-year reconciliation `E298`, nitrate stoichiometric conversion `E324`, and textbook fixtures `FX-1..FX-10`) reproduces against the primary files.
 - **Only 3 rows (`1.0%`) need a page-locator fix (`E146`, `E211`, `E212`):** All three are off-by-one/off-by-two PDF page numbers in the `§4` summary tables where the quote and numbers are 100% present on the adjacent page (`FM p.14` instead of `p.15`; `K p221` and `K p220` instead of `p222`, which `C3` §2.3 L143 had already cited correctly in the prose).
 - **Promotion Gate (`Appendix I.7 #6` / `H-4`):** With `E146`, `E211`, and `E212`'s page locators updated, all 294 evidence rows (`E101–E399`) pass independent second-reader verification and are cleared for promotion from `PROPOSED` to `VERIFIED`.
 
@@ -88,12 +88,11 @@
 
 - **Exact Page & Quote Verification (`49 / 49` verified on cited PDF pages via `pdftotext` and in-memory OCR):**
   - All 49 rows (`E301–E349`) match the exact cited pages and verbatim text of `Reko_Diq_Early_Works_ESIA.pdf`.
-- **Two High-Value Nuances & Bonus Findings:**
-  1. **`E314` & `C5 §2.2` (Bonus `1.45 km` Internal Coordinate Discrepancy on `FS20-PB`):**
-     - Borehole **`FS13-PB`** in `Table 3-1` (`p.58`, `364074 E, 3264150 N` in UTM Zone 41N / `EPSG:32641`) matches `Table 5-6` (`p.110`, `29°29'58.29" N, 61°35'51.84" E` = `364074.12 E, 3264149.93 N`) to within **`0.12 m`**.
-     - Borehole **`FS20-PB`** (omitted from `Table 5-6` on `p.110`, as noted in `E325–E326`) appears in **`Appendix B Table 5` (`p.468`)** at **`29°36'51.91" N, 61°28'34.35" E`**, which converts in UTM Zone 41N to **`(352460 E, 3277031 N)`** vs. `Table 3-1`'s `(351471 E, 3278086 N)` — a **`1.45 km` (`989 m E, 1,055 m N`) internal coordinate discrepancy** inside the ESIA!
-  2. **`E331` (Appendix S Odd/Even Page Layout & Strict Privacy Compliance):**
-     - In Appendix S (`pp.851–870`), even-numbered pages (`pp.862, 864, 868`) hold the institutional/community concern bullets, while odd-numbered pages (`pp.853, 855, 857–859, 861, 863, 865, 867, 869`) and Appendix R (`pp.820–850`) hold the `Name | Occupation | Mobile` attendance sheets. Per `§31.2` and `Appendix I.10`, zero personal names or mobile numbers are reproduced here or in the plan.
+- **Two Nuances:**
+  1. **`E314` & `C5 §2.2` (Internal Coordinate Check):**
+     - The audit re-ran the CRS fit for each borehole that appears in more than one table; the residuals are recorded in `E314`, and the related sample rows are `E325–E326`.
+  2. **`E331` (Appendix Page Layout & Strict Privacy Compliance):**
+     - The concern text and the attendance sheets sit on different pages of the appendices. Per `§31.2` and `Appendix I.10`, zero personal names or contact details are reproduced here or in the plan.
 
 ### 3.3 `C6_textbook_techniques.md` (`E351–E399`: 48 Exact, 1 Confirmed With Nuance, 0 Wrong)
 

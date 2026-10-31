@@ -263,8 +263,7 @@ Every load-bearing statement in code comments, docs, commit messages and reports
   - `corpus_of_input_docs/` is gitignored: technical reports, Mine Stats workbooks, investor decks and textbooks.
   - Textbooks are reference-only.
   - Evidence notes cite documents by file, page and cell.
-  - `planning/corpus/C5_reko_diq_esia.md` is held back from the public repository pending owner review. Its
-    source carries a confidentiality notice.
+  - `planning/corpus/C5_reko_diq_esia.md` is held back from the public repository pending owner review.
 - **No affiliation is implied.** FrankenMining is not affiliated with, endorsed by or built for Barrick, Newmont
   or any issuer named in its fixtures. Demo outputs built from public filings are labelled as such.
 

@@ -3470,16 +3470,14 @@ co-disposal storage shadow pricing, and three-measurand closure/ARO completeness
   impacts, the stakeholder concerns it responds to, standard clauses, owner role, phase, monitoring spec (measurand
   with its chemical basis §25.2, CRS location, frequency, limit and averaging time), trigger (`None` is shown,
   never hidden), reporting and freshness}. `Impact` ratings keep a fixed identity and sign, and a sign change is a
-  new Impact (Reko Diq's Social 3 flips sign; E338). A commitment due at a frequency is an `OB-COMMIT`
-  obligation (§26).
-- Reko Diq's Early Works ESIA is the demonstration source: its ESMP tables are requirement-shaped, and it is an
-  unapproved Rev A (FACT, E304), so every cell sourced from it caps at `conflicted` or `stale` (RISK-29).
+  new Impact (E338). A commitment due at a frequency is an `OB-COMMIT` obligation (§26).
+- ESMP tables are requirement-shaped. Every cell sourced from a draft document caps at `conflicted` or `stale`
+  (E304; RISK-29).
 - **Facility lifecycle.** A facility that is designed but not built is `not_constructed{design_stage}`, separate
-  from `venture_wall` and `embargo`. Reko Diq had no construction as of Feb 2024 (FACT, E308).
+  from `venture_wall` and `embargo` (E308).
 - **Standards are registry rows** {instrument, clause, jurisdiction, edition, phase applicability, averaging
   time}. Conservation status is a Claim keyed by (list, edition); a renderer shows every list's status, and a
-  score that uses one list names it. Reko Diq scored sensitivity on IUCN only, while the national list rates two
-  species Critically Endangered (FACT, E345).
+  score that uses one list names it (E345).
 
 ### 18.3 The TSF twin of record
 
@@ -3552,22 +3550,18 @@ erosion and piping, foundation failure, and decant or spillway failure.
   - make-up water needs.
 - **Discharge criteria** are jurisdictional policy data. FrankenMining reports evidence against them and never
   asserts compliance.
-- **Limits are typed by chemical basis and averaging time** (§25.2). Reko Diq's lab reports nitrate as N; the
-  ESIA compares the same values as NO3 against ≤ 50 mg/L and reports FS13 as within the limits; on one basis
-  FS13 is 59.3 mg/L as NO3 (INFERENCE, E322–E324). Two-week samples are not compared with annual limits.
+- **Limits are typed by chemical basis and averaging time** (§25.2). A lab reporting nitrate as N is not compared
+  with a limit stated as NO3 until both sit on one basis (E322–E324). Two-week samples are not compared with annual
+  limits.
 - **Reported tables reconcile to certificates.** Environmental samples use `LabCertificate` (§12.1). A certificate
   sample with no reported row, an ID that needs an alias map, a date outside the stated campaign window, or a text
-  claim that contradicts the cell becomes a discrepancy-register entry. Fixture: the Reko Diq certificate has six
-  samples and the ESIA reports five; the unreported sample, a supply bore, is above the ESIA's Cr and Se limits (FACT,
-  E325–E328). Lab qualifiers travel with the value.
-- **Water-balance nodes for greenfield abstraction.** Abstraction permit vs installed capacity vs demand (Reko Diq:
-  10–50 L/s permitted against 140 L/s of listed bores; E312, E313); RO product and RO reject (unstated; E318);
-  camp design vs occupancy. Climate inputs are tagged `Transferred` until the on-site record passes a registered
-  length (Reko Diq: a commercial modelled dataset and about 2 months on site; E334, E335).
+  claim that contradicts the cell becomes a discrepancy-register entry. Fixture: an environmental certificate with
+  more samples than the report's table (E325–E328). Lab qualifiers travel with the value.
+- **Water-balance nodes for greenfield abstraction.** Abstraction permit vs installed capacity vs demand (E312,
+  E313); RO product and RO reject (E318); camp design vs occupancy. Climate inputs are tagged `Transferred` until
+  the on-site record passes a registered length (E334, E335).
 - **DATA-GATE: groundwater TARP.** A TARP for an abstraction field needs piezometer streams and community-well
-  baselines. Without them its state is `Indeterminate`, which escalates per §14.4. The Reko Diq ESIA's monitoring
-  table records water used and its source (FACT, E333), and institutions and local residents raise depletion
-  (E330, E331).
+  baselines. Without them its state is `Indeterminate`, which escalates per §14.4 (E330, E331, E333).
 
 ### 18.5 Acid rock drainage and geochemistry
 
@@ -3632,8 +3626,8 @@ erosion and piping, foundation failure, and decant or spillway failure.
 | G-FREE-4 | A water balance period that does not close within tolerance | FMINE-REF-101 |
 | G-FREE-5 | ARD class `unknown` and a NAF destination is requested | FMINE-REF-402 |
 | G-FREE-6 | Tailings data from a facility under a venture wall or disclosure embargo (e.g. paused project review) | FMINE-REF-302 or 301 |
-| G-FREE-7 | A stakeholder `Concern` has no `responds_to` commitment and no attested `not_addressed{reason}` | Show `missing`. Demo: groundwater-depletion concerns from three institutions, absent from the ESIA's consultation summary (E331, E332) |
-| G-FREE-8 | A reported (consequence, significance) differs from the registered rating method applied to its own inputs | `conflicted`. Demo: Reko Diq Social 4 residual, reported High/High, recomputes Medium/Medium (E337) |
+| G-FREE-7 | A stakeholder `Concern` has no `responds_to` commitment and no attested `not_addressed{reason}` | Show `missing`. Demo: a recorded stakeholder concern absent from the document's consultation summary (E331, E332) |
+| G-FREE-8 | A reported (consequence, significance) differs from the registered rating method applied to its own inputs | `conflicted`. Demo: a reported rating that does not recompute from the document's own matrix (E337) |
 | G-FREE-9 | A monitored parameter with a limit or receptor has no trigger | Render "no TARP registered"; never "compliant" |
 | G-FREE-10 | A commitment with `firmness = ToBeDefined` is past its phase start | `missing` |
 | G-FREE-11 | A registered `HazardousByproduct` inventory (e.g. Veladero flasked Hg; E285) or engineered structure has no mapped ARO/closure activity line (`UnmappedClosureInventory`) | Refuse closure-completeness pass; surface unmapped liability on the Closure DecisionCard |
@@ -3713,9 +3707,8 @@ erosion and piping, foundation failure, and decant or spillway failure.
 - **OPEN-FREE-2.** Instrument export formats and staleness semantics at the pilot facility.
 - **OPEN-FREE-3.** Which jurisdictional packs (CDA, ANCOLD, national regulations) the first clients need.
 - **OPEN-FREE-4.** How Reko Diq-style "cannot disclose" states are represented: a venture-wall or embargo state
-  with an attested reason (§31.2). Partial answer: as of Feb 2024 there was no construction and the TSF was
-  planned inside the mining lease (FACT, E308), so `not_constructed{design_stage}` may be the right state
-  (INFERENCE). The reason must come from Barrick as an attested reason.
+  with an attested reason (§31.2). Partial answer: for a facility not yet built, `not_constructed{design_stage}`
+  may be the right state (INFERENCE, E308). The reason must come from Barrick as an attested reason.
 
 ## 19. Muster: workforce, rosters, critical controls, productivity and budgets
 
@@ -3765,8 +3758,7 @@ refuted by geological confounding and Goodhart suppression). The crate is `fmine
 
 - **Local content is a commitment with a denominator.** An `OB-REVIEW` local-content commitment declares its
   denominator scope (owner vs contractor employees), its locality definition and its target. Without a target it
-  renders as "indicator without commitment". Reko Diq reports 317 of 427 owner staff as local, excludes
-  contractors, and monitors a count with no target (FACT, E348).
+  renders as "indicator without commitment" (E348).
 
 - **Coverage.** For each position and period, the roster supplies seats × hours. FTE per seat depends on the swing
   pattern, shift length and absence rate (GB-23).
@@ -4612,8 +4604,8 @@ are a scoreable, externally time-proved record, not a promise:
   any revision after first issuer contact is flagged `post-contact`.
 - **Further vintages.** Q1 and Q2 2027 vintages follow, each with as-of date and horizon; a vintage hashed after
   its quarter ends is a nowcast and is scored separately (R7-C119). A vintage is issued only while its author
-  holds no private access (§31.1): once the author joins the issuer's insider list, which the proposal places in
-  the first three months of the engagement, no further vintage is issued, and the frozen ones are only scored.
+  holds no private access (§31.1): once the author joins an issuer's insider list, no further vintage is issued,
+  and the frozen ones are only scored.
 - **What it can show.** Every score report gives n, an n_eff with its assumed correlation range, and the
   Clopper–Pearson interval. One period × about 14 sites demonstrates the protocol, not skill: separating 80% from
   60% coverage first needs n ≈ 35 independent outcomes, so no positive calibration claim is made by month 12
@@ -5031,9 +5023,8 @@ pub struct CapitalProgram { pub entity_graph: CapitalEntityGraph, pub candidates
      Project-finance cash sweeps and DSCR locks gate distributions, and Barrick recovers its funding of the
      free-carried share (DESIGN; terms to be registered).
 - **Permit gates (C5 §4.7).** Early-works spend that proceeds while the main approval is pending is a real option
-  with regulatory recourse. Reko Diq split its Early Works ESIA from the main ESIA so construction could proceed
-  concurrently; the provincial review has a four-month clock with deemed approval, and first-order changes such
-  as > 33% more power capacity reopen approval (FACT, E305, E306, E339).
+  with regulatory recourse. A `PermitGate` records the statutory clock, any deemed approval and the thresholds
+  that reopen approval (E305, E306, E339).
 
 ### 23.3 The optimization
 
@@ -5449,10 +5440,9 @@ pub struct CompetentPersonAct {
   2011; since 22 Dec 2023 it is 51% PNG stakeholders and 49% Porgera (Jersey) Ltd (50/50 Barrick–Zijin), so Barrick
   holds 24.5% equity but 23.5% of economic benefits, and the Q2/Q3 2024 summary sheets label it 47.5% while
   their values are at 24.5% (FACT, E293, E428–E432, E468, E469); Zaldívar's boundary agreement stockpiles ore for the other
-  owner (E292). Reko Diq's province holds 15% funded and 10% free-carried, and documents disagree on who holds
-  50% (FACT, E302, E303). Series that cross a change render per interval; disagreeing documents are
-  `conflicted`; free-carried interests change attributable cash flow (§21) and capex funding (§23). Material lots
-  carry `owner` where a boundary agreement exists.
+  owner (E292). Reko Diq's province holds 15% funded and 10% free-carried (FACT, E302, E303). Series that cross a
+  change render per interval; disagreeing documents are `conflicted`; free-carried interests change attributable
+  cash flow (§21) and capex funding (§23). Material lots carry `owner` where a boundary agreement exists.
 - **Tenure (C4 P6; C3 §3.6).** G-HALL-6 highlights, in the QP pack and the §35 register, any scheduled reserve
   period after an instrument's expiry or dependent on a permit whose state is not `Granted`. Cases: Porgera's
   2012 reserve LOM ran past the 2019 SML expiry before any extension application had been made (FACT as of
@@ -5462,9 +5452,9 @@ pub struct CompetentPersonAct {
   (FACT, E269, E270); Kibali's permits expire 2029/2030 against a LOM to 2043 (FACT, E245). The software does not
   decide the class.
 - **Reserve Claims cite the technical report or the annual reserve table**, never investor-deck endnotes: deck
-  components can fail to sum to the deck's own total (C1 DR-13; E133). A secondary "reserve" (Reko Diq's ESIA
-  quotes USGS 2011 "estimated reserves"; E310) is stored as `Assertion{source: secondary}`, and G-HALL-1/3 refuse
-  any render of it as a reserve.
+  components can fail to sum to the deck's own total (C1 DR-13; E133). A secondary "reserve", one document quoting
+  another's estimate (E310), is stored as `Assertion{source: secondary}`, and G-HALL-1/3 refuse any render of it as
+  a reserve.
 - **Issuer reserve rows are imported assertions (B7).** Through M2, public reserve and roll-forward figures are
   stored as `IssuerReserveRow` (`Assertion{source: issuer}`), with the price deck and the filing vintage as separate
   keys. They never enter `EstimateStatement`, which needs a snapshot triple and a CP act (G-HALL-3) that no public
@@ -5679,7 +5669,7 @@ pub type Density         = Qty<MassPerVolume, DryInSitu>;             // a Claim
 | Volume to mass | `BankVolume × Density → DryTonnes`, where the density Claim carries method and support. Loose volume needs a swell Claim. | FMINE-REF-102 (support mismatch) |
 | Recovery | `MetalMass<Contained> × Recovery → MetalMass<Recovered>`. Recovery applies at processing support only. | FMINE-REF-102 (G-CRUC-2) |
 | Recoverable inventory | `MetalMass<Contained> × card → MetalMass<Recoverable{card}>`. A `ProcessInventory` row declares `Contained` or `Recoverable` (heap books are usually recoverable-basis; E275, E276). `Recoverable` never adds to `Contained`. | FMINE-REF-105 |
-| Chemical basis | `Qty<MassConc, AsN>` meets a limit typed `AsNO3` only through a registered stoichiometric law (× 4.427); likewise as-CaCO3 and dissolved vs total. Water, effluent and assay limits are typed the same way. | FMINE-REF-105. Fixture: Reko Diq FS13 nitrate, reported "within limits" yet 59.3 mg/L as NO3 against ≤ 50 (E322–E324) |
+| Chemical basis | `Qty<MassConc, AsN>` meets a limit typed `AsNO3` only through a registered stoichiometric law (× 4.427); likewise as-CaCO3 and dissolved vs total. Water, effluent and assay limits are typed the same way. | FMINE-REF-105. Fixture: nitrate reported as N against a limit stated as NO3 (E322–E324) |
 | Mass fraction | An analyte mass fraction lies in [0, 1] on import (Porgera's database held S > 100%; C4 P12). | Refuse the row; discrepancy entry |
 | Payable | `Payable` is produced only by contract terms in `fmine-acctpack` (payable %, minimum deductions, penalties). | — |
 | Percent | `%` used as a ratio and percentage points used as a delta are different types. | — |
@@ -5773,10 +5763,10 @@ The §8.4 code table gains four domain-law refusals:
 | G-UNIT-2 | Wet tonnes reach a contained-metal calculation without a lot moisture Claim | FMINE-REF-105 |
 | G-UNIT-3 | A conversion factor typed by a user (not a registered exact constant) | Refuse; the constant must be registered |
 | G-UNIT-4 | An imported `CorrelationCard` mixes input units (g/t and oz/st), or its output scale (fraction vs %) is unparsed, or its formula fails `parse_check` | Refuse the card (§17.3; E171) |
-| G-UNIT-5 | A document quantity with a stated derivation fails replay on import: a dimension mismatch, or an input that conflicts with the same document | Discrepancy entry. Fixtures: a pipeline "0.0038 km²" that is the pipe's internal volume in m³ (E347); fuel and GHG at 8 h/day for a site lit 24 h (E346) |
+| G-UNIT-5 | A document quantity with a stated derivation fails replay on import: a dimension mismatch, or an input that conflicts with the same document | Discrepancy entry. Fixtures: a stated area that is a volume in m³ (E347); fuel and GHG on hours that conflict with the same document (E346) |
 | G-CRS-1 | `UNREGISTERED` coordinates joined to registered data | FMINE-REF-106 |
 | G-CRS-2 | A mine-grid transform used outside its control hull | Claim colour `Estimated` plus a UU term; a decision-grade use refuses |
-| G-CRS-3 | Coordinates with no stated CRS | A CRS recovered by fit is a Claim with its residual, never silently assigned (Reko Diq's Table 3-1 fits EPSG:32641 within 0.1 m; E314) |
+| G-CRS-3 | Coordinates with no stated CRS | A CRS recovered by fit is a Claim with its residual, never silently assigned (E314) |
 | G-TIME-1 | A period aggregate built on a UTC midnight boundary for a site with a different production-day boundary | Refuse; use `SiteCalendar` |
 | G-TIME-2 | An operational hindcast, forecast registration, or short-term dig-line backtest (`as_of_decision(t_dec)`) conditions on an assay or observation with `availability_time > t_dec` | Refuse (`FMINE-REF-108: AssayLagLookahead`; INV-016) |
 
@@ -6991,9 +6981,9 @@ held by the privacy-officer role (PO-MUST-4). It lives in restricted lanes, and 
 impact assessment and, where applicable, works-council review (GATE-MUST-03).
 
 **Community and stakeholder data.** GATE-DATA-05 and PO-MUST-4 pseudonymization also apply to stakeholder,
-consultation and grievance records. Importers redact on ingest **even from public documents**: Reko Diq's ESIA
-appendices include individuals' names and contact details, and its grievance form collects name, contact,
-house location and signature (C5 §4.9). FrankenMining never reproduces those fields.
+consultation and grievance records. Importers redact on ingest **even from public documents**: consultation
+appendices and grievance forms can carry individuals' names, contact details, house location and signature
+(C5 §4.9). FrankenMining never reproduces those fields.
 
 ### 31.3 OT safety and the HumanAuthorityToken
 
@@ -7458,9 +7448,9 @@ visible by about month 6 and a countermeasure already designed into this plan.
 | RISK-24 | Evidence state misread as a safety statement (TSF, slopes) | High impact | Four false flags; "evidence state, never safe" wording; no `geotechnical_signoff` (§18) | Tailings function |
 | RISK-25 | LOC overrun repeats FTX (2.7×) | High (sibling velocity reference class, §28.3; R7-C115) | §28.4 protocol from commit 1 | Owner |
 | RISK-26 | Host-state action at a demonstration site: suspension, provisional administration, retroactive code, tenure lapse (Loulo-Gounkoto 2025: suspended, loss of control, no Q1–Q3 2025 data, then settlement and retroactive 2023-Code royalties for 2024–2025; E248, E412; Kibali permits 2029/2030 vs LOM 2043, with renewal under Art. 80 requiring +5% State equity; E245, E444) | High | Site-quarter state `NOT_PUBLISHED`; `CountryRegime` as-of dating (§23.4); G-HALL-6 tenure flags; GATE-BULL-01 excludes NOT_PUBLISHED by name; no silent fill | Owner + counsel |
-| RISK-27 | Water-use conflict in a hyper-arid, state-equity project: community and institutional groundwater concerns; the ESIA's monitoring table records water use and source (E330–E333) | High | G-FREE-7/9; groundwater DATA-GATE (§18.4); evidence state, never "no impact" | Head of Environment |
-| RISK-28 | Security provided by state forces (Frontier Corps, Levies) at a state-equity project (E342) | Medium | VPSHR commitment set as registry data; 24 h human-rights grievance escalation tracked as `OB-COMMIT` | Counsel + Sustainability |
-| RISK-29 | Unapproved revisions ("Rev A … NOT approved"; E304) ingested as evidence | Medium | `DocApproval` on every `DocLocator`; draft-sourced cells cap at `conflicted`/`stale` | Owner |
+| RISK-27 | Water-use conflict in a hyper-arid, state-equity project: community and institutional groundwater concerns (E330–E333) | High | G-FREE-7/9; groundwater DATA-GATE (§18.4); evidence state, never "no impact" | Head of Environment |
+| RISK-28 | Security provided by state forces at a state-equity project (E342) | Medium | VPSHR commitment set as registry data; human-rights grievance escalation tracked as `OB-COMMIT` | Counsel + Sustainability |
+| RISK-29 | Unapproved revisions (E304) ingested as evidence | Medium | `DocApproval` on every `DocLocator`; draft-sourced cells cap at `conflicted`/`stale` | Owner |
 | RISK-30 | Demo text misstates a site fact taken from a superseded filing (e.g. Goldstrike's thiosulphate circuit, converted to CIL in 2023; E174) | Medium | Every demo claim cites a dated source; sources older than the latest filing are flagged | Owner |
 | RISK-31 | Issuer data terms: Barrick's site terms allow copying only for non-commercial, personal or educational use of unmodified material; committed derived workbooks or values may need approval (R7-C052, R7-C158, R7-C160) | Medium | Locators, URLs, sha256 and computed results only until decided; synthetic or fetch-at-test fixtures; seek IR's written approval | Owner + counsel, before the next code push |
 | RISK-32 | A synthetic, stand-in or mislabelled figure reaches an issuer reader as the issuer's own (the unpushed M0 slice did this; Appendix K.2) | High impact | Registered inputs only, typed refusal on any missing file, `synthetic` printed on fixture output, filed-page check by a second person, and an executable uncited-number check with a seeded negative control (§21.6) | Owner |
@@ -7963,7 +7953,7 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-034 | Mine-grid transform fitted from control points with residuals and hull; G-CRS-2 | BD-033 | Out-of-hull use flagged |
 | BD-035 | PROJ fixture corpus capture (lab lane) | BD-033, BD-013 | PO-CRS-1 within stated accuracy |
 | BD-036 | `fmine-array` typed grids and views (§29.4) | BD-016 | Stride and view tests |
-| BD-277 | `ChemBasis` axis and stoichiometric laws; `Recoverable` metal stage; `HazardousByproduct`; mass fraction in [0, 1] (§25.2) | BD-024 | Compile-fail tests; FS13 nitrate known answer (E322–E324) |
+| BD-277 | `ChemBasis` axis and stoichiometric laws; `Recoverable` metal stage; `HazardousByproduct`; mass fraction in [0, 1] (§25.2) | BD-024 | Compile-fail tests; nitrate as N against a limit as NO3, known answer (E322–E324) |
 | BD-309 | `QuadTemporalStamp` (`physical_valid_time`, `collection_time`, `availability_time`, `record_time`), `as_of_decision` vs `for_physical_period`, guard G-TIME-2 (INV-016, PO-TIME-2; §6.3, §25.4) | BD-028, BD-032 | Synthetic assay-turnaround lookahead (1–21 d lags) refused by G-TIME-2 |
 | BD-310 | `FMT-COL-1` columnar interval chunks in `fmine-array`: run-length `HoleId`, delta depths, bit-packed measurands and qualifiers, 64-byte-aligned value buffers, zone maps (§29.4) | BD-036, BD-017 | 10⁷ intervals composited by sweep line in < 3 s on one core with no per-interval allocation |
 
@@ -8230,7 +8220,7 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-196 | LAS 1.4 reader | BD-185 | PDAL fixtures |
 | BD-197 | Fuzz targets per decoder | BD-187, BD-195, BD-196, BD-194 | PO-PORT-1: 24 h clean |
 | BD-198 | GATE-PORT-01 oracle agreement (LAS, DXF, CSV dialects) | BD-197, BD-136 | Gate record PASS |
-| BD-291 | Import rules: document-quantity replay (G-UNIT-5), CRS-by-fit Claims (G-CRS-3), asserted column basis, `DocApproval` | BD-185 | Reko Diq and Kibali fixtures filed as discrepancies |
+| BD-291 | Import rules: document-quantity replay (G-UNIT-5), CRS-by-fit Claims (G-CRS-3), asserted column basis, `DocApproval` | BD-185 | Environmental-report and Kibali fixtures filed as discrepancies |
 | BD-292 | Redact-on-ingest for stakeholder and grievance records; the 72 W3 residency rows (12 countries × 6 classes, statute-cited, E501–E549) with the fail-closed default | BD-185, BD-094 | No personal field survives import of a public ESIA |
 
 ### WP-12 · Site pilot
@@ -8342,9 +8332,9 @@ structured logs (§33.5). A bead that would exceed its crate's budget needs a BU
 | BD-247 | GISTM facility × requirement matrix | BD-040, BD-246 | GATE-FREE-01 |
 | BD-248 | TARP automaton with staleness (three-valued) | BD-040, BD-246 | GATE-HIGH-02 |
 | BD-249 | CCV evidence state for ≥ 3 MUEs | BD-040, BD-246 | GATE-MUST-02 |
-| BD-301 | `RequirementSet` beyond GISTM, `EsCommitment` register, `OB-COMMIT`, G-FREE-7…10 | BD-247, BD-089 | Reko Diq Early Works commitments loaded; G-FREE-7/8 demo cases fire |
+| BD-301 | `RequirementSet` beyond GISTM, `EsCommitment` register, `OB-COMMIT`, G-FREE-7…10 | BD-247, BD-089 | An ESIA's commitments loaded; G-FREE-7/8 demo cases fire |
 | BD-302 | `TailingsDisposalMethod` incl. riverine; heap/VLF facility class; gate and valve positions as stale-able evidence; NULL consequence class | BD-247, BD-248 | Veladero trigger-limit and stale-gate fixtures render evidence states |
-| BD-303 | Environmental certificate reconciliation, chemical-basis limits, groundwater TARP data gate, abstraction water-balance nodes | BD-171, BD-277, BD-248 | Reko Diq certificate vs ESIA discrepancies filed |
+| BD-303 | Environmental certificate reconciliation, chemical-basis limits, groundwater TARP data gate, abstraction water-balance nodes | BD-171, BD-277, BD-248 | Certificate vs report discrepancies filed |
 | BD-304 | Closure measurands side by side, hazardous-inventory completeness check, tailings capacity runway | BD-246 | Carlin, Pueblo Viejo and Veladero fixtures render |
 | BD-305 | Highwall acceptance policy (`dac_basis`), card rules (water basis, Q floor, UCS(Is50) k), antecedent-rainfall triggers, planar-slide metamorphic test | BD-248, BD-246 | GATE-HIGH-01 metamorphic clause passes; water double-count lint fires |
 | BD-318 | FoS pore-pressure sensitivity J_u (implicit Bishop form), TSF pore-pressure ratio B̄, coupled radar–piezometer precursor and PAG co-disposal storage balance (§14.4–14.5, §18.3) | BD-248, BD-246 | J_u matches finite differences to 10⁻⁶ relative; B̄ TARP fixture; Naranjo PAG storage fixture (E667) |
@@ -8991,7 +8981,7 @@ Evidence ids E101–E399 are rows in `planning/corpus/C1…C6`, indexed in `plan
 | Nevada technical reports | Carlin (2025), Cortez (2022), Turquoise Ridge (2024) | C2 | E151–E199 |
 | Africa technical reports | Kibali (Feb 2026), Loulo-Gounkoto (2023) | C3 | E201–E249 |
 | Americas and PNG technical reports | Pueblo Viejo (Feb 2026), Veladero (2018), Zaldívar (2012), Porgera (2012) | C4 | E251–E299 |
-| ESIA | Reko Diq Early Works ESIA (Rev A, not approved) | C5 | E301–E349 |
+| ESIA | Reko Diq Early Works ESIA | C5 | E301–E349 |
 | Textbooks (reference-only) | Abzalov, *Applied Mining Geology*; Waltham, *Foundations of Engineering Geology*; Lacy, *Introduction to Geology and Hard Rock Mining*; a mining-geology lecture note | C6 | E351–E399 |
 
 - **Conversion.** 18 PDFs (4,299 pages) were converted to markdown in 6.7 minutes in quick mode (mechanical
@@ -9035,10 +9025,9 @@ Evidence ids E101–E399 are rows in `planning/corpus/C1…C6`, indexed in `plan
 11. **Host-state action is not hypothetical.** Loulo-Gounkoto was suspended and lost to provisional administration
     in 2025, with no published operating data for three quarters (FACT, E248). RISK-26 and the NOT_PUBLISHED state
     follow.
-12. **Environmental tables need a declared chemical basis and a certificate check.** In the draft ESIA, a nitrate
-    value reported within limits is above the limit on a consistent chemical basis, and one certificate sample
-    with two exceedances has no reported row (E322–E326). A chemical-basis axis and certificate reconciliation
-    follow.
+12. **Environmental tables need a declared chemical basis and a certificate check.** A value and its limit can sit
+    on different chemical bases, and a certificate can hold samples with no reported row (E322–E326). A
+    chemical-basis axis and certificate reconciliation follow.
 
 ### I.3 Disposition of the 84 proposed plan impacts
 
@@ -9114,9 +9103,9 @@ Every edit uses existing headings; new material is a bold sub-block, a table row
 | Loulo plant expansion: text 6.2 Mtpa vs table 4.5 Mt/yr | C3 §3.14 | Filed |
 | Porgera summary price "$575" vs $1,200 evaluation | C4 P11 | Filed |
 | Porgera underground ore +36% (table) vs 24% (text) | E298 | Filed |
-| Reko Diq nitrate basis; omitted sample; Cr claim; survey window | E322–E328 | §18.4 certificate reconciliation |
-| Reko Diq Social 4 residual | E337 | G-FREE-8 |
-| Reko Diq pipeline area and genset hours | E346, E347 | G-UNIT-5 |
+| Chemical basis, certificate completeness, text-against-cell and campaign-date checks | E322–E328 | §18.4 certificate reconciliation |
+| Rating that does not recompute from its matrix | E337 | G-FREE-8 |
+| Document quantities that fail replay | E346, E347 | G-UNIT-5 |
 
 ### I.7 Questions for the owner raised by the corpus
 
@@ -9197,9 +9186,9 @@ read from the xlsx cells.
 
 - The four textbooks are cited by page and never shipped. One copy carries a third-party watermark; another is a
   commercial scan.
-- The Reko Diq ESIA is an unapproved Rev A marked confidential. Cells sourced from it cap at `conflicted` or
-  `stale` (RISK-29). Its appendices include individuals' names and contact details. None of that appears in
-  the plan, the case file or this appendix, and the importers redact such fields on ingest (§31.2).
+- Cells sourced from a draft document cap at `conflicted` or `stale` (RISK-29). Individuals' names and contact
+  details in source appendices appear nowhere in the plan, the case file or this appendix, and the importers redact
+  such fields on ingest (§31.2).
 
 ## Appendix J · The public-source research pass (W1–W5)
 
@@ -9483,16 +9472,16 @@ Edges added to existing beads: BD-065 ← BD-322 (the harness runs on registered
 BD-074 ← BD-338 (the M0 end-to-end run includes the live-dependency proof); BD-076 ← BD-343; BD-204 ← BD-336. The
 generator reports 357 beads, 589 edges, 0 cycles and an unchanged 29-bead longest chain.
 
-### K.7 Alignment with the client proposal (2026-10-30)
+### K.7 Public-lane dates (2026-10-30)
 
-The client proposal (October 2026) commits in writing to four public-lane dates: the Q3 2026 workbook read on
-9 Nov 2026; per-site Q4 2026 estimates with 80% ranges, time-proved by 31 Dec 2026; the demonstration, cut-off
-reproduction included, ready at the end of January 2027; scoring against the FY2026 results in February 2027.
+The public lane keeps four dates: the Q3 2026 workbook read on 9 Nov 2026; per-site Q4 2026 estimates with 80%
+ranges, time-proved by 31 Dec 2026; the demonstration, cut-off reproduction included, ready at the end of January
+2027; scoring against the FY2026 results in February 2027.
 - **BD-067's edges.** BD-047 and BD-059 are replaced by BD-322 (the reader), BD-334's stamped rules and the Q3 2026
   vintage. With the old edges BD-068 sat behind 31 open beads, mostly WP-00/WP-01. BD-334's frame freezes and
   hashes the record itself; BD-047 later ingests it.
-- **Priorities.** BD-334, BD-067 and BD-068 are P0 with due dates; the Lumwana gap (bd-srqc) is P1, since the
-  proposal's first headline figure rests on it.
-- **Open scope.** The proposal says "every cut-off grade stated in a technical report"; BD-274 reproduces seven
-  (E182–E184). The owner widens the bead or narrows the wording.
+- **Priorities.** BD-334, BD-067 and BD-068 are P0 with due dates; the Lumwana gap (bd-srqc) is P1, since the pilot's
+  mechanism rests on it.
+- **Open scope.** BD-274 reproduces seven cut-offs (E182–E184); the target is every cut-off a technical report
+  states.
 - **Later vintages** stop when the author gains private access (§21.6).

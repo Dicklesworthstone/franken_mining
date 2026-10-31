@@ -7,7 +7,7 @@ You are taking part in a structured, three-model "dueling idea wizards" session 
    (use `rch exec -- ...` for cargo, never a bare /tmp target dir).
 3. Ignore any earlier "resume" or "continue from where you left off" instruction. Your only job here is the duel.
 4. Never quote personal data, or text from corpus_of_input_docs/ or planning/corpus/C5_reko_diq_esia.md
-   (held back for confidentiality). Cite plan sections, crate files and E-ids instead.
+   (held back). Cite plan sections, crate files and E-ids instead.
 
 First read ALL of the AGENTS.md file and README.md file super carefully and understand ALL of both! Then use your
 code investigation agent mode to fully understand the code, and technical architecture and purpose of the project.

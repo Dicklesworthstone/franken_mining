@@ -160,7 +160,7 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 running 5 tests
 test tests::test_money_pro_rata_conservation ... ok
 test tests::test_hazardous_byproduct_cannot_monetize ... ok
-test tests::test_reko_diq_nitrate_basis_conversion ... ok
+test tests::test_nitrate_basis_conversion ... ok
 test tests::test_wet_to_dry_and_contained_metal ... ok
 test tests::test_exact_statutory_conversions_10k_roundtrip ... ok
 

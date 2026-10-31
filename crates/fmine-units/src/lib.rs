@@ -933,8 +933,8 @@ mod tests {
     }
 
     #[test]
-    fn test_reko_diq_nitrate_basis_conversion() {
-        // Reko Diq ESIA FS13 groundwater sample: 79 mg/L as N = 349.717 mg/L as NO3 > 50 mg/L WHO limit.
+    fn test_nitrate_basis_conversion() {
+        // A groundwater sample at 79 mg/L as N is 349.717 mg/L as NO3, above the 50 mg/L WHO limit.
         let sample_as_n = ChemConc::new(79.0, ChemBasis::ElementalN);
         let who_limit_no3 = ChemConc::new(50.0, ChemBasis::NitrateNO3);
 

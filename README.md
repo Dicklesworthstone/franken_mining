@@ -320,8 +320,7 @@ proven otherwise.
 - **Ownership basis is part of every figure.** 100% project basis vs attributable, at the stated interest, for
   example NGM 61.5/38.5 or Pueblo Viejo 60/40.
 - **Source documents are not committed.** The repository carries evidence notes that cite them by file, page and
-  cell. One note is held back pending owner review (`planning/corpus/C5`), because its source carries a
-  confidentiality notice.
+  cell. One note is held back pending owner review (`planning/corpus/C5`).
 
 ---
 

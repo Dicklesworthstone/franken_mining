@@ -850,8 +850,8 @@ builds: the host is short of disk (E690) and the results above are already recor
 - Earlier review rounds: AUDIT_1–AUDIT_5 (`planning/mor/audits/`), Appendix H (audit fold-in) and H.5b
   (corrections to the concurrent revision). Evidence rows E401–E655 (public research) have not yet had an
   independent second reader (plan §36.4 item H-4).
-- `planning/corpus/C5_reko_diq_esia.md` is held back from the public repository (its source carries a
-  confidentiality notice); it may be read locally but must not be quoted in outputs.
+- `planning/corpus/C5_reko_diq_esia.md` is held back from the public repository; it may be read locally but must
+  not be quoted in outputs.
 - The plan says nothing is "implemented" in the §0.2 sense yet (AGENTS.md "Current Repository State"), while the
   M0 commit closes 87 beads (E673, E680).
 

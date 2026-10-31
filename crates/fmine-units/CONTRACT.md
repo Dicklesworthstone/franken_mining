@@ -39,7 +39,7 @@ Known gaps: dimension, moisture-basis and FX-missing refusals are compile-time m
 ## 6. Proof Obligations (`PO-*`)
 - `PO-UNIT-1`: $10^4$ randomized `ExactQty` round-trips (`g <-> oz_t`, `g/t <-> oz/st`) have zero residual.
 - `PO-UNIT-2`: `79 mg/L as N = 349.72 mg/L as NO3 > 50 mg/L` WHO threshold; comparing without the conversion is
-  refused with `FMINE-REF-105` (`test_reko_diq_nitrate_basis_conversion`).
+  refused with `FMINE-REF-105` (`test_nitrate_basis_conversion`).
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Invalid moisture fractions (`>= 1.0` or `< 0.0`) or mismatched currencies fail closed with typed `Refusal`.

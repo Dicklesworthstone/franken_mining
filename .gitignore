@@ -37,8 +37,7 @@ flamegraph.svg
 # OPEN-R7-1 (committing transcribed values). The mechanism and its synthetic tests are committed; the rows are not.
 /registries/transcriptions/
 
-# Held back from the public repository pending owner review: notes on a source document whose
-# cover carries a confidentiality notice. Do not force-add.
+# Held back from the public repository pending owner review. Do not force-add.
 planning/corpus/C5_reko_diq_esia.md
 
 # Site data, MNPI and personal data never enter the repository (plan §31). Real site exports,

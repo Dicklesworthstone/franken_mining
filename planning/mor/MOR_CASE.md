@@ -191,10 +191,10 @@ PDF page numbers; xlsx cites are `<file-period>:<Sheet>!<Cell>`.
 | E151–E199 | `C2_nevada_technical_reports.md` | NI 43-101 reports: Carlin (2025), Cortez (2022), Turquoise Ridge (2024) | 49 | No public slope or kriging efficiency (GB-11 data gate); NGM MCF out and the "GC adjustment" plug (§20.4); preg-rob as a spike-test % (§17.3); Goldstrike CIL since Q1 2023; 71 lab-vs-plant pairs; cut-off fixed point; pseudoflow in production; closure bond vs estimate (§18.6) |
 | E201–E249 | `C3_africa_technical_reports.md` | NI 43-101 reports: Kibali (Feb 2026), Loulo-Gounkoto (2023) | 49 | Site-specific F-factor registry (§20.4); irreproducible published cells; FoS-only acceptance criteria (GB-39); Kibali compensating errors 2016–2025; Loulo-Gounkoto 2025 host-state action (RISK-26); fiscal regime rows; hoist factor ≈ 0.81 |
 | E251–E299 | `C4_americas_png_reports.md` | Pueblo Viejo (2026), Veladero, Zaldívar and Porgera technical reports | 49 | Heap book on a recoverable basis (GB-20, §25.2); stockpile degradation state (§20.8); per-row point of reference (§24.3); heap/VLF and riverine facilities, gate and valve state (§18.3); tenure (G-HALL-6); bitemporal ownership |
-| E301–E349 | `C5_reko_diq_esia.md` | Reko Diq Early Works ESIA (Rev A, not approved) | 49 | Requirement sets beyond GISTM and the commitments register (§18.2, G-FREE-7…10, OB-COMMIT); chemical basis (§25.2); certificate-vs-report reconciliation; groundwater data gate; state-equity ownership; community-data redaction (§31.2) |
+| E301–E349 | `C5_reko_diq_esia.md` | Reko Diq Early Works ESIA | 49 | Requirement sets beyond GISTM and the commitments register (§18.2, G-FREE-7…10, OB-COMMIT); chemical basis (§25.2); certificate-vs-report reconciliation; groundwater data gate; state-equity ownership; community-data redaction (§31.2) |
 | E351–E399 | `C6_textbook_techniques.md` | Abzalov, *Applied Mining Geology*; Waltham, *Foundations of Engineering Geology*; Lacy; a mining-geology lecture note (reference-only) | 49 | LUC b ≈ ρ and the slope-plus-correlation flip (GB-11); CRM SD basis (§12.4); CV_AVR%, Gy calibration, twins, core recovery (§12); Highwall card rules and TARP triggers (§14) |
 
-Rights and privacy: textbook pages are cited, never shipped as fixtures; Reko Diq appendix personal data (phone
+Rights and privacy: textbook pages are cited, never shipped as fixtures; personal data in source appendices (phone
 numbers, named individuals) is not reproduced anywhere in the case file or plan.
 
 ### Corrections appended after the corpus pass

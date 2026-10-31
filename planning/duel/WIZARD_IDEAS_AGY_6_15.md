@@ -656,7 +656,7 @@ standardized by the domain covariance `Σ_d`).
 ### 13.1 What Is Already in the Plan vs. What Is Materially New
 - **Already in the plan:**
   - `§18.2` (`BD-247`, `BD-301`) tracks `RequirementSet` (`GISTM, ESMP, PermitCondition, IFC_PS, EP4`) and
-    `EsCommitment` rows with `OB-COMMIT` obligations (demonstrated on Reko Diq `E304–E348`).
+    `EsCommitment` rows with `OB-COMMIT` obligations (demonstrated on an ESIA, `E304–E348`).
   - `§18.6` (`BD-304`) notes that tailings capacity runway is a monitored quantity (e.g. Goldstrike's storage lasts
     "through 2028" while a 180 Mm³ TSF is in permitting, `E190`; Kibali's FTSF limits oxide feed until 2028, `E218`;
     Loulo's delayed TSF expansion forced over-height deposition behind a sacrificial buttress, `E219`).
@@ -672,8 +672,8 @@ standardized by the domain covariance `Σ_d`).
        governed by a regulatory agency dependency DAG and reference-class delay prior (`REFCLASS-PERMIT`).
     2. **Environmental Trigger-to-Production Curtailment Laws:** At Veladero (`E278`, `E280`, `E281`), crossing
        an environmental trigger (in-heap solution `PSSA > 3,927 MASL` or `LCRS > 270 m³/d`) **restricts water
-       make-up and cyanide addition** (2017: `21.87%` below budget). Similarly, Reko Diq's borefield permit (`10–50
-       L/s` permitted vs `140 L/s` required, `E312`, `E313`) directly caps mill ramp-up throughput!
+       make-up and cyanide addition** (2017: `21.87%` below budget). Similarly, a borefield permit below installed
+       capacity (`E312`, `E313`) directly caps mill ramp-up throughput!
   - `PermitAndCommitmentCriticalPathCompiler` compiles all active permits, renewal dates, agency prerequisite edges,
     and trigger-curtailment rules into a unified **Stochastic Permit–Operations Critical Path Graph** (`fmine-tailings::
     permit_dag`) that computes for every permit and ESIA commitment its **Live Production-At-Risk (`koz/month`) and
@@ -735,7 +735,7 @@ standardized by the domain covariance `Σ_d`).
 - **First shippable slice (M3–M5 / WP-14 & WP-18):**
   - Implement `PermitDependencyDag` (on `fmine-numerics::tropical` + Monte Carlo `REFCLASS-PERMIT`), volumetric
     `t_choke` intersection, and `TriggerCurtailmentRule` in `fmine-tailings` (~550 LOC), with fixtures for Goldstrike
-    (`E190`), Kibali (`E218`), Veladero (`E278`, `E280`), and Reko Diq (`E312`).
+    (`E190`), Kibali (`E218`), Veladero (`E278`, `E280`), and an abstraction permit (`E312`).
 - **Testing strategy (§33.1 Four Claims):**
   - **Parity:** Deterministic critical path (`σ = 0`) matches `fmine-numerics::tropical` (`crates/fmine-numerics/src/
     lib.rs:283–347`) exactly.

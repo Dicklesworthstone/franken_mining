@@ -31,7 +31,7 @@ change state.
 - rate severity against a deployment or threat model the project does not have;
 - recommend changing a project-defining substrate (Rust, asupersync, the FrankenSuite siblings);
 - invent an alternative, defeater, competing value or opposing position to fill a field;
-- quote text from `planning/corpus/C5_reko_diq_esia.md` or its source PDF (confidentiality), or any personal data.
+- quote text from `planning/corpus/C5_reko_diq_esia.md` or its source PDF, or any personal data.
 
 **Claim discipline.** For every material claim, cite evidence (E ids from the case file; for things the case
 does not yet index, cite the exact file and line, sheet and cell, command, or URL with access date, and say it is
