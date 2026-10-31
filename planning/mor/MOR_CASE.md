@@ -1252,3 +1252,47 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     mutants are simulations built from the reads, not a second reader implementation.
   - **Verification.** Self-verified on this machine only; nothing has run in CI. The real-file test needs the
     registered workbooks, so BD-339's CI job cannot run it until the files can be fetched there.
+- **E848** The AISC footings' rounding construction is discovered as `ComponentSum` (bd-4wvl.4, BD-340.S4 part
+  1; FACT, execution, 2026-10-31, owner machine). It updates E815's counts with E838's.
+  - **Kernel.** `fmine_numerics::exact_feas::discover`. p₀(k) = P(|Σeᵢ| < ½) is exact from the Irwin–Hall
+    polynomial (p₀(2) = 3/4, p₀(3) = 2/3, p₀(4) = 115/192) and matches 10⁵ seeded Philox draws within 4σ for
+    k = 1 to 20. A construction may reject footings, as issuer errors, at a rate up to ε = 1/10. It is ruled out
+    when P(Binomial(n, ε) ≥ its rejections) < α = 10⁻⁶. `RoundedOnce` is also ruled out when either tail of the
+    exact count under it (Poisson-binomial) is below α. Exactly one left is discovered; both or neither is
+    `Ambiguous` with FMINE-REF-104.
+  - **Rule revised before any real-file run.** The first rule named `RoundedOnce` whenever it accepted a footing
+    `ComponentSum` rejected and the exact rate did not reject it. The synthetic ledger's hidden scope, one
+    three-line total off by 1, was then "discovered" as `RoundedOnce`. One such total is as much one issuer error
+    as one rounding. ε and the symmetric rule replaced it, and a kernel test pins that case as `Ambiguous`.
+  - **Binding.** For TCC and AISC footings in (i) and (iii), k is the numeric `Line` operands (a placeholder is
+    an exact 0) and the residual is Σ lines − total. The real-file test checks that those lines sum to the
+    ledger's component sum on every decided footing. A footing printed again with the same subject and numbers
+    (a comparative column in a later release) counts once, since the tails assume independent draws.
+  - **Real files** (`test_construction_discovery_real_aisc_tables`, release, 2.8 s):
+
+    | Scope, family | Instances exact | Distinct exact | Σp₀ / n | ln upper tail |
+    |---|---|---|---|---|
+    | visible TCC | 505 / 507 | 370 / 371 | 0.5246 | −233.8 |
+    | visible AISC | 505 / 507 | 306 / 307 | 0.4794 | −219.9 |
+    | hidden TCC | 84 / 85 | 57 / 58 | 0.5204 | −33.9 |
+    | hidden AISC | 85 / 85 | 58 / 58 | 0.4794 | −42.6 |
+
+    - All four are `ComponentSum`. Visible, 1,010 of 1,014 is E838's census (footing i 1,010, iii 4); E815's
+      1,004 of 1,008 predates E838's 6 Loulo-Gounkoto footings leaving (v). Hidden, 169 of 170 is E828's hidden
+      census. E815's 1,212 counted 174 hidden footing totals, not 170 scoreable (E828).
+    - The five (iii) are E815's three cells. Kibali `'Q2 2024'!O11` (sign-flip witness O7) and Porgera L18 are
+      each in `Barrick_Q3_2024_AISC.xlsx` and `Barrick_Q2_2025_AISC.xlsx`. North America `'Q4 2023'!J11` in
+      `Barrick_Q4_2024_AISC.xlsx` is in the hidden scope only.
+    - E815's expected rate of about 0.56 was over a different set. Over the distinct footings Σp₀/n is 0.48 to
+      0.52.
+  - **Payload.** A `construction_discovery` section after `hidden_scope`: counts and log tails, no cell value.
+    It is not in the state root, so no expected root moves.
+  - **Planted negatives, each reverted:** the decision's two tails swapped; p₀'s lower term at k − 2; the
+    dedupe skipped (the reprint test fails).
+  - **Not claimed.** ε = 1/10 and α are declared choices, not estimated. Footings are taken as independent once
+    deduplicated; footings of one table share cells (TCC is a line of the AISC footing), which the tails ignore.
+    The counts the test pins were cross-checked against censuses the same agent lineage wrote earlier (E828,
+    E838), so they are not independent evidence. FMINE-REF-104 is also used by `fmine-evidence` (density
+    missing) and `fmine-time` (calendar window), not in the catalogue's sense (bd-h0q1). The tie, share, deck
+    and unit discoveries (S4 parts 2 to 5) are not started.
+  - **Verification.** Self-verified on this machine only; nothing has run in CI.

@@ -46,6 +46,11 @@ The public lane of M0 (`fmine assure public`).
     non-zero, and 100% otherwise. Each column reports the check at 100%, the check at the registered share,
     and the implied ounce interval. `one_cell_verdict` counts the failures outside a caller's K.4 items:
     "site-specific" if there are none, otherwise "basis rule".
+  - **Construction discovery** (bd-4wvl.4, BD-340.S4 part 1): a report, never a state and not in the state root.
+    For the TCC and AISC footings in states (i) and (iii), visible and hidden scopes apart, it asks which
+    construction they fit (`fmine_numerics::exact_feas::discover`). Each footing's k is its numeric lines and
+    its residual is Σ lines − total. A footing printed again with the same subject and numbers (a later
+    release's comparative) counts once.
 - `mine_stats` (bd-gwf1.1): a label-anchored reader for the quarterly Mine Statistics workbooks (W1 §3, §4, §13).
   It finds blocks by `For the (three|six|nine|twelve) months`, takes site names from the row above (carried left
   across merged blanks), and strips trailing footnote numbers from labels. The `QTD`/`YTD` summary columns are
@@ -152,6 +157,10 @@ The public lane of M0 (`fmine assure public`).
   match_subject, cell_text,
   OneCellCheck, OneCellOutcome, OneCellVerdict, FailGroup, implied_ounces, one_cell_checks, one_cell_verdict}`
   (bd-prmn.8); `PublicAssuranceReport::one_cell`, the payload's `one_cell_cos` section.
+- `aisc::{FootingDiscovery, footing_discovery}`, `PublicAssuranceReport::construction_discovery` and
+  `discovery_json` (bd-4wvl.4): the payload's `construction_discovery` section, after `hidden_scope`, holds one
+  object per family and scope. It carries counts and log tails only, never a cell value; a tail of −∞ is
+  `null`.
 - `aisc::{Operand, OperandRole, OperandValue, operand_at}` and `IdentityInstance::operands` (bd-sjrh.1, part 2
   of BD-329.S1). Each instance cites every cell its state was computed from, with its role (total, line,
   rate, ounces, numerator, NCI line, component, label check, member rate, member ounces) and its value as read.
@@ -458,6 +467,16 @@ The public lane of M0 (`fmine assure public`).
     nil (np), `n/a` and a blank at their cells; a site withheld for January–March refused for H1 by its Q1
     operand, its prior year still decided; a site that moved sheets matched; a missing previous release; a site
     on two sheets of its metal; a row the previous release does not print.
+- `PO-PUB-12` (construction discovery, bd-4wvl.4, MOR_CASE E848):
+  - **Real files** (ignored test `test_construction_discovery_real_aisc_tables`): `ComponentSum` in all four
+    family and scope pairs. Visible: TCC 505 of 507 instances (370 of 371 distinct), AISC 505 of 507 (306 of
+    307). Hidden: TCC 84 of 85 (57 of 58), AISC 85 of 85 (58 of 58).
+  - The five (iii) are E815's cells: Kibali `'Q2 2024'!O11` (sign-flip witness O7) and Porgera L18, each in
+    the Q3 2024 and Q2 2025 files, and North America `'Q4 2023'!J11`, hidden only. On every decided footing
+    the numeric lines sum to the ledger's component sum.
+  - **Default suite:** on the synthetic ledger every pair is `Ambiguous` (FMINE-REF-104), and the counts are
+    the (i) and (iii) footings. A doubled instance list leaves the report unchanged; the same numbers under
+    another subject double the distinct count.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.

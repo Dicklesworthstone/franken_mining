@@ -62,6 +62,8 @@ use std::fmt;
 use fmine_core::{Encoder, blake3_hash};
 use fmine_units::{ExactQty, UnitsError};
 
+pub mod discover;
+
 /// An exact rational.
 pub type Rat = ExactQty;
 

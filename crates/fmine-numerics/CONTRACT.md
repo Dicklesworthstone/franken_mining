@@ -76,6 +76,18 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
     - a placeholder in an identity other than `Equal` (`presence_conflicts`).
   - Caps: 256 cells per component (`MAX_VARIABLES`) and 10⁴ pivots per run (`MAX_PIVOTS`). A cap or an
     overflow gives `Indeterminate`.
+- `exact_feas::discover` (bd-4wvl.4, BD-340.S4 part 1; `DeterministicPerIsa`, the rest of `exact_feas` is
+  `Exact`): which construction one family's decided footings fit. A report; it decides no state.
+  - `p0(k)`: P(|Σeᵢ| < ½) for k i.i.d. U(−½, ½) errors, an exact `Rat` from the Irwin–Hall polynomial;
+    `None` past `MAX_K` (20).
+  - `discover_construction(&[Footing { k, residual }]) -> Result<ConstructionReport, UnitsError>`: the counts
+    each construction accepts, Σp₀ exactly, and the log tails, in `f64` through `fmine_core::det`. These are
+    the exact count's two tails under `RoundedOnce` (Poisson-binomial) and each construction's rejections
+    under Binomial(n, `MAX_ERROR_RATE` = 1/10).
+  - `Discovered::{ComponentSum, RoundedOnce, Ambiguous}`: a construction is ruled out when a tail is below
+    `ALPHA` (10⁻⁶); exactly one left is discovered; both or neither is `Ambiguous`, which carries
+    `NON_IDENTIFIABLE` (FMINE-REF-104). Past `MAX_K` a footing is `indeterminate` and not scored.
+  - The tails take footings as independent: the caller passes each distinct footing once.
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-301` (`NonSpdCovarianceMatrix`) when Cholesky diagonal pivot `<= 1e-12` or cycle detected in `TropicalDag`.

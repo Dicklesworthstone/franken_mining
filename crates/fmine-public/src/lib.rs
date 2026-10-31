@@ -31,11 +31,12 @@ use fmine_io::xlsx::{
 };
 
 use crate::aisc::{
-    CitedCell, ConsistentBasis, DEFAULT_MISSING_FACT, ExplanationBasis, IdentityFamily,
-    IdentityInstance, IdentityState, MemberWeighting, OneCellCheck, OneCellOutcome, Operand,
-    OperandRole, OperandValue, RateMiss, ReconstructionCheck, ShareBasis, StatedShare, Undecided,
-    UnregisteredHeader, cell_text, confirm_share_label, find_qtd_sheet, ledger_for_table,
-    locate_table, one_cell_checks, operand_at, reconstruction_holds,
+    CitedCell, ConsistentBasis, DEFAULT_MISSING_FACT, ExplanationBasis, FootingDiscovery,
+    IdentityFamily, IdentityInstance, IdentityState, MemberWeighting, OneCellCheck, OneCellOutcome,
+    Operand, OperandRole, OperandValue, RateMiss, ReconstructionCheck, ShareBasis, StatedShare,
+    Undecided, UnregisteredHeader, cell_text, confirm_share_label, find_qtd_sheet,
+    footing_discovery, ledger_for_table, locate_table, one_cell_checks, operand_at,
+    reconstruction_holds,
 };
 use crate::mine_ledger::{LedgerFile, LedgerRules, MineLedger, mine_ledger};
 use crate::mine_stats::{CellRefusal, LabelVocabulary, MineStatsRead, read_mine_stats};
@@ -508,6 +509,48 @@ impl PublicAssuranceReport {
         o.push_str("]},");
     }
 
+    /// Which rounding construction the TCC and AISC footings fit (bd-4wvl.4, BD-340.S4 part 1): the visible
+    /// scope, then the hidden one. A report: it changes no state and is not in the state root.
+    pub fn construction_discovery(
+        &self,
+    ) -> Result<Vec<(&'static str, FootingDiscovery)>, fmine_units::UnitsError> {
+        let mut out = Vec::new();
+        for (scope, instances) in [
+            ("visible", &self.instances),
+            ("hidden", &self.hidden_scope.instances),
+        ] {
+            out.extend(
+                footing_discovery(instances)?
+                    .into_iter()
+                    .map(|d| (scope, d)),
+            );
+        }
+        Ok(out)
+    }
+
+    /// The `construction_discovery` section (bd-4wvl.4): one entry per footing family and scope.
+    fn construction_discovery_json(&self, o: &mut String) {
+        let _ = write!(
+            o,
+            "\"construction_discovery\":{{\"report_only\":\"which rounding construction the decided footings fit; \
+             never a state, not in the state root\",\"alpha\":{:e},\"null\":\"rounded_once: every printed value \
+             is its true value rounded once, independently\",",
+            fmine_numerics::exact_feas::discover::ALPHA
+        );
+        match self.construction_discovery() {
+            Err(e) => {
+                let _ = write!(o, "\"refused\":{}}},", js(&e.to_string()));
+            }
+            Ok(found) => {
+                let entries: Vec<String> = found
+                    .iter()
+                    .map(|(scope, d)| discovery_json(scope, d))
+                    .collect();
+                let _ = write!(o, "\"families\":[{}]}},", entries.join(","));
+            }
+        }
+    }
+
     /// One (ii), (iii) or (iv) instance as a JSON object; `scope` labels a hidden-scope instance.
     fn exception_json(&self, i: &IdentityInstance, scope: Option<&str>) -> String {
         let mut o = format!(
@@ -912,11 +955,13 @@ impl PublicAssuranceReport {
             .collect();
         let _ = write!(
             o,
-            "}},\"exceptions\":[{}],\"unregistered_headers\":{},\"table_refusals\":{}}},\"quarantine\":[",
+            "}},\"exceptions\":[{}],\"unregistered_headers\":{},\"table_refusals\":{}}},",
             hidden_exceptions.join(","),
             hidden.unregistered_headers.len(),
             hidden.table_refusals.len()
         );
+        self.construction_discovery_json(&mut o);
+        o.push_str("\"quarantine\":[");
         let mut first = true;
         for s in &self.sources {
             for q in &s.workbook.quarantined {
@@ -981,6 +1026,48 @@ const STATE_CODES: [&str; 6] = ["i", "ii", "iii", "iv", "v", "np"];
 /// What an `assure public` report does not claim; the CLI prints it in the envelope's `no_claim` field.
 pub const NO_CLAIM: &str = "Reproduces and checks the issuer's published AISC reconciliation tables as printed. \
 It makes no reserve, resource, geotechnical, regulatory or investment claim and implies no issuer affiliation.";
+
+/// One family and scope of the `construction_discovery` section, as a JSON object (also the real-file test's log
+/// line). Counts and probabilities only, never a cell value. A log tail of −∞ (probability 0) is `null`.
+#[must_use]
+pub fn discovery_json(scope: &str, d: &FootingDiscovery) -> String {
+    let r = &d.report;
+    let ln = |x: f64| {
+        if x.is_finite() {
+            format!("{x:.3}")
+        } else {
+            "null".to_string()
+        }
+    };
+    let expected = r.expected_rounded_once.to_f64();
+    let rate = if r.n == 0 {
+        "null".to_string()
+    } else {
+        format!("{:.4}", expected / r.n as f64)
+    };
+    format!(
+        "{{\"family\":{},\"scope\":{},\"totals\":{},\"foot_exact\":{},\"distinct\":{},\"distinct_foot_exact\":{},\
+         \"rounded_once_accepts\":{},\"indeterminate\":{},\"expected_rounded_once\":{expected:.3},\
+         \"expected_rate\":{rate},\"ln_upper_tail\":{},\"ln_lower_tail\":{},\"ln_component_sum_error_tail\":{},\
+         \"ln_rounded_once_error_tail\":{},\"discovered\":{},\"reason_code\":{}}}",
+        js(d.family.as_str()),
+        js(scope),
+        d.totals,
+        d.foot_exact,
+        r.n,
+        r.foot_exact,
+        r.rounded_once_accepts,
+        r.indeterminate,
+        ln(r.ln_upper_tail),
+        ln(r.ln_lower_tail),
+        ln(r.ln_component_sum_error_tail),
+        ln(r.ln_rounded_once_error_tail),
+        js(r.discovered.as_str()),
+        r.discovered
+            .reason_code()
+            .map_or_else(|| "null".to_string(), js)
+    )
+}
 
 /// JSON string literal.
 fn js(s: &str) -> String {
@@ -3832,6 +3919,87 @@ mod tests {
         ));
     }
 
+    /// bd-4wvl.4: the construction discovery reads exactly the decided footings, per family and scope, and the
+    /// payload carries it after the hidden scope. A handful of synthetic footings identifies no construction.
+    #[test]
+    fn test_construction_discovery_on_synthetic_ledger() {
+        let r = run_synthetic_assurance(&[]).expect("synthetic");
+        let found = r.construction_discovery().expect("discovery");
+        let order: Vec<(&str, &str)> = found.iter().map(|(s, d)| (*s, d.family.as_str())).collect();
+        assert_eq!(
+            order,
+            [
+                ("visible", "tcc_footing"),
+                ("visible", "aisc_footing"),
+                ("hidden", "tcc_footing"),
+                ("hidden", "aisc_footing")
+            ]
+        );
+        let json = r.to_json();
+        let (_, section) = json
+            .split_once("\"construction_discovery\":")
+            .expect("section");
+        assert!(section.starts_with("{\"report_only\":"), "{section}");
+        assert!(json.contains("\"table_refusals\":0},\"construction_discovery\":{"));
+        for (scope, d) in &found {
+            let instances = if *scope == "visible" {
+                &r.instances
+            } else {
+                &r.hidden_scope.instances
+            };
+            let decided = |code: &str| {
+                instances
+                    .iter()
+                    .filter(|i| i.family == d.family && i.state.code() == code)
+                    .count()
+            };
+            assert!(d.totals > 0, "{scope} {:?}", d.family);
+            assert_eq!(
+                d.totals,
+                decided("i") + decided("iii"),
+                "{scope} {:?}",
+                d.family
+            );
+            assert_eq!(d.foot_exact, decided("i"), "{scope} {:?}", d.family);
+            assert_eq!(
+                d.report.discovered,
+                fmine_numerics::exact_feas::discover::Discovered::Ambiguous,
+                "{d:?}"
+            );
+            assert!(section.contains(&discovery_json(scope, d)));
+        }
+    }
+
+    /// bd-4wvl.4: a footing printed twice with the same subject and numbers (a comparative column) is one draw;
+    /// the same numbers under another subject are another.
+    #[test]
+    fn test_construction_discovery_counts_a_reprinted_footing_once() {
+        let r = run_synthetic_assurance(&[]).expect("synthetic");
+        let base = footing_discovery(&r.instances).expect("discovery");
+        let doubled: Vec<IdentityInstance> =
+            r.instances.iter().chain(&r.instances).cloned().collect();
+        let twice = footing_discovery(&doubled).expect("discovery");
+        let renamed: Vec<IdentityInstance> = r
+            .instances
+            .iter()
+            .cloned()
+            .chain(r.instances.iter().cloned().map(|mut i| {
+                i.subject.push_str(" (other)");
+                i
+            }))
+            .collect();
+        let other = footing_discovery(&renamed).expect("discovery");
+        for ((b, t), o) in base.iter().zip(&twice).zip(&other) {
+            assert_eq!((t.totals, t.foot_exact), (2 * b.totals, 2 * b.foot_exact));
+            assert_eq!(t.report, b.report, "the reprint adds no draw");
+            assert_eq!(
+                o.report.n,
+                2 * b.report.n,
+                "another subject is another draw"
+            );
+        }
+    }
+
     /// BD-331.S2: a hidden cell is outside the counts but inside the root.
     #[test]
     fn test_hidden_scope_moves_root() {
@@ -4970,6 +5138,121 @@ mod tests {
                 .count(),
             by_fact.len()
         );
+    }
+
+    /// bd-4wvl.4 (E815, E848) on the real files: the AISC tables' footings are `ComponentSum`, visible and hidden
+    /// scopes apart. One JSON line per family and scope, then each footing that does not foot, as a locator.
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+    fn test_construction_discovery_real_aisc_tables() {
+        use fmine_numerics::exact_feas::discover::Discovered;
+        let root = workspace_root();
+        let profile = load_issuer_profile(&root, "barrick")
+            .expect("registry")
+            .through("2026Q2")
+            .expect("bound");
+        let r =
+            run_public_assurance(&profile, &root).expect("registered files present and unaltered");
+        // The lines the discovery counts are the ones the ledger summed.
+        for i in r.instances.iter().chain(&r.hidden_scope.instances) {
+            if let (Calc::Footing { component_sum, .. }, "i" | "iii") = (i.calc, i.state.code()) {
+                let lines: i64 = i
+                    .operands
+                    .iter()
+                    .filter_map(|o| match (o.role, &o.value) {
+                        (OperandRole::Line, OperandValue::Int(x)) => Some(*x),
+                        _ => None,
+                    })
+                    .sum();
+                assert_eq!(lines, component_sum, "{}:{}!{}", i.file, i.sheet, i.cell);
+            }
+        }
+        let found = r.construction_discovery().expect("discovery");
+        for (scope, d) in &found {
+            println!("{}", discovery_json(scope, d));
+        }
+        let mut not_footing = Vec::new();
+        for (scope, instances) in [
+            ("visible", &r.instances),
+            ("hidden", &r.hidden_scope.instances),
+        ] {
+            for i in instances.iter().filter(|i| i.state.code() == "iii") {
+                if let IdentityState::IssuerDiscrepancy(c) = &i.state {
+                    let at = format!("{}:{}!{} {}", i.file, i.sheet, i.cell, i.subject);
+                    println!(
+                        "{{\"scope\":{},\"family\":{},\"not_footing\":{},\"sign_flip_witness\":{}}}",
+                        js(scope),
+                        js(i.family.as_str()),
+                        js(&at),
+                        c.sign_flip_witness
+                            .as_deref()
+                            .map_or_else(|| "null".to_string(), js)
+                    );
+                    not_footing.push((scope, at, c.sign_flip_witness.clone()));
+                }
+            }
+        }
+        // E815's three cells: Kibali and Porgera in both files that print Q2 2024, North America hidden only.
+        let kibali = |f: &str| {
+            (
+                "visible",
+                format!("Barrick_{f}_AISC.xlsx:Q2 2024!O11 Kibali"),
+                Some("O7".to_string()),
+            )
+        };
+        let porgera = |f: &str| {
+            (
+                "visible",
+                format!("Barrick_{f}_AISC.xlsx:Q2 2024!L18 Porgera"),
+                None,
+            )
+        };
+        not_footing.sort();
+        let mut want = vec![
+            porgera("Q2_2025"),
+            kibali("Q2_2025"),
+            porgera("Q3_2024"),
+            kibali("Q3_2024"),
+            (
+                "hidden",
+                "Barrick_Q4_2024_AISC.xlsx:Q4 2023!J11 North America".to_string(),
+                None,
+            ),
+        ];
+        want.sort();
+        assert_eq!(not_footing, want);
+        // E838's census: footing i 1,010 and iii 4 visible; E828's hidden census: 170 scoreable, 169 consistent.
+        let counts: Vec<(&str, &str, usize, usize, usize, usize)> = found
+            .iter()
+            .map(|(s, d)| {
+                (
+                    *s,
+                    d.family.as_str(),
+                    d.totals,
+                    d.foot_exact,
+                    d.report.n,
+                    d.report.foot_exact,
+                )
+            })
+            .collect();
+        assert_eq!(
+            counts,
+            [
+                ("visible", "tcc_footing", 507, 505, 371, 370),
+                ("visible", "aisc_footing", 507, 505, 307, 306),
+                ("hidden", "tcc_footing", 85, 84, 58, 57),
+                ("hidden", "aisc_footing", 85, 85, 58, 58),
+            ]
+        );
+        for (scope, d) in &found {
+            assert_eq!(d.report.indeterminate, 0);
+            assert_eq!(
+                d.report.discovered,
+                Discovered::ComponentSum,
+                "{scope} {}",
+                discovery_json(scope, d)
+            );
+        }
     }
 
     /// BD-331.S2 on the real files: the hidden scope. Every count is from the hidden census

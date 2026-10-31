@@ -23,7 +23,7 @@
 //! that reach the rate, checked exactly, which is (i) `MembersExact`, or none, which is (iv); only when it gives
 //! no answer is the rate (i) qualified `relaxation_only`: no conflict shown, no value proved.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use fmine_io::numfmt;
@@ -2505,6 +2505,82 @@ fn footing_state(
         alternate_consistent,
     });
     (state, calc)
+}
+
+/// Which rounding construction one footing family's decided totals fit (bd-4wvl.4, BD-340.S4 part 1). A report
+/// over finished states: it changes none and is not in the state root.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FootingDiscovery {
+    pub family: IdentityFamily,
+    /// Decided footing instances: states (i) and (iii).
+    pub totals: usize,
+    /// Of those, the ones whose printed total is the sum of its printed lines.
+    pub foot_exact: usize,
+    /// Over the distinct footings. A footing printed again with the same subject and the same numbers (a later
+    /// release's comparative column) is the same draw and counts once.
+    pub report: xf::discover::ConstructionReport,
+}
+
+/// [`FootingDiscovery`] for the TCC and AISC footings of `instances`, in that order. A footing's k is its numeric
+/// lines (a placeholder line is an exact 0, never rounded); its residual is Σ lines − total.
+pub fn footing_discovery(
+    instances: &[IdentityInstance],
+) -> Result<Vec<FootingDiscovery>, fmine_units::UnitsError> {
+    let mut out = Vec::new();
+    for family in [IdentityFamily::TccFooting, IdentityFamily::AiscFooting] {
+        let (mut totals, mut foot_exact) = (0, 0);
+        let mut seen = BTreeSet::new();
+        let mut footings = Vec::new();
+        for i in instances.iter().filter(|i| i.family == family) {
+            let Calc::Footing {
+                printed,
+                component_sum,
+                ..
+            } = i.calc
+            else {
+                continue;
+            };
+            if !matches!(
+                i.state,
+                IdentityState::Consistent { .. } | IdentityState::IssuerDiscrepancy(_)
+            ) {
+                continue;
+            }
+            totals += 1;
+            if component_sum == printed {
+                foot_exact += 1;
+            }
+            let summed = |o: &&Operand| matches!(o.role, OperandRole::Total | OperandRole::Line);
+            let values: Vec<Option<i64>> = i
+                .operands
+                .iter()
+                .filter(summed)
+                .map(|o| match o.value {
+                    OperandValue::Int(x) => Some(x),
+                    _ => None,
+                })
+                .collect();
+            if !seen.insert((i.subject.clone(), values)) {
+                continue;
+            }
+            let k = i
+                .operands
+                .iter()
+                .filter(|o| o.role == OperandRole::Line && matches!(o.value, OperandValue::Int(_)))
+                .count();
+            footings.push(xf::discover::Footing {
+                k: u32::try_from(k).unwrap_or(u32::MAX),
+                residual: i128::from(component_sum) - i128::from(printed),
+            });
+        }
+        out.push(FootingDiscovery {
+            family,
+            totals,
+            foot_exact,
+            report: xf::discover::discover_construction(&footings)?,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
