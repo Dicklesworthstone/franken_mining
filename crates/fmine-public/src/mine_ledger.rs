@@ -1,6 +1,6 @@
 //! The Mine Statistics identity ledger (BD-331.S4, bd-prmn.4): six of the plan's Mine Stats families, anchored on
-//! the `QTD`/`YTD` summary sheets and decided in exact arithmetic (the kernel `fmine_numerics::exact_feas`, or
-//! an exact closed form for a lone sum or weighted mean).
+//! the `QTD`/`YTD` summary sheets (family 2 on the `Minestats*` site sheets too) and decided in exact arithmetic
+//! (the kernel `fmine_numerics::exact_feas`, or an exact closed form for a lone sum or weighted mean).
 //!
 //! - **Ownership.** Attributable production = s × 100%-basis production, per site row and column group (the
 //!   release's own year, or the prior-year comparative). s is the share the row's label prints. A registered
@@ -10,6 +10,13 @@
 //! - **Quarter sums.** H1 = Q1 + Q2, 9M = H1 + Q3 and FY = 9M + Q4 on the three flow columns (100% production,
 //!   attributable production, attributable sold), anchored on each `YTD` cell. The operands come from releases
 //!   of the anchor's year, in the anchor's column group, on the row of the same subject.
+//! - **Site-sheet quarter sums** (family 2 on the `Minestats*` sheets). The same sums on each additive row of
+//!   [`SITE_QUARTER_ROWS`] (tonnes mined and processed and their sub-rows, ounces or pounds, revenue, capital
+//!   expenditures), anchored on each cumulative block's cell: the previous release's block of the same site,
+//!   row and column group (its quarter block Q1 for H1, else its cumulative block) plus the anchor release's
+//!   quarter block. A site is found by name on whichever sheet of its metal it prints in each release; one with
+//!   columns on two sheets of its metal in an operand's release is refused, and so is a row printed twice in one
+//!   block. Rates, grades, recovery, strip ratio and unit costs are not additive and pose none.
 //! - **Summary against site sheet** (family 7). Each summary value of production, sales, cost of sales, TCC or
 //!   C1 and AISC equals the same site's value on a `Minestats*` sheet of the metal (title `(Gold)` or
 //!   `(Copper)`), same release, period and column group: [`SITE_FIELDS`] names the row. A registered label alias
@@ -25,12 +32,13 @@
 //! - **Region to total** (family 4). `Total Gold` = Σ the regions of the release's map (not every region row
 //!   printed); `Total Copper` = Σ the copper block's site rows, in row order.
 //!
-//!   In both, the nil token is exactly 0 (`nil_token`); any other placeholder beside a number is refused. A sum
-//!   is decided alone by |Σ parts − total| ≤ Σ half-steps over every operand, which is the kernel's answer for
-//!   one sum with every box rounded once (a test checks the two agree). Sums are never posed jointly: a sum links
-//!   every site of a block, so posing them would merge the other families' components past the exhaustive
-//!   correction search. Not yet posed: the Nevada Gold Mines LLC sub-sum (Carlin, Cortez, Turquoise Ridge,
-//!   Phoenix, Long Canyon), which needs a registry table of its own.
+//!   In both, and in the site-sheet quarter sums, the nil token is exactly 0 (`nil_token`); any other placeholder
+//!   beside a number is refused. A sum is decided alone by |Σ parts − total| ≤ Σ half-steps over every operand,
+//!   which is the kernel's answer for one sum with every box rounded once (a test checks the two agree). These
+//!   sums are never posed jointly: a region sum links every site of a block, and a site's chain of quarters
+//!   joined to the summary's would grow the other families' components past the exhaustive correction search.
+//!   Not yet posed: the Nevada Gold Mines LLC sub-sum (Carlin, Cortez, Turquoise Ridge, Phoenix, Long Canyon),
+//!   which needs a registry table of its own.
 //! - **Sold-weighted rate** (family 5). A region's cost of sales, total cash costs and AISC per ounce = its
 //!   members' rates weighted by their attributable gold sold, R·Σwᵢ = Σ rᵢ·wᵢ, members found as in family 3 and
 //!   taken in row order. A member whose sold cell is the nil token sold nothing and leaves the identity; any other
@@ -49,7 +57,8 @@
 //! [v − step/2, v + step/2] (rounded once, the step from the displayed decimals), the identity holds exactly
 //! between true values, and a feasible run is (i), an infeasible one (iii).
 //!
-//! Every decided instance but the sums and sold-weighted rates is then posed jointly. Instances that share a cell
+//! Every decided instance but the region, total and site-sheet sums and the sold-weighted rates is then posed
+//! jointly. Instances that share a cell
 //! form a component: a 100% cell is in its ownership identity and in quarter sums, and a cumulative is the total
 //! of one sum and an operand of the next. For each infeasible component the kernel's blame gives every minimum
 //! correction set, with the range each of its cells can take, never a corrected value. A component can be
@@ -120,6 +129,96 @@ pub const SITE_FIELDS: [(Metal, &str, &str); 10] = [
 /// Family 5's rates: the gold unit-cost columns of a summary sheet, each weighted by attributable gold sold.
 pub const RATE_FIELDS: [&str; 3] = ["cos_usd_per_oz", "tcc_usd_per_oz", "aisc_usd_per_oz"];
 
+/// The additive `Minestats*` rows the site-sheet quarter sums pose, as `(metal, section, label, field id)`:
+/// tonnes, ounces and pounds, revenue and capital expenditures. Rates, grades, recovery, strip ratio and unit
+/// costs are not additive and pose none. Section and label match the reader's case-insensitively.
+pub const SITE_QUARTER_ROWS: [(Metal, Option<&str>, &str, &str); 32] = {
+    const TM: Option<&str> = Some("Tonnes mined (thousands)");
+    const TP: Option<&str> = Some("Tonnes processed (thousands)");
+    const PR: Option<&str> = Some("Production (thousands of ounces)");
+    const CX: Option<&str> = Some("Capital expenditures ($ millions)");
+    use Metal::{Copper as C, Gold as G};
+    [
+        (G, None, "Tonnes mined (thousands)", "au_tonnes_mined_kt"),
+        (G, TM, "Open Pit Ore", "au_tonnes_mined_open_pit_ore_kt"),
+        (G, TM, "Open Pit Waste", "au_tonnes_mined_open_pit_waste_kt"),
+        (G, TM, "Underground", "au_tonnes_mined_underground_kt"),
+        (
+            G,
+            None,
+            "Tonnes processed (thousands)",
+            "au_tonnes_processed_kt",
+        ),
+        (G, TP, "Oxide Mill", "au_tonnes_processed_oxide_mill_kt"),
+        (G, TP, "Roasters", "au_tonnes_processed_roasters_kt"),
+        (G, TP, "Autoclave", "au_tonnes_processed_autoclave_kt"),
+        (G, TP, "Heap Leach", "au_tonnes_processed_heap_leach_kt"),
+        (
+            G,
+            None,
+            "Production (thousands of ounces)",
+            "au_production_koz",
+        ),
+        (G, PR, "Oxide Mill", "au_production_oxide_mill_koz"),
+        (G, PR, "Roasters", "au_production_roasters_koz"),
+        (G, PR, "Autoclave", "au_production_autoclave_koz"),
+        (G, PR, "Heap Leach", "au_production_heap_leach_koz"),
+        (G, None, "Sales (thousands of ounces)", "au_sales_koz"),
+        (G, None, "Revenue ($ millions)", "au_revenue_usd_m"),
+        (
+            G,
+            CX,
+            "Minesite sustaining",
+            "au_capex_minesite_sustaining_usd_m",
+        ),
+        (G, CX, "Projects", "au_capex_projects_usd_m"),
+        (
+            G,
+            None,
+            "Total capital expenditures ($ millions)",
+            "au_capex_total_usd_m",
+        ),
+        (C, None, "Tonnes mined (thousands)", "cu_tonnes_mined_kt"),
+        (C, TM, "Open Pit Ore", "cu_tonnes_mined_open_pit_ore_kt"),
+        (C, TM, "Open Pit Waste", "cu_tonnes_mined_open_pit_waste_kt"),
+        (C, TM, "Underground", "cu_tonnes_mined_underground_kt"),
+        (
+            C,
+            None,
+            "Tonnes processed (thousands)",
+            "cu_tonnes_processed_kt",
+        ),
+        (
+            C,
+            None,
+            "Production (millions of pounds)",
+            "cu_production_mlb",
+        ),
+        (
+            C,
+            None,
+            "Production (Thousands of tonnes)",
+            "cu_production_kt",
+        ),
+        (C, None, "Sales (millions of pounds)", "cu_sales_mlb"),
+        (C, None, "Sales (Thousands of tonnes)", "cu_sales_kt"),
+        (C, None, "Revenue ($ millions)", "cu_revenue_usd_m"),
+        (
+            C,
+            CX,
+            "Minesite sustaining",
+            "cu_capex_minesite_sustaining_usd_m",
+        ),
+        (C, CX, "Projects", "cu_capex_projects_usd_m"),
+        (
+            C,
+            None,
+            "Total capital expenditures ($ millions)",
+            "cu_capex_total_usd_m",
+        ),
+    ]
+};
+
 /// Metal totals: like regions, they roll up sites held at different shares.
 const TOTALS: [&str; 2] = ["Total Gold", "Total Copper"];
 
@@ -144,6 +243,9 @@ pub enum Family {
     QuarterSum,
     /// Family 4: `Total Gold` = Σ the release's regions; `Total Copper` = Σ the copper sites.
     RegionToTotal,
+    /// Family 2 on the `Minestats*` site sheets: a cumulative block's value = the previous release's block + the
+    /// quarter, on the [`SITE_QUARTER_ROWS`].
+    SiteQuarterSum,
     SiteSheet,
     /// Family 3: a region = Σ its registered members in the release's map.
     SitesToRegion,
@@ -152,10 +254,11 @@ pub enum Family {
 }
 
 impl Family {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Ownership,
         Self::QuarterSum,
         Self::RegionToTotal,
+        Self::SiteQuarterSum,
         Self::SiteSheet,
         Self::SitesToRegion,
         Self::SoldWeightedRate,
@@ -167,6 +270,7 @@ impl Family {
             Self::Ownership => "ownership",
             Self::QuarterSum => QUARTER_SUM,
             Self::RegionToTotal => "region_to_total",
+            Self::SiteQuarterSum => "site_quarter_sum",
             Self::SiteSheet => "site_sheet",
             Self::SitesToRegion => "sites_to_region",
             Self::SoldWeightedRate => "sold_weighted_rate",
@@ -1563,6 +1667,206 @@ fn sold_weighted(
     }
 }
 
+/// `(release, metal, field id, period, site)`: a [`SITE_QUARTER_ROWS`] cell on a `Minestats*` sheet.
+type SiteRowKey = (String, Metal, &'static str, Period, String);
+
+/// Every [`SITE_QUARTER_ROWS`] cell of the `Minestats*` sheets, by key: each with its row, in row order, and
+/// whether the reader found its `(section, label)` printed again in its block. A row's label is read under its
+/// registered alias for the release, and its section is the reader's.
+fn site_quarter_cells(
+    files: &[LedgerFile<'_>],
+    aliases: &[MineStatsLabelAlias],
+) -> BTreeMap<SiteRowKey, Vec<(u32, bool, Slot)>> {
+    let norm = |s: &str| {
+        s.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    let mut out: BTreeMap<SiteRowKey, Vec<(u32, bool, Slot)>> = BTreeMap::new();
+    for f in files {
+        let mut metals: BTreeMap<&str, Option<Metal>> = BTreeMap::new();
+        let repeated: BTreeSet<&str> = f.read.repeated.iter().map(String::as_str).collect();
+        for v in f.read.values.iter().filter(|v| v.view == View::Minestats) {
+            let metal = *metals
+                .entry(v.sheet.as_str())
+                .or_insert_with(|| sheet_metal(f.workbook, &v.sheet));
+            let (Some(metal), Some(period), Some((row, _))) =
+                (metal, parse_period(&v.period), parse_a1_ref(&v.cell))
+            else {
+                continue;
+            };
+            let label = site_label(aliases, f.quarter, &v.label);
+            let section = v.section.as_deref().map(norm);
+            let Some(&(_, _, _, field)) = SITE_QUARTER_ROWS
+                .iter()
+                .find(|(m, s, l, _)| *m == metal && s.map(norm) == section && norm(l) == label)
+            else {
+                continue;
+            };
+            let slot = Slot {
+                locator: v.locator.clone(),
+                operand: operand(v, f.workbook),
+                period,
+                printed_share: None,
+            };
+            let twice = repeated.contains(format!("{}:{}!A{row}", f.quarter, v.sheet).as_str());
+            out.entry((f.quarter.to_string(), metal, field, period, v.site.clone()))
+                .or_default()
+                .push((row, twice, slot));
+        }
+    }
+    for cells in out.values_mut() {
+        cells.sort_by_key(|(row, _, _)| *row);
+    }
+    out
+}
+
+/// Family 2 on the `Minestats*` site sheets: for each cumulative block's [`SITE_QUARTER_ROWS`] cell (H1 in a Q2
+/// release, 9M in Q3, FY in Q4), the previous release's block of the same site, field and year (its quarter block
+/// Q1 for H1, else its cumulative block) plus this release's quarter block. A site is found on any sheet of the
+/// metal, so a site that moves between sheets is still matched. Each instance is decided alone, the nil token
+/// exactly 0, and never posed jointly: a site's chain of quarters joined to the summary's would grow the other
+/// families' components.
+fn site_quarter_sums(
+    rules: &LedgerRules<'_>,
+    files: &[LedgerFile<'_>],
+    sites: &SiteSheets,
+    releases: &BTreeSet<&str>,
+    out: &mut Vec<(Instance, Option<Posed>)>,
+) {
+    let cells = site_quarter_cells(files, rules.aliases);
+    let two_sheets = |release: &str, metal: Metal, site: &str| {
+        sites
+            .sheets
+            .get(&(release.to_string(), metal, site.to_string()))
+            .is_some_and(|s| s.len() > 1)
+    };
+    for ((release, metal, field, period, site), totals) in &cells {
+        let Some((year, n @ 2..=4)) = release_parts(release) else {
+            continue;
+        };
+        let cumulative = match n {
+            2 => PeriodKind::H1,
+            3 => PeriodKind::NineMonths,
+            _ => PeriodKind::FullYear,
+        };
+        let group = if period.year == year {
+            Group::Current
+        } else if period.year + 1 == year {
+            Group::Prior
+        } else {
+            continue;
+        };
+        let Some((_, _, total)) = totals.first().filter(|_| period.kind == cumulative) else {
+            continue;
+        };
+        let prev_release = format!("{year}Q{}", n - 1);
+        let at = |kind| Period {
+            year: period.year,
+            kind,
+        };
+        let prev_period = at(match n {
+            2 => PeriodKind::Quarter(1),
+            3 => PeriodKind::H1,
+            _ => PeriodKind::NineMonths,
+        });
+        let quarter_period = at(PeriodKind::Quarter(n));
+        let moved = two_sheets(&prev_release, *metal, site) || two_sheets(release, *metal, site);
+        let find = |r: &str, p: Period| {
+            (!two_sheets(r, *metal, site))
+                .then(|| cells.get(&(r.to_string(), *metal, *field, p, site.clone())))
+                .flatten()
+        };
+        let prev = find(&prev_release, prev_period);
+        let quarter = find(release, quarter_period);
+        fn first(c: Option<&Vec<(u32, bool, Slot)>>) -> Option<&Slot> {
+            c.and_then(|c| c.first()).map(|(_, _, s)| s)
+        }
+        let refused = |reason, at: Option<&Slot>| State::Refused {
+            reason,
+            at: at.map(|s| s.locator.clone()),
+        };
+        let mut nil_token = false;
+        let state = if let Some(evidence) = [prev_period, quarter_period, *period]
+            .iter()
+            .find_map(|p| rules.withheld(site, p))
+        {
+            refused(Reason::Withheld { evidence }, None)
+        } else if !releases.contains(prev_release.as_str()) {
+            refused(Reason::ReleaseMissing, None)
+        } else if moved {
+            refused(Reason::OperandUnreadable, None)
+        } else if let (Some(p), Some(q)) = (prev, quarter) {
+            let blocks = [p, q, totals];
+            let ops: Vec<&Slot> = blocks.iter().filter_map(|c| first(Some(c))).collect();
+            let find_op =
+                |pred: &dyn Fn(&Operand) -> bool| ops.iter().copied().find(|s| pred(&s.operand));
+            if let Some(dup) = blocks
+                .iter()
+                .find(|c| c.len() > 1 || c.iter().any(|(_, twice, _)| *twice))
+            {
+                refused(Reason::OperandUnreadable, first(Some(dup)))
+            } else if let Some(b) = find_op(&|o| *o == Operand::Blank) {
+                refused(Reason::BlankOperand, Some(b))
+            } else if ops.iter().all(|s| {
+                matches!(
+                    s.operand,
+                    Operand::Placeholder(Mark::Nil | Mark::NotApplicable)
+                )
+            }) {
+                State::NotPublished
+            } else if let Some(na) = find_op(&|o| *o == Operand::Placeholder(Mark::NotApplicable)) {
+                refused(Reason::PlaceholderOperand, Some(na))
+            } else if let Some(u) =
+                find_op(&|o| matches!(o, Operand::Unreadable | Operand::Placeholder(Mark::Other)))
+            {
+                refused(Reason::OperandUnreadable, Some(u))
+            } else {
+                match ops.as_slice() {
+                    [a, b, t] => match sum_holds(&[a, b], t) {
+                        Some(holds) => {
+                            nil_token = ops
+                                .iter()
+                                .any(|s| s.operand == Operand::Placeholder(Mark::Nil));
+                            if holds {
+                                State::Consistent
+                            } else {
+                                State::Discrepancy
+                            }
+                        }
+                        None => kernel_refused("overflow in the exact sum".to_string()),
+                    },
+                    _ => kernel_refused("an operand block with no cell".to_string()),
+                }
+            }
+        } else {
+            refused(Reason::OperandRowMissing, None)
+        };
+        out.push((
+            Instance {
+                family: Family::SiteQuarterSum,
+                subject: site.clone(),
+                field: (*field).to_string(),
+                group,
+                period: *period,
+                anchor: total.locator.clone(),
+                cells: vec![
+                    first(prev).map(|s| s.locator.clone()),
+                    first(quarter).map(|s| s.locator.clone()),
+                    Some(total.locator.clone()),
+                ],
+                state,
+                share: None,
+                printed_share: None,
+                nil_token,
+                component: None,
+            },
+            None,
+        ));
+    }
+}
+
 /// Poses every decided instance jointly and blames each infeasible component.
 fn joint(
     instances: &mut [Instance],
@@ -1683,14 +1987,11 @@ pub fn mine_ledger(files: &[LedgerFile<'_>], rules: &LedgerRules<'_>) -> MineLed
     let mut pairs = Vec::new();
     ownership(rules, &slots, &mut pairs);
     quarter_sums(rules, &slots, &releases, &mut pairs);
-    site_sheet(
-        rules,
-        &slots,
-        &site_sheets(files, rules.aliases),
-        &mut pairs,
-    );
+    let sites = site_sheets(files, rules.aliases);
+    site_sheet(rules, &slots, &sites, &mut pairs);
     sums(rules, &slots, &mut pairs);
     sold_weighted(rules, &slots, &mut pairs);
+    site_quarter_sums(rules, files, &sites, &releases, &mut pairs);
     pairs.sort_by(|(a, _), (b, _)| {
         (a.family, &a.anchor, a.group, &a.field).cmp(&(b.family, &b.anchor, b.group, &b.field))
     });
@@ -3461,5 +3762,381 @@ mod tests {
         }
         assert!(outcomes.iter().all(|&k| k >= 50), "{outcomes:?}");
         assert!(refuted >= 50, "the kernel refuted only {refuted}");
+    }
+
+    /// One block of a site sheet: its months word and its `(label, cells)` rows.
+    type SiteBlock<'a> = (&'a str, Vec<(&'a str, Vec<&'a str>)>);
+
+    /// A `Minestats*` sheet titled `title` with one block per `(months, rows)`: each block's site names over
+    /// their two columns (from B: 2030, then 2029), the block header below them, then one row per label with
+    /// each site's current-year and prior-year cells. The first block's site row is row 2.
+    fn site_blocks(
+        name: &str,
+        title: &str,
+        sites: &[&str],
+        blocks: &[SiteBlock<'_>],
+    ) -> MinimalSheet {
+        const COLS: [&str; 14] = [
+            "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O",
+        ];
+        let mut cells = vec![("A1".to_string(), text(title))];
+        let mut row = 2;
+        for (months, rows) in blocks {
+            for (k, site) in sites.iter().enumerate() {
+                let (cur, prior) = (COLS[2 * k], COLS[2 * k + 1]);
+                cells.push((format!("{cur}{row}"), text(site)));
+                for (col, year) in [(cur, "2030"), (prior, "2029")] {
+                    let year = MinimalCell::Styled {
+                        raw: year.to_string(),
+                        xf: 0,
+                    };
+                    cells.push((format!("{col}{}", row + 1), year));
+                }
+            }
+            cells.push((
+                format!("A{}", row + 1),
+                text(&format!("For the {months} months ended September 30,")),
+            ));
+            row += 2;
+            for (label, values) in rows {
+                cells.push((format!("A{row}"), text(label)));
+                for (col, v) in COLS.into_iter().zip(values) {
+                    if let Some(c) = data(v) {
+                        cells.push((format!("{col}{row}"), c));
+                    }
+                }
+                row += 1;
+            }
+        }
+        MinimalSheet {
+            name: name.to_string(),
+            hidden: false,
+            cells,
+        }
+    }
+
+    /// Release `2030Q{n}`: empty summary sheets beside the given `Minestats*` sheets.
+    fn site_release(n: u8, sheets: Vec<MinimalSheet>) -> (String, Vec<MinimalSheet>) {
+        let mut all = vec![summary("QTD", "three", GOLD, &[])];
+        if n > 1 {
+            let months = ["three", "six", "nine", "twelve"][usize::from(n) - 1];
+            all.push(summary("YTD", months, GOLD, &[]));
+        }
+        all.extend(sheets);
+        (format!("2030Q{n}"), all)
+    }
+
+    fn site_sums(l: &MineLedger) -> Vec<&Instance> {
+        l.instances
+            .iter()
+            .filter(|i| i.family == Family::SiteQuarterSum)
+            .collect()
+    }
+
+    fn loc(release: u8, cell: &str) -> Option<String> {
+        Some(format!("2030Q{release}:Minestats1!{cell}"))
+    }
+
+    /// BD-331.S4 family 2 on the site sheets: H1 = Q1 + Q2 across the Q1 and Q2 releases, and 9M = H1 + Q3, on the
+    /// additive rows only. `Underground` under `Tonnes mined` is posed and under `Cost per tonne mined` is not;
+    /// strip ratio and unit costs pose none. Every value is a whole number, so a sum of two holds within 1½. By
+    /// hand: H1 tonnes 100 + 120 = 220 and 90 + 80 = 170 hold; open-pit ore 60 + 70 = 130 holds and 50 + 45 = 95
+    /// against 97 does not (iii); 9M tonnes 220 + 130 = 350 and 170 + 100 = 270 hold, 22 + 13 = 35 against 36
+    /// holds (the bound 1½ not reached); 9M open-pit ore has no Q3 row (v).
+    #[test]
+    fn test_site_quarter_sums_across_releases_on_additive_rows() {
+        let labels = [
+            "Tonnes mined (thousands)",
+            "Open Pit Ore",
+            "Underground",
+            "Strip Ratio",
+            "Cost per tonne mined ($/tonne)",
+            "Underground",
+            "Production (thousands of ounces)",
+        ];
+        let block = |values: [[&'static str; 2]; 7]| -> Vec<(&'static str, Vec<&'static str>)> {
+            labels
+                .into_iter()
+                .zip(values)
+                .map(|(l, v)| (l, v.to_vec()))
+                .collect()
+        };
+        let q1 = block([
+            ["100", "90"],
+            ["60", "50"],
+            ["40", "40"],
+            ["2", "2"],
+            ["3", "3"],
+            ["30", "30"],
+            ["10", "9"],
+        ]);
+        let q2 = block([
+            ["120", "80"],
+            ["70", "45"],
+            ["50", "35"],
+            ["2", "2"],
+            ["3", "3"],
+            ["31", "31"],
+            ["12", "8"],
+        ]);
+        let h1 = block([
+            ["220", "170"],
+            ["130", "97"],
+            ["90", "75"],
+            ["2", "2"],
+            ["3", "3"],
+            ["61", "61"],
+            ["22", "17"],
+        ]);
+        let q3 = vec![
+            ("Tonnes mined (thousands)", vec!["130", "100"]),
+            ("Production (thousands of ounces)", vec!["13", "10"]),
+        ];
+        let nine = vec![
+            ("Tonnes mined (thousands)", vec!["350", "270"]),
+            ("Open Pit Ore", vec!["200", "150"]),
+            ("Production (thousands of ounces)", vec!["36", "27"]),
+        ];
+        let sheet = |blocks| site_blocks("Minestats1", AU, &["Site A"], blocks);
+        let (l, refusals) = run(
+            vec![
+                site_release(1, vec![sheet(&[("three", q1)])]),
+                site_release(2, vec![sheet(&[("three", q2), ("six", h1)])]),
+                site_release(3, vec![sheet(&[("three", q3), ("nine", nine)])]),
+            ],
+            &NONE,
+        );
+        assert!(refusals.is_empty(), "{refusals:?}");
+        let sums = site_sums(&l);
+        // H1: four additive rows × two years; 9M: three rows × two years.
+        assert_eq!(sums.len(), 14);
+        let tonnes = at(&l, Family::SiteQuarterSum, "2030Q2:Minestats1!B13");
+        assert_eq!(
+            (tonnes.field.as_str(), tonnes.group, tonnes.state.code()),
+            ("au_tonnes_mined_kt", Group::Current, "i")
+        );
+        assert_eq!(tonnes.cells, [loc(1, "B4"), loc(2, "B4"), loc(2, "B13")]);
+        let ore = at(&l, Family::SiteQuarterSum, "2030Q2:Minestats1!C14");
+        assert_eq!(
+            (ore.field.as_str(), ore.group, &ore.state),
+            (
+                "au_tonnes_mined_open_pit_ore_kt",
+                Group::Prior,
+                &State::Discrepancy
+            )
+        );
+        assert_eq!(ore.cells, [loc(1, "C5"), loc(2, "C5"), loc(2, "C14")]);
+        assert!(ore.component.is_none() && !ore.nil_token);
+        // The tonnes row of Underground (row 15) is posed; the unit-cost row (18) is not.
+        let underground = at(&l, Family::SiteQuarterSum, "2030Q2:Minestats1!B15");
+        assert_eq!(underground.field, "au_tonnes_mined_underground_kt");
+        assert!(sums.iter().all(|i| !i.anchor.ends_with("18")
+            && !i.anchor.ends_with("16")
+            && !i.anchor.ends_with("17")));
+        let nine_tonnes = at(&l, Family::SiteQuarterSum, "2030Q3:Minestats1!B8");
+        assert_eq!(
+            nine_tonnes.cells,
+            [loc(2, "B13"), loc(3, "B4"), loc(3, "B8")]
+        );
+        assert_eq!(nine_tonnes.state, State::Consistent);
+        assert_eq!(
+            at(&l, Family::SiteQuarterSum, "2030Q3:Minestats1!B10").state,
+            State::Consistent
+        );
+        let nine_ore = at(&l, Family::SiteQuarterSum, "2030Q3:Minestats1!B9");
+        assert_eq!(nine_ore.state, refused(Reason::OperandRowMissing, None));
+        assert_eq!(nine_ore.cells, [loc(2, "B14"), None, loc(3, "B9")]);
+        assert_eq!(
+            ["i", "iii", "v", "np"].map(|c| l.count(Family::SiteQuarterSum, c)),
+            [11, 1, 2, 0]
+        );
+    }
+
+    /// The nil token is exactly 0 (a site that began in Q2), all nil is not published, `n/a` and a blank refuse
+    /// at their cell, a withheld site is excluded by name for the periods its status covers, and a site that moves
+    /// to another sheet is still found. Sites (current-year cells Q1, Q2, H1): Nil (—, 12, 12) holds; Off (—, 12,
+    /// 14) misses by 2 with slack 1, (iii); Idle all —; Na (n/a, 12, 12); Gap (12, blank, 24); Loulo-Gounkoto
+    /// withheld for January–March 2030 (a status's bounds are months), so H1 is refused for its Q1 operand
+    /// though H1 itself is not inside the status; Moved on Minestats2 in Q1. Every prior-year sum is 1 + 1 = 2
+    /// and holds.
+    #[test]
+    fn test_site_quarter_sum_nil_placeholders_withheld_and_moved() {
+        let sites = ["Nil", "Off", "Idle", "Na", "Gap", "Loulo-Gounkoto", "Moved"];
+        let prod = "Production (thousands of ounces)";
+        let row = |cur: [&'static str; 7], prior: &'static str| -> Vec<(&str, Vec<&'static str>)> {
+            vec![(prod, cur.into_iter().flat_map(|c| [c, prior]).collect())]
+        };
+        let q1 = row(["—", "—", "—", "n/a", "12", "10", "10"], "1");
+        let q2 = row(["12", "12", "—", "12", "", "10", "10"], "1");
+        let h1 = row(["12", "14", "—", "12", "24", "20", "20"], "2");
+        let six = &sites[..6];
+        let statuses = [SubjectStatus {
+            subject: "Loulo-Gounkoto".to_string(),
+            kind: StatusKind::Withheld,
+            first: (2030, 1),
+            last: Some((2030, 3)),
+            evidence: "E818".to_string(),
+        }];
+        let rules = LedgerRules {
+            statuses: &statuses,
+            ..NONE
+        };
+        let q1_main: Vec<(&str, Vec<&str>)> = vec![(prod, q1[0].1[..12].to_vec())];
+        let q1_moved: Vec<(&str, Vec<&str>)> = vec![(prod, q1[0].1[12..].to_vec())];
+        let (l, refusals) = run(
+            vec![
+                site_release(
+                    1,
+                    vec![
+                        site_blocks("Minestats1", AU, six, &[("three", q1_main)]),
+                        site_blocks("Minestats2", AU, &["Moved"], &[("three", q1_moved)]),
+                    ],
+                ),
+                site_release(
+                    2,
+                    vec![site_blocks(
+                        "Minestats1",
+                        AU,
+                        &sites,
+                        &[("three", q2), ("six", h1)],
+                    )],
+                ),
+            ],
+            &rules,
+        );
+        assert!(refusals.is_empty(), "{refusals:?}");
+        // Q2 block: data row 4; H1 block: site row 5, header 6, data row 7. Site k's current column is B, D, F, …
+        let h1_at = |col: &str| {
+            at(
+                &l,
+                Family::SiteQuarterSum,
+                &format!("2030Q2:Minestats1!{col}7"),
+            )
+        };
+        let nil = h1_at("B");
+        assert_eq!((&nil.state, nil.nil_token), (&State::Consistent, true));
+        assert_eq!(nil.cells, [loc(1, "B4"), loc(2, "B4"), loc(2, "B7")]);
+        let off = h1_at("D");
+        assert_eq!((&off.state, off.nil_token), (&State::Discrepancy, true));
+        assert_eq!(h1_at("F").state, State::NotPublished);
+        assert_eq!(
+            h1_at("H").state,
+            refused(Reason::PlaceholderOperand, loc(1, "H4").as_deref())
+        );
+        assert_eq!(
+            h1_at("J").state,
+            refused(Reason::BlankOperand, loc(2, "J4").as_deref())
+        );
+        assert_eq!(
+            h1_at("L").state,
+            refused(
+                Reason::Withheld {
+                    evidence: "E818".to_string()
+                },
+                None
+            )
+        );
+        let moved = h1_at("N");
+        assert_eq!(moved.state, State::Consistent);
+        assert_eq!(
+            moved.cells,
+            [
+                Some("2030Q1:Minestats2!B4".to_string()),
+                loc(2, "N4"),
+                loc(2, "N7")
+            ]
+        );
+        // Every prior-year sum holds, Loulo-Gounkoto's too: its status does not cover 2029.
+        assert!(
+            site_sums(&l)
+                .iter()
+                .filter(|i| i.group == Group::Prior)
+                .all(|i| i.state == State::Consistent && !i.nil_token)
+        );
+        assert_eq!(
+            ["i", "iii", "v", "np"].map(|c| l.count(Family::SiteQuarterSum, c)),
+            [9, 1, 3, 1]
+        );
+    }
+
+    /// The refusals that come before the operands: a missing previous release, a site with columns on two sheets
+    /// of its metal in an operand's release (its cells there not located), and a row the previous release does
+    /// not print.
+    #[test]
+    fn test_site_quarter_sum_refusals_before_the_operands() {
+        let prod = "Production (thousands of ounces)";
+        let sales = "Sales (thousands of ounces)";
+        let quarter = vec![(prod, vec!["10", "9"])];
+        let both = vec![(prod, vec!["10", "9"]), (sales, vec!["10", "9"])];
+        let half = vec![(prod, vec!["20", "18"]), (sales, vec!["20", "18"])];
+        let (alone, _) = run(
+            vec![site_release(
+                2,
+                vec![site_blocks(
+                    "Minestats1",
+                    AU,
+                    &["Site A"],
+                    &[("three", both.clone()), ("six", half.clone())],
+                )],
+            )],
+            &NONE,
+        );
+        let sums = site_sums(&alone);
+        assert_eq!(sums.len(), 4);
+        assert!(
+            sums.iter()
+                .all(|i| i.state == refused(Reason::ReleaseMissing, None) && i.cells[0].is_none())
+        );
+        let (l, refusals) = run(
+            vec![
+                site_release(
+                    1,
+                    vec![site_blocks(
+                        "Minestats1",
+                        AU,
+                        &["Site A", "Site D"],
+                        &[("three", vec![(prod, vec!["10", "9", "10", "9"])])],
+                    )],
+                ),
+                site_release(
+                    2,
+                    vec![
+                        site_blocks(
+                            "Minestats1",
+                            AU,
+                            &["Site A", "Site D"],
+                            &[
+                                (
+                                    "three",
+                                    vec![
+                                        (prod, vec!["10", "9", "10", "9"]),
+                                        (sales, vec!["10", "9", "10", "9"]),
+                                    ],
+                                ),
+                                (
+                                    "six",
+                                    vec![
+                                        (prod, vec!["20", "18", "20", "18"]),
+                                        (sales, vec!["20", "18", "20", "18"]),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        site_blocks("Minestats2", AU, &["Site D"], &[("three", quarter)]),
+                    ],
+                ),
+            ],
+            &NONE,
+        );
+        assert!(refusals.is_empty(), "{refusals:?}");
+        // Minestats1, Q2 block rows 4–5, H1 block rows 8–9; Site A in B/C, Site D in D/E.
+        let a_prod = at(&l, Family::SiteQuarterSum, "2030Q2:Minestats1!B8");
+        assert_eq!(a_prod.state, State::Consistent);
+        let a_sales = at(&l, Family::SiteQuarterSum, "2030Q2:Minestats1!B9");
+        assert_eq!(a_sales.state, refused(Reason::OperandRowMissing, None));
+        assert_eq!(a_sales.cells, [None, loc(2, "B5"), loc(2, "B9")]);
+        let d_prod = at(&l, Family::SiteQuarterSum, "2030Q2:Minestats1!D8");
+        assert_eq!(d_prod.state, refused(Reason::OperandUnreadable, None));
+        assert_eq!(d_prod.cells, [loc(1, "D4"), None, loc(2, "D8")]);
     }
 }

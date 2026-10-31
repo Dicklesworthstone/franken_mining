@@ -5626,6 +5626,8 @@ mod tests {
         let rate =
             ["i", "iii", "iv", "v", "np"].map(|code| l.count(Family::SoldWeightedRate, code));
         assert_eq!(rate, [252, 0, 30, 24, 0]);
+        // Family 2 on the site sheets (9854b6c's census).
+        assert_eq!(counts(Family::SiteQuarterSum), [2742, 8, 87, 683]);
         let components: Vec<&str> = lines
             .iter()
             .copied()
