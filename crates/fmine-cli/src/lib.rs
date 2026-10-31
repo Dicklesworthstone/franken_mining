@@ -776,8 +776,8 @@ mod tests {
             "{{\"files\":{},\"instances\":{total},\"non_assertion\":{other}}}",
             by_file.len()
         );
-        assert_eq!(by_file.len(), 18);
-        assert!(total > 0);
+        // Instances come from the eight AISC workbooks; the ten Mine Stats files carry none. 2595 is E822's count.
+        assert_eq!((by_file.len(), total), (8, 2595));
         assert_eq!(other, 0);
     }
 

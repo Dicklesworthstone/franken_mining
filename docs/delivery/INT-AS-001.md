@@ -13,5 +13,6 @@
      `serde`; the S0 crates keep their own `std`-only types.
   3. FACT, static half of criterion 5 only: `xtask check-caps` bans `open_child_region` outside `fmine-runtime`
      (`crates/xtask/src/lib.rs:401`, defect `S3(a)`). No runtime check exists, because no crate runs asupersync.
-- **Status:** INT-AS-001a: NOT_APPLICABLE. asupersync is absent from `Cargo.lock` at `6a14976` (16 workspace
-  packages, 0 `source` lines); its checks are wired by BD-325. INT-AS-001b (criteria 1–8): PENDING, WP-05, M1.
+- **Status:** INT-AS-001a: NOT_APPLICABLE. asupersync is absent from `Cargo.lock` at `d1d3b18` (16 workspace
+  packages, 0 `source` lines); `xtask check-int-as-001a`, run by `check-all` in CI, prints this line until it is
+  present (checks wired: `4416b0a`). INT-AS-001b (criteria 1–8): PENDING, WP-05, M1.
