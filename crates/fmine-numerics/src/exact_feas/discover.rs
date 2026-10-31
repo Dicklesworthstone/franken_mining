@@ -318,9 +318,10 @@ pub struct TieDiscovery {
     pub assignments: Vec<Assignment>,
     pub closed: Assignment,
     pub findings: Vec<(String, TieFinding)>,
-    /// Quantities with no true value even when every document is `Closed`, in name order. Every strict interval
-    /// lies inside the closed one, so no convention reconciles their prints: one of them is not a rounding of
-    /// the same value (a misprint, or a different quantity under one key). They make every assignment `Empty`.
+    /// Quantities with no true value under `Closed` nor under any assignment, in name order. `Closed` alone does
+    /// not decide: it holds every round-to-nearest interval, but a truncation interval [v, v + 2h) can reach past
+    /// it when the documents' steps differ. No convention reconciles these prints: one of them is not a rounding
+    /// of the same value (a misprint, or a different quantity under one key). They make every assignment `Empty`.
     pub conflicts: Vec<String>,
 }
 
@@ -442,10 +443,21 @@ pub fn discover_tie_conventions(printed: &[Printed]) -> Result<TieDiscovery, Tie
             (name.clone(), finding)
         })
         .collect();
+    // `Closed` holds every round-to-nearest interval but not a truncation one, [v, v + 2h), which can reach past
+    // it when the documents' steps differ; so a quantity is a conflict only when every assignment leaves it empty.
     let mut conflicts = Vec::new();
-    for (q, range) in &closed.ranges {
+    for (i, (q, range)) in closed.ranges.iter().enumerate() {
         let overflow = |e: UnitsError| TieRefusal::Interval(String::new(), q.clone(), e.into());
-        if range.is_empty().map_err(overflow)? {
+        let mut empty = range.is_empty().map_err(overflow)?;
+        for a in &assignments {
+            if !empty {
+                break;
+            }
+            if let Some((_, r)) = a.ranges.get(i) {
+                empty = r.is_empty().map_err(overflow)?;
+            }
+        }
+        if empty {
             conflicts.push(q.clone());
         }
     }
@@ -1020,6 +1032,37 @@ mod tests {
                 .conflicts
                 .is_empty()
         );
+    }
+
+    /// `Closed` holds every round-to-nearest interval but not a truncation one. The deck's 3.6 at a tenth,
+    /// truncated, is [3.6, 3.7); the MD&A's 3.68 at a hundredth is [3.675, 3.685] closed. Their closed meet is
+    /// empty, yet a truncating deck fits properly, so the quantity is no conflict.
+    #[test]
+    fn test_truncation_reconciles_what_closed_cannot() {
+        use Convention::{HalfDown, HalfEven, HalfUp, Truncate};
+        let cells = [
+            printed("deck", "q", "3.6", "0.1"),
+            printed("mda", "q", "3.68", "0.01"),
+        ];
+        let t = discover_tie_conventions(&cells).expect("discovery");
+        assert_eq!(t.closed.fit, Fit::Empty);
+        assert!(t.conflicts.is_empty(), "{:?}", t.conflicts);
+        let proper: Vec<(Convention, Convention)> = t
+            .assignments
+            .iter()
+            .filter(|a| a.fit == Fit::Proper)
+            .map(|a| (a.conventions[0].1, a.conventions[1].1))
+            .collect();
+        assert_eq!(
+            proper,
+            [
+                (Truncate, HalfUp),
+                (Truncate, HalfDown),
+                (Truncate, HalfEven),
+                (Truncate, Truncate)
+            ]
+        );
+        assert_eq!(t.findings[0].1, TieFinding::Identified(Truncate));
     }
 
     fn whole(n: i128) -> Factor {

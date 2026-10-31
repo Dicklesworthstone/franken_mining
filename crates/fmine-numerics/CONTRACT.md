@@ -93,9 +93,10 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
     `STRICT_CONVENTIONS` (half-up, half-down, half-even, truncate) to 2 to `MAX_DOCUMENTS` (4) documents gets
     each quantity's meet of intervals and a `Fit::{Empty, Points, Proper}`; `closed` is every document
     `Closed`. `TieFinding::{Identified, Ambiguous (FMINE-REF-104), NoProperFit}` per document is read from the
-    proper fits only. `conflicts` names each quantity whose `closed` meet is empty (bd-plx1): every strict
-    interval lies in the closed one, so no convention reconciles its prints, and it makes every assignment
-    `Empty`. Refused: a step of zero or below, a quantity printed twice by one document, a document count
+    proper fits only. `conflicts` names each quantity whose meet is empty under `closed` and under every
+    assignment (bd-plx1): no convention reconciles its prints, and it makes every assignment `Empty`.
+    `Closed` alone does not decide, since a truncation interval [v, v + 2h) can reach past it when the steps
+    differ (bd-4wvl.7). Refused: a step of zero or below, a quantity printed twice by one document, a document count
     outside 2 to 4, a value off its step's grid (half-even), an overflow.
   - `share_interval(c, numerators, denominators, convention) -> Result<Bound, ShareRefusal>` (part 3): the
     exact range of s = c·Π numerators / Π denominators over each `Factor { printed, step }`'s rounding box
