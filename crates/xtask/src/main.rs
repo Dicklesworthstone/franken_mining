@@ -30,8 +30,17 @@ fn main() -> ExitCode {
                 for r in &report.rows {
                     if r.actual_loc > 0 {
                         println!(
-                            "  {:20} {:5} {:6} / {:6} (ceil {:6})",
-                            r.name, r.layer, r.actual_loc, r.planned_loc, r.ceiling_loc
+                            "  {:20} {:5} {:6} / {:6} (ceil {:6}){}",
+                            r.name,
+                            r.layer,
+                            r.actual_loc,
+                            r.planned_loc,
+                            r.ceiling_loc,
+                            if r.over_ceiling {
+                                " OVER CEILING: see check-amend"
+                            } else {
+                                ""
+                            }
                         );
                     }
                 }

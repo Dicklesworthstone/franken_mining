@@ -19,19 +19,26 @@ The `forecast-*` commands are the exception: they write a record's digest files 
 
 ## 4. Public API Surface
 - `check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>>`
-- `loc::{check_amend, evaluate, read_amendments, net_loc_since}` (BD-012, §28.4; command `check-amend [--base
-  <rev>]`, and `check-all` runs it against `HEAD` and prints its line
+- `loc::{check_amend, evaluate, measure, read_amendments, budget_rows}` (BD-012, §28.4; command `check-amend
+  [--base <rev>]`, and `check-all` runs it against `HEAD` and prints its line
   `{"check":"check-amend","measured","changed","over_planned","amendments","approved","warnings"}`):
+  - A change is the diff from the merge-base of the base and `HEAD` to the working tree, untracked files included,
+    over the `.rs` files git lists, counting non-blank lines as `check_loc_budget` does.
   - A change that adds LOC to a crate over its planned budget fails unless a `docs/delivery/BUDGET-AMEND-nnn….md`
     record for that crate reads `Approval: approved by <who>, YYYY-MM-DD` with `New planned` at least the crate's
-    actual LOC. A change is the diff from the base to the working tree, untracked files included, counted as
-    `check_loc_budget` counts (non-blank `.rs` lines). Net LOC ≤ 0 needs no record (§28.4.4).
+    actual LOC. Net LOC ≤ 0 needs no record (§28.4.4).
+  - A change that adds LOC to a crate over its ceiling fails, record or not; net LOC ≤ 0 passes with a warning
+    (§28.4.4). With no change measured, a crate over its ceiling fails.
+  - A crate's row in `registries/loc_budget.toml` that differs from the base's fails unless an approved record for
+    it has `New planned` equal to the new number, so a change cannot move budget between crates.
   - A crate over planned that nothing adds to, or one at 80% of planned, is a warning. §28.4.2 puts the 80% warning
-    in `fmine doctor`; `check-all` prints it until that verb reads the budget.
+    in `fmine doctor`; `check-all` prints it until that verb reads the budget. An approval added by the change
+    under test is a warning naming the record: the check cannot tell who wrote it.
   - A malformed record name, a missing field, a repeated id, or a record for a crate the budget does not list,
-    fails. A root that is no git work tree is a warning in `check-all`; with `--base`, which CI passes over the
-    pushed range, it fails.
-  - The form is `docs/templates/BUDGET-AMEND.md`. The ceiling itself is `check_loc_budget`'s, whatever changed.
+    fails. A root that is not a git work tree's top level is a warning in `check-all`; with `--base`, which CI
+    passes over the pushed range, it fails. A crate directory renamed in the change counts as wholly added.
+  - The form is `docs/templates/BUDGET-AMEND.md`. `check_loc_budget` reports `over_ceiling` and no longer fails on
+    it.
 - `check_layers(root: &Path) -> Result<(), Vec<String>>`
 - `check_deps(root: &Path) -> Result<(), Vec<String>>` (BD-005): no member names a `deny.toml` crate in any
   dependency table (normal, build and dev, each also under `target.<spec>`, inline or dotted, by key or through
@@ -108,7 +115,7 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   refuses a shallow clone, whose history cannot show the order.
 
 ## 5. Guards & Typed Refusals
-Fails CI (`exit 2`) on any upward layer edge (`L-1`), banned dependency (`L-5`), `open_child_region` escalation outside `fmine-runtime` (`L-3`), lift provenance mismatch (`L-7`), undeclared module family (`§28.4`), bare `f64` physical quantity in `K`/`E` public signatures (`L-6`), a `K`/`E` file without a determinism class or a `std` transcendental in a `BitwisePortable` module (`PO-NUM-2`), LOC ceiling overrun (`§28.4`), oracle crate in a production closure (`GATE-ORACLE-01`), or a `franken-stack.lock` id set that differs from plan Appendix F.1 (`BD-326.S1`).
+Fails CI (`exit 2`) on any upward layer edge (`L-1`), banned dependency (`L-5`), `open_child_region` escalation outside `fmine-runtime` (`L-3`), lift provenance mismatch (`L-7`), undeclared module family (`§28.4`), bare `f64` physical quantity in `K`/`E` public signatures (`L-6`), a `K`/`E` file without a determinism class or a `std` transcendental in a `BitwisePortable` module (`PO-NUM-2`), a change adding LOC to a crate over its ceiling, or over planned without an approved amendment (`§28.4`), oracle crate in a production closure (`GATE-ORACLE-01`), or a `franken-stack.lock` id set that differs from plan Appendix F.1 (`BD-326.S1`).
 
 ## 6. Proof Obligations (`PO-*`)
 Each check has a positive workspace test and a seeded negative violation unit test (`BD-003`..`BD-015`).

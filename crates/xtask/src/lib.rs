@@ -59,12 +59,12 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
     let mut cur_ceiling = 0usize;
     let mut in_crate = false;
 
+    // The ceiling is `loc::evaluate`'s: §28.4.4 lets a change with net LOC ≤ 0 through, so it needs the change.
     let flush = |name: &str,
                  layer: &str,
                  planned: usize,
                  ceiling: usize,
-                 rows: &mut Vec<CrateBudgetRow>,
-                 errors: &mut Vec<String>| {
+                 rows: &mut Vec<CrateBudgetRow>| {
         if name.is_empty() {
             return;
         }
@@ -77,11 +77,6 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
         let warn_80_pct = planned > 0 && actual_loc * 100 >= planned * 80;
         let over_planned = actual_loc > planned;
         let over_ceiling = actual_loc > ceiling;
-        if over_ceiling {
-            errors.push(format!(
-                "LOC ceiling overrun in {name}: actual {actual_loc} > ceiling {ceiling}"
-            ));
-        }
         rows.push(CrateBudgetRow {
             name: name.to_string(),
             layer: layer.to_string(),
@@ -98,14 +93,7 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
         let line = raw_line.trim();
         if line == "[[crate]]" {
             if in_crate {
-                flush(
-                    &cur_name,
-                    &cur_layer,
-                    cur_planned,
-                    cur_ceiling,
-                    &mut rows,
-                    &mut errors,
-                );
+                flush(&cur_name, &cur_layer, cur_planned, cur_ceiling, &mut rows);
             }
             cur_name.clear();
             cur_layer.clear();
@@ -125,14 +113,7 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
         }
     }
     if in_crate {
-        flush(
-            &cur_name,
-            &cur_layer,
-            cur_planned,
-            cur_ceiling,
-            &mut rows,
-            &mut errors,
-        );
+        flush(&cur_name, &cur_layer, cur_planned, cur_ceiling, &mut rows);
     }
 
     if rows.len() < 59 {
@@ -1048,7 +1029,7 @@ fn fd_id_suffix(id: &str) -> Option<&str> {
     (name_ok && suffix_ok).then_some(suffix)
 }
 
-fn strip_kv_str(line: &str, key: &str) -> Option<String> {
+pub(crate) fn strip_kv_str(line: &str, key: &str) -> Option<String> {
     let (k, v) = line.split_once('=')?;
     if k.trim() != key {
         return None;
@@ -1057,7 +1038,7 @@ fn strip_kv_str(line: &str, key: &str) -> Option<String> {
     Some(val.to_string())
 }
 
-fn strip_kv_usize(line: &str, key: &str) -> Option<usize> {
+pub(crate) fn strip_kv_usize(line: &str, key: &str) -> Option<usize> {
     let (k, v) = line.split_once('=')?;
     if k.trim() != key {
         return None;
