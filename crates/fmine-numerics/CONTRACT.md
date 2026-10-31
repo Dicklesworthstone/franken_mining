@@ -106,6 +106,13 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
     candidate `(name, factor)` fits a `UnitPair { observed, reference }` when factor × the observed range meets
     the reference range. `UnitFinding::{Identified, Ambiguous (FMINE-REF-104), NoFit}` counts only candidates
     that fit every pair.
+  - `discover_deck(&[GeoRelation { gold, copper, geo }], &[Deck { name, gold, copper }]) -> Result<DeckDiscovery,
+    ShareRefusal>` (part 4): geo = gold + copper · (copper price / gold price), gold and GEO in Moz, copper in
+    Mlb. Each `STRICT_CONVENTIONS` member, one for all of a row's relations, against each deck gives a `DeckFit`
+    (the worst `Fit` over the relations). A one-point meet is `Points` unless exact inputs make the converted
+    sum that point. `DeckFinding::{Found, Ambiguous (FMINE-REF-104), NoFit}` reads the proper fits only, and
+    `conventions` lists the conventions with one. Found is not registered: the row's stated deck is the
+    caller's. Refused: a price of zero or below (`NotPositive`), a negative step, an overflow.
 - `exact_feas::generator` (bd-4wvl.7, BD-340.S7; `Exact`): clean random tables for the soundness, metamorphic
   and power tests. (`gen` is a reserved word in edition 2024, so the module is `generator`.)
   - `generate(key, &GenSpec) -> Result<Generated, GenError>` and `generate_vintage(key, spec, vintage)`: one

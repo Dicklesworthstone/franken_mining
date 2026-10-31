@@ -1528,3 +1528,49 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     - **Consumers.** Read from source: BD-331's `mine_ledger.rs` and BD-349's `packet.rs` read a correction set's
       `.implied` outside their test modules. The two candidates are a hand-written list.
     - **Verification.** Self-verified on this machine; nothing has run in CI; no independent verifier.
+- **E856** Price-deck discovery (bd-4wvl.4, BD-340.S4 part 4; FACT, execution, 2026-10-31, owner machine, unless
+  marked).
+  - **Kernel.** `discover_deck` tests geo = gold + copper · (copper price / gold price), gold and GEO in Moz and
+    copper in Mlb, for each of E143's four decks under each strict convention. One convention covers the whole
+    row and never changes per cell. A deck is found when every proper fit is on it. A found deck is a finding and
+    is never presented as the row's registered deck.
+  - **E147.** The fixture is the Fourmile deck's 2024 row (p.14), P&P and net change, as
+    `C1_barrick_public_stats.md` transcribes it. Its six cells equal bd-plx1's two-reader cells (checked locally).
+    - **Found:** $1,500/$3.25, under half-up, half-down and half-even.
+    - **Rejected:** the row's stated $1,400/$3.00, under all four conventions.
+    - **P&P alone** fits both the 2024 and the 2025 deck. The net change is what tells them apart.
+  - **New: truncation fits no deck.** S4 part 2 identifies truncation as this deck's convention from its MD&A
+    ties (E850). Under truncation, 17.0 + 28,542 · 3.25/1,500 lies in [78.84, 78.94), short of [79, 80). Under one
+    convention per document, E850's truncation and E147's 2025 deck cannot both hold. Either the deck does not
+    truncate, so E698's split has another cause (a revision, say), or its 2024 GEO net change was not converted
+    from the row's printed inputs (OPEN).
+  - **Ambiguity.** The 2023 row (P&P 77, 12,391, 105; net change 5.0, 728, 6.7) fits $1,200/$2.75 and $1,300/$3.00
+    under every strict convention, so it is ambiguous (FMINE-REF-104). The copper term is too small to separate
+    them.
+    - **2020–2022** (INFERENCE, a scratch check only, from my `pdftotext -layout` read of p.14, not in tests):
+      each row fits both early decks under every convention.
+    - DR-15's "every other year fits its stated basis" therefore holds as consistency, not identification.
+  - **2025 as printed.** With copper net change +131, the row fits no deck. Read as −131, it fits all four. This
+    is E144's sign, found here as no fit; S5 binds it.
+  - **Basis** (my read, same lineage):
+    - p.14 labels its price columns "Reported Reserve Price … for GEO conversion" and its GEO net change "(using
+      reported reserve prices)".
+    - p.13's "Conversion factors for gold equivalency" ($2,148/oz and $9,369/t for 2024) give 73.5 for the 2024
+      row, so they are not the basis.
+    - p.14's price column matches E143. It was read by C1 and by me, not by two blind readers.
+  - **Kill report.** E147 is now computed, as `true`. The re-run took 72.7 s, gave E855's counts unchanged and
+    `fired: false`, and left only E144 pending.
+  - **Planted negatives**, each run on a scratch copy of HEAD and never in the tree; each fails at least one test
+    (baseline 16 of 16):
+    - a tie-point meet read as proper;
+    - an exact-input point read as a tie;
+    - the price ratio inverted;
+    - one convention tried;
+    - an empty relation set read as a fit.
+  - **Not claimed.**
+    - **Fixture.** The fixture values are C1's single-reader table. They agree with bd-plx1's readers, who are of
+      the same lineage.
+    - **No real-file binding.** The transcription registry stays out of git (OPEN-R7-1).
+    - **Conventions.** The set lacks half-away-from-zero.
+    - **Verdicts.** `test_discovery_never_changes_verdict` is still not written.
+    - **Verification.** Self-verified on this machine; nothing has run in CI.

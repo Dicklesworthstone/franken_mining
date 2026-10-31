@@ -6,6 +6,10 @@
 //! identified when every proper fit gives it the same convention. The tie-agnostic `Closed` check is reported
 //! apart.
 //!
+//! **Part 4, deck** ([`discover_deck`]): which registered price deck converted one row's gold and copper to GEO.
+//! Every strict convention, one for the whole row, is tried against every deck; a deck is found when every proper
+//! fit is on it. A found deck is a finding, never the row's registered deck.
+//!
 //! **Part 1, construction**: which of `ComponentSum` and `RoundedOnce` the printed footings of one family fit,
 //! read from finished footings.
 //!
@@ -640,6 +644,141 @@ pub fn discover_unit(
     })
 }
 
+/// A reserve price deck: gold in $/oz and copper in $/lb, exact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Deck {
+    pub name: String,
+    pub gold: Rat,
+    pub copper: Rat,
+}
+
+/// One GEO cell of a table row and the gold and copper cells it converts: geo = gold + copper · (copper price /
+/// gold price), gold and GEO in Moz and copper in Mlb.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GeoRelation {
+    pub gold: Factor,
+    pub copper: Factor,
+    pub geo: Factor,
+}
+
+/// How one deck fits one row's relations under one convention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeckFit {
+    pub convention: Convention,
+    pub deck: String,
+    /// The worst over the row's relations.
+    pub fit: Fit,
+}
+
+/// What a deck discovery finds for one row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeckFinding {
+    /// Every proper fit is on this deck. Found, not registered: the deck the row states is the caller's to compare.
+    Found(String),
+    /// Proper fits are on several decks (FMINE-REF-104).
+    Ambiguous(Vec<String>),
+    /// No deck fits properly under any convention.
+    NoFit,
+}
+
+impl DeckFinding {
+    /// [`NON_IDENTIFIABLE`] for an ambiguous finding, else `None`.
+    #[must_use]
+    pub const fn reason_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Ambiguous(_) => Some(NON_IDENTIFIABLE),
+            Self::Found(_) | Self::NoFit => None,
+        }
+    }
+}
+
+/// A deck discovery: every strict convention against every deck, the finding, and the conventions under which
+/// some deck fits properly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeckDiscovery {
+    pub fits: Vec<DeckFit>,
+    pub finding: DeckFinding,
+    pub conventions: Vec<Convention>,
+}
+
+/// How one relation fits at copper/gold price ratio `r` (positive). The converted sum rises with both inputs,
+/// so its range runs from the sum of the low ends to the sum of the high ends, each end open when an input end
+/// is; it fits where it meets the GEO cell's range. A meet of one point fits only at a tie, unless exact inputs
+/// make the sum that one point.
+fn geo_fit(rel: &GeoRelation, r: Rat, convention: Convention) -> Result<Fit, ShareRefusal> {
+    let g = factor_interval(rel.gold, convention)?;
+    let c = factor_interval(rel.copper, convention)?;
+    let sum = Bound {
+        lo: Some(End {
+            at: g.lo.checked_add(r.checked_mul(c.lo)?)?,
+            strict: g.lo_strict || c.lo_strict,
+        }),
+        hi: Some(End {
+            at: g.hi.checked_add(r.checked_mul(c.hi)?)?,
+            strict: g.hi_strict || c.hi_strict,
+        }),
+    };
+    let range = sum.meet(Bound::of(factor_interval(rel.geo, convention)?))?;
+    Ok(if range.is_empty()? {
+        Fit::Empty
+    } else if is_point(&range)? && !is_point(&sum)? {
+        Fit::Points
+    } else {
+        Fit::Proper
+    })
+}
+
+/// Which registered deck one row's GEO cells were converted at (part 4). One convention for the whole row, the
+/// deck's document, never per cell; every strict convention is tried against every deck. A deck is found when
+/// every proper fit is on it.
+pub fn discover_deck(
+    relations: &[GeoRelation],
+    decks: &[Deck],
+) -> Result<DeckDiscovery, ShareRefusal> {
+    let mut fits = Vec::with_capacity(STRICT_CONVENTIONS.len() * decks.len());
+    for &convention in &STRICT_CONVENTIONS {
+        for deck in decks {
+            if deck.gold.signum() <= 0 || deck.copper.signum() <= 0 {
+                return Err(ShareRefusal::NotPositive);
+            }
+            let r = deck.copper.checked_div(deck.gold)?;
+            let mut fit = Fit::Proper;
+            for rel in relations {
+                match geo_fit(rel, r, convention)? {
+                    Fit::Empty => fit = Fit::Empty,
+                    Fit::Points if fit == Fit::Proper => fit = Fit::Points,
+                    _ => {}
+                }
+            }
+            fits.push(DeckFit {
+                convention,
+                deck: deck.name.clone(),
+                fit,
+            });
+        }
+    }
+    let proper = || {
+        fits.iter()
+            .filter(|f| !relations.is_empty() && f.fit == Fit::Proper)
+    };
+    let mut found: Vec<String> = proper().map(|f| f.deck.clone()).collect();
+    found.sort();
+    found.dedup();
+    let mut conventions: Vec<Convention> = proper().map(|f| f.convention).collect();
+    conventions.sort();
+    conventions.dedup();
+    let finding = match found.as_slice() {
+        [] => DeckFinding::NoFit,
+        [one] => DeckFinding::Found(one.clone()),
+        _ => DeckFinding::Ambiguous(found),
+    };
+    Ok(DeckDiscovery {
+        fits,
+        finding,
+        conventions,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use fmine_core::rand::{PhiloxStream, RngKey};
@@ -1171,5 +1310,161 @@ mod tests {
         assert_eq!(u.finding.reason_code(), Some("FMINE-REF-104"));
         let u = discover_unit(&[], &candidates, Convention::Closed).expect("no pairs");
         assert_eq!(u.finding, UnitFinding::NoFit);
+    }
+
+    /// E143's registered decks, gold $/oz over copper $/lb.
+    fn decks() -> Vec<Deck> {
+        [(1200, 275), (1300, 300), (1400, 300), (1500, 325)]
+            .iter()
+            .map(|&(gold, cents)| Deck {
+                name: format!("{gold}/{}.{:02}", cents / 100, cents % 100),
+                gold: rat(gold, 1),
+                copper: rat(cents, 100),
+            })
+            .collect()
+    }
+
+    /// One GEO relation; values and steps in tenths.
+    fn geo(gold: (i128, i128), copper: (i128, i128), geo: (i128, i128)) -> GeoRelation {
+        let f = |(v, step): (i128, i128)| Factor {
+            printed: rat(v, 10),
+            step: rat(step, 10),
+        };
+        GeoRelation {
+            gold: f(gold),
+            copper: f(copper),
+            geo: f(geo),
+        }
+    }
+
+    fn fits_of<'a>(d: &'a DeckDiscovery, deck: &'a str) -> impl Iterator<Item = &'a DeckFit> {
+        d.fits.iter().filter(move |f| f.deck == deck)
+    }
+
+    /// E147 on the Fourmile deck's 2024 row (p.14, as `planning/corpus/C1_barrick_public_stats.md` transcribes
+    /// it): P&P 89 Moz, 40,201 Mlb, 176 GEO; net change 17.0 Moz, 28,542 Mlb, 79 GEO. The row states
+    /// $1,400/$3.00. The net change fits $1,500/$3.25 only, and only under a round-to-nearest convention.
+    #[test]
+    fn test_e147_deck_found_fixture() {
+        let pp = geo((890, 10), (402_010, 10), (1760, 10));
+        let net = geo((170, 1), (285_420, 10), (790, 10));
+        let d = discover_deck(&[pp, net], &decks()).expect("discovery");
+        assert_eq!(d.finding, DeckFinding::Found("1500/3.25".to_string()));
+        assert_eq!(d.finding.reason_code(), None);
+        // The row's own deck is rejected under every convention.
+        assert!(fits_of(&d, "1400/3.00").all(|f| f.fit == Fit::Empty));
+        assert_eq!(fits_of(&d, "1400/3.00").count(), STRICT_CONVENTIONS.len());
+        // Truncation, the convention S4 part 2 finds for this deck on its MD&A ties (E850), fits no deck: under
+        // it the net change converts to [78.84, 78.94), short of [79, 80).
+        assert_eq!(
+            d.conventions,
+            [
+                Convention::HalfUp,
+                Convention::HalfDown,
+                Convention::HalfEven
+            ]
+        );
+        assert!(
+            d.fits
+                .iter()
+                .filter(|f| f.convention == Convention::Truncate)
+                .all(|f| f.fit == Fit::Empty)
+        );
+        // The P&P relation alone fits both 2024 and 2025 decks: the net change is what tells them apart.
+        let alone = discover_deck(&[pp], &decks()).expect("discovery");
+        assert_eq!(
+            alone.finding,
+            DeckFinding::Ambiguous(vec!["1400/3.00".to_string(), "1500/3.25".to_string()])
+        );
+    }
+
+    /// The deck's 2023 row (P&P 77, 12,391, 105; net change 5.0, 728, 6.7; stated $1,300/$3.00) fits both the
+    /// 2020–21 and the 2022–23 decks: the copper term is too small to tell them apart.
+    #[test]
+    fn test_deck_ambiguity_refuses_ref_104() {
+        let pp = geo((770, 10), (123_910, 10), (1050, 10));
+        let net = geo((50, 1), (7280, 10), (67, 1));
+        let d = discover_deck(&[pp, net], &decks()).expect("discovery");
+        assert_eq!(
+            d.finding,
+            DeckFinding::Ambiguous(vec!["1200/2.75".to_string(), "1300/3.00".to_string()])
+        );
+        assert_eq!(d.finding.reason_code(), Some("FMINE-REF-104"));
+        assert_eq!(d.conventions, STRICT_CONVENTIONS.to_vec());
+    }
+
+    #[test]
+    fn test_deck_refusals_and_no_fit() {
+        // The 2025 row as printed: copper net change +131 where its own roll-forward needs −131 (E144) fits no
+        // deck; read as −131 it fits every one.
+        let printed = geo((17, 1), (1310, 10), (14, 1));
+        let d = discover_deck(&[printed], &decks()).expect("discovery");
+        assert_eq!(d.finding, DeckFinding::NoFit);
+        assert_eq!(d.finding.reason_code(), None);
+        assert!(d.conventions.is_empty());
+        let signed = geo((17, 1), (-1310, 10), (14, 1));
+        let d = discover_deck(&[signed], &decks()).expect("discovery");
+        assert_eq!(
+            d.finding,
+            DeckFinding::Ambiguous(decks().into_iter().map(|d| d.name).collect())
+        );
+        // No relation constrains nothing, and finds nothing.
+        let d = discover_deck(&[], &decks()).expect("discovery");
+        assert_eq!(d.finding, DeckFinding::NoFit);
+        let free = Deck {
+            name: "free".to_string(),
+            gold: rat(0, 1),
+            copper: rat(3, 1),
+        };
+        assert_eq!(
+            discover_deck(&[printed], &[free]),
+            Err(ShareRefusal::NotPositive)
+        );
+        let negative = geo((17, -1), (1310, 10), (14, 1));
+        assert_eq!(
+            discover_deck(&[negative], &decks()),
+            Err(ShareRefusal::NegativeStep)
+        );
+    }
+
+    #[test]
+    fn test_deck_point_fits_are_not_proper() {
+        let exact = |v: Rat| Factor {
+            printed: v,
+            step: rat(0, 1),
+        };
+        // Gold 1.0 at a tenth and GEO 1.2 at three tenths, no copper: under half-even both ranges are closed and
+        // touch at 1.05 only; under every other convention they miss. Nothing is found.
+        let touching = GeoRelation {
+            gold: Factor {
+                printed: rat(1, 1),
+                step: rat(1, 10),
+            },
+            copper: exact(rat(0, 1)),
+            geo: Factor {
+                printed: rat(12, 10),
+                step: rat(3, 10),
+            },
+        };
+        let d = discover_deck(&[touching], &decks()).expect("discovery");
+        assert!(d.fits.iter().all(|f| f.fit
+            == if f.convention == Convention::HalfEven {
+                Fit::Points
+            } else {
+                Fit::Empty
+            }));
+        assert_eq!(d.finding, DeckFinding::NoFit);
+        // Exact inputs make the converted sum one point; inside the GEO cell's range that is a proper fit:
+        // 1,000 · 3/1,300 = 2.3077 prints 2.31 at the 2022–23 deck and nowhere else (truncated it prints 2.30).
+        let pinned = GeoRelation {
+            gold: exact(rat(0, 1)),
+            copper: exact(rat(1000, 1)),
+            geo: Factor {
+                printed: rat(231, 100),
+                step: rat(1, 100),
+            },
+        };
+        let d = discover_deck(&[pinned], &decks()).expect("discovery");
+        assert_eq!(d.finding, DeckFinding::Found("1300/3.00".to_string()));
     }
 }

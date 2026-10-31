@@ -427,17 +427,17 @@ mod blame {
     /// row 3. Every entry is computed here, none set by hand:
     /// - joint-only detections: the study's, by kind, and COD-02's shared total;
     /// - one-cell blame on E113 and E114 (S3's fixtures above);
-    /// - discovery on E698 (S4's tie fixture, as the bead transcribes it) and E815 (S4 on the registered AISC
-    ///   tables);
+    /// - discovery on E698 (S4's tie fixture, as the bead transcribes it), E147 (S4's deck fixture, the deck's 2024
+    ///   row as `C1_barrick_public_stats.md` transcribes it) and E815 (S4 on the registered AISC tables);
     /// - implied-interval consumers: the beads whose production source reads a correction set's implied ranges.
     ///
-    /// E144 (S5's roll-forward) and E147 (S4 part 4's deck) have not landed and stay `null`. No cell value is
-    /// logged (RISK-31).
+    /// E144 (S5's roll-forward) has not landed and stays `null`. No cell value is logged (RISK-31).
     #[test]
     #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
     fn test_power_study_full_and_kill_report() {
         use fmine_numerics::exact_feas::discover::{
-            Discovered, Printed, TieFinding, discover_tie_conventions,
+            Deck, DeckFinding, Discovered, Factor, GeoRelation, Printed, TieFinding, discover_deck,
+            discover_tie_conventions,
         };
         use fmine_numerics::exact_feas::generator::{GenSpec, SUM_FAMILY};
         use fmine_numerics::exact_feas::power::{
@@ -519,6 +519,30 @@ mod blame {
             .findings
             .iter()
             .any(|(_, f)| matches!(f, TieFinding::Identified(_)));
+        // E147: the deck's 2024 row, P&P and net change, against E143's four decks.
+        let factor = |printed: Rat, step: Rat| Factor { printed, step };
+        let geo = |gold: (Rat, Rat), copper: Rat, geo: Rat| GeoRelation {
+            gold: factor(gold.0, gold.1),
+            copper: factor(copper, int(1)),
+            geo: factor(geo, int(1)),
+        };
+        let decks: Vec<Deck> = [(1200, 275), (1300, 300), (1400, 300), (1500, 325)]
+            .iter()
+            .map(|&(gold, cents)| Deck {
+                name: format!("{gold}/{cents}"),
+                gold: int(gold),
+                copper: q(cents, 100),
+            })
+            .collect();
+        let e147 = discover_deck(
+            &[
+                geo((int(89), int(1)), int(40_201), int(176)),
+                geo((q(170, 10), q(1, 10)), int(28_542), int(79)),
+            ],
+            &decks,
+        )
+        .expect("discovery");
+        let e147_found = e147.finding == DeckFinding::Found("1500/325".to_string());
         let root = workspace_root();
         let profile = load_issuer_profile(&root, "barrick")
             .and_then(|p| p.through("2026Q2"))
@@ -554,7 +578,7 @@ mod blame {
                 ("E144".to_string(), None),
             ],
             discoveries: vec![
-                ("E147".to_string(), None),
+                ("E147".to_string(), Some(e147_found)),
                 ("E698".to_string(), Some(e698_found)),
                 ("E815".to_string(), Some(e815_found)),
             ],
@@ -565,7 +589,9 @@ mod blame {
             report.log_line(spec.seed, start.elapsed().as_secs_f64())
         );
         // The known answers S3 and S4 already establish.
-        assert!(cod02_joint_only && e113_size1 && e114_size1 && e698_found && e815_found);
-        assert_eq!(report.pending(), ["E144", "E147"]);
+        assert!(
+            cod02_joint_only && e113_size1 && e114_size1 && e147_found && e698_found && e815_found
+        );
+        assert_eq!(report.pending(), ["E144"]);
     }
 }
