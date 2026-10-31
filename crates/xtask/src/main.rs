@@ -44,6 +44,25 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        "check-amend" => {
+            let (base, require_git) = match (args.get(1).map(String::as_str), args.get(2)) {
+                (None, _) => ("HEAD", false),
+                (Some("--base"), Some(base)) => (base.as_str(), true),
+                _ => {
+                    eprintln!("usage: xtask check-amend [--base <rev>]");
+                    return ExitCode::from(2);
+                }
+            };
+            run_one(
+                "check-amend",
+                xtask::loc::check_amend(&root, base, require_git).map(|r| {
+                    println!("{}", r.log_line());
+                    for w in &r.warnings {
+                        println!("WARN [check-amend]: {w}");
+                    }
+                }),
+            )
+        }
         "check-layers" => run_one("check-layers", xtask::check_layers(&root)),
         "check-deps" => run_one("check-deps", xtask::check_deps(&root)),
         "check-oracle" => run_one("check-oracle", xtask::check_oracle(&root)),
@@ -186,6 +205,12 @@ fn main() -> ExitCode {
                 }
                 if let Ok((report, lock)) = xtask::int_as::check_int_as_001a(&root) {
                     println!("{}", report.status_line(&lock));
+                }
+                if let Ok(report) = xtask::loc::check_amend(&root, "HEAD", false) {
+                    println!("{}", report.log_line());
+                    for w in &report.warnings {
+                        println!("WARN [check-amend]: {w}");
+                    }
                 }
                 ExitCode::SUCCESS
             }

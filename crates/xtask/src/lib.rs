@@ -8,6 +8,7 @@ pub mod beads;
 pub mod forecast;
 pub mod int_as;
 pub mod lifts;
+pub mod loc;
 pub mod refusals;
 
 /// Summary row for a single crate's LOC budget (`BD-003`, `BD-012`).
@@ -916,6 +917,12 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
     if let Err(e) = check_stack_lock(root) {
         all_errors.extend(e);
     }
+    // §28.4.3 over what is about to be committed; CI runs `check-amend --base` over the pushed range.
+    if loc_report.is_some()
+        && let Err(e) = loc::check_amend(root, "HEAD", false)
+    {
+        all_errors.extend(e);
+    }
     if all_errors.is_empty() {
         Ok(loc_report.unwrap_or(LocReport {
             rows: Vec::new(),
@@ -1058,7 +1065,7 @@ fn strip_kv_usize(line: &str, key: &str) -> Option<usize> {
     v.trim().parse::<usize>().ok()
 }
 
-fn count_rust_loc(dir: &Path) -> usize {
+pub(crate) fn count_rust_loc(dir: &Path) -> usize {
     collect_rs_files(dir)
         .into_iter()
         .map(|p| {

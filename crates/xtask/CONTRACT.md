@@ -14,10 +14,24 @@ Enforces the structural invariants of the workspace (`L-1`..`L-7`, `PO-NUM-2`, `
 Pure static verifier over repository source files and TOML registries; produces deterministic pass/fail diagnostics (`GATE-LAYERS-00`).
 The `forecast-*` commands are the exception: they write a record's digest files and run `openssl ts` and `git`
 (BD-334.S1, S2). `gen-refusals` is the other: it writes `crates/fmine-evidence/src/refusal_catalog.rs`.
-`check-int-as-001a`, also run by `check-all`, runs `cargo tree`.
+`check-int-as-001a`, also run by `check-all`, runs `cargo tree`. `check-amend`, also run by `check-all`, runs
+`git rev-parse`, `git diff`, `git ls-files`, `git ls-tree` and `git show`, read-only.
 
 ## 4. Public API Surface
 - `check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>>`
+- `loc::{check_amend, evaluate, read_amendments, net_loc_since}` (BD-012, §28.4; command `check-amend [--base
+  <rev>]`, and `check-all` runs it against `HEAD` and prints its line
+  `{"check":"check-amend","measured","changed","over_planned","amendments","approved","warnings"}`):
+  - A change that adds LOC to a crate over its planned budget fails unless a `docs/delivery/BUDGET-AMEND-nnn….md`
+    record for that crate reads `Approval: approved by <who>, YYYY-MM-DD` with `New planned` at least the crate's
+    actual LOC. A change is the diff from the base to the working tree, untracked files included, counted as
+    `check_loc_budget` counts (non-blank `.rs` lines). Net LOC ≤ 0 needs no record (§28.4.4).
+  - A crate over planned that nothing adds to, or one at 80% of planned, is a warning. §28.4.2 puts the 80% warning
+    in `fmine doctor`; `check-all` prints it until that verb reads the budget.
+  - A malformed record name, a missing field, a repeated id, or a record for a crate the budget does not list,
+    fails. A root that is no git work tree is a warning in `check-all`; with `--base`, which CI passes over the
+    pushed range, it fails.
+  - The form is `docs/templates/BUDGET-AMEND.md`. The ceiling itself is `check_loc_budget`'s, whatever changed.
 - `check_layers(root: &Path) -> Result<(), Vec<String>>`
 - `check_deps(root: &Path) -> Result<(), Vec<String>>` (BD-005): no member names a `deny.toml` crate in any
   dependency table (normal, build and dev, each also under `target.<spec>`, inline or dotted, by key or through

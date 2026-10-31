@@ -46,6 +46,18 @@ jobs:
           fetch-depth: 0
       - name: Run GATE-LAYERS-00 (xtask check-all)
         run: cargo run -p xtask -- check-all
+      # §28.4.3 (BD-012): a change adding LOC to a crate over its planned budget needs an approved BUDGET-AMEND
+      # record. The range starts at the pull request's base or the push's previous head; HEAD~1 for a new branch, or
+      # when a force push left the previous head out of the checkout.
+      - name: Budget amendments over the pushed range
+        if: matrix.os == 'ubuntu-latest' && matrix.profile == 'dev'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          case "$BASE" in ""|0000000000000000000000000000000000000000) BASE=HEAD~1 ;; esac
+          git cat-file -e "$BASE^{commit}" 2>/dev/null || BASE=HEAD~1
+          echo "check-amend base: $BASE"
+          cargo run -p xtask -- check-amend --base "$BASE"
       # BD-003 done-when: CI prints the per-crate LOC budget table (check-all prints only the totals).
       - name: LOC budget table
         if: matrix.os == 'ubuntu-latest' && matrix.profile == 'dev'
