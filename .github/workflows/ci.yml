@@ -17,6 +17,20 @@ jobs:
       - name: clippy (warnings denied)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  # BD-326 (bd-i787.2): advisories, bans, licences and sources over the graph of deny.toml's three targets. The
+  # advisory database is fetched first, retried once, so the check itself runs offline.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - name: Fetch the advisory database
+        run: cargo deny fetch db || { sleep 15; cargo deny fetch db; }
+      - name: cargo deny check
+        run: cargo deny --locked --offline check advisories bans licenses sources
+
   check-and-test:
     name: ${{ matrix.os }} (${{ matrix.profile }})
     runs-on: ${{ matrix.os }}

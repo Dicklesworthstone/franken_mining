@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+publish = false
 description = "Phantom-typed physical quantities, moisture/recovery bases, exact statutory conversions, Money, chemical basis tags, and hazardous byproduct guards."
 
 [dependencies]

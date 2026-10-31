@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+publish = false
 description = "Frozen forecast ledger, proper scoring rules (CRPS, log, Winkler), reference-class priors (GB-32), and Vecchia/Rosenblatt spatial PIT e-process monitors (GB-08)."
 
 [dependencies]

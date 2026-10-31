@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+publish = false
 description = "Public filing source registry (registries/sources/*.toml), public-basis Claim builder, and the registered-corpus loader."
 
 [dependencies]

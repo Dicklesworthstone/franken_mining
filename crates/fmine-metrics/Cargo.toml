@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+publish = false
 description = "Public assurance metric engine: C1/TCC/AISC L_corp/L_JV bridges, versioned GEO, reserve replacement, exact LMDI waterfall (GB-26), cut-off solver, and GATE-BULL-01."
 
 [dependencies]

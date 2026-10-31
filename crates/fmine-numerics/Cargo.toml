@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+publish = false
 description = "Deterministic numerical kernels: SPD Cholesky, Brent root-finding, normal quantiles, e-processes, EVPI/EVSI, CVaR/Drawdown, and tropical schedule algebra."
 
 [dependencies]

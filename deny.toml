@@ -1,5 +1,9 @@
 # deny.toml — FrankenMining Dependency & License Constitution (§28.5 Rule L-5)
-# Enforced by `xtask check-deps` and `cargo deny`.
+# Enforced by `xtask check-deps` (direct dependencies) and `cargo deny` (the CI `deny` job, BD-326).
+
+[graph]
+# wasm32 is in rust-toolchain.toml, so its dependency graph is checked too.
+targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "wasm32-unknown-unknown"]
 
 [advisories]
 version = 2
@@ -7,17 +11,111 @@ yanked = "deny"
 
 [licenses]
 version = 2
+# Never add LicenseRef-MIT-OpenAI-Anthropic-Rider here: rider crates are admitted only by name, below.
 allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+
+# The workspace declares license = "MIT" (Cargo.toml [workspace.package]), but LICENSE reads "MIT License (with
+# OpenAI/Anthropic Rider)" (E681). The field is the owner's to change; until then these exceptions are unused.
+# Each is pending the RISK-17 owner/counsel decision.
+[[licenses.exceptions]]
+name = "fmine-array"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-calib"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-claim"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-cli"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-core"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-crs"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-decide"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-evidence"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-io"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-metrics"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-numerics"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-public"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-registry"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-time"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "fmine-units"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+[[licenses.exceptions]]
+name = "xtask"
+allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+
+# The suite crates are not in the graph yet; uncomment when they enter (WP-04), with a [[licenses.clarify]] entry
+# for each LICENSE file.
+# [[licenses.exceptions]]
+# name = "asupersync"
+# allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+# [[licenses.exceptions]]
+# name = "asupersync-macros"
+# allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+# [[licenses.exceptions]]
+# name = "franken-decision"
+# allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+# [[licenses.exceptions]]
+# name = "franken-evidence"
+# allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+# [[licenses.exceptions]]
+# name = "franken-kernel"
+# allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
+# [[licenses.exceptions]]
+# name = "ftui"
+# allow = ["LicenseRef-MIT-OpenAI-Anthropic-Rider"] # pending RISK-17 owner/counsel decision
 
 [bans]
 multiple-versions = "deny"
+# Path dependencies carry no version; with every workspace crate `publish = false` they are not wildcards.
 wildcards = "deny"
+allow-wildcard-paths = true
+skip = []
+# When asupersync enters (WP-04), it brings nine duplicate pairs (R7-C150; FA's deny.toml at 41363acb skips the
+# same ones). Add each with its reason then:
+# skip = [
+#     { name = "block-buffer" },
+#     { name = "const-oid" },
+#     { name = "cpufeatures" },
+#     { name = "crypto-common" },
+#     { name = "digest" },
+#     { name = "getrandom" },
+#     { name = "rand_core" },
+#     { name = "sha2" },
+#     { name = "syn" },
+# ]
 
-# Banned direct dependencies and public-API exposure (§28.5 L-5):
+# Banned dependencies and public-API exposure (§28.5 L-5):
 # - Foreign async runtimes / HTTP stacks: tokio, async-std, smol, hyper, reqwest, actix, axum, tower, tonic
-# - Foreign DB / ORM / columnar stacks: sqlx, diesel, sea-orm, arrow, parquet, polars, duckdb, rusqlite
+# - Foreign DB / ORM / columnar / search stacks: sqlx, diesel, sea-orm, arrow, parquet, polars, duckdb, rusqlite,
+#   petgraph, fastembed, tantivy
 # - Foreign ML / C++ FFI stacks: ort, candle, tch, openssl, ring
-# - Uncontrolled time/rand in production closures: chrono, time (direct dependency banned; fmine-time owns civil/quad-temporal time)
+# - Uncontrolled time in production closures: chrono and time reach the graph only through the listed suite
+#   wrappers; cargo-deny matches wrappers against immediate parents only (R7-C152). fmine-time owns civil and
+#   quad-temporal time, and `xtask check-deps` still bans both as direct dependencies of a workspace crate.
+# `xtask check-deps` reads one `{ name = "..." }` row per line, so keep each row on one line.
 deny = [
     { name = "tokio" },
     { name = "async-std" },
@@ -35,10 +133,21 @@ deny = [
     { name = "arrow" },
     { name = "parquet" },
     { name = "polars" },
+    { name = "petgraph" },
+    { name = "fastembed" },
+    { name = "tantivy" },
     { name = "ort" },
     { name = "candle-core" },
     { name = "tch" },
     { name = "openssl" },
-    { name = "chrono" },
-    { name = "time" },
+    { name = "chrono", wrappers = ["x509-parser", "asn1-rs", "der-parser", "fsqlite-func", "fastmcp-server", "fp-types"] },
+    { name = "time", wrappers = ["x509-parser", "asn1-rs", "der-parser", "fsqlite-func", "fastmcp-server", "fp-types"] },
 ]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[sources.allow-org]
+# The suite's GitHub organisation (Cargo.toml `repository`).
+github = ["Dicklesworthstone"]

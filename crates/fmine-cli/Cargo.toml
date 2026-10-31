@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+publish = false
 description = "FrankenMining CLI (fmine): FMT-ENV-1 response envelope, exit codes, doctor, robot-docs, and M0 public assurance."
 
 [[bin]]

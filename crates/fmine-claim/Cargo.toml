@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+publish = false
 description = "Universal Claim<T> epistemic envelope, NL-1..NL-8 composition laws, confidentiality lattice, support/additivity guards, and provenance DAG."
 
 [dependencies]

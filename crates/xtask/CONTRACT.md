@@ -21,7 +21,9 @@ The `forecast-*` commands are the exception: they write a record's digest files 
 - `check_layers(root: &Path) -> Result<(), Vec<String>>`
 - `check_deps(root: &Path) -> Result<(), Vec<String>>` (BD-005): no member names a `deny.toml` crate in any
   dependency table (normal, build and dev, each also under `target.<spec>`, inline or dotted, by key or through
-  `package = "..."`, quoted either way). A `deny.toml` with no readable rows fails. Transitive closures are B(i).
+  `package = "..."`, quoted either way). The crates are the `[bans] deny` rows, one per line; a row with `wrappers`
+  still bans its crate here, and `skip` rows ban nothing. A `deny.toml` with no readable rows, or one unreadable
+  deny row, fails. Transitive closures are B(i), and `cargo deny` in CI (BD-326).
 - `check_caps(root: &Path) -> Result<(), Vec<String>>`: besides `L-3`, bans `thread::spawn`, `thread::Builder`,
   `thread::sleep`, `Instant::now` and `SystemTime::now` in production code outside `fmine-runtime` and `fmine-lab`.
 - `int_as::{check_int_as_001a, evaluate, parse_tree_line}` (BD-325; command `check-int-as-001a [--json]`, and

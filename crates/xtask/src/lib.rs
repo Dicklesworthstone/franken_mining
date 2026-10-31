@@ -307,22 +307,12 @@ pub fn check_deps(root: &Path) -> Result<(), Vec<String>> {
     let deny_text = fs::read_to_string(&deny_path)
         .map_err(|e| vec![format!("failed to read {}: {e}", deny_path.display())])?;
 
-    let mut banned = BTreeSet::new();
-    for raw_line in deny_text.lines() {
-        let line = raw_line.trim();
-        if line.starts_with("{ name =")
-            && let Some(val) = strip_kv_str(
-                line.trim_matches(|c| c == '{' || c == '}' || c == ','),
-                "name",
-            )
-        {
-            banned.insert(val);
-        }
-    }
+    let banned =
+        banned_crates(&deny_text).map_err(|e| vec![format!("{}: {e}", deny_path.display())])?;
     // An empty list would pass every crate, so a deny.toml this reader cannot parse fails instead.
     if banned.is_empty() {
         return Err(vec![format!(
-            "{}: no banned crate read (expected `{{ name = \"...\" }}` rows)",
+            "{}: no banned crate read (expected `{{ name = \"...\" }}` rows in a multi-line `[bans] deny`)",
             deny_path.display()
         )]);
     }
@@ -1077,6 +1067,61 @@ fn parse_cargo_manifest(
     Ok((name, deps, dev_deps))
 }
 
+/// The crate names of `deny.toml`'s `[bans] deny` rows, one `{ name = "...", ... }` row per line, so a row with
+/// `wrappers` still bans its crate as a direct dependency. `name` rows elsewhere (`skip`, `[[licenses.exceptions]]`)
+/// ban nothing, and a deny row this reader cannot read is an error, never a crate that passes (`BD-005`).
+fn banned_crates(deny_text: &str) -> Result<BTreeSet<String>, String> {
+    let mut banned = BTreeSet::new();
+    let mut section = "";
+    let mut in_deny = false;
+    for (index, raw_line) in deny_text.lines().enumerate() {
+        let line = raw_line
+            .split_once('#')
+            .map_or(raw_line, |(code, _)| code)
+            .trim();
+        if line.is_empty() {
+            continue;
+        }
+        if in_deny {
+            if line.starts_with(']') {
+                in_deny = false;
+                continue;
+            }
+            let name = line
+                .strip_prefix('{')
+                .and_then(|row| row.trim_start().strip_prefix("name"))
+                .and_then(|row| row.trim_start().strip_prefix('='))
+                .and_then(quoted_prefix)
+                .ok_or_else(|| {
+                    format!("line {}: unreadable `[bans] deny` row `{line}`", index + 1)
+                })?;
+            banned.insert(name);
+        } else if line.starts_with('[') {
+            section = line;
+        } else if section == "[bans]"
+            && line
+                .strip_prefix("deny")
+                .and_then(|rest| rest.trim_start().strip_prefix('='))
+                .is_some_and(|value| value.trim() == "[")
+        {
+            in_deny = true;
+        }
+    }
+    if in_deny {
+        return Err("`[bans] deny` is never closed".to_string());
+    }
+    Ok(banned)
+}
+
+/// The non-empty TOML string, of either quote style, that opens `text`.
+fn quoted_prefix(text: &str) -> Option<String> {
+    let text = text.trim_start();
+    let quote = text.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    let body = &text[1..];
+    let name = &body[..body.find(quote)?];
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 /// A TOML key or simple string value without its quotes, of either style.
 fn unquote(text: &str) -> String {
     text.trim().trim_matches(['"', '\'']).to_string()
@@ -1580,8 +1625,9 @@ mod tests {
     }
 
     /// BD-005: a member declaring tokio fails `check_deps` in every manifest form, with the workspace's own
-    /// deny.toml, and a name that only starts like it passes. A deny.toml with no readable rows fails instead of
-    /// passing every crate. Tokio reached transitively is `int_as`'s B(i) check, which `check-all` also runs.
+    /// deny.toml, and a name that only starts like it passes. A `wrappers` row still bans its crate, a `skip` row
+    /// bans nothing, and a deny.toml with no readable rows, or one unreadable deny row, fails instead of passing
+    /// every crate. Tokio reached transitively is `int_as`'s B(i) check, which `check-all` also runs.
     #[test]
     fn test_seeded_tokio_fails_check_deps_in_every_declaration_form() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1647,6 +1693,55 @@ mod tests {
             })
             .collect();
         assert_eq!(check_deps(&scratch), Err(want));
+
+        // The workspace's `wrappers` rows still ban time and chrono as direct dependencies, and a `skip` row bans
+        // nothing (the R7-C150 skips are crates a member may name).
+        fs::write(
+            scratch.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/wrapped\"]\n",
+        )
+        .expect("workspace manifest");
+        let krate = scratch.join("crates").join("wrapped");
+        fs::create_dir_all(&krate).expect("scratch crate");
+        fs::write(
+            krate.join("Cargo.toml"),
+            "[package]\nname = \"wrapped\"\n\n[dependencies]\nchrono = \"0.4\"\nsha2 = \"0.10\"\ntime = \"0.3\"\n",
+        )
+        .expect("manifest");
+        let wrapped = |dep: &str| {
+            format!("banned dependency {dep} in crate wrapped (violates L-5 / deny.toml)")
+        };
+        assert_eq!(
+            check_deps(&scratch),
+            Err(vec![wrapped("chrono"), wrapped("time")])
+        );
+        fs::write(
+            scratch.join("deny.toml"),
+            "[bans]\nskip = [\n    { name = \"sha2\" },\n]\ndeny = [\n    { name = \"time\", wrappers = [\"fp-types\"] }, # R7-C152\n]\n",
+        )
+        .expect("deny.toml");
+        assert_eq!(check_deps(&scratch), Err(vec![wrapped("time")]));
+        fs::write(
+            scratch.join("deny.toml"),
+            "[bans]\ndeny = [\n    { name = \"time\" },\n    \"chrono\",\n]\n",
+        )
+        .expect("deny.toml");
+        let errs = check_deps(&scratch).expect_err("an unreadable deny row");
+        assert!(
+            errs.len() == 1
+                && errs[0].contains("line 4: unreadable `[bans] deny` row `\"chrono\",`"),
+            "{errs:?}"
+        );
+        fs::write(
+            scratch.join("deny.toml"),
+            "[bans]\ndeny = [\n    { name = \"time\" },\n",
+        )
+        .expect("deny.toml");
+        let errs = check_deps(&scratch).expect_err("an unclosed deny list");
+        assert!(
+            errs.len() == 1 && errs[0].contains("`[bans] deny` is never closed"),
+            "{errs:?}"
+        );
 
         fs::write(scratch.join("deny.toml"), "[bans]\ndeny = [\"tokio\"]\n").expect("deny.toml");
         let errs = check_deps(&scratch).expect_err("an unread deny list");
