@@ -4,199 +4,23 @@
 //! Determinism: DeterministicPerIsa (transcendentals via `fmine_core::det`; BitwisePortable once one CI run passes
 //! the file's three digests on both hosts, bd-hp2j.3).
 
-use std::collections::BTreeMap;
-
 use fmine_claim::Claim;
 use fmine_core::det;
 use fmine_core::hash::blake3_hash;
-use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_core::rand::{PhiloxStream, RngKey};
-use fmine_evidence::{EvidenceClass, Refusal, RefusalCode};
+use fmine_evidence::{EvidenceClass, Refusal};
 use fmine_numerics::cholesky_solve;
 use fmine_numerics::eproc::BettingEProcess;
 use fmine_numerics::norm_cdf;
 
+pub mod ledger;
 pub mod record;
-
-/// Immutable forecast record registered before outcome realization (`BD-047`, `INV-008`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct FrozenForecast {
-    pub forecast_id: ObjectId,
-    pub model_key: String,
-    pub registered_ns: i64,
-    pub freeze_time_ns: i64,
-    pub mean: f64,
-    pub std_dev: f64,
-    pub p10: f64,
-    pub p90: f64,
-    pub realized_outcome: Option<f64>,
-}
-
-/// Append-only ledger of frozen forecasts (`BD-047`, `INV-008`).
-#[derive(Debug, Default, Clone)]
-pub struct ForecastLedger {
-    records: BTreeMap<ObjectId, FrozenForecast>,
-}
-
-impl ForecastLedger {
-    /// Creates an empty `ForecastLedger`.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Registers a new forecast prior to `freeze_time_ns`. Refuses `FMINE-REF-206` if
-    /// `registered_ns > freeze_time_ns`, `FMINE-REF-109` if the mean is not finite or `std_dev` is not positive
-    /// and finite, and `FMINE-REF-507` if the same record is already frozen.
-    pub fn register(
-        &mut self,
-        model_key: impl Into<String>,
-        registered_ns: i64,
-        freeze_time_ns: i64,
-        mean: f64,
-        std_dev: f64,
-    ) -> Result<ObjectId, Refusal> {
-        if registered_ns > freeze_time_ns {
-            return Err(Refusal::new(
-                RefusalCode::LateRegistration206,
-                format!(
-                    "forecast registered at {registered_ns} after freeze_time {freeze_time_ns}"
-                ),
-            ));
-        }
-        // A forecast that cannot be scored is refused at entry, so `evaluate_model` never meets one.
-        if !mean.is_finite() || !(std_dev.is_finite() && std_dev > 0.0) {
-            return Err(Refusal::new(
-                RefusalCode::OutsidePhysicalDomain109,
-                format!(
-                    "forecast needs a finite mean and a positive finite std_dev, got mean {mean}, std_dev {std_dev}"
-                ),
-            ));
-        }
-        let model_key = model_key.into();
-        let z80 = 1.281_551_565_544_600_4;
-        let p10 = mean - z80 * std_dev;
-        let p90 = mean + z80 * std_dev;
-        let payload =
-            format!("{model_key}:{registered_ns}:{freeze_time_ns}:{mean:.8}:{std_dev:.8}");
-        let forecast_id = ObjectId::from_canonical_bytes(PrefixKind::Forecast, payload.as_bytes());
-        if self.records.contains_key(&forecast_id) {
-            return Err(Refusal::new(
-                RefusalCode::FrozenRecordMutation507,
-                format!("duplicate or mutated frozen forecast {forecast_id}"),
-            ));
-        }
-        self.records.insert(
-            forecast_id,
-            FrozenForecast {
-                forecast_id,
-                model_key,
-                registered_ns,
-                freeze_time_ns,
-                mean,
-                std_dev,
-                p10,
-                p90,
-                realized_outcome: None,
-            },
-        );
-        Ok(forecast_id)
-    }
-
-    /// Attaches the realized outcome once observed after `freeze_time_ns`. Refuses `FMINE-REF-201` for an
-    /// unknown forecast, `FMINE-REF-507` if an outcome was already recorded, `FMINE-REF-206` if
-    /// `outcome_ns <= freeze_time_ns`, and `FMINE-REF-109` for a non-finite outcome.
-    pub fn record_outcome(
-        &mut self,
-        forecast_id: ObjectId,
-        outcome_ns: i64,
-        realized: f64,
-    ) -> Result<(), Refusal> {
-        let rec = self.records.get_mut(&forecast_id).ok_or_else(|| {
-            Refusal::new(
-                RefusalCode::NoClaimInDomain201,
-                format!("no forecast {forecast_id} in the ledger"),
-            )
-        })?;
-        if rec.realized_outcome.is_some() {
-            return Err(Refusal::new(
-                RefusalCode::FrozenRecordMutation507,
-                format!("the outcome of {forecast_id} is already recorded"),
-            ));
-        }
-        if outcome_ns <= rec.freeze_time_ns {
-            return Err(Refusal::new(
-                RefusalCode::LateRegistration206,
-                format!(
-                    "outcome at {outcome_ns} is not after freeze_time {}",
-                    rec.freeze_time_ns
-                ),
-            ));
-        }
-        if !realized.is_finite() {
-            return Err(Refusal::new(
-                RefusalCode::OutsidePhysicalDomain109,
-                format!("outcome for {forecast_id} must be finite, got {realized}"),
-            ));
-        }
-        rec.realized_outcome = Some(realized);
-        Ok(())
-    }
-
-    /// Evaluates calibration across all realized forecasts for `model_key` (`BD-048`, `BD-049`).
-    ///
-    /// A realized record whose score cannot be computed refuses the whole evaluation; it is never skipped, so the
-    /// denominator cannot shrink silently. `register` and `record_outcome` refuse such records at entry.
-    pub fn evaluate_model(&self, model_key: &str) -> Result<CalibrationReport, ScoreError> {
-        let mut n = 0_usize;
-        let mut crps_sum = 0.0_f64;
-        let mut winkler_sum = 0.0_f64;
-        let mut covered_80 = 0_usize;
-        let mut z_sum = 0.0_f64;
-
-        for rec in self.records.values() {
-            if rec.model_key != model_key {
-                continue;
-            }
-            if let Some(y) = rec.realized_outcome {
-                n += 1;
-                crps_sum += gaussian_crps(rec.mean, rec.std_dev, y)?;
-                winkler_sum += winkler_interval_score(rec.p10, rec.p90, 0.20, y)?;
-                if y >= rec.p10 && y <= rec.p90 {
-                    covered_80 += 1;
-                }
-                z_sum += (y - rec.mean) / rec.std_dev;
-            }
-        }
-        if n == 0 {
-            return Ok(CalibrationReport {
-                n_scored: 0,
-                mean_crps: 0.0,
-                mean_winkler_80: 0.0,
-                empirical_coverage_80: 0.0,
-                mean_standardized_bias: 0.0,
-                flag: CalibrationFlag::Unscored,
-            });
-        }
-        let cov80 = (covered_80 as f64) / (n as f64);
-        let bias = z_sum / (n as f64);
-        let flag = if bias.abs() > 0.5 {
-            CalibrationFlag::Biased
-        } else if cov80 < 0.65 {
-            CalibrationFlag::Overconfident
-        } else {
-            CalibrationFlag::Calibrated
-        };
-        Ok(CalibrationReport {
-            n_scored: n,
-            mean_crps: crps_sum / (n as f64),
-            mean_winkler_80: winkler_sum / (n as f64),
-            empirical_coverage_80: cov80,
-            mean_standardized_bias: bias,
-            flag,
-        })
-    }
-}
+pub use ledger::{
+    Assessment, AssessmentPolicy, AssessmentSummary, Cohort, CohortSpec, CoverageSummary,
+    EffectiveSampleSize, ForecastLedger, ForecastPayload, FrozenForecast, MemberAssessment,
+    MemberOutcome, MissingReason, OutcomeCitation, OutcomeEvent, OutcomeKind, OutcomeSelector,
+    ScoreBounds, ScoreSummary,
+};
 
 /// Calibration health classification (`BD-049`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,12 +29,19 @@ pub enum CalibrationFlag {
     Overconfident,
     Biased,
     Unscored,
+    /// Scores are descriptive: the declared effective sample is too small, membership is unresolved, or the
+    /// forecast has no stated probability level. It cannot confer calibrated evidence (BD-343).
+    Descriptive,
 }
 
 /// Summary report produced by `ForecastLedger::evaluate_model` (`BD-048`, `BD-049`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CalibrationReport {
+    pub n_members: usize,
     pub n_scored: usize,
+    pub n_unresolved: usize,
+    /// A bound on final coverage, not a confidence interval; absent for an empty model.
+    pub whole_cohort_coverage_80: Option<(f64, f64)>,
     pub mean_crps: f64,
     pub mean_winkler_80: f64,
     pub empirical_coverage_80: f64,
@@ -219,7 +50,7 @@ pub struct CalibrationReport {
 }
 
 /// Applies `CalibrationFlag` to a `Claim<T>`, enforcing `NL-8`: if `flag` is `Overconfident`
-/// or `Biased`, marks `calibration_failed = true`. Either way, and for `Unscored`, a `ModelledCalibrated` claim
+/// or `Biased`, marks `calibration_failed = true`. Either way, and for `Unscored` or `Descriptive`, a `ModelledCalibrated` claim
 /// has lost its track record and becomes `ModelledUncalibrated` (`BD-049`, NL-4).
 pub fn apply_calibration_gate<T>(claim: &mut Claim<T>, flag: CalibrationFlag) {
     if flag == CalibrationFlag::Calibrated {
@@ -675,6 +506,7 @@ mod tests {
     use super::*;
     use fmine_claim::{AdditivityClass, ConfidentialityTier, Representation, SpatialSupport};
     use fmine_core::anchor::SourceAnchor;
+    use fmine_core::id::{ObjectId, PrefixKind};
     use fmine_core::rand::{PhiloxStream, RngKey};
     use fmine_evidence::{EpistemicStatus, KnowledgeState, KuKind};
 
@@ -911,7 +743,7 @@ mod tests {
         assert_eq!(report.n_scored, 3);
         assert!((report.empirical_coverage_80 - 2.0 / 3.0).abs() < 1e-12);
         assert!((report.mean_standardized_bias - 5.5 / 3.0).abs() < 1e-12);
-        assert_eq!(report.flag, CalibrationFlag::Biased);
+        assert_eq!(report.flag, CalibrationFlag::Descriptive);
         let z80 = 1.281_551_565_544_600_4_f64;
         let width = 2.0 * z80;
         let expected_winkler = (3.0 * width + (2.0 / 0.2) * (35.0 - (30.0 + z80))) / 3.0;
