@@ -1,4 +1,4 @@
-//! Quad-temporal timestamps (`t_valid`, `t_tx`, `t_decision`, `t_assay_available`),
+//! Quad-temporal timestamps (`physical_valid_time`, `collection_time`, `availability_time`, `record_time`; plan §6.3),
 //! civil calendar arithmetic, site/fiscal calendars (`G-TIME-1`), and assay-lag lookahead
 //! guards (`G-TIME-2`, `FMINE-REF-108`).
 
@@ -19,8 +19,14 @@ pub enum TimeError {
     },
     /// `FMINE-REF-108` (`G-TIME-2`): Assay or observation was not yet reported at `as_of_decision`.
     AssayLagLookahead {
-        assay_available_ns: i64,
+        availability_time: i64,
         as_of_decision_ns: i64,
+    },
+    /// A `QuadTemporalStamp` instant before its `collection_time`: impossible, so refused, never reordered.
+    StampOrder {
+        field: &'static str,
+        at_ns: i64,
+        collection_time: i64,
     },
 }
 
@@ -53,11 +59,19 @@ impl fmt::Display for TimeError {
                 "G-TIME-1: site '{site_id}' shift end {shift_end_utc_ns} != fiscal cut {fiscal_cut_utc_ns}"
             ),
             Self::AssayLagLookahead {
-                assay_available_ns,
+                availability_time,
                 as_of_decision_ns,
             } => write!(
                 f,
-                "FMINE-REF-108: assay available at {assay_available_ns} > decision time {as_of_decision_ns}"
+                "FMINE-REF-108: available at {availability_time} > decision time {as_of_decision_ns}"
+            ),
+            Self::StampOrder {
+                field,
+                at_ns,
+                collection_time,
+            } => write!(
+                f,
+                "{field} {at_ns} is before collection_time {collection_time}"
             ),
         }
     }
@@ -275,30 +289,87 @@ impl SiteCalendar {
 
 // --- Quad-Temporal Stamp & Assay-Lag Lookahead Guard (BD-032, BD-309, G-TIME-2) ---
 
-/// Quad-temporal timestamp (`§9.0.1`, `BD-309`) distinguishing physical validity,
-/// ledger ingestion, decision epoch, and laboratory assay availability.
+/// The four times of one observation (plan §6.3, `BD-309`). A decision time is not one of them: it belongs to the
+/// query ([`AsOfQuery`]). The fields are private so that no stamp can hold an impossible order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuadTemporalStamp {
-    /// Physical time interval when material was mined/sampled/processed (`t_valid`).
-    pub valid_time: ValidTime,
-    /// Ledger transaction time when the record entered storage (`t_tx`).
-    pub transaction_time: RecordTime,
-    /// Operational decision timestamp when routing/dispatch occurred (`t_decision`).
-    pub decision_time_ns: Option<i64>,
-    /// Timestamp when the fire/ICP assay certificate became available (`t_assay_available`).
-    /// Typically lags `valid_time.end_ns` by `12–72` hours for blast-hole fire assays.
-    pub assay_available_ns: i64,
+    physical_valid_time: ValidTime,
+    collection_time: i64,
+    availability_time: i64,
+    record_time: RecordTime,
+}
+
+impl QuadTemporalStamp {
+    /// Builds a stamp. Refuses `availability_time` or `record_time` before `collection_time`
+    /// ([`TimeError::StampOrder`]); nothing is reordered or clamped.
+    pub const fn new(
+        physical_valid_time: ValidTime,
+        collection_time: i64,
+        availability_time: i64,
+        record_time: RecordTime,
+    ) -> Result<Self, TimeError> {
+        if availability_time < collection_time {
+            return Err(TimeError::StampOrder {
+                field: "availability_time",
+                at_ns: availability_time,
+                collection_time,
+            });
+        }
+        if record_time.utc_ns < collection_time {
+            return Err(TimeError::StampOrder {
+                field: "record_time",
+                at_ns: record_time.utc_ns,
+                collection_time,
+            });
+        }
+        Ok(Self {
+            physical_valid_time,
+            collection_time,
+            availability_time,
+            record_time,
+        })
+    }
+
+    /// The interval over which the physical state held.
+    #[must_use]
+    pub const fn physical_valid_time(&self) -> ValidTime {
+        self.physical_valid_time
+    }
+
+    /// When the sample, survey pickup or sensor frame was taken.
+    #[must_use]
+    pub const fn collection_time(&self) -> i64 {
+        self.collection_time
+    }
+
+    /// When the certificate, QA/QC disposition or processed reading became visible to a site decision-maker.
+    #[must_use]
+    pub const fn availability_time(&self) -> i64 {
+        self.availability_time
+    }
+
+    /// When the ledger committed it.
+    #[must_use]
+    pub const fn record_time(&self) -> RecordTime {
+        self.record_time
+    }
+
+    /// Whether the record was knowable at `t_ns`: `availability_time ≤ t` and `record_time ≤ t` (§6.3, `INV-016`).
+    #[must_use]
+    pub const fn as_of(&self, t_ns: i64) -> bool {
+        self.availability_time <= t_ns && self.record_time.utc_ns <= t_ns
+    }
 }
 
 /// Purpose of an `AsOfQuery` (`BD-309`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryPurpose {
     /// Operational routing / blending / dispatch decision at `as_of_decision_ns`.
-    /// Strictly enforces `G-TIME-2` (`assay_available_ns <= as_of_decision_ns`).
+    /// Strictly enforces `G-TIME-2` (`availability_time <= as_of_decision_ns`).
     OperationalDecision,
     /// Retrospective period-close accounting / metallurgical balance over `for_physical_period`,
     /// where late-arriving assays for ore mined in `for_physical_period` are admissible provided
-    /// `transaction_time.utc_ns <= as_of_decision_ns`.
+    /// `record_time.utc_ns <= as_of_decision_ns`.
     RetrospectiveAccounting,
 }
 
@@ -316,22 +387,22 @@ pub struct AsOfQuery {
 impl AsOfQuery {
     /// Evaluates whether a record with `stamp` is admissible under this `AsOfQuery`.
     ///
-    /// - If `stamp.valid_time` does not overlap `self.for_physical_period`, returns `Ok(false)`.
-    /// - If `stamp.transaction_time.utc_ns > self.as_of_decision_ns`, returns `Ok(false)`.
-    /// - Under `QueryPurpose::OperationalDecision`, if `stamp.assay_available_ns > self.as_of_decision_ns`,
+    /// - If `stamp.physical_valid_time()` does not overlap `self.for_physical_period`, returns `Ok(false)`.
+    /// - If `stamp.record_time().utc_ns > self.as_of_decision_ns`, returns `Ok(false)`.
+    /// - Under `QueryPurpose::OperationalDecision`, if `stamp.availability_time() > self.as_of_decision_ns`,
     ///   returns `Err(TimeError::AssayLagLookahead)` (`FMINE-REF-108`, `G-TIME-2`).
     pub fn check_admissible(&self, stamp: &QuadTemporalStamp) -> Result<bool, TimeError> {
-        if !stamp.valid_time.overlaps(self.for_physical_period) {
+        if !stamp.physical_valid_time.overlaps(self.for_physical_period) {
             return Ok(false);
         }
-        if stamp.transaction_time.utc_ns > self.as_of_decision_ns {
+        if stamp.record_time.utc_ns > self.as_of_decision_ns {
             return Ok(false);
         }
         if self.purpose == QueryPurpose::OperationalDecision
-            && stamp.assay_available_ns > self.as_of_decision_ns
+            && stamp.availability_time > self.as_of_decision_ns
         {
             return Err(TimeError::AssayLagLookahead {
-                assay_available_ns: stamp.assay_available_ns,
+                availability_time: stamp.availability_time,
                 as_of_decision_ns: self.as_of_decision_ns,
             });
         }
@@ -342,6 +413,7 @@ impl AsOfQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fmine_core::rand::{PhiloxStream, RngKey};
 
     #[test]
     fn test_civil_calendar_roundtrip_1900_to_2200() {
@@ -400,12 +472,13 @@ mod tests {
         let t_route = 12 * NS_PER_HOUR;
         let t_assay = 36 * NS_PER_HOUR;
 
-        let stamp = QuadTemporalStamp {
-            valid_time: ValidTime::new(t_blast, t_blast + NS_PER_HOUR).unwrap(),
-            transaction_time: RecordTime::new(t_blast + NS_PER_HOUR, TimeEvidence::HostSynced),
-            decision_time_ns: Some(t_route),
-            assay_available_ns: t_assay,
-        };
+        let stamp = QuadTemporalStamp::new(
+            ValidTime::new(t_blast, t_blast + NS_PER_HOUR).unwrap(),
+            t_blast,
+            t_assay,
+            RecordTime::new(t_blast + NS_PER_HOUR, TimeEvidence::HostSynced),
+        )
+        .unwrap();
 
         // 1. Real-time routing query at t_route = 12h MUST refuse the t = 36h assay (FMINE-REF-108).
         let routing_query = AsOfQuery {
@@ -429,5 +502,106 @@ mod tests {
                 .check_admissible(&stamp)
                 .expect("admissible at close")
         );
+    }
+
+    fn stamp_at(
+        collection: i64,
+        availability: i64,
+        record: i64,
+    ) -> Result<QuadTemporalStamp, TimeError> {
+        QuadTemporalStamp::new(
+            ValidTime::new(0, NS_PER_HOUR).unwrap(),
+            collection,
+            availability,
+            RecordTime::new(record, TimeEvidence::HostSynced),
+        )
+    }
+
+    #[test]
+    fn test_stamp_keeps_the_four_times_apart() {
+        let stamp = stamp_at(1, 2, 3).unwrap();
+        assert_eq!(
+            stamp.physical_valid_time(),
+            ValidTime::new(0, NS_PER_HOUR).unwrap()
+        );
+        assert_eq!(stamp.collection_time(), 1);
+        assert_eq!(stamp.availability_time(), 2);
+        assert_eq!(stamp.record_time().utc_ns, 3);
+    }
+
+    #[test]
+    fn test_stamp_refuses_availability_before_collection() {
+        assert_eq!(
+            stamp_at(10, 9, 10),
+            Err(TimeError::StampOrder {
+                field: "availability_time",
+                at_ns: 9,
+                collection_time: 10,
+            })
+        );
+    }
+
+    #[test]
+    fn test_stamp_refuses_record_before_collection() {
+        assert_eq!(
+            stamp_at(10, 10, 9),
+            Err(TimeError::StampOrder {
+                field: "record_time",
+                at_ns: 9,
+                collection_time: 10,
+            })
+        );
+    }
+
+    /// Ownership, tenure and fiscal records have no sampling lag (§6.3), and a ledger may commit a sample before
+    /// its certificate arrives: neither is an impossible order.
+    #[test]
+    fn test_stamp_admits_no_lag_and_a_record_before_availability() {
+        assert!(stamp_at(10, 10, 10).is_ok());
+        assert!(stamp_at(10, 30, 20).is_ok());
+    }
+
+    /// A reading collected on day 1, available on day 4 and recorded on day 5 is knowable from day 5, and from that
+    /// instant on. No other instant in between shows it.
+    #[test]
+    fn test_late_reading_is_invisible_until_available_and_recorded() {
+        let day = 24 * NS_PER_HOUR;
+        let stamp = stamp_at(day, 4 * day, 5 * day).unwrap();
+        assert!(!stamp.as_of(day));
+        assert!(!stamp.as_of(4 * day), "available but not yet recorded");
+        assert!(!stamp.as_of(5 * day - 1));
+        assert!(stamp.as_of(5 * day));
+        assert!(stamp.as_of(6 * day));
+    }
+
+    /// Once a record is knowable it stays knowable, and the first such instant is exact.
+    #[test]
+    fn test_as_of_is_monotone_in_t() {
+        const SEED: u64 = 0x0309_F00D;
+        let mut rng = PhiloxStream::new(RngKey {
+            seed_root: SEED,
+            partition: 0,
+            domain: 0,
+            var_group: 0,
+            realization: 0,
+            brick: 0,
+        });
+        let mut draw = |span: u64| (rng.next_u64() % span) as i64;
+        for _ in 0..10_000 {
+            let collection = draw(1_000);
+            let (availability, record) = (collection + draw(1_000), collection + draw(1_000));
+            let stamp = stamp_at(collection, availability, record).unwrap();
+            let (a, b) = (draw(3_000), draw(3_000));
+            let (t0, t1) = (a.min(b), a.max(b));
+            assert!(
+                !stamp.as_of(t0) || stamp.as_of(t1),
+                "seed {SEED:#x}: {stamp:?} knowable at {t0}, not at {t1}"
+            );
+            let first = availability.max(record);
+            assert!(
+                stamp.as_of(first) && !stamp.as_of(first - 1),
+                "seed {SEED:#x}: {stamp:?} first knowable at {first}"
+            );
+        }
     }
 }
