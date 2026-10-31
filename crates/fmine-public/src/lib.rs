@@ -5615,7 +5615,10 @@ mod tests {
                 &line[start + len..]
             )
         };
+        // One log line per instance (the census's format: anchor, cells, family, state, reason, component,
+        // implied corrections), printed before its comparison so a failing run shows every line up to the miss.
         for (a, b) in ours.iter().zip(&instances) {
+            println!("{a}");
             assert_eq!(sum_cells_sorted(a), sum_cells_sorted(b));
         }
         // The sum families' counts (c697b13's census), pinned so that both sides cannot drift together.
