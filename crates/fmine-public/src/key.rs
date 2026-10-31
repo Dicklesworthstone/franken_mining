@@ -22,6 +22,7 @@ use crate::mine_stats::{MineStatsValue, View};
 use crate::sources::IssuerProfile;
 
 pub mod consistency;
+pub mod inspect;
 pub mod mine_stats;
 
 /// What a period's length is.

@@ -95,10 +95,16 @@ Inspect a comparison's `current[].claim_id` or `first[].claim_id`, then resolve 
 
 ```bash
 cargo run -p fmine-cli -- claim show clm_REPLACE_WITH_THE_EMITTED_ID
+cargo run -p fmine-cli -- claim why clm_REPLACE_WITH_THE_EMITTED_ID
+cargo run -p fmine-cli -- claim trace clm_REPLACE_WITH_THE_EMITTED_ID
 ```
 
-This rechecks the registered source hashes and returns the complete source Claim. It refuses missing or
-altered inputs. These additions do not constitute a pass of the full M0 gate.
+All three views recheck the registered source hashes and refuse missing or altered inputs. `show` returns
+the complete source Claim; `why` explains its evidence, knowledge state, colour and actual admission guards;
+`trace` follows its source anchors to the registered workbook, cell, URL and digest. Assessments that the
+public projection has not made, including clock freshness and flip margin, remain explicitly absent.
+Exact Claim IDs emitted by the built-in synthetic run also resolve, retaining their synthetic evidence.
+These additions do not constitute a pass of the full M0 gate.
 
 To resolve a Claim against a particular assurance snapshot, use the same issuer and release bound:
 
@@ -361,18 +367,18 @@ The workspace runs under these rules:
 
 ---
 
-## Command surface (planned)
+## Command surface
 
 ```bash
 fmine assure public --issuer barrick    # M0: reproduce, cite or refuse every published site metric
 fmine claim show <id>                   # a Claim with its evidence class, knowledge state, UU term and provenance
-fmine claim why <id>                    # why it has the colour, flip margin and staleness it has
-fmine claim trace <id>                  # the provenance DAG back to source cells and ledger anchors
+fmine claim why <id>                    # evidence, colour, admission guards and unassessed fields
+fmine claim trace <id>                  # source anchors, registered files and unresolved parent IDs
 fmine doctor                            # hash chains, pins, LOC budgets, obligations
 fmine robot-docs                        # machine-readable docs and NDJSON schemas for agents
 ```
 
-Every verb is registered in `registries/verbs.toml`. Every command prints human text and, with `--json`, a stable
+Every verb is registered in `registries/verbs.toml`. Every command prints human text and, with `--format json`, a stable
 NDJSON envelope with documented exit codes. Agents get certified numbers or typed refusals, never prose.
 
 ---
