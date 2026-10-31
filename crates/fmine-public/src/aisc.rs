@@ -26,9 +26,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+use fmine_core::hash::Digest32;
 use fmine_io::numfmt;
 use fmine_io::xlsx::{CellValue, ExtractedCell, Sheet, col_index_to_letters, parse_a1_ref};
 use fmine_numerics::exact_feas::{self as xf, Rat};
+
+use crate::LoadedSource;
+use crate::key::{
+    KeyedCell, LineKey, OwnershipBasis, PublicKey, ShareSource, Vintage, classify,
+    parse_sheet_period, public_claim, scope_for, status_for,
+};
+use crate::sources::{IssuerProfile, SourceKind};
 
 /// The five identity families of one subject column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -914,6 +922,225 @@ pub struct Operand {
     pub sheet: String,
     pub cell: String,
     pub value: OperandValue,
+}
+
+/// A cited operand for which no semantic key can be constructed. The original operand remains in the ledger;
+/// keying never drops it or changes its state (BD-332.S2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyingRefusal {
+    pub locator: String,
+    pub reason: String,
+}
+
+/// Numeric and placeholder AISC operands keyed independently of their spreadsheet coordinates (BD-332.S2).
+/// Textual `LabelCheck` operands remain context references. Numeric operands in Mine Stats files are keyed by
+/// that reader's adapter, which knows their block periods and units.
+#[derive(Debug, Clone, Default)]
+pub struct AiscClaimIndex {
+    pub cells: BTreeMap<String, KeyedCell>,
+    pub refusals: Vec<KeyingRefusal>,
+    /// All-zero columns with no registered subject status for their period, named `file:sheet!column`.
+    /// Their numeric zeros remain numbers; the ledger's existing not-published state is not upgraded to a fact.
+    pub unregistered_all_zero: Vec<String>,
+}
+
+/// Builds one public Claim per distinct AISC operand, keeping every reporting vintage. The subject is read
+/// from the operand's own column, including a regional identity's member columns. A row's basis remains
+/// `Unprinted` unless its printed label explicitly states an attributable basis and a share is registered.
+#[must_use]
+pub fn key_aisc_operands(
+    profile: &IssuerProfile,
+    sources: &[LoadedSource],
+    instances: &[IdentityInstance],
+) -> AiscClaimIndex {
+    let sources: BTreeMap<&str, &LoadedSource> =
+        sources.iter().map(|s| (s.file_name.as_str(), s)).collect();
+    let operands: BTreeMap<String, &Operand> = instances
+        .iter()
+        .flat_map(|i| &i.operands)
+        .filter(|o| o.role != OperandRole::LabelCheck)
+        .map(|o| (format!("{}:{}!{}", o.file, o.sheet, o.cell), o))
+        .collect();
+    let mut tables: BTreeMap<(String, String), Result<AiscTable, String>> = BTreeMap::new();
+    let mut index = AiscClaimIndex::default();
+    for (locator, operand) in operands {
+        let result = (|| {
+            let source = sources
+                .get(operand.file.as_str())
+                .ok_or_else(|| "the operand's source file was not loaded".to_string())?;
+            if source.kind != SourceKind::AiscReconciliation {
+                return Ok(None);
+            }
+            let sheet = source
+                .workbook
+                .sheets
+                .iter()
+                .chain(&source.workbook.hidden_sheets)
+                .find(|s| s.name == operand.sheet)
+                .ok_or_else(|| "the operand's worksheet was not loaded".to_string())?;
+            let table = tables
+                .entry((operand.file.clone(), operand.sheet.clone()))
+                .or_insert_with(|| {
+                    locate_table(sheet, &profile.subjects)?
+                        .ok_or_else(|| "the worksheet has no AISC table".to_string())
+                })
+                .as_ref()
+                .map_err(Clone::clone)?;
+            key_aisc_operand(profile, source, sheet, table, operand).map(Some)
+        })();
+        match result {
+            Ok(Some(cell)) => {
+                index.cells.insert(locator, cell);
+            }
+            Ok(None) => {}
+            Err(reason) => index.refusals.push(KeyingRefusal { locator, reason }),
+        }
+    }
+    let mut unregistered = BTreeSet::new();
+    for instance in instances.iter().filter(|i| {
+        matches!(
+            i.state,
+            IdentityState::NotPublished {
+                reason: NotPublishedReason::AllZeroColumn
+            }
+        )
+    }) {
+        if let Ok(period) = parse_sheet_period(&instance.sheet)
+            && status_for(&profile.subject_statuses, &instance.subject, &period).is_none()
+        {
+            unregistered.insert(format!(
+                "{}:{}!{}",
+                instance.file, instance.sheet, instance.column
+            ));
+        }
+    }
+    index.unregistered_all_zero = unregistered.into_iter().collect();
+    index
+}
+
+fn key_aisc_operand(
+    profile: &IssuerProfile,
+    source: &LoadedSource,
+    sheet: &Sheet,
+    table: &AiscTable,
+    operand: &Operand,
+) -> Result<KeyedCell, String> {
+    let (row, col) =
+        parse_a1_ref(&operand.cell).ok_or_else(|| "invalid operand cell reference".to_string())?;
+    if operand_at(&operand.file, sheet, row, col, operand.role).value != operand.value {
+        return Err("the ledger operand no longer matches its source cell".to_string());
+    }
+    let header = cell_text(sheet, table.header_row, col)
+        .ok_or_else(|| "the operand's subject header is missing".to_string())?;
+    let subject = match_subject(&header, &profile.subjects)
+        .ok_or_else(|| "the operand's subject header is not registered".to_string())?;
+    let period = parse_sheet_period(&sheet.name).map_err(|e| e.to_string())?;
+    let value = classify(
+        sheet.cell(row, col),
+        status_for(&profile.subject_statuses, subject, &period),
+    )
+    .map_err(|e| e.to_string())?;
+    let rows = aisc_key_rows(table);
+    if !rows.contains(&row) {
+        return Err("the operand is outside the table's registered metric rows".to_string());
+    }
+    let label = aisc_key_label(sheet, table, row)?;
+    let occurrence = rows
+        .iter()
+        .filter(|&&r| r < row)
+        .filter(|&&r| aisc_key_label(sheet, table, r).as_deref() == Ok(label.as_str()))
+        .count();
+    let unit = if row == table.ounces_row {
+        "koz"
+    } else if [table.cos_rate_row, table.tcc_rate_row, table.aisc_rate_row].contains(&row) {
+        "usd_per_oz"
+    } else {
+        "usd_m"
+    };
+    let raw_label = cell_text(sheet, row, 1).unwrap_or_default().to_lowercase();
+    let registered_share = profile.shares.iter().find(|s| s.subject == subject);
+    let attributable = raw_label.contains("attributable basis");
+    let basis = if attributable {
+        registered_share.map_or(OwnershipBasis::Unprinted, |s| {
+            OwnershipBasis::Attributable {
+                num: s.num,
+                den: s.den,
+                source: ShareSource::Registry,
+            }
+        })
+    } else {
+        OwnershipBasis::Unprinted
+    };
+    let key = PublicKey {
+        issuer: profile.issuer.clone(),
+        subject: subject.to_string(),
+        valid_period: period,
+        reporting_vintage: Vintage {
+            release: source.quarter.clone(),
+            file_sha256: Digest32(source.workbook.sha256).to_hex(),
+        },
+        ownership_basis: basis,
+        scope: scope_for(profile, subject, &source.quarter),
+        unit: unit.to_string(),
+        line: LineKey {
+            label,
+            occurrence: u32::try_from(occurrence)
+                .map_err(|_| "too many repeated metric labels".to_string())?,
+        },
+    };
+    let mut cell = public_claim(&source.workbook, &sheet.name, &operand.cell, key, value);
+    // The label states attributable basis but contains no numeric ownership share. Preserve that distinction
+    // from the registered share used in the key; removing the registry row must remove the supplied basis.
+    cell.printed_basis = OwnershipBasis::Unprinted;
+    if attributable && let Some(share) = registered_share {
+        cell.basis_evidence = Some(format!(
+            "{}; {}:{}!A{}",
+            share.evidence, source.file_name, sheet.name, row
+        ));
+    }
+    cell.cite_status(profile);
+    Ok(cell)
+}
+
+fn aisc_key_rows(table: &AiscTable) -> BTreeSet<u32> {
+    table
+        .block1
+        .iter()
+        .chain(&table.block2)
+        .copied()
+        .chain([
+            table.tcc_row,
+            table.aisc_row,
+            table.ounces_row,
+            table.cos_rate_row,
+            table.tcc_rate_row,
+            table.aisc_rate_row,
+        ])
+        .collect()
+}
+
+fn aisc_key_label(sheet: &Sheet, table: &AiscTable, row: u32) -> Result<String, String> {
+    // A canonical anchor name makes an abbreviated rate label or a changing unit suffix the same metric.
+    for (r, anchor) in [
+        table.cos_row,
+        table.tcc_row,
+        table.aisc_row,
+        table.ounces_row,
+        table.cos_rate_row,
+        table.tcc_rate_row,
+        table.aisc_rate_row,
+    ]
+    .into_iter()
+    .zip(ROW_ANCHORS)
+    {
+        if row == r {
+            return Ok(anchor.names[0].to_string());
+        }
+    }
+    cell_text(sheet, row, 1)
+        .filter(|label| !label.is_empty())
+        .map(|label| label.to_lowercase())
+        .ok_or_else(|| "the operand's metric label is missing".to_string())
 }
 
 /// The operand at `(row, col)` of `sheet` in `file`.
@@ -3070,7 +3297,7 @@ mod tests {
 
     /// 10⁴ seeded footings with placeholder lines against the closed-form rules the corner kernel used: the
     /// primary holds iff the printed lines sum to the printed total, the alternate iff |printed − sum|·2 ≤ 1 + k.
-    /// The rates' closed-form oracle is `tests/exact_feas_oracle.rs`. The BD-340 S7 table generator does not
+    /// The rates' closed-form oracle is `xtask/tests/public_exact_feas_oracle.rs`. The BD-340 S7 table generator does not
     /// exist yet, so these stand in for its tables.
     #[test]
     fn test_property_footings_match_closed_form() {

@@ -765,13 +765,16 @@ mod tests {
             ledger.register("m", 1, 2, f64::NAN, 1.0).is_err(),
             "NaN mean refused"
         );
-        let fid = ledger.register("n", 1, 2, 1.0, 1.0).expect("register");
+        // The ledger has already recorded outcomes at 10_000; this independent record must advance time.
+        let fid = ledger
+            .register("n", 11_000, 12_000, 1.0, 1.0)
+            .expect("register");
         assert!(
-            ledger.record_outcome(fid, 3, f64::NAN).is_err(),
+            ledger.record_outcome(fid, 13_000, f64::NAN).is_err(),
             "NaN outcome refused"
         );
         assert!(
-            ledger.record_outcome(fid, 3, 1.0).is_ok(),
+            ledger.record_outcome(fid, 13_000, 1.0).is_ok(),
             "the refused write left the record open"
         );
     }

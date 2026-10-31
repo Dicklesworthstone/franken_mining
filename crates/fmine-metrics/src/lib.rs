@@ -4,7 +4,7 @@
 //! - `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`, `BD-060`–`BD-062`, `BD-272`)
 //! - Versioned `PriceDeck` and `compute_geo` (`GB-27`, `BD-063`, `BD-273`)
 //! - `ReserveReplacementBridge` (one stated basis per bridge; `E603–E604`, `BD-064`)
-//! - Exact LMDI 5-factor waterfall (`lmdi`, `GB-26`, `BD-065`, `BD-274`)
+//! - Spend-based LMDI bridge with separate printed-rate reconciliation (`lmdi`, `GB-26`, BD-333.S1)
 //! - Cost per ounce and the sustaining test, read from the metric-definition registry (`definitions`, `BD-060`)
 //! - Fixed-point cut-off grade solver (`solve_cutoff_grade`, `BD-275`) and the published cut-offs reproduced from
 //!   the reports' printed inputs (`cutoff`, E182–E184, `BD-274`)

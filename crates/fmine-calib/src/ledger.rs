@@ -17,6 +17,9 @@ use crate::{
     CalibrationFlag, CalibrationReport, ScoreError, gaussian_crps, winkler_interval_score,
 };
 
+/// Plan §21.6's floor on independent outcomes for a positive calibration claim. A policy may be stricter.
+pub const MIN_CALIBRATION_N: usize = 35;
+
 /// A frozen predictive distribution, or a guidance range whose probability level is explicitly unstated.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ForecastPayload {
@@ -179,7 +182,7 @@ impl Default for AssessmentPolicy {
     fn default() -> Self {
         Self {
             alpha: 0.2,
-            min_calibration_n: 35,
+            min_calibration_n: MIN_CALIBRATION_N,
             correlation_range: (0.0, 0.5),
             outcome_bounds: None,
         }
@@ -192,7 +195,7 @@ impl AssessmentPolicy {
         if !(self.alpha.is_finite()
             && self.alpha > 0.0
             && self.alpha < 1.0
-            && self.min_calibration_n > 0
+            && self.min_calibration_n >= MIN_CALIBRATION_N
             && a.is_finite()
             && b.is_finite()
             && a >= 0.0
@@ -202,7 +205,9 @@ impl AssessmentPolicy {
                 .outcome_bounds
                 .is_some_and(|(lo, hi)| !lo.is_finite() || !hi.is_finite() || lo > hi)
         {
-            return Err(domain("invalid frozen assessment policy"));
+            return Err(domain(
+                "invalid frozen assessment policy; the calibration minimum must be at least 35",
+            ));
         }
         Ok(())
     }
@@ -457,6 +462,9 @@ pub struct ForecastLedger {
     cohort_names: BTreeMap<String, Digest32>,
     assessments: BTreeMap<(Digest32, i64, OutcomeSelector), Assessment>,
     assessed_through: BTreeMap<ObjectId, i64>,
+    /// One authority chronology across forecasts, not merely separate histories for selected members.
+    latest_record_ns: Option<i64>,
+    sealed_through_ns: Option<i64>,
 }
 
 impl ForecastLedger {
@@ -525,7 +533,9 @@ impl ForecastLedger {
                 "forecast id already exists; no duplicate or changed payload may replace it",
             ));
         }
+        self.check_record_time(record.registered_ns)?;
         let id = record.forecast_id;
+        self.latest_record_ns = Some(record.registered_ns);
         self.records.insert(id, record);
         Ok(id)
     }
@@ -574,6 +584,7 @@ impl ForecastLedger {
         if self.cohort_names.contains_key(&spec.name) {
             return Err(frozen("cohort name already frozen; create a new cohort"));
         }
+        self.check_record_time(spec.frozen_at_ns)?;
         let mut enc = Encoder::new_frame(*b"COH1", 1);
         enc.put_str(&spec.name);
         enc.put_i64(spec.frozen_at_ns);
@@ -621,9 +632,23 @@ impl ForecastLedger {
             rec.encode(&mut enc);
         }
         let digest = blake3_hash(&enc.finish());
+        self.latest_record_ns = Some(spec.frozen_at_ns);
         self.cohort_names.insert(spec.name.clone(), digest);
         self.cohorts.insert(digest, Cohort { digest, spec });
         Ok(digest)
+    }
+
+    /// Equal times allow a batch of distinct records; an assessed cut is closed and requires a later time.
+    /// Failed writes must leave both watermarks unchanged.
+    fn check_record_time(&self, record_ns: i64) -> Result<(), Refusal> {
+        if self.latest_record_ns.is_some_and(|t| record_ns < t)
+            || self.sealed_through_ns.is_some_and(|t| record_ns <= t)
+        {
+            return Err(late(
+                "write regresses the ledger record time or backdates an already assessed cut",
+            ));
+        }
+        Ok(())
     }
 
     /// Append a publication, explicit missing status, or a cited restatement of the latest numeric vintage.
@@ -640,6 +665,7 @@ impl ForecastLedger {
             .records
             .get(&forecast_id)
             .ok_or_else(|| absent("outcome names an unknown forecast"))?;
+        self.check_record_time(record_time_ns)?;
         if availability_time_ns <= rec.freeze_time_ns
             || record_time_ns < availability_time_ns
             || self
@@ -747,6 +773,7 @@ impl ForecastLedger {
             previous_digest,
             digest: blake3_hash(&enc.finish()),
         };
+        self.latest_record_ns = Some(record_time_ns);
         self.outcomes.entry(forecast_id).or_default().push(event);
         Ok(seq)
     }
@@ -825,6 +852,10 @@ impl ForecastLedger {
                     .and_modify(|t| *t = (*t).max(as_of_ns))
                     .or_insert(as_of_ns);
             }
+            self.sealed_through_ns = Some(
+                self.sealed_through_ns
+                    .map_or(as_of_ns, |old| old.max(as_of_ns)),
+            );
             self.assessments.insert(key, assessment);
         }
         self.assessments
@@ -1994,5 +2025,237 @@ mod tests {
             a.digest.to_hex(),
             "7d8c61e468bab0d43ed0cbe695da8dc63a0c11a94a1fed2d5628d9229ede0af9"
         );
+    }
+
+    #[test]
+    fn a_cohort_cannot_omit_an_observed_miss_and_backdate_its_freeze() {
+        let mut ledger = ForecastLedger::new();
+        let a = ledger.register_payload("a", 1, 100, interval()).expect("a");
+        let b = ledger.register_payload("b", 1, 100, interval()).expect("b");
+        ledger
+            .append_outcome(a, 101, 102, published(100.0))
+            .expect("observed miss");
+        let selected = CohortSpec {
+            name: "selected after the miss".into(),
+            frozen_at_ns: 2,
+            members: vec![b],
+            resolution_rule: "synthetic".into(),
+            eligible_sources: vec!["synthetic".into()],
+            policy: AssessmentPolicy::default(),
+        };
+        assert_eq!(
+            ledger
+                .freeze_cohort(selected)
+                .expect_err("omitted member does not erase history")
+                .code,
+            "FMINE-REF-206"
+        );
+        assert_eq!(
+            ledger
+                .register_payload("retrofitted", 1, 100, interval())
+                .expect_err("backdated payload")
+                .code,
+            "FMINE-REF-206"
+        );
+        assert_eq!(
+            ledger
+                .register("retrofitted legacy", 1, 100, 100.0, 1.0)
+                .expect_err("backdated legacy")
+                .code,
+            "FMINE-REF-206"
+        );
+        assert!(ledger.cohorts.is_empty());
+        assert_eq!(ledger.records.len(), 2);
+
+        // The next genuinely future forecast is still admitted; no repair of history is needed.
+        let c = ledger
+            .register_payload("next period", 103, 200, interval())
+            .expect("future forecast");
+        ledger
+            .freeze_cohort(CohortSpec {
+                name: "next period".into(),
+                frozen_at_ns: 104,
+                members: vec![c],
+                resolution_rule: "synthetic".into(),
+                eligible_sources: vec!["synthetic".into()],
+                policy: AssessmentPolicy::default(),
+            })
+            .expect("future cohort");
+    }
+
+    #[test]
+    fn an_assessed_cut_seals_the_whole_ledger_and_historical_queries_do_not_reopen_it() {
+        let mut ledger = ForecastLedger::new();
+        let a = ledger.register_payload("a", 1, 100, interval()).expect("a");
+        let b = ledger.register_payload("b", 1, 100, interval()).expect("b");
+        let cohort = ledger
+            .freeze_cohort(CohortSpec {
+                name: "first cohort".into(),
+                frozen_at_ns: 2,
+                members: vec![a],
+                resolution_rule: "synthetic".into(),
+                eligible_sources: vec!["synthetic".into()],
+                policy: AssessmentPolicy::default(),
+            })
+            .expect("cohort");
+        let original = ledger
+            .assess(cohort, 200, OutcomeSelector::FirstPublished)
+            .expect("seal")
+            .clone();
+        ledger
+            .assess(cohort, 150, OutcomeSelector::LatestAsOf)
+            .expect("historical report");
+
+        // B was not in the assessed cohort: its timestamps must still respect the authority's closed cut.
+        assert_eq!(
+            ledger
+                .append_outcome(b, 151, 152, published(0.5))
+                .expect_err("unseen member backdate")
+                .code,
+            "FMINE-REF-206"
+        );
+        assert_eq!(
+            ledger
+                .register_payload("backdated", 199, 300, interval())
+                .expect_err("closed registration cut")
+                .code,
+            "FMINE-REF-206"
+        );
+        assert_eq!(
+            ledger
+                .freeze_cohort(CohortSpec {
+                    name: "backdated cohort".into(),
+                    frozen_at_ns: 3,
+                    members: vec![b],
+                    resolution_rule: "synthetic".into(),
+                    eligible_sources: vec!["synthetic".into()],
+                    policy: AssessmentPolicy::default(),
+                })
+                .expect_err("closed membership cut")
+                .code,
+            "FMINE-REF-206"
+        );
+        ledger
+            .append_outcome(b, 151, 201, published(0.5))
+            .expect("late arrival with honest record time");
+        assert_eq!(
+            ledger
+                .assess(cohort, 200, OutcomeSelector::FirstPublished)
+                .expect("unchanged report"),
+            &original
+        );
+        assert_eq!(ledger.outcomes(b).len(), 1);
+    }
+
+    #[test]
+    fn record_time_is_monotone_across_forecasts_but_equal_time_batches_are_allowed() {
+        let mut ledger = ForecastLedger::new();
+        let a = ledger.register_payload("a", 1, 100, interval()).expect("a");
+        let b = ledger.register_payload("b", 1, 100, interval()).expect("b");
+        ledger
+            .append_outcome(a, 101, 200, published(0.5))
+            .expect("first member");
+        assert_eq!(
+            ledger
+                .append_outcome(b, 101, 199, published(0.5))
+                .expect_err("cross-forecast regression")
+                .code,
+            "FMINE-REF-206"
+        );
+        ledger
+            .append_outcome(b, 101, 200, published(0.5))
+            .expect("same record-time batch");
+        assert_eq!(ledger.outcomes(a).len(), 1);
+        assert_eq!(ledger.outcomes(b).len(), 1);
+    }
+
+    #[test]
+    fn refused_writes_do_not_advance_the_shared_record_watermark() {
+        let (mut ledger, _, ids) = make_cohort(vec![interval()], AssessmentPolicy::default());
+        let mut wrong = citation("v1");
+        wrong.source = "ineligible".into();
+        assert_eq!(
+            ledger
+                .append_outcome(
+                    ids[0],
+                    101,
+                    1000,
+                    OutcomeKind::Published {
+                        value: 0.5,
+                        citation: wrong,
+                    }
+                )
+                .expect_err("source refused")
+                .code,
+            "FMINE-REF-201"
+        );
+        ledger
+            .append_outcome(ids[0], 101, 102, published(0.5))
+            .expect("failed source did not move time");
+        assert!(
+            ledger
+                .register_payload(
+                    "invalid",
+                    2000,
+                    3000,
+                    ForecastPayload::Gaussian {
+                        mean: f64::NAN,
+                        std_dev: 1.0,
+                    }
+                )
+                .is_err()
+        );
+        let next = ledger
+            .register_payload("next", 103, 200, interval())
+            .expect("failed payload did not move time");
+        let mut spec = CohortSpec {
+            name: "next".into(),
+            frozen_at_ns: 9999,
+            members: vec![next],
+            resolution_rule: "synthetic".into(),
+            eligible_sources: vec!["synthetic".into()],
+            policy: AssessmentPolicy::default(),
+        };
+        assert_eq!(
+            ledger
+                .freeze_cohort(spec.clone())
+                .expect_err("late freeze")
+                .code,
+            "FMINE-REF-206"
+        );
+        spec.frozen_at_ns = 104;
+        ledger
+            .freeze_cohort(spec)
+            .expect("failed cohort did not move time or reserve the name");
+    }
+
+    #[test]
+    fn policy_cannot_lower_the_minimum_below_thirty_five_independent_outcomes() {
+        let mut ledger = ForecastLedger::new();
+        let id = ledger
+            .register_payload("m", 1, 100, interval())
+            .expect("forecast");
+        let mut spec = CohortSpec {
+            name: "minimum sample".into(),
+            frozen_at_ns: 2,
+            members: vec![id],
+            resolution_rule: "synthetic".into(),
+            eligible_sources: vec!["synthetic".into()],
+            policy: AssessmentPolicy::default(),
+        };
+        for minimum in [0, 1, 5, 34] {
+            spec.policy.min_calibration_n = minimum;
+            assert_eq!(
+                ledger
+                    .freeze_cohort(spec.clone())
+                    .expect_err("no positive small-n calibration")
+                    .code,
+                "FMINE-REF-109"
+            );
+        }
+        spec.policy.min_calibration_n = MIN_CALIBRATION_N;
+        ledger
+            .freeze_cohort(spec)
+            .expect("registered minimum at the plan floor");
     }
 }

@@ -27,7 +27,19 @@ git clone https://github.com/Dicklesworthstone/franken_mining
 cd franken_mining
 repro/barrick/fetch.sh
 cargo test -p fmine-public -p fmine-cli -- --ignored
+cargo test -p xtask --test public_corpus --test public_exact_feas_blame --test public_laap_2023 \
+  --test public_keys_aisc --test public_keys_mine_stats --test public_consistency -- --ignored
 ```
+
+To reproduce the first-registered AISC counts independently of Rust after fetching the workbooks:
+
+```sh
+python3 -I repro/barrick/first_vintage_aisc_census.py
+```
+
+This aggregates the existing Python displayed-value, share and region readers, keeping all-file counts
+beside first-registered counts and the cited Kibali/Porgera histories. It prints computed counts rather than
+a pass/fail verdict; the Rust integration test pins the independently obtained answers.
 
 `fetch.sh` reads `registries/sources/barrick.toml`. It downloads only the files that are missing, two seconds
 apart, saves each under its registered name only when its size and SHA-256 match, and verifies every file
@@ -59,9 +71,12 @@ the files existed (bd-s9j3; GATE-BULL-01's blind-layout clause). For Q3 2026 the
 
 1. **Before the release.**
    - Push the revision that will run.
-   - Build it with `cargo build --release --locked -p fmine-cli`.
-   - Write `repro/barrick/blind_record.json` with the commit, the push time and `binary_sha256`, the SHA-256 of
-     `target/release/fmine`.
+   - Build it on GitHub: the Blind binary workflow (`.github/workflows/blind-binary.yml`, run by hand) builds
+     `fmine` for aarch64-apple-darwin from the pushed commit, prints its SHA-256 and keeps it as an artifact for 90
+     days, so the digest has a timestamp from outside this machine.
+   - Write `repro/barrick/blind_record.json` with the commit, the run, the artifact and `binary_sha256`. Download
+     the artifact with `gh run download <run id>` and pass it to step 5 as `FMINE_BIN`. For Q3 2026 the record names
+     run 41222758273 at 6a46b96 (E854).
 2. **On release day, take each URL** from the issuer's quarterly results page. Never construct one: the naming
    rule has already changed once (`Barrick_Q3_2024_AISC.xlsx`, then `AISC_Q1_2025.xlsx`, and Q1 2025 sits under
    `2025/01/`).

@@ -1465,3 +1465,24 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
   - **Corrects R6 §4.1 in one respect.** FAQ 13 treats by-product and co-product credits alike as reducing AISC and
     AIC. A separate co-product metric depends on an allocation the issuer states, so the registry takes that share as
     an input and invents no method.
+- **E854** The blind binary for the Q3 2026 release, recorded before it, and its run with no network (bd-s9j3.1,
+  bd-073; FACT, execution, 2026-10-31).
+  - **Binary.** GitHub Actions run 41222758273 ("Blind binary", macos-15, aarch64-apple-darwin) built commit
+    `6a46b96` (committed 17:04:48Z; the run was created by its push at 17:04:53Z and finished at 17:54:42Z). The
+    run's Digest step printed `58818c06c39df09de19eeba93d2a4b4b9c0fb72e24bb88afbc5fd5bf1b36bd82`. The artifact
+    (id 13051824556, kept until 2027-01-29) was downloaded on the owner machine, and its `fmine` has that SHA-256.
+    `repro/barrick/blind_record.json` names the commit, run, artifact and digest.
+  - **Root.** In `git archive 6a46b96`, with the registered workbooks linked in, the binary ran
+    `assure public --issuer barrick --through 2026Q2` and the same run on all rows. Both give root
+    `d37903cf8a0c3cd4428bb2a606457479825d2bf7841d64f887dbede4e66ef15c` and anchor
+    `anc_13872409843300420677ef6e1293bff5`, with exit 0 and empty stderr. That equals `expected.toml`'s 9b4c453 row
+    (E846).
+  - **No network.** The same runs inside `sandbox-exec -p '(version 1)(allow default)(deny network*)'` give the same
+    root and anchor. Control: `curl https://github.com` inside that profile fails to resolve (exit 6); outside it
+    returns 200.
+  - **Not claimed.**
+    - **Importer age.** This binary predates d1d3b18 (published cut-offs), 0399c1c (reader bounds) and 50e9b46
+      (BD-332 claims). A release-day run with it reads Q3 2026 with 6a46b96's importer. A later binary counts only
+      if its own record is pushed before 2026-11-09T11:00Z.
+    - **Linux.** The real-files job's `offline` stage (a fresh network namespace) has not run in CI yet.
+    - **Verification.** Self-verified on this machine; no independent verifier has re-run it.

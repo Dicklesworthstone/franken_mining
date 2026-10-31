@@ -19,6 +19,7 @@ on:
     paths:
       - "crates/fmine-public/**"
       - "crates/fmine-io/**"
+      - "crates/xtask/**"
       - "registries/sources/**"
       - "repro/barrick/**"
       - "scripts/oracle/**"

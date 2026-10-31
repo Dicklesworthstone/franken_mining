@@ -1402,12 +1402,20 @@ mod tests {
         let local = root
             .join("registries/transcriptions/barrick.toml")
             .is_file();
+        let metrics = fs::read_to_string(root.join("registries/metrics.toml")).expect("metrics");
+        let definitions = metrics
+            .lines()
+            .filter(|l| l.trim() == "[[definition]]")
+            .count();
+        assert_eq!(
+            lines.last().expect("metrics registry log"),
+            &format!("{{\"stage\":\"metrics\",\"definitions\":{definitions},\"check\":\"pass\"}}")
+        );
         assert_eq!(lines.len(), 2 + usize::from(local), "{lines:?}");
-        let metrics = lines.last().expect("the metrics line is last");
-        assert!(metrics.starts_with("{\"stage\":\"metrics\","), "{lines:?}");
         let scratch = std::env::temp_dir().join(format!("xtask-registry-{}", std::process::id()));
         let dir = scratch.join("registries").join("sources");
         fs::create_dir_all(&dir).expect("scratch dir");
+        fs::write(scratch.join("registries/metrics.toml"), &metrics).expect("metrics fixture");
         let dup = text.replacen(
             "sha256 = \"1a73d6d7d4658f923757e873eec147ccc74aa8aada6a439f3c98da8540ff68d5\"",
             "sha256 = \"e2e1243ec0549f4c487c773869876e2acade401a0b6cd1141adf4b9296aec840\"",
@@ -1435,8 +1443,7 @@ mod tests {
         fs::create_dir_all(scratch.join("registries/sources")).expect("scratch dir");
         fs::create_dir_all(scratch.join("registries/transcriptions")).expect("scratch dir");
         fs::write(scratch.join("registries/sources/barrick.toml"), &text).expect("write");
-        let metrics = "registries/metrics.toml";
-        fs::copy(root.join(metrics), scratch.join(metrics)).expect("copy the metrics registry");
+        fs::write(scratch.join("registries/metrics.toml"), &metrics).expect("metrics fixture");
         let sha = "63b3af0b98436900159f6ddac7f2920a0178f0e8651f1ee262d07bbaa690d281";
         let entry = |reader: &str, token: &str| {
             format!(
@@ -1520,8 +1527,11 @@ mod tests {
         let dir = scratch.join("registries").join("sources");
         fs::create_dir_all(&dir).expect("scratch dir");
         fs::write(dir.join("barrick.toml"), format!("{text}\n{row}")).expect("write");
-        let metrics = "registries/metrics.toml";
-        fs::copy(root.join(metrics), scratch.join(metrics)).expect("copy the metrics registry");
+        fs::copy(
+            root.join("registries/metrics.toml"),
+            scratch.join("registries/metrics.toml"),
+        )
+        .expect("metrics fixture");
         let lines =
             check_sources_registry(&scratch).expect("registry-check passes with the row appended");
         let sources = text.lines().filter(|l| l.trim() == "[[source]]").count();

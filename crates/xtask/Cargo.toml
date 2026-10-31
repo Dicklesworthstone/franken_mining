@@ -13,5 +13,11 @@ fmine-core = { path = "../fmine-core" }
 fmine-public = { path = "../fmine-public" }
 fmine-registry = { path = "../fmine-registry" }
 
+[dev-dependencies]
+fmine-claim = { path = "../fmine-claim" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-io = { path = "../fmine-io" }
+fmine-numerics = { path = "../fmine-numerics" }
+
 [lints]
 workspace = true

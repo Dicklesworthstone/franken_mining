@@ -151,7 +151,11 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "fmine-calib",
+ "fmine-claim",
  "fmine-core",
+ "fmine-evidence",
+ "fmine-io",
+ "fmine-numerics",
  "fmine-public",
  "fmine-registry",
 ]

@@ -4,8 +4,8 @@
 - **Crate:** `fmine-public`
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
-- **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "transcribe"]`
+- **LOC Budget:** `18k planned / 21k ceiling` (`registries/loc_budget.toml`)
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
@@ -61,8 +61,10 @@ The public lane of M0 (`fmine assure public`).
   (`MineStatsRead::repeated`). With the issuer's `[[mine_stats_label]]` vocabulary (Barrick:
   56 pairs from W1's read, frozen before the Q3 2026 release), a data row whose `(section, label)` is not
   registered is refused too. W1-DR-01 is data (`[[printed_share_correction]]`, read by `mine_ledger`), and so is
-  W1-DR-02 (`[[mine_stats_label_alias]]`, read by `mine_ledger`); other units are not. The region map is
-  (`[[region_member]]`, BD-331.S4); values do not carry its version, and `mine_ledger` asks it by release.
+  W1-DR-02 (`[[mine_stats_label_alias]]`, read by `mine_ledger`). The keyed Claim adapter also applies these
+  evidenced corrections and resolves explicit units without rescaling the stored values. The region map is
+  (`[[region_member]]`, BD-331.S4); raw reader values do not carry its version, while the keyed projection
+  records the release's membership digest in each region's scope.
 - `mine_ledger` (BD-331.S4, bd-prmn.4): six Mine Stats identity families anchored on the `QTD`/`YTD` summary
   sheets, decided in exact arithmetic. Ownership: attributable = s × 100% per site row and column group, s the
   share the label prints or its registered correction (the printed share kept beside); regions and metal totals
@@ -102,6 +104,15 @@ The public lane of M0 (`fmine assure public`).
 - `synthetic`: invented workbooks in the real layout, seeded with one known answer per state. They are never
   gate-eligible. `write_issuer_workspace` writes them, plus a later title-only vintage, with a digest registry
   under the reserved issuer name `synthetic`; `run_public_assurance` runs that name in the synthetic lane.
+- `key` (BD-332.S2/S3): projects visible AISC arithmetic operands and Mine Stats reads into source-anchored
+  `Claim<PublicValue>` values. Subject, period, release, basis, scope, unit and semantic line belong to the key;
+  coordinates remain citations. The raw readers and numerical identity ledgers retain their existing behavior.
+- `consistency` (bd-504e.1): groups visible AISC identities by the total or rate's `SeriesKey` and identity
+  family. It reports the state at the earliest registered release once per identity, retains the all-files
+  counts, and reports every adjacent appearance. "Earliest registered" never asserts first publication.
+  Unknown keys and ambiguous earliest releases are named and excluded from the first-registered denominator.
+  This implements the AISC diagnostics for part 3a and adjacent histories for part 3c; it does not implement
+  part 3b's full restatement classification or a composite issuer-consistency pass score.
 - `lib`:
   - `load_registered_sources` verifies every registered file;
   - `assess` builds the ledger and the state root;
@@ -113,10 +124,12 @@ The public lane of M0 (`fmine assure public`).
   - `cell_to_public_claim` is the public-basis `Claim` builder (`BD-058`).
 
 ## 3. Authority, Epistemics & Representation
-- Every issuer figure is `Assertion { source: Issuer }`, state `Known`, status `KnownKnown`, and every reported
+- Every retained numeric issuer assertion is `Assertion { source: Issuer }`, state `Known`, status `KnownKnown`, and every reported
   instance says so (`"evidence":"Assertion","source":"issuer"`). A reproduced figure is `Derived` over assertions,
   so by NL-2 it is still an `Assertion`: its figures agree with each other, which does not show they are true.
-  A placeholder cell is `Assumed`, state `Unknown`. Nothing here labels an issuer figure stronger than that.
+  A placeholder cell, including a status-derived `Nil`, is `Assumed`, state `Unknown`. Keyed numbers for the
+  reserved synthetic issuer are also `Assumed`, state `Unknown`, and labelled `synthetic` in JSON; they never
+  acquire issuer authority. Nothing here labels an issuer figure stronger than that.
 - This report is not the issuer's disclosure, so it does not call G-DISC (`ClaimDag::guard_disclosure_export`).
   No output implies that FrankenMining or Barrick attests a figure.
 - Every reported exception cites file, file SHA-256, `sheet!cell`, subject, family and ownership basis
@@ -139,6 +152,16 @@ The public lane of M0 (`fmine assure public`).
     sums add instances in the v7 frame, with no change to its format.
 
   Changing any input cell moves the root; rewording a message does not (bd-sjrh.1 part 4).
+- The keyed projection has its own BLAKE3 digest over a `PCLM` v1 frame, sorted by key and locator. It binds
+  every accepted cell's locator, Claim id, canonical key, typed value (including stored/displayed text or a
+  display refusal and status), printed basis, basis and registered-status evidence, printed label and unit evidence. The Claim id
+  itself includes a `PVAL` v1 digest of the typed interpretation, so changing a zero from a number to a
+  registered `Nil` cannot reuse its numeric Claim id. This projection does not change the established
+  `M0AS` v7 identity-ledger root or its expected-root rows. Keying refusals and unregistered all-zero columns
+  are reported separately; they are not silently represented as accepted cells in this digest.
+- Issuer-consistency counts and histories are a report over the existing ledger and keyed projection. They
+  do not alter the numerical states or the identity-ledger root. Their binomial intervals describe the
+  registered corpus counts, with no calibrated forecast claim or pass threshold.
 - The report payload carries `lane` and `gate_eligible`. The no-claim line (`NO_CLAIM`), the four INV-002 flags
   and the next actions (`PublicAssuranceReport::next_actions`) are envelope fields, which `fmine-cli` prints.
 
@@ -201,7 +224,8 @@ The public lane of M0 (`fmine assure public`).
     - each printed member's rate and ounces, for such a rate of a region with registered members;
     - a consulted reconstruction's quote, label-check and component cells.
   - **Not cited:** structure cells (row labels, subject headers, a sheet's title and period line).
-  - **Not yet in the payload or the state root.**
+  - The numerical operands are cited in the payload and bound into the state root; the separate keyed
+    projection adds typed Claims for arithmetic cells without turning textual context into numerical Claims.
   - **Test:** `test_operands_cover_every_input_cell` perturbs every other synthetic cell, one at a time, and
     fails on any state change it causes that the operands do not cite.
   `IdentityState::Consistent` carries `basis`: `ConsistentBasis::Share` (the stated share, footnote and label
@@ -293,23 +317,94 @@ The public lane of M0 (`fmine assure public`).
   `PublicAssuranceReport`, `load_registered_sources`, `assess`, `assess_memo`, `MineStatsMemo` (`hits`,
   `misses`), `run_public_assurance`, `run_barrick_m0_assurance`,
   `run_synthetic_assurance`, `cell_to_public_claim`, `NO_CLAIM`; `PublicAssuranceReport::next_actions`
-- `key` (bd-a28f.1, BD-332.S1): the key of a printed public figure, and the value typed with its raw token.
+- `key` (bd-a28f.1/.2/.3, BD-332.S1/S2/S3): the key of a printed public figure, and the value typed with its raw token.
   - `PublicKey { issuer, subject, valid_period, reporting_vintage, ownership_basis, scope, unit, line }`.
-    `series_key()` drops only the vintage. `canonical_tag(raw_token)` is `fmk1` plus every field and the
-    token, length-prefixed, and goes into `Claim::new` as the canonical value tag, so the claim id differs
-    whenever any field or the token differs.
+    `series_key()` drops the vintage and share provenance: `SeriesOwnershipBasis` retains the exact effective
+    attributable fraction, with `Consolidated100`, `Attributable` and `Unprinted` still distinct. A registered
+    correction and the same share later printed explicitly can therefore belong to one series. Provenance
+    remains on `PublicKey` and in the Claim id. `canonical_tag(raw_token)` is `fmk1` plus every field and the
+    token, length-prefixed. `public_claim` combines it with the typed-value digest for `Claim::new`, so a
+    different key, token or typed interpretation has a different claim id. `series` retains and sorts every
+    vintage rather than overwriting comparative figures.
   - `parse_sheet_period`: `Qn YYYY`, `YTD Q2 YYYY` (H1), `YTD Q3 YYYY` and `YTD Sept 30 YYYY` (nine months),
-    `YTD Dec 31 YYYY` and `YYYY` (full year). Anything else refuses.
+    `YTD Dec 31 YYYY` and `YYYY` (full year). Anything else refuses. `parse_period_code` reads the Mine Stats
+    reader's corresponding `YYYYQn`, `YYYYH1`, `YYYY9M` and `YYYYFY` codes without inferring a calendar.
   - `parse_ownership`: `100%` first, then a final `(x%)` after a one- or two-digit footnote run. No `%` gives
     `Unprinted`, never 100%.
   - `classify`: `—` and other dashes give `Nil { Unknown }`, `n/a` gives `NotApplicable`, and no cell gives
     `Missing`, each keeping the token as stored. A number keeps its stored text and its displayed text, or the
-    display refusal code. A numeric zero where a registered disposal or withholding applies is `Nil`; a
-    non-zero number there stays a `Number`, flagged. Text, a formula error or a number without stored text
-    refuses.
+    display refusal code. A numeric zero where a registered disposal or withholding applies is respectively
+    `Nil { reason: Disposed }` or `Nil { reason: Withheld }`; the JSON value is `kind: "nil"` with that reason
+    in lower case. A non-zero number there stays a `Number`, flagged `after_disposal` or `withheld`. Without
+    a matching status, zero remains a number. Care and maintenance leaves zeros numeric. Text, a formula
+    error or a number without stored text refuses.
   - `SubjectStatus`, `status_for`: the `[[subject_status]]` rows of the issuer registry, carried on
     `IssuerProfile::subject_statuses`. A disposal covers the periods that begin after its closing date.
-  - **Not yet:** no run reads claims through the key. The Mine Stats and AISC readers adopt it in S2 and S3.
+  - `scope_for`: region scope hashes sorted, distinct members of the map effective at the reporting release;
+    no registered members gives a release-specific unknown map. Company totals are company scope; other
+    subjects are site scope. No joint-venture kind is inferred without a registered classification.
+  - `KeyedCell { locator, key, claim, printed_basis, basis_evidence, status_evidence, label_as_printed, unit_evidence }`,
+    `public_claim`, `raw_token`, `series`, `claims_digest`, `KeyedCell::to_json` and
+    `PublicAssuranceReport::public_claims`: the existing public-assurance JSON includes `public_claims` with
+    schema `fmine.public_claims.v1`, its separate digest, cells, refusals and `unregistered_all_zero`.
+    Each accepted cell carries its Claim id, `file:sheet!cell`, file SHA-256, complete key, original and
+    effective basis with evidence, typed value and authority. This is part of the existing command, not a
+    new mode or endpoint.
+  - `from_mine_stats`: binds the reader's release/cell locator and exact stored numeric bits/text or token to
+    the workbook. With a source registry it also requires matching filename, SHA-256 and release. It retains
+    the printed ownership basis while applying the registered correction, keeps the original row label and
+    alias evidence, and uses the alias only within its registered releases. Units describe the stored number:
+    a supported percent display over a stored fraction uses `mass_fraction`, preserving both texts; an
+    explicitly printed percent-unit number without that display uses `percent`. Corrections never silently
+    rescale a value. Unknown units, periods or source bindings produce named keying refusals.
+  - `key::mine_stats::{KeyedClaims, build_claims, load_claims}` is a thin inventory over that same adapter,
+    not another Claim implementation. `mine_stats_claims` reports its typed-value census, named refusals and
+    canonical `claims_digest`. The direct reader supports `fmine claim show` without running the identity solver.
+- `key::consistency::{VintageReport, VintageState, compare_vintages}` and
+  `PublicAssuranceReport::mine_stats_vintages` add `issuer_consistency.mine_stats_vintages` beside the AISC
+  findings. Every Mine Stats appearance is counted. Comparisons retain both the earliest registered and
+  previous release, match semantic keys rather than cell coordinates, and compare displayed decimals exactly.
+  Percentage glyphs are normalized to the key's stored-number unit using exact rationals. Unknown conversions
+  and refused displays remain `not_comparable`; no stored precision is substituted for displayed precision.
+  - Changed values or token classes are `changed_without_registered_explanation`; no disclosure search or
+    choice of a true vintage is implied. Same-release ambiguity and corrected ownership remain explicit
+    conflicts. Region-map changes are `not_comparable`, with both source assertions retained.
+  - The real-source regression checks E474 and all eight W1-DR-09 changes. W1 T16's 6,391/9 is passes/failures:
+    the six per-release populations equal 6,400 in total after excluding the 30 cited region-map changes.
+    The full classification differs from that pass/fail table because basis conflicts and display refusals
+    remain visible. The separate keyed projection digest and existing M0AS v7 root are preserved.
+- `aisc::{AiscClaimIndex, KeyingRefusal, key_aisc_operands}` (BD-332.S2): one keyed Claim per distinct arithmetic
+  operand, with the subject read from that operand's own column (including regional member inputs), canonical
+  metric labels, repeated-label occurrence indices and units `usd_m`, `koz` or `usd_per_oz`. An operand must
+  still agree with its loaded source cell. Textual label checks remain context references; consulted Mine
+  Stats cells use `from_mine_stats`. All-zero columns lacking a registered subject status are named in
+  `unregistered_all_zero`; their zeros do not become evidence of withholding or disposal.
+  - **Explicitly partial ownership wiring:** a row stays `Unprinted` unless its printed label states an
+    attributable basis and the subject has a registered share; that supplied share cites both its registry
+    evidence and the row locator. The missing row-basis registry is not invented. In particular, an
+    arithmetic family's stated basis is not automatically assigned to every operand, and BD-332.S2's full
+    row-basis obligation remains open.
+- `consistency::{AiscConsistency, FamilyCounts, Appearance, IdentityHistory, Transition, TransitionKind,
+  UnkeyedIdentity, aisc_consistency, clopper_pearson_95, FIRST_REGISTERED_CAVEAT}` and
+  `PublicAssuranceReport::issuer_consistency`: the public JSON's `issuer_consistency` section has schema
+  `fmine.issuer_consistency.aisc.v1`.
+  - `within_vintage.first_registered` and `all_files` give counts by family and state `(i, ii, iii, iv, v, np)`.
+    The denominator includes `np`; rates and equal-tailed 95% Clopper–Pearson intervals are descriptive.
+    An empty family gives a null rate/interval; intervals also return null beyond the 100,000-trial budget.
+  - Identities group by semantic total/rate key and family, so moved rows/columns and equivalent period names
+    do not create new identities. Hidden sheets are excluded. An unkeyed total remains in `all_files` and is
+    listed under `unkeyed`; multiple distinct assertions at the earliest registered release are retained in
+    `ambiguous_vintages` and excluded from `first_registered`, never chosen arbitrarily.
+  - `transitions` keeps every appearance's release, file/cell, SHA-256 and state, and an adjacent `steps` list.
+    `persisted` requires equal state, label, reason and complete arithmetic operand signatures; `corrected`
+    requires `(iii) → (i or ii)` with changed operands; `broken` records `(i) → (iii)`. Other transitions,
+    including ambiguous releases, are `reclassified`; an only appearance is `single_vintage`. Signatures
+    include operand role, semantic key and displayed arithmetic value/token, so swapping inputs is not
+    persistence and moving a cell is not a restatement. An unkeyed operand makes `operands_changed` null and
+    cannot prove persistence or correction.
+  - This is the earliest **registered** appearance, not necessarily the issuer's first publication. Full
+    part 3b disclosure classification across all public figures and a composite gate result remain open;
+    Mine Stats value comparisons are reported separately under `mine_stats_vintages` as described above.
 
 ## 5. Guards & Typed Refusals
 - A run names every registered file that is missing, digest-mismatched or unparseable, and never substitutes
@@ -330,6 +425,10 @@ The public lane of M0 (`fmine assure public`).
   - an operand with no whole displayed number (above);
   - a non-numeric line;
   - one of rate and ounces being zero.
+- Keying refusals are separate from numerical identity states. `KeyRefusal` distinguishes a sheet period,
+  printed share, unusable cell token, source binding or explicit unit that could not be read; the projection
+  names the failing locator and reason. A refused Claim is never supplied with an inferred period, unit,
+  ownership share or numeric replacement. The ledger's already computed state remains available.
 - Cost of sales per ounce in a column with a non-zero non-controlling-interest line (BD-331.S3) is checked at the
   subject's registered share, s: 1000·s·N/Q on exact corners. A fit is (i), and its `basis` cites the share, the
   footnote and the label. A miss is (iv), giving the feasible share interval, rounded outward, and the missing
@@ -529,6 +628,46 @@ The public lane of M0 (`fmine assure public`).
     value); one altered byte of a cited document (`FMINE-REF-505`, exit 8); a missing cited document
     (`FMINE-REF-506`, exit 5). A `--through` run reads no
     transcriptions. A lone reader's locator is pending, not refused.
+- `PO-PUB-14` (keyed public Claims, BD-332.S2/S3): cross-crate contracts live in the T layer at
+  `crates/xtask/tests/public_key_contract.rs`, `public_keys_aisc.rs` and `public_keys_mine_stats.rs`.
+  - **Default suite:** every synthetic arithmetic operand is keyed or refused by name; stored and displayed
+    numbers and unsupported-format refusal codes survive; registered statuses alone turn zeros into Nil,
+    changing the Claim id when the interpretation changes. A non-zero disposed/withheld figure is retained
+    with its flag. Source/release rebinding is refused. Printed shares and unit aliases remain beside their
+    evidenced corrections, without numerical conversion. An explicit percent format's literal zero section
+    does not change a stored fraction's unit. Unknown AISC row bases remain unprinted. Shifted rows/columns,
+    repeated labels and reordered files preserve semantic series and distinct vintage Claim ids.
+  - **Real files** (ignored tests `barrick_aisc_claims_known_answers`, `barrick_mine_stats_claims_known_answers`):
+    the seven 2026 Hemlo/Tongon numeric-zero cells become disposed Nil; Loulo-Gounkoto's registered withheld
+    zeros become withheld Nil; `n/a` and the em dash retain distinct types. The known Q1 2024 Total Gold AISC
+    comparative shares its series across the 2024Q1 and 2025Q1 releases with distinct Claim ids. Porgera's
+    printed 47.5% and corrected 24.5% remain separately visible. Pueblo Viejo's moved AISC column and Kibali's
+    repeated total preserve their series. These are keyed projection checks; the existing ledger-root
+    regression remains unchanged.
+- `PO-PUB-15` (AISC issuer consistency, bd-504e.1; T-layer `crates/xtask/tests/public_consistency.rs`):
+  - **Real files** (ignored `test_part3_real_aisc_dedup_and_persisted`): 2,595 all-file instances become 1,565
+    first-registered identities, 313 per family, with no unkeyed totals or ambiguous releases. The independent
+    aggregation in `repro/barrick/first_vintage_aisc_census.py` uses `census2.py` on displayed values plus
+    `share_census.py` and `region_census.py`, grouping
+    normalized periods, subjects and families by earliest registry quarter before reading the consistency
+    implementation; adding region-map scope gives the same counts. First-registered states are:
+
+    | Family | i | ii | iii | iv | v | np |
+    | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+    | TCC footing | 306 | 0 | 1 | 0 | 0 | 6 |
+    | AISC footing | 306 | 0 | 1 | 0 | 0 | 6 |
+    | Cost of sales per ounce | 250 | 0 | 0 | 57 | 0 | 6 |
+    | TCC per ounce | 307 | 0 | 0 | 0 | 0 | 6 |
+    | AISC per ounce | 305 | 2 | 0 | 0 | 0 | 6 |
+
+    All-file counts remain 2,436 (i), 3 (ii), 4 (iii), 92 (iv), 0 (v), 60 np. Kibali TCC
+    `'Q2 2024'!O11` and Porgera AISC `'Q2 2024'!L18` both retain their `(iii) → (iii)` sequence from the
+    2024Q3 to the 2025Q2 registered release, with both source digests and locators.
+  - **Default suite:** equivalent sheet-period forms, earliest rather than latest selection, hidden-sheet
+    exclusion, missing keys, ambiguous earliest releases and reversed input order. Seeded adjacent histories
+    distinguish persistence, correction, break and reclassification, including a correction followed by a
+    later break. Binomial intervals match independent known answers and their edge cases; empty/invalid and
+    over-budget samples return no interval. No pass threshold is inferred from these counts.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.
@@ -536,14 +675,20 @@ The public lane of M0 (`fmine assure public`).
 - Neither stops the run, and neither is ever guessed.
 
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
-- `GATE-BULL-01` (parts 1 and 2; part 3, issuer consistency across vintages, is not yet scored)
+- `GATE-BULL-01`: parts 1 and 2 retain their existing numerical ledger. Part 3a now reports AISC
+  first-registered within-vintage counts, and part 3c reports adjacent histories. Part 3b's full restatement
+  classifier and a complete issuer-consistency gate score remain outstanding; Mine Stats comparisons now
+  reproduce the independent T16 population and all nine known changes without asserting disclosure status.
 
 ## 9. Lifted Code & Foundation Dependencies
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io` (and, in the manifest, `fmine-units`,
   `fmine-time`, `fmine-metrics`, not used by this crate since BD-321).
 - Depends on `fmine-numerics` (BD-331.S6): the ledger's exact kernel (`exact_feas`, BD-340).
-  `tests/exact_feas_oracle.rs` keeps the old closed-form corner rule as an independent oracle for rates (at a
+  `crates/xtask/tests/public_exact_feas_oracle.rs` keeps the old closed-form corner rule as an independent oracle for rates (at a
   share, and the (iv) range exactly); `test_property_footings_match_closed_form` does the same for footings.
+- Depends on `fmine-registry` for source/status/basis registries. Cross-crate oracle and registry tests live in
+  `crates/xtask/tests/public_exact_feas_blame.rs`, `public_exact_feas_oracle.rs`, `public_laap_2023.rs` and
+  `public_registry.rs`; the prior integration entry files retain documentation redirects.
 
 ## 10. Non-Goals & Scope Boundary
 - Operates only on public disclosures (`ConfidentialityTier::Public`).

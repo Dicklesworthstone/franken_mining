@@ -18,18 +18,23 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 - BD-343: `freeze_cohort(CohortSpec)` freezes sorted membership, the resolution rule, eligible sources and
   `AssessmentPolicy` before outcomes. The digest binds the complete payload, including exact float bits.
   Payloads are Gaussian, an interval with a stated or explicitly absent level, quantiles, or an event probability.
+  Forecast registrations, cohort freezes and outcomes share a monotone record-time watermark: an already
+  observed miss cannot be excluded by backdating a new cohort containing only other, unresolved members.
 - `append_outcome` records hash-chained `Published`, `Restated` and `Missing` events with separate availability
   and recording times. A restatement must name the latest numeric predecessor and a new cited source vintage.
   The original forecast is never mutated. Eligibility and a declared physical outcome domain are checked.
 - `assess(cohort, as_of_ns, FirstPublished | LatestAsOf)` retains an immutable assessment. Both event times must
   be at or before the cut. Later events cannot be backdated into an already assessed cut. Every member remains
   visible, including Pending, Overdue, NotPublished, Withdrawn, DefinitionChanged and Divested outcomes.
+  A successful assessment seals its cut across the ledger, including records outside that cohort. Historical
+  queries remain permitted and never lower the sealed cut; equal-time mutation batches are allowed only above it.
 - An `AssessmentSummary` carries all denominator counts; observed coverage and whole-cohort coverage bounds;
   observed and whole-cohort score bounds; the effective sample range under the frozen correlation assumptions.
   Brier bounds are finite. Interval-score upper bounds need a registered physical outcome domain; an unresolved
   CRPS has no finite upper bound. These are completion bounds, never confidence intervals. Guidance with no
   nominal level remains descriptive. A positive calibration flag requires complete resolution and a conservative
-  effective sample at least the frozen threshold (default 35). The default correlation range is [0, 0.5].
+  effective sample at least the frozen threshold (minimum 35; stricter thresholds are allowed). The default
+  correlation range is [0, 0.5].
 - `gaussian_crps`, `gaussian_log_score`, `winkler_interval_score` → `Result<f64, ScoreError>` (non-finite inputs, non-positive std_dev, alpha outside (0, 1) and inverted intervals refuse; nothing is clamped, bd-8wrk)
 - `golden_digest_gaussian_crps_10k`, `golden_digest_gaussian_log_score_10k` (bd-hp2j.3): BLAKE3 over the score bits
   on 10,000 `SCORE_DIGEST_KEY` triples (|z| up to 12).
@@ -77,10 +82,13 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   freeze before registration, at or after the outcome time, or after any recorded outcome; an early or backdated
   outcome; an assessment before its cohort. Compatibility `register` retains equality at the freeze boundary;
   such a forecast cannot enter a cohort, which needs a strictly later freeze before the outcome.
+  A registration, cohort freeze or outcome behind the shared record watermark or at/before a sealed assessment
+  cut also refuses. A refused mutation changes neither watermark nor stored records.
 - `FMINE-REF-507` (frozen record mutation, exit 6): a second registration of one forecast id, a reused cohort
   name, a second one-shot outcome, an invalid restatement predecessor or reused source vintage, or reinterpretation
   of a withdrawn, changed-definition or divested target as its old quantity without a new resolution rule.
-- `FMINE-REF-109` (outside physical domain, exit 3): a non-finite mean or outcome, or `std_dev <= 0`.
+- `FMINE-REF-109` (outside physical domain, exit 3): a non-finite mean or outcome, `std_dev <= 0`, or a policy
+  attempting to lower the positive-calibration minimum below 35 independent outcomes.
 - `FMINE-REF-201` (no claim in domain, exit 3): an unknown forecast/cohort, or an ineligible outcome source.
 
 206 and 507 are proposed codes (`docs/adr/ADR-REFUSALS-01.md`).
@@ -92,6 +100,10 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   independently captured source cells and registered hashes beside a synthetic forecast; delayed record times,
   restatement replay, source eligibility, frozen membership, interval bounds and minimum-effective-n gates have
   focused tests in `ledger::tests`.
+- Shared-chronology regressions prove that omitting an already observed miss cannot enable a backdated cohort;
+  registration and outcomes outside an assessed cohort respect its closed cut; historical queries cannot reopen
+  that cut; same-time batches remain valid; failed writes do not advance time or reserve a cohort name; and
+  calibration policies cannot bypass the minimum independent sample. Existing frame and score goldens are retained.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Miscalibrated spatial fronts trip `BettingEProcess` at `E_t >= 20.0` (`alpha = 0.05`) and downgrade downstream claims.

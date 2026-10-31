@@ -564,27 +564,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 vec![NextAction::new("fmine robot-docs", ROBOT_DOCS_WHY)],
             ),
         },
-        CliCommand::ClaimShow { id } => {
-            let report = registered_issuers(workspace_root).first().map_or_else(
-                || "fmine assure public --synthetic".to_string(),
-                |issuer| format!("fmine assure public --issuer {issuer}"),
-            );
-            // No claim store exists, so no claim is in the requested domain (§8.4's 201, exit 3).
-            Envelope::refused(
-                "claim show",
-                Refusal::new(
-                    RefusalCode::NoClaimInDomain201,
-                    format!(
-                        "no claim store exists in M0, so claim '{id}' cannot be read; claims are emitted only \
-                         inside an 'assure public' report"
-                    ),
-                ),
-                vec![NextAction::new(
-                    report,
-                    "claims exist only inside an assure public report",
-                )],
-            )
-        }
+        CliCommand::ClaimShow { id } => show_public_claim(id, workspace_root),
         CliCommand::RobotDocs => {
             let refusals: Vec<String> = CATALOG
                 .iter()
@@ -614,6 +594,92 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             )
         }
     }
+}
+
+/// DESIGN (BD-332, BD-115): resolve an emitted public Claim from verified source bytes. Mine Stats uses its
+/// direct reader; AISC uses the existing assurance projection, keeping one authoritative set of Claim IDs.
+fn show_public_claim(id: &str, root: &Path) -> Envelope {
+    let actions = || vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
+    let found = |cell: &fmine_public::key::KeyedCell, issuer: &str| {
+        Envelope::ok(
+            "claim show",
+            cell.to_json(),
+            vec![NextAction::new(
+                format!("fmine assure public --issuer {issuer}"),
+                "the source inventory, identity checks and publication-vintage comparisons",
+            )],
+        )
+    };
+    if !id.starts_with("clm_") || id.parse::<fmine_core::id::ObjectId>().is_err() {
+        return Envelope::refused(
+            "claim show",
+            Refusal::new(
+                RefusalCode::NoClaimInDomain201,
+                format!("invalid public claim id '{id}'"),
+            ),
+            actions(),
+        );
+    }
+    let mut input_errors = Vec::new();
+    let mut source_failure = None;
+    for issuer in registered_issuers(root) {
+        let claims = load_issuer_profile(root, &issuer)
+            .and_then(|p| fmine_public::key::mine_stats::load_claims(&p, root));
+        match claims {
+            Ok(claims) => {
+                if let Some(c) = claims
+                    .claims
+                    .iter()
+                    .find(|c| c.claim.claim_id.to_string() == id)
+                {
+                    return found(c, &issuer);
+                }
+                input_errors.extend(
+                    claims
+                        .refusals
+                        .into_iter()
+                        .map(|r| format!("{}: {}", r.locator, r.reason)),
+                );
+                match load_issuer_profile(root, &issuer)
+                    .and_then(|p| run_public_assurance(&p, root))
+                {
+                    Ok(report) => {
+                        if let Some(c) = report
+                            .public_claims
+                            .cells
+                            .values()
+                            .find(|c| c.claim.claim_id.to_string() == id)
+                        {
+                            return found(c, &issuer);
+                        }
+                    }
+                    Err(refusal) if source_failure.is_none() => source_failure = Some(refusal),
+                    Err(_) => {}
+                }
+            }
+            Err(refusal) => {
+                if source_failure.is_none() {
+                    source_failure = Some(refusal);
+                }
+            }
+        }
+    }
+    if let Some(refusal) = source_failure {
+        return Envelope::refused("claim show", refusal, actions());
+    }
+    let detail = if input_errors.is_empty() {
+        String::new()
+    } else {
+        format!("; unreadable claim inputs: {}", input_errors.join("; "))
+    };
+    Envelope::refused(
+        "claim show",
+        Refusal::new(
+            RefusalCode::NoClaimInDomain201,
+            format!("public claim '{id}' is absent from the registered public sources{detail}"),
+        ),
+        actions(),
+    )
 }
 
 fn escape_json(s: &str) -> String {
@@ -1048,7 +1114,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_claim_show_refuses_without_a_claim_store() {
+    fn test_cli_claim_show_refuses_invalid_id() {
         let env = execute_command(
             &CliCommand::ClaimShow {
                 id: "clm_0001".to_string(),
@@ -1058,7 +1124,65 @@ mod tests {
         assert_eq!((env.exit_code, env.status), (3, "refused"));
         let json = env.to_json();
         assert!(json.contains("\"code\":\"FMINE-REF-201\""), "{json}");
-        assert!(json.contains("no claim store exists in M0"), "{json}");
+        assert!(json.contains("invalid public claim id"), "{json}");
+    }
+
+    #[test]
+    fn test_cli_claim_show_resolves_aisc_and_refuses_altered_source() {
+        let ws = synthetic_workspace("claim-show-aisc");
+        let profile = load_issuer_profile(&ws, "synthetic").expect("registry");
+        let report = run_public_assurance(&profile, &ws).expect("report");
+        let source = profile
+            .sources
+            .iter()
+            .find(|s| s.kind == fmine_public::sources::SourceKind::AiscReconciliation)
+            .expect("AISC source");
+        let claim = report
+            .public_claims
+            .cells
+            .values()
+            .find(|c| c.locator.starts_with(&format!("{}:", source.file_name)))
+            .expect("emitted AISC claim");
+        let command = CliCommand::ClaimShow {
+            id: claim.claim.claim_id.to_string(),
+        };
+        let env = execute_command(&command, &ws);
+        assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
+        assert_eq!(env.payload_json, claim.to_json());
+        assert!(env.payload_json.contains("\"evidence\":\"synthetic\""));
+        assert!(env.to_json().contains(FLAGS_JSON));
+
+        let path = ws.join(&profile.corpus_dir).join(&source.file_name);
+        let mut bytes = std::fs::read(&path).expect("source bytes");
+        bytes.push(0);
+        std::fs::write(&path, bytes).expect("alter the registered source");
+        let refused = execute_command(&command, &ws);
+        assert_eq!((refused.status, refused.exit_code), ("refused", 8));
+        assert_eq!(refused.refusal.expect("refusal").code, "FMINE-REF-505");
+        assert_eq!(refused.payload_json, "null");
+    }
+
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks"]
+    fn test_cli_claim_show_resolves_public_source_claim() {
+        let root = workspace_root();
+        let profile = load_issuer_profile(&root, "barrick").expect("registry");
+        let claims = fmine_public::key::mine_stats::load_claims(&profile, &root).expect("claims");
+        let first = claims
+            .claims
+            .iter()
+            .find(|c| c.locator == "Barrick_Q1_2024_Mine_Stats.xlsx:QTD!G23")
+            .expect("E474 first");
+        let env = execute_command(
+            &CliCommand::ClaimShow {
+                id: first.claim.claim_id.to_string(),
+            },
+            &root,
+        );
+        assert_eq!((env.status, env.exit_code), ("ok", 0));
+        assert_eq!(env.payload_json, first.to_json());
+        assert!(env.to_json().contains("1479"));
+        assert!(env.to_json().contains(FLAGS_JSON));
     }
 
     /// Gate run on the real registered workbooks (public lane; the files are not in git). Run with
@@ -1545,14 +1669,10 @@ mod tests {
                 head("robot-docs", "ok", 0, "null")
             ),
             format!(
-                "{}\"certificate\":null,\"warnings\":[],\"next_actions\":[{}],\"payload\":null,\
+                "{}\"certificate\":null,\"warnings\":[],\"next_actions\":[{doctor}],\"payload\":null,\
                  \"refusal\":{{\"code\":\"FMINE-REF-201\",\"exit_code\":3,\"what\":\"<what>\",\
                  \"fix\":\"{fix_201}\"}}}}",
-                head("claim show", "refused", 3, "null"),
-                action(
-                    "fmine assure public --issuer barrick",
-                    "claims exist only inside an assure public report"
-                )
+                head("claim show", "refused", 3, "null")
             ),
             format!(
                 "{}\"certificate\":null,\"warnings\":[],\"next_actions\":[{robot_docs}],\

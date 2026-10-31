@@ -69,6 +69,37 @@ of the whole operation. See [Alongside your systems](#alongside-your-systems-and
 | Is there code? | **Yes, and the public lane runs.** `fmine assure public --issuer barrick` runs end to end on the 18 registered workbooks (not in git) and reproduces the state root pinned in `repro/barrick/expected.toml`. The M0 gate is not passed: the M0 report, the security pack and the hashed FY2026 forecasts are still open |
 | Has anything been benchmarked? | **No.** Every speed and scale number in the plan is a TARGET |
 
+### Run the public lane
+
+With the pinned Rust toolchain, fetch the registered public workbooks and run:
+
+```bash
+bash repro/barrick/fetch.sh
+cargo run -p fmine-cli -- assure public --issuer barrick > run.json
+```
+
+**FACT, the registered-corpus tests in `fmine-public`:** the Mine Stats Claim inventory contains 22,732
+observations, with no mapping refusals. Each Claim retains its publication vintage, period, ownership basis,
+unit, raw token, displayed value and source cell/hash. Numeric zeros at registered disposed sites remain
+`nil` with reason `disposed`; missing cells, dashes and `n/a` remain distinct.
+
+The JSON payload includes `public_claims.cells` (the canonical AISC and Mine Stats Claims), `mine_stats_claims`
+(the Mine Stats census and digest), and `issuer_consistency.mine_stats_vintages` (counts and cited comparisons
+against both the earliest registered and previous releases). The comparison tests
+reproduce E474 and all eight W1-DR-09 changes, while listing ownership conflicts and changed regional membership
+separately. The comparison population reconciles with W1 T16: 6,391 passes plus nine changes, with 30
+regional-membership changes listed separately. A difference does not identify which publication is correct;
+disclosure-note search remains open.
+
+Inspect a comparison's `current[].claim_id` or `first[].claim_id`, then resolve it directly:
+
+```bash
+cargo run -p fmine-cli -- claim show clm_REPLACE_WITH_THE_EMITTED_ID
+```
+
+This rechecks the registered source hashes and returns the complete source Claim. It refuses missing or
+altered inputs. These additions do not constitute a pass of the full M0 gate.
+
 ---
 
 ## TL;DR
