@@ -26,7 +26,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use fmine_claim::{AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport};
+use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::anchor::{FMT_ANCHOR_V1, LedgerAnchor};
 use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, blake3_hash, sha256};
@@ -78,7 +78,7 @@ pub fn cell_to_public_claim(
             EvidenceClass::ISSUER,
             EpistemicStatus::KnownKnown,
             KnowledgeState::Known,
-            ConfidentialityTier::Public,
+            Confidentiality::public(),
             vec![],
             vec![],
             vec![anchor],
@@ -93,7 +93,7 @@ pub fn cell_to_public_claim(
             EvidenceClass::Assumed,
             EpistemicStatus::KnownUnknown(KuKind::Parametric),
             KnowledgeState::Unknown,
-            ConfidentialityTier::Public,
+            Confidentiality::public(),
             vec![],
             vec![],
             vec![anchor],

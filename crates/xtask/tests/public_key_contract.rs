@@ -1,5 +1,5 @@
 //! Public key contracts crossing the claim, evidence, RNG and registry crates.
-use fmine_claim::{AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport};
+use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::rand::{PhiloxStream, RngKey};
 use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal};
 use fmine_io::styles::NumberFormat;
@@ -529,7 +529,7 @@ fn test_property_claim_id_injective_on_key_and_token() {
             EvidenceClass::Derived,
             EpistemicStatus::KnownKnown,
             KnowledgeState::Known,
-            ConfidentialityTier::Public,
+            Confidentiality::public(),
             Vec::new(),
             Vec::new(),
             Vec::new(),

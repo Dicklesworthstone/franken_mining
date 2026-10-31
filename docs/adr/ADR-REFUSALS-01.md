@@ -39,7 +39,8 @@
      - `through` bound leaving no rows → 201.
      - two readers disagreeing on a token → 202: the evidence conflicts, so the value is not observable.
      - unregistered Mine Stats quarter, missing or malformed registry → 506.
-     - a confidentiality-tier export → 301, the MNPI wall [a new 3xx row].
+     - internal data exported to a public reader → 301, the MNPI wall [a new 3xx row]. A missing wall is 301 and
+       a missing venture 302, as §31 has them (bd-lf4q), so only the internal case is a choice.
      - an outcome for an unknown forecast id → 201.
   5. **Scope of the check.** `check-refusals` reads §8.4 only. §25.6 and §31.3 also name codes and are not checked.
 - **Left open for their own beads:** G-DISC (plan line 751) has no code (`bd-306n.3`). NEW-fa-sap needs a 1xx

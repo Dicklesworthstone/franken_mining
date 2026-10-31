@@ -66,32 +66,9 @@ pub enum AdditivityClass {
     NonAdditive,
 }
 
-/// Confidentiality clearance lattice (`BD-043`, `INV-007`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ConfidentialityTier {
-    /// Publicly filed disclosure (SEC/SEDAR+, public ESIA).
-    Public = 0,
-    /// Internal operational engineering data.
-    Internal = 1,
-    /// Joint-venture partner restricted (`NGM`, `Pueblo Viejo`, `Kibali`, `Reko Diq`).
-    JvPartner = 2,
-    /// Sovereign/host-government restricted geological or security data.
-    SovereignRestricted = 3,
-    /// Board / M&A / litigation privileged.
-    BoardEyesOnly = 4,
-}
+mod label;
 
-impl ConfidentialityTier {
-    /// Least upper bound (`max`) of two confidentiality tiers (`INV-007`).
-    #[must_use]
-    pub const fn combine(self, other: Self) -> Self {
-        if (self as u8) >= (other as u8) {
-            self
-        } else {
-            other
-        }
-    }
-}
+pub use label::{Confidentiality, LabelError, LabelRegistry, VentureId, WallId};
 
 /// Explicit Unknown-Unknown (`UU`) structural tail-risk scenario (`BD-044`, `INV-015`).
 #[derive(Debug, Clone, PartialEq)]
@@ -125,7 +102,7 @@ pub struct Claim<T> {
     pub evidence: EvidenceClass,
     pub epistemic: EpistemicStatus,
     pub state: KnowledgeState,
-    pub confidentiality: ConfidentialityTier,
+    pub confidentiality: Confidentiality,
     pub uu_terms: Vec<UuTerm>,
     pub parents: Vec<ClaimId>,
     pub anchors: Vec<SourceAnchor>,
@@ -149,7 +126,7 @@ impl<T> Claim<T> {
         evidence: EvidenceClass,
         epistemic: EpistemicStatus,
         state: KnowledgeState,
-        confidentiality: ConfidentialityTier,
+        confidentiality: Confidentiality,
         uu_terms: Vec<UuTerm>,
         parents: Vec<ClaimId>,
         anchors: Vec<SourceAnchor>,
@@ -161,7 +138,7 @@ impl<T> Claim<T> {
             evidence,
             epistemic,
             state,
-            confidentiality,
+            &confidentiality,
             &parents,
             &anchors,
         );
@@ -221,19 +198,21 @@ impl<T> Claim<T> {
         Ok(color)
     }
 
-    /// Enforces `INV-007`: refuses export if `self.confidentiality > clearance` (`FMINE-REF-301`, the nearest
-    /// §8.4 authorization code until the owner adds a confidentiality row; ADR-REFUSALS-01).
-    pub fn verify_export_clearance(&self, clearance: ConfidentialityTier) -> Result<(), Refusal> {
-        if self.confidentiality > clearance {
-            return Err(Refusal::new(
-                RefusalCode::MnpiWall301,
+    /// Enforces `INV-007`: a reader holding `clearance` may see this claim iff its label is within the clearance
+    /// ([`Confidentiality::leq`]). Otherwise it refuses with [`Confidentiality::refusal_over`]'s code:
+    /// `FMINE-REF-301` for a wall the reader lacks, or for internal data on a public clearance (§31.1), and
+    /// `FMINE-REF-302` for a venture the reader lacks (§31.2).
+    pub fn verify_export_clearance(&self, clearance: &Confidentiality) -> Result<(), Refusal> {
+        match self.confidentiality.refusal_over(clearance) {
+            None => Ok(()),
+            Some(code) => Err(Refusal::new(
+                code,
                 format!(
-                    "claim '{}' has confidentiality {:?} > clearance {:?}",
-                    self.metric_key, self.confidentiality, clearance
+                    "claim '{}' is labelled {}; the reader's clearance is {clearance}",
+                    self.metric_key, self.confidentiality
                 ),
-            ));
+            )),
         }
-        Ok(())
     }
 
     /// Enforces `INV-015` (`G-UU`): refuses decision card emission if `epistemic != KnownKnown`
@@ -282,7 +261,7 @@ pub fn verify_unweighted_additive(
 /// - `evidence = left.evidence.meet(right.evidence)` (NL-2, never upgrades)
 /// - `epistemic = left.epistemic.and(right.epistemic)`, `state = left.state.and(right.state)` (NL-5)
 /// - the colour composes both parents' colours under `op` (NL-1); with either refused it stays refused (NL-6)
-/// - `confidentiality = left.confidentiality.combine(right.confidentiality)` (`INV-007`)
+/// - `confidentiality = left.confidentiality.join(&right.confidentiality)` (`INV-007`)
 /// - `stale = left.stale || right.stale` (`NL-7`)
 /// - `calibration_failed = left.calibration_failed || right.calibration_failed` (`NL-8`)
 /// - `uu_terms` = deduplicated union of `left.uu_terms` and `right.uu_terms` (`NL-5`)
@@ -303,7 +282,7 @@ pub fn compose_binary<A, B, R>(
     let evidence = left.evidence.meet(right.evidence);
     let epistemic = left.epistemic.and(right.epistemic);
     let state = left.state.and(right.state);
-    let confidentiality = left.confidentiality.combine(right.confidentiality);
+    let confidentiality = left.confidentiality.join(&right.confidentiality);
     let color_basis = match (left.color(), right.color()) {
         (Ok(a), Ok(b)) => Some(compose(&a, &b, op)),
         _ => None,
@@ -356,7 +335,7 @@ fn compute_claim_id(
     evidence: EvidenceClass,
     epistemic: EpistemicStatus,
     state: KnowledgeState,
-    confidentiality: ConfidentialityTier,
+    confidentiality: &Confidentiality,
     parents: &[ClaimId],
     anchors: &[SourceAnchor],
 ) -> ClaimId {
@@ -366,7 +345,7 @@ fn compute_claim_id(
     enc.put_fixed(&evidence.tag());
     enc.put_fixed(&epistemic.tag());
     enc.put_u8(state.tag());
-    enc.put_u8(confidentiality as u8);
+    confidentiality.encode(&mut enc);
     enc.put_u64(parents.len() as u64);
     for p in parents {
         enc.put_fixed(&p.bytes);
@@ -538,7 +517,7 @@ mod tests {
             class,
             EpistemicStatus::KnownKnown,
             KnowledgeState::Known,
-            ConfidentialityTier::Internal,
+            Confidentiality::internal(),
             vec![],
             parents,
             vec![sample_anchor()],
@@ -565,6 +544,8 @@ mod tests {
 
     #[test]
     fn test_nl1_to_nl8_non_laundering_composition() {
+        let reg = LabelRegistry::new(["ven_a"], []).unwrap();
+        let ven_a = Confidentiality::venture(reg.venture("ven_a").unwrap());
         let c_measured = Claim::new(
             "tonnes_mined",
             1_000.0_f64,
@@ -575,7 +556,7 @@ mod tests {
             EvidenceClass::Measured,
             EpistemicStatus::KnownKnown,
             KnowledgeState::Known,
-            ConfidentialityTier::Public,
+            Confidentiality::public(),
             vec![],
             vec![],
             vec![sample_anchor()],
@@ -597,7 +578,7 @@ mod tests {
             EvidenceClass::Assumed,
             EpistemicStatus::KnownUnknown(KuKind::Parametric),
             KnowledgeState::Estimated,
-            ConfidentialityTier::JvPartner,
+            ven_a.clone(),
             vec![uu],
             vec![],
             vec![sample_anchor()],
@@ -626,8 +607,8 @@ mod tests {
             derived.epistemic,
             EpistemicStatus::KnownUnknown(KuKind::Parametric)
         );
-        // Confidentiality monotonically increases: max(Public, JvPartner) = JvPartner (INV-007).
-        assert_eq!(derived.confidentiality, ConfidentialityTier::JvPartner);
+        // Confidentiality monotonically increases: Public ⊔ Venture(ven_a) = Venture(ven_a) (INV-007).
+        assert_eq!(derived.confidentiality, ven_a);
         // UuTerm preserved (NL-5).
         assert_eq!(derived.uu_terms.len(), 1);
         // The Validated parent does not lift the Estimated one (NL-1).
@@ -846,11 +827,10 @@ mod tests {
         assert!(refused > 0 && validated > 0);
     }
 
-    #[test]
-    fn test_confidentiality_lattice_and_export_guard() {
-        let claim = Claim::new(
-            "sovereign_royalty_model",
-            42.0_f64,
+    fn labelled(key: &str, confidentiality: Confidentiality) -> Claim<f64> {
+        Claim::new(
+            key,
+            42.0,
             "42.0",
             Representation::Deterministic,
             SpatialSupport::PeriodAggregate,
@@ -858,20 +838,156 @@ mod tests {
             EvidenceClass::ModelledCalibrated,
             EpistemicStatus::KnownKnown,
             KnowledgeState::Known,
-            ConfidentialityTier::SovereignRestricted,
+            confidentiality,
             vec![],
             vec![],
             vec![sample_anchor()],
+        )
+    }
+
+    /// One export attempt, guarded and logged: the source labels, their join, the clearance, whether the join sits
+    /// under it, and the decision.
+    fn export_attempt(
+        case: &str,
+        sources: &[&Claim<f64>],
+        derived: &Claim<f64>,
+        clearance: &Confidentiality,
+    ) -> Result<(), Refusal> {
+        let verdict = derived.verify_export_clearance(clearance);
+        let labels: Vec<String> = sources
+            .iter()
+            .map(|c| format!("\"{}\"", c.confidentiality))
+            .collect();
+        let code = verdict
+            .as_ref()
+            .err()
+            .map_or("null".to_string(), |r| format!("\"{}\"", r.code));
+        println!(
+            "{{\"test\":\"export_guard\",\"case\":\"{case}\",\"sources\":[{}],\"join\":\"{}\",\
+             \"clearance\":\"{clearance}\",\"leq\":{},\"decision\":\"{}\",\"code\":{code}}}",
+            labels.join(","),
+            derived.confidentiality,
+            derived.confidentiality.leq(clearance),
+            if verdict.is_ok() { "allow" } else { "refuse" },
         );
-        let err = claim
-            .verify_export_clearance(ConfidentialityTier::Public)
-            .expect_err("must block public export of SovereignRestricted claim");
+        verdict
+    }
+
+    #[test]
+    fn test_confidentiality_lattice_and_export_guard() {
+        let reg = LabelRegistry::new([], ["W-A", "W-B"]).unwrap();
+        let wall_a = Confidentiality::mnpi(reg.wall("W-A").unwrap());
+        let wall_b = Confidentiality::mnpi(reg.wall("W-B").unwrap());
+        let a = labelled("royalty_model", wall_a.clone());
+        let b = labelled("offtake_terms", wall_b.clone());
+        let both = join("royalty_on_offtake", &a, &b);
+        assert_eq!(both.confidentiality, wall_a.join(&wall_b));
+
+        // A reader cleared behind wall A alone must not see a result that also carries wall B's facts.
+        let err = export_attempt("two walls, cleared for one", &[&a, &b], &both, &wall_a)
+            .expect_err("the second wall must refuse");
         // An authorization refusal (3xx, exit 7), never 402 (unknown PAG, a dump-safety code).
         assert_eq!((err.code, err.exit_code), ("FMINE-REF-301", 7));
+        let public = export_attempt("wall to public", &[&a], &a, &Confidentiality::public())
+            .expect_err("a walled claim must not go public");
+        assert_eq!(public.code, "FMINE-REF-301");
+        // Internal data to a public reader is the same refusal: no wall is involved, but nothing private may leak.
+        let internal = labelled("site_cost", Confidentiality::internal());
+        let leak = export_attempt(
+            "internal to public",
+            &[&internal],
+            &internal,
+            &Confidentiality::public(),
+        )
+        .expect_err("internal data must not go public");
+        assert_eq!(leak.code, "FMINE-REF-301");
+
         assert!(
-            claim
-                .verify_export_clearance(ConfidentialityTier::BoardEyesOnly)
-                .is_ok()
+            export_attempt(
+                "two walls, cleared for both",
+                &[&a, &b],
+                &both,
+                &both.confidentiality
+            )
+            .is_ok()
+        );
+        assert!(export_attempt("one wall, cleared for it", &[&a], &a, &wall_a).is_ok());
+    }
+
+    #[test]
+    fn test_two_venture_composition_refuses_a_single_venture_reader() {
+        let reg = LabelRegistry::new(["ven_north", "ven_south"], []).unwrap();
+        let north = Confidentiality::venture(reg.venture("ven_north").unwrap());
+        let south = Confidentiality::venture(reg.venture("ven_south").unwrap());
+        let north_grade = labelled("north_grade", north.clone());
+        let north_tonnes = labelled("north_tonnes", north.clone());
+        let south_tonnes = labelled("south_tonnes", south.clone());
+
+        // Within one venture the composed label stays that venture's, and its partner may read it.
+        let north_metal = join("north_metal", &north_grade, &north_tonnes);
+        assert_eq!(north_metal.confidentiality, north);
+        assert!(
+            export_attempt(
+                "one venture",
+                &[&north_grade, &north_tonnes],
+                &north_metal,
+                &north
+            )
+            .is_ok()
+        );
+
+        // Across ventures the label joins both, and neither partner alone may read the result.
+        let pooled = join("pooled_tonnes", &north_tonnes, &south_tonnes);
+        assert_eq!(pooled.confidentiality, north.join(&south));
+        for (case, clearance) in [("north reader", &north), ("south reader", &south)] {
+            let err = export_attempt(case, &[&north_tonnes, &south_tonnes], &pooled, clearance)
+                .expect_err("a single-venture reader must be refused the pooled result");
+            assert_eq!((err.code, err.exit_code), ("FMINE-REF-302", 7));
+        }
+        // Group-internal staff cleared for both ventures may read it; bare internal clearance may not.
+        let group = north.join(&south);
+        assert!(
+            export_attempt(
+                "both ventures",
+                &[&north_tonnes, &south_tonnes],
+                &pooled,
+                &group
+            )
+            .is_ok()
+        );
+        let err = export_attempt(
+            "internal only",
+            &[&north_tonnes, &south_tonnes],
+            &pooled,
+            &Confidentiality::internal(),
+        )
+        .expect_err("internal clearance names no venture");
+        assert_eq!(err.code, "FMINE-REF-302");
+
+        // One wall: the north venture's tonnes joined with a walled fact carry the wall, so the north partner, who is
+        // not behind it, is refused at the wall (301) even though the venture matches.
+        let walls = LabelRegistry::new([], ["W-EMBARGO"]).unwrap();
+        let embargo = Confidentiality::mnpi(walls.wall("W-EMBARGO").unwrap());
+        let embargoed = labelled("embargoed_plan", embargo.clone());
+        let tainted = join("north_tonnes_vs_plan", &north_tonnes, &embargoed);
+        assert_eq!(tainted.confidentiality, north.join(&embargo));
+        let err = export_attempt(
+            "across the wall",
+            &[&north_tonnes, &embargoed],
+            &tainted,
+            &north,
+        )
+        .expect_err("the wall must refuse a reader outside it");
+        assert_eq!((err.code, err.exit_code), ("FMINE-REF-301", 7));
+        let inside = north.join(&embargo);
+        assert!(
+            export_attempt(
+                "inside the wall",
+                &[&north_tonnes, &embargoed],
+                &tainted,
+                &inside
+            )
+            .is_ok()
         );
     }
 
@@ -907,7 +1023,7 @@ mod tests {
             EvidenceClass::Measured,
             EpistemicStatus::KnownKnown,
             KnowledgeState::Known,
-            ConfidentialityTier::Internal,
+            Confidentiality::internal(),
             vec![],
             vec![],
             vec![sample_anchor()],

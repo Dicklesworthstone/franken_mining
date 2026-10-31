@@ -504,7 +504,7 @@ impl SpatialFrontPitMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fmine_claim::{AdditivityClass, ConfidentialityTier, Representation, SpatialSupport};
+    use fmine_claim::{AdditivityClass, Confidentiality, Representation, SpatialSupport};
     use fmine_core::anchor::SourceAnchor;
     use fmine_core::id::{ObjectId, PrefixKind};
     use fmine_core::rand::{PhiloxStream, RngKey};
@@ -815,7 +815,7 @@ mod tests {
             EvidenceClass::ModelledCalibrated,
             EpistemicStatus::KnownUnknown(KuKind::Parametric),
             KnowledgeState::Estimated,
-            ConfidentialityTier::Public,
+            Confidentiality::public(),
             vec![],
             vec![],
             vec![SourceAnchor::new("esia.pdf", [0; 32], "p.1")],

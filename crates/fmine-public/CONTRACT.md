@@ -760,7 +760,7 @@ The public lane of M0 (`fmine assure public`).
   `public_transcriptions.rs`, preserving the crate's existing LOC ceiling.
 
 ## 10. Non-Goals & Scope Boundary
-- Operates only on public disclosures (`ConfidentialityTier::Public`).
+- Operates only on public disclosures (`Confidentiality::public()`).
 - Makes no reserve, resource, geotechnical, regulatory or investment claim.
 - Implies no issuer affiliation.
 - Guidance uses only the registered evidence population, not an assertion that no later issuer guidance

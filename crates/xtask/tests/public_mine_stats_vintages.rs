@@ -2,9 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use fmine_claim::{
-        AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport,
-    };
+    use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
     use fmine_core::anchor::SourceAnchor;
     use fmine_core::hash::Digest32;
     use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState};
@@ -58,7 +56,7 @@ mod tests {
             EvidenceClass::ISSUER,
             EpistemicStatus::KnownKnown,
             KnowledgeState::Known,
-            ConfidentialityTier::Public,
+            Confidentiality::public(),
             vec![],
             vec![],
             vec![SourceAnchor::new(&file, [0xab; 32], format!("QTD!{cell}"))],

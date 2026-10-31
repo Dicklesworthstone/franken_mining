@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use fmine_claim::{
-    AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport, UuTerm,
+    AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport, UuTerm,
 };
 use fmine_core::anchor::SourceAnchor;
 use fmine_core::hash::{Digest32, blake3_hash, sha256};
@@ -346,7 +346,7 @@ fn quantity_claim(
         evidence,
         epistemic,
         state,
-        ConfidentialityTier::Public,
+        Confidentiality::public(),
         uu_terms,
         parents,
         anchors,
@@ -450,7 +450,7 @@ fn select_cell<'a>(
 }
 
 fn actual_claim(c: &KeyedCell, kind: QuantityKind) -> Result<Claim<Quantity>> {
-    if c.claim.confidentiality != ConfidentialityTier::Public {
+    if !c.claim.confidentiality.is_public() {
         return Err(refuse(
             RefusalCode::MnpiWall301,
             format!(
@@ -950,7 +950,7 @@ fn synthetic_evidence() -> Result<(TranscriptionReport, Vec<KeyedCell>)> {
             EvidenceClass::Assumed,
             EpistemicStatus::KnownUnknown(KuKind::Parametric),
             KnowledgeState::Estimated,
-            ConfidentialityTier::Public,
+            Confidentiality::public(),
             vec![],
             vec![],
             vec![SourceAnchor::new(&path, digest.0, "invented value")],

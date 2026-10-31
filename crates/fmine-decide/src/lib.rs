@@ -209,9 +209,7 @@ impl DecisionCard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fmine_claim::{
-        AdditivityClass, ConfidentialityTier, Representation, SpatialSupport, UuTerm,
-    };
+    use fmine_claim::{AdditivityClass, Confidentiality, Representation, SpatialSupport, UuTerm};
     use fmine_core::anchor::SourceAnchor;
     use fmine_evidence::color::{ColorRank, ValidityDomain};
     use fmine_evidence::{AssertionSource, EpistemicStatus, EvidenceClass, KnowledgeState, KuKind};
@@ -241,7 +239,7 @@ mod tests {
             evidence,
             EpistemicStatus::KnownUnknown(KuKind::Parametric),
             KnowledgeState::Estimated,
-            ConfidentialityTier::Internal,
+            Confidentiality::internal(),
             uu,
             vec![],
             vec![SourceAnchor::new("study.pdf", [0x22; 32], "Table 14-1")],

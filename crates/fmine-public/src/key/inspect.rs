@@ -1,7 +1,7 @@
 //! DESIGN (BD-115): inspect the canonical public Claim without changing its evidence or inventing a
 //! decision context. Public projections currently contain source leaves, so trace names that boundary.
 
-use fmine_claim::ConfidentialityTier;
+use fmine_claim::Confidentiality;
 use fmine_core::hash::Digest32;
 use fmine_evidence::{Color, Refusal};
 
@@ -166,10 +166,10 @@ pub fn why_json(cell: &KeyedCell) -> String {
         js(&format!("{:?}", claim.representation)),
         js(&format!("{:?}", claim.support)),
         js(&format!("{:?}", claim.additivity)),
-        js(&format!("{:?}", claim.confidentiality)),
+        js(&claim.confidentiality.to_string()),
         color_json(&color),
         guard_json(&uu_guard),
-        guard_json(&claim.verify_export_clearance(ConfidentialityTier::Public)),
+        guard_json(&claim.verify_export_clearance(&Confidentiality::public())),
         first_refusal.is_none(),
         first_refusal.map_or_else(|| "null".into(), refusal_json),
         claim.calibration_failed,

@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use fmine_claim::{AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport};
+use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, blake3_hash};
 use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, KuKind};
@@ -470,7 +470,7 @@ pub fn public_claim(
         evidence,
         epistemic,
         state,
-        ConfidentialityTier::Public,
+        Confidentiality::public(),
         vec![],
         vec![],
         vec![anchor],

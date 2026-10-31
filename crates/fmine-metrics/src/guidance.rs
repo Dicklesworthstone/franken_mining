@@ -12,7 +12,7 @@
 
 use std::cmp::Ordering;
 
-use fmine_claim::{AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport};
+use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::{Encoder, blake3_hash};
 use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode};
 use fmine_numerics::exact_feas::{Interval, Rat};
@@ -401,7 +401,7 @@ fn derived_value<T>(
     let mut evidence = EvidenceClass::Derived;
     let mut epistemic = EpistemicStatus::KnownKnown;
     let mut state = KnowledgeState::Known;
-    let mut confidentiality = ConfidentialityTier::Public;
+    let mut confidentiality = Confidentiality::public();
     let mut uu_terms = Vec::new();
     let mut anchors = Vec::new();
     let mut parent_ids = Vec::new();
@@ -409,7 +409,7 @@ fn derived_value<T>(
         evidence = evidence.meet(p.evidence);
         epistemic = epistemic.and(p.epistemic);
         state = state.and(p.state);
-        confidentiality = confidentiality.combine(p.confidentiality);
+        confidentiality = confidentiality.join(&p.confidentiality);
         for term in &p.uu_terms {
             if !uu_terms
                 .iter()
@@ -1011,7 +1011,7 @@ mod tests {
             EvidenceClass::ModelledUncalibrated,
             EpistemicStatus::KnownKnown,
             KnowledgeState::Known,
-            ConfidentialityTier::Public,
+            Confidentiality::public(),
             Vec::new(),
             Vec::new(),
             vec![SourceAnchor::new("synthetic/guidance", [7; 32], key)],
@@ -1299,11 +1299,11 @@ mod tests {
     #[test]
     fn derived_claims_preserve_provenance_and_never_upgrade_evidence() {
         let mut i = inputs();
-        i.ytd_sold.confidentiality = ConfidentialityTier::Internal;
+        i.ytd_sold.confidentiality = Confidentiality::internal();
         let r = complete(&i).unwrap();
         let cost = &r.remaining_aisc_rate;
         assert_eq!(cost.evidence, EvidenceClass::ModelledUncalibrated);
-        assert_eq!(cost.confidentiality, ConfidentialityTier::Internal);
+        assert_eq!(cost.confidentiality, Confidentiality::internal());
         assert_eq!(cost.parents.len(), 4);
         assert_eq!(cost.anchors.len(), 4);
         assert!(cost.parents.contains(&i.remaining_sold.claim_id));
