@@ -1139,3 +1139,83 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     unchanged; `repro/barrick/expected.toml` has the row, and the ignored expected-root and port-root tests pass
     on it.
   - **Verification.** Self-verified on this machine only; nothing has run in CI.
+- **E846** Mine Stats quarter sums on the `Minestats*` site sheets (the plan's family 2 there) decided in exact
+  arithmetic (BD-331.S4, bd-prmn.4, follows E841; FACT, execution, 2026-10-30, owner machine).
+  - **Rule.** `fmine-public::mine_ledger`, family `site_quarter_sum`:
+    - H1 = Q1 + Q2, 9M = H1 + Q3 and FY = 9M + Q4 on each additive row (`SITE_QUARTER_ROWS`, 32: tonnes mined
+      and processed with their sub-rows, ounces or pounds, revenue, capital expenditures). Rates, grades,
+      recovery, strip ratio and unit costs are not additive and pose none.
+    - Anchored on each cumulative block's cell of a Q2, Q3 or Q4 release. The operands are the previous release's
+      block of the same site, row and column group (its Q1 block for H1, else its cumulative block) and the
+      anchor release's quarter block. A site is found by name on whichever sheet of its metal it prints in each
+      release.
+    - Refused, in order: a withheld status covering any of the three periods (E818), a missing previous
+      release, a site on two sheets of its metal in an operand's release, a missing row, a row printed twice in
+      a block, a blank. All placeholders are not published; `n/a` beside a number refuses.
+    - The nil token is exactly 0, with a `nil_token` certificate. Decided alone by the exact sum bound, as in
+      E843; never posed jointly.
+  - **Independent reader.** The census's `site_quarter_sum` (9854b6c, judgement calls J39–J47 in its notes) was
+    written first by a subagent from a rule statement, without reading the crate. The rule statement and the
+    Rust share one origin (this agent). This agent did not read the new census code before writing the Rust,
+    only the subagent's report and output. The subagent first wrote the withheld exclusion in a form that differed
+    from the existing convention; this agent's rule wording caused it. It was changed to the existing form
+    (`excluded_e818`, no certificate) before commit. Rerun by this agent: exit 0, empty stderr; the diff to the
+    previous output adds lines only.
+  - **Result.**
+    - The ignored test `barrick_mine_ledger_matches_census` runs the census. All 9,000 instance lines are equal,
+      and the family's counts are pinned. The other families, the 2,091 components and the 27 infeasible are
+      unchanged.
+    - Site-sheet quarter sums 3,520: 2,742 (i), 8 (iii), 87 (v), 683 np. 61 are decided by the nil token: 59
+      (i), 2 (iii).
+    - The 8 (iii) (locators, subjects and periods only):
+
+      | Anchor | Subject | Field | Period |
+      |---|---|---|---|
+      | `2024Q3:Minestats2!B61` | Pueblo Viejo | tonnes processed | 2024 9M |
+      | `2024Q3:Minestats2!B62` | Pueblo Viejo | tonnes processed, autoclave | 2024 9M |
+      | `2024Q4:Minestats1!O109` | Hemlo | capital expenditures, total | 2023 FY (nil token) |
+      | `2024Q4:Minestats3!G45` | Tongon | tonnes mined | 2023 FY |
+      | `2025Q3:Minestats2!C61` | Pueblo Viejo | tonnes processed | 2024 9M |
+      | `2025Q3:Minestats2!C62` | Pueblo Viejo | tonnes processed, autoclave | 2024 9M |
+      | `2025Q4:Minestats4!B44` | Total Copper | tonnes processed | 2025 FY |
+      | `2026Q2:Minestats1!G113` | Turquoise Ridge | capital expenditures, projects | 2025 H1 (nil token) |
+
+    - The 87 (v):
+      - 41 Loulo-Gounkoto, withheld (E818). These are the 2025 H1, 9M and FY rows of the 2025Q2 to 2025Q4
+        releases and the 2025 H1 comparatives of the 2026Q2 release.
+      - 43 missing rows. 35 are revenue H1 in the 2026Q2 release, refused because the 2026Q1 release prints no
+        revenue row. No earlier cumulative block prints one either, so revenue is never decided. The 2024Q1 and
+        2025Q1 quarter blocks were not checked. The other 8 are Pueblo Viejo FY 2025 and FY 2024 in 2025Q4 (Oxide
+        Mill and Roasters sub-rows of tonnes processed and production). Pueblo Viejo prints on Minestats2
+        through 2025Q3 and on Minestats1 from 2025Q4, and the 2025Q3 sheet has no such sub-rows. Its other 28
+        FY instances in 2025Q4 pair a 2025Q3 Minestats2 cell with 2025Q4 Minestats1 cells (22 (i), 6 np), so
+        the sheet move is matched on real data.
+      - 3 placeholders: Phoenix roasters production 2023 H1 (2024Q2), Turquoise Ridge roasters tonnes processed
+        2025 FY (2025Q4), Phoenix autoclave production 2026 H1 (2026Q2).
+  - **Not claimed.**
+    - A (iii) blames no cell and gives no correction set: the site sums are not posed jointly.
+    - Untested hypothesis: Pueblo Viejo's 2024 9M tonnes processed fails in both files that print it (2024Q3
+      current year, 2025Q3 prior year), which suggests a restated quarter.
+    - Q1 releases pose none (no cumulative block). Rows outside `SITE_QUARTER_ROWS` are not posed, and neither
+      are the non-additive rows: a weighted check of grades or unit costs across quarters is not built.
+    - The site sums are not tied to the summary sheets' quarter sums. Family 7 links the shared values.
+  - **Tests.** Three synthetic tests, default suite, expected states derived by hand before the run:
+    - H1 and 9M across three releases on the additive rows only (`Underground` posed under tonnes mined, not
+      under a unit cost; no strip ratio). Cells are [previous, quarter, total]. A (iii) is past the slack, and
+      35 against 36 is inside it. A row is missing from the Q3 release.
+    - The nil token as exactly 0, both held and past the slack. All nil (np). `n/a` and a blank at their cells.
+      A site withheld for January–March is refused for H1 by its Q1 operand, and its prior year is still
+      decided. A site that moved sheets is matched.
+    - A missing previous release, a site on two sheets of its metal, a row the previous release does not print.
+
+    The first run failed because the test fixture gave the status's bounds as quarters; they are months. The
+    test was fixed, not the code.
+  - **Planted negatives, each reverted.** Each fails a synthetic test and the census test: the 9M previous
+    operand taken from the Q2 quarter block; nil read as a placeholder; the withheld status checked against
+    the cumulative period alone. The subagent's own two plants in the census (the previous operand from the
+    quarter block, nil as a placeholder) moved its counts and were reverted.
+  - **Root.** No format change (frame v7). The root moves to `d37903cf…`, observed from the release binary of
+    9b4c453 (exit 0, empty stderr), with AISC totals unchanged. `repro/barrick/expected.toml` has the row, and
+    the ignored expected-root and port-root tests pass on it.
+  - **Verification.** Self-verified on this machine only. The second reader is an AI subagent, not a person,
+    and nothing has run in CI.

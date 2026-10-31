@@ -281,3 +281,21 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "AISC regional rates proved by the exact weighted mean, not relaxation_only; no state code moves."
 evidence = "BD-331.S4, bd-prmn.4, E845"
+
+# Observed from the release binary of 9b4c453 (git archive, own target directory; exit 0, empty stderr). No AISC
+# state code moves: the totals equal 1172606's. The root moves because the Mine Stats ledger adds 3,520
+# site-sheet quarter-sum instances (frame v7, no format change). No registry file row or cell changes.
+[[expected]]
+commit = "9b4c453"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "d37903cf8a0c3cd4428bb2a606457479825d2bf7841d64f887dbede4e66ef15c"
+anchor_id = "anc_13872409843300420677ef6e1293bff5"
+totals_i = 2436
+totals_ii = 3
+totals_iii = 4
+totals_iv = 92
+totals_v = 0
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "The Mine Stats ledger adds the site-sheet quarter sums, family 2 on the Minestats* sheets; no AISC moves."
+evidence = "BD-331.S4, bd-prmn.4, E846"
