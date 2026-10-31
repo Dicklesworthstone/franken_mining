@@ -895,8 +895,8 @@ mod tests {
     }
 
     /// A throwaway repository, removed on drop so that a failing test leaves nothing behind. On an rch worker the
-    /// temp dir sits inside the project, and one leftover `.git` there makes rch refuse every later sync of this
-    /// project to that worker (`RCH_SYNC_LIVE_CHECKOUT_REFUSED`).
+    /// temp dir sits inside the project, and a host that declares live checkouts refuses every later sync of this
+    /// project once one `.git` is left there (`RCH_SYNC_LIVE_CHECKOUT_REFUSED`).
     struct Repo(std::path::PathBuf);
 
     impl Drop for Repo {

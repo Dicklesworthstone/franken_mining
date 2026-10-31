@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn test_rule_e_upstream_digest_and_overlap() {
         // Removes the fixture even when an assertion fails: a `.git` left in an rch worker's temp dir, which sits
-        // inside the project, makes rch refuse every later sync to that worker.
+        // inside the project, makes a host that declares live checkouts refuse every later sync.
         struct Cleanup(std::path::PathBuf);
         impl Drop for Cleanup {
             fn drop(&mut self) {
