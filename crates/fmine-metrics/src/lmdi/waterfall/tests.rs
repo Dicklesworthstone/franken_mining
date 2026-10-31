@@ -1,3 +1,6 @@
+//! Determinism: DeterministicPerIsa
+//! Independent known answers, exact signed properties and outward rounding-box checks.
+
 use super::*;
 use fmine_core::rand::PhiloxStream;
 

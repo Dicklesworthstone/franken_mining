@@ -1119,6 +1119,79 @@ fn aisc_key_rows(table: &AiscTable) -> BTreeSet<u32> {
         .collect()
 }
 
+/// Evidence for the net AISC reconciliation's attributable-ounce denominator (BD-333).
+/// Individual gross-cost and NCI lines retain their own printed Claims and are not relabelled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BridgeBasisEvidence {
+    pub basis: OwnershipBasis,
+    pub evidence: Vec<String>,
+}
+
+/// Confirms the bridge's basis from the current reconciliation and same-release Mine Stats summary.
+/// The caller supplies the physical input's already source-bound ownership basis and separately verifies
+/// the signed component footing. An absent share, mismatching label or duplicate source refuses.
+pub fn bridge_basis(
+    profile: &IssuerProfile,
+    sources: &[LoadedSource],
+    source: &LoadedSource,
+    sheet: &Sheet,
+    table: &AiscTable,
+    subject: &str,
+    physical_basis: OwnershipBasis,
+) -> Result<BridgeBasisEvidence, String> {
+    if source.kind != SourceKind::AiscReconciliation || profile.regions.iter().any(|s| s == subject)
+    {
+        return Err("the bridge requires a gold-site AISC reconciliation".to_string());
+    }
+    let title = cell_text(sheet, 1, 1).unwrap_or_default().to_lowercase();
+    let ounces = cell_text(sheet, table.ounces_row, 1)
+        .unwrap_or_default()
+        .to_lowercase();
+    if !title.contains("reconciliation of gold cost of sales")
+        || !title.contains("all-in sustaining costs")
+        || !ounces.starts_with("ounces sold")
+        || !ounces.contains("attributable basis")
+        || !(ounces.contains("000s ounces") || ounces.contains("thousands of ounces"))
+    {
+        return Err(
+            "the AISC title or attributable thousand-ounce denominator is not stated".to_string(),
+        );
+    }
+    let (num, den) = match physical_basis {
+        OwnershipBasis::Attributable { num, den, .. } if num > 0 && num <= den => (num, den),
+        OwnershipBasis::Consolidated100 => (1, 1),
+        _ => return Err("the physical input has no explicit ownership share".to_string()),
+    };
+    let share = profile.shares.iter().find(|s| s.subject == subject);
+    if share
+        .is_some_and(|s| i128::from(s.num) * i128::from(den) != i128::from(num) * i128::from(s.den))
+    {
+        return Err(
+            "the registered share differs from the physical input's printed share".to_string(),
+        );
+    }
+    let candidates: Vec<_> = sources
+        .iter()
+        .filter(|s| s.kind == SourceKind::MineStats && s.quarter == source.quarter)
+        .collect();
+    let [stats] = candidates.as_slice() else {
+        return Err(
+            "exactly one same-release Mine Stats source is required for the basis".to_string(),
+        );
+    };
+    let summary = find_qtd_sheet(&stats.workbook.sheets, &source.quarter)?;
+    let label = share.map_or(subject, |s| s.label.as_str());
+    let at = confirm_share_label(summary, label, num, den)?;
+    Ok(BridgeBasisEvidence {
+        basis: physical_basis,
+        evidence: vec![
+            format!("{}:{}!A1", source.file_name, sheet.name),
+            format!("{}:{}!A{}", source.file_name, sheet.name, table.ounces_row),
+            format!("{}:{}!{at}", stats.file_name, summary.name),
+        ],
+    })
+}
+
 fn aisc_key_label(sheet: &Sheet, table: &AiscTable, row: u32) -> Result<String, String> {
     // A canonical anchor name makes an abbreviated rate label or a changing unit suffix the same metric.
     for (r, anchor) in [
@@ -3283,15 +3356,19 @@ mod tests {
     /// output: the five moved and five new states are pinned one by one by the synthetic tests in `lib.rs`.
     /// Frame v6 (bd-prmn.4) appends the Mine Stats ledger section, empty here: at v5 without it the root is
     /// still 54f1201b…, checked when the pin moved. Frame v7 (site-sheet family) changes only the version here:
-    /// at v6 the root is still fd7864f9…, checked when the pin moved.
+    /// at v6 the root is still fd7864f9…, checked when the pin moved. BD-333's frame v8 adds the
+    /// empty waterfall digest here; the v7 regression root was
+    /// dfb17a08c70d5307ece489544334cea72086234182fe9d3d0580e3a0d209f5e5. These are regression
+    /// values, not independent numerical oracles; the unchanged 60 states remain separately checked.
     #[test]
     fn test_port_keeps_synthetic_root() {
         let run = crate::run_synthetic_assurance(&[]).expect("synthetic run");
         assert_eq!(run.instances.len() + run.hidden_scope.instances.len(), 60);
         assert_eq!(run.mine_ledger, crate::mine_ledger::MineLedger::default());
+        assert!(run.waterfall.pairs.is_empty());
         assert_eq!(
             run.ledger_anchor.state_root.to_hex(),
-            "dfb17a08c70d5307ece489544334cea72086234182fe9d3d0580e3a0d209f5e5"
+            "eb8bd4e4ae85d74b07b14e29e9c05a198b90491ea821e269bb72127972fe2ff0"
         );
     }
 

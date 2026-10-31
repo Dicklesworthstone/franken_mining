@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
 - **LOC Budget:** `18k planned / 21k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "waterfall"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
@@ -134,7 +134,7 @@ The public lane of M0 (`fmine assure public`).
   No output implies that FrankenMining or Barrick attests a figure.
 - Every reported exception cites file, file SHA-256, `sheet!cell`, subject, family and ownership basis
   (`IdentityFamily::basis`).
-- The `LedgerAnchor` state root (BLAKE3 over an `M0AS` v7 frame) binds:
+- The `LedgerAnchor` state root (BLAKE3 over an `M0AS` v8 frame) binds:
   - every input's SHA-256, numeric digest and census, and (v5, bd-jg43.3) its displayed-value digest with the
     shown, token and refused counts (`Workbook::displayed_census`);
   - every instance's state as codes, numbers and locators (`encode_state`), never its prose, with a tag before
@@ -149,15 +149,17 @@ The public lane of M0 (`fmine assure public`).
     (families 3–4) add instances in the v7 frame, with no change to its format. The sold-weighted rate
     (family 5) adds the first (iv) instances: after the state code `iv`, the frame binds the need's code where
     (i) and (iii) put a zero byte, so the state code already says which branch follows. The site-sheet quarter
-    sums add instances in the v7 frame, with no change to its format.
+    sums add instances in the v7 frame, with no change to its format;
+  - (v8, BD-333) the public waterfall's canonical digest, including its pair outcomes, cited inputs,
+    exact printed-rate reconciliation and outward bar enclosures. Previous root epochs remain recorded.
 
   Changing any input cell moves the root; rewording a message does not (bd-sjrh.1 part 4).
 - The keyed projection has its own BLAKE3 digest over a `PCLM` v1 frame, sorted by key and locator. It binds
   every accepted cell's locator, Claim id, canonical key, typed value (including stored/displayed text or a
   display refusal and status), printed basis, basis and registered-status evidence, printed label and unit evidence. The Claim id
   itself includes a `PVAL` v1 digest of the typed interpretation, so changing a zero from a number to a
-  registered `Nil` cannot reuse its numeric Claim id. This projection does not change the established
-  `M0AS` v7 identity-ledger root or its expected-root rows. Keying refusals and unregistered all-zero columns
+  registered `Nil` cannot reuse its numeric Claim id. This projection has its own digest; M0AS v8 additionally
+  binds the waterfall's use of its source Claims. Keying refusals and unregistered all-zero columns
   are reported separately; they are not silently represented as accepted cells in this digest.
 - Issuer-consistency counts and histories are a report over the existing ledger and keyed projection. They
   do not alter the numerical states or the identity-ledger root. Their binomial intervals describe the
@@ -372,7 +374,8 @@ The public lane of M0 (`fmine assure public`).
   - The real-source regression checks E474 and all eight W1-DR-09 changes. W1 T16's 6,391/9 is passes/failures:
     the six per-release populations equal 6,400 in total after excluding the 30 cited region-map changes.
     The full classification differs from that pass/fail table because basis conflicts and display refusals
-    remain visible. The separate keyed projection digest and existing M0AS v7 root are preserved.
+    remain visible. The comparison itself does not change the separate keyed projection digest or
+    identity-ledger states; the waterfall's addition advances the assurance frame to v8 below.
 - `aisc::{AiscClaimIndex, KeyingRefusal, key_aisc_operands}` (BD-332.S2): one keyed Claim per distinct arithmetic
   operand, with the subject read from that operand's own column (including regional member inputs), canonical
   metric labels, repeated-label occurrence indices and units `usd_m`, `koz` or `usd_per_oz`. An operand must
@@ -405,6 +408,28 @@ The public lane of M0 (`fmine assure public`).
   - This is the earliest **registered** appearance, not necessarily the issuer's first publication. Full
     part 3b disclosure classification across all public figures and a composite gate result remain open;
     Mine Stats value comparisons are reported separately under `mine_stats_vintages` as described above.
+
+- `waterfall::{pair_sites, WaterfallReport}` (BD-333): the existing assurance payload includes same-quarter
+  year-on-year AISC bridges, with first-published sources only. A missing first-release reconciliation is
+  a named refusal; later comparative sheets never substitute for it. Copper, aggregate scopes, ambiguous
+  sources, undeclared or conflicting ownership and affected (iii)/(v) operands are named explicitly.
+  - `aisc::bridge_basis` checks the live gold-reconciliation title, attributable thousand-ounce label and
+    same-release Mine Stats summary share. The net reconciliation has this denominator; its gross cost and
+    NCI components retain their original Claims and are never all relabelled attributable.
+  - Positive physical factors yield six LMDI bars. Unavailable or non-positive factors permit the exact
+    signed cost-line/reciprocal-sales fallback only when the displayed component midpoints foot exactly.
+    Its declared frontier is reported TCC as an aggregate plus signed block-2 sustaining adjustments;
+    changing gross-cost row names never creates an alias or an assumed-zero component. Cost uncertainty
+    uses the full numeric component count, `k/2`; the TCC aggregate uses its block-1 count, `k1/2`.
+    Every bar carries its input citations, rounding enclosure and `sign_not_determined`; endpoint gaps and
+    their change are separate exact quantities. Public bridges are descriptive and non-identifying.
+  - Derived USD/oz endpoint fields use `waterfall.rate_reconciliation`; the measured residual uses
+    `waterfall.closure` and cites the union of bar and rate inputs, both at `m0-waterfall/1`. The `WFLW` v1
+    digest binds structured values, rule identifiers, Claim digests and source contexts. Refusal prose is
+    excluded; changing a refusal code or interpretation changes the digest.
+  - Cross-crate checks live in `xtask/tests/public_waterfall.rs`; the independent reader and high-precision
+    known answers are in `repro/barrick/waterfall_census.py`. The existing synthetic CLI profile has no
+    year-on-year source pair; the four-outcome synthetic bridge fixture is an integration test.
 
 ## 5. Guards & Typed Refusals
 - A run names every registered file that is missing, digest-mismatched or unparseable, and never substitutes
@@ -681,8 +706,8 @@ The public lane of M0 (`fmine assure public`).
   reproduce the independent T16 population and all nine known changes without asserting disclosure status.
 
 ## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io` (and, in the manifest, `fmine-units`,
-  `fmine-time`, `fmine-metrics`, not used by this crate since BD-321).
+- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io` and `fmine-metrics` for the typed public
+  waterfall (BD-333). `fmine-units` and `fmine-time` remain declared in the manifest.
 - Depends on `fmine-numerics` (BD-331.S6): the ledger's exact kernel (`exact_feas`, BD-340).
   `crates/xtask/tests/public_exact_feas_oracle.rs` keeps the old closed-form corner rule as an independent oracle for rates (at a
   share, and the (iv) range exactly); `test_property_footings_match_closed_form` does the same for footings.

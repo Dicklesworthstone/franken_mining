@@ -33,6 +33,9 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 - A successful assurance run carries the run's `anc_…` anchor id, and the report as payload: `lane`,
   `gate_eligible`, sources with SHA-256, the extraction census, the identity ledger with cited exceptions, the
   quarantine and the state root. The payload holds no flags, no `no_claim` and no `next_actions`.
+- The `waterfall` payload (BD-333) reports first-published year-on-year public AISC bridges, signed additive
+  fallbacks and named refusals. Bars carry rounding intervals and source citations; exact printed-rate gaps
+  remain separate. It is descriptive and non-identifying, and its digest is bound into the M0AS v8 certificate.
 - An issuer run's payload ends with `published_cutoffs` (BD-274), `fmine_metrics::cutoff::section` over
   `registries/published_cutoffs.toml` when that registry's `issuer` is the run's: the registry's sha256, the count
   of cut-offs reproduced, within input rounding and in conflict, and one row per cut-off. It is not in the state
