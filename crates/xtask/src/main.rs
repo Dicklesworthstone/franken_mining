@@ -55,6 +55,22 @@ fn main() -> ExitCode {
             "check-det",
             xtask::check_det(&root).map(|r| println!("{}", r.log_line())),
         ),
+        "check-refusals" => run_one(
+            "check-refusals",
+            xtask::refusals::check_refusals(&root).map(|r| {
+                println!("{}", r.log_line());
+                for w in &r.warnings {
+                    println!("WARN [check-refusals]: {w}");
+                }
+            }),
+        ),
+        "gen-refusals" => run_one(
+            "gen-refusals",
+            xtask::refusals::gen_refusals(&root).map(|wrote| {
+                let what = if wrote { "wrote" } else { "unchanged:" };
+                println!("{what} {}", xtask::refusals::CATALOG_PATH);
+            }),
+        ),
         "registry-check" => run_one(
             "registry-check",
             xtask::check_sources_registry(&root).map(|lines| {
@@ -105,9 +121,15 @@ fn main() -> ExitCode {
                     report.total_planned,
                     report.total_ceiling
                 );
-                // check_all ran check-det and it passed; read again for its counts.
+                // check_all ran check-det and check-refusals and both passed; read again for their counts.
                 if let Ok(det) = xtask::check_det(&root) {
                     println!("{}", det.log_line());
+                }
+                if let Ok(report) = xtask::refusals::check_refusals(&root) {
+                    println!("{}", report.log_line());
+                    for w in &report.warnings {
+                        println!("WARN [check-refusals]: {w}");
+                    }
                 }
                 ExitCode::SUCCESS
             }

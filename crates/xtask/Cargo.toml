@@ -9,6 +9,7 @@ description = "FrankenMining workspace governance, layer DAG, LOC budget, lift p
 
 [dependencies]
 fmine-calib = { path = "../fmine-calib" }
+fmine-core = { path = "../fmine-core" }
 fmine-public = { path = "../fmine-public" }
 fmine-registry = { path = "../fmine-registry" }
 

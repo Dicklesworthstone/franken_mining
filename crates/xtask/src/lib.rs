@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod forecast;
+pub mod refusals;
 
 /// Summary row for a single crate's LOC budget (`BD-003`, `BD-012`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -938,6 +939,9 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
         all_errors.extend(e);
     }
     if let Err(e) = check_sources_registry(root) {
+        all_errors.extend(e);
+    }
+    if let Err(e) = refusals::check_refusals(root) {
         all_errors.extend(e);
     }
     if all_errors.is_empty() {

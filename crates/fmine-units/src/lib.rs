@@ -9,13 +9,13 @@ use std::ops::{Add, Sub};
 /// Errors raised by unit, basis, fraction, currency, or chemical-basis guards.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnitsError {
-    /// `FMINE-REF-105`: Moisture fraction must lie in `[0.0, 1.0)`.
+    /// `FMINE-REF-109` (outside its physical domain): Moisture fraction must lie in `[0.0, 1.0)`.
     MoistureOutOfBounds(f64),
-    /// `FMINE-REF-105`: Mass fraction or recovery must lie in `[0.0, 1.0]`.
+    /// `FMINE-REF-109` (outside its physical domain): Mass fraction or recovery must lie in `[0.0, 1.0]`.
     FractionOutOfBounds(f64),
     /// Simplex composition does not sum to `1.0` within tolerance.
     SimplexSumInvalid(f64),
-    /// `FMINE-REF-107`: Chemical species basis mismatch without stoichiometric conversion.
+    /// `FMINE-REF-105` (basis mismatch): Chemical species basis mismatch without stoichiometric conversion.
     ChemicalBasisMismatch { left: ChemBasis, right: ChemBasis },
     /// Currency mismatch in `Money` arithmetic.
     CurrencyMismatch { left: Currency, right: Currency },
@@ -26,12 +26,13 @@ pub enum UnitsError {
 }
 
 impl UnitsError {
-    /// Returns the canonical `FMINE-REF-*` refusal code if mapped.
+    /// Returns the canonical `FMINE-REF-*` refusal code if mapped. This crate sits below `fmine-evidence`, so
+    /// the code is a string; `xtask check-refusals` requires every such token to be a registry code (BD-328).
     #[must_use]
     pub const fn refusal_code(&self) -> Option<&'static str> {
         match self {
-            Self::MoistureOutOfBounds(_) | Self::FractionOutOfBounds(_) => Some("FMINE-REF-105"),
-            Self::ChemicalBasisMismatch { .. } => Some("FMINE-REF-107"),
+            Self::MoistureOutOfBounds(_) | Self::FractionOutOfBounds(_) => Some("FMINE-REF-109"),
+            Self::ChemicalBasisMismatch { .. } => Some("FMINE-REF-105"),
             _ => None,
         }
     }
@@ -41,15 +42,15 @@ impl fmt::Display for UnitsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MoistureOutOfBounds(v) => {
-                write!(f, "FMINE-REF-105: moisture fraction {v} outside [0.0, 1.0)")
+                write!(f, "FMINE-REF-109: moisture fraction {v} outside [0.0, 1.0)")
             }
             Self::FractionOutOfBounds(v) => {
-                write!(f, "FMINE-REF-105: fraction {v} outside [0.0, 1.0]")
+                write!(f, "FMINE-REF-109: fraction {v} outside [0.0, 1.0]")
             }
             Self::SimplexSumInvalid(s) => write!(f, "simplex sum {s} != 1.0"),
             Self::ChemicalBasisMismatch { left, right } => write!(
                 f,
-                "FMINE-REF-107: chemical basis mismatch ({left:?} vs {right:?})"
+                "FMINE-REF-105: chemical basis mismatch ({left:?} vs {right:?})"
             ),
             Self::CurrencyMismatch { left, right } => {
                 write!(f, "currency mismatch ({left:?} vs {right:?})")
@@ -652,7 +653,7 @@ impl FxRate {
     }
 }
 
-// --- Chemical Species Basis Tags (BD-026, INV-012, FMINE-REF-107) ---
+// --- Chemical Species Basis Tags (BD-026, INV-012, FMINE-REF-105) ---
 
 /// Explicit chemical reporting basis for environmental and metallurgical concentrations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -711,7 +712,7 @@ impl ChemConc {
     }
 
     /// Returns `Ok(true)` if `self > threshold` after enforcing identical `ChemBasis`,
-    /// or `Err(UnitsError::ChemicalBasisMismatch)` (`FMINE-REF-107`) if bases differ.
+    /// or `Err(UnitsError::ChemicalBasisMismatch)` (`FMINE-REF-105`) if bases differ.
     pub fn exceeds_strict(self, threshold: Self) -> Result<bool, UnitsError> {
         if self.basis != threshold.basis {
             return Err(UnitsError::ChemicalBasisMismatch {
@@ -793,6 +794,26 @@ impl HazardousByproduct {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// BD-328.S3: a fraction or moisture outside its interval refuses with 109 (outside its physical domain),
+    /// carrying the value as given; nothing is moved to the nearest bound.
+    #[test]
+    fn test_fraction_outside_unit_interval_refuses_109_never_clamps() {
+        for v in [1.000_001, -0.0001, f64::NAN, f64::INFINITY] {
+            let err = MassFraction::new(v).expect_err("outside [0, 1]");
+            assert_eq!(err.refusal_code(), Some("FMINE-REF-109"));
+            assert!(
+                matches!(err, UnitsError::FractionOutOfBounds(x) if x.to_bits() == v.to_bits())
+            );
+        }
+        let err = MoistureFraction::new(1.0).expect_err("moisture is below 1");
+        assert_eq!(err.refusal_code(), Some("FMINE-REF-109"));
+        assert_eq!(
+            err.to_string(),
+            "FMINE-REF-109: moisture fraction 1 outside [0.0, 1.0)"
+        );
+        assert_eq!(MassFraction::new(1.0).map(MassFraction::value), Ok(1.0));
+    }
 
     #[test]
     fn test_wet_to_dry_and_contained_metal() {
@@ -917,11 +938,12 @@ mod tests {
         let sample_as_n = ChemConc::new(79.0, ChemBasis::ElementalN);
         let who_limit_no3 = ChemConc::new(50.0, ChemBasis::NitrateNO3);
 
-        // Comparing without conversion must trigger FMINE-REF-107.
+        // test_chemical_basis_refuses_105: comparing without conversion is a basis mismatch (§8.4's 105; plan
+        // §25), not 107 (undeclared unit on import).
         let err = sample_as_n
             .exceeds_strict(who_limit_no3)
             .expect_err("must refuse mixed basis");
-        assert_eq!(err.refusal_code(), Some("FMINE-REF-107"));
+        assert_eq!(err.refusal_code(), Some("FMINE-REF-105"));
 
         // Converting to NitrateNO3 reveals the 7x exceedance.
         let sample_as_no3 = sample_as_n

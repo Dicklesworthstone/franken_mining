@@ -11,7 +11,7 @@
 pub mod lmdi;
 
 use fmine_core::anchor::SourceAnchor;
-use fmine_evidence::Refusal;
+use fmine_evidence::{Refusal, RefusalCode};
 
 pub use lmdi::{LmdiState, LmdiWaterfall, decompose_aisc_lmdi, logarithmic_mean};
 
@@ -59,8 +59,8 @@ impl AiscConsolidationBridge {
             self.site_numerator_sum_usd_m - self.consolidated_numerator_usd_m
         };
         if gap.abs() > 0.5 {
-            return Err(Refusal::from_code(
-                "FMINE-REF-203",
+            return Err(Refusal::new(
+                RefusalCode::OutsideAoa203,
                 format!(
                     "{} {} site-sum (${:.1}M) != consolidated (${:.1}M) without L_corp=${:.1}M",
                     self.metal,

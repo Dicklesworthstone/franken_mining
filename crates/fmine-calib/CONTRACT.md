@@ -8,7 +8,7 @@
 - **Allowed Module Families:** `["ledger", "scoring", "prior", "pit", "record"]`
 
 ## 2. Mathematical & Domain Formulation
-Implements the append-only pre-registration `ForecastLedger` (`INV-008`, `FMINE-REF-403`), strictly proper scoring rules (`gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`), `ReferenceClassPrior` (`GB-32`: capex `+28%/+43%`, schedule `+31%`, ramp-up `74%` Yr-1), and `SpatialFrontPitMonitor` (`GB-08` Vecchia/Rosenblatt conditional PIT + `BettingEProcess`).
+Implements the append-only pre-registration `ForecastLedger` (`INV-008`, `FMINE-REF-206`), strictly proper scoring rules (`gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`), `ReferenceClassPrior` (`GB-32`: capex `+28%/+43%`, schedule `+31%`, ramp-up `74%` Yr-1), and `SpatialFrontPitMonitor` (`GB-08` Vecchia/Rosenblatt conditional PIT + `BettingEProcess`).
 
 ## 3. Authority, Epistemics & Representation
 Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) and monitors spatial front miscalibration (`G-CAL-1`).
@@ -49,11 +49,18 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
     is then an observed ratio; the linear estimator's bounds are irrational and refuse with `NotExact`)
 
 ## 5. Guards & Typed Refusals
-- `FMINE-REF-403` (`RetroactiveForecastEdit`, `INV-008`)
+`ForecastLedger` refusals, by condition (`test_ledger_refusals_by_condition`):
+- `FMINE-REF-206` (late registration, exit 3): `register` at or after the outcome's availability, and
+  `record_outcome` at or before the freeze (`INV-008`).
+- `FMINE-REF-507` (frozen record mutation, exit 6): a second `register` of one forecast id, or a second outcome.
+- `FMINE-REF-109` (outside physical domain, exit 3): a non-finite mean or outcome, or `std_dev <= 0`.
+- `FMINE-REF-201` (no claim in domain, exit 3): an outcome for a forecast id the ledger does not hold.
+
+206 and 507 are proposed codes (`docs/adr/ADR-REFUSALS-01.md`).
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-CAL-1`: Expected Gaussian CRPS is uniquely minimized at the true data-generating $(\mu_0, \sigma_0)$.
-- `PO-CAL-2`: Retroactive forecast registration (`t_registered >= t_outcome_avail`) is refused with `FMINE-REF-403`.
+- `PO-CAL-2`: Retroactive forecast registration (`t_registered >= t_outcome_avail`) is refused with `FMINE-REF-206`.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Miscalibrated spatial fronts trip `BettingEProcess` at `E_t >= 20.0` (`alpha = 0.05`) and downgrade downstream claims.

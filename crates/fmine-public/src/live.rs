@@ -2,10 +2,11 @@
 //!
 //! **Files (S1).** Every registered file is load-bearing at the gate. For each registered file, a scratch
 //! workspace holds copies of the other files, and that file absent, written as zero bytes, or replaced by a valid
-//! but foreign xlsx. The loader must refuse each case with `FMINE-REF-502` (exit 8, a catalogued code), count
-//! "1 of n registered", and name that file, and no other, under the label that applies: "missing" for an absent
-//! file, "digest mismatch" for a changed one. Only a refusal passes; a loader that falls back to other bytes, or
-//! re-raises under an unregistered code, fails by name.
+//! but foreign xlsx. The loader must refuse each case with the code §30.1 gives it (an absent file
+//! `FMINE-REF-506`, exit 5; a changed one `FMINE-REF-505`, exit 8), count "1 of n registered", and name that
+//! file, and no other, under the label that applies: "missing" for an absent file, "digest mismatch" for a
+//! changed one. Only a refusal passes; a loader that falls back to other bytes, or re-raises under another
+//! code, fails by name. An unregistered code cannot be raised at all: `Refusal` takes a `RefusalCode`.
 //!
 //! **Leaves (S2).** Every cell an instance cites is live. Each operand is perturbed alone, on a copy of the
 //! parsed sources, and the run repeated. The field located at the leaf must read the new value ("value did not
@@ -17,7 +18,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use fmine_evidence::{Refusal, lookup_refusal_spec};
+use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::styles::NumberFormat;
 use fmine_io::xlsx::{CellValue, ExtractedCell, Sheet, build_minimal_xlsx, parse_a1_ref};
 
@@ -58,6 +59,16 @@ impl CheckKind {
         }
     }
 
+    /// The code the loader must refuse with (§30.1): an absent file is foundation I/O, a changed one a digest
+    /// mismatch.
+    #[must_use]
+    pub fn expected(self) -> RefusalCode {
+        match self {
+            Self::FileDeleted => RefusalCode::InputMissingOrUnreadable506,
+            Self::FileZeroBytes | Self::FileForeign => RefusalCode::DigestMismatch505,
+        }
+    }
+
     fn not_refused(self) -> &'static str {
         match self {
             Self::FileDeleted => "file deletion did not refuse",
@@ -92,12 +103,15 @@ impl LiveCheck {
             || ("null".to_string(), "null".to_string()),
             |(c, e)| (format!("\"{c}\""), e.to_string()),
         );
+        let want = self.kind.expected().spec();
         let mut o = format!(
-            "{{\"kind\":\"{}\",\"file\":\"{}\",\"expected_code\":\"FMINE-REF-502\",\"expected_exit\":8,\
+            "{{\"kind\":\"{}\",\"file\":\"{}\",\"expected_code\":\"{}\",\"expected_exit\":{},\
              \"observed_code\":{code},\"observed_exit\":{exit},\"label\":\"{}\",\"names_only_this_file\":{},\
              \"pass\":{}",
             self.kind.as_str(),
             self.file,
+            want.code,
+            want.exit_code,
             self.kind.label(),
             self.names_only_this_file,
             self.pass()
@@ -208,12 +222,16 @@ fn judge(
         .filter(|o| **o != file)
         .any(|o| what.contains(&format!("{o} (")));
     let names_only_this_file = named && !others;
-    let failure = if refusal.exit_code != 8 {
-        Some(format!("refusal exit {} is not 8", refusal.exit_code))
-    } else if refusal.code != "FMINE-REF-502" || lookup_refusal_spec(refusal.code).is_none() {
+    let want = kind.expected().spec();
+    let failure = if refusal.exit_code != want.exit_code {
         Some(format!(
-            "refusal code {} is not FMINE-REF-502",
-            refusal.code
+            "refusal exit {} is not {}",
+            refusal.exit_code, want.exit_code
+        ))
+    } else if refusal.code != want.code {
+        Some(format!(
+            "refusal code {} is not {}",
+            refusal.code, want.code
         ))
     } else if !what.contains(&format!("1 of {} registered", names.len())) {
         Some(format!(
@@ -1037,7 +1055,11 @@ mod tests {
         assert_eq!(checks.len(), 9);
         for c in &checks {
             assert!(c.pass(), "{}", c.to_json());
-            assert_eq!(c.observed, Some(("FMINE-REF-502", 8)));
+            let want = match c.kind {
+                CheckKind::FileDeleted => ("FMINE-REF-506", 5),
+                CheckKind::FileZeroBytes | CheckKind::FileForeign => ("FMINE-REF-505", 8),
+            };
+            assert_eq!(c.observed, Some(want), "{}", c.to_json());
             assert!(c.names_only_this_file);
         }
         let _ = std::fs::remove_dir_all(&ws);
@@ -1107,26 +1129,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
     }
 
-    /// M4, unregistered code: re-raising under a code the catalogue lacks degrades to FMINE-REF-000, exit 2.
+    /// M4, wrong code. A code the catalogue lacks can no longer be raised: `Refusal::new` takes a `RefusalCode`
+    /// (the compile_fail doctests on `fmine_evidence::Refusal`). Re-raising under another registered code is
+    /// caught by exit where the exits differ and by code where they agree.
     #[test]
-    fn test_live_files_mutant_m4_unregistered_code_is_caught() {
+    fn test_live_files_mutant_m4_wrong_code_is_caught() {
         let (ws, profile) = workspace("m4");
         let reraise = |p: &IssuerProfile, root: &Path| {
             load_registered_sources(p, root)
-                .map_err(|r| Refusal::from_code("FMINE-REF-5O2", r.what))
+                .map_err(|r| Refusal::new(RefusalCode::FaRefusalRelayed501, r.what))
         };
         let checks =
             prove_files(&profile, &ws, &ws.join("scratch"), &reraise).expect("scratch workspaces");
         log("m4", &profile, &ws, &checks);
         assert_eq!(checks.len(), 9);
         for c in &checks {
-            assert_eq!(
-                c.failure.as_deref(),
-                Some("refusal exit 2 is not 8"),
-                "{}",
-                c.to_json()
-            );
-            assert_eq!(c.observed, Some(("FMINE-REF-000", 2)));
+            let want = match c.kind {
+                CheckKind::FileDeleted => "refusal exit 8 is not 5",
+                CheckKind::FileZeroBytes | CheckKind::FileForeign => {
+                    "refusal code FMINE-REF-501 is not FMINE-REF-505"
+                }
+            };
+            assert_eq!(c.failure.as_deref(), Some(want), "{}", c.to_json());
+            assert_eq!(c.observed, Some(("FMINE-REF-501", 8)));
         }
         let _ = std::fs::remove_dir_all(&ws);
     }
@@ -1153,7 +1178,7 @@ mod tests {
         }
         let r = load_registered_sources(&profile, &ws).expect_err("refuses");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
-        assert_eq!((r.code, r.exit_code), ("FMINE-REF-502", 8));
+        assert_eq!((r.code, r.exit_code), ("FMINE-REF-506", 5));
         assert!(r.what.contains("1 of 3 registered"), "{}", r.what);
         assert!(
             r.what.contains("missing: Synthetic_AISC.xlsx ("),
@@ -1510,7 +1535,8 @@ mod tests {
     }
 
     /// BD-338.S3, files, on the real lane: 18 registered workbooks × {absent, zero bytes, foreign xlsx} = 54
-    /// checks, each refusing `FMINE-REF-502`, exit 8, "1 of 18 registered", naming only that file.
+    /// checks, each refusing with its kind's code (an absent file `FMINE-REF-506`, exit 5; a changed one
+    /// `FMINE-REF-505`, exit 8), "1 of 18 registered", naming only that file.
     #[test]
     #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
     fn barrick_live_files_all_refuse() {

@@ -11,7 +11,7 @@
 Implements `CrsId`, `Point3D`, `Ellipsoid` (`WGS84`, `GRS80`), 6th-order Snyder Transverse Mercator (`geodetic_to_utm`, `utm_to_geodetic`), 7-parameter Helmert datum shifts (`Helmert7Params`), and `MineGridTransform` with 2D Andrew monotone-chain convex-hull control-point domain enforcement (`G-CRS-1`, `G-CRS-2`).
 
 ## 3. Authority, Epistemics & Representation
-Prevents silent coordinate datum mixing (`FMINE-REF-105`) and out-of-hull local mine-grid extrapolation (`FMINE-REF-106`).
+Prevents silent coordinate datum mixing and out-of-hull local mine-grid extrapolation (both `FMINE-REF-106`).
 
 ## 4. Public API Surface
 - `CrsId`, `Point3D`, `Ellipsoid`, `UtmCoord`
@@ -19,8 +19,10 @@ Prevents silent coordinate datum mixing (`FMINE-REF-105`) and out-of-hull local 
 - `Helmert7Params`, `MineGridTransform`
 
 ## 5. Guards & Typed Refusals
-- `FMINE-REF-105` (`CrsDatumMismatch`, `G-CRS-1`)
-- `FMINE-REF-106` (`MineGridHullExtrapolation`, `G-CRS-2`)
+§8.4's 106 is "unregistered or incompatible CRS". `CrsError::refusal_code` returns it, as a string (the crate
+sits below `fmine-evidence`), for both:
+- `CrsMismatch` (`G-CRS-1`): points on different CRSs combined without a registered transform;
+- `ExtrapolationBeyondHull` (`G-CRS-2`): a mine-grid point outside the control-point hull beyond its buffer.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-CRS-1`: Sub-millimeter round-trip accuracy (`geodetic -> UTM -> geodetic` `< 1e-4 m`) across Reko Diq (`UTM 41N`), Lumwana (`UTM 35S`), and Carlin (`UTM 11N`).

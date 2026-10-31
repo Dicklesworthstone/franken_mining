@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use fmine_core::hash::sha256;
-use fmine_evidence::{REFUSAL_CATALOG, Refusal};
+use fmine_evidence::{CATALOG, Refusal, RefusalCode};
 use fmine_public::sources::{
     is_issuer_name, is_through_bound, load_issuer_profile, registered_issuers, registry_path,
 };
@@ -517,9 +517,10 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                     )],
                 )
             }
+            // The registries could not be read: foundation I/O, never a stale anchor or a digest code.
             Err(e) => Envelope::refused(
                 "doctor",
-                Refusal::from_code("FMINE-REF-502", e.to_string()),
+                Refusal::new(RefusalCode::InputMissingOrUnreadable506, e.to_string()),
                 vec![NextAction::new("fmine robot-docs", ROBOT_DOCS_WHY)],
             ),
         },
@@ -528,10 +529,11 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 || "fmine assure public --synthetic".to_string(),
                 |issuer| format!("fmine assure public --issuer {issuer}"),
             );
+            // No claim store exists, so no claim is in the requested domain (§8.4's 201, exit 3).
             Envelope::refused(
                 "claim show",
-                Refusal::from_code(
-                    "FMINE-REF-502",
+                Refusal::new(
+                    RefusalCode::NoClaimInDomain201,
                     format!(
                         "no claim store exists in M0, so claim '{id}' cannot be read; claims are emitted only \
                          inside an 'assure public' report"
@@ -544,13 +546,14 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             )
         }
         CliCommand::RobotDocs => {
-            let refusals: Vec<String> = REFUSAL_CATALOG
+            let refusals: Vec<String> = CATALOG
                 .iter()
                 .map(|r| {
                     format!(
-                        "{{\"code\":\"{}\",\"exit_code\":{},\"summary\":\"{}\"}}",
+                        "{{\"code\":\"{}\",\"exit_code\":{},\"status\":\"{}\",\"summary\":\"{}\"}}",
                         r.code,
                         r.exit_code,
+                        r.status.as_str(),
                         escape_json(r.summary)
                     )
                 })
@@ -638,8 +641,8 @@ mod tests {
         assert!(!env.payload_json.contains("next_actions"));
     }
 
-    /// Without the registered workbooks the gate-eligible run refuses with exit 8 and names the files; it
-    /// never substitutes stand-in content (BD-321).
+    /// Without the registered workbooks the gate-eligible run refuses with 506 (foundation I/O, exit 5) and
+    /// names the files; it never substitutes stand-in content (BD-321).
     ///
     /// The scratch workspace holds a copy of the registry and no corpus.
     #[test]
@@ -662,9 +665,9 @@ mod tests {
         )
         .expect("parse");
         let env = execute_command(&cmd, &ws_parsed);
-        assert_eq!((env.exit_code, env.status), (8, "refused"));
+        assert_eq!((env.exit_code, env.status), (5, "refused"));
         let json = env.to_json();
-        assert!(json.contains("\"code\":\"FMINE-REF-502\""));
+        assert!(json.contains("\"code\":\"FMINE-REF-506\""));
         assert!(json.contains("Barrick_Q2_2026_AISC.xlsx"));
         assert!(json.contains("\"payload\":null"));
 
@@ -798,8 +801,10 @@ mod tests {
             },
             &workspace_root(),
         );
-        assert_eq!((env.exit_code, env.status), (8, "refused"));
-        assert!(env.to_json().contains("no claim store exists in M0"));
+        assert_eq!((env.exit_code, env.status), (3, "refused"));
+        let json = env.to_json();
+        assert!(json.contains("\"code\":\"FMINE-REF-201\""), "{json}");
+        assert!(json.contains("no claim store exists in M0"), "{json}");
     }
 
     /// Gate run on the real registered workbooks (public lane; the files are not in git). Run with
@@ -1009,7 +1014,15 @@ mod tests {
         let rob = env_rob.to_json();
         assert!(rob.contains("\"FMT-ENV-1\""));
         assert!(rob.contains("\"issuers\":[\"barrick\"]"), "{rob}");
-        assert!(rob.contains("{\"code\":\"FMINE-REF-502\",\"exit_code\":8,"));
+        assert!(rob.contains("{\"code\":\"FMINE-REF-502\",\"exit_code\":6,\"status\":\"active\","));
+        assert!(
+            rob.contains("{\"code\":\"FMINE-REF-506\",\"exit_code\":5,\"status\":\"proposed\",")
+        );
+        assert_eq!(
+            rob.matches("{\"code\":\"FMINE-REF-").count(),
+            CATALOG.len(),
+            "{rob}"
+        );
         // robot-docs documents every envelope field, in print order.
         let doc = &env_rob.payload_json[env_rob
             .payload_json
@@ -1114,10 +1127,12 @@ mod tests {
             "{}",
             env.to_json()
         );
+        // The readers disagree, so the value is not observable from the evidence (202, exit 3).
         std::fs::write(&path, rows("(1.6)")).expect("rows");
         let env = execute_command(&cmd, &ws);
-        assert_eq!((env.exit_code, env.status), (8, "refused"));
+        assert_eq!((env.exit_code, env.status), (3, "refused"));
         let json = env.to_json();
+        assert!(json.contains("\"code\":\"FMINE-REF-202\""), "{json}");
         assert!(
             json.contains("at Doc.pdf:p2:Table:Row/Col (reader_a, reader_b: token)"),
             "{json}"
@@ -1127,14 +1142,20 @@ mod tests {
             "{json}"
         );
         std::fs::write(&path, rows("(1.5)")).expect("rows");
-        std::fs::remove_file(ws.join("corpus").join("Doc.pdf")).expect("remove document");
+        // A registered document that is altered is a digest mismatch (505, exit 8); one that is gone is
+        // foundation I/O (506, exit 5).
+        std::fs::write(ws.join("corpus").join("Doc.pdf"), b"%PDF-1.4 altered")
+            .expect("alter document");
         let env = execute_command(&cmd, &ws);
         assert_eq!((env.exit_code, env.status), (8, "refused"));
-        assert!(
-            env.to_json().contains("missing: Doc.pdf"),
-            "{}",
-            env.to_json()
-        );
+        let json = env.to_json();
+        assert!(json.contains("\"code\":\"FMINE-REF-505\""), "{json}");
+        std::fs::remove_file(ws.join("corpus").join("Doc.pdf")).expect("remove document");
+        let env = execute_command(&cmd, &ws);
+        assert_eq!((env.exit_code, env.status), (5, "refused"));
+        let json = env.to_json();
+        assert!(json.contains("\"code\":\"FMINE-REF-506\""), "{json}");
+        assert!(json.contains("missing: Doc.pdf"), "{json}");
         let _ = std::fs::remove_dir_all(&ws);
     }
 
@@ -1239,8 +1260,10 @@ mod tests {
             "fmine assure public --issuer barrick",
             "the gate-eligible run over the workbooks in registries/sources/barrick.toml",
         );
-        let fix_502 =
-            "Re-verify input file integrity or regenerate the bundle from canonical sources.";
+        let fix_506 =
+            "Put each named file at its registered path, or correct the registry entry named.";
+        let fix_201 = "Query a domain that has claims, or produce the claim first (a public figure is emitted \
+                       by its report).";
         let expected = [
             format!(
                 "{}\"certificate\":\"<certificate>\",\"warnings\":[],\"next_actions\":[{barrick_run},\
@@ -1249,8 +1272,8 @@ mod tests {
             ),
             format!(
                 "{}\"certificate\":null,\"warnings\":[],\"next_actions\":[{doctor}],\"payload\":null,\
-                 \"refusal\":{{\"code\":\"FMINE-REF-502\",\"exit_code\":8,\"what\":\"<what>\",\"fix\":\"{fix_502}\"}}}}",
-                head("assure public", "refused", 8, "null")
+                 \"refusal\":{{\"code\":\"FMINE-REF-506\",\"exit_code\":5,\"what\":\"<what>\",\"fix\":\"{fix_506}\"}}}}",
+                head("assure public", "refused", 5, "null")
             ),
             format!(
                 "{}\"certificate\":\"<certificate>\",\"warnings\":[],\"next_actions\":[{barrick_run},\
@@ -1269,9 +1292,9 @@ mod tests {
             ),
             format!(
                 "{}\"certificate\":null,\"warnings\":[],\"next_actions\":[{}],\"payload\":null,\
-                 \"refusal\":{{\"code\":\"FMINE-REF-502\",\"exit_code\":8,\"what\":\"<what>\",\
-                 \"fix\":\"{fix_502}\"}}}}",
-                head("claim show", "refused", 8, "null"),
+                 \"refusal\":{{\"code\":\"FMINE-REF-201\",\"exit_code\":3,\"what\":\"<what>\",\
+                 \"fix\":\"{fix_201}\"}}}}",
+                head("claim show", "refused", 3, "null"),
                 action(
                     "fmine assure public --issuer barrick",
                     "claims exist only inside an assure public report"
@@ -1317,7 +1340,7 @@ mod tests {
             Envelope::usage_error("unknown", "bad"),
             Envelope::refused(
                 "claim show",
-                Refusal::from_code("FMINE-REF-502", "absent"),
+                Refusal::new(RefusalCode::NoClaimInDomain201, "absent"),
                 Vec::new(),
             ),
         ] {
@@ -1451,8 +1474,8 @@ mod tests {
     }
 
     #[test]
-    fn test_refused_502_points_to_doctor() {
-        let ws = no_corpus_workspace("refused-502");
+    fn test_refused_506_points_to_doctor() {
+        let ws = no_corpus_workspace("refused-506");
         let env = envelope_for(&[
             "assure",
             "public",
@@ -1461,7 +1484,10 @@ mod tests {
             "--workspace",
             &ws.display().to_string(),
         ]);
-        assert_eq!(env.refusal.as_ref().map(|r| r.code), Some("FMINE-REF-502"));
+        assert_eq!(
+            env.refusal.as_ref().map(|r| (r.code, r.exit_code)),
+            Some(("FMINE-REF-506", 5))
+        );
         let commands: Vec<&str> = env
             .next_actions
             .iter()

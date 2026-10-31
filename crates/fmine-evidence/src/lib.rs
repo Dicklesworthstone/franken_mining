@@ -1,35 +1,54 @@
 //! Epistemic evidence lattice (`EvidenceClass`, `KnowledgeState`, `ClaimColor`) and
-//! structured refusal catalog (`FMINE-REF-*`, `BD-037`–`BD-039`).
+//! structured refusal catalog (`FMINE-REF-*`, `BD-037`–`BD-039`, BD-328).
 
 pub mod lattice;
+mod refusal_catalog;
 
 pub use lattice::{ClaimColor, EvidenceClass, KnowledgeState, project_color};
+pub use refusal_catalog::{CATALOG, RefusalCode};
 
 use std::fmt;
 
 /// Structured refusal diagnostic with actionable remedy (`INV-011`, `BD-039`).
+///
+/// Outside this crate the only constructor is [`Refusal::new`], which takes a [`RefusalCode`], so every
+/// refusal carries a code from `registries/refusals.toml` (BD-328):
+///
+/// ```
+/// use fmine_evidence::{Refusal, RefusalCode};
+/// let r = Refusal::new(RefusalCode::Conservation101, "metal balance open by 2 t");
+/// assert_eq!((r.code, r.exit_code), ("FMINE-REF-101", 3));
+/// ```
+///
+/// A free string is not a code:
+///
+/// ```compile_fail
+/// let _ = fmine_evidence::Refusal::new("FMINE-REF-101", "detail");
+/// ```
+///
+/// and the fields cannot be assembled by hand:
+///
+/// ```compile_fail
+/// let _ = fmine_evidence::Refusal { code: "FMINE-REF-101", exit_code: 3, what: String::new(), fix: "" };
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Refusal {
-    /// Canonical code (`FMINE-REF-101` .. `FMINE-REF-502`).
+    /// The registered code, `FMINE-REF-nnn`.
     pub code: &'static str,
-    ///Deterministic CLI exit code (`2..=8`).
+    /// The CLI exit code (plan §30.1's family rule; `3..=8`).
     pub exit_code: u8,
-    /// Human- and agent-readable explanation of what guard failed.
+    /// The code's summary, then `: ` and the specific detail.
     pub what: String,
     /// Concrete remediation step required to resolve the refusal.
     pub fix: &'static str,
 }
 
 impl Refusal {
-    /// Constructs a `Refusal` from a canonical `FMINE-REF-*` code and specific context detail.
+    /// A refusal under the registered `code`, with `detail` appended to the code's summary.
     #[must_use]
-    pub fn from_code(code: &'static str, detail: impl Into<String>) -> Self {
-        let spec = lookup_refusal_spec(code).unwrap_or(RefusalSpec {
-            code: "FMINE-REF-000",
-            exit_code: 2,
-            summary: "Unspecified invariant refusal",
-            fix: "Inspect the refusal detail and consult registries/refusals.toml.",
-        });
+    pub fn new(code: RefusalCode, detail: impl Into<String>) -> Self {
+        let spec = code.spec();
         let d = detail.into();
         let what = if d.is_empty() {
             spec.summary.to_string()
@@ -57,155 +76,58 @@ impl fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// Static refusal specification entry matching `registries/refusals.toml`.
+/// A registry row's status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefusalStatus {
+    /// A plan §8.4 code.
+    Active,
+    /// Awaiting the owner's plan amendment (`docs/adr/ADR-REFUSALS-01.md`).
+    Proposed,
+    /// Held, not yet used.
+    Reserved,
+}
+
+impl RefusalStatus {
+    /// The registry's spelling: `active`, `proposed` or `reserved`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Proposed => "proposed",
+            Self::Reserved => "reserved",
+        }
+    }
+}
+
+/// One row of `registries/refusals.toml`, as compiled into [`CATALOG`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RefusalSpec {
     pub code: &'static str,
+    pub key: &'static str,
     pub exit_code: u8,
+    pub status: RefusalStatus,
     pub summary: &'static str,
     pub fix: &'static str,
 }
 
-/// Complete static catalog of canonical `FMINE-REF-*` refusal specifications (`BD-039`).
-pub const REFUSAL_CATALOG: &[RefusalSpec] = &[
-    RefusalSpec {
-        code: "FMINE-REF-101",
-        exit_code: 3,
-        summary: "Coordinate Reference System mismatch across spatial operands",
-        fix: "Reproject both geometries to a common CRS via fmine_crs before combining.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-102",
-        exit_code: 3,
-        summary: "Change-of-support mismatch (point assay vs SMU block)",
-        fix: "Apply discrete Gaussian or affine support correction before comparing point and block grades.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-103",
-        exit_code: 3,
-        summary: "Unweighted arithmetic averaging of intensive/non-additive variable",
-        fix: "Weight grades by dry mass or convert to extensive metal content before averaging.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-104",
-        exit_code: 3,
-        summary: "Density or specific gravity missing in volume-to-mass conversion",
-        fix: "Provide a domain-calibrated dry bulk density Claim on the block or composite.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-105",
-        exit_code: 3,
-        summary: "Mass fraction, moisture, or recovery outside valid [0, 1] simplex",
-        fix: "Clamp or re-normalize compositions on the simplex and verify moisture < 1.0.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-106",
-        exit_code: 3,
-        summary: "Mine-grid coordinate extrapolated outside control-monument convex hull",
-        fix: "Add bounding survey control monuments or restrict evaluation to the convex hull buffer.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-107",
-        exit_code: 3,
-        summary: "Chemical reporting basis mismatch (e.g. NO3-N vs NO3 ion)",
-        fix: "Convert concentrations to a common stoichiometric basis via ChemConc::convert_basis.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-108",
-        exit_code: 3,
-        summary: "Assay-lag lookahead violation (t_assay_available > as_of_decision)",
-        fix: "Filter operational routing inputs to assays reported at or before as_of_decision.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-201",
-        exit_code: 4,
-        summary: "Mass or metal balance discrepancy exceeds 3-sigma tolerance without BILLED split",
-        fix: "Run fmine reconcile mass-balance to decompose discrepancy or attach an adjustment node.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-202",
-        exit_code: 4,
-        summary: "Accounting double-entry journal fails zero-sum balance check",
-        fix: "Ensure debits equal credits in minor currency units for every journal entry.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-203",
-        exit_code: 4,
-        summary: "Disclosure roll-up mismatch without explicit consolidation adjustment layer",
-        fix: "Supply L_corp and L_JV adjustment layers to reconcile site sums to consolidated totals.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-301",
-        exit_code: 5,
-        summary: "Kriging or Cholesky covariance matrix is non-positive-definite or singular",
-        fix: "Check duplicate sample coordinates or add a positive nugget variance.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-302",
-        exit_code: 5,
-        summary: "Geotechnical Factor of Safety or Probability of Failure violates safety envelope",
-        fix: "Flatten inter-ramp slope angle or depressurize pore water before scheduling bench.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-303",
-        exit_code: 5,
-        summary: "Tailings GISTM trigger action response plan (TARP) red threshold exceeded",
-        fix: "Halt deposition into the affected cell and execute emergency drawdown.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-304",
-        exit_code: 5,
-        summary: "Schedule optimization LP/MILP is infeasible under capacity and precedence constraints",
-        fix: "Inspect the IIS minimal conflicting constraint set in the solver diagnostic.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-401",
-        exit_code: 6,
-        summary: "Epistemic gate refuses Green status on Placeholder or failed-calibration claim",
-        fix: "Replace placeholder inputs with calibrated claims or downgrade target status.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-402",
-        exit_code: 6,
-        summary: "Confidentiality lattice violation: export level below claim sensitivity",
-        fix: "Aggregate or redact restricted claims before exporting to a lower clearance tier.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-403",
-        exit_code: 6,
-        summary: "Forecast ledger mutation attempted after freeze_time",
-        fix: "Create a new timestamped forecast entry rather than mutating a frozen ledger record.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-404",
-        exit_code: 6,
-        summary: "Decision card missing required Unknown-Unknown (UuTerm) tail-risk slot",
-        fix: "Attach at least one explicit UuTerm scenario or structural residual to the DecisionCard.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-501",
-        exit_code: 7,
-        summary: "Mine schedule step violates physical bench-precedence cone",
-        fix: "Ensure all overlying predecessor blocks are mined in earlier or equal periods.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-502",
-        exit_code: 8,
-        summary: "Artifact SHA-256 or BLAKE3 content digest mismatch against manifest",
-        fix: "Re-verify input file integrity or regenerate the bundle from canonical sources.",
-    },
-    RefusalSpec {
-        code: "FMINE-REF-504",
-        exit_code: 7,
-        summary: "Uncured backfill exposure: secondary stope scheduled adjacent to uncured primary fill (G-HEAD-7)",
-        fix: "Delay secondary stope blast until paste-fill hydration reaches required UCS threshold.",
-    },
-];
+impl RefusalCode {
+    /// The code as printed, `FMINE-REF-nnn`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        self.spec().code
+    }
 
-/// Looks up a `RefusalSpec` by its canonical `FMINE-REF-*` code.
-#[must_use]
-pub fn lookup_refusal_spec(code: &str) -> Option<RefusalSpec> {
-    REFUSAL_CATALOG.iter().copied().find(|s| s.code == code)
+    /// The registered code spelled `code`, if there is one. Reading a code never builds a refusal.
+    #[must_use]
+    pub fn parse(code: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.as_str() == code)
+    }
+}
+
+impl fmt::Display for RefusalCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[cfg(test)]
@@ -271,16 +193,66 @@ mod tests {
     }
 
     #[test]
-    fn test_refusal_catalog_completeness() {
-        assert_eq!(REFUSAL_CATALOG.len(), 22);
-        for spec in REFUSAL_CATALOG {
-            assert!(spec.code.starts_with("FMINE-REF-"));
-            assert!((3..=8).contains(&spec.exit_code));
-            assert!(!spec.summary.is_empty());
-            assert!(!spec.fix.is_empty());
-            let r = Refusal::from_code(spec.code, "test context");
-            assert_eq!(r.code, spec.code);
-            assert_eq!(r.exit_code, spec.exit_code);
+    fn test_catalog_is_the_enum_in_order_and_refusals_carry_its_rows() {
+        assert_eq!(CATALOG.len(), RefusalCode::ALL.len());
+        let mut prev = "";
+        for (spec, code) in CATALOG.iter().zip(RefusalCode::ALL) {
+            assert_eq!(code.spec(), spec);
+            assert!(
+                spec.code.starts_with("FMINE-REF-") && spec.code.len() == 13,
+                "{}",
+                spec.code
+            );
+            assert!(spec.code > prev, "{} after {prev}", spec.code);
+            prev = spec.code;
+            assert!((3..=8).contains(&spec.exit_code), "{}", spec.code);
+            assert!(
+                !spec.summary.is_empty() && !spec.fix.is_empty(),
+                "{}",
+                spec.code
+            );
+            assert_eq!(RefusalCode::parse(spec.code), Some(code));
+            assert_eq!(code.to_string(), spec.code);
+
+            let r = Refusal::new(code, "test context");
+            assert_eq!(
+                (r.code, r.exit_code, r.fix),
+                (spec.code, spec.exit_code, spec.fix)
+            );
+            assert_eq!(r.what, format!("{}: test context", spec.summary));
+            assert_eq!(Refusal::new(code, "").what, spec.summary);
         }
+        // There is no fallback code: an unregistered spelling parses to nothing.
+        assert_eq!(RefusalCode::parse(concat!("FMINE-REF-", "000")), None);
+        assert_eq!(RefusalCode::parse("FMINE-REF-1xx"), None);
+    }
+
+    #[test]
+    fn test_plan_meanings_on_known_codes() {
+        // Spot checks that the catalogue carries plan §8.4's meanings, not the pre-BD-328 ones.
+        let s = |c: RefusalCode| (c.as_str(), c.spec().exit_code, c.spec().status);
+        assert_eq!(
+            s(RefusalCode::UnknownReactiveGround401),
+            ("FMINE-REF-401", 7, RefusalStatus::Active)
+        );
+        assert_eq!(
+            s(RefusalCode::NonIdentifiableAttribution104),
+            ("FMINE-REF-104", 3, RefusalStatus::Active)
+        );
+        assert_eq!(
+            s(RefusalCode::InputMissingOrUnreadable506),
+            ("FMINE-REF-506", 5, RefusalStatus::Proposed)
+        );
+        assert_eq!(
+            s(RefusalCode::DigestMismatch505),
+            ("FMINE-REF-505", 8, RefusalStatus::Proposed)
+        );
+        assert!(
+            !RefusalCode::BasisMismatch105
+                .spec()
+                .fix
+                .to_lowercase()
+                .contains("clamp")
+        );
     }
 }

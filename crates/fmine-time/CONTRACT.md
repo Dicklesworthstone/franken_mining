@@ -19,15 +19,16 @@ Guarantees zero assay-availability lookahead (`t_avail <= as_of_cutoff`) in hist
 - `QuadTemporalStamp`, `AsOfQuery`
 
 ## 5. Guards & Typed Refusals
-- `FMINE-REF-104` (`CalendarWindowMismatch`, `G-TIME-1`)
-- `FMINE-REF-108` (`TemporalLookaheadViolation`, `G-TIME-2`)
+- `FMINE-REF-108` (assay-availability lookahead, `TimeError::AssayLagLookahead`, `G-TIME-2`), the only variant
+  `TimeError::refusal_code` maps. It is a string: the crate sits below `fmine-evidence`.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-TIME-1`: Bijective `CivilDate <-> epoch_days` across `1900-01-01..2200-12-31`.
 - `PO-TIME-2`: `AsOfQuery::admits` refuses any stamp with `t_avail > as_of_cutoff` (`FMINE-REF-108`).
 
 ## 7. Failure Modes & Deterministic Fallbacks
-Invalid calendar dates or inverted shift windows fail closed with `FMINE-REF-104`.
+Invalid civil dates, inverted intervals and a shift crossing a fiscal cut without a split rule (`G-TIME-1`) fail
+closed with typed `TimeError`s that carry no refusal code.
 
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
 - `GATE-TIME-01`

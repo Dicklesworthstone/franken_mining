@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use fmine_evidence::Refusal;
+use fmine_evidence::{Refusal, RefusalCode};
 use fmine_registry::sources::{
     BasisRow, SourcesRegistry, SubjectStatusRow, is_quarter, load_sources_registry,
 };
@@ -256,12 +256,13 @@ impl IssuerProfile {
     }
 
     /// Keeps only the sources whose quarter is at or before `bound` (`YYYYQn`, already validated), so a later
-    /// registry reproduces an earlier run. Refuses when no source remains.
+    /// registry reproduces an earlier run. Refuses when no source remains (`FMINE-REF-201`: no registered
+    /// workbook covers the requested periods).
     pub fn through(mut self, bound: &str) -> Result<Self, Refusal> {
         self.sources.retain(|s| s.quarter.as_str() <= bound);
         if self.sources.is_empty() {
-            return Err(Refusal::from_code(
-                "FMINE-REF-502",
+            return Err(Refusal::new(
+                RefusalCode::NoClaimInDomain201,
                 format!(
                     "no registered {} workbooks at or before {bound}",
                     self.issuer
@@ -574,27 +575,18 @@ pub fn registered_issuers(workspace: &Path) -> Vec<String> {
 }
 
 /// Loads and checks the issuer's registry from `<workspace>/registries/sources/<issuer>.toml`. A missing or
-/// malformed file refuses (`FMINE-REF-502`; BD-328 owns the final code) naming the file and the line.
+/// malformed file refuses (`FMINE-REF-506`, registered input missing or unreadable; exit 5) naming the file
+/// and the line.
 pub fn load_issuer_profile(workspace: &Path, issuer: &str) -> Result<IssuerProfile, Refusal> {
     if !is_issuer_name(issuer) {
-        return Err(Refusal::from_code(
-            "FMINE-REF-502",
-            format!("issuer {issuer:?} is not a registry name"),
-        ));
+        return Err(crate::input_refusal(format!(
+            "issuer {issuer:?} is not a registry name"
+        )));
     }
     let path = registry_path(workspace, issuer);
-    let reg = load_sources_registry(&path).map_err(|e| {
-        Refusal::from_code(
-            "FMINE-REF-502",
-            format!("source registry {}: {e}", path.display()),
-        )
-    })?;
-    IssuerProfile::from_registry(reg).map_err(|e| {
-        Refusal::from_code(
-            "FMINE-REF-502",
-            format!("source registry {}: {e}", path.display()),
-        )
-    })
+    let bad = |e: String| crate::input_refusal(format!("source registry {}: {e}", path.display()));
+    let reg = load_sources_registry(&path).map_err(|e| bad(e.to_string()))?;
+    IssuerProfile::from_registry(reg).map_err(|e| bad(e.to_string()))
 }
 
 #[cfg(test)]
@@ -649,7 +641,7 @@ mod tests {
         assert_eq!(names, kept);
         assert_eq!(p.clone().through("2099Q4").expect("all").sources.len(), all);
         let e = p.through("2023Q4").expect_err("nothing that early");
-        assert_eq!(e.code, "FMINE-REF-502");
+        assert_eq!((e.code, e.exit_code), ("FMINE-REF-201", 3));
         assert!(
             is_through_bound("2026Q2")
                 && !is_through_bound("2026Q5")
@@ -664,7 +656,7 @@ mod tests {
         let sources = dir.join("registries").join("sources");
         std::fs::create_dir_all(&sources).expect("temp registry dir");
         let e = load_issuer_profile(&dir, "nobody").expect_err("no file");
-        assert_eq!(e.code, "FMINE-REF-502");
+        assert_eq!((e.code, e.exit_code), ("FMINE-REF-506", 5));
         assert!(e.what.contains("nobody.toml"), "{}", e.what);
         let text =
             std::fs::read_to_string(registry_path(&workspace_root(), "barrick")).expect("read");

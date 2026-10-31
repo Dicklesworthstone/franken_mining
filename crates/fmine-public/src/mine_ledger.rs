@@ -2425,13 +2425,7 @@ mod tests {
             (1, lg(["100", "10", "9"]), vec![]),
             (2, lg(["100", "80", "70"]), lg(["200", "90", "79"])),
         ];
-        let statuses = [SubjectStatus {
-            subject: "Loulo-Gounkoto".to_string(),
-            kind: StatusKind::Withheld,
-            first: (2030, 1),
-            last: Some((2030, 3)),
-            evidence: "E818".to_string(),
-        }];
+        let statuses = loulo_withheld();
         let withheld = refused(
             Reason::Withheld {
                 evidence: "E818".to_string(),
@@ -2758,13 +2752,7 @@ mod tests {
     /// named); a missing row; then a blank or unreadable operand at that cell.
     #[test]
     fn test_site_sheet_refusals_in_order() {
-        let statuses = [SubjectStatus {
-            subject: "Loulo-Gounkoto".to_string(),
-            kind: StatusKind::Withheld,
-            first: (2030, 1),
-            last: Some((2030, 3)),
-            evidence: "E818".to_string(),
-        }];
+        let statuses = loulo_withheld();
         let (l, refusals) = site_ledger(
             GOLD,
             &[
@@ -2962,6 +2950,16 @@ mod tests {
             ]
         );
         assert_eq!(l.components, 2);
+    }
+
+    fn loulo_withheld() -> [SubjectStatus; 1] {
+        [SubjectStatus {
+            subject: "Loulo-Gounkoto".to_string(),
+            kind: StatusKind::Withheld,
+            first: (2030, 1),
+            last: Some((2030, 3)),
+            evidence: "E818".to_string(),
+        }]
     }
 
     fn member(region: &str, member: &str, first: &str) -> RegionMemberRow {
@@ -3245,13 +3243,7 @@ mod tests {
             member("Africa", "Loulo-Gounkoto", "2030Q1"),
             member("Africa", "Kibali", "2030Q1"),
         ];
-        let statuses = [SubjectStatus {
-            subject: "Loulo-Gounkoto".to_string(),
-            kind: StatusKind::Withheld,
-            first: (2030, 1),
-            last: Some((2030, 3)),
-            evidence: "E818".to_string(),
-        }];
+        let statuses = loulo_withheld();
         let quarter = || {
             vec![
                 ("Loulo-Gounkoto (80%)", ["100", "80", "70"]),
@@ -3979,13 +3971,7 @@ mod tests {
         let q2 = row(["12", "12", "—", "12", "", "10", "10"], "1");
         let h1 = row(["12", "14", "—", "12", "24", "20", "20"], "2");
         let six = &sites[..6];
-        let statuses = [SubjectStatus {
-            subject: "Loulo-Gounkoto".to_string(),
-            kind: StatusKind::Withheld,
-            first: (2030, 1),
-            last: Some((2030, 3)),
-            evidence: "E818".to_string(),
-        }];
+        let statuses = loulo_withheld();
         let rules = LedgerRules {
             statuses: &statuses,
             ..NONE

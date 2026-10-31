@@ -1,157 +1,340 @@
-# registries/refusals.toml — Canonical FMINE-REF-* Refusal Code Registry (§8.4, §25.6, §31.3, BD-031, BD-039)
+# registries/refusals.toml — the FMINE-REF-* refusal registry, the single source (plan §8.4, §30.1; BD-328)
+#
+# One [[refusal]] row per code, in ascending code order. `cargo run -p xtask -- gen-refusals` writes the
+# compiled catalogue, crates/fmine-evidence/src/refusal_catalog.rs, from this file; `check-refusals` (part of
+# check-all) fails when that file differs, when an active row's "<nnn> <plan_text>" is not an item of its family's
+# §8.4 row or a §8.4 code has no active row, when an exit code breaks the §30.1 family rule, when a crate names
+# an unregistered code, or when a fix says to clamp.
+#
+# Fields, all required:
+# - code: "FMINE-REF-nnn"; family: "<first digit>xx"; key: snake_case, the enum variant's stem.
+# - exit_code: §30.1, 1xx and 2xx -> 3, 3xx and 4xx -> 7, 5xx -> 8 (digest or signature) or 6 (stale anchor).
+#   Listed exceptions, in the check: 504 -> 7 (a safety refusal numbered 5xx) and 506 -> 5 (foundation I/O:
+#   "a missing or unreadable registered input is a typed refusal that names the file, never a digest-mismatch
+#   code").
+# - status: active (a §8.4 code), proposed (awaiting the owner's plan amendment, docs/adr/ADR-REFUSALS-01.md;
+#   reported as a warning) or reserved.
+# - plan_text: the §8.4 phrase after the number, verbatim; for a proposed row, the phrase the ADR proposes.
+# - what: the summary printed before a refusal's detail. fix: the remedy; it never says to clamp.
 
-schema_version = 1
+schema_version = 2
 
 [[refusal]]
 code = "FMINE-REF-101"
+family = "1xx"
+key = "conservation"
 exit_code = 3
-category = "domain_law"
-what = "Mass or metal conservation law violated beyond measurement tolerance (Sigma_in - Sigma_out - Delta_stock != 0)"
-fix = "Inspect flow node balances or open a Touchstone reconciliation case; never insert a plug row."
+status = "active"
+plan_text = "conservation"
+what = "Conservation law violated beyond measurement tolerance (inputs - outputs - stock change is not zero)"
+fix = "Inspect the flow-node balances or open a reconciliation case; never insert a plug row."
 
 [[refusal]]
 code = "FMINE-REF-102"
+family = "1xx"
+key = "support_mismatch"
 exit_code = 3
-category = "domain_law"
-what = "Incompatible physical support (e.g. combining core interval and SMU block without explicit change-of-support)"
-fix = "Apply explicit mass-space compositing or sub-cell regularization (G-STRATA-11) before combining."
+status = "active"
+plan_text = "support mismatch"
+what = "Incompatible physical support (e.g. a core interval combined with an SMU block without a change of support)"
+fix = "Composite in mass space or regularise to a common support before combining."
 
 [[refusal]]
 code = "FMINE-REF-103"
+family = "1xx"
+key = "non_additive_average"
 exit_code = 3
-category = "domain_law"
-what = "Non-additive average attempted (e.g. unweighted addition of Grade, FoS, RMR, or recovery)"
-fix = "Compute mass-weighted mean (contained_metal / dry_mass) or use a nonlinear transform card."
+status = "active"
+plan_text = "non-additive average"
+what = "Non-additive average attempted (an unweighted sum or mean of grade, FoS, RMR or recovery)"
+fix = "Use the mass-weighted mean (contained metal / dry mass) or a declared nonlinear transform."
 
 [[refusal]]
 code = "FMINE-REF-104"
+family = "1xx"
+key = "non_identifiable_attribution"
 exit_code = 3
-category = "domain_law"
-what = "Non-identifiable attribution or unbridged aggregation layer (e.g. site-to-company AISC gap without L_corp/L_JV)"
-fix = "Supply named corporate/JV layers (G-BULL-3) or widen the reconciliation witness set."
+status = "active"
+plan_text = "non-identifiable attribution"
+what = "Non-identifiable attribution: the evidence fits more than one explanation, so none is reported"
+fix = "Add evidence that separates the candidates (another witness, document or period); never pick one."
 
 [[refusal]]
 code = "FMINE-REF-105"
+family = "1xx"
+key = "basis_mismatch"
 exit_code = 3
-category = "domain_law"
-what = "Basis mismatch across wet/dry mass, metal stage (InSitu..Sold), chemical species (ChemBasis), or currency"
-fix = "Convert explicitly using moisture Claim, recovery card, molar-mass stoichiometric ratio, or FxRateDeck."
+status = "active"
+plan_text = "basis mismatch (wet/dry, metal stage)"
+what = "Basis mismatch: wet vs dry mass, metal stage, chemical species or currency"
+fix = "Convert explicitly (moisture claim, recovery card, stoichiometric ratio or FX deck) before combining."
 
 [[refusal]]
 code = "FMINE-REF-106"
+family = "1xx"
+key = "crs_unregistered_or_incompatible"
 exit_code = 3
-category = "domain_law"
-what = "Unregistered CRS or coordinate outside the control-point convex hull of a local mine grid (G-CRS-2)"
-fix = "Register the EPSG/mine-grid transform in registries/crs.toml or extend surveyed control points."
+status = "active"
+plan_text = "unregistered or incompatible CRS"
+what = "Unregistered or incompatible CRS, or a coordinate outside the control-point hull of a local grid"
+fix = "Register the transform in registries/crs.toml, transform both sides to one CRS, or extend the control points."
 
 [[refusal]]
 code = "FMINE-REF-107"
+family = "1xx"
+key = "undeclared_unit_basis_or_tz"
 exit_code = 3
-category = "domain_law"
-what = "Undeclared unit, mass basis, chemical basis, or time zone at import boundary"
-fix = "Declare the unit, basis, and site calendar in the import manifest before quarantine release."
+status = "active"
+plan_text = "undeclared unit, basis or time zone on import (§25)"
+what = "Undeclared unit, basis or time zone at the import boundary"
+fix = "Declare the unit, basis and site calendar in the import manifest."
 
 [[refusal]]
 code = "FMINE-REF-108"
+family = "1xx"
+key = "assay_lookahead"
 exit_code = 3
-category = "domain_law"
-what = "Assay-availability lookahead violation: availability_time > decision_timestamp tau (G-TIME-2, INV-016)"
-fix = "Filter observations via as_of_decision(tau) so backtests cannot see delayed fire/POX assays before lab receipt."
+status = "active"
+plan_text = "assay-availability lookahead (`AssayLagLookahead`; §6.3, G-TIME-2)"
+what = "Assay-availability lookahead: the observation was not yet available at the decision time (G-TIME-2)"
+fix = "Filter observations with as_of_decision(t), so a backtest never sees an assay before its availability time."
+
+[[refusal]]
+code = "FMINE-REF-109"
+family = "1xx"
+key = "outside_physical_domain"
+exit_code = 3
+status = "proposed"
+plan_text = "value outside its physical domain"
+what = "Value outside its physical domain (e.g. a fraction outside [0, 1], a non-positive standard deviation)"
+fix = "Correct the source value or its unit; the value is refused as given, never adjusted."
 
 [[refusal]]
 code = "FMINE-REF-201"
-exit_code = 4
-category = "epistemic"
-what = "Epistemic laundering or missing unknown-unknown budget (UuTerm) on a decision-facing Claim (G-UU, INV-015)"
-fix = "Attach an explicit UuTerm (UnmodelledBudget or FlipMargin) and preserve worst-input EvidenceClass (NL-1)."
+family = "2xx"
+key = "no_claim_in_domain"
+exit_code = 3
+status = "active"
+plan_text = "no claim in domain"
+what = "No claim covers the requested domain"
+fix = "Query a domain that has claims, or produce the claim first (a public figure is emitted by its report)."
 
 [[refusal]]
 code = "FMINE-REF-202"
-exit_code = 4
-category = "epistemic"
-what = "Late forecast registration: resolution timestamp precedes or equals freeze timestamp (INV-008)"
-fix = "Register and hash forecasts before the physical period closes or disclosure is published."
+family = "2xx"
+key = "not_observable"
+exit_code = 3
+status = "active"
+plan_text = "not observable"
+what = "Not observable: the quantity cannot be read from the available evidence (stale, offline or absent)"
+fix = "Restore or replace the instrument or source; a quantity that is not observable is never reported as stable."
 
 [[refusal]]
 code = "FMINE-REF-203"
-exit_code = 4
-category = "domain_law"
-what = "Disclosure roll-up mismatch without explicit consolidation adjustment layer (G-BULL-3)"
-fix = "Supply L_corp and L_JV adjustment layers to reconcile site sums to consolidated totals."
+family = "2xx"
+key = "outside_aoa"
+exit_code = 3
+status = "active"
+plan_text = "outside AOA"
+what = "Outside the area of applicability of the model, card or roll-up"
+fix = "Stay inside the validity box, or extrapolate explicitly with colour Estimated and a priced UU term."
+
+[[refusal]]
+code = "FMINE-REF-204"
+family = "2xx"
+key = "unbudgeted_unknowns"
+exit_code = 3
+status = "active"
+plan_text = "unbudgeted unknowns"
+what = "Unbudgeted unknowns: a decision-facing claim carries no unknown-unknown (UU) budget (G-UU, INV-015)"
+fix = "Attach an explicit UU term (an unmodelled budget or a flip margin)."
+
+[[refusal]]
+code = "FMINE-REF-205"
+family = "2xx"
+key = "calibration_required"
+exit_code = 3
+status = "active"
+plan_text = "calibration required for decision-grade use"
+what = "Calibration required for decision-grade use: placeholder, uncalibrated or failed-calibration evidence (NL-4)"
+fix = "Calibrate the inputs, or accept the lower colour the evidence supports."
+
+[[refusal]]
+code = "FMINE-REF-206"
+family = "2xx"
+key = "late_registration"
+exit_code = 3
+status = "proposed"
+plan_text = "forecast registered after its freeze or resolution"
+what = "Forecast registered after its freeze or resolution time (INV-008)"
+fix = "Register and hash forecasts before the period closes or the outcome is published."
+
+[[refusal]]
+code = "FMINE-REF-207"
+family = "2xx"
+key = "numerical_certificate_failed"
+exit_code = 3
+status = "proposed"
+plan_text = "numerical certificate failed (non-SPD, solver residual)"
+what = "Numerical certificate failed (a matrix not square or not positive definite, or a residual over its bound)"
+fix = "Inspect the input for duplicate or collinear rows; never perturb a matrix to force a solve."
+
+[[refusal]]
+code = "FMINE-REF-208"
+family = "2xx"
+key = "source_cell_unusable"
+exit_code = 3
+status = "proposed"
+plan_text = "source cell unusable (formula error or text where a number is required)"
+what = "Source cell unusable: a formula error or text where a number is required"
+fix = "Read the figure from a cell that holds a number, or register the gap; never substitute a value."
 
 [[refusal]]
 code = "FMINE-REF-301"
+family = "3xx"
+key = "mnpi_wall"
 exit_code = 7
-category = "wall_and_authz"
-what = "MNPI wall boundary violation or non-positive-definite covariance matrix"
-fix = "Restrict query to Public-tainted claims or inspect duplicate sample coordinates."
+status = "active"
+plan_text = "MNPI wall"
+what = "MNPI wall: the request would release material non-public or above-clearance data"
+fix = "Restrict the query to public-tainted claims, or aggregate or redact before export."
 
 [[refusal]]
 code = "FMINE-REF-302"
+family = "3xx"
+key = "venture_wall"
 exit_code = 7
-category = "wall_and_authz"
-what = "Venture/JV wall violation: cross-JV access without partner entitlement caveat (e.g. NGM 61.5%/38.5%, Twiga, Reko Diq)"
-fix = "Scope the query to a single venture cell or use public-basis disclosures."
+status = "active"
+plan_text = "venture wall"
+what = "Venture wall: cross-venture access without the partner entitlement"
+fix = "Scope the query to one venture cell, or use public-basis disclosures."
 
 [[refusal]]
 code = "FMINE-REF-303"
+family = "3xx"
+key = "residency"
 exit_code = 7
-category = "wall_and_authz"
-what = "Host-state data-residency violation: export of restricted geoscience or personal data outside jurisdiction"
-fix = "Keep raw data in the sovereign site cell and replicate only permitted aggregate rollups."
+status = "active"
+plan_text = "residency"
+what = "Residency: export of restricted data outside its jurisdiction"
+fix = "Keep raw data in the sovereign site cell and replicate only permitted aggregates."
 
 [[refusal]]
 code = "FMINE-REF-304"
-exit_code = 5
-category = "solver"
-what = "Schedule optimization LP/MILP is infeasible under capacity and precedence constraints"
-fix = "Inspect the IIS minimal conflicting constraint set in the solver diagnostic."
+family = "3xx"
+key = "missing_human_token"
+exit_code = 7
+status = "active"
+plan_text = "missing human authority token"
+what = "Missing human authority token for an effect that requires one"
+fix = "Obtain a human-signed authority token; FrankenMining prepares advisories only."
 
 [[refusal]]
 code = "FMINE-REF-401"
-exit_code = 6
-category = "authority_and_sync"
-what = "Fencing epoch regression, stale lease, or Red/Placeholder claim presented as decision-grade"
-fix = "Refresh cell lease epoch or replace placeholder inputs with calibrated claims."
+family = "4xx"
+key = "unknown_reactive_ground"
+exit_code = 7
+status = "active"
+plan_text = "unknown reactive ground → no ANFO plan"
+what = "Unknown reactive ground: no ANFO charge plan is produced"
+fix = "Test the ground for reactivity, or plan with a product approved for reactive ground."
 
 [[refusal]]
 code = "FMINE-REF-402"
-exit_code = 6
-category = "wall_and_authz"
-what = "Confidentiality lattice violation: export level below claim sensitivity (INV-007)"
-fix = "Aggregate or redact restricted claims before exporting to a lower clearance tier."
+family = "4xx"
+key = "unknown_pag"
+exit_code = 7
+status = "active"
+plan_text = "unknown PAG → no NAF dump plan"
+what = "Unknown PAG status: no NAF dump destination is offered"
+fix = "Classify the material's acid-rock-drainage class before routing it."
 
 [[refusal]]
 code = "FMINE-REF-403"
-exit_code = 6
-category = "epistemic"
-what = "Forecast ledger mutation attempted after freeze_time (INV-008)"
-fix = "Create a new timestamped forecast entry rather than mutating a frozen ledger record."
+family = "4xx"
+key = "unknown_moisture_vs_tml"
+exit_code = 7
+status = "active"
+plan_text = "unknown moisture vs TML → no shipment release"
+what = "Unknown concentrate moisture against its TML: no shipment release"
+fix = "Measure the lot's moisture and TML before release."
 
 [[refusal]]
 code = "FMINE-REF-404"
-exit_code = 6
-category = "epistemic"
-what = "Decision card missing required Unknown-Unknown (UuTerm) tail-risk slot (INV-015)"
-fix = "Attach at least one explicit UuTerm scenario or structural residual to the DecisionCard."
+family = "4xx"
+key = "stale_tsf_instrumentation"
+exit_code = 7
+status = "active"
+plan_text = "stale TSF instrumentation → no \"within TARP\" statement"
+what = "Stale TSF instrumentation: no \"within TARP\" statement"
+fix = "Restore the instruments or read them within their staleness bound; stale is not observable, never stable."
 
 [[refusal]]
 code = "FMINE-REF-501"
-exit_code = 7
-category = "safety_and_actuation"
-what = "Direct actuation attempt on FMS/AHS/PLC/mill/TSF hardware (INV-002, NONGOAL-002, G-HEAD-1)"
-fix = "Prepare a read-only EFFECT-* advisory document and require a human-signed HumanAuthorityToken."
+family = "5xx"
+key = "fa_refusal_relayed"
+exit_code = 8
+status = "active"
+plan_text = "FA refusal relayed (`FA-REF-nnn`)"
+what = "Refusal relayed from the FA engine (FA-REF-nnn)"
+fix = "Read the relayed FA refusal and resolve it in the FA engine."
 
 [[refusal]]
 code = "FMINE-REF-502"
+family = "5xx"
+key = "stale_anchor"
+exit_code = 6
+status = "active"
+plan_text = "stale anchor"
+what = "Stale anchor: the anchor is older than the state it attests"
+fix = "Re-anchor against the current state before relying on the record."
+
+[[refusal]]
+code = "FMINE-REF-503"
+family = "5xx"
+key = "sibling_unavailable"
 exit_code = 8
-category = "integrity"
-what = "Artifact SHA-256 or BLAKE3 content digest mismatch or missing required corpus/registry file"
-fix = "Re-verify input file integrity or regenerate the bundle from canonical sources."
+status = "active"
+plan_text = "sibling capability unavailable, fallback engaged"
+what = "Sibling capability unavailable; fallback engaged"
+fix = "Read the fallback's caveats, or retry when the sibling engine is available."
 
 [[refusal]]
 code = "FMINE-REF-504"
+family = "5xx"
+key = "uncured_backfill"
 exit_code = 7
-category = "safety_and_actuation"
-what = "Uncured backfill exposure: secondary stope scheduled adjacent to primary fill with UCS(t_cure) < sigma_req (G-HEAD-7)"
-fix = "Delay secondary stope blast until paste-fill hydration reaches required factor-of-safety UCS threshold."
+status = "active"
+plan_text = "adjacent paste/cemented backfill uncured or strength-degraded (`FillStrength(t) < UCS_design`) → no secondary stope blast plan (§16.3)"
+what = "Adjacent paste or cemented backfill uncured or strength-degraded: no secondary stope blast plan (G-HEAD-7)"
+fix = "Wait until the fill reaches its design strength, or resolve the missing cure QA."
+
+[[refusal]]
+code = "FMINE-REF-505"
+family = "5xx"
+key = "digest_mismatch"
+exit_code = 8
+status = "proposed"
+plan_text = "artifact digest or signature mismatch"
+what = "Artifact digest or signature mismatch"
+fix = "Restore the registered bytes, or register the new file under its own digest."
+
+[[refusal]]
+code = "FMINE-REF-506"
+family = "5xx"
+key = "input_missing_or_unreadable"
+exit_code = 5
+status = "proposed"
+plan_text = "registered input missing or unreadable"
+what = "Registered input missing or unreadable"
+fix = "Put each named file at its registered path, or correct the registry entry named."
+
+[[refusal]]
+code = "FMINE-REF-507"
+family = "5xx"
+key = "frozen_record_mutation"
+exit_code = 6
+status = "proposed"
+plan_text = "frozen record mutation attempted"
+what = "Frozen record mutation attempted"
+fix = "Append a new, timestamped record; a frozen record is never changed."

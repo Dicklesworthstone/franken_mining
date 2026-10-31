@@ -7,7 +7,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use fmine_core::anchor::SourceAnchor;
 use fmine_core::codec::Encoder;
 use fmine_core::id::{ObjectId, PrefixKind};
-use fmine_evidence::{ClaimColor, EvidenceClass, KnowledgeState, Refusal, project_color};
+use fmine_evidence::{
+    ClaimColor, EvidenceClass, KnowledgeState, Refusal, RefusalCode, project_color,
+};
 
 /// Type alias for a `clm_...` content-addressed [`ObjectId`].
 pub type ClaimId = ObjectId;
@@ -184,11 +186,12 @@ impl<T> Claim<T> {
         )
     }
 
-    /// Enforces `INV-007`: refuses export if `self.confidentiality > clearance` (`FMINE-REF-402`).
+    /// Enforces `INV-007`: refuses export if `self.confidentiality > clearance` (`FMINE-REF-301`, the nearest
+    /// §8.4 authorization code until the owner adds a confidentiality row; ADR-REFUSALS-01).
     pub fn verify_export_clearance(&self, clearance: ConfidentialityTier) -> Result<(), Refusal> {
         if self.confidentiality > clearance {
-            return Err(Refusal::from_code(
-                "FMINE-REF-402",
+            return Err(Refusal::new(
+                RefusalCode::MnpiWall301,
                 format!(
                     "claim '{}' has confidentiality {:?} > clearance {:?}",
                     self.metric_key, self.confidentiality, clearance
@@ -199,11 +202,11 @@ impl<T> Claim<T> {
     }
 
     /// Enforces `INV-015` (`G-UU`): refuses decision card emission if `knowledge != KnownKnown`
-    /// and `uu_terms` is empty (`FMINE-REF-404`).
+    /// and `uu_terms` is empty (`FMINE-REF-204`, unbudgeted unknowns).
     pub fn verify_uu_slot_for_decision(&self) -> Result<(), Refusal> {
         if self.knowledge != KnowledgeState::KnownKnown && self.uu_terms.is_empty() {
-            return Err(Refusal::from_code(
-                "FMINE-REF-404",
+            return Err(Refusal::new(
+                RefusalCode::UnbudgetedUnknowns204,
                 format!(
                     "claim '{}' has knowledge state {:?} but zero UuTerm scenarios",
                     self.metric_key, self.knowledge
@@ -213,13 +216,13 @@ impl<T> Claim<T> {
         Ok(())
     }
 
-    /// Enforces `NL-4` (`FMINE-REF-401`): refuses if a caller demands `ClaimColor::Green`
-    /// on a `Placeholder` or failed-calibration claim.
+    /// Enforces `NL-4` (`FMINE-REF-205`, calibration required for decision-grade use): refuses if a caller
+    /// demands `ClaimColor::Green` on a `Placeholder` or failed-calibration claim.
     pub fn require_decision_grade(&self) -> Result<ClaimColor, Refusal> {
         let c = self.color();
         if c == ClaimColor::Red {
-            return Err(Refusal::from_code(
-                "FMINE-REF-401",
+            return Err(Refusal::new(
+                RefusalCode::CalibrationRequired205,
                 format!(
                     "claim '{}' is Red (evidence={:?}, calibration_failed={})",
                     self.metric_key, self.evidence, self.calibration_failed
@@ -233,8 +236,8 @@ impl<T> Claim<T> {
 /// Verifies that two claims have identical `SpatialSupport` before direct comparison or combination (`FMINE-REF-102`).
 pub fn verify_support_compatible(a: SpatialSupport, b: SpatialSupport) -> Result<(), Refusal> {
     if a != b {
-        return Err(Refusal::from_code(
-            "FMINE-REF-102",
+        return Err(Refusal::new(
+            RefusalCode::SupportMismatch102,
             format!("cannot combine supports {a:?} and {b:?} without change-of-support model"),
         ));
     }
@@ -247,8 +250,8 @@ pub fn verify_unweighted_additive(
     context: &str,
 ) -> Result<(), Refusal> {
     if additivity != AdditivityClass::ExtensiveAdditive {
-        return Err(Refusal::from_code(
-            "FMINE-REF-103",
+        return Err(Refusal::new(
+            RefusalCode::NonAdditiveAverage103,
             format!("unweighted aggregation on {additivity:?} in {context}"),
         ));
     }
@@ -520,7 +523,8 @@ mod tests {
         let err = claim
             .verify_export_clearance(ConfidentialityTier::Public)
             .expect_err("must block public export of SovereignRestricted claim");
-        assert_eq!(err.code, "FMINE-REF-402");
+        // An authorization refusal (3xx, exit 7), never 402 (unknown PAG, a dump-safety code).
+        assert_eq!((err.code, err.exit_code), ("FMINE-REF-301", 7));
         assert!(
             claim
                 .verify_export_clearance(ConfidentialityTier::BoardEyesOnly)
@@ -539,12 +543,12 @@ mod tests {
             },
         )
         .expect_err("must reject point vs SMU block support mismatch");
-        assert_eq!(err_sup.code, "FMINE-REF-102");
+        assert_eq!((err_sup.code, err_sup.exit_code), ("FMINE-REF-102", 3));
 
         let err_add =
             verify_unweighted_additive(AdditivityClass::IntensiveWeighted, "bench mean grade")
                 .expect_err("must reject unweighted average of intensive grade");
-        assert_eq!(err_add.code, "FMINE-REF-103");
+        assert_eq!((err_add.code, err_add.exit_code), ("FMINE-REF-103", 3));
     }
 
     #[test]

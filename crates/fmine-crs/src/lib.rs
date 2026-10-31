@@ -7,7 +7,8 @@ use std::fmt;
 /// Errors raised by CRS checks, projection bounds, or mine-grid convex-hull guards.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CrsError {
-    /// `FMINE-REF-101` (`G-CRS-1`): Attempted to combine points with different CRS identifiers.
+    /// `FMINE-REF-106` (`G-CRS-1`, unregistered or incompatible CRS): Attempted to combine points with
+    /// different CRS identifiers.
     CrsMismatch { left: CrsId, right: CrsId },
     /// `FMINE-REF-106` (`G-CRS-2`): Point lies outside the control-point convex hull beyond buffer.
     ExtrapolationBeyondHull {
@@ -21,12 +22,14 @@ pub enum CrsError {
 }
 
 impl CrsError {
-    /// Returns the canonical `FMINE-REF-*` refusal code when mapped.
+    /// Returns the canonical `FMINE-REF-*` refusal code when mapped. This crate sits below `fmine-evidence`, so
+    /// the code is a string; `xtask check-refusals` requires every such token to be a registry code (BD-328).
     #[must_use]
     pub const fn refusal_code(&self) -> Option<&'static str> {
         match self {
-            Self::CrsMismatch { .. } => Some("FMINE-REF-101"),
-            Self::ExtrapolationBeyondHull { .. } => Some("FMINE-REF-106"),
+            Self::CrsMismatch { .. } | Self::ExtrapolationBeyondHull { .. } => {
+                Some("FMINE-REF-106")
+            }
             _ => None,
         }
     }
@@ -36,7 +39,7 @@ impl fmt::Display for CrsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CrsMismatch { left, right } => {
-                write!(f, "FMINE-REF-101: CRS mismatch ({left:?} vs {right:?})")
+                write!(f, "FMINE-REF-106: CRS mismatch ({left:?} vs {right:?})")
             }
             Self::ExtrapolationBeyondHull {
                 distance_outside_m,
@@ -419,7 +422,7 @@ impl MineGridTransform {
     }
 
     /// Transforms a `ProjectedPoint` from `self.source_crs` into `self.target_crs`, enforcing
-    /// both `G-CRS-1` (`FMINE-REF-101`) and the convex-hull extrapolation guard `G-CRS-2` (`FMINE-REF-106`).
+    /// both `G-CRS-1` and the convex-hull extrapolation guard `G-CRS-2` (both `FMINE-REF-106`).
     pub fn transform(&self, pt: ProjectedPoint) -> Result<ProjectedPoint, CrsError> {
         if pt.crs != self.source_crs {
             return Err(CrsError::CrsMismatch {
@@ -637,6 +640,12 @@ mod tests {
             sigma_m: 0.05,
         };
         let err = p1.distance_3d(p2).expect_err("must refuse CRS mismatch");
-        assert_eq!(err.refusal_code(), Some("FMINE-REF-101"));
+        // test_crs_mismatch_refuses_106: §8.4's 106 (unregistered or incompatible CRS), not 101
+        // (conservation).
+        assert_eq!(err.refusal_code(), Some("FMINE-REF-106"));
+        assert!(
+            err.to_string().starts_with("FMINE-REF-106: CRS mismatch"),
+            "{err}"
+        );
     }
 }

@@ -107,7 +107,10 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
     that fit every pair.
 
 ## 5. Guards & Typed Refusals
-- `FMINE-REF-301` (`NonSpdCovarianceMatrix`) when Cholesky diagonal pivot `<= 1e-12` or cycle detected in `TropicalDag`.
+- `FMINE-REF-207` (numerical certificate failed, proposed; exit 3) from Cholesky when the matrix is not square or
+  a diagonal pivot is `<= 1e-12` (`test_cholesky_non_spd_refuses_207`).
+- `TropicalDag::earliest_starts` returns `None` on a positive precedence cycle; it is not a refusal code.
+- `NON_IDENTIFIABLE` (`FMINE-REF-104`, non-identifiable attribution) marks an ambiguous construction finding.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-NUM-1`: `0 <= EVSI <= EVPI` across all prior covariance and action sets (`GATE-HELM-02`).
@@ -115,7 +118,7 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
 - `PO-NUM-4`: Tropical `(max,+)` and `(min,+)` critical paths satisfy zero-slack duality.
 
 ## 7. Failure Modes & Deterministic Fallbacks
-Indefinite matrices or cyclic Precedence graphs fail closed with `FMINE-REF-301`.
+Indefinite matrices fail closed with `FMINE-REF-207`; cyclic precedence graphs give `None`, never a schedule.
 
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
 - `GATE-HELM-02`

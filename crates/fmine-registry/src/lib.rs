@@ -11,7 +11,7 @@ use std::path::Path;
 
 use fmine_core::codec::Encoder;
 use fmine_core::hash::blake3_hash;
-use fmine_evidence::REFUSAL_CATALOG;
+use fmine_evidence::CATALOG;
 
 /// Errors raised when loading or validating `registries/*.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,8 +91,9 @@ impl RegistryCatalog {
         let ref_src = read_reg(&reg_dir, "refusals.toml")?;
         let refusal_codes = extract_unique_key(&ref_src, "refusals.toml", "code")?;
 
-        // Verify 1:1 alignment between registries/refusals.toml and fmine_evidence::REFUSAL_CATALOG.
-        for spec in REFUSAL_CATALOG {
+        // Every compiled code is in registries/refusals.toml. `xtask check-refusals` is the full check (the
+        // catalogue is generated from the registry, BD-328); this one also runs where only the binary is.
+        for spec in &CATALOG {
             if !refusal_codes.iter().any(|c| c == spec.code) {
                 return Err(RegistryError::SchemaViolation {
                     registry: "refusals.toml".to_string(),
@@ -183,7 +184,10 @@ mod tests {
         let catalog = RegistryCatalog::load_from_root(&root).expect("registries must validate");
         assert!(catalog.unit_symbols.len() >= 10);
         assert!(catalog.crs_codes.iter().any(|c| c == "EPSG:32641"));
-        assert_eq!(catalog.refusal_codes.len(), 22);
+        // 25 plan §8.4 codes and 7 proposed (BD-328), one row each, in the compiled catalogue's order.
+        assert_eq!(catalog.refusal_codes.len(), 32);
+        let compiled: Vec<&str> = CATALOG.iter().map(|s| s.code).collect();
+        assert_eq!(catalog.refusal_codes, compiled);
         assert!(catalog.verb_names.iter().any(|v| v == "assure public"));
     }
 }

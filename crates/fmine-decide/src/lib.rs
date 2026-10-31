@@ -111,8 +111,8 @@ pub struct DecisionCard {
 }
 
 impl DecisionCard {
-    /// Constructs a validated `DecisionCard`, enforcing `INV-015` (`FMINE-REF-404` if `UU` slot is missing)
-    /// and `NL-4` (`FMINE-REF-401` if `expected_npv_usd_m` is `Red`).
+    /// Constructs a validated `DecisionCard`, enforcing `INV-015` (`FMINE-REF-204` if `UU` slot is missing)
+    /// and `NL-4` (`FMINE-REF-205` if `expected_npv_usd_m` is `Red`).
     pub fn build(
         title: impl Into<String>,
         recommended_action: impl Into<String>,
@@ -245,7 +245,8 @@ mod tests {
 
     #[test]
     fn test_decision_card_uu_and_flip_margin_guards() {
-        // Missing UuTerm on KnownUnknown claim must refuse with FMINE-REF-404.
+        // test_missing_uu_refuses_204: a missing UuTerm on a KnownUnknown claim refuses with FMINE-REF-204
+        // (unbudgeted unknowns), never 404 (stale TSF instrumentation, a tailings-safety code).
         let bad_claim = make_npv_claim(false, EvidenceClass::Calibrated);
         let err = DecisionCard::build(
             "Pushback 4",
@@ -257,9 +258,10 @@ mod tests {
             vec![],
         )
         .expect_err("must refuse missing UU");
-        assert_eq!(err.code, "FMINE-REF-404");
+        assert_eq!((err.code, err.exit_code), ("FMINE-REF-204", 3));
 
-        // Placeholder claim must refuse with FMINE-REF-401.
+        // A Placeholder claim refuses with FMINE-REF-205 (calibration required for decision-grade use), never
+        // 401 (unknown reactive ground, a blasting-safety code).
         let red_claim = make_npv_claim(true, EvidenceClass::Placeholder);
         let err_red = DecisionCard::build(
             "Pushback 4",
@@ -271,7 +273,7 @@ mod tests {
             vec![],
         )
         .expect_err("must refuse Placeholder claim");
-        assert_eq!(err_red.code, "FMINE-REF-401");
+        assert_eq!((err_red.code, err_red.exit_code), ("FMINE-REF-205", 3));
 
         // Valid calibrated claim with UuTerm succeeds and computes flip margin.
         let ok_claim = make_npv_claim(true, EvidenceClass::Calibrated);

@@ -5,7 +5,7 @@
 - **Layer:** `T` (Build/Verification tooling)
 - **Subsystem:** `Testpit`
 - **LOC Budget:** Dev-only verification binary (`GATE-LAYERS-00`)
-- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "oracle", "forecast"]`
+- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "oracle", "forecast", "refusals"]`
 
 ## 2. Mathematical & Domain Formulation
 Enforces the structural invariants of the workspace (`L-1`..`L-7`, `PO-NUM-2`, `GATE-ORACLE-01`, `§28.4` LOC budget ceilings) over the repository source tree and `registries/*.toml`.
@@ -13,7 +13,7 @@ Enforces the structural invariants of the workspace (`L-1`..`L-7`, `PO-NUM-2`, `
 ## 3. Authority, Epistemics & Representation
 Pure static verifier over repository source files and TOML registries; produces deterministic pass/fail diagnostics (`GATE-LAYERS-00`).
 The `forecast-*` commands are the exception: they write a record's digest files and run `openssl ts` and `git`
-(BD-334.S1, S2).
+(BD-334.S1, S2). `gen-refusals` is the other: it writes `crates/fmine-evidence/src/refusal_catalog.rs`.
 
 ## 4. Public API Surface
 - `check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>>`
@@ -32,6 +32,14 @@ The `forecast-*` commands are the exception: they write a record's digest files 
 - `check_oracle(root: &Path) -> Result<(), Vec<String>>`
 - `check_sources_registry(root: &Path) -> Result<Vec<String>, Vec<String>>` (`registry-check`; on success one
   `{"stage":"registry",…}` JSON log line per `registries/sources/*.toml`)
+- `refusals::{check_refusals, gen_refusals}` (BD-328; commands `check-refusals`, `gen-refusals`, and `check-all`
+  runs the check and prints its line `{"check":"check-refusals","rows","active","proposed","reserved",…}`):
+  - `gen_refusals` renders `registries/refusals.toml` (schema 2) into the `RefusalCode` enum and `CATALOG`, and
+    writes the file only when its text changes.
+  - `check_refusals` fails unless (e) the committed catalogue equals the rendered text; (a) every `active` code
+    is in plan §8.4 and every §8.4 code is `active`; (b) each exit code follows the §30.1 family rule or a listed
+    exception (504→7, 506→5), and no exception is unused; (c) every `FMINE-REF-nnn` token in `crates/**/*.rs`
+    and `crates/*/CONTRACT.md` is a registry code, named `path:line`; (d) no fix text says "clamp".
 - `check_all(root: &Path) -> Result<LocReport, Vec<String>>`
 - `forecast::{rules_hash, record_hash, record_verify}` (BD-334.S1; commands `forecast-rules-hash <rules.toml>`,
   `forecast-record-hash <dir>`, `forecast-record-verify <dir>`): the IO around the pure `fmine_calib::record`.

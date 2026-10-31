@@ -48,10 +48,13 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - an unregistered issuer (no `registries/sources/<issuer>.toml` in the workspace);
   - a malformed `--through` bound, or `--through` with `--synthetic`;
   - `--issuer` together with `--synthetic`.
-- **Exit 3–8:** the catalog refusal's own exit code. For example, `FMINE-REF-502` (exit 8) means a registered file
-  is missing or altered.
-- `claim show` refuses (`FMINE-REF-502`): M0 has no claim store, and the verb never fabricates a claim. The
-  code is wrong for this case (502 is a digest mismatch); BD-328.S1 (`bd-h0q1.1`, point 4) owns the choice.
+- **Exit 3–8:** the catalog refusal's own exit code. For example, `FMINE-REF-506` (exit 5) means a registered
+  file is missing or unreadable, and `FMINE-REF-505` (exit 8) that one is altered.
+- `claim show` refuses (`FMINE-REF-201`, no claim in domain, exit 3): M0 has no claim store, and the verb never
+  fabricates a claim.
+- `doctor` refuses `FMINE-REF-506` when the registries cannot be read.
+- `robot-docs` lists every catalogue row as `{code, exit_code, status, summary}`, `status` being `active` or
+  `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-CLI-1`: `assure public --synthetic` exits 0 with `lane` `synthetic`, `gate_eligible` false and the seeded

@@ -11,7 +11,7 @@
 Implements `DecisionCard` (`FMT-CARD-1`), `DecisionAction`, `FlipMargin`, `rank_voi_campaigns` (`GATE-HELM-02`), and the CEO/CFO/Mine-GM 1-Page Executive Decision Card Markdown renderer (`render_one_pager_markdown`, `§9.6`).
 
 ## 3. Authority, Epistemics & Representation
-Enforces `INV-002` (`authoritative: false`, `may_actuate: false`, `is_safe_certification: false`, `is_signing_basis: false`) and `INV-015` (non-empty `uu_register`, `FMINE-REF-404`) on every `DecisionCard`.
+Enforces `INV-002` (`authoritative: false`, `may_actuate: false`, `is_safe_certification: false`, `is_signing_basis: false`) and `INV-015` (non-empty `uu_register`, `FMINE-REF-204`) on every `DecisionCard`.
 
 ## 4. Public API Surface
 - `DecisionAction`, `FlipMargin`, `DecisionCard`
@@ -19,11 +19,13 @@ Enforces `INV-002` (`authoritative: false`, `may_actuate: false`, `is_safe_certi
 - `render_one_pager_markdown`
 
 ## 5. Guards & Typed Refusals
-- `FMINE-REF-401` (`UnanchoredClaimError`)
-- `FMINE-REF-404` (`MissingUuRegisterError`, `G-UU`)
+`DecisionCard::new` relays the claim's refusals:
+- `FMINE-REF-204` (unbudgeted unknowns, `G-UU`), exit 3: a non-`KnownKnown` claim with no `UuTerm`.
+- `FMINE-REF-205` (calibration required, `NL-4`), exit 3: a `Red` `expected_npv_usd_m`.
 
 ## 6. Proof Obligations (`PO-*`)
-- `PO-DEC-1`: `DecisionCard::new` refuses any card with empty `uu_register` (`FMINE-REF-404`) or empty `action_set` (`FMINE-REF-401`).
+- `PO-DEC-1`: `DecisionCard::new` refuses a card whose claim has an empty `uu_register` (`FMINE-REF-204`) or is
+  `Red` (`FMINE-REF-205`).
 - `PO-DEC-2`: `rank_voi_campaigns` guarantees `0 <= EVSI <= EVPI` (`GATE-HELM-02`).
 
 ## 7. Failure Modes & Deterministic Fallbacks

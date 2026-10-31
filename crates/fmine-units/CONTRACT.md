@@ -24,15 +24,22 @@ Enforces compile-time and runtime guards against silent unit, moisture-basis, cu
 - `HazardousByproduct`, `StreamMassBalance`
 
 ## 5. Guards & Typed Refusals
-- `FMINE-REF-101` (`UnitDimensionMismatch`)
-- `FMINE-REF-102` (`MoistureBasisMissing`)
-- `FMINE-REF-103` (`CurrencyFxMissing`)
-- `FMINE-REF-107` (`ChemicalBasisMismatch`, `G-ENV-1`)
-- `FMINE-REF-206` (`HazardousByproductOmitted`, `G-BYPROD-1`)
+`UnitsError::refusal_code` maps three variants. The crate sits below `fmine-evidence`, so each code is a string
+that `xtask check-refusals` requires to be a registry code:
+- `FMINE-REF-109` (outside physical domain, proposed): `MoistureOutOfBounds` (outside `[0.0, 1.0)`) and
+  `FractionOutOfBounds` (outside `[0.0, 1.0]`). The value is refused, never clamped.
+- `FMINE-REF-105` (basis mismatch): `ChemicalBasisMismatch`, comparing concentrations on different species bases
+  without the stoichiometric conversion (`G-ENV-1`).
+
+`SimplexSumInvalid`, `CurrencyMismatch`, `ZeroMassWeight` and `Overflow` are typed errors with no refusal code.
+
+Known gaps: dimension, moisture-basis and FX-missing refusals are compile-time markers or typed errors here, not
+§8.4 codes. `G-BYPROD-1` is a type (`HazardousByproduct` converts only to a storage liability), not a refusal.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-UNIT-1`: $10^4$ randomized `ExactQty` round-trips (`g <-> oz_t`, `g/t <-> oz/st`) have zero residual.
-- `PO-UNIT-2`: `79 mg/L as N = 349.72 mg/L as NO3 > 50 mg/L` WHO threshold (`FMINE-REF-107`).
+- `PO-UNIT-2`: `79 mg/L as N = 349.72 mg/L as NO3 > 50 mg/L` WHO threshold; comparing without the conversion is
+  refused with `FMINE-REF-105` (`test_reko_diq_nitrate_basis_conversion`).
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Invalid moisture fractions (`>= 1.0` or `< 0.0`) or mismatched currencies fail closed with typed `Refusal`.

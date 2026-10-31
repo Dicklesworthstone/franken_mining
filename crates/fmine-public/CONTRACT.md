@@ -172,10 +172,11 @@ The public lane of M0 (`fmine assure public`).
   `PublicAssuranceReport::transcriptions` (bd-plx1, bd-4wvl.4 part 2). When
   `<workspace>/registries/transcriptions/<issuer>.toml` exists and the run has no `--through` bound (documents
   carry no release quarter), `run_public_assurance`:
-  - checks the bytes and sha256 of every document the registry cites, and refuses (`FMINE-REF-502`, exit 8)
-    naming each missing or altered file; uncited documents are never read, so CI, which caches only the
-    workbooks, needs none;
-  - applies the two-reader check and refuses (`FMINE-REF-502`) naming each locator where readers disagree, with
+  - checks the bytes and sha256 of every document the registry cites, and refuses naming each missing
+    (`FMINE-REF-506`, exit 5) or altered (`FMINE-REF-505`, exit 8) file; uncited documents are never read, so
+    CI, which caches only the workbooks, needs none;
+  - applies the two-reader check and refuses (`FMINE-REF-202`, not observable, exit 3: the evidence conflicts)
+    naming each locator where readers disagree, with
     the differing field names and never their values; a locator one reader has entered is pending and listed;
   - feeds the accepted point values that two or more documents print under one quantity key to
     `discover_tie_conventions`. A quantity whose prints no convention reconciles (its `Closed` meet is empty)
@@ -216,8 +217,9 @@ The public lane of M0 (`fmine assure public`).
   SYNTHETIC_LATER_STATS_FILE}`
 - `live::{CheckKind, LiveCheck, LiveReport, Loader, prove_files}` (BD-338.S1): the file half of the
   live-dependency proof. For each registered file, the cases are absent, zero bytes and a foreign xlsx, each in
-  its own scratch workspace. Each must refuse `FMINE-REF-502`, exit 8, "1 of n registered", naming only that
-  file under "missing" or "digest mismatch".
+  its own scratch workspace. Each must refuse "1 of n registered", naming only that file under "missing" or
+  "digest mismatch": absent is `FMINE-REF-506` (exit 5), the other two `FMINE-REF-505` (exit 8)
+  (`CheckKind::expected`).
 - `live::{prove_leaves, LeafCheck, Perturbation, leaf_summary, rate_flip_up, rate_flip_down}` (BD-338.S2): the
   leaf half. Each operand of each visible instance is perturbed alone, on a copy of the parsed sources with
   that file's census recomputed.
@@ -304,10 +306,14 @@ The public lane of M0 (`fmine assure public`).
   - **Not yet:** no run reads claims through the key. The Mine Stats and AISC readers adopt it in S2 and S3.
 
 ## 5. Guards & Typed Refusals
-- `FMINE-REF-502` (exit 8) names every registered file that is missing, digest-mismatched or unparseable. A run never
-  substitutes content. The same code (until BD-328 assigns one) refuses a missing or malformed registry, naming the
-  file and line, and a `through` bound that leaves no rows.
-- `FMINE-REF-401` from `cell_to_public_claim` on text or formula-error cells.
+- A run names every registered file that is missing, digest-mismatched or unparseable, and never substitutes
+  content. The code is `FMINE-REF-505` (digest mismatch, exit 8) when every file is present and readable, and
+  `FMINE-REF-506` (registered input missing or unreadable, exit 5) otherwise (`files_refusal`).
+- `FMINE-REF-506` also refuses a missing or malformed registry, naming the file and line, and an unregistered
+  Mine Stats quarter.
+- `FMINE-REF-201` (no claim in domain, exit 3): a `through` bound that leaves no rows.
+- `FMINE-REF-208` (source cell unusable, exit 3) from `cell_to_public_claim` on text or formula-error cells.
+- 505, 506 and 208 are proposed codes (`docs/adr/ADR-REFUSALS-01.md`).
 - The ledger scores displayed values (bd-jg43.3, E838): the declared construction sums the numbers as printed,
   so a numeric cell enters as `fmine-io`'s displayed value under its number format, never as the stored double.
   A whole displayed number (d = 0) enters as itself and a zero section's token (the dash) as 0. An operand
@@ -407,8 +413,10 @@ The public lane of M0 (`fmine assure public`).
   - **Mutants:**
     - M3, a loader that restores the intact bytes on refusal, fails each file with "file deletion did not
       refuse: <file>".
-    - M4, re-raising under an uncatalogued code, fails every check with "refusal exit 2 is not 8".
-  - **Unreadable file:** a chmod 000 file is named under "missing". As root, the test says it skipped.
+    - M4, re-raising under the wrong code (`FMINE-REF-501`, exit 8), fails a deleted file with "refusal exit 8
+      is not 5" and the other cases with "refusal code FMINE-REF-501 is not FMINE-REF-505".
+  - **Unreadable file:** a chmod 000 file is named under "missing" (`FMINE-REF-506`, exit 5). As root, the test
+    says it skipped.
   - **Lane:** the synthetic registry never reports the public lane or gate eligibility.
 - `PO-PUB-9` (live dependency, leaves; BD-338.S2; default suite, `live::tests`):
   - **Positive control:** every leaf of the 50 synthetic instances passes or is skipped with a reason. Skips
@@ -511,8 +519,9 @@ The public lane of M0 (`fmine assure public`).
     state root is unchanged without the registry.
   - E692's shape (6.7 against 79): a conflict naming both locators; the re-run without it finds the same deck
     convention.
-  - Refusals, each `FMINE-REF-502` exit 8: a reader's planted different token (the locator and `token` named,
-    no value); one altered byte of a cited document; a missing cited document. A `--through` run reads no
+  - Refusals: a reader's planted different token (`FMINE-REF-202`, exit 3; the locator and `token` named, no
+    value); one altered byte of a cited document (`FMINE-REF-505`, exit 8); a missing cited document
+    (`FMINE-REF-506`, exit 5). A `--through` run reads no
     transcriptions. A lone reader's locator is pending, not refused.
 
 ## 7. Failure Modes & Deterministic Fallbacks

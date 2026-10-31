@@ -26,7 +26,7 @@ Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when 
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-203` (`ConsolidationBridgeMissing`, `G-BULL-3`)
-- `FMINE-REF-301` on non-positive LMDI state inputs.
+- `FMINE-REF-109` (outside physical domain, proposed; exit 3) on non-positive or non-finite LMDI state inputs.
 - `CutoffError` (non-positive cost, price or guess; recovery outside (0, 1]; no convergence in 100 iterations): no input is clamped (bd-8wrk).
 
 ## 6. Proof Obligations (`PO-*`)

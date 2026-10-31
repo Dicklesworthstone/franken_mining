@@ -6,7 +6,7 @@
 use fmine_core::det;
 use fmine_core::hash::blake3_hash;
 use fmine_core::rand::{PhiloxStream, RngKey};
-use fmine_evidence::Refusal;
+use fmine_evidence::{Refusal, RefusalCode};
 
 /// Operational state for a single period used in the 5-factor multiplicative AISC identity:
 ///
@@ -96,7 +96,7 @@ fn log_branch(a: f64, b: f64) -> f64 {
 pub fn logarithmic_mean(a: f64, b: f64) -> f64 {
     let mean = 0.5 * (a + b);
     // `max(1e-15)` only selects the series branch near a = b; it never changes the returned value's inputs, and
-    // callers refuse non-positive states (FMINE-REF-301) before reaching here. Not a domain clamp.
+    // callers refuse non-positive states (FMINE-REF-109) before reaching here. Not a domain clamp.
     if (a - b).abs() / mean.max(1e-15) < SERIES_SWITCH {
         series_branch(a, b)
     } else {
@@ -106,18 +106,22 @@ pub fn logarithmic_mean(a: f64, b: f64) -> f64 {
 
 /// Computes the exact 5-factor (+ circuit bridge) LMDI waterfall between `s0` and `s1` (`GB-26`, `BD-065`, `BD-274`).
 pub fn decompose_aisc_lmdi(s0: &LmdiState, s1: &LmdiState) -> Result<LmdiWaterfall, Refusal> {
+    // `x <= 0.0` is false for NaN, so the test is "finite and positive", which a NaN fails.
+    let in_domain = |x: f64| x.is_finite() && x > 0.0;
     for st in [s0, s1] {
-        if st.aisc_per_oz <= 0.0
-            || st.total_aisc_spend <= 0.0
-            || st.tonnes_processed <= 0.0
-            || st.head_grade_g_t <= 0.0
-            || st.recovery_fraction <= 0.0
-            || st.oz_produced <= 0.0
-            || st.oz_sold <= 0.0
-        {
-            return Err(Refusal::from_code(
-                "FMINE-REF-105",
-                "all LMDI state variables must be strictly positive",
+        let vars = [
+            st.aisc_per_oz,
+            st.total_aisc_spend,
+            st.tonnes_processed,
+            st.head_grade_g_t,
+            st.recovery_fraction,
+            st.oz_produced,
+            st.oz_sold,
+        ];
+        if !vars.into_iter().all(in_domain) {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                "all LMDI state variables must be finite and strictly positive",
             ));
         }
     }
@@ -422,6 +426,20 @@ mod tests {
         // AISC while spend surged).
         assert!(wf.sales_timing_effect < -500.0 && wf.sales_timing_effect > -550.0);
         assert!(wf.spend_effect > 1800.0);
+
+        // A non-positive state refuses with 109 (outside its physical domain), never 105 (basis mismatch).
+        let zero_sold = LmdiState { oz_sold: 0.0, ..q2 };
+        let err = decompose_aisc_lmdi(&q1, &zero_sold).expect_err("non-positive");
+        assert_eq!((err.code, err.exit_code), ("FMINE-REF-109", 3));
+        // NaN and infinity are outside the domain too; a `<= 0.0` test alone let NaN through.
+        for bad in [f64::NAN, f64::INFINITY] {
+            let st = LmdiState {
+                head_grade_g_t: bad,
+                ..q2
+            };
+            let err = decompose_aisc_lmdi(&q1, &st).expect_err("non-finite");
+            assert_eq!((err.code, err.exit_code), ("FMINE-REF-109", 3), "{bad}");
+        }
     }
 
     fn pairs(stream: u32) -> (fmine_core::rand::RngKey, Vec<(f64, f64)>) {

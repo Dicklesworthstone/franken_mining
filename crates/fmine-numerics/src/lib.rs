@@ -1,7 +1,7 @@
 //! Deterministic numerical kernels (`WP-02`, `BD-022`):
 //! Determinism: DeterministicPerIsa (`norm_cdf` and `norm_inv` delegate to `fmine_core::det`; `brent_root` and
 //! `cholesky_solve` use only `+ − × ÷` and `sqrt`. BitwisePortable once its golden digest exists, bd-hp2j.3).
-//! - Dense SPD Cholesky solver (`cholesky_solve`, `FMINE-REF-301`)
+//! - Dense SPD Cholesky solver (`cholesky_solve`, `FMINE-REF-207`)
 //! - Brent's bracketed root-finder (`brent_root`), which refuses on a missing sign change, a non-finite value or
 //!   non-convergence and never returns an unconverged iterate (bd-t1dk)
 //! - Standard normal CDF (`norm_cdf`) and Acklam inverse quantile (`norm_inv`)
@@ -16,16 +16,17 @@ pub mod voi;
 
 use fmine_core::hash::blake3_hash;
 use fmine_core::rand::{PhiloxStream, RngKey};
-use fmine_evidence::Refusal;
+use fmine_evidence::{Refusal, RefusalCode};
 
 /// Solves $A x = b$ for an $n \times n$ row-major symmetric positive-definite matrix `a`
 /// via Cholesky factorization $A = L L^\top$.
 ///
-/// Refuses with `FMINE-REF-301` if `a` is not positive-definite (`BD-022`).
+/// Refuses with `FMINE-REF-207` (numerical certificate failed; §29.6 routes failed linear solves to 2xx) if
+/// the dimensions do not describe an $n \times n$ system or `a` is not positive-definite (`BD-022`).
 pub fn cholesky_solve(a: &[f64], b: &[f64], n: usize) -> Result<Vec<f64>, Refusal> {
     if n == 0 || a.len() != n * n || b.len() != n {
-        return Err(Refusal::from_code(
-            "FMINE-REF-301",
+        return Err(Refusal::new(
+            RefusalCode::NumericalCertificateFailed207,
             format!(
                 "invalid matrix dimensions n={n}, a.len()={}, b.len()={}",
                 a.len(),
@@ -42,8 +43,8 @@ pub fn cholesky_solve(a: &[f64], b: &[f64], n: usize) -> Result<Vec<f64>, Refusa
             }
             if i == j {
                 if !sum.is_finite() || sum <= 1e-14 {
-                    return Err(Refusal::from_code(
-                        "FMINE-REF-301",
+                    return Err(Refusal::new(
+                        RefusalCode::NumericalCertificateFailed207,
                         format!("matrix is not positive-definite at pivot {i} (diag={sum})"),
                     ));
                 }
@@ -359,7 +360,28 @@ mod tests {
 
         let singular = [1.0, 2.0, 2.0, 4.0];
         let err = cholesky_solve(&singular, &b, 2).expect_err("singular must refuse");
-        assert_eq!(err.code, "FMINE-REF-301");
+        assert_eq!((err.code, err.exit_code), ("FMINE-REF-207", 3));
+    }
+
+    #[test]
+    fn test_cholesky_non_spd_refuses_207() {
+        // Not positive definite (eigenvalues 3 and -1), and a dimension mismatch: both 207, exit 3, never 301
+        // (the MNPI wall).
+        let err = cholesky_solve(&[1.0, 2.0, 2.0, 1.0], &[1.0, 1.0], 2).expect_err("indefinite");
+        assert_eq!((err.code, err.exit_code), ("FMINE-REF-207", 3));
+        assert!(
+            err.what.contains("not positive-definite at pivot 1"),
+            "{}",
+            err.what
+        );
+        let err = cholesky_solve(&[1.0, 0.0, 0.0], &[1.0, 1.0], 2).expect_err("dimensions");
+        assert_eq!((err.code, err.exit_code), ("FMINE-REF-207", 3));
+        assert!(
+            err.what
+                .contains("invalid matrix dimensions n=2, a.len()=3"),
+            "{}",
+            err.what
+        );
     }
 
     /// The bd-hp2j.3 log line: kernel, input count, the folded Philox key and counter prefix, digest, host.

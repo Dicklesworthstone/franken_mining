@@ -8,7 +8,7 @@
 - **Allowed Module Families:** `["catalog", "parser", "sources", "toml_subset", "transcriptions"]`
 
 ## 2. Mathematical & Domain Formulation
-Parses and validates the 8 canonical TOML registries in `registries/` (`loc_budget`, `workspace_topology`, `lifts`, `units`, `crs`, `calendars`, `refusals`, `verbs`) and verifies 1:1 alignment between `registries/refusals.toml` and `fmine_evidence::REFUSAL_CATALOG`.
+Parses and validates the 8 canonical TOML registries in `registries/` (`loc_budget`, `workspace_topology`, `lifts`, `units`, `crs`, `calendars`, `refusals`, `verbs`) and verifies 1:1 alignment between `registries/refusals.toml` and `fmine_evidence::CATALOG` (generated from that file; `xtask check-refusals` checks the generation).
 
 ## 3. Authority, Epistemics & Representation
 Serves as the schema and registry catalog authority for `fmine doctor` and `xtask`.
@@ -54,7 +54,7 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
 - `RegistryError::MissingEntry`, `RegistryError::CatalogMismatch`, `RegistryError::Io`.
 
 ## 6. Proof Obligations (`PO-*`)
-- `PO-REG-1`: `RegistryCatalog::load_from_root` verifies all 8 workspace TOML registries and 100% refusal-code parity with `REFUSAL_CATALOG`.
+- `PO-REG-1`: `RegistryCatalog::load_from_root` verifies all 8 workspace TOML registries and 100% refusal-code parity, in order, with `CATALOG` (32 codes).
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Missing or out-of-sync registry entries fail closed with `RegistryError`.

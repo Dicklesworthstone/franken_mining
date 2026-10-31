@@ -11,7 +11,7 @@ use fmine_core::det;
 use fmine_core::hash::blake3_hash;
 use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_core::rand::{PhiloxStream, RngKey};
-use fmine_evidence::{EvidenceClass, Refusal};
+use fmine_evidence::{EvidenceClass, Refusal, RefusalCode};
 use fmine_numerics::cholesky_solve;
 use fmine_numerics::eproc::BettingEProcess;
 use fmine_numerics::norm_cdf;
@@ -45,7 +45,9 @@ impl ForecastLedger {
         Self::default()
     }
 
-    /// Registers a new forecast prior to `freeze_time_ns` (`FMINE-REF-403` if `registered_ns > freeze_time_ns`).
+    /// Registers a new forecast prior to `freeze_time_ns`. Refuses `FMINE-REF-206` if
+    /// `registered_ns > freeze_time_ns`, `FMINE-REF-109` if the mean is not finite or `std_dev` is not positive
+    /// and finite, and `FMINE-REF-507` if the same record is already frozen.
     pub fn register(
         &mut self,
         model_key: impl Into<String>,
@@ -55,18 +57,17 @@ impl ForecastLedger {
         std_dev: f64,
     ) -> Result<ObjectId, Refusal> {
         if registered_ns > freeze_time_ns {
-            return Err(Refusal::from_code(
-                "FMINE-REF-403",
+            return Err(Refusal::new(
+                RefusalCode::LateRegistration206,
                 format!(
                     "forecast registered at {registered_ns} after freeze_time {freeze_time_ns}"
                 ),
             ));
         }
-        // A forecast that cannot be scored is refused at entry, so `evaluate_model` never meets one. The code is
-        // the ledger's only registered refusal until BD-328 adds an invalid-forecast code.
+        // A forecast that cannot be scored is refused at entry, so `evaluate_model` never meets one.
         if !mean.is_finite() || !(std_dev.is_finite() && std_dev > 0.0) {
-            return Err(Refusal::from_code(
-                "FMINE-REF-403",
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
                 format!(
                     "forecast needs a finite mean and a positive finite std_dev, got mean {mean}, std_dev {std_dev}"
                 ),
@@ -80,8 +81,8 @@ impl ForecastLedger {
             format!("{model_key}:{registered_ns}:{freeze_time_ns}:{mean:.8}:{std_dev:.8}");
         let forecast_id = ObjectId::from_canonical_bytes(PrefixKind::Forecast, payload.as_bytes());
         if self.records.contains_key(&forecast_id) {
-            return Err(Refusal::from_code(
-                "FMINE-REF-403",
+            return Err(Refusal::new(
+                RefusalCode::FrozenRecordMutation507,
                 format!("duplicate or mutated frozen forecast {forecast_id}"),
             ));
         }
@@ -102,8 +103,9 @@ impl ForecastLedger {
         Ok(forecast_id)
     }
 
-    /// Attaches the realized outcome once observed after `freeze_time_ns`.
-    /// Refuses with `FMINE-REF-403` if an outcome was already recorded or `outcome_ns <= freeze_time_ns`.
+    /// Attaches the realized outcome once observed after `freeze_time_ns`. Refuses `FMINE-REF-201` for an
+    /// unknown forecast, `FMINE-REF-507` if an outcome was already recorded, `FMINE-REF-206` if
+    /// `outcome_ns <= freeze_time_ns`, and `FMINE-REF-109` for a non-finite outcome.
     pub fn record_outcome(
         &mut self,
         forecast_id: ObjectId,
@@ -111,20 +113,29 @@ impl ForecastLedger {
         realized: f64,
     ) -> Result<(), Refusal> {
         let rec = self.records.get_mut(&forecast_id).ok_or_else(|| {
-            Refusal::from_code("FMINE-REF-403", format!("unknown forecast {forecast_id}"))
+            Refusal::new(
+                RefusalCode::NoClaimInDomain201,
+                format!("no forecast {forecast_id} in the ledger"),
+            )
         })?;
-        if rec.realized_outcome.is_some() || outcome_ns <= rec.freeze_time_ns {
-            return Err(Refusal::from_code(
-                "FMINE-REF-403",
+        if rec.realized_outcome.is_some() {
+            return Err(Refusal::new(
+                RefusalCode::FrozenRecordMutation507,
+                format!("the outcome of {forecast_id} is already recorded"),
+            ));
+        }
+        if outcome_ns <= rec.freeze_time_ns {
+            return Err(Refusal::new(
+                RefusalCode::LateRegistration206,
                 format!(
-                    "cannot overwrite outcome or score at {outcome_ns} <= freeze_time {}",
+                    "outcome at {outcome_ns} is not after freeze_time {}",
                     rec.freeze_time_ns
                 ),
             ));
         }
         if !realized.is_finite() {
-            return Err(Refusal::from_code(
-                "FMINE-REF-403",
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
                 format!("outcome for {forecast_id} must be finite, got {realized}"),
             ));
         }
@@ -663,11 +674,11 @@ mod tests {
             .register("grade_control_carlin", 1_000, 2_000, 3.5, 0.4)
             .expect("valid pre-freeze registration");
 
-        // Registering after freeze_time must fail with FMINE-REF-403.
+        // Registering after freeze_time must fail with FMINE-REF-206 (late registration, INV-008).
         let err_late = ledger
             .register("grade_control_carlin", 2_500, 2_000, 3.5, 0.4)
             .expect_err("must reject post-freeze registration");
-        assert_eq!(err_late.code, "FMINE-REF-403");
+        assert_eq!((err_late.code, err_late.exit_code), ("FMINE-REF-206", 3));
 
         // Recording outcome after freeze_time succeeds once, then refuses mutation.
         ledger
@@ -676,7 +687,45 @@ mod tests {
         let err_mut = ledger
             .record_outcome(fid, 3_500, 4.0)
             .expect_err("must reject outcome mutation");
-        assert_eq!(err_mut.code, "FMINE-REF-403");
+        assert_eq!((err_mut.code, err_mut.exit_code), ("FMINE-REF-507", 6));
+    }
+
+    /// BD-328.S3: each ledger refusal carries the code whose plan meaning matches it; none is 403 (unknown
+    /// moisture vs TML, a shipment-safety code).
+    #[test]
+    fn test_ledger_refusals_by_condition() {
+        let mut ledger = ForecastLedger::new();
+        let code = |r: Refusal| (r.code, r.exit_code);
+        // test_late_forecast_refuses_206
+        let late = ledger.register("m", 3, 2, 1.0, 1.0).expect_err("late");
+        assert_eq!(code(late), ("FMINE-REF-206", 3));
+        // test_nonpositive_std_dev_refuses_109 (the other half of register's old combined check)
+        for (mean, sd) in [
+            (1.0, 0.0),
+            (1.0, -1.0),
+            (f64::NAN, 1.0),
+            (1.0, f64::INFINITY),
+        ] {
+            let bad = ledger.register("m", 1, 2, mean, sd).expect_err("domain");
+            assert_eq!(code(bad), ("FMINE-REF-109", 3), "{mean} {sd}");
+        }
+        // Registering the same record twice is a frozen-record mutation.
+        let fid = ledger.register("m", 1, 2, 1.0, 1.0).expect("first");
+        let dup = ledger.register("m", 1, 2, 1.0, 1.0).expect_err("dup");
+        assert_eq!(code(dup), ("FMINE-REF-507", 6));
+        // test_outcome_before_freeze_refuses_206 (the other half of record_outcome's old combined check)
+        let early = ledger.record_outcome(fid, 2, 1.0).expect_err("early");
+        assert_eq!(code(early), ("FMINE-REF-206", 3));
+        let nan = ledger.record_outcome(fid, 3, f64::NAN).expect_err("nan");
+        assert_eq!(code(nan), ("FMINE-REF-109", 3));
+        // An unknown id is no claim in the domain.
+        let other = ObjectId::from_canonical_bytes(PrefixKind::Forecast, b"absent");
+        let unknown = ledger.record_outcome(other, 3, 1.0).expect_err("unknown");
+        assert_eq!(code(unknown), ("FMINE-REF-201", 3));
+        // test_outcome_overwrite_refuses_507
+        ledger.record_outcome(fid, 3, 1.0).expect("first outcome");
+        let again = ledger.record_outcome(fid, 4, 2.0).expect_err("overwrite");
+        assert_eq!(code(again), ("FMINE-REF-507", 6));
     }
 
     #[test]

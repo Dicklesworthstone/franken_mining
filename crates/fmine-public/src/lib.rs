@@ -3,8 +3,9 @@
 //! extraction (cell census and numeric-cell digest per workbook); builds the five-state identity ledger over
 //! the issuer's AISC reconciliation tables; and commits the whole result to a state root.
 //!
-//! Nothing here is a stand-in: a missing or altered input is a typed refusal (`FMINE-REF-502`) naming the
-//! file. Synthetic workbooks exist only in the synthetic lane, which says so and is never gate-eligible.
+//! Nothing here is a stand-in: a missing or unreadable input is a typed refusal (`FMINE-REF-506`, exit 5) and
+//! an altered one `FMINE-REF-505` (exit 8), each naming the file. Synthetic workbooks exist only in the
+//! synthetic lane, which says so and is never gate-eligible.
 
 pub mod aisc;
 pub mod citation;
@@ -26,7 +27,7 @@ use fmine_claim::{AdditivityClass, Claim, ConfidentialityTier, Representation, S
 use fmine_core::anchor::{FMT_ANCHOR_V1, LedgerAnchor};
 use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, blake3_hash, sha256};
-use fmine_evidence::{EvidenceClass, KnowledgeState, Refusal};
+use fmine_evidence::{EvidenceClass, KnowledgeState, Refusal, RefusalCode};
 use fmine_io::xlsx::{
     CellCensus, CellValue, ExtractedCell, QuarantineItem, Workbook, parse_a1_ref,
 };
@@ -49,7 +50,8 @@ use crate::sources::{
 };
 
 /// Converts an extracted cell into a public-basis `Claim<Option<f64>>` (`BD-058`): a number is the value as
-/// published, a placeholder is a known unknown, and text or a formula error is refused.
+/// published, a placeholder is a known unknown, and text or a formula error is refused (`FMINE-REF-208`,
+/// source cell unusable; never 401, which §8.4 reserves for unknown reactive ground).
 pub fn cell_to_public_claim(
     workbook: &Workbook,
     sheet_name: &str,
@@ -87,15 +89,15 @@ pub fn cell_to_public_claim(
             vec![],
             vec![anchor],
         )),
-        CellValue::FormulaError(err_tok) => Err(Refusal::from_code(
-            "FMINE-REF-401",
+        CellValue::FormulaError(err_tok) => Err(Refusal::new(
+            RefusalCode::SourceCellUnusable208,
             format!(
                 "quarantined formula error '{err_tok}' at {sheet_name}!{}",
                 cell.cell_ref
             ),
         )),
-        CellValue::Text(txt) => Err(Refusal::from_code(
-            "FMINE-REF-401",
+        CellValue::Text(txt) => Err(Refusal::new(
+            RefusalCode::SourceCellUnusable208,
             format!(
                 "expected a number or placeholder at {sheet_name}!{}, found text '{txt}'",
                 cell.cell_ref
@@ -141,7 +143,8 @@ fn hex(bytes: &[u8; 32]) -> String {
 }
 
 /// Loads every registered workbook of `profile` from `<root>/<corpus_dir>/`, checking byte size and SHA-256
-/// against the registry. Refuses (`FMINE-REF-502`) naming every missing, altered or unparseable file.
+/// against the registry. Refuses naming every missing, altered or unparseable file: `FMINE-REF-506` (exit 5)
+/// when any file is missing or unreadable, otherwise `FMINE-REF-505` (exit 8) for digest mismatches alone.
 pub fn load_registered_sources(
     profile: &IssuerProfile,
     root: &Path,
@@ -207,7 +210,23 @@ pub fn load_registered_sources(
             let _ = write!(detail, "; {label}: {}", list.join(", "));
         }
     }
-    Err(Refusal::from_code("FMINE-REF-502", detail))
+    Err(files_refusal(&missing, &unreadable, detail))
+}
+
+/// `FMINE-REF-506` (exit 5): a registered input is missing or cannot be read.
+pub(crate) fn input_refusal(detail: impl Into<String>) -> Refusal {
+    Refusal::new(RefusalCode::InputMissingOrUnreadable506, detail)
+}
+
+/// §30.1: a missing or unreadable registered input is foundation I/O (`FMINE-REF-506`, exit 5), never a
+/// digest-mismatch code; only when every unusable file is present and parses but has other bytes is it
+/// `FMINE-REF-505` (exit 8). Every file is named either way.
+pub(crate) fn files_refusal(missing: &[String], unreadable: &[String], detail: String) -> Refusal {
+    if missing.is_empty() && unreadable.is_empty() {
+        Refusal::new(RefusalCode::DigestMismatch505, detail)
+    } else {
+        input_refusal(detail)
+    }
 }
 
 /// A sheet that holds a cost-of-sales row but whose table structure could not be located.
@@ -1815,17 +1834,21 @@ fn assess_inner(
     }
 }
 
-/// Binds the Mine Stats ledger into the root frame (v7): every instance's identity, operands and state as codes
-/// and locators (a refusal's reason, an (iv) item's needed fact), the share used and the share printed, the
-/// nil-token certificate, then every infeasible component with its correction sets and implied ranges.
-fn encode_mine_ledger(enc: &mut Encoder, ledger: &MineLedger) {
-    let opt = |enc: &mut Encoder, s: Option<&str>| match s {
+/// An optional text in the root frame: a tag, then the text, so an absent value and an empty one differ.
+fn opt(enc: &mut Encoder, s: Option<&str>) {
+    match s {
         None => enc.put_u8(0),
         Some(s) => {
             enc.put_u8(1);
             enc.put_str(s);
         }
-    };
+    }
+}
+
+/// Binds the Mine Stats ledger into the root frame (v7): every instance's identity, operands and state as codes
+/// and locators (a refusal's reason, an (iv) item's needed fact), the share used and the share printed, the
+/// nil-token certificate, then every infeasible component with its correction sets and implied ranges.
+fn encode_mine_ledger(enc: &mut Encoder, ledger: &MineLedger) {
     enc.put_u64(ledger.instances.len() as u64);
     for i in &ledger.instances {
         for field in [
@@ -1911,18 +1934,9 @@ fn ledger_anchor(issuer: &str, lane: Lane, sources: usize, state_root: Digest32)
     }
 }
 
-/// Names the fact that would decide a (iv) instance: the registered `(subject, family)` row if there is one,
-/// otherwise the text the ledger gave it (its family default, or the stated share rule's).
 /// Binds a state into the root frame (v4) as codes, numbers and locators, with a tag before every optional
 /// part, so rewording any prose leaves the root alone.
 fn encode_state(enc: &mut Encoder, state: &IdentityState) {
-    let opt = |enc: &mut Encoder, s: Option<&str>| match s {
-        None => enc.put_u8(0),
-        Some(s) => {
-            enc.put_u8(1);
-            enc.put_str(s);
-        }
-    };
     let miss = |enc: &mut Encoder, m: &RateMiss| {
         for x in [m.r, m.n, m.k, m.q] {
             enc.put_i64(x);
@@ -2145,7 +2159,7 @@ fn load_synthetic(
     let mut sources = Vec::new();
     for (file, kind, quarter, bytes) in files {
         let workbook = Workbook::from_bytes(file, &bytes)
-            .map_err(|e| Refusal::from_code("FMINE-REF-502", format!("synthetic {file}: {e}")))?;
+            .map_err(|e| input_refusal(format!("synthetic {file}: {e}")))?;
         let census = workbook.cell_census();
         sources.push(LoadedSource {
             file_name: file.to_string(),
@@ -2525,7 +2539,8 @@ mod tests {
         let n = profile.sources.len();
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("no-such-workspace");
         let refusal = run_public_assurance(&profile, &root).expect_err("must refuse");
-        assert_eq!((refusal.code, refusal.exit_code), ("FMINE-REF-502", 8));
+        // Missing files are foundation I/O (506, exit 5), never a digest code (§30.1).
+        assert_eq!((refusal.code, refusal.exit_code), ("FMINE-REF-506", 5));
         assert!(
             refusal
                 .what
@@ -4479,6 +4494,13 @@ mod tests {
             .join("..")
     }
 
+    fn barrick_to_2026q2(root: &Path) -> IssuerProfile {
+        load_issuer_profile(root, "barrick")
+            .expect("registry")
+            .through("2026Q2")
+            .expect("bound")
+    }
+
     /// GATE-BULL-01 on the real registered workbooks. Every expected value below comes from the independent
     /// Python reader written before this code (scratch `fidelity.py` and `census2.py`, 2026-10-29; recorded in
     /// MOR_CASE E820–E823), never from this implementation's own output.
@@ -4979,10 +5001,7 @@ mod tests {
     #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/ and python3"]
     fn test_format_census_matches_independent_reader() {
         let root = workspace_root();
-        let profile = load_issuer_profile(&root, "barrick")
-            .expect("registry")
-            .through("2026Q2")
-            .expect("bound");
+        let profile = barrick_to_2026q2(&root);
         let mut names: Vec<&str> = profile
             .sources
             .iter()
@@ -5071,10 +5090,7 @@ mod tests {
     #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/ and python3"]
     fn test_displayed_digest_matches_independent_reader() {
         let root = workspace_root();
-        let profile = load_issuer_profile(&root, "barrick")
-            .expect("registry")
-            .through("2026Q2")
-            .expect("bound");
+        let profile = barrick_to_2026q2(&root);
         let mut names: Vec<&str> = profile
             .sources
             .iter()
@@ -5262,10 +5278,7 @@ mod tests {
     fn test_construction_discovery_real_aisc_tables() {
         use fmine_numerics::exact_feas::discover::Discovered;
         let root = workspace_root();
-        let profile = load_issuer_profile(&root, "barrick")
-            .expect("registry")
-            .through("2026Q2")
-            .expect("bound");
+        let profile = barrick_to_2026q2(&root);
         let r =
             run_public_assurance(&profile, &root).expect("registered files present and unaltered");
         // The lines the discovery counts are the ones the ledger summed.
@@ -5376,10 +5389,7 @@ mod tests {
     #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
     fn test_e463_copper_unit_real_files() {
         let root = workspace_root();
-        let profile = load_issuer_profile(&root, "barrick")
-            .expect("registry")
-            .through("2026Q2")
-            .expect("bound");
+        let profile = barrick_to_2026q2(&root);
         let r =
             run_public_assurance(&profile, &root).expect("registered files present and unaltered");
         let u = r.copper_unit_discovery().expect("unit discovery");
@@ -5402,10 +5412,7 @@ mod tests {
     #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/ and python3"]
     fn barrick_one_cell_matches_independent_reader() {
         let root = workspace_root();
-        let profile = load_issuer_profile(&root, "barrick")
-            .expect("registry")
-            .through("2026Q2")
-            .expect("bound");
+        let profile = barrick_to_2026q2(&root);
         let r =
             run_public_assurance(&profile, &root).expect("registered files present and unaltered");
         let out = std::process::Command::new("python3")
@@ -6268,16 +6275,29 @@ mod tests {
         )
         .expect("placeholder");
         assert_eq!(placeholder.value, None);
+        // test_formula_error_cell_refuses_208_exit_3: a formula-error cell is a source cell unusable (208,
+        // exit 3), never 401 (unknown reactive ground, exit 7).
         let err = sheet.cell(20, 2).expect("B20");
         assert!(
-            cell_to_public_claim(
-                &aisc.workbook,
-                &sheet.name,
-                "x",
-                err,
-                AdditivityClass::ExtensiveAdditive
-            )
-            .is_err()
+            matches!(err.value, CellValue::FormulaError(_)),
+            "{:?}",
+            err.value
+        );
+        let refusal = cell_to_public_claim(
+            &aisc.workbook,
+            &sheet.name,
+            "x",
+            err,
+            AdditivityClass::ExtensiveAdditive,
+        )
+        .expect_err("formula error");
+        assert_eq!((refusal.code, refusal.exit_code), ("FMINE-REF-208", 3));
+        assert!(
+            refusal.what.starts_with("Source cell unusable")
+                && refusal.what.contains("quarantined formula error")
+                && refusal.what.ends_with("at Q1 2030!B20"),
+            "{}",
+            refusal.what
         );
     }
 }

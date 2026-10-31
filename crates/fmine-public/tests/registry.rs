@@ -27,7 +27,10 @@ fn altered_registered_file_is_refused_with_both_digests() {
     fs::write(dir.join(&first.file_name), &bytes).expect("write altered file");
 
     let refusal = run_barrick_m0_assurance(&root).expect_err("an altered file must be refused");
-    assert_eq!((refusal.code, refusal.exit_code), ("FMINE-REF-502", 8));
+    // The other registered files are missing, so the code is 506 (foundation I/O, exit 5, §30.1); the altered
+    // file is still listed under "digest mismatch" with both digests. An altered file alone is 505, exit 8
+    // (`live.rs`, `test_live_files_synthetic_all_refuse`).
+    assert_eq!((refusal.code, refusal.exit_code), ("FMINE-REF-506", 5));
     let what = &refusal.what;
     assert!(
         what.contains(&format!("{n} of {n} registered barrick workbooks unusable")),

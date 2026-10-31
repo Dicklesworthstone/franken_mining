@@ -2,8 +2,9 @@
 //! (bd-4wvl.4 part 2).
 //!
 //! When `<workspace>/registries/transcriptions/<issuer>.toml` exists, a run checks the bytes of every document
-//! it cites against the sources registry and refuses (`FMINE-REF-502`) naming each missing or altered file. It
-//! then applies the two-reader check and refuses, naming the locators, if any readers disagree; a locator only
+//! it cites against the sources registry and refuses naming each missing (`FMINE-REF-506`, exit 5) or altered
+//! (`FMINE-REF-505`, exit 8) file. It then applies the two-reader check and refuses (`FMINE-REF-202`, not
+//! observable; exit 3), naming the locators, if any readers disagree; a locator only
 //! one reader has entered is pending and reported. Accepted values that two or more documents print under one
 //! quantity key form a tie, and [`discover_tie_conventions`] finds which rounding convention each document
 //! uses. A quantity no convention reconciles is reported as a conflict with its locators, and the discovery is
@@ -14,7 +15,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use fmine_core::hash::sha256;
-use fmine_evidence::Refusal;
+use fmine_evidence::{Refusal, RefusalCode};
 use fmine_numerics::exact_feas::discover::{
     Fit, Printed, TieDiscovery, TieFinding, TieRefusal, discover_tie_conventions,
 };
@@ -56,10 +57,6 @@ pub struct TranscriptionReport {
     pub agreement: Agreement,
     /// `None` when no quantity is printed by two documents; `Err` names why the discovery was refused.
     pub tie: Option<Result<TieOutcome, String>>,
-}
-
-fn refuse(detail: String) -> Refusal {
-    Refusal::from_code("FMINE-REF-502", detail)
 }
 
 /// Checks the cited documents' bytes, refusing with every missing or altered file named.
@@ -105,7 +102,7 @@ fn check_documents(cited: &[&DocumentRow], root: &Path) -> Result<Vec<CheckedDoc
             let _ = write!(detail, "; {label}: {}", list.join(", "));
         }
     }
-    Err(refuse(detail))
+    Err(crate::files_refusal(&missing, &[], detail))
 }
 
 /// An exact rational and its rounding step from a printed decimal.
@@ -219,7 +216,7 @@ pub fn load_transcription_report(
     }
     let registry = format!("registries/transcriptions/{}.toml", profile.issuer);
     let reg = load_transcriptions(&path, &profile.issuer, &profile.documents)
-        .map_err(|e| refuse(format!("transcription registry {registry}: {e}")))?;
+        .map_err(|e| crate::input_refusal(format!("transcription registry {registry}: {e}")))?;
     let cited: Vec<&DocumentRow> = profile
         .documents
         .iter()
@@ -246,7 +243,9 @@ pub fn load_transcription_report(
                 at.join(", ")
             );
         }
-        return Err(refuse(detail));
+        // Conflicted evidence is a 2xx refusal (§30.1): until the readers agree, the printed value is not
+        // observable from the transcription.
+        return Err(Refusal::new(RefusalCode::NotObservable202, detail));
     }
     let tie = tie_outcome(&agreement.accepted);
     Ok(Some(TranscriptionReport {
@@ -625,7 +624,7 @@ mod tests {
         );
         std::fs::write(&path, format!("{header}{}", conflict.concat())).expect("write");
         let e = run(&ws).expect_err("disagreement refuses");
-        assert_eq!((e.code, e.exit_code), ("FMINE-REF-502", 8));
+        assert_eq!((e.code, e.exit_code), ("FMINE-REF-202", 3));
         assert!(
             e.what.contains(
                 "at Deck.pdf:p14:Reserves roll-forward:Depletion/2030 (reader_a, reader_b: token)"
@@ -644,11 +643,12 @@ mod tests {
         altered[0] ^= 1;
         std::fs::write(ws.join("docs").join("Deck.pdf"), &altered).expect("alter");
         let e = run(&ws).expect_err("altered refuses");
-        assert_eq!((e.code, e.exit_code), ("FMINE-REF-502", 8));
+        assert_eq!((e.code, e.exit_code), ("FMINE-REF-505", 8));
         assert!(e.what.contains("digest mismatch: Deck.pdf"), "{}", e.what);
         // A missing cited document.
         std::fs::remove_file(ws.join("docs").join("Deck.pdf")).expect("remove");
         let e = run(&ws).expect_err("missing refuses");
+        assert_eq!((e.code, e.exit_code), ("FMINE-REF-506", 5));
         assert!(e.what.contains("missing: Deck.pdf"), "{}", e.what);
         // A `--through` run reads no transcriptions, so the missing document does not refuse it.
         let profile = load_issuer_profile(&ws, "synthetic")

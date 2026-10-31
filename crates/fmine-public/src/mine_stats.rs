@@ -250,7 +250,8 @@ pub type LabelVocabulary = BTreeSet<(Option<String>, String)>;
 /// one, every label is read.
 ///
 /// # Errors
-/// Refuses (`FMINE-REF-502`) when `quarter` is not `YYYYQn`: the quarter digit is part of every quarterly
+/// Refuses (`FMINE-REF-506`, a registered input that cannot be read) when `quarter` is not `YYYYQn`: the
+/// quarter digit is part of every quarterly
 /// period code. Cell-level problems never fail the read; they are listed in [`MineStatsRead::refusals`].
 pub fn read_mine_stats(
     workbook: &Workbook,
@@ -266,13 +267,10 @@ pub fn read_mine_stats(
         })
         .and_then(|(_, q)| q.parse::<u8>().ok())
         .ok_or_else(|| {
-            Refusal::from_code(
-                "FMINE-REF-502",
-                format!(
-                    "Mine Statistics workbook {} registered for quarter {quarter:?}, not YYYYQn",
-                    workbook.artifact_path
-                ),
-            )
+            crate::input_refusal(format!(
+                "Mine Statistics workbook {} registered for quarter {quarter:?}, not YYYYQn",
+                workbook.artifact_path
+            ))
         })?;
     let mut read = MineStatsRead {
         quarter: quarter.to_string(),

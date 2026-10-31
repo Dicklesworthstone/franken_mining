@@ -1378,3 +1378,49 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     - **Convention set.** The convention set lacks half-away-from-zero, which differs from half-up on negative
       prints.
     - **Verification.** Self-verified on this machine; nothing has run in CI.
+- **E851** The refusal registry is the single source (bd-h0q1, BD-328.S2 and S3; FACT, execution, 2026-10-30).
+  - **Before.** Only 4 of the 25 §8.4 codes (102, 103, 108, 504) meant the same thing in the plan, the registry and
+    the catalogue (R7-C080). A formula-error cell refused as 401, which §8.4 defines as unknown reactive ground.
+  - **Now.** `registries/refusals.toml` (schema 2) holds 32 rows: the 25 §8.4 codes, `active`, and 7 `proposed`
+    (109, 206, 207, 208, 505, 506, 507).
+    - `xtask gen-refusals` compiles it to a closed `RefusalCode`, and `Refusal::new` takes only that enum. The
+      `FMINE-REF-000` fallback and the string constructor are gone; two `compile_fail` doctests pin that.
+    - `xtask check-refusals`, in `check-all`, fails on a catalogue that differs from the registry, a plan code out
+      of step with the registry, an exit code off the §30.1 family rule or its two exceptions (504→7, 506→5), a
+      `FMINE-REF` token that is not a registry code (72 files, 279 tokens), or a fix text that says clamp.
+  - **Exit codes that changed.**
+    - A missing file: 502 exit 8 → 506 exit 5. An altered file: 502 exit 8 → 505 exit 8.
+    - `claim show`: 502 exit 8 → 201 exit 3. Reader disagreement: 502 exit 8 → 202 exit 3.
+    - A formula-error or text cell: 401 exit 6 → 208 exit 3.
+  - **Found on the way.**
+    - **NaN got through.** `decompose_aisc_lmdi` tested `x <= 0.0`, which is false for NaN, so a NaN or infinite
+      state reached the arithmetic. It now requires finite and positive, and refuses 109.
+    - **Contracts described refusals the code never raised.** The units contract named five codes, the time
+      contract 104, the numerics contract 301 for cycles. Each now states what the code does, and the check
+      holds them there. The check caught one such stale token (110, `fmine-claim/CONTRACT.md`) on its first run.
+    - **LOC.** The migration took `fmine-public` to 21,034 against its ceiling of 21,000, and the gate failed.
+      The ceiling was not raised. Duplication came out instead (two helpers for 506 and 505, one `opt` encoder
+      in place of two closures, two test helpers), giving 20,981, 19 lines of room.
+  - **Run.**
+    - Default suite: 427 passed, 0 failed, 23 ignored. The 23 ignored, run on the corpus: all pass, including the
+      18-workbook file proof.
+    - `tests/e2e_envelope.sh`, which now also checks the refusal code: 9 runs, 0 failures.
+    - The state root on the corpus is `d37903cf…`, equal to the newest row of `repro/barrick/expected.toml`.
+      Refusal codes are not in the root, and the `opt` refactor moved nothing.
+  - **Planted negatives, each reverted by hand:**
+    - a formula-error cell back to 401 fails `public_claim_from_a_synthetic_cell`: ("FMINE-REF-401", 7) against
+      ("FMINE-REF-208", 3);
+    - the LMDI guard back to `!(x <= 0.0)` fails `test_synthetic_two_period_exact_lmdi` on the NaN case;
+    - 506's exit changed to 8 in the registry fails `check-refusals` twice: the catalogue differs, and the listed
+      exception matches no row;
+    - a hand-edited `fix` in the generated catalogue fails `check-refusals`.
+  - **Not claimed.**
+    - **Owner decision.** The 7 proposed codes, the exceptions and eight call-site choices are not approved
+      (`docs/adr/ADR-REFUSALS-01.md`, status Proposed). Call sites use them ahead of that decision, which S3 did
+      not intend; the ADR's fallback undoes each declined row. bd-h0q1.1 stays open.
+    - **Strings remain.** `fmine-crs`, `fmine-units` and `fmine-time` sit below `fmine-evidence`, so their codes
+      are strings the check validates, not enum values.
+    - **Scope of the check.** It reads §8.4 only, not §25.6 or §31.3.
+    - **Bootstrap.** `xtask` depends transitively on `fmine-evidence`, so a registry change that removes a variant
+      in use needs the generated file edited before `gen-refusals` can build.
+    - **Verification.** Self-verified on this machine; nothing has run in CI.
