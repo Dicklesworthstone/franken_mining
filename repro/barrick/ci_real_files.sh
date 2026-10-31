@@ -3,8 +3,9 @@
 # fetch and verify the registered Barrick workbooks, run the ignored real-file tests (which check the root and
 # anchor of repro/barrick/expected.toml's last row), print the root, and check that no workbook is in git.
 #
-# Output: {"stage","ok","elapsed_s"} per stage, plus fetch.sh's lines and {"stage":"root",...}. It stops at the
-# first failed stage with exit 1. Under GitHub Actions the root is also written to $GITHUB_OUTPUT as root=<hex>.
+# Output: {"stage","ok","elapsed_s"} per stage, plus fetch.sh's lines, {"stage":"root",...} and
+# {"stage":"offline_root",...}. It stops at the first failed stage with exit 1. Under GitHub Actions the root is also
+# written to $GITHUB_OUTPUT as root=<hex>.
 # BD-338.S3's live-dependency proof runs in two places:
 # - its file checks and the real M1, inside test_public;
 # - its leaf sample (one leaf per instance, about 2,600 reruns of the pipeline), as the release-mode stage
@@ -40,6 +41,24 @@ xlsx_guard() {
   test -z "$(git ls-files '*.xlsx' '*.xls')"
 }
 
+# bd-073: the release binary gives the same root with no network at all. A fresh network namespace (Linux, so CI
+# only) holds just a down loopback; the run inside it drops back to this user. The control first shows that the
+# namespace cannot open a connection, so an equal root is not a namespace that leaked.
+offline() {
+  local bin=target/release/fmine online isolated
+  local cert='import json, sys; print(json.loads(sys.stdin.read())["certificate"])'
+  cargo build -q --release --locked -p fmine-cli || return 1
+  if sudo -n unshare --net -- python3 -I -c 'import socket; socket.create_connection(("github.com", 443), 5)'; then
+    echo "offline: the namespace reached the network" >&2
+    return 1
+  fi
+  online="$("$bin" assure public --issuer barrick --through 2026Q2 | python3 -I -c "$cert")" || return 1
+  isolated="$(sudo -n unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups -- \
+    "$bin" assure public --issuer barrick --through 2026Q2 | python3 -I -c "$cert")" || return 1
+  printf '{"stage":"offline_root","online":"%s","no_network":"%s"}\n' "$online" "$isolated"
+  [[ -n $online && $online == "$isolated" ]]
+}
+
 stage fetch repro/barrick/fetch.sh
 stage test_public cargo test -p fmine-public -- --ignored --skip barrick_live_leaves_one_per_instance
 stage test_public_integration cargo test -p xtask \
@@ -50,3 +69,4 @@ stage live_leaves cargo test --release -p fmine-public --lib -- --ignored --exac
 stage test_cli cargo test -p fmine-cli -- --ignored
 stage root root
 stage xlsx_guard xlsx_guard
+stage offline offline

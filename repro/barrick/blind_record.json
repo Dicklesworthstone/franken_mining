@@ -1,0 +1,19 @@
+{
+  "issuer": "barrick",
+  "commit": "6a46b96caa35d50397b6534d11038844015d2301",
+  "committed_utc": "2026-10-31T17:04:48Z",
+  "workflow": "Blind binary",
+  "run_id": 41222758273,
+  "run_created_utc": "2026-10-31T17:04:53Z",
+  "run_completed_utc": "2026-10-31T17:54:42Z",
+  "runner": "macos-15",
+  "target": "aarch64-apple-darwin",
+  "artifact": "fmine-aarch64-apple-darwin-6a46b96caa35d50397b6534d11038844015d2301",
+  "artifact_id": 13051824556,
+  "artifact_expires_utc": "2027-01-29T17:04:53Z",
+  "binary_sha256": "58818c06c39df09de19eeba93d2a4b4b9c0fb72e24bb88afbc5fd5bf1b36bd82",
+  "release_utc": "2026-11-09T11:00:00Z",
+  "state_root_through_2026Q2": "d37903cf8a0c3cd4428bb2a606457479825d2bf7841d64f887dbede4e66ef15c",
+  "anchor_id": "anc_13872409843300420677ef6e1293bff5",
+  "evidence": "E854"
+}
