@@ -561,11 +561,11 @@ mod tests {
     }
 
     #[test]
-    fn test_committed_registry_passes_with_three_lifts_and_five_analogues() {
+    fn test_committed_registry_passes_with_four_lifts_and_five_analogues() {
         let root = workspace_root();
         check_lifts(&root).expect("committed lifts");
         let (lifts, analogues) = load(&root).expect("registry");
-        assert_eq!((lifts.len(), analogues.len()), (3, 5));
+        assert_eq!((lifts.len(), analogues.len()), (4, 5));
     }
 
     /// Local only: set `FRANKENSIM_PATH` to a frankensim checkout that holds the pinned commit. The shared count
@@ -578,10 +578,14 @@ mod tests {
             return;
         };
         let log = check_upstream(&workspace_root(), Path::new(&up)).expect("every lift holds");
-        assert_eq!(log.len(), 3, "{log:?}");
+        assert_eq!(log.len(), 4, "{log:?}");
         assert!(log[0].contains("\"shared\":82,"), "{log:?}");
         assert!(
             log[2].contains("crates/fs-rand/src/philox.rs") && log[2].contains(SHA),
+            "{log:?}"
+        );
+        assert!(
+            log[3].contains("crates/fs-evidence/src/color.rs"),
             "{log:?}"
         );
     }

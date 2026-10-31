@@ -4,7 +4,7 @@
 
 use fmine_claim::Claim;
 use fmine_core::id::{ObjectId, PrefixKind};
-use fmine_evidence::{ClaimColor, Refusal};
+use fmine_evidence::{Color, Refusal};
 use fmine_numerics::voi::{VoiProblem, VoiSummary};
 
 /// Parameter perturbation threshold that flips the optimal action (`BD-227`).
@@ -107,12 +107,12 @@ pub struct DecisionCard {
     pub cvar95_loss_usd_m: f64,
     pub flip_margins: Vec<FlipMargin>,
     pub top_voi_items: Vec<VoiRankedItem>,
-    pub color: ClaimColor,
+    pub color: Color,
 }
 
 impl DecisionCard {
     /// Constructs a validated `DecisionCard`, enforcing `INV-015` (`FMINE-REF-204` if `UU` slot is missing)
-    /// and `NL-4` (`FMINE-REF-205` if `expected_npv_usd_m` is `Red`).
+    /// and `NL-4` (`FMINE-REF-205` if `expected_npv_usd_m` has no colour to show).
     pub fn build(
         title: impl Into<String>,
         recommended_action: impl Into<String>,
@@ -123,7 +123,7 @@ impl DecisionCard {
         top_voi_items: Vec<VoiRankedItem>,
     ) -> Result<Self, Refusal> {
         expected_npv_usd_m.verify_uu_slot_for_decision()?;
-        let color = expected_npv_usd_m.require_decision_grade()?;
+        let color = expected_npv_usd_m.color()?;
         let title = title.into();
         let recommended_action = recommended_action.into();
         let runner_up_action = runner_up_action.into();
@@ -155,8 +155,11 @@ impl DecisionCard {
             self.title, self.decision_id
         ));
         out.push_str(&format!(
-            "- **Status Color**: `{:?}` | **Evidence**: `{:?}` | **Knowledge**: `{:?}`\n",
-            self.color, self.expected_npv_usd_m.evidence, self.expected_npv_usd_m.knowledge
+            "- **Status Color**: `{}` | **Evidence**: `{:?}` | **Epistemic**: `{:?}` | **State**: `{:?}`\n",
+            self.color.name(),
+            self.expected_npv_usd_m.evidence,
+            self.expected_npv_usd_m.epistemic,
+            self.expected_npv_usd_m.state
         ));
         out.push_str(&format!(
             "- **Recommended Action**: {} (vs. {})\n",
@@ -210,7 +213,8 @@ mod tests {
         AdditivityClass, ConfidentialityTier, Representation, SpatialSupport, UuTerm,
     };
     use fmine_core::anchor::SourceAnchor;
-    use fmine_evidence::{EvidenceClass, KnowledgeState};
+    use fmine_evidence::color::{ColorRank, ValidityDomain};
+    use fmine_evidence::{AssertionSource, EpistemicStatus, EvidenceClass, KnowledgeState, KuKind};
 
     fn make_npv_claim(with_uu: bool, evidence: EvidenceClass) -> Claim<f64> {
         let uu = if with_uu {
@@ -235,7 +239,8 @@ mod tests {
             SpatialSupport::PeriodAggregate,
             AdditivityClass::ExtensiveAdditive,
             evidence,
-            KnowledgeState::KnownUnknown,
+            EpistemicStatus::KnownUnknown(KuKind::Parametric),
+            KnowledgeState::Estimated,
             ConfidentialityTier::Internal,
             uu,
             vec![],
@@ -247,7 +252,7 @@ mod tests {
     fn test_decision_card_uu_and_flip_margin_guards() {
         // test_missing_uu_refuses_204: a missing UuTerm on a KnownUnknown claim refuses with FMINE-REF-204
         // (unbudgeted unknowns), never 404 (stale TSF instrumentation, a tailings-safety code).
-        let bad_claim = make_npv_claim(false, EvidenceClass::Calibrated);
+        let bad_claim = make_npv_claim(false, EvidenceClass::ModelledCalibrated);
         let err = DecisionCard::build(
             "Pushback 4",
             "Proceed",
@@ -260,9 +265,14 @@ mod tests {
         .expect_err("must refuse missing UU");
         assert_eq!((err.code, err.exit_code), ("FMINE-REF-204", 3));
 
-        // A Placeholder claim refuses with FMINE-REF-205 (calibration required for decision-grade use), never
+        // An unreviewed assertion refuses with FMINE-REF-205 (calibration required for decision-grade use), never
         // 401 (unknown reactive ground, a blasting-safety code).
-        let red_claim = make_npv_claim(true, EvidenceClass::Placeholder);
+        let red_claim = make_npv_claim(
+            true,
+            EvidenceClass::Assertion {
+                source: AssertionSource::Agent,
+            },
+        );
         let err_red = DecisionCard::build(
             "Pushback 4",
             "Proceed",
@@ -272,11 +282,11 @@ mod tests {
             vec![],
             vec![],
         )
-        .expect_err("must refuse Placeholder claim");
+        .expect_err("must refuse an unreviewed assertion");
         assert_eq!((err_red.code, err_red.exit_code), ("FMINE-REF-205", 3));
 
         // Valid calibrated claim with UuTerm succeeds and computes flip margin.
-        let ok_claim = make_npv_claim(true, EvidenceClass::Calibrated);
+        let ok_claim = make_npv_claim(true, EvidenceClass::ModelledCalibrated);
         let fm = FlipMargin::from_linear_sensitivity(
             "Au_Recovery",
             0.86,
@@ -296,10 +306,34 @@ mod tests {
             vec![],
         )
         .expect("valid card");
-        assert_eq!(card.color, ClaimColor::Amber);
+        // No calibration domain was named, so the calibrated class has nothing to stand on yet.
+        assert_eq!(card.color.rank(), ColorRank::Estimated);
         let md = card.render_one_pager_markdown();
         assert!(md.contains("UU-GEO-07"));
         assert!(md.contains("Au_Recovery"));
+        assert!(md.contains("**Status Color**: `estimated`"), "{md}");
+        assert!(
+            md.contains("**Epistemic**: `KnownUnknown(Parametric)`"),
+            "{md}"
+        );
+        assert!(md.contains("**State**: `Estimated`"), "{md}");
+
+        // Naming the domain and its calibration record carries it onto the card.
+        let anchored = make_npv_claim(true, EvidenceClass::ModelledCalibrated).with_regime(
+            ValidityDomain::unconstrained().with("feed_grade", 1.0, 3.0),
+            "calib-2026-q3",
+        );
+        let card = DecisionCard::build(
+            "Pushback 4",
+            "Proceed Mill",
+            "Leach Pad Only",
+            anchored,
+            40.0,
+            vec![],
+            vec![],
+        )
+        .expect("valid card");
+        assert_eq!(card.color.rank(), ColorRank::Validated);
     }
 
     #[test]

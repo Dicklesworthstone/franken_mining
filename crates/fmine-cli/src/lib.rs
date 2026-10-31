@@ -641,6 +641,106 @@ mod tests {
         assert!(!env.payload_json.contains("next_actions"));
     }
 
+    const STATE_I: &str = "\"state\":\"i\"";
+    const ISSUER_ASSERTION: &str = "\"evidence\":\"Assertion\",\"source\":\"issuer\"";
+
+    /// The objects of every `"key":[{..},..]` array, with braces balanced outside strings.
+    fn json_objects<'a>(json: &'a str, key: &str) -> Vec<&'a str> {
+        let mut found = Vec::new();
+        for (at, _) in json.match_indices(&format!("\"{key}\":[{{")) {
+            let start = at + key.len() + 4;
+            let (mut from, mut depth, mut in_str, mut escaped) = (start, 0_u32, false, false);
+            for (i, c) in json[start..].char_indices() {
+                match c {
+                    _ if escaped => escaped = false,
+                    '\\' if in_str => escaped = true,
+                    '"' => in_str = !in_str,
+                    '{' if !in_str => {
+                        if depth == 0 {
+                            from = start + i;
+                        }
+                        depth += 1;
+                    }
+                    '}' if !in_str => {
+                        depth -= 1;
+                        if depth == 0 {
+                            found.push(&json[from..=start + i]);
+                        }
+                    }
+                    ']' if !in_str && depth == 0 => break,
+                    _ => {}
+                }
+            }
+        }
+        found
+    }
+
+    /// bd-306n.3: an issuer's figure is reported as an assertion, whether it reproduced or not. Reproducing shows
+    /// its figures agree with each other; it does not show they are true.
+    #[test]
+    fn test_assure_synthetic_reports_assertion_issuer() {
+        let root = workspace_root();
+        let (cmd, _, ws) =
+            parse_args(&args(&["assure", "public", "--synthetic"]), &root).expect("parse");
+        let env = execute_command(&cmd, &ws);
+        assert_eq!((env.exit_code, env.status), (0, "ok"));
+        let json = env.to_json();
+        let instances = json_objects(&json, "instances");
+        // The walk must reach the 40 state-(i) instances, or the loop below passes on nothing.
+        let reproduced = instances.iter().filter(|i| i.contains(STATE_I)).count();
+        assert_eq!(reproduced, 40, "{json}");
+        // 2 + 1 + 2 in the visible scope, and the one the hidden sheet `Q4 2029` holds.
+        let exceptions = json_objects(&json, "exceptions");
+        assert_eq!(exceptions.len(), 6, "{json}");
+        for instance in instances.iter().chain(&exceptions) {
+            assert!(instance.contains(ISSUER_ASSERTION), "{instance}");
+        }
+        println!(
+            "{{\"test\":\"assure_synthetic_assertion_issuer\",\"instances\":{},\"exceptions\":{},\
+             \"non_assertion\":0}}",
+            instances.len(),
+            exceptions.len()
+        );
+    }
+
+    /// bd-306n.3 over the real workbooks: one line per workbook, then a summary.
+    #[test]
+    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded_docs"]
+    fn test_assure_public_reports_every_barrick_instance_as_issuer_assertion() {
+        let root = workspace_root();
+        let (cmd, _, ws) =
+            parse_args(&args(&["assure", "public", "--issuer", "barrick"]), &root).expect("parse");
+        let env = execute_command(&cmd, &ws);
+        assert_eq!(env.exit_code, 0, "{}", env.to_json());
+        let json = env.to_json();
+        let mut by_file: std::collections::BTreeMap<&str, (u32, u32)> =
+            std::collections::BTreeMap::new();
+        for instance in json_objects(&json, "instances") {
+            let at = instance.strip_prefix("{\"at\":\"").expect("at");
+            let file = at.split(':').next().expect("file");
+            let row = by_file.entry(file).or_default();
+            row.0 += 1;
+            row.1 += u32::from(instance.contains(ISSUER_ASSERTION));
+        }
+        let (mut total, mut other) = (0, 0);
+        for (file, (instances, assertion_issuer)) in &by_file {
+            let other_class = instances - assertion_issuer;
+            println!(
+                "{{\"file\":\"{file}\",\"instances\":{instances},\"assertion_issuer\":{assertion_issuer},\
+                 \"other_class\":{other_class}}}"
+            );
+            total += instances;
+            other += other_class;
+        }
+        println!(
+            "{{\"files\":{},\"instances\":{total},\"non_assertion\":{other}}}",
+            by_file.len()
+        );
+        assert_eq!(by_file.len(), 18);
+        assert!(total > 0);
+        assert_eq!(other, 0);
+    }
+
     /// Without the registered workbooks the gate-eligible run refuses with 506 (foundation I/O, exit 5) and
     /// names the files; it never substitutes stand-in content (BD-321).
     ///

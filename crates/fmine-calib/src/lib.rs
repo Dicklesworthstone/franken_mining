@@ -219,21 +219,18 @@ pub struct CalibrationReport {
 }
 
 /// Applies `CalibrationFlag` to a `Claim<T>`, enforcing `NL-8`: if `flag` is `Overconfident`
-/// or `Biased`, marks `calibration_failed = true` and downgrades `Calibrated -> Assumed` (`BD-049`).
+/// or `Biased`, marks `calibration_failed = true`. Either way, and for `Unscored`, a `ModelledCalibrated` claim
+/// has lost its track record and becomes `ModelledUncalibrated` (`BD-049`, NL-4).
 pub fn apply_calibration_gate<T>(claim: &mut Claim<T>, flag: CalibrationFlag) {
-    match flag {
-        CalibrationFlag::Calibrated => {}
-        CalibrationFlag::Unscored => {
-            if claim.evidence == EvidenceClass::Calibrated {
-                claim.evidence = EvidenceClass::Assumed;
-            }
-        }
-        CalibrationFlag::Overconfident | CalibrationFlag::Biased => {
-            claim.calibration_failed = true;
-            if claim.evidence == EvidenceClass::Calibrated {
-                claim.evidence = EvidenceClass::Assumed;
-            }
-        }
+    if flag == CalibrationFlag::Calibrated {
+        return;
+    }
+    claim.calibration_failed |= matches!(
+        flag,
+        CalibrationFlag::Overconfident | CalibrationFlag::Biased
+    );
+    if claim.evidence == EvidenceClass::ModelledCalibrated {
+        claim.evidence = EvidenceClass::ModelledUncalibrated;
     }
 }
 
@@ -679,7 +676,7 @@ mod tests {
     use fmine_claim::{AdditivityClass, ConfidentialityTier, Representation, SpatialSupport};
     use fmine_core::anchor::SourceAnchor;
     use fmine_core::rand::{PhiloxStream, RngKey};
-    use fmine_evidence::KnowledgeState;
+    use fmine_evidence::{EpistemicStatus, KnowledgeState, KuKind};
 
     /// bd-hp2j.2: the literal is the bits `det::ln(2π)` returns, so the log score depends on no platform libm.
     #[test]
@@ -980,16 +977,34 @@ mod tests {
             Representation::Gaussian { mean, std_dev: std },
             SpatialSupport::PeriodAggregate,
             AdditivityClass::ExtensiveAdditive,
-            EvidenceClass::Calibrated,
-            KnowledgeState::KnownUnknown,
+            EvidenceClass::ModelledCalibrated,
+            EpistemicStatus::KnownUnknown(KuKind::Parametric),
+            KnowledgeState::Estimated,
             ConfidentialityTier::Public,
             vec![],
             vec![],
             vec![SourceAnchor::new("esia.pdf", [0; 32], "p.1")],
         );
+        let unscored = claim.clone();
         apply_calibration_gate(&mut claim, CalibrationFlag::Biased);
         assert!(claim.calibration_failed);
-        assert_eq!(claim.evidence, EvidenceClass::Assumed);
+        assert_eq!(claim.evidence, EvidenceClass::ModelledUncalibrated);
+        assert_eq!(
+            claim.color().map(|_| ()).map_err(|e| e.code),
+            Err("FMINE-REF-205")
+        );
+
+        // Unscored loses the class but has not failed.
+        let mut unscored = unscored;
+        apply_calibration_gate(&mut unscored, CalibrationFlag::Unscored);
+        assert!(!unscored.calibration_failed);
+        assert_eq!(unscored.evidence, EvidenceClass::ModelledUncalibrated);
+
+        // A passing flag leaves the class alone, and no flag raises one.
+        let mut assumed = unscored.clone();
+        assumed.evidence = EvidenceClass::Assumed;
+        apply_calibration_gate(&mut assumed, CalibrationFlag::Calibrated);
+        assert_eq!(assumed.evidence, EvidenceClass::Assumed);
     }
 
     /// bd-8wrk: the monitor's constructor used to floor nugget and sill at 1e-6, range at 1 m, and clamp the

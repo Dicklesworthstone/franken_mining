@@ -468,7 +468,7 @@ mod tests {
         AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport,
     };
     use fmine_core::rand::{PhiloxStream, RngKey};
-    use fmine_evidence::{EvidenceClass, KnowledgeState};
+    use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState};
     use fmine_io::styles::NumberFormat;
     use std::collections::BTreeMap;
 
@@ -882,8 +882,9 @@ mod tests {
                 Representation::Deterministic,
                 SpatialSupport::PeriodAggregate,
                 AdditivityClass::IntensiveWeighted,
-                EvidenceClass::Exact,
-                KnowledgeState::KnownKnown,
+                EvidenceClass::Derived,
+                EpistemicStatus::KnownKnown,
+                KnowledgeState::Known,
                 ConfidentialityTier::Public,
                 Vec::new(),
                 Vec::new(),

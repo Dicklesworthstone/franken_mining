@@ -38,10 +38,18 @@ licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
 target = "crates/fmine-core/src/rand.rs"
 guard_test = "rand::tests::test_philox4x32_known_answers"
 
+[[lift]]
+source = "crates/fs-evidence/src/color.rs"
+commit = "20463525d9775a18c1b237d2676f364f367175ab"
+sha256_at_lift = "7a15d995a8ca2e611f48e3a9c69dbd10fdbd4a192cf3f247380b2105b5aa95c7"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+target = "crates/fmine-evidence/src/color.rs"
+guard_test = "color::tests::test_compose_never_promotes"
+
 [[analogue]]
 target = "crates/fmine-evidence/src/lattice.rs"
 upstream = "crates/fs-evidence/src/lib.rs"
-note = "Same subject, none of its identifiers. NEW-evidence-lattice-plan-types does a real lift of color.rs."
+note = "Same subject, none of its identifiers. Colours themselves are a real lift: fmine-evidence/src/color.rs."
 
 [[analogue]]
 target = "crates/fmine-numerics/src/eproc.rs"

@@ -113,6 +113,12 @@ The public lane of M0 (`fmine assure public`).
   - `cell_to_public_claim` is the public-basis `Claim` builder (`BD-058`).
 
 ## 3. Authority, Epistemics & Representation
+- Every issuer figure is `Assertion { source: Issuer }`, state `Known`, status `KnownKnown`, and every reported
+  instance says so (`"evidence":"Assertion","source":"issuer"`). A reproduced figure is `Derived` over assertions,
+  so by NL-2 it is still an `Assertion`: its figures agree with each other, which does not show they are true.
+  A placeholder cell is `Assumed`, state `Unknown`. Nothing here labels an issuer figure stronger than that.
+- This report is not the issuer's disclosure, so it does not call G-DISC (`ClaimDag::guard_disclosure_export`).
+  No output implies that FrankenMining or Barrick attests a figure.
 - Every reported exception cites file, file SHA-256, `sheet!cell`, subject, family and ownership basis
   (`IdentityFamily::basis`).
 - The `LedgerAnchor` state root (BLAKE3 over an `M0AS` v7 frame) binds:

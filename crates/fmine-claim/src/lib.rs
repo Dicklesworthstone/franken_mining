@@ -7,8 +7,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use fmine_core::anchor::SourceAnchor;
 use fmine_core::codec::Encoder;
 use fmine_core::id::{ObjectId, PrefixKind};
+use fmine_evidence::color::{IntervalOp, ValidityDomain, compose};
 use fmine_evidence::{
-    ClaimColor, EvidenceClass, KnowledgeState, Refusal, RefusalCode, project_color,
+    Color, EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode, project_color,
 };
 
 /// Type alias for a `clm_...` content-addressed [`ObjectId`].
@@ -104,6 +105,15 @@ pub struct UuTerm {
 }
 
 /// Universal epistemic envelope wrapping any value `T` (`§8.1`, `BD-040`).
+///
+/// A claim's colour is computed, never set by a caller (NL-1). No constructor takes one, and what it is computed
+/// from is private:
+///
+/// ```compile_fail
+/// fn forge(claim: &mut fmine_claim::Claim<f64>) {
+///     claim.color_basis = None;
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct Claim<T> {
     pub claim_id: ClaimId,
@@ -113,7 +123,8 @@ pub struct Claim<T> {
     pub support: SpatialSupport,
     pub additivity: AdditivityClass,
     pub evidence: EvidenceClass,
-    pub knowledge: KnowledgeState,
+    pub epistemic: EpistemicStatus,
+    pub state: KnowledgeState,
     pub confidentiality: ConfidentialityTier,
     pub uu_terms: Vec<UuTerm>,
     pub parents: Vec<ClaimId>,
@@ -121,6 +132,8 @@ pub struct Claim<T> {
     pub supersedes: Option<ClaimId>,
     pub stale: bool,
     pub calibration_failed: bool,
+    /// The anchor's colour on a leaf, the composition of the parents' colours on a derived claim.
+    color_basis: Option<Color>,
 }
 
 impl<T> Claim<T> {
@@ -134,7 +147,8 @@ impl<T> Claim<T> {
         support: SpatialSupport,
         additivity: AdditivityClass,
         evidence: EvidenceClass,
-        knowledge: KnowledgeState,
+        epistemic: EpistemicStatus,
+        state: KnowledgeState,
         confidentiality: ConfidentialityTier,
         uu_terms: Vec<UuTerm>,
         parents: Vec<ClaimId>,
@@ -145,7 +159,8 @@ impl<T> Claim<T> {
             &metric_key,
             canonical_value_tag,
             evidence,
-            knowledge,
+            epistemic,
+            state,
             confidentiality,
             &parents,
             &anchors,
@@ -158,7 +173,8 @@ impl<T> Claim<T> {
             support,
             additivity,
             evidence,
-            knowledge,
+            epistemic,
+            state,
             confidentiality,
             uu_terms,
             parents,
@@ -166,24 +182,43 @@ impl<T> Claim<T> {
             supersedes: None,
             stale: false,
             calibration_failed: false,
+            color_basis: None,
         }
     }
 
-    /// Projects the claim's executive traffic-light color (`Green`, `Amber`, `Red`)
-    /// enforcing non-laundering laws `NL-4`, `NL-5`, `NL-7`, `NL-8`.
+    /// States the regime and dataset this claim is anchored to. They count only for a class `§7.1` lets stand on an
+    /// anchor ([`project_color`]), so this can never raise a colour by itself.
     #[must_use]
-    pub fn color(&self) -> ClaimColor {
-        let uu_material = self
-            .uu_terms
-            .iter()
-            .any(|u| u.downside_exposure_usd_m > 0.0);
-        project_color(
-            self.evidence,
-            self.knowledge,
-            self.calibration_failed,
-            self.stale,
-            uu_material,
-        )
+    pub fn with_regime(mut self, regime: ValidityDomain, dataset: impl Into<String>) -> Self {
+        self.color_basis = Some(Color::Validated {
+            regime,
+            dataset: dataset.into(),
+        });
+        self
+    }
+
+    /// The claim's colour (`§7.1`, NL-1), or a refusal when it has none to show: failed calibration (NL-8), or an
+    /// `Assertion`, which is refused as a colour leaf until reviewed (`FMINE-REF-205`, the use a colour serves).
+    /// A stale claim is at most `Estimated`.
+    pub fn color(&self) -> Result<Color, Refusal> {
+        let refused = |why: &str| {
+            Refusal::new(
+                RefusalCode::CalibrationRequired205,
+                format!("claim '{}': {why}", self.metric_key),
+            )
+        };
+        if self.calibration_failed {
+            return Err(refused("calibration failed"));
+        }
+        let color = project_color(self.evidence, self.color_basis.as_ref())
+            .ok_or_else(|| refused("an unreviewed assertion has no colour"))?;
+        if self.stale && color.rank() > fmine_evidence::color::ColorRank::Estimated {
+            return Ok(Color::Estimated {
+                estimator: "state:stale".to_string(),
+                dispersion: f64::INFINITY,
+            });
+        }
+        Ok(color)
     }
 
     /// Enforces `INV-007`: refuses export if `self.confidentiality > clearance` (`FMINE-REF-301`, the nearest
@@ -201,35 +236,19 @@ impl<T> Claim<T> {
         Ok(())
     }
 
-    /// Enforces `INV-015` (`G-UU`): refuses decision card emission if `knowledge != KnownKnown`
+    /// Enforces `INV-015` (`G-UU`): refuses decision card emission if `epistemic != KnownKnown`
     /// and `uu_terms` is empty (`FMINE-REF-204`, unbudgeted unknowns).
     pub fn verify_uu_slot_for_decision(&self) -> Result<(), Refusal> {
-        if self.knowledge != KnowledgeState::KnownKnown && self.uu_terms.is_empty() {
+        if self.epistemic != EpistemicStatus::KnownKnown && self.uu_terms.is_empty() {
             return Err(Refusal::new(
                 RefusalCode::UnbudgetedUnknowns204,
                 format!(
-                    "claim '{}' has knowledge state {:?} but zero UuTerm scenarios",
-                    self.metric_key, self.knowledge
+                    "claim '{}' has epistemic status {:?} but zero UuTerm scenarios",
+                    self.metric_key, self.epistemic
                 ),
             ));
         }
         Ok(())
-    }
-
-    /// Enforces `NL-4` (`FMINE-REF-205`, calibration required for decision-grade use): refuses if a caller
-    /// demands `ClaimColor::Green` on a `Placeholder` or failed-calibration claim.
-    pub fn require_decision_grade(&self) -> Result<ClaimColor, Refusal> {
-        let c = self.color();
-        if c == ClaimColor::Red {
-            return Err(Refusal::new(
-                RefusalCode::CalibrationRequired205,
-                format!(
-                    "claim '{}' is Red (evidence={:?}, calibration_failed={})",
-                    self.metric_key, self.evidence, self.calibration_failed
-                ),
-            ));
-        }
-        Ok(c)
     }
 }
 
@@ -260,14 +279,15 @@ pub fn verify_unweighted_additive(
 
 /// Composes two parent claims `left` and `right` into a derived `Claim<R>` using `NL-1..NL-8` (`BD-042`).
 ///
-/// - `evidence = left.evidence.combine(right.evidence)` (weakest-link, never upgrades)
-/// - `knowledge = left.knowledge.combine(right.knowledge)`
+/// - `evidence = left.evidence.meet(right.evidence)` (NL-2, never upgrades)
+/// - `epistemic = left.epistemic.and(right.epistemic)`, `state = left.state.and(right.state)` (NL-5)
+/// - the colour composes both parents' colours under `op` (NL-1); with either refused it stays refused (NL-6)
 /// - `confidentiality = left.confidentiality.combine(right.confidentiality)` (`INV-007`)
 /// - `stale = left.stale || right.stale` (`NL-7`)
 /// - `calibration_failed = left.calibration_failed || right.calibration_failed` (`NL-8`)
 /// - `uu_terms` = deduplicated union of `left.uu_terms` and `right.uu_terms` (`NL-5`)
 /// - `parents` = `[left.claim_id, right.claim_id]`
-// Eight arguments, each a distinct part of the composed Claim; a parameter struct would only rename them.
+// Nine arguments, each a distinct part of the composed Claim; a parameter struct would only rename them.
 #[allow(clippy::too_many_arguments)]
 pub fn compose_binary<A, B, R>(
     metric_key: impl Into<String>,
@@ -278,10 +298,16 @@ pub fn compose_binary<A, B, R>(
     representation: Representation,
     support: SpatialSupport,
     additivity: AdditivityClass,
+    op: IntervalOp,
 ) -> Claim<R> {
-    let evidence = left.evidence.combine(right.evidence);
-    let knowledge = left.knowledge.combine(right.knowledge);
+    let evidence = left.evidence.meet(right.evidence);
+    let epistemic = left.epistemic.and(right.epistemic);
+    let state = left.state.and(right.state);
     let confidentiality = left.confidentiality.combine(right.confidentiality);
+    let color_basis = match (left.color(), right.color()) {
+        (Ok(a), Ok(b)) => Some(compose(&a, &b, op)),
+        _ => None,
+    };
 
     let mut uu_terms = left.uu_terms.clone();
     for u in &right.uu_terms {
@@ -309,31 +335,37 @@ pub fn compose_binary<A, B, R>(
         support,
         additivity,
         evidence,
-        knowledge,
+        epistemic,
+        state,
         confidentiality,
         uu_terms,
         parents,
         anchors,
     );
+    derived.color_basis = color_basis;
     derived.stale = left.stale || right.stale;
     derived.calibration_failed = left.calibration_failed || right.calibration_failed;
     derived
 }
 
+// Eight arguments, each a hashed field of the claim; a parameter struct would only rename them.
+#[allow(clippy::too_many_arguments)]
 fn compute_claim_id(
     metric_key: &str,
     canonical_value_tag: &str,
     evidence: EvidenceClass,
-    knowledge: KnowledgeState,
+    epistemic: EpistemicStatus,
+    state: KnowledgeState,
     confidentiality: ConfidentialityTier,
     parents: &[ClaimId],
     anchors: &[SourceAnchor],
 ) -> ClaimId {
-    let mut enc = Encoder::new_frame(*b"CLM1", 1);
+    let mut enc = Encoder::new_frame(*b"CLM1", 2);
     enc.put_str(metric_key);
     enc.put_str(canonical_value_tag);
-    enc.put_u8(evidence as u8);
-    enc.put_u8(knowledge as u8);
+    enc.put_fixed(&evidence.tag());
+    enc.put_fixed(&epistemic.tag());
+    enc.put_u8(state.tag());
     enc.put_u8(confidentiality as u8);
     enc.put_u64(parents.len() as u64);
     for p in parents {
@@ -355,6 +387,7 @@ fn compute_claim_id(
 pub struct DagNode {
     pub claim_id: ClaimId,
     pub metric_key: String,
+    pub evidence: EvidenceClass,
     pub parents: Vec<ClaimId>,
     pub stale: bool,
     pub superseded_by: Option<ClaimId>,
@@ -388,11 +421,55 @@ impl ClaimDag {
             DagNode {
                 claim_id: claim.claim_id,
                 metric_key: claim.metric_key.clone(),
+                evidence: claim.evidence,
                 parents: claim.parents.clone(),
                 stale,
                 superseded_by: None,
             },
         );
+    }
+
+    /// G-DISC (`§8.3`), its evidence clauses: a disclosure-facing export needs a class in {Measured, Derived,
+    /// ModelledCalibrated} and no `Assertion` or `Assumed` anywhere in its provenance. A parent this DAG does not hold
+    /// proves nothing, so it refuses too.
+    ///
+    /// §8.4 has no G-DISC code, so `FMINE-REF-304` is the nearest: the clause this cannot yet check is the attested
+    /// record. Passing is therefore necessary, not sufficient: the RefClass and attestation clauses wait on fields
+    /// `Claim` does not have. FrankenMining's own public report is not a disclosure and does not call this.
+    pub fn guard_disclosure_export<T>(&self, claim: &Claim<T>) -> Result<(), Refusal> {
+        let refuse = |why: String| {
+            Err(Refusal::new(
+                RefusalCode::MissingHumanToken304,
+                format!("G-DISC on '{}': {why}", claim.metric_key),
+            ))
+        };
+        if !matches!(
+            claim.evidence,
+            EvidenceClass::Measured | EvidenceClass::Derived | EvidenceClass::ModelledCalibrated
+        ) {
+            return refuse(format!("class {:?}", claim.evidence));
+        }
+        let mut seen = BTreeSet::new();
+        let mut queue: VecDeque<ClaimId> = claim.parents.iter().copied().collect();
+        while let Some(id) = queue.pop_front() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let Some(node) = self.nodes.get(&id) else {
+                return refuse(format!("parent {id} is not in this provenance graph"));
+            };
+            if matches!(
+                node.evidence,
+                EvidenceClass::Assumed | EvidenceClass::Assertion { .. }
+            ) {
+                return refuse(format!(
+                    "'{}' in its provenance is {:?}",
+                    node.metric_key, node.evidence
+                ));
+            }
+            queue.extend(node.parents.iter().copied());
+        }
+        Ok(())
     }
 
     /// Marks `root_id` and all transitive downstream dependents as `stale = true` (`INV-013`).
@@ -436,27 +513,74 @@ impl ClaimDag {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fmine_core::rand::{PhiloxStream, RngKey};
+    use fmine_evidence::color::ColorRank;
+    use fmine_evidence::{AoaStatus, AssertionSource, KuKind};
 
     fn sample_anchor() -> SourceAnchor {
         SourceAnchor::new("synthetic/aisc.xlsx", [0x11; 32], "Synthetic AISC!L14")
     }
 
+    fn regime() -> ValidityDomain {
+        ValidityDomain::unconstrained().with("feed_grade", 1.0, 3.0)
+    }
+
+    /// A claim stating `class` itself and naming `parents`, whatever they are. Nothing in `Claim::new` checks that the
+    /// two agree, which is why G-DISC walks the provenance.
+    fn stating(key: &str, class: EvidenceClass, parents: Vec<ClaimId>) -> Claim<f64> {
+        Claim::new(
+            key,
+            2.1,
+            "2.1",
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::ExtensiveAdditive,
+            class,
+            EpistemicStatus::KnownKnown,
+            KnowledgeState::Known,
+            ConfidentialityTier::Internal,
+            vec![],
+            parents,
+            vec![sample_anchor()],
+        )
+    }
+
+    fn leaf(key: &str, class: EvidenceClass) -> Claim<f64> {
+        stating(key, class, vec![])
+    }
+
+    fn join(key: &str, left: &Claim<f64>, right: &Claim<f64>) -> Claim<f64> {
+        compose_binary(
+            key,
+            left,
+            right,
+            4.2,
+            "4.2",
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::ExtensiveAdditive,
+            IntervalOp::Add,
+        )
+    }
+
     #[test]
     fn test_nl1_to_nl8_non_laundering_composition() {
-        let c_exact = Claim::new(
+        let c_measured = Claim::new(
             "tonnes_mined",
             1_000.0_f64,
             "1000.0",
             Representation::Deterministic,
             SpatialSupport::PeriodAggregate,
             AdditivityClass::ExtensiveAdditive,
-            EvidenceClass::Exact,
-            KnowledgeState::KnownKnown,
+            EvidenceClass::Measured,
+            EpistemicStatus::KnownKnown,
+            KnowledgeState::Known,
             ConfidentialityTier::Public,
             vec![],
             vec![],
             vec![sample_anchor()],
-        );
+        )
+        .with_regime(regime(), "qaqc-2026");
         let uu = UuTerm {
             scenario_id: "UU-MET-01".to_string(),
             description: "Preg-robbing carbonaceous lens".to_string(),
@@ -471,7 +595,8 @@ mod tests {
             SpatialSupport::PeriodAggregate,
             AdditivityClass::IntensiveWeighted,
             EvidenceClass::Assumed,
-            KnowledgeState::KnownUnknown,
+            EpistemicStatus::KnownUnknown(KuKind::Parametric),
+            KnowledgeState::Estimated,
             ConfidentialityTier::JvPartner,
             vec![uu],
             vec![],
@@ -480,7 +605,7 @@ mod tests {
 
         let derived = compose_binary(
             "recovered_metal",
-            &c_exact,
+            &c_measured,
             &c_assumed,
             850.0_f64,
             "850.0",
@@ -490,18 +615,235 @@ mod tests {
             },
             SpatialSupport::PeriodAggregate,
             AdditivityClass::ExtensiveAdditive,
+            IntervalOp::Mul,
         );
 
-        // Weakest-link EvidenceClass: Exact ∧ Assumed = Assumed (NL-6).
+        // Weakest input class: Measured ∧ Assumed = Assumed (NL-2).
         assert_eq!(derived.evidence, EvidenceClass::Assumed);
-        // Weakest-link KnowledgeState: KK ∧ KU = KU.
-        assert_eq!(derived.knowledge, KnowledgeState::KnownUnknown);
+        // Conjunction of states and of statuses (NL-5).
+        assert_eq!(derived.state, KnowledgeState::Estimated);
+        assert_eq!(
+            derived.epistemic,
+            EpistemicStatus::KnownUnknown(KuKind::Parametric)
+        );
         // Confidentiality monotonically increases: max(Public, JvPartner) = JvPartner (INV-007).
         assert_eq!(derived.confidentiality, ConfidentialityTier::JvPartner);
         // UuTerm preserved (NL-5).
         assert_eq!(derived.uu_terms.len(), 1);
-        // Color is Amber (never Green when Assumed or UU present).
-        assert_eq!(derived.color(), ClaimColor::Amber);
+        // The Validated parent does not lift the Estimated one (NL-1).
+        assert_eq!(
+            c_measured.color().map(|c| c.rank()),
+            Ok(ColorRank::Validated)
+        );
+        assert_eq!(derived.color().map(|c| c.rank()), Ok(ColorRank::Estimated));
+    }
+
+    #[test]
+    fn test_with_regime_keeps_a_validated_basis_only_for_a_class_that_may_stand_on_one() {
+        let stands = leaf("stands", EvidenceClass::Measured).with_regime(regime(), "qaqc-2026");
+        assert_eq!(stands.color().map(|c| c.rank()), Ok(ColorRank::Validated));
+
+        // Bare, a Measured claim has nothing to stand on yet.
+        let bare = leaf("bare", EvidenceClass::Measured);
+        assert_eq!(bare.color().map(|c| c.rank()), Ok(ColorRank::Estimated));
+
+        // Planted: a caller supplies a regime for classes §7.1 keeps at Estimated. The colour must not rise.
+        for class in [
+            EvidenceClass::ModelledUncalibrated,
+            EvidenceClass::Elicited,
+            EvidenceClass::Assumed,
+            EvidenceClass::Transferred {
+                aoa: AoaStatus::Outside,
+            },
+        ] {
+            let c = leaf("planted", class).with_regime(regime(), "qaqc-2026");
+            assert_eq!(
+                c.color().map(|c| c.rank()),
+                Ok(ColorRank::Estimated),
+                "{class:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_assertion_failed_calibration_and_staleness_never_show_a_strong_colour() {
+        // An assertion has no colour, with or without a regime, and passes that refusal on (NL-6).
+        let issuer = leaf("issuer", EvidenceClass::ISSUER).with_regime(regime(), "report-2025");
+        let err = issuer.color().expect_err("assertion is no colour leaf");
+        assert_eq!((err.code, err.exit_code), ("FMINE-REF-205", 3));
+        let measured = leaf("measured", EvidenceClass::Measured).with_regime(regime(), "qaqc");
+        assert!(join("child", &measured, &issuer).color().is_err());
+
+        // NL-8: failed calibration refuses, whatever the class, and stays refused downstream.
+        let mut failed = leaf("failed", EvidenceClass::Measured).with_regime(regime(), "qaqc");
+        failed.calibration_failed = true;
+        assert_eq!(failed.color().map_err(|e| e.code), Err("FMINE-REF-205"));
+        assert!(join("child2", &failed, &measured).color().is_err());
+
+        // NL-7: a stale claim keeps a colour, at most Estimated, and so does what it feeds.
+        let mut stale = measured.clone();
+        stale.stale = true;
+        assert_eq!(stale.color().map(|c| c.rank()), Ok(ColorRank::Estimated));
+        let child = join("child3", &stale, &measured);
+        assert_eq!(child.color().map(|c| c.rank()), Ok(ColorRank::Estimated));
+    }
+
+    #[test]
+    fn test_g_disc_refuses_assertion_in_provenance() {
+        // Planted: `Derived` is stated over an issuer's figure. The class alone would pass.
+        let root = leaf("issuer_root", EvidenceClass::ISSUER);
+        let mid = stating("mid", EvidenceClass::Derived, vec![root.claim_id]);
+        let top = stating("top", EvidenceClass::Derived, vec![mid.claim_id]);
+        let mut dag = ClaimDag::new();
+        for claim in [&root, &mid, &top] {
+            dag.insert(claim);
+        }
+        let err = dag
+            .guard_disclosure_export(&top)
+            .expect_err("an assertion two levels up must block the export");
+        assert_eq!((err.code, err.exit_code), ("FMINE-REF-304", 7));
+        assert!(err.what.contains("issuer_root"), "{}", err.what);
+    }
+
+    #[test]
+    fn test_g_disc_refuses_assumed_in_provenance() {
+        let root = leaf("assumed_root", EvidenceClass::Assumed);
+        let top = stating("top", EvidenceClass::Measured, vec![root.claim_id]);
+        let mut dag = ClaimDag::new();
+        dag.insert(&root);
+        dag.insert(&top);
+        let err = dag
+            .guard_disclosure_export(&top)
+            .expect_err("an assumption in the provenance must block the export");
+        assert!(err.what.contains("assumed_root"), "{}", err.what);
+    }
+
+    #[test]
+    fn test_g_disc_refuses_a_weak_class_and_a_parent_it_cannot_see() {
+        let dag = ClaimDag::new();
+        for class in [
+            EvidenceClass::ModelledUncalibrated,
+            EvidenceClass::Elicited,
+            EvidenceClass::Transferred {
+                aoa: AoaStatus::Inside,
+            },
+            EvidenceClass::Assumed,
+            EvidenceClass::Assertion {
+                source: AssertionSource::Extraction,
+            },
+        ] {
+            assert!(
+                dag.guard_disclosure_export(&leaf("weak", class)).is_err(),
+                "{class:?}"
+            );
+        }
+        let missing = leaf("missing", EvidenceClass::Measured);
+        let orphan = stating("orphan", EvidenceClass::Derived, vec![missing.claim_id]);
+        assert!(dag.guard_disclosure_export(&orphan).is_err());
+    }
+
+    #[test]
+    fn test_g_disc_accepts_measured_derived_chain() {
+        let a = leaf("a", EvidenceClass::Measured);
+        let b = leaf("b", EvidenceClass::Derived);
+        let c = leaf("c", EvidenceClass::ModelledCalibrated);
+        let ab = join("ab", &a, &b);
+        let top = join("top", &ab, &c);
+        assert_eq!(top.evidence, EvidenceClass::ModelledCalibrated);
+        let mut dag = ClaimDag::new();
+        for claim in [&a, &b, &c, &ab, &top] {
+            dag.insert(claim);
+        }
+        assert_eq!(dag.guard_disclosure_export(&top), Ok(()));
+    }
+
+    /// PO-PLUMB-1 through `Claim` itself: random trees of 2 to 6 leaves, each pair joined by `compose_binary`. A node
+    /// never outranks either parent in class, state or colour, and is refused exactly when some leaf under it is.
+    #[test]
+    fn test_random_claim_dags_nl1_nl2_nl5_100k() {
+        const CASES: usize = 100_000;
+        let key = RngKey {
+            seed_root: 0x0009_D0C5_0040,
+            partition: 2,
+            domain: 0,
+            var_group: 0,
+            realization: 0,
+            brick: 0,
+        };
+        let mut rng = PhiloxStream::new(key);
+        let classes = [
+            EvidenceClass::Measured,
+            EvidenceClass::Derived,
+            EvidenceClass::ModelledCalibrated,
+            EvidenceClass::ModelledUncalibrated,
+            EvidenceClass::Elicited,
+            EvidenceClass::Transferred {
+                aoa: AoaStatus::Inside,
+            },
+            EvidenceClass::Transferred {
+                aoa: AoaStatus::NotAssessed,
+            },
+            EvidenceClass::Assumed,
+            EvidenceClass::ISSUER,
+        ];
+        let states = [
+            KnowledgeState::Known,
+            KnowledgeState::Estimated,
+            KnowledgeState::Unknown,
+            KnowledgeState::Conflicted,
+            KnowledgeState::Redacted,
+        ];
+        let (mut violations, mut refused, mut validated) = (0_u32, 0_u32, 0_u32);
+        for _ in 0..CASES {
+            let leaves = 2 + (rng.next_u64() % 5) as usize;
+            let mut pool: Vec<(Claim<f64>, Option<ColorRank>)> = (0..leaves)
+                .map(|i| {
+                    let class = classes[(rng.next_u64() % classes.len() as u64) as usize];
+                    let mut claim = leaf(if i % 2 == 0 { "even" } else { "odd" }, class);
+                    claim.state = states[(rng.next_u64() % states.len() as u64) as usize];
+                    if rng.next_u64() % 2 == 0 {
+                        claim = claim.with_regime(regime(), "qaqc");
+                    }
+                    let weakest = claim.color().ok().map(|c| c.rank());
+                    (claim, weakest)
+                })
+                .collect();
+            while pool.len() > 1 {
+                let (l, l_weakest) =
+                    pool.swap_remove((rng.next_u64() % pool.len() as u64) as usize);
+                let (r, r_weakest) =
+                    pool.swap_remove((rng.next_u64() % pool.len() as u64) as usize);
+                let child = join("node", &l, &r);
+                let weakest = l_weakest.zip(r_weakest).map(|(a, b)| a.min(b));
+                let color = child.color().ok().map(|c| c.rank());
+                let colour_holds = match (color, weakest) {
+                    (None, None) => true,
+                    (Some(c), Some(w)) => c <= w,
+                    _ => false,
+                };
+                let class_holds = child.evidence.no_stronger_than(l.evidence)
+                    && child.evidence.no_stronger_than(r.evidence);
+                let state_holds = child.state.and(l.state) == child.state
+                    && child.state.and(r.state) == child.state;
+                if !(colour_holds && class_holds && state_holds) {
+                    violations += 1;
+                }
+                match color {
+                    None => refused += 1,
+                    Some(ColorRank::Validated) => validated += 1,
+                    Some(_) => {}
+                }
+                pool.push((child, weakest));
+            }
+        }
+        println!(
+            "{{\"test\":\"claim_dags_nl1_nl2_nl5\",\"cases\":{CASES},\"rng_key\":\"{:016x}\",\"violations\":{violations},\
+             \"refused\":{refused},\"validated\":{validated}}}",
+            key.seed_root
+        );
+        assert_eq!(violations, 0);
+        // A run with no refused or Validated node would have proved nothing about either.
+        assert!(refused > 0 && validated > 0);
     }
 
     #[test]
@@ -513,8 +855,9 @@ mod tests {
             Representation::Deterministic,
             SpatialSupport::PeriodAggregate,
             AdditivityClass::ExtensiveAdditive,
-            EvidenceClass::Calibrated,
-            KnowledgeState::KnownKnown,
+            EvidenceClass::ModelledCalibrated,
+            EpistemicStatus::KnownKnown,
+            KnowledgeState::Known,
             ConfidentialityTier::SovereignRestricted,
             vec![],
             vec![],
@@ -561,8 +904,9 @@ mod tests {
             Representation::Deterministic,
             SpatialSupport::PointCore,
             AdditivityClass::IntensiveWeighted,
-            EvidenceClass::Exact,
-            KnowledgeState::KnownKnown,
+            EvidenceClass::Measured,
+            EpistemicStatus::KnownKnown,
+            KnowledgeState::Known,
             ConfidentialityTier::Internal,
             vec![],
             vec![],
@@ -577,6 +921,7 @@ mod tests {
             Representation::Deterministic,
             SpatialSupport::Composite { length_mm: 2000 },
             AdditivityClass::IntensiveWeighted,
+            IntervalOp::Hull,
         );
         let c3 = compose_binary(
             "block_leaf",
@@ -591,6 +936,7 @@ mod tests {
                 dz_cm: 500,
             },
             AdditivityClass::IntensiveWeighted,
+            IntervalOp::Hull,
         );
 
         dag.insert(&c1);

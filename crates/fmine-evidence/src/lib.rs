@@ -1,10 +1,17 @@
-//! Epistemic evidence lattice (`EvidenceClass`, `KnowledgeState`, `ClaimColor`) and
-//! structured refusal catalog (`FMINE-REF-*`, `BD-037`–`BD-039`, BD-328).
+//! Evidence classes, knowledge states, colours (`§7`) and the structured refusal catalog
+//! (`FMINE-REF-*`, `BD-037`–`BD-039`, BD-328).
 
+pub mod color;
+pub mod epistemic;
 pub mod lattice;
 mod refusal_catalog;
 
-pub use lattice::{ClaimColor, EvidenceClass, KnowledgeState, project_color};
+pub use color::Color;
+pub use epistemic::{
+    AoaStatus, AssertionSource, EpistemicStatus, EvidenceClass, HypothesisSetId, KnowledgeState,
+    KuKind,
+};
+pub use lattice::project_color;
 pub use refusal_catalog::{CATALOG, RefusalCode};
 
 use std::fmt;
@@ -133,64 +140,6 @@ impl fmt::Display for RefusalCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_knowledge_state_and_color_projection() {
-        // Placeholder is always Red (NL-4).
-        assert_eq!(
-            project_color(
-                EvidenceClass::Placeholder,
-                KnowledgeState::KnownKnown,
-                false,
-                false,
-                false
-            ),
-            ClaimColor::Red
-        );
-        // Failed calibration is always Red (NL-8).
-        assert_eq!(
-            project_color(
-                EvidenceClass::Calibrated,
-                KnowledgeState::KnownKnown,
-                true,
-                false,
-                false
-            ),
-            ClaimColor::Red
-        );
-        // Material UU or stale is at most Amber (NL-5, NL-7).
-        assert_eq!(
-            project_color(
-                EvidenceClass::Exact,
-                KnowledgeState::KnownKnown,
-                false,
-                true,
-                false
-            ),
-            ClaimColor::Amber
-        );
-        assert_eq!(
-            project_color(
-                EvidenceClass::Calibrated,
-                KnowledgeState::KnownUnknown,
-                false,
-                false,
-                true
-            ),
-            ClaimColor::Amber
-        );
-        // Calibrated + KU + not stale + no material UU -> Green.
-        assert_eq!(
-            project_color(
-                EvidenceClass::Calibrated,
-                KnowledgeState::KnownUnknown,
-                false,
-                false,
-                false
-            ),
-            ClaimColor::Green
-        );
-    }
 
     #[test]
     fn test_catalog_is_the_enum_in_order_and_refusals_carry_its_rows() {

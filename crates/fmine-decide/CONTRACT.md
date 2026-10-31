@@ -21,11 +21,12 @@ Enforces `INV-002` (`authoritative: false`, `may_actuate: false`, `is_safe_certi
 ## 5. Guards & Typed Refusals
 `DecisionCard::new` relays the claim's refusals:
 - `FMINE-REF-204` (unbudgeted unknowns, `G-UU`), exit 3: a non-`KnownKnown` claim with no `UuTerm`.
-- `FMINE-REF-205` (calibration required, `NL-4`), exit 3: a `Red` `expected_npv_usd_m`.
+- `FMINE-REF-205` (calibration required, `NL-4`), exit 3: an `expected_npv_usd_m` with no colour to show, because
+  calibration failed or it is an unreviewed `Assertion`.
 
 ## 6. Proof Obligations (`PO-*`)
-- `PO-DEC-1`: `DecisionCard::new` refuses a card whose claim has an empty `uu_register` (`FMINE-REF-204`) or is
-  `Red` (`FMINE-REF-205`).
+- `PO-DEC-1`: `DecisionCard::new` refuses a card whose claim has an empty `uu_terms` (`FMINE-REF-204`) or no colour
+  (`FMINE-REF-205`).
 - `PO-DEC-2`: `rank_voi_campaigns` guarantees `0 <= EVSI <= EVPI` (`GATE-HELM-02`).
 
 ## 7. Failure Modes & Deterministic Fallbacks

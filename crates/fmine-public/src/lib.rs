@@ -27,7 +27,9 @@ use fmine_claim::{AdditivityClass, Claim, ConfidentialityTier, Representation, S
 use fmine_core::anchor::{FMT_ANCHOR_V1, LedgerAnchor};
 use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, blake3_hash, sha256};
-use fmine_evidence::{EvidenceClass, KnowledgeState, Refusal, RefusalCode};
+use fmine_evidence::{
+    EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
+};
 use fmine_io::xlsx::{
     CellCensus, CellValue, ExtractedCell, QuarantineItem, Workbook, parse_a1_ref,
 };
@@ -49,8 +51,8 @@ use crate::sources::{
     ExpectedRoot, IssuerProfile, RegisteredMissingFact, RegisteredReconstruction, SourceKind,
 };
 
-/// Converts an extracted cell into a public-basis `Claim<Option<f64>>` (`BD-058`): a number is the value as
-/// published, a placeholder is a known unknown, and text or a formula error is refused (`FMINE-REF-208`,
+/// Converts an extracted cell into a public-basis `Claim<Option<f64>>` (`BD-058`): a number is the issuer's
+/// assertion, a placeholder is a known unknown, and text or a formula error is refused (`FMINE-REF-208`,
 /// source cell unusable; never 401, which §8.4 reserves for unknown reactive ground).
 pub fn cell_to_public_claim(
     workbook: &Workbook,
@@ -60,6 +62,8 @@ pub fn cell_to_public_claim(
     additivity: AdditivityClass,
 ) -> Result<Claim<Option<f64>>, Refusal> {
     let anchor = workbook.make_anchor(sheet_name, &cell.cell_ref);
+    let at = format!("{sheet_name}!{}", cell.cell_ref);
+    let unusable = |why: String| Err(Refusal::new(RefusalCode::SourceCellUnusable208, why));
     match &cell.value {
         CellValue::Number(v) => Ok(Claim::new(
             metric_key,
@@ -68,8 +72,9 @@ pub fn cell_to_public_claim(
             Representation::Deterministic,
             SpatialSupport::PeriodAggregate,
             additivity,
-            EvidenceClass::Exact,
-            KnowledgeState::KnownKnown,
+            EvidenceClass::ISSUER,
+            EpistemicStatus::KnownKnown,
+            KnowledgeState::Known,
             ConfidentialityTier::Public,
             vec![],
             vec![],
@@ -82,26 +87,19 @@ pub fn cell_to_public_claim(
             Representation::Placeholder { token: tok.clone() },
             SpatialSupport::PeriodAggregate,
             additivity,
-            EvidenceClass::Placeholder,
-            KnowledgeState::KnownUnknown,
+            EvidenceClass::Assumed,
+            EpistemicStatus::KnownUnknown(KuKind::Parametric),
+            KnowledgeState::Unknown,
             ConfidentialityTier::Public,
             vec![],
             vec![],
             vec![anchor],
         )),
-        CellValue::FormulaError(err_tok) => Err(Refusal::new(
-            RefusalCode::SourceCellUnusable208,
-            format!(
-                "quarantined formula error '{err_tok}' at {sheet_name}!{}",
-                cell.cell_ref
-            ),
-        )),
-        CellValue::Text(txt) => Err(Refusal::new(
-            RefusalCode::SourceCellUnusable208,
-            format!(
-                "expected a number or placeholder at {sheet_name}!{}, found text '{txt}'",
-                cell.cell_ref
-            ),
+        CellValue::FormulaError(err_tok) => {
+            unusable(format!("quarantined formula error '{err_tok}' at {at}"))
+        }
+        CellValue::Text(txt) => unusable(format!(
+            "expected a number or placeholder at {at}, found text '{txt}'"
         )),
     }
 }
@@ -737,6 +735,7 @@ impl PublicAssuranceReport {
             }
             _ => {}
         }
+        o.push_str(",\"evidence\":\"Assertion\",\"source\":\"issuer\"");
         let _ = write!(o, ",\"cited\":{}", citation::cited_json(i, &sha_of));
         o.push('}');
         o
@@ -745,7 +744,7 @@ impl PublicAssuranceReport {
     /// One compact record per counted instance (bd-sjrh.1): its cell, family, state and cited numbers.
     fn instance_json(&self, i: &IdentityInstance) -> String {
         format!(
-            "{{\"at\":{},\"family\":{},\"state\":{},\"cited\":{}}}",
+            "{{\"at\":{},\"family\":{},\"state\":{},\"evidence\":\"Assertion\",\"source\":\"issuer\",\"cited\":{}}}",
             js(&format!("{}:{}!{}", i.file, i.sheet, i.cell)),
             js(i.family.as_str()),
             js(i.state.code()),
@@ -6242,55 +6241,59 @@ mod tests {
         );
     }
 
-    #[test]
-    fn public_claim_from_a_synthetic_cell() {
+    /// `cell_to_public_claim` on a cell of the synthetic issuer table.
+    fn synthetic_claim(row: u32, col: u32) -> Result<Claim<Option<f64>>, Refusal> {
         let r = run_synthetic_assurance(&[]).expect("synthetic");
-        let aisc = r
-            .sources
-            .iter()
-            .find(|s| s.file_name == synthetic::SYNTHETIC_AISC_FILE)
-            .expect("aisc");
-        let sheet = aisc
-            .workbook
-            .sheet(synthetic::SYNTHETIC_TABLE_SHEET)
-            .expect("sheet");
-        let cell = sheet.cell(5, 2).expect("B5");
-        let claim = cell_to_public_claim(
-            &aisc.workbook,
-            &sheet.name,
-            "cos_usd_m",
-            cell,
-            AdditivityClass::ExtensiveAdditive,
-        )
-        .expect("claim");
+        let f = synthetic::SYNTHETIC_AISC_FILE;
+        let aisc = r.sources.iter().find(|s| s.file_name == f).expect("aisc");
+        let t = synthetic::SYNTHETIC_TABLE_SHEET;
+        let sheet = aisc.workbook.sheet(t).expect("sheet");
+        let cell = sheet.cell(row, col).expect("cell");
+        let additive = AdditivityClass::ExtensiveAdditive;
+        cell_to_public_claim(&aisc.workbook, &sheet.name, "m", cell, additive)
+    }
+
+    #[test]
+    fn test_issuer_cell_is_assertion_issuer_known() {
+        let claim = synthetic_claim(5, 2).expect("B5");
         assert_eq!(claim.value, Some(500.0));
         assert_eq!(claim.anchors[0].locator, "Q1 2030!B5");
-        let dash = sheet.cell(6, 6).expect("F6");
-        let placeholder = cell_to_public_claim(
-            &aisc.workbook,
-            &sheet.name,
-            "dep",
-            dash,
+        assert_eq!(claim.evidence, EvidenceClass::ISSUER);
+        assert_eq!(claim.state, KnowledgeState::Known);
+        assert_eq!(claim.epistemic, EpistemicStatus::KnownKnown);
+    }
+
+    #[test]
+    fn test_placeholder_cell_is_assumed_unknown() {
+        let claim = synthetic_claim(6, 6).expect("F6");
+        assert_eq!(claim.value, None);
+        assert_eq!(claim.evidence, EvidenceClass::Assumed);
+        assert_eq!(claim.state, KnowledgeState::Unknown);
+    }
+
+    /// "Reproduced" means the issuer's figures agree with each other, so the result stays an assertion (NL-2).
+    #[test]
+    fn test_reproduction_result_class_is_assertion() {
+        let cell = synthetic_claim(5, 2).expect("B5");
+        let footing = fmine_claim::compose_binary(
+            "component_sum",
+            &cell,
+            &cell,
+            Some(1000.0),
+            "1000",
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
             AdditivityClass::ExtensiveAdditive,
-        )
-        .expect("placeholder");
-        assert_eq!(placeholder.value, None);
-        // test_formula_error_cell_refuses_208_exit_3: a formula-error cell is a source cell unusable (208,
-        // exit 3), never 401 (unknown reactive ground, exit 7).
-        let err = sheet.cell(20, 2).expect("B20");
-        assert!(
-            matches!(err.value, CellValue::FormulaError(_)),
-            "{:?}",
-            err.value
+            fmine_evidence::color::IntervalOp::Add,
         );
-        let refusal = cell_to_public_claim(
-            &aisc.workbook,
-            &sheet.name,
-            "x",
-            err,
-            AdditivityClass::ExtensiveAdditive,
-        )
-        .expect_err("formula error");
+        assert_eq!(footing.evidence, EvidenceClass::ISSUER);
+        assert!(footing.color().is_err());
+    }
+
+    /// A formula-error cell is a source cell unusable (208, exit 3), never 401 (unknown reactive ground, exit 7).
+    #[test]
+    fn test_formula_error_cell_refuses_208_exit_3() {
+        let refusal = synthetic_claim(20, 2).expect_err("formula error");
         assert_eq!((refusal.code, refusal.exit_code), ("FMINE-REF-208", 3));
         assert!(
             refusal.what.starts_with("Source cell unusable")
