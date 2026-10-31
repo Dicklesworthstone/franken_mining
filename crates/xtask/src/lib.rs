@@ -319,6 +319,13 @@ pub fn check_deps(root: &Path) -> Result<(), Vec<String>> {
             banned.insert(val);
         }
     }
+    // An empty list would pass every crate, so a deny.toml this reader cannot parse fails instead.
+    if banned.is_empty() {
+        return Err(vec![format!(
+            "{}: no banned crate read (expected `{{ name = \"...\" }}` rows)",
+            deny_path.display()
+        )]);
+    }
 
     let oracle_crates: BTreeSet<&str> = [
         "fmine-oracles",
@@ -1023,30 +1030,99 @@ fn parse_cargo_manifest(
     let mut deps = Vec::new();
     let mut dev_deps = Vec::new();
     let mut section = "";
+    // Inside a dependency table: whether it is dev-only and, for the dotted form `[dependencies.<key>]`, where
+    // its one entry sits, so a later `package = "..."` line can name the real package.
+    let mut table: Option<(bool, Option<usize>)> = None;
     for raw_line in text.lines() {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         if line.starts_with('[') && line.ends_with(']') {
-            section = &line[1..line.len() - 1];
+            section = line[1..line.len() - 1].trim();
+            table = dependency_table(section).map(|(dev, key)| {
+                let list = if dev { &mut dev_deps } else { &mut deps };
+                let at = key.map(|k| {
+                    list.push(k);
+                    list.len() - 1
+                });
+                (dev, at)
+            });
             continue;
         }
         if section == "package" {
             if let Some(n) = strip_kv_str(line, "name") {
                 name = n;
             }
-        } else if section == "dependencies" {
-            if let Some((k, _)) = line.split_once('=') {
-                deps.push(k.trim().to_string());
+            continue;
+        }
+        let Some((dev, at)) = table else {
+            continue;
+        };
+        let list = if dev { &mut dev_deps } else { &mut deps };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match at {
+            Some(i) => {
+                if unquote(key) == "package"
+                    && let Some(slot) = list.get_mut(i)
+                {
+                    *slot = unquote(value);
+                }
             }
-        } else if section == "dev-dependencies"
-            && let Some((k, _)) = line.split_once('=')
-        {
-            dev_deps.push(k.trim().to_string());
+            None => list.push(renamed_package(value).unwrap_or_else(|| unquote(key))),
         }
     }
     Ok((name, deps, dev_deps))
+}
+
+/// A TOML key or simple string value without its quotes, of either style.
+fn unquote(text: &str) -> String {
+    text.trim().trim_matches(['"', '\'']).to_string()
+}
+
+/// Whether a manifest section is a dependency table, as `(dev-only, dotted key)`. Covers `dependencies`,
+/// `build-dependencies` (counted as normal) and `dev-dependencies`, each also under `target.<spec>.`, and each in
+/// the dotted form `<table>.<key>` (`BD-005`: a banned crate must not pass by its declaration form).
+fn dependency_table(section: &str) -> Option<(bool, Option<String>)> {
+    const KINDS: [(&str, bool); 3] = [
+        ("dependencies", false),
+        ("build-dependencies", false),
+        ("dev-dependencies", true),
+    ];
+    let names_kind = |rest: &str| {
+        KINDS.iter().any(|(kind, _)| {
+            rest.strip_prefix(kind)
+                .is_some_and(|after| after.is_empty() || after.starts_with('.'))
+        })
+    };
+    let rest = match section.strip_prefix("target.") {
+        // The spec may be quoted and hold dots (`target.'cfg(unix)'.dependencies`), so the table is the first
+        // `.<kind>` that ends the header or is followed by a dotted key.
+        Some(spec) => spec
+            .match_indices('.')
+            .map(|(i, _)| &spec[i + 1..])
+            .find(|rest| names_kind(rest))?,
+        None => section,
+    };
+    KINDS.iter().find_map(|&(kind, dev)| {
+        let after = rest.strip_prefix(kind)?;
+        if after.is_empty() {
+            return Some((dev, None));
+        }
+        let key = after.strip_prefix('.')?;
+        Some((dev, Some(unquote(key))))
+    })
+}
+
+/// The real package of an inline-table entry renamed with `package = "..."`, as in `rt = { package = "tokio" }`.
+fn renamed_package(value: &str) -> Option<String> {
+    let inner = value.trim().strip_prefix('{')?.trim_end_matches('}');
+    inner.split(',').find_map(|kv| {
+        let (key, value) = kv.split_once('=')?;
+        (unquote(key) == "package").then(|| unquote(value))
+    })
 }
 
 fn parse_allowed_modules(contract: &str) -> BTreeSet<String> {
@@ -1490,6 +1566,84 @@ mod tests {
                 "{smuggled}: {errs:?}"
             );
         }
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    /// BD-005: a member declaring tokio fails `check_deps` in every manifest form, with the workspace's own
+    /// deny.toml, and a name that only starts like it passes. A deny.toml with no readable rows fails instead of
+    /// passing every crate. Tokio reached transitively is `int_as`'s B(i) check, which `check-all` also runs.
+    #[test]
+    fn test_seeded_tokio_fails_check_deps_in_every_declaration_form() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .to_path_buf();
+        assert_eq!(check_deps(&root), Ok(()));
+        let forms = [
+            ("plain", "[dependencies]\ntokio = \"1\"\n"),
+            ("quoted", "[dependencies]\n\"tokio\" = '1'\n"),
+            (
+                "dotted",
+                "[dependencies.tokio]\nversion = \"1\"\nfeatures = [\"rt\"]\n",
+            ),
+            (
+                "target",
+                "[target.'cfg(unix)'.dependencies]\ntokio = \"1\"\n",
+            ),
+            (
+                "renamed",
+                "[dependencies]\nrt = { version = \"1\", package = \"tokio\" }\n",
+            ),
+            (
+                "dotted-renamed",
+                "[dependencies.rt]\npackage = 'tokio'\nversion = \"1\"\n",
+            ),
+            ("build", "[build-dependencies]\ntokio = \"1\"\n"),
+            (
+                "dev",
+                "[target.\"x86_64-unknown-linux-gnu\".dev-dependencies]\ntokio = \"1\"\n",
+            ),
+            (
+                "clean",
+                "[dependencies]\ntokio-lookalike = \"1\"\n\n[dependencies.rt]\nversion = \"1\"\n",
+            ),
+        ];
+        let scratch = std::env::temp_dir().join(format!("xtask-deps-{}", std::process::id()));
+        fs::create_dir_all(&scratch).expect("scratch dir");
+        let members: Vec<String> = forms
+            .iter()
+            .map(|(name, _)| format!("\"crates/{name}\""))
+            .collect();
+        fs::write(
+            scratch.join("Cargo.toml"),
+            format!("[workspace]\nmembers = [{}]\n", members.join(", ")),
+        )
+        .expect("workspace manifest");
+        fs::copy(root.join("deny.toml"), scratch.join("deny.toml")).expect("deny.toml");
+        for (name, deps) in forms {
+            let krate = scratch.join("crates").join(name);
+            fs::create_dir_all(&krate).expect("scratch crate");
+            fs::write(
+                krate.join("Cargo.toml"),
+                format!("[package]\nname = \"{name}\"\n\n{deps}"),
+            )
+            .expect("manifest");
+        }
+        let want: Vec<String> = forms[..forms.len() - 1]
+            .iter()
+            .map(|(name, _)| {
+                format!("banned dependency tokio in crate {name} (violates L-5 / deny.toml)")
+            })
+            .collect();
+        assert_eq!(check_deps(&scratch), Err(want));
+
+        fs::write(scratch.join("deny.toml"), "[bans]\ndeny = [\"tokio\"]\n").expect("deny.toml");
+        let errs = check_deps(&scratch).expect_err("an unread deny list");
+        assert!(
+            errs.len() == 1 && errs[0].contains("no banned crate read"),
+            "{errs:?}"
+        );
         let _ = fs::remove_dir_all(&scratch);
     }
 

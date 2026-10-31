@@ -19,7 +19,9 @@ The `forecast-*` commands are the exception: they write a record's digest files 
 ## 4. Public API Surface
 - `check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>>`
 - `check_layers(root: &Path) -> Result<(), Vec<String>>`
-- `check_deps(root: &Path) -> Result<(), Vec<String>>`
+- `check_deps(root: &Path) -> Result<(), Vec<String>>` (BD-005): no member names a `deny.toml` crate in any
+  dependency table (normal, build and dev, each also under `target.<spec>`, inline or dotted, by key or through
+  `package = "..."`, quoted either way). A `deny.toml` with no readable rows fails. Transitive closures are B(i).
 - `check_caps(root: &Path) -> Result<(), Vec<String>>`: besides `L-3`, bans `thread::spawn`, `thread::Builder`,
   `thread::sleep`, `Instant::now` and `SystemTime::now` in production code outside `fmine-runtime` and `fmine-lab`.
 - `int_as::{check_int_as_001a, evaluate, parse_tree_line}` (BD-325; command `check-int-as-001a [--json]`, and
