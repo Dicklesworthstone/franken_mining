@@ -3,7 +3,8 @@ identity (summary value = Minestats value), each instance decided alone on its o
 instances of these three families posed jointly by shared cells, with every minimum correction set of each jointly
 infeasible component. The sum families sites_to_region and region_to_total (region = sum of its sites, total = sum
 of the regions or of the copper sites) are decided alone only, never posed jointly; so is family sold_weighted_rate
-(a region's gold unit cost = its members' unit costs weighted by their attributable gold sold).
+(a region's gold unit cost = its members' unit costs weighted by their attributable gold sold), and so is family
+site_quarter_sum (on the Minestats* site sheets, a site's cumulative row = the previous cumulative + the quarter).
 
 Independent reader, written 2026-10-30 without opening any Rust under crates/, planning/mor/MOR_CASE.md, repro/ or
 any other agent's scratch files. It reads the xlsx itself (zipfile + xml.etree) and imports formats.py only for its
@@ -203,6 +204,60 @@ aisc_usd_per_oz. A region's rate is its members' rates weighted by their attribu
 - Known answer E817: every sold_weighted_rate instance of the region "Latin America & Asia Pacific" whose period's
   year is 2023 (anchor, field, state, reason), listed whatever their states; "ok" true iff there is at least one.
 
+Family site_quarter_sum (quarter sums on the Minestats* site sheets; added 2026-10-30 by a second reader, who wrote
+it from the rule as given, without reading crates/ or any Rust). A Minestats* sheet of one metal (J13) holds blocks
+headed "For the three/six/nine/twelve months ended ..." (J14); a release (Y, n) prints the quarter block Qn and, for
+n >= 2, the cumulative block (n = 2: H1, n = 3: 9M, n = 4: FY), each with site columns per year (current = the
+release's year, prior = the year before). Identity: the cumulative = the previous cumulative + the quarter, per site,
+column group and additive row.
+- Sections. A block's rows (those with column-A text, J14) are walked in row order. A row's label is its column-A
+  text with the footnote number stripped, whitespace collapsed, compared case-insensitively, after the release's
+  [[mine_stats_label_alias]] rows of the registry (W1-DR-02, J42). The child labels are the labels that the
+  registry's [[mine_stats_label]] rows list with a "section". A row whose label is a child label and that comes after
+  some earlier row of the block is a sub-row; its section is the label of the most recent non-sub-row above it. Any
+  other row starts a new section and has no section itself. A row has data when some site column of the block holds
+  a cell there (J40).
+- Fields (SQS_FIELDS), matched on (section, label), case-insensitive, whitespace collapsed; only these additive rows
+  are posed. Gold: au_tonnes_mined_kt (-, Tonnes mined (thousands)) and its Open Pit Ore, Open Pit Waste and
+  Underground sub-rows; au_tonnes_processed_kt (-, Tonnes processed (thousands)) and its Oxide Mill, Roasters,
+  Autoclave and Heap Leach sub-rows; au_production_koz (-, Production (thousands of ounces)) and the same four
+  sub-rows; au_sales_koz (-, Sales (thousands of ounces)); au_revenue_usd_m (-, Revenue ($ millions));
+  au_capex_minesite_sustaining_usd_m and au_capex_projects_usd_m (Capital expenditures ($ millions), Minesite
+  sustaining / Projects); au_capex_total_usd_m (-, Total capital expenditures ($ millions)). Copper: the four
+  tonnes-mined fields and the three capex fields as gold (cu_ prefix); cu_tonnes_processed_kt; cu_production_mlb (-,
+  Production (millions of pounds)); cu_production_kt (-, Production (Thousands of tonnes)); cu_sales_mlb and
+  cu_sales_kt likewise for Sales; cu_revenue_usd_m. Every other row (rates, grades, recovery, strip ratio, per-tonne
+  and per-ounce costs) is not additive and is not posed.
+- Instances: per release (Y, n) with n in {2, 3, 4}, one-metal Minestats* sheet, its cumulative block, site column
+  (site, group) of that block and row with data whose field is in the table: one instance anchored on that cell (the
+  total). A total cell absent from the sheet is a blank operand (the instance exists). If the block holds more than
+  one row of the field, the first anchors (and step e applies). Subject = the site as J15 names it.
+- Operands, in order [prev, quarter, total]: prev = release (Y, n-1), the same metal, site, group and field, from its
+  quarter block Q1 when n = 2, else its cumulative block (H1 or 9M); quarter = release (Y, n)'s quarter block Qn;
+  total = the anchor. A site is found on any one-metal Minestats* sheet of that metal in that release (its sheet may
+  differ between releases). Each operand is read as family site_sheet reads a site-sheet cell (read_site_operand,
+  J16): a number as displayed with its step, the nil token ("—" or "— "), "n/a", blank, or unreadable.
+- Decision, first match wins (at null unless stated): a. a withheld status (the registry's [[subject_status]] rows
+  with status "withheld", J41; E818) covering the subject for the period of any of the three operands -> v, reason
+  "excluded_" + its evidence id lower-cased (excluded_e818, as the other families), certificate null; b. release (Y, n-1) not in the loaded corpus -> v, release_missing; c. the site has columns on
+  more than one Minestats* sheet of the metal in release (Y, n) or (Y, n-1) -> v, operand_unreadable; d. prev or
+  quarter not found (no column for the site and group in that block, or no row with data for the field there) -> v,
+  operand_row_missing; e. an operand's block has more than one row of the field (after the alias) -> v,
+  operand_unreadable, at = that operand's first-row cell (prev, quarter, total checked in that order); f. a blank
+  operand -> v, blank_operand, at = the first blank in order; g. every operand the nil token or n/a -> np; h. an n/a
+  -> v, placeholder_operand, at = the first; i. an unreadable operand -> v, operand_unreadable, at = the first;
+  j. otherwise decide alone, in exact rational arithmetic: the nil token is exactly 0 with no slack, a number v with
+  step s the closed box [v - s/2, v + s/2]; the identity holds iff |prev + quarter - total| <= the sum of s/2 over the
+  numbers (bound included): holds -> i, else iii. certificate "nil_token" when any operand is the nil token, else
+  null.
+- Never posed jointly: component and corrections null; the components, their lines and the known-answer checks are
+  computed without this family, so they are unchanged.
+- Record: family "site_quarter_sum", subject, field = the id above, group, period = the total's period (J1), anchor =
+  the total's locator, cells = [prev, quarter, total] locators (null for one not found), state, reason, at,
+  certificate, share and printed_share null, component and corrections null; with --values "values" and "implied"
+  null as the sum families do.
+- Summary: {"family":"site_quarter_sum","n","i","iii","v","np","v_by_reason"} (J47).
+
 Components. Every instance in state i or iii (and certificate null) is posed jointly; instances sharing a cell are
 linked; connected components are decided exactly: do true values exist, each in its closed box, satisfying every
 identity of the component (c = s.b, t = a + q, summary = Minestats)? For each infeasible component: every minimum
@@ -225,6 +280,7 @@ Output (stdout, one compact JSON object per line, ensure_ascii=False, determinis
 2. one line per jointly infeasible component {"component","cells","instances","joint_only","corrections"};
 3. per family {"family","n","i","iii","v","np","v_by_reason"} (ownership, quarter_sum, site_sheet, sites_to_region,
    region_to_total); then {"family":"sold_weighted_rate","n","i","iii","iv","v","np","v_by_reason"} (J37); then
+   {"family":"site_quarter_sum","n","i","iii","v","np","v_by_reason"} (J47); then
    one line per refused Minestats* sheet {"family":"site_sheet","refused","reason"}; then one
    line per release {"family":"site_sheet","release","no_minestats_column"}; then one line per (release, sheet)
    {"family":"region_to_total","release","sheet","gold_rows_not_in_map"}; then one line per release
@@ -430,12 +486,51 @@ J38 E817 is printed after E116 as {"check":"E817","ok","detail","instances":[{"a
    the instances in output order (J9's key); "the period's year" is the year that begins the period label (J1). In
    this corpus there are 21: the prior group (2023) of the seven sheets of the 2024 releases (four QTD, three YTD) x
    three fields; 3 are i and 18 iv (every iv with certificate nil_token), so "ok" is true.
+J39-J47 belong to family site_quarter_sum (second reader, 2026-10-30).
+J39 Registry: the vocabulary, the aliases and the withheld rows are read with tomllib (stdlib) from
+   registries/sources/barrick.toml, at a path fixed relative to this script (REGISTRY). A missing or unparseable
+   registry, a row without its keys, or a quarter not spelled "<yyyy>Q<n>" stops the run (every family's output, not
+   only this one's). A row label outside the vocabulary is walked like any other row (it starts a section); it is
+   never refused here.
+J40 "Has a cell" is read as a non-empty cell (Sheet.is_empty false). The section header rows of this corpus ("Cost
+   per tonne mined ($/tonne)", "Capital expenditures ($ millions)", ...) carry styled XML cells with no value in every
+   site column; none of them is a field, so the literal reading (any <c> element) poses the same instances here. A
+   row with no column-A text is not walked (no label, starts no section): 2024Q4:Minestats1!A99 is one with a value,
+   between unit-cost rows.
+J41 Withheld: a [[subject_status]] row with status "withheld" covers its subject in every period (a quarter, or the
+   H1, 9M or FY of a year) all of whose quarters lie in [first, last]; a period only partly inside (2025 FY for E818)
+   is not covered. The periods so covered for Loulo-Gounkoto must equal the E818 list the other families use
+   (E818_PERIODS), else SystemExit. The evidence (the row's "evidence", "E818") is carried in the reason, as the
+   other families do: "excluded_" + the evidence id lower-cased ("excluded_e818"), certificate null (coordinator's
+   output convention of 2026-10-30, replacing reason "withheld" with the evidence in "certificate"). With two rows
+   covering, the first in registry order gives it.
+J42 Alias: a [[mine_stats_label_alias]] row applies to every Minestats* sheet of a release in [first, last] (the
+   registry names no metal; site_sheet's DR02 constants apply to copper only); one substitution, no chaining. No gold
+   sheet of this corpus prints those labels. In the 2024 copper blocks the "millions of pounds" rows thus read as
+   cu_production_kt and cu_sales_kt, and no copper block of this corpus keeps a millions-of-pounds row unaliased, so
+   cu_production_mlb and cu_sales_mlb pose no instance.
+J43 Vocabulary labels are normalised as row labels are (ms_label: whitespace collapsed, trimmed, trailing 1-2 footnote
+   digits stripped, lower case), the child-label test runs on the aliased label, and a child label in a block's
+   first walked row is not a sub-row. Sections are matched on the normalised label of the section row itself.
+J44 "More than one row of the field" counts the rows with data (as "found" in step d does), so a field row with no
+   data never makes a duplicate; the first such row anchors and is the at of step e. No block of this corpus holds
+   two rows of one field.
+J45 cells: an operand is listed whenever it is located, also when step a, d or e decides; it is null when not located
+   (release (Y, n-1) not loaded, no column or row with data there, or the site has columns on two sheets of the metal
+   in that operand's release, as J17). Step c tests ms_cols (columns in any block of the sheet), as site_sheet does.
+J46 The nil token and n/a are read_site_operand's (raw text exactly "—" or "— "; exactly "n/a"); "N/A", "-" and "–"
+   are unreadable (J16). An instance with both an n/a and an unreadable operand is placeholder_operand (h before i).
+J47 Output: instance lines sort with the others by J9's key; "site_quarter_sum" sorts between "region_to_total" and
+   "site_sheet" ("site_q" < "site_s"), so its lines are inserted there. Its family summary follows
+   sold_weighted_rate's (before the site_sheet refusal lines). The J29 per-release line, the components and the
+   checks are unchanged; every pre-existing line is unchanged, the family adds lines only.
 """
 import itertools
 import json
 import os
 import re
 import sys
+import tomllib
 import zipfile
 from fractions import Fraction as F
 from xml.etree import ElementTree as ET
@@ -1497,6 +1592,241 @@ def check_e817(swr):
                           for x in hits]}
 
 
+# -------------------------------------------------------------------------------------------------- site quarter sums
+
+SQS_FAMILY = "site_quarter_sum"
+REGISTRY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "registries",
+                                         "sources", "barrick.toml"))  # J39
+_MINED, _PROC = "Tonnes mined (thousands)", "Tonnes processed (thousands)"
+_PROD, _CAPEX = "Production (thousands of ounces)", "Capital expenditures ($ millions)"
+# rule step 3: metal -> (field id, section or None, label), spelled as the rule spells them; matched normalised
+SQS_FIELDS = {
+    "au": (("au_tonnes_mined_kt", None, _MINED),
+           ("au_tonnes_mined_open_pit_ore_kt", _MINED, "Open Pit Ore"),
+           ("au_tonnes_mined_open_pit_waste_kt", _MINED, "Open Pit Waste"),
+           ("au_tonnes_mined_underground_kt", _MINED, "Underground"),
+           ("au_tonnes_processed_kt", None, _PROC),
+           ("au_tonnes_processed_oxide_mill_kt", _PROC, "Oxide Mill"),
+           ("au_tonnes_processed_roasters_kt", _PROC, "Roasters"),
+           ("au_tonnes_processed_autoclave_kt", _PROC, "Autoclave"),
+           ("au_tonnes_processed_heap_leach_kt", _PROC, "Heap Leach"),
+           ("au_production_koz", None, _PROD),
+           ("au_production_oxide_mill_koz", _PROD, "Oxide Mill"),
+           ("au_production_roasters_koz", _PROD, "Roasters"),
+           ("au_production_autoclave_koz", _PROD, "Autoclave"),
+           ("au_production_heap_leach_koz", _PROD, "Heap Leach"),
+           ("au_sales_koz", None, "Sales (thousands of ounces)"),
+           ("au_revenue_usd_m", None, "Revenue ($ millions)"),
+           ("au_capex_minesite_sustaining_usd_m", _CAPEX, "Minesite sustaining"),
+           ("au_capex_projects_usd_m", _CAPEX, "Projects"),
+           ("au_capex_total_usd_m", None, "Total capital expenditures ($ millions)")),
+    "cu": (("cu_tonnes_mined_kt", None, _MINED),
+           ("cu_tonnes_mined_open_pit_ore_kt", _MINED, "Open Pit Ore"),
+           ("cu_tonnes_mined_open_pit_waste_kt", _MINED, "Open Pit Waste"),
+           ("cu_tonnes_mined_underground_kt", _MINED, "Underground"),
+           ("cu_tonnes_processed_kt", None, _PROC),
+           ("cu_production_mlb", None, "Production (millions of pounds)"),
+           ("cu_production_kt", None, "Production (Thousands of tonnes)"),
+           ("cu_sales_mlb", None, "Sales (millions of pounds)"),
+           ("cu_sales_kt", None, "Sales (Thousands of tonnes)"),
+           ("cu_revenue_usd_m", None, "Revenue ($ millions)"),
+           ("cu_capex_minesite_sustaining_usd_m", _CAPEX, "Minesite sustaining"),
+           ("cu_capex_projects_usd_m", _CAPEX, "Projects"),
+           ("cu_capex_total_usd_m", None, "Total capital expenditures ($ millions)")),
+}
+SQS_TABLE = {metal: {(ms_label(s) if s is not None else None, ms_label(lab)): fid for fid, s, lab in rows}
+             for metal, rows in SQS_FIELDS.items()}  # (normalised section or None, normalised label) -> field id
+QUARTERS_OF = {"Q1": (1,), "Q2": (2,), "Q3": (3,), "Q4": (4,), "H1": (1, 2), "9M": (1, 2, 3), "FY": (1, 2, 3, 4)}
+
+
+def _release_quarter(text, where):
+    m = re.fullmatch(r"([0-9]{4})Q([1-4])", text) if isinstance(text, str) else None
+    if not m:
+        die("%s: not a release quarter <yyyy>Q<n>: %r" % (where, text))
+    return int(m.group(1)), int(m.group(2))
+
+
+def _need(row, keys, where):
+    for k in keys:
+        if not isinstance(row.get(k), str):
+            die("%s: row without a text %r: %r" % (where, k, row))
+    return [row[k] for k in keys]
+
+
+class Registry:
+    """The issuer registry rows this family reads (J39): child labels, label aliases, withheld statuses."""
+
+    def __init__(self, path):
+        try:
+            with open(path, "rb") as f:
+                reg = tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            die("registry %s unreadable: %s" % (path, e))
+        where = os.path.basename(path)
+        self.child = set()
+        for row in reg.get("mine_stats_label", []):
+            (label,) = _need(row, ("label",), where + " [[mine_stats_label]]")
+            if "section" in row:
+                _need(row, ("section",), where + " [[mine_stats_label]]")
+                self.child.add(ms_label(label))
+        if not self.child:
+            die("%s: no [[mine_stats_label]] row with a section" % where)
+        self.aliases = []  # (label, reads_as, first, last), normalised labels (J42)
+        for row in reg.get("mine_stats_label_alias", []):
+            w = where + " [[mine_stats_label_alias]]"
+            label, reads_as, first, last = _need(row, ("label", "reads_as", "first", "last"), w)
+            self.aliases.append((ms_label(label), ms_label(reads_as), _release_quarter(first, w),
+                                 _release_quarter(last, w)))
+        self.withheld = []  # (subject, frozenset of covered period labels, evidence), registry order (J41)
+        for row in reg.get("subject_status", []):
+            if row.get("status") != "withheld":
+                continue
+            w = where + " [[subject_status]]"
+            subject, first, last, evidence = _need(row, ("subject", "first", "last", "evidence"), w)
+            lo, hi = _release_quarter(first, w), _release_quarter(last, w)
+            covered = {period(yy, kind) for yy in range(lo[0], hi[0] + 1) for kind, qs in QUARTERS_OF.items()
+                       if all(lo <= (yy, k) <= hi for k in qs)}
+            self.withheld.append((subject, frozenset(covered), evidence))
+        e818 = {p for s, covered, _e in self.withheld if s == E818_SUBJECT for p in covered}
+        if e818 != E818_PERIODS:
+            die("%s: the withheld rows for %s cover %s, not the E818 list %s the other families use"
+                % (where, E818_SUBJECT, sorted(e818), sorted(E818_PERIODS)))
+
+    def alias(self, rel, label):
+        for lab, reads_as, first, last in self.aliases:
+            if label == lab and first <= (rel.year, rel.q) <= last:
+                return reads_as
+        return label
+
+    def withheld_evidence(self, subject, periods):
+        for s, covered, evidence in self.withheld:
+            if s == subject and any(p in covered for p in periods):
+                return evidence
+        return None
+
+
+def sqs_field_rows(reg, sheet, blk):
+    """Rule steps 1-3 on one Minestats block: field id -> [rows with data of that field], ascending (memoised)."""
+    cached = getattr(blk, "sqs_rows", None)
+    if cached is not None:
+        return cached
+    table = SQS_TABLE[sheet.metal]
+    out, section, walked = {}, None, False
+    for r in range(blk.header_row + 1, blk.end):
+        a = sheet.text(r, 1)
+        if a is None or not a.strip():
+            continue  # J40: an unlabelled row is not walked
+        label = reg.alias(sheet.release, ms_label(a))
+        if walked and label in reg.child:
+            key = (section, label)  # a sub-row of the most recent non-sub-row's section
+        else:
+            section = label
+            key = (None, label)
+        walked = True
+        fid = table.get(key)
+        if fid is not None and any(not sheet.is_empty(r, c) for c in blk.cols.values()):
+            out.setdefault(fid, []).append(r)
+    blk.sqs_rows = out
+    return out
+
+
+def sqs_operand(reg, rel, metal, subj, kind, g, fid):
+    """('two_sheets' | 'missing', None) or ('dup' | 'ok', Op at the (first) row's cell): the site's cell of the field
+    in its block of period `kind` in release rel (rule step 5; J44, J45)."""
+    have = rel.ms_cols[metal].get(subj, [])
+    if len(have) > 1:
+        return "two_sheets", None
+    if not have:
+        return "missing", None
+    sheet = next(s for s in rel.ms_sheets if s.name == have[0])
+    blk = sheet.ms_blocks.get(kind)
+    if blk is None or (subj, g) not in blk.cols:
+        return "missing", None
+    rows = sqs_field_rows(reg, sheet, blk).get(fid, [])
+    if not rows:
+        return "missing", None
+    return ("dup" if len(rows) > 1 else "ok"), read_site_operand(sheet, rows[0], blk.cols[(subj, g)])
+
+
+def decide_sqs(ops):
+    """Steps f-j for an instance whose three operands are located: (state, reason, at, certificate)."""
+    for o in ops:
+        if o.kind == "blank":
+            return "v", "blank_operand", o.loc, None
+    if all(o.kind in ("nil", "na") for o in ops):
+        return "np", None, None, None
+    for o in ops:
+        if o.kind == "na":
+            return "v", "placeholder_operand", o.loc, None
+    for o in ops:
+        if o.kind == "unreadable":
+            return "v", "operand_unreadable", o.loc, None
+    val = [F(0) if o.kind == "nil" else o.value for o in ops]
+    slack = sum((F(0) if o.kind == "nil" else o.half for o in ops), F(0))
+    ok = abs(val[0] + val[1] - val[2]) <= slack
+    return ("i" if ok else "iii"), None, None, ("nil_token" if any(o.kind == "nil" for o in ops) else None)
+
+
+def sqs_instances(releases, reg):
+    """Family site_quarter_sum: on each Minestats* sheet, cumulative = previous cumulative + quarter, per site."""
+    out = []
+    for (y, q), rel in sorted(releases.items()):
+        if q == 1:
+            continue
+        cum, qkind, pkind = CUM[q], "Q%d" % q, PREV_KIND[q]
+        prev = releases.get((y, q - 1))
+        for sheet in rel.ms_sheets:
+            blk = sheet.ms_blocks.get(cum)
+            if blk is None:
+                continue
+            metal = sheet.metal
+            rows = sqs_field_rows(reg, sheet, blk)
+            for (subj, g), col in sorted(blk.cols.items(), key=lambda kv: kv[1]):
+                yy = y if g == "current" else y - 1
+                pers = [period(yy, pkind), period(yy, qkind), period(yy, cum)]
+                for fid, _section, _label in SQS_FIELDS[metal]:
+                    if fid not in rows:
+                        continue
+                    t_how = "dup" if len(rows[fid]) > 1 else "ok"
+                    t_op = read_site_operand(sheet, rows[fid][0], col)
+                    if prev is None:
+                        p_how, p_op = "release_missing", None
+                    else:
+                        p_how, p_op = sqs_operand(reg, prev, metal, subj, pkind, g, fid)
+                    q_how, q_op = sqs_operand(reg, rel, metal, subj, qkind, g, fid)
+                    ops = [p_op, q_op, t_op]
+                    inst = {"family": SQS_FAMILY, "subject": subj, "field": fid, "group": g, "period": pers[2],
+                            "anchor": t_op.loc, "cells": [o.loc if o is not None else None for o in ops],
+                            "state": "v", "reason": None, "at": None, "certificate": None, "share": None,
+                            "printed_share": None, "component": None, "corrections": None, "_ops": ops, "_s": None}
+                    hows = [p_how, q_how, t_how]
+                    evidence = reg.withheld_evidence(subj, pers)
+                    if evidence is not None:
+                        inst["reason"] = "excluded_" + evidence.lower()  # J41: as the other families; certificate null
+                    elif prev is None:
+                        inst["reason"] = "release_missing"
+                    elif "two_sheets" in (p_how, q_how):
+                        inst["reason"] = "operand_unreadable"
+                    elif "missing" in (p_how, q_how):
+                        inst["reason"] = "operand_row_missing"
+                    elif "dup" in hows:
+                        inst["reason"], inst["at"] = "operand_unreadable", ops[hows.index("dup")].loc
+                    else:
+                        inst["state"], inst["reason"], inst["at"], inst["certificate"] = decide_sqs(ops)
+                    out.append(inst)
+    return out
+
+
+def sqs_summary(xs):
+    by = {}
+    for x in xs:
+        if x["state"] == "v":
+            by[x["reason"]] = by.get(x["reason"], 0) + 1
+    return {"family": SQS_FAMILY, "n": len(xs), **{s: sum(1 for x in xs if x["state"] == s)
+                                                    for s in ("i", "iii", "v", "np")},
+            "v_by_reason": dict(sorted(by.items()))}
+
+
 # ---------------------------------------------------------------------------------------------------- exact joint decision
 
 def _norm(cons):
@@ -1787,12 +2117,14 @@ def main(argv):
     if bad or not args:
         die("usage: mine_stats_census.py [--values] <dir-or-files...>")
     releases = collect(args)
+    reg = Registry(REGISTRY)  # J39
     site, unmatched = site_sheet_instances(releases)
     sums, outside = sum_instances(releases)
     swr = swr_instances(releases)  # decided alone, never posed (J37)
+    sqs = sqs_instances(releases, reg)  # decided alone, never posed (J47)
     instances = ownership_instances(releases) + quarter_sum_instances(releases) + site
     instances.sort(key=sort_key)
-    printed = sorted(instances + sums + swr, key=sort_key)
+    printed = sorted(instances + sums + swr + sqs, key=sort_key)
     seen = set()
     for x in printed:
         k = sort_key(x)
@@ -1820,6 +2152,7 @@ def main(argv):
                                                for s in ("i", "iii", "v", "np")},
               "v_by_reason": dict(sorted(by.items()))})
     emit(swr_summary(swr))  # J37: directly after the five family summaries
+    emit(sqs_summary(sqs))  # J47
     for _y, rel in sorted(releases.items()):
         for where, why in rel.refusals:
             emit({"family": "site_sheet", "refused": where, "reason": why})
