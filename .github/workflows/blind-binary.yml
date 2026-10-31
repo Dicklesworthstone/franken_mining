@@ -1,0 +1,34 @@
+name: Blind binary
+
+# GATE-BULL-01's blind-layout clause (bd-s9j3): the binary that first reads a new quarter must exist before the
+# issuer's files do. GitHub builds it from the pushed commit, so its digest has an outside timestamp and owes nothing
+# to anyone's working tree. repro/barrick/blind_record.json names the run, the commit and the digest, and
+# scripts/register_vintage.sh --run takes the downloaded binary through FMINE_BIN and refuses any other.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/blind-binary.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: fmine (aarch64-apple-darwin)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --release --locked -p fmine-cli
+      - name: Digest
+        run: shasum -a 256 target/release/fmine
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fmine-aarch64-apple-darwin-${{ github.sha }}
+          path: target/release/fmine
+          if-no-files-found: error
+          retention-days: 90
