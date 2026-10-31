@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod beads;
 pub mod forecast;
 pub mod int_as;
 pub mod lifts;

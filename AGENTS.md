@@ -508,13 +508,21 @@ br ready --json
 br list --status=open
 br show <id>
 br update <id> --status=in_progress
-br close <id> --reason "Verified by <test or gate>"
+br close <id> --reason "test:<crate>::<path>::<fn> ... commit:<sha7>"
 br sync --flush-only
 ```
 
 `.beads/issues.jsonl` mirrors the plan's §39 rows (320 beads, 533 edges, acyclic); keep titles and acceptance
 text in step with the plan. Use Bead IDs in Agent Mail threads and commit messages. `br sync --flush-only` does
 not commit; stage and commit intentionally.
+
+A close reason cites that bead's own evidence as typed references: `test:<crate>::<path>::<fn>` naming a `fn`,
+`record:<repo path>`, `ci:<run>@<sha7>`, `decision:<id>` or `commit:<sha7>`. Prose such as "cargo test passes"
+is not a reference. Never reuse one reason across beads, and never cite a `GATE-…` before its
+`docs/delivery/` record says `Verdict: PASS`. `cargo run -p xtask -- check-beads` (BD-324) checks the committed
+JSONL for all of this and for closes over open blockers. `.beads/policy.yaml` makes `br close` refuse an untyped
+reason. Never use `br close --force` (it closes over open blockers) or `--bypass-policy` on plan beads. When a
+cited test is renamed or moved, reopen the bead and close it again citing the new name.
 
 ## `bv` - Graph-Aware Triage
 

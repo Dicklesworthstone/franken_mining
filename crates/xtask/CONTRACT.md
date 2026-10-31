@@ -5,7 +5,7 @@
 - **Layer:** `T` (Build/Verification tooling)
 - **Subsystem:** `Testpit`
 - **LOC Budget:** Dev-only verification binary (`GATE-LAYERS-00`)
-- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "oracle", "forecast", "refusals", "int_as"]`
+- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "oracle", "forecast", "refusals", "int_as", "beads"]`
 
 ## 2. Mathematical & Domain Formulation
 Enforces the structural invariants of the workspace (`L-1`..`L-7`, `PO-NUM-2`, `GATE-ORACLE-01`, `§28.4` LOC budget ceilings) over the repository source tree and `registries/*.toml`.
@@ -45,6 +45,16 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   from plan heading `### F.1 ` to the next heading (F.2's `-01` upstream asks are outside it). It fails on a missing
   or extra id, a lock id not ending `-00`, a malformed or repeated id, or an empty set.
 - `check_scope(root: &Path) -> Result<(), Vec<String>>`
+- `beads::{check_beads, evaluate}` (BD-324; command `check-beads`, which prints
+  `{"check":"check-beads","rows","closed","distinct"}`): over `.beads/issues.jsonl`, a closed bead fails when its
+  normalised reason is shared with another closed bead (R-SHARED), holds no `test:`/`record:`/`ci:`/`decision:`/
+  `commit:` reference (R-TYPED), or cites one that does not resolve (R-RESOLVE). A `test:` reference's last `::`
+  segment must be a `fn` anywhere under `crates/`; it is not looked up in the named crate, because tests have
+  moved between crates since they were cited. A `record:` reference must be a file, and `ci:`/`commit:` are
+  format-checked only. A bead also fails when it cites a `GATE-…` token with no `docs/delivery/<token>*.md`
+  record holding a `Verdict: PASS` line (R-GATE), or when it is closed over a `blocks` dependency that is not
+  closed (R-BLOCKED). Ten closes within 60 s is a warning (R-WINDOW). The JSONL reader is hand-written (no serde),
+  and a malformed line is an error naming its number.
 - `check_claims(root: &Path) -> Result<(), Vec<String>>`
 - `check_det(root: &Path) -> Result<DetReport, Vec<String>>` (bd-hp2j.1; command `check-det`, and `check-all`
   prints its line `{"check":"check-det","files","headers_missing":0,"violations":0,"bitwise_files"}`): every

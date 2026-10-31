@@ -74,6 +74,15 @@ fn main() -> ExitCode {
             xtask::check_stack_lock(&root).map(|r| println!("{}", r.log_line())),
         ),
         "check-scope" => run_one("check-scope", xtask::check_scope(&root)),
+        "check-beads" => run_one(
+            "check-beads",
+            xtask::beads::check_beads(&root).map(|r| {
+                println!("{}", r.log_line());
+                for w in &r.warnings {
+                    println!("WARN [check-beads]: {w}");
+                }
+            }),
+        ),
         "check-claims" => run_one("check-claims", xtask::check_claims(&root)),
         "check-det" => run_one(
             "check-det",

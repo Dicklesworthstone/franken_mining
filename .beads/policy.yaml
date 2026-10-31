@@ -1,0 +1,10 @@
+# Local guard for close reasons (BD-324). `cargo run -p xtask -- check-beads`, run by CI, is authoritative.
+allow_bypass: false
+close_policy:
+  require_close_reason:
+    enabled: true
+    min_length: 20
+    regex: '\b(test|record|ci|decision|commit):\S+'
+  require_typed_references:
+    enabled: true
+    required_kinds: [test, record, ci, decision, commit]
