@@ -14,6 +14,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use fmine_core::hash::sha256;
 use fmine_registry::toml_subset::{TomlRow, TomlValue, parse_subset};
 use fmine_units::{ExactQty, TROY_OZ_TO_GRAMS_DEN, TROY_OZ_TO_GRAMS_NUM, UnitsError};
 
@@ -21,6 +22,9 @@ use crate::solve_cutoff_grade;
 
 /// Schema id `registries/published_cutoffs.toml` must declare.
 pub const CUTOFFS_SCHEMA: &str = "fmine.published_cutoffs.v1";
+
+/// Where the registry sits under a workspace root.
+pub const CUTOFFS_REGISTRY: &str = "registries/published_cutoffs.toml";
 
 /// Largest step the solver cross-check may differ from the exact fixed point by, in g/t.
 const SOLVER_AGREEMENT_G_PER_T: f64 = 1e-6;
@@ -528,6 +532,52 @@ pub fn parse_cases(toml: &str) -> Result<Vec<CutoffCase>, CutoffFailure> {
     Ok(cases)
 }
 
+/// Every registered cut-off reproduced, for a report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CutoffSection {
+    /// The registry's top-level `issuer`: whose technical reports the rows come from.
+    pub issuer: String,
+    /// `{registry, sha256, cases, reproduced, within_input_rounding, conflict, rows}`, rows in registry order.
+    pub json: String,
+}
+
+/// Reproduces every row of the registry's bytes. A row that cannot be computed fails the whole section, so a
+/// report never shows fewer cut-offs than are registered.
+pub fn section(registry: &[u8]) -> Result<CutoffSection, CutoffFailure> {
+    let text = std::str::from_utf8(registry)
+        .map_err(|e| CutoffFailure::Registry(format!("not UTF-8: {e}")))?;
+    let doc = parse_subset(text).map_err(|e| CutoffFailure::Registry(e.to_string()))?;
+    let issuer = match doc.top_get("issuer").map(|f| &f.value) {
+        Some(TomlValue::Str(s)) if !s.is_empty() => s.clone(),
+        _ => {
+            return Err(CutoffFailure::Registry(
+                "needs the text field issuer".to_string(),
+            ));
+        }
+    };
+    let (mut counts, mut rows) = ([0_usize; 3], Vec::new());
+    for case in parse_cases(text)? {
+        let report = reproduce(&case)?;
+        counts[match report.state {
+            CutoffState::Reproduced => 0,
+            CutoffState::WithinInputRounding => 1,
+            CutoffState::Conflict => 2,
+        }] += 1;
+        rows.push(report.to_json()?);
+    }
+    let json = format!(
+        "{{\"registry\":\"{CUTOFFS_REGISTRY}\",\"sha256\":\"{}\",\"cases\":{},\"reproduced\":{},\
+         \"within_input_rounding\":{},\"conflict\":{},\"rows\":[{}]}}",
+        sha256(registry).to_hex(),
+        rows.len(),
+        counts[0],
+        counts[1],
+        counts[2],
+        rows.join(",")
+    );
+    Ok(CutoffSection { issuer, json })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -702,6 +752,52 @@ mod tests {
                 r.id
             );
         }
+    }
+
+    /// The report section: seven rows in registry order, counted by state, under the registry's digest and issuer.
+    #[test]
+    fn test_section_counts_every_row_by_state() {
+        let s = section(REGISTRY.as_bytes()).expect("section");
+        assert_eq!(s.issuer, "barrick");
+        assert!(
+            s.json.starts_with(&format!(
+                "{{\"registry\":\"registries/published_cutoffs.toml\",\"sha256\":\"{}\",\"cases\":7,\
+                 \"reproduced\":6,\"within_input_rounding\":1,\"conflict\":0,\"rows\":[",
+                sha256(REGISTRY.as_bytes()).to_hex()
+            )),
+            "{}",
+            s.json
+        );
+        let at: Vec<usize> = cases()
+            .iter()
+            .map(|c| s.json.find(&format!("{{\"id\":\"{}\"", c.id)).expect("row"))
+            .collect();
+        assert!(
+            at.windows(2).all(|w| w[0] < w[1]),
+            "rows out of registry order"
+        );
+
+        // Planted: a printed figure out of the inputs' reach is counted as a conflict, and the digest moves.
+        let planted = REGISTRY.replacen("published = \"5.66\"", "published = \"5.80\"", 1);
+        let p = section(planted.as_bytes()).expect("section");
+        assert!(
+            p.json
+                .contains("\"reproduced\":5,\"within_input_rounding\":1,\"conflict\":1,"),
+            "{}",
+            p.json
+        );
+        assert!(!p.json.contains(&sha256(REGISTRY.as_bytes()).to_hex()));
+
+        // A row that cannot be computed fails the section; so does a registry with no issuer.
+        let broken = REGISTRY.replacen("cost_usd_per_t = \"243.89\"", "cost_usd_per_t = \"x\"", 1);
+        assert!(matches!(
+            section(broken.as_bytes()),
+            Err(CutoffFailure::Row { .. })
+        ));
+        let anonymous = REGISTRY.replacen("issuer = \"barrick\"\n", "", 1);
+        assert!(
+            matches!(section(anonymous.as_bytes()), Err(CutoffFailure::Registry(d)) if d.contains("issuer"))
+        );
     }
 
     #[test]

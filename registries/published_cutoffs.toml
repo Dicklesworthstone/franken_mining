@@ -9,6 +9,9 @@
 # tax_percent and report in oz/st (E183).
 
 schema = "fmine.published_cutoffs.v1"
+# Every row is from a technical report this issuer filed; `fmine assure public --issuer <issuer>` reports the rows
+# only for its own issuer.
+issuer = "barrick"
 
 [[cutoff]]
 id = "turquoise-ridge-ug-resource"

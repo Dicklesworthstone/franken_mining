@@ -25,6 +25,9 @@ Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when 
   published cut-offs in `registries/published_cutoffs.toml`, recomputed on exact rationals from the printed inputs.
   Each comes back `Reproduced`, `WithinInputRounding` or `Conflict`; `CutoffReport::to_json` prints exact results to
   six places, never through a float.
+- `cutoff::{section, CutoffSection, CUTOFFS_REGISTRY}`: every row reproduced, as the JSON object an issuer run of
+  `fmine assure public` carries as `published_cutoffs`: the registry's sha256, the count in each state and the rows in
+  registry order, with the registry's `issuer`. A row that cannot be computed fails the whole section.
 - `lmdi::{LmdiState, LmdiWaterfall, decompose_aisc_lmdi, logarithmic_mean}`
 - `lmdi::{golden_digest_logarithmic_mean_10k, golden_digest_decompose_aisc_lmdi_10k}` (bd-hp2j.3): BLAKE3 over the
   output bits on 10,000 inputs from `LMDI_DIGEST_KEY` (series branch, both branches, ratios to e^300, magnitudes

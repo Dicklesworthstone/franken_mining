@@ -32,6 +32,12 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 - A successful assurance run carries the run's `anc_…` anchor id, and the report as payload: `lane`,
   `gate_eligible`, sources with SHA-256, the extraction census, the identity ledger with cited exceptions, the
   quarantine and the state root. The payload holds no flags, no `no_claim` and no `next_actions`.
+- An issuer run's payload ends with `published_cutoffs` (BD-274), `fmine_metrics::cutoff::section` over
+  `registries/published_cutoffs.toml` when that registry's `issuer` is the run's: the registry's sha256, the count
+  of cut-offs reproduced, within input rounding and in conflict, and one row per cut-off. It is not in the state
+  root, so the certificate is the same with or without it. No registry means no field; a registry that does not
+  read, or a row that cannot be computed, refuses the run with `FMINE-REF-506` before any workbook is read. The
+  synthetic lane never carries it.
 - A refusal carries `{code, exit_code, what, fix}` and a null payload.
 - Field names are this crate's. Renaming them to FMT-ENV-1's (`v`, `event`, `node`, `anchor`, `data`) and
   bumping `schema_version` are open for the FMT-ENV-1 owner.
