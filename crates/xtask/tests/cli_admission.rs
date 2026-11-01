@@ -1,11 +1,12 @@
 //! Public CLI admission and synthetic assurance contracts exercised through the T layer.
 
 #![cfg(test)]
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 mod tests {
     use fmine_cli::{CliCommand, OutputFormat, execute_command, invoke, parse_args, run};
-    use fmine_public::sources::registry_path;
+    use fmine_evidence::CATALOG;
+    use fmine_public::sources::{load_issuer_profile, registry_path};
     use std::path::{Path, PathBuf};
 
     fn workspace_root() -> PathBuf {
@@ -18,6 +19,385 @@ mod tests {
 
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// The four INV-002 flags, all false, written by hand from BD-329.S3 (not taken from `FLAGS_JSON`).
+    const FLAGS: &str = "{\"reserve_disclosure_claim\":false,\"execution_authorized\":false,\
+                         \"geotechnical_signoff\":false,\"regulatory_compliance_claim\":false}";
+
+    #[test]
+    fn test_challenge_command_renders_cited_json_and_readable_markdown() {
+        let query = args(&["assure", "challenges", "--synthetic"]);
+        let (env, _) = invoke(&query, &workspace_root());
+        assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
+        assert_eq!(env.verb, "assure challenges");
+        assert!(
+            env.payload_json
+                .contains("\"schema\":\"fmine.challenge_packets.v1\"")
+        );
+        assert!(env.payload_json.contains("\"subject\":\"Site B\""));
+        assert!(env.payload_json.contains("\"component_sum\":{\"v\":250,"));
+        assert!(env.payload_json.contains("\"sign_flip_witness\":\"C6\""));
+        assert!(env.payload_json.contains("\"external_use_allowed\":false"));
+        assert!(env.to_json().contains(FLAGS));
+        assert_eq!(invoke(&query, &workspace_root()).0.to_json(), env.to_json());
+        let (markdown, exit) = run(
+            &args(&[
+                "assure",
+                "challenges",
+                "--synthetic",
+                "--format",
+                "markdown",
+            ]),
+            &workspace_root(),
+        );
+        assert_eq!(exit, 0);
+        assert!(markdown.starts_with("# Evidence challenge packets\n"));
+        assert!(markdown.contains("## Closing evidence requested"));
+        assert!(markdown.contains("## Source operands"));
+        assert!(markdown.contains("invented synthetic workbooks"));
+        assert!(!markdown.contains("external_use_allowed\":true"));
+    }
+
+    #[test]
+    fn test_new_commands_refuse_missing_evidence_and_reject_mixed_selectors() {
+        let ws = no_corpus_workspace("new-commands-no-corpus");
+        let (env, _) = invoke(&args(&["assure", "challenges", "--issuer", "barrick"]), &ws);
+        assert_eq!(env.status, "refused");
+        assert_eq!(env.refusal.expect("missing source").code, "FMINE-REF-506");
+        assert_eq!(env.payload_json, "null");
+        let (env, _) = invoke(
+            &args(&[
+                "guidance",
+                "completion",
+                "--issuer",
+                "barrick",
+                "--site",
+                "north-mara",
+                "--through",
+                "2026Q2",
+                "--as-of",
+                "2026-10-31",
+            ]),
+            &ws,
+        );
+        assert_eq!(env.status, "refused");
+        assert_eq!(env.refusal.expect("missing guidance").code, "FMINE-REF-201");
+        assert_eq!(env.payload_json, "null");
+        for bad in [
+            vec!["assure", "challenges"],
+            vec!["assure", "challenges", "--synthetic", "--issuer", "barrick"],
+            vec![
+                "guidance",
+                "completion",
+                "--synthetic",
+                "--through",
+                "2026Q2",
+            ],
+            vec![
+                "guidance",
+                "completion",
+                "--issuer",
+                "barrick",
+                "--site",
+                "north-mara",
+            ],
+            vec![
+                "guidance",
+                "completion",
+                "--synthetic",
+                "--as-of",
+                "2026-02-30",
+            ],
+            vec!["doctor", "--site", "north-mara"],
+        ] {
+            assert!(
+                parse_args(&args(&bad), &workspace_root()).is_err(),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// Without the registered workbooks the gate-eligible run refuses with 506 (foundation I/O, exit 5) and
+    /// names the files; it never substitutes stand-in content (BD-321).
+    ///
+    /// The scratch workspace holds a copy of the registry and no corpus.
+    #[test]
+    fn test_cli_assure_public_refuses_without_registered_files() {
+        let ws = std::env::temp_dir().join(format!("fmine-cli-no-corpus-{}", std::process::id()));
+        let reg = registry_path(&ws, "barrick");
+        std::fs::create_dir_all(reg.parent().expect("dir")).expect("registry dir");
+        std::fs::copy(registry_path(&workspace_root(), "barrick"), &reg).expect("copy registry");
+        let ws_arg = ws.display().to_string();
+        let (cmd, _, ws_parsed) = parse_args(
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--workspace",
+                &ws_arg,
+            ]),
+            &workspace_root(),
+        )
+        .expect("parse");
+        let env = execute_command(&cmd, &ws_parsed);
+        assert_eq!((env.exit_code, env.status), (5, "refused"));
+        let json = env.to_json();
+        assert!(json.contains("\"code\":\"FMINE-REF-506\""));
+        assert!(json.contains("Barrick_Q2_2026_AISC.xlsx"));
+        assert!(json.contains("\"payload\":null"));
+
+        // --through narrows the refusal to the rows at or before the bound.
+        let (cmd, _, _) = parse_args(
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2024Q4",
+                "--workspace",
+                &ws_arg,
+            ]),
+            &workspace_root(),
+        )
+        .expect("parse");
+        assert_eq!(
+            cmd,
+            CliCommand::AssurePublic {
+                issuer: "barrick".to_string(),
+                through: Some("2024Q4".to_string())
+            }
+        );
+        let json = execute_command(&cmd, &ws_parsed).to_json();
+        assert!(json.contains("Barrick_Q4_2024_AISC.xlsx"), "{json}");
+        assert!(!json.contains("Barrick_Q1_2025"), "{json}");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// A workspace without the issuer's registry file makes the issuer unknown: a usage error, exit 2.
+    #[test]
+    fn test_cli_unknown_issuer_without_registry_is_usage_error() {
+        let empty = workspace_root()
+            .join("crates")
+            .join("fmine-cli")
+            .join("no-such-workspace");
+        let err = parse_args(
+            &args(&[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--workspace",
+                &empty.display().to_string(),
+            ]),
+            &workspace_root(),
+        )
+        .expect_err("no registry there");
+        assert!(err.contains("no registries/sources/barrick.toml"), "{err}");
+    }
+
+    #[test]
+    fn test_cli_usage_errors() {
+        let root = workspace_root();
+        for bad in [
+            &["assure", "public", "--issuer", "newmont"][..],
+            &["assure", "public"][..],
+            &["assure", "public", "--issuer", "barrick", "--synthetic"][..],
+            &["assure", "private"][..],
+            &[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2026Q5",
+            ][..],
+            &[
+                "assure",
+                "public",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2026-Q2",
+            ][..],
+            &["assure", "public", "--issuer", "barrick", "--through"][..],
+            &["assure", "public", "--synthetic", "--through", "2026Q2"][..],
+            &[
+                "assure",
+                "public",
+                "--issuer",
+                "../registries/sources/barrick",
+            ][..],
+            &[][..],
+            // Unknown flags, surplus words and flags a verb does not take (none is ignored).
+            &["doctor", "--deep"][..],
+            &["robot-docs", "extra"][..],
+            &["assure", "public", "issuer=barrick"][..],
+            &["assure", "public", "--synthetic", "now"][..],
+            &["claim", "show", "clm_0001", "clm_0002"][..],
+            &["claim", "why", "clm_0001", "extra"][..],
+            &["claim", "trace"][..],
+            &["claim", "invent", "clm_0001"][..],
+            &[
+                "claim",
+                "why",
+                "clm_0001",
+                "--synthetic",
+                "--issuer",
+                "barrick",
+            ][..],
+            &["doctor", "--issuer", "barrick"][..],
+            &["robot-docs", "--synthetic"][..],
+        ] {
+            assert!(
+                parse_args(&args(bad), &root).is_err(),
+                "{bad:?} must be a usage error"
+            );
+            // What `fmine` prints: one envelope line on stdout, exit 2.
+            let (text, exit) = run(&args(bad), &root);
+            assert_eq!(exit, 2, "{bad:?}");
+            assert!(!text.contains('\n'), "{bad:?}: {text}");
+            assert!(
+                text.starts_with("{\"schema_version\":\"fmine.env.v1\",\"verb\":\""),
+                "{bad:?}: {text}"
+            );
+            assert!(
+                text.contains("\"status\":\"usage_error\",\"exit_code\":2,"),
+                "{bad:?}: {text}"
+            );
+        }
+        let env = execute_command(
+            &CliCommand::AssurePublic {
+                issuer: "newmont".to_string(),
+                through: None,
+            },
+            &root,
+        );
+        assert_eq!(
+            (env.exit_code, env.status, env.refusal.is_none()),
+            (2, "usage_error", true)
+        );
+    }
+
+    /// BD-339.S2: `repro/barrick/fetch.sh` reads the registry with its own awk parser, so that a reader can
+    /// fetch without building. Its listing must equal the Rust loader's rows (file, url, bytes, sha256) in
+    /// order: the registry is the one copy, and the two readers of it cannot drift apart unnoticed.
+    #[test]
+    fn test_fetch_list_equals_registry() {
+        let root = workspace_root();
+        let out = std::process::Command::new("bash")
+            .arg(root.join("repro").join("barrick").join("fetch.sh"))
+            .arg("--list")
+            .env("FMINE_WORKSPACE", &root)
+            .output()
+            .expect("run fetch.sh --list");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let want: String = load_issuer_profile(&root, "barrick")
+            .expect("registry")
+            .sources
+            .iter()
+            .map(|s| {
+                format!(
+                    "{}\t{}\t{}\t{}\n",
+                    s.file_name, s.url, s.bytes, s.sha256_hex
+                )
+            })
+            .collect();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), want);
+    }
+
+    #[test]
+    fn test_cli_doctor_and_robot_docs() {
+        let root = workspace_root();
+        let env_doc = execute_command(&CliCommand::Doctor, &root);
+        assert_eq!(env_doc.exit_code, 0);
+        assert!(env_doc.to_json().contains("\"registries_ok\":true"));
+        let n = load_issuer_profile(&root, "barrick")
+            .expect("registry")
+            .sources
+            .len();
+        assert!(
+            env_doc.to_json().contains(&format!(
+                "{{\"issuer\":\"barrick\",\"registry_ok\":true,\"sources_registered\":{n},"
+            )),
+            "{}",
+            env_doc.to_json()
+        );
+
+        let env_rob = execute_command(&CliCommand::RobotDocs, &root);
+        assert_eq!(env_rob.exit_code, 0);
+        let rob = env_rob.to_json();
+        assert!(rob.contains("\"FMT-ENV-1\""));
+        assert!(rob.contains("\"issuers\":[\"barrick\"]"), "{rob}");
+        assert!(rob.contains("{\"code\":\"FMINE-REF-502\",\"exit_code\":6,\"status\":\"active\","));
+        assert!(
+            rob.contains("{\"code\":\"FMINE-REF-506\",\"exit_code\":5,\"status\":\"proposed\",")
+        );
+        assert_eq!(
+            rob.matches("{\"code\":\"FMINE-REF-").count(),
+            CATALOG.len(),
+            "{rob}"
+        );
+        // robot-docs documents every envelope field, in print order.
+        let doc = &env_rob.payload_json[env_rob
+            .payload_json
+            .find("\"envelope_fields\":")
+            .expect("envelope fields documented")..];
+        let mut at = 0;
+        for field in [
+            "schema_version",
+            "verb",
+            "status",
+            "exit_code",
+            "anchor_id",
+            "flags",
+            "certificate",
+            "warnings",
+            "next_actions",
+            "no_claim",
+            "payload",
+            "refusal",
+        ] {
+            at += doc[at..]
+                .find(&format!("\"{field}\":"))
+                .unwrap_or_else(|| panic!("{field} documented after the previous field: {doc}"));
+        }
+    }
+
+    #[test]
+    fn test_usage_error_from_parse_args_is_envelope() {
+        let root = workspace_root();
+        for (bad, verb) in [
+            (&["frobnicate"][..], "unknown"),
+            (&[][..], "unknown"),
+            (
+                &["--format", "md", "assure", "private"][..],
+                "assure public",
+            ),
+            (&["--format", "xml", "doctor"][..], "doctor"),
+            (&["claim", "show"][..], "claim show"),
+            (&["claim", "why"][..], "claim why"),
+            (&["claim", "trace"][..], "claim trace"),
+            (&["claim", "--format", "json", "trace"][..], "claim trace"),
+        ] {
+            let (text, exit) = run(&args(bad), &root);
+            assert_eq!(exit, 2, "{bad:?}");
+            assert_eq!(text.lines().count(), 1, "{bad:?}: {text}");
+            assert!(
+                text.starts_with(&format!(
+                    "{{\"schema_version\":\"fmine.env.v1\",\"verb\":\"{verb}\",\"status\":\"usage_error\",\
+                     \"exit_code\":2,\"anchor_id\":null,\"flags\":{FLAGS},"
+                )),
+                "{bad:?}: {text}"
+            );
+            assert!(text.ends_with(",\"refusal\":null}"), "{bad:?}: {text}");
+        }
     }
 
     #[test]

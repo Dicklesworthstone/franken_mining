@@ -41,6 +41,16 @@ the IO layer retains OpenSSL configuration, trust-input fingerprints and typed v
 The decoded generation time is provisional until verification succeeds; certificate validity is checked at
 that signed time with `-attime`, without disabling certificate checks or sampling the host clock.
 
+DESIGN (BD-068): `forecast::prefix::{PrefixCommitment, commitment, verify, VerifiedPrefix}` binds a retained
+FJR1 prefix to SHA-256 of the exact ASCII frame `fmine.forecast-journal-prefix.v1\nhead=<head>\nsequence=<seq>\n`.
+The head is 64 lowercase BLAKE3 hex digits; the sequence is unpadded unsigned decimal, derived from the matching
+validated record. `PrefixCommitment::for_record` can prepare a receipt before sync but establishes no journal
+membership or durability. `commitment` and `verify` require a healthy retained snapshot and refuse an absent
+prefix with `FMINE-REF-502`. Verification delegates to the existing RFC 3161 verifier under caller-selected
+roots and returns its conservative time bounds and receipt/root fingerprints. It neither authenticates the
+original host-clock times nor asserts forecast preregistration: the caller must check exact cohort/member
+definitions, absence of selected outcomes in the prefix, and all applicable deadline/availability bounds.
+
 ## 3. Authority, Epistemics & Representation
 Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a `SourceAnchor`
 (`artifact_path`, sha256, `sheet!cell`).

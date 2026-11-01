@@ -836,10 +836,44 @@ report while preserving the original assessment digest and journal bytes. This l
 not an ancestry commitment made at registration or an external timestamp proof; generator replay remains
 `not_performed`.
 
+DESIGN (BD-047, BD-068): independently timestamp a frozen journal prefix before its outcomes resolve.
+Every successful receipt and `inspect` response supplies `payload.timestamp_commitment`: a versioned
+SHA-256 imprint, the exact BLAKE3 prefix head, and its sequence. After freezing a cohort, retain that receipt
+and request an RFC 3161 timestamp for its `imprint_sha256`, for example by preparing a query with:
+
+```bash
+openssl ts -query -digest IMPRINT_SHA256 -sha256 -cert -out frozen-prefix.tsq
+```
+
+Submit that query to your selected timestamp authority and retain the returned receipt and trusted PEM roots.
+After outcomes and assessments have been appended, verify the original frozen prefix while retrieving a report:
+
+```bash
+cargo run -p fmine-cli -- forecast journal report \
+  --journal runs/forecast-demo/history --assessment ASSESSMENT_DIGEST \
+  --head LATEST_RETAINED_HEAD --timestamp-head FROZEN_PREFIX_HEAD \
+  --timestamp-receipt frozen-prefix.tsr --timestamp-roots trusted-tsa-roots.pem
+```
+
+All three timestamp options are required together. Optional `--timestamp-intermediates <pem>` supplies
+untrusted chain certificates without adding trust roots. The verifier derives the sequence and imprint from
+the retained journal, checks the receipt's signature and chain, and replays the exact attested prefix. That
+prefix must contain the selected assessment's exact frozen cohort and all members, with none of their outcome
+events recorded yet. The authenticated upper time bound must strictly precede every member's declared
+deadline, including unresolved members, and every published/restated availability time recorded for those
+members in the current journal. Equality and uncertainty crossing a boundary refuse.
+
+Successful verification appears in outer `payload.timestamp_verification`, with the prefix, receipt and
+root-file hashes and authenticated time bounds; `external_time_proof` becomes `verified_caller_selected_roots`.
+The nested historical report and journal bytes stay unchanged. An invalid requested proof refuses rather than
+falling back to an unverified result. Caller-selected roots express that caller's trust: this does not assert
+public timestamp authority, source truth, completeness of recorded publications or accuracy of original host
+times. Retain `--head` separately to detect rollback of the current journal beyond the attested prefix.
+
 The response schema is `fmine.forecast-journal.v1`; assessment responses contain the familiar report under
 `payload.report`. `--trust-host-clock` acknowledges an operator-declared clock bound, fixed at initialization;
-it supplies no independent timestamp proof. Source citations remain supplied evidence. This local workflow
-does not issue the FY2026 forecast set or replace the existing external timestamp verification. Clock rollback,
+it supplies no independent timestamp proof. Source citations remain supplied evidence. This journal workflow
+does not issue the FY2026 forecast set or replace its separate frozen-record acceptance policy. Clock rollback,
 corrupt or truncated bytes, and stale heads refuse. A failed write retains its bytes for inspection and never
 silently repairs or truncates history.
 

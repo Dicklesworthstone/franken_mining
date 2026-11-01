@@ -155,14 +155,40 @@ does not replace its first report. The outer
 payload's head and inventories describe the currently opened journal, including any later checkpoints; its
 retrieval metadata remains separate from the historical report. The stored digest binds the assessment result;
 this contract does not freeze report presentation across software versions. Source citations remain unverified;
-`--trust-host-clock` declares an operator's bound and provides no independent timestamp proof. External time
-proof is not verified, and envelope authority anchors/certificates remain null.
+`--trust-host-clock` declares an operator's bound and provides no independent timestamp proof. Without an
+explicit timestamp receipt, external time proof is not verified. Envelope authority anchors/certificates remain null.
 An optional provenance bundle checks every frozen member at its exact recorded registration time, including
 unresolved members, using the existing temporal-cone verifier. Provenance timestamps alone accept strict UTC
 fractions of one through nine digits with checked nanosecond conversion. A leakage refusal retains the structured
 frontier and shortest paths. The supplied bundle digest and temporal result are supplemental: the saved
 assessment digest and journal bytes remain unchanged. This does not bind the bundle into the original
 registration, authenticate its declared times or perform generator replay.
+
+DESIGN (BD-047, BD-068): every journal receipt exposes `timestamp_commitment` with schema
+`fmine.forecast-journal-prefix.v1`, head, sequence and `imprint_sha256`. The imprint is SHA-256 of exact ASCII
+`fmine.forecast-journal-prefix.v1\nhead=<64 lowercase BLAKE3 hex>\nsequence=<unpadded decimal>\n`, including final LF;
+it is not the BLAKE3 head relabelled as SHA-256. Mutations prepare this commitment before append and release it
+only after sync. It is suitable for `openssl ts -query -digest <imprint> -sha256 -cert`.
+
+`report` additionally accepts the complete group `--timestamp-head <hex> --timestamp-receipt <path>
+--timestamp-roots <pem>`, with optional `--timestamp-intermediates <pem>`. Partial, empty, duplicate or
+mutation-side proof options are usage errors. No caller-provided sequence or imprint is accepted. Verification
+holds the journal's shared lock, locates the exact retained prefix, authenticates its SHA-256 commitment using
+the existing offline RFC 3161 verifier and replays that prefix with its original operation-version semantics.
+The selected assessment's exact cohort and every member must exist there, with no selected-member outcome
+events (including Missing) yet recorded. The authenticated upper bound must strictly precede all frozen-member
+deadlines and all current recorded Published/Restated availability times, including events beyond the saved
+assessment cut. Comparisons retain nanosecond precision through i128; equality refuses `FMINE-REF-206`.
+An absent prefix refuses `FMINE-REF-502`; invalid receipt/imprint/trust fails `FMINE-REF-505`. Explicit proof
+failure never falls back to success without proof.
+
+Proof success adds outer `timestamp_verification` and `external_time_proof: verified_caller_selected_roots`,
+including the exact prefix, cohort, member count, receipt/root fingerprints and authenticated time bounds.
+The historical nested report is unchanged by timestamp verification, and verification reads no clock and
+writes no journal bytes. Evidence is scoped to caller-selected roots and current journal declarations; host
+timestamps, publication completeness and source truth remain unverified. The attested prefix is independent
+of optional `--head`, which pins the final opened history and still detects suffix rollback.
+
 Malformed inputs, stale heads and semantic refusal cannot append. A failed write/sync poisons the writer and
 retains unconfirmed bytes for inspection. No command repairs, truncates or deletes journal history.
 

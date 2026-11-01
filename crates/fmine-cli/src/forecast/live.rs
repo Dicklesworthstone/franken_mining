@@ -1,6 +1,8 @@
 //! Live forecast admission and durable replay (BD-047). The locked I/O owner assigns record times.
 //! Caller requests supply targets and source availability, never their own registration or recording time.
 
+mod proof;
+
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::Read as _;
@@ -24,6 +26,15 @@ pub const NO_CLAIM: &str = "Local append-only forecast history under an operator
 // explicit v2 marker changes authority times to the clock upper bound without rewriting old records.
 const OPERATION_SCHEMA: &str = "fmine.forecast-ledger.v1";
 const V2_SCHEMA: &str = "fmine.forecast-operation.v2";
+
+/// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimestampProof {
+    pub prefix_head: Digest32,
+    pub receipt: PathBuf,
+    pub trust_roots: PathBuf,
+    pub intermediates: Option<PathBuf>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperationVersion {
@@ -101,6 +112,7 @@ pub enum Command {
         head: Option<Digest32>,
         assessment: Digest32,
         provenance: Option<PathBuf>,
+        timestamp: Option<TimestampProof>,
     },
 }
 
@@ -159,7 +171,7 @@ fn perform(
         } => {
             let journal =
                 Journal::create(&root.join(journal), cell_id.as_str(), *clock_skew_ns, clock)?;
-            return presentation(&journal, &replay(&journal)?, "init", None, false)
+            return presentation(&journal, &replay(&journal)?, "init", None, false, None)
                 .map_err(Into::into);
         }
         Command::Inspect { journal, head } => {
@@ -170,6 +182,7 @@ fn perform(
                 "inspect",
                 None,
                 head.is_some(),
+                None,
             )
             .map_err(Into::into);
         }
@@ -178,10 +191,15 @@ fn perform(
             head,
             assessment,
             provenance,
+            timestamp,
         } => {
             let journal = Journal::open_read(&root.join(journal), *head)?;
             let mut state = replay(&journal)?;
             let report = persisted_report(&mut state, *assessment)?;
+            let verified_timestamp = timestamp
+                .as_ref()
+                .map(|request| proof::verify(&journal, &state, &report, request, root))
+                .transpose()?;
             if let Some(path) = provenance {
                 state.temporal_validation = Some(super::provenance::verify(
                     &root.join(path),
@@ -189,8 +207,15 @@ fn perform(
                     &report,
                 )?);
             }
-            return presentation(&journal, &state, "report", Some(&report), head.is_some())
-                .map_err(Into::into);
+            return presentation(
+                &journal,
+                &state,
+                "report",
+                Some(&report),
+                head.is_some(),
+                verified_timestamp,
+            )
+            .map_err(Into::into);
         }
         _ => {}
     }
@@ -273,6 +298,7 @@ fn perform(
             PresentationContext {
                 versions,
                 report_origin,
+                timestamp: None,
             },
         )?);
         Ok(())
@@ -514,6 +540,7 @@ struct ReportOrigin {
 struct PresentationContext {
     versions: VersionCounts,
     report_origin: Option<ReportOrigin>,
+    timestamp: Option<proof::Evidence>,
 }
 
 /// Compact origin metadata preserves a report's original head and prefix without caching growing JSON.
@@ -556,6 +583,7 @@ fn version_counts(
     Ok(PresentationContext {
         versions: counts,
         report_origin,
+        timestamp: None,
     })
 }
 
@@ -565,12 +593,14 @@ fn presentation(
     operation: &str,
     assessment: Option<&Assessment>,
     pinned: bool,
+    timestamp: Option<proof::Evidence>,
 ) -> Result<(String, String), Refusal> {
     let last = journal
         .records()
         .last()
         .ok_or_else(|| absent("journal genesis missing"))?;
-    let context = version_counts(journal.records(), state, assessment.map(|a| a.digest))?;
+    let mut context = version_counts(journal.records(), state, assessment.map(|a| a.digest))?;
+    context.timestamp = timestamp;
     presentation_at(
         journal.header(),
         last,
@@ -596,7 +626,16 @@ fn presentation_at(
     let PresentationContext {
         versions,
         report_origin,
+        timestamp,
     } = context;
+    let commitment = fmine_io::forecast::prefix::PrefixCommitment::for_record(last)?;
+    let timestamp_commitment = proof::commitment_json(commitment);
+    let timestamp_verification = timestamp.map_or_else(|| "null".into(), proof::Evidence::json);
+    let external_time_proof = if timestamp.is_some() {
+        "verified_caller_selected_roots"
+    } else {
+        "not_verified"
+    };
     let outcomes: usize = state
         .forecasts
         .values()
@@ -676,7 +715,7 @@ fn presentation_at(
         String::new()
     };
     let payload = format!(
-        "{{\"schema\":\"fmine.forecast-journal.v1\",\"operation_schema\":\"{OPERATION_SCHEMA}\",\"operation\":{},\"head\":{},\"expected_head_checked\":{pinned},\"cell_id\":{},\"clock_skew_ns\":{},\"sequence\":{},\"observed_ns\":{},\"observed_at\":{},\"clock_bounds\":{{\"earliest_ns\":{earliest},\"latest_ns\":{latest}}},\"n_operations\":{},\"n_forecasts\":{},\"n_cohorts\":{},\"n_outcomes\":{outcomes},\"n_assessments\":{},{},\"clock_basis\":\"operator_declared_bounded_host_clock\",\"external_time_proof\":\"not_verified\",\"source_citations\":\"supplied_not_verified\",\"forecasts\":[{forecasts}],\"cohorts\":[{cohorts}],\"assessments\":[{checkpoints}]{retrieval},\"report\":{report}}}",
+        "{{\"schema\":\"fmine.forecast-journal.v1\",\"operation_schema\":\"{OPERATION_SCHEMA}\",\"operation\":{},\"head\":{},\"expected_head_checked\":{pinned},\"cell_id\":{},\"clock_skew_ns\":{},\"sequence\":{},\"observed_ns\":{},\"observed_at\":{},\"clock_bounds\":{{\"earliest_ns\":{earliest},\"latest_ns\":{latest}}},\"n_operations\":{},\"n_forecasts\":{},\"n_cohorts\":{},\"n_outcomes\":{outcomes},\"n_assessments\":{},{},\"clock_basis\":\"operator_declared_bounded_host_clock\",\"external_time_proof\":\"{external_time_proof}\",\"timestamp_commitment\":{timestamp_commitment},\"timestamp_verification\":{timestamp_verification},\"source_citations\":\"supplied_not_verified\",\"forecasts\":[{forecasts}],\"cohorts\":[{cohorts}],\"assessments\":[{checkpoints}]{retrieval},\"report\":{report}}}",
         js(operation),
         js(&head.to_hex()),
         js(&header.cell_id),
@@ -690,18 +729,24 @@ fn presentation_at(
         state.checkpoints.len(),
         versions.fields(),
     );
-    Ok((
-        payload,
-        markdown(
-            header,
-            head,
-            state,
-            operation,
-            assessment,
-            outcomes,
-            report_origin.map_or(versions, |origin| origin.versions),
-        ),
-    ))
+    let mut rendered_markdown = markdown(
+        header,
+        head,
+        state,
+        operation,
+        assessment,
+        outcomes,
+        report_origin.map_or(versions, |origin| origin.versions),
+    );
+    let _ = writeln!(
+        rendered_markdown,
+        "\nTimestamp commitment (SHA-256): `{}`. This imprint alone is not external time proof.",
+        commitment.imprint_sha256
+    );
+    if let Some(evidence) = timestamp {
+        rendered_markdown.push_str(&evidence.markdown());
+    }
+    Ok((payload, rendered_markdown))
 }
 
 fn markdown(
