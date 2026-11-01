@@ -270,7 +270,7 @@ fn derived<T>(
     let mut evidence = EvidenceClass::Derived.meet(required.evidence);
     let mut epistemic = required.epistemic;
     let mut state = required.state;
-    let mut confidentiality = required.confidentiality;
+    let mut confidentiality = required.confidentiality.clone();
     let mut uu_terms = required.uu_terms.clone();
     let mut anchors = required.anchors.clone();
     let mut parents = vec![required.claim_id];
@@ -278,7 +278,7 @@ fn derived<T>(
         evidence = evidence.meet(p.evidence);
         epistemic = epistemic.and(p.epistemic);
         state = state.and(p.state);
-        confidentiality = confidentiality.combine(p.confidentiality);
+        confidentiality = confidentiality.join(&p.confidentiality);
         for term in &p.uu_terms {
             if !uu_terms.iter().any(|u| u.scenario_id == term.scenario_id) {
                 uu_terms.push(term.clone());
@@ -388,7 +388,7 @@ pub fn compare_production(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fmine_claim::{ConfidentialityTier, UuTerm};
+    use fmine_claim::{Confidentiality, UuTerm};
     use fmine_core::anchor::SourceAnchor;
     use fmine_evidence::EpistemicStatus;
 
@@ -417,7 +417,7 @@ mod tests {
             EvidenceClass::ISSUER,
             EpistemicStatus::KnownKnown,
             KnowledgeState::Known,
-            ConfidentialityTier::Public,
+            Confidentiality::public(),
             vec![],
             vec![],
             vec![SourceAnchor::new(
@@ -730,7 +730,7 @@ mod tests {
         required.evidence = EvidenceClass::Assumed;
         l.feed.epistemic = EpistemicStatus::UnmodelledBudget;
         l.grade.state = KnowledgeState::Estimated;
-        l.recovery.confidentiality = ConfidentialityTier::BoardEyesOnly;
+        l.recovery.confidentiality = Confidentiality::internal();
         let term = UuTerm {
             scenario_id: "feed-disruption".into(),
             description: "synthetic risk".into(),
@@ -747,7 +747,7 @@ mod tests {
         );
         assert_eq!(c.epistemic, EpistemicStatus::UnmodelledBudget);
         assert_eq!(c.state, KnowledgeState::Estimated);
-        assert_eq!(c.confidentiality, ConfidentialityTier::BoardEyesOnly);
+        assert_eq!(c.confidentiality, Confidentiality::internal());
         assert_eq!(c.uu_terms, vec![term]);
         assert_eq!(c.anchors.len(), 4);
         assert_eq!(c.parents.len(), 4);

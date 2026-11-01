@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use fmine_claim::{AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport};
+use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::{Encoder, anchor::SourceAnchor, blake3_hash, hash::Digest32};
 use fmine_evidence::{
     EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
@@ -222,7 +222,7 @@ fn ownership_claim(a: &Accepted, synthetic: bool) -> Result<Claim<Rat>> {
         evidence,
         EpistemicStatus::KnownKnown,
         KnowledgeState::Known,
-        ConfidentialityTier::Public,
+        Confidentiality::public(),
         vec![],
         vec![],
         vec![anchor(a)?],
@@ -273,7 +273,7 @@ fn quantity_claim(
         evidence,
         epistemic,
         state,
-        ConfidentialityTier::Public,
+        Confidentiality::public(),
         uu,
         parents,
         anchors,
@@ -380,7 +380,7 @@ fn operating_claim(
             format!("{} source identity differs", c.locator),
         ));
     }
-    if c.claim.confidentiality != ConfidentialityTier::Public
+    if !c.claim.confidentiality.is_public()
         || c.claim.support != SpatialSupport::PeriodAggregate
         || c.claim.stale
         || c.claim.calibration_failed
@@ -1146,7 +1146,7 @@ fn synthetic_inputs() -> Result<(IssuerProfile, TranscriptionReport, Vec<KeyedCe
             EvidenceClass::Assumed,
             EpistemicStatus::KnownUnknown(KuKind::Parametric),
             KnowledgeState::Known,
-            ConfidentialityTier::Public,
+            Confidentiality::public(),
             vec![],
             vec![],
             cell.claim.anchors.clone(),

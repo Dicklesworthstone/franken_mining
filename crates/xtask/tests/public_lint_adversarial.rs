@@ -1,5 +1,5 @@
 //! Adversarial known answers for the bounded cited-equality surface; all source assertions are invented.
-use fmine_claim::{AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport};
+use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState};
 use fmine_public::key::{
@@ -48,7 +48,7 @@ fn source_line(subject: &str, release: &str, basis: OwnershipBasis, line: &str) 
         EvidenceClass::ISSUER,
         EpistemicStatus::KnownKnown,
         KnowledgeState::Known,
-        ConfidentialityTier::Public,
+        Confidentiality::public(),
         vec![],
         vec![],
         vec![SourceAnchor::new(&file, [0xab; 32], "QTD!A1")],

@@ -35,7 +35,7 @@ fn source(kind: QuantityKind, year: u16, point: Rat, half: Rat, annual: bool) ->
         EvidenceClass::Measured,
         EpistemicStatus::KnownKnown,
         KnowledgeState::Known,
-        ConfidentialityTier::Public,
+        Confidentiality::public(),
         Vec::new(),
         Vec::new(),
         vec![SourceAnchor::new(
@@ -322,7 +322,7 @@ fn negative_gaps_and_extrapolated_recovery_are_not_clamped() {
 fn ordering_is_deterministic_and_evidence_cannot_be_strengthened() {
     let mut rows = training(ZERO, ZERO);
     rows[0].head.evidence = EvidenceClass::ISSUER;
-    rows[1].head.confidentiality = ConfidentialityTier::JvPartner;
+    rows[1].head.confidentiality = Confidentiality::internal();
     let f = fit(&rows).unwrap();
     rows.reverse();
     assert_eq!(fit(&rows).unwrap(), f);
@@ -330,7 +330,7 @@ fn ordering_is_deterministic_and_evidence_cannot_be_strengthened() {
     assert_eq!(f.evidence, EvidenceClass::ISSUER);
     assert_eq!(p.evidence, EvidenceClass::ISSUER);
     assert_eq!(p.state, KnowledgeState::Estimated);
-    assert_eq!(p.confidentiality, ConfidentialityTier::JvPartner);
+    assert_eq!(p.confidentiality, Confidentiality::internal());
     assert_eq!(f.anchors.len(), 6);
     assert_eq!(p.anchors.len(), 10);
     assert_eq!(p.parents.len(), 5);
