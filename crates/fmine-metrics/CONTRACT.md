@@ -5,7 +5,7 @@
 - **Layer:** `E` (Enterprise & Decision)
 - **Subsystem:** `Enterprise`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), a spend-based Logarithmic Mean Divisia Index (`lmdi`, `GB-26`, BD-333.S1), and fixed-point marginal cut-off grade solver (`solve_cutoff_grade`; synthetic known answer only, the published cut-offs E182–E184 are not yet reproduced).
@@ -31,6 +31,11 @@ is `(r_ytd * sold_ytd + numerator_remaining) / (sold_ytd + sold_remaining)`. The
 separate, cited scenario; production never substitutes for sales. Requirements use exact closed intervals and
 retain the common YTD-sales variable when enclosing the numerator and rate. Negative computed requirements
 remain signed. These are necessary arithmetic conditions, not forecasts or probabilities.
+
+DESIGN (BD-342, COD-01): `capacity` bounds remaining gold production from cited maximum dry feed in million
+metric tonnes, gold head grade in g/t and recovery as a fraction. Their product is converted with the exact
+troy-ounce constant `31.1034768` g/oz and scaled only by an explicit attributable share. The product of maxima
+is an optimistic upper ceiling even when those maxima cannot occur together; it is not a feasible plan.
 
 ## 3. Authority, Epistemics & Representation
 Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when `L_corp` is omitted) and checks
@@ -109,6 +114,14 @@ arithmetic closure does not establish causation or identify an operational expla
   successes across different periods do not suffice. `ExceedsEnvelope` excludes only this named envelope, not
   physical capacity. No history is T3/`Indeterminate`. The witness checker re-evaluates source membership and
   both production and annual-cost equations independently of witness construction.
+- `capacity::{PhysicalKind, PhysicalLimit, CapacityLimits, CapacityVerdict, CapacityReport,
+  compare_production}` (BD-342, COD-01): accepts a signed remaining-production Claim and three cited physical
+  limit Claims over the same subject and remaining months. Physical inputs must be full-mine quantities;
+  attributable scaling applies to the resulting production ceiling, never to grade or recovery. The output
+  includes the exact ceiling, the signed grade required at maximum feed/recovery, and one of
+  `ExceedsStatedProductionCeiling`, `NotExcluded` or `AlreadySatisfied`. `NotExcluded` supplies neither a
+  physical feasibility witness nor a joint production-cost witness. Source anchors, parent identities,
+  evidence, epistemics, confidentiality and UU terms propagate into both derived Claims.
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-203` (`ConsolidationBridgeMissing`, `G-BULL-3`)
@@ -132,6 +145,11 @@ arithmetic closure does not establish causation or identify an operational expla
   strictly positive sales and AISC throughout each input interval (`109`). Open-ended intervals are outside the
   declared closed-rounding construction (`203`); arithmetic overflow or a failed witness is `207`. A historical
   period at or after the guidance year refuses (`108`). Failed-calibration claims refuse (`205`).
+- `capacity` additionally requires explicit full-mine dry-metric-tonne/gold/fraction units, matching subject,
+  calendar support and additivity. It refuses absent citations (`201`), placeholders (`208`), stale inputs
+  (`502`), failed calibration (`205`), unknown states (`202`), mismatched basis (`105`), support (`102`) or
+  additivity (`103`), open bounds (`203`), invalid physical domains (`109`) and exact overflow (`207`). Zero
+  maximum feed or recovery refuses because required grade is undefined; zero grade remains a valid zero ceiling.
 - `cutoff::CutoffFailure`: a malformed registry row, a non-positive net value or recovery, or a float solver that
   disagrees with the exact fixed point. A printed figure beyond its inputs' rounding is a result (`Conflict`), not a
   failure.
@@ -192,6 +210,11 @@ arithmetic closure does not establish causation or identify an operational expla
     an exact guidance boundary; corrupting it fails the independent checker.
   - Domain, zero-denominator, ownership, definition, support, missing/stale/evidence, and overflow refusals are
     checked. Historical ordering leaves the report identical and every output retains its input provenance.
+- `PO-MET-7` (BD-342, COD-01, `capacity::tests`): the independently calculated 600 koz remaining requirement
+  against 10 Mt, 2 g/t and 90% recovery exceeds the exact ceiling `3750000000/6479891` koz and requires
+  `6479891/3125000` g/t at maximum feed/recovery. Eight focused tests also cover attributable scaling, signed
+  already-delivered requirements, equality at the ceiling, rounded physical limits, zero/invalid denominators,
+  unit/support/ownership refusals, exact overflow and complete source/uncertainty propagation.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 The legacy floating API refuses non-positive physical inputs. The typed public API attempts the exact signed
@@ -212,7 +235,9 @@ kernel supplies the numerical and provenance-locator contract, not real-file eli
 
 BD-342's kernel is exact arithmetic on supplied, cited gold/koz and USD/oz quantities, with a declared positive
 cost domain. It does not acquire or transcribe guidance, register future forecasts, infer missing inputs, equate
-sales with production, estimate probabilities, supply T2 technical-report capacity bounds, or infer dependence
-inside a historical rounding box. Source selection and historical-box construction belong to the public adapter.
+sales with production, estimate probabilities, authenticate T2 technical-report capacity evidence, or infer
+dependence inside a historical rounding box. The capacity kernel checks supplied cited limits; a registered
+technical-report adapter must establish their public eligibility before a report can claim T2. Source selection
+and historical-box construction belong to the public adapter.
 Real North Mara parity and the full bead require independently read guidance and actual-source cells; synthetic
 known answers establish only the arithmetic and refusal behavior.

@@ -9,6 +9,7 @@
 //! - Fixed-point cut-off grade solver (`solve_cutoff_grade`, `BD-275`) and the published cut-offs reproduced from
 //!   the reports' printed inputs (`cutoff`, E182–E184, `BD-274`)
 
+pub mod capacity;
 pub mod cutoff;
 pub mod definitions;
 pub mod guidance;
