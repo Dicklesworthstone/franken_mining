@@ -805,10 +805,13 @@ mod tests {
         assert!(markdown.contains("T2: explicit technical-report production limits"));
         assert!(markdown.contains("Historical joint comparison"));
         assert!(markdown.contains("Composite report BLAKE3"));
-        assert!(!markdown.contains("no probability of meeting guidance or technical-report capacity claim is made"));
+        assert!(!markdown.contains(
+            "no probability of meeting guidance or technical-report capacity claim is made"
+        ));
         assert_eq!(
             envelope.to_json(),
-            crate::guidance_capacity_envelope(&base, &report, "Invented synthetic evidence.").to_json()
+            crate::guidance_capacity_envelope(&base, &report, "Invented synthetic evidence.")
+                .to_json()
         );
         std::fs::write(root.join("corpus/Bounds.pdf"), b"SYNTHETIC changed bytes").unwrap();
         assert_eq!(
@@ -827,4 +830,3 @@ mod tests {
         );
     }
 }
-

@@ -9,6 +9,7 @@ pub mod reliance;
 mod reliance_binding;
 mod track_record;
 mod track_record_data;
+mod track_record_price;
 
 use std::path::{Path, PathBuf};
 
@@ -63,6 +64,8 @@ pub enum CliCommand {
         site: Option<String>,
         /// Selects source releases, not a historical information-availability cut.
         through: Option<String>,
+        /// Explicit commodity-price subject; a different subject is a disclosed proxy, never inferred.
+        price_subject: Option<String>,
     },
     /// Compare earliest registered guidance and paired outcomes at an explicit evidence cut.
     TrackRecordAsOf {
@@ -358,6 +361,7 @@ fn verb_hint(args: &[String]) -> &'static str {
             | "--through"
             | "--site"
             | "--as-of"
+            | "--price-subject"
             | "--ledger"
             | "--cohort"
             | "--selector"
@@ -380,8 +384,14 @@ fn verb_hint(args: &[String]) -> &'static str {
                 i += 1;
                 while let Some(arg) = args.get(i) {
                     match arg.as_str() {
-                        "--format" | "--workspace" | "--issuer" | "--through" | "--site"
-                        | "--as-of" => i += 2,
+                        "--format"
+                        | "--workspace"
+                        | "--issuer"
+                        | "--through"
+                        | "--site"
+                        | "--as-of"
+                        | "--price-subject"
+                        | "--capacity-document" => i += 2,
                         flag if flag.starts_with("--") => i += 1,
                         "why" => return "claim why",
                         "trace" => return "claim trace",
@@ -415,6 +425,7 @@ pub fn parse_args(
     let mut synthetic = false;
     let mut through = None;
     let mut site = None;
+    let mut price_subject = None;
     let mut as_of = None;
     let mut ledger = None;
     let mut cohort = None;
@@ -463,6 +474,17 @@ pub fn parse_args(
             "--site" => {
                 i += 1;
                 site = Some(args.get(i).ok_or("missing value for --site")?.clone());
+            }
+            "--price-subject" => {
+                i += 1;
+                let subject = args.get(i).ok_or("missing value for --price-subject")?;
+                if subject.trim().is_empty() || subject.chars().any(char::is_control) {
+                    return Err(
+                        "--price-subject requires a nonempty subject without control characters"
+                            .into(),
+                    );
+                }
+                price_subject = Some(subject.clone());
             }
             "--as-of" => {
                 i += 1;
@@ -540,6 +562,9 @@ pub fn parse_args(
     }
     if !matches!(positional[0].as_str(), "guidance" | "track-record") && site.is_some() {
         return Err("--site requires 'guidance completion' or 'track-record'".to_string());
+    }
+    if positional[0] != "track-record" && price_subject.is_some() {
+        return Err("--price-subject requires 'track-record'".to_string());
     }
     if !matches!(
         positional[0].as_str(),
@@ -658,10 +683,18 @@ pub fn parse_args(
             if through.is_some() && as_of.is_some() {
                 return Err("track-record selects either --through or --as-of".to_string());
             }
+            if as_of.is_some() && price_subject.is_some() {
+                return Err("track-record --as-of cannot be combined with --price-subject; price sensitivity is available in retrospective mode".to_string());
+            }
             if synthetic {
-                if issuer.is_some() || site.is_some() || through.is_some() || as_of.is_some() {
+                if issuer.is_some()
+                    || site.is_some()
+                    || through.is_some()
+                    || as_of.is_some()
+                    || price_subject.is_some()
+                {
                     return Err(
-                        "track-record --synthetic takes no issuer, site, through or as-of selection"
+                        "track-record --synthetic takes no issuer, site, through, as-of or price-subject selection"
                             .to_string(),
                     );
                 }
@@ -669,6 +702,7 @@ pub fn parse_args(
                     issuer: None,
                     site: None,
                     through: None,
+                    price_subject: None,
                 }
             } else {
                 let issuer = issuer.ok_or("track-record requires --issuer or --synthetic")?;
@@ -692,6 +726,7 @@ pub fn parse_args(
                         issuer: Some(issuer),
                         site,
                         through,
+                        price_subject,
                     }
                 }
             }
@@ -1132,10 +1167,12 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             issuer,
             site,
             through,
+            price_subject,
         } => track_record::execute(
             issuer.as_deref(),
             site.as_deref(),
             through.as_deref(),
+            price_subject.as_deref(),
             workspace_root,
         ),
         CliCommand::TrackRecordAsOf {
@@ -1360,7 +1397,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "assure challenges --synthetic",
                 "guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD [--capacity-document <registered file>]",
                 "guidance completion --synthetic",
-                "track-record --issuer <issuer> [--site <subject>] [--through YYYYQn]",
+                "track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]",
                 "track-record --issuer <issuer> [--site <site>] --as-of YYYY-MM-DD",
                 "track-record --synthetic [--json]",
                 "recovery gap --issuer <issuer> [--through YYYYQn]",
@@ -1380,8 +1417,10 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "{\"mode\":\"retrospective_descriptive\",\"schema\":\"fmine.guidance.track-record.v1\",",
                 "\"input\":\"Hash-verified registered workbooks and agreed document transcriptions\",",
                 "\"outcome_selector\":\"Original annual releases and comparative-only populations remain separate\",",
+                "\"price_sensitivity\":\"Paired AISC sensitivity on complete declared quarterly evidence, exact proportionality and current-period compatibility; --price-subject explicitly selects a commodity-price proxy\",",
                 "\"as_of\":{\"mode\":\"descriptive_source_comparison\",\"schema\":\"fmine.guidance.track-record.as-of.v1\",",
-                "\"cut\":\"Explicit --as-of YYYY-MM-DD; no inferred wall clock; exclusive with --through\",",
+                "\"cut\":\"Explicit --as-of YYYY-MM-DD; no inferred wall clock; exclusive with --through and --price-subject\",",
+                "\"price_sensitivity\":\"Unconditional scores only; --price-subject is rejected\",",
                 "\"population\":\"Earliest registered agreed guidance per subject, metric, fiscal year and ownership basis; revisions remain visible\",",
                 "\"outcomes\":\"First-published and latest registered assessments retain missing members\"},",
                 "\"scope\":\"Registered transcription population; no completeness, historical forecast registration, ranking or calibration verdict\"}"
@@ -1921,6 +1960,26 @@ mod tests {
                 as_of: "2026-11-01".into(),
             }
         );
+        let (mixed, _) = invoke(
+            &args(&[
+                "--price-subject",
+                "Barrick",
+                "track-record",
+                "--issuer",
+                "barrick",
+                "--as-of",
+                "2026-11-01",
+            ]),
+            &workspace_root(),
+        );
+        assert_eq!((mixed.verb.as_str(), mixed.exit_code), ("track-record", 2));
+        assert_eq!(mixed.status, "usage_error");
+        assert!(mixed.refusal.is_none());
+        assert!(
+            mixed
+                .payload_json
+                .contains("--as-of cannot be combined with --price-subject")
+        );
         for bad in [
             vec!["track-record"],
             vec!["track-record", "--as-of", "2026-11-01"],
@@ -1965,6 +2024,7 @@ mod tests {
             ],
             vec!["track-record", "--synthetic", "--issuer", "barrick"],
             vec!["track-record", "--synthetic", "--as-of", "2026-11-01"],
+            vec!["track-record", "--synthetic", "--price-subject", "Barrick"],
             vec!["track-record", "--synthetic", "--site", "north-mara"],
             vec!["track-record", "--synthetic", "extra"],
         ] {
@@ -1995,6 +2055,11 @@ mod tests {
         let (docs, _) = invoke(&args(&["robot-docs"]), &workspace_root());
         assert!(docs.payload_json.contains("track-record --issuer"));
         assert!(docs.payload_json.contains("track-record --synthetic"));
+        assert!(docs.payload_json.contains("[--price-subject <subject>]"));
+        assert!(
+            docs.payload_json
+                .contains("Unconditional scores only; --price-subject is rejected")
+        );
     }
 
     #[test]

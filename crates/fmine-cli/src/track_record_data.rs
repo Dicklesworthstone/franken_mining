@@ -31,7 +31,7 @@ fn js(text: &str) -> String {
     format!("\"{}\"", crate::escape_json(text))
 }
 
-pub const NO_CLAIM: &str = "Retrospective description of cited issuer guidance and reported outcomes. No forecast registration, calibration verdict, ranking, inferred probability or price adjustment.";
+pub const NO_CLAIM: &str = "Retrospective description of cited issuer guidance and reported outcomes. Any price sensitivity remains paired with its unconditional score. No forecast registration, calibration verdict, ranking, inferred probability or causal attribution.";
 type Result<T> = std::result::Result<T, Refusal>;
 
 #[derive(Debug, Clone)]
@@ -65,6 +65,8 @@ pub struct TrackRecordRow {
     /// Later appearances remain cited separately and never replace the selected outcome.
     pub later_outcomes: Vec<KeyedCell>,
     pub score: Option<GuidanceScore>,
+    /// Paired AISC sensitivity or a cited unsplit reason; production has no price-sensitivity model.
+    pub price_sensitivity: Option<crate::track_record_price::PriceAssessment>,
 }
 
 #[derive(Debug, Clone)]
@@ -117,7 +119,7 @@ fn decimal(d: Decimal) -> Result<Rat> {
     Rat::new(d.mantissa, den).map_err(rule_error)
 }
 
-fn site_key(site: &str) -> String {
+pub(super) fn site_key(site: &str) -> String {
     site
         // The registered Mine Stats header prints Zaldívar; its transcription key is ASCII "zaldivar".
         .replace(['í', 'Í'], "i")
@@ -149,7 +151,7 @@ fn basis(text: &str) -> Result<(bool, Rat)> {
     ))
 }
 
-fn cell_basis(basis: OwnershipBasis) -> Result<(bool, Rat)> {
+pub(super) fn cell_basis(basis: OwnershipBasis) -> Result<(bool, Rat)> {
     match basis {
         OwnershipBasis::Consolidated100 => Ok((false, Rat::from_integer(1))),
         OwnershipBasis::Attributable { num, den, .. } if num > 0 && den > 0 && num <= den => Ok((
@@ -181,7 +183,7 @@ fn metric(quantity: &str) -> Option<(&str, &str)> {
     })
 }
 
-fn specification(a: &Accepted, name: &str) -> Result<((bool, Rat), String)> {
+pub(super) fn specification(a: &Accepted, name: &str) -> Result<((bool, Rat), String)> {
     let (unit, suffix) = match name {
         "production_koz" => ("koz", ""),
         "production_kt" => ("kt", ""),
@@ -231,7 +233,7 @@ fn specification(a: &Accepted, name: &str) -> Result<((bool, Rat), String)> {
     Ok((ownership, format!("summary:{line}")))
 }
 
-fn limits(a: &Accepted) -> Result<Guidance> {
+pub(super) fn limits(a: &Accepted) -> Result<Guidance> {
     if parse_token(&a.token).map_err(rule_error)? != a.value {
         return Err(failure(
             RefusalCode::SourceCellUnusable208,
@@ -547,6 +549,16 @@ fn assess(
     cells: &[KeyedCell],
     site: Option<&str>,
 ) -> Result<TrackRecordReport> {
+    assess_with_price_subject(profile, transcripts, cells, site, None)
+}
+
+fn assess_with_price_subject(
+    profile: &IssuerProfile,
+    transcripts: &TranscriptionReport,
+    cells: &[KeyedCell],
+    site: Option<&str>,
+    price_subject: Option<&str>,
+) -> Result<TrackRecordReport> {
     if !transcripts.agreement.is_consistent() || !transcripts.agreement.single_reader.is_empty() {
         return Err(failure(
             RefusalCode::NotObservable202,
@@ -687,6 +699,7 @@ fn assess(
             outcome,
             later_outcomes,
             score,
+            price_sensitivity: None,
         });
     }
     if rows.is_empty() {
@@ -730,6 +743,16 @@ fn assess(
             .or_default();
         row.vintage = *ordinal;
         *ordinal += 1;
+        if !row.metric.starts_with("production_") {
+            row.price_sensitivity = Some(crate::track_record_price::assess(
+                profile,
+                transcripts,
+                cells,
+                row,
+                profile.through.as_deref(),
+                price_subject,
+            ));
+        }
     }
     type Group = (String, String, String, String, usize, bool);
     let mut groups = BTreeMap::<Group, Vec<ScoringMember>>::new();
@@ -809,13 +832,24 @@ pub fn run(
     site: Option<&str>,
     through: Option<&str>,
 ) -> Result<TrackRecordReport> {
+    run_with_price_subject(root, issuer, site, through, None)
+}
+
+pub fn run_with_price_subject(
+    root: &Path,
+    issuer: &str,
+    site: Option<&str>,
+    through: Option<&str>,
+    price_subject: Option<&str>,
+) -> Result<TrackRecordReport> {
     let mut profile = load_issuer_profile(root, issuer)?;
     if let Some(bound) = through {
         profile = profile.through(bound)?;
     }
     let claims = fmine_public::key::mine_stats::load_claims(&profile, root)?;
     let transcripts=fmine_public::transcribe::load_transcription_report(&profile,root)?.ok_or_else(||failure(RefusalCode::NoClaimInDomain201,format!("registries/transcriptions/{issuer}.toml is absent; register guidance documents and agreed readings")))?;
-    let mut report = assess(&profile, &transcripts, &claims.claims, site)?;
+    let mut report =
+        assess_with_price_subject(&profile, &transcripts, &claims.claims, site, price_subject)?;
     report.source_refusals = claims.refusals;
     report.digest = blake3_hash(report.body().as_bytes());
     Ok(report)
@@ -854,7 +888,8 @@ impl TrackRecordReport {
             let score = format!("{{\"rule\":\"guidance.range_score\",\"rules_version\":\"guidance-track-record/1\",\"in\":[{}],\"value\":{}}}",
                 inputs.iter().map(|s| js(s)).collect::<Vec<_>>().join(","),
                 r.score.as_ref().map_or_else(|| "null".into(), GuidanceScore::to_json));
-            format!("{{\"id\":{},\"site\":{},\"metric\":{},\"year\":{},\"guidance_vintage_ordinal\":{},\"published_at\":{},\"published_at_basis\":{},\"guidance\":{{\"at\":{},\"sha256\":{},\"token\":{},\"unit\":{},\"basis\":{},\"period\":{},\"reader_count\":{}}},\"outcome\":{outcome},\"later_outcomes\":[{}],\"score\":{score}}}",
+            let price = r.price_sensitivity.as_ref().map_or_else(|| "null".into(), crate::track_record_price::PriceAssessment::to_json);
+            format!("{{\"id\":{},\"site\":{},\"metric\":{},\"year\":{},\"guidance_vintage_ordinal\":{},\"published_at\":{},\"published_at_basis\":{},\"guidance\":{{\"at\":{},\"sha256\":{},\"token\":{},\"unit\":{},\"basis\":{},\"period\":{},\"reader_count\":{}}},\"outcome\":{outcome},\"later_outcomes\":[{}],\"score\":{score},\"price_sensitivity\":{price}}}",
                 js(&r.id), js(&r.site), js(&r.metric), r.year, r.vintage, js(&r.published_at), js(&r.publication_basis),
                 js(&r.guidance.locator.to_string()), js(&r.guidance.doc_sha256), js(&r.guidance.token), js(&r.guidance.unit),
                 js(&r.guidance.basis), js(&r.guidance.period), r.guidance.readers.len(),

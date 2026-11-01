@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_data", "lint", "forecast", "reliance", "reliance_binding"]`
+- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_data", "track_record_price", "lint", "forecast", "reliance", "reliance_binding"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -288,7 +288,7 @@ None: every failure is a usage error or a typed refusal.
   `fmine-metrics`.
 
 ## 10. Non-Goals & Scope Boundary
-- DESIGN (BD-341): `track-record --issuer <issuer> [--site <subject>] [--through YYYYQn]` is a read-only
+- DESIGN (BD-341): `track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]` is a read-only
   adapter over agreed PDF transcriptions, canonical annual Mine Stats Claims and `fmine-calib::guidance_scores`.
   `--synthetic` uses invented inputs through the same adapter. JSON is the default (`--json` is an explicit
   alias); Markdown renders the same selected values, unresolved reasons, later appearances and source hashes.
@@ -307,8 +307,20 @@ None: every failure is a usage error or a typed refusal.
   exact scores, original/comparative selection, ownership separation, source tampering, missing bytes,
   transcription disagreement, deterministic replay and actual JSON/Markdown executable output.
   The adapter supports gold/copper production and explicit issuer-reported per-sold-unit AISC, TCC and C1;
-  cost-definition changes, price conditioning, automatic transcription, year-effect estimation and full BD-341
-  data/coverage gates remain outside this slice. Actual calculations live in the calibration kernel.
+  automatic cost-definition reconciliation, transcription, year-effect estimation and full BD-341 data/coverage
+  gates remain outside this slice. Actual calculations live in the calibration kernel.
+- DESIGN (BD-341.S5): `track_record_price` binds agreed, hash-verified price readings and canonical original
+  Mine Stats royalty Claims to the exact paired sensitivity kernel. Every expected quarter from 2024Q1 through
+  2026Q2 is required, truncated only by an explicit `--through` bound; missing releases or unusable inputs leave
+  the row unsplit with its reason and evidence. Price assumptions must come from the same guidance document;
+  realized-price documents must be dated at or after the end of their stated period.
+  An explicitly transcribed `all_sites` assumption can serve several guidance rows from that same document
+  without duplicating its physical locator; overlapping site/shared assumptions are retained as ambiguous.
+  Site prices are the default. `--price-subject` explicitly chooses a differently named price series and the
+  result identifies that proxy. Commodity-price conventions are retained separately from site ownership.
+  AISC sensitivity also requires the scored period's royalty/price interval to meet the historical coefficient.
+  JSON and Markdown retain the unconditional score beside every conditional result, exact input-rounding
+  bounds and source citations. TCC and C1 remain unsplit. No controllability or causal claim is created.
 - Computes nothing itself: all calculation is delegated to the `V`/`E`/`K`/`S0` crates.
 - Never writes to any external system.
 - Challenge packets do not cover hidden or not-published instances. Human review and external-release
@@ -322,5 +334,7 @@ None: every failure is a usage error or a typed refusal.
   observations into first-published outcomes. Input-rounding bounds are not confidence or prediction intervals.
 - Track-record coverage is the registered two-reader transcription population, not a complete historical
   issuer census. Guidance has no inferred probability level. The binomial reference interval is conditional
-  on independent trials; source-rounding and missing-outcome bounds have separate meanings. Price-conditional
-  cost attribution, cluster inference, forecast registration and the full guidance data gate remain open.
+  on independent trials; source-rounding and missing-outcome bounds have separate meanings. Evidence-cut
+  reports remain unconditional on price and reject `--price-subject`; the paired sensitivity above belongs
+  to retrospective reports. Causal cost attribution, cluster inference, forecast registration and the full
+  guidance data gate remain open.

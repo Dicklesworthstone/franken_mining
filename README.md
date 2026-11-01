@@ -167,6 +167,7 @@ Relative draft paths are resolved against `--workspace`, which defaults to the c
 ```bash
 cargo run -p fmine-cli -- track-record --issuer barrick --through 2026Q2
 cargo run -p fmine-cli -- track-record --issuer barrick --site north-mara --format markdown
+cargo run -p fmine-cli -- track-record --issuer barrick --site north-mara --price-subject barrick --format markdown
 cargo run -p fmine-cli -- track-record --synthetic
 ```
 
@@ -181,8 +182,8 @@ Every guidance document remains a separate vintage. Missing annual cells, withhe
 incompatible bases remain unresolved members. The report shows exact normalized deviations for ranges,
 rounding-boundary ambiguity, hit and miss counts, and whole-cohort completion bounds. Its separate binomial
 reference interval assumes independent, identically distributed hits; it does not estimate common year effects,
-effective sample size, a bias confidence interval or forecasting skill. No site ranking or price adjustment is
-made, and guidance ranges receive no invented probability level.
+effective sample size, a bias confidence interval or forecasting skill. Guidance ranges receive no invented
+probability level, and the report does not rank sites.
 
 The public command requires `registries/transcriptions/<issuer>.toml` with agreed readings from registered
 documents. These transcriptions and source documents remain outside git. Quantity keys follow
@@ -192,6 +193,28 @@ Production basis is `100%` or `attributable:n/d`. Cost basis also declares its d
 `attributable:4/5;aisc=issuer-reported-per-sold-oz`; the analogous per-sold-lb, `tcc` and `c1` definitions are
 explicit. Unknown guidance quantities, missing agreed readings and changed source bytes refuse. The synthetic
 command is an invented known-answer demonstration through the same binding and scoring code.
+
+For AISC, the report can show a cited price sensitivity beside the unconditional score:
+`p = royalty * (1 - assumed_price / realized_price)`. It requires every declared original quarter from
+2024Q1 through 2026Q2 (or the earlier explicit `--through` bound) to admit a common royalty/price coefficient.
+The scored year's ratio must also be compatible. Missing quarters, incompatible evidence and a missing stated
+price assumption leave the result unsplit with an explicit reason. TCC and C1 are never adjusted.
+
+Two-reader price entries use quantity keys
+`aisc_price_assumption_<site>_<yyyyfy>_<unit>` and
+`realized_price_<subject>_<yyyyfy|yyyyqn>_<unit>`, with underscore-separated site/subject names,
+lowercase period in the key, `usd_per_oz` or `usd_per_lb`, and the matching uppercase `YYYYFY` or `YYYYQn`
+in the entry's `period` field. The price assumption must cite the same document as its guidance row.
+An explicitly shared assumption uses `aisc_price_assumption_all_sites_<yyyyfy>_<unit>` and retains its
+single physical citation. Exactly one site-specific or shared assumption may apply; overlapping entries
+leave the sensitivity unsplit with both citations.
+Realized-price documents must be published at or after the claimed quarter or year ends.
+Prices retain their stated commodity-price basis; royalties retain their canonical site ownership basis.
+Site prices are used by default. `--price-subject barrick` explicitly selects that company's price series as
+a proxy and labels it in the result; no company fallback is inferred. JSON and Markdown include the paired
+scores, exact rounding bounds, source cells/pages and hashes. This is a descriptive sensitivity with no causal
+or controllability conclusion.
+Price sensitivity belongs to the retrospective report; `--price-subject` cannot be combined with `--as-of`.
 
 ### Assess a frozen forecast cohort
 

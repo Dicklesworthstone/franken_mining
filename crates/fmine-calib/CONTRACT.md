@@ -68,6 +68,9 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   rounding intervals admit one common proportionality coefficient. It returns the exact feasible interval
   or two conflicting quarters. Only supported gold/copper AISC ranges with a stated price assumption and
   a passing gate receive the signed adjustment `royalty * (1 - assumed_price / realized_price)`.
+  The scored period's exact royalty/price ratio must also intersect that coefficient interval; a contradictory
+  period remains unsplit with its ratio and historical gate visible. Cost ownership is checked within the
+  outcome/royalty family, and commodity-price basis within the price family; the two are never relabelled equal.
   Exact rounding enclosures, source identities, unit/basis checks and an explicit company-price proxy are
   retained. The immutable conditional report always includes the unconditional score and binds both to its
   inputs. It makes no causal claim and does not establish that the supplied history is complete.
@@ -167,7 +170,8 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 
 - FACT (BD-341.S5, `guidance_scores::price::tests`): independent exact examples exercise a price contribution
   of twenty-five, unchanged prices, supported and refuted proportionality, open interval endpoints, missing
-  assumptions, unsupported metrics, explicit proxies, altered paired reports, scaling and arithmetic overflow.
+  assumptions, unsupported metrics, explicit proxies with distinct commodity-price bases, incompatible current
+  periods, altered paired reports, scaling and arithmetic overflow.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Miscalibrated spatial fronts trip `BettingEProcess` at `E_t >= 20.0` (`alpha = 0.05`) and downgrade downstream claims.

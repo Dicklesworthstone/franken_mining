@@ -14,15 +14,21 @@ pub(crate) fn execute(
     issuer: Option<&str>,
     site: Option<&str>,
     through: Option<&str>,
+    price_subject: Option<&str>,
     root: &Path,
 ) -> Envelope {
     let report = match issuer {
-        Some(issuer) => data::run(root, issuer, site, through),
-        None if site.is_none() && through.is_none() => data::synthetic(),
+        Some(issuer) => match price_subject {
+            Some(subject) => {
+                data::run_with_price_subject(root, issuer, site, through, Some(subject))
+            }
+            None => data::run(root, issuer, site, through),
+        },
+        None if site.is_none() && through.is_none() && price_subject.is_none() => data::synthetic(),
         None => {
             return Envelope::usage_error(
                 "track-record",
-                "site and through selections require an issuer",
+                "site, through and price-subject selections require an issuer",
             );
         }
     };
@@ -201,6 +207,26 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
             );
         }
     }
+    if report
+        .rows
+        .iter()
+        .any(|row| row.price_sensitivity.is_some())
+    {
+        out.push_str("\n## AISC price sensitivity\n\nThe report retains the reported outcome and unconditional score above. A conditional sensitivity is shown only when every declared quarter has usable source evidence and the exact proportionality checks pass.\n\n");
+        for row in &report.rows {
+            if let Some(price) = &row.price_sensitivity {
+                let _ = writeln!(
+                    out,
+                    "### {} / {} / {} / guidance vintage {}\n\n{}",
+                    text(&row.site),
+                    text(&row.metric),
+                    row.year,
+                    row.vintage,
+                    price.to_markdown()
+                );
+            }
+        }
+    }
     if report.rows.iter().any(
         |r| matches!(&r.outcome, OutcomeBinding::Unresolved { sources, .. } if !sources.is_empty()),
     ) {
@@ -332,6 +358,8 @@ mod tests {
             "north-mara",
             "--through",
             "2026Q2",
+            "--price-subject",
+            "barrick",
         ]);
         let (command, _, _) = parse_args(&query, &root()).expect("public selectors");
         assert_eq!(
@@ -340,6 +368,7 @@ mod tests {
                 issuer: Some("barrick".into()),
                 site: Some("north-mara".into()),
                 through: Some("2026Q2".into()),
+                price_subject: Some("barrick".into()),
             }
         );
         for query in [
@@ -350,6 +379,15 @@ mod tests {
             vec!["track-record", "--issuer", "barrick", "--synthetic"],
             vec!["track-record", "--synthetic", "--site", "north-mara"],
             vec!["track-record", "--synthetic", "--through", "2026Q2"],
+            vec!["track-record", "--synthetic", "--price-subject", "barrick"],
+            vec!["track-record", "--issuer", "barrick", "--price-subject"],
+            vec![
+                "track-record",
+                "--issuer",
+                "barrick",
+                "--price-subject",
+                " ",
+            ],
             vec!["track-record", "--issuer", "barrick", "--site", " "],
             vec!["track-record", "--issuer", "barrick", "--through", "2026Q5"],
             vec!["track-record", "--synthetic", "--as-of", "2026-10-31"],
@@ -400,5 +438,13 @@ mod tests {
         );
         assert!(docs.payload_json.contains("track-record --synthetic"));
         assert!(docs.payload_json.contains("retrospective_descriptive"));
+        assert!(docs.payload_json.contains("[--price-subject <subject>]"));
+        assert!(docs.payload_json.contains("current-period compatibility"));
+        assert_eq!(
+            invoke(&args(&["doctor", "--price-subject", "barrick"]), &root())
+                .0
+                .exit_code,
+            2
+        );
     }
 }
