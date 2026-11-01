@@ -3,6 +3,8 @@
 //! BD-341: source-to-score CLI checks on invented workbooks and two synthetic reader records.
 //! The PDF stubs are hash-bound bytes, never evidence that a real document or human reading was checked.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;

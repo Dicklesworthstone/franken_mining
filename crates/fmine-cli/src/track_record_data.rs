@@ -22,7 +22,7 @@ use fmine_public::key::{
     KeyedCell, OwnershipBasis, PeriodKind, PublicValue, Scope, StatusKind, SubjectStatus,
     canonical_value_tag,
 };
-use fmine_public::sources::{IssuerProfile, SourceKind, load_issuer_profile};
+use fmine_public::sources::{IssuerProfile, RegisteredSource, SourceKind, load_issuer_profile};
 use fmine_public::transcribe::{CheckedDocument, TranscriptionReport};
 use fmine_registry::sources::is_date;
 use fmine_registry::transcriptions::{Accepted, Agreement, Decimal, Locator, Token, parse_token};
@@ -118,7 +118,10 @@ fn decimal(d: Decimal) -> Result<Rat> {
 }
 
 fn site_key(site: &str) -> String {
-    site.to_ascii_lowercase()
+    site
+        // The registered Mine Stats header prints Zaldívar; its transcription key is ASCII "zaldivar".
+        .replace(['í', 'Í'], "i")
+        .to_ascii_lowercase()
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
@@ -550,6 +553,38 @@ fn assess(
             "complete two-reader agreement before selecting the guidance population",
         ));
     }
+    // The subject registry lists AISC table headers, which need not include copper sites. A canonical
+    // site Claim from a registered Mine Stats workbook also establishes a subject; a transcription alone
+    // cannot introduce one. Keep regions and company totals out of this site population.
+    let mut registered_sites: BTreeSet<&str> =
+        profile.subjects.iter().map(String::as_str).collect();
+    for cell in cells {
+        if registered_sites.contains(cell.key.subject.as_str())
+            || cell.key.issuer != profile.issuer
+            || !matches!(cell.key.scope, Scope::Site)
+            || cell.claim.check_id().is_err()
+            || cell.claim.value_tag()
+                != fmine_public::key::canonical_value_tag(&cell.key, &cell.claim.value)
+        {
+            continue;
+        }
+        if profile.sources.iter().any(|source| {
+            source.kind == SourceKind::MineStats
+                && source.quarter == cell.key.reporting_vintage.release
+                && source.sha256_hex == cell.key.reporting_vintage.file_sha256
+                && cell.locator.split_once(':').is_some_and(|(file, _)| {
+                    file == source.file_name
+                        || Path::new(file) == Path::new(&profile.corpus_dir).join(&source.file_name)
+                })
+                && cell
+                    .claim
+                    .anchors
+                    .iter()
+                    .any(|anchor| Digest32(anchor.artifact_sha256).to_hex() == source.sha256_hex)
+        }) {
+            registered_sites.insert(&cell.key.subject);
+        }
+    }
     let mut rows = Vec::new();
     for a in transcripts
         .agreement
@@ -570,10 +605,10 @@ fn assess(
         if site.is_some_and(|s| site_key(s) != key) {
             continue;
         }
-        let subjects: Vec<_> = profile
-            .subjects
+        let subjects: Vec<_> = registered_sites
             .iter()
-            .filter(|s| site_key(s) == key && !profile.regions.contains(s))
+            .copied()
+            .filter(|s| site_key(s) == key && !profile.regions.iter().any(|region| region == s))
             .collect();
         let [subject] = subjects.as_slice() else {
             return Err(failure(
@@ -641,7 +676,7 @@ fn assess(
         }
         rows.push(TrackRecordRow {
             id: blake3_hash(&enc.finish()).to_hex(),
-            site: (*subject).clone(),
+            site: (*subject).to_string(),
             metric: name.into(),
             year: period.year,
             guidance: a.clone(),
@@ -912,8 +947,8 @@ fn synthetic_evidence() -> Result<(IssuerProfile, TranscriptionReport, Vec<Keyed
         },
         tie: None,
     };
-    let outcome_bytes = b"invented FY2030 production 125 koz attributable 4/5";
-    let digest = sha256(outcome_bytes);
+    let source_bytes = b"invented FY2030 production 125 koz attributable 4/5";
+    let digest = sha256(source_bytes);
     let key = PublicKey {
         issuer: "synthetic".into(),
         subject: "Example Mine".into(),
@@ -972,17 +1007,15 @@ fn synthetic_evidence() -> Result<(IssuerProfile, TranscriptionReport, Vec<Keyed
     // The shared in-memory synthetic profile intentionally has no registered sources. This fixture
     // declares its own original release so withholding that outcome cannot select a later comparative.
     profile.corpus_dir = "synthetic/2030Q4".into();
-    profile
-        .sources
-        .push(fmine_public::sources::RegisteredSource {
-            file_name: "production.txt".into(),
-            kind: SourceKind::MineStats,
-            quarter: "2030Q4".into(),
-            url: "https://example.invalid/2030Q4/production.txt".into(),
-            url_basis: "DESIGN: invented in-memory source".into(),
-            bytes: outcome_bytes.len() as u64,
-            sha256_hex: digest.to_hex(),
-        });
+    profile.sources.push(RegisteredSource {
+        file_name: "production.txt".into(),
+        kind: SourceKind::MineStats,
+        quarter: "2030Q4".into(),
+        url: "https://example.invalid/2030Q4/production.txt".into(),
+        url_basis: "DESIGN: invented in-memory source".into(),
+        bytes: source_bytes.len() as u64,
+        sha256_hex: digest.to_hex(),
+    });
     Ok((profile, transcripts, vec![cell]))
 }
 
@@ -1091,6 +1124,104 @@ mod tests {
         );
         assert!(r.to_json().contains("\"lane\":\"synthetic\""));
         assert_eq!(r.to_json(), synthetic().expect("rerun").to_json());
+    }
+
+    fn refresh_source_claim(cell: &mut KeyedCell) {
+        let old = &cell.claim;
+        cell.claim = Claim::new(
+            &cell.key.line.label,
+            old.value.clone(),
+            &fmine_public::key::canonical_value_tag(&cell.key, &old.value),
+            old.representation.clone(),
+            old.support,
+            old.additivity,
+            old.evidence,
+            old.epistemic,
+            old.state,
+            old.confidentiality.clone(),
+            old.uu_terms.clone(),
+            old.parents.clone(),
+            old.anchors.clone(),
+        );
+    }
+
+    #[test]
+    fn accented_registered_site_binds_ascii_guidance_and_site_selections() {
+        let (mut profile, mut transcripts, mut cells) = synthetic_evidence().expect("fixture");
+        profile.subjects[0] = "Zaldívar".into();
+        for guidance in &mut transcripts.agreement.accepted {
+            guidance.quantity = guidance.quantity.replace("example_mine", "zaldivar");
+            guidance.locator.row = "Zaldívar".into();
+        }
+        cells[0].key.subject = "Zaldívar".into();
+        refresh_source_claim(&mut cells[0]);
+        let report =
+            assess(&profile, &transcripts, &cells, None).expect("registered accented site");
+        assert_eq!(report.rows.len(), 2);
+        assert_eq!(production(&report).site, "Zaldívar");
+        assert_eq!(
+            production(&report).score.expect("source score").z,
+            Some(Rat::new(3, 2).expect("z"))
+        );
+        for site in ["zaldivar", "Zaldívar", "ZALDÍVAR"] {
+            assert_eq!(
+                report.to_json(),
+                assess(&profile, &transcripts, &cells, Some(site))
+                    .expect("equivalent site selection")
+                    .to_json()
+            );
+        }
+    }
+
+    #[test]
+    fn registered_copper_claim_declares_site_outside_aisc_headers() {
+        let (mut profile, mut transcripts, mut cells) = synthetic_evidence().expect("fixture");
+        profile.subjects.clear();
+        transcripts
+            .agreement
+            .accepted
+            .retain(|a| a.quantity.ends_with("production_koz"));
+        let guidance = &mut transcripts.agreement.accepted[0];
+        guidance.quantity = "guidance_example_copper_production_kt".into();
+        guidance.unit = "kt".into();
+        guidance.locator.row = "Example Copper".into();
+        cells[0].key.subject = "Example Copper".into();
+        cells[0].key.line.label = "summary:cu_prod_attr_kt".into();
+        cells[0].key.unit = "kt".into();
+        refresh_source_claim(&mut cells[0]);
+        let report = assess(&profile, &transcripts, &cells, Some("example-copper"))
+            .expect("site declared by a registered canonical copper source");
+        assert_eq!(report.rows.len(), 1);
+        assert_eq!(production(&report).site, "Example Copper");
+        assert_eq!(
+            production(&report).score.expect("copper score").z,
+            Some(Rat::new(3, 2).expect("z"))
+        );
+
+        let mut unregistered = profile.clone();
+        unregistered.sources.clear();
+        assert_eq!(
+            assess(&unregistered, &transcripts, &cells, None)
+                .expect_err("an unregistered source cannot introduce a site")
+                .code,
+            RefusalCode::NoClaimInDomain201.as_str()
+        );
+        let mut altered = cells.clone();
+        altered[0].claim.value = PublicValue::Missing;
+        assert_eq!(
+            assess(&profile, &transcripts, &altered, None)
+                .expect_err("a changed canonical source cannot introduce a site")
+                .code,
+            RefusalCode::NoClaimInDomain201.as_str()
+        );
+        cells[0].key.scope = Scope::Company;
+        refresh_source_claim(&mut cells[0]);
+        assert_eq!(
+            assess(&profile, &transcripts, &cells, None)
+                .expect_err("a company total cannot introduce a site")
+                .code,
+            RefusalCode::NoClaimInDomain201.as_str()
+        );
     }
 
     #[test]

@@ -20,6 +20,9 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD` or `--synthetic`:
     cited remaining-production and AISC requirements plus joint historical-window comparisons under an explicit
     historical-sales scenario, in JSON or readable `--format markdown` (BD-342);
+  - `track-record --issuer <issuer> [--site <site>] [--through YYYYQn | --as-of YYYY-MM-DD]` or `--synthetic`: cited issuer
+    guidance against first-published annual outcomes, with separate comparative assessments, retained missing
+    members, exact descriptive scores and JSON or readable Markdown output (BD-341);
   - `recovery gap --issuer <issuer> [--through YYYYQn]` or `--synthetic`: two cited historical
     grade-normalised recovery comparisons for Lumwana, with exact points and input-rounding enclosures
     (bd-srqc). The bound filters workbook releases for a retrospective computation using current verified
@@ -43,6 +46,7 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
 All three Claim commands accept `--issuer <issuer> [--through YYYYQn]` or `--synthetic` to select the same
 verified source snapshot as assurance. Without a selector they search the current canonical projections.
+`--json` is an alias for `--format json`.
 
 ### Issued-output reliance (BD-347)
 
@@ -66,6 +70,7 @@ after artifact creation leaves issuance durability unconfirmed: retain the file 
   Markdown wraps that envelope in a JSON fence, except successful challenge exports, which render the cited
   packets as readable sections with the source root, packet-set digest and internal-review boundary. Successful
   guidance reports also render readable requirements, historical comparisons, checked replays and source citations.
+  Track-record Markdown presents guidance vintages, outcome states, descriptive aggregates and source citations.
 - After `anchor_id` every envelope has, in this order:
   - `flags`: the four INV-002 flags, all false, from one constant (no field or setter can set one);
   - `certificate`: the report's ledger state root (hex), or null when no ledger snapshot is registered;
@@ -187,8 +192,8 @@ after artifact creation leaves issuance durability unconfirmed: retain the file 
   refuse with `FMINE-REF-201`; document disagreement, source failures and incompatible support retain
   their typed refusals. With valid training, unusable quarters remain explicit refused rows in an otherwise
   successful report. The explicit synthetic selector runs invented inputs through the same adapter/kernel.
-  `--synthetic` is exclusive with `--issuer` and `--through`; `--site` and `--as-of` remain guidance-only
-  flags. The existing `assure public --through` path continues to skip PDF transcriptions, independently of
+  `--synthetic` is exclusive with `--issuer` and `--through`; recovery accepts neither `--site` nor `--as-of`.
+  The existing `assure public --through` path continues to skip PDF transcriptions, independently of
   the dedicated recovery command's retrospective workbook bound.
 - DESIGN (BD-345): lint bounds its local UTF-8 draft read, verifies the selected sources once, and delegates
   every finding to `fmine_public::lint`. Its certificate identifies the source assurance snapshot; the lint
@@ -213,6 +218,17 @@ after artifact creation leaves issuance durability unconfirmed: retain the file 
   report. Successful payloads bind the bundle's SHA-256 and each cone digest. Without a bundle the status
   is `not_checked`; the CLI always reports generator replay as `not_performed`. Supplied metadata remains
   unauthenticated evidence. The pure replay API is a separate caller-mediated operation.
+- DESIGN (BD-341): `track-record --as-of` delegates source selection to `fmine_public::guidance::track_record` and
+  all scoring to `fmine-calib`. The explicit calendar-date cut prevents an implicit wall-clock information
+  set. The payload digest binds guidance, source Claims, selection and results; the envelope's authority
+  anchor and certificate remain null. Only the earliest registered agreed guidance per subject, metric,
+  fiscal year and ownership basis enters each denominator; all revisions remain visible. First publication
+  and comparatives are reported separately, and unresolved outcomes retain their members and reasons.
+  Unknown issuers, empty sites, non-date cuts and conflicting selectors are usage errors. Source integrity
+  and transcription failures keep their typed refusals. The explicit-cut schema is
+  `fmine.guidance.track-record.as-of.v1`; the existing retrospective command and its synthetic lane retain
+  `fmine.guidance.track-record.v1`. `--through` and `--as-of` are mutually exclusive; synthetic selection
+  remains retrospective and accepts neither filter.
 - `robot-docs` lists every catalogue row as `{code, exit_code, status, summary}`, `status` being `active` or
   `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 
@@ -294,3 +310,7 @@ None: every failure is a usage error or a typed refusal.
 - Recovery outputs describe model differences with an annual historical relation. They make no causal,
   recoverable-production or forecast claim, emit no dollar sensitivity, and do not turn comparative-only
   observations into first-published outcomes. Input-rounding bounds are not confidence or prediction intervals.
+- Track-record coverage is the registered two-reader transcription population, not a complete historical
+  issuer census. Guidance has no inferred probability level. The binomial reference interval is conditional
+  on independent trials; source-rounding and missing-outcome bounds have separate meanings. Price-conditional
+  cost attribution, cluster inference, forecast registration and the full guidance data gate remain open.

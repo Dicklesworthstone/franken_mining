@@ -53,13 +53,19 @@ pub enum CliCommand {
     },
     /// Invented evidence exercising the same guidance completion adapter and exact kernel.
     GuidanceSynthetic,
-    /// Describe issuer guidance against original annual outcomes, retaining every unresolved member.
+    /// Retrospective guidance report, optionally limited to a workbook release.
     TrackRecord {
         /// `None` selects the explicitly requested synthetic lane.
         issuer: Option<String>,
         site: Option<String>,
         /// Selects source releases, not a historical information-availability cut.
         through: Option<String>,
+    },
+    /// Compare earliest registered guidance and paired outcomes at an explicit evidence cut.
+    TrackRecordAsOf {
+        issuer: String,
+        site: Option<String>,
+        as_of: String,
     },
     /// Descriptive recovery comparison against an agreed historical grade/tails relation.
     RecoveryGap {
@@ -407,7 +413,6 @@ pub fn parse_args(
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--json" => format = OutputFormat::Json,
             "--format" => {
                 i += 1;
                 let val = args.get(i).ok_or("missing value for --format")?;
@@ -421,6 +426,7 @@ pub fn parse_args(
                     }
                 };
             }
+            "--json" => format = OutputFormat::Json,
             "--workspace" => {
                 i += 1;
                 let val = args.get(i).ok_or("missing value for --workspace")?;
@@ -504,19 +510,25 @@ pub fn parse_args(
     }
     if !matches!(
         positional[0].as_str(),
-        "assure" | "claim" | "guidance" | "track-record" | "recovery" | "lint"
+        "assure" | "claim" | "guidance" | "recovery" | "lint" | "track-record"
     ) && (issuer.is_some() || synthetic || through.is_some())
     {
         return Err(
-            "--issuer, --synthetic and --through require an assurance, claim, guidance, track-record, recovery or lint command"
-                .to_string(),
+            "--issuer, --synthetic and --through require a source-reading command".to_string(),
         );
     }
     if !matches!(positional[0].as_str(), "guidance" | "track-record") && site.is_some() {
         return Err("--site requires 'guidance completion' or 'track-record'".to_string());
     }
-    if !matches!(positional[0].as_str(), "guidance" | "forecast") && as_of.is_some() {
-        return Err("--as-of requires 'guidance completion' or 'forecast assess'".to_string());
+    if !matches!(
+        positional[0].as_str(),
+        "guidance" | "forecast" | "track-record"
+    ) && as_of.is_some()
+    {
+        return Err(
+            "--as-of requires 'guidance completion', 'track-record' or 'forecast assess'"
+                .to_string(),
+        );
     }
     if positional[0] != "forecast"
         && (ledger.is_some() || cohort.is_some() || selector.is_some() || provenance.is_some())
@@ -613,28 +625,45 @@ pub fn parse_args(
             }
         }
         "track-record" => {
+            if through.is_some() && as_of.is_some() {
+                return Err("track-record selects either --through or --as-of".to_string());
+            }
             if synthetic {
-                if issuer.is_some() || site.is_some() || through.is_some() {
+                if issuer.is_some() || site.is_some() || through.is_some() || as_of.is_some() {
                     return Err(
-                        "track-record --synthetic takes no issuer, site or through selection"
+                        "track-record --synthetic takes no issuer, site, through or as-of selection"
                             .to_string(),
                     );
                 }
+                CliCommand::TrackRecord {
+                    issuer: None,
+                    site: None,
+                    through: None,
+                }
             } else {
-                let name = issuer
-                    .as_deref()
-                    .ok_or("track-record requires --issuer <issuer> or --synthetic")?;
-                if !is_issuer_name(name) || !registry_path(&workspace, name).is_file() {
-                    return Err(format!("unknown issuer '{name}'"));
+                let issuer = issuer.ok_or("track-record requires --issuer or --synthetic")?;
+                if !is_issuer_name(&issuer) || !registry_path(&workspace, &issuer).is_file() {
+                    return Err(format!("unknown issuer '{issuer}'"));
                 }
-                if site.as_ref().is_some_and(|s| s.trim().is_empty()) {
-                    return Err("track-record --site requires a nonempty subject".to_string());
+                if site.as_deref().is_some_and(|value| value.trim().is_empty()) {
+                    return Err("track-record --site requires a nonempty subject key".to_string());
                 }
-            }
-            CliCommand::TrackRecord {
-                issuer,
-                site,
-                through,
+                if let Some(as_of) = as_of {
+                    if !fmine_registry::sources::is_date(&as_of) {
+                        return Err("track-record --as-of requires YYYY-MM-DD".to_string());
+                    }
+                    CliCommand::TrackRecordAsOf {
+                        issuer,
+                        site,
+                        as_of,
+                    }
+                } else {
+                    CliCommand::TrackRecord {
+                        issuer: Some(issuer),
+                        site,
+                        through,
+                    }
+                }
             }
         }
         "recovery" => {
@@ -930,6 +959,23 @@ fn recovery_envelope(result: Result<fmine_public::recovery::RecoveryReport, Refu
     }
 }
 
+fn track_record_envelope(
+    result: Result<fmine_public::guidance::track_record::TrackRecordReport, Refusal>,
+) -> Envelope {
+    let actions = vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
+    match result {
+        Ok(report) => {
+            let mut env = Envelope::ok("track-record", report.to_json(), actions);
+            // The report binds its cited evidence with a payload digest. Historical source selection does
+            // not create an authority-ledger registration or an external timestamp proof.
+            env.no_claim = Some(fmine_public::guidance::track_record::NO_CLAIM);
+            env.rendered_markdown = Some(report.to_markdown());
+            env
+        }
+        Err(refusal) => Envelope::refused("track-record", refusal, actions),
+    }
+}
+
 /// Executes a parsed `CliCommand` against `workspace_root` and returns an `FMT-ENV-1` `Envelope`.
 #[must_use]
 pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
@@ -1013,6 +1059,16 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             through.as_deref(),
             workspace_root,
         ),
+        CliCommand::TrackRecordAsOf {
+            issuer,
+            site,
+            as_of,
+        } => track_record_envelope(fmine_public::guidance::track_record::run(
+            workspace_root,
+            issuer,
+            site.as_deref(),
+            as_of,
+        )),
         CliCommand::RecoveryGap { issuer, through } => recovery_envelope(
             fmine_public::recovery::run_public(workspace_root, issuer, through.as_deref()),
         ),
@@ -1218,51 +1274,43 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 .iter()
                 .map(|i| format!("\"{}\"", escape_json(i)))
                 .collect();
+            let verbs = [
+                "assure public --issuer <issuer> [--through YYYYQn]",
+                "assure public --synthetic",
+                "assure challenges --issuer <issuer> [--through YYYYQn]",
+                "assure challenges --synthetic",
+                "guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD",
+                "guidance completion --synthetic",
+                "track-record --issuer <issuer> [--site <subject>] [--through YYYYQn]",
+                "track-record --issuer <issuer> [--site <site>] --as-of YYYY-MM-DD",
+                "track-record --synthetic [--json]",
+                "recovery gap --issuer <issuer> [--through YYYYQn]",
+                "recovery gap --synthetic",
+                "lint <draft> --issuer <issuer> [--through YYYYQn] [--discover]",
+                "lint <draft> --synthetic [--discover]",
+                "forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ [--selector first-published|latest-as-of] [--provenance <path>]",
+                "doctor",
+                "claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
+                "claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
+                "claim trace <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
+                "robot-docs",
+            ].map(|verb| format!("\"{}\"", escape_json(verb))).join(",");
             let reliance_verbs = reliance::VERBS_JSON;
             let reliance_docs = reliance::ROBOT_DOCS_JSON;
+            let track_record_modes = concat!(
+                "{\"mode\":\"retrospective_descriptive\",\"schema\":\"fmine.guidance.track-record.v1\",",
+                "\"input\":\"Hash-verified registered workbooks and agreed document transcriptions\",",
+                "\"outcome_selector\":\"Original annual releases and comparative-only populations remain separate\",",
+                "\"as_of\":{\"mode\":\"descriptive_source_comparison\",\"schema\":\"fmine.guidance.track-record.as-of.v1\",",
+                "\"cut\":\"Explicit --as-of YYYY-MM-DD; no inferred wall clock; exclusive with --through\",",
+                "\"population\":\"Earliest registered agreed guidance per subject, metric, fiscal year and ownership basis; revisions remain visible\",",
+                "\"outcomes\":\"First-published and latest registered assessments retain missing members\"},",
+                "\"scope\":\"Registered transcription population; no completeness, historical forecast registration, ranking or calibration verdict\"}"
+            );
             let payload = format!(
-                concat!(
-                    "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{envelope_fields},\"verbs\":[",
-                    "\"assure public --issuer <issuer> [--through YYYYQn]\",\"assure public --synthetic\",",
-                    "\"assure challenges --issuer <issuer> [--through YYYYQn]\",\"assure challenges --synthetic\",",
-                    "\"guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD\",\"guidance completion --synthetic\",",
-                    "\"track-record --issuer <issuer> [--site <subject>] [--through YYYYQn]\",\"track-record --synthetic [--json]\",",
-                    "\"recovery gap --issuer <issuer> [--through YYYYQn]\",\"recovery gap --synthetic\",",
-                    "\"lint <draft> --issuer <issuer> [--through YYYYQn] [--discover]\",\"lint <draft> --synthetic [--discover]\",",
-                    "\"forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ [--selector first-published|latest-as-of] [--provenance <path>]\",",
-                    "{reliance_verbs},",
-                    "\"doctor\",\"claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",",
-                    "\"claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",",
-                    "\"claim trace <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"robot-docs\"],",
-                    "\"issuers\":[{issuers}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",",
-                    "\"exit_codes\":{{\"0\":\"ok; lint verdicts and track-record misses are data\",\"2\":\"usage error (unknown verb, flag, issuer or selection); the envelope still prints\"}},",
-                    "\"claim_inspection\":{{\"lookup\":\"Exact canonical IDs from the synthetic run or hash-verified registered sources; explicit selectors bind the ledger snapshot and claims digest\",",
-                    "\"why\":\"Recorded evidence, interpretation, computed color and Claim admission guards; absent assessments remain absent\",",
-                    "\"trace\":\"Available source anchors and registered provenance; unresolved parents are explicit\"}},",
-                    "\"lint\":{{\"mode\":\"cited equality by default; --discover searches uncited equalities\",",
-                    "\"link\":\"[printed number and unit](fmine:clm_ID)\",",
-                    "\"predicate\":\"One explicit subject, reporting period, ownership basis, supported metric, unit and equality per sentence or line; other prose is unchecked\",",
-                    "\"discovery\":\"All semantic candidates remain visible; multiple matches stay ambiguous and the amount never selects a vintage\",",
-                    "\"scope\":\"Selected registered source snapshot; no publication-time or disclosure-permission verdict\"}},",
-                    "\"forecast_assessment\":{{\"mode\":\"read_only_replay\",\"input\":\"Ordered forecast, cohort, outcome and assessment TOML rows\",",
-                    "\"default_selector\":\"first-published\",",
-                    "\"provenance\":{{\"schema\":\"fmine.forecast-provenance.v1\",\"tables\":[\"node\",\"anchor\",\"binding\"],",
-                    "\"cut\":\"Each frozen forecast registered_at, not the assessment date\",",
-                    "\"coverage\":\"Every cohort member, including unresolved outcomes\",\"without_bundle\":\"not_checked\",",
-                    "\"generator_replay\":\"not_performed\",\"example\":\"tests/forecasts/provenance_synthetic.toml\"}},",
-                    "\"times_and_citations\":\"Supplied records, not external time proof or independently verified sources\"}},",
-                    "\"reliance\":{reliance_docs},",
-                    "\"track_record\":{{\"mode\":\"retrospective_descriptive\",",
-                    "\"input\":\"Hash-verified registered workbooks and agreed document transcriptions\",",
-                    "\"outcome_selector\":\"Original annual release when registered; comparative-only outcomes remain separately labelled\",",
-                    "\"scope\":\"Missing members retained; no forecast registration, inferred probability, ranking or price adjustment\"}},",
-                    "\"refusals\":[{refusals}]}}"
-                ),
-                envelope_fields = ENVELOPE_FIELDS,
-                reliance_verbs = reliance_verbs,
-                reliance_docs = reliance_docs,
-                issuers = issuers.join(","),
-                refusals = refusals.join(",")
+                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{ENVELOPE_FIELDS},\"verbs\":[{verbs},{reliance_verbs}],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok; lint verdicts and track-record misses are data\",\"2\":\"usage error (unknown verb, flag, issuer or selection); the envelope still prints\"}},\"claim_inspection\":{{\"lookup\":\"Exact canonical IDs from the synthetic run or hash-verified registered sources; explicit selectors bind the ledger snapshot and claims digest\",\"why\":\"Recorded evidence, interpretation, computed color and Claim admission guards; absent assessments remain absent\",\"trace\":\"Available source anchors and registered provenance; unresolved parents are explicit\"}},\"lint\":{{\"mode\":\"cited equality by default; --discover searches uncited equalities\",\"link\":\"[printed number and unit](fmine:clm_ID)\",\"predicate\":\"One explicit subject, reporting period, ownership basis, supported metric, unit and equality per sentence or line; other prose is unchecked\",\"discovery\":\"All semantic candidates remain visible; multiple matches stay ambiguous and the amount never selects a vintage\",\"scope\":\"Selected registered source snapshot; no publication-time or disclosure-permission verdict\"}},\"forecast_assessment\":{{\"mode\":\"read_only_replay\",\"input\":\"Ordered forecast, cohort, outcome and assessment TOML rows\",\"default_selector\":\"first-published\",\"provenance\":{{\"schema\":\"fmine.forecast-provenance.v1\",\"tables\":[\"node\",\"anchor\",\"binding\"],\"cut\":\"Each frozen forecast registered_at, not the assessment date\",\"coverage\":\"Every cohort member, including unresolved outcomes\",\"without_bundle\":\"not_checked\",\"generator_replay\":\"not_performed\",\"example\":\"tests/forecasts/provenance_synthetic.toml\"}},\"times_and_citations\":\"Supplied records, not external time proof or independently verified sources\"}},\"reliance\":{reliance_docs},\"track_record\":{track_record_modes},\"refusals\":[{}]}}",
+                issuers.join(","),
+                refusals.join(",")
             );
             Envelope::ok(
                 "robot-docs",
@@ -1722,6 +1770,152 @@ mod tests {
         assert!(markdown.contains("conditional on that sales interval"));
         assert!(markdown.contains("not a mine-capacity conclusion or a forecast"));
         assert!(!markdown.starts_with("```json"));
+    }
+
+    #[test]
+    fn test_track_record_as_of_envelope_preserves_original_outcomes_and_missing_members() {
+        let report = fmine_public::guidance::track_record::synthetic;
+        let env = track_record_envelope(report());
+        assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
+        assert_eq!(env.verb, "track-record");
+        for required in [
+            "\"schema\":\"fmine.guidance.track-record.as-of.v1\"",
+            "\"lane\":\"synthetic\"",
+            "\"gate_eligible\":false",
+            "\"n_members\":2,\"n_scored\":1,\"n_unresolved\":1,\"n_inside\":0",
+            "\"n_members\":2,\"n_scored\":1,\"n_unresolved\":1,\"n_inside\":1",
+            "\"z\":\"3/2\"",
+            "\"z\":\"1/2\"",
+            "\"cp90_iid\":{",
+            "\"whole_cohort_bounds\":{\"lo\":\"0\",\"hi\":\"1/2\"",
+            "Synthetic_2030Q4.xlsx:YTD!C4",
+            "Synthetic_2031Q4.xlsx:YTD!C4",
+            "historical completeness unassessed",
+            "Cost scores are unconditional",
+        ] {
+            assert!(
+                env.payload_json.contains(required),
+                "missing {required}: {}",
+                env.payload_json
+            );
+        }
+        assert!(env.anchor_id.is_none());
+        assert!(env.certificate.is_none());
+        assert_eq!(
+            env.no_claim,
+            Some(fmine_public::guidance::track_record::NO_CLAIM)
+        );
+        assert!(env.to_json().contains(FLAGS));
+        assert_eq!(track_record_envelope(report()), env);
+        let markdown = env
+            .rendered_markdown
+            .as_deref()
+            .expect("readable as-of report");
+        assert!(markdown.starts_with("# Guidance track record"));
+        assert!(markdown.contains("125; above; z 3/2"));
+        assert!(markdown.contains("115; inside; z 1/2"));
+        assert!(markdown.contains("1 unresolved of 2 members"));
+        assert!(markdown.contains("## Sources"));
+        assert!(markdown.contains("Synthetic invented evidence"));
+    }
+
+    #[test]
+    fn test_track_record_requires_an_explicit_evidence_cut_and_registered_inputs() {
+        let (command, _, _) = parse_args(
+            &args(&[
+                "track-record",
+                "--issuer",
+                "barrick",
+                "--site",
+                "north-mara",
+                "--as-of",
+                "2026-11-01",
+            ]),
+            &workspace_root(),
+        )
+        .expect("explicit evidence cut");
+        assert_eq!(
+            command,
+            CliCommand::TrackRecordAsOf {
+                issuer: "barrick".into(),
+                site: Some("north-mara".into()),
+                as_of: "2026-11-01".into(),
+            }
+        );
+        for bad in [
+            vec!["track-record"],
+            vec!["track-record", "--as-of", "2026-11-01"],
+            vec![
+                "track-record",
+                "--issuer",
+                "unknown",
+                "--as-of",
+                "2026-11-01",
+            ],
+            vec![
+                "track-record",
+                "--issuer",
+                "barrick",
+                "--as-of",
+                "2026-02-30",
+            ],
+            vec![
+                "track-record",
+                "--issuer",
+                "barrick",
+                "--as-of",
+                "2026-11-01T00:00:00Z",
+            ],
+            vec![
+                "track-record",
+                "--issuer",
+                "barrick",
+                "--as-of",
+                "2026-11-01",
+                "--site",
+                "",
+            ],
+            vec![
+                "track-record",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2025Q4",
+                "--as-of",
+                "2026-11-01",
+            ],
+            vec!["track-record", "--synthetic", "--issuer", "barrick"],
+            vec!["track-record", "--synthetic", "--as-of", "2026-11-01"],
+            vec!["track-record", "--synthetic", "--site", "north-mara"],
+            vec!["track-record", "--synthetic", "extra"],
+        ] {
+            let (env, _) = invoke(&args(&bad), &workspace_root());
+            assert_eq!(env.exit_code, 2, "{bad:?}: {}", env.to_json());
+            assert!(env.anchor_id.is_none());
+            assert!(env.certificate.is_none());
+        }
+        let ws = no_corpus_workspace("track-record-no-inputs");
+        let (env, _) = invoke(
+            &args(&[
+                "track-record",
+                "--issuer",
+                "barrick",
+                "--as-of",
+                "2026-11-01",
+            ]),
+            &ws,
+        );
+        assert_eq!(env.status, "refused");
+        let refusal = env.refusal.expect("missing registered workbooks");
+        assert_eq!(refusal.code, "FMINE-REF-506");
+        assert!(refusal.what.contains("Barrick_Q1_2024_Mine_Stats.xlsx"));
+        assert!(refusal.what.contains("Barrick_Q2_2026_Mine_Stats.xlsx"));
+        assert_eq!(env.payload_json, "null");
+        assert!(env.anchor_id.is_none());
+        assert!(env.certificate.is_none());
+        let (docs, _) = invoke(&args(&["robot-docs"]), &workspace_root());
+        assert!(docs.payload_json.contains("track-record --issuer"));
+        assert!(docs.payload_json.contains("track-record --synthetic"));
     }
 
     #[test]

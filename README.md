@@ -370,6 +370,37 @@ Its content digest creates no forecast registration or ledger certificate, and n
 or mine-capacity conclusion. The metrics library separately provides an exact feed/grade/recovery ceiling
 kernel for cited physical limits. Public technical-report binding and the remaining BD-342/M0 gates stay open.
 
+### Assess guidance at an explicit evidence cut
+
+```bash
+cargo run -p fmine-cli -- track-record --issuer barrick --as-of 2026-11-01 --json
+cargo run -p fmine-cli -- track-record --issuer barrick --site north-mara --as-of 2026-11-01 --format markdown
+```
+
+DESIGN (BD-341): `--as-of` selects a separate evidence-cut report, preserving the retrospective command and
+its `--synthetic` demonstration above. It uses the same registered workbooks and local two-reader PDF
+transcriptions. It keeps every registered guidance vintage, selects the earliest
+agreed guidance for each site, fiscal year, metric and ownership basis, and compares it with the matching
+annual outcome. A later comparative is displayed separately and cannot replace a missing first publication.
+Divested, withheld and unavailable outcomes remain in the denominator with their reasons.
+
+The quantities and basis declarations are the same as the retrospective report. Ownership, units, scope,
+source hashes and exact source-cell anchors are checked before scoring. When original publication timing
+is unestablished, the registered retrieval date is used conservatively. `--through` and `--as-of` are
+mutually exclusive; neither invents an external timestamp proof.
+
+The report gives exact range-normalized misses, their direction, source-rounding ambiguity, observed hit
+rates and bounds that retain unresolved outcomes. Its Clopper–Pearson reference interval is explicitly
+conditional on independent Bernoulli hits; common year or site shocks are not modelled. Guidance ranges
+have no inferred probability level. The report is descriptive and makes no calibration or site-ranking
+claim. Cost comparisons are unconditional on price: a miss alone does not establish an operating failure.
+
+Each row retains its page or cell citation and file hash. The deterministic payload uses
+`fmine.guidance.track-record.as-of.v1`, distinct from the retrospective `fmine.guidance.track-record.v1`.
+Coverage describes the registered transcription population; the complete historical data gate,
+price-conditional split and cluster-aware inference remain open. Source documents and real transcription
+rows remain outside git.
+
 ### Compare Lumwana recovery with its historical grade relation
 
 ```bash
