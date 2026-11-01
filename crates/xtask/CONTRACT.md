@@ -134,6 +134,15 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   vocabulary; a workbook with a refused cell refuses): the pool's size, the pairs left out, the two ratio
   quantiles and, once the point quarter's workbook is registered, each live site's exact interval. It needs the
   corpus, so it never runs in CI (RISK-31).
+  `forecast-baseline --as-of YYYY-MM-DD` adds `forecast::guidance::run`'s issuer-guidance baseline to that
+  persistence output. It selects the latest registered two-reader annual guidance at the inclusive date cut;
+  ties and pending newer readings stay unavailable. Production divides by its stated attributable share before
+  subtracting the original Q3-release nine-month Claim; AISC retains its per-sold-ounce interval unchanged.
+  All frozen sites and targets remain visible, including excluded sites and missing originals. Negative
+  remainders are retained. The report binds rules, exact intervals, source Claims, PDF locators/digests/readers
+  and availability evidence. Workbook retrieval is the conservative availability bound because per-workbook
+  publication dates are not registered; unsupported earlier cuts refuse. No forecast, time proof or calibration
+  claim is created. Actual registered-file integration controls are `tests/forecast_guidance_baseline.rs`.
   `scripts/forecast_record_e2e.sh` runs all three on a synthetic record with a throwaway local TSA (`test_tsa`,
   never a record's proof); `scripts/verify_rules_timestamp.sh` checks the rules' proofs with openssl/ots alone.
 - `forecast::rules_order` (BD-334.S2; command `forecast-rules-order`): the commit adding

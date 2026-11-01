@@ -28,6 +28,8 @@ use fmine_public::mine_stats::{
     LabelVocabulary, MineStatsCell, MineStatsValue, View, read_mine_stats,
 };
 
+pub mod guidance;
+
 /// The FY2026 rules, relative to the workspace root.
 pub const FY2026_RULES: &str = "forecasts/fy2026/rules.toml";
 /// The FY2026 forecasts, relative to the workspace root; no commit may touch them before the rules exist.
@@ -397,6 +399,15 @@ pub fn baseline_lines(root: &Path) -> Res<Vec<String>> {
             });
         }
     }
+    Ok(lines)
+}
+
+/// Both frozen baseline rules at an explicit evidence cut. The legacy no-argument command remains the
+/// persistence-only projection. Workbooks carry a verified retrieval bound, not invented publication dates.
+pub fn baseline_lines_as_of(root: &Path, as_of: &str) -> Res<Vec<String>> {
+    let guidance = guidance::run(root, as_of)?;
+    let mut lines = guidance.json_lines();
+    lines.extend(baseline_lines(root)?);
     Ok(lines)
 }
 

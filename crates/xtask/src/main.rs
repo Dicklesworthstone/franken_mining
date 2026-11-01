@@ -214,7 +214,14 @@ fn main() -> ExitCode {
         ),
         "forecast-baseline" => run_one(
             cmd,
-            xtask::forecast::baseline_lines(&root).map(|lines| {
+            (match args.as_slice() {
+                [_] => xtask::forecast::baseline_lines(&root),
+                [_, flag, cut] if flag == "--as-of" => {
+                    xtask::forecast::baseline_lines_as_of(&root, cut)
+                }
+                _ => Err(vec!["usage: forecast-baseline [--as-of YYYY-MM-DD]".into()]),
+            })
+            .map(|lines| {
                 for line in lines {
                     println!("{line}");
                 }
