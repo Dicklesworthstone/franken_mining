@@ -47,6 +47,14 @@ pub enum CliCommand {
     },
     /// Invented evidence exercising the same guidance completion adapter and exact kernel.
     GuidanceSynthetic,
+    /// Descriptive recovery comparison against an agreed historical grade/tails relation.
+    RecoveryGap {
+        issuer: String,
+        /// Selects workbook releases, not a historical information or forecast cut.
+        through: Option<String>,
+    },
+    /// Invented annual and quarterly observations through the same recovery models.
+    RecoverySynthetic,
     /// `fmine doctor` (`BD-115`).
     Doctor,
     /// Read an existing public Claim from a verified issuer snapshot or the explicit synthetic lane
@@ -311,6 +319,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                 };
             }
             "guidance" => return "guidance completion",
+            "recovery" => return "recovery gap",
             "claim" => {
                 i += 1;
                 while let Some(arg) = args.get(i) {
@@ -410,7 +419,7 @@ pub fn parse_args(
     // The words each verb takes, the verb included. A surplus word or a flag the verb does not take is a usage
     // error, never ignored, so every next action that parses means what it says.
     let words = match positional[0].as_str() {
-        "assure" | "guidance" => 2,
+        "assure" | "guidance" | "recovery" => 2,
         "claim" => 3,
         "doctor" | "robot-docs" => 1,
         other => return Err(format!("unknown verb '{other}'")),
@@ -421,11 +430,13 @@ pub fn parse_args(
             positional[..words].join(" ")
         ));
     }
-    if !matches!(positional[0].as_str(), "assure" | "claim" | "guidance")
-        && (issuer.is_some() || synthetic || through.is_some())
+    if !matches!(
+        positional[0].as_str(),
+        "assure" | "claim" | "guidance" | "recovery"
+    ) && (issuer.is_some() || synthetic || through.is_some())
     {
         return Err(
-            "--issuer, --synthetic and --through require an assurance, claim or guidance command"
+            "--issuer, --synthetic and --through require an assurance, claim, guidance or recovery command"
                 .to_string(),
         );
     }
@@ -508,6 +519,25 @@ pub fn parse_args(
                     through: through.ok_or("guidance completion requires --through YYYYQn")?,
                     as_of: as_of.ok_or("guidance completion requires --as-of YYYY-MM-DD")?,
                 }
+            }
+        }
+        "recovery" => {
+            if positional.get(1).map(String::as_str) != Some("gap") {
+                return Err("expected 'fmine recovery gap'".to_string());
+            }
+            if synthetic {
+                if issuer.is_some() || through.is_some() {
+                    return Err(
+                        "recovery --synthetic takes no issuer or through selection".to_string()
+                    );
+                }
+                CliCommand::RecoverySynthetic
+            } else {
+                let issuer = issuer.ok_or("recovery gap requires --issuer or --synthetic")?;
+                if !is_issuer_name(&issuer) || !registry_path(&workspace, &issuer).is_file() {
+                    return Err(format!("unknown issuer '{issuer}'"));
+                }
+                CliCommand::RecoveryGap { issuer, through }
             }
         }
         "doctor" => CliCommand::Doctor,
@@ -727,6 +757,19 @@ fn guidance_envelope(
     }
 }
 
+fn recovery_envelope(result: Result<fmine_public::recovery::RecoveryReport, Refusal>) -> Envelope {
+    let actions = vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
+    match result {
+        Ok(report) => {
+            let mut env = Envelope::ok("recovery gap", report.to_json(), actions);
+            // The model's own digest binds its inputs and results; it is not an authority-ledger root.
+            env.no_claim = Some(fmine_metrics::recovery::NO_CLAIM);
+            env
+        }
+        Err(refusal) => Envelope::refused("recovery gap", refusal, actions),
+    }
+}
+
 /// Executes a parsed `CliCommand` against `workspace_root` and returns an `FMT-ENV-1` `Envelope`.
 #[must_use]
 pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
@@ -799,6 +842,10 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             fmine_public::guidance::run_synthetic(),
             "Invented synthetic evidence; this example is not an issuer finding.",
         ),
+        CliCommand::RecoveryGap { issuer, through } => recovery_envelope(
+            fmine_public::recovery::run_public(workspace_root, issuer, through.as_deref()),
+        ),
+        CliCommand::RecoverySynthetic => recovery_envelope(fmine_public::recovery::run_synthetic()),
         CliCommand::Doctor => match RegistryCatalog::load_from_root(workspace_root) {
             Ok(cat) => {
                 // One entry per registries/sources/<issuer>.toml: registered, present and verified counts with
@@ -962,7 +1009,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 .map(|i| format!("\"{}\"", escape_json(i)))
                 .collect();
             let payload = format!(
-                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{ENVELOPE_FIELDS},\"verbs\":[\"assure public --issuer <issuer> [--through YYYYQn]\",\"assure public --synthetic\",\"assure challenges --issuer <issuer> [--through YYYYQn]\",\"assure challenges --synthetic\",\"guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD\",\"guidance completion --synthetic\",\"doctor\",\"claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"claim trace <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"robot-docs\"],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok\",\"2\":\"usage error (unknown verb, flag, issuer or --through bound); the envelope still prints\"}},\"claim_inspection\":{{\"lookup\":\"Exact canonical IDs from the synthetic run or hash-verified registered sources; explicit selectors bind the ledger snapshot and claims digest\",\"why\":\"Recorded evidence, interpretation, computed color and Claim admission guards; absent assessments remain absent\",\"trace\":\"Available source anchors and registered provenance; unresolved parents are explicit\"}},\"refusals\":[{}]}}",
+                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{ENVELOPE_FIELDS},\"verbs\":[\"assure public --issuer <issuer> [--through YYYYQn]\",\"assure public --synthetic\",\"assure challenges --issuer <issuer> [--through YYYYQn]\",\"assure challenges --synthetic\",\"guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD\",\"guidance completion --synthetic\",\"recovery gap --issuer <issuer> [--through YYYYQn]\",\"recovery gap --synthetic\",\"doctor\",\"claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"claim trace <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"robot-docs\"],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok\",\"2\":\"usage error (unknown verb, flag, issuer or --through bound); the envelope still prints\"}},\"claim_inspection\":{{\"lookup\":\"Exact canonical IDs from the synthetic run or hash-verified registered sources; explicit selectors bind the ledger snapshot and claims digest\",\"why\":\"Recorded evidence, interpretation, computed color and Claim admission guards; absent assessments remain absent\",\"trace\":\"Available source anchors and registered provenance; unresolved parents are explicit\"}},\"refusals\":[{}]}}",
                 issuers.join(","),
                 refusals.join(",")
             );
@@ -1289,6 +1336,99 @@ mod tests {
         assert!(markdown.contains("conditional on that sales interval"));
         assert!(markdown.contains("not a mine-capacity conclusion or a forecast"));
         assert!(!markdown.starts_with("```json"));
+    }
+
+    #[test]
+    fn test_recovery_command_preserves_models_citations_and_authority_boundary() {
+        let query = args(&["recovery", "gap", "--synthetic"]);
+        let (env, _) = invoke(&query, &workspace_root());
+        assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
+        assert_eq!(env.verb, "recovery gap");
+        for required in [
+            "\"schema\":\"fmine.recovery.gap.v1\"",
+            "\"lane\":\"synthetic\"",
+            "\"constant_tails\":{",
+            "\"grade_dependent_tails\":{",
+            "\"gap_pp\":{\"point\":{",
+            "\"source_claims\":[{",
+            "\"training_inputs\":[{",
+            "\"anchors\":[{",
+            "\"descriptive_only\":true",
+            "\"identifying\":false",
+            "\"calibration\":\"uncalibrated_descriptive_model\"",
+            "conservative input-rounding enclosures, not confidence or prediction intervals",
+            "\"monetary_downside\":\"unquantified\"",
+        ] {
+            assert!(env.payload_json.contains(required), "missing {required}");
+        }
+        assert!(env.anchor_id.is_none());
+        assert!(env.certificate.is_none());
+        assert_eq!(env.no_claim, Some(fmine_metrics::recovery::NO_CLAIM));
+        assert!(env.to_json().contains(FLAGS));
+        let digest = fmine_public::recovery::run_synthetic()
+            .expect("synthetic recovery")
+            .digest()
+            .to_hex();
+        assert!(
+            env.payload_json
+                .contains(&format!("\"digest\":\"{digest}\""))
+        );
+        assert_eq!(invoke(&query, &workspace_root()).0, env);
+    }
+
+    #[test]
+    fn test_recovery_command_requires_evidence_and_unambiguous_selectors() {
+        let ws = no_corpus_workspace("recovery-no-corpus");
+        let (env, _) = invoke(&args(&["recovery", "gap", "--issuer", "barrick"]), &ws);
+        assert_eq!(env.status, "refused");
+        assert_eq!(env.refusal.expect("missing source").code, "FMINE-REF-506");
+        assert_eq!(env.payload_json, "null");
+        assert!(env.anchor_id.is_none());
+        assert!(env.certificate.is_none());
+        let (command, _, _) = parse_args(
+            &args(&[
+                "recovery",
+                "gap",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2025Q4",
+            ]),
+            &workspace_root(),
+        )
+        .expect("retrospective workbook selection");
+        assert_eq!(
+            command,
+            CliCommand::RecoveryGap {
+                issuer: "barrick".into(),
+                through: Some("2025Q4".into()),
+            }
+        );
+        for bad in [
+            vec!["recovery"],
+            vec!["recovery", "gap"],
+            vec!["recovery", "unknown", "--synthetic"],
+            vec!["recovery", "gap", "--issuer", "unknown"],
+            vec!["recovery", "gap", "--synthetic", "--issuer", "barrick"],
+            vec!["recovery", "gap", "--synthetic", "--through", "2025Q4"],
+            vec![
+                "recovery",
+                "gap",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2025Q5",
+            ],
+            vec!["recovery", "gap", "--synthetic", "--site", "Lumwana"],
+            vec!["recovery", "gap", "--synthetic", "--as-of", "2026-10-31"],
+            vec!["recovery", "gap", "--synthetic", "extra"],
+        ] {
+            let (env, _) = invoke(&args(&bad), &workspace_root());
+            assert_eq!(env.exit_code, 2, "{bad:?}: {}", env.to_json());
+            assert!(env.payload_json.starts_with("{\"error\":"));
+            assert!(env.anchor_id.is_none());
+            assert!(env.certificate.is_none());
+        }
     }
 
     #[test]

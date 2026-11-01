@@ -188,6 +188,60 @@ Its content digest creates no forecast registration or ledger certificate, and n
 or mine-capacity conclusion. The metrics library separately provides an exact feed/grade/recovery ceiling
 kernel for cited physical limits. Public technical-report binding and the remaining BD-342/M0 gates stay open.
 
+### Compare Lumwana recovery with its historical grade relation
+
+```bash
+cargo run -p fmine-cli -- recovery gap --synthetic
+cargo run -p fmine-cli -- recovery gap --issuer barrick --through 2026Q2 > recovery.json
+```
+
+The command fits two descriptive models to the annual head-grade and recovery observations in the
+2013–2022 part of the Lumwana site-visit presentation's Appendix A, then compares both with the registered
+quarterly Mine Stats. M-a holds implied tails grade constant; M-b fits a line relating implied tails grade
+to head grade. Both use `tails = head_grade × (1 − recovery/100)`, with grade and recovery explicitly in
+percent units. Their calculations and rounding propagation live in the
+[recovery metric kernel](crates/fmine-metrics/src/recovery.rs).
+
+The synthetic command runs without external data. To use the Barrick command:
+
+1. Fetch the registered workbooks with `bash repro/barrick/fetch.sh`.
+2. Download `Lumwana_Site_Visit_25092025.pdf` and `Barrick_AIF_2025.pdf` from their `[[document]]` URLs in
+   [the source registry](registries/sources/barrick.toml), placing them in each row's registered `dir`.
+   The command verifies their byte counts and SHA-256 digests. The workbook fetch script does not fetch PDFs.
+3. Supply the two agreeing reader entries in the local, ignored `registries/transcriptions/barrick.toml`.
+   Each annual head-grade and recovery field must cite the presentation's printed page 39, table
+   `Appendix A: Past Production Records for Lumwana`, year row and printed column. The separate ownership
+   entry cites PDF page 38 (printed page 37), table `Copper Mineral Reserves`, row
+   `Lumwana surface (100%)`, column `Based on attributable tonnes`. The
+   [public recovery contract](crates/fmine-public/CONTRACT.md) specifies the quantity keys, units and support;
+   the [transcription schema](crates/fmine-registry/src/transcriptions.rs) defines the entry fields.
+
+Only source metadata and hashes are committed. Historical row values and PDFs remain local while
+OPEN-R7-1 is unresolved. Missing or conflicting evidence produces a typed refusal; the real command never
+substitutes synthetic inputs.
+
+For every available quarter, the report retains the earliest registered visible workbook appearance and
+prints both models' expected recovery, signed gap in percentage points, implied copper difference in kt,
+and that difference as a fraction of reported production. A fraction can be multiplied by one hundred to
+express it as a percentage. The original source Claims, PDF citations, ownership interpretation and model
+limitations accompany the results. An unusable quarter remains in the report with its refusal; a later
+comparative does not replace it. The available 2023 observations are explicitly labelled as comparative
+appearances in the 2024 releases, rather than first-published 2023 results.
+
+The exact rational points have conservative enclosures over the declared input-rounding boxes. These bounds
+do not assert statistical coverage. The fit also distinguishes the descriptive residual sample SD, using
+`SSE/(n−1)`, from the conventional regression residual-error SD, using `SSE/(n−2)`; their square-root bounds
+cover numerical evaluation only. The models omit ore type, grind, throughput effects and concentrate mass
+pull, and apply annual training to quarterly observations. Operational attribution, recoverable production,
+forecasts and dollar sensitivity are outside this output.
+
+**`--through` limits workbook releases for a retrospective comparison.** The command still reads the current
+verified historical model documents, so the bound does not establish what was knowable at that earlier date.
+Omit it to use all registered workbook releases. The payload's `fmine.recovery.gap.v1` digest binds the model,
+source Claims and results; the CLI envelope has no ledger anchor or certificate. An unbounded
+`assure public --issuer barrick` run also includes the optional `recovery` section when these transcriptions
+are supplied. The existing bounded assurance command continues to skip PDF transcriptions.
+
 ---
 
 ## TL;DR
