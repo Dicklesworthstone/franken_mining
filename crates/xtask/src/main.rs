@@ -212,6 +212,9 @@ fn main() -> ExitCode {
                 if let Ok(report) = xtask::oracle::check(&root) {
                     println!("{}", report.log_line());
                 }
+                if let Ok(line) = xtask::check_calendars(&root) {
+                    println!("{line}");
+                }
                 if let Ok(report) = xtask::refusals::check_refusals(&root) {
                     println!("{}", report.log_line());
                     for w in &report.warnings {

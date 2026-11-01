@@ -10,6 +10,7 @@ description = "Schema-validated loader and cross-reference verifier for registri
 [dependencies]
 fmine-core = { path = "../fmine-core" }
 fmine-evidence = { path = "../fmine-evidence" }
+fmine-time = { path = "../fmine-time" }
 
 [lints]
 workspace = true

@@ -1,11 +1,12 @@
 # registries/calendars.toml — Site Production & Fiscal Calendars (§25.4, BD-031, BD-032)
+# Each site names an IANA zone. Its UTC offsets, daylight saving included, come from registries/zones.toml, never
+# from a fixed offset here (BD-029). fmine_registry::calendars loads both files and refuses any other field.
 
 schema_version = 1
 
 [[calendar]]
 site_id = "barrick-corp"
 tz_name = "America/Toronto"
-utc_offset_minutes = -300
 day_start_local_hour = 0
 shift_hours = 12
 roster_pattern = "5/2"
@@ -13,7 +14,6 @@ roster_pattern = "5/2"
 [[calendar]]
 site_id = "ngm-carlin"
 tz_name = "America/Los_Angeles"
-utc_offset_minutes = -480
 day_start_local_hour = 6
 shift_hours = 12
 roster_pattern = "4/4"
@@ -21,7 +21,6 @@ roster_pattern = "4/4"
 [[calendar]]
 site_id = "ngm-cortez"
 tz_name = "America/Los_Angeles"
-utc_offset_minutes = -480
 day_start_local_hour = 6
 shift_hours = 12
 roster_pattern = "4/4"
@@ -29,7 +28,6 @@ roster_pattern = "4/4"
 [[calendar]]
 site_id = "pueblo-viejo"
 tz_name = "America/Santo_Domingo"
-utc_offset_minutes = -240
 day_start_local_hour = 6
 shift_hours = 12
 roster_pattern = "4/3"
@@ -37,7 +35,6 @@ roster_pattern = "4/3"
 [[calendar]]
 site_id = "kibali"
 tz_name = "Africa/Lubumbashi"
-utc_offset_minutes = 120
 day_start_local_hour = 6
 shift_hours = 12
 roster_pattern = "6/3"
@@ -45,7 +42,6 @@ roster_pattern = "6/3"
 [[calendar]]
 site_id = "lumwana"
 tz_name = "Africa/Lusaka"
-utc_offset_minutes = 120
 day_start_local_hour = 6
 shift_hours = 12
 roster_pattern = "8/6"
@@ -53,7 +49,6 @@ roster_pattern = "8/6"
 [[calendar]]
 site_id = "loulo-gounkoto"
 tz_name = "Africa/Bamako"
-utc_offset_minutes = 0
 day_start_local_hour = 6
 shift_hours = 12
 roster_pattern = "14/7"
@@ -61,7 +56,6 @@ roster_pattern = "14/7"
 [[calendar]]
 site_id = "reko-diq"
 tz_name = "Asia/Karachi"
-utc_offset_minutes = 300
 day_start_local_hour = 6
 shift_hours = 12
 roster_pattern = "14/7"

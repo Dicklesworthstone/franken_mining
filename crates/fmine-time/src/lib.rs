@@ -38,6 +38,21 @@ pub enum TimeError {
     CellNotInAnchor { cell: String, seq: u64 },
     /// An anchor that names a cell twice has no one high-water mark for it: refused, never resolved by max or min.
     AnchorCellRepeated { cell: String },
+    /// A zone snapshot that is not a valid offset table: refused, never repaired.
+    ZoneSnapshot { tz_name: String, detail: String },
+    /// An instant outside the span a zone snapshot covers: its offset is unknown, never extrapolated.
+    OutsideZoneSnapshot { tz_name: String, utc_s: i64 },
+    /// A local wall-clock time the zone skips (a forward change): no UTC instant has it.
+    LocalTimeNonexistent { tz_name: String, local_s: i64 },
+    /// A local wall-clock time the zone repeats (a backward change): two UTC instants have it, and none is chosen.
+    LocalTimeAmbiguous {
+        tz_name: String,
+        local_s: i64,
+        earlier_utc_s: i64,
+        later_utc_s: i64,
+    },
+    /// A site calendar field out of range, such as a production day starting at hour 24 or later.
+    InvalidCalendar { site_id: String, detail: String },
 }
 
 impl TimeError {
@@ -89,6 +104,29 @@ impl fmt::Display for TimeError {
             ),
             Self::AnchorCellRepeated { cell } => {
                 write!(f, "the anchor names cell {cell} more than once")
+            }
+            Self::ZoneSnapshot { tz_name, detail } => {
+                write!(f, "zone snapshot for {tz_name}: {detail}")
+            }
+            Self::OutsideZoneSnapshot { tz_name, utc_s } => write!(
+                f,
+                "{tz_name}: UTC second {utc_s} is outside the zone snapshot's span"
+            ),
+            Self::LocalTimeNonexistent { tz_name, local_s } => write!(
+                f,
+                "{tz_name}: local second {local_s} does not exist (skipped by a forward change)"
+            ),
+            Self::LocalTimeAmbiguous {
+                tz_name,
+                local_s,
+                earlier_utc_s,
+                later_utc_s,
+            } => write!(
+                f,
+                "{tz_name}: local second {local_s} is ambiguous (UTC {earlier_utc_s} or {later_utc_s})"
+            ),
+            Self::InvalidCalendar { site_id, detail } => {
+                write!(f, "site calendar {site_id}: {detail}")
             }
         }
     }
@@ -367,12 +405,153 @@ pub const NS_PER_MIN: i64 = 60 * NS_PER_SEC;
 pub const NS_PER_HOUR: i64 = 60 * NS_PER_MIN;
 pub const NS_PER_DAY: i64 = 24 * NS_PER_HOUR;
 
-/// Site operational shift calendar (`BD-029`).
+/// Seconds per day.
+pub const SECS_PER_DAY: i64 = 86_400;
+/// No zone is further than 18 hours from UTC.
+const MAX_OFFSET_MINUTES: i32 = 18 * 60;
+/// Every second of a snapshot's span is a whole number of nanoseconds in `i64`.
+const MAX_SNAPSHOT_S: i64 = i64::MAX / NS_PER_SEC;
+
+/// The UTC offsets of one IANA zone over a bounded span, from a registry snapshot (plan §25.4: DST rules are data;
+/// `BD-029`). From `at_utc_s` on, each transition's offset holds until the next one. Instants outside
+/// `[from_utc_s, to_utc_s)` are refused, never extrapolated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneRules {
+    tz_name: String,
+    from_utc_s: i64,
+    to_utc_s: i64,
+    initial_offset_minutes: i32,
+    transitions: Vec<(i64, i32)>,
+}
+
+impl ZoneRules {
+    /// Builds the table. Refuses ([`TimeError::ZoneSnapshot`]) an empty or out-of-range span, an offset beyond
+    /// ±18 h, and transitions that are not strictly increasing, fall outside the span, or do not change the offset.
+    pub fn new(
+        tz_name: &str,
+        from_utc_s: i64,
+        to_utc_s: i64,
+        initial_offset_minutes: i32,
+        transitions: Vec<(i64, i32)>,
+    ) -> Result<Self, TimeError> {
+        let refuse = |detail: String| {
+            Err(TimeError::ZoneSnapshot {
+                tz_name: tz_name.to_string(),
+                detail,
+            })
+        };
+        if tz_name.is_empty() {
+            return refuse("empty zone name".to_string());
+        }
+        if from_utc_s >= to_utc_s || from_utc_s < -MAX_SNAPSHOT_S || to_utc_s > MAX_SNAPSHOT_S {
+            return refuse(format!(
+                "span [{from_utc_s}, {to_utc_s}) is empty or out of range"
+            ));
+        }
+        let beyond = |offset: i32| offset.abs() > MAX_OFFSET_MINUTES;
+        if beyond(initial_offset_minutes) {
+            return refuse(format!(
+                "offset {initial_offset_minutes} min is beyond ±18 h"
+            ));
+        }
+        let mut prev = (from_utc_s, initial_offset_minutes);
+        for &(at, offset) in &transitions {
+            if beyond(offset) {
+                return refuse(format!("offset {offset} min is beyond ±18 h"));
+            }
+            if at <= prev.0 || at >= to_utc_s {
+                return refuse(format!(
+                    "transition at {at} is not after {} and inside the span",
+                    prev.0
+                ));
+            }
+            if offset == prev.1 {
+                return refuse(format!("transition at {at} keeps offset {offset} min"));
+            }
+            prev = (at, offset);
+        }
+        Ok(Self {
+            tz_name: tz_name.to_string(),
+            from_utc_s,
+            to_utc_s,
+            initial_offset_minutes,
+            transitions,
+        })
+    }
+
+    /// The IANA zone id.
+    #[must_use]
+    pub fn tz_name(&self) -> &str {
+        &self.tz_name
+    }
+
+    /// The `(at_utc_s, offset_minutes)` changes inside the span, in time order.
+    #[must_use]
+    pub fn transitions(&self) -> &[(i64, i32)] {
+        &self.transitions
+    }
+
+    /// The offset from UTC, in minutes, at UTC second `utc_s`. Refuses an instant outside the span.
+    pub fn offset_minutes_at(&self, utc_s: i64) -> Result<i32, TimeError> {
+        if utc_s < self.from_utc_s || utc_s >= self.to_utc_s {
+            return Err(TimeError::OutsideZoneSnapshot {
+                tz_name: self.tz_name.clone(),
+                utc_s,
+            });
+        }
+        let after = self.transitions.partition_point(|&(at, _)| at <= utc_s);
+        Ok(match after.checked_sub(1) {
+            Some(i) => self.transitions[i].1,
+            None => self.initial_offset_minutes,
+        })
+    }
+
+    /// The UTC second at which the local wall clock reads `local_s` (seconds from 1970-01-01T00:00 local). A
+    /// skipped time refuses with [`TimeError::LocalTimeNonexistent`], a repeated one with
+    /// [`TimeError::LocalTimeAmbiguous`], and a time whose candidates leave the span with
+    /// [`TimeError::OutsideZoneSnapshot`]: none is resolved by picking a side.
+    pub fn local_to_utc_s(&self, local_s: i64) -> Result<i64, TimeError> {
+        let mut offsets: Vec<i32> = std::iter::once(self.initial_offset_minutes)
+            .chain(self.transitions.iter().map(|&(_, o)| o))
+            .collect();
+        offsets.sort_unstable();
+        offsets.dedup();
+        let mut hits = Vec::new();
+        for offset in offsets {
+            let utc_s = local_s.checked_sub(i64::from(offset) * 60).ok_or_else(|| {
+                TimeError::OutsideZoneSnapshot {
+                    tz_name: self.tz_name.clone(),
+                    utc_s: local_s,
+                }
+            })?;
+            if self.offset_minutes_at(utc_s)? == offset {
+                hits.push(utc_s);
+            }
+        }
+        hits.sort_unstable();
+        match hits.as_slice() {
+            [one] => Ok(*one),
+            [] => Err(TimeError::LocalTimeNonexistent {
+                tz_name: self.tz_name.clone(),
+                local_s,
+            }),
+            [earlier, .., later] => Err(TimeError::LocalTimeAmbiguous {
+                tz_name: self.tz_name.clone(),
+                local_s,
+                earlier_utc_s: *earlier,
+                later_utc_s: *later,
+            }),
+        }
+    }
+}
+
+/// Site operational shift calendar (`BD-029`, `BD-032`): a row of `registries/calendars.toml` with its zone's
+/// offsets from `registries/zones.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SiteCalendar {
     pub site_id: String,
-    /// Offset from UTC in minutes (e.g. `-480` for Nevada PST, `+300` for Pakistan PKT).
-    pub utc_offset_minutes: i32,
+    /// The site's IANA zone, daylight saving included.
+    pub zone: ZoneRules,
     /// Local hour (`0..24`) at which the daily production day starts (e.g., `6` for `06:00`).
     pub day_start_hour_local: u8,
     /// Duration of each shift in hours (`12` for 2x12h, `8` for 3x8h).
@@ -388,37 +567,47 @@ pub struct FiscalCalendar {
 }
 
 impl SiteCalendar {
-    /// Computes the UTC timestamp (`ns`) of the site's production-day boundary on `date`.
-    #[must_use]
-    pub fn site_day_cut_utc_ns(&self, date: CivilDate) -> i64 {
-        let midnight_utc_ns = date.to_epoch_days() * NS_PER_DAY;
-        let local_start_ns = i64::from(self.day_start_hour_local) * NS_PER_HOUR;
-        let offset_ns = i64::from(self.utc_offset_minutes) * NS_PER_MIN;
-        midnight_utc_ns + local_start_ns - offset_ns
+    /// The UTC timestamp (`ns`) at which the site's production day `date` starts: `day_start_hour_local` on the
+    /// site's wall clock, at the zone's offset on that day. Refuses an hour of 24 or more, and a start the zone skips
+    /// or repeats, or one outside its snapshot.
+    pub fn site_day_cut_utc_ns(&self, date: CivilDate) -> Result<i64, TimeError> {
+        if self.day_start_hour_local >= 24 {
+            return Err(TimeError::InvalidCalendar {
+                site_id: self.site_id.clone(),
+                detail: format!("day starts at hour {}", self.day_start_hour_local),
+            });
+        }
+        let local_s =
+            date.to_epoch_days() * SECS_PER_DAY + i64::from(self.day_start_hour_local) * 3600;
+        // The snapshot's span keeps `utc_s * NS_PER_SEC` inside i64.
+        Ok(self.zone.local_to_utc_s(local_s)? * NS_PER_SEC)
     }
 
     /// Checks whether the site production cut on `date` matches the fiscal cut-off (`G-TIME-1`).
-    /// If `allow_shift_pro_rata` is `false` and the timestamps differ, returns `CalendarCutMismatch`.
+    /// If `allow_shift_pro_rata` is `false` and the timestamps differ, returns `CalendarCutMismatch`. With it, the
+    /// fiscal cut must fall inside the day's first shift, and the result is the fraction of that shift before the
+    /// cut; a cut outside the shift refuses with `CalendarCutMismatch` rather than being clamped to it.
     pub fn verify_fiscal_alignment(
         &self,
         date: CivilDate,
         fiscal: FiscalCalendar,
         allow_shift_pro_rata: bool,
     ) -> Result<f64, TimeError> {
-        let site_cut = self.site_day_cut_utc_ns(date);
+        let site_cut = self.site_day_cut_utc_ns(date)?;
         let fiscal_cut = fiscal.period_utc.end_ns;
         if site_cut == fiscal_cut {
             return Ok(1.0);
         }
-        if !allow_shift_pro_rata {
-            return Err(TimeError::CalendarCutMismatch {
-                site_id: self.site_id.clone(),
-                shift_end_utc_ns: site_cut,
-                fiscal_cut_utc_ns: fiscal_cut,
-            });
-        }
+        let mismatch = || TimeError::CalendarCutMismatch {
+            site_id: self.site_id.clone(),
+            shift_end_utc_ns: site_cut,
+            fiscal_cut_utc_ns: fiscal_cut,
+        };
         let shift_ns = i64::from(self.shift_hours) * NS_PER_HOUR;
-        let delta = (fiscal_cut - site_cut).clamp(0, shift_ns);
+        let delta = fiscal_cut.checked_sub(site_cut).ok_or_else(mismatch)?;
+        if !allow_shift_pro_rata || !(0..=shift_ns).contains(&delta) {
+            return Err(mismatch());
+        }
         Ok((delta as f64) / (shift_ns as f64))
     }
 }
@@ -597,36 +786,174 @@ mod tests {
         assert!(table.ends_with("2200-12-31 84370 3 2201 1\n"));
     }
 
-    #[test]
-    fn test_site_and_fiscal_calendar_alignment_g_time_1() {
-        let carlin = SiteCalendar {
-            site_id: "ngm_carlin".to_string(),
-            utc_offset_minutes: -480,
-            day_start_hour_local: 6,
+    /// America/Los_Angeles over 2025, by hand: PST (-480) until 2025-03-09T10:00Z, PDT (-420) until
+    /// 2025-11-02T09:00Z, then PST. registries/zones.toml holds the same two rows for 2025.
+    fn la_2025() -> ZoneRules {
+        ZoneRules::new(
+            "America/Los_Angeles",
+            1_735_689_600,
+            1_767_225_600,
+            -480,
+            vec![(1_741_514_400, -420), (1_762_074_000, -480)],
+        )
+        .expect("valid table")
+    }
+
+    fn carlin(day_start_hour_local: u8) -> SiteCalendar {
+        SiteCalendar {
+            site_id: "ngm-carlin".to_string(),
+            zone: la_2025(),
+            day_start_hour_local,
             shift_hours: 12,
-        };
-        let q1_end_date = CivilDate::new(2025, 3, 31).expect("valid date");
-        let fiscal = FiscalCalendar {
+        }
+    }
+
+    fn q1_2025() -> FiscalCalendar {
+        FiscalCalendar {
             year: 2025,
             quarter: 1,
-            period_utc: ValidTime::new(
-                CivilDate::new(2025, 1, 1).unwrap().to_epoch_days() * NS_PER_DAY,
-                q1_end_date.to_epoch_days() * NS_PER_DAY + 24 * NS_PER_HOUR,
-            )
-            .unwrap(),
-        };
+            period_utc: ValidTime::new(1_735_689_600 * NS_PER_SEC, 1_743_465_600 * NS_PER_SEC)
+                .unwrap(),
+        }
+    }
 
+    #[test]
+    fn test_site_and_fiscal_calendar_alignment_g_time_1() {
+        let q1_end_date = CivilDate::new(2025, 3, 31).expect("valid date");
         // Without explicit shift-split rule, G-TIME-1 refuses unaligned aggregation.
-        let err = carlin
-            .verify_fiscal_alignment(q1_end_date, fiscal, false)
+        let err = carlin(6)
+            .verify_fiscal_alignment(q1_end_date, q1_2025(), false)
             .expect_err("must refuse unaligned cut");
         assert!(matches!(err, TimeError::CalendarCutMismatch { .. }));
 
-        // With shift pro-rata enabled, returns deterministic fraction in [0, 1].
-        let frac = carlin
-            .verify_fiscal_alignment(q1_end_date, fiscal, true)
+        // 31 March is in PDT: the day starts at 06:00 PDT = 13:00Z, 11 h before the fiscal cut at 1 April 00:00Z.
+        // A fixed PST offset put the start at 14:00Z and gave 10/12.
+        let frac = carlin(6)
+            .verify_fiscal_alignment(q1_end_date, q1_2025(), true)
             .expect("pro-rata allowed");
-        assert!((0.0..=1.0).contains(&frac));
+        assert_eq!(frac, 11.0 / 12.0);
+    }
+
+    #[test]
+    fn test_pro_rata_refuses_a_fiscal_cut_outside_the_first_shift() {
+        let site = carlin(6);
+        let mut late = q1_2025();
+        // 1 April 12:00Z is 23 h after the 31 March start: outside the 12 h shift. It used to clamp to 1.0.
+        late.period_utc.end_ns = 1_743_508_800 * NS_PER_SEC;
+        let mut early = q1_2025();
+        // 31 March 12:00Z is an hour before the start. It used to clamp to 0.0.
+        early.period_utc.end_ns = 1_743_422_400 * NS_PER_SEC;
+        let day = CivilDate::new(2025, 3, 31).unwrap();
+        for fiscal in [late, early] {
+            let err = site.verify_fiscal_alignment(day, fiscal, true).unwrap_err();
+            assert!(
+                matches!(err, TimeError::CalendarCutMismatch { .. }),
+                "{err}"
+            );
+        }
+        // The shift's last instant is still inside it.
+        let mut edge = q1_2025();
+        edge.period_utc.end_ns = (1_743_426_000 + 12 * 3600) * NS_PER_SEC;
+        assert_eq!(site.verify_fiscal_alignment(day, edge, true), Ok(1.0));
+    }
+
+    #[test]
+    fn test_site_day_cut_follows_daylight_saving() {
+        let site = carlin(6);
+        for ((y, m, d), utc_s) in [
+            ((2025, 1, 15), 1_736_949_600), // 06:00 PST = 14:00Z
+            ((2025, 3, 31), 1_743_426_000), // 06:00 PDT = 13:00Z
+            ((2025, 11, 3), 1_762_178_400), // 06:00 PST = 14:00Z
+        ] {
+            let date = CivilDate::new(y, m, d).unwrap();
+            assert_eq!(site.site_day_cut_utc_ns(date), Ok(utc_s * NS_PER_SEC));
+        }
+    }
+
+    #[test]
+    fn test_site_day_cut_refuses_a_skipped_or_repeated_start_and_hour_24() {
+        let spring = CivilDate::new(2025, 3, 9).unwrap();
+        let fall = CivilDate::new(2025, 11, 2).unwrap();
+        // 02:00-03:00 on 9 March does not exist; 01:00-02:00 on 2 November happens twice.
+        assert!(matches!(
+            carlin(2).site_day_cut_utc_ns(spring),
+            Err(TimeError::LocalTimeNonexistent { .. })
+        ));
+        assert_eq!(
+            carlin(1).site_day_cut_utc_ns(fall),
+            Err(TimeError::LocalTimeAmbiguous {
+                tz_name: "America/Los_Angeles".to_string(),
+                local_s: 20_394 * SECS_PER_DAY + 3600,
+                earlier_utc_s: 1_762_070_400,
+                later_utc_s: 1_762_074_000,
+            })
+        );
+        assert!(matches!(
+            carlin(24).site_day_cut_utc_ns(spring),
+            Err(TimeError::InvalidCalendar { .. })
+        ));
+        // Outside 2025 the table has no offsets, so a cut there is refused, not computed at a guessed offset.
+        let next_year = CivilDate::new(2026, 1, 15).unwrap();
+        assert!(matches!(
+            carlin(6).site_day_cut_utc_ns(next_year),
+            Err(TimeError::OutsideZoneSnapshot { .. })
+        ));
+    }
+
+    #[test]
+    fn test_zone_offset_holds_from_each_transition_second() {
+        let z = la_2025();
+        for (utc_s, offset) in [
+            (1_735_689_600, -480),
+            (1_741_514_399, -480),
+            (1_741_514_400, -420),
+            (1_762_073_999, -420),
+            (1_762_074_000, -480),
+            (1_767_225_599, -480),
+        ] {
+            assert_eq!(z.offset_minutes_at(utc_s), Ok(offset), "at {utc_s}");
+        }
+        for utc_s in [1_735_689_599, 1_767_225_600] {
+            assert!(matches!(
+                z.offset_minutes_at(utc_s),
+                Err(TimeError::OutsideZoneSnapshot { .. })
+            ));
+        }
+        // The edges of the skipped hour (local 02:00 on 9 March = 1741485600 local seconds).
+        let skipped = 20_156 * SECS_PER_DAY + 2 * 3600;
+        assert_eq!(z.local_to_utc_s(skipped - 1), Ok(1_741_514_399));
+        assert!(matches!(
+            z.local_to_utc_s(skipped + 3599),
+            Err(TimeError::LocalTimeNonexistent { .. })
+        ));
+        assert_eq!(z.local_to_utc_s(skipped + 3600), Ok(1_741_514_400));
+    }
+
+    #[test]
+    fn test_zone_rules_refuse_malformed_snapshots() {
+        let ok = vec![(10, 60), (20, 0)];
+        for (from, to, initial, transitions) in [
+            (0, 0, 0, vec![]),                     // empty span
+            (0, i64::MAX, 0, vec![]),              // seconds beyond the i64 nanosecond range
+            (0, 100, 19 * 60, vec![]),             // initial offset beyond 18 h
+            (0, 100, 0, vec![(10, -19 * 60)]),     // transition offset beyond 18 h
+            (0, 100, 0, vec![(20, 60), (10, 0)]),  // not increasing
+            (0, 100, 0, vec![(10, 60), (10, 0)]),  // repeated second
+            (0, 100, 0, vec![(0, 60)]),            // at the span's first second
+            (0, 100, 0, vec![(100, 60)]),          // at the span's end
+            (0, 100, 0, vec![(10, 0)]),            // no change
+            (0, 100, 0, vec![(10, 60), (20, 60)]), // no change
+        ] {
+            assert!(
+                matches!(
+                    ZoneRules::new("Test/Zone", from, to, initial, transitions.clone()),
+                    Err(TimeError::ZoneSnapshot { .. })
+                ),
+                "{from} {to} {initial} {transitions:?}"
+            );
+        }
+        assert!(ZoneRules::new("", 0, 100, 0, ok.clone()).is_err());
+        assert!(ZoneRules::new("Test/Zone", 0, 100, 0, ok).is_ok());
     }
 
     #[test]

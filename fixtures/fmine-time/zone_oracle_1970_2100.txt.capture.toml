@@ -1,0 +1,13 @@
+# Capture record (§33.2) for zone_oracle_1970_2100.txt: UTC offsets, local-time gaps and overlaps, and site
+# production-day cuts for the zones of registries/calendars.toml, 1970-2100 (bd-029). inputs_digest is the
+# generator's; its other inputs are registries/calendars.toml (zone and day-start of each site) and the system
+# tzdata named in version, whose TZif digests registries/zones.toml records.
+oracle = "CPython zoneinfo (datetime.fromtimestamp, astimezone with fold 0 and 1) over the system tzdata"
+version = "Python 3.15.0; tzdata 2026e"
+platform = "arm64-darwin"
+inputs_digest = "sha256:c101b493a9e1404ee6d2624178a9331dca04c38db575a166d49fca4ba36adfae"
+outputs_digest = "sha256:741fd7a54783683171a84be7a7b0c0a2a6baeff3eec6a247c76bde4f2ada22c3"
+command = "python3 -I scripts/oracle/zone_snapshot.py oracle"
+captured_by = "coding agent that wrote the fmine-time and fmine-registry code under test (no separate lab runner)"
+date = "2026-11-01"
+licence = "Generated time-zone facts; tzdata is public domain; the oracle is CPython (PSF-2.0); the generator is this repository's licence"

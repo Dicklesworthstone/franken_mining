@@ -849,6 +849,19 @@ pub fn check_sources_registry(root: &Path) -> Result<Vec<String>, Vec<String>> {
     }
 }
 
+/// `registries/calendars.toml` and its zone snapshot `registries/zones.toml` load and join (BD-029): every site
+/// names a zone the snapshot holds, every zone is named, and each zone's transitions form a valid table.
+pub fn check_calendars(root: &Path) -> Result<String, Vec<String>> {
+    match fmine_registry::calendars::load_site_calendars(root) {
+        Ok(c) => Ok(format!(
+            "{{\"check\":\"calendars\",\"sites\":{},\"tzdata\":\"{}\"}}",
+            c.calendars.len(),
+            c.tzdata
+        )),
+        Err(e) => Err(vec![format!("check-calendars: {e}")]),
+    }
+}
+
 /// Run all `GATE-LAYERS-00` checks (`BD-015`).
 pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
     let mut all_errors = Vec::new();
@@ -884,6 +897,9 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
         all_errors.extend(e);
     }
     if let Err(e) = check_sources_registry(root) {
+        all_errors.extend(e);
+    }
+    if let Err(e) = check_calendars(root) {
         all_errors.extend(e);
     }
     if let Err(e) = refusals::check_refusals(root) {

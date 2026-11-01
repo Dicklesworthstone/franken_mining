@@ -95,6 +95,9 @@ The `forecast-*` commands are the exception: they write a record's digest files 
     `docs/templates/CAPTURE-RECORD.md`.
 - `check_sources_registry(root: &Path) -> Result<Vec<String>, Vec<String>>` (`registry-check`; on success one
   `{"stage":"registry",…}` JSON log line per `registries/sources/*.toml`)
+- `check_calendars(root: &Path) -> Result<String, Vec<String>>` (BD-029; `check-all` runs it and prints
+  `{"check":"calendars","sites","tzdata"}`): `fmine_registry::calendars::load_site_calendars` must join
+  `registries/calendars.toml` with the zone snapshot `registries/zones.toml`
 - `refusals::{check_refusals, gen_refusals}` (BD-328; commands `check-refusals`, `gen-refusals`, and `check-all`
   runs the check and prints its line `{"check":"check-refusals","rows","active","proposed","reserved",…}`):
   - `gen_refusals` renders `registries/refusals.toml` (schema 2) into the `RefusalCode` enum and `CATALOG`, and
