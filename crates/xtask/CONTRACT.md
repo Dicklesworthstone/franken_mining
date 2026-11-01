@@ -161,6 +161,11 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   boundary preserves unconditional forecast/outcome scores. `benchmark_assessment` serializes statuses,
   exact results, source/timing evidence and pool exclusions. Issuer guidance has no inferred nominal
   probability, and no same-information-set, skill or calibration claim is made.
+  Its `issuer_guidance_completion` and `run_rate_persistence_completion` objects separately report exact
+  mean-loss-difference bounds over every frozen live member, including pending outcomes. They retain the
+  full denominator and name pending outcomes or unavailable comparators; a missing comparator yields null
+  bounds, while a completion overflow refuses only that completion. Bounds allow every real unresolved
+  outcome and carry no probability meaning. Their deterministic JSON is included in the assessment digest.
 - `forecast::persistence_baselines` (command `forecast-baseline`): each `run_rate_persistence` baseline of the
   FY2026 rules from the registered Mine Stats workbooks (read through `fmine-public` under the registered
   vocabulary; a workbook with a refused cell refuses): the pool's size, the pairs left out, the two ratio

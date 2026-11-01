@@ -26,6 +26,13 @@
   flags. Empty common sets have no means or score differences. Negative forecast-minus-baseline differences
   favor the forecast under the frozen loss, without asserting skill, calibration or probability semantics
   for an issuer's range. The ordinary assessment retains the full frozen population independently.
+  Each comparator also has exact full-frozen-cohort mean-loss-difference completion bounds. For shared
+  alpha, `interval_score_difference_bounds` evaluates the four endpoint knots: the difference is piecewise
+  linear and both tails are constant. Known outcomes contribute their exact difference; unresolved outcomes
+  contribute the global extrema over all real values, divided by the full live-member count. Missing
+  comparators leave bounds absent with named members; arithmetic refusal is local to its completion and
+  preserves observed means and the other comparator. Different alpha values cannot use this cancellation.
+  These arithmetic completion bounds are neither confidence intervals nor predictive-skill claims.
 Implements the append-only pre-registration `ForecastLedger` (`INV-008`, `FMINE-REF-206`), strictly proper scoring rules (`gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`), `ReferenceClassPrior` (`GB-32`: capex `+28%/+43%`, schedule `+31%`, ramp-up `74%` Yr-1), and `SpatialFrontPitMonitor` (`GB-08` Vecchia/Rosenblatt conditional PIT + `BettingEProcess`).
 
 ## 3. Authority, Epistemics & Representation
@@ -157,6 +164,8 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   coverage, an equicorrelation n_eff sensitivity over the frozen rho range, and a paired count/mean for the
   common population where the forecast, outcome and every declared baseline are available. Membership,
   paired means and forecast-minus-baseline differences reuse `record::scoring::compare`'s common calculation;
+  both full-live-cohort loss-difference completion objects are retained in the typed target summary and JSON,
+  including pending/missing names and local arithmetic refusal, independently of the common-set means.
   negative differences favor the forecast loss without a skill claim. Calibration remains `Descriptive` or,
   without resolved live outcomes, `Unscored`,
   even if the record's sample threshold is exceeded.

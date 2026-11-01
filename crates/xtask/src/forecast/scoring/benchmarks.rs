@@ -9,7 +9,9 @@ use std::path::Path;
 
 use fmine_calib::record::{
     self, BaselineKind, BaselineRule, Quarter, Rat, RecordManifest, SiteStatus,
-    scoring::{self, BenchmarkRow, ComparisonExclusion, OutcomeRow, TargetComparison},
+    scoring::{
+        self, BenchmarkRow, ComparisonCompletion, ComparisonExclusion, OutcomeRow, TargetComparison,
+    },
 };
 use fmine_core::hash::Digest32;
 use fmine_public::key::mine_stats::KeyedClaims;
@@ -409,13 +411,37 @@ fn persistence(
     Ok(out)
 }
 
+fn completion_json(completion: &ComparisonCompletion, n_frozen: usize, assessed: bool) -> String {
+    let status = if !assessed || completion.arithmetic_refusal.is_some() {
+        "refused"
+    } else if !completion.missing_benchmarks.is_empty() {
+        "missing_benchmarks"
+    } else if n_frozen == 0 {
+        "empty"
+    } else {
+        "bounded"
+    };
+    format!(
+        "{{\"kind\":\"arithmetic_completion_bounds\",\"status\":{},\"n_members\":{},\"outcome_domain\":\"all_real_values\",\"pending_outcomes\":{},\"missing_benchmarks\":{},\"arithmetic_refusal\":{},\"mean_difference_bounds\":{}}}",
+        js(status),
+        n_frozen,
+        names(&completion.pending_outcomes),
+        names(&completion.missing_benchmarks),
+        completion
+            .arithmetic_refusal
+            .as_deref()
+            .map_or_else(|| "null".into(), js),
+        interval_json(completion.mean_difference_bounds),
+    )
+}
+
 fn comparison_json(target: &TargetComparison, status: &str, errors: &[String]) -> String {
     let exclusions = target.exclusions.iter().map(|row| format!(
         "{{\"site\":{},\"missing_actual\":{},\"missing_issuer_guidance\":{},\"missing_run_rate_persistence\":{}}}",
         js(&row.site), row.missing_actual, row.missing_issuer_guidance, row.missing_run_rate_persistence,
     )).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"target\":{},\"status\":{},\"errors\":{},\"n_frozen\":{},\"n_common\":{},\"common_members\":{},\"exclusions\":[{}],\"mean_forecast_score\":{},\"mean_issuer_guidance_score\":{},\"mean_run_rate_persistence_score\":{},\"forecast_minus_issuer_guidance\":{},\"forecast_minus_run_rate_persistence\":{}}}",
+        "{{\"target\":{},\"status\":{},\"errors\":{},\"n_frozen\":{},\"n_common\":{},\"common_members\":{},\"exclusions\":[{}],\"mean_forecast_score\":{},\"mean_issuer_guidance_score\":{},\"mean_run_rate_persistence_score\":{},\"forecast_minus_issuer_guidance\":{},\"forecast_minus_run_rate_persistence\":{},\"issuer_guidance_completion\":{},\"run_rate_persistence_completion\":{}}}",
         js(&target.target),
         js(status),
         names(errors),
@@ -428,6 +454,16 @@ fn comparison_json(target: &TargetComparison, status: &str, errors: &[String]) -
         rational(target.mean_run_rate_persistence_score),
         rational(target.forecast_minus_issuer_guidance),
         rational(target.forecast_minus_run_rate_persistence),
+        completion_json(
+            &target.issuer_guidance_completion,
+            target.n_frozen,
+            status == "assessed"
+        ),
+        completion_json(
+            &target.run_rate_persistence_completion,
+            target.n_frozen,
+            status == "assessed"
+        ),
     )
 }
 
@@ -471,6 +507,8 @@ fn comparisons(loaded: &Loaded, outcomes: &[OutcomeRow], rows: &[BenchmarkRow]) 
                         mean_run_rate_persistence_score: None,
                         forecast_minus_issuer_guidance: None,
                         forecast_minus_run_rate_persistence: None,
+                        issuer_guidance_completion: ComparisonCompletion::default(),
+                        run_rate_persistence_completion: ComparisonCompletion::default(),
                     };
                     for site in rules
                         .sites
@@ -490,6 +528,28 @@ fn comparisons(loaded: &Loaded, outcomes: &[OutcomeRow], rows: &[BenchmarkRow]) 
                                 .and_then(|row| row.run_rate_persistence)
                                 .is_none(),
                         };
+                        if exclusion.missing_actual {
+                            population
+                                .issuer_guidance_completion
+                                .pending_outcomes
+                                .push(site.name.clone());
+                            population
+                                .run_rate_persistence_completion
+                                .pending_outcomes
+                                .push(site.name.clone());
+                        }
+                        if exclusion.missing_issuer_guidance {
+                            population
+                                .issuer_guidance_completion
+                                .missing_benchmarks
+                                .push(site.name.clone());
+                        }
+                        if exclusion.missing_run_rate_persistence {
+                            population
+                                .run_rate_persistence_completion
+                                .missing_benchmarks
+                                .push(site.name.clone());
+                        }
                         if exclusion.missing_actual
                             || exclusion.missing_issuer_guidance
                             || exclusion.missing_run_rate_persistence
@@ -855,6 +915,8 @@ mod tests {
         );
         assert!(absent.contains("\"n_common\":0"));
         assert!(absent.contains("\"missing_actual\":false"));
+        assert!(absent.contains("\"missing_benchmarks\":[\"Example Mine\"]"));
+        assert!(absent.contains("\"mean_difference_bounds\":null"));
         for quarter in ["2024Q1", "2024Q2"] {
             profile.sources.push(RegisteredSource {
                 file_name: format!("invented_missing_{quarter}.xlsx"),
@@ -879,7 +941,7 @@ mod tests {
     #[test]
     fn comparator_overflow_preserves_population_and_the_other_target() {
         let loaded = loaded();
-        let actuals: Vec<_> = loaded
+        let mut actuals: Vec<_> = loaded
             .forecasts
             .iter()
             .map(|forecast| OutcomeRow {
@@ -921,6 +983,79 @@ mod tests {
                 .observed_mean_interval_score,
             Some(Rat::from_integer(120))
         );
+        actuals[0].value = None;
+        let pending = comparisons(&loaded, &actuals, &benchmarks);
+        assert!(pending[0].starts_with("{\"target\":\"production\",\"status\":\"assessed\""));
+        assert!(pending[0].contains("\"arithmetic_refusal\":\""));
+        assert!(pending[0].contains("\"pending_outcomes\":[\"Example Mine\"]"));
+        assert!(
+            pending[0].contains("\"mean_difference_bounds\":{\"lower\":\"0\",\"upper\":\"0\"}")
+        );
+    }
+
+    #[test]
+    fn completion_json_binds_the_full_membership_and_is_deterministic() {
+        use fmine_core::hash::sha256;
+        let mut loaded = loaded();
+        let mut other = loaded.rules.sites[0].clone();
+        other.name = "Pending Mine".into();
+        loaded.rules.sites.push(other);
+        let extra: Vec<_> = loaded
+            .forecasts
+            .iter()
+            .cloned()
+            .map(|mut row| {
+                row.site = "Pending Mine".into();
+                row
+            })
+            .collect();
+        loaded.forecasts.extend(extra);
+        let mut actuals: Vec<_> = loaded
+            .forecasts
+            .iter()
+            .map(|row| OutcomeRow {
+                site: row.site.clone(),
+                target: row.target.clone(),
+                value: (row.site == "Example Mine").then_some(Rat::from_integer(100)),
+            })
+            .collect();
+        let mut benchmarks: Vec<_> = loaded
+            .forecasts
+            .iter()
+            .map(|row| BenchmarkRow {
+                site: row.site.clone(),
+                target: row.target.clone(),
+                issuer_guidance: Some((Rat::from_integer(80), Rat::from_integer(120))),
+                run_rate_persistence: Some((row.lo, row.hi)),
+            })
+            .collect();
+        let original = comparisons(&loaded, &actuals, &benchmarks).join(",");
+        let expected = "\"issuer_guidance_completion\":{\"kind\":\"arithmetic_completion_bounds\",\"status\":\"bounded\",\"n_members\":2,\"outcome_domain\":\"all_real_values\",\"pending_outcomes\":[\"Pending Mine\"],\"missing_benchmarks\":[],\"arithmetic_refusal\":null,\"mean_difference_bounds\":{\"lower\":\"-20\",\"upper\":\"30\"}}";
+        assert_eq!(original.matches(expected).count(), 2);
+        let digest = sha256(original.as_bytes());
+        loaded.forecasts.reverse();
+        actuals.reverse();
+        benchmarks.reverse();
+        let permuted = comparisons(&loaded, &actuals, &benchmarks).join(",");
+        assert_eq!(original, permuted);
+        assert_eq!(digest, sha256(permuted.as_bytes()));
+
+        // These exact comparison bytes form part of the enclosing assessment's SHA-256 body.
+        for row in &mut actuals {
+            row.value = Some(Rat::from_integer(100));
+        }
+        let resolved = comparisons(&loaded, &actuals, &benchmarks).join(",");
+        assert!(
+            resolved.contains("\"mean_difference_bounds\":{\"lower\":\"-20\",\"upper\":\"-20\"}")
+        );
+        assert_ne!(digest, sha256(resolved.as_bytes()));
+        benchmarks[0].issuer_guidance = None;
+        let missing = comparisons(&loaded, &actuals, &benchmarks).join(",");
+        assert!(missing.contains("\"status\":\"missing_benchmarks\",\"n_members\":2"));
+        assert!(missing.contains("\"missing_benchmarks\":[\"Pending Mine\"]"));
+        assert!(missing.contains("\"mean_difference_bounds\":null"));
+        assert!(missing.contains("\"mean_difference_bounds\":{\"lower\":\"0\",\"upper\":\"0\"}"));
+        assert_ne!(sha256(resolved.as_bytes()), sha256(missing.as_bytes()));
     }
 
     #[test]

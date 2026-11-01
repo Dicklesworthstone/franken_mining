@@ -11,6 +11,7 @@ use std::fmt::{Display, Write as _};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_numerics::exact_feas::Interval;
 
+use super::ComparisonCompletion;
 use crate::CalibrationFlag;
 use crate::guidance_scores::clopper_pearson_exact;
 use crate::record::{
@@ -115,6 +116,9 @@ pub struct TargetSummary {
     /// Differences on the common comparison set; negative values favor the forecast loss.
     pub forecast_minus_issuer_guidance: Option<Rat>,
     pub forecast_minus_run_rate_persistence: Option<Rat>,
+    /// Arithmetic loss-difference bounds on every live member, including unresolved outcomes.
+    pub issuer_guidance_completion: ComparisonCompletion,
+    pub run_rate_persistence_completion: ComparisonCompletion,
     /// Forecast first, then the target's baselines in frozen rules order.
     pub methods: Vec<MethodSummary>,
 }
@@ -560,6 +564,8 @@ pub fn assess(
             n_paired,
             forecast_minus_issuer_guidance: comparison.forecast_minus_issuer_guidance,
             forecast_minus_run_rate_persistence: comparison.forecast_minus_run_rate_persistence,
+            issuer_guidance_completion: comparison.issuer_guidance_completion.clone(),
+            run_rate_persistence_completion: comparison.run_rate_persistence_completion.clone(),
             methods,
         });
     }
@@ -730,6 +736,39 @@ fn score_json(value: Option<Score>) -> String {
     )
 }
 
+fn completion_json(value: &ComparisonCompletion, n_live: usize) -> String {
+    let names = |values: &[String]| {
+        values
+            .iter()
+            .map(|v| quote(v))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let status = if value.arithmetic_refusal.is_some() {
+        "refused"
+    } else if !value.missing_benchmarks.is_empty() {
+        "missing_benchmarks"
+    } else if n_live == 0 {
+        "empty"
+    } else {
+        "bounded"
+    };
+    format!(
+        "{{\"kind\":\"arithmetic_completion_bounds\",\"status\":{},\"n_members\":{},\"outcome_domain\":\"all_real_values\",\"pending_outcomes\":[{}],\"missing_benchmarks\":[{}],\"arithmetic_refusal\":{},\"mean_difference_bounds\":{}}}",
+        quote(status),
+        n_live,
+        names(&value.pending_outcomes),
+        names(&value.missing_benchmarks),
+        value
+            .arithmetic_refusal
+            .as_deref()
+            .map_or_else(|| "null".into(), quote),
+        value
+            .mean_difference_bounds
+            .map_or_else(|| "null".into(), |(lo, hi)| bounds_json(Bounds { lo, hi })),
+    )
+}
+
 impl RecordAssessment {
     /// Deterministic exact JSON. The enclosing adapter binds it to the frozen record and source citations.
     #[must_use]
@@ -749,9 +788,10 @@ impl RecordAssessment {
                 quote(&m.method), m.n_available, m.n_scored, m.n_unscored, m.n_inside, optional_rat(m.mean_interval_score),
                 optional_rat(m.observed_coverage), optional_interval(m.whole_cohort_coverage), optional_interval(m.iid_reference_interval),
                 interval_json(m.effective_n), optional_rat(m.paired_mean_interval_score))).collect::<Vec<_>>().join(",");
-            format!("{{\"target\":{},\"n_members\":{},\"n_live\":{},\"n_not_published\":{},\"n_resolved\":{},\"n_unresolved\":{},\"n_paired\":{},\"forecast_minus_issuer_guidance\":{},\"forecast_minus_run_rate_persistence\":{},\"methods\":[{methods}]}}",
+            format!("{{\"target\":{},\"n_members\":{},\"n_live\":{},\"n_not_published\":{},\"n_resolved\":{},\"n_unresolved\":{},\"n_paired\":{},\"forecast_minus_issuer_guidance\":{},\"forecast_minus_run_rate_persistence\":{},\"issuer_guidance_completion\":{},\"run_rate_persistence_completion\":{},\"methods\":[{methods}]}}",
                 quote(&t.target), t.n_members, t.n_live, t.n_not_published, t.n_resolved, t.n_unresolved, t.n_paired,
-                optional_rat(t.forecast_minus_issuer_guidance), optional_rat(t.forecast_minus_run_rate_persistence))
+                optional_rat(t.forecast_minus_issuer_guidance), optional_rat(t.forecast_minus_run_rate_persistence),
+                completion_json(&t.issuer_guidance_completion, t.n_live), completion_json(&t.run_rate_persistence_completion, t.n_live))
         }).collect::<Vec<_>>().join(",");
         format!(
             "{{\"schema\":\"fmine.forecast-record.scores.v1\",\"record_id\":{},\"rules_id\":{},\"alpha\":{},\"coverage_level\":{},\"rho_low\":{},\"rho_high\":{},\"calibration_claim_min_n\":{},\"calibration_flag\":{},\"cp_assumption\":{},\"coverage_denominator\":\"frozen_live_members\",\"completion_bounds\":\"hypothetical_whole_cohort_coverage_not_confidence_intervals\",\"effective_n_assumption\":\"equicorrelation_sensitivity_over_frozen_rho_range_not_dependence_estimate\",\"members\":[{members}],\"targets\":[{targets}]}}",
@@ -983,6 +1023,58 @@ mod tests {
         let after = assess(&rules, &forecasts, &outcomes, &baselines).expect("permutation");
         assert_eq!(before, after);
         assert_eq!(before.to_json(), after.to_json());
+    }
+
+    #[test]
+    fn paired_json_retains_completion_pending_missing_and_local_overflow_states() {
+        let (rules, forecasts, outcomes, mut baselines) = fixture();
+        let report = assess(&rules, &forecasts, &outcomes, &baselines).unwrap();
+        let guidance = &report.targets[0].issuer_guidance_completion;
+        assert_eq!(guidance.pending_outcomes, ["C"]);
+        assert_eq!(guidance.missing_benchmarks, ["B"]);
+        assert_eq!(guidance.mean_difference_bounds, None);
+        // A and B contribute 26 and -2; pending C contributes [-20,20], all divided by three.
+        let persistence = &report.targets[0].run_rate_persistence_completion;
+        assert_eq!(
+            persistence.mean_difference_bounds,
+            Some((r(4, 3), r(44, 3)))
+        );
+        let json = report.to_json();
+        assert!(json.contains("\"status\":\"missing_benchmarks\",\"n_members\":3"));
+        assert!(json.contains("\"pending_outcomes\":[\"C\"],\"missing_benchmarks\":[\"B\"]"));
+        assert!(json.contains("\"mean_difference_bounds\":{\"lo\":{\"num\":\"4\",\"den\":\"3\"},\"hi\":{\"num\":\"44\",\"den\":\"3\"}}"));
+        for row in &mut baselines {
+            if row.baseline == "issuer_guidance" {
+                if row.site == "B" {
+                    row.value = interval(20, 24);
+                }
+                if row.site == "C" {
+                    row.value = interval(i128::MAX, i128::MAX);
+                }
+            }
+        }
+        let overflow = assess(&rules, &forecasts, &outcomes, &baselines).unwrap();
+        let target = &overflow.targets[0];
+        assert_eq!(target.forecast_minus_issuer_guidance, Some(i(10)));
+        assert_eq!(&target.run_rate_persistence_completion, persistence);
+        assert!(
+            target
+                .issuer_guidance_completion
+                .arithmetic_refusal
+                .is_some()
+        );
+        assert_eq!(target.issuer_guidance_completion.pending_outcomes, ["C"]);
+        assert!(
+            target
+                .issuer_guidance_completion
+                .missing_benchmarks
+                .is_empty()
+        );
+        let json = overflow.to_json();
+        assert!(json.contains("\"status\":\"refused\",\"n_members\":3"));
+        assert!(json.contains("\"arithmetic_refusal\":\""));
+        assert!(json.contains("\"mean_difference_bounds\":null"));
+        assert_eq!(overflow.flag, CalibrationFlag::Descriptive);
     }
 
     #[test]
