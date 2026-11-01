@@ -5,6 +5,7 @@
 //! original registered release; a later comparative, different basis or stored unrounded value cannot
 //! replace that target. The journal owner supplies and checks its own bounded recording clock.
 
+use std::io::Read as _;
 use std::path::Path;
 
 use fmine_calib::ledger::OutcomeCitation;
@@ -14,15 +15,17 @@ use fmine_calib::ledger::binding::{
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::ObjectId;
 use fmine_core::anchor::SourceAnchor;
-use fmine_core::hash::Digest32;
+use fmine_core::hash::{Digest32, sha256};
 use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode};
+use fmine_io::xlsx::Workbook;
 use fmine_numerics::exact_feas::Rat;
 use fmine_public::key::{
     KeyedCell, LineKey, OwnershipBasis, PublicKey, PublicValue, Scope, ShareSource, Vintage,
     canonical_value_tag, parse_period_code,
 };
+use fmine_public::mine_stats::{View, read_mine_stats};
 use fmine_public::sources::{IssuerProfile, SourceKind, is_issuer_name, registry_path};
-use fmine_registry::sources::{SourceRow, load_sources_registry};
+use fmine_registry::sources::{SourceRow, parse_sources_registry};
 use fmine_time::{CivilDate, NS_PER_DAY};
 
 type Result<T> = std::result::Result<T, Refusal>;
@@ -62,6 +65,37 @@ fn public_policy(policy: &PublicResolutionPolicy) -> Result<()> {
     Ok(())
 }
 
+fn bounded_snapshot(path: &Path, limit: u64) -> Result<Vec<u8>> {
+    let failure = |error| {
+        refusal(
+            RefusalCode::InputMissingOrUnreadable506,
+            format!("{}: {error}", path.display()),
+        )
+    };
+    let file = std::fs::File::open(path).map_err(failure)?;
+    let metadata = file.metadata().map_err(failure)?;
+    if !metadata.is_file() || metadata.len() > limit {
+        return Err(refusal(
+            RefusalCode::InputMissingOrUnreadable506,
+            format!(
+                "{} must be a regular file within {limit} bytes",
+                path.display()
+            ),
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(failure)?;
+    if bytes.len() as u64 > limit {
+        return Err(refusal(
+            RefusalCode::InputMissingOrUnreadable506,
+            format!("{} grew beyond {limit} bytes", path.display()),
+        ));
+    }
+    Ok(bytes)
+}
+
 /// Authenticate the original workbook and resolve only the target bound into `policy` for this id.
 /// No caller-supplied value, locator, subject, basis, source date or clock participates in selection.
 pub(super) fn resolve(
@@ -77,7 +111,14 @@ pub(super) fn resolve(
         ));
     }
     let path = registry_path(root, &policy.issuer);
-    let registry = load_sources_registry(&path).map_err(|error| {
+    let registry_bytes = bounded_snapshot(&path, 4 * 1024 * 1024)?;
+    let registry_text = std::str::from_utf8(&registry_bytes).map_err(|error| {
+        refusal(
+            RefusalCode::InputMissingOrUnreadable506,
+            format!("{}: {error}", path.display()),
+        )
+    })?;
+    let registry = parse_sources_registry(registry_text).map_err(|error| {
         refusal(
             RefusalCode::InputMissingOrUnreadable506,
             format!("{}: {error}", path.display()),
@@ -114,41 +155,77 @@ pub(super) fn resolve(
     profile.sources.retain(|row| {
         row.kind == SourceKind::MineStats && row.quarter == release && row.file_name == source.file
     });
-    let sources = fmine_public::load_registered_sources(&profile, root)?;
-    let vocabulary = profile.mine_stats_labels.iter().cloned().collect();
-    let reads = sources
-        .iter()
-        .map(|verified| {
-            Ok((
-                verified.file_name.clone(),
-                fmine_public::mine_stats::read_mine_stats(
-                    &verified.workbook,
-                    &verified.quarter,
-                    (!profile.mine_stats_labels.is_empty()).then_some(&vocabulary),
-                )?,
-            ))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let loaded = fmine_public::key::mine_stats::build_claims(&profile, &sources, &reads);
-    let result = bind(&source, policy, forecast_id, &loaded.claims)?;
-    let mut rows = reads
-        .iter()
-        .flat_map(|(file, read)| read.values.iter().map(move |row| (file, row)))
-        .filter(|(file, row)| {
-            format!("{file}:{}!{}", row.sheet, row.cell) == result.source.locator
-        });
-    let (_, row) = rows.next().ok_or_else(|| {
+    let artifact = format!("{}/{}", profile.corpus_dir, source.file);
+    let bytes = bounded_snapshot(&root.join(&artifact), 64 * 1024 * 1024)?;
+    if bytes.len() as u64 != source.bytes || sha256(&bytes).to_hex() != source.sha256 {
+        return Err(refusal(
+            RefusalCode::DigestMismatch505,
+            format!(
+                "{} differs from its registered byte count or SHA-256",
+                source.file
+            ),
+        ));
+    }
+    let workbook = Workbook::from_bytes(artifact, &bytes).map_err(|error| {
         refusal(
-            RefusalCode::SupportMismatch102,
-            "outcome has no original period-header evidence",
+            RefusalCode::InputMissingOrUnreadable506,
+            format!("{}: {error}", source.file),
+        )
+    })?;
+    let vocabulary = profile.mine_stats_labels.iter().cloned().collect();
+    let read = read_mine_stats(
+        &workbook,
+        &release,
+        (!profile.mine_stats_labels.is_empty()).then_some(&vocabulary),
+    )?;
+    let period = policy.period.label();
+    let field = policy.metric.field(policy.ownership);
+    let subject = &policy.members[&forecast_id];
+    // Count raw competitors before Claim conversion: a malformed share or unit must not hide a
+    // second assertion and let the remaining cell become an apparently unambiguous outcome.
+    let mut rows = read.values.iter().filter(|row| {
+        let named = profile
+            .shares
+            .iter()
+            .find(|share| share.label == row.site)
+            .map_or(row.site.as_str(), |share| share.subject.as_str());
+        let label = profile
+            .mine_stats_label_aliases
+            .iter()
+            .find(|alias| alias.label == row.label && alias.holds_for(&release))
+            .map_or(row.label.as_str(), |alias| alias.reads_as.as_str());
+        row.view == View::Summary
+            && row.period == period
+            && named == subject
+            && field
+                == format!(
+                    "summary:{}",
+                    label
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .to_lowercase()
+                )
+    });
+    let row = rows.next().ok_or_else(|| {
+        refusal(
+            RefusalCode::NoClaimInDomain201,
+            format!(
+                "the original release has no assertion for frozen target {subject} {period} {field}"
+            ),
         )
     })?;
     if rows.next().is_some() {
         return Err(refusal(
-            RefusalCode::SupportMismatch102,
-            "outcome has ambiguous period-header evidence",
+            RefusalCode::NonIdentifiableAttribution104,
+            format!(
+                "multiple original source assertions match frozen target {subject} {period} {field}"
+            ),
         ));
     }
+    let cell = fmine_public::key::from_mine_stats(&profile, &workbook, &release, row)
+        .map_err(|error| refusal(RefusalCode::SourceCellUnusable208, error.to_string()))?;
+    let result = bind(&source, policy, forecast_id, &[cell])?;
     calendar_period(row, policy.period)?;
     Ok(result)
 }

@@ -614,3 +614,92 @@ fn resolve_cli_uses_only_the_frozen_cohort_member_and_explicit_head() {
         .collect();
     assert!(parse_args(&no_trust, &fixture.root).is_err());
 }
+
+#[test]
+fn unusable_competing_target_cannot_disappear_during_claim_projection() {
+    for competitor in ["Site A", "Unrelated Site"] {
+        let mut fixture = Fixture::annual("100%");
+        let path = fixture.root.join("corpus/2030Q4.xlsx");
+        let original = fs::read(&path).unwrap();
+        let mut annual = sheet(
+            "YTD",
+            "twelve",
+            "400.4",
+            "All-in sustaining costs ($/oz)",
+            "December 31",
+        );
+        // The raw reader names this subject correctly. Its impossible printed ownership makes the
+        // later canonical-Claim projection refuse this row; that refusal must not remove a rival
+        // assertion for the same frozen target and leave the surviving numeric cell as unique.
+        annual.cells.extend([
+            (
+                "A6".into(),
+                MinimalCell::Text(format!("{competitor} (150%)")),
+            ),
+            (
+                "B6".into(),
+                MinimalCell::Styled {
+                    raw: "999.4".into(),
+                    xf: 0,
+                },
+            ),
+        ]);
+        let bytes = build_minimal_xlsx_styled(
+            &[
+                annual,
+                sheet(
+                    "QTD",
+                    "three",
+                    "100.4",
+                    "All-in sustaining costs ($/oz)",
+                    "December 31",
+                ),
+            ],
+            Some(&MinimalStyles {
+                num_fmts: vec![],
+                xfs: vec![1],
+            }),
+        );
+        fs::write(&path, &bytes).unwrap();
+        let registry = registry_path(&fixture.root, ISSUER);
+        let text = fs::read_to_string(&registry)
+            .unwrap()
+            .replace(
+                &format!("bytes = {}\n", original.len()),
+                &format!("bytes = {}\n", bytes.len()),
+            )
+            .replace(&fixture.source_digest.to_hex(), &sha256(&bytes).to_hex());
+        fs::write(registry, text).unwrap();
+        let profile = load_issuer_profile(&fixture.root, ISSUER).unwrap();
+        let inventory =
+            fmine_public::key::mine_stats::load_claims(&profile, &fixture.root).unwrap();
+        assert!(
+            inventory
+                .refusals
+                .iter()
+                .any(|row| row.locator == "2030Q4.xlsx:YTD!B6"),
+            "the unusable source row must be visible as a projection refusal"
+        );
+        assert_eq!(
+            inventory
+                .claims
+                .iter()
+                .filter(|cell| {
+                    cell.key.subject == "Site A"
+                        && cell.key.valid_period.code() == "2030FY"
+                        && cell.key.line.label == "summary:au_prod_100_koz"
+                })
+                .count(),
+            1,
+            "only the successful target remains in the projection"
+        );
+        if competitor == "Site A" {
+            fixture.refuse(&fixture.resolve(), ns(AVAILABLE), "FMINE-REF-104");
+        } else {
+            // A refusal for a different subject is not evidence that this frozen target is ambiguous.
+            let admitted = fixture.ok(fixture.resolve(), ns(AVAILABLE));
+            assert!(admitted.payload_json.contains("\"n_outcomes\":1"));
+            assert!(admitted.payload_json.contains("\"numerator\":\"400\""));
+        }
+    }
+}
