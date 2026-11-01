@@ -67,7 +67,7 @@ of the whole operation. See [Alongside your systems](#alongside-your-systems-and
 | Has it been reviewed? | **Five audits and six hypothesis passes.** AUDIT_1–AUDIT_5 covered domain accuracy, suite fit, internal consistency, a corpus second read and a second-wave review of equations, guards and the bead graph. Brenner passes B1–B6 covered subsurface, prospectivity, planning and capital, substrate, wedge and pre-mortem, and operations, plant, tailings and workforce. Their corrections are folded in (plan Appendix H) |
 | Is there a work plan? | **Yes.** 21 work packages and 485 beads with 917 dependency edges, acyclic. Instantiated in `.beads/` for `br` |
 | Is there code? | **Yes, and the public lane runs.** `fmine assure public --issuer barrick` runs end to end on the 18 registered workbooks (not in git) and reproduces the state root pinned in `repro/barrick/expected.toml`. The M0 gate is not passed: the M0 report, the security pack and the hashed FY2026 forecasts are still open |
-| Has anything been benchmarked? | **No.** Every speed and scale number in the plan is a TARGET |
+| Has anything been benchmarked? | **No benchmark suite.** One machine has timed `fmine-optimize`'s certified ultimate pit: MineLib's 2.1M-block mclaughlin in about 1.2 s, and a synthetic 10⁷-block model in under a minute (`crates/fmine-optimize/CONTRACT.md` §8). Every other speed and scale number in the plan is a TARGET |
 
 ### Run the public lane
 

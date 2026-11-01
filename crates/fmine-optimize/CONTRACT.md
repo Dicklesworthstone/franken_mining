@@ -135,6 +135,8 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   | `scale_pit` slope_2e6, K = 8 | 2,000,000 | 65,223,274 of 620,800,754 | 16.3 s, arcs 0.47 s | 1.8 GB |
   | `scale_pit` slope_1e7, K = 4 | 10,000,000 | 168,721,897 of 515,782,954 | 51.8 s, arcs 0.33 s | 5.0 GB |
 
+  Plan §15.4's scale TARGET for `pitflow` is 10⁷ blocks and about 2×10⁸ implicit arcs in at most 120 s and 32 GB. slope_1e7 comes near it, with 1.69×10⁸ arcs stored explicitly, in 51.4 s and 5.0 GB. That is one synthetic model on one machine, with 15% fewer arcs than the target and none of them implicit, so the TARGET is not claimed as met.
+
   The slope rows use the blocks_1e7 ore model with slope arcs in place of the 3 × 3 ones. They have 10 m cubes and two domains: 45° to 55° by sector in the west half, and 60° in the east half. "Of" gives the full-cone count.
 
   The synthetic models cost far more per block than MineLib's. blocks_1e7 made 193M relabels against mclaughlin's 1.3M. Time grows faster than linearly in this family: 8.6× the blocks of arcs_1e7 took 18.6× the time.
