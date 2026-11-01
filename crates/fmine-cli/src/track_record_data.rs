@@ -242,6 +242,21 @@ pub(super) fn specification(a: &Accepted, name: &str) -> Result<((bool, Rat), St
     Ok((ownership, format!("summary:{line}")))
 }
 
+// Raw transcription bases stay on the source record; interpreted series use exact normalized shares.
+fn series_basis(a: &Accepted, metric: &str) -> Result<String> {
+    let ((attributable, share), _) = specification(a, metric)?;
+    let mut basis = if attributable {
+        format!("attributable:{}/{}", share.num(), share.den())
+    } else {
+        "100%".into()
+    };
+    if let Some((_, definition)) = a.basis.split_once(';') {
+        basis.push(';');
+        basis.push_str(definition);
+    }
+    Ok(basis)
+}
+
 pub(super) fn limits(a: &Accepted) -> Result<Guidance> {
     if parse_token(&a.token).map_err(rule_error)? != a.value {
         return Err(failure(
@@ -834,7 +849,7 @@ fn assess_with_price_subject(
                 subject: (*subject).to_string(),
                 metric: name.into(),
                 unit: a.unit.clone(),
-                basis: a.basis.clone(),
+                basis: series_basis(a, name)?,
                 year: period.year,
             },
             limits,
@@ -890,23 +905,25 @@ fn assess_with_price_subject(
                 &b.guidance.locator,
             ))
     });
-    let mut seen = BTreeMap::<(String, String, u16), usize>::new();
+    type Family = (String, String, String, String, u16);
+    let mut seen = BTreeMap::<Family, usize>::new();
     let mut unique = BTreeSet::new();
     for row in &mut rows {
-        if !unique.insert((
-            row.site.clone(),
-            row.metric.clone(),
-            row.year,
-            row.published_at.clone(),
-        )) {
+        let key = &row.member.guidance.value.key;
+        let family = (
+            key.subject.clone(),
+            key.metric.clone(),
+            key.unit.clone(),
+            key.basis.clone(),
+            key.year,
+        );
+        if !unique.insert((family.clone(), row.published_at.clone())) {
             return Err(failure(
                 RefusalCode::NonIdentifiableAttribution104,
-                "multiple guidance rows have the same site, metric, year and publication date; the earliest statement is ambiguous",
+                "multiple guidance rows have the same site, metric, unit, ownership/definition basis, year and publication date; the earliest statement is ambiguous",
             ));
         }
-        let ordinal = seen
-            .entry((row.site.clone(), row.metric.clone(), row.year))
-            .or_default();
+        let ordinal = seen.entry(family).or_default();
         row.vintage = *ordinal;
         *ordinal += 1;
         if !row.metric.starts_with("production_") {
@@ -927,8 +944,8 @@ fn assess_with_price_subject(
             .entry((
                 row.site.clone(),
                 row.metric.clone(),
-                row.guidance.unit.clone(),
-                row.guidance.basis.clone(),
+                row.member.guidance.value.key.unit.clone(),
+                row.member.guidance.value.key.basis.clone(),
                 row.vintage,
                 row.comparative,
             ))
@@ -1984,6 +2001,192 @@ mod tests {
                 .code,
             "FMINE-REF-104"
         );
+    }
+
+    fn multi_basis_evidence() -> (IssuerProfile, TranscriptionReport, Vec<KeyedCell>) {
+        let (p, mut t, mut cells) = synthetic_evidence().expect("fixture");
+        t.agreement
+            .accepted
+            .retain(|a| a.quantity.ends_with("production_koz"));
+        let mut full = t.agreement.accepted[0].clone();
+        full.locator.col = "100% production".into();
+        full.basis = "100%".into();
+        full.token = "140 - 160".into();
+        full.value = parse_token(&full.token).expect("full-mine guidance");
+        t.agreement.accepted.push(full);
+        let mut actual = cells[0].clone();
+        actual.key.ownership_basis = OwnershipBasis::Consolidated100;
+        actual.printed_basis = OwnershipBasis::Consolidated100;
+        actual.key.line.label = "summary:au_prod_100_koz".into();
+        actual.locator = "synthetic/2030Q4/production.txt:Annual!B1".into();
+        actual.claim.anchors[0].locator = "Annual!B1".into();
+        actual.claim.value = PublicValue::Number {
+            stored: "150".into(),
+            displayed: Ok("150".into()),
+            under_status: None,
+        };
+        reconstruct(&mut actual);
+        cells.push(actual);
+        (p, t, cells)
+    }
+
+    #[test]
+    fn same_date_full_and_attributable_guidance_keep_independent_scores() {
+        let (p, t, cells) = multi_basis_evidence();
+        let report = assess(&p, &t, &cells, None).expect("independent ownership series");
+        assert_eq!(report.rows.len(), 2);
+        assert_eq!(report.summaries.len(), 2);
+        for row in &report.rows {
+            assert_eq!(row.vintage, 0);
+            let (source, side) = if row.member.guidance.value.key.basis == "100%" {
+                (&cells[1], Side::Inside)
+            } else {
+                assert_eq!(row.member.guidance.value.key.basis, "attributable:4/5");
+                (&cells[0], Side::Above)
+            };
+            assert_eq!(row.score.expect("separate score").side, side);
+            let outcome = row.member.outcome.as_ref().expect("interpreted outcome");
+            assert_eq!(outcome.parents, vec![source.claim.claim_id]);
+            row.score_claim
+                .as_ref()
+                .expect("score Claim")
+                .check_id()
+                .expect("canonical");
+        }
+        assert!(
+            report
+                .summaries
+                .iter()
+                .all(|s| s.vintage == 0 && s.scores.n_members == 1 && s.scores.n_resolved == 1)
+        );
+        let mut attributable_all = t.agreement.accepted[0].clone();
+        attributable_all.basis = "attributable:1/1".into();
+        assert_ne!(
+            series_basis(&attributable_all, "production_koz").expect("attributable"),
+            series_basis(&t.agreement.accepted[1], "production_koz").expect("full")
+        );
+    }
+
+    #[test]
+    fn ownership_series_revision_ordinals_do_not_interleave() {
+        let (p, mut t, mut cells) = multi_basis_evidence();
+        // The full-mine series starts later, but its first statement is still vintage zero.
+        for (index, file, date) in [
+            (1, "full-initial.txt", "2030-03-01"),
+            (0, "attributable-revision.txt", "2030-06-01"),
+            (1, "full-revision.txt", "2030-09-01"),
+        ] {
+            let mut doc = t.documents[0].clone();
+            doc.file = file.into();
+            doc.published_at = date.into();
+            let mut row = t.agreement.accepted[index].clone();
+            row.locator.doc = file.into();
+            t.documents.push(doc);
+            if file == "full-initial.txt" {
+                t.agreement.accepted[index] = row;
+            } else {
+                t.agreement.accepted.push(row);
+            }
+        }
+        let report = assess(&p, &t, &cells, None).expect("both series with revisions");
+        assert_eq!(report.rows.len(), 4);
+        assert_eq!(report.summaries.len(), 4);
+        for basis in ["100%", "attributable:4/5"] {
+            let rows: Vec<_> = report
+                .rows
+                .iter()
+                .filter(|r| r.member.guidance.value.key.basis == basis)
+                .collect();
+            assert_eq!(
+                rows.iter().map(|r| r.vintage).collect::<Vec<_>>(),
+                vec![0, 1]
+            );
+            for summary in report.summaries.iter().filter(|s| s.basis == basis) {
+                assert_eq!(summary.scores.n_members, 1);
+                assert_eq!(summary.members, vec![rows[summary.vintage].id.clone()]);
+            }
+        }
+        t.agreement.accepted.reverse();
+        t.documents.reverse();
+        cells.reverse();
+        assert_eq!(
+            report.to_json(),
+            assess(&p, &t, &cells, None).expect("permutation").to_json()
+        );
+    }
+
+    #[test]
+    fn equivalent_fraction_spellings_share_one_history_without_losing_source_basis() {
+        let (mut p, mut t, cells) = synthetic_evidence().expect("fixture");
+        t.agreement
+            .accepted
+            .retain(|a| a.quantity.ends_with("production_koz"));
+        let mut doc = t.documents[0].clone();
+        doc.file = "guidance-2031.txt".into();
+        doc.published_at = "2031-01-15".into();
+        let mut row = t.agreement.accepted[0].clone();
+        row.locator.doc = doc.file.clone();
+        row.period = "2031FY".into();
+        row.basis = "attributable:8/10".into();
+        t.documents.push(doc);
+        t.agreement.accepted.push(row);
+        let next = revised(&cells[0], 2031, "2031Q4", "115");
+        let mut source = p.sources[0].clone();
+        source.file_name = "2031.txt".into();
+        source.quarter = "2031Q4".into();
+        source.sha256_hex = next.key.reporting_vintage.file_sha256.clone();
+        p.sources.push(source);
+        let report = assess(&p, &t, &[cells[0].clone(), next], None).expect("canonical shares");
+        assert_eq!(report.rows.len(), 2);
+        assert_eq!(report.rows[1].guidance.basis, "attributable:8/10");
+        assert!(
+            report
+                .rows
+                .iter()
+                .all(|r| r.member.guidance.value.key.basis == "attributable:4/5" && r.vintage == 0)
+        );
+        assert_eq!(report.summaries.len(), 1);
+        let summary = &report.summaries[0];
+        assert_eq!(summary.basis, "attributable:4/5");
+        assert_eq!(
+            (
+                summary.scores.n_members,
+                summary.scores.n_resolved,
+                summary.scores.inside
+            ),
+            (2, 2, 1)
+        );
+        summary
+            .claim
+            .check_id()
+            .expect("canonical combined history");
+        let mut cost = t.agreement.accepted[0].clone();
+        cost.unit = "usd_per_oz".into();
+        cost.basis = "attributable:8/10;aisc=issuer-reported-per-sold-oz".into();
+        assert_eq!(
+            series_basis(&cost, "aisc_usd_per_oz").expect("cost definition"),
+            "attributable:4/5;aisc=issuer-reported-per-sold-oz"
+        );
+    }
+
+    #[test]
+    fn same_date_equivalent_basis_duplicates_still_refuse() {
+        let (p, t, cells) = synthetic_evidence().expect("fixture");
+        for basis in ["attributable:4/5", "attributable:8/10"] {
+            let mut transcripts = t.clone();
+            let mut duplicate = transcripts.agreement.accepted[0].clone();
+            duplicate.locator.col = "second attributable statement".into();
+            duplicate.basis = basis.into();
+            duplicate.token = "120 - 130".into();
+            duplicate.value = parse_token(&duplicate.token).expect("conflicting statement");
+            transcripts.agreement.accepted.push(duplicate);
+            assert_eq!(
+                assess(&p, &transcripts, &cells, None)
+                    .expect_err("same-series ambiguity")
+                    .code,
+                "FMINE-REF-104"
+            );
+        }
     }
 
     #[test]
