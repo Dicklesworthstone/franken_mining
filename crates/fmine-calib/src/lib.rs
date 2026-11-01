@@ -13,6 +13,7 @@ use fmine_numerics::cholesky_solve;
 use fmine_numerics::eproc::BettingEProcess;
 use fmine_numerics::norm_cdf;
 
+pub mod guidance_scores;
 pub mod ledger;
 pub mod record;
 pub use ledger::{
