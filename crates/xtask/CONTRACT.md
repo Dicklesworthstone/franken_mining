@@ -63,7 +63,8 @@ The `forecast-*` commands are the exception: they write a record's digest files 
 - `lifts::{check_drift, parse_drift}` (bd-d2l5, GATE-FSIM-DRIFT; command `check-lift-drift --upstream <path>
   [--head <rev>]`, run by `.github/workflows/lift-drift.yml` each quarter against frankensim main): each `[[lift]]`
   source's blob at its pinned commit against the same path at `<rev>` (default HEAD), from committed objects only.
-  One JSON line per lift: `unchanged`, `changed` (lines added and deleted, the commits that touched it) or `missing`.
+  One JSON line per lift: `unchanged`, `changed` (lines added and deleted, the hunk ranges, the commits that touched
+  it) or `missing`.
   It fails on a changed or missing source without a `registries/lift_drift.toml` decision (`relift` with its bead,
   or `no-op` with a reason) whose `upstream` commit holds the same blob, and on a decision naming no `[[lift]]` row.
 - `check_stack_lock(root: &Path) -> Result<StackLockReport, Vec<String>>` and the pure

@@ -434,8 +434,9 @@ fn blob_at(up: &Path, commit: &str, path: &str) -> Result<Option<String>, String
 }
 
 /// Rule (g): each `[[lift]]` source in `upstream`, a frankensim checkout, from its pinned commit to `head`. One JSON
-/// line per lift, with status `unchanged`, `changed` (lines added and deleted, and the commits that touched the
-/// file) or `missing`, and the decision that covers it. A changed or missing source with no decision puts every
+/// line per lift, with status `unchanged`, `changed` (lines added and deleted, the hunk ranges, and the commits that
+/// touched the file) or `missing`, and the decision that covers it. The hunk ranges let the decider see whether a
+/// change falls in the part of the file that was lifted. A changed or missing source with no decision puts every
 /// line on the error side, and so does a decision that names no `[[lift]]` row.
 pub fn check_drift(root: &Path, upstream: &Path, head: &str) -> Result<Vec<String>, Vec<String>> {
     let (lifts, _) = load(root)?;
@@ -461,7 +462,8 @@ pub fn check_drift(root: &Path, upstream: &Path, head: &str) -> Result<Vec<Strin
             Some(_) => "changed",
             None => "missing",
         };
-        let (mut added, mut deleted, mut commits) = (0usize, 0usize, String::new());
+        let (mut added, mut deleted) = (0usize, 0usize);
+        let (mut hunks, mut commits) = (String::new(), String::new());
         let mut decision = "null".to_string();
         if status != "unchanged" {
             let range = format!("{pinned}..{head}");
@@ -476,6 +478,17 @@ pub fn check_drift(root: &Path, upstream: &Path, head: &str) -> Result<Vec<Strin
                 added += counts.next().flatten().unwrap_or(0);
                 deleted += counts.next().flatten().unwrap_or(0);
             }
+            // `@@ -1264,6 +1264,13 @@ impl …` keeps `-1264,6 +1264,13`: digits and signs only, safe inside JSON.
+            hunks = git_query(
+                upstream,
+                &["diff", "-U0", &pinned, &head, "--", &row.source],
+            )
+            .map_err(one)?
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.strip_prefix("@@ ")?.split(" @@").next())
+            .collect::<Vec<_>>()
+            .join(";");
             commits = git_query(upstream, &["log", "--format=%h", &range, "--", &row.source])
                 .map_err(one)?
                 .unwrap_or_default()
@@ -496,7 +509,7 @@ pub fn check_drift(root: &Path, upstream: &Path, head: &str) -> Result<Vec<Strin
         log.push(format!(
             "{{\"check\":\"check-lift-drift\",\"source\":\"{}\",\"target\":\"{}\",\"pinned\":\"{pinned}\",\
              \"head\":\"{head}\",\"status\":\"{status}\",\"added\":{added},\"deleted\":{deleted},\
-             \"commits\":\"{commits}\",\"decision\":{decision}}}",
+             \"hunks\":\"{hunks}\",\"commits\":\"{commits}\",\"decision\":{decision}}}",
             row.source, row.target
         ));
     }
@@ -823,7 +836,9 @@ mod tests {
         let log = check_drift(&ws, &up, &elsewhere).expect("a change elsewhere");
         assert_eq!(log.len(), 1, "{log:?}");
         assert!(
-            log[0].contains("\"status\":\"unchanged\",\"added\":0,\"deleted\":0,\"commits\":\"\",\"decision\":null"),
+            log[0].contains(
+                "\"status\":\"unchanged\",\"added\":0,\"deleted\":0,\"hunks\":\"\",\"commits\":\"\",\"decision\":null"
+            ),
             "{log:?}"
         );
         let log = check_drift(&ws, &up, &inside).expect_err("an undecided change");
@@ -833,7 +848,7 @@ mod tests {
         );
         assert!(
             log[0].contains(&format!(
-                "\"commits\":\"{}\",\"decision\":null",
+                "\"hunks\":\"-1,0 +2\",\"commits\":\"{}\",\"decision\":null",
                 short(&inside)
             )),
             "{log:?}"
@@ -859,7 +874,11 @@ mod tests {
         git(&["rm", "-q", "a.rs"]);
         let gone = commit("removed");
         let log = check_drift(&ws, &up, &gone).expect_err("missing upstream");
-        assert!(log[0].contains("\"status\":\"missing\""), "{log:?}");
+        assert!(
+            log[0]
+                .contains("\"status\":\"missing\",\"added\":0,\"deleted\":1,\"hunks\":\"-1 +0,0\""),
+            "{log:?}"
+        );
         decide(&pin, &gone, "relift");
         assert!(check_drift(&ws, &up, &gone).is_ok());
 
