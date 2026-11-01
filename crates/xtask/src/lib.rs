@@ -1575,9 +1575,9 @@ mod tests {
             .sum();
         assert_eq!(report.files, expected, "{report:?}");
         // fmine-core's seven, plus lmdi.rs, fmine-calib's and fmine-numerics' lib.rs (bd-hp2j.3), fmine-geom's six
-        // (bd-193, bd-191), fmine-optimize's four (bd-250, bd-nzwd, bd-t75z) and fmine-calib's ledger/binding.rs
-        // (BD-047).
-        assert_eq!(report.bitwise_files, 21, "{report:?}");
+        // (bd-193, bd-191), fmine-optimize's four (bd-250, bd-nzwd, bd-t75z), fmine-calib's ledger/binding.rs
+        // (BD-047) and fmine-io's forecast/prefix.rs (BD-047).
+        assert_eq!(report.bitwise_files, 22, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

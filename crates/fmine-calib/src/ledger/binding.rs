@@ -1,7 +1,7 @@
 //! Frozen semantic targets for registered public-cell resolution; no source I/O or time authentication.
 //! Determinism: BitwisePortable
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fmine_core::codec::{Decoder, Encoder};
 use fmine_core::id::{ObjectId, PrefixKind};
@@ -193,6 +193,11 @@ impl PublicResolutionPolicy {
         {
             return Err(domain(
                 "invalid public-resolution issuer or forecast-to-subject mapping",
+            ));
+        }
+        if self.members.values().collect::<BTreeSet<_>>().len() != self.members.len() {
+            return Err(domain(
+                "a public cohort cannot count the same physical subject more than once",
             ));
         }
         self.ownership.validate()?;
@@ -554,6 +559,89 @@ mod tests {
         }
         let digest = ledger.freeze_cohort(valid).unwrap();
         assert_eq!(ledger.cohort(digest).unwrap().spec.members.len(), 2);
+    }
+
+    #[test]
+    fn repeated_physical_target_refuses_atomically_but_separate_models_keep_one_outcome_each() {
+        use crate::ledger::{OutcomeCitation, OutcomeKind, OutcomeSelector};
+
+        let end = PublicPeriod::Year(1970).end_ns().unwrap();
+        let (mut ledger, ids) = forecasts(end);
+        assert_ne!(ids[0], ids[1]);
+        let mut duplicate = policy(&ids);
+        duplicate
+            .members
+            .values_mut()
+            .for_each(|subject| *subject = "site_a".into());
+        assert_eq!(
+            duplicate.to_resolution_rule().unwrap_err().code,
+            "FMINE-REF-109"
+        );
+        // A correctly framed client rule must not bypass the same guard at the ledger boundary.
+        let mut enc = Encoder::new_frame(*b"PRP1", 1);
+        for field in [
+            "barrick",
+            "production_koz",
+            "koz",
+            "summary:au_prod_100_koz",
+            "1970FY",
+            "1970Q4",
+            "100%",
+        ] {
+            enc.put_str(field);
+        }
+        enc.put_u32(2);
+        for id in duplicate.members.keys() {
+            enc.put_fixed(&id.bytes);
+            enc.put_str("site_a");
+        }
+        let mut invalid = spec(&policy(&ids), "model_a", 200);
+        invalid.resolution_rule = format!(
+            "{PUBLIC_RESOLUTION_PREFIX}{}",
+            enc.finish()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
+        assert_eq!(
+            ledger.freeze_cohort(invalid).unwrap_err().code,
+            "FMINE-REF-109"
+        );
+
+        // Reuse the refused name and earlier record times: neither name nor watermark was advanced.
+        let mut single = policy(&ids[..1]);
+        single.members.insert(ids[0], "site_a".into());
+        let first = ledger.freeze_cohort(spec(&single, "model_a", 2)).unwrap();
+        single.members = BTreeMap::from([(ids[1], "site_a".into())]);
+        let second = ledger.freeze_cohort(spec(&single, "model_b", 3)).unwrap();
+        for id in ids {
+            ledger
+                .append_outcome(
+                    id,
+                    end + 1,
+                    end + 1,
+                    OutcomeKind::Published {
+                        value: 110.0,
+                        citation: OutcomeCitation {
+                            source: "barrick".into(),
+                            vintage: "invented-original".into(),
+                            locator: "invented:site_a".into(),
+                            sha256: [1; 32],
+                        },
+                    },
+                )
+                .unwrap();
+        }
+        for cohort in [first, second] {
+            let report = ledger
+                .assess(cohort, end + 2, OutcomeSelector::FirstPublished)
+                .unwrap();
+            assert_eq!(
+                (report.summary.n_members, report.summary.n_resolved),
+                (1, 1)
+            );
+            assert_eq!(report.summary.flag, crate::CalibrationFlag::Descriptive);
+        }
     }
 
     #[test]

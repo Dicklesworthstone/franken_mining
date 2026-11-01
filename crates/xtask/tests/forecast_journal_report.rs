@@ -6,14 +6,18 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
-use fmine_calib::record::{parse_hex32, parse_utc};
+use fmine_calib::record::{format_utc, parse_hex32, parse_utc};
 use fmine_claim::forecast_journal::Entry;
-use fmine_cli::forecast_journal::{Command, execute_with_clock};
+use fmine_cli::forecast_journal::{Command, TimestampProof, execute_with_clock};
 use fmine_cli::{CliCommand, Envelope, OutputFormat, execute_command, invoke, parse_args};
 use fmine_core::hash::{Digest32, sha256};
 use fmine_io::forecast::Journal as DurableJournal;
+use fmine_io::forecast::prefix::{PrefixCommitment, commitment};
+use fmine_io::forecast::timestamp::verify_rfc3161;
 use fmine_registry::toml_subset::{TomlValue, parse_subset};
 use fmine_runtime::{ClockError, WallClock};
 
@@ -22,6 +26,15 @@ const EARLY_CUT: &str = "2031-01-10T00:00:00Z";
 const LATE_CUT: &str = "2031-01-30T00:00:00Z";
 const JOURNAL: &str = "forecasts.journal";
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+// OpenSSL process creation can inherit another test's flock until exec, briefly extending its lifetime.
+// Serialize this binary's fixtures so independent drop/reopen checks cannot race that inheritance.
+static JOURNAL_FIXTURES: Mutex<()> = Mutex::new(());
+
+fn isolated_fixture() -> MutexGuard<'static, ()> {
+    JOURNAL_FIXTURES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 struct FixedClock(i64);
 
@@ -98,6 +111,10 @@ struct Journal {
 
 impl Journal {
     fn new() -> Self {
+        Self::new_at(ns("2030-01-01T00:00:00Z"))
+    }
+
+    fn new_at(at: i64) -> Self {
         let root = std::env::temp_dir().join(format!(
             "fmine-saved-forecast-report-{}-{}",
             std::process::id(),
@@ -115,7 +132,7 @@ impl Journal {
                 cell_id: "synthetic-report-cell".into(),
                 clock_skew_ns: SECOND as u64,
             },
-            ns("2030-01-01T00:00:00Z"),
+            at,
         );
         journal
     }
@@ -188,6 +205,21 @@ impl Journal {
                 head,
                 assessment,
                 provenance,
+                timestamp: None,
+            },
+            &self.root,
+            &NeverClock,
+        )
+    }
+
+    fn report_with_timestamp(&self, assessment: Digest32, proof: TimestampProof) -> Envelope {
+        execute_with_clock(
+            &Command::Report {
+                journal: JOURNAL.into(),
+                head: Some(self.head),
+                assessment,
+                provenance: None,
+                timestamp: Some(proof),
             },
             &self.root,
             &NeverClock,
@@ -245,6 +277,7 @@ fn saved_reports_with_fraction(fraction_ns: i64) -> (Journal, String, String) {
 
 #[test]
 fn saved_reports_reopen_without_clock_or_mutation() {
+    let _fixture = isolated_fixture();
     let (journal, early, latest) = saved_reports();
     let before = journal.bytes();
     let early_digest = digest_field(assessment(&early), "digest");
@@ -372,6 +405,7 @@ fn saved_reports_reopen_without_clock_or_mutation() {
 
 #[test]
 fn legacy_unbound_assessments_remain_readable_without_claiming_a_persisted_result() {
+    let _fixture = isolated_fixture();
     let (mut journal, early, latest) = saved_reports();
     // Reproduce the older v1 writer's valid optional-field grammar. The CLI validates all semantics
     // on reopening; no existing operation is rewritten to manufacture this historical fixture.
@@ -482,6 +516,7 @@ fn legacy_unbound_assessments_remain_readable_without_claiming_a_persisted_resul
 
 #[test]
 fn forecast_journal_commands_require_explicit_admission_policy_and_exact_heads() {
+    let _fixture = isolated_fixture();
     let root = workspace_root();
     let head = "ab".repeat(32);
     let (command, format, selected_root) = parse_args(
@@ -579,6 +614,7 @@ fn forecast_journal_commands_require_explicit_admission_policy_and_exact_heads()
 
 #[test]
 fn forecast_journal_usage_refuses_backdating_flags_ignored_options_and_clock_ambiguity() {
+    let _fixture = isolated_fixture();
     let root = workspace_root();
     let head = "ab".repeat(32);
     let base = args(&[
@@ -646,10 +682,41 @@ fn forecast_journal_usage_refuses_backdating_flags_ignored_options_and_clock_amb
     ] {
         assert!(parse_args(&args(&bad), &root).is_err(), "{bad:?}");
     }
+    for mut other in [
+        args(&["forecast", "journal", "inspect", "--journal", "x"]),
+        args(&[
+            "forecast",
+            "journal",
+            "assess",
+            "--journal",
+            "x",
+            "--head",
+            &head,
+            "--cohort",
+            "demo",
+            "--as-of",
+            "2026-11-01T00:00:00Z",
+            "--trust-host-clock",
+        ]),
+    ] {
+        other.extend(args(&[
+            "--timestamp-head",
+            &head,
+            "--timestamp-receipt",
+            "proof.tsr",
+            "--timestamp-roots",
+            "roots.pem",
+        ]));
+        assert!(
+            parse_args(&other, &root).is_err(),
+            "report-only timestamp options: {other:?}"
+        );
+    }
 }
 
 #[test]
 fn saved_report_cli_routes_without_accepting_mutation_or_cut_flags() {
+    let _fixture = isolated_fixture();
     let (journal, early, _) = saved_reports();
     let before = journal.bytes();
     let selected = digest_field(assessment(&early), "digest");
@@ -685,6 +752,7 @@ fn saved_report_cli_routes_without_accepting_mutation_or_cut_flags() {
             matches!(command, CliCommand::ForecastJournal(Command::Report {
             journal: path, head: actual_head, assessment: actual,
             provenance: None,
+            timestamp: None,
         }) if path == Path::new(JOURNAL) && actual_head == expected_head && actual == selected)
         );
         let (envelope, format) = invoke(&invocation, Path::new("."));
@@ -704,6 +772,44 @@ fn saved_report_cli_routes_without_accepting_mutation_or_cut_flags() {
         vec!["--recorded-at", EARLY_CUT],
         vec!["--assessment", &digest],
         vec!["--unknown", "value"],
+        vec!["--timestamp-head", &digest],
+        vec!["--timestamp-receipt", "proof.tsr"],
+        vec!["--timestamp-roots", "roots.pem"],
+        vec!["--timestamp-intermediates", "chain.pem"],
+        vec![
+            "--timestamp-head",
+            &digest,
+            "--timestamp-receipt",
+            "proof.tsr",
+        ],
+        vec![
+            "--timestamp-head",
+            &digest,
+            "--timestamp-roots",
+            "roots.pem",
+        ],
+        vec![
+            "--timestamp-receipt",
+            "proof.tsr",
+            "--timestamp-roots",
+            "roots.pem",
+        ],
+        vec![
+            "--timestamp-head",
+            "not-a-digest",
+            "--timestamp-receipt",
+            "proof.tsr",
+            "--timestamp-roots",
+            "roots.pem",
+        ],
+        vec![
+            "--timestamp-head",
+            &digest,
+            "--timestamp-receipt",
+            "",
+            "--timestamp-roots",
+            "roots.pem",
+        ],
     ] {
         let mut bad = selected_args.clone();
         bad.extend(args(&extras));
@@ -738,6 +844,364 @@ fn saved_report_cli_routes_without_accepting_mutation_or_cut_flags() {
         .expect("registered saved-report verb");
     assert!(entry.contains("mutates_authority = false"), "{entry}");
     assert_eq!(journal.bytes(), before);
+}
+
+// Reuse the real local TSA setup from forecast_record_score; the authority is explicitly synthetic.
+// There is one arbitrary-digest signer, with no calendar window or rules-before-record sleep.
+fn openssl(tsa: &Path, args: &str) {
+    let output = ProcessCommand::new("openssl")
+        .current_dir(tsa)
+        .args(args.split_ascii_whitespace())
+        .env("LC_ALL", "C")
+        .output()
+        .expect("OpenSSL is required by the offline timestamp verifier");
+    assert!(
+        output.status.success(),
+        "openssl {args}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn timestamp_authority(root: &Path) -> PathBuf {
+    let tsa = root.join("tsa");
+    fs::create_dir(&tsa).expect("new synthetic authority");
+    fs::write(
+        tsa.join("tsa.cnf"),
+        r#"[ tsa_config ]
+serial = ./serial
+crypto_device = builtin
+signer_digest = sha256
+default_policy = 1.2.3.4.1
+digests = sha256
+accuracy = secs:0
+ordering = no
+tsa_name = no
+ess_cert_id_chain = no
+ess_cert_id_alg = sha256
+[ req ]
+distinguished_name = dn
+prompt = no
+[ dn ]
+CN = synthetic_journal_tsa
+[ tsa_ext ]
+basicConstraints = CA:FALSE
+keyUsage = critical, digitalSignature
+extendedKeyUsage = critical, timeStamping
+[ ca_ext ]
+basicConstraints = critical, CA:TRUE
+keyUsage = critical, keyCertSign, cRLSign
+"#,
+    )
+    .expect("synthetic TSA configuration");
+    fs::write(tsa.join("serial"), "01\n").expect("fresh TSA serial");
+    for command in [
+        "req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -days 2 -subj /CN=synthetic_journal_root -config tsa.cnf -extensions ca_ext",
+        "req -newkey rsa:2048 -nodes -keyout tsa.key -out tsa.csr -subj /CN=synthetic_journal_tsa -config tsa.cnf",
+        "x509 -req -in tsa.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out tsa.pem -days 2 -extfile tsa.cnf -extensions tsa_ext",
+        "req -x509 -newkey rsa:2048 -nodes -keyout wrong.key -out wrong.pem -days 2 -subj /CN=unrelated_journal_root -config tsa.cnf -extensions ca_ext",
+    ] {
+        openssl(&tsa, command);
+    }
+    tsa
+}
+
+fn sign_timestamp(tsa: &Path, name: &str, digest: Digest32) -> PathBuf {
+    openssl(
+        tsa,
+        &format!(
+            "ts -query -digest {} -sha256 -cert -out {name}.tsq",
+            digest.to_hex()
+        ),
+    );
+    openssl(
+        tsa,
+        &format!(
+            "ts -reply -config tsa.cnf -section tsa_config -queryfile {name}.tsq -inkey tsa.key -signer tsa.pem -out {name}.tsr"
+        ),
+    );
+    tsa.join(format!("{name}.tsr"))
+}
+
+fn prefix_imprint(head: Digest32, sequence: u64) -> Digest32 {
+    // Independent protocol framing: this is not the SHA-256 of the journal, or of the raw BLAKE3 head.
+    sha256(
+        format!(
+            "fmine.forecast-journal-prefix.v1\nhead={}\nsequence={sequence}\n",
+            head.to_hex()
+        )
+        .as_bytes(),
+    )
+}
+
+const DAY: i64 = 86_400;
+
+fn timestamp_cohort(journal: &mut Journal, epoch: i64, missing_due: i64) -> Digest32 {
+    for (alias, due, at) in [
+        ("f1", epoch + DAY, epoch - 3 * DAY),
+        ("f2", missing_due, epoch - 3 * DAY + 10),
+    ] {
+        journal.append_at(&format!("[[forecast]]\nid = \"{alias}\"\nmodel_key = \"synthetic:{alias}\"\noutcome_due = \"{}\"\nkind = \"interval\"\nlo = \"40\"\nhi = \"50\"\nnominal = \"0.8\"\n", format_utc(due)), at * SECOND);
+    }
+    let before_freeze = journal.head;
+    journal.append_at("[[cohort]]\nname = \"two-sites\"\nmembers = \"f1,f2\"\nresolution_rule = \"Invented observations\"\neligible_sources = \"synthetic:issuer\"\nalpha = \"0.2\"\noutcome_lo = \"0\"\noutcome_hi = \"100\"\n", (epoch - 2 * DAY) * SECOND);
+    before_freeze
+}
+
+fn timestamp_outcomes(journal: &mut Journal, epoch: i64, missing_due: i64) -> (String, Digest32) {
+    journal.append_at(&format!("[[outcome]]\nforecast = \"f2\"\nkind = \"missing\"\navailable_at = \"{}\"\nreason = \"not_published\"\n", format_utc(missing_due + 10)), (epoch + DAY + 20) * SECOND);
+    let missing_prefix = journal.head;
+    journal.append_at(&format!("[[outcome]]\nforecast = \"f1\"\nkind = \"published\"\navailable_at = \"{}\"\nvalue = \"45\"\nsource = \"synthetic:issuer\"\nvintage = \"invented\"\nlocator = \"Invented!A1\"\nsha256 = \"{}\"\n", format_utc(epoch + DAY + 10), "11".repeat(32)), (epoch + DAY + 30) * SECOND);
+    (
+        journal.assess(&format_utc(epoch + DAY + 60), "first-published"),
+        missing_prefix,
+    )
+}
+
+#[test]
+fn signed_prefix_proofs_survive_appends_and_refuse_hindsight_without_mutating_history() {
+    let _fixture = isolated_fixture();
+    let mut journal = Journal::new_at(0);
+    let tsa = timestamp_authority(&journal.root);
+    let roots = tsa.join("ca.pem");
+    let probe_digest = sha256(b"synthetic timestamp fixture epoch, not a journal proof");
+    let probe = sign_timestamp(&tsa, "epoch", probe_digest);
+    let epoch = verify_rfc3161(&probe, &roots, probe_digest)
+        .expect("authenticated fixture epoch")
+        .times
+        .upper_utc;
+    let missing_due = epoch + DAY / 2;
+    let before_freeze = timestamp_cohort(&mut journal, epoch, missing_due);
+    let frozen_head = journal.head;
+    let imprint = prefix_imprint(frozen_head, 3);
+    let reader = DurableJournal::open_read(&journal.root.join(JOURNAL), Some(frozen_head))
+        .expect("frozen prefix");
+    let frozen = commitment(&reader, frozen_head).expect("known prefix");
+    assert_eq!(
+        frozen,
+        PrefixCommitment::for_record(&reader.records()[3]).expect("canonical record")
+    );
+    assert_eq!((frozen.sequence, frozen.imprint_sha256), (3, imprint));
+    assert_ne!(imprint, sha256(&journal.bytes()));
+    drop(reader);
+    let receipt = sign_timestamp(&tsa, "frozen", imprint);
+    let proof_time = verify_rfc3161(&receipt, &roots, imprint).expect("real signed prefix");
+    assert!(proof_time.times.upper_utc < missing_due);
+    let receipt_bytes = fs::read(&receipt).expect("signed response");
+    let root_bytes = fs::read(&roots).expect("selected synthetic trust root");
+    let proof = |prefix_head, receipt: PathBuf| TimestampProof {
+        prefix_head,
+        receipt,
+        trust_roots: roots.clone(),
+        intermediates: None,
+    };
+
+    // The proof exists before any invented outcome is appended; later reports retain its exact old prefix.
+    let (saved, missing_prefix) = timestamp_outcomes(&mut journal, epoch, missing_due);
+    let digest = digest_field(assessment(&saved), "digest");
+    assert!(
+        assessment(&saved).contains("\"interval_score\":{\"n_scored\":1,\"observed_mean\":10,")
+    );
+    assert!(assessment(&saved).contains("\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1,"));
+    let before = journal.bytes();
+    let checked = journal.report_with_timestamp(digest, proof(frozen_head, receipt.clone()));
+    assert_eq!(checked.exit_code, 0, "{checked:?}");
+    assert_eq!(nested_report(&checked.payload_json), nested_report(&saved));
+    assert_eq!(
+        string_field(&checked.payload_json, "external_time_proof"),
+        "verified_caller_selected_roots"
+    );
+    let verification = checked
+        .payload_json
+        .split_once("\"timestamp_verification\":")
+        .expect("supplemental verification")
+        .1
+        .split_once(",\"source_citations\":")
+        .expect("verification end")
+        .0;
+    assert_eq!(digest_field(verification, "head"), frozen_head);
+    assert_eq!(digest_field(verification, "imprint_sha256"), imprint);
+    assert_eq!(
+        digest_field(verification, "receipt_sha256"),
+        sha256(&receipt_bytes)
+    );
+    assert_eq!(
+        digest_field(verification, "trust_roots_sha256"),
+        sha256(&root_bytes)
+    );
+    for fragment in [
+        "\"status\":\"verified\"".to_string(),
+        "\"trust_basis\":\"caller_selected_roots\"".to_string(),
+        "\"sequence\":3".to_string(),
+        "\"n_members\":2".to_string(),
+        "\"publication_scope\":\"current_journal_declarations\"".to_string(),
+        "\"host_clock\":\"not_verified\"".to_string(),
+        "\"source_truth\":\"not_verified\"".to_string(),
+        format!("\"earliest_deadline_ns\":{}", missing_due * SECOND),
+        format!(
+            "\"earliest_recorded_publication_ns\":{}",
+            (epoch + DAY + 10) * SECOND
+        ),
+        format!("\"lower_seconds\":{}", proof_time.times.lower_utc),
+        format!("\"upper_seconds\":{}", proof_time.times.upper_utc),
+    ] {
+        assert!(
+            verification.contains(&fragment),
+            "missing {fragment}: {verification}"
+        );
+    }
+    assert!(checked.anchor_id.is_none() && checked.certificate.is_none());
+    for flag in [
+        "reserve_disclosure_claim",
+        "execution_authorized",
+        "geotechnical_signoff",
+        "regulatory_compliance_claim",
+    ] {
+        assert!(checked.to_json().contains(&format!("\"{flag}\":false")));
+    }
+    assert!(
+        checked
+            .rendered_markdown
+            .as_deref()
+            .expect("proof explanation")
+            .contains("caller-selected trust roots")
+    );
+    assert_eq!(journal.bytes(), before);
+
+    let query = args(&[
+        "forecast",
+        "journal",
+        "report",
+        "--journal",
+        JOURNAL,
+        "--assessment",
+        &digest.to_hex(),
+        "--head",
+        &journal.head.to_hex(),
+        "--timestamp-head",
+        &frozen_head.to_hex(),
+        "--timestamp-receipt",
+        receipt.to_str().expect("receipt path"),
+        "--timestamp-roots",
+        roots.to_str().expect("root path"),
+    ]);
+    let routed = invoke(&query, &journal.root).0;
+    assert_eq!(routed.to_json(), checked.to_json());
+    assert_eq!(journal.bytes(), before);
+
+    journal.append_at(&format!("[[outcome]]\nforecast = \"f1\"\nkind = \"restated\"\navailable_at = \"{}\"\nvalue = \"55\"\nsource = \"synthetic:issuer\"\nvintage = \"invented-later\"\nlocator = \"Invented!A2\"\nsha256 = \"{}\"\nsupersedes = 1\n", format_utc(epoch + DAY + 100), "22".repeat(32)), (epoch + DAY + 120) * SECOND);
+    let later = journal.assess(&format_utc(epoch + DAY + 180), "latest-as-of");
+    assert!(
+        assessment(&later).contains("\"interval_score\":{\"n_scored\":1,\"observed_mean\":60,")
+    );
+    let before = journal.bytes();
+    for selected in [digest, digest_field(assessment(&later), "digest")] {
+        let replayed = journal.report_with_timestamp(selected, proof(frozen_head, receipt.clone()));
+        assert_eq!(replayed.exit_code, 0, "{replayed:?}");
+        let original = if selected == digest { &saved } else { &later };
+        assert_eq!(
+            nested_report(&replayed.payload_json),
+            nested_report(original)
+        );
+        assert_eq!(digest_field(&replayed.payload_json, "head"), journal.head);
+        let current = replayed
+            .payload_json
+            .split_once("\"timestamp_commitment\":")
+            .expect("current commitment")
+            .1
+            .split_once(",\"timestamp_verification\":")
+            .expect("commitment end")
+            .0;
+        assert_eq!(digest_field(current, "head"), journal.head);
+        assert_eq!(
+            digest_field(current, "imprint_sha256"),
+            prefix_imprint(journal.head, 8)
+        );
+        assert_eq!(journal.bytes(), before);
+    }
+
+    let wrong_imprint = sign_timestamp(&tsa, "wrong-imprint", sha256(b"another signed message"));
+    let before_cohort = sign_timestamp(&tsa, "before-cohort", prefix_imprint(before_freeze, 2));
+    let after_missing = sign_timestamp(&tsa, "after-missing", prefix_imprint(missing_prefix, 4));
+    let corrupt_path = tsa.join("corrupt.tsr");
+    let mut corrupt = receipt_bytes.clone();
+    corrupt[0] ^= 1;
+    fs::write(&corrupt_path, corrupt).expect("altered response fixture");
+    for (name, request, code) in [
+        (
+            "wrong roots",
+            TimestampProof {
+                trust_roots: tsa.join("wrong.pem"),
+                ..proof(frozen_head, receipt.clone())
+            },
+            "FMINE-REF-505",
+        ),
+        (
+            "untrusted intermediates cannot add roots",
+            TimestampProof {
+                trust_roots: tsa.join("wrong.pem"),
+                intermediates: Some(roots.clone()),
+                ..proof(frozen_head, receipt.clone())
+            },
+            "FMINE-REF-505",
+        ),
+        (
+            "wrong imprint",
+            proof(frozen_head, wrong_imprint),
+            "FMINE-REF-505",
+        ),
+        (
+            "altered response",
+            proof(frozen_head, corrupt_path),
+            "FMINE-REF-505",
+        ),
+        (
+            "unknown prefix",
+            proof(Digest32([0x5a; 32]), receipt.clone()),
+            "FMINE-REF-502",
+        ),
+        (
+            "cohort not yet frozen",
+            proof(before_freeze, before_cohort),
+            "FMINE-REF-206",
+        ),
+        (
+            "unresolved outcome already recorded",
+            proof(missing_prefix, after_missing),
+            "FMINE-REF-206",
+        ),
+    ] {
+        let refused = journal.report_with_timestamp(digest, request);
+        assert_eq!(
+            refused.refusal.expect("typed timestamp refusal").code,
+            code,
+            "{name}"
+        );
+        assert_eq!(journal.bytes(), before, "{name}");
+    }
+
+    // Backdated local admissions cannot overcome the unresolved member's earlier deadline.
+    let mut late = Journal::new_at(0);
+    timestamp_cohort(&mut late, epoch, epoch - DAY);
+    let late_head = late.head;
+    let late_receipt = sign_timestamp(&tsa, "late", prefix_imprint(late_head, 3));
+    let (late_saved, _) = timestamp_outcomes(&mut late, epoch, epoch - DAY);
+    assert!(
+        assessment(&late_saved).contains("\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1,")
+    );
+    let before = late.bytes();
+    let refused = late.report_with_timestamp(
+        digest_field(assessment(&late_saved), "digest"),
+        proof(late_head, late_receipt),
+    );
+    let refusal = refused.refusal.expect("authenticated late registration");
+    assert_eq!(refusal.code, "FMINE-REF-206");
+    assert!(refusal.what.contains("deadline"), "{}", refusal.what);
+    assert_eq!(late.bytes(), before);
+    assert_eq!(
+        fs::read(receipt).expect("original receipt retained"),
+        receipt_bytes
+    );
+    assert_eq!(fs::read(roots).expect("caller roots retained"), root_bytes);
 }
 
 const OBSERVATION: &str = "evd_11111111111111111111111111111111";
@@ -848,6 +1312,7 @@ fn checked_report(journal: &Journal, saved: &str, bundle: &str) -> Envelope {
 
 #[test]
 fn saved_report_checks_fractional_registration_provenance_without_changing_results() {
+    let _fixture = isolated_fixture();
     let (journal, early, latest) = saved_reports_with_fraction(123_456_789);
     let bundle = provenance_bundle(&early, None);
     for saved in [&early, &latest] {
@@ -935,6 +1400,7 @@ fn saved_report_checks_fractional_registration_provenance_without_changing_resul
 
 #[test]
 fn saved_report_provenance_retains_minimal_frontiers_and_checks_unresolved_members() {
+    let _fixture = isolated_fixture();
     let (journal, early, _) = saved_reports_with_fraction(123_456_789);
     let (root, _) = registration(&early, "f1");
     // V2 registration is the observed instant plus this journal's one-second uncertainty bound.
@@ -1022,6 +1488,7 @@ fn saved_report_provenance_retains_minimal_frontiers_and_checks_unresolved_membe
 
 #[test]
 fn provenance_fractional_times_preserve_nanoseconds_and_refuse_ambiguous_or_overflowing_dates() {
+    let _fixture = isolated_fixture();
     let (journal, early, _) = saved_reports_with_fraction(123_456_789);
     let mut cones = std::collections::BTreeSet::new();
     for digits in 1..=9 {

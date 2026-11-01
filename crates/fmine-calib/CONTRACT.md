@@ -57,7 +57,9 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   source. Each forecast deadline must be at or before the final nanosecond of the target calendar period,
   while registration and cohort freeze remain strictly before that deadline. A forecast shared by multiple
   public cohorts must retain the same issuer, metric, period, ownership and subject in each; cohort populations
-  may differ. Binary events cannot be reinterpreted as production or cost quantities. Source authentication,
+  may differ. Within one public cohort, each physical subject can occur only once, so multiple models of the
+  same outcome must use separate cohorts and cannot inflate the calibration denominator.
+  Binary events cannot be reinterpreted as production or cost quantities. Source authentication,
   original-release selection, printed rounding and publication availability remain adapter responsibilities;
   neither the period end nor this pure policy authenticates when a forecast or source became available.
 - `append_outcome` records hash-chained `Published`, `Restated` and `Missing` events with separate availability

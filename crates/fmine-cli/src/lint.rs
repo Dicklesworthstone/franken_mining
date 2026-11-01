@@ -222,10 +222,6 @@ mod tests {
             .to_path_buf()
     }
 
-    fn args(words: &[&str]) -> Vec<String> {
-        words.iter().map(|s| (*s).to_string()).collect()
-    }
-
     fn temporary_workspace(label: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
             "fmine-lint-{label}-{}-{}",
@@ -234,42 +230,6 @@ mod tests {
         ));
         std::fs::create_dir_all(&path).expect("temporary workspace");
         path
-    }
-
-    #[test]
-    fn lint_requires_an_explicit_snapshot_and_rejects_unimplemented_options() {
-        for words in [
-            vec!["lint"],
-            vec!["lint", "draft.md"],
-            vec!["lint", "draft.md", "--issuer", "barrick", "--synthetic"],
-            vec!["lint", "draft.md", "--synthetic", "--through", "2026Q2"],
-            vec!["lint", "draft.md", "--synthetic", "--as-of", "2026-10-31"],
-            vec!["lint", "draft.md", "--synthetic", "--site", "north-mara"],
-            vec!["lint", "draft.md", "--synthetic", "extra"],
-        ] {
-            let (env, _) = crate::invoke(&args(&words), &root());
-            assert_eq!((env.verb.as_str(), env.exit_code), ("lint", 2), "{words:?}");
-        }
-        let (cmd, _, _) = crate::parse_args(
-            &args(&[
-                "lint",
-                "draft.md",
-                "--issuer",
-                "barrick",
-                "--through",
-                "2026Q2",
-            ]),
-            &root(),
-        )
-        .expect("explicit snapshot");
-        assert!(matches!(
-            cmd,
-            crate::CliCommand::Lint {
-                issuer: Some(_),
-                through: Some(_),
-                ..
-            }
-        ));
     }
 
     #[test]

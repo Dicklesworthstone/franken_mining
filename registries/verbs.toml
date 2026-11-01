@@ -87,6 +87,12 @@ mutates_authority = true
 description = "Append a published outcome, explicit missing status or cited restatement without replacing a forecast"
 
 [[verb]]
+path = "forecast journal resolve"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Resolve a frozen public target from the digest-verified original workbook Claim, retaining exact source evidence"
+
+[[verb]]
 path = "forecast journal assess"
 subsystem = "Plumb"
 mutates_authority = true

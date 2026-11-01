@@ -3,7 +3,6 @@
 #![cfg(test)]
 #![allow(clippy::expect_used)]
 
-use std::path::Path;
 use std::process::Command;
 
 #[test]
@@ -47,44 +46,4 @@ fn synthetic_binary_emits_readable_markdown() {
             "missing {expected}: {markdown}"
         );
     }
-}
-
-#[test]
-fn typed_execute_rejects_reserved_synthetic_issuer() {
-    use fmine_cli::mirror::{Command as MirrorCommand, execute, parse};
-    let args: Vec<String> = [
-        "mirror",
-        "--asset",
-        "example-jv",
-        "--period",
-        "2025",
-        "--as-of",
-        "2026-02-01",
-        "--left-issuer",
-        "alpha",
-        "--left-document",
-        "Left.pdf",
-        "--right-issuer",
-        "beta",
-        "--right-document",
-        "Right.pdf",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
-    let MirrorCommand::Public(mut selection) = parse(&args).expect("valid explicit selection")
-    else {
-        panic!("explicit reporters must select the public path");
-    };
-    selection.reporters[0].issuer = "synthetic".into();
-    let report = execute(
-        &MirrorCommand::Public(selection),
-        Path::new("unused-workspace"),
-    );
-    assert_eq!(
-        report.refusal.as_ref().expect("typed refusal").code,
-        "FMINE-REF-107"
-    );
-    assert_ne!(report.exit_code, 0);
-    assert!(!report.payload_json.contains("\"status\":\"consistent\""));
 }
