@@ -131,6 +131,9 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   both accuracy bounds. Changed proof/root bytes refuse. `proof_times_from_text` reads signed time and
   accuracy; an overflowing interval refuses. `rules_hash` refuses malformed rules or an `OPEN` marker;
   the record is validated against the dates its rules state and the CSV against their universe and targets.
+  The manifest's advisory registry-hash binding includes registered documents as well as workbooks.
+  This authenticates the frozen declarations and detects conflicting registered digests; it does not prove
+  actual input use or replay a generator. Source adapters separately verify the bodies they consume.
 - DESIGN (BD-334/BD-068): `forecast::record_score` (command `forecast-record-score <dir>`) shares that verifier
   and scores the already loaded frozen manifest/CSV/rules against registered original-release Mine Stats
   Claims. It verifies time proofs before opening outcome workbooks. Production is the signed exact difference

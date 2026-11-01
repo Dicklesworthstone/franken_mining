@@ -385,6 +385,16 @@ fn summary_json(s: &TargetScore) -> String {
     )
 }
 
+/// An unregistered outcome release is pending evidence. Once a source is registered, its bytes must
+/// still be present and match: IO/integrity refusals cannot be downgraded to an unresolved outcome.
+fn load_observation_sources(profile: &IssuerProfile, root: &Path) -> Res<Vec<LoadedSource>> {
+    if profile.sources.is_empty() {
+        Ok(Vec::new())
+    } else {
+        fmine_public::load_registered_sources(profile, root).map_err(|e| vec![e.to_string()])
+    }
+}
+
 /// Assess a verified record against byte-verified registered original releases. Source bodies are loaded only
 /// after the record and prior rules timestamp have authenticated the complete frozen forecast universe.
 /// This command never creates forecasts, registrations, timestamps, outcomes or baseline values.
@@ -420,8 +430,7 @@ pub fn record_score(root: &Path, dir: &Path) -> Res<Vec<String>> {
                 || s.quarter == format!("{year}Q4")
                 || (reference_is_frozen && s.quarter == format!("{year}Q2")))
     });
-    let sources =
-        fmine_public::load_registered_sources(&profile, root).map_err(|e| vec![e.to_string()])?;
+    let sources = load_observation_sources(&profile, root)?;
     let vocabulary: BTreeSet<_> = profile.mine_stats_labels.iter().cloned().collect();
     let mut reads = Vec::new();
     for source in &sources {
@@ -1100,5 +1109,34 @@ mod tests {
                 if stored == "1600.49" && shown == "1600.5"
         ));
         assert_ne!(actual.value, Some(Rat::new(160049, 100).unwrap()));
+    }
+    #[test]
+    fn unregistered_releases_are_pending_but_registered_missing_files_refuse() {
+        let mut d = empty_data();
+        let root = std::env::temp_dir().join(format!(
+            "fmine-record-uncreated-inputs-{}",
+            std::process::id()
+        ));
+        d.profile.corpus_dir = "uncreated-corpus".into();
+        assert!(
+            load_observation_sources(&d.profile, &root)
+                .unwrap()
+                .is_empty()
+        );
+        d.profile.sources.push(RegisteredSource {
+            file_name: "missing_original_2030Q4.xlsx".into(),
+            kind: SourceKind::MineStats,
+            quarter: "2030Q4".into(),
+            url: "https://example.invalid/missing_original_2030Q4.xlsx".into(),
+            url_basis: "synthetic absent source".into(),
+            bytes: 1,
+            sha256_hex: "00".repeat(32),
+        });
+        let errors = load_observation_sources(&d.profile, &root).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("missing_original_2030Q4.xlsx"))
+        );
     }
 }

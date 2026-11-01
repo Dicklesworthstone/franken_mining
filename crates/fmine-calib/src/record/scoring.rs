@@ -268,6 +268,153 @@ pub fn assess(
     Ok(RecordScore { members, targets })
 }
 
+/// Comparator intervals resolved under the same frozen rules as the forecast. A missing interval is
+/// explicit. Issuer guidance is assessed as a range; no probability meaning is assigned to its bounds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BenchmarkRow {
+    pub site: String,
+    pub target: String,
+    pub issuer_guidance: Option<(Rat, Rat)>,
+    pub run_rate_persistence: Option<(Rat, Rat)>,
+}
+
+/// Every reason that a live forecast member cannot enter the common comparison set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComparisonExclusion {
+    pub site: String,
+    pub missing_actual: bool,
+    pub missing_issuer_guidance: bool,
+    pub missing_run_rate_persistence: bool,
+}
+
+/// Exact descriptive losses on one identical member set. Negative differences favor the forecast
+/// under the frozen interval loss; they do not establish predictive skill or calibration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetComparison {
+    pub target: String,
+    pub n_frozen: usize,
+    pub common_members: Vec<String>,
+    pub exclusions: Vec<ComparisonExclusion>,
+    pub mean_forecast_score: Option<Rat>,
+    pub mean_issuer_guidance_score: Option<Rat>,
+    pub mean_run_rate_persistence_score: Option<Rat>,
+    pub forecast_minus_issuer_guidance: Option<Rat>,
+    pub forecast_minus_run_rate_persistence: Option<Rat>,
+}
+
+/// Compare all three intervals only where the actual and both comparators are available. Every live
+/// forecast must have exactly one explicit benchmark row, including rows whose intervals are absent.
+/// Interval order is validated even without an actual; signed and zero comparator bounds are valid.
+/// The ordinary assessment retains the full universe and its not-published members separately.
+pub fn compare(
+    rules: &RecordRules,
+    forecasts: &[ForecastRow],
+    outcomes: &[OutcomeRow],
+    benchmarks: &[BenchmarkRow],
+) -> Result<Vec<TargetComparison>> {
+    let assessment = assess(rules, forecasts, outcomes)?;
+    let forecast_keys: BTreeSet<_> = forecasts
+        .iter()
+        .map(|f| (f.site.as_str(), f.target.as_str()))
+        .collect();
+    let mut by_member = BTreeMap::new();
+    for benchmark in benchmarks {
+        let key = (benchmark.site.as_str(), benchmark.target.as_str());
+        if !forecast_keys.contains(&key) || by_member.insert(key, benchmark).is_some() {
+            return Err(AssessmentError(format!(
+                "unknown or duplicate benchmark row for {} / {}",
+                benchmark.site, benchmark.target
+            )));
+        }
+        for (name, interval) in [
+            ("issuer guidance", benchmark.issuer_guidance),
+            ("run-rate persistence", benchmark.run_rate_persistence),
+        ] {
+            if let Some((lo, hi)) = interval
+                && !le(lo, hi)?
+            {
+                return Err(AssessmentError(format!(
+                    "inverted {name} interval for {} / {}",
+                    benchmark.site, benchmark.target
+                )));
+            }
+        }
+    }
+    for (site, target) in forecast_keys {
+        if !by_member.contains_key(&(site, target)) {
+            return Err(AssessmentError(format!(
+                "missing explicit benchmark row for {site} / {target}"
+            )));
+        }
+    }
+
+    let zero = Rat::from_integer(0);
+    let mut comparisons = Vec::new();
+    for target in &assessment.targets {
+        let mut common_members = Vec::new();
+        let mut exclusions = Vec::new();
+        let (mut forecast_sum, mut guidance_sum, mut persistence_sum) = (zero, zero, zero);
+        for member in assessment
+            .members
+            .iter()
+            .filter(|m| m.forecasted && m.target == target.target)
+        {
+            let benchmark = by_member
+                .get(&(member.site.as_str(), member.target.as_str()))
+                .ok_or_else(|| {
+                    AssessmentError(format!(
+                        "missing explicit benchmark row for {} / {}",
+                        member.site, member.target
+                    ))
+                })?;
+            if let (Some(actual), Some((g_lo, g_hi)), Some((p_lo, p_hi))) = (
+                member.outcome,
+                benchmark.issuer_guidance,
+                benchmark.run_rate_persistence,
+            ) {
+                let forecast_loss = member.interval_score.ok_or_else(|| {
+                    AssessmentError(format!(
+                        "resolved forecast has no interval score for {} / {}",
+                        member.site, member.target
+                    ))
+                })?;
+                let guidance_loss = exact(interval_score(g_lo, g_hi, rules.alpha, actual))?;
+                let persistence_loss = exact(interval_score(p_lo, p_hi, rules.alpha, actual))?;
+                forecast_sum = exact(forecast_sum.checked_add(forecast_loss))?;
+                guidance_sum = exact(guidance_sum.checked_add(guidance_loss))?;
+                persistence_sum = exact(persistence_sum.checked_add(persistence_loss))?;
+                common_members.push(member.site.clone());
+            } else {
+                exclusions.push(ComparisonExclusion {
+                    site: member.site.clone(),
+                    missing_actual: member.outcome.is_none(),
+                    missing_issuer_guidance: benchmark.issuer_guidance.is_none(),
+                    missing_run_rate_persistence: benchmark.run_rate_persistence.is_none(),
+                });
+            }
+        }
+        let common_count = common_members.len();
+        comparisons.push(TargetComparison {
+            target: target.target.clone(),
+            n_frozen: target.n_frozen,
+            common_members,
+            exclusions,
+            mean_forecast_score: mean(forecast_sum, common_count)?,
+            mean_issuer_guidance_score: mean(guidance_sum, common_count)?,
+            mean_run_rate_persistence_score: mean(persistence_sum, common_count)?,
+            forecast_minus_issuer_guidance: mean(
+                exact(forecast_sum.checked_sub(guidance_sum))?,
+                common_count,
+            )?,
+            forecast_minus_run_rate_persistence: mean(
+                exact(forecast_sum.checked_sub(persistence_sum))?,
+                common_count,
+            )?,
+        });
+    }
+    Ok(comparisons)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,5 +534,200 @@ mod tests {
         let mut no_targets = r.clone();
         no_targets.targets.clear();
         assert!(assess(&no_targets, &[], &[]).is_err());
+    }
+
+    fn benchmarks(forecasts: &[ForecastRow]) -> Vec<BenchmarkRow> {
+        forecasts
+            .iter()
+            .map(|f| BenchmarkRow {
+                site: f.site.clone(),
+                target: f.target.clone(),
+                issuer_guidance: Some((Rat::from_integer(95), Rat::from_integer(105))),
+                run_rate_persistence: Some((Rat::from_integer(80), Rat::from_integer(100))),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn comparisons_use_one_common_set_and_keep_every_exclusion() {
+        let (mut r, mut f, mut y) = data();
+        r.sites[2].status = SiteStatus::Live;
+        let mut omitted = r.sites[0].clone();
+        omitted.name = "Not published fixture".into();
+        omitted.status = SiteStatus::NotPublished;
+        r.sites.push(omitted);
+        let mut third_forecast = f[0].clone();
+        third_forecast.site = r.sites[2].name.clone();
+        f.push(third_forecast);
+        y[0].value = Some(Rat::from_integer(100));
+        y.push(OutcomeRow {
+            site: r.sites[2].name.clone(),
+            target: r.targets[0].id.clone(),
+            value: Some(Rat::from_integer(1000)),
+        });
+        let mut b = benchmarks(&f);
+        b[1].issuer_guidance = Some((Rat::from_integer(100), Rat::from_integer(110)));
+        b[1].run_rate_persistence = Some((Rat::from_integer(110), Rat::from_integer(110)));
+        b[2].issuer_guidance = None;
+        let comparison = compare(&r, &f, &y, &b).unwrap();
+        let scored = &comparison[0];
+        assert_eq!(scored.n_frozen, 3);
+        assert_eq!(
+            scored.common_members,
+            [r.sites[0].name.clone(), r.sites[1].name.clone()]
+        );
+        assert_eq!(
+            scored.exclusions,
+            [ComparisonExclusion {
+                site: r.sites[2].name.clone(),
+                missing_actual: false,
+                missing_issuer_guidance: true,
+                missing_run_rate_persistence: false,
+            }]
+        );
+        // The first two sites give forecast losses 20 and 120, guidance 10 and 110, and
+        // persistence 20 and 100. The third site's forecast loss 8920 must not enter any mean.
+        assert_eq!(scored.mean_forecast_score, Some(Rat::from_integer(70)));
+        assert_eq!(
+            scored.mean_issuer_guidance_score,
+            Some(Rat::from_integer(60))
+        );
+        assert_eq!(
+            scored.mean_run_rate_persistence_score,
+            Some(Rat::from_integer(60))
+        );
+        assert_eq!(
+            scored.forecast_minus_issuer_guidance,
+            Some(Rat::from_integer(10))
+        );
+        assert_eq!(
+            scored.forecast_minus_run_rate_persistence,
+            Some(Rat::from_integer(10))
+        );
+        let full = assess(&r, &f, &y).unwrap();
+        assert_eq!(
+            full.targets[0].observed_mean_interval_score,
+            Some(Rat::from_integer(3020))
+        );
+        assert_eq!(full.targets[0].not_forecast, [r.sites[3].name.clone()]);
+        f.reverse();
+        y.reverse();
+        b.reverse();
+        assert_eq!(comparison, compare(&r, &f, &y, &b).unwrap());
+    }
+
+    #[test]
+    fn comparison_with_no_common_members_retains_all_missing_reasons() {
+        let (r, f, mut y) = data();
+        let mut b = benchmarks(&f);
+        y[0].value = None;
+        b[0].issuer_guidance = None;
+        b[0].run_rate_persistence = None;
+        b[1].run_rate_persistence = None;
+        let comparison = compare(&r, &f, &y, &b).unwrap();
+        let scored = &comparison[0];
+        assert!(scored.common_members.is_empty());
+        assert_eq!(scored.n_frozen, 2);
+        assert_eq!(
+            scored.exclusions,
+            [
+                ComparisonExclusion {
+                    site: r.sites[0].name.clone(),
+                    missing_actual: true,
+                    missing_issuer_guidance: true,
+                    missing_run_rate_persistence: true,
+                },
+                ComparisonExclusion {
+                    site: r.sites[1].name.clone(),
+                    missing_actual: false,
+                    missing_issuer_guidance: false,
+                    missing_run_rate_persistence: true,
+                },
+            ]
+        );
+        assert_eq!(scored.mean_forecast_score, None);
+        assert_eq!(scored.mean_issuer_guidance_score, None);
+        assert_eq!(scored.mean_run_rate_persistence_score, None);
+        assert_eq!(scored.forecast_minus_issuer_guidance, None);
+        assert_eq!(scored.forecast_minus_run_rate_persistence, None);
+    }
+
+    #[test]
+    fn benchmark_rows_cannot_omit_duplicate_or_extend_the_frozen_membership() {
+        let (r, f, y) = data();
+        let b = benchmarks(&f);
+        assert!(compare(&r, &f, &y, &b[..1]).is_err());
+        let mut duplicate = b.clone();
+        duplicate.push(b[0].clone());
+        assert!(compare(&r, &f, &y, &duplicate).is_err());
+        for (site, target) in [
+            ("unknown site", f[0].target.as_str()),
+            (r.sites[2].name.as_str(), f[0].target.as_str()),
+            (f[0].site.as_str(), "unknown target"),
+        ] {
+            let mut extra = b.clone();
+            extra.push(BenchmarkRow {
+                site: site.into(),
+                target: target.into(),
+                issuer_guidance: None,
+                run_rate_persistence: None,
+            });
+            assert!(compare(&r, &f, &y, &extra).is_err());
+        }
+        assert!(compare(&r, &f, &y[..1], &b).is_err());
+        let missing_actuals: Vec<_> = y
+            .iter()
+            .cloned()
+            .map(|mut row| {
+                row.value = None;
+                row
+            })
+            .collect();
+        for guidance in [true, false] {
+            let mut inverted = b.clone();
+            let bad = Some((Rat::from_integer(1), Rat::from_integer(0)));
+            if guidance {
+                inverted[0].issuer_guidance = bad;
+            } else {
+                inverted[0].run_rate_persistence = bad;
+            }
+            assert!(compare(&r, &f, &missing_actuals, &inverted).is_err());
+        }
+    }
+
+    #[test]
+    fn signed_comparator_bounds_and_point_ranges_are_valid() {
+        let (mut r, mut f, mut y) = data();
+        r.sites.truncate(1);
+        f.truncate(1);
+        y.truncate(1);
+        y[0].value = Some(Rat::from_integer(-5));
+        let b = [BenchmarkRow {
+            site: f[0].site.clone(),
+            target: f[0].target.clone(),
+            issuer_guidance: Some((Rat::from_integer(-10), Rat::from_integer(0))),
+            run_rate_persistence: Some((Rat::from_integer(-5), Rat::from_integer(-5))),
+        }];
+        let comparison = compare(&r, &f, &y, &b).unwrap();
+        let scored = &comparison[0];
+        assert_eq!(scored.common_members, [f[0].site.clone()]);
+        assert!(scored.exclusions.is_empty());
+        assert_eq!(scored.mean_forecast_score, Some(Rat::from_integer(970)));
+        assert_eq!(
+            scored.mean_issuer_guidance_score,
+            Some(Rat::from_integer(10))
+        );
+        assert_eq!(
+            scored.mean_run_rate_persistence_score,
+            Some(Rat::from_integer(0))
+        );
+        assert_eq!(
+            scored.forecast_minus_issuer_guidance,
+            Some(Rat::from_integer(960))
+        );
+        assert_eq!(
+            scored.forecast_minus_run_rate_persistence,
+            Some(Rat::from_integer(970))
+        );
     }
 }

@@ -91,15 +91,20 @@ fn registered_digests(root: &Path) -> Res<Vec<(String, [u8; 32])>> {
     for p in files {
         let reg = fmine_registry::sources::load_sources_registry(&p)
             .map_err(|e| vec![format!("{}: {e}", p.display())])?;
-        for s in reg.sources {
-            let Some(d) = parse_hex32(&s.sha256) else {
-                return fail(format!(
-                    "{}: {} has no 64-digit sha256",
-                    p.display(),
-                    s.file
-                ));
+        let rows = reg
+            .sources
+            .into_iter()
+            .map(|source| (source.file, source.sha256))
+            .chain(
+                reg.documents
+                    .into_iter()
+                    .map(|document| (document.file, document.sha256)),
+            );
+        for (file, sha256) in rows {
+            let Some(digest) = parse_hex32(&sha256) else {
+                return fail(format!("{}: {file} has no 64-digit sha256", p.display()));
             };
-            out.push((s.file, d));
+            out.push((file, digest));
         }
     }
     Ok(out)
@@ -1108,6 +1113,54 @@ mod tests {
         let err = rules_order(&shallow).expect_err("shallow clone");
         assert!(err[0].contains("shallow clone"), "{err:?}");
     }
+    /// Synthetic manifest, real registered metadata: PDFs must obey the same digest binding as workbooks.
+    #[test]
+    fn registered_document_hashes_are_bound_by_manifest_validation() {
+        let root = workspace_root();
+        let registry = fmine_registry::sources::load_sources_registry(
+            &root.join("registries/sources/barrick.toml"),
+        )
+        .expect("registered metadata");
+        let document = registry
+            .documents
+            .iter()
+            .find(|document| document.file == "Barrick_Q4_2025_MD-A.pdf")
+            .expect("registered PDF");
+        let registered = registered_digests(&root).expect("all registered source digests");
+        let digest = parse_hex32(&document.sha256).expect("registered digest");
+        assert!(registered.contains(&(document.file.clone(), digest)));
+        for workbook in &registry.sources {
+            assert!(registered.contains(&(
+                workbook.file.clone(),
+                parse_hex32(&workbook.sha256).expect("workbook digest"),
+            )));
+        }
+        let mut manifest = RecordManifest {
+            record_id: "synthetic-registry-binding".into(),
+            author_role: "public-lane-author".into(),
+            information_cutoff_utc: parse_utc("2026-11-01T00:00:00Z").expect("cut"),
+            label: record::Label::Forecast,
+            contact: record::Contact::PreContact,
+            attestation: record::ATTESTATION.into(),
+            rules_sha256: [1; 32],
+            inputs: vec![record::InputDoc {
+                doc_id: document.file.clone(),
+                url: document.url.clone(),
+                publication_day: record::parse_date(&document.published_at)
+                    .expect("publication date"),
+                retrieved_utc: parse_utc("2026-10-31T12:00:00Z").expect("declared retrieval"),
+                bytes: document.bytes,
+                sha256: digest,
+                line: 1,
+            }],
+        };
+        assert!(findings(&manifest, &registered, None, record::FY2026_DATES).is_empty());
+        manifest.inputs[0].sha256[0] ^= 1;
+        let refused = findings(&manifest, &registered, None, record::FY2026_DATES);
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(refused[0].contains(&document.file));
+    }
+
     #[test]
     fn committed_rules_verify_under_pinned_public_authorities_at_their_signed_time() {
         let root = workspace_root();

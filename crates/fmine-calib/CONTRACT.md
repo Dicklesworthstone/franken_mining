@@ -19,6 +19,13 @@
   existing outward integer-binomial/dyadic bounds. Its iid Bernoulli reference is not a calibration verdict.
   This kernel reads no files, authenticates no timestamps and selects no public sources; the xtask adapter
   must verify the record and bind original-release source Claims before calling it.
+  `record::scoring::compare` computes forecast, issuer-guidance and persistence losses on one identical
+  complete member set. Every live forecast needs an explicit benchmark row; omitted, duplicate or foreign
+  rows refuse, and inverted intervals refuse even when actuals are missing. Signed and point comparator
+  intervals are valid. Every excluded member retains all applicable missing-actual/guidance/persistence
+  flags. Empty common sets have no means or score differences. Negative forecast-minus-baseline differences
+  favor the forecast under the frozen loss, without asserting skill, calibration or probability semantics
+  for an issuer's range. The ordinary assessment retains the full frozen population independently.
 Implements the append-only pre-registration `ForecastLedger` (`INV-008`, `FMINE-REF-206`), strictly proper scoring rules (`gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`), `ReferenceClassPrior` (`GB-32`: capex `+28%/+43%`, schedule `+31%`, ramp-up `74%` Yr-1), and `SpatialFrontPitMonitor` (`GB-08` Vecchia/Rosenblatt conditional PIT + `BettingEProcess`).
 
 ## 3. Authority, Epistemics & Representation
