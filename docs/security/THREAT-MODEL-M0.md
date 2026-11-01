@@ -2,6 +2,8 @@
 
 Part of the M0 security pack (BD-073, plan §37 and §39). The other parts are the bill of materials (`cargo run -p xtask -- sbom`) and the offline runs recorded on bd-073. This document covers what the binary does today, as of 2026-11-01. Plan §31 describes the target design: MNPI walls, venture walls, residency and OT separation. None of that is in this binary, and this document does not claim it.
 
+**Scope of the tree.** This document was checked against the local tree at c2466d6. That tree has not been integrated with `origin/main` at 7752612, which diverged from it at 9bb92fc. `origin/main` registers ten more verbs. Seven of them mutate: the five `forecast journal` writers (`init`, `register`, `freeze`, `outcome`, `assess`), `assure issue` and `reliance reissue`. It also marks `assure public` as mutating. So §1's verb list and §4's write row describe the local tree only, and both must be checked again after integration.
+
 Each control below says how it is known: **enforced** (a check or the compiler fails without it), **tested** (a named test), **observed** (a recorded run) or **by search** (true of the source at this date, with nothing to stop a regression).
 
 ## 1. What the binary is
