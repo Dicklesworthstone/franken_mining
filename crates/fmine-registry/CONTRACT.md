@@ -15,7 +15,7 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
 
 ## 4. Public API Surface
 - `table_identities::{parse_table_identities, load_table_identities, TableIdentityRegistry, TableIdentity,
-  Term, IdentityKind, TermRole}` (BD-340.S5): strict `fmine.table-identities.v1` declarations for source-bound
+  Term, Replacement, IdentityKind, TermRole}` (BD-340.S5, BD-063): strict `fmine.table-identities.v1` declarations for source-bound
   PDF arithmetic, without source values. Every identity names its registered document, family, sum or
   roll-forward kind, total quantity and period, unit, basis, construction and tie convention. Linked term rows
   explicitly name each member quantity, period, sign and role. A roll-forward has exactly one positive opening
@@ -23,6 +23,12 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   membership is declared rather than inferred. Duplicate quantities, unknown documents/fields, orphan terms,
   missing periods and invalid signs/roles refuse. One construction applies per family and one tie convention
   per document, preventing selection of a rounding rule per instance. `validate` rechecks caller-built structs.
+  `reserve_replacement` identities require one numerator and denominator, a versioned gold-ounce or GEO
+  definition, explicit matching ounce units, percentage factor 100 and a price-deck key. The percentage and
+  both operands share a three-year `YYYY-YYYY` window. Basis is explicitly attributable contained gold/GEO,
+  excluding acquisitions/divestments, with the same deck key. Gold requires `none`; GEO requires a named deck.
+  Replacement metadata cannot decorate a sum or roll-forward. Shared amount quantities remain permitted;
+  reuse of a quoted percentage in another same-document identity refuses as unsupported nonlinear coupling.
   DESIGN (BD-335): optional `[[reserve_row]]` entries add explicit subject, reserve item/year, period, metal,
   unit, ownership, contained/recoverable support and convention; their source basis is the exact agreed string
   `<metal>;<ownership>;<support>`. An opening belongs to the preceding fiscal year. A quoted deck names the

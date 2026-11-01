@@ -1129,6 +1129,7 @@ mod tests {
                 basis: "gold;full;contained".into(),
                 construction: "rounded_once".into(),
                 convention: "closed".into(),
+                replacement: None,
                 terms: ["part_a", "part_b"]
                     .into_iter()
                     .map(|quantity| Term {

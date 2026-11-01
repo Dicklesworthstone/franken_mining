@@ -14,6 +14,7 @@ pub const TABLE_IDENTITIES_SCHEMA: &str = "fmine.table-identities.v1";
 pub enum IdentityKind {
     Sum,
     RollForward,
+    ReserveReplacement,
 }
 
 impl IdentityKind {
@@ -22,6 +23,7 @@ impl IdentityKind {
         match self {
             Self::Sum => "sum",
             Self::RollForward => "roll_forward",
+            Self::ReserveReplacement => "reserve_replacement",
         }
     }
 }
@@ -31,6 +33,8 @@ pub enum TermRole {
     Member,
     Opening,
     Move,
+    Numerator,
+    Denominator,
 }
 
 impl TermRole {
@@ -40,6 +44,8 @@ impl TermRole {
             Self::Member => "member",
             Self::Opening => "opening",
             Self::Move => "move",
+            Self::Numerator => "numerator",
+            Self::Denominator => "denominator",
         }
     }
 }
@@ -67,7 +73,110 @@ pub struct TableIdentity {
     pub construction: String,
     /// `closed`, `half_up`, `half_down`, `half_even` or `truncate`; one convention per document.
     pub convention: String,
+    /// Explicit interpretation of a reserve-replacement ratio; absent for sums and roll-forwards.
+    pub replacement: Option<Replacement>,
     pub terms: Vec<Term>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Replacement {
+    pub definition: String,
+    pub numerator_unit: String,
+    pub denominator_unit: String,
+    /// Percentage scaling. Operand signs are declared independently in their term rows.
+    pub factor: i64,
+    /// `none` for gold; a named printed deck for already-converted GEO operands. No conversion is performed.
+    pub price_deck: String,
+}
+
+impl Replacement {
+    #[must_use]
+    pub fn metal(&self) -> Option<&'static str> {
+        let (name, version) = self.definition.split_once('@')?;
+        if version.is_empty() || version.chars().any(char::is_whitespace) {
+            return None;
+        }
+        match name {
+            "reserve_replacement.gold_oz" => Some("gold"),
+            "reserve_replacement.geo" => Some("geo"),
+            _ => None,
+        }
+    }
+
+    fn validate(&self, identity: &TableIdentity) -> Result<(), &'static str> {
+        let metal = self
+            .metal()
+            .ok_or("unsupported named replacement definition")?;
+        if self.price_deck.is_empty()
+            || !self
+                .price_deck
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'@'))
+            || (metal == "gold") != (self.price_deck == "none")
+        {
+            return Err("gold requires deck=none; GEO requires an explicit named price deck");
+        }
+        let basis = format!(
+            "attributable;contained;metal={metal};ex_ad;deck={}",
+            self.price_deck
+        );
+        if identity.basis != basis {
+            return Err(
+                "replacement basis must explicitly match attributable contained metal, ex-A&D and the named deck",
+            );
+        }
+        let unit = self.numerator_unit.as_str();
+        if self.denominator_unit != unit
+            || !(matches!(unit, "oz" | "koz" | "moz")
+                || (metal == "geo" && matches!(unit, "geo_oz" | "geo_koz" | "geo_moz")))
+            || identity.unit != "percent"
+            || self.factor != 100
+        {
+            return Err(
+                "replacement requires percent scaling 100 and identical explicit ounce units for both operands",
+            );
+        }
+        let window = identity
+            .total_period
+            .split_once('-')
+            .and_then(|(start, end)| {
+                if start.len() != 4 || end.len() != 4 {
+                    return None;
+                }
+                Some((start.parse::<u16>().ok()?, end.parse::<u16>().ok()?))
+            });
+        if !window.is_some_and(|(start, end)| {
+            start >= 1000 && end <= 9999 && start.checked_add(2) == Some(end)
+        }) || identity
+            .terms
+            .iter()
+            .any(|term| term.period != identity.total_period)
+        {
+            return Err(
+                "replacement and both cumulative operands require the same three-year YYYY-YYYY window",
+            );
+        }
+        if identity.construction != "rounded_once"
+            || identity.terms.len() != 2
+            || identity
+                .terms
+                .iter()
+                .filter(|t| t.role == TermRole::Numerator)
+                .count()
+                != 1
+            || identity
+                .terms
+                .iter()
+                .filter(|t| t.role == TermRole::Denominator)
+                .count()
+                != 1
+        {
+            return Err(
+                "replacement needs rounded_once and exactly one numerator and one denominator",
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,9 +439,18 @@ impl TableIdentityRegistry {
                         "terms need unique quantities, explicit periods and signs of -1 or 1",
                     ));
                 }
-                if (identity.kind == IdentityKind::Sum && term.role != TermRole::Member)
-                    || (identity.kind == IdentityKind::RollForward && term.role == TermRole::Member)
-                    || (term.role == TermRole::Opening && term.sign != 1)
+                if !matches!(
+                    (identity.kind, term.role),
+                    (IdentityKind::Sum, TermRole::Member)
+                        | (
+                            IdentityKind::RollForward,
+                            TermRole::Opening | TermRole::Move
+                        )
+                        | (
+                            IdentityKind::ReserveReplacement,
+                            TermRole::Numerator | TermRole::Denominator
+                        )
+                ) || (term.role == TermRole::Opening && term.sign != 1)
                 {
                     return Err(bad("term role does not match the declared identity kind"));
                 }
@@ -349,6 +467,27 @@ impl TableIdentityRegistry {
                 return Err(bad(
                     "a roll-forward needs one positive opening and at least one movement",
                 ));
+            }
+            match (&identity.replacement, identity.kind) {
+                (Some(replacement), IdentityKind::ReserveReplacement) => {
+                    replacement.validate(identity).map_err(bad)?;
+                    if self.identities.iter().any(|other| {
+                        other.doc == identity.doc
+                            && other.id != identity.id
+                            && (other.total == identity.total
+                                || other.terms.iter().any(|t| t.quantity == identity.total))
+                    }) {
+                        return Err(bad(
+                            "a quoted replacement rate cannot be reused in another identity; shared-rate bilinear checks are unsupported",
+                        ));
+                    }
+                }
+                (None, IdentityKind::Sum | IdentityKind::RollForward) => {}
+                _ => {
+                    return Err(bad(
+                        "replacement metadata is required only for reserve_replacement identities",
+                    ));
+                }
             }
         }
         let mut source_keys = BTreeSet::new();
@@ -465,12 +604,52 @@ pub fn parse_table_identities(
                     "basis",
                     "construction",
                     "convention",
+                    "definition",
+                    "numerator_unit",
+                    "denominator_unit",
+                    "factor",
+                    "price_deck",
                 ])?;
                 let (kind, line) = f.string("kind")?;
                 let kind = match kind.as_str() {
                     "sum" => IdentityKind::Sum,
                     "roll_forward" => IdentityKind::RollForward,
-                    _ => return fail(line, "kind must be sum or roll_forward"),
+                    "reserve_replacement" => IdentityKind::ReserveReplacement,
+                    _ => {
+                        return fail(
+                            line,
+                            "kind must be sum, roll_forward or reserve_replacement",
+                        );
+                    }
+                };
+                let replacement = if kind == IdentityKind::ReserveReplacement {
+                    let Some(TomlValue::Int(factor)) = row.get("factor").map(|v| &v.value) else {
+                        return fail(row.line, "replacement factor must be an explicit integer");
+                    };
+                    Some(Replacement {
+                        definition: f.string("definition")?.0,
+                        numerator_unit: f.string("numerator_unit")?.0,
+                        denominator_unit: f.string("denominator_unit")?.0,
+                        factor: *factor,
+                        price_deck: f.string("price_deck")?.0,
+                    })
+                } else {
+                    if [
+                        "definition",
+                        "numerator_unit",
+                        "denominator_unit",
+                        "factor",
+                        "price_deck",
+                    ]
+                    .iter()
+                    .any(|key| row.get(key).is_some())
+                    {
+                        return fail(
+                            row.line,
+                            "replacement fields cannot decorate another identity kind",
+                        );
+                    }
+                    None
                 };
                 identities.push(TableIdentity {
                     id: f.string("id")?.0,
@@ -483,6 +662,7 @@ pub fn parse_table_identities(
                     basis: f.string("basis")?.0,
                     construction: f.string("construction")?.0,
                     convention: f.string("convention")?.0,
+                    replacement,
                     terms: Vec::new(),
                 });
             }
@@ -498,7 +678,14 @@ pub fn parse_table_identities(
                     "member" => TermRole::Member,
                     "opening" => TermRole::Opening,
                     "move" => TermRole::Move,
-                    _ => return fail(line, "role must be member, opening or move"),
+                    "numerator" => TermRole::Numerator,
+                    "denominator" => TermRole::Denominator,
+                    _ => {
+                        return fail(
+                            line,
+                            "role must be member, opening, move, numerator or denominator",
+                        );
+                    }
                 };
                 terms.push((
                     f.string("identity")?.0,
@@ -689,5 +876,50 @@ mod tests {
                 .reason
                 .contains("document/quantity")
         );
+    }
+
+    #[test]
+    fn constructed_replacements_cannot_bypass_basis_window_or_role_validation() {
+        let mut registry = parse_table_identities(&text(), "synthetic", &[doc()]).unwrap();
+        let identity = &mut registry.identities[0];
+        identity.kind = IdentityKind::ReserveReplacement;
+        identity.total_period = "2028-2030".into();
+        identity.unit = "percent".into();
+        identity.basis = "attributable;contained;metal=gold;ex_ad;deck=none".into();
+        identity.replacement = Some(Replacement {
+            definition: "reserve_replacement.gold_oz@synthetic".into(),
+            numerator_unit: "moz".into(),
+            denominator_unit: "moz".into(),
+            factor: 100,
+            price_deck: "none".into(),
+        });
+        identity.terms = vec![
+            Term {
+                quantity: "net_change".into(),
+                period: "2028-2030".into(),
+                sign: 1,
+                role: TermRole::Numerator,
+            },
+            Term {
+                quantity: "depletion".into(),
+                period: "2028-2030".into(),
+                sign: -1,
+                role: TermRole::Denominator,
+            },
+        ];
+        assert!(registry.validate(&[doc()]).is_ok());
+        let mutations: [fn(&mut TableIdentity); 6] = [
+            |identity| identity.kind = IdentityKind::Sum,
+            |identity| identity.replacement = None,
+            |identity| identity.total_period = "2028-2031".into(),
+            |identity| identity.basis = "attributable;contained".into(),
+            |identity| identity.terms[1].sign = 0,
+            |identity| identity.terms[1].role = TermRole::Member,
+        ];
+        for mutation in mutations {
+            let mut invalid = registry.clone();
+            mutation(&mut invalid.identities[0]);
+            assert!(invalid.validate(&[doc()]).is_err());
+        }
     }
 }

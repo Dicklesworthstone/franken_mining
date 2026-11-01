@@ -630,7 +630,7 @@ None: every failure is a usage error or a typed refusal.
   Actual NGM, Pueblo Viejo and Kibali filing coverage, resolved NGM vend-in boundaries, capex and cost/accounting
   bridges remain open; synthetic/source-adapter checks do not close full BD-346 acceptance.
 - DESIGN (BD-340.S5/S8): `check tables` exposes the existing workbook identity ledger, or checks a strict
-  `--definitions` registry of PDF sums and reserve roll-forwards. The PDF mode verifies every declared
+  `--definitions` registry of PDF sums, reserve roll-forwards and named reserve-replacement ratios. The PDF mode verifies every declared
   document's bytes, even when its values have no readings, and selects only the declared quantities while
   retaining all readers at their locators. It delegates exact arithmetic, joint consistency, checked
   certificates and correction sets to `fmine-metrics::roll_forward`; it selects no corrected value.
@@ -640,12 +640,18 @@ None: every failure is a usage error or a typed refusal.
   they are not authority-ledger anchors or external timestamps. Workbook mode retains its existing ledger
   anchor and certificate. All authority flags remain false. JSON and Markdown retain signed source tokens,
   period, unit, basis, document vintage and citations. Optional `reserve_row` declarations also collect their
-  same-document price readings and render `fmine-metrics::reserves` under `payload.issuer_reserves`. MD&A/AIF
-  current-filed selection retains earlier assertions, ambiguous latest filings, unavailable newer readings
-  and deck-only cross-checks; definitions and every selected source remain hash-bound. This slice does not
-  classify reserves, infer table membership or complete the real-PDF acceptance population.
+  same-document price readings and render `fmine-metrics::reserves` under `payload.issuer_reserves`.
+  Definitions and every selected source remain hash-bound. The arithmetic slice does not classify reserves,
+  infer table membership or complete the real-PDF acceptance population. The separate declared reserve-row
+  projection selects the latest dated MD&A/AIF filing, keeps older vintages and investor-deck cross-checks
+  visible, and retains ambiguous or unusable latest filings rather than falling back to an older assertion.
   An accepted value or price with a competing pending location refuses `FMINE-REF-202` with both citations;
   ordinary missing second readings remain visible as unavailable rows and pending evidence.
+  Replacement declarations additionally load the selected workspace's metric registry and bind the selected
+  definition metadata into the report. Gold/GEO metal, attributable contained basis, ex-A&D scope, three-year
+  window, operand units, signs and price-deck key are explicit. Signed depletion must remain strictly positive
+  throughout its rounding interval. Shared amounts are checked jointly; shared quoted-rate reuse refuses as
+  unsupported. No GEO conversion is performed, and no complete real reserve-replacement gate is asserted.
 - DESIGN (BD-341): `track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]` is a read-only
   adapter over agreed PDF transcriptions, canonical annual Mine Stats Claims and `fmine-calib::guidance_scores`.
   `--synthetic` uses invented inputs through the same adapter. JSON is the default (`--json` is an explicit

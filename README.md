@@ -133,7 +133,7 @@ their envelope has no identity-ledger certificate or issuance anchor. The source
 separately and does not certify the model. Missing IDs and altered source files refuse instead of returning
 a stale cached Claim. Recovery results remain descriptive and uncalibrated.
 
-### Check table identities and reserve roll-forwards
+### Check table identities, reserve roll-forwards and replacement ratios
 
 DESIGN (BD-340.S5/S8): inspect the existing workbook identities with their source citations and ledger
 certificate, or supply explicit definitions for tables transcribed from registered PDFs:
@@ -196,6 +196,32 @@ connected component reports a checked witness, a checked conflict certificate, o
 result. Conflict reports retain correction sets and implied intervals without selecting a corrected value.
 Missing agreed operands remain listed identities. A mathematical conflict is a finding with exit zero;
 unreadable/changed source files and reader disagreements preserve their typed refusals.
+
+Reserve replacement uses `kind = "reserve_replacement"` in the same declarations file. It requires a named
+`reserve_replacement.gold_oz@…` or `reserve_replacement.geo@…` definition from `registries/metrics.toml`,
+`unit = "percent"`, `factor = 100`, and explicit, identical `numerator_unit` and `denominator_unit`.
+Exactly two terms use `role = "numerator"` and `role = "denominator"`. The percentage and both cumulative
+amounts must name the same three-year `YYYY-YYYY` window. For example, a gold declaration uses:
+
+```toml
+kind = "reserve_replacement"
+definition = "reserve_replacement.gold_oz@barrick-fy2025"
+total_period = "2023-2025"
+unit = "percent"
+numerator_unit = "moz"
+denominator_unit = "moz"
+factor = 100
+price_deck = "none"
+basis = "attributable;contained;metal=gold;ex_ad;deck=none"
+```
+
+These fields replace the corresponding identity fields in a complete declaration; they supply no numerical
+inputs. GEO uses `metal=geo` and an explicit matching deck key in both `price_deck` and `basis`. It checks
+already-converted GEO amounts and performs no implicit price or metal conversion. Each term's sign applies
+to its original printed token; the resulting depletion interval must be strictly positive. Shared net-change
+or depletion amounts can participate in sums or roll-forwards, and all those constraints are checked jointly.
+Reusing the quoted percentage in another identity refuses because that would require a general nonlinear
+constraint. JSON and Markdown retain the named definition, window, deck, tokens, locators and checked result.
 
 DESIGN boundary: these are arithmetic checks on issuer assertions. Different filing/deck vintages remain
 separate documents. The command does not determine which vintage is true, classify reserves or establish

@@ -91,7 +91,7 @@ arithmetic closure does not establish causation or identify an operational expla
   exact rational strings. The source adapter enriches these fields with full source/date evidence.
   `WARNING` distinguishes derived information from an issuer disclosure. No target-period Claim is
   manufactured and no input value is promoted to a physically established fact.
-- `roll_forward::{assess, TableReport, SourceCell, ComponentCheck, IdentityRefusal}` (BD-340.S5,
+- `roll_forward::{assess, assess_with_metrics, TableReport, SourceCell, ComponentCheck, IdentityRefusal}` (BD-340.S5,
   BD-331.S7): binds explicit PDF identity declarations to agreed point readings and their registered document
   metadata. Units, basis, member periods, raw-token precision, distinct reader identities, page bounds and
   source hashes must agree. Missing, ambiguous or incompatible members retain a refused identity and its
@@ -102,6 +102,12 @@ arithmetic closure does not establish causation or identify an operational expla
   Different documents remain separate vintages. The JSON report and its SHA-256 digest bind all declarations,
   admitted source readings, rejected candidate readings, reader roles, filing metadata and results. No file
   I/O occurs here: callers authenticate actual registered bytes and reader agreement before public use.
+  `assess_with_metrics` additionally binds each reserve-replacement ratio to exactly one cited percentage
+  definition in the supplied metric registry. Its full definition metadata participates in the report digest.
+  The exact ratio uses the declared numerator/denominator signs and scaling; the signed depletion interval
+  must be strictly positive and bounded away from zero. Shared amounts participate in the same joint solve
+  as sums and roll-forwards. Original source tokens remain unchanged, and gold/GEO definitions, windows and
+  deck keys remain distinct. There is no implicit metal/price conversion or shared-rate nonlinear solve.
 - `SiteAiscRow`, `AiscConsolidationBridge`
 - `PriceDeck` (`barrick_reserve(year)`), `GeoBreakdown`, `compute_geo`
 - `ReserveReplacementBridge`

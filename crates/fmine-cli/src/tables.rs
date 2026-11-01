@@ -1,4 +1,4 @@
-//! Cited table inspection: existing workbook identities and explicitly declared PDF roll-forwards.
+//! Cited table inspection: workbook identities and declared PDF sums, roll-forwards and replacement ratios.
 //! Determinism: Exact (registered bytes, sorted declarations, exact solver and stable rendering).
 
 use std::collections::BTreeMap;
@@ -12,6 +12,7 @@ use fmine_numerics::exact_feas::{BlameOutcome, CorrectionLabel, Interval, Outcom
 use fmine_public::sources::{IssuerProfile, load_issuer_profile, transcriptions_path};
 use fmine_public::transcribe::{check_docs, load_transcription_quantities_as_of};
 use fmine_public::{PublicAssuranceReport, run_public_assurance, run_synthetic_assurance};
+use fmine_registry::metrics::MetricRegistry;
 use fmine_registry::table_identities::parse_table_identities;
 
 use crate::guidance::{number, text};
@@ -127,7 +128,22 @@ fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<
     }
     accepted.sort_by(|a, b| a.locator.cmp(&b.locator));
     pending.sort();
-    let report = roll_forward::assess(&definitions, &accepted, &profile.documents);
+    let metrics = if definitions
+        .identities
+        .iter()
+        .any(|d| d.replacement.is_some())
+    {
+        MetricRegistry::load_from_root(root).map_err(|e| {
+            Refusal::new(
+                RefusalCode::InputMissingOrUnreadable506,
+                format!("reserve replacement requires registries/metrics.toml: {e}"),
+            )
+        })?
+    } else {
+        MetricRegistry::default()
+    };
+    let report =
+        roll_forward::assess_with_metrics(&definitions, &accepted, &profile.documents, &metrics);
     let reserves = fmine_metrics::reserves::assess(&definitions, &accepted, &profile.documents);
     let pending_json = pending
         .iter()
@@ -221,6 +237,34 @@ fn document_markdown(
             text(&d.construction),
             text(&d.convention)
         );
+    }
+    if report.definitions.iter().any(|d| d.replacement.is_some()) {
+        out.push_str("\n## Reserve replacement definitions\n\n| Identity | Definition / window | Numerator / denominator units | Factor / price deck |\n|---|---|---|---|\n");
+        for d in &report.definitions {
+            if let Some(r) = &d.replacement {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} / {} | {} / {} | {} / {} |",
+                    text(&d.id),
+                    text(&r.definition),
+                    text(&d.total_period),
+                    text(&r.numerator_unit),
+                    text(&r.denominator_unit),
+                    r.factor,
+                    text(&r.price_deck),
+                );
+            }
+        }
+        for definition in &report.metric_definitions {
+            let _ = writeln!(
+                out,
+                "\n**{}**: {}. Source: {} ({}).\n",
+                text(&definition.id),
+                text(&definition.formula),
+                text(&definition.source),
+                text(&definition.evidence),
+            );
+        }
     }
     out.push_str(
         "\n## Joint results\n\n| Identities | Result | Checked certificate |\n|---|---|---|\n",
