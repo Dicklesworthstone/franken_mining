@@ -3,20 +3,22 @@
 //! DESIGN: ranges have no implied coverage. Missing members stay in the denominator. Completion, rounding
 //! and IID reference bounds are separate. Callers bind compatible cited outcomes and select their vintage.
 //! Determinism: Exact for scores and completion bounds; DeterministicPerIsa for the explicitly IID-only
-//! Clopper–Pearson reference interval, through the existing `fmine_core::det` numerical kernel.
+//! Clopper-Pearson reference interval, evaluated by a bounded recurrence and the refusing root solver.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::fmt;
 
-use fmine_numerics::exact_feas::power::clopper_pearson;
+use fmine_numerics::brent_root;
 pub use fmine_numerics::exact_feas::{Interval, Rat};
 
 use crate::CalibrationFlag;
 
 const ZERO: Rat = Rat::from_integer(0);
 const TWO: Rat = Rat::from_integer(2);
+const MAX_BINOMIAL_N: usize = 4096;
 
+pub const CP_ASSUMPTION: &str = "Independent Bernoulli outcomes among resolved members only; no adjustment for site or year dependence, selective missingness, or outcome rounding.";
 /// The issuer's stated acceptance set; no variant asserts a nominal probability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guidance {
@@ -125,7 +127,7 @@ fn interval_json(value: Option<Interval>) -> String {
                 rat_json(i.lo),
                 rat_json(i.hi),
                 i.lo_strict,
-                i.hi_strict,
+                i.hi_strict
             )
         },
     )
@@ -156,12 +158,9 @@ impl GuidanceSummary {
     /// Numeric JSON; dependence estimates and bias confidence intervals remain explicitly absent.
     #[must_use]
     pub fn to_json(&self) -> String {
-        let reference = self.iid_reference_interval_90.map_or_else(
-            || "null".to_owned(),
-            |(lo, hi)| format!(
-                "{{\"lo\":{lo},\"hi\":{hi},\"level\":0.9,\"assumption\":\"independent_identically_distributed_bernoulli_hits\"}}",
-            ),
-        );
+        let reference = self.iid_reference_interval_90.map_or_else(|| "null".to_owned(), |(lo, hi)| {
+            format!("{{\"lo\":{lo},\"hi\":{hi},\"level\":0.9,\"assumption\":\"independent_identically_distributed_bernoulli_hits\"}}")
+        });
         let flag = if self.n_resolved == 0 {
             "unscored"
         } else {
@@ -314,6 +313,63 @@ pub fn score(guidance: Guidance, outcome: PrintedOutcome) -> Result<GuidanceScor
     Ok(result)
 }
 
+/// Binomial tail from a recurrence centred at a mode. Relative weights are at most one; normalizing their
+/// sum avoids factorial overflow and a vanishing endpoint seed. This evaluates the binomial polynomial with
+/// fixed-order floating arithmetic, with no platform transcendental functions.
+fn binomial_tail(n: usize, k: usize, p: f64, upper: bool) -> f64 {
+    if p == 0.0 {
+        return if !upper || k == 0 { 1.0 } else { 0.0 };
+    }
+    if p == 1.0 {
+        return if upper || k == n { 1.0 } else { 0.0 };
+    }
+    let mode = (((n + 1) as f64 * p) as usize).min(n);
+    let selected = |i: usize| if upper { i >= k } else { i <= k };
+    let (mut total, mut tail) = (1.0, if selected(mode) { 1.0 } else { 0.0 });
+    let mut weight = 1.0;
+    for i in (1..=mode).rev() {
+        weight *= i as f64 / (n - i + 1) as f64 * ((1.0 - p) / p);
+        total += weight;
+        if selected(i - 1) {
+            tail += weight;
+        }
+    }
+    weight = 1.0;
+    for i in mode..n {
+        weight *= (n - i) as f64 / (i + 1) as f64 * (p / (1.0 - p));
+        total += weight;
+        if selected(i + 1) {
+            tail += weight;
+        }
+    }
+    tail / total
+}
+
+fn binomial_interval(k: usize, n: usize, max_iter: usize) -> Result<(f64, f64)> {
+    if n == 0 || k > n || n > MAX_BINOMIAL_N {
+        return Err(GuidanceScoreError::ReferenceIntervalFailed);
+    }
+    let solve = |upper: bool| {
+        brent_root(0.0, 1.0, 1e-13, max_iter, |p| {
+            binomial_tail(n, k, p, upper) - 0.05
+        })
+        .map(|root| root.x)
+        .map_err(|_| GuidanceScoreError::ReferenceIntervalFailed)
+    };
+    let lo = if k == 0 { 0.0 } else { solve(true)? };
+    let hi = if k == n { 1.0 } else { solve(false)? };
+    if !lo.is_finite() || !hi.is_finite() || lo < 0.0 || hi > 1.0 || lo > hi {
+        return Err(GuidanceScoreError::ReferenceIntervalFailed);
+    }
+    Ok((lo, hi))
+}
+
+/// A two-sided 90% Clopper-Pearson interval. The numerical roots must converge; zero outcomes, invalid counts,
+/// or a sample above the fixed computation budget refuse instead of returning an estimate.
+pub fn clopper_pearson_90(k: usize, n: usize) -> Result<(f64, f64)> {
+    binomial_interval(k, n, 200)
+}
+
 fn count_ratio(numerator: usize, denominator: usize) -> Result<Rat> {
     let numerator =
         i128::try_from(numerator).map_err(|_| GuidanceScoreError::ArithmeticOverflow)?;
@@ -407,16 +463,8 @@ pub fn summarize(members: &[ScoringMember]) -> Result<GuidanceSummary> {
     if summary.n_resolved > 0 {
         summary.flag = CalibrationFlag::Descriptive;
         summary.observed_hit_rate = Some(count_ratio(summary.inside, summary.n_resolved)?);
-        let k = u64::try_from(summary.inside)
-            .map_err(|_| GuidanceScoreError::ReferenceIntervalFailed)?;
-        let n = u64::try_from(summary.n_resolved)
-            .map_err(|_| GuidanceScoreError::ReferenceIntervalFailed)?;
-        let (lo, hi) =
-            clopper_pearson(k, n, 0.1).ok_or(GuidanceScoreError::ReferenceIntervalFailed)?;
-        if !lo.is_finite() || !hi.is_finite() || lo < 0.0 || hi > 1.0 || lo > hi {
-            return Err(GuidanceScoreError::ReferenceIntervalFailed);
-        }
-        summary.iid_reference_interval_90 = Some((lo, hi));
+        summary.iid_reference_interval_90 =
+            Some(clopper_pearson_90(summary.inside, summary.n_resolved)?);
     }
     if summary.n_ranges > 0 {
         let n = count_ratio(summary.n_ranges, 1)?;
@@ -661,5 +709,63 @@ mod tests {
             ),
             Err(GuidanceScoreError::ArithmeticOverflow)
         );
+    }
+
+    #[test]
+    fn test_one_sided_guidance_boundary_and_excluded_lower_endpoint() {
+        for guidance in [
+            Guidance::AtMost { upper: q(100, 1) },
+            Guidance::AtLeast { lower: q(100, 1) },
+        ] {
+            let boundary = score(guidance, printed(100, q(1, 2))).unwrap();
+            assert_eq!(boundary.side, Side::Inside);
+            assert!(boundary.boundary && boundary.possibly_inside && !boundary.definitely_inside);
+            assert!(
+                score(guidance, printed(100, ZERO))
+                    .unwrap()
+                    .definitely_inside
+            );
+        }
+        let mut below = printed(99, q(1, 1));
+        assert!(score(range(), below).unwrap().possibly_inside);
+        below.interval.hi_strict = true;
+        assert!(!score(range(), below).unwrap().possibly_inside);
+    }
+
+    #[test]
+    fn test_clopper_pearson_single_member_and_maximum_budget() {
+        let one = clopper_pearson_90(1, 1).unwrap();
+        assert!((one.0 - 0.05).abs() < 1e-12);
+        assert_eq!(one.1, 1.0);
+        let zero = clopper_pearson_90(0, MAX_BINOMIAL_N).unwrap();
+        let expected =
+            1.0 - fmine_core::det::exp(fmine_core::det::ln(0.05) / MAX_BINOMIAL_N as f64);
+        assert_eq!(zero.0, 0.0);
+        assert!((zero.1 - expected).abs() < 1e-12);
+        let central = clopper_pearson_90(MAX_BINOMIAL_N / 2, MAX_BINOMIAL_N).unwrap();
+        assert!(central.0 < 0.5 && central.1 > 0.5);
+        assert!((central.0 + central.1 - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn binomial_bounds_match_the_existing_independent_tail_implementation() {
+        for n in [2, 7, 10, 40, 100, 300] {
+            for k in [0, 1, n / 2, n - 1, n] {
+                let actual = clopper_pearson_90(k, n).expect("interval");
+                let reference =
+                    fmine_numerics::exact_feas::power::clopper_pearson(k as u64, n as u64, 0.1)
+                        .expect("reference");
+                assert!((actual.0 - reference.0).abs() < 1e-10, "{k}/{n} lower");
+                assert!((actual.1 - reference.1).abs() < 1e-10, "{k}/{n} upper");
+            }
+        }
+    }
+
+    #[test]
+    fn clopper_pearson_refuses_nonconvergence_and_invalid_populations() {
+        assert!(binomial_interval(3, 10, 0).is_err());
+        assert!(clopper_pearson_90(0, 0).is_err());
+        assert!(clopper_pearson_90(11, 10).is_err());
+        assert!(clopper_pearson_90(1, MAX_BINOMIAL_N + 1).is_err());
     }
 }

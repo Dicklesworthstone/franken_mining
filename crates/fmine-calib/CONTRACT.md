@@ -5,7 +5,7 @@
 - **Layer:** `K0` (Kernel Foundation)
 - **Subsystem:** `Kernels`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["ledger", "scoring", "prior", "pit", "record"]`
+- **Allowed Module Families:** `["ledger", "scoring", "prior", "pit", "record", "guidance_scores"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements the append-only pre-registration `ForecastLedger` (`INV-008`, `FMINE-REF-206`), strictly proper scoring rules (`gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`), `ReferenceClassPrior` (`GB-32`: capex `+28%/+43%`, schedule `+31%`, ramp-up `74%` Yr-1), and `SpatialFrontPitMonitor` (`GB-08` Vecchia/Rosenblatt conditional PIT + `BettingEProcess`).
@@ -57,9 +57,12 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   `summarize` preserves every declared member, refuses duplicate ids and invalid ranges even when unresolved,
   and reduces in stable id order. It gives exact observed hit rates, whole-cohort completion bounds, separate
   rounding-aware bounds, mean `z` with its arithmetic rounding enclosure, and the share above the midpoint.
-  The existing `exact_feas::power::clopper_pearson` supplies a separately labelled 90% IID Bernoulli reference
-  interval, using `fmine_core::det`; it is not adjusted for common year or site shocks. Numeric JSON renderers
-  keep exact rational numerators/denominators and open interval ends. Outputs are always Descriptive or Unscored.
+  `clopper_pearson_90` supplies a separately labelled 90% IID Bernoulli reference interval, using a bounded,
+  mode-centred binomial recurrence and the existing refusing root solver. Empty/invalid counts, more than
+  4096 resolved outcomes and nonconvergence refuse. It is not adjusted for common year/site shocks, selective
+  missingness or outcome rounding. Numeric JSON renderers keep exact rational numerators/denominators and
+  open interval ends; effective sample size and bias confidence intervals remain null. Outputs are always
+  Descriptive or Unscored.
 - `record` (BD-334.S1, the public forecast record of plan §21.6), all pure:
   - `record_frame`/`record_digest` (`FMREC1`: manifest and forecasts hashed as one) and `rules_frame`/`rules_digest`
     (`FMRUL1`: the rules alone, stamped first);
@@ -121,9 +124,11 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   that cut; same-time batches remain valid; failed writes do not advance time or reserve a cohort name; and
   calibration policies cannot bypass the minimum independent sample. Existing frame and score goldens are retained.
 - BD-341.S4's descriptive slice has known-answer `z = 3/2`, exact oz-to-gram invariance, open/closed rounding
-  boundary, missing-member completion-bound, stable input-order, Clopper–Pearson closed-form edge, malformed
-  input and arithmetic-overflow tests in `guidance_scores::tests`. These do not establish the unimplemented
-  clustered bias interval or its 200-replicate coverage gate.
+  boundary, missing-member completion-bound, stable input-order, Clopper-Pearson closed-form edge, malformed
+  input and arithmetic-overflow tests in `guidance_scores::tests`. Added tests compare the binomial bounds
+  with the independent log-space tail implementation, verify the maximum supported population and one-sided
+  boundaries, and force nonconvergence. These do not establish the unimplemented clustered bias interval or
+  its 200-replicate coverage gate.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Miscalibrated spatial fronts trip `BettingEProcess` at `E_t >= 20.0` (`alpha = 0.05`) and downgrade downstream claims.
@@ -141,7 +146,7 @@ Pure calibration and scoring kernel; does not perform file I/O (`L-3`).
 The cohort store is in memory. Its canonical assessment bytes can be retained by an adapter; this slice adds no
 durable ledger or external timestamp authority. Caller-supplied times are ordering inputs, not time proofs
 (BD-047/BD-068). It does not infer a fallback after a target's definition changes, estimate correlation, or claim
-calibration for an issuer guidance range with no stated level. Guidance's IID Clopper–Pearson reference interval
+calibration for an issuer guidance range with no stated level. Guidance's IID Clopper-Pearson reference interval
 does not account for common shocks. Clustered bias confidence intervals, an empirically justified effective
 sample-size rule and BD-341's three-scenario coverage study remain open. The exact guidance scorer consumes
 already selected, citation-bound outcomes: it does not freeze forecasts, authenticate a publication date or
