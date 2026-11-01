@@ -188,6 +188,20 @@ def pair(role, token, mode, unit):
             for reader in ("reader_a", "reader_b")]
 
 
+CAPEX_DEFINITION = (
+    ";timing=cash;leases=excluded;definition_page=2;definition_table=Capital policy;"
+    "definition_row=Cash capital excluding leases;definition_col=2025"
+)
+
+
+def capex_pair(scope, ownership, token):
+    rows = pair(f"capex_{scope}_{ownership}_usd_m", token,
+                "100%" if ownership == "100" else "attributable", "USD_m")
+    for reading in rows:
+        reading.basis += CAPEX_DEFINITION
+    return rows
+
+
 class Document:
     def __init__(self, issuer, file, attributable, share, full):
         self.file = file
@@ -317,6 +331,147 @@ class MirrorIntegration(unittest.TestCase):
 
     def fixture(self, tag):
         return Fixture(self.binary, tag)
+
+    def capex_fixture(self, tag):
+        fixture = self.fixture(tag)
+        for document, share, values in (
+            (fixture.left[0], "61.5", ("369", "246", "615")),
+            (fixture.right[0], "38.5", ("231", "154", "385")),
+        ):
+            document.readings = pair(EQUITY, share, "equity", "percent")
+            for scope, token in zip(("sustaining", "project", "total"), values):
+                document.readings += capex_pair(scope, "attr", token)
+        for scope, token in (("sustaining", "600"), ("project", "400"), ("total", "1000")):
+            fixture.left[0].readings += capex_pair(scope, "100", token)
+        return fixture
+
+    def test_capex_scopes_bind_exact_money_and_separate_definition_citations(self):
+        fixture = self.capex_fixture("capex-scopes")
+        fixture.write()
+        for scope, full in (("sustaining", 600), ("project", 400), ("total", 1000)):
+            with self.subTest(scope=scope):
+                arguments = fixture.arguments() + ["--metric", f"capex-{scope}"]
+                report = successful(fixture.invoke(arguments))
+                payload = report["payload"]
+                self.assertEqual(payload["verdict"]["status"], "consistent")
+                self.assertEqual(payload["metric"], f"capex_{scope}_usd_m")
+                self.assertEqual(bounds(payload["common"]["interval_usd_m"]),
+                                 (Fraction(2 * full - 1, 2), Fraction(2 * full + 1, 2)))
+                self.assertNotIn("interval_koz", report.raw)
+                self.assertFalse(payload["proof"]["physical_nonnegative"])
+                for reading in payload["inputs"]:
+                    self.assertEqual(reading["capex_basis"], {
+                        "scope": scope, "timing": "cash", "leases": "excluded",
+                    })
+                    self.assertIn(":p2:Capital policy:Cash capital excluding leases/2025",
+                                  reading["basis_source"]["locator"])
+                    self.assertIn(reading["basis_source"], reading["anchors"])
+                no_authority(report)
+                markdown = fixture.markdown(arguments)
+                self.assertIn("USD_m", markdown)
+                self.assertIn("Cash capital excluding leases", markdown)
+                same(report, successful(fixture.invoke(arguments)))
+
+    def test_capex_joint_witness_satisfies_ownership_and_component_sum_in_exact_fractions(self):
+        fixture = self.capex_fixture("capex-joint")
+        fixture.write()
+        arguments = fixture.arguments() + ["--metric", "capex"]
+        report = successful(fixture.invoke(arguments))
+        payload = report["payload"]
+        self.assertEqual(payload["verdict"]["status"], "consistent")
+        self.assertEqual(payload["construction"], "component_sum")
+        self.assertEqual(len(payload["scope_checks"]), 3)
+        self.assertTrue(all(s["construction"] == "independent_half_last_place"
+                            for s in payload["scope_checks"]))
+        joint = payload["joint"]
+        self.assertIsNone(payload["joint_unavailable_reason"])
+        witness = {v["cell"]: rat(v["value"]) for v in joint["verdict"]["witness"]}
+        sums = [i for i in joint["proof"]["identities"] if i["kind"] == "sum"]
+        self.assertEqual(len(sums), 3)
+        total_cells = {s["total"] for s in sums}
+        for cell in joint["proof"]["cells"]:
+            if cell["locator"] not in total_cells:
+                self.assertLessEqual(abs(witness[cell["locator"]] - rat(cell["printed"])),
+                                     rat(cell["step"]) / 2)
+        for identity in joint["proof"]["identities"]:
+            if identity["kind"] == "sum":
+                self.assertEqual(witness[identity["total"]],
+                                 sum(sign * witness[line] for sign, line in
+                                     zip(identity["signs"], identity["lines"])))
+            else:
+                self.assertEqual(identity["kind"], "scale")
+                self.assertEqual(witness[identity["target"]],
+                                 rat(identity["factor"]) * witness[identity["source"]])
+        self.assertIn("Joint component-sum check", fixture.markdown(arguments))
+        swapped = list(arguments)
+        for flag, value in (("--left-issuer", "beta"), ("--left-document", "Right.pdf"),
+                            ("--right-issuer", "alpha"), ("--right-document", "Left.pdf")):
+            replace_argument(swapped, flag, value)
+        same(report, successful(fixture.invoke(swapped)))
+        no_authority(report)
+
+    def test_capex_joint_footing_finds_a_conflict_that_each_scope_alone_accepts(self):
+        fixture = self.capex_fixture("capex-footing")
+        fixture.left[0].token("capex_total_100_usd_m", "1000.1")
+        fixture.write()
+        report = successful(fixture.invoke(fixture.arguments() + ["--metric", "capex"]))
+        self.assertTrue(all(s["verdict"]["status"] == "consistent"
+                            for s in report["payload"]["scope_checks"]))
+        verdict = report["payload"]["joint"]["verdict"]
+        self.assertEqual(verdict["status"], "conflict")
+        self.assertTrue(verdict["independently_checked"])
+        self.assertEqual(verdict["certificate"]["kind"], "residual")
+        self.assertEqual(abs(rat(verdict["certificate"]["residual"])), Fraction(1, 10))
+        self.assertEqual(report["payload"]["verdict"], verdict)
+
+    def test_capex_missing_unstated_or_incompatible_basis_never_becomes_consistent(self):
+        for old, new in (
+            (";timing=cash", ""), ("timing=cash", "timing=unstated"),
+            ("timing=cash", "timing=accrual"), ("leases=excluded", "leases=unstated"),
+            ("leases=excluded", "leases=included"),
+            (";definition_row=Cash capital excluding leases", ""),
+            ("definition_page=2", "definition_page=3"),
+        ):
+            with self.subTest(new=new):
+                fixture = self.capex_fixture("capex-basis")
+                for reading in fixture.right[0].readings:
+                    if "_capex_" in reading.quantity:
+                        self.assertIn(old, reading.basis)
+                        reading.basis = reading.basis.replace(old, new)
+                fixture.write()
+                refused(fixture.invoke(fixture.arguments() + ["--metric", "capex-total"]),
+                        "FMINE-REF-104")
+
+    def test_capex_signed_corrections_are_not_clamped_and_source_tampering_refuses(self):
+        fixture = self.capex_fixture("capex-signed")
+        fixture.left[0].readings = capex_pair("total", "100", "-10")
+        fixture.right[0].readings = capex_pair("total", "100", "-10")
+        fixture.write()
+        arguments = fixture.arguments() + ["--metric", "capex-total"]
+        report = successful(fixture.invoke(arguments))
+        self.assertEqual(bounds(report["payload"]["common"]["interval_usd_m"]),
+                         (Fraction(-21, 2), Fraction(-19, 2)))
+        self.assertFalse(report["payload"]["proof"]["physical_nonnegative"])
+        (fixture.root / "corpus/beta/Right.pdf").write_bytes(b"changed source")
+        refused(fixture.invoke(arguments), "FMINE-REF-505")
+
+    def test_capex_all_scopes_never_silently_omits_a_missing_or_disputed_line(self):
+        for scenario in ("missing", "pending", "disputed", "wrong-currency"):
+            with self.subTest(scenario=scenario):
+                fixture = self.capex_fixture(scenario)
+                rows = fixture.right[0].readings
+                selected = [r for r in rows if r.quantity.endswith("capex_project_attr_usd_m")]
+                if scenario == "missing":
+                    fixture.right[0].readings = [r for r in rows if r not in selected]
+                elif scenario == "pending":
+                    fixture.right[0].readings = [r for r in rows if r is not selected[1]]
+                elif scenario == "disputed":
+                    selected[1].token = "155"
+                else:
+                    for r in selected:
+                        r.unit = "CAD_m"
+                fixture.write()
+                refused(fixture.invoke(fixture.arguments() + ["--metric", "capex"]))
 
     def test_two_document_only_reporters_bind_values_shares_perimeters_and_source_bytes(self):
         fixture = self.fixture("positive")
@@ -525,6 +680,12 @@ class MirrorIntegration(unittest.TestCase):
         report = successful(fixture.invoke(["mirror", "--synthetic", "--json"]))
         synthetic(report)
         self.assertIsNone(report["certificate"])
+        capex = successful(fixture.invoke(["mirror", "--synthetic", "--metric", "capex"]))
+        self.assertTrue(capex["payload"]["synthetic"])
+        self.assertEqual(capex["payload"]["verdict"]["status"], "consistent")
+        self.assertTrue(all(c["evidence"] == "Assumed" for c in capex["payload"]["joint"]["inputs"]))
+        self.assertIn("Joint component-sum check", fixture.markdown(["mirror", "--synthetic", "--metric", "capex"]))
+        no_authority(capex)
 
     def test_json_and_markdown_execute_as_a_real_read_only_command(self):
         fixture = self.fixture("binary")

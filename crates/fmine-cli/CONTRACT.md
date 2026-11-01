@@ -725,10 +725,23 @@ None: every failure is a usage error or a typed refusal.
   `fmine-metrics`.
 
 ## 10. Non-Goals & Scope Boundary
-- The mirror currently supports produced and sold gold in koz from explicitly selected, agreed document
-  assertions. It neither selects a correct reporter nor establishes physical truth or disclosure permission.
-  Actual NGM, Pueblo Viejo and Kibali filing coverage, resolved NGM vend-in boundaries, capex and cost/accounting
-  bridges remain open; synthetic/source-adapter checks do not close full BD-346 acceptance.
+- The mirror supports produced and sold gold in koz and sustaining, project or total capital in USD millions
+  from explicitly selected, agreed document assertions. It neither selects a correct reporter nor establishes
+  physical truth or disclosure permission. Actual NGM, Pueblo Viejo and Kibali filing coverage, resolved NGM
+  vend-in boundaries and definition/cost/accounting bridges remain open; synthetic/source-adapter checks do
+  not close full BD-346 acceptance.
+- DESIGN (BD-346.S4): `mirror --metric capex-sustaining|capex-project|capex-total` binds each monetary row's
+  explicit cash/accrual timing, included/excluded lease treatment and separately cited definition locator.
+  Missing, unstated or unequal bases refuse instead of applying an inferred bridge. `--metric capex` requires
+  all three scopes from both selected reporters and reports their independent rounding-box comparisons beside
+  the joint component-sum assessment. Joint totals must foot exactly from printed components; their underlying
+  bounds then come from those components. Every supplied complete ownership-basis triple participates, and an
+  absent unambiguous triple keeps the joint result unavailable. Signed monetary values retain their sign;
+  neither a physical nonnegativity clamp nor a currency conversion is applied. JSON `interval_usd_m` fields
+  remain distinct from physical `interval_koz`, and definition citations survive into source and derived Claims.
+  An explicit `--synthetic --metric capex` demonstration uses invented, Assumed evidence. Integration tests
+  exercise the executable with generated source bytes and independently calculated rational expectations;
+  it proves the adapter, not authentic issuer filing coverage or the full BD-346 gate.
 - DESIGN (BD-340.S5/S8): `check tables` exposes the existing workbook identity ledger, or checks a strict
   `--definitions` registry of PDF sums, reserve roll-forwards and named reserve-replacement ratios. The PDF mode verifies every declared
   document's bytes, even when its values have no readings, and selects only the declared quantities while

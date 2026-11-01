@@ -30,7 +30,7 @@ description = "Compute remaining production and spending requirements from cited
 path = "mirror"
 subsystem = "Bullion"
 mutates_authority = false
-description = "Compare cited JV production or sales assertions under explicit ownership and a common dated operating perimeter"
+description = "Compare cited JV production, sales or capital expenditure under explicit ownership, capital definitions and a common dated operating perimeter"
 
 [[verb]]
 path = "track-record"

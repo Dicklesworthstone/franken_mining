@@ -1,4 +1,4 @@
-//! Exact production/sales mirrors of a declared common public perimeter (BD-346.S3).
+//! Exact production, sales and capital-expenditure mirrors of a declared common public perimeter (BD-346).
 //! Determinism: Exact
 //!
 //! DESIGN: source intervals and fixed ownership shares define Scale identities in the existing exact
@@ -6,7 +6,10 @@
 //! not establish physical truth, independence of the reporters, or a cost-definition bridge. The caller
 //! authenticates source bytes, availability, readership and the stated ownership/perimeter context.
 
+mod capex;
 pub mod transcriptions;
+
+pub use capex::{CapexJointReport, CapexReport, compare_capex};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
@@ -18,13 +21,175 @@ use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, Re
 use fmine_numerics::exact_feas::{self as xf, Interval, Rat};
 use fmine_time::{CivilDate, days_in_month};
 
-use crate::guidance::{Ownership, Quantity, QuantityKind};
+use crate::guidance::{Ownership, Period};
 
 pub const READING_METRIC: &str = "mirror.source_reading";
 pub const NO_CLAIM: &str = "Consistency of supplied public assertions under stated ownership and perimeter; no physical-truth, cost-comparability or affiliation claim.";
 type Result<T> = std::result::Result<T, Refusal>;
 const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);
+
+/// A capital line's declared classification. No reclassification between reporters is inferred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CapexScope {
+    Sustaining,
+    Project,
+    Total,
+}
+
+impl CapexScope {
+    pub const ALL: [Self; 3] = [Self::Sustaining, Self::Project, Self::Total];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sustaining => "sustaining",
+            Self::Project => "project",
+            Self::Total => "total",
+        }
+    }
+}
+
+/// Cash paid and accrual additions are different measures, even when their printed values agree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapexTiming {
+    Cash,
+    Accrual,
+    Unstated,
+}
+
+impl CapexTiming {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cash => "cash",
+            Self::Accrual => "accrual",
+            Self::Unstated => "unstated",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseTreatment {
+    Included,
+    Excluded,
+    Unstated,
+}
+
+impl LeaseTreatment {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Included => "included",
+            Self::Excluded => "excluded",
+            Self::Unstated => "unstated",
+        }
+    }
+}
+
+/// The separately cited capital definition; every field must be stated before comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapexBasis {
+    pub scope: CapexScope,
+    pub timing: CapexTiming,
+    pub leases: LeaseTreatment,
+}
+
+/// Mirror-local units and quantity kinds. Capital never masquerades as AISC spending or gold ounces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MirrorMetric {
+    ProductionKoz,
+    SoldKoz,
+    Capex(CapexScope),
+}
+
+impl MirrorMetric {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProductionKoz => "gold_produced",
+            Self::SoldKoz => "gold_sold",
+            Self::Capex(CapexScope::Sustaining) => "capex_sustaining",
+            Self::Capex(CapexScope::Project) => "capex_project",
+            Self::Capex(CapexScope::Total) => "capex_total",
+        }
+    }
+
+    #[must_use]
+    pub const fn unit(self) -> &'static str {
+        match self {
+            Self::ProductionKoz | Self::SoldKoz => "koz",
+            Self::Capex(_) => "USD_m",
+        }
+    }
+
+    #[must_use]
+    pub const fn is_capex(self) -> bool {
+        matches!(self, Self::Capex(_))
+    }
+}
+
+/// An exact extensive amount on explicit temporal, ownership and reporting bases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirrorQuantity {
+    pub subject: String,
+    pub period: Period,
+    pub ownership: Ownership,
+    pub kind: MirrorMetric,
+    pub capex_basis: Option<CapexBasis>,
+    pub interval: Interval,
+}
+
+impl MirrorQuantity {
+    #[must_use]
+    pub fn canonical_tag(&self) -> String {
+        // DESIGN: existing physical Claims retain their original bytes and identities.
+        if !self.kind.is_capex() && self.capex_basis.is_none() {
+            return crate::guidance::Quantity {
+                subject: self.subject.clone(),
+                period: self.period,
+                ownership: self.ownership,
+                kind: if self.kind == MirrorMetric::ProductionKoz {
+                    crate::guidance::QuantityKind::ProductionKoz
+                } else {
+                    crate::guidance::QuantityKind::SoldKoz
+                },
+                definition: String::new(),
+                interval: self.interval,
+            }
+            .canonical_tag();
+        }
+        let mut enc = Encoder::new_frame(*b"MCQ1", 1);
+        enc.put_str(&self.subject);
+        enc.put_u16(self.period.year);
+        enc.put_u8(self.period.first_month);
+        enc.put_u8(self.period.last_month);
+        match self.ownership {
+            Ownership::Full => enc.put_u8(0),
+            Ownership::Attributable { share } => {
+                enc.put_u8(1);
+                enc.put_i128(share.num());
+                enc.put_i128(share.den());
+            }
+        }
+        enc.put_str(self.kind.as_str());
+        if let Some(basis) = self.capex_basis {
+            enc.put_u8(1);
+            enc.put_str(basis.scope.as_str());
+            enc.put_str(basis.timing.as_str());
+            enc.put_str(basis.leases.as_str());
+        } else {
+            enc.put_u8(0);
+        }
+        for bound in [self.interval.lo, self.interval.hi] {
+            enc.put_i128(bound.num());
+            enc.put_i128(bound.den());
+        }
+        enc.put_u8(u8::from(self.interval.lo_strict));
+        enc.put_u8(u8::from(self.interval.hi_strict));
+        blake3_hash(&enc.finish()).to_hex()
+    }
+}
 
 /// Explicit operation membership and inclusive dates over which it and the reading's basis apply.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,30 +222,38 @@ impl Perimeter {
 pub struct MirrorReading {
     pub reporter: String,
     pub source: SourceAnchor,
+    /// The reporter's own page defining capital scope, timing and lease treatment.
+    pub basis_source: Option<SourceAnchor>,
     pub perimeter: Perimeter,
-    pub quantity: Quantity,
+    pub quantity: MirrorQuantity,
 }
 
 impl MirrorReading {
     #[must_use]
     pub fn canonical_tag(&self) -> String {
-        let mut enc = Encoder::new_frame(*b"MIRD", 1);
+        let mut enc = Encoder::new_frame(*b"MIRD", if self.basis_source.is_some() { 2 } else { 1 });
         enc.put_str(&self.reporter);
         enc.put_str(&self.source.artifact_path);
         enc.put_fixed(&self.source.artifact_sha256);
         enc.put_str(&self.source.locator);
         self.perimeter.encode(&mut enc);
         enc.put_str(&self.quantity.canonical_tag());
+        if let Some(source) = &self.basis_source {
+            enc.put_str(&source.artifact_path);
+            enc.put_fixed(&source.artifact_sha256);
+            enc.put_str(&source.locator);
+        }
         blake3_hash(&enc.finish()).to_hex()
     }
 }
 
-/// The common nonnegative full-perimeter quantity, conditional on every supplied source interpretation.
+/// The common full-perimeter quantity conditional on every supplied source interpretation.
+/// Gold amounts are nonnegative; capital amounts retain their signed monetary domain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MirrorCommon {
     pub reporters: Vec<String>,
     pub perimeter: Perimeter,
-    pub quantity: Quantity,
+    pub quantity: MirrorQuantity,
 }
 
 impl MirrorCommon {
@@ -95,7 +268,7 @@ impl MirrorCommon {
         }
         self.perimeter.encode(&mut enc);
         enc.put_str(&self.quantity.canonical_tag());
-        enc.put_u8(1); // The common physical quantity is explicitly restricted to x >= 0.
+        enc.put_u8(u8::from(!self.quantity.kind.is_capex()));
         blake3_hash(&enc.finish()).to_hex()
     }
 }
@@ -157,7 +330,7 @@ fn midpoint(interval: Interval) -> Result<Rat> {
     checked(interval.lo.checked_add(half_width))
 }
 
-fn share(quantity: &Quantity) -> Rat {
+fn share(quantity: &MirrorQuantity) -> Rat {
     match quantity.ownership {
         Ownership::Full => ONE,
         Ownership::Attributable { share } => share,
@@ -190,7 +363,7 @@ fn validate(claim: &Claim<MirrorReading>) -> Result<()> {
     if matches!(claim.representation, Representation::Placeholder { .. }) {
         return refuse(
             RefusalCode::SourceCellUnusable208,
-            "a placeholder is not a production or sales reading",
+            "a placeholder is not a numeric mirror reading",
         );
     }
     if !matches!(
@@ -223,7 +396,7 @@ fn validate(claim: &Claim<MirrorReading>) -> Result<()> {
     if claim.additivity != AdditivityClass::ExtensiveAdditive {
         return refuse(
             RefusalCode::NonAdditiveAverage103,
-            "production and sales are extensive quantities",
+            "mirror amounts are extensive quantities",
         );
     }
     let reading = &claim.value;
@@ -240,13 +413,49 @@ fn validate(claim: &Claim<MirrorReading>) -> Result<()> {
         );
     }
     let q = &reading.quantity;
-    if !matches!(q.kind, QuantityKind::ProductionKoz | QuantityKind::SoldKoz)
-        || !q.definition.is_empty()
-    {
-        return refuse(
-            RefusalCode::BasisMismatch105,
-            "only gold produced/sold koz without a definition bridge are supported",
-        );
+    match q.kind {
+        MirrorMetric::ProductionKoz | MirrorMetric::SoldKoz => {
+            if q.capex_basis.is_some() || reading.basis_source.is_some() {
+                return refuse(
+                    RefusalCode::BasisMismatch105,
+                    "physical gold quantities cannot carry a capital definition",
+                );
+            }
+        }
+        MirrorMetric::Capex(scope) => {
+            let Some(basis) = q.capex_basis else {
+                return refuse(
+                    RefusalCode::NonIdentifiableAttribution104,
+                    "missing capital expenditure definition",
+                );
+            };
+            if basis.scope != scope {
+                return refuse(
+                    RefusalCode::BasisMismatch105,
+                    "capital scope differs from the requested metric",
+                );
+            }
+            if basis.timing == CapexTiming::Unstated || basis.leases == LeaseTreatment::Unstated {
+                return refuse(
+                    RefusalCode::NonIdentifiableAttribution104,
+                    if basis.timing == CapexTiming::Unstated {
+                        "missing capex timing basis"
+                    } else {
+                        "missing capex lease treatment"
+                    },
+                );
+            }
+            if !reading.basis_source.as_ref().is_some_and(|source| {
+                claim.anchors.contains(source)
+                    && source.artifact_path == reading.source.artifact_path
+                    && source.artifact_sha256 == reading.source.artifact_sha256
+            }) {
+                return refuse(
+                    RefusalCode::NonIdentifiableAttribution104,
+                    "capex definition needs a cited page in this reporter's source document",
+                );
+            }
+        }
     }
     if reading.reporter.is_empty()
         || !reading
@@ -327,11 +536,11 @@ fn validate(claim: &Claim<MirrorReading>) -> Result<()> {
         );
     }
     if checked(q.interval.lo.checked_cmp(q.interval.hi))?.is_gt()
-        || midpoint(q.interval)?.signum() < 0
+        || (!q.kind.is_capex() && midpoint(q.interval)?.signum() < 0)
     {
         return refuse(
             RefusalCode::OutsidePhysicalDomain109,
-            "reversed interval or negative reported production/sales midpoint",
+            "reversed interval or negative reported physical quantity midpoint",
         );
     }
     Ok(())
@@ -379,6 +588,32 @@ fn derived<T>(metric: &str, value: T, tag: &str, sources: &[&Claim<MirrorReading
     )
 }
 
+fn normalize(input: &Claim<MirrorReading>) -> Result<Claim<MirrorReading>> {
+    let r = &input.value;
+    let mut value = r.clone();
+    value.quantity.ownership = Ownership::Full;
+    value.quantity.interval.lo = checked(r.quantity.interval.lo.checked_div(share(&r.quantity)))?;
+    value.quantity.interval.hi = checked(r.quantity.interval.hi.checked_div(share(&r.quantity)))?;
+    let tag = value.canonical_tag();
+    Ok(derived("mirror.normalized_full", value, &tag, &[input]))
+}
+
+fn proof_cell(input: &Claim<MirrorReading>) -> Result<xf::Cell> {
+    let r = &input.value;
+    Ok(xf::Cell {
+        locator: format!("{}:{}:{}", r.reporter, input.claim_id, r.source.locator),
+        sha256: Digest32(r.source.artifact_sha256).to_hex(),
+        token: format!("interpreted Claim {} closed interval", input.claim_id),
+        printed: midpoint(r.quantity.interval)?,
+        step: checked(r.quantity.interval.hi.checked_sub(r.quantity.interval.lo))?,
+        scope: if r.source.locator.contains(":p") {
+            xf::Scope::Pdf
+        } else {
+            xf::Scope::Visible
+        },
+    })
+}
+
 /// Compare two or more cited readings. A reporter may supply full and attributable figures, but at
 /// least two distinct reporters are required. Their attributable shares need not sum to one.
 pub fn compare(inputs: &[Claim<MirrorReading>]) -> Result<MirrorReport> {
@@ -418,13 +653,19 @@ fn compare_with_caps(
         if r.quantity.subject != first.quantity.subject || r.quantity.kind != first.quantity.kind {
             return refuse(
                 RefusalCode::BasisMismatch105,
-                "reporters must name the same asset and produced/sold quantity kind",
+                "reporters must name the same asset and quantity kind",
             );
         }
         if r.quantity.period != first.quantity.period {
             return refuse(
                 RefusalCode::SupportMismatch102,
                 "reporters cover different periods; no annualization or calendar bridge",
+            );
+        }
+        if r.quantity.capex_basis != first.quantity.capex_basis {
+            return refuse(
+                RefusalCode::NonIdentifiableAttribution104,
+                "capex definitions differ: an explicit cited timing or lease bridge would be required",
             );
         }
         let mut operations = r.perimeter.operations.clone();
@@ -451,27 +692,8 @@ fn compare_with_caps(
     let mut normalized = Vec::new();
     let mut cells = Vec::new();
     for input in &inputs {
-        let r = &input.value;
-        let mut value = r.clone();
-        value.quantity.ownership = Ownership::Full;
-        value.quantity.interval.lo =
-            checked(r.quantity.interval.lo.checked_div(share(&r.quantity)))?;
-        value.quantity.interval.hi =
-            checked(r.quantity.interval.hi.checked_div(share(&r.quantity)))?;
-        let tag = value.canonical_tag();
-        normalized.push(derived("mirror.normalized_full", value, &tag, &[input]));
-        cells.push(xf::Cell {
-            locator: format!("{}:{}:{}", r.reporter, input.claim_id, r.source.locator),
-            sha256: Digest32(r.source.artifact_sha256).to_hex(),
-            token: format!("interpreted Claim {} closed interval", input.claim_id),
-            printed: midpoint(r.quantity.interval)?,
-            step: checked(r.quantity.interval.hi.checked_sub(r.quantity.interval.lo))?,
-            scope: if r.source.locator.contains(":p") {
-                xf::Scope::Pdf
-            } else {
-                xf::Scope::Visible
-            },
-        });
+        normalized.push(normalize(input)?);
+        cells.push(proof_cell(input)?);
     }
     let mut identities = Vec::new();
     for i in 1..inputs.len() {
@@ -506,7 +728,7 @@ fn compare_with_caps(
     let verdict = match &component.outcome {
         xf::Outcome::Feasible { .. } => {
             let mut interval = normalized[0].value.quantity.interval;
-            interval.lo = if interval.lo.signum() < 0 {
+            interval.lo = if !first.quantity.kind.is_capex() && interval.lo.signum() < 0 {
                 ZERO
             } else {
                 interval.lo
@@ -523,7 +745,7 @@ fn compare_with_caps(
             if checked(interval.lo.checked_cmp(interval.hi))?.is_gt() {
                 return refuse(
                     RefusalCode::NumericalCertificateFailed207,
-                    "checked feasible source boxes have no nonnegative common interval",
+                    "checked feasible source boxes have no common interval in the declared domain",
                 );
             }
             let witness: BTreeMap<_, _> = cells
@@ -537,7 +759,7 @@ fn compare_with_caps(
                 })
                 .collect::<Result<_>>()?;
             checked(xf::check_witness(&cells, &identities, &rules, &witness))?;
-            if witness.values().any(|q| q.signum() < 0) {
+            if !first.quantity.kind.is_capex() && witness.values().any(|q| q.signum() < 0) {
                 return refuse(
                     RefusalCode::NumericalCertificateFailed207,
                     "physical witness is negative",
@@ -634,6 +856,7 @@ fn compare_with_caps(
             reason: "a relaxation supplies no checked mirror witness".into(),
         },
     };
+    let physical_nonnegative = !first.quantity.kind.is_capex();
     Ok(MirrorReport {
         inputs,
         normalized,
@@ -641,7 +864,7 @@ fn compare_with_caps(
         cells,
         identities,
         rules,
-        physical_nonnegative: true,
+        physical_nonnegative,
         verdict,
     })
 }
@@ -664,7 +887,7 @@ mod tests {
         }
     }
 
-    fn reading(
+    pub(super) fn reading(
         reporter: &str,
         suffix: &str,
         point: i128,
@@ -685,13 +908,14 @@ mod tests {
         let value = MirrorReading {
             reporter: reporter.into(),
             source: source.clone(),
+            basis_source: None,
             perimeter: Perimeter {
                 id: "invented-common-perimeter".into(),
                 operations: vec!["invented-operation".into()],
                 valid_from: CivilDate::new(2024, 1, 1).unwrap(),
                 valid_through: CivilDate::new(2026, 12, 31).unwrap(),
             },
-            quantity: Quantity {
+            quantity: MirrorQuantity {
                 subject: "invented-asset".into(),
                 period: crate::guidance::Period {
                     year: 2025,
@@ -699,8 +923,8 @@ mod tests {
                     last_month: 12,
                 },
                 ownership,
-                kind: QuantityKind::ProductionKoz,
-                definition: String::new(),
+                kind: MirrorMetric::ProductionKoz,
+                capex_basis: None,
                 interval: interval(rat(2 * point - 1, 2), rat(2 * point + 1, 2)),
             },
         };
@@ -744,7 +968,7 @@ mod tests {
         ]
     }
 
-    fn reseal(c: &mut Claim<MirrorReading>) {
+    pub(super) fn reseal(c: &mut Claim<MirrorReading>) {
         let (stale, calibration_failed) = (c.stale, c.calibration_failed);
         *c = Claim::new(
             c.metric_key.clone(),
@@ -905,12 +1129,12 @@ mod tests {
             ),
         ];
         for input in &mut inputs {
-            input.value.quantity.kind = QuantityKind::SoldKoz;
+            input.value.quantity.kind = MirrorMetric::SoldKoz;
             input.value.quantity.period.first_month = 7;
             reseal(input);
         }
         let common = compare(&inputs).unwrap().common.unwrap();
-        assert_eq!(common.value.quantity.kind, QuantityKind::SoldKoz);
+        assert_eq!(common.value.quantity.kind, MirrorMetric::SoldKoz);
         assert_eq!(
             common.value.quantity.interval,
             interval(rat(890, 9), rat(910, 9))
@@ -1031,7 +1255,7 @@ mod tests {
             let c = &mut inputs[2];
             let code = match case {
                 0 => {
-                    c.value.quantity.kind = QuantityKind::AiscUsdPerSoldOz;
+                    c.value.quantity.kind = MirrorMetric::SoldKoz;
                     "105"
                 }
                 1 => {
@@ -1133,7 +1357,11 @@ mod tests {
                     "109"
                 }
                 22 => {
-                    c.value.quantity.definition = "unstated-physical-definition".into();
+                    c.value.quantity.capex_basis = Some(CapexBasis {
+                        scope: CapexScope::Sustaining,
+                        timing: CapexTiming::Cash,
+                        leases: LeaseTreatment::Included,
+                    });
                     "105"
                 }
                 _ => {

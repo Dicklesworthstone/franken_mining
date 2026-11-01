@@ -1,4 +1,4 @@
-//! DESIGN (BD-346): pure interpretation of agreed source rows into production/sales mirror Claims.
+//! DESIGN (BD-346): pure interpretation of agreed source rows into physical/capital mirror Claims.
 //! The caller authenticates document bytes, publication availability and complete reader agreement.
 //! This module binds the supplied document identity, dated perimeter and separately cited equity share.
 //! Determinism: Exact
@@ -15,8 +15,11 @@ use fmine_registry::transcriptions::{Accepted, Decimal, Locator, Token, parse_to
 use fmine_time::CivilDate;
 use fmine_units::UnitsError;
 
-use super::{MirrorReading, Perimeter, READING_METRIC};
-use crate::guidance::{Ownership, Period, Quantity, QuantityKind};
+use super::{
+    CapexBasis, CapexScope, CapexTiming, LeaseTreatment, MirrorMetric, MirrorQuantity,
+    MirrorReading, Perimeter, READING_METRIC,
+};
+use crate::guidance::{Ownership, Period};
 
 type Result<T> = std::result::Result<T, Refusal>;
 
@@ -79,6 +82,8 @@ struct Context {
     mode: String,
     perimeter: Perimeter,
     anchor: SourceAnchor,
+    capex_basis: Option<CapexBasis>,
+    basis_source: Option<SourceAnchor>,
 }
 
 fn digest_bytes(s: &str) -> Result<[u8; 32]> {
@@ -105,7 +110,11 @@ fn anchor(document: &DocumentRow, locator: String) -> Result<SourceAnchor> {
 }
 
 /// The two readers agree on both the complete perimeter and the separate page that states its scope.
-fn context(row: &Accepted, document: &DocumentRow) -> Result<Context> {
+fn context(
+    row: &Accepted,
+    document: &DocumentRow,
+    capex_scope: Option<CapexScope>,
+) -> Result<Context> {
     let mut parts = row.basis.split(';');
     let mode = parts.next().unwrap_or_default().to_string();
     let mut fields = BTreeMap::new();
@@ -116,7 +125,7 @@ fn context(row: &Accepted, document: &DocumentRow) -> Result<Context> {
                 "perimeter basis needs explicit key=value fields",
             )
         })?;
-        if !matches!(
+        let perimeter_field = matches!(
             key,
             "perimeter"
                 | "members"
@@ -125,7 +134,19 @@ fn context(row: &Accepted, document: &DocumentRow) -> Result<Context> {
                 | "scope_table"
                 | "scope_row"
                 | "scope_col"
-        ) || value.is_empty()
+        );
+        let capex_field = capex_scope.is_some()
+            && matches!(
+                key,
+                "timing"
+                    | "leases"
+                    | "definition_page"
+                    | "definition_table"
+                    | "definition_row"
+                    | "definition_col"
+            );
+        if (!perimeter_field && !capex_field)
+            || value.is_empty()
             || fields.insert(key, value).is_some()
         {
             return Err(fail(
@@ -186,10 +207,61 @@ fn context(row: &Accepted, document: &DocumentRow) -> Result<Context> {
         row: get("scope_row")?.into(),
         col: get("scope_col")?.into(),
     };
+    let (capex_basis, basis_source) = if let Some(scope) = capex_scope {
+        let timing = match fields.get("timing").copied() {
+            Some("cash") => CapexTiming::Cash,
+            Some("accrual") => CapexTiming::Accrual,
+            _ => {
+                return Err(fail(
+                    RefusalCode::NonIdentifiableAttribution104,
+                    "missing or unstated capex timing basis",
+                ));
+            }
+        };
+        let leases = match fields.get("leases").copied() {
+            Some("included") => LeaseTreatment::Included,
+            Some("excluded") => LeaseTreatment::Excluded,
+            _ => {
+                return Err(fail(
+                    RefusalCode::NonIdentifiableAttribution104,
+                    "missing or unstated capex lease treatment",
+                ));
+            }
+        };
+        let page = get("definition_page")?
+            .parse::<u64>()
+            .ok()
+            .filter(|p| *p > 0 && *p <= document.pages)
+            .ok_or_else(|| {
+                fail(
+                    RefusalCode::NonIdentifiableAttribution104,
+                    "capex definition page is outside the registered document",
+                )
+            })?;
+        let definition = Locator {
+            doc: document.file.clone(),
+            page,
+            table: get("definition_table")?.into(),
+            row: get("definition_row")?.into(),
+            col: get("definition_col")?.into(),
+        };
+        (
+            Some(CapexBasis {
+                scope,
+                timing,
+                leases,
+            }),
+            Some(anchor(document, definition.to_string())?),
+        )
+    } else {
+        (None, None)
+    };
     Ok(Context {
         mode,
         perimeter,
         anchor: anchor(document, locator.to_string())?,
+        capex_basis,
+        basis_source,
     })
 }
 
@@ -255,7 +327,7 @@ fn share(
     period: Period,
     evidence: EvidenceClass,
 ) -> Result<(Claim<Rat>, Context)> {
-    let ctx = context(row, document)?;
+    let ctx = context(row, document, None)?;
     if ctx.mode != "equity"
         || row.unit != "percent"
         || row.period != period_label(period)
@@ -307,22 +379,19 @@ fn share(
     ))
 }
 
-/// Full, attributable and ownership registry keys. `bind` accepts only produced/sold kinds.
+/// Full, attributable and ownership registry keys for a physical or capital metric.
 #[must_use]
-pub fn keys(subject: &str, period: Period, kind: QuantityKind) -> [String; 3] {
+pub fn keys(subject: &str, period: Period, kind: MirrorMetric) -> [String; 3] {
     let base = format!(
         "mirror_{}_{}",
         subject.replace('-', "_"),
         period_label(period).to_ascii_lowercase()
     );
-    let metric = if kind == QuantityKind::ProductionKoz {
-        "gold_produced"
-    } else {
-        "gold_sold"
-    };
+    let metric = kind.as_str();
+    let unit = kind.unit().to_ascii_lowercase();
     [
-        format!("{base}_{metric}_100_koz"),
-        format!("{base}_{metric}_attr_koz"),
+        format!("{base}_{metric}_100_{unit}"),
+        format!("{base}_{metric}_attr_{unit}"),
         format!("{base}_ownership_percent"),
     ]
 }
@@ -333,18 +402,12 @@ pub fn keys(subject: &str, period: Period, kind: QuantityKind) -> [String; 3] {
 pub fn bind(
     subject: &str,
     period: Period,
-    kind: QuantityKind,
+    kind: MirrorMetric,
     issuer: &str,
     document: &DocumentRow,
     rows: &[Accepted],
     evidence: EvidenceClass,
 ) -> Result<BoundReadings> {
-    if !matches!(kind, QuantityKind::ProductionKoz | QuantityKind::SoldKoz) {
-        return Err(fail(
-            RefusalCode::BasisMismatch105,
-            "mirror supports only gold produced or sold koz",
-        ));
-    }
     let keys = keys(subject, period, kind);
     let lookup = |key: &str| -> Result<Option<&Accepted>> {
         let matches: Vec<_> = rows.iter().filter(|r| r.quantity == key).collect();
@@ -388,7 +451,7 @@ pub fn bind(
         let Some(row) = row else {
             continue;
         };
-        if row.unit != "koz"
+        if row.unit != kind.unit()
             || row.period != period_label(period)
             || row.locator.doc != document.file
             || row.doc_sha256 != document.sha256
@@ -398,12 +461,20 @@ pub fn bind(
             return Err(fail(
                 RefusalCode::BasisMismatch105,
                 format!(
-                    "{} needs the selected document, exact requested period and gold koz",
-                    row.locator
+                    "{} needs the selected document, exact requested period and {}",
+                    row.locator,
+                    kind.unit()
                 ),
             ));
         }
-        let ctx = context(row, document)?;
+        let ctx = context(
+            row,
+            document,
+            match kind {
+                MirrorMetric::Capex(scope) => Some(scope),
+                _ => None,
+            },
+        )?;
         if ctx.mode != if attributable { "attributable" } else { "100%" } {
             return Err(fail(
                 RefusalCode::BasisMismatch105,
@@ -412,6 +483,7 @@ pub fn bind(
         }
         let numeric_source = anchor(document, row.locator.to_string())?;
         let mut anchors = vec![numeric_source.clone(), ctx.anchor];
+        anchors.extend(ctx.basis_source.iter().cloned());
         let mut parents = Vec::new();
         let ownership_basis = if attributable {
             let (share, share_context) = ownership.as_ref().ok_or_else(|| {
@@ -433,7 +505,7 @@ pub fn bind(
             Ownership::Full
         };
         let (value, step) = point(row)?;
-        if value.signum() < 0 {
+        if !kind.is_capex() && value.signum() < 0 {
             return Err(fail(
                 RefusalCode::BasisMismatch105,
                 "negative printed production/sales is not a physical actual",
@@ -450,12 +522,13 @@ pub fn bind(
             reporter: issuer.into(),
             perimeter: ctx.perimeter,
             source: numeric_source,
-            quantity: Quantity {
+            basis_source: ctx.basis_source,
+            quantity: MirrorQuantity {
                 subject: subject.into(),
                 period,
                 ownership: ownership_basis,
                 kind,
-                definition: String::new(),
+                capex_basis: ctx.capex_basis,
                 interval,
             },
         };
@@ -499,7 +572,7 @@ mod tests {
             bytes: 1,
             sha256: "11".repeat(32),
         };
-        let keys = keys("invented-jv", PERIOD, QuantityKind::ProductionKoz);
+        let keys = keys("invented-jv", PERIOD, MirrorMetric::ProductionKoz);
         let rows = [(&keys[1], "615", "attributable", "koz"), (&keys[2], "61.5", "equity", "percent")]
             .into_iter()
             .map(|(key, token, mode, unit)| Accepted {
@@ -520,7 +593,7 @@ mod tests {
         bind(
             "invented-jv",
             PERIOD,
-            QuantityKind::ProductionKoz,
+            MirrorMetric::ProductionKoz,
             "alpha",
             document,
             rows,
@@ -597,15 +670,139 @@ mod tests {
             bind(
                 "invented-jv",
                 PERIOD,
-                QuantityKind::AiscUsdPerSoldOz,
+                MirrorMetric::Capex(CapexScope::Sustaining),
                 "alpha",
                 &document,
                 &rows,
                 EvidenceClass::Assumed
             )
-            .expect_err("costs cannot use a production mirror")
+            .expect_err("capital cannot borrow an ounce source")
             .code,
-            "FMINE-REF-105"
+            "FMINE-REF-201"
         );
+    }
+
+    fn capital_fixture(scope: CapexScope) -> (DocumentRow, Vec<Accepted>) {
+        let (document, mut rows) = fixture();
+        rows[0].quantity = keys("invented-jv", PERIOD, MirrorMetric::Capex(scope))[1].clone();
+        rows[0].unit = "USD_m".into();
+        rows[0].basis.push_str(
+            ";timing=cash;leases=included;definition_page=2;definition_table=Capital policy;definition_row=Scope timing and leases;definition_col=2025",
+        );
+        (document, rows)
+    }
+
+    fn bind_capital(
+        document: &DocumentRow,
+        rows: &[Accepted],
+        scope: CapexScope,
+    ) -> Result<BoundReadings> {
+        bind(
+            "invented-jv",
+            PERIOD,
+            MirrorMetric::Capex(scope),
+            "alpha",
+            document,
+            rows,
+            EvidenceClass::Assumed,
+        )
+    }
+
+    #[test]
+    fn capital_binding_requires_usd_m_and_retains_each_reporters_definition_page() {
+        for scope in CapexScope::ALL {
+            let (document, mut rows) = capital_fixture(scope);
+            let bound = bind_capital(&document, &rows, scope).unwrap();
+            let c = &bound.inputs[0];
+            assert_eq!(c.value.quantity.kind, MirrorMetric::Capex(scope));
+            assert_eq!(
+                c.value.quantity.capex_basis,
+                Some(CapexBasis {
+                    scope,
+                    timing: CapexTiming::Cash,
+                    leases: LeaseTreatment::Included,
+                })
+            );
+            let definition = c.value.basis_source.as_ref().unwrap();
+            assert_eq!(
+                definition.locator,
+                "Invented.pdf:p2:Capital policy:Scope timing and leases/2025"
+            );
+            assert!(c.anchors.contains(definition));
+            assert_eq!(definition.artifact_path, c.value.source.artifact_path);
+            assert_eq!(definition.artifact_sha256, c.value.source.artifact_sha256);
+            assert_eq!(c.parents, vec![bound.ownership.unwrap().claim_id]);
+            assert!(
+                keys("invented-jv", PERIOD, MirrorMetric::Capex(scope))[0].ends_with("_100_usd_m")
+            );
+
+            rows[0].token = "-10".into();
+            rows[0].value = parse_token("-10").unwrap();
+            let signed = bind_capital(&document, &rows, scope).unwrap();
+            assert_eq!(
+                signed.inputs[0].value.quantity.interval.lo,
+                Rat::new(-21, 2).unwrap()
+            );
+            assert_eq!(
+                signed.inputs[0].value.quantity.interval.hi,
+                Rat::new(-19, 2).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn capital_binding_refuses_missing_uncited_or_ambiguous_definitions() {
+        let (document, rows) = capital_fixture(CapexScope::Total);
+        for (from, to) in [
+            (";timing=cash", ""),
+            ("timing=cash", "timing=unstated"),
+            (";leases=included", ""),
+            ("leases=included", "leases=unstated"),
+            (";definition_page=2", ""),
+            ("definition_page=2", "definition_page=3"),
+            ("definition_row=Scope timing and leases", "definition_row="),
+            (";timing=cash", ";timing=cash;timing=accrual"),
+            (
+                ";timing=cash",
+                ";timing=cash;accounting_basis=purchase_price_allocation",
+            ),
+        ] {
+            let mut altered = rows.clone();
+            altered[0].basis = altered[0].basis.replace(from, to);
+            assert_eq!(
+                bind_capital(&document, &altered, CapexScope::Total)
+                    .unwrap_err()
+                    .code,
+                "FMINE-REF-104",
+                "{from} -> {to}"
+            );
+        }
+        for case in 0..4 {
+            let mut altered = rows.clone();
+            let expected = match case {
+                0 => {
+                    altered[0].unit = "USD".into();
+                    "105"
+                }
+                1 => {
+                    altered[0].period = "2024FY".into();
+                    "105"
+                }
+                2 => {
+                    altered[0].readers = vec!["only-one".into()];
+                    "202"
+                }
+                _ => {
+                    altered[0].token = "0".into();
+                    "202"
+                }
+            };
+            assert_eq!(
+                bind_capital(&document, &altered, CapexScope::Total)
+                    .unwrap_err()
+                    .code,
+                format!("FMINE-REF-{expected}")
+            );
+        }
     }
 }

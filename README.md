@@ -597,11 +597,12 @@ completed quarterly history by the requested evidence cut, and assesses first-pu
 outcomes separately.
 `--cohort-as-of` keeps unconditional scores and cannot be combined with `--price-subject`.
 
-### Mirror two reporters' gold production or sales
+### Mirror two reporters' gold quantities and capital expenditure
 
 ```bash
 cargo run -p fmine-cli -- mirror --synthetic
 cargo run -p fmine-cli -- mirror --synthetic --format markdown
+cargo run -p fmine-cli -- mirror --synthetic --metric capex --format markdown
 ```
 
 DESIGN (BD-346): the mirror checks whether two reporters' printed gold quantities admit a common 100%
@@ -617,7 +618,9 @@ cargo run -p fmine-cli -- mirror --asset example-jv --period 2025 --as-of 2026-0
 
 `--metric production` is the default; `--metric sold` checks ounces sold separately. Periods are calendar
 years (`2025` or `2025FY`), quarters (`2025Q1` through `2025Q4`) or halves (`2025H1`, `2025H2`).
-`--synthetic` is exclusive with source selectors. JSON is the default; `--workspace` selects the local root.
+Capital selections are `capex-sustaining`, `capex-project`, `capex-total`, or `capex` for all three scopes
+and their joint footing check. `--synthetic` is exclusive with source selectors; the capex demo accepts
+`--synthetic --metric capex`. JSON is the default; `--workspace` selects the local root.
 
 Each issuer uses the existing `registries/sources/<issuer>.toml` and ignored
 `registries/transcriptions/<issuer>.toml`. A sources registry can contain only validated `[[document]]`
@@ -666,9 +669,44 @@ retain both reporters, tokens, ownership and scope citations, source hashes and 
 All authority flags remain false, with no issuance anchor or authority certificate. Agreement does not
 establish physical truth, select a correct reporter or authorize disclosure.
 
+**Capital expenditure (BD-346.S4).** Use the same explicit source selection with `--metric capex` to
+check sustaining, project and total capital together. The three single-scope selections work when only
+that line is available. Capital amounts use `USD_m`; no currency conversion is inferred. For example:
+
+| Quantity key | Unit | Basis prefix |
+| --- | --- | --- |
+| `mirror_example_jv_2025fy_capex_sustaining_100_usd_m` | `USD_m` | `100%` |
+| `mirror_example_jv_2025fy_capex_sustaining_attr_usd_m` | `USD_m` | `attributable` |
+| `mirror_example_jv_2025fy_capex_project_attr_usd_m` | `USD_m` | `attributable` |
+| `mirror_example_jv_2025fy_capex_total_attr_usd_m` | `USD_m` | `attributable` |
+
+All scopes accept both `_100_usd_m` and `_attr_usd_m`. The separate ownership row uses the same key and
+grammar as the gold mirror. Each capital amount appends explicit timing and lease treatment plus the
+same-document page and labels supporting that definition. This remains an invented grammar example:
+
+```toml
+basis = "attributable;perimeter=group;members=mine-a+mine-b;valid=2025-01-01/2025-12-31;scope_page=2;scope_table=Scope;scope_row=Operations;scope_col=2025;timing=cash;leases=excluded;definition_page=2;definition_table=Capital policy;definition_row=Cash capital excluding leases;definition_col=2025"
+```
+
+Timing must be `cash` or `accrual`; leases must be `included` or `excluded`. Missing or unstated bases,
+uncited definitions, and unequal bases refuse with the missing parameter identified. No cash/accrual,
+lease, purchase-accounting or asset-to-asset adjustment is manufactured. Signed capital corrections retain
+their sign and source rounding; they do not inherit gold's nonnegative physical constraint.
+
+The all-capex result keeps `scope_checks` and `joint` separate. Scope checks compare each printed amount's
+own half-last-place interval. The declared joint **component-sum** check requires displayed
+`total = sustaining + project` on each complete reporting basis, then derives the total's interval from
+those components while checking all ownership identities together. An individually plausible set of
+capital lines can therefore have a conflicting joint footing. A missing complete triple leaves the joint
+assessment explicitly unavailable. JSON retains each exact witness or exclusion certificate and the
+definition citations; Markdown explains both constructions. Arithmetic conflicts are findings with exit
+zero; unusable sources or incompatible bases retain their nonzero refusal exits.
+
 Real partner-filing coverage for NGM, Pueblo Viejo and Kibali remains open, including independently read
-ownership and dated perimeter evidence. The unresolved NGM vend-in dates and shares are not supplied by
-defaults. Capex, cost-definition and accounting bridges, and full BD-346 acceptance, remain open.
+ownership, capital definitions and dated perimeter evidence. The unresolved NGM vend-in dates and shares
+are not supplied by defaults. The current capex adapter reads agreed registered document transcriptions;
+automatic workbook-to-partner pairing, cited definition bridges, cost/accounting bridges and full BD-346
+acceptance remain open.
 
 ### Assess a frozen forecast cohort
 

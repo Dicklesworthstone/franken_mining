@@ -61,6 +61,17 @@ At least two reporters are required, but their shares need not sum to one. The n
 is explicit: a printed zero keeps its original negative-to-positive rounding box, while the common interval
 is intersected with `x >= 0` and the reported witness is checked there. A negative printed midpoint refuses.
 
+DESIGN (BD-346.S4): the same exact mirror accepts sustaining, project and total capital in USD millions.
+Every capital amount carries its scope, cash/accrual timing, included/excluded lease treatment, and a separate
+citation to that reporter's definition page. Only equal stated bases compare; missing or unequal definitions
+need an explicit bridge and refuse here. Signed capital corrections are retained, without a physical-zero
+floor. `compare_capex` keeps the independent half-step checks for the three lines separate from a declared
+`ComponentSum` joint assessment. The joint model requires each reporter's complete, unambiguous triple on
+one ownership basis, checks displayed total = displayed sustaining + displayed project, and derives the true
+total's bounds from the component boxes. It never selects a construction to rescue an instance. A missing
+reporting-basis triple or ambiguous line on any reporting ownership basis leaves the joint assessment
+explicitly unavailable, even when another complete triple exists for that reporter.
+
 ## 3. Authority, Epistemics & Representation
 Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when `L_corp` is omitted) and checks
 the multiplicative-to-additive LMDI accounting identity (`GB-26`). Its public-data interpretation is descriptive;
@@ -272,7 +283,8 @@ arithmetic closure does not establish causation or identify an operational expla
     `Quantity::canonical_tag`, `Fit::canonical_tag` and `ModelProjection::canonical_tag` bind the exact
     calculation, interpretation and support. Sorting annual observations leaves the result unchanged.
 
-- `mirror::{Perimeter, MirrorReading, MirrorCommon, MirrorReport, MirrorVerdict, compare}` (BD-346):
+- `mirror::{Perimeter, MirrorMetric, MirrorQuantity, MirrorReading, MirrorCommon, MirrorReport, MirrorVerdict,
+  compare}` (BD-346):
   source inputs are `Claim<MirrorReading>` under `READING_METRIC`. Canonical tags bind reporter identity,
   numeric source anchor, operation membership, inclusive validity dates and the exact typed quantity.
   Inputs, normalized Claims and proof cells share one sorted order; minimal-source indices address that
@@ -282,6 +294,14 @@ arithmetic closure does not establish causation or identify an operational expla
   `Indeterminate` has no common quantity. All source boxes, Scale identities and Closed rules are exposed.
   Normalized/common Claims retain immediate source parents, anchors, weaker evidence/knowledge/epistemics,
   and every distinct UU term, including different terms sharing a scenario id. No assertion is promoted.
+- `mirror::{CapexScope, CapexTiming, LeaseTreatment, CapexBasis, CapexReport, CapexJointReport,
+  compare_capex}` (BD-346.S4) adds typed capital semantics without expanding guidance quantity kinds.
+  Gold canonical value tags remain unchanged. Capital tags additionally bind the stated basis and its source.
+  `CapexReport.lines` are independent single-line checks; `joint` is the separate ComponentSum assessment.
+  A joint witness/certificate uses all admitted capital inputs, all complete ownership-basis sums and the
+  cross-reporter Scale identities. Generic conflict sets retain the exact kernel's checked deletion result
+  and rechecked exclusion certificates; joint conflicts need not be two-cell pairs. The independent total
+  half-step check and the joint total can differ because ComponentSum uses the components' rounding bounds.
 - `mirror::transcriptions::{BoundReadings, bind, keys, period_label}` interprets already-agreed S0
   `Accepted` rows and a `DocumentRow`, without IO. `bind(subject, period, kind, issuer, document, rows,
   evidence)` returns the separately cited ownership Claim, when needed, and source reading Claims.
@@ -289,6 +309,9 @@ arithmetic closure does not establish causation or identify an operational expla
   periods, units, exact equity percentages and complete dated perimeter context remain explicit.
   The supplied evidence class is preserved. The caller checks bytes, availability and all reader results;
   accepted rows alone cannot prove that an omitted rejection did not exist.
+  Capital keys use `capex_sustaining`, `capex_project` or `capex_total` with `_100_usd_m` / `_attr_usd_m`;
+  the source unit is exactly `USD_m`. Capital context requires `timing`, `leases` and the definition's own
+  page/table/row/column. The separately cited equity percentage retains its existing perimeter-only context.
 
 ## 5. Guards & Typed Refusals
 
@@ -304,7 +327,10 @@ arithmetic closure does not establish causation or identify an operational expla
   unequal periods or invalid dates (`102`), missing/unequal operation perimeters or validity straddles
   (`104`), missing numeric/context citations (`201`), private sources (`301`), placeholders (`208`),
   stale/unknown/conflicted/failed-calibration inputs (`502`/`202`/`205`), and mutated canonical Claims (`507`).
-  Reversed bounds or negative reported midpoints refuse (`109`); open source bounds refuse (`203`).
+  Reversed bounds or negative physical-gold midpoints refuse (`109`); signed capital amounts remain valid.
+  Missing, unstated, uncited or mismatched capital timing/lease definitions refuse (`104`); mismatched capital
+  scope or monetary units refuse (`105`). No accounting-basis adjustment exists in this capital API.
+  Open source bounds refuse (`203`).
   Arithmetic overflow/checker failures refuse (`207`); solver limits remain `Indeterminate`.
 - `FMINE-REF-203` (`ConsolidationBridgeMissing`, `G-BULL-3`)
 - `FMINE-REF-109` (outside physical domain, proposed; exit 3) on non-positive or non-finite LMDI state inputs,
@@ -435,6 +461,15 @@ inside the common interval for 256 synthetic worlds. This is not the full BD-346
 Direct transcription-binding tests additionally check exact source/share Claims and refuse mismatched
 numeric or ownership document names, hashes and pages before construction.
 
+DESIGN (BD-346.S4, `mirror::capex::tests` and `mirror::transcriptions::tests`): capital known answers cover
+signed/zero amounts, exact attributable scaling, source-definition retention, missing and incompatible bases,
+canonical mutations, and the complete component-sum witness. A 101 total on 60 + 40 gives a checked joint
+conflict although both reporters agree on every individual line. Conversely 1 + 1 = 2 and 2 + 2 = 4 admit
+true components 1.5 + 1.5 = 3 under ComponentSum although independently rounded total boxes do not overlap.
+The tests retain incomplete-basis refusals, reverse input order, and compare 64 independently rounded
+attributable worlds against their generated exact truth. These synthetic cases do not establish partner-filing
+coverage or satisfy the full BD-346 data gate.
+
 ## 7. Failure Modes & Deterministic Fallbacks
 
 The legacy floating API refuses non-positive physical inputs. The typed public API attempts the exact signed
@@ -464,7 +499,8 @@ open. Closed intervals are agnostic about ties; a named half-open convention is 
 
 The mirror kernel authenticates no filing bytes, human readership, publication date or issuer affiliation;
 its caller must bind those facts before supplying source Claims. It does not infer missing perimeters,
-aggregate incomparable operations, select vintages, invent an absent partner share, bridge costs/capex,
+aggregate incomparable operations, select vintages, invent an absent partner share, adjust capital definitions
+or bridge cost lines,
 transfer bridges between assets, or decide which reporter is physically correct. Actual FY2023–FY2025
 partner-source reproduction and the full synthetic power gate remain separate BD-346 work.
 
