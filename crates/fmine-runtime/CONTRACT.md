@@ -39,8 +39,9 @@ The adapter never makes a historical journal timestamp trusted and never correct
 `ClockError` is the runtime boundary's local error; caller adapters map it to their existing typed refusal.
 The adapter does not clamp, substitute zero, return a cached reading or assert a quality bound on failure.
 `ProcessError` distinguishes process/worker startup, output reads, byte limits, wait failures and worker
-panics. Consumers retain their domain-specific refusal mapping. A failed input write stops the child and
-remains explicit in `PipedOutput`; success requires both a successful status and no input error.
+panics. Consumers retain their domain-specific refusal mapping. A failed input write remains explicit in
+`PipedOutput` while the child completes its bounded outputs and actual exit status; it does not cancel
+legitimate diagnostics after stdin closure. Success requires both a successful status and no input error.
 
 ## 6. Proof Obligations
 
@@ -49,7 +50,9 @@ immediate successor, and the largest `Duration`. An injected fixed clock demonst
 and unchanged error propagation without reading the host clock.
 Process tests send a binary input larger than pipe capacity while the child fills both output pipes, verify
 exact capture, exercise each output bound with a blocked input writer, and retain nonzero status/stderr when
-the child closes stdin early. Overflow does not leave a writer waiting on an unowned child.
+the child closes stdin early. A delayed response after explicit stdin closure retains both streams and
+either a zero or nonzero exit without hiding the input error. Overflow does not leave a writer waiting on
+an unowned child.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 

@@ -1,5 +1,5 @@
 //! Owned synchronous subprocesses with exact stdin bytes and bounded output capture.
-//! Every pipe worker is scoped and joined. Failures kill and reap the child before returning;
+//! Every pipe worker is scoped and joined. Startup/read failures and output limits kill/reap the child;
 //! this adapter supplies no timeout, ambient clock, detached task or command policy.
 
 use std::fmt;
@@ -98,8 +98,9 @@ fn capture(reader: impl Read, stream: &'static str, limit: usize) -> Result<Vec<
 
 /// Run the supplied command with piped stdin/stdout/stderr, preserving the input snapshot exactly.
 /// Each output stream retains at most `limit + 1` bytes; the extra byte detects overflow. Readers and
-/// writer run concurrently, so full pipes cannot deadlock each other. A pipe failure or output overflow
-/// kills/reaps the child and joins every worker. There is deliberately no wall-clock timeout.
+/// writer run concurrently, so full pipes cannot deadlock each other. A reader/worker failure or output
+/// overflow kills/reaps the child and joins every worker. An input-write error is retained while the
+/// child finishes its bounded diagnostics and exit status. There is deliberately no wall-clock timeout.
 pub fn output_with_input(
     command: &mut Command,
     input: &[u8],
@@ -141,10 +142,9 @@ pub fn output_with_input(
         for _ in 0..3 {
             let error = match receiver.recv() {
                 Ok(Completion::Input(result)) => {
+                    // Closing stdin can precede a legitimate rejection and its diagnostic output.
+                    // Retain that write failure without replacing the child's exit with our kill.
                     input_error = result.err();
-                    if input_error.is_some() {
-                        stop(&mut child);
-                    }
                     None
                 }
                 Ok(Completion::Stdout(Ok(bytes))) => {
@@ -232,5 +232,27 @@ mod tests {
         assert_eq!(result.output.status.code(), Some(9));
         assert_eq!(result.output.stderr, b"rejected");
         assert!(result.input_error.is_some());
+    }
+
+    #[test]
+    fn closed_stdin_does_not_cancel_later_diagnostics_or_exit_status() {
+        for exit_code in [0, 9] {
+            let mut command = Command::new("sh");
+            command.args([
+                "-c",
+                &format!(
+                    "exec 0<&-; sleep 0.1; printf stdout-note; printf rejected >&2; exit {exit_code}"
+                ),
+            ]);
+            let result = output_with_input(&mut command, &vec![7; 262_144], 16)
+                .expect("closed stdin is separate from process completion");
+            assert_eq!(result.output.status.code(), Some(exit_code));
+            assert_eq!(result.output.stdout, b"stdout-note");
+            assert_eq!(result.output.stderr, b"rejected");
+            assert_eq!(
+                result.input_error.as_ref().map(io::Error::kind),
+                Some(io::ErrorKind::BrokenPipe)
+            );
+        }
     }
 }
