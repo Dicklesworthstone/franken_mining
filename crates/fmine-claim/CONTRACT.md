@@ -33,6 +33,14 @@ own id with `supersedes` naming the old one. Limits, stated plainly: representat
 so a write to `value` alone is not detected; the fields stay `pub`. Widening the body changes every claim id and the
 public lane's state root, so it waits on an owner decision.
 
+DESIGN (BD-046, INV-013): the dependency index retains invalidation facts, including identities whose bodies have
+not arrived. Insertion computes staleness from these facts, the claim's stale status and known parents, and
+propagates it to existing descendants. Replaying a body cannot make that identity current again or erase its
+supersession. Inserting a distinct identity with `supersedes` invalidates the old identity and its dependants;
+the replacement is not stale merely because it replaces an old version. Its own stale dependencies still apply.
+A claim cannot supersede itself, and that refusal occurs before the graph changes. This is an in-memory dependency
+index; it does not add a durable format or independently authenticate the unhashed `supersedes` field.
+
 A claim carries `evidence`, `epistemic` and `state` separately. Its colour is computed by `Claim::color`, never set: no
 constructor takes one and its basis is private (`compile_fail` doctest on `Claim`). `with_regime` names a claim's anchor,
 which counts only for a class `project_color` lets stand on one, so it cannot raise a colour.
@@ -51,6 +59,9 @@ A decision-facing claim whose status is not `KnownKnown` requires a non-empty `u
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-102` (support mismatch, `verify_support_compatible`, `G-GEO-1`), exit 3
 - `FMINE-REF-103` (non-additive average, `verify_unweighted_additive`, `INV-014`), exit 3
+- `FMINE-REF-202` (not observable, `ClaimDag::guard_disclosure_export`, INV-013), exit 3: the supplied claim or
+  an ancestor is stale, including a recorded invalidation before the affected body arrives. The supplied claim
+  may be uninserted, but its current body and all required parents must still be checked.
 - `FMINE-REF-204` (unbudgeted unknowns, `verify_uu_slot_for_decision`, `INV-015`), exit 3
 - `FMINE-REF-205` (calibration required, `Claim::color`), exit 3: failed calibration, or an `Assertion`, which §7.1
   refuses as a colour leaf until reviewed. §8.4 has no code for the second, so this is the nearest.
@@ -64,14 +75,23 @@ A decision-facing claim whose status is not `KnownKnown` requires a non-empty `u
   DAG does not hold. §8.4 has no G-DISC code; 304 is the nearest, because the clause this cannot yet check is the
   attested record. Passing is necessary, not sufficient: G-DISC's RefClass and attestation clauses wait on fields
   `Claim` does not have. The owner should confirm the code with the others in `docs/adr/ADR-REFUSALS-01.md`.
-- `FMINE-REF-507` (frozen record mutation, proposed, `Claim::check_id` and `ClaimDag::insert`), exit 6: the claim's
-  id is not the id of its current body.
+- `FMINE-REF-507` (frozen record mutation, proposed, `Claim::check_id`, `ClaimDag::insert` and
+  `ClaimDag::guard_disclosure_export`), exit 6: the claim's id is not the id of its current body. Insertion also
+  refuses a self-supersession because a correction must have a distinct identity.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-CLAIM-1`: `compose_binary` keeps the placeholder (`None`), takes the `meet` of classes and the `and` of states
   and statuses, composes colours, and unions `uu_terms`. Over $10^5$ random claim trees no node outranks a parent in
   class, state or colour, and a node is refused exactly when a leaf under it is (`test_random_claim_dags_nl1_nl2_nl5_100k`).
 - `PO-CLAIM-2`: `ClaimDag::invalidate_and_propagate` marks all transitive descendants stale (`INV-013`).
+  FACT (BD-046): `test_claim_dag_invalidation_is_monotone_across_arrival_orders_and_replay` covers all six
+  arrival orders of a three-node chain with invalidation at each of four positions, then replays every body.
+  `test_claim_dag_late_stale_parent_invalidates_existing_descendants` covers late parent status and stale
+  knowledge states. `test_claim_dag_supersession_invalidates_old_dependants_without_staling_new_version`
+  covers evidence downgrades before and after the old body arrives.
+  `test_claim_dag_rejects_self_supersession_without_mutation` checks atomic refusal.
+  `test_g_disc_refuses_stale_claims_and_ancestors_before_root_insertion` checks stale export refusal, while
+  `test_g_disc_accepts_measured_derived_chain` retains the fresh, uninserted-root positive path.
 - `PO-CLAIM-3` (BD-040): two claims' canonical bytes and ids equal known answers built from the codec and BLAKE3
   specs by `scripts/oracle/claim_body_known_answers.py`, whose BLAKE3 port passes the official vectors first
   (`test_canonical_body_and_claim_id_golden`). A write to each hashed field is refused by `check_id` and by

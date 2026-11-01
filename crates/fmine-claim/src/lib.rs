@@ -451,6 +451,8 @@ pub struct DagNode {
 pub struct ClaimDag {
     nodes: BTreeMap<ClaimId, DagNode>,
     children: BTreeMap<ClaimId, BTreeSet<ClaimId>>,
+    /// DESIGN (INV-013): invalidation facts survive replay, including when the affected body has not arrived.
+    invalidations: BTreeMap<ClaimId, Option<ClaimId>>,
 }
 
 impl ClaimDag {
@@ -461,13 +463,25 @@ impl ClaimDag {
     }
 
     /// Registers a `Claim<T>` in the provenance DAG. Refuses (`FMINE-REF-507`, [`Claim::check_id`]) a claim whose id
-    /// does not name its body, so a node never records a class written after the id was fixed.
+    /// does not name its body, or which supersedes itself. Replaying a body cannot clear staleness. A changed
+    /// identity's `supersedes` invalidates the old version and its dependants, without making the new version
+    /// depend on the old one.
     pub fn insert<T>(&mut self, claim: &Claim<T>) -> Result<(), Refusal> {
         claim.check_id()?;
-        let mut stale = claim.stale;
+        if claim.supersedes == Some(claim.claim_id) {
+            return Err(Refusal::new(
+                RefusalCode::FrozenRecordMutation507,
+                format!(
+                    "claim '{}' cannot supersede its own identity",
+                    claim.metric_key
+                ),
+            ));
+        }
+        let mut stale =
+            claim.stale || claim.state == KnowledgeState::Stale || self.is_stale(claim.claim_id);
         for &p in &claim.parents {
             self.children.entry(p).or_default().insert(claim.claim_id);
-            if self.nodes.get(&p).is_some_and(|pn| pn.stale) {
+            if self.is_stale(p) {
                 stale = true;
             }
         }
@@ -479,20 +493,40 @@ impl ClaimDag {
                 evidence: claim.evidence,
                 parents: claim.parents.clone(),
                 stale,
-                superseded_by: None,
+                superseded_by: self.invalidations.get(&claim.claim_id).copied().flatten(),
             },
         );
+        if stale {
+            self.propagate_staleness(claim.claim_id);
+        }
+        if let Some(previous) = claim.supersedes {
+            self.invalidate_and_propagate(previous, Some(claim.claim_id));
+        }
         Ok(())
     }
 
     /// G-DISC (`§8.3`), its evidence clauses: a disclosure-facing export needs a class in {Measured, Derived,
     /// ModelledCalibrated} and no `Assertion` or `Assumed` anywhere in its provenance. A parent this DAG does not hold
-    /// proves nothing, so it refuses too.
+    /// proves nothing, so it refuses too. The body must still match its id (`FMINE-REF-507`), and both this claim
+    /// and its ancestors must be current (`FMINE-REF-202`, INV-013). The supplied root need not be inserted.
     ///
     /// §8.4 has no G-DISC code, so `FMINE-REF-304` is the nearest: the clause this cannot yet check is the attested
     /// record. Passing is therefore necessary, not sufficient: the RefClass and attestation clauses wait on fields
     /// `Claim` does not have. FrankenMining's own public report is not a disclosure and does not call this.
     pub fn guard_disclosure_export<T>(&self, claim: &Claim<T>) -> Result<(), Refusal> {
+        claim.check_id()?;
+        let stale = |id: ClaimId| {
+            Refusal::new(
+                RefusalCode::NotObservable202,
+                format!(
+                    "G-DISC on '{}': claim {id} is stale; recompute from current dependencies",
+                    claim.metric_key
+                ),
+            )
+        };
+        if claim.stale || claim.state == KnowledgeState::Stale || self.is_stale(claim.claim_id) {
+            return Err(stale(claim.claim_id));
+        }
         let refuse = |why: String| {
             Err(Refusal::new(
                 RefusalCode::MissingHumanToken304,
@@ -510,6 +544,9 @@ impl ClaimDag {
         while let Some(id) = queue.pop_front() {
             if !seen.insert(id) {
                 continue;
+            }
+            if self.is_stale(id) {
+                return Err(stale(id));
             }
             let Some(node) = self.nodes.get(&id) else {
                 return refuse(format!("parent {id} is not in this provenance graph"));
@@ -529,19 +566,28 @@ impl ClaimDag {
     }
 
     /// Marks `root_id` and all transitive downstream dependents as `stale = true` (`INV-013`).
-    /// Returns the deterministic sorted list of all affected `ClaimId`s.
+    /// Returns the deterministic sorted list of all affected `ClaimId`s, including an absent root. Its
+    /// invalidation remains effective when the body or a dependant arrives later. A repeated invalidation with
+    /// no replacement does not erase a recorded supersession.
     pub fn invalidate_and_propagate(
         &mut self,
         root_id: ClaimId,
         superseded_by: Option<ClaimId>,
     ) -> Vec<ClaimId> {
+        let replacement = self.invalidations.entry(root_id).or_default();
+        if superseded_by.is_some() {
+            *replacement = superseded_by;
+        }
+        if let Some(node) = self.nodes.get_mut(&root_id) {
+            node.superseded_by = *replacement;
+        }
+        self.propagate_staleness(root_id)
+    }
+
+    fn propagate_staleness(&mut self, root_id: ClaimId) -> Vec<ClaimId> {
         let mut affected = BTreeSet::new();
         let mut queue = VecDeque::new();
         queue.push_back(root_id);
-
-        if let Some(node) = self.nodes.get_mut(&root_id) {
-            node.superseded_by = superseded_by;
-        }
 
         while let Some(curr) = queue.pop_front() {
             if !affected.insert(curr) {
@@ -559,10 +605,11 @@ impl ClaimDag {
         affected.into_iter().collect()
     }
 
-    /// Returns whether `claim_id` is currently marked stale in the DAG.
+    /// Returns whether `claim_id` is stale from an invalidation or a known dependency, even before its body arrives.
     #[must_use]
     pub fn is_stale(&self, claim_id: ClaimId) -> bool {
-        self.nodes.get(&claim_id).is_some_and(|n| n.stale)
+        self.invalidations.contains_key(&claim_id)
+            || self.nodes.get(&claim_id).is_some_and(|n| n.stale)
     }
 }
 
@@ -809,10 +856,44 @@ mod tests {
         let top = join("top", &ab, &c);
         assert_eq!(top.evidence, EvidenceClass::ModelledCalibrated);
         let mut dag = ClaimDag::new();
-        for claim in [&a, &b, &c, &ab, &top] {
+        for claim in [&a, &b, &c, &ab] {
             assert_eq!(dag.insert(claim), Ok(()));
         }
+        // FACT: a fresh projection can be checked before it is stored; its ancestors must already be known.
         assert_eq!(dag.guard_disclosure_export(&top), Ok(()));
+        assert_eq!(dag.insert(&top), Ok(()));
+        assert_eq!(dag.guard_disclosure_export(&top), Ok(()));
+    }
+
+    #[test]
+    fn test_g_disc_refuses_stale_claims_and_ancestors_before_root_insertion() {
+        let root = leaf("current_deck", EvidenceClass::Measured);
+        let mid = stating("cost", EvidenceClass::Derived, vec![root.claim_id]);
+        let top = stating("projection", EvidenceClass::Derived, vec![mid.claim_id]);
+        let mut dag = ClaimDag::new();
+        dag.insert(&root).unwrap();
+        dag.insert(&mid).unwrap();
+        assert_eq!(dag.guard_disclosure_export(&top), Ok(()));
+        dag.invalidate_and_propagate(root.claim_id, None);
+        let err = dag.guard_disclosure_export(&top).unwrap_err();
+        assert_eq!((err.code, err.exit_code), ("FMINE-REF-202", 3));
+        assert!(err.what.contains(&mid.claim_id.to_string()));
+
+        let mut stale = leaf("uninserted_stale", EvidenceClass::Measured);
+        stale.stale = true;
+        assert_eq!(
+            ClaimDag::new()
+                .guard_disclosure_export(&stale)
+                .unwrap_err()
+                .code,
+            "FMINE-REF-202"
+        );
+        let mut absent = ClaimDag::new();
+        absent.invalidate_and_propagate(root.claim_id, None);
+        assert_eq!(
+            absent.guard_disclosure_export(&root).unwrap_err().code,
+            "FMINE-REF-202"
+        );
     }
 
     /// PO-PLUMB-1 through `Claim` itself: random trees of 2 to 6 leaves, each pair joined by `compose_binary`. A node
@@ -1144,6 +1225,152 @@ mod tests {
         assert!(dag.is_stale(c3.claim_id));
     }
 
+    #[test]
+    fn test_claim_dag_invalidation_is_monotone_across_arrival_orders_and_replay() {
+        let root = leaf("price_deck_v1", EvidenceClass::Measured);
+        let mid = stating("metric_v1", EvidenceClass::Derived, vec![root.claim_id]);
+        let top = stating("report_v1", EvidenceClass::Derived, vec![mid.claim_id]);
+        let replacement = leaf("price_deck_v2", EvidenceClass::Measured);
+        let claims = [&root, &mid, &top];
+        let orders = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        for order in orders {
+            for invalidation_step in 0..=claims.len() {
+                let mut dag = ClaimDag::new();
+                for step in 0..=claims.len() {
+                    if step == invalidation_step {
+                        dag.invalidate_and_propagate(root.claim_id, Some(replacement.claim_id));
+                        assert!(dag.is_stale(root.claim_id));
+                        dag.invalidate_and_propagate(root.claim_id, None);
+                    }
+                    if let Some(&index) = order.get(step) {
+                        dag.insert(claims[index]).unwrap();
+                    }
+                }
+                for claim in claims.into_iter().rev() {
+                    assert!(
+                        dag.is_stale(claim.claim_id),
+                        "order={order:?}, step={invalidation_step}"
+                    );
+                    dag.insert(claim).unwrap();
+                    assert!(
+                        dag.is_stale(claim.claim_id),
+                        "replay cannot revive a stale identity"
+                    );
+                }
+                assert_eq!(
+                    dag.nodes[&root.claim_id].superseded_by,
+                    Some(replacement.claim_id)
+                );
+                assert_eq!(
+                    dag.guard_disclosure_export(&top).unwrap_err().code,
+                    "FMINE-REF-202"
+                );
+                dag.insert(&replacement).unwrap();
+                assert!(!dag.is_stale(replacement.claim_id));
+                assert_eq!(dag.guard_disclosure_export(&replacement), Ok(()));
+            }
+        }
+    }
+
+    #[test]
+    fn test_claim_dag_late_stale_parent_invalidates_existing_descendants() {
+        let mut root = leaf("late_deck", EvidenceClass::Measured);
+        let mid = stating("late_metric", EvidenceClass::Derived, vec![root.claim_id]);
+        let top = stating("late_report", EvidenceClass::Derived, vec![mid.claim_id]);
+        let mut dag = ClaimDag::new();
+        dag.insert(&top).unwrap();
+        dag.insert(&mid).unwrap();
+        assert!(!dag.is_stale(top.claim_id));
+        root.stale = true;
+        dag.insert(&root).unwrap();
+        for claim in [&root, &mid, &top] {
+            assert!(dag.is_stale(claim.claim_id));
+        }
+        root.stale = false;
+        dag.insert(&root).unwrap();
+        assert!(dag.is_stale(root.claim_id));
+        assert!(dag.is_stale(top.claim_id));
+
+        let stale_state = Claim::new(
+            "stale_state",
+            (),
+            "stale",
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::ExtensiveAdditive,
+            EvidenceClass::Measured,
+            EpistemicStatus::KnownKnown,
+            KnowledgeState::Stale,
+            Confidentiality::public(),
+            vec![],
+            vec![],
+            vec![],
+        );
+        assert_eq!(
+            dag.guard_disclosure_export(&stale_state).unwrap_err().code,
+            "FMINE-REF-202"
+        );
+        dag.insert(&stale_state).unwrap();
+        assert!(dag.is_stale(stale_state.claim_id));
+    }
+
+    #[test]
+    fn test_claim_dag_supersession_invalidates_old_dependants_without_staling_new_version() {
+        let old = leaf("calibrated_grade", EvidenceClass::ModelledCalibrated);
+        let child = stating("old_estimate", EvidenceClass::Derived, vec![old.claim_id]);
+        let replacement = old.downgraded(EvidenceClass::ModelledUncalibrated);
+        for replacement_first in [false, true] {
+            let mut dag = ClaimDag::new();
+            if replacement_first {
+                dag.insert(&replacement).unwrap();
+            }
+            dag.insert(&child).unwrap();
+            dag.insert(&old).unwrap();
+            dag.insert(&replacement).unwrap();
+            assert!(dag.is_stale(old.claim_id));
+            assert!(dag.is_stale(child.claim_id));
+            assert!(!dag.is_stale(replacement.claim_id));
+            assert_eq!(
+                dag.nodes[&old.claim_id].superseded_by,
+                Some(replacement.claim_id)
+            );
+            let refreshed = stating(
+                "new_estimate",
+                EvidenceClass::Derived,
+                vec![replacement.claim_id],
+            );
+            dag.insert(&refreshed).unwrap();
+            assert!(!dag.is_stale(refreshed.claim_id));
+            dag.insert(&old).unwrap();
+            assert!(dag.is_stale(old.claim_id));
+        }
+    }
+
+    #[test]
+    fn test_claim_dag_rejects_self_supersession_without_mutation() {
+        let root = leaf("root", EvidenceClass::Measured);
+        let mut child = stating(
+            "self_superseding",
+            EvidenceClass::Derived,
+            vec![root.claim_id],
+        );
+        child.supersedes = Some(child.claim_id);
+        let mut dag = ClaimDag::new();
+        dag.insert(&root).unwrap();
+        let before = dag.clone();
+        assert_eq!(dag.insert(&child).unwrap_err().code, "FMINE-REF-507");
+        assert_eq!(dag.nodes, before.nodes);
+        assert_eq!(dag.children, before.children);
+        assert_eq!(dag.invalidations, before.invalidations);
+    }
+
     /// The golden pair: an issuer's figure (public, one anchor) and a derived claim (venture joined with a wall, two
     /// parents, no anchor).
     fn golden_claims() -> (Claim<f64>, Claim<f64>) {
@@ -1251,6 +1478,11 @@ mod tests {
             );
             let mut dag = ClaimDag::new();
             assert!(dag.insert(&edited).is_err(), "{what}");
+            assert_eq!(
+                dag.guard_disclosure_export(&edited).unwrap_err().code,
+                "FMINE-REF-507",
+                "{what}"
+            );
             // Nothing was stored: a child of the refused claim finds its parent missing.
             let child = stating("child", EvidenceClass::Measured, vec![edited.claim_id]);
             assert_eq!(dag.insert(&child), Ok(()));
