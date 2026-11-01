@@ -15,15 +15,18 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use fmine_claim::reliance::{
-    Entry, Header, JournalRecord, MAX_RECORD_BYTES, ReleaseCapability, RelianceLedger, TrustedTime,
+    Entry, Header, IssuanceRecord, JournalRecord, MAX_RECORD_BYTES, ReleaseCapability,
+    RelianceLedger, TrustContext, TrustedTime,
 };
-use fmine_core::hash::{Digest32, sha256};
+use fmine_core::hash::{Digest32, blake3_hash, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
 
 /// Total on-disk journal bound, checked before and during reads and before each append.
 pub const MAX_JOURNAL_BYTES: u64 = 64 * 1024 * 1024;
 /// Bound on replay work, independent of the byte limit.
 pub const MAX_JOURNAL_RECORDS: usize = 100_000;
+/// Exact issued-artifact bytes retained in memory for one verified write or current-use copy.
+pub const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A local bearer capability loaded from an exact 32-byte private file. Debug never exposes its bytes.
 pub struct ReleaseKey([u8; 32]);
@@ -64,6 +67,9 @@ impl ReleaseKey {
         }
         let mut key = [0_u8; 32];
         key.copy_from_slice(&bytes[..32]);
+        if key == [0; 32] {
+            return Err(authority("release key must not be all zero bytes"));
+        }
         Ok(Self(key))
     }
 
@@ -236,6 +242,61 @@ impl Journal {
         self.prepare_append(entry.clone(), key, time).map(|_| ())
     }
 
+    /// Create the exact artifact and durably record its issuance under this writer's exclusive lock.
+    /// DESIGN: the caller derives Claims, anchor, inputs and build identity from its verified report;
+    /// this boundary verifies the supplied output digest against the actual bytes before any write.
+    /// A failed artifact write leaves the journal unchanged. A failed journal append leaves the artifact
+    /// unissued; it must not be distributed as current, and no automatic deletion or retry is attempted.
+    pub fn issue_bytes(
+        &mut self,
+        output_path: &Path,
+        bytes: &[u8],
+        issuance: IssuanceRecord,
+        key: &ReleaseKey,
+        time: TrustedTime,
+    ) -> Result<JournalRecord, Refusal> {
+        artifact_bound(bytes.len() as u64)?;
+        if blake3_hash(bytes) != issuance.output_digest {
+            return Err(Refusal::new(
+                RefusalCode::DigestMismatch505,
+                "issuance digest does not match the exact output bytes",
+            ));
+        }
+        let next = self.prepare_append(Entry::Issued(issuance), key, time)?;
+        write_artifact_new(output_path, bytes)?;
+        self.commit_append(next)
+    }
+
+    /// Copy an already issued artifact for current reuse, keeping this journal lock throughout the copy.
+    /// DESIGN: only an independently supplied final-head pin plus bounded trusted time can grant reuse.
+    /// The source is read once; those same verified bytes are written using `create_new` and synced.
+    /// This is retrieval of an existing issuance, not a new recipient record or a freshness receipt.
+    pub fn export_current(
+        &self,
+        source_path: &Path,
+        destination_path: &Path,
+        time: TrustedTime,
+    ) -> Result<Digest32, Refusal> {
+        if !self.is_pinned() {
+            return Err(Refusal::new(
+                RefusalCode::NotObservable202,
+                "current artifact reuse requires an independently pinned journal read",
+            ));
+        }
+        let bytes = read_artifact(source_path)?;
+        let digest = blake3_hash(&bytes);
+        self.ledger.verify_artifact(digest, &bytes)?;
+        self.ledger.gate_current_reuse(
+            digest,
+            &TrustContext {
+                pinned_head: Some(self.head()),
+                time: Some(time),
+            },
+        )?;
+        write_artifact_new(destination_path, &bytes)?;
+        Ok(digest)
+    }
+
     /// Validate authority and the transition, append one complete line, then sync before publishing its head.
     /// A partial write or failed sync poisons this handle; it cannot retry or repair the journal.
     pub fn append(
@@ -245,6 +306,10 @@ impl Journal {
         time: TrustedTime,
     ) -> Result<JournalRecord, Refusal> {
         let next = self.prepare_append(entry, key, time)?;
+        self.commit_append(next)
+    }
+
+    fn commit_append(&mut self, next: PreparedAppend) -> Result<JournalRecord, Refusal> {
         self.poisoned = true;
         self.file.write_all(&next.line).map_err(|e| {
             integrity(format!(
@@ -298,6 +363,73 @@ impl Journal {
             byte_len: new_len,
         })
     }
+}
+
+fn artifact_bound(length: u64) -> Result<(), Refusal> {
+    if length > MAX_ARTIFACT_BYTES {
+        return Err(Refusal::new(
+            RefusalCode::InputMissingOrUnreadable506,
+            "issued artifact exceeds its byte bound",
+        ));
+    }
+    Ok(())
+}
+
+/// Read exact artifact bytes once with a fixed size bound; never follow a symlink or read a special file.
+pub fn read_artifact(path: &Path) -> Result<Vec<u8>, Refusal> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|e| io_refusal("read artifact metadata", path, &e))?;
+    if !metadata.is_file() {
+        return Err(Refusal::new(
+            RefusalCode::InputMissingOrUnreadable506,
+            format!("artifact is not a regular file: {}", path.display()),
+        ));
+    }
+    artifact_bound(metadata.len())?;
+    let file = File::open(path).map_err(|e| io_refusal("open artifact", path, &e))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| io_refusal("read opened artifact metadata", path, &e))?;
+    if !metadata.is_file() {
+        return Err(Refusal::new(
+            RefusalCode::InputMissingOrUnreadable506,
+            format!("opened artifact is not a regular file: {}", path.display()),
+        ));
+    }
+    artifact_bound(metadata.len())?;
+    let mut bytes = Vec::new();
+    file.take(MAX_ARTIFACT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| io_refusal("read artifact", path, &e))?;
+    artifact_bound(bytes.len() as u64)?;
+    Ok(bytes)
+}
+
+fn write_artifact_new(path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|e| io_refusal("create issued artifact", path, &e))?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|e| io_refusal("write and sync issued artifact", path, &e))?;
+    #[cfg(unix)]
+    {
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|e| io_refusal("sync artifact parent directory", parent, &e))?;
+    }
+    Ok(())
 }
 
 fn regular_journal(metadata: &std::fs::Metadata) -> Result<(), Refusal> {
@@ -543,6 +675,235 @@ mod tests {
     }
 
     #[test]
+    fn exact_artifact_issue_and_current_copy_refuse_after_withdrawal() {
+        let dir = workspace();
+        let path = dir.join("journal");
+        let output = dir.join("issued");
+        let copied = dir.join("current-copy");
+        let blocked = dir.join("withdrawn-copy");
+        let bytes = b"synthetic output\n";
+        let issued = issuance();
+        let mut journal = Journal::create(&path, header()).expect("create");
+        journal
+            .issue_bytes(&output, bytes, issued.clone(), &key(), time(10))
+            .expect("durable issuance");
+        let head = journal.head();
+        let journal_bytes = std::fs::read(&path).expect("committed journal");
+        assert_eq!(std::fs::read(&output).expect("artifact"), bytes);
+        assert_eq!(journal.ledger().copies(issued.output_digest), vec![&issued]);
+        assert_eq!(
+            journal
+                .export_current(&output, &copied, time(11))
+                .expect_err("new head is not an independent pin")
+                .code,
+            "FMINE-REF-202"
+        );
+        assert!(!copied.exists());
+        drop(journal);
+        let reader = Journal::open_read(&path, Some(head)).expect("independently pinned reader");
+        assert_eq!(
+            reader
+                .export_current(&output, &copied, time(11))
+                .expect("current retrieval"),
+            issued.output_digest
+        );
+        assert_eq!(std::fs::read(&copied).expect("exact copy"), bytes);
+        assert_eq!(
+            std::fs::read(&path).expect("read-only journal"),
+            journal_bytes
+        );
+        assert!(
+            Journal::open_write(&path, head).is_err(),
+            "reader lock retained"
+        );
+        drop(reader);
+        let mut writer = Journal::open_write(&path, head).expect("owner after copy");
+        writer
+            .append(
+                Entry::Withdrawn(Withdrawal {
+                    output_digest: issued.output_digest,
+                    reason: "synthetic code defect".to_string(),
+                    affected_claims: issued.output_claims.clone(),
+                    defect_class: DefectClass::CodeDefect,
+                    by_role: RoleId::ReleaseOwner,
+                    at_ns: 20,
+                }),
+                &key(),
+                time(20),
+            )
+            .expect("withdraw");
+        let withdrawn_head = writer.head();
+        drop(writer);
+        let reader = Journal::open_read(&path, Some(withdrawn_head)).expect("current status pin");
+        reader
+            .ledger()
+            .verify_artifact(
+                issued.output_digest,
+                &std::fs::read(&output).expect("old artifact"),
+            )
+            .expect("historical bytes still verify");
+        assert_eq!(
+            reader.ledger().copies(issued.output_digest)[0].anchor,
+            issued.anchor
+        );
+        assert_eq!(
+            reader
+                .export_current(&output, &blocked, time(21))
+                .expect_err("withdrawn bytes cannot be current")
+                .code,
+            "FMINE-REF-202"
+        );
+        assert!(!blocked.exists());
+        assert_eq!(std::fs::read(&output).expect("original preserved"), bytes);
+    }
+
+    #[test]
+    fn issue_preflight_rejects_digest_key_time_and_existing_destination_without_append() {
+        let dir = workspace();
+        let path = dir.join("journal");
+        let mut journal = Journal::create(&path, header()).expect("create");
+        let before = std::fs::read(&path).expect("genesis");
+        let output = dir.join("invalid");
+        for (bytes, signing_key, clock, code) in [
+            (&b"different bytes"[..], key(), time(10), "FMINE-REF-505"),
+            (
+                &b"synthetic output\n"[..],
+                ReleaseKey([9; 32]),
+                time(10),
+                "FMINE-REF-304",
+            ),
+            (&b"synthetic output\n"[..], key(), time(11), "FMINE-REF-304"),
+        ] {
+            assert_eq!(
+                journal
+                    .issue_bytes(&output, bytes, issuance(), &signing_key, clock)
+                    .expect_err("preflight")
+                    .code,
+                code
+            );
+            assert!(!output.exists());
+            assert_eq!(std::fs::read(&path).expect("unchanged journal"), before);
+        }
+        write_new(&output, b"unrelated data");
+        assert_eq!(
+            journal
+                .issue_bytes(&output, b"synthetic output\n", issuance(), &key(), time(10))
+                .expect_err("must not overwrite")
+                .code,
+            "FMINE-REF-506"
+        );
+        assert_eq!(
+            std::fs::read(&output).expect("existing data"),
+            b"unrelated data"
+        );
+        assert_eq!(std::fs::read(&path).expect("unchanged journal"), before);
+        assert_eq!(journal.ledger().records().len(), 1);
+        assert!(!journal.poisoned, "no journal write was attempted");
+    }
+
+    #[test]
+    fn current_copy_requires_fresh_bounded_trust_and_never_overwrites() {
+        let dir = workspace();
+        let path = dir.join("journal");
+        let output = dir.join("issued");
+        let copy = dir.join("copy");
+        let mut journal = Journal::create(&path, header()).expect("create");
+        journal
+            .issue_bytes(&output, b"synthetic output\n", issuance(), &key(), time(10))
+            .expect("issue");
+        let head = journal.head();
+        drop(journal);
+        let reader = Journal::open_read(&path, None).expect("untrusted historical inspection");
+        assert!(reader.export_current(&output, &copy, time(11)).is_err());
+        assert!(!copy.exists());
+        drop(reader);
+        let reader = Journal::open_read(&path, Some(head)).expect("pinned reader");
+        for clock in [
+            time(9),
+            time(106),
+            TrustedTime {
+                now_ns: 11,
+                uncertainty_ns: 6,
+            },
+        ] {
+            assert_eq!(
+                reader
+                    .export_current(&output, &copy, clock)
+                    .expect_err("untrusted current use")
+                    .code,
+                "FMINE-REF-202"
+            );
+            assert!(!copy.exists());
+        }
+        let altered = dir.join("altered");
+        write_new(&altered, b"altered artifact");
+        assert!(reader.export_current(&altered, &copy, time(11)).is_err());
+        assert!(!copy.exists());
+        write_new(&copy, b"existing destination");
+        assert_eq!(
+            reader
+                .export_current(&output, &copy, time(11))
+                .expect_err("no overwrite")
+                .code,
+            "FMINE-REF-506"
+        );
+        assert_eq!(
+            std::fs::read(copy).expect("preserved"),
+            b"existing destination"
+        );
+    }
+
+    #[test]
+    fn failed_issuance_append_retains_artifact_without_granting_reuse() {
+        let dir = workspace();
+        let path = dir.join("journal");
+        let output = dir.join("unissued");
+        let mut journal = Journal::create(&path, header()).expect("create");
+        let head = journal.head();
+        let before = std::fs::read(&path).expect("genesis");
+        journal.file = File::open(&path).expect("real read-only descriptor forces append failure");
+        assert!(
+            journal
+                .issue_bytes(&output, b"synthetic output\n", issuance(), &key(), time(10))
+                .is_err()
+        );
+        assert!(journal.poisoned);
+        assert_eq!(journal.head(), head);
+        assert_eq!(std::fs::read(&path).expect("journal unchanged"), before);
+        assert_eq!(
+            std::fs::read(&output).expect("retain unissued bytes"),
+            b"synthetic output\n"
+        );
+        drop(journal);
+        let reader = Journal::open_read(&path, Some(head)).expect("verified retained journal");
+        assert!(reader.ledger().copies(issuance().output_digest).is_empty());
+        assert!(
+            reader
+                .export_current(&output, &dir.join("blocked"), time(11))
+                .is_err()
+        );
+        assert!(!dir.join("blocked").exists());
+    }
+
+    #[test]
+    fn artifact_reads_refuse_special_files_and_oversized_files_before_allocating() {
+        let dir = workspace();
+        assert!(read_artifact(&dir).is_err());
+        let oversized = dir.join("oversized");
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&oversized)
+            .expect("sparse file");
+        file.set_len(MAX_ARTIFACT_BYTES + 1)
+            .expect("oversized sparse file");
+        assert_eq!(
+            read_artifact(&oversized).expect_err("bound").code,
+            "FMINE-REF-506"
+        );
+    }
+
+    #[test]
     fn wrong_key_and_invalid_preflight_create_no_append() {
         let path = workspace().join("journal");
         let mut journal = Journal::create(&path, header()).expect("create");
@@ -758,6 +1119,14 @@ mod tests {
             write_new(&path, &vec![0x7b; length]);
             assert!(ReleaseKey::read(&path).is_err());
         }
+        let zero = dir.join("zero-key");
+        write_new(&zero, &[0; 32]);
+        assert_eq!(
+            ReleaseKey::read(&zero)
+                .expect_err("unusable genesis key")
+                .code,
+            "FMINE-REF-304"
+        );
         let link = dir.join("key-link");
         symlink(&private, &link).expect("test symlink");
         assert!(ReleaseKey::read(&link).is_err());

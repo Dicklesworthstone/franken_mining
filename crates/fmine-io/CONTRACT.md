@@ -75,7 +75,12 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   expose the committed snapshot. `validate_append` stages the same checks without writing; `append` publishes
   its new head only after the complete line is written and synced. A new head is not automatically marked
   externally pinned. Dropping the handle releases the lock.
-- `ReleaseKey::read` accepts an exact-size regular, non-symlink file. On Unix it refuses group/other access;
+- DESIGN (BD-347): `Journal::issue_bytes` verifies the exact artifact digest and validates the owner capability,
+  clock and append before creating a new output. It syncs the output and parent directory before committing
+  the issuance, retaining its exclusive journal lock throughout. `export_current` reads bounded bytes once,
+  verifies their issuance and current-use status, and creates a byte-identical local copy while retaining
+  an independently pinned journal lock. Retrieval does not register a new recipient or assert receipt.
+- `ReleaseKey::read` accepts an exact-size, nonzero regular, non-symlink file. On Unix it refuses group/other access;
   on platforms where this private-file policy is unsupported it refuses. `sha256` exposes only its public
   header commitment. The adapter does not generate keys or choose an operator's state directory.
 
@@ -125,6 +130,10 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   exclusion and expected-head CAS under concurrent writers, refuse corrupted/torn/reordered/replayed journals,
   retain committed state after an I/O failure, and refuse insecure or malformed key files. These tests exercise
   local filesystem behavior; they do not establish partner receipt or hardware power-loss durability.
+- FACT (BD-347, `reliance::tests`): exact artifact issuance and current-use retrieval preserve bytes and
+  refuse after withdrawal; invalid digest, key, time, stale or absent trust, and an existing destination
+  cannot create an authorized output. A failed final append retains the unissued artifact and poisons its
+  writer. Artifact reads refuse special files and inputs over the separate 64 MiB bound.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Missing files, corrupt ZIP or DEFLATE streams and malformed workbooks fail closed with `IoError`. No fallbacks.
