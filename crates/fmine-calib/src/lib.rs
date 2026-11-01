@@ -8,7 +8,7 @@ use fmine_claim::Claim;
 use fmine_core::det;
 use fmine_core::hash::blake3_hash;
 use fmine_core::rand::{PhiloxStream, RngKey};
-use fmine_evidence::{EvidenceClass, Refusal};
+use fmine_evidence::{EvidenceClass, Refusal, RefusalCode};
 use fmine_numerics::cholesky_solve;
 use fmine_numerics::eproc::BettingEProcess;
 use fmine_numerics::norm_cdf;
@@ -421,14 +421,19 @@ impl SpatialFrontPitMonitor {
         if !(alpha.is_finite() && alpha > 0.0 && alpha < 1.0) {
             return Err(ScoreError::AlphaOutOfDomain(alpha));
         }
+        // Each monitor gets half of `alpha`. Only a subnormal `alpha` whose half rounds to 0 is refused here.
+        let eproc = |null_mean| {
+            BettingEProcess::new(null_mean, alpha * 0.5)
+                .map_err(|_| ScoreError::AlphaOutOfDomain(alpha))
+        };
         Ok(Self {
             nugget_var,
             sill_var,
             range_m,
             max_neighbors,
             history: Vec::new(),
-            mean_eproc: BettingEProcess::new(0.5, alpha * 0.5),
-            spread_eproc: BettingEProcess::new(0.25, alpha * 0.5),
+            mean_eproc: eproc(0.5)?,
+            spread_eproc: eproc(0.25)?,
         })
     }
 
@@ -446,7 +451,24 @@ impl SpatialFrontPitMonitor {
 
     /// Conditions `sample` on its nearest Vecchia predecessors, computes the whitened Rosenblatt PIT $u_i$,
     /// updates the e-processes, and appends `sample` to the conditioning history (`BD-311`).
+    ///
+    /// Refuses with `FMINE-REF-109` a sample with a NaN or infinite coordinate, prior mean or value, and changes
+    /// nothing (bd-a482). An infinite value used to give a PIT of 1 and join the history, so every later sample
+    /// conditioned on it.
     pub fn observe_sample(&mut self, sample: SpatialSample) -> Result<(f64, bool), Refusal> {
+        let fields = [
+            ("x", sample.x),
+            ("y", sample.y),
+            ("z", sample.z),
+            ("prior_mean", sample.prior_mean),
+            ("observed_value", sample.observed_value),
+        ];
+        if let Some((name, value)) = fields.into_iter().find(|(_, v)| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!("spatial sample {name} is {value}"),
+            ));
+        }
         let total_var = self.nugget_var + self.sill_var;
         let (cond_mean, cond_std) = if self.history.is_empty() {
             (sample.prior_mean, total_var.sqrt())
@@ -495,9 +517,25 @@ impl SpatialFrontPitMonitor {
 
         let z_star = (sample.observed_value - cond_mean) / cond_std;
         let u_pit = norm_cdf(z_star);
-        self.mean_eproc.observe(u_pit);
+        // Finite inputs can still overflow the conditional mean and give a NaN PIT. Refuse it before either
+        // e-process moves, so that both observations below succeed or neither runs.
+        if !(0.0..=1.0).contains(&u_pit) {
+            return Err(Refusal::new(
+                RefusalCode::NumericalCertificateFailed207,
+                format!(
+                    "spatial PIT is {u_pit} (observed {}, prior mean {})",
+                    sample.observed_value, sample.prior_mean
+                ),
+            ));
+        }
+        let refuse = |e: fmine_numerics::eproc::EProcError| {
+            Refusal::new(RefusalCode::NumericalCertificateFailed207, e.to_string())
+        };
+        self.mean_eproc.observe(u_pit).map_err(refuse)?;
         //Under Uniform(0,1), E[(u - 0.5)^2] = 1/12, and E[|u - 0.5|] = 0.25.
-        self.spread_eproc.observe((u_pit - 0.5).abs());
+        self.spread_eproc
+            .observe((u_pit - 0.5).abs())
+            .map_err(refuse)?;
         self.history.push(sample);
 
         let alarm = self.mean_eproc.rejected_null() || self.spread_eproc.rejected_null();
@@ -1013,6 +1051,48 @@ mod tests {
             SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 1.0).map(|_| ()),
             Err(ScoreError::AlphaOutOfDomain(1.0))
         );
+        // bd-a482: half of the smallest subnormal rounds to 0, which the e-processes refuse instead of clamping.
+        assert_eq!(
+            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, f64::from_bits(1)).map(|_| ()),
+            Err(ScoreError::AlphaOutOfDomain(f64::from_bits(1)))
+        );
+    }
+
+    /// bd-a482: a NaN value used to reach the e-processes as a NaN PIT and turn their wealth to NaN, and an
+    /// infinite one gave a PIT of 1 and joined the history.
+    #[test]
+    fn test_spatial_monitor_refuses_non_finite_sample_and_changes_nothing() {
+        let mut monitor =
+            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 0.05).expect("valid parameters");
+        let sample = |x, observed_value| SpatialSample {
+            x,
+            y: 0.0,
+            z: 0.0,
+            prior_mean: 1.0,
+            observed_value,
+        };
+        monitor
+            .observe_sample(sample(0.0, 1.4))
+            .expect("finite sample");
+        let wealth = (monitor.mean_eproc.wealth, monitor.spread_eproc.wealth);
+        for bad in [
+            sample(0.0, f64::NAN),
+            sample(0.0, f64::INFINITY),
+            sample(f64::NAN, 1.0),
+        ] {
+            let refusal = monitor.observe_sample(bad).expect_err("refused");
+            assert_eq!(refusal.code, RefusalCode::OutsidePhysicalDomain109.as_str());
+            assert_eq!(
+                (monitor.mean_eproc.wealth, monitor.spread_eproc.wealth),
+                wealth
+            );
+            assert_eq!(monitor.history.len(), 1);
+            assert_eq!(monitor.mean_eproc.n_steps, 1);
+        }
+        monitor
+            .observe_sample(sample(5.0, 0.6))
+            .expect("finite sample");
+        assert_eq!(monitor.history.len(), 2);
     }
 
     #[test]

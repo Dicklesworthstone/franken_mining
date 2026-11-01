@@ -23,10 +23,10 @@ It does no I/O and holds no domain rules (L-3). `xtask check-claims` exempts it 
   - `brent_root` takes a bracket, `tol`, `max_iter` and an `FnMut(f64) -> f64`;
   - `norm_cdf` takes `z` and `norm_inv` takes `p`.
 - **Original kernels.**
-  - `voi`: state probabilities and a `payoffs[state][action]` matrix (its doc comment says USD millions), a `likelihood[state][signal]` matrix and a sample cost.
-  - `risk`: a slice of losses and `alpha`.
-  - `eproc`: PIT values in [0, 1].
-  - `tropical`: node counts and arcs with `f64` minimum lags.
+  - `voi`: state probabilities and a `payoffs[state][action]` matrix (its doc comment says USD millions), a `likelihood[state][signal]` matrix and a non-negative sample cost.
+  - `risk`: a slice of losses and `alpha` in (0, 1).
+  - `eproc`: a null mean and `alpha` in (0, 1), then PIT values in [0, 1].
+  - `tropical`: node counts, arcs with finite `f64` minimum lags, and a finite deadline.
 - **`sparse`.** COO triplets `(row, col, value)`, CSR parts, `LdltOptions`, right-hand sides, a PCG tolerance and an iteration limit.
 - **`exact_feas`.** Cells with exact printed values and rounding steps (`Rat = fmine_units::ExactQty`), identities over cell ids, and `Rules`, each declaring a convention and one construction per family. The discovery reports take footings, printed values, factors, unit pairs and price decks. The generator takes a Philox key and a `GenSpec`.
 - **No files.** It reads no files or registries.
@@ -36,9 +36,9 @@ None is a Claim; callers wrap results.
 - **Dense and original kernels.**
   - `cholesky_solve` gives `Result<Vec<f64>, Refusal>`, and `brent_root` gives `Result<Root, RootError>`.
   - `norm_cdf` and `norm_inv` give an `f64`.
-  - `BettingEProcess` gives its wealth and `rejected_null`.
-  - `voi` gives `VoiSummary` and `risk` gives `TailRiskSummary`.
-  - `TropicalDag` gives start-time vectors, or `None` on a positive cycle.
+  - `BettingEProcess` gives its wealth and `rejected_null`, or an `EProcError`.
+  - `voi` gives `VoiSummary` or a `VoiError`, and `risk` gives `TailRiskSummary` and a drawdown, or a `RiskError`.
+  - `TropicalDag` gives start-time vectors, or a `TropicalError`.
 - **`sparse`.** `Csr`, `SymbolicLdlt`, `LdltFactor` (solve, `Inertia`, `FactorStats`), `Ilu0` and `PcgSolution`, or a typed error.
 - **`exact_feas`.**
   - One `Component` per connected group of cells, with an `Outcome`.
@@ -54,6 +54,11 @@ None is a Claim; callers wrap results.
   - `test_brent_refuses_non_convergence_and_bad_inputs`, and `test_brent_property_monotone_cubics` (seeded cubics).
   - `test_norm_inv_out_of_domain_is_nan_not_clamped`: NaN outside [0, 1], ±∞ at 0 and 1.
   - `test_cholesky_solve_and_singular_refusal` and `test_cholesky_non_spd_refuses_207`.
+- **No clamped or made-up answer from the original kernels (bd-a482).** Out-of-domain input refuses and leaves the state as it was:
+  - `test_eproc_refuses_out_of_domain_parameters_and_observations`: parameters stand as given, and a refused observation changes nothing;
+  - `test_voi_refuses_bad_shapes_probabilities_and_costs`: an EVSI inside the row-sum tolerance is reported below 0 as computed, not clamped;
+  - `test_risk_refuses_empty_non_finite_and_alpha_out_of_domain`: an `alpha` of 1 − 2⁻⁵³ over 49 losses gives the largest loss;
+  - `test_tropical_refuses_bad_arcs_cycles_and_deadlines`: a positive cycle refuses, and a zero-lag cycle is feasible.
 - **`sparse` is deterministic and never perturbs.**
   - The matrix is bitwise independent of push order: `test_assembly_is_stream_order_invariant_bitwise`.
   - Factor and PCG repeat bitwise on one host: `test_factorization_is_bitwise_deterministic` and `test_setup_and_solve_are_deterministic`.
@@ -83,8 +88,13 @@ None is a Claim; callers wrap results.
     - `test_refusals_name_the_input` covers seven of them.
     - `test_den_interval_through_zero_is_refused` and `test_presence_conflicts_refuse_and_locate` cover two more, and other tests reach `DuplicateCell` and `UnknownVariable`.
     - No test reaches `BadSigns`;
-  - `ImpliedError::{Refused, Infeasible, Unbounded, Indeterminate}`, `TieRefusal`, `ShareRefusal::{NotPositive, NegativeStep, Interval}`, `GenError`, `PowerError` and `IntervalError`.
-- **No refusal at all.** `TropicalDag` gives `None` on a positive precedence cycle. `eproc`, `voi` and `risk` clamp or default instead of refusing (Validity domain; bd-a482).
+  - `ImpliedError::{Refused, Infeasible, Unbounded, Indeterminate}`, `TieRefusal`, `ShareRefusal::{NotPositive, NegativeStep, Interval}`, `GenError`, `PowerError` and `IntervalError`;
+  - the original kernels' errors (bd-a482), each reached by its module's refusal test (Invariants):
+    - `EProcError::{NullMeanOutOfDomain, AlphaOutOfDomain, ObservationOutOfDomain}`;
+    - `VoiError::{Empty, Shape, NonFinite, CostOutOfDomain, ProbabilityOutOfDomain, NotNormalised}`;
+    - `RiskError::{Empty, NonFinite { index, value }, AlphaOutOfDomain}`;
+    - `TropicalError::{ArcOutOfRange, NonFiniteLag, PositiveCycle, NonFiniteDeadline}`.
+- **Callers map them.** `fmine_decide::rank_voi_campaigns` returns the `VoiError`. `fmine_calib::SpatialFrontPitMonitor::new` maps an `EProcError` to `ScoreError::AlphaOutOfDomain`, and `observe_sample` refuses a non-finite sample with `FMINE-REF-109` before either e-process moves.
 
 ## 6. Determinism class
 Each file's `//! Determinism:` header:
@@ -97,13 +107,13 @@ Each file's `//! Determinism:` header:
 Not applicable: no Claims are emitted. A caller that wraps a result in a Claim decides its class and state.
 
 ## 8. Validity domain
-- **`norm_cdf`** is Abramowitz & Stegun 7.1.26 on `erf`, with absolute error below 1.5 × 10⁻⁷ in `erf`. **`norm_inv`** is Acklam's rational approximation. Neither is exact in the tails.
+- **`norm_cdf`** is `½(1 + erf(z/√2))` on `fmine_core::det::erf`, which bd-hp2j.2 rewrote from Abramowitz & Stegun 7.1.26. Its comment gives about 8 ulp from the correctly rounded value on a 0.005 grid over (0, 6), measured on an f64 prototype, and exactly ±1 from |x| ≥ 6. **`norm_inv`** is Acklam's rational approximation. Neither is exact in the tails.
 - **`cholesky_solve`** refuses a pivot ≤ 1e-14 in absolute terms, whatever the matrix's scale.
 - **`brent_root`** needs a sign change on `[a, b]` and a finite `f` at every point it evaluates.
-- **`eproc`.** `BettingEProcess::new` clamps `null_mean` into [0.01, 0.99] and `alpha` into [1e-6, 0.5], and `observe` clamps `u` into [0, 1]. The bet fraction is clamped to ±0.75, while the doc comment says ±0.95. Its null is two-sided, `E[U_t] = μ0`, while the struct's doc comment says `≤`. `test_ville_inequality_type1_error_bound` checks the false-alarm rate against α + 0.02 over 500 seeded runs, plus one alternative.
-- **`voi`.** An empty problem gives zeros. Ragged payoffs, or fewer payoff rows than states, panic on an index. Probabilities are not checked. A likelihood that does not match the states gives EVSI 0, and EVSI is clamped into [0, EVPI]. `test_evpi_non_negative_and_evsi_monotone` covers one two-state problem.
-- **`risk`.** No losses gives zeros. `alpha` is clamped into [1e-6, 1 − 1e-6], and a NaN loss makes the mean and the CVaR NaN. `max_drawdown` of an empty slice is 0. `test_cvar_coherent_subadditivity_and_monotonicity` covers one pair of eight-point samples.
-- **`tropical`.** An arc naming a node ≥ `n_nodes` panics on an index. Comparisons use a fixed 1e-12 tolerance, and a NaN lag is not refused. `test_min_plus_longest_path_duality` covers one four-node DAG. No test reaches the positive-cycle `None`.
+- **`eproc`.** `BettingEProcess::new` refuses a `null_mean` or `alpha` outside (0, 1), and `observe` refuses `u` outside [0, 1]; neither clamps (bd-a482). The bet fraction is held to ±0.75 by design, so every factor is at least 0.25. The null is two-sided, `E[U_t | U_<t] = μ0`. `test_ville_inequality_type1_error_bound` checks the false-alarm rate against α + 0.02 over 500 seeded runs, plus one alternative.
+- **`voi`.** A problem must have states and actions, `payoffs` one row per state of one length, finite payoffs, and a prior that is a probability vector. Each likelihood row must be a probability vector over the same signals, and the cost finite and ≥ 0. Probability sums may be off by `PROBABILITY_SUM_TOLERANCE` = 1e-9, which can move EVSI by that times the largest payoff. EVPI and EVSI are not clamped. `test_evpi_non_negative_and_evsi_monotone` covers one two-state problem.
+- **`risk`.** It needs at least one value, every one finite, and `alpha` in (0, 1). The tail bounds are `i / n`, so the largest loss always has weight. `test_cvar_coherent_subadditivity_and_monotonicity` covers one pair of eight-point samples.
+- **`tropical`.** Arcs must name nodes in `0..n_nodes` and carry finite lags, and the deadline must be finite. Comparisons use `RELAXATION_TOLERANCE` = 1e-12, absolute. A start can be left up to that much short per arc on its path, a positive cycle below it is not detected, and above about 1e4 an ulp exceeds it, so a zero-total cycle whose lags do not cancel exactly can be refused as positive. `test_min_plus_longest_path_duality` covers one four-node DAG.
 - **`sparse`.** A solve's accuracy is what the residual known answers and the dense comparisons show, within the tolerances in their tests. There is no cross-host bitwise guarantee.
 - **`exact_feas` caps.**
   - 256 cells per component (`MAX_VARIABLES`) and 10⁴ pivots per run (`MAX_PIVOTS`).
@@ -129,8 +139,7 @@ No fixture under `fixtures/` (§33.2).
   The cross-crate AISC tables are checked in `crates/xtask/tests/public_exact_feas_oracle.rs` and `public_exact_feas_blame.rs`.
 
 ## 10. Known gaps
-- **Clamps and made-up defaults in `eproc`, `voi`, `risk` and `tropical`** (Validity domain): bd-a482. `fmine-decide` (`rank_voi_campaigns`) and `fmine-calib` (`SpatialFrontPitMonitor`) call two of them.
-- **The four original kernels are not lifts.** Each has one example test, and no test reaches `tropical`'s cycle refusal. A real lift waits on bd-022.
+- **The four original kernels are not lifts.** Beyond its refusal test, each has one example test of its statistics or algebra (Ville, EVSI monotone, CVaR coherence, duality). The refusals make bad input visible; they do not make the kernels correct in general. A real lift waits on bd-022.
 - **GATE-HELM-02 is not met here.** It needs a Monte Carlo VOI estimator to recover closed-form EVSI over K problems by a χ² test. `voi` has only the closed form: bd-227.
 - **PO-NUM-1 holds for `lib.rs` only.** Every other module is DeterministicPerIsa, with no cross-host digest.
 - **PO-NUM-3** asks for a recorded determinism class and a thread-count test for each kernel on a certified path, kept in `registries/kernels.toml`. That registry does not exist, and no bead covers it.
@@ -146,10 +155,10 @@ No fixture under `fixtures/` (§33.2).
   - `brent_root(a, b, tol, max_iter, f) -> Result<Root, RootError>`, with `Root { x, f_x, bracket, iterations }`. An unconverged iterate is never returned (bd-t1dk).
   - `norm_cdf`, `norm_inv`. `norm_inv` clamps nothing: bd-hp2j.2 removed a silent clamp to [1e-15, 1 − 1e-15].
   - `NUMERICS_DIGEST_KEY`, `normal_digest_inputs`, `digest_norm_cdf_inv`, `golden_digest_norm_cdf_inv_10k`, `digest_cholesky_brent` and `golden_digest_cholesky_brent_10k` (bd-hp2j.3).
-- **`eproc::BettingEProcess`** has `new(null_mean, alpha)`, `threshold` (1/α), `observe(u) -> f64` (the wealth) and `rejected_null` (the running maximum wealth ≥ 1/α).
-- **`voi::{VoiProblem { state_probs, payoffs }, VoiSummary}`**, with `compute_evpi() -> (best_action, prior_ev, evpi)` and `compute_evsi(likelihood, cost) -> VoiSummary`.
-- **`risk::{TailRiskSummary, compute_cvar(losses, alpha), max_drawdown}`.**
-- **`tropical::{PrecedenceArc { from, to, min_lag }, TropicalDag}`**, with `new`, `add_arc`, `earliest_starts() -> Option<Vec<f64>>` and `latest_starts(deadline) -> Option<Vec<f64>>`.
+- **`eproc::{BettingEProcess, EProcError}`.** `new(null_mean, alpha) -> Result<Self, EProcError>`, `threshold` (1/α), `observe(u) -> Result<f64, EProcError>` (the wealth) and `rejected_null` (the running maximum wealth ≥ 1/α).
+- **`voi::{VoiProblem { state_probs, payoffs }, VoiSummary, VoiError, PROBABILITY_SUM_TOLERANCE}`**, with `compute_evpi() -> Result<(best_action, prior_ev, evpi), VoiError>` and `compute_evsi(likelihood, cost) -> Result<VoiSummary, VoiError>`.
+- **`risk::{TailRiskSummary, RiskError}`**, with `compute_cvar(losses, alpha) -> Result<TailRiskSummary, RiskError>` and `max_drawdown(trajectory) -> Result<f64, RiskError>`.
+- **`tropical::{PrecedenceArc { from, to, min_lag }, TropicalDag, TropicalError, RELAXATION_TOLERANCE}`**, with `new`, `add_arc` (checked when a pass runs), `earliest_starts() -> Result<Vec<f64>, TropicalError>` and `latest_starts(deadline) -> Result<Vec<f64>, TropicalError>`.
 - **`sparse`** (BD-145):
   - **`Coo::{new, push, staged, assemble}`.** Duplicates accumulate in insertion order after a stable (row, col) sort.
   - **`Csr::{from_parts, nrows, ncols, nnz, row, get, spmv}`.** `from_parts` checks the canonical invariant, strictly ascending columns in each row. `row` and `get` are `None` outside the matrix.

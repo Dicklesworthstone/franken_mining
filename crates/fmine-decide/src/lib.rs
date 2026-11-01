@@ -8,7 +8,7 @@ use fmine_claim::dag::{CheckedCone, ConeCut, TemporalGraph};
 use fmine_core::codec::Encoder;
 use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::{Color, Refusal, RefusalCode};
-use fmine_numerics::voi::{VoiProblem, VoiSummary};
+use fmine_numerics::voi::{VoiError, VoiProblem, VoiSummary};
 
 /// Parameter perturbation threshold that flips the optimal action (`BD-227`).
 #[derive(Debug, Clone, PartialEq)]
@@ -69,26 +69,32 @@ pub struct VoiRankedItem {
 
 /// Evaluates and ranks candidate `VoiCampaign`s by descending `net_voi` (`EVSI - cost`),
 /// breaking ties by `campaign_id` (`BD-225`, `GATE-HELM-02`).
-#[must_use]
-pub fn rank_voi_campaigns(problem: &VoiProblem, campaigns: &[VoiCampaign]) -> Vec<VoiRankedItem> {
-    let mut items: Vec<VoiRankedItem> = campaigns
+///
+/// # Errors
+/// The first campaign's [`VoiError`]: a problem or likelihood that is not a valid VOI input, or a cost that is
+/// negative or not finite. Nothing is ranked from a partial list.
+pub fn rank_voi_campaigns(
+    problem: &VoiProblem,
+    campaigns: &[VoiCampaign],
+) -> Result<Vec<VoiRankedItem>, VoiError> {
+    let mut items = campaigns
         .iter()
         .map(|c| {
-            let summary = problem.compute_evsi(&c.likelihood, c.cost_usd_m);
+            let summary = problem.compute_evsi(&c.likelihood, c.cost_usd_m)?;
             let bcr = if c.cost_usd_m > 1e-9 {
                 summary.evsi / c.cost_usd_m
             } else {
                 0.0
             };
-            VoiRankedItem {
+            Ok(VoiRankedItem {
                 campaign_id: c.campaign_id.clone(),
                 description: c.description.clone(),
                 cost_usd_m: c.cost_usd_m,
                 summary,
                 benefit_cost_ratio: bcr,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, VoiError>>()?;
 
     items.sort_by(|a, b| {
         b.summary
@@ -96,7 +102,7 @@ pub fn rank_voi_campaigns(problem: &VoiProblem, campaigns: &[VoiCampaign]) -> Ve
             .total_cmp(&a.summary.net_voi)
             .then_with(|| a.campaign_id.cmp(&b.campaign_id))
     });
-    items
+    Ok(items)
 }
 
 /// Executive and operational `DecisionCard` (`§22`, `BD-052`).
@@ -753,8 +759,26 @@ mod tests {
                 likelihood: vec![vec![0.92, 0.08], vec![0.08, 0.92]],
             },
         ];
-        let ranked = rank_voi_campaigns(&problem, &campaigns);
+        let ranked = rank_voi_campaigns(&problem, &campaigns).expect("valid campaigns");
         assert_eq!(ranked[0].campaign_id, "CAMP-HIGH");
         assert!(ranked[0].summary.net_voi > ranked[1].summary.net_voi);
+        for item in &ranked {
+            assert!(0.0 <= item.summary.evsi && item.summary.evsi <= item.summary.evpi + 1e-12);
+        }
+
+        // bd-a482: a likelihood row that does not sum to 1, or a negative cost, refuses the whole ranking. Before,
+        // the row's EVSI was clamped into [0, EVPI] and ranked.
+        let mut bad = campaigns.clone();
+        bad[1].likelihood = vec![vec![0.92, 0.18], vec![0.08, 0.92]];
+        assert!(matches!(
+            rank_voi_campaigns(&problem, &bad),
+            Err(VoiError::NotNormalised { row: 0, .. })
+        ));
+        let mut negative = campaigns;
+        negative[0].cost_usd_m = -1.5;
+        assert_eq!(
+            rank_voi_campaigns(&problem, &negative),
+            Err(VoiError::CostOutOfDomain(-1.5))
+        );
     }
 }

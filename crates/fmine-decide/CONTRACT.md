@@ -44,7 +44,12 @@ Enforces `INV-002` (`authoritative: false`, `may_actuate: false`, `is_safe_certi
 ## 6. Proof Obligations (`PO-*`)
 - `PO-DEC-1`: `DecisionCard::build` refuses a card whose claim has an empty `uu_terms` (`FMINE-REF-204`) or no colour
   (`FMINE-REF-205`).
-- `PO-DEC-2`: `rank_voi_campaigns` guarantees `0 <= EVSI <= EVPI` (`GATE-HELM-02`).
+- `PO-DEC-2`: `rank_voi_campaigns` refuses the whole list with `fmine_numerics::voi::VoiError` if any campaign's
+  problem, likelihood or cost is not a valid VOI input. For valid inputs `0 <= EVSI <= EVPI` holds up to rounding
+  and the likelihood row-sum tolerance; it is no longer forced by a clamp (bd-a482). `test_voi_campaign_ranking_gate_helm_02`
+  checks the bound on its two campaigns and the refusal of an unnormalised likelihood and a negative cost
+  (`GATE-HELM-02`). A campaign costing at most `1e-9` $M still gets a `benefit_cost_ratio` of 0, a made-up value
+  that the replay bytes encode; it is left for the `build_as_of` owner.
 - `PO-DEC-3`: retrospective construction binds the actual NPV Claim and the replayed output; neither an unrelated
   clean root nor an older certificate for edited output is accepted. The checked snapshot has no mutable accessor.
 
