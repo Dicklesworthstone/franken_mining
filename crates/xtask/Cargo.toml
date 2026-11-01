@@ -12,6 +12,7 @@ fmine-calib = { path = "../fmine-calib" }
 fmine-core = { path = "../fmine-core" }
 fmine-public = { path = "../fmine-public" }
 fmine-registry = { path = "../fmine-registry" }
+fmine-time = { path = "../fmine-time" }
 
 [dev-dependencies]
 fmine-claim = { path = "../fmine-claim" }

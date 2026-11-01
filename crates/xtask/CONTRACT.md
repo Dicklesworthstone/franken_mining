@@ -100,6 +100,13 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   - Every file under `fixtures/` needs `<file>.capture.toml` beside it with the nine §33.2 fields once each; its
     `outputs_digest` must be the fixture's sha256, and a record with no fixture fails. The form is
     `docs/templates/CAPTURE-RECORD.md`.
+- `oracle::{capture, parse_capture_args, inputs_digest, host_platform, utc_date_today, Capture}` (BD-136; command
+  `capture-fixture <fixture> --oracle --version --captured-by --licence --input <path>... [--note] [--replace] --
+  <command>...`): runs the command from the root without a shell and writes its stdout as the fixture and the record
+  beside it, with `platform` as `<arch>-<os>`, `date` as today in UTC, `inputs_digest` as one input's sha256 or the
+  sha256 of the sorted `sha256:<hex> <path>` manifest of several, and the command as run. The record must pass
+  `record_errors` before either file is written. It writes nothing when the command fails or prints nothing, when a
+  value holds a quote, a backslash or a line break, or, without `--replace`, when the fixture or its record exists.
 - `check_sources_registry(root: &Path) -> Result<Vec<String>, Vec<String>>` (`registry-check`; on success one
   `{"stage":"registry",…}` JSON log line per `registries/sources/*.toml`)
 - `check_calendars(root: &Path) -> Result<String, Vec<String>>` (BD-029; `check-all` runs it and prints

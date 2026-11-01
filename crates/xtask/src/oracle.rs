@@ -9,10 +9,14 @@
 //!   the nine §33.2 fields of [`CAPTURE_FIELDS`] once each. Its `outputs_digest` must be the fixture's sha256, so a
 //!   fixture regenerated without a new record fails. A record with no fixture fails too. The form is
 //!   `docs/templates/CAPTURE-RECORD.md`.
+//! - **Capture (BD-136).** `xtask capture-fixture` ([`capture`]) runs an oracle command and writes its stdout as the
+//!   fixture and the record beside it, so the record's `command` and digests are those of the run that made the
+//!   bytes. A fixture from a published source, with no command to run, still gets its record by hand.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use fmine_core::hash::sha256;
 
@@ -248,10 +252,308 @@ pub fn check(root: &Path) -> Result<Report, Vec<String>> {
     }
 }
 
+/// What `xtask capture-fixture` records besides the command's output (§33.2, BD-136). Paths are relative to the
+/// workspace root.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Capture {
+    /// The fixture to write, under [`FIXTURES_DIR`].
+    pub fixture: PathBuf,
+    pub oracle: String,
+    pub version: String,
+    pub captured_by: String,
+    pub licence: String,
+    /// What the fixture is for, kept as a comment line at the top of the record. Optional.
+    pub note: String,
+    /// The files the command reads; at least one.
+    pub inputs: Vec<PathBuf>,
+    /// The command as argv, run from the root without a shell; its stdout is the fixture.
+    pub command: Vec<String>,
+    /// Write over an existing fixture and record. A new capture needs a bead, a reason and a reviewer (§33.2).
+    pub replace: bool,
+}
+
+const CAPTURE_USAGE: &str = "usage: xtask capture-fixture <fixture> --oracle <s> --version <s> --captured-by <s> \
+                             --licence <s> --input <path> [--input <path>]... [--note <s>] [--replace] -- <command> \
+                             [<arg>]...";
+
+/// `capture-fixture`'s arguments, after the subcommand. Values are checked by [`capture`].
+pub fn parse_capture_args(args: &[String]) -> Result<Capture, String> {
+    let split = args
+        .iter()
+        .position(|a| a == "--")
+        .ok_or_else(|| CAPTURE_USAGE.to_string())?;
+    let (opts, command) = args.split_at(split);
+    let mut c = Capture {
+        command: command.iter().skip(1).cloned().collect(),
+        ..Capture::default()
+    };
+    let mut fixture = None;
+    let mut opts = opts.iter();
+    while let Some(opt) = opts.next() {
+        let slot = match opt.as_str() {
+            "--replace" => {
+                c.replace = true;
+                continue;
+            }
+            "--oracle" => &mut c.oracle,
+            "--version" => &mut c.version,
+            "--captured-by" => &mut c.captured_by,
+            "--licence" => &mut c.licence,
+            "--note" => &mut c.note,
+            "--input" => {
+                let path = opts.next().ok_or_else(|| CAPTURE_USAGE.to_string())?;
+                c.inputs.push(PathBuf::from(path));
+                continue;
+            }
+            other if !other.starts_with("--") && fixture.is_none() => {
+                fixture = Some(PathBuf::from(other));
+                continue;
+            }
+            _ => return Err(CAPTURE_USAGE.to_string()),
+        };
+        *slot = opts
+            .next()
+            .ok_or_else(|| CAPTURE_USAGE.to_string())?
+            .clone();
+    }
+    c.fixture = fixture.ok_or_else(|| CAPTURE_USAGE.to_string())?;
+    Ok(c)
+}
+
+/// A relative path of plain components only.
+fn is_plain(path: &Path) -> bool {
+    path.components().count() > 0
+        && path
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// The record's `inputs_digest`: one input's own sha256, or for several the sha256 of their manifest, the lines
+/// `sha256:<hex> <path>` sorted by path, each ending in a newline. Also returns those lines.
+pub fn inputs_digest(root: &Path, inputs: &[PathBuf]) -> Result<(String, Vec<String>), String> {
+    let mut rows = Vec::new();
+    for input in inputs {
+        let shown = input.display().to_string();
+        if !is_plain(input) || shown.contains(['\n', '\r']) {
+            return Err(format!(
+                "input {shown:?} must be a relative path without `..`"
+            ));
+        }
+        let bytes = fs::read(root.join(input)).map_err(|e| format!("input {shown}: {e}"))?;
+        rows.push((shown, sha256(&bytes).to_hex()));
+    }
+    rows.sort();
+    if let Some(w) = rows.windows(2).find(|w| w[0].0 == w[1].0) {
+        return Err(format!("input {} is named twice", w[0].0));
+    }
+    let lines: Vec<String> = rows
+        .iter()
+        .map(|(path, hex)| format!("sha256:{hex} {path}"))
+        .collect();
+    let digest = match rows.as_slice() {
+        [] => return Err("capture-fixture needs at least one --input".to_string()),
+        [(_, hex)] => format!("sha256:{hex}"),
+        _ => {
+            let manifest: String = lines.iter().map(|l| format!("{l}\n")).collect();
+            format!("sha256:{}", sha256(manifest.as_bytes()).to_hex())
+        }
+    };
+    Ok((digest, lines))
+}
+
+/// The argv as the record's `command`: an argument that is empty or holds whitespace is single-quoted.
+fn shown_command(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| {
+            if a.is_empty() || a.contains(char::is_whitespace) {
+                format!("'{a}'")
+            } else {
+                a.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn write_file(path: &Path, bytes: &[u8], replace: bool) -> Result<(), String> {
+    use std::io::Write;
+    let written = if replace {
+        fs::write(path, bytes)
+    } else {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .and_then(|mut f| f.write_all(bytes))
+    };
+    written.map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// `xtask capture-fixture`: runs `c.command` from `root`, writes its stdout as the fixture and the nine-field
+/// record beside it, and checks that record with [`record_errors`] first. Nothing is written when an argument is
+/// refused, the command fails or prints nothing, or (without `replace`) the fixture or its record exists. Returns
+/// `{"check":"capture-fixture","fixture","bytes","inputs_digest","outputs_digest"}`.
+pub fn capture(
+    root: &Path,
+    c: &Capture,
+    platform: &str,
+    date: &str,
+) -> Result<String, Vec<String>> {
+    let mut errors = Vec::new();
+    let shown = c.fixture.display().to_string();
+    let name = c
+        .fixture
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let under_fixtures =
+        c.fixture.components().next() == Some(std::path::Component::Normal(FIXTURES_DIR.as_ref()));
+    if !is_plain(&c.fixture) || !under_fixtures || c.fixture.components().count() < 2 {
+        errors.push(format!(
+            "fixture {shown:?} must be a relative path under {FIXTURES_DIR}/ without `..`"
+        ));
+    }
+    if name.ends_with(RECORD_SUFFIX) {
+        errors.push(format!("fixture {shown:?} is named like a capture record"));
+    }
+    let one_line = |v: &str| !v.trim().is_empty() && !v.contains(['"', '\\', '\n', '\r']);
+    for (field, value) in [
+        ("oracle", &c.oracle),
+        ("version", &c.version),
+        ("captured_by", &c.captured_by),
+        ("licence", &c.licence),
+        ("platform", &platform.to_string()),
+    ] {
+        if !one_line(value) {
+            errors.push(format!(
+                "{field} must be one non-empty line without `\"` or `\\`"
+            ));
+        }
+    }
+    if c.note.contains(['\n', '\r']) {
+        errors.push("note must be one line".to_string());
+    }
+    if !crate::is_iso_date(date) {
+        errors.push(format!("date {date:?} is not YYYY-MM-DD"));
+    }
+    if c.command.is_empty() {
+        errors.push("capture-fixture needs a command after `--`".to_string());
+    }
+    if let Some(arg) = c
+        .command
+        .iter()
+        .find(|a| a.contains(['"', '\\', '\'', '\n', '\r']))
+    {
+        errors.push(format!(
+            "command argument {arg:?} holds a quote, a backslash or a line break"
+        ));
+    }
+    let fixture = root.join(&c.fixture);
+    let record_path = fixture.with_file_name(format!("{name}{RECORD_SUFFIX}"));
+    if !c.replace {
+        for path in [&fixture, &record_path] {
+            if path.exists() {
+                errors.push(format!(
+                    "{} exists; a new capture needs --replace, a bead, a reason and a reviewer (§33.2)",
+                    path.strip_prefix(root).unwrap_or(path).display()
+                ));
+            }
+        }
+    }
+    let inputs = inputs_digest(root, &c.inputs)
+        .map_err(|e| errors.push(e))
+        .ok();
+    let (Some((inputs_digest, lines)), Some((program, args)), true) =
+        (inputs, c.command.split_first(), errors.is_empty())
+    else {
+        return Err(errors);
+    };
+    let command = shown_command(&c.command);
+    let out = Command::new(program)
+        .args(args)
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stderr(Stdio::inherit())
+        .output()
+        .map_err(|e| vec![format!("{program} failed to start: {e}")])?;
+    if !out.status.success() {
+        return Err(vec![format!(
+            "`{command}` exited with {}; nothing written",
+            out.status
+        )]);
+    }
+    if out.stdout.is_empty() {
+        return Err(vec![format!(
+            "`{command}` printed nothing; nothing written"
+        )]);
+    }
+    let outputs = sha256(&out.stdout).to_hex();
+    let mut text =
+        format!("# Capture record (§33.2) for {name}, written by `xtask capture-fixture`.\n");
+    if !c.note.trim().is_empty() {
+        text.push_str(&format!("# {}\n", c.note.trim()));
+    }
+    match lines.as_slice() {
+        [one] => text.push_str(&format!(
+            "# inputs_digest is the sha256 of {}.\n",
+            one.split_once(' ').map_or("", |(_, p)| p)
+        )),
+        _ => {
+            text.push_str(
+                "# inputs_digest is the sha256 of these lines, each ending in a newline:\n",
+            );
+            for line in &lines {
+                text.push_str(&format!("#   {line}\n"));
+            }
+        }
+    }
+    let outputs_digest = format!("sha256:{outputs}");
+    for (field, value) in [
+        ("oracle", c.oracle.as_str()),
+        ("version", c.version.as_str()),
+        ("platform", platform),
+        ("inputs_digest", inputs_digest.as_str()),
+        ("outputs_digest", outputs_digest.as_str()),
+        ("command", command.as_str()),
+        ("captured_by", c.captured_by.as_str()),
+        ("date", date),
+        ("licence", c.licence.as_str()),
+    ] {
+        text.push_str(&format!("{field} = \"{value}\"\n"));
+    }
+    let problems = record_errors(&shown, &text, &outputs);
+    if !problems.is_empty() {
+        return Err(problems);
+    }
+    if let Some(dir) = fixture.parent() {
+        fs::create_dir_all(dir).map_err(|e| vec![format!("{}: {e}", dir.display())])?;
+    }
+    write_file(&fixture, &out.stdout, c.replace).map_err(|e| vec![e])?;
+    write_file(&record_path, text.as_bytes(), c.replace).map_err(|e| vec![e])?;
+    Ok(format!(
+        "{{\"check\":\"capture-fixture\",\"fixture\":\"{shown}\",\"bytes\":{},\"inputs_digest\":\"{inputs_digest}\",\
+         \"outputs_digest\":\"{outputs_digest}\"}}",
+        out.stdout.len()
+    ))
+}
+
+/// Where this process runs, as `<arch>-<os>`, for a record's `platform`.
+pub fn host_platform() -> String {
+    format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
+}
+
+/// Today's UTC date as `YYYY-MM-DD`, for a record's `date`.
+pub fn utc_date_today() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let d = fmine_time::CivilDate::from_epoch_days(i64::try_from(secs / 86_400).unwrap_or(0));
+    format!("{:04}-{:02}-{:02}", d.year, d.month, d.day)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     /// sha256("abc"), FIPS 180-2 appendix B.1.
     const ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
@@ -499,5 +801,272 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    fn capture_of(fixture: &str, inputs: &[&str], command: &[&str]) -> Capture {
+        Capture {
+            fixture: PathBuf::from(fixture),
+            oracle: "printf".to_string(),
+            version: "system printf".to_string(),
+            captured_by: "test".to_string(),
+            licence: "CC0-1.0".to_string(),
+            note: String::new(),
+            inputs: inputs.iter().map(PathBuf::from).collect(),
+            command: command.iter().map(ToString::to_string).collect(),
+            replace: false,
+        }
+    }
+
+    /// BD-136: the tool's record passes the gate, names the command as run and the input's own sha256, and a second
+    /// capture of the same fixture needs `replace`.
+    #[test]
+    fn test_capture_writes_a_record_the_gate_accepts() {
+        let (root, _c) = scratch("capture");
+        write(&root.join("gen.txt"), "abc");
+        let c = Capture {
+            note: " The bytes a test expects. ".to_string(),
+            ..capture_of(
+                "fixtures/t/out.txt",
+                &["gen.txt"],
+                &["printf", "fixture bytes"],
+            )
+        };
+        let log = capture(&root, &c, "x86_64-linux", "2026-11-01").expect("captured");
+        let fixture = root.join("fixtures/t/out.txt");
+        assert_eq!(fs::read(&fixture).expect("fixture"), b"fixture bytes");
+        let digest = sha256(b"fixture bytes").to_hex();
+        assert_eq!(
+            log,
+            format!(
+                "{{\"check\":\"capture-fixture\",\"fixture\":\"fixtures/t/out.txt\",\"bytes\":13,\
+                 \"inputs_digest\":\"sha256:{ABC}\",\"outputs_digest\":\"sha256:{digest}\"}}"
+            )
+        );
+        assert_eq!(check_capture_records(&root), Ok(1));
+        let record = fs::read_to_string(root.join(format!("fixtures/t/out.txt{RECORD_SUFFIX}")))
+            .expect("record");
+        for line in [
+            "command = \"printf 'fixture bytes'\"",
+            "platform = \"x86_64-linux\"",
+            "date = \"2026-11-01\"",
+            "# The bytes a test expects.",
+            "# inputs_digest is the sha256 of gen.txt.",
+        ] {
+            assert!(record.lines().any(|l| l == line), "{line}: {record}");
+        }
+
+        let again = capture(&root, &c, "x86_64-linux", "2026-11-02").expect_err("exists");
+        assert_eq!(again.len(), 2, "{again:?}");
+        assert!(
+            again[0].starts_with("fixtures/t/out.txt exists"),
+            "{again:?}"
+        );
+        assert!(
+            again[1].starts_with(&format!("fixtures/t/out.txt{RECORD_SUFFIX} exists")),
+            "{again:?}"
+        );
+        assert_eq!(fs::read(&fixture).expect("unchanged"), b"fixture bytes");
+
+        let replaced = Capture {
+            command: vec!["printf".to_string(), "other".to_string()],
+            replace: true,
+            ..c
+        };
+        capture(&root, &replaced, "x86_64-linux", "2026-11-02").expect("replaced");
+        assert_eq!(fs::read(&fixture).expect("fixture"), b"other");
+        assert_eq!(check_capture_records(&root), Ok(1));
+    }
+
+    /// A command that fails or prints nothing, and every refused argument, writes nothing.
+    #[test]
+    fn test_capture_refusals_write_nothing() {
+        let (root, _c) = scratch("capture-refusals");
+        write(&root.join("gen.txt"), "abc");
+        let ok = capture_of("fixtures/x.txt", &["gen.txt"], &["printf", "x"]);
+        let cases: Vec<(Capture, &str, &str)> = vec![
+            (
+                capture_of("fixtures/x.txt", &["gen.txt"], &["false"]),
+                "2026-11-01",
+                "`false` exited with",
+            ),
+            (
+                capture_of("fixtures/x.txt", &["gen.txt"], &["true"]),
+                "2026-11-01",
+                "`true` printed nothing",
+            ),
+            (
+                capture_of("elsewhere/x.txt", &["gen.txt"], &["printf", "x"]),
+                "2026-11-01",
+                "under fixtures/",
+            ),
+            (
+                capture_of("fixtures/../x.txt", &["gen.txt"], &["printf", "x"]),
+                "2026-11-01",
+                "under fixtures/",
+            ),
+            (
+                capture_of("fixtures", &["gen.txt"], &["printf", "x"]),
+                "2026-11-01",
+                "under fixtures/",
+            ),
+            (
+                capture_of(
+                    &format!("fixtures/x{RECORD_SUFFIX}"),
+                    &["gen.txt"],
+                    &["printf", "x"],
+                ),
+                "2026-11-01",
+                "named like a capture record",
+            ),
+            (
+                capture_of("fixtures/x.txt", &[], &["printf", "x"]),
+                "2026-11-01",
+                "at least one --input",
+            ),
+            (
+                capture_of("fixtures/x.txt", &["missing.txt"], &["printf", "x"]),
+                "2026-11-01",
+                "input missing.txt",
+            ),
+            (
+                capture_of("fixtures/x.txt", &["../gen.txt"], &["printf", "x"]),
+                "2026-11-01",
+                "relative path",
+            ),
+            (
+                capture_of("fixtures/x.txt", &["gen.txt", "gen.txt"], &["printf", "x"]),
+                "2026-11-01",
+                "named twice",
+            ),
+            (
+                capture_of("fixtures/x.txt", &["gen.txt"], &[]),
+                "2026-11-01",
+                "a command after `--`",
+            ),
+            (
+                capture_of("fixtures/x.txt", &["gen.txt"], &["printf", "a\\n"]),
+                "2026-11-01",
+                "a backslash",
+            ),
+            (
+                Capture {
+                    oracle: " ".to_string(),
+                    ..ok.clone()
+                },
+                "2026-11-01",
+                "oracle must be",
+            ),
+            (
+                Capture {
+                    licence: "say \"x\"".to_string(),
+                    ..ok.clone()
+                },
+                "2026-11-01",
+                "licence must be",
+            ),
+            (
+                Capture {
+                    captured_by: "a\nb".to_string(),
+                    ..ok.clone()
+                },
+                "2026-11-01",
+                "captured_by must be",
+            ),
+            (
+                Capture {
+                    note: "two\nlines".to_string(),
+                    ..ok.clone()
+                },
+                "2026-11-01",
+                "note must be one line",
+            ),
+            (ok.clone(), "2026-11-1", "is not YYYY-MM-DD"),
+        ];
+        for (c, date, want) in &cases {
+            let err = capture(&root, c, "x86_64-linux", date).expect_err(want);
+            assert!(err.iter().any(|e| e.contains(want)), "{want}: {err:?}");
+            assert!(!root.join(FIXTURES_DIR).exists(), "{want}: wrote something");
+        }
+        let err = capture(&root, &ok, "two words\nplatform", "2026-11-01").expect_err("platform");
+        assert!(err[0].contains("platform must be"), "{err:?}");
+        assert!(!root.join(FIXTURES_DIR).exists());
+    }
+
+    /// Several inputs: the digest of their manifest, sorted by path, so the order given does not matter.
+    #[test]
+    fn test_inputs_digest_of_several_is_their_sorted_manifest() {
+        let (root, _c) = scratch("capture-inputs");
+        write(&root.join("a.txt"), "abc");
+        write(&root.join("b/c.txt"), "abd");
+        let manifest = format!(
+            "sha256:{ABC} a.txt\nsha256:{} b/c.txt\n",
+            sha256(b"abd").to_hex()
+        );
+        let want = format!("sha256:{}", sha256(manifest.as_bytes()).to_hex());
+        for order in [["a.txt", "b/c.txt"], ["b/c.txt", "a.txt"]] {
+            let inputs: Vec<PathBuf> = order.iter().map(PathBuf::from).collect();
+            let (digest, lines) = inputs_digest(&root, &inputs).expect("digest");
+            assert_eq!(digest, want);
+            assert_eq!(lines.len(), 2);
+            assert!(lines[0].ends_with(" a.txt"), "{lines:?}");
+        }
+        let (one, _) = inputs_digest(&root, &[PathBuf::from("a.txt")]).expect("one");
+        assert_eq!(one, format!("sha256:{ABC}"));
+    }
+
+    #[test]
+    fn test_parse_capture_args() {
+        let args = |s: &[&str]| s.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let c = parse_capture_args(&args(&[
+            "fixtures/x.txt",
+            "--oracle",
+            "CPython datetime",
+            "--version",
+            "3.15",
+            "--captured-by",
+            "lab runner",
+            "--licence",
+            "PSF-2.0",
+            "--input",
+            "a.py",
+            "--input",
+            "b.py",
+            "--note",
+            "PO-TIME-1 table",
+            "--replace",
+            "--",
+            "python3",
+            "-I",
+            "a.py",
+        ]))
+        .expect("parsed");
+        assert_eq!(
+            c,
+            Capture {
+                fixture: PathBuf::from("fixtures/x.txt"),
+                oracle: "CPython datetime".to_string(),
+                version: "3.15".to_string(),
+                captured_by: "lab runner".to_string(),
+                licence: "PSF-2.0".to_string(),
+                note: "PO-TIME-1 table".to_string(),
+                inputs: vec![PathBuf::from("a.py"), PathBuf::from("b.py")],
+                command: args(&["python3", "-I", "a.py"]),
+                replace: true,
+            }
+        );
+        for bad in [
+            &["fixtures/x.txt", "--oracle", "o"][..],
+            &["fixtures/x.txt", "--oracle", "--"][..],
+            &["fixtures/x.txt", "--colour", "red", "--", "printf"][..],
+            &["fixtures/x.txt", "fixtures/y.txt", "--", "printf"][..],
+            &["--oracle", "o", "--", "printf"][..],
+            &["fixtures/x.txt", "--input", "--", "printf"][..],
+        ] {
+            let e = parse_capture_args(&args(bad)).expect_err("usage");
+            assert!(
+                e.starts_with("usage: xtask capture-fixture"),
+                "{bad:?}: {e}"
+            );
+        }
     }
 }

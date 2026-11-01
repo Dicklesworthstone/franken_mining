@@ -126,6 +126,24 @@ fn main() -> ExitCode {
                 }),
             )
         }
+        "capture-fixture" => {
+            match xtask::oracle::parse_capture_args(args.get(1..).unwrap_or(&[])) {
+                Ok(capture) => run_one(
+                    "capture-fixture",
+                    xtask::oracle::capture(
+                        &root,
+                        &capture,
+                        &xtask::oracle::host_platform(),
+                        &xtask::oracle::utc_date_today(),
+                    )
+                    .map(|line| println!("{line}")),
+                ),
+                Err(usage) => {
+                    eprintln!("{usage}");
+                    ExitCode::from(2)
+                }
+            }
+        }
         "check-stack-lock" => run_one(
             "check-stack-lock",
             xtask::check_stack_lock(&root).map(|r| println!("{}", r.log_line())),

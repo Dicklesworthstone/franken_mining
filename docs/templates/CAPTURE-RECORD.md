@@ -16,6 +16,15 @@ is recorded. That needs a bead, a reason and a reviewer who is not the author of
 
 The licence is the fixture's own (RISK-17). No issuer data goes in a fixture before the owner and counsel decide
 (RISK-31).
+
+When the oracle is a command that prints the fixture, let `xtask capture-fixture` run it and write both files, so the
+record's command and digests are those of the run (BD-136):
+
+  cargo run -p xtask -- capture-fixture fixtures/<dir>/<file> --oracle "<tool>" --version "<version>" \
+    --captured-by "<role>" --licence "<terms>" --input <generator or input file> [--note "<what it is for>"] \
+    -- <command> <args>...
+
+A fixture from a published source, with no command to run, gets its record by hand from the form below.
 -->
 
 ```toml

@@ -163,4 +163,5 @@ dependencies = [
  "fmine-numerics",
  "fmine-public",
  "fmine-registry",
+ "fmine-time",
 ]
