@@ -74,6 +74,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     bundle checks all declared ancestors at each frozen forecast's registration cut (BD-344);
   - `forecast journal init|register|freeze|outcome|assess|inspect|report --journal <path>`: durable forecast admission,
     cohort freezing, append-only resolution and persisted assessment seals with runtime-assigned times (BD-047);
+  - `forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <pem>`:
+    authenticated frozen-record assessment and common-population baseline comparison in JSON or Markdown (BD-076);
   - `reliance init|issue|reissue|check|reuse|withdraw|supersede|refresh|recall --journal <path>`: local issued-output
     status and exact artifact reuse, with capability-authorized mutations and generic recipient roles (BD-347);
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row
@@ -249,6 +251,8 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
 - `run` (what `fmine` prints, and its exit code), `invoke`, `parse_args`, `execute_command`
 - `forecast_journal::{Command, execute, execute_with_clock}`: the actual host-clock adapter or an explicitly
   injected clock capability for callers/tests. Trust in an injected clock belongs to its caller, not request data.
+- `forecast_record::{Command, execute}`: a read-only adapter over exact frozen record bytes, explicit RFC 3161
+  trust roots and registered original sources; numerical scoring delegates to `fmine-calib`.
 - `packet::{packets_from_report, ChallengePacket}`; immutable packet accessors, `validate`, `to_json`,
   `to_markdown`. The existing assurance engine computes the states; this module packages their evidence.
 - `track_record_binding::{run, assess, assess_snapshot, synthetic, synthetic_as_of, TrackRecordInput,
@@ -467,6 +471,23 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   Saved assessment rows enforce the kernel's sealed-cut rules across replay. Both envelope authority fields
   remain null: transcript and assessment digests identify content, not a durable authority ledger or an
   external timestamp. The adapter does not verify supplied source citations or issue a forecast.
+- DESIGN (BD-076): `forecast record score` binds the manifest, forecast CSV and rules to their exact framed
+  SHA-256 digests and verifies both timestamp signatures through `fmine_io::forecast::timestamp`. Complete
+  proof intervals enforce rules-before-record, the frozen registration deadline, the scored-year boundary
+  and the explicit assessment cut. Trust roots are caller-selected and fingerprinted; a successful signature
+  check does not grant public authority to a local root. This path does not weaken xtask's compiled root pins.
+  Original FY-minus-nine-month production retains signed residuals; unit costs use Q4 QTD values directly.
+  Source hashes, exact displayed values, raw tokens and canonical Claims remain bound to the report.
+  Guidance uses the latest pre-cut publication and two-reader agreement; fixed Q3/history benchmark inputs
+  follow the frozen rule and may postdate the forecast cut. Their availability and manifest membership are
+  explicit. Missing originals, unknown guidance and incomplete history retain the full cohort and named
+  unavailable comparators. Only historical ratio pairs require strictly positive values; a printed zero
+  point remains valid. Every mean in the paired comparison uses the same complete member set.
+  Publication-date availability is bounded at end of day, with an explicitly labelled retrieval fallback;
+  frozen source retrieval times come from the manifest. JSON and Markdown expose completion bounds, the
+  conditional iid reference and rho sensitivity separately. The assessment digest binds record/rules hashes,
+  proof metadata, source evidence and scores. All authority flags remain false, anchor/certificate stay null,
+  and no sample size promotes the descriptive report to a calibration claim.
 - DESIGN (BD-344): `--provenance` reads a strict `fmine.forecast-provenance.v1` bundle, binds exact forecast
   IDs, and checks every cohort member's complete declared ancestry at its registration time. The scoring
   `--as-of` time cannot admit later evidence. Forecast roots must be derived, name inputs and have a performed

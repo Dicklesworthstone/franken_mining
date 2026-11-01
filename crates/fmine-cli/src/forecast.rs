@@ -18,6 +18,8 @@ use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
 
 pub mod live;
 mod provenance;
+pub mod record_score;
+mod record_sources;
 
 const SCHEMA: &str = "fmine.forecast-ledger.v1";
 

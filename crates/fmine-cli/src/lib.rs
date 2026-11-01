@@ -20,6 +20,7 @@ mod track_record_data;
 mod track_record_price;
 
 pub use forecast::live as forecast_journal;
+pub use forecast::record_score as forecast_record;
 
 use std::path::{Path, PathBuf};
 
@@ -140,6 +141,8 @@ pub enum CliCommand {
     },
     /// Register, resolve and assess forecasts in a durable journal using the declared host-clock policy.
     ForecastJournal(forecast_journal::Command),
+    /// Score a time-proved frozen record against original outcomes and its registered baselines (BD-076).
+    ForecastRecord(forecast_record::Command),
     /// Issue, withdraw, supersede, inspect and gate reuse of exact report artifacts (BD-347).
     Reliance(reliance::Command),
     /// `fmine doctor` (`BD-115`).
@@ -455,6 +458,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "--json" | "--trust-host-clock" => next += 1,
                         flag if flag.starts_with("--") => next += 2,
                         "journal" => return "forecast journal",
+                        "record" => return "forecast record score",
                         _ => return "forecast assess",
                     }
                 }
@@ -688,6 +692,10 @@ pub fn parse_args(
     if verb_hint(args) == "forecast journal" {
         return parse_forecast_journal(args, default_root)
             .map(|(command, format, root)| (CliCommand::ForecastJournal(command), format, root));
+    }
+    if verb_hint(args) == "forecast record score" {
+        return forecast_record::parse(args, default_root)
+            .map(|(command, format, root)| (CliCommand::ForecastRecord(command), format, root));
     }
     if let Some(command) = parse_reliance_args(args, default_root)? {
         return Ok(command);
@@ -1535,6 +1543,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             envelope
         }
         CliCommand::ForecastJournal(command) => forecast_journal::execute(command, workspace_root),
+        CliCommand::ForecastRecord(command) => forecast_record::execute(command, workspace_root),
         CliCommand::CheckTables {
             issuer,
             through,
@@ -1915,6 +1924,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal outcome --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal assess --journal <path> --head <hex> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock [--selector first-published|latest-as-of] [--expected-digest <hex>]",
                 "forecast journal inspect --journal <path> [--head <hex>]",
+                "forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <trusted-pem>",
                 "forecast journal report --journal <path> --assessment <digest> [--head <hex>] [--provenance <path>]",
                 "doctor",
                 "claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",

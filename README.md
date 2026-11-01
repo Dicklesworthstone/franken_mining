@@ -579,6 +579,42 @@ The timestamp authenticates the frozen record and its declarations. Consumed sou
 verified; actual input use and forecast generation are not replayed. This command creates no forecasts,
 registrations or time proofs; an absent or incomplete FY2026 record refuses.
 
+### Compare a frozen record at an explicit evidence cut
+
+DESIGN (BD-076): the production CLI exposes the record assessment in JSON or Markdown, with an explicit
+assessment time and caller-selected timestamp trust roots:
+
+```bash
+cargo run -p fmine-cli -- forecast record score --record path/to/frozen-record \
+  --as-of 2027-02-15T00:00:00Z --tsa-roots forecasts/tsa/digicert-trusted-root-g4.pem
+cargo run -p fmine-cli -- forecast record score --record path/to/frozen-record \
+  --as-of 2027-02-15T00:00:00Z --tsa-roots forecasts/tsa/digicert-trusted-root-g4.pem \
+  --format markdown
+```
+
+The directory must contain `manifest.toml`, `forecasts.csv`, `rules.toml`, `record.sha256`, `rules.sha256`,
+`record.tsr` and `rules.tsr`. Both signatures and message imprints are verified using OpenSSL 3 at their signed
+generation times. The complete rules proof must precede the complete record proof; the record must satisfy
+its frozen deadline, precede the scored year's end, and exist by `--as-of`. The selected PEM's fingerprint
+is reported. Selecting a local root expresses caller trust; it does not confer public timestamp authority or
+replace the pinned-authority acceptance policy of `xtask forecast-record-verify`.
+
+The command reads original releases with verified source bytes and displayed exact values. Production
+retains the signed FY-minus-nine-month result; Q4 unit costs use the printed quarterly rate. Guidance is
+selected before the forecast information cutoff. The rules' fixed Q3 observation and historical persistence
+pool can become available later and are checked against the assessment cut, with that information-set
+difference disclosed. Missing originals, ambiguous guidance and incomplete history retain named unavailable
+rows. Registered publication dates bound availability conservatively through the end of that date; when absent,
+the report labels its retrieval-time fallback explicitly. Frozen input timestamps stay those in the manifest.
+
+Every declared site and target remains visible. JSON and Markdown show each method's exact loss and coverage,
+the common-population mean comparison, whole-live-cohort completion bounds, the declared binomial reference
+and correlation sensitivity. Missing outcomes and missing comparators cannot change the population used by
+only one method. Source cells, canonical Claim IDs, raw values, document hashes, baseline calculations and
+unavailable reasons accompany the scores. The assessment digest binds this evidence and the proof metadata.
+The report is descriptive or unscored, with null authority fields and no claim of forecasting skill or calibration.
+It does not generate the own-model forecasts still required for the final FY2026 record.
+
 ### Register forecasts with a live durable journal
 
 DESIGN (BD-047, BD-343): `forecast journal` records live admissions, freezes cohort membership, appends

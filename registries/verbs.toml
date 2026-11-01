@@ -57,6 +57,12 @@ mutates_authority = false
 description = "Replay a frozen forecast cohort, retain missing outcomes, and optionally check all declared ancestry at registration with --provenance"
 
 [[verb]]
+path = "forecast record score"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Verify a frozen record and rules against explicit TSA roots, resolve original outcomes, and score paired registered baselines at an evidence cut"
+
+[[verb]]
 path = "forecast journal init"
 subsystem = "Plumb"
 mutates_authority = true
