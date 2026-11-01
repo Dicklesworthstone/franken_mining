@@ -1,10 +1,14 @@
 # CONTRACT.md — `fmine-optimize`
 
 ## 1. Purpose
-The Pushback optimisation crate. One slice so far:
+The Pushback optimisation crate. Two slices so far:
 - `pitflow` (`BD-250`, plan §15.4): the ultimate pit as a maximum-weight closure, by Hochbaum's pseudoflow (lowest-label variant, gap termination) on an `i64` CSR precedence graph. Each pit comes with its pseudoflow certificate, which `verify` checks without the solver.
+- `pitflow::shells` (`bd-nzwd`, plan §15.4 and PO-PUSH-3): nested pit shells across an increasing list of exact revenue factors. These are the pit-by-pit sequence from which pushbacks are chosen.
+  - Shell `k` is the union of the pit solved at factor `k` and shell `k − 1`.
+  - With non-negative revenue that union is a best pit at factor `k`; the module documentation gives the proof.
+  - Each shell's closure, and its value against the certified optimum, is checked before it is returned.
 
-Nothing in the workspace calls it yet. Slope-template arc generation, nested shells (parametric λ), Bienstock–Zuckerberg, Lagrangian, TopoSort and the stochastic layer are later slices.
+Nothing in the workspace calls it yet. Slope-template arc generation, Bienstock–Zuckerberg, Lagrangian, TopoSort and the stochastic layer are later slices.
 
 - **Crate:** `fmine-optimize`
 - **Layer:** E
@@ -15,11 +19,16 @@ Nothing in the workspace calls it yet. Slope-template arc generation, nested she
 ## 2. Inputs
 - One `i64` value per block, in a caller-chosen integer money unit; the caller scales and rounds, never this crate.
 - Precedence arcs `u → v`, read "taking `u` requires taking `v`", either as CSR (`ClosureProblem::new(weights, offsets, targets)`) or as one list per block (`from_requirements`). Duplicate arcs and self-loops are accepted. Cycles are accepted too: a cycle's blocks are taken together or not at all.
+- For shells (`ShellModel`): one non-negative `i64` revenue and one `i64` cost per block, the same arcs, and strictly increasing `RevenueFactor`s `num / den` with both parts positive. At a factor a block is worth `num · revenue − den · cost`. That is its value scaled by `den`, so no fraction or float is formed.
 - No frame, slope or block geometry: deriving arcs from slope templates is the caller's for now.
 
 ## 3. Outputs
 - `PitSolution`: `in_pit` (one flag per block), `value` (the pit's total, the maximum over all closed sets), `pit_size`, `arc_flow` (the certificate, one flow per arc in CSR order) and `stats` (`PitStats`: mergers, splits, relabels, largest label).
 - `verify(problem, in_pit, arc_flow)`: the pit's value if the certificate holds.
+- `NestedShells` provides:
+  - `first_shell`, one `u32` per block: the first shell holding it, or `u32::MAX` if none does;
+  - `contains(k, b)`;
+  - one `ShellSummary` per factor, holding the factor, the shell's value in units of `1 / den`, its block count and the solved pit's block count.
 
 None is a Claim.
 
@@ -30,6 +39,10 @@ None is a Claim.
 - Values equal an independent Dinic maximum flow (`tests/common`, no shared code) on 300 random graphs (`random_graphs_match_dinic`) and on 15 open-pit-shaped block models up to 30 × 30 × 8 with 3 × 3 slope cones (`block_models_match_dinic`). `block_model_pit_is_a_union_of_cones` checks closure on a block model.
 - The same input gives the same pit, flows and counters (`rerun_is_identical`).
 - `verify` refuses planted bad certificates: an unclosed pit, flow into the pit, a wrong-signed excess, a negative flow (`verify_refuses_planted_certificates`).
+- Shells nest, and each is a closed pit worth the best value at its factor (PO-PUSH-3). The nesting holds by construction; `nested_shells` checks closure and value for every shell.
+  - `tests/shells_oracles.rs` checks both against Dinic, which computes the scaled values itself: 150 random graphs, with costs of either sign, and two block models, each over 8 factors from 1/4 to 3.
+  - `two_ore_blocks_enter_at_their_factors` is a hand-derived known answer.
+  - `negative_revenue_past_the_constructor_is_caught_by_the_value_check` shows the value check refusing a shell that the union rule cannot make optimal.
 - At scale (`tests/scale_pit.rs`, ignored, run by hand), three synthetic block models of about 10⁶ arcs, 10⁷ arcs and 10⁷ blocks each yield a certified, non-empty pit. The smallest also equals Dinic, and the largest must solve within KILL-PUSH-PIT's 600 s. `model_has_the_planned_arc_count_and_shape` checks the generator.
 - GATE-PUSH-PIT1 (`tests/minelib_upit.rs`, ignored by default, run by hand): MineLib UPIT instances integer-scaled at 10⁶ are solved with the certificate verified, equal Dinic exactly, and fall within one whole unit of MineLib's published optimum, a band widened by the bound for any values rounded at read time.
 
@@ -45,6 +58,15 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input.
   Tests: `malformed_input_and_overflow_are_refused`, and `values_near_the_overflow_guard_solve_exactly` for the edge just inside it.
 - `FMINE-REF-207` (proposed), from `verify` and therefore `solve`: lengths that do not match the problem, a negative flow, an unclosed pit, flow entering the pit, a wrong-signed excess, or a value overflowing `i64`.
 - `FMINE-REF-207` (proposed), from `solve`: an intermediate flow overflowing `i64` or a label overflowing `u32`. The overflow guard makes both unreachable in practice.
+- `FMINE-REF-207` (proposed), from `shells`:
+  - a factor whose numerator or denominator is not positive;
+  - revenue and cost lists of different lengths;
+  - a negative revenue;
+  - factors that do not strictly increase, or `u32::MAX` or more of them;
+  - a block value overflowing `i64`, or values breaking the 2⁶² guard, at any factor;
+  - a shell that is not closed or is worth less than the best pit at its factor, which the construction rules out.
+
+  Tests: `bad_input_is_refused`, and the negative-revenue test above.
 
 No value is clamped, rescaled or perturbed to make a problem fit.
 
@@ -58,6 +80,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - The pit is optimal for the integer values given. Any rounding in converting money to `i64` is the caller's, and its effect on the pit is not bounded here.
 - Fewer than `u32::MAX` blocks and arcs, and absolute values summing below 2⁶².
 - When several closed sets tie for the maximum, one of them is returned. Which one is fixed by the input but is not promised to be the smallest or the largest.
+- Shells need non-negative revenue: the union rule rests on it, and the constructor refuses anything else. A sweep costs one full solve per factor, plus O(n + m) for each shell's check.
 - Memory is linear in blocks and arcs. Each arc costs 24 bytes: a target, a tail and two incidence entries (`u32`), and a flow (`i64`). Each block costs two 8-byte and eight 4-byte fields of solver state, on top of its value and offset. The GATE-PUSH-PIT1 process for mclaughlin, Dinic and parsing included, peaked at 7.3 GB RSS.
 - Wall times measured on one machine (aarch64-macos, release, 2026-11-01). They are local runs, not a benchmark suite.
 
@@ -100,10 +123,14 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - MineFlow (Deutsch et al.) is not run.
 
 ## 10. Known gaps
-- `BD-250` (bd-250): no caller in the workspace yet. The first will be the pushback/nested-shell slice.
+- `BD-250` (bd-250) and `bd-nzwd`: no caller in the workspace yet.
+- Shells have no MineLib gate, because the UPIT files give one value per block with revenue and cost not split. Block models and random graphs stand in for it.
 - MineLib's files are not in the repository, because their licence is not recorded. GATE-PUSH-PIT1 is an ignored test, run by hand with `FMINE_MINELIB_DIR`, and CI does not run it.
 - No current-arc pointer: each merger search rescans all the node's incident arcs from the first. Whether a pointer that skips arcs already passed over is valid under these invariants has not been worked out. There is no highest-label or FIFO variant.
-- No slope-template arc generation (plan §15.4's 45° cone templates), no nested shells or parametric λ sweep, no warm start, and no minimal or maximal choice among tied pits.
+- Not yet built:
+  - slope-template arc generation (plan §15.4; `bd-t75z`);
+  - warm starts across revenue factors, since each factor is a fresh solve;
+  - a minimal or maximal choice among tied pits. The shell union gives nesting without one.
 - KILL-PUSH-PIT's MineFlow half is not run (§8). Its 10⁷-block half is an ignored test, run by hand on one machine; CI does not run it.
 - No fnx (franken_networkx) graph code is used. Precedence graphs are this crate's own CSR (`BD-266`, the fallback in plan §27.4's fnx row), and fnx's `preflow_push` has not been run as an oracle.
 
@@ -113,6 +140,14 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `pitflow::PitStats` (`mergers`, `splits`, `relabels`, `max_label`)
 - `pitflow::solve`, `pitflow::verify`
 - `pitflow::ABS_VALUE_SUM_LIMIT`
+- `pitflow::shells::RevenueFactor` (`new`, `num`, `den`)
+- `pitflow::shells::ShellModel` (`new`, `from_requirements`, `block_count`, `values_at`)
+- `pitflow::shells::NestedShells` (`first_shell`, `shells`, `contains`)
+- `pitflow::shells::ShellSummary`
+- `pitflow::shells::nested_shells`
 
 ## 12. Proof obligations
-No PO-* is discharged here. That the certificate conditions imply optimality is the max-flow/min-cut theorem applied to the closure network (Picard 1976), stated in the module documentation and not machine-checked. That pseudoflow terminates with such a certificate is Hochbaum's (2008) result. The tests check values against oracles and do not prove either.
+- PO-PUSH-3 (nested shells are monotone in λ when block values are monotone in λ; plan §15.9 names its discharge "property test"):
+  - discharged by `tests/shells_oracles.rs`, under §4's conditions;
+  - the union lemma in `pitflow::shells`' documentation is the argument for why it holds. It is not machine-checked.
+- No other PO-* is discharged here. That the certificate conditions imply optimality is the max-flow/min-cut theorem applied to the closure network (Picard 1976), stated in the module documentation and not machine-checked. That pseudoflow terminates with such a certificate is Hochbaum's (2008) result. The tests check values against oracles and do not prove either.

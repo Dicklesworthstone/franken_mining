@@ -26,8 +26,21 @@ const NONE: u32 = u32::MAX;
 /// and excess is then bounded by the total positive value and fits an `i64` with room to spare.
 pub const ABS_VALUE_SUM_LIMIT: i128 = 1 << 62;
 
+pub mod shells;
+
 fn refuse(detail: String) -> Refusal {
     Refusal::new(RefusalCode::NumericalCertificateFailed207, detail)
+}
+
+/// [`ABS_VALUE_SUM_LIMIT`], applied to one set of values.
+fn check_value_guard(weights: &[i64]) -> Result<(), Refusal> {
+    let abs_sum: i128 = weights.iter().map(|&w| i128::from(w).abs()).sum();
+    if abs_sum >= ABS_VALUE_SUM_LIMIT {
+        return Err(refuse(format!(
+            "pitflow: the absolute values sum to {abs_sum}, not below 2^62"
+        )));
+    }
+    Ok(())
 }
 
 /// Node values and the precedence arcs in CSR form: the nodes `u` requires are
@@ -71,12 +84,7 @@ impl ClosureProblem {
                 "pitflow: arc {a} requires node {t}, but there are {n} nodes"
             )));
         }
-        let abs_sum: i128 = weights.iter().map(|&w| i128::from(w).abs()).sum();
-        if abs_sum >= ABS_VALUE_SUM_LIMIT {
-            return Err(refuse(format!(
-                "pitflow: the absolute values sum to {abs_sum}, not below 2^62"
-            )));
-        }
+        check_value_guard(&weights)?;
         Ok(Self {
             weights,
             offsets,
