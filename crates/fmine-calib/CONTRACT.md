@@ -45,6 +45,21 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   Payloads are Gaussian, an interval with a stated or explicitly absent level, quantiles, or an event probability.
   Forecast registrations, cohort freezes and outcomes share a monotone record-time watermark: an already
   observed miss cannot be excluded by backdating a new cohort containing only other, unresolved members.
+- DESIGN: `ledger::binding::PublicResolutionPolicy` freezes registered-public resolution semantics in the
+  existing `CohortSpec.resolution_rule` string. Its reserved `fmine.public-resolution.v1:` prefix contains a
+  canonical `PRP1`/v1 frame encoded as lowercase hexadecimal. It binds issuer, metric, explicit unit and source
+  field, calendar FY/quarter, original release, exact ownership fraction and every forecast-id-to-subject mapping.
+  The initial metrics are gold production in koz and issuer-reported AISC per sold gold ounce in USD/oz;
+  full production and attributable production remain distinct even at an attributable fraction of one.
+  `validate`, `to_resolution_rule`, `parse_resolution_rule`, period and ownership helpers perform no I/O.
+  Legacy free-text rules retain their existing behavior; malformed reserved rules refuse.
+  `freeze_cohort` requires the policy's members to equal the cohort exactly and its issuer to be the sole eligible
+  source. Each forecast deadline must be at or before the final nanosecond of the target calendar period,
+  while registration and cohort freeze remain strictly before that deadline. A forecast shared by multiple
+  public cohorts must retain the same issuer, metric, period, ownership and subject in each; cohort populations
+  may differ. Binary events cannot be reinterpreted as production or cost quantities. Source authentication,
+  original-release selection, printed rounding and publication availability remain adapter responsibilities;
+  neither the period end nor this pure policy authenticates when a forecast or source became available.
 - `append_outcome` records hash-chained `Published`, `Restated` and `Missing` events with separate availability
   and recording times. A restatement must name the latest numeric predecessor and a new cited source vintage.
   The original forecast is never mutated. Eligibility and a declared physical outcome domain are checked.
@@ -186,9 +201,12 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   such a forecast cannot enter a cohort, which needs a strictly later freeze before the outcome.
   A registration, cohort freeze or outcome behind the shared record watermark or at/before a sealed assessment
   cut also refuses. A refused mutation changes neither watermark nor stored records.
+  A public-bound forecast deadline after its target calendar period ends also refuses, so an arbitrary later
+  deadline cannot register a forecast for a target that has already ended.
 - `FMINE-REF-507` (frozen record mutation, exit 6): a second registration of one forecast id, a reused cohort
   name, a second one-shot outcome, an invalid restatement predecessor or reused source vintage, or reinterpretation
   of a withdrawn, changed-definition or divested target as its old quantity without a new resolution rule.
+  A second public cohort cannot change a shared forecast's semantic target.
 - `FMINE-REF-109` (outside physical domain, exit 3): a non-finite mean or outcome, `std_dev <= 0`, or a policy
   attempting to lower the positive-calibration minimum below 35 independent outcomes.
 - `FMINE-REF-201` (no claim in domain, exit 3): an unknown forecast/cohort, or an ineligible outcome source.
