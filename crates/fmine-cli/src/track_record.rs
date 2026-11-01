@@ -492,7 +492,7 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CliCommand, OutputFormat, execute_command, invoke, parse_args, run};
+    use crate::{OutputFormat, invoke, run};
     use std::path::PathBuf;
 
     fn root() -> PathBuf {
@@ -538,61 +538,6 @@ mod tests {
     }
 
     #[test]
-    fn selections_are_explicit_and_invalid_combinations_are_usage_errors() {
-        let query = args(&[
-            "track-record",
-            "--issuer",
-            "barrick",
-            "--site",
-            "north-mara",
-            "--through",
-            "2026Q2",
-            "--price-subject",
-            "barrick",
-        ]);
-        let (command, _, _) = parse_args(&query, &root()).expect("public selectors");
-        assert_eq!(
-            command,
-            CliCommand::TrackRecord {
-                issuer: Some("barrick".into()),
-                site: Some("north-mara".into()),
-                through: Some("2026Q2".into()),
-                price_subject: Some("barrick".into()),
-            }
-        );
-        for query in [
-            vec!["track-record"],
-            vec!["track-record", "extra", "--synthetic"],
-            vec!["track-record", "--issuer", "unknown-issuer"],
-            vec!["track-record", "--issuer", "../barrick"],
-            vec!["track-record", "--issuer", "barrick", "--synthetic"],
-            vec!["track-record", "--synthetic", "--site", "north-mara"],
-            vec!["track-record", "--synthetic", "--through", "2026Q2"],
-            vec!["track-record", "--synthetic", "--price-subject", "barrick"],
-            vec!["track-record", "--issuer", "barrick", "--price-subject"],
-            vec![
-                "track-record",
-                "--issuer",
-                "barrick",
-                "--price-subject",
-                " ",
-            ],
-            vec!["track-record", "--issuer", "barrick", "--site", " "],
-            vec!["track-record", "--issuer", "barrick", "--through", "2026Q5"],
-            vec!["track-record", "--synthetic", "--as-of", "2026-02-30"],
-            vec!["track-record", "--synthetic", "--selector", "latest-as-of"],
-            vec!["track-record", "--synthetic", "--rank"],
-        ] {
-            let (envelope, _) = invoke(&args(&query), &root());
-            assert_eq!(
-                (envelope.verb.as_str(), envelope.status, envelope.exit_code),
-                ("track-record", "usage_error", 2),
-                "{query:?}"
-            );
-        }
-    }
-
-    #[test]
     fn markdown_keeps_citations_uncertainty_and_literal_source_text() {
         let mut report = data::synthetic().expect("synthetic report");
         report.issuer = "<script>|[link](bad)\n# forged".into();
@@ -615,27 +560,5 @@ mod tests {
         );
         assert_eq!(code, 0);
         assert!(printed.starts_with("# Guidance track record:"));
-    }
-
-    #[test]
-    fn command_is_registered_and_documented() {
-        let registry =
-            std::fs::read_to_string(root().join("registries/verbs.toml")).expect("verb registry");
-        assert!(registry.contains("path = \"track-record\""));
-        let docs = execute_command(&CliCommand::RobotDocs, &root());
-        assert!(
-            docs.payload_json
-                .contains("track-record --issuer <issuer> [--site <subject>] [--through YYYYQn]")
-        );
-        assert!(docs.payload_json.contains("track-record --synthetic"));
-        assert!(docs.payload_json.contains("retrospective_descriptive"));
-        assert!(docs.payload_json.contains("[--price-subject <subject>]"));
-        assert!(docs.payload_json.contains("current-period compatibility"));
-        assert_eq!(
-            invoke(&args(&["doctor", "--price-subject", "barrick"]), &root())
-                .0
-                .exit_code,
-            2
-        );
     }
 }

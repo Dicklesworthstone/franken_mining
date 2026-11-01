@@ -5,6 +5,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use fmine_calib::ledger::binding::{
+    PublicMetric, PublicOwnership, PublicPeriod, PublicResolutionPolicy,
+};
 use fmine_calib::record::{format_utc, parse_hex32, parse_utc};
 use fmine_calib::{
     Assessment, AssessmentPolicy, CalibrationFlag, Cohort, CohortSpec, ForecastLedger,
@@ -20,6 +23,7 @@ pub mod live;
 mod provenance;
 pub mod record_score;
 mod record_sources;
+mod source;
 
 const SCHEMA: &str = "fmine.forecast-ledger.v1";
 
@@ -79,6 +83,8 @@ struct Replay {
     cohorts: BTreeMap<String, Digest32>,
     checkpoints: Vec<Checkpoint>,
     temporal_validation: Option<String>,
+    /// Recorded byte-verified admissions, keyed by the immutable outcome event.
+    source_admissions: BTreeMap<(ObjectId, u64), live::SourceAdmission>,
 }
 
 impl Replay {
@@ -192,6 +198,11 @@ impl Replay {
                 "rho_high",
                 "outcome_lo",
                 "outcome_hi",
+                "public_issuer",
+                "public_metric",
+                "public_period",
+                "public_ownership",
+                "public_members",
             ],
             &[],
         )?;
@@ -227,11 +238,12 @@ impl Replay {
             .into_iter()
             .map(|alias| self.forecast_id(&alias))
             .collect::<Result<Vec<_>, _>>()?;
+        let resolution_rule = self.resolution_rule(&row)?;
         let digest = self.ledger.freeze_cohort(CohortSpec {
             name: name.clone(),
             frozen_at_ns: row.assigned_time("frozen_at", observed_ns)?,
             members,
-            resolution_rule: row.string("resolution_rule")?.to_string(),
+            resolution_rule,
             eligible_sources: row.identifiers("eligible_sources")?,
             policy,
         })?;
@@ -239,11 +251,101 @@ impl Replay {
         Ok(())
     }
 
+    fn resolution_rule(&self, row: &Row<'_>) -> Result<String, Refusal> {
+        let rule = row.string("resolution_rule")?;
+        let fields = [
+            "public_issuer",
+            "public_metric",
+            "public_period",
+            "public_ownership",
+            "public_members",
+        ];
+        if !fields.iter().any(|key| row.0.get(key).is_some()) {
+            if rule == "registered-public-cell" {
+                return Err(invalid(
+                    "registered-public-cell requires all public target fields",
+                ));
+            }
+            return Ok(rule.to_string());
+        }
+        if rule != "registered-public-cell" {
+            return Err(invalid(
+                "public target fields require resolution_rule = registered-public-cell",
+            ));
+        }
+        let mut members = BTreeMap::new();
+        for entry in row.string("public_members")?.split(',') {
+            let (alias, subject) = entry
+                .trim()
+                .split_once('=')
+                .ok_or_else(|| invalid("public_members needs forecast-alias=subject pairs"))?;
+            let forecast = self.forecast_id(alias.trim())?;
+            if members
+                .insert(forecast, subject.trim().to_string())
+                .is_some()
+            {
+                return Err(invalid("duplicate public forecast binding"));
+            }
+        }
+        PublicResolutionPolicy {
+            issuer: row.string("public_issuer")?.to_string(),
+            metric: PublicMetric::parse(row.string("public_metric")?)?,
+            period: PublicPeriod::parse(row.string("public_period")?)?,
+            ownership: PublicOwnership::parse(row.string("public_ownership")?)?,
+            members,
+        }
+        .to_resolution_rule()
+    }
+
+    fn public_policy(
+        &self,
+        cohort: &str,
+        forecast: ObjectId,
+    ) -> Result<PublicResolutionPolicy, Refusal> {
+        let cohort_id = self
+            .cohorts
+            .get(cohort)
+            .ok_or_else(|| absent(format!("unknown cohort {cohort:?}")))?;
+        let cohort = self
+            .ledger
+            .cohort(*cohort_id)
+            .ok_or_else(|| absent("frozen cohort missing"))?;
+        let policy =
+            PublicResolutionPolicy::parse_resolution_rule(&cohort.spec.resolution_rule)?
+                .ok_or_else(|| invalid("cohort has no frozen public source-resolution policy"))?;
+        if !policy.members.contains_key(&forecast) {
+            return Err(invalid(
+                "forecast is outside the frozen public source population",
+            ));
+        }
+        Ok(policy)
+    }
+
+    fn public_bound(&self, forecast: ObjectId) -> Result<bool, Refusal> {
+        for id in self.cohorts.values() {
+            let cohort = self
+                .ledger
+                .cohort(*id)
+                .ok_or_else(|| absent("frozen cohort missing"))?;
+            if PublicResolutionPolicy::parse_resolution_rule(&cohort.spec.resolution_rule)?
+                .is_some_and(|policy| policy.members.contains_key(&forecast))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn outcome(&mut self, row: Row<'_>) -> Result<(), Refusal> {
         self.outcome_at(row, None)
     }
 
     fn outcome_at(&mut self, row: Row<'_>, observed_ns: Option<i64>) -> Result<(), Refusal> {
+        if self.public_bound(self.forecast_id(row.string("forecast")?)?)? {
+            return Err(invalid(
+                "this forecast has a frozen public target; use forecast journal resolve, not caller-supplied outcomes",
+            ));
+        }
         let kind = row.string("kind")?;
         let extra: &[&str] = match kind {
             "published" => &["value", "source", "vintage", "locator", "sha256"],
@@ -386,11 +488,24 @@ impl Replay {
             if c.expected.is_some() { "true" } else { "null" },
         )).collect::<Vec<_>>().join(",");
         Ok(format!(
-            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":{},\"lane\":{},{identity_key}:{},\"authority_times\":{},\"source_citations\":\"supplied_not_verified\",\"external_time_proof\":\"not_verified\",\"temporal_validation\":{},\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]}},\"checkpoints\":[{}]}}",
+            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":{},\"lane\":{},{identity_key}:{},\"authority_times\":{},\"source_citations\":{},\"external_time_proof\":\"not_verified\",\"temporal_validation\":{},\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]}},\"checkpoints\":[{}]}}",
             js(mode),
             js(&self.lane),
             js(&identity.to_hex()),
             js(authority_times),
+            js(
+                if report
+                    .per_member
+                    .iter()
+                    .any(|member| member.selected_event.is_some_and(|(seq, _)| self
+                        .source_admissions
+                        .contains_key(&(member.forecast_id, seq))))
+                {
+                    "per_member_admission_evidence"
+                } else {
+                    "supplied_not_verified"
+                }
+            ),
             self.temporal_validation
                 .as_deref()
                 .unwrap_or(provenance::NOT_CHECKED),
@@ -452,8 +567,12 @@ impl Replay {
                 js(missing_name(*reason))
             ),
         };
+        let admission = member
+            .selected_event
+            .and_then(|(seq, _)| self.source_admissions.get(&(member.forecast_id, seq)))
+            .map_or_else(|| "null".to_string(), live::SourceAdmission::to_json);
         Ok(format!(
-            "{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_at\":{},\"outcome_due\":{},\"payload\":{},\"selected_event\":{selected},\"outcome\":{outcome}}}",
+            "{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_at\":{},\"outcome_due\":{},\"payload\":{},\"selected_event\":{selected},\"outcome\":{outcome},\"source_admission\":{admission}}}",
             js(alias),
             js(&record.forecast_id.to_string()),
             js(&record.model_key),
@@ -633,8 +752,15 @@ fn pair((lo, hi): (f64, f64)) -> String {
 fn cohort_json(cohort: &Cohort) -> String {
     let spec = &cohort.spec;
     let p = &spec.policy;
+    let public = PublicResolutionPolicy::parse_resolution_rule(&spec.resolution_rule)
+        .ok().flatten().map_or_else(|| "null".into(), |policy| format!(
+            "{{\"issuer\":{},\"metric\":{},\"unit\":{},\"period\":{},\"ownership\":{},\"outcome_selector\":\"original_release_only\",\"members\":[{}]}}",
+            js(&policy.issuer), js(policy.metric.as_str()), js(policy.metric.unit()),
+            js(&policy.period.label()), js(&policy.ownership.label()),
+            policy.members.iter().map(|(id, subject)| format!("{{\"forecast_id\":{},\"subject\":{}}}", js(&id.to_string()), js(subject))).collect::<Vec<_>>().join(","),
+        ));
     format!(
-        "{{\"name\":{},\"digest\":{},\"frozen_at\":{},\"resolution_rule\":{},\"eligible_sources\":[{}],\"policy\":{{\"alpha\":{},\"min_calibration_n\":{},\"correlation_range\":{},\"outcome_bounds\":{}}}}}",
+        "{{\"name\":{},\"digest\":{},\"frozen_at\":{},\"resolution_rule\":{},\"public_resolution\":{public},\"eligible_sources\":[{}],\"policy\":{{\"alpha\":{},\"min_calibration_n\":{},\"correlation_range\":{},\"outcome_bounds\":{}}}}}",
         js(&spec.name),
         js(&cohort.digest.to_hex()),
         utc(spec.frozen_at_ns),

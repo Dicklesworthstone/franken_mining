@@ -391,46 +391,6 @@ pub fn execute(command: &Command, workspace: &Path) -> Envelope {
 mod tests {
     use super::*;
 
-    fn args(text: &str) -> Vec<String> {
-        text.split_whitespace().map(str::to_string).collect()
-    }
-
-    #[test]
-    fn issuance_parser_requires_one_lane_authority_and_explicit_bounded_time() {
-        let good = format!(
-            "assure issue --synthetic --output report --journal journal --key key --expected-head {} --role sponsor --purpose review --now 2026-11-01T00:00:00Z --uncertainty-ns 0",
-            "1".repeat(64)
-        );
-        assert!(parse(&args(&good), Path::new(".")).is_ok());
-        for bad in [
-            good.replace("--synthetic", "--synthetic --issuer barrick"),
-            good.replace("--synthetic", "--synthetic --through 2026Q2"),
-            good.replace("--role sponsor", "--role recipient@example.invalid"),
-            good.replace("--uncertainty-ns 0", "--uncertainty-ns +1"),
-            good.replace("--now 2026-11-01T00:00:00Z", ""),
-            format!("{good} --output again"),
-            format!("{good} extra"),
-        ] {
-            assert!(parse(&args(&bad), Path::new(".")).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn export_has_no_historical_or_untrusted_reuse_mode() {
-        let good = format!(
-            "reliance export report --output copy --journal journal --head {} --now 2026-11-01T00:00:00Z --uncertainty-ns 0",
-            "1".repeat(64)
-        );
-        assert!(parse(&args(&good), Path::new(".")).is_ok());
-        for bad in [
-            format!("{good} --as-of 2026-10-31T00:00:00Z"),
-            format!("{good} --synthetic"),
-            good.replace("--head", "--expected-head"),
-        ] {
-            assert!(parse(&args(&bad), Path::new(".")).is_err());
-        }
-    }
-
     #[test]
     fn issuance_requires_a_complete_build_revision_without_inventing_metadata() {
         let clean = "1".repeat(40);

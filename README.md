@@ -772,14 +772,55 @@ For an actual forecast, the registration request contains one `[[forecast]]` tab
 using the membership, resolution-source and scoring-policy fields shown in the committed example. Each request
 has no top-level fields. Decimal values are quoted strings. The latest possible time under the declared
 clock bound must be **strictly before** every affected outcome deadline, including on an empty or quiet journal.
-For new operations, the writer internally adds `schema = "fmine.forecast-operation.v2"`; callers must not
-include this marker in their request files. The frame retains the sampled `observed_ns`, while registration,
+For ordinary new requests, the writer internally adds `schema = "fmine.forecast-operation.v2"`; public-bound
+freezes and generated source resolutions use v3. Callers must not include this marker in their request files.
+The frame retains the sampled `observed_ns`, while registration,
 cohort freeze and outcome recording times use the clock's upper bound (`observed_ns + clock_skew_ns`).
 
 After the outcome becomes available, `forecast journal outcome` accepts one `[[outcome]]` table with the same
 published, missing or restated vocabulary as the replay example above, omitting `recorded_at`. Its
 `available_at` must be at or before the earliest possible current time. Restatements append to the original
 history, and missing members remain in the frozen denominator.
+
+For a forecast resolved from registered public workbooks, freeze its physical target with the cohort.
+This example names a future target and assumes the forecast alias was already registered before its
+deadline; it supplies no forecast values:
+
+```toml
+[[cohort]]
+name = "fy2027-production"
+members = "north-mara-production"
+resolution_rule = "registered-public-cell"
+eligible_sources = "barrick"
+public_issuer = "barrick"
+public_metric = "production_koz"
+public_period = "2027FY"
+public_ownership = "100%"
+public_members = "north-mara-production=North Mara"
+```
+
+The frozen digest binds the exact issuer, subject, period, metric/unit and ownership basis for every member.
+Supported metrics are gold production (`production_koz`) and issuer-reported AISC per sold gold ounce
+(`aisc_usd_per_oz`), at site level over a calendar year (`YYYYFY`) or individual calendar quarter.
+A declared deadline after the target period ends
+refuses. When the original workbook has been published and registered with its digest and dated evidence:
+
+```bash
+cargo run -p fmine-cli -- forecast journal resolve \
+  --journal runs/forecast-demo/history --head LATEST_RETAINED_HEAD \
+  --cohort fy2027-production --forecast north-mara-production --trust-host-clock
+```
+
+`resolve` obtains the value from the authenticated original-release cell. It accepts no replacement value,
+target, locator or date. The receipt retains the source Claim, exact printed value, workbook hash and
+publication basis. The registered publication date must fall after the complete target period; retrieval
+never supplies a missing publication date. Date-only availability conservatively begins at midnight after
+the publication day. The stated FACT/INFERENCE basis is retained metadata, not independent proof of that time.
+Missing original releases, altered bytes, placeholders, ambiguous cells and ownership mismatches refuse
+without changing the journal; later comparatives are never substituted. Caller-supplied `outcome` requests
+cannot bypass a frozen public binding. Historical reports reconstruct the recorded source Claim without
+requiring the workbook to remain on disk. This first source-bound route resolves original outcomes;
+source-bound restatements and automatic missing-status events remain future work.
 
 For example, an outcome available at `12:00:00Z` and recorded at an observed `12:00:01.500Z` with a one-second
 uncertainty has a recording upper bound of `12:00:02.500Z`. A later assessment cut at `12:00:02Z` leaves that
@@ -821,7 +862,8 @@ the same result cannot upgrade that original binding. Legacy operations without 
 retain their observed recording times, existing identities and results. New v2 operations can follow them in
 the same journal; replay applies each operation's original time policy.
 
-`payload.operation_version_counts` reports `legacy_v1` and `v2` counts, excluding genesis.
+`payload.operation_version_counts` reports `legacy_v1` and `v2` counts, plus `v3` when present, excluding genesis.
+Version three stores public-bound freezes and generated source admissions with the same bounded-clock policy.
 `payload.record_time_policy` is `none`, `legacy_observed`, `clock_upper_bound` or `mixed`. The nested report
 describes the operation prefix through that assessment's first saved checkpoint, so later appends do not
 change its time-policy labels. A v2 assessment over legacy history remains explicitly mixed; adding a result
@@ -872,7 +914,8 @@ times. Retain `--head` separately to detect rollback of the current journal beyo
 
 The response schema is `fmine.forecast-journal.v1`; assessment responses contain the familiar report under
 `payload.report`. `--trust-host-clock` acknowledges an operator-declared clock bound, fixed at initialization;
-it supplies no independent timestamp proof. Source citations remain supplied evidence. This journal workflow
+it supplies no independent timestamp proof. Source admissions retain their recorded verification evidence;
+other source citations remain supplied evidence. This journal workflow
 does not issue the FY2026 forecast set or replace its separate frozen-record acceptance policy. Clock rollback,
 corrupt or truncated bytes, and stale heads refuse. A failed write retains its bytes for inspection and never
 silently repairs or truncates history.

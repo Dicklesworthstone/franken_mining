@@ -10,8 +10,10 @@ use std::path::{Path, PathBuf};
 
 use fmine_claim::forecast_journal::{Entry, Header, MAX_OPERATION_BYTES, Record};
 use fmine_core::hash::Digest32;
+use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::forecast::Journal;
+use fmine_numerics::exact_feas::Rat;
 use fmine_registry::toml_subset::{TomlDoc, TomlValue};
 use fmine_runtime::{HostWallClock, WallClock};
 
@@ -21,11 +23,12 @@ use super::{
 };
 use crate::{DOCTOR_WHY, Envelope, NextAction};
 
-pub const NO_CLAIM: &str = "Local append-only forecast history under an operator-declared host-clock bound. Journal heads identify local history; they are not signatures or external timestamp proofs. Supplied outcomes and citations are not independently verified.";
+pub const NO_CLAIM: &str = "Local append-only forecast history under an operator-declared host-clock bound. Journal heads identify local history; they are not signatures or external timestamp proofs. Registered-source admissions retain their byte-verification evidence; replay does not re-read source files. Other supplied outcomes and citations are unverified.";
 // Legacy no-top-level operations retain observed-time semantics and their original IDs. The writer's
 // explicit v2 marker changes authority times to the clock upper bound without rewriting old records.
 const OPERATION_SCHEMA: &str = "fmine.forecast-ledger.v1";
 const V2_SCHEMA: &str = "fmine.forecast-operation.v2";
+const V3_SCHEMA: &str = "fmine.forecast-operation.v3";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +43,7 @@ pub struct TimestampProof {
 enum OperationVersion {
     LegacyV1,
     V2,
+    V3,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -49,6 +53,10 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
         && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V2_SCHEMA)
     {
         Ok(OperationVersion::V2)
+    } else if doc.top.len() == 1
+        && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V3_SCHEMA)
+    {
+        Ok(OperationVersion::V3)
     } else {
         Err(invalid("unknown stored forecast operation schema"))
     }
@@ -62,7 +70,17 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
             "a {expected_table} request needs exactly its one table and no top-level fields"
         )));
     }
-    let versioned = format!("schema = \"{V2_SCHEMA}\"\n{request}");
+    let schema = if expected_table == "registered_outcome"
+        || doc.rows[0]
+            .fields
+            .iter()
+            .any(|field| field.key.starts_with("public_"))
+    {
+        V3_SCHEMA
+    } else {
+        V2_SCHEMA
+    };
+    let versioned = format!("schema = \"{schema}\"\n{request}");
     if versioned.len() > MAX_OPERATION_BYTES {
         return Err(invalid(
             "versioned forecast request exceeds the operation byte limit",
@@ -94,6 +112,13 @@ pub enum Command {
         head: Digest32,
         request: PathBuf,
     },
+    /// Resolve the member's frozen public target from its registered original-release workbook.
+    Resolve {
+        journal: PathBuf,
+        head: Digest32,
+        cohort: String,
+        forecast: String,
+    },
     Assess {
         journal: PathBuf,
         head: Digest32,
@@ -123,6 +148,7 @@ impl Command {
             Self::Register { .. } => "register",
             Self::Freeze { .. } => "freeze",
             Self::Outcome { .. } => "outcome",
+            Self::Resolve { .. } => "resolve",
             Self::Assess { .. } => "assess",
             Self::Inspect { .. } => "inspect",
             Self::Report { .. } => "report",
@@ -223,6 +249,7 @@ fn perform(
         Command::Register { journal, head, .. }
         | Command::Freeze { journal, head, .. }
         | Command::Outcome { journal, head, .. }
+        | Command::Resolve { journal, head, .. }
         | Command::Assess { journal, head, .. } => (journal, *head),
         _ => return Err(invalid("this operation needs a writer").into()),
     };
@@ -232,6 +259,18 @@ fn perform(
         Command::Register { request, .. } => (read_request(&root.join(request))?, "forecast", None),
         Command::Freeze { request, .. } => (read_request(&root.join(request))?, "cohort", None),
         Command::Outcome { request, .. } => (read_request(&root.join(request))?, "outcome", None),
+        Command::Resolve {
+            cohort, forecast, ..
+        } => {
+            let id = state.forecast_id(forecast)?;
+            let policy = state.public_policy(cohort, id)?;
+            let resolved = super::source::resolve(root, &policy, id)?;
+            (
+                source_request(&state, cohort, forecast, &resolved)?,
+                "registered_outcome",
+                None,
+            )
+        }
         Command::Assess {
             cohort,
             as_of,
@@ -268,15 +307,18 @@ fn perform(
         _ => return Err(invalid("this operation has no request").into()),
     };
     let request = version_request(&request, table)?;
+    let version = operation_version(&parse_subset(&request).map_err(|e| invalid(e.to_string()))?)?;
     let previous = version_counts(journal.records(), &state, selected)?;
     let mut response = None;
     journal.append(&request, clock, |record, header| {
         let assessment = apply(&mut state, record, header, Some(table))?;
-        // Every new writer operation carries v2; replayed legacy prefixes retain their original counts.
-        let versions = VersionCounts {
-            v2: previous.versions.v2 + 1,
-            ..previous.versions
-        };
+        // Public bindings and admitted receipts carry v3; ordinary operations retain v2 semantics.
+        let mut versions = previous.versions;
+        match version {
+            OperationVersion::LegacyV1 => versions.legacy_v1 += 1,
+            OperationVersion::V2 => versions.v2 += 1,
+            OperationVersion::V3 => versions.v3 += 1,
+        }
         let report_origin = match (previous.report_origin, assessment.as_ref()) {
             (Some(origin), _) => Some(origin),
             (None, Some(_)) => Some(ReportOrigin {
@@ -375,6 +417,247 @@ fn read_request(path: &Path) -> Result<String, Refusal> {
     String::from_utf8(bytes).map_err(|_| invalid("forecast request must be UTF-8"))
 }
 
+/// Evidence recorded at admission. Historical replay verifies this record and its journal hash;
+/// it does not assert that the current filesystem still contains the admitted source bytes.
+#[derive(Debug)]
+pub(super) struct SourceAdmission {
+    cohort: Digest32,
+    claim: ObjectId,
+    exact: Rat,
+    displayed: String,
+    published_at: String,
+    published_at_basis: String,
+}
+
+impl SourceAdmission {
+    pub(super) fn to_json(&self) -> String {
+        format!(
+            "{{\"basis\":\"recorded_registered_source_admission\",\"source_bytes_reverified_on_replay\":false,\"cohort_digest\":{},\"source_claim_id\":{},\"exact_value\":{{\"numerator\":{},\"denominator\":{}}},\"displayed\":{},\"published_at\":{},\"published_at_basis\":{}}}",
+            js(&self.cohort.to_hex()),
+            js(&self.claim.to_string()),
+            js(&self.exact.num().to_string()),
+            js(&self.exact.den().to_string()),
+            js(&self.displayed),
+            js(&self.published_at),
+            js(&self.published_at_basis),
+        )
+    }
+}
+
+fn bytes_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn claim_body(hex: &str) -> Result<Vec<u8>, Refusal> {
+    if hex.is_empty()
+        || !hex.len().is_multiple_of(2)
+        || !hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(invalid(
+            "source Claim body needs canonical lowercase hexadecimal bytes",
+        ));
+    }
+    hex.as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| {
+            let nibble = |b: u8| if b <= b'9' { b - b'0' } else { b - b'a' + 10 };
+            Ok(nibble(pair[0]) * 16 + nibble(pair[1]))
+        })
+        .collect()
+}
+
+fn source_request(
+    state: &Replay,
+    cohort: &str,
+    forecast: &str,
+    resolved: &super::source::ResolvedPublicOutcome,
+) -> Result<String, Refusal> {
+    let id = state
+        .cohorts
+        .get(cohort)
+        .ok_or_else(|| absent("frozen cohort missing"))?;
+    let anchor = resolved
+        .source
+        .claim
+        .anchors
+        .first()
+        .ok_or_else(|| absent("source Claim anchor missing"))?;
+    let mut request = String::from("[[registered_outcome]]\n");
+    for (key, value) in [
+        ("forecast", forecast.to_string()),
+        ("cohort", cohort.to_string()),
+        ("cohort_digest", id.to_hex()),
+        ("value", resolved.displayed.clone()),
+        ("numerator", resolved.value.num().to_string()),
+        ("denominator", resolved.value.den().to_string()),
+        ("source", resolved.citation.source.clone()),
+        ("vintage", resolved.citation.vintage.clone()),
+        ("locator", resolved.citation.locator.clone()),
+        ("sha256", Digest32(resolved.citation.sha256).to_hex()),
+        ("claim_id", resolved.source.claim.claim_id.to_string()),
+        (
+            "claim_body",
+            bytes_hex(&resolved.source.claim.canonical_body()),
+        ),
+        ("stored", resolved.stored.clone()),
+        ("ownership_source", resolved.ownership_source.to_string()),
+        ("anchor_path", anchor.artifact_path.clone()),
+        ("published_at", resolved.published_at.clone()),
+        ("published_at_basis", resolved.published_at_basis.clone()),
+        (
+            "available_at",
+            fmine_calib::record::format_utc(resolved.available_at_ns / 1_000_000_000),
+        ),
+    ] {
+        let _ = writeln!(request, "{key} = {}", toml_string(&value)?);
+    }
+    Ok(request)
+}
+
+fn apply_source(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> Result<(), Refusal> {
+    row.allowed(
+        &[
+            "forecast",
+            "cohort",
+            "cohort_digest",
+            "value",
+            "numerator",
+            "denominator",
+            "source",
+            "vintage",
+            "locator",
+            "sha256",
+            "claim_id",
+            "claim_body",
+            "published_at",
+            "published_at_basis",
+            "available_at",
+            "stored",
+            "ownership_source",
+            "anchor_path",
+        ],
+        &[],
+    )?;
+    let forecast = state.forecast_id(row.string("forecast")?)?;
+    let cohort = row.string("cohort")?;
+    let policy = state.public_policy(cohort, forecast)?;
+    let cohort_digest = super::hex(row.string("cohort_digest")?)?;
+    if state.cohorts.get(cohort) != Some(&cohort_digest)
+        || row.string("source")? != policy.issuer
+        || row.string("vintage")? != policy.period.original_release()
+    {
+        return Err(invalid(
+            "source admission differs from the frozen cohort, issuer or original release",
+        ));
+    }
+    let integer = |key| {
+        row.string(key)?.parse::<i128>().map_err(|_| {
+            invalid("source exact value needs signed integer numerator and denominator")
+        })
+    };
+    let exact = Rat::new(integer("numerator")?, integer("denominator")?)
+        .map_err(|_| invalid("invalid exact source value"))?;
+    let displayed = row.string("value")?.to_string();
+    let fmine_registry::transcriptions::Token::Point(decimal) =
+        fmine_registry::transcriptions::parse_token(&displayed).map_err(invalid)?
+    else {
+        return Err(invalid("registered outcome needs one printed number"));
+    };
+    if Rat::new(decimal.mantissa, 10_i128.pow(decimal.scale))
+        .map_err(|_| invalid("invalid printed value"))?
+        != exact
+    {
+        return Err(invalid(
+            "printed source value differs from its exact rational",
+        ));
+    }
+    let published_at = row.string("published_at")?.to_string();
+    if !fmine_registry::sources::is_date(&published_at) {
+        return Err(invalid("source publication date must be YYYY-MM-DD"));
+    }
+    let publication_start = time(&format!("{published_at}T00:00:00Z"))?;
+    let published_at_basis = row.string("published_at_basis")?;
+    if !fmine_registry::sources::PUBLISHED_AT_BASES
+        .iter()
+        .any(|prefix| {
+            published_at_basis
+                .strip_prefix(prefix)
+                .is_some_and(|detail| !detail.trim().is_empty())
+        })
+    {
+        return Err(invalid(
+            "publication basis needs FACT: or INFERENCE: followed by its evidence",
+        ));
+    }
+    if policy.metric == fmine_calib::ledger::binding::PublicMetric::ProductionKoz && exact.num() < 0
+    {
+        return Err(invalid("production cannot be negative"));
+    }
+    let available_ns = publication_start
+        .checked_add(86_400_000_000_000)
+        .ok_or_else(|| invalid("publication availability overflows"))?;
+    if available_ns != row.time("available_at")? || publication_start < policy.period.end_ns()? {
+        return Err(invalid(
+            "source availability must be after the target period and conservatively follow its publication day",
+        ));
+    }
+    let body = claim_body(row.string("claim_body")?)?;
+    let claim = row
+        .string("claim_id")?
+        .parse::<ObjectId>()
+        .map_err(|e| invalid(e.to_string()))?;
+    if claim != ObjectId::from_canonical_bytes(PrefixKind::Claim, &body) {
+        return Err(Refusal::new(
+            RefusalCode::FrozenRecordMutation507,
+            "source Claim body differs from its stored identity",
+        ));
+    }
+    let citation = fmine_calib::OutcomeCitation {
+        source: policy.issuer.clone(),
+        vintage: row.string("vintage")?.to_string(),
+        locator: row.string("locator")?.to_string(),
+        sha256: super::hex(row.string("sha256")?)?.0,
+    };
+    let expected_body = super::source::receipt_claim_body(
+        &policy,
+        forecast,
+        &citation,
+        row.string("stored")?,
+        &displayed,
+        row.string("ownership_source")?,
+        row.string("anchor_path")?,
+    )?;
+    if body != expected_body {
+        return Err(Refusal::new(
+            RefusalCode::FrozenRecordMutation507,
+            "source Claim does not bind the frozen target, exact printed value and cited anchor",
+        ));
+    }
+    let value = exact.num() as f64 / exact.den() as f64;
+    let event = state.ledger.append_outcome(
+        forecast,
+        available_ns,
+        recorded_ns,
+        fmine_calib::OutcomeKind::Published { value, citation },
+    )?;
+    state.source_admissions.insert(
+        (forecast, event),
+        SourceAdmission {
+            cohort: cohort_digest,
+            claim,
+            exact,
+            displayed,
+            published_at,
+            published_at_basis: published_at_basis.to_string(),
+        },
+    );
+    Ok(())
+}
+
 fn late(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::LateRegistration206, message)
 }
@@ -442,7 +725,7 @@ fn apply(
     let (lower, upper) = record.time_bounds(header)?;
     let authority_ns = match version {
         OperationVersion::LegacyV1 => record.observed_ns,
-        OperationVersion::V2 => upper,
+        OperationVersion::V2 | OperationVersion::V3 => upper,
     };
     let row = Row(row);
     match row.0.table.as_str() {
@@ -478,8 +761,21 @@ fn apply(
             }
             state.outcome_at(row, Some(authority_ns))?;
         }
+        "registered_outcome" => {
+            if version != OperationVersion::V3 {
+                return Err(invalid(
+                    "registered source outcomes require operation version three",
+                ));
+            }
+            if row.time("available_at")? > lower {
+                return Err(late(
+                    "registered publication availability exceeds the writer's earliest possible clock time",
+                ));
+            }
+            apply_source(state, row, authority_ns)?;
+        }
         "assessment" => {
-            if version == OperationVersion::V2 {
+            if version != OperationVersion::LegacyV1 {
                 row.string("expected_digest")?;
             }
             if row.time("as_of")? > lower {
@@ -498,11 +794,12 @@ fn apply(
 struct VersionCounts {
     legacy_v1: usize,
     v2: usize,
+    v3: usize,
 }
 
 impl VersionCounts {
     fn policy(self) -> &'static str {
-        match (self.legacy_v1, self.v2) {
+        match (self.legacy_v1, self.v2 + self.v3) {
             (0, 0) => "none",
             (_, 0) => "legacy_observed",
             (0, _) => "clock_upper_bound",
@@ -520,8 +817,13 @@ impl VersionCounts {
     }
 
     fn fields(self) -> String {
+        let v3 = if self.v3 == 0 {
+            String::new()
+        } else {
+            format!(",\"v3\":{}", self.v3)
+        };
         format!(
-            "\"operation_version_counts\":{{\"legacy_v1\":{},\"v2\":{}}},\"record_time_policy\":{}",
+            "\"operation_version_counts\":{{\"legacy_v1\":{},\"v2\":{}{v3}}},\"record_time_policy\":{}",
             self.legacy_v1,
             self.v2,
             js(self.policy())
@@ -560,6 +862,7 @@ fn version_counts(
         match operation_version(&doc)? {
             OperationVersion::LegacyV1 => counts.legacy_v1 += 1,
             OperationVersion::V2 => counts.v2 += 1,
+            OperationVersion::V3 => counts.v3 += 1,
         }
         if doc
             .rows
@@ -677,6 +980,18 @@ fn presentation_at(
         })
         .collect::<Vec<_>>()
         .join(",");
+    let source_admissions = state
+        .source_admissions
+        .iter()
+        .map(|((id, seq), admission)| {
+            format!(
+                "{{\"forecast_id\":{},\"event_seq\":{seq},\"evidence\":{}}}",
+                js(&id.to_string()),
+                admission.to_json()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     let report = assessment
         .map(|a| -> Result<String, Refusal> {
             let origin = report_origin
@@ -715,7 +1030,7 @@ fn presentation_at(
         String::new()
     };
     let payload = format!(
-        "{{\"schema\":\"fmine.forecast-journal.v1\",\"operation_schema\":\"{OPERATION_SCHEMA}\",\"operation\":{},\"head\":{},\"expected_head_checked\":{pinned},\"cell_id\":{},\"clock_skew_ns\":{},\"sequence\":{},\"observed_ns\":{},\"observed_at\":{},\"clock_bounds\":{{\"earliest_ns\":{earliest},\"latest_ns\":{latest}}},\"n_operations\":{},\"n_forecasts\":{},\"n_cohorts\":{},\"n_outcomes\":{outcomes},\"n_assessments\":{},{},\"clock_basis\":\"operator_declared_bounded_host_clock\",\"external_time_proof\":\"{external_time_proof}\",\"timestamp_commitment\":{timestamp_commitment},\"timestamp_verification\":{timestamp_verification},\"source_citations\":\"supplied_not_verified\",\"forecasts\":[{forecasts}],\"cohorts\":[{cohorts}],\"assessments\":[{checkpoints}]{retrieval},\"report\":{report}}}",
+        "{{\"schema\":\"fmine.forecast-journal.v1\",\"operation_schema\":\"{OPERATION_SCHEMA}\",\"operation\":{},\"head\":{},\"expected_head_checked\":{pinned},\"cell_id\":{},\"clock_skew_ns\":{},\"sequence\":{},\"observed_ns\":{},\"observed_at\":{},\"clock_bounds\":{{\"earliest_ns\":{earliest},\"latest_ns\":{latest}}},\"n_operations\":{},\"n_forecasts\":{},\"n_cohorts\":{},\"n_outcomes\":{outcomes},\"n_assessments\":{},{},\"clock_basis\":\"operator_declared_bounded_host_clock\",\"external_time_proof\":\"{external_time_proof}\",\"timestamp_commitment\":{timestamp_commitment},\"timestamp_verification\":{timestamp_verification},\"source_citations\":{},\"source_admissions\":[{source_admissions}],\"forecasts\":[{forecasts}],\"cohorts\":[{cohorts}],\"assessments\":[{checkpoints}]{retrieval},\"report\":{report}}}",
         js(operation),
         js(&head.to_hex()),
         js(&header.cell_id),
@@ -728,6 +1043,11 @@ fn presentation_at(
         state.cohorts.len(),
         state.checkpoints.len(),
         versions.fields(),
+        js(if state.source_admissions.is_empty() {
+            "supplied_not_verified"
+        } else {
+            "per_outcome_admission_evidence"
+        }),
     );
     let mut rendered_markdown = markdown(
         header,
@@ -770,6 +1090,32 @@ fn markdown(
     );
     if state.temporal_validation.is_some() {
         out.push_str("\nDeclared ancestry was checked at each forecast's registration. Supplied time metadata is not independently verified; generator replay was not performed. JSON includes the provenance-file hash and per-forecast cone digests.\n");
+    }
+    if !state.source_admissions.is_empty() {
+        out.push_str("\n## Registered source admissions\n\nSource files were verified at admission. Replay checks retained Claim evidence without reopening those files.\n\n| Forecast | Exact printed value | Source Claim | Publication |\n|---|---|---|---|\n");
+        for ((id, seq), source) in &state.source_admissions {
+            if assessment.is_some_and(|report| {
+                !report.per_member.iter().any(|member| {
+                    member.forecast_id == *id
+                        && member
+                            .selected_event
+                            .is_some_and(|(selected, _)| selected == *seq)
+                })
+            }) {
+                continue;
+            }
+            let alias = state.aliases.get(id).map_or("unknown", String::as_str);
+            let _ = writeln!(
+                out,
+                "| {} | {}/{} | `{}` | {}; {} |",
+                text(alias),
+                source.exact.num(),
+                source.exact.den(),
+                source.claim,
+                text(&source.published_at),
+                text(&source.published_at_basis)
+            );
+        }
     }
     if let Some(report) = assessment {
         if operation == "report" {

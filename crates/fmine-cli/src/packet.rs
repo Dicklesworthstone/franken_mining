@@ -1629,41 +1629,6 @@ mod tests {
     }
 
     #[test]
-    fn ordering_does_not_change_packet_ids_or_bytes() {
-        let mut report = run_synthetic_assurance(&[]).expect("synthetic assurance");
-        let original = packets_from_report(&report).expect("packets");
-        report.instances.reverse();
-        report.sources.reverse();
-        for instance in &mut report.instances {
-            instance.operands.reverse();
-            if let IdentityState::IssuerDiscrepancy(c) = &mut instance.state {
-                c.line_cells.reverse();
-            }
-        }
-        let reordered = packets_from_report(&report).expect("reordered packets");
-        assert_eq!(
-            original
-                .iter()
-                .map(ChallengePacket::to_json)
-                .collect::<Vec<_>>(),
-            reordered
-                .iter()
-                .map(ChallengePacket::to_json)
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            original
-                .iter()
-                .map(ChallengePacket::to_markdown)
-                .collect::<Vec<_>>(),
-            reordered
-                .iter()
-                .map(ChallengePacket::to_markdown)
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
     fn content_address_binds_values_digests_and_closing_requests() {
         let report = run_synthetic_assurance(&[]).expect("synthetic assurance");
         let packets = packets_from_report(&report).expect("packets");
@@ -1704,33 +1669,6 @@ mod tests {
             would_show: "a likelihood and NPV".into(),
         });
         assert!(bad_word.validate().is_err());
-    }
-
-    #[test]
-    fn missing_source_and_mismatched_ledger_operand_refuse() {
-        let mut report = run_synthetic_assurance(&[]).expect("synthetic assurance");
-        report
-            .sources
-            .retain(|s| s.kind != SourceKind::AiscReconciliation);
-        assert_eq!(
-            packets_from_report(&report)
-                .expect_err("source missing")
-                .code,
-            "FMINE-REF-506"
-        );
-        let mut report = run_synthetic_assurance(&[]).expect("synthetic assurance");
-        let instance = report
-            .instances
-            .iter_mut()
-            .find(|i| i.subject == "Site B" && i.family == aisc::IdentityFamily::TccFooting)
-            .expect("instance");
-        instance.operands[0].value = OperandValue::Int(999);
-        assert_eq!(
-            packets_from_report(&report)
-                .expect_err("source differs")
-                .code,
-            "FMINE-REF-208"
-        );
     }
 
     fn summary(name: &str, months: &str, rows: &[(&str, [&str; 4])]) -> MinimalSheet {

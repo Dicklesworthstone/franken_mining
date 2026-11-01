@@ -102,7 +102,7 @@ Workbook Claim reads retain their established payload and identity-ledger certif
 ### Durable forecast registration (BD-047)
 
 DESIGN: `forecast journal init` binds a cell id and operator-declared clock uncertainty to a new journal.
-`register`, `freeze`, `outcome` and `assess` require an exact predecessor `--head`; all mutations require
+`register`, `freeze`, `outcome`, `resolve` and `assess` require an exact predecessor `--head`; all mutations require
 `--trust-host-clock`. The runtime clock is sampled under the journal's exclusive lock. The captured nanoseconds
 remain in the journal frame's `observed_ns`; new admissions assign `ForecastLedger` registration, freeze and
 recording times to the upper bound, `observed_ns + clock_skew_ns`. A caller cannot supply those times.
@@ -111,10 +111,48 @@ availability and assessment cuts must be at or before the lower bound. Clock rol
 
 Requests still contain one permitted TOML table with no top-level fields, using the frozen
 `fmine.forecast-ledger.v1` row grammar with the three assigned-time fields prohibited. The writer validates
-that request, then adds only `schema = "fmine.forecast-operation.v2"` to the stored operation. The `FJR1`
+an ordinary request, then adds `schema = "fmine.forecast-operation.v2"` to the stored operation; the public-bound
+freeze and resolution operations described below use v3. The `FJR1`
 frame format is unchanged. Replay dispatches per operation: legacy rows without top-level fields retain
 their original observed-time semantics and identities; v2 rows use the upper bound. Unknown schemas or extra
 top-level fields refuse. Mixed journals preserve both policies without rewriting earlier operations.
+
+DESIGN: a public-bound freeze adds `public_issuer`, `public_metric`, `public_period`, `public_ownership`
+and `public_members` to the cohort request, with `resolution_rule = "registered-public-cell"`.
+The member string maps existing aliases to exact source subjects (`alias=Subject,other=Other Subject`).
+The adapter converts aliases to immutable forecast IDs and embeds the canonical
+`fmine_calib::ledger::binding::PublicResolutionPolicy` in the cohort's hashed resolution rule.
+The complete member set, sole eligible issuer, metric/unit, original FY/quarter release and ownership
+basis are fixed before any outcome. Supported metrics are site-level `production_koz` and `aisc_usd_per_oz`,
+over calendar years (`YYYYFY`) or individual calendar quarters;
+ownership is `100%` or `attributable:n/d`. AISC means the issuer's reported per-sold-ounce cost,
+with no subtraction of annual and year-to-date rates or implicit ownership conversion.
+
+`forecast journal resolve --journal <path> --head <hex> --cohort <name> --forecast <alias>
+--trust-host-clock` takes no outcome value, target override, source locator or availability timestamp.
+Under the exclusive writer lock it loads the original registered Mine Stats release, verifies source
+bytes and the canonical Claim, and matches the exact frozen issuer, subject, period, metric, unit, scope
+and ownership. It uses the displayed decimal, retaining the stored value and exact rational separately;
+the existing score kernel receives that rational's deterministic floating-point projection.
+Ambiguous, missing, placeholder, status-marked, stale, altered and incompatible sources refuse without
+appending. A later comparative cannot fill a missing original. An unmarked printed zero remains valid.
+Publication date and its registered FACT/INFERENCE basis are mandatory; that date must fall after the
+complete target period. Retrieval never substitutes for a missing publication date, and the stated basis
+is retained metadata rather than independent proof of publication time. Conservative availability is
+midnight after that date, checked against the sampled clock's lower bound before admission.
+
+Public-bound freezes and generated `registered_outcome` operations use
+`schema = "fmine.forecast-operation.v3"`; their authority time uses the same upper-bound policy as v2.
+The raw `outcome` route refuses every public-bound member, including members shared with other cohorts.
+The generated operation retains the frozen cohort digest, source Claim ID and canonical body, exact and
+displayed values, ownership provenance, source anchor and publication evidence. Replay reconstructs the
+original issuer Claim from the frozen policy and retained evidence, checking its complete canonical body
+and identity before restoring the event. This prevents value, subject, period, basis or anchor substitution.
+`source_admissions` and each selected member's `source_admission` distinguish recorded source verification
+from unverified supplied outcomes. Replay does not re-read source files or assert present file availability.
+The journal head binds admission evidence; the existing assessment digest binds the cohort, numeric event
+and citations. This slice resolves original releases; source-bound restatements and automatic status events
+remain outside its supported domain. Refused resolutions leave members unresolved in the frozen denominator.
 
 The existing calibration kernel requires an outcome's availability and recording time to be at or before the
 assessment cut. For example, an observed recording at `12:00:01.500Z` with a one-second skew bound is assigned
@@ -132,7 +170,7 @@ retain their explicit weaker binding status; existing frame bytes and semantic i
 
 The `fmine.forecast-journal.v1` payload reports the cell, exact head, clock bounds, operation schema, inventories
 and checkpoints. `operation_schema` continues to identify the row grammar. `operation_version_counts` contains
-`legacy_v1` and `v2` counts excluding genesis; their sum is `n_operations`. `record_time_policy` is `none`,
+`legacy_v1` and `v2` counts excluding genesis, plus `v3` when present; their sum is `n_operations`. `record_time_policy` is `none`,
 `legacy_observed`, `clock_upper_bound` or `mixed`. An assessment adds `report` with mode `durable_journal`;
 its version counts and time policy describe the prefix through its first persisted checkpoint. A v2 checkpoint
 over legacy operations remains mixed and does not upgrade the earlier time evidence. `inspect` is read-only
@@ -154,7 +192,8 @@ to the original checkpoint's report after later appends, restatements and reopen
 does not replace its first report. The outer
 payload's head and inventories describe the currently opened journal, including any later checkpoints; its
 retrieval metadata remains separate from the historical report. The stored digest binds the assessment result;
-this contract does not freeze report presentation across software versions. Source citations remain unverified;
+this contract does not freeze report presentation across software versions. Source admissions retain their
+recorded verification evidence; other supplied citations remain unverified;
 `--trust-host-clock` declares an operator's bound and provides no independent timestamp proof. Without an
 explicit timestamp receipt, external time proof is not verified. Envelope authority anchors/certificates remain null.
 An optional provenance bundle checks every frozen member at its exact recorded registration time, including
