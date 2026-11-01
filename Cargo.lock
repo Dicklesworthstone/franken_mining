@@ -86,6 +86,7 @@ dependencies = [
 name = "fmine-geom"
 version = "0.1.0"
 dependencies = [
+ "fmine-core",
  "fmine-evidence",
 ]
 

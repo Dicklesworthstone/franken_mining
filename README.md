@@ -686,7 +686,9 @@ card (§34.5).
 The crate map has 59 crates in 7 layers, each with a LOC budget (`registries/loc_budget.toml`; ceiling 1.15× plan).
 A crate joins the workspace only with its first real slice. The first slice covers:
 - the S0 substrate: `fmine-core`, `-units`, `-time`, `-crs`, `-evidence`, `-claim`, `-registry`, `-array`;
+- `fmine-runtime`, which so far holds only the host wall clock;
 - `fmine-numerics` and `fmine-calib`;
+- `fmine-geom`, the Strata geometry kernel: exact predicates and the sparse `VdbGrid`, lifted from frankensim;
 - the public lane: `fmine-io`, `fmine-public`, `fmine-metrics`;
 - `fmine-decide` and `fmine-cli`;
 - `xtask`.

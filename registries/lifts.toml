@@ -96,6 +96,14 @@ licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
 target = "crates/fmine-geom/src/exact/predicates.rs"
 guard_test = "exact::predicates::tests::lattice_battery_matches_i128_oracle"
 
+[[lift]]
+source = "crates/fs-rep-sdf/src/vdb.rs"
+commit = "20463525d9775a18c1b237d2676f364f367175ab"
+sha256_at_lift = "f169a76685cbc2b1b4236cfa67b6b14ae581e65daac1b49a839409b9f191e5ed"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+target = "crates/fmine-geom/src/vdb.rs"
+guard_test = "vdb::tests::golden_iter_active_digest"
+
 [[analogue]]
 target = "crates/fmine-evidence/src/lattice.rs"
 upstream = "crates/fs-evidence/src/lib.rs"
