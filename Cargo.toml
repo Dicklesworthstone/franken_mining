@@ -12,6 +12,7 @@ members = [
     "crates/fmine-array",
     "crates/fmine-runtime",
     "crates/fmine-numerics",
+    "crates/fmine-geom",
     "crates/fmine-calib",
     "crates/fmine-decide",
     "crates/fmine-io",

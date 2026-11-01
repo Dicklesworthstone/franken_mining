@@ -72,6 +72,30 @@ licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
 target = "crates/fmine-numerics/src/sparse/precond.rs"
 guard_test = "sparse::precond::tests::test_pcg_residual_known_answers"
 
+[[lift]]
+source = "crates/fs-math/src/eft.rs"
+commit = "20463525d9775a18c1b237d2676f364f367175ab"
+sha256_at_lift = "5e34b9852f043a26373274061a40f6cf122cdafd4df250c8f5a79f6b478d74c2"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+target = "crates/fmine-geom/src/exact/eft.rs"
+guard_test = "exact::eft::tests::two_sum_identity_is_exact"
+
+[[lift]]
+source = "crates/fs-ivl/src/expansion.rs"
+commit = "20463525d9775a18c1b237d2676f364f367175ab"
+sha256_at_lift = "da5144cd7c7b8cd38e5761268c51f066883120e55987de5df9e19dfdb945f698"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+target = "crates/fmine-geom/src/exact/expansion.rs"
+guard_test = "exact::expansion::tests::sum_scale_product_satisfy_exact_residual_laws"
+
+[[lift]]
+source = "crates/fs-ivl/src/predicates.rs"
+commit = "20463525d9775a18c1b237d2676f364f367175ab"
+sha256_at_lift = "e23fc2f6647ce5e94e11f2930c86731b4137a4c0e89cf92a94c91ba1f9b0a8ba"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+target = "crates/fmine-geom/src/exact/predicates.rs"
+guard_test = "exact::predicates::tests::lattice_battery_matches_i128_oracle"
+
 [[analogue]]
 target = "crates/fmine-evidence/src/lattice.rs"
 upstream = "crates/fs-evidence/src/lib.rs"

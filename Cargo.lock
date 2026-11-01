@@ -83,6 +83,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-geom"
+version = "0.1.0"
+dependencies = [
+ "fmine-evidence",
+]
+
+[[package]]
 name = "fmine-io"
 version = "0.1.0"
 dependencies = [

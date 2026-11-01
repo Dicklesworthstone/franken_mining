@@ -995,11 +995,12 @@ mod tests {
     }
 
     #[test]
-    fn test_committed_registry_passes_with_seven_lifts_and_five_analogues() {
+    fn test_committed_registry_passes_with_ten_lifts_and_five_analogues() {
         let root = workspace_root();
         check_lifts(&root).expect("committed lifts");
         let (lifts, analogues) = load(&root).expect("registry");
-        assert_eq!((lifts.len(), analogues.len()), (7, 5));
+        // Seven, plus fmine-geom's eft.rs, expansion.rs and predicates.rs (bd-193).
+        assert_eq!((lifts.len(), analogues.len()), (10, 5));
     }
 
     /// Local only: set `FRANKENSIM_PATH` to a frankensim checkout that holds the pinned commit. The shared count
