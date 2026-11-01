@@ -1,0 +1,14 @@
+[package]
+name = "fmine-optimize"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Pushback optimisation kernels: ultimate pit limits by Hochbaum pseudoflow on an i64 CSR precedence graph, with an independently checkable certificate."
+
+[dependencies]
+fmine-evidence = { path = "../fmine-evidence" }
+
+[lints]
+workspace = true

@@ -689,6 +689,8 @@ A crate joins the workspace only with its first real slice. The first slice cove
 - `fmine-runtime`, which so far holds only the host wall clock;
 - `fmine-numerics` and `fmine-calib`;
 - `fmine-geom`, the Strata geometry kernel: exact predicates and the sparse `VdbGrid`, lifted from frankensim;
+- `fmine-optimize`, so far only `pitflow`, a certified ultimate pit by pseudoflow. It matches MineLib's published
+  UPIT optima on the 11 instances tried, up to 2.1M blocks;
 - the public lane: `fmine-io`, `fmine-public`, `fmine-metrics`;
 - `fmine-decide` and `fmine-cli`;
 - `xtask`.

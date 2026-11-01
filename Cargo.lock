@@ -123,6 +123,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-optimize"
+version = "0.1.0"
+dependencies = [
+ "fmine-evidence",
+]
+
+[[package]]
 name = "fmine-public"
 version = "0.1.0"
 dependencies = [
