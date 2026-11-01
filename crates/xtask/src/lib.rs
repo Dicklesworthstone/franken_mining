@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod beads;
+pub mod contracts;
 pub mod forecast;
 pub mod int_as;
 pub mod lifts;
@@ -19,6 +20,8 @@ pub struct CrateBudgetRow {
     pub name: String,
     /// Architectural layer (`S0`, `S1`, `K0`..`K4`, `E`, `V`, `U`, `T`, `GATED`).
     pub layer: String,
+    /// §0.5 subsystem (`Bedrock` .. `Testpit`).
+    pub subsystem: String,
     /// Planned LOC budget.
     pub planned_loc: usize,
     /// Hard 1.15x ceiling LOC budget.
@@ -56,6 +59,7 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
     let mut errors = Vec::new();
     let mut cur_name = String::new();
     let mut cur_layer = String::new();
+    let mut cur_subsystem = String::new();
     let mut cur_planned = 0usize;
     let mut cur_ceiling = 0usize;
     let mut in_crate = false;
@@ -63,6 +67,7 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
     // The ceiling is `loc::evaluate`'s: §28.4.4 lets a change with net LOC ≤ 0 through, so it needs the change.
     let flush = |name: &str,
                  layer: &str,
+                 subsystem: &str,
                  planned: usize,
                  ceiling: usize,
                  rows: &mut Vec<CrateBudgetRow>| {
@@ -81,6 +86,7 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
         rows.push(CrateBudgetRow {
             name: name.to_string(),
             layer: layer.to_string(),
+            subsystem: subsystem.to_string(),
             planned_loc: planned,
             ceiling_loc: ceiling,
             actual_loc,
@@ -94,10 +100,18 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
         let line = raw_line.trim();
         if line == "[[crate]]" {
             if in_crate {
-                flush(&cur_name, &cur_layer, cur_planned, cur_ceiling, &mut rows);
+                flush(
+                    &cur_name,
+                    &cur_layer,
+                    &cur_subsystem,
+                    cur_planned,
+                    cur_ceiling,
+                    &mut rows,
+                );
             }
             cur_name.clear();
             cur_layer.clear();
+            cur_subsystem.clear();
             cur_planned = 0;
             cur_ceiling = 0;
             in_crate = true;
@@ -106,6 +120,8 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
                 cur_name = val;
             } else if let Some(val) = strip_kv_str(line, "layer") {
                 cur_layer = val;
+            } else if let Some(val) = strip_kv_str(line, "subsystem") {
+                cur_subsystem = val;
             } else if let Some(val) = strip_kv_usize(line, "planned_loc") {
                 cur_planned = val;
             } else if let Some(val) = strip_kv_usize(line, "ceiling_loc") {
@@ -114,7 +130,14 @@ pub fn check_loc_budget(root: &Path) -> Result<LocReport, Vec<String>> {
         }
     }
     if in_crate {
-        flush(&cur_name, &cur_layer, cur_planned, cur_ceiling, &mut rows);
+        flush(
+            &cur_name,
+            &cur_layer,
+            &cur_subsystem,
+            cur_planned,
+            cur_ceiling,
+            &mut rows,
+        );
     }
 
     if rows.len() < 59 {

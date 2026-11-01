@@ -491,6 +491,7 @@ mod tests {
         CrateBudgetRow {
             name: name.to_string(),
             layer: "V".to_string(),
+            subsystem: "Touchstone".to_string(),
             planned_loc: planned,
             ceiling_loc: planned * 115 / 100,
             actual_loc: actual,

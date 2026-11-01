@@ -149,6 +149,36 @@ fn main() -> ExitCode {
             xtask::check_stack_lock(&root).map(|r| println!("{}", r.log_line())),
         ),
         "check-scope" => run_one("check-scope", xtask::check_scope(&root)),
+        "contracts" => match args.get(1..).unwrap_or(&[]) {
+            [] => run_one(
+                "contracts",
+                xtask::contracts::check_contracts(&root).and_then(|r| {
+                    for line in &r.lines {
+                        println!("{line}");
+                    }
+                    for w in &r.warnings {
+                        println!("WARN [contracts]: {w}");
+                    }
+                    if r.errors.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(r.errors)
+                    }
+                }),
+            ),
+            [flag] if flag == "--write-budget" => run_one(
+                "contracts --write-budget",
+                xtask::contracts::write_budget(&root).map(|lines| {
+                    for line in &lines {
+                        println!("{line}");
+                    }
+                }),
+            ),
+            _ => {
+                eprintln!("usage: xtask contracts [--write-budget]");
+                ExitCode::from(2)
+            }
+        },
         "check-beads" => run_one(
             "check-beads",
             xtask::beads::check_beads(&root).map(|r| {

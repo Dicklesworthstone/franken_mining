@@ -5,7 +5,7 @@
 - **Layer:** `T` (Build/Verification tooling)
 - **Subsystem:** `Testpit`
 - **LOC Budget:** Dev-only verification binary (`GATE-LAYERS-00`)
-- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "oracle", "forecast", "refusals", "int_as", "beads"]`
+- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "oracle", "forecast", "refusals", "int_as", "beads", "contracts"]`
 
 ## 2. Mathematical & Domain Formulation
 Enforces the structural invariants of the workspace (`L-1`..`L-7`, `PO-NUM-2`, `GATE-ORACLE-01`, `§28.4` LOC budget ceilings) over the repository source tree and `registries/*.toml`.
@@ -73,6 +73,17 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   from plan heading `### F.1 ` to the next heading (F.2's `-01` upstream asks are outside it). It fails on a missing
   or extra id, a lock id not ending `-00`, a malformed or repeated id, or an empty set.
 - `check_scope(root: &Path) -> Result<(), Vec<String>>`
+- `contracts::{check_contract_text, findings, rewrite_budget_lines, check_contracts, write_budget}` (BD-327.S1;
+  commands `contracts`, which prints `{"crate","headings_ok","budget_ok","layer_ok","subsystem_ok",
+  "unregistered_codes"}` per contract and `{"contracts","errors","warnings"}`, and `contracts --write-budget`): a
+  contract fails when its level-2 headings are not exactly the twelve of `docs/templates/CONTRACT.md`, in order,
+  when a section is empty, or when its section 1 `Layer`, `Subsystem` or `LOC budget` line differs from the crate's
+  `registries/loc_budget.toml` row (`26,000 planned / 30,000 ceiling`) or names a subsystem outside §0.5's eighteen.
+  `xtask` has no row and reads `not budgeted (dev-only tool; no row in registries/loc_budget.toml)`. A
+  `FMINE-REF-nnn` with no row in `registries/refusals.toml` is a warning until BD-328 closes. `--write-budget`
+  rewrites those three lines from the registry and no other byte; a second run changes nothing, and a contract
+  without exactly one of each line in section 1 is refused with nothing written. `check-all` keeps
+  `check_scope`'s older heading rule until BD-327.S2 rewrites the sixteen contracts.
 - `beads::{check_beads, evaluate}` (BD-324; command `check-beads`, which prints
   `{"check":"check-beads","rows","closed","distinct"}`): over `.beads/issues.jsonl`, a closed bead fails when its
   normalised reason is shared with another closed bead (R-SHARED), holds no `test:`/`record:`/`ci:`/`decision:`/
