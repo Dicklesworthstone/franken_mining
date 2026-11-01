@@ -36,6 +36,8 @@ validation, complete write and `sync_all` does the committed in-memory snapshot/
 DESIGN (BD-076): `forecast::timestamp` is the shared offline RFC 3161 verifier for the CLI and xtask. It
 authenticates a SHA-256 message imprint against an explicitly supplied PEM root bundle using OpenSSL 3.x.
 Both text decoding and signature verification receive the same bounded receipt snapshot through stdin.
+`fmine-runtime::process` owns the scoped pipe workers, bounded stdout/stderr capture, and child cleanup;
+the IO layer retains OpenSSL configuration, trust-input fingerprints and typed verification refusals.
 The decoded generation time is provisional until verification succeeds; certificate validity is checked at
 that signed time with `-attime`, without disabling certificate checks or sampling the host clock.
 
@@ -214,7 +216,8 @@ would permit a concurrent withdrawal race.
 - `GATE-BULL-01` (part 1, extraction fidelity)
 
 ## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim` (V to S0), and `fmine-runtime` (V to S1, explicit clock).
+- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim` (V to S0), and `fmine-runtime` (V to S1, explicit clock
+  and owned bounded subprocesses).
 - `fmine-calib` supplies the shared `ProofTimes` and UTC parser (V to K0); timestamp verification invokes
   OpenSSL 3.x on `PATH` with Unix `/dev/stdin` and `/dev/null`. Unsupported installations refuse.
 

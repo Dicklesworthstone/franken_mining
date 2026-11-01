@@ -1,7 +1,8 @@
 //! Exact scoring of a frozen public forecast record (BD-076, plan §21.6).
 //! The adapter owns source selection, citations, basis transformations and verification of the record's time
 //! proof. This kernel keeps every declared member, compares methods on one paired population, and never
-//! promotes a descriptive comparison to evidence of calibration. Determinism: Exact, in frozen rules order.
+//! promotes a descriptive comparison to evidence of calibration. Results use frozen rules order.
+//! Determinism: Exact
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};

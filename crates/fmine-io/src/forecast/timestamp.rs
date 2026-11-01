@@ -4,13 +4,14 @@
 //! This authenticates a TSA assertion under the supplied roots, not the caller's choice of roots.
 
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use fmine_calib::record::{ProofTimes, parse_utc};
 use fmine_core::hash::{Digest32, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
+use fmine_runtime::process::{ProcessError, output_with_input};
 
 const MAX_INPUT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 16 * 1024 * 1024;
@@ -177,44 +178,16 @@ fn openssl(command: &mut Command, receipt: &[u8], roots: &Path) -> Result<String
         .env("SSL_CERT_DIR", roots)
         .env_remove("OPENSSL_CONF_INCLUDE")
         .env_remove("OPENSSL_MODULES")
-        .env_remove("OPENSSL_ENGINES")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|e| {
-        Refusal::new(
+        .env_remove("OPENSSL_ENGINES");
+    let captured = output_with_input(command, receipt, MAX_TEXT_BYTES).map_err(|e| match e {
+        ProcessError::Spawn(_) => Refusal::new(
             RefusalCode::NotObservable202,
             format!("cannot start offline OpenSSL timestamp verifier: {e}"),
-        )
+        ),
+        ProcessError::OutputLimit { .. } => invalid(format!("OpenSSL timestamp response: {e}")),
+        _ => unavailable(format!("cannot run OpenSSL on timestamp snapshot: {e}")),
     })?;
-    let Some(mut stdin) = child.stdin.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(unavailable("OpenSSL timestamp stdin was not piped"));
-    };
-    // Drain output while writing input, so a large receipt cannot deadlock on pipe capacity.
-    let (output, written) = std::thread::scope(|scope| {
-        let writer = std::thread::Builder::new()
-            .name("fmine-timestamp-input".to_string())
-            .spawn_scoped(scope, move || stdin.write_all(receipt));
-        let writer = match writer {
-            Ok(writer) => writer,
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(unavailable(format!("cannot feed timestamp snapshot: {e}")));
-            }
-        };
-        let output = child.wait_with_output();
-        let written = writer
-            .join()
-            .map_err(|_| unavailable("timestamp input writer failed"))?;
-        Ok((output, written))
-    })?;
-    let output = output.map_err(|e| unavailable(format!("cannot read OpenSSL result: {e}")))?;
-    if output.stdout.len() > MAX_TEXT_BYTES || output.stderr.len() > MAX_TEXT_BYTES {
-        return Err(invalid("OpenSSL timestamp response exceeds its text bound"));
-    }
+    let output = captured.output;
     if !output.status.success() {
         return Err(invalid(format!(
             "openssl ts failed: {} {}",
@@ -222,7 +195,11 @@ fn openssl(command: &mut Command, receipt: &[u8], roots: &Path) -> Result<String
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    written.map_err(|e| unavailable(format!("cannot feed complete timestamp snapshot: {e}")))?;
+    if let Some(e) = captured.input_error {
+        return Err(unavailable(format!(
+            "cannot feed complete timestamp snapshot: {e}"
+        )));
+    }
     String::from_utf8(output.stdout).map_err(|_| invalid("OpenSSL timestamp text is not UTF-8"))
 }
 
