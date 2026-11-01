@@ -145,6 +145,14 @@ verified source snapshot as assurance. Without a selector they search the curren
     release has `first_registered: null` and every `earliest_registered_assertions` entry is retained. Closing
     requests name both compared locators and the missing rule or evidence; the transition itself assigns no
     disclosure classification. Persisted and single-vintage histories add no transition packet.
+  - `transcription_conflict` packets preserve agreed PDF assertions with page/table/row/column locators,
+    raw tokens, exact decimals, units, basis, period, reader roles and checked document metadata. The exporter
+    recomputes the registered rounding-convention comparison and checks the retained conflict population.
+    A mismatched quantity context is reported as such, never as a numerical issuer discrepancy. Truncation
+    remains among the candidate conventions; nearest-rounding failure alone does not establish a conflict.
+    The packet digest binds this evidence separately from the workbook ledger root. Reader agreement does
+    not supply the packet's independent human review. Quarter-bounded assurance runs retain their existing
+    behavior of excluding PDF transcriptions; the unbounded issuer run includes the local registry when present.
 - DESIGN (BD-342): guidance delegates acquisition to `fmine_public::guidance` and arithmetic to
   `fmine_metrics::guidance`. Its payload digest binds the cited inputs and explicit scenario. `anchor_id` and
   `certificate` remain null because this is not a registered forecast or ledger snapshot. Missing two-reader
@@ -245,8 +253,8 @@ None: every failure is a usage error or a typed refusal.
   data/coverage gates remain outside this slice. Actual calculations live in the calibration kernel.
 - Computes nothing itself: all calculation is delegated to the `V`/`E`/`K`/`S0` crates.
 - Never writes to any external system.
-- Challenge packets do not yet cover PDF transcription conflicts, hidden or
-  not-published instances. Human review and external-release sequencing remain open.
+- Challenge packets do not cover hidden or not-published instances. Human review and external-release
+  sequencing remain open for every packet, including PDF transcription conflicts.
 - Guidance completion supplies a T1 finite historical comparison when usable original-quarter evidence exists,
   otherwise T3 necessary arithmetic, under a declared sales scenario. It supplies no probability of meeting
   guidance, public technical capacity envelope or completed M0 gate.

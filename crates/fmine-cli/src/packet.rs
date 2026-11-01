@@ -2,6 +2,8 @@
 //! A packet requests an evidence check, never a financial decision. These immutable drafts carry no human
 //! check or external-use permission. Rendering does not change a ledger state or its established root.
 
+mod transcription;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
@@ -45,6 +47,7 @@ pub enum PacketKind {
     VintageChange,
     VintageConflict,
     IdentityTransition,
+    TranscriptionConflict,
 }
 
 impl PacketKind {
@@ -61,6 +64,7 @@ impl PacketKind {
             Self::VintageChange => "vintage_change",
             Self::VintageConflict => "vintage_conflict",
             Self::IdentityTransition => "identity_transition",
+            Self::TranscriptionConflict => "transcription_conflict",
         }
     }
 
@@ -90,12 +94,17 @@ impl PacketKind {
             Self::IdentityTransition => {
                 "The AISC identity has an exceptional transition between registered appearances. Original states, operand comparisons and certificates are retained; no true assertion or issuer admission is inferred."
             }
+            Self::TranscriptionConflict => {
+                "The registered PDF transcriptions require reconciliation of their printed assertions or quantity context. No assertion is selected as true."
+            }
         }
     }
 
     const fn owner(self) -> &'static str {
         match self {
-            Self::InputRefused | Self::IdentityTransition => "project:source-curator",
+            Self::InputRefused | Self::IdentityTransition | Self::TranscriptionConflict => {
+                "project:source-curator"
+            }
             Self::ReconstructionUnstated | Self::ExplanationStated => "issuer:investor-relations",
             _ => "issuer:corporate-controller",
         }
@@ -200,8 +209,12 @@ struct Finding {
 
 impl Finding {
     fn to_json(&self) -> String {
+        self.to_json_with_key("ledger_evidence")
+    }
+
+    fn to_json_with_key(&self, evidence_key: &str) -> String {
         format!(
-            "{{\"period\":{},\"at\":{},\"state\":{},\"ledger_evidence\":{}}}",
+            "{{\"period\":{},\"at\":{},\"state\":{},\"{evidence_key}\":{}}}",
             js(&self.period),
             js(&self.at),
             js(&self.state),
@@ -231,6 +244,7 @@ pub struct ChallengePacket {
     construction: &'static str,
     findings: Vec<Finding>,
     operands: BTreeMap<String, PacketOperand>,
+    transcription_evidence: Option<transcription::Evidence>,
     closing_documents: BTreeSet<ClosingDocument>,
 }
 
@@ -268,6 +282,9 @@ impl ChallengePacket {
     fn affiliation_line(&self) -> &'static str {
         match self.lane {
             Lane::Public => NO_AFFILIATION,
+            Lane::Synthetic if self.kind == PacketKind::TranscriptionConflict => {
+                "From invented synthetic documents and transcriptions; no affiliation with or endorsement by any issuer is implied."
+            }
             Lane::Synthetic => SYNTHETIC_NO_AFFILIATION,
         }
     }
@@ -281,7 +298,7 @@ impl ChallengePacket {
              \"built_by_role\":\"project:packet-builder\",\"human_check\":null,\"external_use_allowed\":false,\
              \"review_boundary\":{},\"no_affiliation\":{},\"no_claim\":{},\
              \"flags\":{{\"reserve_disclosure_claim\":false,\"execution_authorized\":false,\"geotechnical_signoff\":false,\"regulatory_compliance_claim\":false}},\
-             \"findings\":[{}],\"operands\":[{}]}}",
+             \"findings\":[{}],\"operands\":[{}]{}}}",
             js(RULES_VERSION),
             js(&self.issuer),
             js(self.lane.as_str()),
@@ -304,14 +321,26 @@ impl ChallengePacket {
             js(fmine_public::NO_CLAIM),
             self.findings
                 .iter()
-                .map(Finding::to_json)
+                .map(|finding| {
+                    if self.kind == PacketKind::TranscriptionConflict {
+                        finding.to_json_with_key("transcription_evidence")
+                    } else {
+                        finding.to_json()
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(","),
             self.operands
                 .values()
                 .map(PacketOperand::to_json)
                 .collect::<Vec<_>>()
-                .join(",")
+                .join(","),
+            self.transcription_evidence
+                .as_ref()
+                .map_or_else(String::new, |evidence| format!(
+                    ",\"transcription_evidence\":{}",
+                    evidence.to_json()
+                ))
         )
     }
 
@@ -324,7 +353,9 @@ impl ChallengePacket {
     /// Validate the complete evidence packet, including its content address. Source text is preserved
     /// verbatim; the wording guard applies to authored requests, not to words quoted from a source.
     pub fn validate(&self) -> Result<(), Refusal> {
-        if self.findings.is_empty() || self.operands.is_empty() || self.closing_documents.is_empty()
+        if self.findings.is_empty()
+            || (self.operands.is_empty() && self.transcription_evidence.is_none())
+            || self.closing_documents.is_empty()
         {
             return Err(unusable(
                 "packet needs findings, cited operands and a closing document request",
@@ -349,6 +380,9 @@ impl ChallengePacket {
                     "packet operand has no complete source locator and digest",
                 ));
             }
+        }
+        if let Some(evidence) = &self.transcription_evidence {
+            evidence.validate()?;
         }
         if self.content_id() != self.id {
             return Err(Refusal::new(
@@ -406,7 +440,9 @@ impl ChallengePacket {
         for use_name in self.kind.blocked_uses() {
             let _ = writeln!(out, "- {}", md(use_name));
         }
-        if self.kind == PacketKind::IdentityTransition {
+        if self.kind == PacketKind::TranscriptionConflict {
+            out.push_str("\n## Findings retained\n\n| Period | Transcription finding | Cited anchor |\n| --- | --- | --- |\n");
+        } else if self.kind == PacketKind::IdentityTransition {
             out.push_str("\n## Findings retained\n\n| Period | Recorded transition | Cited anchor |\n| --- | --- | --- |\n");
         } else {
             out.push_str("\n## Findings retained\n\n| Period | Ledger state | Cited anchor |\n| --- | --- | --- |\n");
@@ -420,7 +456,11 @@ impl ChallengePacket {
                 md(&finding.at)
             );
         }
-        out.push_str("\nThe ledger states are retained. A joint conflict does not change an identity that was consistent alone.\n\n## Source operands\n\n| Locator | Value or token as printed | Stored text | Role | Claim | SHA-256 |\n| --- | --- | --- | --- | --- | --- |\n");
+        if let Some(evidence) = &self.transcription_evidence {
+            out.push_str(&evidence.to_markdown());
+        } else {
+            out.push_str("\nThe ledger states are retained. A joint conflict does not change an identity that was consistent alone.\n\n## Source operands\n\n| Locator | Value or token as printed | Stored text | Role | Claim | SHA-256 |\n| --- | --- | --- | --- | --- | --- |\n");
+        }
         for operand in self.operands.values() {
             let claim = operand.claim.as_ref().map_or_else(
                 || "source context; no keyed Claim".to_string(),
@@ -437,7 +477,9 @@ impl ChallengePacket {
                 operand.sha256
             );
         }
-        if self.kind == PacketKind::IdentityTransition {
+        if self.kind == PacketKind::TranscriptionConflict {
+            out.push_str("\n## Transcription comparisons\n\nA numeric conflict means that no supported rounding assignment reconciles the agreed point assertions under their registered quantity key. Incompatible unit, basis or period labels instead leave arithmetic comparability unestablished. Transcription and quantity-key corrections remain alternatives; no issuer admission or disclosure status is inferred. Reader agreement is not an independent human review of this packet.\n\n");
+        } else if self.kind == PacketKind::IdentityTransition {
             out.push_str("\n## AISC identity transitions\n\nThe earliest registered, immediately previous and current identity records retain their source Claims, original states and arithmetic certificates. A corrected or broken classification describes arithmetic under the declared construction, not an issuer admission. Disclosure classifications belong to the separate source-value comparisons; this transition does not invent one. The earliest registered release need not be the issuer's first publication.\n\n");
         } else if matches!(
             self.kind,
@@ -623,6 +665,7 @@ fn packet_for<'a>(
             construction,
             findings: Vec::new(),
             operands: BTreeMap::new(),
+            transcription_evidence: None,
             closing_documents: BTreeSet::new(),
         })
 }
@@ -645,6 +688,8 @@ fn add_operand(packet: &mut ChallengePacket, operand: PacketOperand) -> Result<(
 /// Produce complete internal-review drafts from all visible AISC `ii`/`iii`/`iv`/`v` instances, Mine Stats
 /// `iii`/`iv`/`v` instances, jointly infeasible components, exceptional AISC identity transitions and unresolved
 /// cross-vintage changes/conflicts. Persisted and single-vintage identity histories add no packets.
+/// Accepted PDF transcription conflicts are separately bound to their verified document metadata and
+/// accepted-row digest; they are report-only and never enter the source ledger root.
 /// Disclosed-only changes and non-comparable scopes remain informational in the assurance report. Hidden and
 /// not-published instances remain outside this population. Grouping retains every current-release finding,
 /// including both first/prior comparisons, without combining different periods, units or ownership bases.
@@ -688,6 +733,7 @@ pub fn packets_from_report(
             add_vintage(&mut groups, report, vintages, item)?;
         }
     }
+    transcription::add_packets(&mut groups, report)?;
     let mut packets = Vec::with_capacity(groups.len());
     for mut packet in groups.into_values() {
         packet.findings.sort_by_cached_key(Finding::to_json);

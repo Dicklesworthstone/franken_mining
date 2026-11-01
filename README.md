@@ -252,14 +252,22 @@ verified note. Periods, units and ownership bases remain distinct. The renderer 
 against the canonical comparison engine before exporting them. On the registered corpus through 2026Q2,
 all nine known unexplained changes and all 60 ownership-conflict findings appear once in the exported packets;
 E474 retains both the original 1,479 and later 1,474 USD/oz assertions with their source cells. Disclosed-only
-changes and non-comparable region boundaries stay in the assurance report. PDF transcription conflicts are
-not yet packetized. Use `--synthetic` in place of the issuer selector for an invented known-answer demonstration.
+changes and non-comparable region boundaries stay in the assurance report. Use `--synthetic` in place of the
+issuer selector for an invented known-answer demonstration.
 
 Identity-transition packets additionally preserve corrected, broken or reclassified AISC calculations across
 releases, including a change in classification with identical printed values. They keep the original states,
 operands, certificates and source Claims for both appearances, and request the evidence or inclusion rule that
 explains the transition. Ambiguous earliest releases retain every assertion with no selected first assertion.
 Transition classifications and chronology are rechecked against the canonical identity ledger before export.
+
+PDF transcription conflicts also render as packets when the local two-reader transcription registry is present.
+Run `assure challenges --issuer barrick` without `--through` to include that document evidence; the existing
+quarter-bounded assurance snapshot excludes PDF transcriptions. Each packet retains the agreed printed tokens,
+page, table, row and column labels, units, ownership basis, period, reader roles and verified document hashes.
+The exporter recomputes the rounding-convention comparison before reporting a numerical conflict. Incompatible
+quantity contexts are reported separately and never treated as evidence that two comparable numbers disagree.
+Neither assertion is chosen as correct, and a later document is not assumed to be an issuer correction.
 
 ### Calculate guidance completion requirements
 
