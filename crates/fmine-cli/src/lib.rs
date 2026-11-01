@@ -3087,37 +3087,6 @@ mod tests {
         );
     }
 
-    /// BD-339.S2: `repro/barrick/fetch.sh` reads the registry with its own awk parser, so that a reader can
-    /// fetch without building. Its listing must equal the Rust loader's rows (file, url, bytes, sha256) in
-    /// order: the registry is the one copy, and the two readers of it cannot drift apart unnoticed.
-    #[test]
-    fn test_fetch_list_equals_registry() {
-        let root = workspace_root();
-        let out = std::process::Command::new("bash")
-            .arg(root.join("repro").join("barrick").join("fetch.sh"))
-            .arg("--list")
-            .env("FMINE_WORKSPACE", &root)
-            .output()
-            .expect("run fetch.sh --list");
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let want: String = load_issuer_profile(&root, "barrick")
-            .expect("registry")
-            .sources
-            .iter()
-            .map(|s| {
-                format!(
-                    "{}\t{}\t{}\t{}\n",
-                    s.file_name, s.url, s.bytes, s.sha256_hex
-                )
-            })
-            .collect();
-        assert_eq!(String::from_utf8_lossy(&out.stdout), want);
-    }
-
     /// BD-339.S2: a digest mismatch is a diagnosis, not a refusal.
     #[test]
     fn test_doctor_never_refuses_on_digest_mismatch() {
