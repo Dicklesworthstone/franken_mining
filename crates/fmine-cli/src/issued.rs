@@ -204,27 +204,68 @@ fn build_identity() -> Result<(String, Digest32), Refusal> {
 
 #[cfg(target_os = "linux")]
 fn executing_image_digest() -> Result<Digest32, Refusal> {
-    use fmine_io::reliance::MAX_ARTIFACT_BYTES;
-    use std::io::Read as _;
-
     // DESIGN: this kernel link opens the running executable's inode, including after its pathname is
     // replaced by another build. Reading current_exe() by pathname could instead fingerprint that build.
-    let file = std::fs::File::open("/proc/self/exe")
+    let mut file = std::fs::File::open("/proc/self/exe")
         .map_err(|e| input_error(format!("open executing image: {e}")))?;
     let metadata = file
         .metadata()
         .map_err(|e| input_error(format!("inspect executing image: {e}")))?;
-    if !metadata.is_file() || metadata.len() > MAX_ARTIFACT_BYTES {
-        return Err(input_error("executing image is not a bounded regular file"));
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Err(input_error(
+            "executing image is not a nonempty regular file",
+        ));
     }
-    let mut bytes = Vec::new();
-    file.take(MAX_ARTIFACT_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| input_error(format!("read executing image: {e}")))?;
-    if bytes.len() as u64 > MAX_ARTIFACT_BYTES {
-        return Err(input_error("executing image exceeds its byte bound"));
+    // DESIGN: a debug executable can exceed the report-artifact limit. The pinned inode's length is
+    // the image read budget; fixed-size chunks keep memory independent of debug-symbol size.
+    let digest = digest_image_reader(&mut file, metadata.len())?;
+    if file
+        .metadata()
+        .map_err(|e| input_error(format!("reinspect executing image: {e}")))?
+        .len()
+        != metadata.len()
+    {
+        return Err(input_error(
+            "executing image changed length while fingerprinting",
+        ));
     }
-    Ok(blake3_hash(&bytes))
+    Ok(digest)
+}
+
+#[cfg(target_os = "linux")]
+fn digest_image_reader(
+    reader: impl std::io::Read,
+    expected_bytes: u64,
+) -> Result<Digest32, Refusal> {
+    use fmine_core::hash::Blake3;
+    use std::io::{ErrorKind, Read as _};
+
+    let limit = expected_bytes
+        .checked_add(1)
+        .filter(|_| expected_bytes != 0)
+        .ok_or_else(|| input_error("executing image has no supported byte budget"))?;
+    let mut reader = reader.take(limit);
+    let mut remaining = expected_bytes;
+    let mut hasher = Blake3::new();
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let count = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => return Err(input_error(format!("read executing image: {error}"))),
+        };
+        remaining = remaining
+            .checked_sub(count as u64)
+            .ok_or_else(|| input_error("executing image changed length while fingerprinting"))?;
+        hasher.update(&buffer[..count]);
+    }
+    if remaining != 0 {
+        return Err(input_error(
+            "executing image changed length while fingerprinting",
+        ));
+    }
+    Ok(hasher.finalize())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -409,6 +450,90 @@ mod tests {
                     .code,
                 "FMINE-REF-202"
             );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    mod image_identity {
+        use super::*;
+        use std::io::{self, Cursor, Read};
+
+        struct Chunked<R> {
+            inner: R,
+            interrupt_next: bool,
+            total: u64,
+            largest_request: usize,
+        }
+
+        impl<R: Read> Read for Chunked<R> {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                self.largest_request = self.largest_request.max(buffer.len());
+                if self.interrupt_next {
+                    self.interrupt_next = false;
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                let count = buffer.len().min(4093);
+                let read = self.inner.read(&mut buffer[..count])?;
+                self.total += read as u64;
+                Ok(read)
+            }
+        }
+
+        fn chunked<R: Read>(inner: R) -> Chunked<R> {
+            Chunked {
+                inner,
+                interrupt_next: true,
+                total: 0,
+                largest_request: 0,
+            }
+        }
+
+        #[test]
+        fn streaming_image_identity_matches_exact_bytes_across_read_boundaries() {
+            for length in [
+                1, 63, 64, 65, 1023, 1024, 1025, 16_383, 16_384, 16_385, 32_769,
+            ] {
+                let bytes: Vec<u8> = (0..length).map(|i| (i % 251) as u8).collect();
+                let mut reader = chunked(Cursor::new(&bytes));
+                let got = digest_image_reader(&mut reader, bytes.len() as u64)
+                    .expect("complete interrupted/short reads");
+                assert_eq!(got, blake3_hash(&bytes), "length {length}");
+                assert_eq!(reader.total, length as u64);
+                assert!(reader.largest_request <= 16 * 1024);
+            }
+        }
+
+        #[test]
+        fn executable_identity_is_not_limited_by_report_artifact_size() {
+            let length = fmine_io::reliance::MAX_ARTIFACT_BYTES + 1;
+            let mut reader = chunked(io::repeat(0xa5).take(length));
+            digest_image_reader(&mut reader, length)
+                .expect("running images may exceed the independent report-artifact limit");
+            assert_eq!(reader.total, length);
+            assert!(reader.largest_request <= 16 * 1024);
+        }
+
+        #[test]
+        fn image_identity_refuses_length_changes_and_read_failures() {
+            for expected in [0, 2, 4, u64::MAX] {
+                let mut reader = Cursor::new(b"abc");
+                let error = digest_image_reader(&mut reader, expected)
+                    .expect_err("length must be exactly supported");
+                assert_eq!(error.code, "FMINE-REF-506");
+                assert!(reader.position() <= expected.saturating_add(1));
+            }
+
+            struct ReadFailure;
+            impl Read for ReadFailure {
+                fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                    Err(io::Error::other("injected image read failure"))
+                }
+            }
+            // A failure after all declared bytes still must not be accepted as end-of-file.
+            let error = digest_image_reader(Cursor::new(b"abc").chain(ReadFailure), 3)
+                .expect_err("read errors do not prove EOF");
+            assert_eq!(error.code, "FMINE-REF-506");
+            assert!(error.what.contains("injected image read failure"));
         }
     }
 }

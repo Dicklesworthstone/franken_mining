@@ -183,8 +183,10 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   Source errors retain their original refusal.
   For `assure issue`, build revision is embedded by `build.rs`; a dirty build is marked and an unknown or
   unrelated enclosing-repository revision refuses issuance. The opened Linux `/proc/self/exe` image is
-  hashed with BLAKE3, preserving identity across pathname replacement. Platforms without a supported
-  executing-image handle refuse this command with `FMINE-REF-202`.
+  hashed with BLAKE3, preserving identity across pathname replacement. DESIGN: executable hashing streams
+  through a fixed-size buffer and verifies the opened file's exact metadata length, including an EOF check.
+  Report-artifact byte limits do not constrain the executable; empty, shortened or growing images refuse.
+  Platforms without a supported executing-image handle refuse this command with `FMINE-REF-202`.
   A runtime checkout cannot relabel an installed executable. For `assure issue`, no supplied revision, Claim list
   or artifact digest substitutes for the producer's verified report. Owner-key possession is local release capability,
   not a human signature, disclosure clearance or an independent time proof.
