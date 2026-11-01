@@ -14,4 +14,5 @@ This directory holds machine- and human-verifiable admission records (`INT-*`), 
 
 ## Budget amendments (none approved)
 Form: [`docs/templates/BUDGET-AMEND.md`](../templates/BUDGET-AMEND.md). `xtask check-amend` reads these records (§28.4.3, `BD-012`).
-- [`BUDGET-AMEND-001-fmine-public.md`](./BUDGET-AMEND-001-fmine-public.md) — `fmine-public` 18000 → 22000 planned, for the `check tables` binding (`bd-4wvl.8`) (PENDING).
+- [`BUDGET-AMEND-001-fmine-public.md`](./BUDGET-AMEND-001-fmine-public.md) — `fmine-public` 18000 → 22000 planned, for the `check tables` binding (`bd-4wvl.8`) (PENDING; the binding later landed in `fmine-cli`, see 002).
+- [`BUDGET-AMEND-002-fmine-cli.md`](./BUDGET-AMEND-002-fmine-cli.md) — `fmine-cli` 26000 → 31000 planned, for the verbs already landed past 26000 and the open `lint`, `track-record` and pit verbs (PENDING).
