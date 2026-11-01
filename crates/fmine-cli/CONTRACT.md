@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_data", "track_record_price", "lint", "forecast", "reliance", "reliance_binding"]`
+- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_data", "track_record_price", "lint", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -15,6 +15,15 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `assure public --issuer <issuer> [--through YYYYQn]`: the gate-eligible run over the filings in
     `registries/sources/<issuer>.toml`, optionally only those at or before a quarter;
   - `assure public --synthetic`: the known-answer run, never gate-eligible;
+  - `assure issue`: owner-authorized issuance of a freshly verified public or explicitly synthetic assurance
+    report to a new local file, binding exact JSON bytes, canonical Claims, ledger anchor, source manifest,
+    build-time revision, executable digest, generic recipient role and purpose (BD-347);
+  - `reliance init|check|withdraw|supersede|refresh`: create, inspect and append local reliance events with
+    explicit owner key, expected head and bounded time where the operation changes the journal;
+  - `reliance export`: retrieve an existing artifact only after a pinned current-use check, keeping the
+    journal lock through the exact-byte write. It does not create a new recipient record;
+  - `recall --revision <revision>|--claim <id>`: list known affected copies and generic recipient roles,
+    without sending messages or asserting receipt;
   - `assure challenges --issuer <issuer> [--through YYYYQn]` or `--synthetic`: content-addressed internal-review
     packets from visible assurance exceptions, with JSON or readable `--format markdown` output (BD-349);
   - `guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD`
@@ -107,6 +116,26 @@ after artifact creation leaves issuance durability unconfirmed: retain the file 
   `to_markdown`. The existing assurance engine computes the states; this module packages their evidence.
 
 ## 5. Guards & Typed Refusals
+- DESIGN (BD-347): the explicit-time grammar never samples the host clock or trusts a journal head it just
+  read. The existing host-clock grammar requires its separate `--trust-host-clock` declaration; flags from
+  the two grammars cannot be mixed. Unpinned, stale, future or insufficiently bounded status is `unknown`, never permission to reuse.
+  A historical `--as-of` result never grants current reuse. Check and recall emit metadata, not artifact bytes.
+  Mutation keys are exact nonzero private binary files. Append uses a caller-supplied expected head under an
+  exclusive lock; wrong keys, stale writers and invalid transitions cannot overwrite an artifact or journal.
+  Issuance uses the same verified source projection and JSON envelope as `assure public`, including its final
+  newline. Inputs are bound separately from exact output bytes. Source errors retain their original refusal.
+  For `assure issue`, build revision is embedded by `build.rs`; a dirty build is marked and an unknown or
+  unrelated enclosing-repository revision refuses issuance. The opened Linux `/proc/self/exe` image is
+  hashed with BLAKE3, preserving identity across pathname replacement. Platforms without a supported
+  executing-image handle refuse this command with `FMINE-REF-202`.
+  A runtime checkout cannot relabel an installed executable. No supplied revision, Claim list or artifact
+  digest substitutes for the producer's verified report. Owner-key possession is local release capability,
+  not a human signature, disclosure clearance or an independent time proof.
+  Both issue commands share `reliance_binding` for the exact envelope, Claim closure and input manifest,
+  and use `Journal::issue_bytes`; both retrieval commands use `Journal::export_current`. This preserves
+  cross-command artifact identity, private create-new writes, parent-directory synchronization and journal
+  locking throughout the status check and copy. Shared record rendering labels revision evidence as
+  recorded; only the immediate `assure issue` receipt attests build-time capture.
 - **Exit 0:** ok.
 - **Exit 2:** a usage error with no refusal code. This covers:
   - an unknown verb or flag, a surplus word, or a flag the verb does not take (none is ignored);
@@ -253,6 +282,10 @@ after artifact creation leaves issuance durability unconfirmed: retain the file 
   `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 
 ## 6. Proof Obligations (`PO-*`)
+- FACT (BD-347, `tests/reliance_lifecycle.rs`): real-binary synthetic workflows cover issuance, exact ordinary
+  report bytes, multiple recipient roles, pinned checks, recall, withdrawal, supersession and current retrieval.
+  Wrong keys, stale writers, unsafe trust, altered registered workbooks and existing destinations refuse while
+  preserving evidence. Withdrawn and superseded bytes still authenticate but cannot pass current reuse.
 - `PO-CLI-1`: `assure public --synthetic` exits 0 with `lane` `synthetic`, `gate_eligible` false and the seeded
   totals.
 - `PO-CLI-2`: `assure public --issuer barrick` without the registered files exits 8 and names them.
@@ -333,7 +366,9 @@ None: every failure is a usage error or a typed refusal.
   JSON and Markdown retain the unconditional score beside every conditional result, exact input-rounding
   bounds and source citations. TCC and C1 remain unsplit. No controllability or causal claim is created.
 - Computes nothing itself: all calculation is delegated to the `V`/`E`/`K`/`S0` crates.
-- Never writes to any external system.
+- Writes only explicitly requested local reliance journals and artifact files; never sends messages or writes
+  to an external system. Recall covers recorded copies; local retrieval does not prove remote delivery or
+  recall every detached copy. The local journal is not a replicated authority service.
 - Challenge packets do not cover hidden or not-published instances. Human review and external-release
   sequencing remain open for every packet, including PDF transcription conflicts.
 - Guidance completion supplies a T1 finite historical comparison when usable original-quarter evidence exists,

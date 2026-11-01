@@ -478,7 +478,7 @@ fn issue_json(issue: &IssuanceRecord) -> String {
         .join(",");
     format!(
         "{{\"output_digest\":{},\"output_digest_algorithm\":\"blake3\",\"output_claims\":[{claims}],\
-         \"anchor_id\":{},\"state_root\":{},\"code_revision\":{},\"code_revision_evidence\":\"caller_declared\",\
+         \"anchor_id\":{},\"state_root\":{},\"code_revision\":{},\"code_revision_evidence\":\"recorded\",\
          \"binary_digest\":{},\"binary_digest_algorithm\":\"blake3\",\"input_manifest_root\":{},\
          \"lane\":{},\"confidentiality\":\"public\",\"public_taint\":{},\"recipient_role\":{},\
          \"purpose\":{},\"issued_at_ns\":{}}}",
@@ -657,9 +657,15 @@ fn execute_with(
         Operation::Check { .. } => inspect_check(command, root, clock)
             .and_then(|(payload, refusal)| refusal.map_or(Ok(payload), Err)),
         Operation::Reuse { artifact, output } => {
-            let journal = Journal::open_read(&path, access.head)?;
+            let inspected = Journal::open_read(&path, None)?;
+            if access.head != Some(inspected.head()) {
+                return Err(Refusal::new(
+                    RefusalCode::NotObservable202,
+                    "current artifact reuse requires an independently trusted matching journal head",
+                ));
+            }
             let time = if access.trust_host_clock {
-                trusted_time(access, journal.ledger().header(), clock()?)
+                trusted_time(access, inspected.ledger().header(), clock()?)
             } else {
                 None
             }
@@ -669,6 +675,10 @@ fn execute_with(
                     "current reuse requires an explicitly trusted bounded clock",
                 )
             })?;
+            // DESIGN: retain the first shared lock until the independently pinned handle is open;
+            // cooperating writers cannot advance the journal between checking the pin and using it.
+            let journal = Journal::open_read(&path, access.head)?;
+            drop(inspected);
             let digest =
                 journal.export_current(&absolute(root, artifact), &absolute(root, output), time)?;
             Ok(receipt(
@@ -983,7 +993,7 @@ mod tests {
         assert!(
             first.contains(&blake3_hash(b"synthetic executable image for binding test").to_hex())
         );
-        assert!(first.contains("\"code_revision_evidence\":\"caller_declared\""));
+        assert!(first.contains("\"code_revision_evidence\":\"recorded\""));
         let recall = call(&root, &["recall", "--code-revision", REVISION], START + 2).unwrap();
         assert!(recall.contains("\"known_copy_count\":2"));
         assert!(recall.contains("\"notifications_sent\":0"));
@@ -1250,6 +1260,29 @@ mod tests {
         )
         .unwrap();
         let output = blake3_hash(&std::fs::read(root.join("report.json")).unwrap()).to_hex();
+        let current_head = head(&root);
+        for (destination, authority) in [
+            ("no-clock-copy", vec!["--head", current_head.as_str()]),
+            ("no-pin-copy", vec!["--trust-host-clock"]),
+            (
+                "mismatched-pin-copy",
+                vec!["--head", old_head.as_str(), "--trust-host-clock"],
+            ),
+        ] {
+            let mut args = vec![
+                "reuse",
+                "--artifact",
+                "report.json",
+                "--output",
+                destination,
+            ];
+            args.extend(authority);
+            assert_eq!(
+                call(&root, &args, START + 2).unwrap_err().code,
+                "FMINE-REF-202"
+            );
+            assert!(!root.join(destination).exists());
+        }
         for args in [
             vec!["check", "--digest", &output, "--trust-host-clock"],
             vec![

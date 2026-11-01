@@ -139,3 +139,21 @@ path = "robot schema"
 subsystem = "Adit"
 mutates_authority = false
 description = "Emit the JSON schema for FMT-ENV-1 envelopes, Claims, DecisionCards, and Refusals"
+
+[[verb]]
+path = "assure issue"
+subsystem = "Bullion"
+mutates_authority = true
+description = "Issue exact verified assurance bytes with canonical Claims, source manifest, build identity and recipient role"
+
+[[verb]]
+path = "reliance export"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Retrieve an existing issued artifact while retaining its pinned current-use journal lock"
+
+[[verb]]
+path = "recall"
+subsystem = "Plumb"
+mutates_authority = false
+description = "List every recorded issued copy affected by a build revision or canonical Claim without contacting recipients"

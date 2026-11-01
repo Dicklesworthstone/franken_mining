@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 23
+[verbs] 26
 assure public
 assure challenges
 guidance completion
@@ -97,3 +97,6 @@ repair plan
 repair apply
 robot-docs
 robot schema
+assure issue
+reliance export
+recall

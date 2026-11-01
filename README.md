@@ -279,7 +279,68 @@ DecisionCard API requires this replay certificate and checks that it binds the a
 cut and exact rendered/numeric output. Legacy action, CVaR, flip-margin and VOI fields still lack their own
 Claim provenance, so that wrapper explicitly limits its historical evidence claim to expected NPV.
 
-### Issue a report and check whether it can be reused
+### Issue reports with explicit time and build identity
+
+DESIGN (BD-347): `assure issue` produces the same verified JSON envelope as `assure public`, including its
+final newline, and records its exact bytes, Claim inventory, ledger anchor, input manifest, build identity,
+generic recipient role and purpose in a local append-only journal. `--output` must name a new file. No command
+sends the report or contacts a recipient. The explicit synthetic lane exercises the same issuance protocol.
+
+The owner supplies a pre-existing private key file containing exactly thirty-two raw bytes, with no Unix
+group or other access; an all-zero key is refused. `NOW` is a UTC timestamp such as
+`2026-11-01T12:00:00Z`; `UNCERTAINTY_NS` is an
+explicit bound supplied by the trusted caller. The CLI does not establish clock accuracy. For example:
+
+```bash
+fmine reliance init --journal reliance.log --key owner.key \
+  --now "$NOW" --uncertainty-ns "$UNCERTAINTY_NS" \
+  --max-age-ns 3600000000000 --max-skew-ns 1000000000
+
+fmine assure issue --synthetic --output report.json --journal reliance.log \
+  --expected-head "$EXPECTED_HEAD" --key owner.key --role sponsor --purpose 'internal review' \
+  --now "$NOW" --uncertainty-ns "$UNCERTAINTY_NS"
+
+fmine reliance check report.json --journal reliance.log --head "$TRUSTED_HEAD" \
+  --now "$NOW" --uncertainty-ns "$UNCERTAINTY_NS"
+fmine reliance export report.json --output current-copy.json --journal reliance.log \
+  --head "$TRUSTED_HEAD" --now "$NOW" --uncertainty-ns "$UNCERTAINTY_NS"
+```
+
+Use `--issuer barrick [--through YYYYQn]` instead of `--synthetic` to issue a report from verified registered
+documents. The mutation's `EXPECTED_HEAD` is the previously committed head; each successful mutation returns
+its successor. A consumer's `TRUSTED_HEAD` must be obtained independently from the release owner. Reading the
+head from an untrusted copy of the same journal supplies no authority. Missing trust or time, stale status,
+clock rollback and excessive uncertainty produce `unknown` and never authorize current reuse. Historical
+`--as-of` inspection also never authorizes reuse, even if the historical status was `current`.
+
+Owner-authorized withdrawal and recall retain the original artifact:
+
+```bash
+fmine reliance withdraw "$OUTPUT_DIGEST" --journal reliance.log \
+  --expected-head "$EXPECTED_HEAD" --key owner.key --reason 'source correction' \
+  --defect source-restated --claim "$CLAIM_ID" \
+  --now "$NOW" --uncertainty-ns "$UNCERTAINTY_NS"
+fmine recall --journal reliance.log --claim "$CLAIM_ID"
+fmine recall --journal reliance.log --revision "$BUILD_REVISION"
+```
+
+DESIGN: withdrawal blocks current reuse while historical bytes still verify. `reliance supersede` links an
+issued digest to an existing issued replacement; the replacement's own status must be checked separately.
+`reliance refresh` appends an owner-authorized freshness cut. Both require the same key, expected head and
+bounded-time arguments as withdrawal. `reliance export` retrieves an existing issuance; issuing a copy to a
+new role or purpose uses `assure issue` with another output path. Only recorded copies are recallable.
+Recipient roles are `release-owner`, `sponsor`, `reviewer-pool-N` or `agent-session:<hex>`; no personal contact
+fields are stored. Build revision is captured at compilation, with `+dirty` when applicable, and the executable
+itself is hashed. An unavailable build revision refuses issuance. `robot-docs` lists the complete grammar.
+`assure issue` currently requires Linux's executing-image handle so replacing a binary's pathname cannot change
+the recorded binary identity. Other platforms refuse issuance explicitly; status inspection and local
+retrieval remain available where their existing journal-lock support is present.
+
+The explicit-time grammar above shares report metadata and journal storage with the host-clock grammar
+below. Existing `reliance issue`, `reuse` and `recall` commands remain available. Choose one complete grammar
+for each invocation; mixing its authority or time flags is a usage error.
+
+### Issue reports with an explicitly trusted host clock
 
 DESIGN (BD-347): a local reliance journal records exact assurance artifacts, their Claim dependencies and
 generic recipient roles. A matching file digest proves the bytes still match; current reuse also requires a
