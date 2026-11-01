@@ -703,3 +703,87 @@ fn unusable_competing_target_cannot_disappear_during_claim_projection() {
         }
     }
 }
+
+#[test]
+fn unreadable_summary_competitors_refuse_before_append_but_detail_errors_stay_separate() {
+    for bad_sheet in ["YTD", "QTD", "Minestats1"] {
+        let mut fixture = Fixture::annual("100%");
+        let path = fixture.root.join("corpus/2030Q4.xlsx");
+        let original = fs::read(&path).unwrap();
+        let mut sheets = vec![
+            sheet(
+                "YTD",
+                "twelve",
+                "400.4",
+                "All-in sustaining costs ($/oz)",
+                "December 31",
+            ),
+            sheet(
+                "QTD",
+                "three",
+                "100.4",
+                "All-in sustaining costs ($/oz)",
+                "December 31",
+            ),
+        ];
+        if bad_sheet == "Minestats1" {
+            sheets.push(MinimalSheet {
+                name: bad_sheet.into(),
+                hidden: false,
+                cells: vec![(
+                    "A1".into(),
+                    MinimalCell::Text("For the invented months ended December 31,".into()),
+                )],
+            });
+        } else {
+            let summary = sheets.iter_mut().find(|s| s.name == bad_sheet).unwrap();
+            summary.cells.extend([
+                ("A6".into(), MinimalCell::Text("Site A (60%)".into())),
+                ("B6".into(), MinimalCell::Text("unreadable outcome".into())),
+            ]);
+        }
+        let bytes = build_minimal_xlsx_styled(
+            &sheets,
+            Some(&MinimalStyles {
+                num_fmts: vec![],
+                xfs: vec![1],
+            }),
+        );
+        fs::write(&path, &bytes).unwrap();
+        let registry = registry_path(&fixture.root, ISSUER);
+        let text = fs::read_to_string(&registry)
+            .unwrap()
+            .replace(
+                &format!("bytes = {}\n", original.len()),
+                &format!("bytes = {}\n", bytes.len()),
+            )
+            .replace(&fixture.source_digest.to_hex(), &sha256(&bytes).to_hex());
+        fs::write(registry, text).unwrap();
+        let profile = load_issuer_profile(&fixture.root, ISSUER).unwrap();
+        let sources = fmine_public::load_registered_sources(&profile, &fixture.root).unwrap();
+        let read = fmine_public::mine_stats::read_mine_stats(
+            &sources[0].workbook,
+            "2030Q4",
+            None,
+        )
+        .unwrap();
+        assert!(
+            read.refusals
+                .iter()
+                .any(|error| error.locator.contains(&format!(":{bad_sheet}!"))),
+            "the planted cell/header must actually be refused by the reader"
+        );
+        assert!(
+            read.values.iter().any(|row| row.sheet == "YTD"
+                && row.cell == "B5"
+                && row.site == "Site A"),
+            "the valid original remains present after the competing error is dropped"
+        );
+        if bad_sheet == "Minestats1" {
+            let admitted = fixture.ok(fixture.resolve(), ns(AVAILABLE));
+            assert!(admitted.payload_json.contains("\"n_outcomes\":1"));
+        } else {
+            fixture.refuse(&fixture.resolve(), ns(AVAILABLE), "FMINE-REF-208");
+        }
+    }
+}

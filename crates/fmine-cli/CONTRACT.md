@@ -135,7 +135,11 @@ bytes and the canonical Claim, and matches the exact frozen issuer, subject, per
 and ownership. It uses the displayed decimal, retaining the stored value and exact rational separately;
 the existing score kernel receives that rational's deterministic floating-point projection.
 Ambiguous, missing, placeholder, status-marked, stale, altered and incompatible sources refuse without
-appending. A later comparative cannot fill a missing original. An unmarked printed zero remains valid.
+appending. Candidate cardinality is checked before canonical-key projection, and a reader refusal on either
+QTD/YTD summary sheet blocks admission: an unusable competing row cannot disappear and leave a false singleton.
+Unrelated detailed-sheet refusals do not replace the target. A later comparative cannot fill a missing original.
+An unmarked printed zero remains valid. Cross-crate forecast replay controls retain their CLI harness and all
+assertions in `crates/xtask/testdata/forecast_replay_controls.rs`.
 Publication date and its registered FACT/INFERENCE basis are mandatory; that date must fall after the
 complete target period. Retrieval never substitutes for a missing publication date, and the stated basis
 is retained metadata rather than independent proof of publication time. Conservative availability is

@@ -207,6 +207,21 @@ pub(super) fn resolve_release(
         release,
         (!profile.mine_stats_labels.is_empty()).then_some(&vocabulary),
     )?;
+    // Summary reader errors may hide a competing row before it reaches raw candidate selection.
+    let summary_prefixes = [format!("{release}:QTD!"), format!("{release}:YTD!")];
+    if let Some(error) = read.refusals.iter().find(|error| {
+        summary_prefixes
+            .iter()
+            .any(|prefix| error.locator.starts_with(prefix.as_str()))
+    }) {
+        return Err(refusal(
+            RefusalCode::SourceCellUnusable208,
+            format!(
+                "summary reader refused {}: {}",
+                error.locator, error.reason
+            ),
+        ));
+    }
     let period = policy.period.label();
     let field = policy.metric.field(policy.ownership);
     let subject = &policy.members[&forecast_id];
