@@ -8,8 +8,9 @@
 //! half-last-place rounding intervals. Source publication dates are not guessed from workbook quarters.
 //!
 //! The sales scenario repeats the preceding year's FY-minus-YTD sales, with both cited vintages retained.
-//! It is an assumption, not a forecast. This adapter supplies no joint historical or technical-report
-//! envelope: T3 means necessary arithmetic conditions only, without a probability or capacity verdict.
+//! It is an assumption, not a forecast. T1 jointly replays complete original-vintage rolling windows,
+//! preserving each source quarter and its sales/rate dependence. No usable history is T3. Neither tier
+//! supplies a probability or a physical-capacity verdict.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -35,8 +36,10 @@ use crate::key::{KeyedCell, OwnershipBasis, PublicValue, Scope};
 use crate::sources::{IssuerProfile, load_issuer_profile};
 use crate::transcribe::{CheckedDocument, TranscriptionReport, load_transcription_report_as_of};
 
+pub mod history;
+
 const COST_BASIS: &str = "issuer-reported-per-sold-oz";
-pub const NO_CLAIM: &str = "Necessary arithmetic conditions under a declared sales assumption; no forecast, probability of meeting guidance, physical-capacity verdict or regulatory claim.";
+pub const NO_CLAIM: &str = "Arithmetic and finite historical-window comparisons under a declared sales assumption; no forecast, probability of meeting guidance, physical-capacity verdict or regulatory claim.";
 
 type Result<T> = std::result::Result<T, Refusal>;
 
@@ -44,6 +47,9 @@ type Result<T> = std::result::Result<T, Refusal>;
 pub struct GuidanceCompletionReport {
     pub inputs: CompletionInputs,
     pub completion: CompletionReport,
+    pub history: kernel::quarters::QuarterlyHistoryReport,
+    pub history_exclusions: Vec<history::HistoryExclusion>,
+    pub history_sources: Vec<history::HistorySourceWindow>,
     /// Digest of the deterministic report body, including the requested cut and every selected source.
     pub digest: Digest32,
     body: String,
@@ -450,6 +456,12 @@ fn select_cell<'a>(
 }
 
 fn actual_claim(c: &KeyedCell, kind: QuantityKind) -> Result<Claim<Quantity>> {
+    if matches!(c.claim.representation, Representation::Placeholder { .. }) {
+        return Err(refuse(
+            RefusalCode::SourceCellUnusable208,
+            format!("{}: a placeholder cannot supply an actual", c.locator),
+        ));
+    }
     if !c.claim.confidentiality.is_public() {
         return Err(refuse(
             RefusalCode::MnpiWall301,
@@ -686,6 +698,7 @@ fn assemble(
         remaining_sold,
     };
     let completion = kernel::complete(&inputs)?;
+    let historical = history::compare(&inputs, cells)?;
     let selected = [production, sold, aisc, historic_fy, historic_ytd];
     let sources = selected
         .iter()
@@ -707,7 +720,7 @@ fn assemble(
         .collect::<Vec<_>>()
         .join(",");
     let body = format!(
-        "\"schema\":\"fmine.guidance.completion.v1\",\"lane\":{},\"gate_eligible\":false,\"issuer\":{},\"site\":{},\"through\":{},\"as_of\":{},\"workbooks_available_by\":{},\"availability_basis\":\"verified registry retrieval; workbook publication dates unregistered\",\"guidance_published_at\":{},\"guidance_published_at_basis\":{},\"envelope_tier\":\"T3\",\"verdict\":\"necessary_arithmetic_condition_only\",\"sales_scenario\":\"ASSUMPTION: repeat preceding-year FY-minus-YTD sold ounces, using that year's corresponding registered releases; not a forecast\",\"seasonality\":\"historical same-calendar-month sales context only; no seasonality forecast\",\"inputs\":{{\"production_guidance\":{},\"aisc_guidance\":{},\"ytd_production\":{},\"ytd_sold\":{},\"ytd_aisc\":{},\"remaining_sold\":{}}},\"requirements\":{{\"remaining_production\":{},\"ytd_aisc_spend\":{},\"remaining_aisc_spend\":{},\"remaining_aisc_rate\":{}}},\"frontier\":[{}],\"spending_requirement\":{},\"guidance_sources\":[{}],\"source_claims\":[{}],\"historical_sales\":[{},{}],\"warnings\":[\"Historical remaining sales subtract two published vintages; restatements and future inventory changes are not predicted.\",\"AISC comparisons require the two-reader assertion of the same issuer-reported definition; adjusted guidance is not supported.\",\"No joint historical or technical-report capacity envelope has been supplied.\"],\"no_claim\":{}",
+        "\"schema\":\"fmine.guidance.completion.v1\",\"lane\":{},\"gate_eligible\":false,\"issuer\":{},\"site\":{},\"through\":{},\"as_of\":{},\"workbooks_available_by\":{},\"availability_basis\":\"verified registry retrieval; workbook publication dates unregistered\",\"guidance_published_at\":{},\"guidance_published_at_basis\":{},\"envelope_tier\":{},\"verdict\":{},\"sales_scenario\":\"ASSUMPTION: repeat preceding-year FY-minus-YTD sold ounces, using that year's corresponding registered releases; not a forecast\",\"seasonality\":\"Same-season rolling windows are marked as calendar context only; all equal-duration windows enter the historical comparison.\",\"inputs\":{{\"production_guidance\":{},\"aisc_guidance\":{},\"ytd_production\":{},\"ytd_sold\":{},\"ytd_aisc\":{},\"remaining_sold\":{}}},\"requirements\":{{\"remaining_production\":{},\"ytd_aisc_spend\":{},\"remaining_aisc_spend\":{},\"remaining_aisc_rate\":{}}},\"frontier\":[{}],\"spending_requirement\":{},\"guidance_sources\":[{}],\"source_claims\":[{}],\"historical_sales\":[{},{}],\"history\":{},\"warnings\":[\"Historical remaining sales subtract two published vintages; restatements and future inventory changes are not predicted.\",\"AISC comparisons require the two-reader assertion of the same issuer-reported definition; adjusted guidance is not supported.\",\"Historical exclusion concerns only the supplied finite windows under the declared sales scenario; no technical-report capacity envelope has been supplied.\"],\"no_claim\":{}",
         js(if synthetic { "synthetic" } else { "public" }),
         js(issuer),
         js(site),
@@ -716,6 +729,8 @@ fn assemble(
         js(availability),
         js(&doc.published_at),
         js(&doc.published_at_basis),
+        js(history::tier(&historical.comparison)),
+        js(history::verdict(&historical.comparison)),
         quantity_json(&inputs.production_guidance),
         quantity_json(&inputs.aisc_guidance),
         quantity_json(&inputs.ytd_production),
@@ -736,25 +751,21 @@ fn assemble(
         sources,
         quantity_json(&fy),
         quantity_json(&hytd),
+        history::to_json(&historical),
         js(NO_CLAIM)
     );
     Ok(GuidanceCompletionReport {
         inputs,
         completion,
+        history: historical.comparison,
+        history_exclusions: historical.exclusions,
+        history_sources: historical.sources,
         digest: blake3_hash(body.as_bytes()),
         body,
     })
 }
 
-fn quantity_json(c: &Claim<Quantity>) -> String {
-    let q = &c.value;
-    let rat = |r: Rat| js(&format!("{}/{}", r.num(), r.den()));
-    let basis = match q.ownership {
-        Ownership::Full => "{\"kind\":\"100_percent\"}".into(),
-        Ownership::Attributable { share } => {
-            format!("{{\"kind\":\"attributable\",\"share\":{}}}", rat(share))
-        }
-    };
+fn claim_fields<T>(c: &Claim<T>) -> String {
     let anchors = c
         .anchors
         .iter()
@@ -776,9 +787,31 @@ fn quantity_json(c: &Claim<Quantity>) -> String {
         .join(",");
     let uu_terms = c.uu_terms.iter().map(|u| format!("{{\"scenario_id\":{},\"description\":{},\"downside_exposure_usd_m\":{},\"trigger_indicator\":{}}}", js(&u.scenario_id), js(&u.description), if u.downside_exposure_usd_m.is_finite() { u.downside_exposure_usd_m.to_string() } else { "null".into() }, js(&u.trigger_indicator))).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"claim_id\":{},\"metric\":{},\"subject\":{},\"year\":{},\"first_month\":{},\"last_month\":{},\"ownership_basis\":{},\"kind\":{},\"definition\":{},\"interval\":{{\"lo\":{},\"hi\":{},\"closed\":true}},\"representation\":\"deterministic_exact_set\",\"support\":\"period_aggregate\",\"additivity\":{},\"evidence\":{},\"epistemic\":{},\"knowledge\":{},\"confidentiality\":\"public\",\"calibration\":\"not_a_probability\",\"uu_terms\":[{}],\"parents\":[{}],\"anchors\":[{}]}}",
+        "\"claim_id\":{},\"metric\":{},\"representation\":\"deterministic_exact_set\",\"support\":\"period_aggregate\",\"additivity\":{},\"evidence\":{},\"epistemic\":{},\"knowledge\":{},\"confidentiality\":\"public\",\"calibration\":\"not_a_probability\",\"uu_terms\":[{}],\"parents\":[{}],\"anchors\":[{}]",
         js(&c.claim_id.to_string()),
         js(&c.metric_key),
+        js(&format!("{:?}", c.additivity)),
+        js(&format!("{:?}", c.evidence)),
+        js(&format!("{:?}", c.epistemic)),
+        js(&format!("{:?}", c.state)),
+        uu_terms,
+        parents,
+        anchors
+    )
+}
+
+fn quantity_json(c: &Claim<Quantity>) -> String {
+    let q = &c.value;
+    let rat = |r: Rat| js(&format!("{}/{}", r.num(), r.den()));
+    let basis = match q.ownership {
+        Ownership::Full => "{\"kind\":\"100_percent\"}".into(),
+        Ownership::Attributable { share } => {
+            format!("{{\"kind\":\"attributable\",\"share\":{}}}", rat(share))
+        }
+    };
+    format!(
+        "{{{},\"subject\":{},\"year\":{},\"first_month\":{},\"last_month\":{},\"ownership_basis\":{},\"kind\":{},\"definition\":{},\"interval\":{{\"lo\":{},\"hi\":{},\"closed\":true}}}}",
+        claim_fields(c),
         js(&q.subject),
         q.period.year,
         q.period.first_month,
@@ -792,14 +825,7 @@ fn quantity_json(c: &Claim<Quantity>) -> String {
         }),
         js(&q.definition),
         rat(q.interval.lo),
-        rat(q.interval.hi),
-        js(&format!("{:?}", c.additivity)),
-        js(&format!("{:?}", c.evidence)),
-        js(&format!("{:?}", c.epistemic)),
-        js(&format!("{:?}", c.state)),
-        uu_terms,
-        parents,
-        anchors
+        rat(q.interval.hi)
     )
 }
 
@@ -903,6 +929,12 @@ fn synthetic_evidence() -> Result<(TranscriptionReport, Vec<KeyedCell>)> {
         ("2030Q2", "2030H1", "aisc_usd_per_oz", "2283"),
         ("2029Q4", "2029FY", "au_sold_attr_koz", "210"),
         ("2029Q2", "2029H1", "au_sold_attr_koz", "70"),
+        ("2029Q3", "2029Q3", "au_prod_attr_koz", "70"),
+        ("2029Q3", "2029Q3", "au_sold_attr_koz", "70"),
+        ("2029Q3", "2029Q3", "aisc_usd_per_oz", "1300"),
+        ("2029Q4", "2029Q4", "au_prod_attr_koz", "70"),
+        ("2029Q4", "2029Q4", "au_sold_attr_koz", "70"),
+        ("2029Q4", "2029Q4", "aisc_usd_per_oz", "1350"),
     ] {
         let bytes = format!("synthetic|{release}|{period}|{field}|{token}|attributable:4/5");
         let digest = sha256(bytes.as_bytes());
@@ -1006,7 +1038,11 @@ mod tests {
             Rat::new(108647, 800).unwrap()
         );
         assert_eq!(report.to_json(), run_synthetic().unwrap().to_json());
-        assert!(report.to_json().contains("\"envelope_tier\":\"T3\""));
+        assert!(report.to_json().contains("\"envelope_tier\":\"T1\""));
+        assert_eq!(
+            report.history.verdict,
+            kernel::HistoryVerdict::WithinEnvelope
+        );
         assert!(report.to_json().contains("\"lane\":\"synthetic\""));
         assert_eq!(report.inputs.remaining_sold.parents.len(), 2);
         assert_eq!(report.inputs.remaining_sold.anchors.len(), 2);

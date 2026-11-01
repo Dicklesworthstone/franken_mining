@@ -17,6 +17,7 @@ fmine-registry = { path = "../fmine-registry" }
 fmine-claim = { path = "../fmine-claim" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-io = { path = "../fmine-io" }
+fmine-metrics = { path = "../fmine-metrics" }
 fmine-numerics = { path = "../fmine-numerics" }
 
 [lints]

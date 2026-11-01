@@ -5,11 +5,23 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
 - **LOC Budget:** `18k planned / 21k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "guidance", "waterfall"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "guidance", "waterfall", "recovery", "lint"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
 
+- DESIGN (BD-345): `lint::lint_cited(draft, claims)` checks a bounded equality grammar against canonical
+  source assertions. It indexes Claim IDs and latest series once, then compares the named subject, supported
+  metric, period, ownership, denominator and unit. Exact rational half-step intervals decide containment,
+  disjoint values and excessive precision; no floating-point tolerance or implicit unit conversion is used.
+  AISC, total cash costs, cost of sales, gold production and gold sales are supported. Co-product TCC stays
+  distinct from by-product TCC. Unsupported prose and source values remain unchecked, and ambiguous citations
+  or semantic context never produce `verified`.
+  The caller supplies the source-verified snapshot. Staleness means a later release of the same canonical
+  series in that snapshot or explicit Claim supersession; it is not inferred from a wall clock. The report
+  binds exact draft bytes, canonical Claims, rules version and findings. It exposes numeric spans and source
+  Claims without copying entire draft sentences. It does not decide publication availability, disclosure
+  permission, qualitative truth or calibration of source numbers.
 - `sources`: the source registry (`BD-055`, `BD-322`, bd-s9j3.1), read at run time from
   `<workspace>/registries/sources/<issuer>.toml` (schema `fmine.sources.v1`, checked by `fmine_registry::sources`
   and by `xtask registry-check`). It pins each public workbook by file name, URL, byte size and SHA-256 (Barrick:
@@ -111,6 +123,28 @@ The public lane of M0 (`fmine assure public`).
   Remaining sales explicitly assume the preceding year's same remaining-month sales, derived from its original
   FY and YTD releases. Production is never substituted for sales. Workbook availability uses the verified
   retrieval date conservatively because those registry rows have no publication timestamp.
+  `guidance::history` forms every complete contiguous original-vintage window of the remaining duration,
+  including cross-year windows, strictly before the guidance year. A later comparative never fills an absent
+  original release. Missing, unusable or incompatible windows are listed with their source refusal; same-season
+  is context only. The exact quarter model retains sales/cost dependence and intersects the separate sales
+  scenario before making a joint comparison. Checked witnesses preserve original and hypothetical supports;
+  checked exclusion certificates apply only to the supplied finite windows. No usable window stays T3, and
+  solver caps remain indeterminate.
+- `recovery` (bd-srqc): fits constant implied tails and an OLS tails-on-head-grade relation to the agreed
+  annual Lumwana observations for 2013–2022, using `fmine_metrics::recovery`. It projects both onto each
+  later visible site-quarter's head grade, recovery, processed mass and reported copper production.
+  Displayed percent units and closed half-last-place bounds survive conversion; stored Excel fractions are
+  not mistaken for percent values. All four quarterly inputs come from the same earliest registered
+  workbook appearance. A later comparative never repairs an unusable first appearance. Comparative-only
+  periods retain that label, including the 2023 observations in the registered 2024 releases.
+  - Full-mine interpretation requires a separate, agreed ownership citation from the checked AIF.
+    It is explicit context on the derived physical Claims; original source keys, including unprinted basis,
+    remain unchanged. Annual intensive ratios are never multiplied by an ownership share.
+  - The model returns exact point estimates and conservative input-rounding enclosures for expected
+    recovery, signed gap in percentage points, copper difference in kt and the fraction of reported output.
+    Its marginal coefficient bounds and centred prediction bounds are not confidence or prediction intervals.
+    The residual sample SD uses `SSE/(n−1)`; the conventional regression residual-error SD uses `SSE/(n−2)`.
+    Both have separate names and numerical square-root enclosures at the printed inputs.
 - `key` (BD-332.S2/S3): projects visible AISC arithmetic operands and Mine Stats reads into source-anchored
   `Claim<PublicValue>` values. Subject, period, release, basis, scope, unit and semantic line belong to the key;
   coordinates remain citations. The raw readers and numerical identity ledgers retain their existing behavior.
@@ -190,8 +224,36 @@ The public lane of M0 (`fmine assure public`).
   renderer without changing its numerical state or the assurance root.
 - `guidance::{run_public, run_synthetic, GuidanceCompletionReport, NO_CLAIM}` (BD-342). The report carries exact
   input/output Claims, source and intermediate historical Claims, accepted guidance rows, source hashes,
-  explicit sales assumption and a content digest. It is T3 and never gate-eligible; the digest is not a forecast
-  registration or ledger root. Source epistemics and unknown-unknown terms survive quantity conversion.
+  explicit sales assumption and a content digest. It exposes `history`, `history_sources` and
+  `history_exclusions`, with T1 when usable original-quarter windows exist and T3 otherwise. The digest is not
+  a forecast registration or ledger root, and this report supplies no gate-eligibility claim. Source epistemics
+  and unknown-unknown terms survive quantity conversion.
+- `recovery::{assess, run_public, run_synthetic, RecoveryReport, QuarterReport, RULES_VERSION}` and
+  `PublicAssuranceReport::recovery` (bd-srqc). `RecoveryReport::{digest, to_json}` emits
+  `fmine.recovery.gap.v1`, binding the accepted source rows, fit, selected quarterly source Claims, results
+  and refusal codes with its own digest. The existing identity/waterfall state root is unchanged.
+  - `assess` returns no section when no recovery inputs are registered. Once registration is started,
+    incomplete or conflicting historical/ownership evidence refuses explicitly. Valid training with an
+    unusable operating quarter retains that quarter as a named refusal, with computed/refused counts.
+  - `run_public(root, issuer, through)` reads hash-verified Mine Stats Claims and current verified model
+    documents. Its optional `through` selects workbook releases only: this is a retrospective computation,
+    not an historical as-of record or hindcast. The dedicated command requires model inputs; absence refuses
+    with `FMINE-REF-201`. `run_synthetic` uses invented observations through the same adapter and kernel.
+  - Unbounded ordinary assurance includes the optional section when the local transcription registry
+    supplies the model inputs. Ordinary assurance's existing `--through` behavior still skips PDF
+    transcriptions and therefore this section.
+  - The local transcription registry uses `fmine.transcriptions.v1` with issuer `barrick`. For each year in
+    2013–2022, `recovery_lumwana_<year>_head_grade_pct` has unit `wt_pct`, and
+    `recovery_lumwana_<year>_recovery_pct` has unit `percent`; both use period `<year>FY`, basis `100%`,
+    table `Appendix A: Past Production Records for Lumwana`, the year as row, and columns
+    `Head Grade (% Cu)` and `Recovery (%)`, respectively. These fields cite the presentation's printed
+    page 39, with each original printed token and its precision preserved.
+  - `recovery_lumwana_ownership_pct` uses unit `percent`, basis `100%` and period `2025FY`, citing the
+    `Copper Mineral Reserves` table on the checked AIF's PDF page 38 (printed page 37), row
+    `Lumwana surface (100%)`, column `Based on attributable tonnes`. Every accepted field needs two distinct
+    agreeing reader roles, a complete page/table/row/column locator and the registered PDF SHA-256.
+    PDF bytes and real historical row values remain local and ignored under OPEN-R7-1; source URLs,
+    exact-byte hashes, byte counts and availability qualifications are registered.
 - `aisc::{IdentityFamily, IdentityState, IdentityInstance, FootingCertificate, UnregisteredHeader, AiscTable,
   RateMiss, ShareBasis, ExplanationBasis, DEFAULT_MISSING_FACT, SHARE_MISSING_FACT, RowAnchor, AnchorRule,
   ConsistentBasis, MemberWeighting, WeightedMember, REGION_MISSING_FACT (BD-331.S4),
@@ -228,6 +290,9 @@ The public lane of M0 (`fmine assure public`).
   - The guidance-specific as-of loader filters future documents before byte checks, reader agreement and tie
     analysis; it still validates registry syntax and document identities. General assurance checks all cited
     documents as before.
+  - The dedicated recovery loader deliberately uses the current verified historical documents even with a
+    workbook `through` bound, and states that retrospective interpretation in its payload. It does not change
+    the ordinary assurance loader's bound behavior or infer historical availability from a PDF cover date.
   - The payload's `transcriptions` section, after `unit_discovery`, holds citations (file, kind,
     `published_at` and its basis, sha256), counts, the accepted-rows digest, pending locators, conflicts and each
     document's convention finding (FMINE-REF-104 when ambiguous); never a transcribed value. It is `null` when
@@ -732,6 +797,17 @@ The public lane of M0 (`fmine assure public`).
   production and sales intervals, latest eligible vintage, exclusion of future guidance, missing/incomplete
   pairs, pending newer evidence, incompatible ownership and definition, altered documents, unusable source
   support and metadata preservation. Real values remain external inputs, not embedded source constants.
+- `PO-PUB-RECOVERY` (bd-srqc): the public adapter must preserve the independent historical fit and all
+  selected quarterly point answers, exact rounding boxes, source locators, source hashes and separate
+  ownership evidence. Synthetic and registered-input tests cover missing/disagreeing historical readings,
+  altered source bytes, missing ownership context, unusable first appearances, explicit comparative
+  selection, input mutation changing the result/digest, deterministic reruns and uncited-number checks.
+  Historical point answers are checked against the independent source-only oracle; real training rows are
+  supplied through local inputs rather than embedded test fixtures.
+- FACT (BD-342, `xtask/tests/public_guidance_history.rs`): six integration regressions cover the positive
+  synthetic T1 path, rolling and cross-year windows, original-vintage-only selection, missing history, guidance-year
+  cutoffs, incompatible source Claims and a separately restricted sales scenario. Every emitted source-quarter
+  witness is checked against its original source intervals; missing history cannot produce a positive verdict.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.
@@ -747,7 +823,7 @@ The public lane of M0 (`fmine assure public`).
 
 ## 9. Lifted Code & Foundation Dependencies
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim`, `fmine-io` and `fmine-metrics` for exact guidance
-  requirements (BD-342) and the typed public waterfall (BD-333). `fmine-units` and `fmine-time` remain
+  requirements (BD-342), the typed public waterfall (BD-333) and the recovery comparison (bd-srqc). `fmine-units` and `fmine-time` remain
   declared in the manifest.
 - Depends on `fmine-numerics` (BD-331.S6): the ledger's exact kernel (`exact_feas`, BD-340).
   `crates/xtask/tests/public_exact_feas_oracle.rs` keeps the old closed-form corner rule as an independent oracle for rates (at a
@@ -765,4 +841,9 @@ The public lane of M0 (`fmine assure public`).
 - Implies no issuer affiliation.
 - Guidance uses only the registered evidence population, not an assertion that no later issuer guidance
   exists. Historical sales persistence is an assumption, not a production/sales equality or a capacity bound.
-  The adapter does not yet assemble the kernel's joint historical T1 envelope or a technical-report T2 envelope.
+  The T1 result excludes or admits only supplied historical windows under that assumption. Public technical-report
+  T2 evidence binding remains open; no historical exclusion establishes that a mine cannot meet guidance.
+- Recovery comparison is descriptive and non-identifying. Ore type, grind, throughput, concentrate mass
+  pull and annual-to-quarter support remain explicit model limitations. Signed differences do not establish
+  causation, recoverable production, investment value or forecasting skill. This slice emits no dollar
+  sensitivity or annualized economic estimate, and makes no first-publication claim for comparative inputs.

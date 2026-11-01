@@ -127,6 +127,54 @@ cargo run -p fmine-cli -- claim show clm_REPLACE_WITH_THE_EMITTED_ID --issuer ba
 The response includes both the assurance root and the keyed Claim projection digest. Missing ids and altered
 source files refuse instead of returning a stale cached Claim.
 
+### Check cited numbers in a draft
+
+```bash
+cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2
+cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2 --format markdown
+```
+
+DESIGN (BD-345): cited mode checks explicit equalities against canonical Claims from one hash-verified source
+snapshot. Link the printed number and unit to its exact Claim ID, and state the subject, reporting period,
+ownership basis and metric. For example, using the registered North Mara source Claim:
+
+```markdown
+North Mara Q2 2026 attributable AISC per ounce sold is [$2,577/oz](fmine:clm_f6e6c9b2ea703557f2a3b2f49b22b1aa).
+```
+
+The checker uses exact rounding intervals. It distinguishes value, period and basis mismatches, excessive
+rounding, missing or ambiguous citations, and superseded Claims. It accepts only complete supported equality
+predicates; negations, comparisons and other prose remain `unchecked`. A matching number cannot compensate for
+a wrong site, period, metric or basis. `verified` means agreement with the cited source assertion, not that the
+issuer assertion is true or that disclosure is permitted. Publication-time/publicness checks are not part of
+this slice; `--through` selects registered vintages, not an information-availability date.
+
+The command reads the draft locally, writes no files, and emits number spans and verdicts rather than whole
+sentences. JSON includes the draft and Claim-population digests and the source snapshot root. Findings are data:
+a completed lint exits zero even when it finds mismatches. Missing or altered registered source files refuse.
+Use `--synthetic` with Claims emitted by the built-in synthetic assurance run for an invented demonstration.
+Relative draft paths are resolved against `--workspace`, which defaults to the current workspace.
+
+### Assess a frozen forecast cohort
+
+```bash
+cargo run -p fmine-cli -- forecast assess --ledger tests/forecasts/cohort_synthetic.toml \
+  --cohort synthetic-demo --as-of 2026-10-31T00:00:00Z
+cargo run -p fmine-cli -- forecast assess --ledger tests/forecasts/cohort_synthetic.toml \
+  --cohort synthetic-demo --as-of 2026-10-31T00:00:00Z --selector latest-as-of
+```
+
+DESIGN (BD-343): this read-only adapter replays an ordered transcript through the existing forecast ledger.
+Registrations, cohort freezes, published or missing outcomes, restatements and saved assessments retain their
+order. It reports every cohort member, selected outcome citations, missing reasons, observed scores and
+whole-cohort completion bounds, plus the frozen assumptions behind the effective sample size. The default
+selector preserves the first published outcome; `latest-as-of` reports restatements separately.
+
+The committed example is explicitly synthetic. Transcript times and citations are supplied inputs, not
+independently verified time proofs or source documents. This command neither issues the FY2026 forecast set
+nor replaces `xtask forecast-record-verify`; it makes the cohort and scoring kernel usable while retaining those
+boundaries. Relative transcript paths are resolved against the selected workspace.
+
 ### Export evidence challenges
 
 ```bash
@@ -147,11 +195,18 @@ E474 retains both the original 1,479 and later 1,474 USD/oz assertions with thei
 changes and non-comparable region boundaries stay in the assurance report. PDF transcription conflicts are
 not yet packetized. Use `--synthetic` in place of the issuer selector for an invented known-answer demonstration.
 
+Identity-transition packets additionally preserve corrected, broken or reclassified AISC calculations across
+releases, including a change in classification with identical printed values. They keep the original states,
+operands, certificates and source Claims for both appearances, and request the evidence or inclusion rule that
+explains the transition. Ambiguous earliest releases retain every assertion with no selected first assertion.
+Transition classifications and chronology are rechecked against the canonical identity ledger before export.
+
 ### Calculate guidance completion requirements
 
 ```bash
 cargo run -p fmine-cli -- guidance completion --synthetic
 cargo run -p fmine-cli -- guidance completion --issuer barrick --site north-mara --through 2026Q2 --as-of 2026-10-31
+cargo run -p fmine-cli -- guidance completion --issuer barrick --site north-mara --through 2026Q2 --as-of 2026-10-31 --format markdown
 ```
 
 DESIGN (BD-342): the public command requires registered, hash-verified documents and two agreeing reader
@@ -165,11 +220,75 @@ document. Missing or conflicting evidence refuses; no real guidance values are b
 The result reports exact remaining production and an AISC spending/rate frontier. AISC uses summed costs and
 sold ounces; it never averages quarterly rates or treats production as sales. Remaining sales explicitly assume
 the preceding year's sales for the same remaining months, with source Claims and rounding intervals retained.
+The report also tests completion jointly against every usable contiguous historical quarter window of the
+remaining duration, including windows crossing a year boundary. Production, sales and AISC come from each
+quarter's own original release before the guidance year; later comparatives cannot replace a missing original.
+The **T1 historical comparison** keeps each quarter's sales and costs coupled. Separate best-case production
+and cost ranges cannot establish a feasible result. A positive result includes an independently checked exact
+replay; an exclusion includes checked certificates and applies only to those historical windows under the
+declared sales assumption. Missing or incompatible windows have explicit reasons, and no usable history stays
+**T3: necessary arithmetic conditions only**. Solver limits remain indeterminate.
+
 The report includes the guidance vintage, as-of selection and all source hashes. Workbook availability uses its
-verified retrieval date conservatively where no publication date is registered. This is a **T3 conditional
-arithmetic requirement**, not a capacity finding or a probability of meeting guidance. Its content digest is in
-the payload; it creates no forecast registration or ledger certificate. Full historical/technical envelopes and
-the remaining BD-342/M0 gates stay open.
+verified retrieval date conservatively where no publication date is registered. JSON preserves exact Claims,
+source-quarter witnesses and certificates; Markdown presents requirements, comparison results and citations.
+Its content digest creates no forecast registration or ledger certificate, and neither tier gives a probability
+or mine-capacity conclusion. The metrics library separately provides an exact feed/grade/recovery ceiling
+kernel for cited physical limits. Public technical-report binding and the remaining BD-342/M0 gates stay open.
+
+### Compare Lumwana recovery with its historical grade relation
+
+```bash
+cargo run -p fmine-cli -- recovery gap --synthetic
+cargo run -p fmine-cli -- recovery gap --issuer barrick --through 2026Q2 > recovery.json
+```
+
+The command fits two descriptive models to the annual head-grade and recovery observations in the
+2013–2022 part of the Lumwana site-visit presentation's Appendix A, then compares both with the registered
+quarterly Mine Stats. M-a holds implied tails grade constant; M-b fits a line relating implied tails grade
+to head grade. Both use `tails = head_grade × (1 − recovery/100)`, with grade and recovery explicitly in
+percent units. Their calculations and rounding propagation live in the
+[recovery metric kernel](crates/fmine-metrics/src/recovery.rs).
+
+The synthetic command runs without external data. To use the Barrick command:
+
+1. Fetch the registered workbooks with `bash repro/barrick/fetch.sh`.
+2. Download `Lumwana_Site_Visit_25092025.pdf` and `Barrick_AIF_2025.pdf` from their `[[document]]` URLs in
+   [the source registry](registries/sources/barrick.toml), placing them in each row's registered `dir`.
+   The command verifies their byte counts and SHA-256 digests. The workbook fetch script does not fetch PDFs.
+3. Supply the two agreeing reader entries in the local, ignored `registries/transcriptions/barrick.toml`.
+   Each annual head-grade and recovery field must cite the presentation's printed page 39, table
+   `Appendix A: Past Production Records for Lumwana`, year row and printed column. The separate ownership
+   entry cites PDF page 38 (printed page 37), table `Copper Mineral Reserves`, row
+   `Lumwana surface (100%)`, column `Based on attributable tonnes`. The
+   [public recovery contract](crates/fmine-public/CONTRACT.md) specifies the quantity keys, units and support;
+   the [transcription schema](crates/fmine-registry/src/transcriptions.rs) defines the entry fields.
+
+Only source metadata and hashes are committed. Historical row values and PDFs remain local while
+OPEN-R7-1 is unresolved. Missing or conflicting evidence produces a typed refusal; the real command never
+substitutes synthetic inputs.
+
+For every available quarter, the report retains the earliest registered visible workbook appearance and
+prints both models' expected recovery, signed gap in percentage points, implied copper difference in kt,
+and that difference as a fraction of reported production. A fraction can be multiplied by one hundred to
+express it as a percentage. The original source Claims, PDF citations, ownership interpretation and model
+limitations accompany the results. An unusable quarter remains in the report with its refusal; a later
+comparative does not replace it. The available 2023 observations are explicitly labelled as comparative
+appearances in the 2024 releases, rather than first-published 2023 results.
+
+The exact rational points have conservative enclosures over the declared input-rounding boxes. These bounds
+do not assert statistical coverage. The fit also distinguishes the descriptive residual sample SD, using
+`SSE/(n−1)`, from the conventional regression residual-error SD, using `SSE/(n−2)`; their square-root bounds
+cover numerical evaluation only. The models omit ore type, grind, throughput effects and concentrate mass
+pull, and apply annual training to quarterly observations. Operational attribution, recoverable production,
+forecasts and dollar sensitivity are outside this output.
+
+**`--through` limits workbook releases for a retrospective comparison.** The command still reads the current
+verified historical model documents, so the bound does not establish what was knowable at that earlier date.
+Omit it to use all registered workbook releases. The payload's `fmine.recovery.gap.v1` digest binds the model,
+source Claims and results; the CLI envelope has no ledger anchor or certificate. An unbounded
+`assure public --issuer barrick` run also includes the optional `recovery` section when these transcriptions
+are supplied. The existing bounded assurance command continues to skip PDF transcriptions.
 
 ---
 

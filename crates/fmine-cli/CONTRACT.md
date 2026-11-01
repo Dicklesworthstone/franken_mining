@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet"]`
+- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "lint", "forecast"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -18,7 +18,17 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `assure challenges --issuer <issuer> [--through YYYYQn]` or `--synthetic`: content-addressed internal-review
     packets from visible assurance exceptions, with JSON or readable `--format markdown` output (BD-349);
   - `guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD` or `--synthetic`:
-    cited remaining-production and AISC requirements under an explicit historical-sales scenario (BD-342);
+    cited remaining-production and AISC requirements plus joint historical-window comparisons under an explicit
+    historical-sales scenario, in JSON or readable `--format markdown` (BD-342);
+  - `recovery gap --issuer <issuer> [--through YYYYQn]` or `--synthetic`: two cited historical
+    grade-normalised recovery comparisons for Lumwana, with exact points and input-rounding enclosures
+    (bd-srqc). The bound filters workbook releases for a retrospective computation using current verified
+    historical documents; it does not establish a historical information cutoff;
+  - `lint <draft> --issuer <issuer> [--through YYYYQn]` or `--synthetic`: bounded cited equalities checked
+    against one verified canonical Claim snapshot, with JSON or readable Markdown output (BD-345);
+  - `forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ
+    [--selector first-published|latest-as-of]`: read-only ordered transcript replay and cohort assessment
+    through `fmine-calib`; first-published is the default (BD-343);
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row
     per file, `{file, present, bytes_ok, digest_ok}` against the registry's size and sha256 (BD-339.S2). A
     mismatch is reported, never refused: doctor stays exit 0, status ok;
@@ -33,7 +43,8 @@ verified source snapshot as assurance. Without a selector they search the curren
 ## 3. Authority, Epistemics & Representation
 - Every JSON invocation prints exactly one `FMT-ENV-1` envelope on stdout, a usage error included (`BD-329.S3`).
   Markdown wraps that envelope in a JSON fence, except successful challenge exports, which render the cited
-  packets as readable sections with the source root, packet-set digest and internal-review boundary.
+  packets as readable sections with the source root, packet-set digest and internal-review boundary. Successful
+  guidance reports also render readable requirements, historical comparisons, checked replays and source citations.
 - After `anchor_id` every envelope has, in this order:
   - `flags`: the four INV-002 flags, all false, from one constant (no field or setter can set one);
   - `certificate`: the report's ledger state root (hex), or null when no ledger snapshot is registered;
@@ -46,6 +57,12 @@ verified source snapshot as assurance. Without a selector they search the curren
 - The `waterfall` payload (BD-333) reports first-published year-on-year public AISC bridges, signed additive
   fallbacks and named refusals. Bars carry rounding intervals and source citations; exact printed-rate gaps
   remain separate. It is descriptive and non-identifying, and its digest is bound into the M0AS v8 certificate.
+- A successful `recovery gap` envelope carries a `fmine.recovery.gap.v1` payload and the model's explicit
+  `no_claim` text. Its own digest binds source rows, source Claims, the fit and quarterly outcomes. Both
+  `anchor_id` and `certificate` remain null; no ledger snapshot or forecast registration is created. Each
+  quarter retains its earliest registered release and comparative status, both model outputs or a named
+  refusal, citations and input-rounding bounds. The residual sample and regression-error SDs retain their
+  separate denominator conventions and numerical-evaluation bounds.
 - An issuer run's payload ends with `published_cutoffs` (BD-274), `fmine_metrics::cutoff::section` over
   `registries/published_cutoffs.toml` when that registry's `issuer` is the run's: the registry's sha256, the count
   of cut-offs reproduced, within input rounding and in conflict, and one row per cut-off. It is not in the state
@@ -120,11 +137,41 @@ verified source snapshot as assurance. Without a selector they search the curren
     Disclosed-only changes, unchanged/first/single appearances and non-comparable scope boundaries remain
     in the assurance report without becoming challenges. No vintage is selected as true; silence means
     no applicable note in registered documents. Packet IDs and immutable draft restrictions apply unchanged.
+  - `identity_transition` packets cover exceptional adjacent AISC identity histories, including corrected,
+    broken and reclassified calculations with unchanged printed operands. The builder recomputes the histories
+    from canonical Claims and the original identity ledger, rejecting forged states, classifications or chronology.
+    Both original appearances retain their states, certificates, operands and source Claims. An ambiguous earliest
+    release has `first_registered: null` and every `earliest_registered_assertions` entry is retained. Closing
+    requests name both compared locators and the missing rule or evidence; the transition itself assigns no
+    disclosure classification. Persisted and single-vintage histories add no transition packet.
 - DESIGN (BD-342): guidance delegates acquisition to `fmine_public::guidance` and arithmetic to
   `fmine_metrics::guidance`. Its payload digest binds the cited inputs and explicit scenario. `anchor_id` and
   `certificate` remain null because this is not a registered forecast or ledger snapshot. Missing two-reader
   guidance, incompatible ownership/support, future evidence and unusable sales refuse; synthetic evidence is
   available only through the explicit synthetic lane.
+  T1 output retains exact source-quarter/replay-quarter points and checked exclusion certificates under the
+  separately declared sales scenario. No usable historical window remains T3. Markdown retains exact fractions
+  when a decimal would round, labels display approximations and escapes source text; it never adds authority.
+- DESIGN (bd-srqc): recovery delegates source acquisition and selection to `fmine_public::recovery` and
+  fitting/projection to `fmine_metrics::recovery`. The public path needs registered, byte-verified PDFs,
+  agreed local historical/ownership transcriptions and verified workbook Claims. Missing model inputs
+  refuse with `FMINE-REF-201`; document disagreement, source failures and incompatible support retain
+  their typed refusals. With valid training, unusable quarters remain explicit refused rows in an otherwise
+  successful report. The explicit synthetic selector runs invented inputs through the same adapter/kernel.
+  `--synthetic` is exclusive with `--issuer` and `--through`; `--site` and `--as-of` remain guidance-only
+  flags. The existing `assure public --through` path continues to skip PDF transcriptions, independently of
+  the dedicated recovery command's retrospective workbook bound.
+- DESIGN (BD-345): lint bounds its local UTF-8 draft read, verifies the selected sources once, and delegates
+  every finding to `fmine_public::lint`. Its certificate identifies the source assurance snapshot; the lint
+  payload separately binds the draft and canonical Claim population. Only number spans and findings are
+  emitted, never the draft's full prose. Drafts are never written or sent over a network. A completed check
+  exits zero even when findings report mismatches; invalid syntax is exit two and source failures retain
+  their typed refusals. Publication-time/publicness and discovery modes are not inferred or advertised.
+- DESIGN (BD-343): forecast assessment replays transcript rows in their supplied order using the existing
+  calibration kernel. No alternate scoring formula, default time proof or hidden denominator is introduced.
+  Saved assessment rows enforce the kernel's sealed-cut rules across replay. Both envelope authority fields
+  remain null: transcript and assessment digests identify content, not a durable authority ledger or an
+  external timestamp. The adapter does not verify supplied source citations or issue a forecast.
 - `robot-docs` lists every catalogue row as `{code, exit_code, status, summary}`, `status` being `active` or
   `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 
@@ -154,6 +201,13 @@ verified source snapshot as assurance. Without a selector they search the curren
   `exit_code` and `status` matching. The generator must reach ok, usage, exit-3 and other refusals. The built
   binary, given a closed stdout, exits 5 with a line on stderr. This is a seeded generative test, not a
   coverage-guided fuzzer, and no registry is present, so issuer runs past file loading are not reached.
+- `PO-CLI-RECOVERY` (bd-srqc): the synthetic command must return both cited model outputs with deterministic
+  JSON, false authority flags and null ledger anchor/certificate. Invalid selector combinations are usage
+  errors. The registered command preserves missing-input and altered-source refusals and the explicit
+  retrospective meaning of `--through`; successful per-quarter results retain their source and model bounds.
+- FACT (BD-349, `packet::tests`): four transition regressions cover corrected/broken footings, unchanged values
+  reclassified by a later source-bound reconstruction, forged history, ordering and ambiguous earliest releases.
+  The real-corpus packet test asserts complete coverage of the existing exceptional identity-transition population.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 None: every failure is a usage error or a typed refusal.
@@ -171,5 +225,9 @@ None: every failure is a usage error or a typed refusal.
 - Never writes to any external system.
 - Challenge packets do not yet cover PDF transcription conflicts, hidden or
   not-published instances. Human review and external-release sequencing remain open.
-- Guidance completion is a T3 necessary-arithmetic report under a declared scenario, not a probability of
-  meeting guidance, a technical capacity envelope or a completed M0 gate.
+- Guidance completion supplies a T1 finite historical comparison when usable original-quarter evidence exists,
+  otherwise T3 necessary arithmetic, under a declared sales scenario. It supplies no probability of meeting
+  guidance, public technical capacity envelope or completed M0 gate.
+- Recovery outputs describe model differences with an annual historical relation. They make no causal,
+  recoverable-production or forecast claim, emit no dollar sensitivity, and do not turn comparative-only
+  observations into first-published outcomes. Input-rounding bounds are not confidence or prediction intervals.

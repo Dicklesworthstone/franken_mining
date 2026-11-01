@@ -15,6 +15,9 @@ use fmine_public::aisc::{
     self, ExplanationBasis, IdentityInstance, IdentityState, OperandRole, OperandValue,
 };
 use fmine_public::citation::{self, Cited};
+use fmine_public::consistency::{
+    AiscConsistency, Appearance, IdentityHistory, TransitionKind, aisc_consistency,
+};
 use fmine_public::key::consistency::{
     Comparison, VintageItem, VintageReport, VintageScope, VintageState,
     compare_vintages_with_disclosures,
@@ -41,6 +44,7 @@ pub enum PacketKind {
     InputRefused,
     VintageChange,
     VintageConflict,
+    IdentityTransition,
 }
 
 impl PacketKind {
@@ -56,6 +60,7 @@ impl PacketKind {
             Self::InputRefused => "input_refused",
             Self::VintageChange => "vintage_change",
             Self::VintageConflict => "vintage_conflict",
+            Self::IdentityTransition => "identity_transition",
         }
     }
 
@@ -82,12 +87,15 @@ impl PacketKind {
             Self::VintageConflict => {
                 "The registered comparison retains conflicting source assertions; their value and ownership basis require a cited reconciliation."
             }
+            Self::IdentityTransition => {
+                "The AISC identity has an exceptional transition between registered appearances. Original states, operand comparisons and certificates are retained; no true assertion or issuer admission is inferred."
+            }
         }
     }
 
     const fn owner(self) -> &'static str {
         match self {
-            Self::InputRefused => "project:source-curator",
+            Self::InputRefused | Self::IdentityTransition => "project:source-curator",
             Self::ReconstructionUnstated | Self::ExplanationStated => "issuer:investor-relations",
             _ => "issuer:corporate-controller",
         }
@@ -398,7 +406,11 @@ impl ChallengePacket {
         for use_name in self.kind.blocked_uses() {
             let _ = writeln!(out, "- {}", md(use_name));
         }
-        out.push_str("\n## Findings retained\n\n| Period | Ledger state | Cited anchor |\n| --- | --- | --- |\n");
+        if self.kind == PacketKind::IdentityTransition {
+            out.push_str("\n## Findings retained\n\n| Period | Recorded transition | Cited anchor |\n| --- | --- | --- |\n");
+        } else {
+            out.push_str("\n## Findings retained\n\n| Period | Ledger state | Cited anchor |\n| --- | --- | --- |\n");
+        }
         for finding in &self.findings {
             let _ = writeln!(
                 out,
@@ -425,7 +437,9 @@ impl ChallengePacket {
                 operand.sha256
             );
         }
-        if matches!(
+        if self.kind == PacketKind::IdentityTransition {
+            out.push_str("\n## AISC identity transitions\n\nThe earliest registered, immediately previous and current identity records retain their source Claims, original states and arithmetic certificates. A corrected or broken classification describes arithmetic under the declared construction, not an issuer admission. Disclosure classifications belong to the separate source-value comparisons; this transition does not invent one. The earliest registered release need not be the issuer's first publication.\n\n");
+        } else if matches!(
             self.kind,
             PacketKind::VintageChange | PacketKind::VintageConflict
         ) {
@@ -629,7 +643,8 @@ fn add_operand(packet: &mut ChallengePacket, operand: PacketOperand) -> Result<(
 }
 
 /// Produce complete internal-review drafts from all visible AISC `ii`/`iii`/`iv`/`v` instances, Mine Stats
-/// `iii`/`iv`/`v` instances, jointly infeasible components and unresolved cross-vintage changes/conflicts.
+/// `iii`/`iv`/`v` instances, jointly infeasible components, exceptional AISC identity transitions and unresolved
+/// cross-vintage changes/conflicts. Persisted and single-vintage identity histories add no packets.
 /// Disclosed-only changes and non-comparable scopes remain informational in the assurance report. Hidden and
 /// not-published instances remain outside this population. Grouping retains every current-release finding,
 /// including both first/prior comparisons, without combining different periods, units or ownership bases.
@@ -651,6 +666,10 @@ pub fn packets_from_report(
     }
     for component in &report.mine_ledger.infeasible {
         add_component(&mut groups, report, component)?;
+    }
+    validate_identity_transitions(report)?;
+    for history in &report.issuer_consistency.histories {
+        add_identity_transitions(&mut groups, report, history)?;
     }
     for (vintages, scope, kind) in [
         (
@@ -754,6 +773,207 @@ fn validate_vintage_report(
             "{} vintage findings differ from the comparison of the canonical source Claims",
             scope.as_str()
         )));
+    }
+    Ok(())
+}
+
+/// Recompute the supplied transitions from the canonical keys and original ledger. Reordering findings is
+/// immaterial; changing a state, transition kind or predecessor index without its evidence refuses.
+fn validate_identity_transitions(report: &PublicAssuranceReport) -> Result<(), Refusal> {
+    let canonical = |mut value: AiscConsistency| {
+        value
+            .histories
+            .sort_by(|a, b| (&a.series, a.family).cmp(&(&b.series, b.family)));
+        for history in &mut value.histories {
+            history
+                .transitions
+                .sort_by_key(|t| (t.from, t.to, t.kind.as_str(), t.operands_changed));
+            history.ambiguous_vintages.sort();
+        }
+        value
+            .unkeyed
+            .sort_by(|a, b| (&a.at, a.family, &a.reason).cmp(&(&b.at, b.family, &b.reason)));
+        value
+    };
+    let checked = aisc_consistency(&report.public_claims, &report.instances);
+    if canonical(report.issuer_consistency.clone()) != canonical(checked) {
+        return Err(unusable(
+            "AISC identity transitions differ from the canonical source Claims and original identity ledger",
+        ));
+    }
+    Ok(())
+}
+
+fn transition_appearance(
+    packet: &mut ChallengePacket,
+    report: &PublicAssuranceReport,
+    history: &IdentityHistory,
+    appearance: &Appearance,
+    role: &str,
+) -> Result<String, Refusal> {
+    let claim = report
+        .public_claims
+        .cells
+        .get(&appearance.at)
+        .ok_or_else(|| {
+            unusable(format!(
+                "AISC identity appearance has no source Claim at {}",
+                appearance.at
+            ))
+        })?;
+    if claim.key.reporting_vintage.file_sha256 != appearance.sha256 {
+        return Err(Refusal::new(
+            RefusalCode::DigestMismatch505,
+            format!(
+                "AISC identity appearance has a different source digest at {}",
+                appearance.at
+            ),
+        ));
+    }
+    if claim.key.reporting_vintage.release != appearance.release
+        || claim.key.series_key() != history.series
+    {
+        return Err(unusable(format!(
+            "AISC identity appearance has a different semantic key at {}",
+            appearance.at
+        )));
+    }
+    let mut matches = report.instances.iter().filter(|i| {
+        i.family == history.family && format!("{}:{}!{}", i.file, i.sheet, i.cell) == appearance.at
+    });
+    let instance = matches.next().ok_or_else(|| {
+        unusable(format!(
+            "AISC appearance has no original identity at {}",
+            appearance.at
+        ))
+    })?;
+    if matches.any(|other| other != instance) || instance.state.code() != appearance.state {
+        return Err(unusable(format!(
+            "AISC appearance has ambiguous or different original states at {}",
+            appearance.at
+        )));
+    }
+    add_operand(packet, vintage_operand(report, claim, role)?)?;
+    let mut instance = instance.clone();
+    instance
+        .operands
+        .sort_by_key(|o| (citation::locator(o), o.role.as_str()));
+    if let IdentityState::IssuerDiscrepancy(certificate) = &mut instance.state {
+        certificate.line_cells.sort();
+    }
+    for operand in &instance.operands {
+        let role = format!("{role}:{}", operand.role.as_str());
+        let read = read_operand(
+            report,
+            &citation::locator(operand),
+            &role,
+            Some(&operand.value),
+        )?;
+        let checked = if let Some(claim) = &read.claim {
+            vintage_operand(report, claim, &role)?
+        } else {
+            read
+        };
+        add_operand(packet, checked)?;
+    }
+    Ok(format!(
+        "{{\"release\":{},\"claim\":{},\"identity\":{}}}",
+        js(&appearance.release),
+        claim.to_json(),
+        report.exception_json(&instance, None)
+    ))
+}
+
+fn add_identity_transitions(
+    groups: &mut BTreeMap<GroupKey, ChallengePacket>,
+    report: &PublicAssuranceReport,
+    history: &IdentityHistory,
+) -> Result<(), Refusal> {
+    for transition in history.transitions.iter().filter(|t| {
+        !matches!(
+            t.kind,
+            TransitionKind::Persisted | TransitionKind::SingleVintage
+        )
+    }) {
+        let appearance = |index| {
+            history
+                .sequence
+                .get(index)
+                .ok_or_else(|| unusable("AISC identity transition references an absent appearance"))
+        };
+        let first = appearance(0)?;
+        let previous = appearance(transition.from)?;
+        let current = appearance(transition.to)?;
+        let period = history.series.valid_period.code();
+        let packet = packet_for(
+            groups,
+            report,
+            GroupKey {
+                origin: "aisc_identity_transition",
+                subject: history.series.subject.clone(),
+                family: format!("aisc_identity:{}", history.family.as_str()),
+                kind: PacketKind::IdentityTransition,
+                discriminator: first.at.clone(),
+            },
+            "existing adjacent-appearance identity comparison; original constructions and states retained",
+        );
+        let mut earliest = history
+            .sequence
+            .iter()
+            .filter(|a| a.release == first.release)
+            .map(|a| transition_appearance(packet, report, history, a, "earliest_registered"))
+            .collect::<Result<Vec<_>, _>>()?;
+        earliest.sort();
+        let first_json = if history.ambiguous_vintages.contains(&first.release) {
+            "null"
+        } else {
+            earliest.first().map_or("null", String::as_str)
+        };
+        let previous_json =
+            transition_appearance(packet, report, history, previous, "immediately_previous")?;
+        let current_json =
+            transition_appearance(packet, report, history, current, "current_release")?;
+        let ambiguous: BTreeSet<_> = history
+            .ambiguous_vintages
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let request = if ambiguous.contains(previous.release.as_str())
+            || ambiguous.contains(current.release.as_str())
+        {
+            "resolve the coexisting assertions in the ambiguous registered releases without choosing one arbitrarily"
+        } else {
+            match transition.operands_changed {
+                None => {
+                    "supply the missing semantic key or inclusion definition needed to compare the arithmetic operands"
+                }
+                Some(false) => {
+                    "identify the evidence or registered rule responsible for the reclassification despite unchanged arithmetic operands"
+                }
+                Some(true) => {
+                    "bridge the changed supporting operands and explain the resulting identity classifications"
+                }
+            }
+        };
+        packet.closing_documents.insert(ClosingDocument {
+            document: "source-review record and reconciliation of the cited AISC identities".into(),
+            locator: Some(format!("{} -> {}", previous.at, current.at)),
+            would_show: format!("For {} {period} {} between {} and {}: {request}; retain both original assertions and cite the evidence supporting any resolution.",
+                history.series.subject, history.family.as_str(), previous.release, current.release),
+        });
+        packet.findings.push(Finding {
+            period,
+            at: current.at.clone(),
+            state: transition.kind.as_str().into(),
+            evidence_json: format!(
+                "{{\"schema\":\"fmine.challenge_identity_transition.v1\",\"first_registered_caveat\":{},\"transition\":{},\"operands_changed\":{},\"ambiguous_vintages\":{},\"disclosure_classification\":\"not_assigned_to_identity_transition\",\"interpretation_limit\":\"The transition describes original arithmetic states, not an issuer admission or selection of a true assertion. Source-value disclosure classifications remain separate.\",\"first_registered\":{first_json},\"earliest_registered_assertions\":[{}],\"previous\":{previous_json},\"current\":{current_json}}}",
+                js(fmine_public::consistency::FIRST_REGISTERED_CAVEAT),
+                js(transition.kind.as_str()),
+                transition.operands_changed.map_or_else(|| "null".into(), |b| b.to_string()),
+                strings(ambiguous),
+                earliest.join(","),
+            ),
+        });
     }
     Ok(())
 }
@@ -1883,6 +2103,308 @@ mod tests {
         }
     }
 
+    fn identity_transition_fixture(totals: &[i64]) -> PublicAssuranceReport {
+        let mut profile = synthetic::synthetic_profile();
+        profile.subjects = vec!["Site A".into()];
+        profile.reconstructions.clear();
+        let sources = totals
+            .iter()
+            .enumerate()
+            .map(|(index, total)| {
+                let column = ["B", "D", "C"][index % 3];
+                let mut cells = vec![(format!("{column}2"), MinimalCell::Text("Site A".into()))];
+                for (row, label, value) in [
+                    (5, "Cost of sales applicable to gold production", 100),
+                    (6, "Royalty adjustment", 20),
+                    (7, "Total cash costs", *total),
+                    (8, "Minesite sustaining", 30),
+                    (9, "All-in sustaining costs", 150),
+                    (10, "Ounces sold", 10),
+                    (11, "Cost of sales per ounce", 10_000),
+                    (12, "Total cash costs per ounce", 12_000),
+                    (13, "All-in sustaining costs per ounce", 15_000),
+                ] {
+                    cells.push((format!("A{row}"), MinimalCell::Text(label.into())));
+                    cells.push((format!("{column}{row}"), MinimalCell::Number(value as f64)));
+                }
+                let mut source = mine_source(
+                    &format!("identity-{index}.xlsx"),
+                    &format!("{}Q2", 2030 + index),
+                    vec![MinimalSheet {
+                        name: "Q2 2030".into(),
+                        hidden: false,
+                        cells,
+                    }],
+                );
+                source.kind = SourceKind::AiscReconciliation;
+                source
+            })
+            .collect();
+        assess(&profile, Lane::Synthetic, sources)
+    }
+
+    #[test]
+    fn identity_transitions_keep_corrected_broken_states_and_source_evidence() {
+        let report = identity_transition_fixture(&[119, 120, 121]);
+        let original = report.to_json();
+        let packets = packets_from_report(&report).expect("source-verified transitions");
+        let packet = packets
+            .iter()
+            .find(|p| p.family == "aisc_identity:tcc_footing")
+            .expect("footing history");
+        assert_eq!(packet.kind, PacketKind::IdentityTransition);
+        assert_eq!(packet.findings.len(), 2);
+        assert_eq!(
+            packet
+                .findings
+                .iter()
+                .map(|f| f.state.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["corrected", "broken"])
+        );
+        for finding in &packet.findings {
+            assert!(finding.evidence_json.contains("\"state\":\"iii\""));
+            assert!(finding.evidence_json.contains("\"state\":\"i\""));
+            assert!(finding.evidence_json.contains("\"operands_changed\":true"));
+            assert!(
+                finding
+                    .evidence_json
+                    .contains("\"component_sum\":{\"v\":120,")
+            );
+        }
+        for (file, cell, value) in [
+            ("identity-0.xlsx", "B7", 119),
+            ("identity-1.xlsx", "D7", 120),
+            ("identity-2.xlsx", "C7", 121),
+        ] {
+            let at = format!("{file}:Q2 2030!{cell}");
+            let operand = &packet.operands[&at];
+            assert_eq!(operand.value, OperandValue::Int(value));
+            assert_eq!(operand.claim.as_ref(), report.public_claims.cells.get(&at));
+        }
+        for pair in [
+            "identity-0.xlsx:Q2 2030!B7 -> identity-1.xlsx:Q2 2030!D7",
+            "identity-1.xlsx:Q2 2030!D7 -> identity-2.xlsx:Q2 2030!C7",
+        ] {
+            assert!(
+                packet
+                    .closing_documents
+                    .iter()
+                    .any(|r| r.locator.as_deref() == Some(pair))
+            );
+        }
+        assert!(
+            packet
+                .to_json()
+                .contains("\"disclosure_classification\":\"not_assigned_to_identity_transition\"")
+        );
+        assert!(packet.to_markdown().contains("Recorded transition"));
+        assert!(packet.to_markdown().contains("not an issuer admission"));
+        assert!(!packet.external_use_allowed());
+        assert_eq!(
+            report.to_json(),
+            original,
+            "original ledger and source root remain immutable"
+        );
+        for totals in [vec![120], vec![120, 120]] {
+            assert!(
+                packets_from_report(&identity_transition_fixture(&totals))
+                    .expect("ordinary histories")
+                    .iter()
+                    .all(|p| p.kind != PacketKind::IdentityTransition)
+            );
+        }
+    }
+
+    #[test]
+    fn identity_transitions_export_reclassification_without_printed_value_changes() {
+        let mut profile = synthetic::synthetic_profile();
+        // Without a registered map a region has a release-specific, non-comparable scope. Keep the
+        // invented region's membership fixed so only the reconstruction evidence changes here.
+        profile.region_members = vec![fmine_public::sources::RegionMemberRow {
+            region: "Region North".into(),
+            member: "Site G".into(),
+            first: "2030Q1".into(),
+            last: None,
+        }];
+        let mut sources = Vec::new();
+        for (file, kind, release, bytes) in synthetic::synthetic_workbooks(&[]) {
+            let identities = if kind == SourceKind::AiscReconciliation {
+                vec![("earlier-aisc.xlsx", "2030Q1"), (file, "2031Q1")]
+            } else {
+                vec![(file, release)]
+            };
+            for (file, release) in identities {
+                let workbook = Workbook::from_bytes(file, &bytes).expect("invented source bytes");
+                sources.push(LoadedSource {
+                    file_name: file.into(),
+                    kind,
+                    quarter: release.into(),
+                    url: "synthetic".into(),
+                    url_basis: "synthetic".into(),
+                    bytes: bytes.len() as u64,
+                    census: workbook.cell_census(),
+                    workbook,
+                });
+            }
+        }
+        // The registered reconstruction applies to the later file only; both AISC workbooks contain
+        // identical printed values. Its cited 13-unit component is in the retained Mine Stats workbook.
+        let report = assess(&profile, Lane::Synthetic, sources);
+        let earlier = &report.public_claims.cells
+            [&format!("earlier-aisc.xlsx:{}!H16", synthetic::SYNTHETIC_TABLE_SHEET)];
+        let current = &report.public_claims.cells[&format!(
+            "{}:{}!H16",
+            synthetic::SYNTHETIC_AISC_FILE,
+            synthetic::SYNTHETIC_TABLE_SHEET
+        )];
+        assert_eq!(earlier.key.series_key(), current.key.series_key());
+        assert_eq!(earlier.claim.value, current.claim.value);
+        let family = aisc::IdentityFamily::AiscPerOunce;
+        let history = report
+            .issuer_consistency
+            .histories
+            .iter()
+            .find(|h| h.series.subject == "Region North" && h.family == family)
+            .expect("region history");
+        assert_eq!(
+            history.sequence.iter().map(|a| a.state).collect::<Vec<_>>(),
+            vec!["iv", "ii"]
+        );
+        assert_eq!(history.transitions[0].kind, TransitionKind::Reclassified);
+        assert!(
+            report
+                .aisc_vintages
+                .items
+                .iter()
+                .all(|i| i.current.iter().all(|c| c.key.subject != "Region North")),
+            "the source values themselves did not change"
+        );
+        let packets = packets_from_report(&report).expect("reclassification packet");
+        let packet = packets
+            .iter()
+            .find(|p| {
+                p.kind == PacketKind::IdentityTransition
+                    && p.subject == "Region North"
+                    && p.family == format!("aisc_identity:{}", family.as_str())
+            })
+            .expect("state-only transition is retained even without a value-change packet");
+        assert_eq!(packet.findings.len(), 1);
+        assert_eq!(packet.findings[0].state, "reclassified");
+        assert!(
+            packet.findings[0]
+                .evidence_json
+                .contains("\"state\":\"iv\"")
+        );
+        assert!(
+            packet.findings[0]
+                .evidence_json
+                .contains("\"state\":\"ii\"")
+        );
+        assert!(
+            packet
+                .operands
+                .keys()
+                .any(|at| at == &format!("{}:Minestats3!B32", synthetic::SYNTHETIC_STATS_FILE))
+        );
+        assert!(!packet.external_use_allowed());
+    }
+
+    #[test]
+    fn identity_transitions_refuse_forged_history_and_keep_order_deterministic() {
+        let report = identity_transition_fixture(&[119, 120, 121]);
+        let original = packets_from_report(&report).expect("original packets");
+        for mutation in ["classification", "predecessor", "omission", "state"] {
+            let mut forged = report.clone();
+            let history = forged
+                .issuer_consistency
+                .histories
+                .iter_mut()
+                .find(|h| h.family == aisc::IdentityFamily::TccFooting)
+                .expect("footing");
+            match mutation {
+                "classification" => history.transitions[0].kind = TransitionKind::Persisted,
+                "predecessor" => history.transitions[0].to = usize::MAX,
+                "omission" => history.transitions.clear(),
+                "state" => history.sequence[0].state = "i",
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                packets_from_report(&forged).expect_err(mutation).code,
+                "FMINE-REF-208"
+            );
+        }
+        let mut reordered = report;
+        reordered.sources.reverse();
+        reordered.instances.reverse();
+        reordered.issuer_consistency.histories.reverse();
+        for instance in &mut reordered.instances {
+            instance.operands.reverse();
+        }
+        for history in &mut reordered.issuer_consistency.histories {
+            history.transitions.reverse();
+        }
+        let after = packets_from_report(&reordered).expect("same evidence in different order");
+        assert_eq!(
+            original
+                .iter()
+                .map(ChallengePacket::to_json)
+                .collect::<Vec<_>>(),
+            after
+                .iter()
+                .map(ChallengePacket::to_json)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            original
+                .iter()
+                .map(ChallengePacket::to_markdown)
+                .collect::<Vec<_>>(),
+            after
+                .iter()
+                .map(ChallengePacket::to_markdown)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn identity_transitions_keep_every_ambiguous_earliest_assertion() {
+        let mut sources = identity_transition_fixture(&[119, 120, 121]).sources;
+        sources
+            .iter_mut()
+            .find(|s| s.file_name == "identity-1.xlsx")
+            .expect("second assertion")
+            .quarter = "2030Q2".into();
+        let mut profile = synthetic::synthetic_profile();
+        profile.subjects = vec!["Site A".into()];
+        profile.reconstructions.clear();
+        let report = assess(&profile, Lane::Synthetic, sources);
+        let packets = packets_from_report(&report).expect("ambiguous identity history");
+        let packet = packets
+            .iter()
+            .find(|p| p.family == "aisc_identity:tcc_footing")
+            .expect("footing history");
+        assert_eq!(packet.findings.len(), 2);
+        for finding in &packet.findings {
+            assert!(finding.evidence_json.contains("\"first_registered\":null"));
+            assert!(
+                finding
+                    .evidence_json
+                    .contains("\"earliest_registered_assertions\":[")
+            );
+            assert!(finding.evidence_json.contains("identity-0.xlsx:Q2 2030!B7"));
+            assert!(finding.evidence_json.contains("identity-1.xlsx:Q2 2030!D7"));
+        }
+        assert!(packet.operands.contains_key("identity-0.xlsx:Q2 2030!B7"));
+        assert!(packet.operands.contains_key("identity-1.xlsx:Q2 2030!D7"));
+        assert!(
+            packet
+                .closing_documents
+                .iter()
+                .any(|r| r.would_show.contains("without choosing one arbitrarily"))
+        );
+    }
+
     fn disclosed_vintage_fixture(first_uses_old_section: bool) -> PublicAssuranceReport {
         use fmine_public::sources::{RegisteredSource, RestatementNoteRow, RestatementScopeRow};
         let mut profile = synthetic::synthetic_profile();
@@ -2278,6 +2800,28 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let report = fmine_public::run_barrick_m0_assurance(&root).expect("registered assurance");
         let packets = packets_from_report(&report).expect("public packets");
+        let expected_transitions = report
+            .issuer_consistency
+            .histories
+            .iter()
+            .flat_map(|h| &h.transitions)
+            .filter(|t| {
+                !matches!(
+                    t.kind,
+                    TransitionKind::Persisted | TransitionKind::SingleVintage
+                )
+            })
+            .count();
+        assert_eq!(
+            packets
+                .iter()
+                .filter(|p| p.kind == PacketKind::IdentityTransition)
+                .map(ChallengePacket::finding_count)
+                .sum::<usize>(),
+            expected_transitions,
+            "every exceptional AISC transition is retained exactly once"
+        );
+        println!("AISC identity transition packet coverage: {expected_transitions}");
         for (subject, family, total, printed, residual) in [
             ("Kibali", "tcc_footing", "O11", 70, -2),
             ("Porgera", "aisc_footing", "L18", 13, 1),

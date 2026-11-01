@@ -1,22 +1,1125 @@
 //! Cross-crate public report and Claim contracts, retained unchanged in the T layer.
 #[cfg(test)]
+use fmine_public::{aisc, sources};
+#[cfg(test)]
 mod tests {
     use fmine_claim::{AdditivityClass, Claim, Representation, SpatialSupport};
     use fmine_core::hash::Digest32;
     use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal};
-    use fmine_io::xlsx::{CellCensus, MinimalCell, QuarantineItem, Workbook};
+    use fmine_io::xlsx::{
+        CellCensus, CellValue, ExtractedCell, MinimalCell, QuarantineItem, Workbook,
+    };
     use fmine_numerics::exact_feas::discover::UnitFinding;
     use fmine_public::aisc::{
         self, Calc, CitedCell, ConsistentBasis, ExplanationBasis, IdentityFamily, IdentityInstance,
-        IdentityState, NotPublishedReason, OneCellCheck, OneCellOutcome, RateMiss,
-        ReconstructionCheck, RefusedReason, StatedShare, Undecided, footing_discovery,
+        IdentityState, MemberWeighting, NotPublishedReason, OneCellCheck, OneCellOutcome,
+        OperandRole, OperandValue, RateMiss, ReconstructionCheck, RefusedReason, StatedShare,
+        Undecided, WeightedMember, footing_discovery,
     };
-    use fmine_public::sources::ExpectedRoot;
+    use fmine_public::sources::{ExpectedRoot, IssuerProfile, SourceKind};
     use fmine_public::{
-        Lane, PublicAssuranceReport, assess, cell_to_public_claim, discovery_json,
-        load_issuer_profile, run_public_assurance, run_synthetic_assurance, sources, synthetic,
+        Lane, LoadedSource, MineStatsMemo, PublicAssuranceReport, assess, assess_memo,
+        cell_to_public_claim, discovery_json, load_issuer_profile, run_public_assurance,
+        run_synthetic_assurance, sources, synthetic,
     };
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
+
+    /// Parses the same in-memory workbooks as the public crate's synthetic entry point.
+    fn load_synthetic(
+        files: Vec<(&'static str, SourceKind, &'static str, Vec<u8>)>,
+    ) -> Result<Vec<LoadedSource>, Refusal> {
+        let mut sources = Vec::new();
+        for (file, kind, quarter, bytes) in files {
+            let workbook = Workbook::from_bytes(file, &bytes).map_err(|e| {
+                Refusal::new(
+                    fmine_evidence::RefusalCode::InputMissingOrUnreadable506,
+                    format!("synthetic {file}: {e}"),
+                )
+            })?;
+            let census = workbook.cell_census();
+            sources.push(LoadedSource {
+                file_name: file.to_string(),
+                kind,
+                quarter: quarter.to_string(),
+                url: String::new(),
+                url_basis: "synthetic".to_string(),
+                bytes: bytes.len() as u64,
+                workbook,
+                census,
+            });
+        }
+        Ok(sources)
+    }
+    /// The synthetic workbooks with Site H's `QTD` label replaced, assessed under `profile`.
+    fn synthetic_run_with(
+        profile: &IssuerProfile,
+        edits: &[(String, MinimalCell)],
+        site_h_label: &str,
+    ) -> PublicAssuranceReport {
+        let mut files = synthetic::synthetic_workbooks(edits);
+        for f in &mut files {
+            if f.0 == synthetic::SYNTHETIC_STATS_FILE {
+                f.3 = synthetic::synthetic_stats_workbook(site_h_label);
+            }
+        }
+        let sources = load_synthetic(files).expect("synthetic workbooks parse");
+        assess(profile, Lane::Synthetic, sources)
+    }
+
+    const NO_FOOTNOTE: IdentityState = IdentityState::Refused {
+        reason: RefusedReason::FootnoteNotFound,
+    };
+
+    /// BD-331.S3: a registered share the same-release label does not print is (v), naming the cell.
+    #[test]
+    fn test_share_label_mismatch_gives_v() {
+        let profile = synthetic::synthetic_profile();
+        let r = synthetic_run_with(&profile, &[], "Site H (80%)1");
+        assert_eq!(
+            state_of(&r, "K14", IdentityFamily::CosPerOunce),
+            &IdentityState::RefusedAt {
+                reason: RefusedReason::ShareNotConfirmed,
+                at: "Synthetic_Mine_Stats.xlsx: QTD!A5 prints 80%, registered 3/4".to_string(),
+            }
+        );
+        // Site I's label still prints 75%, so its rate is still checked.
+        assert_eq!(
+            state_of(&r, "L14", IdentityFamily::CosPerOunce).code(),
+            "iv"
+        );
+        let r = synthetic_run_with(&profile, &[], "Site Hx (75%)");
+        assert_eq!(
+            state_of(&r, "K14", IdentityFamily::CosPerOunce).detail(),
+            "registered share not confirmed by label: Synthetic_Mine_Stats.xlsx: no column-A label \
+             'Site H (x%)' on QTD"
+        );
+    }
+
+    /// BD-331.S3: the footnote is found by what it says, whatever its letter or row.
+    #[test]
+    fn test_footnote_located_by_text_not_letter() {
+        let other_note = (
+            String::from("A30"),
+            MinimalCell::Text("h.  Ounces sold are in thousands.".to_string()),
+        );
+        let moved = [
+            other_note.clone(),
+            (
+                String::from("A41"),
+                MinimalCell::Text(synthetic::SYNTHETIC_SHARE_FOOTNOTE.replacen("h.", "k.", 1)),
+            ),
+        ];
+        let r = run_synthetic_assurance(&moved).expect("synthetic");
+        match state_of(&r, "K14", IdentityFamily::CosPerOunce) {
+            IdentityState::Consistent {
+                basis: Some(ConsistentBasis::Share(b)),
+                ..
+            } => {
+                assert_eq!(b.footnote, "Q1 2030!A41");
+            }
+            other => panic!("K14: {other:?}"),
+        }
+        // Planted negative: letter "h" stays at A30, but nothing states the attributable basis.
+        let r = run_synthetic_assurance(&[other_note]).expect("synthetic");
+        for cell in ["K14", "L14"] {
+            assert_eq!(
+                state_of(&r, cell, IdentityFamily::CosPerOunce),
+                &NO_FOOTNOTE
+            );
+        }
+    }
+
+    /// BD-331.S3: a region's cost-of-sales rate stays (v), now for the reason that applies.
+    #[test]
+    fn test_regions_keep_v_new_reason() {
+        let nci = [(String::from("H7"), MinimalCell::Number(-10.0))];
+        let r = run_synthetic_assurance(&nci).expect("synthetic");
+        assert_eq!(
+            state_of(&r, "H14", IdentityFamily::CosPerOunce),
+            &IdentityState::Refused {
+                reason: RefusedReason::RegionalNumerator
+            }
+        );
+        // Unregistered as a region, the same column is refused for having no share instead.
+        let mut profile = synthetic::synthetic_profile();
+        profile.regions.clear();
+        let r = synthetic_run_with(&profile, &nci, "Site H (75%)1");
+        assert_eq!(
+            state_of(&r, "H14", IdentityFamily::CosPerOunce),
+            &IdentityState::Refused {
+                reason: RefusedReason::NoRegisteredShare
+            }
+        );
+        assert!(
+            r.instances
+                .iter()
+                .all(|i| i.state.detail() != "attributable share needed")
+        );
+    }
+
+    /// The synthetic profile with Region North (column H) registered as Site H (K) and Site I (L), the members
+    /// first holding from `first`.
+    fn region_profile(first: &str) -> IssuerProfile {
+        let mut profile = synthetic::synthetic_profile();
+        profile.region_members = ["Site H", "Site I"]
+            .iter()
+            .map(|m| crate::sources::RegionMemberRow {
+                region: "Region North".to_string(),
+                member: (*m).to_string(),
+                first: first.to_string(),
+                last: None,
+            })
+            .collect();
+        profile
+    }
+
+    /// Region North with a non-zero NCI line (H7), ounces footing to its members' (H13 = 150 + 150) and rate
+    /// `h14`, then `more` on top.
+    fn region_run(
+        profile: &IssuerProfile,
+        h14: f64,
+        more: &[(&str, MinimalCell)],
+    ) -> PublicAssuranceReport {
+        let mut edits = vec![
+            (String::from("H7"), MinimalCell::Number(-10.0)),
+            (String::from("H13"), MinimalCell::Number(300.0)),
+            (String::from("H14"), MinimalCell::Number(h14)),
+        ];
+        edits.extend(more.iter().map(|(r, c)| ((*r).to_string(), c.clone())));
+        synthetic_run_with(profile, &edits, "Site H (75%)1")
+    }
+
+    fn weighed(subject: &str, col: &str, rate: i64, ounces: i64) -> WeightedMember {
+        WeightedMember {
+            subject: subject.to_string(),
+            rate_cell: format!("{col}14"),
+            rate,
+            ounces_cell: format!("{col}13"),
+            ounces,
+        }
+    }
+
+    /// BD-331.S4: a region's rate is weighed against its registered members. Site H prints 2000 and Site I 2200,
+    /// each on 150 ounces, so with every printed value ± ½ the weighted mean lies in [2099⅙, 2100⅚]: Region
+    /// North at 2100 is (i), proved by the exact decision, not `relaxation_only`; at 2300 or 1900 the McCormick
+    /// relaxation refutes it with a checked certificate, (iv), naming what public data leaves open.
+    #[test]
+    fn test_region_weighed_against_members() {
+        let profile = region_profile("2030Q1");
+        let weighting = MemberWeighting {
+            used: vec![
+                weighed("Site H", "K", 2000, 150),
+                weighed("Site I", "L", 2200, 150),
+            ],
+            excluded: Vec::new(),
+            absent: Vec::new(),
+        };
+        let r = region_run(&profile, 2100.0, &[]);
+        let h14 = state_of(&r, "H14", IdentityFamily::CosPerOunce);
+        assert_eq!(
+            h14,
+            &IdentityState::Consistent {
+                alternate_consistent: true,
+                basis: Some(ConsistentBasis::MembersExact(weighting.clone())),
+            }
+        );
+        assert_eq!(
+            h14.detail(),
+            "alternate_construction_consistent=true; exact weighted mean; weighted by ounces sold over Site H \
+             K14/K13, Site I L14/L13"
+        );
+        assert_eq!(r.relaxation_only(), 0);
+        assert!(r.to_json().contains("\"relaxation_only\":0,"));
+        let region = r
+            .instances
+            .iter()
+            .find(|i| i.cell == "H14" && i.family == IdentityFamily::CosPerOunce)
+            .expect("H14");
+        let members: Vec<(&str, OperandRole)> = region
+            .operands
+            .iter()
+            .filter(|o| matches!(o.role, OperandRole::MemberRate | OperandRole::MemberOunces))
+            .map(|o| (o.cell.as_str(), o.role))
+            .collect();
+        assert_eq!(
+            members,
+            [
+                ("K14", OperandRole::MemberRate),
+                ("K13", OperandRole::MemberOunces),
+                ("L14", OperandRole::MemberRate),
+                ("L13", OperandRole::MemberOunces),
+            ]
+        );
+        for far in [2300.0, 1900.0] {
+            let r = region_run(&profile, far, &[]);
+            match state_of(&r, "H14", IdentityFamily::CosPerOunce) {
+                IdentityState::Undecidable {
+                    why:
+                        Undecided::RegionOutsideMembers {
+                            weighting: w,
+                            certificate,
+                        },
+                    missing_fact,
+                    closing_document: None,
+                } => {
+                    assert_eq!(w, &weighting);
+                    assert_eq!(certificate.len(), 64, "{certificate}");
+                    assert!(certificate.bytes().all(|b| b.is_ascii_hexdigit()));
+                    assert_eq!(missing_fact, crate::aisc::REGION_MISSING_FACT);
+                }
+                other => panic!("H14 at {far}: {other:?}"),
+            }
+            assert_eq!(r.relaxation_only(), 0);
+        }
+        // At the edges the relaxation refutes exactly where the exact vertex bound does: 2099 ± ½ and 2101 ± ½
+        // meet [2099⅙, 2100⅚]; 2098 ± ½ and 2102 ± ½ do not.
+        for (edge, code) in [(2098.0, "iv"), (2099.0, "i"), (2101.0, "i"), (2102.0, "iv")] {
+            let r = region_run(&profile, edge, &[]);
+            assert_eq!(
+                state_of(&r, "H14", IdentityFamily::CosPerOunce).code(),
+                code,
+                "{edge}"
+            );
+        }
+    }
+
+    /// BD-331.S4: the exact decision's bounds are closed. Site H prints 1000 and Site I 2000, each on 1 ounce, so
+    /// with every value ± ½ the members' weighted means span exactly [1249½, 1750½], reached only with both
+    /// weights and both rates at a corner of their boxes. 1249 ± ½ and 1751 ± ½ touch that range at one point and
+    /// are (i), proved; 1248 and 1752 are (iv), refuted by the McCormick relaxation.
+    #[test]
+    fn test_region_exact_bounds_are_closed() {
+        let profile = region_profile("2030Q1");
+        let light = [
+            ("H13", MinimalCell::Number(2.0)),
+            ("K13", MinimalCell::Number(1.0)),
+            ("L13", MinimalCell::Number(1.0)),
+            ("K14", MinimalCell::Number(1000.0)),
+            ("L14", MinimalCell::Number(2000.0)),
+        ];
+        for rate in [1249.0, 1751.0] {
+            let r = region_run(&profile, rate, &light);
+            assert!(
+                matches!(
+                    state_of(&r, "H14", IdentityFamily::CosPerOunce),
+                    IdentityState::Consistent {
+                        basis: Some(ConsistentBasis::MembersExact(_)),
+                        ..
+                    }
+                ),
+                "{rate}"
+            );
+            assert_eq!(r.relaxation_only(), 0);
+        }
+        for rate in [1248.0, 1752.0] {
+            let r = region_run(&profile, rate, &light);
+            match state_of(&r, "H14", IdentityFamily::CosPerOunce) {
+                IdentityState::Undecidable {
+                    why: Undecided::RegionOutsideMembers { certificate, .. },
+                    ..
+                } => assert_eq!(certificate.len(), 64, "{rate}: {certificate}"),
+                other => panic!("{rate}: {other:?}"),
+            }
+        }
+    }
+
+    /// BD-331.S4: members that sold nothing (rate and ounces both zero, or both placeholders) are left out by
+    /// name, and a registered member the sheet does not print is named as absent; the rest are weighed.
+    #[test]
+    fn test_region_excludes_and_names_absent() {
+        let profile = region_profile("2030Q1");
+        let zero = MinimalCell::Number(0.0);
+        let place = MinimalCell::Text("-".to_string());
+        for (what, l) in [("zero", zero), ("placeholder", place)] {
+            let r = region_run(
+                &profile,
+                2000.0,
+                &[
+                    ("H13", MinimalCell::Number(150.0)),
+                    ("L13", l.clone()),
+                    ("L14", l),
+                ],
+            );
+            assert_eq!(
+                state_of(&r, "H14", IdentityFamily::CosPerOunce),
+                &IdentityState::Consistent {
+                    alternate_consistent: true,
+                    basis: Some(ConsistentBasis::MembersExact(MemberWeighting {
+                        used: vec![weighed("Site H", "K", 2000, 150)],
+                        excluded: vec!["Site I".to_string()],
+                        absent: Vec::new(),
+                    })),
+                },
+                "{what}"
+            );
+        }
+        let mut with_absent = region_profile("2030Q1");
+        with_absent.subjects.push("Site Z".to_string());
+        with_absent
+            .region_members
+            .push(crate::sources::RegionMemberRow {
+                region: "Region North".to_string(),
+                member: "Site Z".to_string(),
+                first: "2030Q1".to_string(),
+                last: None,
+            });
+        let r = region_run(&with_absent, 2100.0, &[]);
+        match state_of(&r, "H14", IdentityFamily::CosPerOunce) {
+            IdentityState::Consistent {
+                basis: Some(ConsistentBasis::MembersExact(w)),
+                ..
+            } => assert_eq!(w.absent, ["Site Z"]),
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            state_of(&r, "H14", IdentityFamily::CosPerOunce)
+                .detail()
+                .ends_with("; not printed: Site Z")
+        );
+    }
+
+    /// BD-331.S4 refusals, each naming its cell where it has one: the region's ounces not footing to its
+    /// members' (H13 = 100 against 150 + 150); a member's rate beside zero ounces (the ounces), a text rate (the
+    /// rate), a zero beside a placeholder (the rate), negative ounces; a member printed twice (the second
+    /// header); and no member left to weigh. Unchanged: the footnote is checked first, and a region with no
+    /// members registered for the release keeps the regional-numerator refusal.
+    #[test]
+    fn test_region_refusals() {
+        use RefusedReason as R;
+        let profile = region_profile("2030Q1");
+        let at = |reason, at: &str| IdentityState::RefusedAt {
+            reason,
+            at: at.to_string(),
+        };
+        let num = MinimalCell::Number;
+        let text = |s: &str| MinimalCell::Text(s.to_string());
+        type Edits = Vec<(&'static str, MinimalCell)>;
+        let cases: [(&str, Edits, IdentityState); 8] = [
+            (
+                "ounces do not foot",
+                vec![("H13", num(100.0))],
+                at(R::RegionOuncesDoNotFoot, "H13"),
+            ),
+            (
+                "rate beside zero ounces",
+                vec![("L13", num(0.0))],
+                at(R::RegionMemberOperand, "L13"),
+            ),
+            (
+                "text rate",
+                vec![("L14", text("x"))],
+                at(R::RegionMemberOperand, "L14"),
+            ),
+            (
+                "zero beside a placeholder",
+                vec![("L13", num(0.0)), ("L14", text("-"))],
+                at(R::RegionMemberOperand, "L14"),
+            ),
+            (
+                "negative ounces",
+                vec![("L13", num(-150.0))],
+                at(R::RegionMemberOperand, "L13"),
+            ),
+            (
+                "member printed twice",
+                vec![("J2", text("Site I"))],
+                at(R::RegionMemberOperand, "L2"),
+            ),
+            (
+                "no member sold anything",
+                vec![
+                    ("K13", num(0.0)),
+                    ("K14", num(0.0)),
+                    ("L13", num(0.0)),
+                    ("L14", num(0.0)),
+                ],
+                IdentityState::Refused {
+                    reason: R::RegionNoMembers,
+                },
+            ),
+            ("footnote first", vec![("A30", text("x"))], NO_FOOTNOTE),
+        ];
+        for (what, more, want) in cases {
+            let r = region_run(&profile, 2100.0, &more);
+            assert_eq!(
+                state_of(&r, "H14", IdentityFamily::CosPerOunce),
+                &want,
+                "{what}"
+            );
+        }
+        let later = region_profile("2030Q2");
+        assert_eq!(
+            state_of(
+                &region_run(&later, 2100.0, &[]),
+                "H14",
+                IdentityFamily::CosPerOunce
+            ),
+            &IdentityState::Refused {
+                reason: R::RegionalNumerator
+            }
+        );
+    }
+
+    /// BD-331.S3 mutation: without its registered share, Site H's rate is (v), not consistent.
+    #[test]
+    fn test_drop_registered_share_yields_v() {
+        let mut profile = synthetic::synthetic_profile();
+        profile.shares.retain(|s| s.subject != "Site H");
+        let r = synthetic_run_with(&profile, &[], "Site H (75%)1");
+        assert_eq!(
+            state_of(&r, "K14", IdentityFamily::CosPerOunce),
+            &IdentityState::Refused {
+                reason: RefusedReason::NoRegisteredShare
+            }
+        );
+        assert_eq!(
+            state_of(&r, "L14", IdentityFamily::CosPerOunce).code(),
+            "iv"
+        );
+    }
+
+    /// bd-prmn.8: a column registered at the wrong share fails at that basis and K.4's verdict names it a basis
+    /// rule; with the right share and Site I's miss counted as a known item, the verdict is site-specific.
+    #[test]
+    fn test_one_cell_wrong_share_is_basis_rule() {
+        let site_i = |c: &crate::aisc::OneCellCheck| c.subject == "Site I";
+        let r = run_synthetic_assurance(&[]).expect("synthetic");
+        let v = crate::aisc::one_cell_verdict(&r.one_cell, &site_i);
+        assert_eq!(
+            (v.fail, v.k4_fail, v.other_fail, v.verdict),
+            (1, 1, 0, "site-specific")
+        );
+
+        let mut profile = synthetic::synthetic_profile();
+        for s in profile.shares.iter_mut().filter(|s| s.subject == "Site H") {
+            (s.num, s.den) = (3, 5);
+        }
+        let r = synthetic_run_with(&profile, &[], "Site H (60%)1");
+        match &one_cell(&r, "K").outcome {
+            OneCellOutcome::Checked {
+                basis: (3, 5),
+                pass: false,
+                at_full: false,
+                at_share: Some(false),
+                ..
+            } => {}
+            other => panic!("K: {other:?}"),
+        }
+        let v = crate::aisc::one_cell_verdict(&r.one_cell, &site_i);
+        assert_eq!(
+            (v.fail, v.k4_fail, v.other_fail, v.verdict),
+            (2, 1, 1, "basis rule")
+        );
+        assert_eq!(
+            v.pattern,
+            [(("Site H".to_string(), (3, 5), Some(false)), 1)]
+        );
+    }
+
+    /// An instance's operands as (role, `file:sheet!cell`, value).
+    fn operands_of(
+        r: &PublicAssuranceReport,
+        cell: &str,
+    ) -> Vec<(OperandRole, String, OperandValue)> {
+        let Some(i) = r.instances.iter().find(|i| i.cell == cell) else {
+            panic!("no instance at {cell}");
+        };
+        i.operands
+            .iter()
+            .map(|o| {
+                (
+                    o.role,
+                    format!("{}:{}!{}", o.file, o.sheet, o.cell),
+                    o.value.clone(),
+                )
+            })
+            .collect()
+    }
+
+    fn aisc_at(cell: &str) -> String {
+        format!(
+            "{}:{}!{cell}",
+            synthetic::SYNTHETIC_AISC_FILE,
+            synthetic::SYNTHETIC_TABLE_SHEET
+        )
+    }
+
+    /// bd-sjrh.1: C8's footing is computed from its total and block 1 (hand-read from `synthetic.rs`).
+    #[test]
+    fn test_c8_footing_operands() {
+        use OperandRole as R;
+        use OperandValue::Int;
+        let r = run_synthetic_assurance(&[]).expect("synthetic run");
+        assert_eq!(
+            operands_of(&r, "C8"),
+            vec![
+                (R::Total, aisc_at("C8"), Int(350)),
+                (R::Line, aisc_at("C5"), Int(300)),
+                (R::Line, aisc_at("C6"), Int(-50)),
+                (R::Line, aisc_at("C7"), Int(0)),
+            ]
+        );
+        // The AISC footing adds the TCC line and block 2, and counts block 1 for its alternate rule.
+        let c11: Vec<(OperandRole, String)> = operands_of(&r, "C11")
+            .into_iter()
+            .map(|o| (o.0, o.1))
+            .collect();
+        let want: Vec<(OperandRole, String)> = [
+            (R::Total, "C11"),
+            (R::Line, "C8"),
+            (R::Counted, "C5"),
+            (R::Counted, "C6"),
+            (R::Counted, "C7"),
+            (R::Line, "C9"),
+            (R::Line, "C10"),
+        ]
+        .iter()
+        .map(|(role, c)| (*role, aisc_at(c)))
+        .collect();
+        assert_eq!(c11, want);
+    }
+
+    /// bd-sjrh.1: Site D's cost of sales per ounce is refused for its NCI line, after reading the footnote. Site A
+    /// has a zero NCI line, so its footnote is never read; Site H's confirmed share adds the `QTD` label.
+    #[test]
+    fn test_cos_refusal_operands_name_nci_row() {
+        use OperandRole as R;
+        use OperandValue::{Int, Token};
+        let r = run_synthetic_assurance(&[]).expect("synthetic run");
+        let footnote = (
+            R::LabelCheck,
+            aisc_at("A30"),
+            Token(synthetic::SYNTHETIC_SHARE_FOOTNOTE.to_string()),
+        );
+        assert_eq!(
+            operands_of(&r, "E14"),
+            vec![
+                (R::Rate, aisc_at("E14"), Int(2500)),
+                (R::Ounces, aisc_at("E13"), Int(400)),
+                (R::Numerator, aisc_at("E5"), Int(1000)),
+                (R::NciLine, aisc_at("E7"), Int(-160)),
+                footnote.clone(),
+            ]
+        );
+        assert_eq!(
+            operands_of(&r, "B14"),
+            vec![
+                (R::Rate, aisc_at("B14"), Int(1250)),
+                (R::Ounces, aisc_at("B13"), Int(400)),
+                (R::Numerator, aisc_at("B5"), Int(500)),
+                (R::NciLine, aisc_at("B7"), Int(0)),
+            ]
+        );
+        let k14 = operands_of(&r, "K14");
+        assert_eq!(k14[4], footnote);
+        assert_eq!(
+            k14[5],
+            (
+                R::LabelCheck,
+                format!("{}:QTD!A5", synthetic::SYNTHETIC_STATS_FILE),
+                Token("Site H (75%)1".to_string())
+            )
+        );
+        assert_eq!(k14.len(), 6);
+    }
+
+    /// bd-sjrh.1: H16 is explained by `Minestats3!B32` = 13 after four label checks; M16 also reads its stated
+    /// quote, `A31`. F's all-zero column cites every used cell (11).
+    #[test]
+    fn test_explained_component_cited_cell_h16() {
+        use OperandRole as R;
+        use OperandValue::{Int, Token};
+        let r = run_synthetic_assurance(&[]).expect("synthetic run");
+        let stats = |c: &str| format!("{}:Minestats3!{c}", synthetic::SYNTHETIC_STATS_FILE);
+        let rec = [
+            (
+                R::LabelCheck,
+                stats("A32"),
+                Token("Minesite sustaining3".to_string()),
+            ),
+            (
+                R::LabelCheck,
+                stats("B2"),
+                Token("Site G (60%)1".to_string()),
+            ),
+            (
+                R::LabelCheck,
+                stats("A3"),
+                Token("For the three months ended March 31,".to_string()),
+            ),
+            (R::LabelCheck, stats("B3"), Token("2030".to_string())),
+            (R::Component, stats("B32"), Int(13)),
+        ];
+        let h16 = operands_of(&r, "H16");
+        // Rate, ounces, numerator, then the five lines of blocks 1 and 2, then the reconstruction.
+        assert_eq!(h16.len(), 3 + 5 + 5);
+        assert_eq!(
+            h16[..3].iter().map(|o| o.0).collect::<Vec<_>>(),
+            [R::Rate, R::Ounces, R::Numerator]
+        );
+        assert_eq!(h16[8..], rec[..]);
+        let m16 = operands_of(&r, "M16");
+        assert_eq!(m16[8].0, R::LabelCheck);
+        assert_eq!(m16[8].1, aisc_at("A31"));
+        assert_eq!(m16[9..], rec[..]);
+        for cell in ["F8", "F11", "F14", "F15", "F16"] {
+            assert_eq!(operands_of(&r, cell).len(), 11, "{cell}");
+        }
+    }
+
+    /// Cells that place a table or a sheet rather than feed an instance: the AISC sheet's row labels (column A,
+    /// rows 1 to 16) and subject headers (row 2), and the `QTD` sheet's title and period line (rows 1 and 3).
+    fn structural(file: &str, sheet: &str, row: u32, col: u32) -> bool {
+        match (file, sheet) {
+            (synthetic::SYNTHETIC_AISC_FILE, synthetic::SYNTHETIC_TABLE_SHEET) => {
+                row == 2 || (col == 1 && row <= 16)
+            }
+            (synthetic::SYNTHETIC_STATS_FILE, "QTD") => row == 1 || row == 3,
+            _ => false,
+        }
+    }
+
+    /// Perturbs one cell in place: a number +1, any other value to the text "x", a blank cell to 1.
+    fn perturb(sheet: &mut fmine_io::xlsx::Sheet, row: u32, col: u32) {
+        let value = match sheet.cell(row, col).map(|c| &c.value) {
+            Some(CellValue::Number(x)) => CellValue::Number(x + 1.0),
+            Some(_) => CellValue::Text("x".to_string()),
+            None => CellValue::Number(1.0),
+        };
+        let number_text = match &value {
+            CellValue::Number(x) => Some(x.to_string()),
+            _ => None,
+        };
+        let cell = sheet
+            .cells_by_coord
+            .entry((row, col))
+            .or_insert_with(|| ExtractedCell {
+                cell_ref: format!("{}{row}", fmine_io::xlsx::col_index_to_letters(col)),
+                row,
+                col,
+                value: CellValue::Number(0.0),
+                formula: None,
+                number_text: None,
+                style: None,
+                format: fmine_io::styles::NumberFormat::Builtin(0),
+            });
+        cell.value = value;
+        cell.number_text = number_text;
+    }
+
+    /// For each instance cell, the cells whose perturbation changed its state: every non-structural cell of every
+    /// visible synthetic sheet, within its used range, one at a time, under `profile` with `edits` applied first.
+    /// Observed from the code's behaviour, never from its operand lists.
+    fn observed_dependencies(
+        profile: &IssuerProfile,
+        edits: &[(String, MinimalCell)],
+    ) -> (usize, BTreeMap<String, Vec<String>>) {
+        let base_sources = load_synthetic(synthetic::synthetic_workbooks(edits)).expect("parse");
+        let base = assess(profile, Lane::Synthetic, base_sources.clone());
+        let mut swept = 0;
+        let mut deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (si, src) in base_sources.iter().enumerate() {
+            for (ki, sheet) in src.workbook.sheets.iter().enumerate() {
+                let rows = sheet.cells_by_coord.keys().map(|k| k.0).max().unwrap_or(0);
+                let cols = sheet.cells_by_coord.keys().map(|k| k.1).max().unwrap_or(0);
+                for (row, col) in (1..=rows).flat_map(|r| (1..=cols).map(move |c| (r, c))) {
+                    if structural(&src.file_name, &sheet.name, row, col) {
+                        continue;
+                    }
+                    swept += 1;
+                    let mut sources = base_sources.clone();
+                    perturb(&mut sources[si].workbook.sheets[ki], row, col);
+                    let r = assess(profile, Lane::Synthetic, sources);
+                    let at = format!(
+                        "{}:{}!{}{row}",
+                        src.file_name,
+                        sheet.name,
+                        fmine_io::xlsx::col_index_to_letters(col)
+                    );
+                    for b in &base.instances {
+                        let after = r
+                            .instances
+                            .iter()
+                            .find(|e| e.cell == b.cell)
+                            .map(|e| &e.state);
+                        if after != Some(&b.state) {
+                            deps.entry(b.cell.clone()).or_default().push(at.clone());
+                        }
+                    }
+                }
+            }
+        }
+        (swept, deps)
+    }
+
+    /// Each observed dependency the instance's operands do not cite, as "uncited input: <cell> → <instance>".
+    fn uncited(r: &PublicAssuranceReport, deps: &BTreeMap<String, Vec<String>>) -> Vec<String> {
+        let mut out = Vec::new();
+        for i in &r.instances {
+            let cited: Vec<String> = i
+                .operands
+                .iter()
+                .map(|o| format!("{}:{}!{}", o.file, o.sheet, o.cell))
+                .collect();
+            for at in deps.get(&i.cell).into_iter().flatten() {
+                if !cited.contains(at) {
+                    out.push(format!(
+                        "uncited input: {at} → {} {}",
+                        i.cell,
+                        i.family.as_str()
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// bd-sjrh.1: every cell whose perturbation moves an instance's state is among that instance's operands.
+    #[test]
+    fn test_operands_cover_every_input_cell() {
+        let r = run_synthetic_assurance(&[]).expect("synthetic run");
+        let (swept, deps) = observed_dependencies(&synthetic::synthetic_profile(), &[]);
+        let missing = uncited(&r, &deps);
+        println!(
+            "{{\"test\":\"operands_cover\",\"instances\":{},\"operands\":{},\"swept_cells\":{swept},\
+             \"dependencies\":{},\"uncited\":{}}}",
+            r.instances.len(),
+            r.instances.iter().map(|i| i.operands.len()).sum::<usize>(),
+            deps.values().map(Vec::len).sum::<usize>(),
+            missing.len()
+        );
+        assert!(r.instances.iter().all(|i| !i.operands.is_empty()));
+        assert!(swept > 300, "{swept}");
+        // Every instance but the unrounded column's depends on something the sweep can move.
+        assert!(deps.len() >= 30, "{}", deps.len());
+        assert!(missing.is_empty(), "{missing:#?}");
+    }
+
+    /// bd-r7lp: a run through a shared memo gives the anchor, Mine Stats reads and Mine Stats ledger `assess`
+    /// gives, on the base sources and on every one-cell perturbation of every synthetic sheet; the memo is reused
+    /// exactly when no Mine Stats cell changed, a perturbed Mine Stats run never displaces the base entry, and a
+    /// changed profile recomputes.
+    #[test]
+    fn test_mine_stats_memo_matches_assess_on_every_one_cell_edit() {
+        let profile = synthetic::synthetic_profile();
+        let mut base = load_synthetic(synthetic::synthetic_workbooks(&[])).expect("parse");
+        // A second Mine Stats release whose summary poses an ownership instance (Site X at 50%), so that the
+        // sweep moves the ledger.
+        let text = |r: &str, s: &str| (r.to_string(), MinimalCell::Text(s.to_string()));
+        let num = |r: &str, v: f64| (r.to_string(), MinimalCell::Number(v));
+        let owned = fmine_io::xlsx::build_minimal_xlsx(&[fmine_io::xlsx::MinimalSheet {
+            name: "QTD".to_string(),
+            hidden: false,
+            cells: vec![
+                text("A3", "For the three months ended June 30,"),
+                num("B3", 2030.0),
+                text("B4", "Gold produced (000s oz 100%)"),
+                text("C4", "Gold produced (000s oz attributable)"),
+                text("D4", "Gold sold (000s oz attributable)"),
+                text("A5", "Site X (50%)"),
+                num("B5", 200.0),
+                num("C5", 100.0),
+                num("D5", 90.0),
+            ],
+        }]);
+        let later = vec![(
+            synthetic::SYNTHETIC_LATER_STATS_FILE,
+            SourceKind::MineStats,
+            "2030Q2",
+            owned,
+        )];
+        base.extend(load_synthetic(later).expect("parse"));
+        let memo = MineStatsMemo::default();
+        let same = |sources: &[LoadedSource], profile: &IssuerProfile| {
+            let plain = assess(profile, Lane::Synthetic, sources.to_vec());
+            let memoed = assess_memo(profile, Lane::Synthetic, sources.to_vec(), &memo);
+            assert_eq!(memoed.ledger_anchor, plain.ledger_anchor);
+            assert_eq!(memoed.mine_stats, plain.mine_stats);
+            assert_eq!(memoed.mine_ledger, plain.mine_ledger);
+            plain
+        };
+        let first = same(&base, &profile);
+        assert_eq!((memo.hits(), memo.misses()), (0, 1));
+        let (mut swept, mut stats_cells, mut ledger_moved) = (0, 0, 0);
+        for (si, src) in base.iter().enumerate() {
+            for (ki, sheet) in src.workbook.sheets.iter().enumerate() {
+                let rows = sheet.cells_by_coord.keys().map(|k| k.0).max().unwrap_or(0);
+                let cols = sheet.cells_by_coord.keys().map(|k| k.1).max().unwrap_or(0);
+                for (row, col) in (1..=rows).flat_map(|r| (1..=cols).map(move |c| (r, c))) {
+                    let mut sources = base.clone();
+                    perturb(&mut sources[si].workbook.sheets[ki], row, col);
+                    // The base entry stays: a perturbed Mine Stats run before this one did not displace it.
+                    let hits = memo.hits();
+                    same(&base, &profile);
+                    assert_eq!(memo.hits() - hits, 1);
+                    let hits = memo.hits();
+                    let r = same(&sources, &profile);
+                    let stats = src.kind == SourceKind::MineStats;
+                    assert_eq!(
+                        memo.hits() - hits,
+                        u64::from(!stats),
+                        "{}:{}!{row},{col}",
+                        src.file_name,
+                        sheet.name
+                    );
+                    swept += 1;
+                    stats_cells += usize::from(stats);
+                    ledger_moved += usize::from(r.mine_ledger != first.mine_ledger);
+                }
+            }
+        }
+        let mut changed = profile.clone();
+        changed.mine_stats_label_aliases.clear();
+        changed.regions.push("Region Elsewhere".to_string());
+        same(&base, &profile);
+        let misses = memo.misses();
+        same(&base, &changed);
+        assert_eq!(memo.misses() - misses, 1);
+        println!(
+            "{{\"test\":\"mine_stats_memo\",\"swept_cells\":{swept},\"mine_stats_cells\":{stats_cells},\
+             \"ledger_moved\":{ledger_moved},\"hits\":{},\"misses\":{}}}",
+            memo.hits(),
+            memo.misses()
+        );
+        assert!(swept > 300 && stats_cells > 0, "{swept} {stats_cells}");
+        // The equality checks are not vacuous: some perturbations move the Mine Stats ledger.
+        assert!(ledger_moved > 0);
+    }
+
+    /// BD-331.S4: the same sweep with Region North weighed against Site H and Site I (consistent at 2100, exactly).
+    /// Every cell that moves the region's state is among its operands, the member cells included, and the
+    /// region's state does move with each member's rate and ounces.
+    #[test]
+    fn test_region_operands_cover_every_input_cell() {
+        let profile = region_profile("2030Q1");
+        let edits = [
+            (String::from("H7"), MinimalCell::Number(-10.0)),
+            (String::from("H13"), MinimalCell::Number(300.0)),
+            (String::from("H14"), MinimalCell::Number(2100.0)),
+        ];
+        let r = assess(
+            &profile,
+            Lane::Synthetic,
+            load_synthetic(synthetic::synthetic_workbooks(&edits)).expect("parse"),
+        );
+        assert!(matches!(
+            state_of(&r, "H14", IdentityFamily::CosPerOunce),
+            IdentityState::Consistent {
+                basis: Some(ConsistentBasis::MembersExact(_)),
+                ..
+            }
+        ));
+        assert_eq!(r.relaxation_only(), 0);
+        let (_, deps) = observed_dependencies(&profile, &edits);
+        let missing = uncited(&r, &deps);
+        assert!(missing.is_empty(), "{missing:#?}");
+        let region: Vec<&str> = deps
+            .get("H14")
+            .into_iter()
+            .flatten()
+            .filter_map(|at| at.rsplit_once('!').map(|(_, cell)| cell))
+            .collect();
+        for member_cell in ["K13", "K14", "L13", "L14"] {
+            assert!(region.contains(&member_cell), "{member_cell}: {region:?}");
+        }
+    }
+
+    /// A reconciliation without its own quarter's sheet refuses that sheet by name; a table on a renamed sheet is
+    /// still read.
+    #[test]
+    fn test_own_quarter_sheet_missing_refuses() {
+        let mut sources = load_synthetic(synthetic::synthetic_workbooks(&[])).expect("parse");
+        for s in &mut sources {
+            for sheet in &mut s.workbook.sheets {
+                if sheet.name == synthetic::SYNTHETIC_TABLE_SHEET {
+                    sheet.name = "Q1 2031".to_string();
+                }
+            }
+        }
+        let r = assess(&synthetic::synthetic_profile(), Lane::Synthetic, sources);
+        let refusals: Vec<(&str, &str)> = r
+            .table_refusals
+            .iter()
+            .map(|t| (t.sheet.as_str(), t.reason.as_str()))
+            .collect();
+        assert_eq!(
+            refusals,
+            [(
+                synthetic::SYNTHETIC_TABLE_SHEET,
+                "the release's own quarter sheet is missing"
+            )]
+        );
+        assert_eq!(r.aisc_tables, 1);
+    }
+
+    /// The coverage check catches a dropped operand: C8 without C6.
+    #[test]
+    fn test_mutation_missing_operands_detected() {
+        let mut r = run_synthetic_assurance(&[]).expect("synthetic run");
+        let (_, deps) = observed_dependencies(&synthetic::synthetic_profile(), &[]);
+        let Some(c8) = r.instances.iter_mut().find(|i| i.cell == "C8") else {
+            panic!("no C8");
+        };
+        c8.operands.retain(|o| o.cell != "C6");
+        assert_eq!(
+            uncited(&r, &deps),
+            [format!("uncited input: {} → C8 tcc_footing", aisc_at("C6"))]
+        );
+    }
+
+    /// BD-331.S2 planted negative: when the stated quote no longer reads as registered, the explanation is
+    /// refused and the instance stays (iv), naming the quote cell. The reconstructed (ii) needs no quote.
+    #[test]
+    fn test_stated_quote_mismatch_keeps_iv() {
+        // The quote is read with its runs of whitespace collapsed; an empty cell reads as "".
+        for (text, found_text) in [
+            (
+                "i.  Site J's all-in sustaining costs per ounce exclude Site G's capital.",
+                "i. Site J's all-in sustaining costs per ounce exclude Site G's capital.",
+            ),
+            ("", ""),
+        ] {
+            let edit = [(String::from("A31"), MinimalCell::Text(text.to_string()))];
+            let r = run_synthetic_assurance(&edit).expect("synthetic");
+            match state_of(&r, "M16", IdentityFamily::AiscPerOunce) {
+                s @ IdentityState::Undecidable {
+                    why, missing_fact, ..
+                } => {
+                    assert!(
+                        matches!(why, Undecided::ReconstructionNotApplied {
+                            evidence_id,
+                            check: ReconstructionCheck::QuoteMismatch { at, found, .. },
+                        } if evidence_id == "SYNTHETIC-STATED"
+                            && at == "Synthetic_AISC.xlsx:Q1 2030!A31"
+                            && found == found_text),
+                        "{why:?}"
+                    );
+                    assert!(
+                        s.detail().starts_with(
+                            "registered reconstruction SYNTHETIC-STATED not applied: stated quote \
+                             Synthetic_AISC.xlsx:Q1 2030!A31 reads"
+                        ),
+                        "{}",
+                        s.detail()
+                    );
+                    assert_eq!(missing_fact, aisc::DEFAULT_MISSING_FACT);
+                }
+                other => panic!("M16 with A31 = {text:?}: {other:?}"),
+            }
+            assert_eq!(
+                state_of(&r, "H16", IdentityFamily::AiscPerOunce).label(),
+                "explained_reconstructed"
+            );
+        }
+    }
+
+    /// BD-331.S2: an unregistered (subject, family) names its family's default; a registered row replaces it;
+    /// a stated-share miss names the share rule's fact.
+    #[test]
+    fn test_missing_fact_family_default() {
+        let mut profile = synthetic::synthetic_profile();
+        profile.missing_facts.clear();
+        let r = synthetic_run_with(&profile, &[], "Site H (75%)1");
+        let fact = |cell: &str, family| match state_of(&r, cell, family) {
+            IdentityState::Undecidable { missing_fact, .. } => missing_fact.clone(),
+            other => panic!("{cell}: {other:?}"),
+        };
+        assert_eq!(
+            fact("D16", IdentityFamily::AiscPerOunce),
+            aisc::DEFAULT_MISSING_FACT
+        );
+        assert_eq!(
+            fact("L14", IdentityFamily::CosPerOunce),
+            aisc::SHARE_MISSING_FACT
+        );
+        // A row for another family of the same subject does not apply.
+        profile.missing_facts = synthetic::synthetic_profile().missing_facts;
+        profile.missing_facts[0].family = IdentityFamily::TccPerOunce;
+        let r = synthetic_run_with(&profile, &[], "Site H (75%)1");
+        match state_of(&r, "D16", IdentityFamily::AiscPerOunce) {
+            IdentityState::Undecidable { missing_fact, .. } => {
+                assert_eq!(missing_fact, aisc::DEFAULT_MISSING_FACT)
+            }
+            other => panic!("D16: {other:?}"),
+        }
+        // Every (iv) of the seeded run names one, in the state and in the report.
+        let r = run_synthetic_assurance(&[]).expect("synthetic");
+        let iv: Vec<&IdentityInstance> = r
+            .instances
+            .iter()
+            .filter(|i| i.state.code() == "iv")
+            .collect();
+        assert_eq!(iv.len(), 2);
+        for i in iv {
+            assert!(i.state.detail().contains("; missing fact: the "), "{i:?}");
+        }
+        assert_eq!(r.to_json().matches("\"missing_fact\":\"the ").count(), 2);
+    }
+
+    /// BD-331.S2: missing-fact texts are prose. The two built-in texts and every registered Barrick row have no
+    /// digit (the registry refuses one; `fmine-registry` tests that).
+    #[test]
+    fn test_missing_fact_texts_have_no_digits() {
+        let barrick = load_issuer_profile(&workspace_root(), "barrick").expect("registry");
+        assert_eq!(barrick.missing_facts.len(), 3);
+        let texts = [aisc::DEFAULT_MISSING_FACT, aisc::SHARE_MISSING_FACT]
+            .into_iter()
+            .chain(barrick.missing_facts.iter().map(|m| m.text.as_str()));
+        for text in texts {
+            assert!(!text.bytes().any(|b| b.is_ascii_digit()), "{text}");
+        }
+    }
+
+    /// BD-331.S2: a hidden cell is outside the counts but inside the root.
+    #[test]
+    fn test_hidden_scope_moves_root() {
+        let base = run_synthetic_assurance(&[]).expect("synthetic");
+        let mut files = synthetic::synthetic_workbooks(&[]);
+        let mut hidden_cells = synthetic::synthetic_hidden_cells();
+        hidden_cells.retain(|(r, _)| r != "B8");
+        hidden_cells.push(("B8".to_string(), MinimalCell::Number(400.0)));
+        for f in &mut files {
+            if f.0 == synthetic::SYNTHETIC_AISC_FILE {
+                f.3 = fmine_io::xlsx::build_minimal_xlsx_styled(
+                    &[
+                        fmine_io::xlsx::MinimalSheet {
+                            name: synthetic::SYNTHETIC_TABLE_SHEET.to_string(),
+                            hidden: false,
+                            cells: synthetic::synthetic_aisc_cells(),
+                        },
+                        fmine_io::xlsx::MinimalSheet {
+                            name: "Scratch".to_string(),
+                            hidden: true,
+                            cells: vec![("A1".to_string(), MinimalCell::Number(1.0))],
+                        },
+                        fmine_io::xlsx::MinimalSheet {
+                            name: synthetic::SYNTHETIC_HIDDEN_SHEET.to_string(),
+                            hidden: true,
+                            cells: hidden_cells.clone(),
+                        },
+                    ],
+                    Some(&synthetic::synthetic_aisc_styles()),
+                );
+            }
+        }
+        let moved = assess(
+            &synthetic::synthetic_profile(),
+            Lane::Synthetic,
+            load_synthetic(files).expect("parse"),
+        );
+        assert_eq!(moved.instances, base.instances);
+        assert_eq!(
+            moved.sources[1].census.numeric_digest,
+            base.sources[1].census.numeric_digest
+        );
+        assert_eq!(moved.hidden_scope.instances[0].state.code(), "i");
+        assert_ne!(
+            moved.ledger_anchor.state_root,
+            base.ledger_anchor.state_root
+        );
+    }
+
     const STATE_CODES: [&str; 6] = ["i", "ii", "iii", "iv", "v", "np"];
     fn workspace_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -738,7 +1841,7 @@ mod tests {
             "]},\"unit_discovery\":{\"report_only\":\"which unit the copper rows labelled (millions of pounds) are \
              in, from their site-sheet pairs; never a state, not in the state root\",\"pairs\":0,\
              \"fits\":{\"kt\":0,\"Mlb\":0},\"finding\":\"no_fit\",\"reason_code\":null},\"transcriptions\":null,\
-             \"quarantine\":["
+             \"recovery\":null,\"quarantine\":["
         ));
         for (scope, d) in &found {
             let instances = if *scope == "visible" {

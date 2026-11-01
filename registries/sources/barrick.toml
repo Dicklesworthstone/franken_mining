@@ -224,6 +224,35 @@ pages = 15
 bytes = 2_855_996
 sha256 = "89c22cd73d2fcc9447ee859dfd9a52b33f2f37591ccb4bc0f7407a1d5d19697a"
 
+# Historical recovery model and separate ownership context (bd-srqc). Only metadata is committed;
+# the two-reader annual inputs remain in the ignored transcription registry (OPEN-R7-1).
+# Availability is the first exact-byte retrieval verified in this implementation, not the document's
+# cover date. The recovery report is retrospective and does not claim these bytes were available earlier.
+
+[[document]]
+file = "Lumwana_Site_Visit_25092025.pdf"
+dir = "corpus_of_input_docs/downloaded"
+kind = "investor_deck"
+url = "https://s25.q4cdn.com/322814910/files/doc_presentations/2025/09/Lumwana_Site_Visit_25092025.pdf"
+url_basis = "fetched and verified 2026-11-01"
+published_at = "2026-11-01"
+published_at_basis = "FACT: exact bytes fetched and SHA-256 verified on 2026-11-01 UTC, matching the C1 hash prefix; title and metadata date the presentation to September 25, 2025, but an earlier exact-byte publication time is not established here"
+pages = 43
+bytes = 5_833_413
+sha256 = "eca7a1026ae3e6ce506b73fe8a666f75f748567b4a47323c4baaaf9f8345dfd7"
+
+[[document]]
+file = "Barrick_AIF_2025.pdf"
+dir = "corpus_of_input_docs/downloaded"
+kind = "aif"
+url = "https://s25.q4cdn.com/322814910/files/doc_downloads/agm/2026/Barrick_AIF_2025.pdf"
+url_basis = "fetched and verified 2026-11-01"
+published_at = "2026-11-01"
+published_at_basis = "FACT: exact bytes fetched and SHA-256 verified on 2026-11-01 UTC, matching the W4 hash prefix; cover dated February 27, 2026, with an earlier exact-byte publication time not established here"
+pages = 163
+bytes = 14_180_626
+sha256 = "d8bc75c700aa88920a39436c171e5b40eae31f6bf35052bcf65db4140d8c004d"
+
 # Reporting subjects as printed in the AISC table headers, before the issuer's one-letter footnote suffix
 # (FACT: every header of the 34 visible AISC tables matches exactly one).
 
