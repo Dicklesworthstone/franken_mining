@@ -108,6 +108,91 @@ def workspace(tag):
     return root
 
 
+def reserve_workspace(tag, mode="normal", reverse=False):
+    """Invented filings/deck with independently declared reserve and price readings."""
+    root = workspace(f"reserves-{tag}")
+    documents = [
+        ("older", "Earlier.pdf", "mda", "2025-02-01", "10.0", "1500"),
+        ("latest", "Later.pdf", "aif", "2026-02-01", "12.0", "1500"),
+        ("deck", "Presentation.pdf", "investor_deck", "2026-03-01", "13.0", "1600"),
+    ]
+    if mode == "deck_only":
+        documents = documents[2:]
+    elif mode == "same_date":
+        documents[0] = (*documents[0][:3], "2026-02-01", *documents[0][4:])
+    elif mode == "changed_deck":
+        documents[1] = (*documents[1][:-1], "1700")
+    elif mode == "secondary":
+        documents = [("secondary", "Secondary.pdf", "partner_filing", "2026-03-01", "13.0", "1600")]
+    elif mode == "unknown_deck":
+        documents = documents[:2]
+    if reverse:
+        documents.reverse()
+    source = (root / "registries/sources/table_test.toml").read_text(encoding="utf-8")
+    definitions = 'schema = "fmine.table-identities.v1"\nissuer = "table_test"\n'
+    readings = 'schema = "fmine.transcriptions.v1"\nissuer = "table_test"\n'
+    for row_id, file, kind, date, value, price in documents:
+        contents = f"%PDF-1.7 invented reserve assertion in {file}; no real issuer data".encode()
+        (root / "documents" / file).write_bytes(contents)
+        source += (
+            f'\n[[document]]\nfile = "{file}"\ndir = "documents"\nkind = "{kind}"\n'
+            f'url = "https://example.invalid/{file}"\nurl_basis = "W1 table"\n'
+            f'published_at = "{date}"\npublished_at_basis = "FACT: invented test date"\n'
+            f'pages = 1\nbytes = {len(contents)}\nsha256 = "{digest(contents)}"\n'
+        )
+        definitions += (
+            f'\n[[reserve_row]]\nid = "{row_id}"\ndoc = "{file}"\n'
+            'quantity = "reserve_change"\nsubject = "Invented Mine"\nitem = "net_change"\n'
+            'reserve_year = 2024\nperiod = "2024FY"\nmetal = "gold"\nunit = "moz"\n'
+            'ownership = "full"\nsupport = "contained"\nconvention = "closed"\n'
+        )
+        if mode == "unknown_deck":
+            definitions += 'deck = "unstated"\n'
+        else:
+            definitions += (
+                'deck = "quoted"\ndeck_period = "2024FY"\ndeck_basis = "reserve_prices"\n'
+                'gold_price_quantity = "reserve_gold_price"\n'
+            )
+        for reader in ("reader_b", "reader_a") if reverse else ("reader_a", "reader_b"):
+            for quantity, token, unit, basis in (
+                ("reserve_change", value, "moz", "gold;full;contained"),
+                ("reserve_gold_price", price, "usd_per_oz", "reserve_prices"),
+            ):
+                if row_id == "latest":
+                    if mode == "pending_latest" and quantity == "reserve_change" and reader == "reader_b":
+                        continue
+                    if mode == "pending_price" and quantity == "reserve_gold_price" and reader == "reader_b":
+                        continue
+                    if mode == "wrong_price_unit" and quantity == "reserve_gold_price":
+                        unit = "usd_per_lb"
+                    if mode == "wrong_reserve_basis" and quantity == "reserve_change":
+                        basis = "gold;attributable:1/2;contained"
+                    if mode == "conflicting_price" and quantity == "reserve_gold_price" and reader == "reader_b":
+                        token = "1501"
+                readings += (
+                    f'\n[[entry]]\ndoc = "{file}"\ndoc_sha256 = "{digest(contents)}"\npage = 1\n'
+                    f'table = "Invented reserves"\nrow = "{quantity}"\ncol = "2024"\n'
+                    f'token = "{token}"\nquantity = "{quantity}"\nunit = "{unit}"\n'
+                    f'basis = "{basis}"\nperiod = "2024FY"\nreader = "{reader}"\n'
+                )
+        if row_id == "latest" and mode in ("competing_value", "competing_price"):
+            quantity, token, unit, basis = (
+                ("reserve_change", value, "moz", "gold;full;contained")
+                if mode == "competing_value"
+                else ("reserve_gold_price", price, "usd_per_oz", "reserve_prices")
+            )
+            readings += (
+                f'\n[[entry]]\ndoc = "{file}"\ndoc_sha256 = "{digest(contents)}"\npage = 1\n'
+                f'table = "Invented reserves"\nrow = "Alternative {quantity}"\ncol = "2024"\n'
+                f'token = "{token}"\nquantity = "{quantity}"\nunit = "{unit}"\n'
+                f'basis = "{basis}"\nperiod = "2024FY"\nreader = "reader_c"\n'
+            )
+    (root / "registries/sources/table_test.toml").write_text(source, encoding="utf-8")
+    (root / "registries/transcriptions/table_test.toml").write_text(readings, encoding="utf-8")
+    (root / DEFINITIONS).write_text(definitions, encoding="utf-8")
+    return root
+
+
 def binary(root, arguments, output_format=None):
     args = [str(BINARY), *arguments, "--workspace", str(root)]
     if output_format is not None:
@@ -133,7 +218,7 @@ def successful(root):
 
 
 def report_digest(payload):
-    value = compact(payload).rsplit('"digest":"', 1)[1].split('"', 1)[0]
+    value = payload["checks"]["digest"]
     assert len(value) == 64 and all(c in "0123456789abcdefABCDEF" for c in value)
     return value
 
@@ -154,7 +239,7 @@ class TableScenarios(unittest.TestCase):
         self.assertIn('"schema":"fmine.pdf-table-check.v1"', text)
         self.assertEqual(text.count('"verdict":"feasible"'), 2, text)
         self.assertEqual(text.count('"verdict":"feasible","checked":true'), 2)
-        self.assertIn('"refused":[]', text)
+        self.assertEqual(envelope["payload"]["checks"]["refused"], [])
         for expected in (
             "reserve_rollforward", "multi_year", "roll_forward", "2023-2025",
             "2023FY", "2024FY", "2025FY", "reader_a", "reader_b",
@@ -183,6 +268,7 @@ class TableScenarios(unittest.TestCase):
         self.assertIn('"blame":{"status":"blamed"', text)
         self.assertNotEqual(positive["payload"], conflict["payload"])
         self.assertNotEqual(report_digest(positive["payload"]), report_digest(conflict["payload"]))
+        self.assertNotEqual(positive["payload"]["digest"], conflict["payload"]["digest"])
         self.assertEqual((root / "documents" / FILE).read_bytes(), DOCUMENT)
         for field in ('"corrected":', '"best":', '"fix":'):
             self.assertNotIn(field, text)
@@ -191,6 +277,7 @@ class TableScenarios(unittest.TestCase):
         self.assertEqual(compact(changed["payload"]).count('"verdict":"feasible"'), 2)
         self.assertNotEqual(conflict["payload"], changed["payload"])
         self.assertNotEqual(report_digest(conflict["payload"]), report_digest(changed["payload"]))
+        self.assertNotEqual(conflict["payload"]["digest"], changed["payload"]["digest"])
 
     def test_missing_and_single_reader_operands_remain_refused_identity_members(self):
         root = workspace("missing")
@@ -201,7 +288,10 @@ class TableScenarios(unittest.TestCase):
                 text = compact(envelope["payload"])
                 self.assertIn('"identity":"reserve_rollforward"', text)
                 self.assertIn("opening", text)
-                self.assertNotIn('"refused":[]', text)
+                self.assertEqual(
+                    [row["identity"] for row in envelope["payload"]["checks"]["refused"]],
+                    ["reserve_rollforward"],
+                )
                 self.assertEqual(text.count('"verdict":"feasible"'), 1, text)
                 self.assertIn("multi_year", text)
                 output = binary(root, BASE, "markdown")
@@ -287,6 +377,142 @@ class TableScenarios(unittest.TestCase):
         ):
             envelope, raw = invoke(root, arguments=args)
             self.assertEqual(envelope["exit_code"], 2, raw)
+
+
+class ReserveScenarios(unittest.TestCase):
+    def reserve_report(self, root):
+        envelope, raw = successful(root)
+        report = envelope["payload"]["issuer_reserves"]
+        self.assertEqual(report["schema"], "fmine.issuer-reserves.v1")
+        self.assertFalse(report["gate_eligible"])
+        self.assertEqual(len(report["selections"]), 1, raw)
+        self.assertEqual(len(report["digest"]), 64)
+        return envelope, report
+
+    def test_latest_filing_is_current_while_older_filings_and_decks_remain_cited(self):
+        root = reserve_workspace("current")
+        envelope, report = self.reserve_report(root)
+        rows = {row["id"]: row for row in report["rows"]}
+        self.assertEqual(set(rows), {"older", "latest", "deck"})
+        current = report["selections"][0]
+        self.assertEqual(current["status"], "current")
+        self.assertEqual(current["current_id"], "latest")
+        self.assertEqual(current["latest_filed_date"], "2026-02-01")
+        self.assertEqual(rows["older"]["source"]["reading"]["token"], "10.0")
+        self.assertEqual(rows["latest"]["source"]["reading"]["token"], "12.0")
+        self.assertEqual(rows["deck"]["source_role"], "investor_deck")
+        self.assertEqual(rows["latest"]["source_role"], "filed_report")
+        self.assertEqual(rows["latest"]["economic_key"]["reserve_year"], 2024)
+        self.assertEqual(rows["latest"]["deck"]["status"], "quoted")
+        self.assertIn('"token":"1500"', compact(rows["latest"]["deck"]))
+        self.assertEqual(rows["older"]["deck"]["key"], rows["latest"]["deck"]["key"])
+        self.assertTrue(any(pair["status"] == "changed" for pair in report["comparisons"]))
+        self.assertEqual(report["refused"], [])
+        self.assertEqual(report, self.reserve_report(root)[1])
+        self.assertIsNone(envelope["anchor_id"])
+        self.assertIsNone(envelope["certificate"])
+        self.assertTrue(all(value is False for value in envelope["flags"].values()))
+        markdown = binary(root, BASE, "markdown")
+        self.assertEqual(markdown.returncode, 0, markdown.stderr)
+        for file in ("Earlier.pdf", "Later.pdf", "Presentation.pdf"):
+            self.assertIn(file, markdown.stdout)
+            self.assertIn(digest((root / "documents" / file).read_bytes()), markdown.stdout)
+        self.assertIn("reserve_gold_price", compact(report))
+
+    def test_same_date_filings_remain_ambiguous_instead_of_selecting_by_import_order(self):
+        root = reserve_workspace("ambiguous", "same_date")
+        _, report = self.reserve_report(root)
+        selection = report["selections"][0]
+        self.assertEqual(selection["status"], "ambiguous_latest")
+        self.assertIsNone(selection["current_id"])
+        self.assertEqual(set(selection["candidates"]), {"older", "latest"})
+        self.assertEqual(len(report["rows"]), 3)
+
+    def test_unusable_latest_value_or_deck_cannot_fall_back_to_an_older_filing(self):
+        for mode in ("pending_latest", "pending_price", "wrong_price_unit", "wrong_reserve_basis"):
+            with self.subTest(mode=mode):
+                root = reserve_workspace(mode, mode)
+                envelope, report = self.reserve_report(root)
+                selection = report["selections"][0]
+                self.assertEqual(selection["status"], "latest_unavailable")
+                self.assertIsNone(selection["current_id"])
+                self.assertIn("latest", selection["unavailable"])
+                self.assertTrue(any(row["id"] == "older" for row in report["rows"]))
+                self.assertTrue(any(row["id"] == "latest" for row in report["refused"]))
+                if mode.startswith("pending"):
+                    self.assertTrue(envelope["payload"]["pending_readings"])
+
+    def test_a_deck_alone_never_supplies_current_filed_reserves(self):
+        root = reserve_workspace("deck", "deck_only")
+        _, report = self.reserve_report(root)
+        self.assertEqual(report["selections"][0]["status"], "no_filed_row")
+        self.assertIsNone(report["selections"][0]["current_id"])
+        self.assertEqual([row["id"] for row in report["rows"]], ["deck"])
+
+    def test_partner_source_cannot_be_relabelled_as_the_issuers_filed_reserve(self):
+        _, report = self.reserve_report(reserve_workspace("secondary", "secondary"))
+        self.assertEqual(report["rows"], [])
+        self.assertEqual(report["selections"][0]["status"], "no_filed_row")
+        self.assertIsNone(report["selections"][0]["current_id"])
+        self.assertEqual(report["refused"][0]["id"], "secondary")
+        self.assertIn("partner_filing", report["refused"][0]["reason"])
+
+    def test_new_filing_retains_its_changed_price_deck_without_coalescing_assumptions(self):
+        normal = self.reserve_report(reserve_workspace("normal-deck"))[1]
+        root = reserve_workspace("changed-deck", "changed_deck")
+        _, changed = self.reserve_report(root)
+        self.assertEqual(changed["selections"][0]["current_id"], "latest")
+        rows = {row["id"]: row for row in changed["rows"]}
+        self.assertNotEqual(rows["older"]["deck"]["key"], rows["latest"]["deck"]["key"])
+        pair = next(pair for pair in changed["comparisons"] if {pair["left"], pair["right"]} == {"older", "latest"})
+        self.assertEqual(pair["status"], "deck_differs")
+        self.assertNotEqual(normal["digest"], changed["digest"])
+        self.assertIn('"token":"1700"', compact(rows["latest"]["deck"]))
+
+    def test_unstated_decks_remain_unknown_even_when_both_rows_omit_prices(self):
+        _, report = self.reserve_report(reserve_workspace("unknown-deck", "unknown_deck"))
+        self.assertEqual(report["selections"][0]["current_id"], "latest")
+        self.assertEqual([pair["status"] for pair in report["comparisons"]], ["deck_unstated"])
+        self.assertTrue(all(row["deck"]["key"] is None for row in report["rows"]))
+
+    def test_reserve_documents_and_price_readers_are_checked_through_the_real_loader(self):
+        root = reserve_workspace("bytes")
+        path = root / "documents/Later.pdf"
+        original = path.read_bytes()
+        path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+        envelope, raw = invoke(root)
+        self.assertEqual((envelope["exit_code"], envelope["refusal"]["code"]), (8, "FMINE-REF-505"), raw)
+        self.assertIsNone(envelope["payload"])
+        path.write_bytes(original)
+        held = path.with_suffix(".held")
+        path.rename(held)
+        envelope, raw = invoke(root)
+        self.assertEqual((envelope["exit_code"], envelope["refusal"]["code"]), (5, "FMINE-REF-506"), raw)
+        held.rename(path)
+        self.reserve_report(root)
+        conflict = reserve_workspace("conflicting-price", "conflicting_price")
+        envelope, raw = invoke(conflict)
+        self.assertEqual((envelope["exit_code"], envelope["refusal"]["code"]), (3, "FMINE-REF-202"), raw)
+        self.assertIn("Later.pdf", raw)
+        self.assertIsNone(envelope["payload"])
+
+    def test_declaration_reader_and_document_order_do_not_change_reserve_results(self):
+        first, report = self.reserve_report(reserve_workspace("order-a"))
+        second, reordered = self.reserve_report(reserve_workspace("order-b", reverse=True))
+        self.assertEqual(report, reordered)
+        # The outer report additionally binds the exact declaration-file bytes, whose order did change.
+        self.assertNotEqual(first["payload"]["definitions_sha256"], second["payload"]["definitions_sha256"])
+
+    def test_pending_competing_value_or_price_location_cannot_be_silently_accepted(self):
+        for mode, quantity in (("competing_value", "reserve_change"), ("competing_price", "reserve_gold_price")):
+            with self.subTest(mode=mode):
+                envelope, raw = invoke(reserve_workspace(mode, mode))
+                self.assertEqual((envelope["exit_code"], envelope["refusal"]["code"]), (3, "FMINE-REF-202"), raw)
+                self.assertIsNone(envelope["payload"])
+                self.assertIn(f"quantity {quantity}", raw)
+                self.assertIn(f"accepted at Later.pdf:p1:Invented reserves:{quantity}/2024", raw)
+                self.assertIn(f"pending at Later.pdf:p1:Invented reserves:Alternative {quantity}/2024", raw)
+                self.assertIn("reader_c", raw)
 
 
 if __name__ == "__main__":

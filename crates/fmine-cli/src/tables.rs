@@ -93,16 +93,7 @@ fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<
         })?;
 
     // Verify even a declared document with no transcribed rows: an absent member must not hide absent bytes.
-    let mut quantities: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-    for identity in &definitions.identities {
-        let keys = quantities.entry(&identity.doc).or_default();
-        keys.push(identity.total.clone());
-        keys.extend(identity.terms.iter().map(|term| term.quantity.clone()));
-    }
-    for keys in quantities.values_mut() {
-        keys.sort();
-        keys.dedup();
-    }
+    let quantities = definitions.quantities_by_document();
     let documents: Vec<_> = profile
         .documents
         .iter()
@@ -124,12 +115,20 @@ fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<
                 ),
             ));
         };
+        let clashes = report.agreement.accepted_pending_clashes();
+        if !clashes.is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::NotObservable202,
+                clashes.join("; "),
+            ));
+        }
         accepted.extend(report.agreement.accepted);
         pending.extend(report.agreement.single_reader);
     }
     accepted.sort_by(|a, b| a.locator.cmp(&b.locator));
     pending.sort();
     let report = roll_forward::assess(&definitions, &accepted, &profile.documents);
+    let reserves = fmine_metrics::reserves::assess(&definitions, &accepted, &profile.documents);
     let pending_json = pending
         .iter()
         .map(|(at, reader)| {
@@ -143,10 +142,11 @@ fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<
         .join(",");
     let body = format!(
         "{{\"schema\":\"fmine.table-check.v1\",\"mode\":\"declared_pdf\",\"lane\":\"public\",\"gate_eligible\":false,\
-        \"issuer\":{},\"definitions_sha256\":{},\"checks\":{},\"pending_readings\":[{}],\"no_claim\":{}}}",
+        \"issuer\":{},\"definitions_sha256\":{},\"checks\":{},\"issuer_reserves\":{},\"pending_readings\":[{}],\"no_claim\":{}}}",
         js(&profile.issuer),
         js(&sha256(&bytes).to_hex()),
         report.to_json(),
+        reserves.to_json(),
         pending_json,
         js(NO_CLAIM),
     );
@@ -154,12 +154,9 @@ fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<
     let payload = format!("{{\"digest\":{},{}", js(&digest), &body[1..]);
     let mut envelope = Envelope::ok("check tables", payload, actions());
     envelope.no_claim = Some(NO_CLAIM);
-    envelope.rendered_markdown = Some(document_markdown(
-        &profile.issuer,
-        &report,
-        &pending,
-        &digest,
-    ));
+    envelope.rendered_markdown = Some(
+        document_markdown(&profile.issuer, &report, &pending, &digest) + &reserves.to_markdown(),
+    );
     Ok(envelope)
 }
 

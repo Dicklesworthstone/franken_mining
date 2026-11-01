@@ -608,8 +608,13 @@ None: every failure is a usage error or a typed refusal.
   their available evidence. PDF report digests bind definitions, readings, results and pending readers;
   they are not authority-ledger anchors or external timestamps. Workbook mode retains its existing ledger
   anchor and certificate. All authority flags remain false. JSON and Markdown retain signed source tokens,
-  period, unit, basis, document vintage and citations. This slice does not classify reserves, infer table
-  membership, establish filing/deck precedence or complete the real-PDF acceptance population.
+  period, unit, basis, document vintage and citations. Optional `reserve_row` declarations also collect their
+  same-document price readings and render `fmine-metrics::reserves` under `payload.issuer_reserves`. MD&A/AIF
+  current-filed selection retains earlier assertions, ambiguous latest filings, unavailable newer readings
+  and deck-only cross-checks; definitions and every selected source remain hash-bound. This slice does not
+  classify reserves, infer table membership or complete the real-PDF acceptance population.
+  An accepted value or price with a competing pending location refuses `FMINE-REF-202` with both citations;
+  ordinary missing second readings remain visible as unavailable rows and pending evidence.
 - DESIGN (BD-341): `track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]` is a read-only
   adapter over agreed PDF transcriptions, canonical annual Mine Stats Claims and `fmine-calib::guidance_scores`.
   `--synthetic` uses invented inputs through the same adapter. JSON is the default (`--json` is an explicit

@@ -156,7 +156,7 @@ kind = "roll_forward"
 total = "closing_reserves_2025"
 total_period = "2025FY"
 unit = "koz"
-basis = "100%"
+basis = "gold;full;contained"
 construction = "rounded_once"
 convention = "closed"
 
@@ -194,7 +194,58 @@ unreadable/changed source files and reader disagreements preserve their typed re
 DESIGN boundary: these are arithmetic checks on issuer assertions. Different filing/deck vintages remain
 separate documents. The command does not determine which vintage is true, classify reserves or establish
 GATE-HALL-01. Its PDF report digest binds the declarations, readings and results; it is not a ledger anchor or
-external timestamp. Authentic historical PDF readings and the full reserve-vintage store remain open.
+external timestamp. Authentic historical PDF readings and complete historical coverage remain open.
+
+#### Keep reserve filing vintages and their price decks separate
+
+DESIGN (BD-335): optional `[[reserve_row]]` declarations add an issuer-reserve register projection to the same
+`check tables --definitions` command. The following invented declaration can be appended to the example
+above; a file containing only reserve declarations is also supported:
+
+```toml
+[[reserve_row]]
+id = "closing_gold_2025"
+doc = "Synthetic_Reserves.pdf"
+quantity = "closing_reserves_2025"
+subject = "Example Mine"
+item = "closing"
+reserve_year = 2025
+period = "2025FY"
+metal = "gold"
+unit = "koz"
+ownership = "full"
+support = "contained"
+convention = "closed"
+deck = "quoted"
+deck_period = "2025FY"
+deck_basis = "reserve_prices"
+gold_price_quantity = "reserve_gold_price_2025"
+```
+
+The reserve reading must independently agree on basis `gold;full;contained`, as well as its quantity, period,
+unit, token and locator. An attributable basis explicitly names a fraction, for example
+`gold;attributable:123/200;contained`. Opening rows use the preceding year's period. Supported items are
+opening, acquisitions/divestments, depletion, net change and closing; signed printed adjustments remain signed.
+The document's declared rounding convention also controls reserve-row comparisons.
+
+A quoted price deck comes from independently agreed price readings in the **same document**, with the declared
+deck period and basis. Gold prices use `usd_per_oz`; copper prices use `usd_per_lb`. GEO requires both price
+quantities. No prices are entered into the definition file. Use `deck = "unstated"` and omit every price field
+when the source does not state its deck; two unstated decks never establish equivalent assumptions.
+
+JSON exposes `payload.issuer_reserves`, and Markdown adds reserve assertions, selections, comparisons and
+unavailable rows. Every admitted row retains its source token, exact rounding interval, source hash, readers,
+publication evidence, interpreted economic key and separately cited price deck. All rows are issuer assertions.
+For the same issuer, subject, item, reserve year, metal, unit, ownership and support, the latest declared MD&A or
+AIF filing is current. A later investor deck remains a cross-check. Competing filings on the latest date stay
+ambiguous; a missing or unusable latest filing or price reading blocks fallback to an older filing.
+An accepted value with a competing pending location refuses with both citations, even when the tokens match.
+
+Earlier filings remain visible, including their disagreement with the current selection. Changed price decks
+are reported separately from amount comparisons, and the latest filing still carries its own deck. Source
+quantities on different units, ownership bases or contained/recoverable supports are never silently combined.
+The projection retains the supplied declared population; it does not prove complete filing coverage, establish
+an append-only history, normalize a changed price deck or create an `EstimateStatement` or reserve classification.
 
 ### Check cited numbers in a draft
 
@@ -574,6 +625,16 @@ the same eligible sites. Every excluded site lists all missing inputs. A negativ
 forecast under this loss, without establishing skill or calibration. Optional comparator failures, including
 arithmetic overflow, preserve the verified forecast/outcome scores and appear as explicit unavailable or
 refused comparisons. The `benchmark_assessment` object carries the detailed statuses, evidence and results.
+
+Each comparator also gets an exact full-cohort bound on the mean forecast-minus-comparator interval loss,
+including every unresolved outcome. With the same frozen alpha, the two interval losses have matching tail
+slopes, so their difference is bounded over all real outcomes even though either individual loss is unbounded.
+The report keeps the full live-member denominator, names pending outcomes and missing benchmark intervals,
+and isolates arithmetic refusals to the affected comparison. For example, an invented observed lead of
+`-20` can become `[-20, 30]` after admitting one pending outcome: either method could finish ahead. A wholly
+negative completion interval retains the forecast's lower loss across every admitted completion. These are
+arithmetic completion bounds, with no probability, confidence or calibration claim. The paired scoring API
+preserves the same bounds and missing-member states.
 
 The timestamp authenticates the frozen record and its declarations. Consumed source bodies are separately
 verified; actual input use and forecast generation are not replayed. This command creates no forecasts,
