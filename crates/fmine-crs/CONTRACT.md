@@ -22,7 +22,7 @@ All values are bare `f64` (S0).
 
 ## 4. Invariants
 - Points on different CRSs are never combined: `distance_3d` and `transform` refuse a mismatch (G-CRS-1); `test_crs_mismatch_refusal_g_crs_1`.
-- A mine-grid point farther outside the control hull than its buffer is refused (G-CRS-2): `test_mine_grid_solver_and_convex_hull_guard_g_crs_2`.
+- A mine-grid point farther outside the control hull than its buffer is refused (G-CRS-2): `test_mine_grid_solver_and_convex_hull_guard_g_crs_2`. The plan's G-CRS-2 instead marks such a use `Estimated` with a UU term and refuses only a decision-grade use; the code refuses every such point.
 - The UTM forward projection followed by the inverse returns the input to 1e-8 degrees for Reko Diq (41N) and Veladero (19S): `test_utm_roundtrip_reko_diq_and_carlin`. Despite its name, the test has no Carlin point.
 
 ## 5. Refusals
@@ -61,5 +61,5 @@ None (gap). The UTM test is a round trip through this crate's own forward and in
 - `ControlMonument`, `MineGridTransform` (`fit`, `transform`)
 
 ## 12. Proof obligations
-- PO-CRS-2 (out-of-hull points refused with FMINE-REF-106): `test_mine_grid_solver_and_convex_hull_guard_g_crs_2`.
+- PO-CRS-2 (out-of-hull points refused with FMINE-REF-106; the old contract's label, not a row of the plan's PO table): `test_mine_grid_solver_and_convex_hull_guard_g_crs_2`.
 - PO-CRS-1 (accuracy against PROJ) is not discharged: there is a round-trip test only.
