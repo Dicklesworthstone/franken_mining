@@ -54,6 +54,7 @@ None is a Claim.
   - An `Assertion` has no colour: `test_assertion_is_refused_as_a_colour_leaf_whatever_its_basis`.
   - `Assumed` is Estimated with `∞` dispersion whatever the basis: `test_assumed_is_estimated_with_unbounded_dispersion`.
   - An unanchored class keeps only an Estimated basis, and any stronger basis is ignored: `test_unanchored_classes_never_rise_above_estimated`.
+  - `ModelledCalibrated` and `Transferred { aoa: Inside }` stand at most on Validated: a Verified basis is ignored and gives Estimated with `∞` dispersion (bd-wiaq): `test_calibrated_and_in_aoa_transfer_ignore_a_verified_basis`.
   - An anchored class with no basis is Estimated with `∞` dispersion: `test_anchored_classes_keep_a_validated_basis_and_need_one`.
 - **Canonical tags are distinct.** There are 13 class tags, 9 state tags and 6 status tags: `test_tags_are_distinct`.
 - **Every refusal carries a catalogue row.**
@@ -85,7 +86,7 @@ Not applicable: no Claims are emitted. This crate defines the classes and states
 - **Colour payloads.** A Verified interval with a NaN, an inverted pair, or a point at infinity is malformed. A half-infinite or whole-line interval is valid but says nothing. A Validated colour needs a valid dataset identity and at least one axis, and every axis must be validly named, finite and ordered. An Estimated dispersion must be neither NaN nor negative. `ValidityDomain::with` reorders reversed finite bounds, and a NaN bound leaves the domain empty.
 - **`IntervalOp::Hull`** encloses the result only for operations whose value lies between its operands: min, max, selection and convex combination. `compose` cannot tell which operation the caller meant. `test_hull_is_not_used_for_difference` shows the hull missing a difference.
 - **Identities.** At most 256 bytes, ASCII letters and digits plus `-_./:@+=`, not blank, with no surrounding space or control character, and no placeholder token (`tbd`, `n/a`, …). A composed identity that would be longer, or that has an invalid part, becomes a BLAKE3 digest. That digest differs from frankensim's for the same inputs.
-- **`project_color` and a Verified basis.** An anchored class (`Measured`, `Derived`, `ModelledCalibrated` or `Transferred { aoa: Inside }`) keeps any basis, Verified included. §7.1 projects `ModelledCalibrated` and an in-AOA transfer to Validated, and reserves Verified for interval enclosures. No test gives an anchored class a Verified basis. In the tree today the basis comes only from `fmine_claim`: `with_regime` makes a Validated basis, and `compose_binary` composes the parents' colours. So no Verified basis reaches `project_color` (Known gaps).
+- **`project_color` and a Verified basis.** §7.1 projects `ModelledCalibrated` and an in-AOA transfer to Validated, and reserves Verified for interval enclosures. Those two classes ignore a Verified basis (bd-wiaq). `Measured` and `Derived` keep one: `test_measured_and_derived_keep_a_verified_basis` pins `Measured`'s behaviour until the owner rules (Known gaps). In the tree today the basis comes only from `fmine_claim`: `with_regime` makes a Validated basis, and `compose_binary` composes the parents' colours. So no Verified basis reaches `project_color`.
 - **Assertion sources.** When two assertions meet, the alphabetically first source survives (Known gaps).
 
 ## 9. Oracles
@@ -95,7 +96,7 @@ No external oracle or fixture.
 - `xtask check-refusals` checks the catalogue against plan §8.4 and the registry (`test_committed_registry_catalogue_and_plan_agree`).
 
 ## 10. Known gaps
-- **`project_color` does not cap anchored classes at Validated** (see Validity domain): bd-wiaq.
+- **`Measured` keeps a Verified basis.** §7.1's Measured row is ambiguous between Validated only and Verified for interval enclosures such as mass-balance bounds. Today's behaviour stands until the owner rules (bd-wiaq).
 - **Owner questions.** Each has its working choice in force. They are recorded here and in the doc comments, with no bead:
   - **Plan erratum.** NL-2 says "the weakest input", but `Transferred` and `Elicited` are incomparable, so there may be no weakest. `meet` gives their lower bound, `Assumed`. It never promotes, and it demotes two mid-tier inputs.
   - **`AoaStatus`.** The plan names `Transferred{aoa}` without defining `aoa`. The working values are `Outside`, `NotAssessed` and `Inside`, weakest first.

@@ -7,8 +7,10 @@ use crate::epistemic::{AoaStatus, EvidenceClass};
 /// Projects a class onto a colour, given the colour its anchor or inputs support.
 ///
 /// `Assertion` gets none: it is refused as a colour leaf until reviewed. A class that §7.1 lets stand on an anchor keeps
-/// `basis`. Every other class is `Estimated`, and a `basis` stronger than that is ignored, so a caller cannot raise
-/// a colour by supplying one. With no `basis` there is nothing to stand on, so the spread is unbounded.
+/// `basis`, up to the colour its row names: `ModelledCalibrated` and a transfer inside its AOA stand at most on
+/// `Validated`, so a `Verified` basis is ignored for them (bd-wiaq), while `Measured` and `Derived` keep any basis.
+/// Every other class is `Estimated`, and a `basis` stronger than that is ignored, so a caller cannot raise a colour by
+/// supplying one. With no `basis` there is nothing to stand on, so the spread is unbounded.
 #[must_use]
 pub fn project_color(evidence: EvidenceClass, basis: Option<&Color>) -> Option<Color> {
     let unbounded = |estimator: &str| {
@@ -26,9 +28,19 @@ pub fn project_color(evidence: EvidenceClass, basis: Option<&Color>) -> Option<C
                 aoa: AoaStatus::Inside
             }
     );
+    let validated_at_most = matches!(
+        evidence,
+        EvidenceClass::ModelledCalibrated
+            | EvidenceClass::Transferred {
+                aoa: AoaStatus::Inside
+            }
+    );
     match (evidence, basis) {
         (EvidenceClass::Assertion { .. }, _) => None,
         (EvidenceClass::Assumed, _) => unbounded("class:assumed"),
+        (_, Some(color)) if validated_at_most && color.rank() > ColorRank::Validated => {
+            unbounded("class:validated_at_most")
+        }
         (_, Some(color)) if anchored || color.rank() == ColorRank::Estimated => Some(color.clone()),
         _ => unbounded("class:unanchored"),
     }
@@ -97,6 +109,40 @@ mod tests {
         ] {
             assert_eq!(project_color(class, Some(&validated())), Some(validated()));
             assert!(is_unbounded(project_color(class, None)), "{class:?}");
+        }
+    }
+
+    /// §7.1 projects `ModelledCalibrated` and an in-AOA transfer to Validated and reserves Verified for interval
+    /// enclosures, so a Verified basis cannot colour them Verified (bd-wiaq). Weaker bases still stand.
+    #[test]
+    fn test_calibrated_and_in_aoa_transfer_ignore_a_verified_basis() {
+        let verified = Color::Verified { lo: 1.0, hi: 2.0 };
+        for class in [
+            EvidenceClass::ModelledCalibrated,
+            EvidenceClass::Transferred {
+                aoa: AoaStatus::Inside,
+            },
+        ] {
+            assert!(
+                is_unbounded(project_color(class, Some(&verified))),
+                "{class:?}"
+            );
+            assert_eq!(project_color(class, Some(&validated())), Some(validated()));
+            assert_eq!(project_color(class, Some(&estimated())), Some(estimated()));
+        }
+    }
+
+    /// `Derived` keeps a Verified basis, which `compose` gives a rigorous chain. `Measured` keeps one too: whether
+    /// §7.1's Measured row allows Verified only for interval enclosures is an owner question (bd-wiaq), and this
+    /// pins today's behaviour until it is answered.
+    #[test]
+    fn test_measured_and_derived_keep_a_verified_basis() {
+        let verified = Color::Verified { lo: 1.0, hi: 2.0 };
+        for class in [EvidenceClass::Measured, EvidenceClass::Derived] {
+            assert_eq!(
+                project_color(class, Some(&verified)),
+                Some(verified.clone())
+            );
         }
     }
 
