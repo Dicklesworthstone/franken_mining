@@ -63,6 +63,16 @@ if [ "$hex" != "$stored" ]; then
   finish
 fi
 
+# `openssl ts -verify` of $tsr against the root file $1, with the reply's own certificates as untrusted ones
+# when it carries any (see below).
+ts_verify() {
+  if [ -n "$embedded" ]; then
+    openssl ts -verify -digest "$hex" -in "$tsr" -CAfile "$1" -untrusted <(printf '%s\n' "$embedded") 2>&1
+  else
+    openssl ts -verify -digest "$hex" -in "$tsr" -CAfile "$1" 2>&1
+  fi
+}
+
 for tsr in "$dir"/rules*.tsr; do
   [ -f "$tsr" ] || continue
   name="$(basename "$tsr")"
@@ -73,17 +83,11 @@ for tsr in "$dir"/rules*.tsr; do
   # does not build the chain from the certificates inside the token, so DigiCert's reply failed there with
   # "unable to get local issuer certificate". Untrusted certificates cannot be a trust anchor: that is still one
   # of tsa_dir/*.pem.
-  embedded="$(openssl ts -reply -in "$tsr" -token_out 2>/dev/null | openssl pkcs7 -inform DER -print_certs 2>/dev/null)"
+  embedded="$(openssl ts -reply -in "$tsr" -token_out 2>/dev/null | openssl pkcs7 -inform DER -print_certs 2>/dev/null)" ||
+    embedded=""
   for chain in "$tsa_dir"/*.pem; do
     [ -f "$chain" ] || continue
-    if [ -n "$embedded" ]; then
-      out="$(openssl ts -verify -digest "$hex" -in "$tsr" -CAfile "$chain" -untrusted <(printf '%s\n' "$embedded") 2>&1)"
-      rc=$?
-    else
-      out="$(openssl ts -verify -digest "$hex" -in "$tsr" -CAfile "$chain" 2>&1)"
-      rc=$?
-    fi
-    if [ "$rc" -eq 0 ]; then
+    if out="$(ts_verify "$chain")"; then
       ok=true
       by="$(basename "$chain")"
       break
