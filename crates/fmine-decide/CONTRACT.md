@@ -74,7 +74,7 @@ No fixture under `fixtures/` and no golden card.
   - VOI is shown without a Monte Carlo SE or status, which G-HELM-6 refuses.
   - There is no regret (G-HELM-7).
 - **GATE-HELM-01 is not met.** It needs two real retrospective cards and an executive panel (bd-226). This crate has only synthetic controls.
-- **GATE-HELM-02 is not met.** It needs a Monte Carlo VOI estimator that recovers closed-form EVSI by a χ² test (bd-227). Only the closed form exists.
+- **GATE-HELM-02 is not met.** The Monte Carlo estimator and its χ² test exist in `fmine-numerics` (`voi::estimate_evsi_mc`, `test_mc_evsi_recovers_closed_form_chi2`), and the test passes locally. CI has not run it, there is no gate record, and bd-227 is open. This crate does not call the estimator: `rank_voi_campaigns` ranks by the closed form.
 - **BD-225 is open (bd-225).** There are no golden cards and no decision-ledger entries.
 - **No INV-002 flags.** The old contract said every card enforces `authoritative`, `may_actuate`, `is_safe_certification` and `is_signing_basis` false. No such fields exist in this crate, `fmine-claim` or `fmine-evidence`.
 - **Two L-6 debt rows** in `registries/l6_allow.toml`, for `from_linear_sensitivity` (3 parameters) and `build` (`cvar95_loss_usd_m`).
