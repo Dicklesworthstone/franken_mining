@@ -11,7 +11,7 @@ A reading claims no synchronisation, uncertainty bound, monotonicity or authorit
 - **Crate:** `fmine-runtime`
 - **Layer:** S1
 - **Subsystem:** Bedrock
-- **LOC budget:** 12,000 planned / 14,000 ceiling (`registries/loc_budget.toml`)
+- **LOC budget:** 12,000 planned / 14,000 ceiling
 - **Allowed Module Families:** `["clock", "process"]`
 
 ## 2. Inputs
