@@ -2,8 +2,9 @@
 //!
 //! DESIGN: ranges have no implied coverage. Missing members stay in the denominator. Completion, rounding
 //! and IID reference bounds are separate. Callers bind compatible cited outcomes and select their vintage.
-//! Determinism: Exact for scores and completion bounds; DeterministicPerIsa for the explicitly IID-only
-//! Clopper-Pearson reference interval, evaluated by a bounded recurrence and the refusing root solver.
+//! Determinism: Exact for scores, completion bounds and certified outward CP90 endpoints. Summary float
+//! endpoints represent the same dyadic rationals exactly. The standalone compatibility float CP90 API is
+//! DeterministicPerIsa, using the bounded mode-centred recurrence and refusing root solver.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -17,11 +18,18 @@ use crate::CalibrationFlag;
 /// Canonical Claim validation and provenance around the exact numerical primitives.
 pub mod claims;
 
+mod certified;
+pub use certified::{
+    MAX_CP_TRIALS, clopper_pearson_90 as clopper_pearson_90_exact,
+    clopper_pearson_90_with_limit as clopper_pearson_90_exact_with_limit,
+};
+
 const ZERO: Rat = Rat::from_integer(0);
 const TWO: Rat = Rat::from_integer(2);
-const MAX_BINOMIAL_N: usize = 4096;
+const MAX_BINOMIAL_N: usize = MAX_CP_TRIALS;
 
 pub const CP_ASSUMPTION: &str = "Independent Bernoulli outcomes among resolved members only; no adjustment for site or year dependence, selective missingness, or outcome rounding.";
+
 /// The issuer's stated acceptance set; no variant asserts a nominal probability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guidance {
@@ -80,125 +88,6 @@ pub struct ScoringMember {
     pub outcome: Option<PrintedOutcome>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct GuidanceSummary {
-    pub n_members: usize,
-    pub n_resolved: usize,
-    pub n_unresolved: usize,
-    pub inside: usize,
-    pub below: usize,
-    pub above: usize,
-    pub boundary: usize,
-    pub definitely_inside: usize,
-    pub possibly_inside: usize,
-    /// Resolved, non-degenerate range rows only; this denominator is printed beside every bias quantity.
-    pub n_ranges: usize,
-    pub above_midpoint: usize,
-    pub observed_hit_rate: Option<Rat>,
-    /// IID Bernoulli reference only; not adjusted for dependence and never a calibration verdict.
-    pub iid_reference_interval_90: Option<(f64, f64)>,
-    /// [printed hits / all members, (printed hits + missing) / all members]. No sampling inference.
-    pub whole_cohort_hit_bounds: Option<Interval>,
-    /// The same completion bound with definite and possible hits under outcome rounding.
-    pub rounding_aware_hit_bounds: Option<Interval>,
-    pub above_midpoint_share: Option<Rat>,
-    pub mean_z: Option<Rat>,
-    /// Arithmetic propagation of printed rounding only, never a confidence interval for bias.
-    pub mean_z_rounding_interval: Option<Interval>,
-    /// This module returns only `Descriptive` or `Unscored`, at every sample size.
-    pub flag: CalibrationFlag,
-}
-
-fn rat_json(value: Rat) -> String {
-    format!(
-        "{{\"num\":\"{}\",\"den\":\"{}\"}}",
-        value.num(),
-        value.den()
-    )
-}
-
-fn optional_rat(value: Option<Rat>) -> String {
-    value.map_or_else(|| "null".to_owned(), rat_json)
-}
-
-fn interval_json(value: Option<Interval>) -> String {
-    value.map_or_else(
-        || "null".to_owned(),
-        |i| {
-            format!(
-                "{{\"lo\":{},\"hi\":{},\"lo_strict\":{},\"hi_strict\":{}}}",
-                rat_json(i.lo),
-                rat_json(i.hi),
-                i.lo_strict,
-                i.hi_strict
-            )
-        },
-    )
-}
-
-impl GuidanceScore {
-    /// Deterministic numeric rendering; the caller supplies the source citations and arithmetic rule.
-    #[must_use]
-    pub fn to_json(&self) -> String {
-        format!(
-            "{{\"side\":\"{}\",\"boundary\":{},\"definitely_inside\":{},\"possibly_inside\":{},\
-             \"midpoint\":{},\"half_width\":{},\"z\":{},\"z_interval\":{},\"above_midpoint\":{}}}",
-            self.side.as_str(),
-            self.boundary,
-            self.definitely_inside,
-            self.possibly_inside,
-            optional_rat(self.midpoint),
-            optional_rat(self.half_width),
-            optional_rat(self.z),
-            interval_json(self.z_interval),
-            self.above_midpoint
-                .map_or_else(|| "null".to_owned(), |x| x.to_string()),
-        )
-    }
-}
-
-impl GuidanceSummary {
-    /// Numeric JSON; dependence estimates and bias confidence intervals remain explicitly absent.
-    #[must_use]
-    pub fn to_json(&self) -> String {
-        let reference = self.iid_reference_interval_90.map_or_else(|| "null".to_owned(), |(lo, hi)| {
-            format!("{{\"lo\":{lo},\"hi\":{hi},\"level\":0.9,\"assumption\":\"independent_identically_distributed_bernoulli_hits\"}}")
-        });
-        let flag = if self.n_resolved == 0 {
-            "unscored"
-        } else {
-            "descriptive"
-        };
-        format!(
-            "{{\"n_members\":{},\"n_resolved\":{},\"n_unresolved\":{},\"inside\":{},\"below\":{},\
-             \"above\":{},\"boundary\":{},\"definitely_inside\":{},\"possibly_inside\":{},\
-             \"n_ranges\":{},\"above_midpoint\":{},\"observed_hit_rate\":{},\
-             \"iid_reference_interval_90\":{},\"whole_cohort_hit_bounds\":{},\
-             \"rounding_aware_hit_bounds\":{},\"above_midpoint_share\":{},\"mean_z\":{},\
-             \"mean_z_rounding_interval\":{},\"effective_n\":null,\"bias_confidence_interval\":null,\
-             \"flag\":\"{flag}\",\"calibration_verdict\":null}}",
-            self.n_members,
-            self.n_resolved,
-            self.n_unresolved,
-            self.inside,
-            self.below,
-            self.above,
-            self.boundary,
-            self.definitely_inside,
-            self.possibly_inside,
-            self.n_ranges,
-            self.above_midpoint,
-            optional_rat(self.observed_hit_rate),
-            reference,
-            interval_json(self.whole_cohort_hit_bounds),
-            interval_json(self.rounding_aware_hit_bounds),
-            optional_rat(self.above_midpoint_share),
-            optional_rat(self.mean_z),
-            interval_json(self.mean_z_rounding_interval),
-        )
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuidanceScoreError {
     InvalidRange,
@@ -245,6 +134,23 @@ fn validate_guidance(guidance: Guidance) -> Result<()> {
         return Err(GuidanceScoreError::InvalidRange);
     }
     Ok(())
+}
+
+/// Scores a closed range in exact arithmetic. Equal endpoints denote point guidance, with no z score.
+/// The canonical [`score`] entry point continues to require a strictly positive-width `Range`.
+pub fn score_range(lo: Rat, hi: Rat, y: Rat, printed: Interval) -> Result<GuidanceScore> {
+    let guidance = if cmp(lo, hi)? == Ordering::Equal {
+        Guidance::Point { value: lo }
+    } else {
+        Guidance::Range { lo, hi }
+    };
+    score(
+        guidance,
+        PrintedOutcome {
+            value: y,
+            interval: printed,
+        },
+    )
 }
 
 /// Score one outcome against the stated guidance set, retaining its printed rounding ambiguity.
@@ -316,6 +222,132 @@ pub fn score(guidance: Guidance, outcome: PrintedOutcome) -> Result<GuidanceScor
     Ok(result)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuidanceSummary {
+    pub n_members: usize,
+    pub n_resolved: usize,
+    pub n_unresolved: usize,
+    pub inside: usize,
+    pub below: usize,
+    pub above: usize,
+    pub boundary: usize,
+    pub definitely_inside: usize,
+    pub possibly_inside: usize,
+    /// Resolved, non-degenerate range rows only; this denominator is printed beside every bias quantity.
+    pub n_ranges: usize,
+    pub above_midpoint: usize,
+    pub observed_hit_rate: Option<Rat>,
+    /// IID Bernoulli reference only; exactly representable float projection of the certified dyadic bounds.
+    pub iid_reference_interval_90: Option<(f64, f64)>,
+    /// Canonical outward CP90 bounds, conditional on independent identically distributed Bernoulli hits.
+    pub iid_reference_interval_90_exact: Option<Interval>,
+    /// [printed hits / all members, (printed hits + missing) / all members]. No sampling inference.
+    pub whole_cohort_hit_bounds: Option<Interval>,
+    /// The same completion bound with definite and possible hits under outcome rounding.
+    pub rounding_aware_hit_bounds: Option<Interval>,
+    pub above_midpoint_share: Option<Rat>,
+    pub mean_z: Option<Rat>,
+    /// Arithmetic propagation of printed rounding only, never a confidence interval for bias.
+    pub mean_z_rounding_interval: Option<Interval>,
+    /// This module returns only `Descriptive` or `Unscored`, at every sample size.
+    pub flag: CalibrationFlag,
+}
+
+fn rat_json(value: Rat) -> String {
+    format!(
+        "{{\"num\":\"{}\",\"den\":\"{}\"}}",
+        value.num(),
+        value.den()
+    )
+}
+
+fn optional_rat(value: Option<Rat>) -> String {
+    value.map_or_else(|| "null".to_owned(), rat_json)
+}
+
+fn interval_json(value: Option<Interval>) -> String {
+    value.map_or_else(
+        || "null".to_owned(),
+        |i| {
+            format!(
+                "{{\"lo\":{},\"hi\":{},\"lo_strict\":{},\"hi_strict\":{}}}",
+                rat_json(i.lo),
+                rat_json(i.hi),
+                i.lo_strict,
+                i.hi_strict,
+            )
+        },
+    )
+}
+
+impl GuidanceScore {
+    /// Deterministic numeric rendering; the caller supplies the source citations and arithmetic rule.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"side\":\"{}\",\"boundary\":{},\"definitely_inside\":{},\"possibly_inside\":{},\
+             \"midpoint\":{},\"half_width\":{},\"z\":{},\"z_interval\":{},\"above_midpoint\":{}}}",
+            self.side.as_str(),
+            self.boundary,
+            self.definitely_inside,
+            self.possibly_inside,
+            optional_rat(self.midpoint),
+            optional_rat(self.half_width),
+            optional_rat(self.z),
+            interval_json(self.z_interval),
+            self.above_midpoint
+                .map_or_else(|| "null".to_owned(), |x| x.to_string()),
+        )
+    }
+}
+
+impl GuidanceSummary {
+    /// Numeric JSON; dependence estimates and bias confidence intervals remain explicitly absent.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let reference = self.iid_reference_interval_90.map_or_else(
+            || "null".to_owned(),
+            |(lo, hi)| format!(
+                "{{\"lo\":{lo},\"hi\":{hi},\"level\":0.9,\"assumption\":\"independent_identically_distributed_bernoulli_hits\"}}",
+            ),
+        );
+        let flag = if self.n_resolved == 0 {
+            "unscored"
+        } else {
+            "descriptive"
+        };
+        format!(
+            "{{\"n_members\":{},\"n_resolved\":{},\"n_unresolved\":{},\"inside\":{},\"below\":{},\
+             \"above\":{},\"boundary\":{},\"definitely_inside\":{},\"possibly_inside\":{},\
+             \"n_ranges\":{},\"above_midpoint\":{},\"observed_hit_rate\":{},\
+             \"iid_reference_interval_90\":{},\"iid_reference_interval_90_exact\":{},\
+             \"whole_cohort_hit_bounds\":{},\"rounding_aware_hit_bounds\":{},\
+             \"above_midpoint_share\":{},\"mean_z\":{},\
+             \"mean_z_rounding_interval\":{},\"effective_n\":null,\"bias_confidence_interval\":null,\
+             \"flag\":\"{flag}\",\"calibration_verdict\":null}}",
+            self.n_members,
+            self.n_resolved,
+            self.n_unresolved,
+            self.inside,
+            self.below,
+            self.above,
+            self.boundary,
+            self.definitely_inside,
+            self.possibly_inside,
+            self.n_ranges,
+            self.above_midpoint,
+            optional_rat(self.observed_hit_rate),
+            reference,
+            interval_json(self.iid_reference_interval_90_exact),
+            interval_json(self.whole_cohort_hit_bounds),
+            interval_json(self.rounding_aware_hit_bounds),
+            optional_rat(self.above_midpoint_share),
+            optional_rat(self.mean_z),
+            interval_json(self.mean_z_rounding_interval),
+        )
+    }
+}
+
 /// Binomial tail from a recurrence centred at a mode. Relative weights are at most one; normalizing their
 /// sum avoids factorial overflow and a vanishing endpoint seed. This evaluates the binomial polynomial with
 /// fixed-order floating arithmetic, with no platform transcendental functions.
@@ -369,6 +401,7 @@ fn binomial_interval(k: usize, n: usize, max_iter: usize) -> Result<(f64, f64)> 
 
 /// A two-sided 90% Clopper-Pearson interval. The numerical roots must converge; zero outcomes, invalid counts,
 /// or a sample above the fixed computation budget refuse instead of returning an estimate.
+/// For certified outward rational endpoints use [`clopper_pearson_90_exact`].
 pub fn clopper_pearson_90(k: usize, n: usize) -> Result<(f64, f64)> {
     binomial_interval(k, n, 200)
 }
@@ -411,6 +444,7 @@ pub fn summarize(members: &[ScoringMember]) -> Result<GuidanceSummary> {
         above_midpoint: 0,
         observed_hit_rate: None,
         iid_reference_interval_90: None,
+        iid_reference_interval_90_exact: None,
         whole_cohort_hit_bounds: None,
         rounding_aware_hit_bounds: None,
         above_midpoint_share: None,
@@ -466,8 +500,15 @@ pub fn summarize(members: &[ScoringMember]) -> Result<GuidanceSummary> {
     if summary.n_resolved > 0 {
         summary.flag = CalibrationFlag::Descriptive;
         summary.observed_hit_rate = Some(count_ratio(summary.inside, summary.n_resolved)?);
-        summary.iid_reference_interval_90 =
-            Some(clopper_pearson_90(summary.inside, summary.n_resolved)?);
+        let reference = clopper_pearson_90_exact(summary.inside, summary.n_resolved)
+            .map_err(|_| GuidanceScoreError::ReferenceIntervalFailed)?;
+        // Every endpoint is a dyadic with numerator and denominator at most 2^40, so both conversions
+        // and this division are exact in f64. The rational bounds remain the canonical representation.
+        summary.iid_reference_interval_90 = Some((
+            reference.lo.num() as f64 / reference.lo.den() as f64,
+            reference.hi.num() as f64 / reference.hi.den() as f64,
+        ));
+        summary.iid_reference_interval_90_exact = Some(reference);
     }
     if summary.n_ranges > 0 {
         let n = count_ratio(summary.n_ranges, 1)?;
@@ -591,81 +632,6 @@ mod tests {
     }
 
     #[test]
-    fn test_withholding_outcome_keeps_n_and_bounds_widen() {
-        let members = vec![
-            member("a", Some(110)),
-            member("b", Some(125)),
-            member("c", None),
-        ];
-        let all = summarize(&members).unwrap();
-        assert_eq!((all.n_members, all.n_resolved, all.n_unresolved), (3, 2, 1));
-        assert_eq!(all.observed_hit_rate, Some(q(1, 2)));
-        let bound = all.whole_cohort_hit_bounds.unwrap();
-        assert_eq!((bound.lo, bound.hi), (q(1, 3), q(2, 3)));
-        let mut withheld = members.clone();
-        withheld[1].outcome = None;
-        let after = summarize(&withheld).unwrap();
-        assert_eq!(after.n_members, all.n_members);
-        assert_eq!(after.n_unresolved, 2);
-        assert_eq!(after.whole_cohort_hit_bounds.unwrap().hi, q(1, 1));
-        let mut reversed = members;
-        reversed.reverse();
-        assert_eq!(summarize(&reversed).unwrap(), all);
-    }
-
-    #[test]
-    fn test_rounding_completion_bounds_and_mean_bias_have_named_denominators() {
-        let rows = [
-            member("a", Some(120)),
-            member("b", Some(125)),
-            member("c", None),
-        ];
-        let s = summarize(&rows).unwrap();
-        assert_eq!(s.boundary, 1);
-        assert_eq!(s.n_ranges, 2);
-        assert_eq!(s.mean_z, Some(q(5, 4)));
-        assert_eq!(s.above_midpoint_share, Some(q(1, 1)));
-        let bounds = s.rounding_aware_hit_bounds.unwrap();
-        assert_eq!((bounds.lo, bounds.hi), (ZERO, q(2, 3)));
-        let bias = s.mean_z_rounding_interval.unwrap();
-        assert_eq!((bias.lo, bias.hi), (q(6, 5), q(13, 10)));
-    }
-
-    #[test]
-    fn test_clopper_pearson_closed_form_edges() {
-        let rows: Vec<_> = (0..10).map(|i| member(&i.to_string(), Some(125))).collect();
-        let (lo, hi) = summarize(&rows).unwrap().iid_reference_interval_90.unwrap();
-        let expected = 1.0 - fmine_core::det::exp(fmine_core::det::ln(0.05) / 10.0);
-        assert_eq!(lo, 0.0);
-        assert!((hi - expected).abs() < 1e-12);
-        let rows: Vec<_> = (0..10).map(|i| member(&i.to_string(), Some(110))).collect();
-        let (lo, hi) = summarize(&rows).unwrap().iid_reference_interval_90.unwrap();
-        assert!((lo - (1.0 - expected)).abs() < 1e-12);
-        assert_eq!(hi, 1.0);
-    }
-
-    #[test]
-    fn test_no_calibration_verdict_at_any_sample_size() {
-        for n in [0, 1, 34, 35, 100] {
-            let rows: Vec<_> = (0..n).map(|i| member(&i.to_string(), Some(110))).collect();
-            assert_eq!(
-                summarize(&rows).unwrap().flag,
-                if n == 0 {
-                    CalibrationFlag::Unscored
-                } else {
-                    CalibrationFlag::Descriptive
-                }
-            );
-        }
-        let missing = summarize(&[member("a", None)]).unwrap();
-        assert_eq!(missing.flag, CalibrationFlag::Unscored);
-        assert_eq!(missing.iid_reference_interval_90, None);
-        assert_eq!(missing.observed_hit_rate, None);
-        assert_eq!(missing.whole_cohort_hit_bounds.unwrap().lo, ZERO);
-        assert_eq!(missing.whole_cohort_hit_bounds.unwrap().hi, q(1, 1));
-    }
-
-    #[test]
     fn test_malformed_inputs_refuse_including_unresolved_members() {
         let invalid = Guidance::Range {
             lo: q(120, 1),
@@ -712,6 +678,81 @@ mod tests {
             ),
             Err(GuidanceScoreError::ArithmeticOverflow)
         );
+    }
+
+    #[test]
+    fn test_clopper_pearson_closed_form_edges() {
+        let rows: Vec<_> = (0..10).map(|i| member(&i.to_string(), Some(125))).collect();
+        let (lo, hi) = summarize(&rows).unwrap().iid_reference_interval_90.unwrap();
+        let expected = 1.0 - fmine_core::det::exp(fmine_core::det::ln(0.05) / 10.0);
+        assert_eq!(lo, 0.0);
+        assert!((hi - expected).abs() < 1e-12);
+        let rows: Vec<_> = (0..10).map(|i| member(&i.to_string(), Some(110))).collect();
+        let (lo, hi) = summarize(&rows).unwrap().iid_reference_interval_90.unwrap();
+        assert!((lo - (1.0 - expected)).abs() < 1e-12);
+        assert_eq!(hi, 1.0);
+    }
+
+    #[test]
+    fn test_withholding_outcome_keeps_n_and_bounds_widen() {
+        let members = vec![
+            member("a", Some(110)),
+            member("b", Some(125)),
+            member("c", None),
+        ];
+        let all = summarize(&members).unwrap();
+        assert_eq!((all.n_members, all.n_resolved, all.n_unresolved), (3, 2, 1));
+        assert_eq!(all.observed_hit_rate, Some(q(1, 2)));
+        let bound = all.whole_cohort_hit_bounds.unwrap();
+        assert_eq!((bound.lo, bound.hi), (q(1, 3), q(2, 3)));
+        let mut withheld = members.clone();
+        withheld[1].outcome = None;
+        let after = summarize(&withheld).unwrap();
+        assert_eq!(after.n_members, all.n_members);
+        assert_eq!(after.n_unresolved, 2);
+        assert_eq!(after.whole_cohort_hit_bounds.unwrap().hi, q(1, 1));
+        let mut reversed = members;
+        reversed.reverse();
+        assert_eq!(summarize(&reversed).unwrap(), all);
+    }
+
+    #[test]
+    fn test_rounding_completion_bounds_and_mean_bias_have_named_denominators() {
+        let rows = [
+            member("a", Some(120)),
+            member("b", Some(125)),
+            member("c", None),
+        ];
+        let s = summarize(&rows).unwrap();
+        assert_eq!(s.boundary, 1);
+        assert_eq!(s.n_ranges, 2);
+        assert_eq!(s.mean_z, Some(q(5, 4)));
+        assert_eq!(s.above_midpoint_share, Some(q(1, 1)));
+        let bounds = s.rounding_aware_hit_bounds.unwrap();
+        assert_eq!((bounds.lo, bounds.hi), (ZERO, q(2, 3)));
+        let bias = s.mean_z_rounding_interval.unwrap();
+        assert_eq!((bias.lo, bias.hi), (q(6, 5), q(13, 10)));
+    }
+
+    #[test]
+    fn test_no_calibration_verdict_at_any_sample_size() {
+        for n in [0, 1, 34, 35, 100] {
+            let rows: Vec<_> = (0..n).map(|i| member(&i.to_string(), Some(110))).collect();
+            assert_eq!(
+                summarize(&rows).unwrap().flag,
+                if n == 0 {
+                    CalibrationFlag::Unscored
+                } else {
+                    CalibrationFlag::Descriptive
+                }
+            );
+        }
+        let missing = summarize(&[member("a", None)]).unwrap();
+        assert_eq!(missing.flag, CalibrationFlag::Unscored);
+        assert_eq!(missing.iid_reference_interval_90, None);
+        assert_eq!(missing.observed_hit_rate, None);
+        assert_eq!(missing.whole_cohort_hit_bounds.unwrap().lo, ZERO);
+        assert_eq!(missing.whole_cohort_hit_bounds.unwrap().hi, q(1, 1));
     }
 
     #[test]
@@ -770,5 +811,77 @@ mod tests {
         assert!(clopper_pearson_90(0, 0).is_err());
         assert!(clopper_pearson_90(11, 10).is_err());
         assert!(clopper_pearson_90(1, MAX_BINOMIAL_N + 1).is_err());
+    }
+
+    #[test]
+    fn test_certified_maximum_budget_matches_float_reference() {
+        for k in [0, MAX_CP_TRIALS / 2] {
+            let exact = clopper_pearson_90_exact(k, MAX_CP_TRIALS).unwrap();
+            let approximate = clopper_pearson_90(k, MAX_CP_TRIALS).unwrap();
+            let lo = exact.lo.num() as f64 / exact.lo.den() as f64;
+            let hi = exact.hi.num() as f64 / exact.hi.den() as f64;
+            assert!((lo - approximate.0).abs() < 2e-12);
+            assert!((hi - approximate.1).abs() < 2e-12);
+            if k > 0 {
+                assert_eq!(exact.lo.checked_add(exact.hi).unwrap(), q(1, 1));
+            }
+        }
+    }
+
+    #[test]
+    fn test_convenience_point_preserves_strict_canonical_range() {
+        let p = printed(110, ZERO);
+        let result = score_range(q(110, 1), q(110, 1), p.value, p.interval).unwrap();
+        assert_eq!(
+            result,
+            score(Guidance::Point { value: q(110, 1) }, p).unwrap()
+        );
+        assert_eq!(result.z, None);
+        assert_eq!(
+            score(
+                Guidance::Range {
+                    lo: q(110, 1),
+                    hi: q(110, 1)
+                },
+                p
+            ),
+            Err(GuidanceScoreError::InvalidRange)
+        );
+    }
+
+    #[test]
+    fn test_certified_reference_is_canonical_in_summary_and_json() {
+        let summary = summarize(&[
+            member("a", Some(110)),
+            member("b", Some(125)),
+            member("c", None),
+        ])
+        .unwrap();
+        let exact = summary.iid_reference_interval_90_exact.unwrap();
+        assert_eq!(exact, clopper_pearson_90_exact(1, 2).unwrap());
+        let floats = summary.iid_reference_interval_90.unwrap();
+        assert_eq!(floats.0, exact.lo.num() as f64 / exact.lo.den() as f64);
+        assert_eq!(floats.1, exact.hi.num() as f64 / exact.hi.den() as f64);
+        let json = summary.to_json();
+        assert!(json.contains(&format!(
+            "\"iid_reference_interval_90_exact\":{}",
+            interval_json(Some(exact))
+        )));
+        assert!(json.contains("\"effective_n\":null"));
+        assert!(json.contains("\"bias_confidence_interval\":null"));
+        assert!(json.contains("\"calibration_verdict\":null"));
+        assert_eq!(
+            summarize(&[member("a", None)])
+                .unwrap()
+                .iid_reference_interval_90_exact,
+            None
+        );
+        let oversized: Vec<_> = (0..=MAX_CP_TRIALS)
+            .map(|i| member(&i.to_string(), Some(110)))
+            .collect();
+        assert_eq!(
+            summarize(&oversized),
+            Err(GuidanceScoreError::ReferenceIntervalFailed)
+        );
     }
 }

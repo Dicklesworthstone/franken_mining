@@ -53,16 +53,27 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 - `guidance_scores` (BD-341.S4, descriptive slice): exact `Range`, `Point`, `AtMost` and `AtLeast` guidance
   scores against cited printed outcomes and their declared rounding intervals. `score` reports the printed
   hit/miss side, whether rounding makes the hit ambiguous, and range-only midpoint, half-width and normalized
-  bias `z = (y - midpoint) / half_width`. One-sided and point guidance have no `z`.
+  bias `z = (y - midpoint) / half_width`. One-sided and point guidance have no `z`. `score_range` is a
+  convenience adapter that maps equal endpoints to `Point`; the canonical `Range` remains strictly positive-width.
   `summarize` preserves every declared member, refuses duplicate ids and invalid ranges even when unresolved,
   and reduces in stable id order. It gives exact observed hit rates, whole-cohort completion bounds, separate
   rounding-aware bounds, mean `z` with its arithmetic rounding enclosure, and the share above the midpoint.
-  `clopper_pearson_90` supplies a separately labelled 90% IID Bernoulli reference interval, using a bounded,
+  `clopper_pearson_90` retains its floating-point 90% IID Bernoulli reference interval API, using a bounded,
   mode-centred binomial recurrence and the existing refusing root solver. Empty/invalid counts, more than
-  4096 resolved outcomes and nonconvergence refuse. It is not adjusted for common year/site shocks, selective
-  missingness or outcome rounding. Numeric JSON renderers keep exact rational numerators/denominators and
-  open interval ends; effective sample size and bias confidence intervals remain null. Outputs are always
-  Descriptive or Unscored.
+  4096 resolved outcomes and nonconvergence refuse. `CP_ASSUMPTION` states that neither reference calculation
+  adjusts for common year/site shocks, selective missingness or outcome rounding. Numeric JSON renderers
+  keep exact rational numerators/denominators and open interval ends; effective sample size and bias confidence
+  intervals remain null. Outputs are always Descriptive or Unscored.
+- DESIGN: `guidance_scores::clopper_pearson_90_exact` returns an outward enclosure of the iid Bernoulli model's
+  two-sided confidence interval. It bisects a dyadic probability grid with spacing `2^-40`, using outward
+  integer evaluation of the exact binomial survival polynomial on a `2^-80` probability scale. Each endpoint
+  is at most one grid step beyond the model's exact endpoint. Count, iteration and trial-resource limits
+  refuse; a tail whose sign cannot be certified refuses. `clopper_pearson_90_exact_with_limit` exposes the iteration
+  budget, and `MAX_CP_TRIALS` is 4,096. Zero trials return the vacuous exact interval. The private
+  `guidance_scores::certified` evaluator uses no floating-point
+  or transcendental operations. Summaries expose canonical `iid_reference_interval_90_exact` rationals and
+  retain `iid_reference_interval_90` as an exactly representable dyadic float projection for compatibility.
+  The iid assumption is explicit and is not asserted for correlated sites or years.
 - `guidance_scores::claims` wraps those same primitives in canonical, cited Claims. Its `score` checks matching
   subject, metric, annual period, unit and ownership/definition basis, source usability, and both the hashed body
   and typed payload's canonical tag. Its `summarize` refuses duplicate subjects in one publication cohort and
@@ -131,11 +142,14 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   that cut; same-time batches remain valid; failed writes do not advance time or reserve a cohort name; and
   calibration policies cannot bypass the minimum independent sample. Existing frame and score goldens are retained.
 - BD-341.S4's descriptive slice has known-answer `z = 3/2`, exact oz-to-gram invariance, open/closed rounding
-  boundary, missing-member completion-bound, stable input-order, Clopper-Pearson closed-form edge, malformed
-  input and arithmetic-overflow tests in `guidance_scores::tests`. Added tests compare the binomial bounds
-  with the independent log-space tail implementation, verify the maximum supported population and one-sided
-  boundaries, and force nonconvergence. These do not establish the unimplemented clustered bias interval or
-  its 200-replicate coverage gate.
+  boundary, missing-member completion-bound, stable input-order, Clopper–Pearson closed-form edge, malformed
+  input and arithmetic-overflow tests in `guidance_scores::tests`. Tests compare floating binomial bounds with
+  the independent log-space tail implementation, verify maximum supported populations and one-sided boundaries,
+  and force nonconvergence. The certified reference interval is checked
+  against independent high-precision combinatorial-sum answers, exact small binomial polynomials, monotonicity
+  and reflection symmetry in `guidance_scores::certified::tests`. Exhausted root iterations and oversized
+  populations refuse. These tests do not establish the unimplemented clustered bias interval or its
+  200-replicate coverage gate.
 - The Claim wrapper's tests in `guidance_scores::claims::tests` check canonical tampering, basis and duplicate
   member refusals, evidence retention, source parents for unresolved members, stable Claim identities, and
   faithful conversion of exact scores and rounding/completion bounds through the numerical API.
@@ -156,10 +170,10 @@ Pure calibration and scoring kernel; does not perform file I/O (`L-3`).
 The cohort store is in memory. Its canonical assessment bytes can be retained by an adapter; this slice adds no
 durable ledger or external timestamp authority. Caller-supplied times are ordering inputs, not time proofs
 (BD-047/BD-068). It does not infer a fallback after a target's definition changes, estimate correlation, or claim
-calibration for an issuer guidance range with no stated level. Guidance's IID Clopper-Pearson reference interval
+calibration for an issuer guidance range with no stated level. Guidance's IID Clopper–Pearson reference interval
 does not account for common shocks. Clustered bias confidence intervals, an empirically justified effective
 sample-size rule and BD-341's three-scenario coverage study remain open. The exact guidance scorer consumes
 already selected, citation-bound outcomes: it does not freeze forecasts, authenticate a publication date or
 select a vintage. Its rational payloads and one-sided guidance do not extend the ledger's durable floating-point
 forecast format. Adapters must retain the frozen membership and selector separately; completion bounds do not
-substitute for statistical confidence intervals.
+substitute for statistical confidence intervals. Mean-z bounds propagate source rounding only.
