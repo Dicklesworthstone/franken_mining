@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet"]`
+- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -18,7 +18,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `assure challenges --issuer <issuer> [--through YYYYQn]` or `--synthetic`: content-addressed internal-review
     packets from visible assurance exceptions, with JSON or readable `--format markdown` output (BD-349);
   - `guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD` or `--synthetic`:
-    cited remaining-production and AISC requirements under an explicit historical-sales scenario (BD-342);
+    cited remaining-production and AISC requirements plus joint historical-window comparisons under an explicit
+    historical-sales scenario, in JSON or readable `--format markdown` (BD-342);
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row
     per file, `{file, present, bytes_ok, digest_ok}` against the registry's size and sha256 (BD-339.S2). A
     mismatch is reported, never refused: doctor stays exit 0, status ok;
@@ -33,7 +34,8 @@ verified source snapshot as assurance. Without a selector they search the curren
 ## 3. Authority, Epistemics & Representation
 - Every JSON invocation prints exactly one `FMT-ENV-1` envelope on stdout, a usage error included (`BD-329.S3`).
   Markdown wraps that envelope in a JSON fence, except successful challenge exports, which render the cited
-  packets as readable sections with the source root, packet-set digest and internal-review boundary.
+  packets as readable sections with the source root, packet-set digest and internal-review boundary. Successful
+  guidance reports also render readable requirements, historical comparisons, checked replays and source citations.
 - After `anchor_id` every envelope has, in this order:
   - `flags`: the four INV-002 flags, all false, from one constant (no field or setter can set one);
   - `certificate`: the report's ledger state root (hex), or null when no ledger snapshot is registered;
@@ -122,6 +124,9 @@ verified source snapshot as assurance. Without a selector they search the curren
   `certificate` remain null because this is not a registered forecast or ledger snapshot. Missing two-reader
   guidance, incompatible ownership/support, future evidence and unusable sales refuse; synthetic evidence is
   available only through the explicit synthetic lane.
+  T1 output retains exact source-quarter/replay-quarter points and checked exclusion certificates under the
+  separately declared sales scenario. No usable historical window remains T3. Markdown retains exact fractions
+  when a decimal would round, labels display approximations and escapes source text; it never adds authority.
 - `robot-docs` lists every catalogue row as `{code, exit_code, status, summary}`, `status` being `active` or
   `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 
@@ -163,5 +168,6 @@ None: every failure is a usage error or a typed refusal.
 - Never writes to any external system.
 - Challenge packets do not yet cover PDF transcription conflicts, hidden or
   not-published instances. Human review and external-release sequencing remain open.
-- Guidance completion is a T3 necessary-arithmetic report under a declared scenario, not a probability of
-  meeting guidance, a technical capacity envelope or a completed M0 gate.
+- Guidance completion supplies a T1 finite historical comparison when usable original-quarter evidence exists,
+  otherwise T3 necessary arithmetic, under a declared sales scenario. It supplies no probability of meeting
+  guidance, public technical capacity envelope or completed M0 gate.

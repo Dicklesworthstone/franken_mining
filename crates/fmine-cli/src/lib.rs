@@ -1,5 +1,6 @@
 //! FrankenMining CLI (`fmine`) implementation (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+mod guidance;
 pub mod packet;
 
 use std::path::{Path, PathBuf};
@@ -710,6 +711,7 @@ fn challenge_envelope(report: &fmine_public::PublicAssuranceReport) -> Result<En
 
 fn guidance_envelope(
     result: Result<fmine_public::guidance::GuidanceCompletionReport, Refusal>,
+    selection: &str,
 ) -> Envelope {
     let actions = vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
     match result {
@@ -718,6 +720,7 @@ fn guidance_envelope(
             // The payload digest binds evidence and assumptions. This computation has no authority-ledger
             // registration, so both the ledger certificate and anchor deliberately remain absent.
             env.no_claim = Some(fmine_public::guidance::NO_CLAIM);
+            env.rendered_markdown = Some(guidance::render(&report, selection));
             env
         }
         Err(refusal) => Envelope::refused("guidance completion", refusal, actions),
@@ -788,14 +791,14 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             site,
             through,
             as_of,
-        } => guidance_envelope(fmine_public::guidance::run_public(
-            workspace_root,
-            issuer,
-            site,
-            through,
-            as_of,
-        )),
-        CliCommand::GuidanceSynthetic => guidance_envelope(fmine_public::guidance::run_synthetic()),
+        } => guidance_envelope(
+            fmine_public::guidance::run_public(workspace_root, issuer, site, through, as_of),
+            &format!("Issuer: {issuer}; actuals through {through}; evidence as of {as_of}."),
+        ),
+        CliCommand::GuidanceSynthetic => guidance_envelope(
+            fmine_public::guidance::run_synthetic(),
+            "Invented synthetic evidence; this example is not an issuer finding.",
+        ),
         CliCommand::Doctor => match RegistryCatalog::load_from_root(workspace_root) {
             Ok(cat) => {
                 // One entry per registries/sources/<issuer>.toml: registered, present and verified counts with
@@ -1233,7 +1236,12 @@ mod tests {
         assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
         assert_eq!(env.verb, "guidance completion");
         assert!(env.payload_json.contains("\"lane\":\"synthetic\""));
-        assert!(env.payload_json.contains("\"envelope_tier\":\"T3\""));
+        assert!(env.payload_json.contains("\"envelope_tier\":\"T1\""));
+        assert!(
+            env.payload_json
+                .contains("within_supplied_history_under_sales_scenario")
+        );
+        assert!(env.payload_json.contains("\"independently_checked\":true"));
         // Invented target 200..230 minus actual 68 rounded to the nearest koz gives [131.5,162.5].
         assert!(
             env.payload_json
@@ -1262,6 +1270,25 @@ mod tests {
         );
         assert_eq!(env.no_claim, Some(fmine_public::guidance::NO_CLAIM));
         assert_eq!(invoke(&query, &workspace_root()).0, env);
+        let (markdown, exit) = run(
+            &args(&[
+                "guidance",
+                "completion",
+                "--synthetic",
+                "--format",
+                "markdown",
+            ]),
+            &workspace_root(),
+        );
+        assert_eq!(exit, 0);
+        assert!(markdown.starts_with("# Guidance completion:"));
+        assert!(markdown.contains("Invented synthetic evidence"));
+        assert!(markdown.contains("131.5 to 162.5 koz"));
+        assert!(markdown.contains("Checked witness"));
+        assert!(markdown.contains("## Source citations"));
+        assert!(markdown.contains("conditional on that sales interval"));
+        assert!(markdown.contains("not a mine-capacity conclusion or a forecast"));
+        assert!(!markdown.starts_with("```json"));
     }
 
     #[test]

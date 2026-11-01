@@ -111,6 +111,13 @@ The public lane of M0 (`fmine assure public`).
   Remaining sales explicitly assume the preceding year's same remaining-month sales, derived from its original
   FY and YTD releases. Production is never substituted for sales. Workbook availability uses the verified
   retrieval date conservatively because those registry rows have no publication timestamp.
+  `guidance::history` forms every complete contiguous original-vintage window of the remaining duration,
+  including cross-year windows, strictly before the guidance year. A later comparative never fills an absent
+  original release. Missing, unusable or incompatible windows are listed with their source refusal; same-season
+  is context only. The exact quarter model retains sales/cost dependence and intersects the separate sales
+  scenario before making a joint comparison. Checked witnesses preserve original and hypothetical supports;
+  checked exclusion certificates apply only to the supplied finite windows. No usable window stays T3, and
+  solver caps remain indeterminate.
 - `key` (BD-332.S2/S3): projects visible AISC arithmetic operands and Mine Stats reads into source-anchored
   `Claim<PublicValue>` values. Subject, period, release, basis, scope, unit and semantic line belong to the key;
   coordinates remain citations. The raw readers and numerical identity ledgers retain their existing behavior.
@@ -190,8 +197,10 @@ The public lane of M0 (`fmine assure public`).
   renderer without changing its numerical state or the assurance root.
 - `guidance::{run_public, run_synthetic, GuidanceCompletionReport, NO_CLAIM}` (BD-342). The report carries exact
   input/output Claims, source and intermediate historical Claims, accepted guidance rows, source hashes,
-  explicit sales assumption and a content digest. It is T3 and never gate-eligible; the digest is not a forecast
-  registration or ledger root. Source epistemics and unknown-unknown terms survive quantity conversion.
+  explicit sales assumption and a content digest. It exposes `history`, `history_sources` and
+  `history_exclusions`, with T1 when usable original-quarter windows exist and T3 otherwise. The digest is not
+  a forecast registration or ledger root, and this report supplies no gate-eligibility claim. Source epistemics
+  and unknown-unknown terms survive quantity conversion.
 - `aisc::{IdentityFamily, IdentityState, IdentityInstance, FootingCertificate, UnregisteredHeader, AiscTable,
   RateMiss, ShareBasis, ExplanationBasis, DEFAULT_MISSING_FACT, SHARE_MISSING_FACT, RowAnchor, AnchorRule,
   ConsistentBasis, MemberWeighting, WeightedMember, REGION_MISSING_FACT (BD-331.S4),
@@ -732,6 +741,10 @@ The public lane of M0 (`fmine assure public`).
   production and sales intervals, latest eligible vintage, exclusion of future guidance, missing/incomplete
   pairs, pending newer evidence, incompatible ownership and definition, altered documents, unusable source
   support and metadata preservation. Real values remain external inputs, not embedded source constants.
+- FACT (BD-342, `xtask/tests/public_guidance_history.rs`): six integration regressions cover the positive
+  synthetic T1 path, rolling and cross-year windows, original-vintage-only selection, missing history, guidance-year
+  cutoffs, incompatible source Claims and a separately restricted sales scenario. Every emitted source-quarter
+  witness is checked against its original source intervals; missing history cannot produce a positive verdict.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.
@@ -765,4 +778,5 @@ The public lane of M0 (`fmine assure public`).
 - Implies no issuer affiliation.
 - Guidance uses only the registered evidence population, not an assertion that no later issuer guidance
   exists. Historical sales persistence is an assumption, not a production/sales equality or a capacity bound.
-  The adapter does not yet assemble the kernel's joint historical T1 envelope or a technical-report T2 envelope.
+  The T1 result excludes or admits only supplied historical windows under that assumption. Public technical-report
+  T2 evidence binding remains open; no historical exclusion establishes that a mine cannot meet guidance.

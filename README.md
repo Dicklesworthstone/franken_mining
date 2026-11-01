@@ -152,6 +152,7 @@ not yet packetized. Use `--synthetic` in place of the issuer selector for an inv
 ```bash
 cargo run -p fmine-cli -- guidance completion --synthetic
 cargo run -p fmine-cli -- guidance completion --issuer barrick --site north-mara --through 2026Q2 --as-of 2026-10-31
+cargo run -p fmine-cli -- guidance completion --issuer barrick --site north-mara --through 2026Q2 --as-of 2026-10-31 --format markdown
 ```
 
 DESIGN (BD-342): the public command requires registered, hash-verified documents and two agreeing reader
@@ -165,11 +166,21 @@ document. Missing or conflicting evidence refuses; no real guidance values are b
 The result reports exact remaining production and an AISC spending/rate frontier. AISC uses summed costs and
 sold ounces; it never averages quarterly rates or treats production as sales. Remaining sales explicitly assume
 the preceding year's sales for the same remaining months, with source Claims and rounding intervals retained.
+The report also tests completion jointly against every usable contiguous historical quarter window of the
+remaining duration, including windows crossing a year boundary. Production, sales and AISC come from each
+quarter's own original release before the guidance year; later comparatives cannot replace a missing original.
+The **T1 historical comparison** keeps each quarter's sales and costs coupled. Separate best-case production
+and cost ranges cannot establish a feasible result. A positive result includes an independently checked exact
+replay; an exclusion includes checked certificates and applies only to those historical windows under the
+declared sales assumption. Missing or incompatible windows have explicit reasons, and no usable history stays
+**T3: necessary arithmetic conditions only**. Solver limits remain indeterminate.
+
 The report includes the guidance vintage, as-of selection and all source hashes. Workbook availability uses its
-verified retrieval date conservatively where no publication date is registered. This is a **T3 conditional
-arithmetic requirement**, not a capacity finding or a probability of meeting guidance. Its content digest is in
-the payload; it creates no forecast registration or ledger certificate. Full historical/technical envelopes and
-the remaining BD-342/M0 gates stay open.
+verified retrieval date conservatively where no publication date is registered. JSON preserves exact Claims,
+source-quarter witnesses and certificates; Markdown presents requirements, comparison results and citations.
+Its content digest creates no forecast registration or ledger certificate, and neither tier gives a probability
+or mine-capacity conclusion. The metrics library separately provides an exact feed/grade/recovery ceiling
+kernel for cited physical limits. Public technical-report binding and the remaining BD-342/M0 gates stay open.
 
 ---
 

@@ -122,6 +122,14 @@ arithmetic closure does not establish causation or identify an operational expla
   successes across different periods do not suffice. `ExceedsEnvelope` excludes only this named envelope, not
   physical capacity. No history is T3/`Indeterminate`. The witness checker re-evaluates source membership and
   both production and annual-cost equations independently of witness construction.
+- `guidance::quarters::{QuarterlyHistory, compare_quarters, aggregate_quarters, check_quarter_witness}`:
+  T1 also accepts complete contiguous original quarters whose count equals the remaining duration, including
+  cross-year windows. Source support remains distinct from hypothetical replay support. Exact Sum/Ratio
+  constraints retain each quarter's sales/rate/numerator relationship and the common YTD-sales variable.
+  Aggregate rate/sales intervals are marginal display projections, never independent boxes used to decide
+  joint feasibility. Positive witnesses are checked against every original quarter and both annual targets;
+  exclusions carry independently checked exact-feas certificates bound to input Claim ids and value tags.
+  Missing history is T3; solver caps and unresolved numerical checks remain indeterminate.
 - `capacity::{PhysicalKind, PhysicalLimit, CapacityLimits, CapacityVerdict, CapacityReport,
   compare_production}` (BD-342, COD-01): accepts a signed remaining-production Claim and three cited physical
   limit Claims over the same subject and remaining months. Physical inputs must be full-mine quantities;
@@ -248,6 +256,11 @@ arithmetic closure does not establish causation or identify an operational expla
     an exact guidance boundary; corrupting it fails the independent checker.
   - Domain, zero-denominator, ownership, definition, support, missing/stale/evidence, and overflow refusals are
     checked. Historical ordering leaves the report identical and every output retains its input provenance.
+- FACT (BD-342, `guidance::quarters::tests`): eight focused regressions cover exact source-quarter witnesses,
+  cross-year ordering, one/two/three-quarter remainders, source/witness corruption and explicit solver caps.
+  A 144-case integer oracle checks joint verdicts. The sales/rate counterexample uses quarters with sales
+  `[1,2]` and rates 10 and 100: marginal weighted rates span `[40,70]`, but total sales 2 forces rate 55.
+  The quarterly model correctly excludes the false witness admitted by independent aggregate boxes.
 - `PO-MET-7` (BD-342, COD-01, `capacity::tests`): the independently calculated 600 koz remaining requirement
   against 10 Mt, 2 g/t and 90% recovery exceeds the exact ceiling `3750000000/6479891` koz and requires
   `6479891/3125000` g/t at maximum feed/recovery. Eight focused tests also cover attributable scaling, signed

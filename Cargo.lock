@@ -155,6 +155,7 @@ dependencies = [
  "fmine-core",
  "fmine-evidence",
  "fmine-io",
+ "fmine-metrics",
  "fmine-numerics",
  "fmine-public",
  "fmine-registry",
