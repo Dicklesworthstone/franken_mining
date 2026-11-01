@@ -60,6 +60,12 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   `UPSTREAM_LICENCE`; (f) a provenance line with no `[[lift]]` row, or an `[[analogue]]` not opening with
   `ORIGINAL_HEADER`. `check_upstream` (e) recomputes each sha256 through `git show` and flags a target under
   `MIN_OVERLAP_PERCENT`; CI has no frankensim checkout, so it never runs there.
+- `lifts::{check_drift, parse_drift}` (bd-d2l5, GATE-FSIM-DRIFT; command `check-lift-drift --upstream <path>
+  [--head <rev>]`, run by `.github/workflows/lift-drift.yml` each quarter against frankensim main): each `[[lift]]`
+  source's blob at its pinned commit against the same path at `<rev>` (default HEAD), from committed objects only.
+  One JSON line per lift: `unchanged`, `changed` (lines added and deleted, the commits that touched it) or `missing`.
+  It fails on a changed or missing source without a `registries/lift_drift.toml` decision (`relift` with its bead,
+  or `no-op` with a reason) whose `upstream` commit holds the same blob, and on a decision naming no `[[lift]]` row.
 - `check_stack_lock(root: &Path) -> Result<StackLockReport, Vec<String>>` and the pure
   `compare_lock_to_f1(lock, plan)` (BD-326.S1; command `check-stack-lock`, and `check-all` prints its line
   `{"check":"stack-lock","lock_ids","f1_ids",…}`): the `id` set of `franken-stack.lock` equals the `| FD-… |` rows

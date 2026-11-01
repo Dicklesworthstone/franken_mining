@@ -1,0 +1,31 @@
+name: Lift drift
+
+# GATE-FSIM-DRIFT (plan §27, F8, bd-d2l5): each quarter, every file lifted from frankensim is compared at its pinned
+# commit with frankensim main. A changed file fails the run until registries/lift_drift.toml records relift or no-op
+# for it as it stands on main. The clone omits blobs; git fetches the few the comparison needs.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 5 2 1,4,7,10 *"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/lift-drift.yml"
+      - "registries/lifts.toml"
+      - "registries/lift_drift.toml"
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: lift drift (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clone frankensim main
+        run: git clone --quiet --filter=blob:none https://github.com/Dicklesworthstone/frankensim.git "$RUNNER_TEMP/frankensim"
+      - name: check-lift-drift
+        run: cargo run --locked -p xtask -- check-lift-drift --upstream "$RUNNER_TEMP/frankensim"

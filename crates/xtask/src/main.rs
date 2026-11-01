@@ -100,6 +100,32 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        "check-lift-drift" => {
+            let usage =
+                "usage: xtask check-lift-drift --upstream <frankensim checkout> [--head <rev>]";
+            let (Some("--upstream"), Some(upstream)) =
+                (args.get(1).map(String::as_str), args.get(2))
+            else {
+                eprintln!("{usage}");
+                return ExitCode::from(2);
+            };
+            let head = match (args.get(3).map(String::as_str), args.get(4)) {
+                (None, _) => "HEAD",
+                (Some("--head"), Some(rev)) => rev.as_str(),
+                _ => {
+                    eprintln!("{usage}");
+                    return ExitCode::from(2);
+                }
+            };
+            run_one(
+                "check-lift-drift",
+                xtask::lifts::check_drift(&root, &PathBuf::from(upstream), head).map(|log| {
+                    for line in log {
+                        println!("{line}");
+                    }
+                }),
+            )
+        }
         "check-stack-lock" => run_one(
             "check-stack-lock",
             xtask::check_stack_lock(&root).map(|r| println!("{}", r.log_line())),

@@ -15,6 +15,11 @@
 //! `sha256_at_lift` from `git show <commit>:<source>` and measures how much of the target is shared with the
 //! source, flagging a file under [`MIN_OVERLAP_PERCENT`] as "not a lift". The overlap is a crude local flag: the
 //! definitive evidence is the header plus a reviewer's diff.
+//!
+//! (g) `check-lift-drift --upstream <path> [--head <rev>]` is GATE-FSIM-DRIFT (plan §27, bd-d2l5), run each quarter
+//! by `.github/workflows/lift-drift.yml`. It compares each lifted source at its pinned commit with the same path at
+//! `head`, reading committed objects only. A source that changed or went missing fails until [`DRIFT_PATH`] records
+//! `relift` or `no-op` for it as it stands at `head`.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -63,14 +68,18 @@ pub struct Analogue {
     pub note: String,
 }
 
-fn field(row: &TomlRow, key: &str) -> Result<String, String> {
+fn field_in(path: &str, row: &TomlRow, key: &str) -> Result<String, String> {
     match row.get(key).map(|f| &f.value) {
         Some(TomlValue::Str(s)) if !s.is_empty() => Ok(s.clone()),
         _ => Err(format!(
-            "{REGISTRY_PATH} line {}: [[{}]] lacks {key}",
+            "{path} line {}: [[{}]] lacks {key}",
             row.line, row.table
         )),
     }
+}
+
+fn field(row: &TomlRow, key: &str) -> Result<String, String> {
+    field_in(REGISTRY_PATH, row, key)
 }
 
 /// Parses the registry, refusing the first row outside the schema.
@@ -309,6 +318,199 @@ pub fn check_upstream(root: &Path, upstream: &Path) -> Result<Vec<String>, Vec<S
              \"not_a_lift\":{not_a_lift}}}",
             row.target, row.source
         ));
+    }
+    if failed { Err(log) } else { Ok(log) }
+}
+
+/// GATE-FSIM-DRIFT decisions (bd-d2l5).
+pub const DRIFT_PATH: &str = "registries/lift_drift.toml";
+const DRIFT_FIELDS: [&str; 6] = ["source", "pinned", "upstream", "decision", "reason", "bead"];
+
+/// What was decided about a lifted source that changed upstream after its pin. `relift` is carried out by `bead`;
+/// `no-op` says in `reason` why the change does not concern the lift. A row covers `source` as it stands at commit
+/// `upstream`. Any later upstream change to the file needs a new row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriftDecision {
+    pub source: String,
+    pub pinned: String,
+    pub upstream: String,
+    pub decision: String,
+    pub reason: String,
+    pub bead: String,
+}
+
+/// Parses the decisions file, refusing the first row outside its schema.
+pub fn parse_drift(text: &str) -> Result<Vec<DriftDecision>, String> {
+    let doc = parse_subset(text).map_err(|e| format!("{DRIFT_PATH}: {e}"))?;
+    let schema = doc.top_get("schema_version").map(|f| &f.value);
+    if doc.top.len() != 1 || schema != Some(&TomlValue::Int(1)) {
+        return Err(format!(
+            "{DRIFT_PATH}: the only top-level key must be schema_version = 1"
+        ));
+    }
+    let mut decisions = Vec::new();
+    for row in &doc.rows {
+        if row.table != "decision" {
+            return Err(format!(
+                "{DRIFT_PATH} line {}: unknown table [[{}]]",
+                row.line, row.table
+            ));
+        }
+        if let Some(extra) = row
+            .fields
+            .iter()
+            .find(|f| !DRIFT_FIELDS.contains(&f.key.as_str()))
+        {
+            return Err(format!(
+                "{DRIFT_PATH} line {}: unknown field {}",
+                extra.line, extra.key
+            ));
+        }
+        let get = |key: &str| field_in(DRIFT_PATH, row, key);
+        let d = DriftDecision {
+            source: get("source")?,
+            pinned: get("pinned")?,
+            upstream: get("upstream")?,
+            decision: get("decision")?,
+            reason: get("reason")?,
+            bead: get("bead")?,
+        };
+        let line = row.line;
+        if !is_lower_hex(&d.pinned, 40) || !is_lower_hex(&d.upstream, 40) {
+            return Err(format!(
+                "{DRIFT_PATH} line {line}: pinned and upstream must be 40 hex digits"
+            ));
+        }
+        if d.decision != "relift" && d.decision != "no-op" {
+            return Err(format!(
+                "{DRIFT_PATH} line {line}: decision must be relift or no-op, not {}",
+                d.decision
+            ));
+        }
+        if !d.bead.starts_with("bd-") {
+            return Err(format!("{DRIFT_PATH} line {line}: bead must be a bd- id"));
+        }
+        decisions.push(d);
+    }
+    Ok(decisions)
+}
+
+/// `git -C <up> <args>`: its trimmed stdout, or `None` when git exits non-zero (an object that is not there).
+fn git_query(up: &Path, args: &[&str]) -> Result<Option<String>, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(up)
+        .args(args)
+        .output()
+        .map_err(|e| format!("git failed to start: {e}"))?;
+    Ok(out
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()))
+}
+
+fn commit_of(up: &Path, rev: &str) -> Result<String, String> {
+    let spec = format!("{rev}^{{commit}}");
+    match git_query(up, &["rev-parse", "--verify", "--quiet", &spec])? {
+        Some(c) if is_lower_hex(&c, 40) => Ok(c),
+        _ => Err(format!(
+            "{}: {rev} is not a commit in this checkout",
+            up.display()
+        )),
+    }
+}
+
+/// The blob id of `path` in `commit`, or `None` when that commit has no such file.
+fn blob_at(up: &Path, commit: &str, path: &str) -> Result<Option<String>, String> {
+    git_query(
+        up,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{commit}:{path}"),
+        ],
+    )
+}
+
+/// Rule (g): each `[[lift]]` source in `upstream`, a frankensim checkout, from its pinned commit to `head`. One JSON
+/// line per lift, with status `unchanged`, `changed` (lines added and deleted, and the commits that touched the
+/// file) or `missing`, and the decision that covers it. A changed or missing source with no decision puts every
+/// line on the error side, and so does a decision that names no `[[lift]]` row.
+pub fn check_drift(root: &Path, upstream: &Path, head: &str) -> Result<Vec<String>, Vec<String>> {
+    let (lifts, _) = load(root)?;
+    let decisions = match fs::read_to_string(root.join(DRIFT_PATH)) {
+        Ok(text) => parse_drift(&text).map_err(|e| vec![e])?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(vec![format!("failed to read {DRIFT_PATH}: {e}")]),
+    };
+    let one = |e: String| vec![e];
+    let head = commit_of(upstream, head).map_err(one)?;
+    let (mut log, mut failed) = (Vec::new(), false);
+    for row in &lifts {
+        let pinned = commit_of(upstream, &row.commit).map_err(one)?;
+        let Some(at_pin) = blob_at(upstream, &pinned, &row.source).map_err(one)? else {
+            return Err(vec![format!(
+                "{}: {} is not in its pinned commit {pinned}",
+                row.target, row.source
+            )]);
+        };
+        let at_head = blob_at(upstream, &head, &row.source).map_err(one)?;
+        let status = match &at_head {
+            Some(blob) if *blob == at_pin => "unchanged",
+            Some(_) => "changed",
+            None => "missing",
+        };
+        let (mut added, mut deleted, mut commits) = (0usize, 0usize, String::new());
+        let mut decision = "null".to_string();
+        if status != "unchanged" {
+            let range = format!("{pinned}..{head}");
+            let numstat = git_query(
+                upstream,
+                &["diff", "--numstat", &pinned, &head, "--", &row.source],
+            )
+            .map_err(one)?
+            .unwrap_or_default();
+            for line in numstat.lines() {
+                let mut counts = line.split_whitespace().map(|n| n.parse::<usize>().ok());
+                added += counts.next().flatten().unwrap_or(0);
+                deleted += counts.next().flatten().unwrap_or(0);
+            }
+            commits = git_query(upstream, &["log", "--format=%h", &range, "--", &row.source])
+                .map_err(one)?
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(",");
+            for d in decisions
+                .iter()
+                .filter(|d| d.source == row.source && d.pinned == row.commit)
+            {
+                let decided_at = commit_of(upstream, &d.upstream).map_err(one)?;
+                if blob_at(upstream, &decided_at, &row.source).map_err(one)? == at_head {
+                    decision = format!("\"{}\"", d.decision);
+                }
+            }
+            failed |= decision == "null";
+        }
+        log.push(format!(
+            "{{\"check\":\"check-lift-drift\",\"source\":\"{}\",\"target\":\"{}\",\"pinned\":\"{pinned}\",\
+             \"head\":\"{head}\",\"status\":\"{status}\",\"added\":{added},\"deleted\":{deleted},\
+             \"commits\":\"{commits}\",\"decision\":{decision}}}",
+            row.source, row.target
+        ));
+    }
+    for d in &decisions {
+        if !lifts
+            .iter()
+            .any(|r| r.source == d.source && r.commit == d.pinned)
+        {
+            failed = true;
+            log.push(format!(
+                "{DRIFT_PATH}: the decision for {} pinned at {} matches no [[lift]] row",
+                d.source, d.pinned
+            ));
+        }
     }
     if failed { Err(log) } else { Ok(log) }
 }
@@ -554,6 +756,219 @@ mod tests {
         write(&sha, &fresh);
         let log = check_upstream(&ws, &up).expect_err("not a lift");
         assert!(log[0].contains("\"not_a_lift\":true"), "{log:?}");
+    }
+
+    /// Rule (g) against a seeded git repository: a change inside the lifted file is `changed`, a change elsewhere
+    /// leaves it `unchanged`, a decision covers the file only as it stood at its commit, and the working tree is
+    /// never read.
+    #[test]
+    fn test_rule_g_drift_against_a_seeded_upstream() {
+        // Same cleanup as rule (e)'s fixture, for the same reason.
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let base = std::env::temp_dir().join(format!("fmine-drift-{}", std::process::id()));
+        let _cleanup = Cleanup(base.clone());
+        let (up, ws) = (base.join("up"), base.join("ws"));
+        fs::create_dir_all(&up).expect("upstream dir");
+        fs::create_dir_all(ws.join("registries")).expect("registries");
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&up)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "{args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let commit = |message: &str| {
+            git(&["add", "-A"]);
+            git(&["commit", "-q", "-m", message]);
+            git(&["rev-parse", "HEAD"])
+        };
+        let write = |name: &str, text: &str| fs::write(up.join(name), text).expect("upstream file");
+        git(&["init", "-q"]);
+        write("a.rs", "fn a() {}\n");
+        write("b.rs", "fn b() {}\n");
+        let pin = commit("pin");
+        write("b.rs", "fn b() { 1 }\n");
+        let elsewhere = commit("outside the lift");
+        write("a.rs", "fn a() {}\nfn a2() {}\n");
+        let inside = commit("inside the lift");
+        fs::write(
+            ws.join(REGISTRY_PATH),
+            format!(
+                "schema_version = 2\n[[lift]]\nsource = \"a.rs\"\ncommit = \"{pin}\"\nsha256_at_lift = \"{SHA}\"\n\
+                 licence = \"{UPSTREAM_LICENCE}\"\ntarget = \"t.rs\"\nguard_test = \"g\"\n"
+            ),
+        )
+        .expect("registry");
+        let decide = |pinned: &str, at: &str, decision: &str| {
+            fs::write(
+                ws.join(DRIFT_PATH),
+                format!(
+                    "schema_version = 1\n[[decision]]\nsource = \"a.rs\"\npinned = \"{pinned}\"\n\
+                     upstream = \"{at}\"\ndecision = \"{decision}\"\nreason = \"r\"\nbead = \"bd-x\"\n"
+                ),
+            )
+            .expect("decisions");
+        };
+        let short = |c: &str| git(&["rev-parse", "--short", c]);
+
+        let log = check_drift(&ws, &up, &elsewhere).expect("a change elsewhere");
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert!(
+            log[0].contains("\"status\":\"unchanged\",\"added\":0,\"deleted\":0,\"commits\":\"\",\"decision\":null"),
+            "{log:?}"
+        );
+        let log = check_drift(&ws, &up, &inside).expect_err("an undecided change");
+        assert!(
+            log[0].contains("\"status\":\"changed\",\"added\":1,\"deleted\":0"),
+            "{log:?}"
+        );
+        assert!(
+            log[0].contains(&format!(
+                "\"commits\":\"{}\",\"decision\":null",
+                short(&inside)
+            )),
+            "{log:?}"
+        );
+        decide(&pin, &inside, "no-op");
+        let log = check_drift(&ws, &up, &inside).expect("decided");
+        assert!(log[0].contains("\"decision\":\"no-op\""), "{log:?}");
+
+        // The decision covered a.rs as it stood at `inside`; the default head is the checkout's HEAD commit.
+        write("a.rs", "fn a() {}\nfn a3() {}\n");
+        let again = commit("again");
+        let log = check_drift(&ws, &up, "HEAD").expect_err("a later change");
+        let commits = format!(
+            "\"commits\":\"{},{}\",\"decision\":null",
+            short(&again),
+            short(&inside)
+        );
+        assert!(
+            log[0].contains("\"added\":1,\"deleted\":0") && log[0].contains(&commits),
+            "{log:?}"
+        );
+
+        git(&["rm", "-q", "a.rs"]);
+        let gone = commit("removed");
+        let log = check_drift(&ws, &up, &gone).expect_err("missing upstream");
+        assert!(log[0].contains("\"status\":\"missing\""), "{log:?}");
+        decide(&pin, &gone, "relift");
+        assert!(check_drift(&ws, &up, &gone).is_ok());
+
+        // Only committed objects count: an uncommitted file at the lifted path changes nothing.
+        write("a.rs", "dirty working tree\n");
+        let log = check_drift(&ws, &up, &elsewhere).expect("committed objects only");
+        assert!(log[0].contains("\"status\":\"unchanged\""), "{log:?}");
+
+        decide(&elsewhere, &gone, "relift");
+        let log = check_drift(&ws, &up, &elsewhere).expect_err("a decision for no lift");
+        assert!(
+            log.iter().any(|l| l.contains("matches no [[lift]] row")),
+            "{log:?}"
+        );
+        // A decision made against another pin does not cover the file, even where its blob matches.
+        let log = check_drift(&ws, &up, &gone).expect_err("another pin");
+        assert!(
+            log[0].contains("\"status\":\"missing\"") && log[0].contains("\"decision\":null"),
+            "{log:?}"
+        );
+        let e = check_drift(&ws, &up, "no-such-rev").expect_err("not a commit");
+        assert!(e[0].contains("is not a commit"), "{e:?}");
+    }
+
+    #[test]
+    fn test_parse_drift_refuses_what_is_outside_the_schema() {
+        let row = |decision: &str, bead: &str| {
+            format!(
+                "[[decision]]\nsource = \"s\"\npinned = \"{COMMIT}\"\nupstream = \"{COMMIT}\"\n\
+                 decision = \"{decision}\"\nreason = \"r\"\nbead = \"{bead}\"\n"
+            )
+        };
+        let ok = parse_drift(&format!("schema_version = 1\n{}", row("no-op", "bd-1")))
+            .expect("schema 1");
+        assert_eq!(ok.len(), 1);
+        assert!(
+            parse_drift("schema_version = 1\n")
+                .expect("no rows")
+                .is_empty()
+        );
+        for (text, needle) in [
+            (
+                format!("schema_version = 2\n{}", row("no-op", "bd-1")),
+                "schema_version = 1",
+            ),
+            (
+                format!("schema_version = 1\nother = 1\n{}", row("no-op", "bd-1")),
+                "schema_version = 1",
+            ),
+            (
+                format!("schema_version = 1\n{}", row("maybe", "bd-1")),
+                "relift or no-op",
+            ),
+            (
+                format!("schema_version = 1\n{}", row("relift", "x-1")),
+                "bd- id",
+            ),
+            (
+                format!(
+                    "schema_version = 1\n{}extra = \"x\"\n",
+                    row("no-op", "bd-1")
+                ),
+                "unknown field extra",
+            ),
+            (
+                format!(
+                    "schema_version = 1\n{}",
+                    row("no-op", "bd-1").replace(COMMIT, "2046")
+                ),
+                "40 hex",
+            ),
+            (
+                format!(
+                    "schema_version = 1\n{}",
+                    row("no-op", "bd-1")
+                        .replace(&format!("upstream = \"{COMMIT}\""), "upstream = \"2046\"")
+                ),
+                "40 hex",
+            ),
+            (
+                "schema_version = 1\n[[lift]]\nsource = \"s\"\n".to_string(),
+                "unknown table",
+            ),
+            (
+                "schema_version = 1\n[[decision]]\nsource = \"s\"\n".to_string(),
+                "lacks pinned",
+            ),
+        ] {
+            let e = parse_drift(&text).expect_err(needle);
+            assert!(e.contains(needle), "{needle}: {e}");
+        }
+    }
+
+    /// CI side of rule (g): the committed decisions parse, and each names a `[[lift]]` row's source and pin.
+    #[test]
+    fn test_committed_drift_decisions_name_lift_rows() {
+        let root = workspace_root();
+        let (lifts, _) = load(&root).expect("registry");
+        let text = fs::read_to_string(root.join(DRIFT_PATH)).expect("decisions file");
+        let decisions = parse_drift(&text).expect("decisions");
+        assert!(!decisions.is_empty());
+        for d in &decisions {
+            assert!(
+                lifts
+                    .iter()
+                    .any(|r| r.source == d.source && r.commit == d.pinned),
+                "{d:?}"
+            );
+        }
     }
 
     fn workspace_root() -> std::path::PathBuf {

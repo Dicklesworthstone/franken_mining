@@ -1,0 +1,19 @@
+# registries/lift_drift.toml — GATE-FSIM-DRIFT decisions (plan §27, F8, bd-d2l5)
+#
+# `xtask check-lift-drift --upstream <frankensim checkout> [--head <rev>]` compares each [[lift]] source in
+# registries/lifts.toml at its pinned commit with the same path at <rev> (default: the checkout's HEAD commit),
+# reading committed objects only. A source that changed or went missing fails until a [[decision]] row here covers
+# it. `upstream` is the commit decided against, and the row covers the file only while it is the same file at <rev>.
+# `relift` names the bead that re-lifts; `no-op` says why the change does not concern the lift. After a re-lift moves
+# the pin, the row's `pinned` matches no [[lift]] row and the check fails until the row is removed.
+# .github/workflows/lift-drift.yml runs the check each quarter against frankensim main.
+
+schema_version = 1
+
+[[decision]]
+source = "crates/fs-sparse/src/direct.rs"
+pinned = "20463525d9775a18c1b237d2676f364f367175ab"
+upstream = "b0512b614861eb12b436209476c97424fa08d0d6"
+decision = "no-op"
+reason = "c4d2ae1f9 (2026-10-27) moves the body of LdltFactor::solve into solve_body unchanged and calls it through crate::fma::direct_solve_dispatch, the x86 FMA capsule; its new test asserts the dispatched bits equal the portable ones. The lift leaves the FMA capsule out, so there is nothing to carry."
+bead = "bd-d2l5"
