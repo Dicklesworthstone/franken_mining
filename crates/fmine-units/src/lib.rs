@@ -17,6 +17,8 @@ pub enum UnitsError {
     SimplexSumInvalid(f64),
     /// `FMINE-REF-105` (basis mismatch): Chemical species basis mismatch without stoichiometric conversion.
     ChemicalBasisMismatch { left: ChemBasis, right: ChemBasis },
+    /// `FMINE-REF-109` (outside its physical domain): a concentration must be finite and `>= 0` mg/L.
+    ConcentrationOutOfDomain(f64),
     /// Currency mismatch in `Money` arithmetic.
     CurrencyMismatch { left: Currency, right: Currency },
     /// Cannot compute mass-weighted grade when total dry mass is `<= 0`.
@@ -35,7 +37,9 @@ impl UnitsError {
     #[must_use]
     pub const fn refusal_code(&self) -> Option<&'static str> {
         match self {
-            Self::MoistureOutOfBounds(_) | Self::FractionOutOfBounds(_) => Some("FMINE-REF-109"),
+            Self::MoistureOutOfBounds(_)
+            | Self::FractionOutOfBounds(_)
+            | Self::ConcentrationOutOfDomain(_) => Some("FMINE-REF-109"),
             Self::ChemicalBasisMismatch { .. }
             | Self::CurrencyMismatch { .. }
             | Self::UnitMismatch { .. } => Some("FMINE-REF-105"),
@@ -58,6 +62,10 @@ impl fmt::Display for UnitsError {
             Self::ChemicalBasisMismatch { left, right } => write!(
                 f,
                 "FMINE-REF-105: chemical basis mismatch ({left:?} vs {right:?})"
+            ),
+            Self::ConcentrationOutOfDomain(v) => write!(
+                f,
+                "FMINE-REF-109: concentration {v} mg/L is not finite and >= 0"
             ),
             Self::CurrencyMismatch { left, right } => {
                 write!(
@@ -240,7 +248,14 @@ pub fn wet_to_dry(
 /// Ore grade (intensive quantity, e.g., g/t dry or mass fraction).
 ///
 /// Intentionally does **not** implement `std::ops::Add` (`INV-012`): grades are non-additive
-/// without dry-mass weighting.
+/// without dry-mass weighting (`BD-277`). The only average is [`mass_weighted_mean`]:
+///
+/// ```compile_fail,E0369
+/// use fmine_units::{Contained, Grade};
+/// let a: Grade<Contained> = Grade::from_g_per_t(1.0);
+/// let b: Grade<Contained> = Grade::from_g_per_t(3.0);
+/// let _ = a + b;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Grade<R = Contained> {
     grams_per_dry_tonne: f64,
@@ -299,6 +314,20 @@ pub fn mass_weighted_mean<R: Copy>(
 }
 
 /// Computes contained or recoverable metal (in grams) from dry ore tonnes and grade.
+///
+/// ```
+/// use fmine_units::{Contained, Dry, Grade, Mass, Qty, metal_grams};
+/// let dry: Qty<Mass, Dry> = Qty::new(10.0);
+/// assert_eq!(metal_grams(dry, Grade::<Contained>::from_g_per_t(2.0)).value(), 20.0);
+/// ```
+///
+/// Grade times wet tonnes does not compile (`BD-277`, plan §25.2):
+///
+/// ```compile_fail,E0308
+/// use fmine_units::{Contained, Grade, Mass, Qty, Wet, metal_grams};
+/// let wet: Qty<Mass, Wet> = Qty::new(10.0);
+/// let _ = metal_grams(wet, Grade::<Contained>::from_g_per_t(2.0));
+/// ```
 #[must_use]
 pub fn metal_grams<R>(dry_tonnes: Qty<Mass, Dry, Neutral>, grade: Grade<R>) -> Qty<Mass, Dry, R> {
     Qty::new(dry_tonnes.value() * grade.g_per_t())
@@ -846,6 +875,151 @@ impl ChemConc {
         }
         Ok(self.mg_per_l > threshold.mg_per_l)
     }
+
+    /// The typed form of this value, for code past the import boundary. Refuses another basis (`FMINE-REF-105`)
+    /// and a value that is not finite and `>= 0` (`FMINE-REF-109`); nothing is converted on the way.
+    pub fn typed<B: ChemBasisTag>(self) -> Result<Conc<B>, UnitsError> {
+        if self.basis != B::BASIS {
+            return Err(UnitsError::ChemicalBasisMismatch {
+                left: self.basis,
+                right: B::BASIS,
+            });
+        }
+        Conc::new(self.mg_per_l)
+    }
+}
+
+/// A chemical reporting basis as a type, for [`Conc`] (`BD-277`, plan §25.2).
+pub trait ChemBasisTag: Copy {
+    /// The runtime tag that [`ChemConc`] carries for this basis.
+    const BASIS: ChemBasis;
+}
+
+macro_rules! chem_basis_tags {
+    ($($(#[$doc:meta])* $name:ident => $basis:ident;)*) => {
+        $(
+            $(#[$doc])*
+            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+            pub struct $name;
+
+            impl ChemBasisTag for $name {
+                const BASIS: ChemBasis = ChemBasis::$basis;
+            }
+        )*
+    };
+}
+
+chem_basis_tags! {
+    /// `mg/L as N`.
+    AsN => ElementalN;
+    /// `mg/L as NO3`.
+    AsNO3 => NitrateNO3;
+    /// `mg/L WAD CN`.
+    CnWad => CyanideWAD;
+    /// `mg/L Free CN`.
+    CnFree => CyanideFree;
+    /// `mg/L Total CN`.
+    CnTotal => CyanideTotal;
+    /// `CaCO3` equivalent.
+    AsCaCO3 => CaCO3Equivalent;
+    /// Filtered (`0.45 um`) dissolved metal.
+    Dissolved => Dissolved;
+    /// Unfiltered total recoverable metal.
+    TotalRecoverable => TotalRecoverable;
+}
+
+/// A registered stoichiometric law from basis `Self` to basis `T` (plan §25.2). Only `N` and `NO3` have one; WAD,
+/// free and total cyanide, and dissolved and total metal, are different measurements, not conversions.
+pub trait StoichLaw<T> {
+    /// The value in basis `T` of `mg_per_l` in basis `Self`.
+    fn apply(mg_per_l: f64) -> f64;
+}
+
+impl StoichLaw<AsNO3> for AsN {
+    fn apply(mg_per_l: f64) -> f64 {
+        mg_per_l * NO3_TO_N_STOICHIOMETRIC_RATIO
+    }
+}
+
+impl StoichLaw<AsN> for AsNO3 {
+    fn apply(mg_per_l: f64) -> f64 {
+        mg_per_l / NO3_TO_N_STOICHIOMETRIC_RATIO
+    }
+}
+
+/// Concentration in `mg/L` whose chemical basis is a type (`BD-277`, plan §25.2). A sample meets a limit only in
+/// the limit's basis, and changes basis only through a registered [`StoichLaw`]. Nitrate reported as N against a
+/// limit stated as NO3 (E322–E324):
+///
+/// ```
+/// use fmine_units::{AsN, AsNO3, Conc};
+/// let sample = Conc::<AsN>::new(79.0).unwrap();
+/// let limit = Conc::<AsNO3>::new(50.0).unwrap();
+/// let as_no3 = sample.convert::<AsNO3>().unwrap();
+/// assert!((as_no3.mg_per_l() - 349.717_4).abs() < 1e-4);
+/// assert!(as_no3.exceeds(limit));
+/// ```
+///
+/// Without the conversion the comparison does not compile:
+///
+/// ```compile_fail,E0308
+/// use fmine_units::{AsN, AsNO3, Conc};
+/// let sample = Conc::<AsN>::new(79.0).unwrap();
+/// let limit = Conc::<AsNO3>::new(50.0).unwrap();
+/// let _ = sample.exceeds(limit);
+/// ```
+///
+/// Nor does a conversion with no registered law:
+///
+/// ```compile_fail,E0277
+/// use fmine_units::{CnTotal, CnWad, Conc};
+/// let wad = Conc::<CnWad>::new(0.2).unwrap();
+/// let _ = wad.convert::<CnTotal>();
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Conc<B> {
+    mg_per_l: f64,
+    _basis: PhantomData<B>,
+}
+
+impl<B: ChemBasisTag> Conc<B> {
+    /// A concentration of `mg_per_l` in basis `B`. Refuses a value that is not finite and `>= 0` (`FMINE-REF-109`).
+    pub fn new(mg_per_l: f64) -> Result<Self, UnitsError> {
+        if !mg_per_l.is_finite() || mg_per_l < 0.0 {
+            return Err(UnitsError::ConcentrationOutOfDomain(mg_per_l));
+        }
+        Ok(Self {
+            mg_per_l,
+            _basis: PhantomData,
+        })
+    }
+
+    /// The value in `mg/L`.
+    #[must_use]
+    pub const fn mg_per_l(self) -> f64 {
+        self.mg_per_l
+    }
+
+    /// Whether this sample is above `limit`, which has the same basis.
+    #[must_use]
+    pub fn exceeds(self, limit: Self) -> bool {
+        self.mg_per_l > limit.mg_per_l
+    }
+
+    /// The same concentration in basis `T`, through the registered law from `B` to `T`. Refuses a result that is
+    /// not finite (`FMINE-REF-109`), so a huge value is never carried as infinity.
+    pub fn convert<T: ChemBasisTag>(self) -> Result<Conc<T>, UnitsError>
+    where
+        B: StoichLaw<T>,
+    {
+        Conc::new(B::apply(self.mg_per_l))
+    }
+
+    /// The untyped form, as the import boundary holds it.
+    #[must_use]
+    pub const fn untyped(self) -> ChemConc {
+        ChemConc::new(self.mg_per_l, B::BASIS)
+    }
 }
 
 /// Simplex vector whose `N` components lie in `[0, 1]` and sum to `1.0` (`BD-027`).
@@ -1203,6 +1377,99 @@ mod tests {
             sample_as_no3
                 .exceeds_strict(who_limit_no3)
                 .expect("same basis comparison")
+        );
+    }
+
+    /// BD-277: the typed form gives the same known answer as the import-boundary form, bit for bit, and the import
+    /// boundary hands over only a value of the expected basis.
+    #[test]
+    fn test_typed_nitrate_matches_the_untyped_law_and_refuses_another_basis() {
+        let sample = ChemConc::new(79.0, ChemBasis::ElementalN);
+        let typed: Conc<AsN> = sample.typed().expect("as N");
+        let as_no3 = typed.convert::<AsNO3>().expect("finite");
+        let untyped = sample.convert_basis(ChemBasis::NitrateNO3).expect("law");
+        assert_eq!(as_no3.mg_per_l().to_bits(), untyped.mg_per_l.to_bits());
+        assert_eq!(as_no3.untyped(), untyped);
+        assert!((as_no3.mg_per_l() - 349.7174).abs() < 1e-4);
+        assert!(as_no3.exceeds(Conc::new(50.0).expect("limit")));
+        assert!(!as_no3.exceeds(Conc::new(400.0).expect("limit")));
+        assert!(
+            !as_no3.exceeds(as_no3),
+            "a sample at the limit does not exceed it"
+        );
+        let back = as_no3.convert::<AsN>().expect("finite");
+        assert_eq!(
+            back.mg_per_l().to_bits(),
+            untyped
+                .convert_basis(ChemBasis::ElementalN)
+                .unwrap()
+                .mg_per_l
+                .to_bits()
+        );
+        assert!((back.mg_per_l() - 79.0).abs() < 1e-12);
+        let mut rng = fmine_core::rand::PhiloxStream::new(fmine_core::rand::RngKey {
+            seed_root: 277,
+            partition: 0,
+            domain: 0,
+            var_group: 0,
+            realization: 0,
+            brick: 0,
+        });
+        for _ in 0..10_000 {
+            let v = rng.next_f64_open01() * 10_f64.powi((rng.next_u64() % 12) as i32 - 4);
+            let (n, no3) = (
+                ChemConc::new(v, ChemBasis::ElementalN),
+                ChemConc::new(v, ChemBasis::NitrateNO3),
+            );
+            let typed_up = n.typed::<AsN>().unwrap().convert::<AsNO3>().unwrap();
+            let typed_down = no3.typed::<AsNO3>().unwrap().convert::<AsN>().unwrap();
+            assert_eq!(
+                typed_up.untyped(),
+                n.convert_basis(ChemBasis::NitrateNO3).unwrap()
+            );
+            assert_eq!(
+                typed_down.untyped(),
+                no3.convert_basis(ChemBasis::ElementalN).unwrap()
+            );
+        }
+
+        let err = sample.typed::<AsNO3>().expect_err("as N is not as NO3");
+        assert_eq!(
+            err,
+            UnitsError::ChemicalBasisMismatch {
+                left: ChemBasis::ElementalN,
+                right: ChemBasis::NitrateNO3,
+            }
+        );
+        assert_eq!(err.refusal_code(), Some("FMINE-REF-105"));
+        let wad = ChemConc::new(0.2, ChemBasis::CyanideWAD);
+        assert!(wad.typed::<CnTotal>().is_err());
+        assert_eq!(wad.typed::<CnWad>().map(Conc::mg_per_l), Ok(0.2));
+    }
+
+    /// BD-277: a concentration that is negative or not finite is refused with 109, never held, and a conversion that
+    /// would overflow is refused too.
+    #[test]
+    fn test_concentration_outside_its_domain_refuses_109() {
+        for v in [-0.001, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let err = Conc::<AsN>::new(v).expect_err("outside its domain");
+            assert_eq!(err.refusal_code(), Some("FMINE-REF-109"));
+            assert!(
+                matches!(err, UnitsError::ConcentrationOutOfDomain(x) if x.to_bits() == v.to_bits())
+            );
+            let err = ChemConc::new(v, ChemBasis::ElementalN)
+                .typed::<AsN>()
+                .expect_err("outside its domain");
+            assert_eq!(err.refusal_code(), Some("FMINE-REF-109"));
+        }
+        assert_eq!(Conc::<AsN>::new(0.0).map(Conc::mg_per_l), Ok(0.0));
+        let huge = Conc::<AsN>::new(f64::MAX).expect("finite");
+        let err = huge.convert::<AsNO3>().expect_err("overflows");
+        assert!(matches!(err, UnitsError::ConcentrationOutOfDomain(x) if x.is_infinite()));
+        assert!(
+            UnitsError::ConcentrationOutOfDomain(-1.0)
+                .to_string()
+                .starts_with("FMINE-REF-109")
         );
     }
 
