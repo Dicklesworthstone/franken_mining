@@ -2780,7 +2780,7 @@ fn column_ledger(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "eight footing-check inputs")]
 fn footing_state(
     v: &dyn Fn(u32) -> Val,
     cell_ref: &dyn Fn(u32) -> String,
