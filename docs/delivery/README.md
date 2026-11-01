@@ -6,6 +6,9 @@ This directory holds machine- and human-verifiable admission records (`INT-*`), 
 - [`INT-AS-001.md`](./INT-AS-001.md) — `asupersync =0.5.0` and `franken-evidence` / `franken-decision` adapter boundary (`BD-257`) (not admitted).
 - [`INT-NUM-001.md`](./INT-NUM-001.md) — Numerics foundation stack (`fsci =0.4.0`, `fp`, `fnp`, `fj`) closure & cross-ISA determinism scope (`BD-308`) (not admitted).
 
+## Gate records
+- [`GATE-LAYERS-00.md`](./GATE-LAYERS-00.md) — every xtask check wired (`BD-015`): PASS measured locally at `2f87dfd`; CI pending.
+
 ## Decisions
 - [`DECISION-BD-012-direct-push-blocking.md`](./DECISION-BD-012-direct-push-blocking.md) — what "CI blocks merges" (§28.4.4) means when every change is pushed straight to `main` (`BD-012`).
 
