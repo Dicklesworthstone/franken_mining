@@ -42,7 +42,7 @@ description = "Check bounded draft equalities against cited canonical Claims in 
 path = "forecast assess"
 subsystem = "Plumb"
 mutates_authority = false
-description = "Replay an ordered forecast transcript and assess a frozen cohort while retaining every missing outcome"
+description = "Replay a frozen forecast cohort, retain missing outcomes, and optionally check all declared ancestry at registration with --provenance"
 
 [[verb]]
 path = "claim show"

@@ -769,7 +769,7 @@ impl TrackRecordReport {
                 OutcomeBinding::Resolved{cell,comparative}=>(format!("{{\"state\":{},\"source\":{}}}",js(if *comparative {"resolved_on_comparative_vintage"} else {"resolved_first_published"}),cell.to_json()),vec![r.guidance.locator.to_string(),cell.locator.clone()]),
                 OutcomeBinding::Unresolved{code,reason}=>(format!("{{\"state\":\"unresolved\",\"code\":{},\"reason\":{}}}",js(code),js(reason)),vec![r.guidance.locator.to_string()]),
             };
-            format!("{{\"id\":{},\"site\":{},\"metric\":{},\"year\":{},\"guidance_vintage_ordinal\":{},\"published_at\":{},\"published_at_basis\":{},\"guidance\":{{\"at\":{},\"sha256\":{},\"token\":{},\"unit\":{},\"basis\":{},\"period\":{},\"reader_count\":{}}},\"outcome\":{},\"later_outcomes\":[{}],\"score\":{{\"rule\":\"guidance.range_score\",\"rules_version\":\"guidance-track-record/1\",\"in\":[{}],\"value\":{}}}}",js(&r.id),js(&r.site),js(&r.metric),r.year,r.vintage,js(&r.published_at),js(&r.publication_basis),js(&r.guidance.locator.to_string()),js(&r.guidance.doc_sha256),js(&r.guidance.token),js(&r.guidance.unit),js(&r.guidance.basis),js(&r.guidance.period),r.guidance.readers.len(),outcome,r.later_outcomes.iter().map(KeyedCell::to_json).collect::<Vec<_>>().join(","),inputs.iter().map(|s|js(s)).collect::<Vec<_>>().join(","),r.score.as_ref().map_or_else(||"null".into(),GuidanceScore::to_json))
+            format!("{{\"id\":{},\"site\":{},\"metric\":{},\"year\":{},\"guidance_vintage_ordinal\":{},\"published_at\":{},\"published_at_basis\":{},\"guidance\":{{\"at\":{},\"sha256\":{},\"token\":{},\"unit\":{},\"basis\":{},\"period\":{},\"reader_count\":{}}},\"outcome\":{},\"later_outcomes\":[{}],\"score\":{{\"rule\":\"guidance.range_score\",\"rules_version\":\"guidance-track-record/1\",\"in\":[{}],\"value\":{}}}}}",js(&r.id),js(&r.site),js(&r.metric),r.year,r.vintage,js(&r.published_at),js(&r.publication_basis),js(&r.guidance.locator.to_string()),js(&r.guidance.doc_sha256),js(&r.guidance.token),js(&r.guidance.unit),js(&r.guidance.basis),js(&r.guidance.period),r.guidance.readers.len(),outcome,r.later_outcomes.iter().map(KeyedCell::to_json).collect::<Vec<_>>().join(","),inputs.iter().map(|s|js(s)).collect::<Vec<_>>().join(","),r.score.as_ref().map_or_else(||"null".into(),GuidanceScore::to_json))
         }).collect::<Vec<_>>().join(",");
         let summaries=self.summaries.iter().map(|s|format!("{{\"site\":{},\"metric\":{},\"unit\":{},\"basis\":{},\"guidance_vintage_ordinal\":{},\"outcome_selector\":{},\"in\":[{}],\"rule\":\"guidance.descriptive_summary\",\"rules_version\":\"guidance-track-record/1\",\"scores\":{}}}",js(&s.site),js(&s.metric),js(&s.unit),js(&s.basis),s.vintage,js(if s.comparative {"comparative_only"} else {"first_published"}),s.members.iter().map(|id|js(id)).collect::<Vec<_>>().join(","),s.scores.to_json())).collect::<Vec<_>>().join(",");
         prefix
@@ -858,7 +858,8 @@ fn synthetic_evidence() -> Result<(IssuerProfile, TranscriptionReport, Vec<Keyed
         },
         tie: None,
     };
-    let digest = sha256(b"invented FY2030 production 125 koz attributable 4/5");
+    let outcome_bytes = b"invented FY2030 production 125 koz attributable 4/5";
+    let digest = sha256(outcome_bytes);
     let key = PublicKey {
         issuer: "synthetic".into(),
         subject: "Example Mine".into(),
@@ -912,21 +913,18 @@ fn synthetic_evidence() -> Result<(IssuerProfile, TranscriptionReport, Vec<Keyed
         label_as_printed: None,
         unit_evidence: None,
     };
-    let mut source = fmine_public::synthetic::synthetic_profile()
+    // The shared synthetic profile has no on-disk sources; this fixture supplies its own invented bytes.
+    profile
         .sources
-        .into_iter()
-        .next()
-        .ok_or_else(|| {
-            failure(
-                RefusalCode::NoClaimInDomain201,
-                "synthetic registry source absent",
-            )
-        })?;
-    source.quarter = "2030Q4".into();
-    source.kind = SourceKind::MineStats;
-    source.file_name = path.into();
-    source.sha256_hex = digest.to_hex();
-    profile.sources.push(source);
+        .push(fmine_public::sources::RegisteredSource {
+            file_name: path.into(),
+            kind: SourceKind::MineStats,
+            quarter: "2030Q4".into(),
+            url: "synthetic:invented-annual-production".into(),
+            url_basis: "DESIGN: invented source bytes; no external retrieval".into(),
+            bytes: outcome_bytes.len() as u64,
+            sha256_hex: digest.to_hex(),
+        });
     Ok((profile, transcripts, vec![cell]))
 }
 

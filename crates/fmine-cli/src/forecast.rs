@@ -16,14 +16,32 @@ use fmine_core::id::ObjectId;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
 
+mod provenance;
+
 const SCHEMA: &str = "fmine.forecast-ledger.v1";
+
+#[derive(Debug)]
+pub(super) struct AssessmentFailure {
+    pub refusal: Refusal,
+    pub diagnostics: Option<String>,
+}
+
+impl From<Refusal> for AssessmentFailure {
+    fn from(refusal: Refusal) -> Self {
+        Self {
+            refusal,
+            diagnostics: None,
+        }
+    }
+}
 
 pub(super) fn assess(
     path: &Path,
     cohort: &str,
     as_of: &str,
     selector: &str,
-) -> Result<String, Refusal> {
+    provenance_path: Option<&Path>,
+) -> Result<String, AssessmentFailure> {
     let bytes = std::fs::read(path).map_err(|e| {
         Refusal::new(
             RefusalCode::InputMissingOrUnreadable506,
@@ -34,7 +52,10 @@ pub(super) fn assess(
         std::str::from_utf8(&bytes).map_err(|_| invalid("forecast transcript must be UTF-8"))?;
     let mut replay = Replay::parse(text)?;
     let report = replay.assessment(cohort, time(as_of)?, selection(selector)?)?;
-    replay.render(&report, sha256(&bytes))
+    if let Some(path) = provenance_path {
+        replay.temporal_validation = Some(provenance::verify(path, &replay, &report)?);
+    }
+    replay.render(&report, sha256(&bytes)).map_err(Into::into)
 }
 
 #[derive(Debug)]
@@ -54,6 +75,7 @@ struct Replay {
     aliases: BTreeMap<ObjectId, String>,
     cohorts: BTreeMap<String, Digest32>,
     checkpoints: Vec<Checkpoint>,
+    temporal_validation: Option<String>,
 }
 
 impl Replay {
@@ -326,9 +348,12 @@ impl Replay {
             if c.expected.is_some() { "true" } else { "null" },
         )).collect::<Vec<_>>().join(",");
         Ok(format!(
-            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":\"read_only_replay\",\"lane\":{},\"transcript_sha256\":{},\"authority_times\":\"supplied_not_verified\",\"source_citations\":\"supplied_not_verified\",\"external_time_proof\":\"not_verified\",\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]}},\"checkpoints\":[{}]}}",
+            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":\"read_only_replay\",\"lane\":{},\"transcript_sha256\":{},\"authority_times\":\"supplied_not_verified\",\"source_citations\":\"supplied_not_verified\",\"external_time_proof\":\"not_verified\",\"temporal_validation\":{},\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]}},\"checkpoints\":[{}]}}",
             js(&self.lane),
             js(&transcript.to_hex()),
+            self.temporal_validation
+                .as_deref()
+                .unwrap_or(provenance::NOT_CHECKED),
             cohort_json(cohort),
             utc(report.as_of_ns),
             js(selector_name(report.selector)),
@@ -1033,10 +1058,11 @@ sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/forecasts/cohort_synthetic.toml");
         let before = std::fs::read(&path).expect("fixture bytes");
-        let output = assess(&path, "synthetic-demo", CUT, "latest-as-of").expect("file assessment");
+        let output =
+            assess(&path, "synthetic-demo", CUT, "latest-as-of", None).expect("file assessment");
         assert_eq!(
             output,
-            assess(&path, "synthetic-demo", CUT, "latest-as-of").expect("repeated")
+            assess(&path, "synthetic-demo", CUT, "latest-as-of", None).expect("repeated")
         );
         assert_eq!(before, std::fs::read(&path).expect("still identical"));
         for expected in [
@@ -1045,6 +1071,7 @@ sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
             "\"authority_times\":\"supplied_not_verified\"",
             "\"source_citations\":\"supplied_not_verified\"",
             "\"external_time_proof\":\"not_verified\"",
+            "\"temporal_validation\":{\"status\":\"not_checked\"",
             "\"calibration_flag\":\"descriptive\"",
             "\"upper\":null,\"upper_unbounded\":true",
             "\"bounds_kind\":\"whole_cohort_completion_bounds_not_confidence_intervals\"",
@@ -1067,15 +1094,18 @@ sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
                 &path.with_file_name("does-not-exist.toml"),
                 "synthetic-demo",
                 CUT,
-                "latest-as-of"
+                "latest-as-of",
+                None
             )
             .expect_err("absent file")
+            .refusal
             .code,
             "FMINE-REF-506"
         );
         assert_eq!(
-            assess(&path, "synthetic-demo", CUT, "latest")
+            assess(&path, "synthetic-demo", CUT, "latest", None)
                 .expect_err("bad selector")
+                .refusal
                 .code,
             "FMINE-REF-107"
         );

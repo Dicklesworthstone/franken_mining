@@ -1,0 +1,106 @@
+# SYNTHETIC: invented ancestry, anchors and times for cohort_synthetic.toml; no time authority or issuer data.
+# Forecast IDs bind the existing exact forecast registrations. Other IDs name supplied metadata only.
+schema = "fmine.forecast-provenance.v1"
+lane = "synthetic"
+
+[[anchor]]
+id = "registration"
+cell = "observations"
+seq = 10
+
+[[anchor]]
+id = "registration"
+cell = "models"
+seq = 5
+
+[[anchor]]
+id = "registration"
+cell = "reference"
+seq = 8
+
+[[anchor]]
+id = "registration"
+cell = "forecasts"
+seq = 3
+
+[[node]]
+id = "evd_11111111111111111111111111111111"
+kind = "observation"
+origin = "source"
+available_at = "2026-06-15T00:00:00Z"
+record_cell = "observations"
+seq = 10
+recorded_at = "2026-06-15T01:00:00Z"
+
+[[node]]
+id = "mod_22222222222222222222222222222222"
+kind = "fitted_parameters"
+origin = "derived"
+performed_at = "2026-06-30T00:00:00Z"
+parents = "evd_11111111111111111111111111111111"
+record_cell = "models"
+seq = 5
+recorded_at = "2026-06-30T01:00:00Z"
+
+[[node]]
+id = "evd_33333333333333333333333333333333"
+kind = "price_deck"
+origin = "source"
+available_at = "2026-06-20T00:00:00Z"
+record_cell = "reference"
+seq = 7
+recorded_at = "2026-06-20T01:00:00Z"
+
+[[node]]
+id = "evd_44444444444444444444444444444444"
+kind = "exclusion_act"
+origin = "source"
+available_at = "2026-06-25T00:00:00Z"
+record_cell = "reference"
+seq = 8
+recorded_at = "2026-06-25T01:00:00Z"
+
+[[node]]
+id = "for_84879cfbc41bf0d36dd6ca99559c8510"
+kind = "forecast"
+origin = "derived"
+performed_at = "2026-07-01T00:00:00Z"
+parents = "mod_22222222222222222222222222222222, evd_33333333333333333333333333333333, evd_44444444444444444444444444444444"
+record_cell = "forecasts"
+seq = 1
+recorded_at = "2026-07-01T00:00:00Z"
+
+[[node]]
+id = "for_7e5736723f819851ecae493ebce8e728"
+kind = "forecast"
+origin = "derived"
+performed_at = "2026-07-01T00:00:00Z"
+parents = "mod_22222222222222222222222222222222"
+record_cell = "forecasts"
+seq = 2
+recorded_at = "2026-07-01T00:00:00Z"
+
+[[node]]
+id = "for_76ff13dac8c451928240cc7c75548508"
+kind = "forecast"
+origin = "derived"
+performed_at = "2026-07-01T00:00:00Z"
+parents = "mod_22222222222222222222222222222222"
+record_cell = "forecasts"
+seq = 3
+recorded_at = "2026-07-01T00:00:00Z"
+
+[[binding]]
+forecast = "north-unit-cost"
+forecast_id = "for_84879cfbc41bf0d36dd6ca99559c8510"
+anchor = "registration"
+
+[[binding]]
+forecast = "central-unit-cost"
+forecast_id = "for_7e5736723f819851ecae493ebce8e728"
+anchor = "registration"
+
+[[binding]]
+forecast = "south-unit-cost"
+forecast_id = "for_76ff13dac8c451928240cc7c75548508"
+anchor = "registration"

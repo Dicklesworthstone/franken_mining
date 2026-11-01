@@ -27,8 +27,9 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `lint <draft> --issuer <issuer> [--through YYYYQn]` or `--synthetic`: bounded cited equalities checked
     against one verified canonical Claim snapshot, with JSON or readable Markdown output (BD-345);
   - `forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ
-    [--selector first-published|latest-as-of]`: read-only ordered transcript replay and cohort assessment
-    through `fmine-calib`; first-published is the default (BD-343);
+    [--selector first-published|latest-as-of] [--provenance <path>]`: read-only ordered transcript replay and
+    cohort assessment through `fmine-calib`; first-published is the default (BD-343). An optional provenance
+    bundle checks all declared ancestors at each frozen forecast's registration cut (BD-344);
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row
     per file, `{file, present, bytes_ok, digest_ok}` against the registry's size and sha256 (BD-339.S2). A
     mismatch is reported, never refused: doctor stays exit 0, status ok;
@@ -172,6 +173,15 @@ verified source snapshot as assurance. Without a selector they search the curren
   Saved assessment rows enforce the kernel's sealed-cut rules across replay. Both envelope authority fields
   remain null: transcript and assessment digests identify content, not a durable authority ledger or an
   external timestamp. The adapter does not verify supplied source citations or issue a forecast.
+- DESIGN (BD-344): `--provenance` reads a strict `fmine.forecast-provenance.v1` bundle, binds exact forecast
+  IDs, and checks every cohort member's complete declared ancestry at its registration time. The scoring
+  `--as-of` time cannot admit later evidence. Forecast roots must be derived, name inputs and have a performed
+  time equal to registration. Availability and cell/sequence anchor checks delegate to `fmine_claim::dag`.
+  Missing members, missing times/parents, cycles, backdating and future ancestors refuse. Future-input
+  refusals include structured frontier nodes and shortest paths in the envelope payload, without a score
+  report. Successful payloads bind the bundle's SHA-256 and each cone digest. Without a bundle the status
+  is `not_checked`; the CLI always reports generator replay as `not_performed`. Supplied metadata remains
+  unauthenticated evidence. The pure replay API is a separate caller-mediated operation.
 - `robot-docs` lists every catalogue row as `{code, exit_code, status, summary}`, `status` being `active` or
   `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 

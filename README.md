@@ -206,6 +206,35 @@ independently verified time proofs or source documents. This command neither iss
 nor replaces `xtask forecast-record-verify`; it makes the cohort and scoring kernel usable while retaining those
 boundaries. Relative transcript paths are resolved against the selected workspace.
 
+Check every member's evidence ancestry at its own registration time with a provenance bundle:
+
+```bash
+cargo run -p fmine-cli -- forecast assess --ledger tests/forecasts/cohort_synthetic.toml \
+  --cohort synthetic-demo --as-of 2026-10-31T00:00:00Z \
+  --provenance tests/forecasts/provenance_synthetic.toml
+```
+
+DESIGN (BD-344): the bundle's `node`, `anchor` and `binding` tables declare complete parent links, availability
+or performed times, and ledger cell/sequence positions. Bindings must match the exact frozen forecast IDs, with
+one for every cohort member, including missing outcomes. A derived object's availability is the latest of its
+inputs and its performed time; an earlier declared availability refuses. Record visibility is checked against
+the named anchor's per-cell high-water marks. The later `--as-of` assessment date cannot admit inputs that were
+unavailable when the forecast was registered.
+
+Successful output carries a digest for each checked ancestry. A future input, backdated fit, cycle, missing
+ancestor or missing time refuses with `FMINE-REF-110`; future-input diagnostics include the earliest offending
+ancestors and shortest paths from the forecast. Without `--provenance`, temporal validation explicitly says
+`not_checked`. These are checks of supplied metadata, not independent proof of publication or recording times.
+The CLI does not execute a supplied forecast generator and reports `generator_replay: not_performed`.
+
+The pure `fmine_claim::dag::replay` API separately reruns a generator against immutable content-addressed bytes
+and a view that denies inadmissible reads. A replay certificate requires identical output and read receipts,
+declared ancestry for every read, and no denied read even if the generator swallows its error. It can police only
+reads through that view; the caller must rebuild the result and supply the same seeds. The retrospective
+DecisionCard API requires this replay certificate and checks that it binds the actual expected-NPV Claim,
+cut and exact rendered/numeric output. Legacy action, CVaR, flip-margin and VOI fields still lack their own
+Claim provenance, so that wrapper explicitly limits its historical evidence claim to expected NPV.
+
 ### Export evidence challenges
 
 ```bash
