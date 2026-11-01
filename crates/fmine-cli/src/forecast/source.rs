@@ -1,9 +1,10 @@
 //! Source-bound resolution of a previously frozen public forecast target.
 //! Determinism: Exact (displayed decimal, source Claim and registered publication date).
 //!
-//! DESIGN: the policy fixes every semantic selector before an outcome. Resolution reads only the
-//! original registered release; a later comparative, different basis or stored unrounded value cannot
-//! replace that target. The journal owner supplies and checks its own bounded recording clock.
+//! DESIGN: the policy fixes every semantic selector before an outcome. Original resolution never
+//! falls back to a comparative. Explicit later-vintage resolution authenticates the same frozen
+//! target, without changing its period or basis. The journal owner checks predecessor and clock
+//! policy before admitting a revision; a comparative is not proof of a formal issuer restatement.
 
 use std::io::Read as _;
 use std::path::Path;
@@ -96,14 +97,40 @@ fn bounded_snapshot(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Authenticate the original workbook and resolve only the target bound into `policy` for this id.
-/// No caller-supplied value, locator, subject, basis, source date or clock participates in selection.
+/// Only an original or later calendar-quarter release can report the complete frozen period.
+/// This does not assert that the release contains the target, or that its figure was formally restated.
+pub(super) fn release_period(policy: &PublicResolutionPolicy, release: &str) -> Result<PublicPeriod> {
+    let period = PublicPeriod::parse(release)?;
+    if !matches!(period, PublicPeriod::Quarter { .. })
+        || period.end_ns()? < policy.period.end_ns()?
+    {
+        return Err(refusal(
+            RefusalCode::SupportMismatch102,
+            "outcome release must be the original calendar quarter or a later quarter",
+        ));
+    }
+    Ok(period)
+}
+
+/// Authenticate only the original workbook. A later registered release is never a fallback.
 pub(super) fn resolve(
     root: &Path,
     policy: &PublicResolutionPolicy,
     forecast_id: ObjectId,
 ) -> Result<ResolvedPublicOutcome> {
+    resolve_release(root, policy, forecast_id, &policy.period.original_release())
+}
+
+/// Authenticate exactly one requested release while keeping every target selector frozen.
+/// The live journal must additionally require an admitted predecessor for a later release.
+pub(super) fn resolve_release(
+    root: &Path,
+    policy: &PublicResolutionPolicy,
+    forecast_id: ObjectId,
+    release: &str,
+) -> Result<ResolvedPublicOutcome> {
     public_policy(policy)?;
+    release_period(policy, release)?;
     if !policy.members.contains_key(&forecast_id) {
         return Err(refusal(
             RefusalCode::NoClaimInDomain201,
@@ -130,7 +157,6 @@ pub(super) fn resolve(
             "source registry issuer differs from the frozen policy",
         ));
     }
-    let release = policy.period.original_release();
     let mut candidates = registry
         .sources
         .iter()
@@ -138,20 +164,20 @@ pub(super) fn resolve(
     let source = candidates.next().ok_or_else(|| {
         refusal(
             RefusalCode::NoClaimInDomain201,
-            format!("original {release} Mine Stats workbook is not registered"),
+            format!("selected {release} Mine Stats workbook is not registered"),
         )
     })?;
     if candidates.next().is_some() {
         return Err(refusal(
             RefusalCode::NonIdentifiableAttribution104,
-            "more than one workbook claims the original outcome release",
+            "more than one workbook claims the selected outcome release",
         ));
     }
     let source = source.clone();
     publication(&source, policy)?;
     let mut profile = IssuerProfile::from_registry(registry)
         .map_err(|error| refusal(RefusalCode::InputMissingOrUnreadable506, error))?;
-    // Do not require unrelated historical or later documents, and never let one supply a fallback.
+    // Do not require unrelated documents, and never let one supply a fallback.
     profile.sources.retain(|row| {
         row.kind == SourceKind::MineStats && row.quarter == release && row.file_name == source.file
     });
@@ -175,7 +201,7 @@ pub(super) fn resolve(
     let vocabulary = profile.mine_stats_labels.iter().cloned().collect();
     let read = read_mine_stats(
         &workbook,
-        &release,
+        release,
         (!profile.mine_stats_labels.is_empty()).then_some(&vocabulary),
     )?;
     let period = policy.period.label();
@@ -192,7 +218,7 @@ pub(super) fn resolve(
         let label = profile
             .mine_stats_label_aliases
             .iter()
-            .find(|alias| alias.label == row.label && alias.holds_for(&release))
+            .find(|alias| alias.label == row.label && alias.holds_for(release))
             .map_or(row.label.as_str(), |alias| alias.reads_as.as_str());
         row.view == View::Summary
             && row.period == period
@@ -211,7 +237,7 @@ pub(super) fn resolve(
         refusal(
             RefusalCode::NoClaimInDomain201,
             format!(
-                "the original release has no assertion for frozen target {subject} {period} {field}"
+                "the selected release has no assertion for frozen target {subject} {period} {field}"
             ),
         )
     })?;
@@ -219,13 +245,17 @@ pub(super) fn resolve(
         return Err(refusal(
             RefusalCode::NonIdentifiableAttribution104,
             format!(
-                "multiple original source assertions match frozen target {subject} {period} {field}"
+                "multiple selected source assertions match frozen target {subject} {period} {field}"
             ),
         ));
     }
-    let cell = fmine_public::key::from_mine_stats(&profile, &workbook, &release, row)
+    let cell = fmine_public::key::from_mine_stats(&profile, &workbook, release, row)
         .map_err(|error| refusal(RefusalCode::SourceCellUnusable208, error.to_string()))?;
-    let result = bind(&source, policy, forecast_id, &[cell])?;
+    let result = if release == policy.period.original_release() {
+        bind(&source, policy, forecast_id, &[cell])?
+    } else {
+        bind_release(&source, policy, forecast_id, release, &[cell])?
+    };
     calendar_period(row, policy.period)?;
     Ok(result)
 }
@@ -259,7 +289,7 @@ fn calendar_period(
     {
         return Err(refusal(
             RefusalCode::SupportMismatch102,
-            "original outcome header does not state the frozen calendar duration and end date",
+            "outcome header does not state the frozen calendar duration and end date",
         ));
     }
     Ok(())
@@ -309,7 +339,7 @@ fn publication(
     let date = source.published_at.as_ref().ok_or_else(|| {
         refusal(
             RefusalCode::NotObservable202,
-            "original workbook has no registered publication date; retrieval is not publication",
+            "workbook has no registered publication date; retrieval is not publication",
         )
     })?;
     let basis = source.published_at_basis.as_ref().ok_or_else(|| {
@@ -356,10 +386,10 @@ fn publication(
             "publication availability exceeds the supported calendar",
         )
     })?;
-    if start < policy.period.end_ns()? {
+    if start < release_period(policy, &source.quarter)?.end_ns()? {
         return Err(refusal(
             RefusalCode::AssayLookahead108,
-            "a complete-period outcome cannot be published before its period ends",
+            "a complete-period workbook cannot be published before its release period ends",
         ));
     }
     Ok((date.clone(), basis.clone(), available))
@@ -381,9 +411,7 @@ fn same_ownership(actual: OwnershipBasis, expected: PublicOwnership) -> bool {
     }
 }
 
-/// Reconstruct the existing public value tag from the frozen target and retained numeric evidence.
-/// Replay compares this with the tag in the source's canonical Claim body; a different displayed
-/// amount or target cannot reuse an admitted source Claim id.
+/// Reconstruct an original-release receipt, without accepting a later comparative in its place.
 pub(super) fn receipt_value_tag(
     policy: &PublicResolutionPolicy,
     forecast_id: ObjectId,
@@ -392,17 +420,35 @@ pub(super) fn receipt_value_tag(
     displayed: &str,
     ownership_source: &str,
 ) -> Result<String> {
+    if citation.vintage != policy.period.original_release() {
+        return Err(refusal(
+            RefusalCode::SupportMismatch102,
+            "receipt is not from the frozen original release",
+        ));
+    }
+    receipt_value_tag_at_vintage(policy, forecast_id, citation, stored, displayed, ownership_source)
+}
+
+fn receipt_value_tag_at_vintage(
+    policy: &PublicResolutionPolicy,
+    forecast_id: ObjectId,
+    citation: &OutcomeCitation,
+    stored: &str,
+    displayed: &str,
+    ownership_source: &str,
+) -> Result<String> {
     public_policy(policy)?;
+    release_period(policy, &citation.vintage)?;
     let subject = policy.members.get(&forecast_id).ok_or_else(|| {
         refusal(
             RefusalCode::NoClaimInDomain201,
             "receipt forecast is outside the frozen member mapping",
         )
     })?;
-    if citation.source != policy.issuer || citation.vintage != policy.period.original_release() {
+    if citation.source != policy.issuer {
         return Err(refusal(
             RefusalCode::SupportMismatch102,
-            "receipt is not from the frozen original release",
+            "receipt issuer differs from the frozen policy",
         ));
     }
     let ownership_basis = match (policy.ownership, ownership_source) {
@@ -457,9 +503,25 @@ pub(super) fn receipt_value_tag(
     ))
 }
 
-/// Rebuild the canonical body of the admitted standalone public issuer assertion, without I/O.
-/// Only the original one-anchor source shape is supported; all target semantics come from `policy`.
+/// Rebuild only the original admitted public assertion, without I/O or comparative fallback.
 pub(super) fn receipt_claim_body(
+    policy: &PublicResolutionPolicy,
+    forecast_id: ObjectId,
+    citation: &OutcomeCitation,
+    stored: &str,
+    displayed: &str,
+    ownership_source: &str,
+    anchor_path: &str,
+) -> Result<Vec<u8>> {
+    receipt_value_tag(policy, forecast_id, citation, stored, displayed, ownership_source)?;
+    receipt_claim_body_at_vintage(
+        policy, forecast_id, citation, stored, displayed, ownership_source, anchor_path,
+    )
+}
+
+/// Rebuild a source assertion at its retained reporting vintage. Admission of a revision additionally
+/// needs the journal's checked predecessor; this pure reconstruction grants no current-source trust.
+pub(super) fn receipt_claim_body_at_vintage(
     policy: &PublicResolutionPolicy,
     forecast_id: ObjectId,
     citation: &OutcomeCitation,
@@ -484,7 +546,7 @@ pub(super) fn receipt_claim_body(
             "receipt anchor differs from its source citation",
         ));
     }
-    let tag = receipt_value_tag(
+    let tag = receipt_value_tag_at_vintage(
         policy,
         forecast_id,
         citation,
@@ -525,7 +587,24 @@ fn bind(
     forecast_id: ObjectId,
     cells: &[KeyedCell],
 ) -> Result<ResolvedPublicOutcome> {
+    bind_release(registered, policy, forecast_id, &policy.period.original_release(), cells)
+}
+
+fn bind_release(
+    registered: &SourceRow,
+    policy: &PublicResolutionPolicy,
+    forecast_id: ObjectId,
+    release: &str,
+    cells: &[KeyedCell],
+) -> Result<ResolvedPublicOutcome> {
     public_policy(policy)?;
+    release_period(policy, release)?;
+    if registered.quarter != release || registered.kind != "mine_stats" {
+        return Err(refusal(
+            RefusalCode::SupportMismatch102,
+            "registered workbook does not match the selected outcome release",
+        ));
+    }
     let subject = policy.members.get(&forecast_id).ok_or_else(|| {
         refusal(
             RefusalCode::NoClaimInDomain201,
@@ -544,12 +623,12 @@ fn bind(
             && cell.key.subject == *subject
             && cell.key.valid_period == period
             && cell.key.line.label == label
-            && cell.key.reporting_vintage.release == policy.period.original_release()
+            && cell.key.reporting_vintage.release == release
     });
     let cell = candidates.next().ok_or_else(|| {
         refusal(
             RefusalCode::NoClaimInDomain201,
-            "the original release has no assertion for the exact frozen target",
+            "the selected release has no assertion for the exact frozen target",
         )
     })?;
     if candidates.next().is_some() {
@@ -585,8 +664,6 @@ fn bind(
         || cell.key.line.occurrence != 0
         || cell.key.unit != policy.metric.unit()
         || !same_ownership(cell.key.ownership_basis, policy.ownership)
-        // A 100%-production column declares its own basis; the site-row share applies to the
-        // separate attributable and cost columns, not to that explicitly full-production value.
         || (!(policy.metric == PublicMetric::ProductionKoz && policy.ownership == PublicOwnership::Full)
             && !same_ownership(cell.printed_basis, policy.ownership))
         || cell.claim.support != SpatialSupport::PeriodAggregate
@@ -688,10 +765,10 @@ fn bind(
     let [anchor] = out.source.claim.anchors.as_slice() else {
         return Err(refusal(
             RefusalCode::NotObservable202,
-            "outcome must be one standalone original source assertion",
+            "outcome must be one standalone source assertion",
         ));
     };
-    if receipt_claim_body(
+    if receipt_claim_body_at_vintage(
         policy,
         forecast_id,
         &out.citation,
@@ -710,369 +787,4 @@ fn bind(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::BTreeMap;
-
-    use fmine_calib::ledger::binding::PublicPeriod;
-    use fmine_core::id::PrefixKind;
-    use fmine_io::xlsx::{MinimalCell, MinimalSheet, Workbook, build_minimal_xlsx};
-    use fmine_public::key::public_claim;
-
-    /// Invented standalone source Claims; file-loading and durable admission are covered by the
-    /// registered-workbook integration test, which independently exercises the actual parser.
-    fn example(metric: PublicMetric) -> (PublicResolutionPolicy, ObjectId, SourceRow, KeyedCell) {
-        let id = ObjectId::from_canonical_bytes(PrefixKind::Forecast, b"invented public target");
-        let policy = PublicResolutionPolicy {
-            issuer: "example".into(),
-            metric,
-            period: PublicPeriod::Year(2030),
-            ownership: PublicOwnership::Full,
-            members: BTreeMap::from([(id, "Example Mine".into())]),
-        };
-        let bytes = build_minimal_xlsx(&[MinimalSheet {
-            name: "YTD".into(),
-            hidden: false,
-            cells: vec![("B5".into(), MinimalCell::Number(400.4))],
-        }]);
-        let workbook =
-            Workbook::from_bytes("corpus/Original.xlsx", &bytes).expect("invented workbook");
-        let registered = SourceRow {
-            file: "Original.xlsx".into(),
-            kind: "mine_stats".into(),
-            quarter: "2030Q4".into(),
-            url: "https://example.invalid/Original.xlsx".into(),
-            url_basis: "W1 table".into(),
-            bytes: bytes.len() as u64,
-            sha256: Digest32(workbook.sha256).to_hex(),
-            published_at: Some("2031-02-15".into()),
-            published_at_basis: Some("FACT: invented test release date".into()),
-        };
-        let key = PublicKey {
-            issuer: policy.issuer.clone(),
-            subject: policy.members[&id].clone(),
-            valid_period: parse_period_code("2030FY").expect("period"),
-            reporting_vintage: Vintage {
-                release: "2030Q4".into(),
-                file_sha256: registered.sha256.clone(),
-            },
-            ownership_basis: OwnershipBasis::Consolidated100,
-            scope: Scope::Site,
-            unit: metric.unit().into(),
-            line: LineKey {
-                label: metric.field(policy.ownership).into(),
-                occurrence: 0,
-            },
-        };
-        let mut cell = public_claim(
-            &workbook,
-            "YTD",
-            "B5",
-            key,
-            PublicValue::Number {
-                stored: "400.4".into(),
-                displayed: Ok("400".into()),
-                under_status: None,
-            },
-        );
-        if metric == PublicMetric::AiscUsdPerOz {
-            cell.label_as_printed = Some("All-in sustaining costs ($/oz)".into());
-        }
-        (policy, id, registered, cell)
-    }
-
-    fn reseal(cell: &mut KeyedCell) {
-        let c = &cell.claim;
-        cell.claim = Claim::new(
-            &cell.key.line.label,
-            c.value.clone(),
-            &canonical_value_tag(&cell.key, &c.value),
-            c.representation.clone(),
-            c.support,
-            c.additivity,
-            c.evidence,
-            c.epistemic,
-            c.state,
-            c.confidentiality.clone(),
-            c.uu_terms.clone(),
-            c.parents.clone(),
-            c.anchors.clone(),
-        );
-    }
-
-    #[test]
-    fn original_displayed_number_and_source_identity_survive_the_receipt() {
-        for metric in [PublicMetric::ProductionKoz, PublicMetric::AiscUsdPerOz] {
-            let (policy, id, source, cell) = example(metric);
-            let result = bind(&source, &policy, id, std::slice::from_ref(&cell)).expect("binding");
-            assert_eq!(result.value, Rat::from_integer(400));
-            assert_eq!(result.stored, "400.4");
-            assert_eq!(result.source.claim.claim_id, cell.claim.claim_id);
-            assert_eq!(
-                result.available_at_ns,
-                CivilDate::new(2031, 2, 16).expect("date").to_epoch_days() * NS_PER_DAY
-            );
-            assert_eq!(result.published_at, "2031-02-15");
-            assert_eq!(
-                result.published_at_basis,
-                "FACT: invented test release date"
-            );
-            let body = receipt_claim_body(
-                &policy,
-                id,
-                &result.citation,
-                &result.stored,
-                &result.displayed,
-                result.ownership_source,
-                &cell.claim.anchors[0].artifact_path,
-            )
-            .expect("reconstructed original source");
-            assert_eq!(body, cell.claim.canonical_body());
-            assert_ne!(
-                receipt_claim_body(
-                    &policy,
-                    id,
-                    &result.citation,
-                    &result.stored,
-                    "401",
-                    result.ownership_source,
-                    &cell.claim.anchors[0].artifact_path
-                )
-                .expect("different assertion"),
-                body
-            );
-            assert_ne!(
-                receipt_claim_body(
-                    &policy,
-                    id,
-                    &result.citation,
-                    "400.5",
-                    &result.displayed,
-                    result.ownership_source,
-                    &cell.claim.anchors[0].artifact_path
-                )
-                .expect("different stored token"),
-                body
-            );
-        }
-    }
-
-    #[test]
-    fn frozen_target_fields_cannot_be_chosen_at_resolution() {
-        let (policy, id, source, cell) = example(PublicMetric::AiscUsdPerOz);
-        let mut variants = vec![policy.clone(); 5];
-        variants[0].issuer = "different".into();
-        variants[1].members.insert(id, "Other Mine".into());
-        variants[2].period = PublicPeriod::Quarter {
-            year: 2030,
-            quarter: 4,
-        };
-        variants[3].metric = PublicMetric::ProductionKoz;
-        variants[4].ownership = PublicOwnership::Attributable { num: 4, den: 5 };
-        for changed in variants {
-            assert!(bind(&source, &changed, id, std::slice::from_ref(&cell)).is_err());
-        }
-        let other = ObjectId::from_canonical_bytes(PrefixKind::Forecast, b"different forecast");
-        assert!(bind(&source, &policy, other, std::slice::from_ref(&cell)).is_err());
-        let mut later = cell.clone();
-        later.key.reporting_vintage.release = "2031Q1".into();
-        reseal(&mut later);
-        assert_eq!(
-            bind(&source, &policy, id, &[later])
-                .expect_err("no comparative fallback")
-                .code,
-            "FMINE-REF-201"
-        );
-        assert_eq!(
-            bind(&source, &policy, id, &[cell.clone(), cell])
-                .expect_err("ambiguous sources")
-                .code,
-            "FMINE-REF-104"
-        );
-    }
-
-    #[test]
-    fn mutated_source_or_wrong_scope_never_becomes_an_outcome() {
-        let (policy, id, source, cell) = example(PublicMetric::ProductionKoz);
-        let mut changed = cell.clone();
-        if let PublicValue::Number { displayed, .. } = &mut changed.claim.value {
-            *displayed = Ok("999".into());
-        }
-        assert_eq!(
-            bind(&source, &policy, id, &[changed])
-                .expect_err("mutated value")
-                .code,
-            "FMINE-REF-507"
-        );
-        for modify in [
-            (|c: &mut KeyedCell| c.key.unit = "usd_per_oz".into()) as fn(&mut KeyedCell),
-            |c| c.key.scope = Scope::Company,
-            |c| c.key.line.occurrence = 1,
-        ] {
-            let mut changed = cell.clone();
-            modify(&mut changed);
-            reseal(&mut changed);
-            assert_eq!(
-                bind(&source, &policy, id, &[changed])
-                    .expect_err("wrong support")
-                    .code,
-                "FMINE-REF-105"
-            );
-        }
-        let mut changed = cell.clone();
-        changed.claim.confidentiality = Confidentiality::internal();
-        reseal(&mut changed);
-        assert_eq!(
-            bind(&source, &policy, id, &[changed])
-                .expect_err("nonpublic")
-                .code,
-            "FMINE-REF-301"
-        );
-        let mut changed = cell;
-        changed.claim.stale = true;
-        assert_eq!(
-            bind(&source, &policy, id, &[changed])
-                .expect_err("stale")
-                .code,
-            "FMINE-REF-502"
-        );
-        let (policy, id, source, mut cost) = example(PublicMetric::AiscUsdPerOz);
-        cost.printed_basis = OwnershipBasis::Unprinted;
-        assert_eq!(
-            bind(&source, &policy, id, &[cost])
-                .expect_err("unprinted cost basis")
-                .code,
-            "FMINE-REF-105"
-        );
-    }
-
-    #[test]
-    fn full_production_column_does_not_adopt_the_site_rows_attributable_share() {
-        let (policy, id, source, mut cell) = example(PublicMetric::ProductionKoz);
-        for printed in [
-            OwnershipBasis::Unprinted,
-            OwnershipBasis::Attributable {
-                num: 3,
-                den: 5,
-                source: ShareSource::Printed,
-            },
-        ] {
-            cell.printed_basis = printed;
-            assert_eq!(
-                bind(&source, &policy, id, std::slice::from_ref(&cell))
-                    .expect("explicit 100% production column")
-                    .value,
-                Rat::from_integer(400)
-            );
-        }
-    }
-
-    #[test]
-    fn wholly_owned_attributable_production_still_binds_the_attributable_column() {
-        let (mut policy, id, source, mut cell) = example(PublicMetric::ProductionKoz);
-        policy.ownership = PublicOwnership::Attributable { num: 1, den: 1 };
-        assert!(bind(&source, &policy, id, std::slice::from_ref(&cell)).is_err());
-        cell.key.line.label = policy.metric.field(policy.ownership).into();
-        reseal(&mut cell);
-        let out = bind(&source, &policy, id, std::slice::from_ref(&cell))
-            .expect("explicit attributable column at a wholly owned site");
-        assert_eq!(out.ownership_source, "full");
-        assert_eq!(out.source.claim.claim_id, cell.claim.claim_id);
-        assert_eq!(out.value, Rat::from_integer(400));
-    }
-
-    #[test]
-    fn numeric_zero_is_preserved_and_unknown_or_status_values_refuse() {
-        let (policy, id, source, cell) = example(PublicMetric::ProductionKoz);
-        let mut zero = cell.clone();
-        zero.claim.value = PublicValue::Number {
-            stored: "0".into(),
-            displayed: Ok("0".into()),
-            under_status: None,
-        };
-        reseal(&mut zero);
-        assert_eq!(
-            bind(&source, &policy, id, &[zero])
-                .expect("printed zero")
-                .value,
-            Rat::from_integer(0)
-        );
-        for value in [
-            PublicValue::Number {
-                stored: "0".into(),
-                displayed: Ok("—".into()),
-                under_status: None,
-            },
-            PublicValue::Number {
-                stored: "2".into(),
-                displayed: Ok("2".into()),
-                under_status: Some(fmine_public::key::StatusKind::Withheld),
-            },
-            PublicValue::Missing,
-        ] {
-            let mut changed = cell.clone();
-            changed.claim.value = value;
-            reseal(&mut changed);
-            assert!(bind(&source, &policy, id, &[changed]).is_err());
-        }
-        let mut changed = cell;
-        changed.claim.evidence = EvidenceClass::Assumed;
-        changed.claim.state = KnowledgeState::Unknown;
-        reseal(&mut changed);
-        assert!(bind(&source, &policy, id, &[changed]).is_err());
-    }
-
-    #[test]
-    fn availability_requires_registered_publication_after_period_end() {
-        let (policy, id, source, cell) = example(PublicMetric::ProductionKoz);
-        for date in [None, Some("2030-12-31"), Some("2031-02-30")] {
-            let mut changed = source.clone();
-            changed.published_at = date.map(str::to_string);
-            assert!(bind(&changed, &policy, id, std::slice::from_ref(&cell)).is_err());
-        }
-        let result = bind(&source, &policy, id, &[cell]).expect("valid publication");
-        let mut citation = result.citation.clone();
-        citation.locator = "Different.xlsx:YTD!B5".into();
-        assert!(
-            receipt_claim_body(
-                &policy,
-                id,
-                &citation,
-                &result.stored,
-                &result.displayed,
-                result.ownership_source,
-                "corpus/Original.xlsx"
-            )
-            .is_err()
-        );
-        citation = result.citation;
-        citation.vintage = "2031Q1".into();
-        assert!(
-            receipt_value_tag(
-                &policy,
-                id,
-                &citation,
-                &result.stored,
-                &result.displayed,
-                result.ownership_source
-            )
-            .is_err()
-        );
-        let mut synthetic = policy;
-        synthetic.issuer = fmine_public::synthetic::SYNTHETIC_ISSUER.into();
-        citation.source = synthetic.issuer.clone();
-        citation.vintage = synthetic.period.original_release();
-        assert!(
-            receipt_claim_body(
-                &synthetic,
-                id,
-                &citation,
-                &result.stored,
-                &result.displayed,
-                result.ownership_source,
-                "corpus/Original.xlsx",
-            )
-            .is_err()
-        );
-    }
-}
+mod tests;
