@@ -119,6 +119,13 @@ verified source snapshot as assurance. Without a selector they search the curren
     Disclosed-only changes, unchanged/first/single appearances and non-comparable scope boundaries remain
     in the assurance report without becoming challenges. No vintage is selected as true; silence means
     no applicable note in registered documents. Packet IDs and immutable draft restrictions apply unchanged.
+  - `identity_transition` packets cover exceptional adjacent AISC identity histories, including corrected,
+    broken and reclassified calculations with unchanged printed operands. The builder recomputes the histories
+    from canonical Claims and the original identity ledger, rejecting forged states, classifications or chronology.
+    Both original appearances retain their states, certificates, operands and source Claims. An ambiguous earliest
+    release has `first_registered: null` and every `earliest_registered_assertions` entry is retained. Closing
+    requests name both compared locators and the missing rule or evidence; the transition itself assigns no
+    disclosure classification. Persisted and single-vintage histories add no transition packet.
 - DESIGN (BD-342): guidance delegates acquisition to `fmine_public::guidance` and arithmetic to
   `fmine_metrics::guidance`. Its payload digest binds the cited inputs and explicit scenario. `anchor_id` and
   `certificate` remain null because this is not a registered forecast or ledger snapshot. Missing two-reader
@@ -151,6 +158,9 @@ verified source snapshot as assurance. Without a selector they search the curren
   preserved assumptions/citations, deterministic JSON and Markdown, missing evidence, mixed selectors,
   seeded discrepancy witnesses, joint-only conflicts and immutable review restrictions. The ignored real-corpus
   packet test retains the known Kibali and Porgera findings across both registered vintages.
+- FACT (BD-349, `packet::tests`): four transition regressions cover corrected/broken footings, unchanged values
+  reclassified by a later source-bound reconstruction, forged history, ordering and ambiguous earliest releases.
+  The real-corpus packet test asserts complete coverage of the existing exceptional identity-transition population.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 None: every failure is a usage error or a typed refusal.

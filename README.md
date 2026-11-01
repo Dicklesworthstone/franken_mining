@@ -147,6 +147,12 @@ E474 retains both the original 1,479 and later 1,474 USD/oz assertions with thei
 changes and non-comparable region boundaries stay in the assurance report. PDF transcription conflicts are
 not yet packetized. Use `--synthetic` in place of the issuer selector for an invented known-answer demonstration.
 
+Identity-transition packets additionally preserve corrected, broken or reclassified AISC calculations across
+releases, including a change in classification with identical printed values. They keep the original states,
+operands, certificates and source Claims for both appearances, and request the evidence or inclusion rule that
+explains the transition. Ambiguous earliest releases retain every assertion with no selected first assertion.
+Transition classifications and chronology are rechecked against the canonical identity ledger before export.
+
 ### Calculate guidance completion requirements
 
 ```bash
