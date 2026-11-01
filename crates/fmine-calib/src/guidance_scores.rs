@@ -14,6 +14,9 @@ pub use fmine_numerics::exact_feas::{Interval, Rat};
 
 use crate::CalibrationFlag;
 
+/// Canonical Claim validation and provenance around the exact numerical primitives.
+pub mod claims;
+
 const ZERO: Rat = Rat::from_integer(0);
 const TWO: Rat = Rat::from_integer(2);
 const MAX_BINOMIAL_N: usize = 4096;

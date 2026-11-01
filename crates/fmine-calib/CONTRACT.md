@@ -63,6 +63,13 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   missingness or outcome rounding. Numeric JSON renderers keep exact rational numerators/denominators and
   open interval ends; effective sample size and bias confidence intervals remain null. Outputs are always
   Descriptive or Unscored.
+- `guidance_scores::claims` wraps those same primitives in canonical, cited Claims. Its `score` checks matching
+  subject, metric, annual period, unit and ownership/definition basis, source usability, and both the hashed body
+  and typed payload's canonical tag. Its `summarize` refuses duplicate subjects in one publication cohort and
+  mixed metric/year/unit groups. All score and aggregate arithmetic delegates to `guidance_scores`; the wrapper
+  adds provenance rather than a second formula. Derived Claims retain every source, including unresolved
+  guidance, and never upgrade evidence or reduce confidentiality. Effective sample size and bias confidence
+  interval remain absent. Publication selection and source-byte authentication belong to the public adapter.
 - `record` (BD-334.S1, the public forecast record of plan §21.6), all pure:
   - `record_frame`/`record_digest` (`FMREC1`: manifest and forecasts hashed as one) and `rules_frame`/`rules_digest`
     (`FMRUL1`: the rules alone, stamped first);
@@ -129,6 +136,9 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   with the independent log-space tail implementation, verify the maximum supported population and one-sided
   boundaries, and force nonconvergence. These do not establish the unimplemented clustered bias interval or
   its 200-replicate coverage gate.
+- The Claim wrapper's tests in `guidance_scores::claims::tests` check canonical tampering, basis and duplicate
+  member refusals, evidence retention, source parents for unresolved members, stable Claim identities, and
+  faithful conversion of exact scores and rounding/completion bounds through the numerical API.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Miscalibrated spatial fronts trip `BettingEProcess` at `E_t >= 20.0` (`alpha = 0.05`) and downgrade downstream claims.
