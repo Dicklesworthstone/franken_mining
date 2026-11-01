@@ -380,7 +380,12 @@ pub fn run(root: &Path, as_of: &str) -> Res<BaselineReport> {
     original
         .sources
         .retain(|s| s.kind == SourceKind::MineStats && s.quarter == original_release);
-    let claims = key::mine_stats::load_claims(&original, root).map_err(|e| vec![e.to_string()])?;
+    // No original-release workbook means the nine-month rows are not available, not that the report refuses.
+    let claims = if original.sources.is_empty() {
+        key::mine_stats::build_claims(&original, &[], &[])
+    } else {
+        key::mine_stats::load_claims(&original, root).map_err(|e| vec![e.to_string()])?
+    };
     if !claims.refusals.is_empty() {
         return Err(claims
             .refusals
