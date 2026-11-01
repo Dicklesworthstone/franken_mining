@@ -160,6 +160,13 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   exclusion and expected-head CAS under concurrent writers, refuse corrupted/torn/reordered/replayed journals,
   retain committed state after an I/O failure, and refuse insecure or malformed key files. These tests exercise
   local filesystem behavior; they do not establish partner receipt or hardware power-loss durability.
+- `PO-IO-5` (BD-073, threat T1): `tests/reader_mutations.rs` mutates two synthetic workbooks, one stored and one
+  deflated with dynamic-Huffman, fixed-Huffman and stored blocks, under fixed Philox keys: 4,000 mutants each,
+  split between byte edits to the archive, edits to one entry re-zipped intact, and overwrites inside the deflated
+  payloads. Through `read_zip_entries`, `Workbook::from_bytes`, the three censuses and every displayed text, no
+  mutant panics and an accepted archive stays within both bounds. Each seed must be refused and accepted at least
+  one time in twenty and reach display refusals, and the deflated seed's inflater refusals meet the same floor, so
+  the search is not vacuous. This is a bounded random search, not a proof and not a coverage-guided fuzzer.
 - FACT (BD-347, `reliance::tests`): exact artifact issuance and current-use retrieval preserve bytes and
   refuse after withdrawal; invalid digest, key, time, stale or absent trust, and an existing destination
   cannot create an authorized output. A failed final append retains the unissued artifact and poisons its

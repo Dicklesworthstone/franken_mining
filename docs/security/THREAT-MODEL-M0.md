@@ -51,7 +51,7 @@ Each control below says how it is known: **enforced** (a check or the compiler f
 
 | # | Threat | Present controls | Gap |
 |---|---|---|---|
-| T1 | A hostile or substituted workbook: code execution, memory exhaustion, or values that differ between readers | Digest gate before parsing; bounded zip reader; entities decoded once; quarantine; no unsafe code; duplicate part names refused, so this reader and a spreadsheet program cannot take different parts under one name | No fuzzing yet (plan §32): the bounds are tested by hand-made cases only. The registry that pins the digests is a file in the workspace, so whoever can edit the workspace can register a hostile file |
+| T1 | A hostile or substituted workbook: code execution, memory exhaustion, or values that differ between readers | Digest gate before parsing; bounded zip reader; entities decoded once; quarantine; no unsafe code; duplicate part names refused, so this reader and a spreadsheet program cannot take different parts under one name | No coverage-guided fuzzing (plan §32). A seeded mutation test (`crates/fmine-io/tests/reader_mutations.rs`) runs 8,000 mutants of two synthetic workbooks through the zip reader, the inflater, the XML parser and the number formats on every test run, and requires no panic. It is a bounded random search. The TOML readers are not covered by it. The registry that pins the digests is a file in the workspace, so whoever can edit the workspace can register a hostile file |
 | T2 | A tampered binary | Built by GitHub from a pushed commit; its sha256 is in `blind_record.json` and in the SBOM; `scripts/register_vintage.sh --run` stops when the binary's sha256 differs from the record's | No signature (plan: minisign through DSR) and no reproducible-build check. A user must compare the sha256 by hand |
 | T3 | A compromised dependency | No third-party crates; `Cargo.lock` with `--locked`; `cargo deny` in CI (advisories, bans, licences, sources; unknown registries and git sources denied outside the suite's organisation) | The compiler and the platform C library are trusted. The toolchain is a nightly |
 | T4 | Data leaving the host | No network code; the macOS sandbox run | The Linux run is pending. Nothing stops a future change from adding network code to the V or U crates: `check-caps` covers S0, K and E only |
@@ -65,7 +65,7 @@ Each control below says how it is known: **enforced** (a check or the compiler f
 
 1. The Linux offline run's first CI result (bd-073).
 2. A signed release and a reproducible-build check (T2).
-3. Fuzz targets for the zip, XML and TOML readers (T1, plan §32).
+3. Coverage-guided fuzz targets for the zip, XML and TOML readers (T1, plan §32). The seeded mutation test covers the first two without coverage feedback.
 4. A static network and process ban for the V and U crates, so that §4's "by search" rows become enforced (T4).
 5. The licence. The manifests declare MIT, and the SBOM reports that, but `LICENSE` reads "MIT License (with OpenAI/Anthropic Rider)" (E681). The owner's decision is pending (RISK-17).
 6. Review by someone other than the author. bd-073's done-when is "Pack reviewed".
