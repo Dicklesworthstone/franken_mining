@@ -14,6 +14,7 @@ pub mod cutoff;
 pub mod definitions;
 pub mod guidance;
 pub mod lmdi;
+pub mod recovery;
 
 use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::{Refusal, RefusalCode};

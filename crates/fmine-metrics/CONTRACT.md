@@ -5,7 +5,7 @@
 - **Layer:** `E` (Enterprise & Decision)
 - **Subsystem:** `Enterprise`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), a spend-based Logarithmic Mean Divisia Index (`lmdi`, `GB-26`, BD-333.S1), and fixed-point marginal cut-off grade solver (`solve_cutoff_grade`; synthetic known answer only, the published cut-offs E182–E184 are not yet reproduced).
@@ -36,6 +36,14 @@ DESIGN (BD-342, COD-01): `capacity` bounds remaining gold production from cited 
 metric tonnes, gold head grade in g/t and recovery as a fraction. Their product is converted with the exact
 troy-ounce constant `31.1034768` g/oz and scaled only by an explicit attributable share. The product of maxima
 is an optimistic upper ceiling even when those maxima cannot occur together; it is not a feasible plan.
+
+DESIGN (bd-srqc, W4 §3.3): `recovery` fits exactly two descriptive annual relations and applies them to later
+quarters. Head grade `h` and recovery `R` are explicitly in percent, and implied tails grade is
+`t = h·(1−R/100)`. M-a uses mean tails; M-b is OLS `t = a+b·h`. Pairwise sums of squared head-grade
+differences and head/tails cross-products form the slope, avoiding cancellation in the design denominator.
+Quarterly M-b projection uses the equivalent centred form `mean(t)+b·(h−mean(h))`, retaining the shared fit
+centering when propagating rounding. All displayed-input estimates are exact rationals; closed enclosures
+cover the supplied rounding boxes, not statistical confidence or prediction intervals.
 
 ## 3. Authority, Epistemics & Representation
 Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when `L_corp` is omitted) and checks
@@ -122,6 +130,28 @@ arithmetic closure does not establish causation or identify an operational expla
   `ExceedsStatedProductionCeiling`, `NotExcluded` or `AlreadySatisfied`. `NotExcluded` supplies neither a
   physical feasibility witness nor a joint production-cost witness. Source anchors, parent identities,
   evidence, epistemics, confidentiality and UU terms propagate into both derived Claims.
+- `recovery::{Quantity, QuantityKind, TrainingRow, OperatingRow, Estimate, Fit, Model, ModelProjection,
+  Projection, SquareRoot, fit, project}` (bd-srqc): every input is `Claim<Quantity>`, with subject, calendar
+  period, full-mine ownership, explicit percent/kt unit, exact printed point and closed rounding interval.
+  `fit` returns `Claim<Fit>` from distinct complete annual observations. It retains mean head grade, mean
+  tails, intercept and slope with rounding enclosures. `project` returns separate model Claims with expected
+  recovery in percent, expected-minus-reported recovery in percentage points, signed copper difference in
+  kt (`processed_kt·head_percent·gap_pp/10000`) and that difference divided by reported copper production.
+  Production is the reported denominator, never a modelled substitute. Neither gaps nor extrapolated
+  recoveries are clamped; the kernel does not annualize, monetize or attribute the differences.
+  - `residual_sample_variance_at_printed` uses `SSE/(n−1)`, reproducing W4's descriptive sample spread.
+    `regression_error_variance_at_printed` uses `SSE/(n−2)`, the conventional fitted-line error estimate.
+    The corresponding explicitly named `SquareRoot` summaries enclose numerical conversion and the
+    portable square root of each exact printed-input variance. They do not enclose historical input
+    rounding or describe a confidence interval. The two denominator conventions are never conflated.
+  - Derived evidence is no stronger than its weakest source and at most `ModelledUncalibrated`; issuer
+    assertions therefore remain assertions. Outputs retain the sources' anchors, immediate parent Claim
+    identities, weaker epistemics, confidentiality and existing UU terms. Their model UU explicitly names
+    omitted ore type, grind, throughput effects, concentrate mass pull and annual-versus-quarterly support.
+    Its zero monetary field is explicitly unquantified, not an estimated zero downside.
+  - `RULES_VERSION = "m0-recovery/1"`, `NO_CLAIM` and `MODEL_CAVEAT` identify a descriptive model comparison.
+    `Quantity::canonical_tag`, `Fit::canonical_tag` and `ModelProjection::canonical_tag` bind the exact
+    calculation, interpretation and support. Sorting annual observations leaves the result unchanged.
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-203` (`ConsolidationBridgeMissing`, `G-BULL-3`)
@@ -150,6 +180,14 @@ arithmetic closure does not establish causation or identify an operational expla
   (`502`), failed calibration (`205`), unknown states (`202`), mismatched basis (`105`), support (`102`) or
   additivity (`103`), open bounds (`203`), invalid physical domains (`109`) and exact overflow (`207`). Zero
   maximum feed or recovery refuses because required grade is undefined; zero grade remains a valid zero ceiling.
+- `recovery` requires a positive head-grade box, a recovery box within `[0,100]`, nonnegative processed mass
+  and strictly positive reported production. It refuses missing source anchors (`201`), stale Claims (`502`),
+  failed calibration (`205`), unknown/conflicted inputs (`202`), placeholders (`208`), unit/full-mine/subject
+  mismatches (`105`), support mismatches (`102`), additivity mismatches (`103`), open bounds (`203`), invalid
+  domains or a printed point outside its bounds (`109`), duplicate/insufficient annual observations or a
+  design-variance enclosure touching zero (`104`), and a quarter at or before the last training year (`108`).
+  Exact-rational overflow and invalid numerical square-root enclosures refuse with `207`; no fallback fit,
+  substituted point precision or fabricated zero gap is emitted.
 - `cutoff::CutoffFailure`: a malformed registry row, a non-positive net value or recovery, or a float solver that
   disagrees with the exact fixed point. A printed figure beyond its inputs' rounding is a result (`Conflict`), not a
   failure.
@@ -215,6 +253,15 @@ arithmetic closure does not establish causation or identify an operational expla
   `6479891/3125000` g/t at maximum feed/recovery. Eight focused tests also cover attributable scaling, signed
   already-delivered requirements, equality at the ceiling, rounded physical limits, zero/invalid denominators,
   unit/support/ownership refusals, exact overflow and complete source/uncertainty propagation.
+- `PO-MET-8` (bd-srqc, `recovery::tests`): independent synthetic annual heads `[1,2,4]` and tails
+  `[1/5,3/10,1/2]` give mean tails `1/3`, intercept `1/10` and slope `1/10`. A quarter with head `2%`,
+  recovery `82%`, processed `1000 kt` and produced `82/5 kt` gives M-a gap `4/3` pp, difference `4/15 kt`
+  and output fraction `2/123`; M-b gives `3` pp, `3/5 kt` and `3/82`. A separate nonzero-residual case
+  distinguishes the `n−1` and `n−2` variances. All 1,024 combinations of six training and four operating
+  input-box corners are enclosed; widening the boxes cannot narrow the model outputs. Signed negative
+  gaps, unclamped extrapolation, deterministic input ordering, source mutation, weaker evidence,
+  confidentiality/UU propagation and the admission/domain/overflow refusals have direct tests. No historical
+  issuer training rows are embedded in these synthetic fixtures.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 The legacy floating API refuses non-positive physical inputs. The typed public API attempts the exact signed
