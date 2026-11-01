@@ -72,6 +72,9 @@ verified source snapshot as assurance. Without a selector they search the curren
   - `--issuer` together with `--synthetic`.
 - **Exit 3–8:** the catalog refusal's own exit code. For example, `FMINE-REF-506` (exit 5) means a registered
   file is missing or unreadable, and `FMINE-REF-505` (exit 8) that one is altered.
+- **Exit 5, no envelope** (BD-112): stdout could not take the envelope (a closed pipe, as under `| head -c 1`,
+  or a full disk). `fmine` writes one line to stderr and exits 5, the I/O-error code, instead of panicking
+  with exit 101. Exit 1 is never emitted.
 - `claim show|why|trace <id>` resolve public Mine Stats and AISC Claims by re-reading the registered, hash-verified workbook
   inputs (BD-332.S3, BD-115). It returns the semantic key, both stored and displayed text, ownership and
   status evidence, and the source locator/digest. Mine Stats uses its direct reader; AISC uses the existing
@@ -146,6 +149,11 @@ verified source snapshot as assurance. Without a selector they search the curren
   preserved assumptions/citations, deterministic JSON and Markdown, missing evidence, mixed selectors,
   seeded discrepancy witnesses, joint-only conflicts and immutable review restrictions. The ignored real-corpus
   packet test retains the known Kibali and Porgera findings across both registered vintages.
+- `PO-ADIT-4` (BD-112, `tests/exit_codes.rs`): 400 seeded argument lists (Philox; half are edits of a
+  well-formed command for each verb) and every verb in both formats exit 0 or 2–9, with the envelope's
+  `exit_code` and `status` matching. The generator must reach ok, usage, exit-3 and other refusals. The built
+  binary, given a closed stdout, exits 5 with a line on stderr. This is a seeded generative test, not a
+  coverage-guided fuzzer, and no registry is present, so issuer runs past file loading are not reached.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 None: every failure is a usage error or a typed refusal.
