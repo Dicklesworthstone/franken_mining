@@ -1058,35 +1058,7 @@ mod tests {
         )
     }
 
-    #[test]
-    fn synthetic_completion_uses_sold_not_produced_and_keeps_every_source() {
-        let report = run_synthetic().unwrap();
-        assert_eq!(
-            report.completion.remaining_production.value.interval,
-            bounds(Rat::new(263, 2).unwrap(), Rat::new(325, 2).unwrap())
-        );
-        assert_eq!(
-            report.inputs.remaining_sold.value.interval,
-            bounds(Rat::from_integer(139), Rat::from_integer(141))
-        );
-        assert_eq!(
-            report.inputs.ytd_sold.value.interval.lo,
-            Rat::new(119, 2).unwrap()
-        );
-        assert_eq!(
-            report.completion.ytd_aisc_spend.value.interval.lo,
-            Rat::new(108647, 800).unwrap()
-        );
-        assert_eq!(report.to_json(), run_synthetic().unwrap().to_json());
-        assert!(report.to_json().contains("\"envelope_tier\":\"T1\""));
-        assert_eq!(
-            report.history.verdict,
-            kernel::HistoryVerdict::WithinEnvelope
-        );
-        assert!(report.to_json().contains("\"lane\":\"synthetic\""));
-        assert_eq!(report.inputs.remaining_sold.parents.len(), 2);
-        assert_eq!(report.inputs.remaining_sold.anchors.len(), 2);
-    }
+    // The public synthetic completion contract is exercised in xtask/tests/public_guidance_history.rs.
 
     #[test]
     fn latest_guidance_obeys_cutoff_and_ambiguity_refuses() {

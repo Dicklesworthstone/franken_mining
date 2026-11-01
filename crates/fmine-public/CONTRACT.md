@@ -42,7 +42,8 @@ The public lane of M0 (`fmine assure public`).
   Mine Stats 2024Q1–2026Q2 and AISC reconciliations 2024Q3–2026Q2, from W1, E451, E452), and holds the reporting
   subjects printed in the AISC table headers and the registered reconstructions (E816). Registering a vintage is
   a TOML edit, never a code change; `through(YYYYQn)` keeps only rows at or before a quarter, so an earlier run
-  reproduces after later rows are added.
+  reproduces after later rows are added. Document-only partner profiles use the same schema and document
+  verification path; workbook assurance and workbook Claims require at least one registered workbook.
 - `aisc`: a label-anchored reader for the AISC reconciliation tables. It finds rows by column-A label and the
   header row by registered subjects, so no coordinate is fixed. It also builds the identity ledger
   (`GATE-BULL-01` part 2, plan §21.6).
@@ -623,7 +624,8 @@ The public lane of M0 (`fmine assure public`).
   `FMINE-REF-506` (registered input missing or unreadable, exit 5) otherwise (`files_refusal`).
 - `FMINE-REF-506` also refuses a missing or malformed registry, naming the file and line, and an unregistered
   Mine Stats quarter.
-- `FMINE-REF-201` (no claim in domain, exit 3): a `through` bound that leaves no rows.
+- `FMINE-REF-201` (no claim in domain, exit 3): a `through` bound that leaves no rows, or a workbook loader
+  called on a profile without registered workbooks. Document-only profiles remain usable by document consumers.
 - `FMINE-REF-208` (source cell unusable, exit 3) from `cell_to_public_claim` on text or formula-error cells.
 - 505, 506 and 208 are proposed codes (`docs/adr/ADR-REFUSALS-01.md`).
 - The ledger scores displayed values (bd-jg43.3, E838): the declared construction sums the numbers as printed,

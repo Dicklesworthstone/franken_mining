@@ -797,10 +797,6 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             sha256,
         });
     }
-    if sources.is_empty() {
-        return fail(0, "no [[source]] rows");
-    }
-
     let mut documents = Vec::new();
     for row in doc.rows_of("document") {
         let f = Fields::of_row(row);
@@ -896,6 +892,9 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             bytes,
             sha256,
         });
+    }
+    if sources.is_empty() && documents.is_empty() {
+        return fail(0, "no [[source]] or [[document]] rows");
     }
 
     let mut subjects = Vec::new();
@@ -2377,6 +2376,45 @@ mod tests {
             }
         }
         out
+    }
+
+    const DOCUMENT_ONLY_HEAD: &str = "schema = \"fmine.sources.v1\"\nissuer = \"demo\"\n\
+        corpus_dir = \"corpus/demo\"\nretrieved_utc = \"2030-02-01T00:00:00Z\"\n\
+        url_prefix = \"https://example.org/files/\"\n[[subject]]\nname = \"Site A\"\n";
+
+    #[test]
+    fn test_document_only_profile_keeps_document_validation() {
+        let doc = document(&[("kind", Some("\"partner_filing\""))]);
+        let reg = parse_sources_registry(&format!("{DOCUMENT_ONLY_HEAD}{doc}"))
+            .expect("document-only partner profile");
+        let mixed = parse_sources_registry(&minimal("", &doc)).expect("workbook and document");
+        assert!(reg.sources.is_empty());
+        assert_eq!(reg.documents, mixed.documents);
+        assert_eq!(reg.documents[0].kind, "partner_filing");
+        assert_eq!(reg.subjects, ["Site A"]);
+        for (replace, why) in [
+            (vec![("sha256", Some("\"short\""))], "64 lowercase hex"),
+            (vec![("pages", Some("0"))], "positive integer"),
+            (vec![("published_at", None)], "has no published_at"),
+        ] {
+            let e = refusal(&format!("{DOCUMENT_ONLY_HEAD}{}", document(&replace)));
+            assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
+        }
+        let e = refusal(&format!("{DOCUMENT_ONLY_HEAD}{doc}{doc}"));
+        assert!(e.reason.contains("duplicate file"), "{e}");
+    }
+
+    #[test]
+    fn test_profile_requires_a_workbook_or_document() {
+        let e = refusal(DOCUMENT_ONLY_HEAD);
+        assert_eq!(e.reason, "no [[source]] or [[document]] rows");
+        let workbook = parse_sources_registry(&minimal("", "")).expect("workbook-only profile");
+        assert_eq!(workbook.sources.len(), 1);
+        assert_eq!(workbook.sources[0].file, "A.xlsx");
+        assert_eq!(workbook.sources[0].sha256, SHA_A);
+        assert!(workbook.documents.is_empty());
+        let mixed = parse_sources_registry(&minimal("", &document(&[]))).expect("mixed profile");
+        assert_eq!(workbook.sources, mixed.sources);
     }
 
     #[test]

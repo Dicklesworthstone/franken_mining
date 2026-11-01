@@ -111,6 +111,82 @@ mod tests {
     }
 
     #[test]
+    fn document_only_profile_verifies_transcriptions_and_refuses_workbook_assurance() {
+        let issuer = "partner_document_fixture";
+        let ws = std::env::temp_dir().join(format!("fmine-document-only-{}", std::process::id()));
+        let source_path = registry_path(&ws, issuer);
+        let transcription_path = transcriptions_path(&ws, issuer);
+        for dir in [
+            source_path.parent().expect("source parent"),
+            transcription_path.parent().expect("transcription parent"),
+            &ws.join("docs"),
+        ] {
+            std::fs::create_dir_all(dir).expect("fixture directory");
+        }
+        std::fs::write(ws.join("docs/Deck.pdf"), DECK).expect("invented document");
+        std::fs::write(
+            &source_path,
+            format!(
+                "schema = \"fmine.sources.v1\"\nissuer = \"{issuer}\"\ncorpus_dir = \"docs\"\n\
+                 retrieved_utc = \"2030-02-01T00:00:00Z\"\nurl_prefix = \"https://example.invalid/\"\n\
+                 [[subject]]\nname = \"Example JV\"\n\
+                 [[document]]\nfile = \"Deck.pdf\"\nkind = \"partner_filing\"\n\
+                 url = \"https://example.invalid/Deck.pdf\"\nurl_basis = \"W1 table\"\n\
+                 published_at = \"2030-02-01\"\npublished_at_basis = \"FACT: invented fixture\"\n\
+                 pages = 15\nbytes = {}\nsha256 = \"{}\"\n",
+                DECK.len(),
+                sha256(DECK).to_hex()
+            ),
+        )
+        .expect("document-only registry");
+        let readings = ["reader_a", "reader_b"]
+            .map(|reader| entry(reader, "Deck.pdf", 14, "Production", "1.7", "production"));
+        std::fs::write(
+            &transcription_path,
+            format!(
+                "schema = \"fmine.transcriptions.v1\"\nissuer = \"{issuer}\"\n{}",
+                readings.concat()
+            ),
+        )
+        .expect("two reader transcriptions");
+        let profile = load_issuer_profile(&ws, issuer).expect("document-only profile");
+        assert!(profile.sources.is_empty());
+        let report = load_transcription_report(&profile, &ws)
+            .expect("verified document")
+            .expect("transcription registry");
+        assert_eq!(
+            (report.documents.len(), report.agreement.accepted.len()),
+            (1, 1)
+        );
+        assert_eq!(report.documents[0].sha256, sha256(DECK).to_hex());
+        assert_eq!(report.documents[0].kind, "partner_filing");
+        assert_eq!(report.agreement.accepted[0].readers.len(), 2);
+        assert_eq!(report.agreement.accepted[0].token, "1.7");
+        for e in [
+            fmine_public::load_registered_sources(&profile, &ws).expect_err("no workbooks"),
+            run_public_assurance(&profile, &ws).expect_err("no empty assurance success"),
+            fmine_public::key::mine_stats::load_claims(&profile, &ws)
+                .expect_err("no empty workbook claims"),
+            profile
+                .clone()
+                .through("2030Q1")
+                .expect_err("no workbook vintage"),
+        ] {
+            assert_eq!((e.code, e.exit_code), ("FMINE-REF-201", 3));
+        }
+        std::fs::write(ws.join("docs/Deck.pdf"), b"altered fixture").expect("alter document");
+        let e = load_transcription_report(&profile, &ws).expect_err("digest remains checked");
+        assert_eq!((e.code, e.exit_code), ("FMINE-REF-505", 8));
+        assert!(e.what.contains("Deck.pdf"));
+        std::fs::rename(ws.join("docs/Deck.pdf"), ws.join("docs/held.pdf"))
+            .expect("withhold document");
+        let e = load_transcription_report(&profile, &ws).expect_err("document remains required");
+        assert_eq!((e.code, e.exit_code), ("FMINE-REF-506", 5));
+        assert!(e.what.contains("Deck.pdf"));
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
     fn test_transcribed_tie_discovers_the_deck_convention() {
         let ws = workspace("tie", &rows());
         let r = run(&ws).expect("run");
