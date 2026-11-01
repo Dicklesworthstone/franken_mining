@@ -23,6 +23,16 @@ refinement.
 A label's claim-id bytes keep the old tier bytes, 0 for public and 1 for internal, so no existing claim id moves; any
 other label is tag 5, then its ventures and walls.
 
+Identity (§8.1, BD-040): `claim_id` is `clm_` and the first 16 bytes of BLAKE3(`clm_` ‖ `canonical_body()`). The
+body is the `CLM1` frame, schema 2: metric key, value tag, evidence, epistemic status, knowledge state, label, parents,
+anchors. `Claim` stores its value tag, so any holder can recompute the id; `check_id` refuses (`FMINE-REF-507`) a claim
+whose hashed fields were written after construction, and `ClaimDag::insert` runs it. `downgraded(to)` is the
+supersession path for evidence: the class becomes `meet(class, to)`, so it never rises, and a changed claim gets its
+own id with `supersedes` naming the old one. Limits, stated plainly: representation, support, additivity, UU terms and
+`supersedes` are not in the body, so claims differing only there share an id; `value` enters only through its tag,
+so a write to `value` alone is not detected; the fields stay `pub`. Widening the body changes every claim id and the
+public lane's state root, so it waits on an owner decision.
+
 A claim carries `evidence`, `epistemic` and `state` separately. Its colour is computed by `Claim::color`, never set: no
 constructor takes one and its basis is private (`compile_fail` doctest on `Claim`). `with_regime` names a claim's anchor,
 which counts only for a class `project_color` lets stand on one, so it cannot raise a colour.
@@ -31,11 +41,12 @@ which counts only for a class `project_color` lets stand on one, so it cannot ra
 A decision-facing claim whose status is not `KnownKnown` requires a non-empty `uu_terms` (`G-UU`, `FMINE-REF-204`). Every claim enforces `Confidentiality` isolation (`INV-007`, `FMINE-REF-301` and `FMINE-REF-302`).
 
 ## 4. Public API Surface
-- `Claim<T>` (`with_regime`, `color`), `Representation`, `SpatialSupport`, `AdditivityClass`, `UuTerm`
+- `Claim<T>` (`with_regime`, `color`, `value_tag`, `canonical_body`, `check_id`, `downgraded`), `Representation`,
+  `SpatialSupport`, `AdditivityClass`, `UuTerm`
 - `Confidentiality` (`public`, `internal`, `venture`, `mnpi`, `join`, `leq`, `refusal_over`), `LabelRegistry`,
   `VentureId`, `WallId`, `LabelError`
 - `compose_binary`, which takes the `IntervalOp` its colour composes under
-- `ClaimDag` (`guard_disclosure_export`), `DagNode`
+- `ClaimDag` (`insert`, which refuses as `check_id` does; `guard_disclosure_export`), `DagNode`
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-102` (support mismatch, `verify_support_compatible`, `G-GEO-1`), exit 3
@@ -53,12 +64,19 @@ A decision-facing claim whose status is not `KnownKnown` requires a non-empty `u
   DAG does not hold. §8.4 has no G-DISC code; 304 is the nearest, because the clause this cannot yet check is the
   attested record. Passing is necessary, not sufficient: G-DISC's RefClass and attestation clauses wait on fields
   `Claim` does not have. The owner should confirm the code with the others in `docs/adr/ADR-REFUSALS-01.md`.
+- `FMINE-REF-507` (frozen record mutation, proposed, `Claim::check_id` and `ClaimDag::insert`), exit 6: the claim's
+  id is not the id of its current body.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-CLAIM-1`: `compose_binary` keeps the placeholder (`None`), takes the `meet` of classes and the `and` of states
   and statuses, composes colours, and unions `uu_terms`. Over $10^5$ random claim trees no node outranks a parent in
   class, state or colour, and a node is refused exactly when a leaf under it is (`test_random_claim_dags_nl1_nl2_nl5_100k`).
 - `PO-CLAIM-2`: `ClaimDag::invalidate_and_propagate` marks all transitive descendants stale (`INV-013`).
+- `PO-CLAIM-3` (BD-040): two claims' canonical bytes and ids equal known answers built from the codec and BLAKE3
+  specs by `scripts/oracle/claim_body_known_answers.py`, whose BLAKE3 port passes the official vectors first
+  (`test_canonical_body_and_claim_id_golden`). A write to each hashed field is refused by `check_id` and by
+  `ClaimDag::insert`, which then stores nothing (`test_edited_claim_is_refused_and_unhashed_fields_are_not`).
+  `downgraded` never raises a class (`test_downgraded_supersedes_and_never_raises`).
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Adding `IntensiveMassWeighted` claims without mass weights or combining mismatched `SpatialSupport` fails closed with `FMINE-REF-103` / `FMINE-REF-102`.

@@ -91,6 +91,10 @@ pub struct UuTerm {
 ///     claim.color_basis = None;
 /// }
 /// ```
+///
+/// `claim_id` is the BLAKE3 id of [`Claim::canonical_body`]: "append-only; supersede, never edit" (§8.1). A write
+/// to a hashed field after construction leaves an id that names another body. [`Claim::check_id`] refuses such a
+/// claim, and so does [`ClaimDag::insert`]. [`Claim::downgraded`] is the supersession path for evidence.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Claim<T> {
     pub claim_id: ClaimId,
@@ -111,6 +115,8 @@ pub struct Claim<T> {
     pub calibration_failed: bool,
     /// The anchor's colour on a leaf, the composition of the parents' colours on a derived claim.
     color_basis: Option<Color>,
+    /// The value's canonical text, hashed into the id in place of `value`.
+    value_tag: String,
 }
 
 impl<T> Claim<T> {
@@ -132,7 +138,7 @@ impl<T> Claim<T> {
         anchors: Vec<SourceAnchor>,
     ) -> Self {
         let metric_key = metric_key.into();
-        let claim_id = compute_claim_id(
+        let claim_id = id_of_body(&encode_body(
             &metric_key,
             canonical_value_tag,
             evidence,
@@ -141,7 +147,7 @@ impl<T> Claim<T> {
             &confidentiality,
             &parents,
             &anchors,
-        );
+        ));
         Self {
             claim_id,
             metric_key,
@@ -160,7 +166,71 @@ impl<T> Claim<T> {
             stale: false,
             calibration_failed: false,
             color_basis: None,
+            value_tag: canonical_value_tag.to_string(),
         }
+    }
+
+    /// The value's canonical text, as hashed into the id.
+    #[must_use]
+    pub fn value_tag(&self) -> &str {
+        &self.value_tag
+    }
+
+    /// The body `claim_id` is the BLAKE3 id of (`§8.1`): the `CLM1` frame, schema 2, over the metric key, value tag,
+    /// evidence class, epistemic status, knowledge state, label, parents and anchors, in that order. Its bytes are
+    /// pinned by known answers from `scripts/oracle/claim_body_known_answers.py`.
+    ///
+    /// Not in the body yet: representation, support, additivity, UU terms and `supersedes`. Two claims that differ
+    /// only there share an id. `value` enters only through its tag, so writing `value` alone goes undetected.
+    /// Adding any of them changes every claim id, and with them the public lane's state root (CONTRACT §2).
+    #[must_use]
+    pub fn canonical_body(&self) -> Vec<u8> {
+        encode_body(
+            &self.metric_key,
+            &self.value_tag,
+            self.evidence,
+            self.epistemic,
+            self.state,
+            &self.confidentiality,
+            &self.parents,
+            &self.anchors,
+        )
+    }
+
+    /// Refuses with `FMINE-REF-507` when `claim_id` is not the id of the current body, because a hashed field was
+    /// written after construction. A claim is superseded, never edited (§8.1).
+    pub fn check_id(&self) -> Result<(), Refusal> {
+        let body_id = id_of_body(&self.canonical_body());
+        if body_id == self.claim_id {
+            return Ok(());
+        }
+        Err(Refusal::new(
+            RefusalCode::FrozenRecordMutation507,
+            format!(
+                "claim '{}': its id {} names another body (the current body's id is {body_id}); a claim is \
+                 superseded, never edited",
+                self.metric_key, self.claim_id
+            ),
+        ))
+    }
+
+    /// The supersession path for evidence (§8.1, NL-2). The class becomes `self`'s class met with `to`, so it can
+    /// only fall. When it does not change, the result is `self` unchanged. Otherwise the result has its own id, and
+    /// its `supersedes` names `self`.
+    #[must_use]
+    pub fn downgraded(&self, to: EvidenceClass) -> Self
+    where
+        T: Clone,
+    {
+        let evidence = self.evidence.meet(to);
+        let mut next = self.clone();
+        if evidence == self.evidence {
+            return next;
+        }
+        next.evidence = evidence;
+        next.supersedes = Some(self.claim_id);
+        next.claim_id = id_of_body(&next.canonical_body());
+        next
     }
 
     /// States the regime and dataset this claim is anchored to. They count only for a class `§7.1` lets stand on an
@@ -329,7 +399,7 @@ pub fn compose_binary<A, B, R>(
 
 // Eight arguments, each a hashed field of the claim; a parameter struct would only rename them.
 #[allow(clippy::too_many_arguments)]
-fn compute_claim_id(
+fn encode_body(
     metric_key: &str,
     canonical_value_tag: &str,
     evidence: EvidenceClass,
@@ -338,7 +408,7 @@ fn compute_claim_id(
     confidentiality: &Confidentiality,
     parents: &[ClaimId],
     anchors: &[SourceAnchor],
-) -> ClaimId {
+) -> Vec<u8> {
     let mut enc = Encoder::new_frame(*b"CLM1", 2);
     enc.put_str(metric_key);
     enc.put_str(canonical_value_tag);
@@ -356,7 +426,11 @@ fn compute_claim_id(
         enc.put_str(&a.locator);
         enc.put_fixed(&a.artifact_sha256);
     }
-    ObjectId::from_canonical_bytes(PrefixKind::Claim, &enc.finish())
+    enc.finish()
+}
+
+fn id_of_body(body: &[u8]) -> ClaimId {
+    ObjectId::from_canonical_bytes(PrefixKind::Claim, body)
 }
 
 // --- Provenance DAG & Staleness Propagation (BD-046, INV-013) ---
@@ -386,8 +460,10 @@ impl ClaimDag {
         Self::default()
     }
 
-    /// Registers a `Claim<T>` in the provenance DAG.
-    pub fn insert<T>(&mut self, claim: &Claim<T>) {
+    /// Registers a `Claim<T>` in the provenance DAG. Refuses (`FMINE-REF-507`, [`Claim::check_id`]) a claim whose id
+    /// does not name its body, so a node never records a class written after the id was fixed.
+    pub fn insert<T>(&mut self, claim: &Claim<T>) -> Result<(), Refusal> {
+        claim.check_id()?;
         let mut stale = claim.stale;
         for &p in &claim.parents {
             self.children.entry(p).or_default().insert(claim.claim_id);
@@ -406,6 +482,7 @@ impl ClaimDag {
                 superseded_by: None,
             },
         );
+        Ok(())
     }
 
     /// G-DISC (`§8.3`), its evidence clauses: a disclosure-facing export needs a class in {Measured, Derived,
@@ -677,7 +754,7 @@ mod tests {
         let top = stating("top", EvidenceClass::Derived, vec![mid.claim_id]);
         let mut dag = ClaimDag::new();
         for claim in [&root, &mid, &top] {
-            dag.insert(claim);
+            assert_eq!(dag.insert(claim), Ok(()));
         }
         let err = dag
             .guard_disclosure_export(&top)
@@ -691,8 +768,8 @@ mod tests {
         let root = leaf("assumed_root", EvidenceClass::Assumed);
         let top = stating("top", EvidenceClass::Measured, vec![root.claim_id]);
         let mut dag = ClaimDag::new();
-        dag.insert(&root);
-        dag.insert(&top);
+        assert_eq!(dag.insert(&root), Ok(()));
+        assert_eq!(dag.insert(&top), Ok(()));
         let err = dag
             .guard_disclosure_export(&top)
             .expect_err("an assumption in the provenance must block the export");
@@ -733,7 +810,7 @@ mod tests {
         assert_eq!(top.evidence, EvidenceClass::ModelledCalibrated);
         let mut dag = ClaimDag::new();
         for claim in [&a, &b, &c, &ab, &top] {
-            dag.insert(claim);
+            assert_eq!(dag.insert(claim), Ok(()));
         }
         assert_eq!(dag.guard_disclosure_export(&top), Ok(()));
     }
@@ -1055,9 +1132,9 @@ mod tests {
             IntervalOp::Hull,
         );
 
-        dag.insert(&c1);
-        dag.insert(&c2);
-        dag.insert(&c3);
+        for claim in [&c1, &c2, &c3] {
+            assert_eq!(dag.insert(claim), Ok(()));
+        }
         assert!(!dag.is_stale(c3.claim_id));
 
         let affected = dag.invalidate_and_propagate(c1.claim_id, None);
@@ -1065,5 +1142,166 @@ mod tests {
         assert!(dag.is_stale(c1.claim_id));
         assert!(dag.is_stale(c2.claim_id));
         assert!(dag.is_stale(c3.claim_id));
+    }
+
+    /// The golden pair: an issuer's figure (public, one anchor) and a derived claim (venture joined with a wall, two
+    /// parents, no anchor).
+    fn golden_claims() -> (Claim<f64>, Claim<f64>) {
+        let a = Claim::new(
+            "aisc_usd_per_oz",
+            1234.5,
+            "1234.5",
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::IntensiveWeighted,
+            EvidenceClass::ISSUER,
+            EpistemicStatus::KnownKnown,
+            KnowledgeState::Known,
+            Confidentiality::public(),
+            vec![],
+            vec![],
+            vec![sample_anchor()],
+        );
+        let reg = LabelRegistry::new(["ven_a"], ["W-1"]).unwrap();
+        let label = Confidentiality::venture(reg.venture("ven_a").unwrap())
+            .join(&Confidentiality::mnpi(reg.wall("W-1").unwrap()));
+        let parents = [
+            "clm_00112233445566778899aabbccddeeff",
+            "clm_ffeeddccbbaa99887766554433221100",
+        ]
+        .map(|p| p.parse::<ClaimId>().unwrap());
+        let b = Claim::new(
+            "net_aisc_usd_m",
+            -12.25,
+            "-12.25",
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::ExtensiveAdditive,
+            EvidenceClass::Derived,
+            EpistemicStatus::KnownUnknown(KuKind::Parametric),
+            KnowledgeState::Estimated,
+            label,
+            vec![],
+            parents.to_vec(),
+            vec![],
+        );
+        (a, b)
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// BD-040: canonical bytes and ids, hand-built from the codec and BLAKE3 specs by
+    /// `scripts/oracle/claim_body_known_answers.py` (its BLAKE3 port passes the official vectors first).
+    #[test]
+    fn test_canonical_body_and_claim_id_golden() {
+        let (a, b) = golden_claims();
+        assert_eq!(
+            hex(&a.canonical_body()),
+            "464d4e45434c4d3102000f000000616973635f7573645f7065725f6f7a06000000313233342e350702000000000000000000\
+             0000000000000000000000000000000000000001000000000000001300000073796e7468657469632f616973632e786c7378\
+             1200000053796e7468657469632041495343214c3134111111111111111111111111111111111111111111111111111111111\
+             1111111b16cfd9a"
+        );
+        assert_eq!(
+            a.claim_id.to_string(),
+            "clm_581c1e44b9d7b72401cca56714637608"
+        );
+        assert_eq!(
+            hex(&b.canonical_body()),
+            "464d4e45434c4d3102000e0000006e65745f616973635f7573645f6d060000002d31322e3235010002000000000000000000\
+             0000000000000000010501000000000000000500000076656e5f61010000000000000003000000572d310200000000000000\
+             00112233445566778899aabbccddeeffffeeddccbbaa998877665544332211000000000000000000316f7b91"
+        );
+        assert_eq!(
+            b.claim_id.to_string(),
+            "clm_24ca9069e4b7290dc6790b4ef151c3c9"
+        );
+        assert_eq!((a.check_id(), b.check_id()), (Ok(()), Ok(())));
+        assert_eq!(a.value_tag(), "1234.5");
+    }
+
+    /// A write to each hashed field after construction is refused by `check_id` and by `ClaimDag::insert`, and the
+    /// DAG is left unchanged. Writes to the fields outside the body are not, which is the documented limit.
+    #[test]
+    fn test_edited_claim_is_refused_and_unhashed_fields_are_not() {
+        type Edit = (&'static str, fn(&mut Claim<f64>));
+        let (a, b) = golden_claims();
+        let edits: [Edit; 7] = [
+            ("metric_key", |c| c.metric_key.push('x')),
+            ("evidence raised", |c| c.evidence = EvidenceClass::Measured),
+            ("epistemic", |c| {
+                c.epistemic = EpistemicStatus::UnmodelledBudget
+            }),
+            ("state", |c| c.state = KnowledgeState::Stale),
+            ("label", |c| c.confidentiality = Confidentiality::internal()),
+            ("parents", |c| c.parents.push(c.claim_id)),
+            ("anchors", |c| c.anchors.clear()),
+        ];
+        for (what, edit) in edits {
+            let mut edited = a.clone();
+            edit(&mut edited);
+            let err = edited.check_id().expect_err(what);
+            assert_eq!((err.code, err.exit_code), ("FMINE-REF-507", 6), "{what}");
+            assert!(
+                err.what.contains("aisc_usd_per_oz") || what == "metric_key",
+                "{}",
+                err.what
+            );
+            let mut dag = ClaimDag::new();
+            assert!(dag.insert(&edited).is_err(), "{what}");
+            // Nothing was stored: a child of the refused claim finds its parent missing.
+            let child = stating("child", EvidenceClass::Measured, vec![edited.claim_id]);
+            assert_eq!(dag.insert(&child), Ok(()));
+            let missing = dag.guard_disclosure_export(&child).expect_err(what);
+            assert!(
+                missing.what.contains("is not in this provenance graph"),
+                "{what}: {}",
+                missing.what
+            );
+        }
+        let mut status = a.clone();
+        status.stale = true;
+        status.calibration_failed = true;
+        status.supersedes = Some(b.claim_id);
+        status.support = SpatialSupport::PointCore;
+        assert_eq!(status.check_id(), Ok(()));
+    }
+
+    /// `downgraded` supersedes with a new id when the class falls, and returns the claim unchanged when the meet
+    /// leaves the class where it was: it can never raise one.
+    #[test]
+    fn test_downgraded_supersedes_and_never_raises() {
+        let calibrated = leaf("grade", EvidenceClass::ModelledCalibrated);
+        let lowered = calibrated.downgraded(EvidenceClass::ModelledUncalibrated);
+        assert_eq!(lowered.evidence, EvidenceClass::ModelledUncalibrated);
+        assert_eq!(lowered.supersedes, Some(calibrated.claim_id));
+        assert_ne!(lowered.claim_id, calibrated.claim_id);
+        assert_eq!(lowered.check_id(), Ok(()));
+        let mut dag = ClaimDag::new();
+        assert_eq!(dag.insert(&lowered), Ok(()));
+
+        let (issuer, _) = golden_claims();
+        for to in [
+            EvidenceClass::Measured,
+            EvidenceClass::Derived,
+            EvidenceClass::ModelledCalibrated,
+        ] {
+            assert_eq!(
+                issuer.downgraded(to),
+                issuer,
+                "{to:?} must not raise an assertion"
+            );
+            assert_eq!(lowered.downgraded(to), lowered, "{to:?}");
+        }
+        // Incomparable classes meet below both (NL-2): Elicited met with Uncalibrated is Assumed.
+        let elicited = leaf("judgement", EvidenceClass::Elicited);
+        assert_eq!(
+            elicited
+                .downgraded(EvidenceClass::ModelledUncalibrated)
+                .evidence,
+            EvidenceClass::Assumed
+        );
     }
 }

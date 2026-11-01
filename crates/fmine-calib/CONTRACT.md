@@ -100,7 +100,8 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   integrated from the definition (`scripts/oracle/score_known_answers.py`), not taken from the closed form.
 - BD-049: `apply_calibration_gate` per flag (only Overconfident and Biased mark a failure; every flag but Calibrated
   drops `ModelledCalibrated`), and over a run of flags it only lowers: a later Calibrated flag neither clears a
-  failure nor gives the class back.
+  failure nor gives the class back. The class is in the claim's id, so the lowered claim comes from
+  `Claim::downgraded`: a new id, `supersedes` naming the old one (§8.1, BD-040); `calibration_failed` is set in place.
 - BD-343: exhaustive binary completions through 12 members verify coverage and Brier bounds; the E474 test uses
   independently captured source cells and registered hashes beside a synthetic forecast; delayed record times,
   restatement replay, source eligibility, frozen membership, interval bounds and minimum-effective-n gates have

@@ -52,7 +52,10 @@ pub struct CalibrationReport {
 /// Applies `CalibrationFlag` to a `Claim<T>`, enforcing `NL-8`: if `flag` is `Overconfident`
 /// or `Biased`, marks `calibration_failed = true`. Either way, and for `Unscored` or `Descriptive`, a `ModelledCalibrated` claim
 /// has lost its track record and becomes `ModelledUncalibrated` (`BD-049`, NL-4).
-pub fn apply_calibration_gate<T>(claim: &mut Claim<T>, flag: CalibrationFlag) {
+///
+/// The class is hashed into the claim's id, so the lowered claim is a new one that supersedes the old
+/// (`Claim::downgraded`, §8.1); `calibration_failed` is outside the id and is set in place.
+pub fn apply_calibration_gate<T: Clone>(claim: &mut Claim<T>, flag: CalibrationFlag) {
     if flag == CalibrationFlag::Calibrated {
         return;
     }
@@ -61,7 +64,7 @@ pub fn apply_calibration_gate<T>(claim: &mut Claim<T>, flag: CalibrationFlag) {
         CalibrationFlag::Overconfident | CalibrationFlag::Biased
     );
     if claim.evidence == EvidenceClass::ModelledCalibrated {
-        claim.evidence = EvidenceClass::ModelledUncalibrated;
+        *claim = claim.downgraded(EvidenceClass::ModelledUncalibrated);
     }
 }
 
@@ -890,6 +893,10 @@ mod tests {
         apply_calibration_gate(&mut claim, CalibrationFlag::Biased);
         assert!(claim.calibration_failed);
         assert_eq!(claim.evidence, EvidenceClass::ModelledUncalibrated);
+        // The lowered class is a new claim that supersedes the old one (§8.1), and its id names its body.
+        assert_eq!(claim.supersedes, Some(unscored.claim_id));
+        assert_ne!(claim.claim_id, unscored.claim_id);
+        assert_eq!(claim.check_id(), Ok(()));
         assert_eq!(
             claim.color().map(|_| ()).map_err(|e| e.code),
             Err("FMINE-REF-205")
