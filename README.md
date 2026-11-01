@@ -142,12 +142,17 @@ certificate, or supply explicit definitions for tables transcribed from register
 cargo run -p fmine-cli -- check tables --synthetic --format markdown
 cargo run -p fmine-cli -- check tables --issuer barrick --through 2026Q2 --json
 cargo run -p fmine-cli -- check tables --issuer demo --definitions local/reserve_tables.toml --format markdown
+cargo run -p fmine-cli -- check tables --issuer demo --definitions local/reserve_tables.toml --as-of 2025-03-01 --json
 ```
 
 The definitions mode reads only its named documents and quantities. Each document must be registered under
 the selected issuer and match its registered SHA-256 and size, even when no reading has yet been entered.
 Values come from the existing two-reader transcription registry. Definitions contain membership and rules;
-they contain no source values. This invented example declares closing reserves as opening reserves plus a
+they contain no source values. Optional `--as-of YYYY-MM-DD` requires every declared document's registered
+publication date to be on or before the cut. An unavailable document refuses the run; it does not disappear
+from the declared population. Without the option, inspection is retrospective. JSON retains the cut, checked
+document hashes and publication-date evidence; these dates do not authenticate an external timestamp or
+prove when a transcription was entered. This invented example declares closing reserves as opening reserves plus a
 signed net change minus a positively printed depletion:
 
 ```toml
@@ -370,6 +375,9 @@ completed arithmetic comparison; `refused` with its reason when evidence or assu
 and Markdown retain exact results, input bounds, citations and source hashes. A conflict remains a finding
 with exit zero. Missing/altered document bytes and disagreeing readers retain the command's typed refusal.
 The result reproduces declared assumptions; it does not choose an operating cutoff or classify a reserve.
+The existing seven `assure public` reference calculations remain explicitly `source_verified:false` until
+their real documents and agreed readings are supplied. This command does not establish physical truth from
+arithmetic agreement.
 
 ### Check cited numbers in a draft
 

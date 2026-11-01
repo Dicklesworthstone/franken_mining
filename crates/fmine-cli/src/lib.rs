@@ -73,6 +73,8 @@ pub enum CliCommand {
         through: Option<String>,
         /// A strict identity registry selects only its cited PDF documents and quantities.
         definitions: Option<PathBuf>,
+        /// Every declared PDF must have been publicly available by this date; no members are dropped.
+        as_of: Option<String>,
     },
     /// Necessary conditions for completing cited annual guidance under historical sales persistence (BD-342).
     GuidanceCompletion {
@@ -911,11 +913,11 @@ pub fn parse_args(
     }
     if !matches!(
         positional[0].as_str(),
-        "guidance" | "forecast" | "track-record" | "lint"
+        "guidance" | "forecast" | "track-record" | "lint" | "check"
     ) && as_of.is_some()
     {
         return Err(
-            "--as-of requires 'guidance completion', 'track-record', 'forecast assess' or 'lint'"
+            "--as-of requires 'guidance completion', 'track-record', 'forecast assess', 'lint' or PDF 'check tables'"
                 .to_string(),
         );
     }
@@ -940,6 +942,11 @@ pub fn parse_args(
         "check" => {
             if positional.get(1).map(String::as_str) != Some("tables") {
                 return Err("expected 'fmine check tables'".to_string());
+            }
+            if let Some(cut) = &as_of
+                && (definitions.is_none() || !fmine_registry::sources::is_date(cut))
+            {
+                return Err("check tables --as-of requires --definitions and YYYY-MM-DD".into());
             }
             if synthetic {
                 if issuer.is_some() || through.is_some() || definitions.is_some() {
@@ -966,6 +973,7 @@ pub fn parse_args(
                 issuer,
                 through,
                 definitions,
+                as_of,
             }
         }
         "assure" => {
@@ -1527,11 +1535,13 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             issuer,
             through,
             definitions,
+            as_of,
         } => tables::execute(
             workspace_root,
             issuer.as_deref(),
             through.as_deref(),
             definitions.as_deref(),
+            as_of.as_deref(),
         ),
         CliCommand::AssurePublic { issuer, through } => {
             if !is_issuer_name(issuer) || !registry_path(workspace_root, issuer).is_file() {
@@ -1875,7 +1885,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "assure challenges --issuer <issuer> [--through YYYYQn]",
                 "assure challenges --synthetic",
                 "check tables --issuer <issuer> [--through YYYYQn]",
-                "check tables --issuer <issuer> --definitions <path>",
+                "check tables --issuer <issuer> --definitions <path> [--as-of YYYY-MM-DD]",
                 "check tables --synthetic",
                 "assure issue (--issuer <issuer> [--through YYYYQn] | --synthetic) --output <path> --journal <path> --expected-head <hex> --key <path> --role <generic-role> --purpose <text> --now <UTC> --uncertainty-ns <n>",
                 "reliance init --journal <path> --key <path> --now <UTC> --uncertainty-ns <n> --max-age-ns <n> --max-skew-ns <n>",

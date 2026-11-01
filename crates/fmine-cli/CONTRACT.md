@@ -744,6 +744,14 @@ None: every failure is a usage error or a typed refusal.
   `reproduced`, `within_input_rounding` and `conflict` from `refused` inputs. Markdown renders the same evidence,
   exact results and bounds. Arithmetic conflicts are inspection findings with exit zero; source failures keep
   their typed refusals. This does not select an operating cutoff or classify a resource or reserve.
+  `--as-of YYYY-MM-DD` is optional only with `--issuer` and `--definitions`. Every declared document must
+  have a registered publication date at or before that cut; a later document refuses the command rather
+  than silently reducing the declared population. Default inspection remains retrospective. The outer
+  digest binds the selected cut, verified-document inventory and publication-date evidence as well as the
+  arithmetic reports. These are current registered metadata, not external time proofs or a reconstruction
+  of historical transcription entry dates. Pending second readings remain visible and leave their cases
+  refused; source-byte failures and reader disagreements retain the existing command-level refusals.
+  The seven reference-only `assure public` cases are not promoted to source-verified evidence.
 - DESIGN (BD-341): `track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]` is a read-only
   adapter over agreed PDF transcriptions, canonical annual Mine Stats Claims and `fmine-calib::guidance_scores`.
   `--synthetic` uses invented inputs through the same adapter. JSON is the default (`--json` is an explicit

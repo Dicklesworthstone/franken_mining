@@ -13,6 +13,7 @@ use fmine_public::sources::{IssuerProfile, load_issuer_profile, transcriptions_p
 use fmine_public::transcribe::{check_docs, load_transcription_quantities_as_of};
 use fmine_public::{PublicAssuranceReport, run_public_assurance, run_synthetic_assurance};
 use fmine_registry::metrics::MetricRegistry;
+use fmine_registry::sources::is_date;
 use fmine_registry::table_identities::parse_table_identities;
 
 use crate::guidance::{number, text};
@@ -20,7 +21,8 @@ use crate::{Envelope, NextAction, escape_json};
 
 const NO_CLAIM: &str = "Checks arithmetic under explicitly declared identities, membership and rounding rules. \
     Source values remain issuer assertions. A conflict does not select a corrected value or establish physical \
-    truth, a reserve classification, regulatory compliance or issuer affiliation.";
+    truth, a reserve classification, regulatory compliance or issuer affiliation. An evidence cut uses registered \
+    publication dates, not independently authenticated publication timestamps or historical transcription records.";
 
 fn js(value: &str) -> String {
     format!("\"{}\"", escape_json(value))
@@ -38,7 +40,24 @@ pub(super) fn execute(
     issuer: Option<&str>,
     through: Option<&str>,
     definitions: Option<&Path>,
+    as_of: Option<&str>,
 ) -> Envelope {
+    if as_of.is_some() && (definitions.is_none() || issuer.is_none()) {
+        return Envelope::usage_error(
+            "check tables",
+            "--as-of requires --issuer and --definitions",
+        );
+    }
+    if as_of.is_some_and(|cut| !is_date(cut)) {
+        return Envelope::refused(
+            "check tables",
+            Refusal::new(
+                RefusalCode::UndeclaredUnitBasisOrTz107,
+                "table evidence cut needs a valid YYYY-MM-DD date",
+            ),
+            actions(),
+        );
+    }
     let result = match issuer {
         Some(issuer) => load_issuer_profile(root, issuer).and_then(|profile| {
             if let Some(path) = definitions {
@@ -48,7 +67,7 @@ pub(super) fn execute(
                         "PDF definitions and workbook --through cannot be combined",
                     ));
                 }
-                document_tables(root, &profile, path)
+                document_tables(root, &profile, path, as_of)
             } else {
                 let profile = match through {
                     Some(bound) => profile.through(bound)?,
@@ -67,7 +86,12 @@ pub(super) fn execute(
     result.unwrap_or_else(|r| Envelope::refused("check tables", r, actions()))
 }
 
-fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<Envelope, Refusal> {
+fn document_tables(
+    root: &Path,
+    profile: &IssuerProfile,
+    path: &Path,
+    as_of: Option<&str>,
+) -> Result<Envelope, Refusal> {
     let path = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -95,18 +119,40 @@ fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<
 
     // Verify even a declared document with no transcribed rows: an absent member must not hide absent bytes.
     let quantities = definitions.quantities_by_document();
-    let documents: Vec<_> = profile
+    let mut documents: Vec<_> = profile
         .documents
         .iter()
         .filter(|d| quantities.contains_key(d.file.as_str()))
         .collect();
-    check_docs(&documents, root)?;
+    documents.sort_by(|a, b| a.file.cmp(&b.file));
+    if let Some(cut) = as_of {
+        let future: Vec<_> = documents
+            .iter()
+            .filter(|d| d.published_at.as_str() > cut)
+            .map(|d| format!("{} (published {})", d.file, d.published_at))
+            .collect();
+        if !future.is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::NotObservable202,
+                format!(
+                    "declared documents unavailable at {cut}: {}",
+                    future.join(", ")
+                ),
+            ));
+        }
+    }
+    let checked = check_docs(&documents, root)?;
     let mut accepted = Vec::new();
     let mut pending = Vec::new();
     for (doc, keys) in &quantities {
-        // This is retrospective inspection of named documents, not an inferred information cut.
-        let Some(report) =
-            load_transcription_quantities_as_of(profile, root, "9999-12-31", keys, Some(doc))?
+        // With no explicit cut, inspect the currently registered named documents retrospectively.
+        let Some(report) = load_transcription_quantities_as_of(
+            profile,
+            root,
+            as_of.unwrap_or("9999-12-31"),
+            keys,
+            Some(doc),
+        )?
         else {
             return Err(Refusal::new(
                 RefusalCode::InputMissingOrUnreadable506,
@@ -145,6 +191,16 @@ fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<
     let report =
         roll_forward::assess_with_metrics(&definitions, &accepted, &profile.documents, &metrics);
     let reserves = fmine_metrics::reserves::assess(&definitions, &accepted, &profile.documents);
+    let checked_json = checked
+        .iter()
+        .map(|d| {
+            format!(
+                "{{\"file\":{},\"kind\":{},\"published_at\":{},\"published_at_basis\":{},\"sha256\":{}}}",
+                js(&d.file), js(&d.kind), js(&d.published_at), js(&d.published_at_basis), js(&d.sha256),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     let pending_json = pending
         .iter()
         .map(|(at, reader)| {
@@ -158,8 +214,11 @@ fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<
         .join(",");
     let body = format!(
         "{{\"schema\":\"fmine.table-check.v1\",\"mode\":\"declared_pdf\",\"lane\":\"public\",\"gate_eligible\":false,\
-        \"issuer\":{},\"definitions_sha256\":{},\"checks\":{},\"issuer_reserves\":{},\"pending_readings\":[{}],\"no_claim\":{}}}",
+        \"issuer\":{},\"as_of\":{},\"source_bytes_verified\":true,\"checked_documents\":[{}],\
+        \"definitions_sha256\":{},\"checks\":{},\"issuer_reserves\":{},\"pending_readings\":[{}],\"no_claim\":{}}}",
         js(&profile.issuer),
+        as_of.map_or_else(|| "null".into(), js),
+        checked_json,
         js(&sha256(&bytes).to_hex()),
         report.to_json(),
         reserves.to_json(),
@@ -171,7 +230,8 @@ fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<
     let mut envelope = Envelope::ok("check tables", payload, actions());
     envelope.no_claim = Some(NO_CLAIM);
     envelope.rendered_markdown = Some(
-        document_markdown(&profile.issuer, &report, &pending, &digest) + &reserves.to_markdown(),
+        document_markdown(&profile.issuer, &report, &pending, &digest, as_of)
+            + &reserves.to_markdown(),
     );
     Ok(envelope)
 }
@@ -200,11 +260,25 @@ fn document_markdown(
     report: &TableReport,
     pending: &[(fmine_registry::transcriptions::Locator, String)],
     digest: &str,
+    as_of: Option<&str>,
 ) -> String {
     let mut out = format!(
         "# Table checks: {}\n\n{}\n\nReport digest: `{digest}`\n\n",
         text(issuer),
         NO_CLAIM
+    );
+    let cut = as_of.map_or_else(
+        || "Retrospective inspection; no historical evidence cut asserted.".to_string(),
+        |date| {
+            format!(
+                "Evidence cut: {} (registered publication dates, inclusive).",
+                text(date)
+            )
+        },
+    );
+    let _ = writeln!(
+        out,
+        "{cut} All declared source documents matched their registered byte lengths and SHA-256 hashes.\n"
     );
     out.push_str("## Declared identities\n\n| Identity / document | Family / kind | Total (period) | Signed members (period, role) | Unit / basis | Construction / convention |\n|---|---|---|---|---|---|\n");
     for d in &report.definitions {
