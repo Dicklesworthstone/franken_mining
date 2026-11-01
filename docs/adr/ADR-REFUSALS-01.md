@@ -1,4 +1,4 @@
-# ADR-REFUSALS-01: Seven New Refusal Codes, Two Exit-Code Exceptions, and Call-Site Choices
+# ADR-REFUSALS-01: Proposed Refusal Codes, Two Exit-Code Exceptions, and Call-Site Choices
 
 - **Status:** Proposed (2026-10-30, `BD-328.S1`, `bd-h0q1.1`, `§8.4`, `§30.1`). It awaits the owner's decision.
   The decision id may be `decision:ADR-REFUSALS-01` or a CELL-DEC entry, as the owner prefers.
@@ -7,18 +7,19 @@
   workbook has 1,092 formula-error cells (E820). A claim built from one refused with `FMINE-REF-401`, exit 6.
   §8.4 defines 401 as "unknown reactive ground → no ANFO plan". Plan codes 204, 205 and 503 were missing from the
   registry. Unknown codes fell back to `FMINE-REF-000`.
-- **Done so far (BD-328.S2, S3):** the registry is the single source (schema 2, 32 rows).
+- **Done so far (BD-328.S2, S3; BD-344):** the registry is the single source (schema 2, 33 rows).
   `xtask gen-refusals` compiles it into a closed `RefusalCode` enum. `Refusal::new` takes only that enum, so an
   unregistered code does not compile. `xtask check-refusals` fails on drift between plan §8.4, registry, generated
-  catalogue and every `FMINE-REF-nnn` token in code and contracts. The 25 plan codes are `active`. The seven
+  catalogue and every `FMINE-REF-nnn` token in code and contracts. The 25 plan codes are `active`. The eight
   below are `proposed`, and the check warns on each until §8.4 lists it. Call sites already use them. This runs
   ahead of the owner's decision (S3 asked for the final numbers), and the fallback below undoes it.
 - **Decision requested:**
-  1. **Add seven codes to §8.4.** None renumbers an existing code (§0.3).
+  1. **Add eight codes to §8.4.** None renumbers an existing code (§0.3).
 
      | Code | Meaning | Exit | Used by today |
      |---|---|---|---|
      | 109 | value outside its physical domain (refuse, never clamp) | 3 | fractions and moisture, LMDI states, ledger values |
+     | 110 | complete temporal ancestry or guarded replay cannot establish the decision cut (INV-016, BD-344) | 3 | temporal graph, replay, retrospective NPV evidence and optional forecast provenance checks |
      | 206 | forecast registered after freeze or resolution (INV-008) | 3 | `ForecastLedger::register`, `record_outcome` |
      | 207 | numerical certificate failed (non-SPD, residual; §29.6) | 3 | Cholesky |
      | 208 | source cell unusable (formula error or text for a number) | 3 | `cell_to_public_claim` |

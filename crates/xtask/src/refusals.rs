@@ -1078,13 +1078,13 @@ const SPEC_506_INPUT_MISSING_OR_UNREADABLE: RefusalSpec = RefusalSpec {
     fn test_committed_registry_catalogue_and_plan_agree() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let report = check_refusals(&root).expect("check-refusals passes on the workspace");
-        assert_eq!(report.rows, 32);
+        assert_eq!(report.rows, 33);
         assert_eq!(
             (report.active, report.proposed, report.reserved),
-            (25, 7, 0)
+            (25, 8, 0)
         );
         assert_eq!(report.plan_codes, 25);
-        assert_eq!(report.warnings.len(), 7);
+        assert_eq!(report.warnings.len(), 8);
         assert!(report.tokens > 0 && report.files > 0);
     }
 }

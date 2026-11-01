@@ -27,6 +27,7 @@ version = "0.1.0"
 dependencies = [
  "fmine-core",
  "fmine-evidence",
+ "fmine-time",
 ]
 
 [[package]]
@@ -69,6 +70,7 @@ dependencies = [
  "fmine-core",
  "fmine-evidence",
  "fmine-numerics",
+ "fmine-time",
 ]
 
 [[package]]

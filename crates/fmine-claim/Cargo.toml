@@ -10,6 +10,7 @@ description = "Universal Claim<T> epistemic envelope, NL-1..NL-8 composition law
 [dependencies]
 fmine-core = { path = "../fmine-core" }
 fmine-evidence = { path = "../fmine-evidence" }
+fmine-time = { path = "../fmine-time" }
 
 [lints]
 workspace = true

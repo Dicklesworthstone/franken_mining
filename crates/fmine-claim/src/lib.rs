@@ -66,6 +66,7 @@ pub enum AdditivityClass {
     NonAdditive,
 }
 
+pub mod dag;
 mod label;
 
 pub use label::{Confidentiality, LabelError, LabelRegistry, VentureId, WallId};

@@ -3,8 +3,11 @@
 //! Determinism: DeterministicPerIsa (no cross-host digest test; plan §29.2, bd-hp2j.1).
 
 use fmine_claim::Claim;
+use fmine_claim::dag::replay::ReplayCertificate;
+use fmine_claim::dag::{CheckedCone, ConeCut, TemporalGraph};
+use fmine_core::codec::Encoder;
 use fmine_core::id::{ObjectId, PrefixKind};
-use fmine_evidence::{Color, Refusal};
+use fmine_evidence::{Color, Refusal, RefusalCode};
 use fmine_numerics::voi::{VoiProblem, VoiSummary};
 
 /// Parameter perturbation threshold that flips the optimal action (`BD-227`).
@@ -110,6 +113,72 @@ pub struct DecisionCard {
     pub color: Color,
 }
 
+/// An immutable card snapshot whose expected-NPV provenance passed the historical cut and whose output was
+/// reproduced over the filtered store (`BD-344`, `G-HELM-4`). The legacy ancillary card fields have no separate
+/// Claim provenance: replay of their bytes does not establish that their inputs were completely declared.
+///
+/// The checked card cannot be replaced or edited after validation:
+///
+/// ```compile_fail,E0616
+/// fn replace(checked: &mut fmine_decide::RetrospectiveDecisionCard, card: fmine_decide::DecisionCard) {
+///     checked.card = card;
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct RetrospectiveDecisionCard {
+    card: DecisionCard,
+    cone: CheckedCone,
+    replay: ReplayCertificate,
+}
+
+impl RetrospectiveDecisionCard {
+    /// Immutable access to the original card. Only its expected-NPV Claim has the checked temporal ancestry.
+    #[must_use]
+    pub fn card(&self) -> &DecisionCard {
+        &self.card
+    }
+
+    /// The checked cut and declared expected-NPV ancestry.
+    #[must_use]
+    pub fn cone(&self) -> &CheckedCone {
+        &self.cone
+    }
+
+    /// The output and read receipts of the full and filtered runs.
+    #[must_use]
+    pub fn replay(&self) -> &ReplayCertificate {
+        &self.replay
+    }
+
+    /// Renders the checked scope beside the ordinary card; no certificate for the whole decision is asserted.
+    #[must_use]
+    pub fn render_one_pager_markdown(&self) -> String {
+        let mut out = format!(
+            "## Historical check: expected-NPV input provenance\n\n\
+             - **Claim root**: `{}`\n\
+             - **Decision cut**: `{}` UTC nanoseconds since Unix epoch\n\
+             - **Checked ancestry**: {} objects; cone digest `{}`\n\
+             - **Full / filtered replay**: identical output and read receipts; output digest `{}`\n\n\
+             Scope: the declared ancestry of the expected-NPV Claim passed the availability and record-anchor \
+             checks. Replay covers the displayed card and its exact numeric values. Action choice, CVaR, flip \
+             margins and VOI retain their existing inputs without separate Claim provenance; this check does \
+             not establish complete historical sourcing for those fields or certify the whole decision.\n\n",
+            self.cone.root(),
+            self.cone.cut().decision_ns,
+            self.cone.nodes().len(),
+            self.cone.digest(),
+            self.replay.output_digest(),
+        );
+        out.push_str("**Record anchor used by this cone**:\n\n");
+        for (cell, sequence) in self.cone.anchor_marks() {
+            out.push_str(&format!("- `{cell}`: commit `{sequence}`\n"));
+        }
+        out.push('\n');
+        out.push_str(&self.card.render_one_pager_markdown());
+        out
+    }
+}
+
 impl DecisionCard {
     /// Constructs a validated `DecisionCard`, enforcing `INV-015` (`FMINE-REF-204` if `UU` slot is missing)
     /// and `NL-4` (`FMINE-REF-205` if `expected_npv_usd_m` has no colour to show).
@@ -144,6 +213,88 @@ impl DecisionCard {
             top_voi_items,
             color,
         })
+    }
+
+    /// Seals this card only after its actual expected-NPV root and parents match the temporal graph and the
+    /// supplied replay certificate matches this exact output, root, cut and cone. Obtain `replay` by returning
+    /// [`Self::temporal_replay_bytes`] from the generator passed to `fmine_claim::dag::replay::verify_replay`.
+    ///
+    /// Ordinary [`Self::build`] has no historical claim. This checked wrapper covers the declared expected-NPV
+    /// provenance; other legacy fields have byte replay but no independent temporal provenance.
+    pub fn build_as_of(
+        self,
+        graph: &TemporalGraph,
+        cut: &ConeCut,
+        replay: ReplayCertificate,
+    ) -> Result<RetrospectiveDecisionCard, Refusal> {
+        self.expected_npv_usd_m.check_id()?;
+        self.expected_npv_usd_m.verify_uu_slot_for_decision()?;
+        if self.color != self.expected_npv_usd_m.color()? {
+            return Err(Refusal::new(
+                RefusalCode::CalibrationRequired205,
+                "retrospective card colour differs from its expected-NPV Claim",
+            ));
+        }
+        graph
+            .verify_claim(&self.expected_npv_usd_m)
+            .map_err(|error| error.refusal())?;
+        let cone = graph
+            .check(self.expected_npv_usd_m.claim_id, cut)
+            .map_err(|error| error.refusal())?;
+        if replay.root() != cone.root()
+            || replay.cut() != cone.cut()
+            || replay.cone_digest() != cone.digest()
+            || !replay.matches_output(&self.temporal_replay_bytes())
+        {
+            return Err(Refusal::new(
+                RefusalCode::TemporalConeViolation110,
+                "replay certificate does not bind this card output, expected-NPV root, cut and checked cone",
+            ));
+        }
+        Ok(RetrospectiveDecisionCard {
+            card: self,
+            cone,
+            replay,
+        })
+    }
+
+    /// Internal replay projection, version 1: the rendered card, expected-NPV canonical Claim body and exact
+    /// bits of displayed numeric values and the VOI calculation totals. Exact bits prevent edits hidden by
+    /// Markdown's decimal formatting from
+    /// reusing a certificate. This is an in-process replay input, not a new durable card format.
+    #[must_use]
+    pub fn temporal_replay_bytes(&self) -> Vec<u8> {
+        let mut enc = Encoder::new_frame(*b"DCRP", 1);
+        enc.put_str(&self.render_one_pager_markdown());
+        enc.put_bytes(&self.expected_npv_usd_m.canonical_body());
+        enc.put_u64(self.expected_npv_usd_m.value.to_bits());
+        enc.put_u64(self.cvar95_loss_usd_m.to_bits());
+        enc.put_u64(self.flip_margins.len() as u64);
+        for margin in &self.flip_margins {
+            enc.put_u64(margin.baseline_value.to_bits());
+            enc.put_u64(margin.flip_value.to_bits());
+        }
+        enc.put_u64(self.expected_npv_usd_m.uu_terms.len() as u64);
+        for term in &self.expected_npv_usd_m.uu_terms {
+            enc.put_u64(term.downside_exposure_usd_m.to_bits());
+        }
+        enc.put_u64(self.top_voi_items.len() as u64);
+        for item in &self.top_voi_items {
+            enc.put_str(&item.description);
+            enc.put_u64(item.summary.prior_best_action as u64);
+            for value in [
+                item.cost_usd_m,
+                item.benefit_cost_ratio,
+                item.summary.prior_expected_value,
+                item.summary.perfect_info_expected_value,
+                item.summary.evpi,
+                item.summary.evsi,
+                item.summary.net_voi,
+            ] {
+                enc.put_u64(value.to_bits());
+            }
+        }
+        enc.finish()
     }
 
     /// Renders the `§9.6` `EpistemicOnePager` in canonical Markdown (`BD-054`).
@@ -209,12 +360,23 @@ impl DecisionCard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fmine_claim::dag::replay::{ReplayStore, verify_replay};
+    use fmine_claim::dag::{Availability, NodeKind, TemporalNode};
     use fmine_claim::{AdditivityClass, Confidentiality, Representation, SpatialSupport, UuTerm};
     use fmine_core::anchor::SourceAnchor;
     use fmine_evidence::color::{ColorRank, ValidityDomain};
     use fmine_evidence::{AssertionSource, EpistemicStatus, EvidenceClass, KnowledgeState, KuKind};
+    use fmine_time::{Anchor, RecordTime, TimeEvidence};
 
     fn make_npv_claim(with_uu: bool, evidence: EvidenceClass) -> Claim<f64> {
+        make_npv_claim_with_parents(with_uu, evidence, vec![])
+    }
+
+    fn make_npv_claim_with_parents(
+        with_uu: bool,
+        evidence: EvidenceClass,
+        parents: Vec<ObjectId>,
+    ) -> Claim<f64> {
         let uu = if with_uu {
             vec![UuTerm {
                 scenario_id: "UU-GEO-07".to_string(),
@@ -241,9 +403,246 @@ mod tests {
             KnowledgeState::Estimated,
             Confidentiality::internal(),
             uu,
-            vec![],
+            parents,
             vec![SourceAnchor::new("study.pdf", [0x22; 32], "Table 14-1")],
         )
+    }
+
+    fn temporal_card(parents: Vec<ObjectId>) -> DecisionCard {
+        DecisionCard::build(
+            "Synthetic retrospective input control",
+            "Collect information",
+            "Do nothing",
+            make_npv_claim_with_parents(true, EvidenceClass::ModelledCalibrated, parents),
+            40.0,
+            vec![FlipMargin::from_linear_sensitivity(
+                "head grade",
+                2.0,
+                10.0,
+                100.0,
+                "g/t",
+                "Do nothing",
+            )],
+            vec![],
+        )
+        .expect("synthetic card")
+    }
+
+    fn temporal_fixture(card: &DecisionCard) -> (TemporalGraph, ConeCut, ReplayStore) {
+        let claim = &card.expected_npv_usd_m;
+        let mut nodes = vec![TemporalNode {
+            id: claim.claim_id,
+            kind: NodeKind::Claim,
+            parents: claim.parents.clone(),
+            availability: Availability::Derived {
+                performed_at: Some(50),
+                declared_available_at: None,
+            },
+            recorded_at: Some(RecordTime::new(
+                "synthetic",
+                2,
+                50,
+                TimeEvidence::HostSynced,
+            )),
+        }];
+        for parent in &claim.parents {
+            nodes.push(TemporalNode {
+                id: *parent,
+                kind: NodeKind::Observation,
+                parents: vec![],
+                availability: Availability::Source {
+                    available_at: Some(20),
+                },
+                recorded_at: Some(RecordTime::new(
+                    "synthetic",
+                    1,
+                    20,
+                    TimeEvidence::HostSynced,
+                )),
+            });
+        }
+        let graph = TemporalGraph::new(nodes).expect("synthetic graph");
+        let cut = ConeCut {
+            decision_ns: 100,
+            anchor: Anchor::new([("synthetic", 2)]).expect("synthetic anchor"),
+        };
+        let mut store = ReplayStore::new();
+        store
+            .insert(claim.claim_id, claim.canonical_body())
+            .expect("freeze claim body");
+        (graph, cut, store)
+    }
+
+    fn temporal_replay(
+        card: &DecisionCard,
+        graph: &TemporalGraph,
+        cut: &ConeCut,
+        store: &ReplayStore,
+    ) -> ReplayCertificate {
+        let claim = &card.expected_npv_usd_m;
+        // A synthetic binding control: the stored input is checked against the test card before its output
+        // is replayed. This is not a real hindcast or evidence of model skill.
+        verify_replay(store, graph, claim.claim_id, cut, |view| {
+            assert_eq!(view.read(claim.claim_id)?, claim.canonical_body());
+            Ok(card.temporal_replay_bytes())
+        })
+        .expect("clean replay")
+    }
+
+    #[test]
+    fn retrospective_card_seals_actual_root_and_replayed_output() {
+        let parent = ObjectId::from_canonical_bytes(PrefixKind::Evidence, b"synthetic observation");
+        let card = temporal_card(vec![parent]);
+        let (graph, cut, store) = temporal_fixture(&card);
+        let replay = temporal_replay(&card, &graph, &cut, &store);
+        let checked = card
+            .clone()
+            .build_as_of(&graph, &cut, replay)
+            .expect("checked snapshot");
+        assert_eq!(checked.card(), &card);
+        assert_eq!(checked.cone().root(), card.expected_npv_usd_m.claim_id);
+        assert_eq!(checked.cone().nodes().len(), 2);
+        assert_eq!(checked.cone().available_at(&parent), Some(20));
+        assert!(
+            checked
+                .replay()
+                .matches_output(&card.temporal_replay_bytes())
+        );
+        let shown = checked.render_one_pager_markdown();
+        assert!(shown.contains("Historical check: expected-NPV input provenance"));
+        assert!(shown.contains("not establish complete historical sourcing"));
+        assert!(shown.contains("`synthetic`: commit `2`"));
+        assert!(shown.contains(&checked.cone().digest().to_string()));
+        assert!(shown.ends_with(&card.render_one_pager_markdown()));
+    }
+
+    #[test]
+    fn retrospective_card_refuses_unrelated_root_and_omitted_parents() {
+        let parent = ObjectId::from_canonical_bytes(PrefixKind::Evidence, b"synthetic observation");
+        let card = temporal_card(vec![parent]);
+        let (graph, cut, store) = temporal_fixture(&card);
+        let replay = temporal_replay(&card, &graph, &cut, &store);
+        let other = temporal_card(vec![]);
+        let (other_graph, _, _) = temporal_fixture(&other);
+        assert_eq!(
+            other
+                .build_as_of(&other_graph, &cut, replay)
+                .expect_err("different root")
+                .code,
+            "FMINE-REF-110"
+        );
+        // A graph with the correct root id but missing its declared parent is not sufficient.
+        let mut nodes: Vec<_> = graph.nodes().cloned().collect();
+        nodes
+            .iter_mut()
+            .find(|n| n.id == card.expected_npv_usd_m.claim_id)
+            .expect("root")
+            .parents
+            .clear();
+        let incomplete = TemporalGraph::new(nodes).expect("structurally valid graph");
+        let replay = temporal_replay(&card, &incomplete, &cut, &store);
+        let error = card
+            .build_as_of(&incomplete, &cut, replay)
+            .expect_err("omitted parent");
+        assert_eq!(error.code, "FMINE-REF-110");
+        assert!(error.what.contains("parent"));
+    }
+
+    #[test]
+    fn retrospective_card_refuses_late_ancestor_and_changed_cut_or_cone() {
+        let parent = ObjectId::from_canonical_bytes(PrefixKind::Evidence, b"synthetic observation");
+        let card = temporal_card(vec![parent]);
+        let (graph, cut, store) = temporal_fixture(&card);
+        let replay = temporal_replay(&card, &graph, &cut, &store);
+        for availability in [21, 101] {
+            let mut nodes: Vec<_> = graph.nodes().cloned().collect();
+            nodes
+                .iter_mut()
+                .find(|n| n.id == parent)
+                .expect("parent")
+                .availability = Availability::Source {
+                available_at: Some(availability),
+            };
+            let changed = TemporalGraph::new(nodes).expect("changed metadata graph");
+            let error = card
+                .clone()
+                .build_as_of(&changed, &cut, replay.clone())
+                .expect_err("changed cone cannot reuse the certificate");
+            assert_eq!(error.code, "FMINE-REF-110");
+            if availability > cut.decision_ns {
+                assert!(error.what.contains(&parent.to_string()));
+                assert!(error.what.contains("available 101"));
+            }
+        }
+        let earlier_cut = ConeCut {
+            decision_ns: 99,
+            anchor: cut.anchor.clone(),
+        };
+        assert_eq!(
+            card.clone()
+                .build_as_of(&graph, &earlier_cut, replay.clone())
+                .expect_err("different cut")
+                .code,
+            "FMINE-REF-110"
+        );
+        let earlier_anchor = ConeCut {
+            decision_ns: 100,
+            anchor: Anchor::new([("synthetic", 1)]).expect("earlier anchor"),
+        };
+        assert_eq!(
+            card.build_as_of(&graph, &earlier_anchor, replay)
+                .expect_err("root not recorded at this anchor")
+                .code,
+            "FMINE-REF-110"
+        );
+    }
+
+    #[test]
+    fn retrospective_card_refuses_output_or_claim_edits_after_replay() {
+        let card = temporal_card(vec![]);
+        let (graph, cut, store) = temporal_fixture(&card);
+        let replay = temporal_replay(&card, &graph, &cut, &store);
+        let mut edited = card.clone();
+        edited.expected_npv_usd_m.value += 0.000_01;
+        assert_eq!(
+            edited.render_one_pager_markdown(),
+            card.render_one_pager_markdown()
+        );
+        assert_eq!(
+            edited
+                .build_as_of(&graph, &cut, replay.clone())
+                .expect_err("changed raw value")
+                .code,
+            "FMINE-REF-110"
+        );
+        let mut edited = card;
+        edited.expected_npv_usd_m.metric_key.push_str("_edited");
+        assert_eq!(
+            edited
+                .build_as_of(&graph, &cut, replay)
+                .expect_err("changed Claim body")
+                .code,
+            "FMINE-REF-507"
+        );
+    }
+
+    #[test]
+    fn temporal_replay_projection_binds_subdisplay_numeric_edits() {
+        let original = temporal_card(vec![]);
+        let shown = original.render_one_pager_markdown();
+        let bytes = original.temporal_replay_bytes();
+        for field in 0..5 {
+            let mut edited = original.clone();
+            match field {
+                0 => edited.expected_npv_usd_m.value += 0.000_01,
+                1 => edited.cvar95_loss_usd_m += 0.000_01,
+                2 => edited.flip_margins[0].baseline_value += 0.000_01,
+                3 => edited.flip_margins[0].flip_value += 0.000_01,
+                _ => edited.expected_npv_usd_m.uu_terms[0].downside_exposure_usd_m += 0.000_01,
+            }
+            assert_eq!(shown, edited.render_one_pager_markdown(), "field {field}");
+            assert_ne!(bytes, edited.temporal_replay_bytes(), "field {field}");
+        }
     }
 
     #[test]

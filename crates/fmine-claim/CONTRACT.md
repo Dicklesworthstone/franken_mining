@@ -45,6 +45,21 @@ A claim carries `evidence`, `epistemic` and `state` separately. Its colour is co
 constructor takes one and its basis is private (`compile_fail` doctest on `Claim`). `with_regime` names a claim's anchor,
 which counts only for a class `project_color` lets stand on one, so it cannot raise a colour.
 
+DESIGN (BD-344, INV-016): `dag::TemporalGraph` seals provenance metadata for observations, interpretations,
+fitted parameters, correlation cards, exclusion acts, decks, registry rows, priors, Claims, forecasts, decisions
+and recipes. Derived availability is max(all input availability, performed time), optionally delayed by an
+explicit declaration; a declaration before that maximum refuses. Every ancestor needs availability and record
+evidence. Admission uses the decision cut and the anchor's cell/sequence marks; wall clocks never order cells.
+Iterative traversal checks only the root's ancestry, detects missing nodes and cycles, and finds frontier
+violators with no violating ancestors. Each has a deterministic shortest root-to-node path. The cone digest
+binds rules, root, cut, relevant anchor marks and all checked metadata; unrelated store entries do not change it.
+
+DESIGN (BD-344): `dag::replay` freezes canonical object bytes under their content-derived IDs and runs the same
+generator against full and guarded views. The guarded view checks a read's complete ancestry. Identical output
+bytes, identical ordered read receipts and membership of every read in the declared root ancestry are required.
+A denied read stays a failure even if the generator swallows its error. Certificates have private fields and
+bind the checked cone, exact output and receipts. This is a pure in-memory replay seam, not an authority ledger.
+
 ## 3. Authority, Epistemics & Representation
 A decision-facing claim whose status is not `KnownKnown` requires a non-empty `uu_terms` (`G-UU`, `FMINE-REF-204`). Every claim enforces `Confidentiality` isolation (`INV-007`, `FMINE-REF-301` and `FMINE-REF-302`).
 
@@ -55,6 +70,10 @@ A decision-facing claim whose status is not `KnownKnown` requires a non-empty `u
   `VentureId`, `WallId`, `LabelError`
 - `compose_binary`, which takes the `IntervalOp` its colour composes under
 - `ClaimDag` (`insert`, which refuses as `check_id` does; `guard_disclosure_export`), `DagNode`
+- `dag::{TemporalGraph, TemporalNode, NodeKind, Availability, ConeCut, CheckedCone, ConeError, ConeViolation}`;
+  `TemporalGraph::check` and `verify_claim` bind the actual Claim's ID, kind and immediate parent set.
+- `dag::replay::{ReplayStore, ReplayView, ReplayCertificate, ReplayError, verify_replay}`; store insertion
+  checks canonical IDs, and certificates expose immutable output and read receipts.
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-102` (support mismatch, `verify_support_compatible`, `G-GEO-1`), exit 3
@@ -78,6 +97,9 @@ A decision-facing claim whose status is not `KnownKnown` requires a non-empty `u
 - `FMINE-REF-507` (frozen record mutation, proposed, `Claim::check_id`, `ClaimDag::insert` and
   `ClaimDag::guard_disclosure_export`), exit 6: the claim's id is not the id of its current body. Insertion also
   refuses a self-supersession because a correction must have a distinct identity.
+- `FMINE-REF-110` (temporal cone or replay, proposed under ADR-REFUSALS-01), exit 3: inadmissible or incomplete
+  ancestry, backdated availability, a cycle, an undeclared read, a denied read, or differing replay outputs.
+  Replay-store replacement or a payload whose content-derived ID differs refuses with `FMINE-REF-507`.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-CLAIM-1`: `compose_binary` keeps the placeholder (`None`), takes the `meet` of classes and the `and` of states
@@ -109,3 +131,10 @@ Adding `IntensiveMassWeighted` claims without mass weights or combining mismatch
 
 ## 10. Non-Goals & Scope Boundary
 Does not perform workbook I/O (`fmine-io`) or CLI formatting (`fmine-cli`).
+
+Temporal metadata is supplied evidence, not an independently authenticated time or ledger proof. The graph
+cannot prove that an engine declared every input; the replay seam checks only reads mediated by `ReplayView`.
+Callers must rebuild outputs with the same seeds and avoid external captures, I/O and caches in generators.
+Canonical-key verification binds exactly the canonical bytes supplied, including the existing Claim value-tag
+limitation above. No durable L0 ledger, cross-host replay gate or complete retrospective DecisionCard is asserted
+by this slice. Pure integer/digest operations introduce no floating-point time comparison.

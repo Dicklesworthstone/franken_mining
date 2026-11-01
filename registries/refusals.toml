@@ -110,6 +110,16 @@ what = "Value outside its physical domain (e.g. a fraction outside [0, 1], a non
 fix = "Correct the source value or its unit; the value is refused as given, never adjusted."
 
 [[refusal]]
+code = "FMINE-REF-110"
+family = "1xx"
+key = "temporal_cone_violation"
+exit_code = 3
+status = "proposed"
+plan_text = "an ancestor was unavailable or unrecorded at the decision cut, or its temporal provenance cannot be verified"
+what = "The complete evidence ancestry or its replay does not establish an as-of-decision result (INV-016, BD-344)"
+fix = "Inspect the reported dependency paths; supply missing time evidence or rebuild using only inputs available and recorded at the decision cut."
+
+[[refusal]]
 code = "FMINE-REF-201"
 family = "2xx"
 key = "no_claim_in_domain"

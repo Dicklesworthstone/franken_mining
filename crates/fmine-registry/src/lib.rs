@@ -186,8 +186,8 @@ mod tests {
         let catalog = RegistryCatalog::load_from_root(&root).expect("registries must validate");
         assert!(catalog.unit_symbols.len() >= 10);
         assert!(catalog.crs_codes.iter().any(|c| c == "EPSG:32641"));
-        // 25 plan §8.4 codes and 7 proposed (BD-328), one row each, in the compiled catalogue's order.
-        assert_eq!(catalog.refusal_codes.len(), 32);
+        // 25 plan §8.4 codes and 8 proposed (BD-328, BD-344), one row each, in catalogue order.
+        assert_eq!(catalog.refusal_codes.len(), 33);
         let compiled: Vec<&str> = CATALOG.iter().map(|s| s.code).collect();
         assert_eq!(catalog.refusal_codes, compiled);
         assert!(catalog.verb_names.iter().any(|v| v == "assure public"));
