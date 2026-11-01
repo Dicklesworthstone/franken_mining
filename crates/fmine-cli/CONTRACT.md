@@ -231,6 +231,13 @@ after artifact creation leaves issuance durability unconfirmed: retain the file 
   report. Successful payloads bind the bundle's SHA-256 and each cone digest. Without a bundle the status
   is `not_checked`; the CLI always reports generator replay as `not_performed`. Supplied metadata remains
   unauthenticated evidence. The pure replay API is a separate caller-mediated operation.
+- The retrospective `track-record` row additionally carries canonical guidance, outcome interpretation and
+  derived-score Claims through `fmine-calib::guidance_scores::claims`. The interpreted outcome is parented to
+  its original source Claim. JSON retains IDs, canonical body bytes, value tags, evidence/knowledge, parents
+  and anchors; Markdown lists the same IDs. Unresolved members still carry guidance. An Unknown synthetic
+  source can support only the explicitly labelled arithmetic illustration, with no score Claim and a visible
+  typed refusal; no source state is promoted. Real Claim admission failures retain their typed refusal.
+  Existing per-site cross-year descriptive summary populations remain unchanged.
 - DESIGN (BD-341): `track-record --as-of` delegates source selection to `fmine_public::guidance::track_record` and
   all scoring to `fmine-calib`. The explicit calendar-date cut prevents an implicit wall-clock information
   set. The payload digest binds guidance, source Claims, selection and results; the envelope's authority

@@ -201,6 +201,13 @@ Production basis is `100%` or `attributable:n/d`. Cost basis also declares its d
 explicit. Unknown guidance quantities, missing agreed readings and changed source bytes refuse. The synthetic
 command is an invented known-answer demonstration through the same binding and scoring code.
 
+JSON rows also carry canonical guidance, interpreted-outcome and derived-score Claims, including their
+content-addressed IDs, exact value tags, canonical body bytes, parent links, evidence states and citations.
+The interpreted outcome points to the original workbook Claim; the score uses the shared Claim-scoring
+kernel and retains both inputs. Markdown lists the same Claim IDs. Missing outcomes retain their guidance
+Claim. Synthetic arithmetic does not promote an Unknown source: a refused score Claim remains explicit.
+
+
 For AISC, the report can show a cited price sensitivity beside the unconditional score:
 `p = royalty * (1 - assumed_price / realized_price)`. It requires every declared original quarter from
 2024Q1 through 2026Q2 (or the earlier explicit `--through` bound) to admit a common royalty/price coefficient.

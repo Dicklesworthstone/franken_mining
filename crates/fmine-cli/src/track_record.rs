@@ -276,6 +276,40 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
             );
         }
     }
+    out.push_str("\n## Canonical Claim links\n\nThe interpreted outcome retains its original source Claim as a parent. An eligible score Claim cites both the guidance and the interpreted outcome.\n\n| Site, metric and year | Role | Claim or admission result |\n|---|---|---|\n");
+    for row in &report.rows {
+        let label = format!(
+            "{} / {} / {} / vintage {}",
+            text(&row.site),
+            text(&row.metric),
+            row.year,
+            row.vintage
+        );
+        let _ = writeln!(
+            out,
+            "| {label} | Guidance | `{}` |",
+            row.claims.guidance.claim_id
+        );
+        if let Some(outcome) = &row.claims.outcome {
+            let _ = writeln!(
+                out,
+                "| {label} | Interpreted outcome | `{}` |",
+                outcome.claim_id
+            );
+        }
+        match &row.claims.score {
+            Some(score) => {
+                let _ = writeln!(out, "| {label} | Derived score | `{}` |", score.claim_id);
+            }
+            None => {
+                let reason = row.claims.score_refusal.as_ref().map_or_else(
+                    || "No admissible scored outcome".into(),
+                    |refusal| format!("{}: {}", text(refusal.code), text(&refusal.what)),
+                );
+                let _ = writeln!(out, "| {label} | Derived score | {reason} |");
+            }
+        }
+    }
     out.push_str("\n## Source citations\n\n| Role | Locator | SHA-256 |\n|---|---|---|\n");
     for row in &report.rows {
         let _ = writeln!(
@@ -413,6 +447,8 @@ mod tests {
         assert!(rendered.contains("Unresolved"));
         assert!(rendered.contains("1.5"));
         assert!(rendered.contains("Source citations"));
+        assert!(rendered.contains("Canonical Claim links"));
+        assert!(rendered.contains(&report.rows[0].claims.guidance.claim_id.to_string()));
         assert!(rendered.contains(&report.rows[0].guidance.doc_sha256));
         assert!(!rendered.contains("<script>"));
         assert!(!rendered.contains("\n# forged"));
