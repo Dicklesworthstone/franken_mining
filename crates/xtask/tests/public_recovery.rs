@@ -521,9 +521,13 @@ const INSPECTION_ISSUER: &str = "invented_recovery";
 /// marks workbook values Unknown, so it cannot exercise positive operating-model projection admission.
 fn inspection_workspace() -> PathBuf {
     use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
+    // The clock alone is not unique: macOS reports it in microseconds, so two tests starting together shared a
+    // root, and one test's tampered document reached the other.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(
-        "fmine-recovery-inspection-{}-{}",
+        "fmine-recovery-inspection-{}-{}-{}",
         std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("test clock")

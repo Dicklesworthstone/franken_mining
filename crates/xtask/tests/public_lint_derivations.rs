@@ -956,7 +956,9 @@ fn complete_half_and_year_sums_keep_exact_enclosures_and_canonical_parent_chains
         let encoded = string_field(derived, "canonical_body_hex");
         let bytes: Vec<_> = encoded
             .as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
             .collect();
         assert_eq!(
