@@ -374,6 +374,12 @@ Results appear under `payload.checks.cutoffs.rows`: `reproduced`, `within_input_
 completed arithmetic comparison; `refused` with its reason when evidence or assumptions are unusable. JSON
 and Markdown retain exact results, input bounds, citations and source hashes. A conflict remains a finding
 with exit zero. Missing/altered document bytes and disagreeing readers retain the command's typed refusal.
+Each successful case also carries `claims.inputs` and `claims.derived`. The derived Claim names every input
+Claim as a parent; the JSON receipts include canonical bodies, value tags and source anchors. Original
+tokens, precision, reader identities and declared semantics participate in those identities even when two
+inputs have the same numerical value. The public Rust API `SourceRow::check_claims` reconstructs the complete
+typed Claim chain, detecting changed values, ancestry or envelope fields. These Claims remain issuer
+assertions. Refused cases retain available evidence and emit `claims: null`.
 The result reproduces declared assumptions; it does not choose an operating cutoff or classify a reserve.
 The existing seven `assure public` reference calculations remain explicitly `source_verified:false` until
 their real documents and agreed readings are supplied. This command does not establish physical truth from

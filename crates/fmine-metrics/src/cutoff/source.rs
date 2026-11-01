@@ -17,6 +17,9 @@ use fmine_units::ExactQty;
 use super::{Corner, CutoffCase, CutoffReport, GradeUnit, Printed, Recovery, reproduce};
 use crate::roll_forward::{SourceCell, accepted_json, bind_reading, canonical_readings, js};
 
+mod claims;
+pub use claims::{CutoffClaims, InputValue};
+
 pub const NO_CLAIM: &str = "Arithmetic reproduction of declared technical-report assumptions, not an optimal operating cutoff, a resource or reserve classification, or evidence that the assumptions are physically true. Source bytes and complete independent reader agreement are authenticated by the caller. Rounded-input bounds are arithmetic enclosures, not probability intervals.";
 pub const ROUNDING_RULE: &str = "closed half-last-place input boxes; exact stated gold-price parameter; half-up published cutoff";
 
@@ -131,7 +134,7 @@ fn bind(
     declaration: &CutoffDeclaration,
     evidence: &[Accepted],
     documents: &[DocumentRow],
-) -> Result<CutoffReport, String> {
+) -> Result<(CutoffReport, Vec<(InputRole, SourceCell)>), String> {
     declaration.validate(documents).map_err(|e| e.to_string())?;
     let [document] = documents else {
         return Err("cutoff needs exactly one registered source document".into());
@@ -209,7 +212,7 @@ fn bind(
         },
     };
     domain(&case)?;
-    reproduce(&case).map_err(|e| e.to_string())
+    Ok((reproduce(&case).map_err(|e| e.to_string())?, sources))
 }
 
 /// Every declared cutoff stays in the population, including malformed or unavailable source inputs.
@@ -246,7 +249,7 @@ pub fn assess(
         {
             Err("cutoff id is ambiguous".into())
         } else {
-            bind(&declaration, &evidence, &documents)
+            bind(&declaration, &evidence, &documents).map(|(report, _)| report)
         };
         rows.push(SourceRow {
             declaration,
@@ -341,15 +344,17 @@ impl SourceReport {
 
     fn body(&self) -> String {
         let rows = self.rows.iter().map(|row| {
-            let rendered = row.result.as_ref().map_err(Clone::clone).and_then(result_json);
-            let (status, result, refusal) = match (&row.result, rendered) {
-                (Ok(report), Ok(json)) => (report.state.as_str(), json, "null".into()),
-                (_, Err(error)) => ("refused", "null".into(), js(&error)),
-                (Err(error), _) => ("refused", "null".into(), js(error)),
+            let rendered = row.claims().and_then(|claims| {
+                Ok((result_json(&claims.derived.value)?, claims.to_json()?))
+            });
+            let (status, result, claims, refusal) = match (&row.result, rendered) {
+                (Ok(report), Ok((json, claims))) => (report.state.as_str(), json, claims, "null".into()),
+                (_, Err(error)) => ("refused", "null".into(), "null".into(), js(&error)),
+                (Err(error), _) => ("refused", "null".into(), "null".into(), js(error)),
             };
             let documents = row.documents.iter().map(document_json).collect::<Vec<_>>().join(",");
             let evidence = row.evidence.iter().map(accepted_json).collect::<Vec<_>>().join(",");
-            format!("{{\"id\":{},\"declaration\":{},\"documents\":[{documents}],\"evidence\":[{evidence}],\"status\":{},\"result\":{result},\"refusal\":{refusal}}}",
+            format!("{{\"id\":{},\"declaration\":{},\"documents\":[{documents}],\"evidence\":[{evidence}],\"status\":{},\"result\":{result},\"refusal\":{refusal},\"claims\":{claims}}}",
                 js(&row.declaration.id), declaration_json(&row.declaration), js(status))
         }).collect::<Vec<_>>().join(",");
         format!(
@@ -401,8 +406,9 @@ impl SourceReport {
                 text(&d.basis),
                 text(&d.price_basis)
             );
-            match &row.result {
-                Ok(report) => {
+            match row.claims() {
+                Ok(claims) => {
+                    let report = &claims.derived.value;
                     let _ = writeln!(
                         out,
                         "{}: published {}/{} {}; computed {}/{}; exact input-rounding enclosure [{}/{}, {}/{}].\n",
@@ -417,9 +423,24 @@ impl SourceReport {
                         report.high.num(),
                         report.high.den()
                     );
+                    let _ = writeln!(
+                        out,
+                        "Derived Claim `{}`; issuer assertion; deterministic arithmetic.\n",
+                        claims.derived.claim_id
+                    );
+                    for input in &claims.inputs {
+                        let _ = writeln!(
+                            out,
+                            "- Input Claim `{}`: {} / {} (issuer assertion).",
+                            input.claim_id,
+                            input.value.role.as_str(),
+                            text(&input.value.quantity)
+                        );
+                    }
+                    out.push('\n');
                 }
                 Err(reason) => {
-                    let _ = writeln!(out, "Refused: {}\n", text(reason));
+                    let _ = writeln!(out, "Refused: {}\n", text(&reason));
                 }
             }
             for document in &row.documents {
@@ -798,5 +819,115 @@ mod tests {
             changed.rows[0].evidence.len(),
             before.rows[0].evidence.len()
         );
+    }
+
+    #[test]
+    fn canonical_claims_preserve_issuer_evidence_and_complete_ancestry() {
+        use fmine_claim::{AdditivityClass, Representation};
+        use fmine_evidence::EvidenceClass;
+        let mut f = fixture(RecoveryModel::TcmOverGold);
+        let report = f.report();
+        let row = &report.rows[0];
+        let claims = row.claims().unwrap();
+        assert_eq!(claims.inputs.len(), f.readings.len());
+        let mut parents = Vec::new();
+        let mut anchors = Vec::new();
+        for input in &claims.inputs {
+            input.check_id().unwrap();
+            assert_eq!(input.evidence, EvidenceClass::ISSUER);
+            assert_eq!(input.representation, Representation::Deterministic);
+            assert_eq!(input.additivity, AdditivityClass::NonAdditive);
+            assert!(input.parents.is_empty());
+            assert!(input.color().is_err());
+            parents.push(input.claim_id);
+            anchors.extend(input.anchors.clone());
+        }
+        parents.sort();
+        anchors.sort();
+        anchors.dedup();
+        assert_eq!(claims.derived.parents, parents);
+        assert_eq!(claims.derived.anchors, anchors);
+        assert_eq!(claims.derived.evidence, EvidenceClass::ISSUER);
+        assert_eq!(claims.derived.value, *row.result.as_ref().unwrap());
+        assert!(claims.derived.color().is_err());
+        claims.derived.check_id().unwrap();
+        row.check_claims(&claims).unwrap();
+        assert!(
+            report
+                .to_json()
+                .contains(&claims.derived.claim_id.to_string())
+        );
+        assert!(
+            report
+                .to_markdown()
+                .contains(&claims.derived.claim_id.to_string())
+        );
+        f.declarations[0].inputs.reverse();
+        f.readings.reverse();
+        for reading in &mut f.readings {
+            reading.readers.reverse();
+        }
+        assert_eq!(claims, f.report().rows[0].claims().unwrap());
+    }
+
+    #[test]
+    fn claim_identity_binds_source_precision_metadata_and_declared_semantics() {
+        let f = fixture(RecoveryModel::ConstantPercent);
+        let before = f.report().rows[0].claims().unwrap();
+        for mutation in 0..5 {
+            let mut f = fixture(RecoveryModel::ConstantPercent);
+            match mutation {
+                // Gold price is exact in this model; changing only its original printed precision
+                // leaves every arithmetic answer unchanged but must change the source ancestry.
+                0 => f.set(InputRole::GoldPrice, "3110.347680"),
+                1 => f.documents[0].url_basis = "different provenance statement".into(),
+                2 => f.documents[0].bytes += 1,
+                3 => f.reading(InputRole::Cost).readers[0] = "reader_c".into(),
+                _ => f.declarations[0].subject = "Another declared subject".into(),
+            }
+            let changed = f.report().rows[0].claims().unwrap();
+            assert_eq!(before.derived.value, changed.derived.value);
+            assert_ne!(
+                before.derived.claim_id, changed.derived.claim_id,
+                "{mutation}"
+            );
+            assert_ne!(
+                before.derived.parents, changed.derived.parents,
+                "{mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_claim_and_result_mutations_refuse_instead_of_minting_false_provenance() {
+        use fmine_claim::Representation;
+        let mut report = fixture(RecoveryModel::ConstantPercent).report();
+        let row = &report.rows[0];
+        let original = row.claims().unwrap();
+        for mutation in 0..5 {
+            let mut claims = original.clone();
+            match mutation {
+                0 => claims.inputs[0].value.printed.value = ExactQty::from_integer(999),
+                1 => claims.derived.value.computed = ExactQty::from_integer(999),
+                2 => claims.derived.representation = Representation::Interval { lo: 0.0, hi: 1.0 },
+                3 => claims.derived.parents.clear(),
+                _ => claims.derived.stale = true,
+            }
+            assert!(row.check_claims(&claims).is_err(), "{mutation}");
+        }
+        report.rows[0].result.as_mut().unwrap().computed = ExactQty::from_integer(999);
+        assert!(report.rows[0].claims().is_err());
+        assert!(
+            report
+                .to_json()
+                .contains("\"status\":\"refused\",\"result\":null")
+        );
+        assert!(report.to_json().contains("\"claims\":null"));
+        assert!(
+            report
+                .to_markdown()
+                .contains("stored cutoff result differs")
+        );
+        assert_eq!(report.rows[0].evidence.len(), original.inputs.len());
     }
 }

@@ -97,7 +97,10 @@ fn original_displayed_number_and_source_identity_survive_the_receipt() {
             CivilDate::new(2031, 2, 16).expect("date").to_epoch_days() * NS_PER_DAY
         );
         assert_eq!(result.published_at, "2031-02-15");
-        assert_eq!(result.published_at_basis, "FACT: invented test release date");
+        assert_eq!(
+            result.published_at_basis,
+            "FACT: invented test release date"
+        );
         let body = receipt_claim_body(
             &policy,
             id,
@@ -144,7 +147,10 @@ fn frozen_target_fields_cannot_be_chosen_at_resolution() {
     let mut variants = vec![policy.clone(); 5];
     variants[0].issuer = "different".into();
     variants[1].members.insert(id, "Other Mine".into());
-    variants[2].period = PublicPeriod::Quarter { year: 2030, quarter: 4 };
+    variants[2].period = PublicPeriod::Quarter {
+        year: 2030,
+        quarter: 4,
+    };
     variants[3].metric = PublicMetric::ProductionKoz;
     variants[4].ownership = PublicOwnership::Attributable { num: 4, den: 5 };
     for changed in variants {
@@ -156,11 +162,15 @@ fn frozen_target_fields_cannot_be_chosen_at_resolution() {
     later.key.reporting_vintage.release = "2031Q1".into();
     reseal(&mut later);
     assert_eq!(
-        bind(&source, &policy, id, &[later]).expect_err("no comparative fallback").code,
+        bind(&source, &policy, id, &[later])
+            .expect_err("no comparative fallback")
+            .code,
         "FMINE-REF-201"
     );
     assert_eq!(
-        bind(&source, &policy, id, &[cell.clone(), cell]).expect_err("ambiguous sources").code,
+        bind(&source, &policy, id, &[cell.clone(), cell])
+            .expect_err("ambiguous sources")
+            .code,
         "FMINE-REF-104"
     );
 }
@@ -172,7 +182,12 @@ fn mutated_source_or_wrong_scope_never_becomes_an_outcome() {
     if let PublicValue::Number { displayed, .. } = &mut changed.claim.value {
         *displayed = Ok("999".into());
     }
-    assert_eq!(bind(&source, &policy, id, &[changed]).expect_err("mutated value").code, "FMINE-REF-507");
+    assert_eq!(
+        bind(&source, &policy, id, &[changed])
+            .expect_err("mutated value")
+            .code,
+        "FMINE-REF-507"
+    );
     for modify in [
         (|c: &mut KeyedCell| c.key.unit = "usd_per_oz".into()) as fn(&mut KeyedCell),
         |c| c.key.scope = Scope::Company,
@@ -181,18 +196,38 @@ fn mutated_source_or_wrong_scope_never_becomes_an_outcome() {
         let mut changed = cell.clone();
         modify(&mut changed);
         reseal(&mut changed);
-        assert_eq!(bind(&source, &policy, id, &[changed]).expect_err("wrong support").code, "FMINE-REF-105");
+        assert_eq!(
+            bind(&source, &policy, id, &[changed])
+                .expect_err("wrong support")
+                .code,
+            "FMINE-REF-105"
+        );
     }
     let mut changed = cell.clone();
     changed.claim.confidentiality = Confidentiality::internal();
     reseal(&mut changed);
-    assert_eq!(bind(&source, &policy, id, &[changed]).expect_err("nonpublic").code, "FMINE-REF-301");
+    assert_eq!(
+        bind(&source, &policy, id, &[changed])
+            .expect_err("nonpublic")
+            .code,
+        "FMINE-REF-301"
+    );
     let mut changed = cell;
     changed.claim.stale = true;
-    assert_eq!(bind(&source, &policy, id, &[changed]).expect_err("stale").code, "FMINE-REF-502");
+    assert_eq!(
+        bind(&source, &policy, id, &[changed])
+            .expect_err("stale")
+            .code,
+        "FMINE-REF-502"
+    );
     let (policy, id, source, mut cost) = example(PublicMetric::AiscUsdPerOz);
     cost.printed_basis = OwnershipBasis::Unprinted;
-    assert_eq!(bind(&source, &policy, id, &[cost]).expect_err("unprinted cost basis").code, "FMINE-REF-105");
+    assert_eq!(
+        bind(&source, &policy, id, &[cost])
+            .expect_err("unprinted cost basis")
+            .code,
+        "FMINE-REF-105"
+    );
 }
 
 #[test]
@@ -200,11 +235,17 @@ fn full_production_column_does_not_adopt_the_site_rows_attributable_share() {
     let (policy, id, source, mut cell) = example(PublicMetric::ProductionKoz);
     for printed in [
         OwnershipBasis::Unprinted,
-        OwnershipBasis::Attributable { num: 3, den: 5, source: ShareSource::Printed },
+        OwnershipBasis::Attributable {
+            num: 3,
+            den: 5,
+            source: ShareSource::Printed,
+        },
     ] {
         cell.printed_basis = printed;
         assert_eq!(
-            bind(&source, &policy, id, std::slice::from_ref(&cell)).expect("explicit 100% production column").value,
+            bind(&source, &policy, id, std::slice::from_ref(&cell))
+                .expect("explicit 100% production column")
+                .value,
             Rat::from_integer(400)
         );
     }
@@ -217,7 +258,8 @@ fn wholly_owned_attributable_production_still_binds_the_attributable_column() {
     assert!(bind(&source, &policy, id, std::slice::from_ref(&cell)).is_err());
     cell.key.line.label = policy.metric.field(policy.ownership).into();
     reseal(&mut cell);
-    let out = bind(&source, &policy, id, std::slice::from_ref(&cell)).expect("explicit attributable column at a wholly owned site");
+    let out = bind(&source, &policy, id, std::slice::from_ref(&cell))
+        .expect("explicit attributable column at a wholly owned site");
     assert_eq!(out.ownership_source, "full");
     assert_eq!(out.source.claim.claim_id, cell.claim.claim_id);
     assert_eq!(out.value, Rat::from_integer(400));
@@ -227,12 +269,29 @@ fn wholly_owned_attributable_production_still_binds_the_attributable_column() {
 fn numeric_zero_is_preserved_and_unknown_or_status_values_refuse() {
     let (policy, id, source, cell) = example(PublicMetric::ProductionKoz);
     let mut zero = cell.clone();
-    zero.claim.value = PublicValue::Number { stored: "0".into(), displayed: Ok("0".into()), under_status: None };
+    zero.claim.value = PublicValue::Number {
+        stored: "0".into(),
+        displayed: Ok("0".into()),
+        under_status: None,
+    };
     reseal(&mut zero);
-    assert_eq!(bind(&source, &policy, id, &[zero]).expect("printed zero").value, Rat::from_integer(0));
+    assert_eq!(
+        bind(&source, &policy, id, &[zero])
+            .expect("printed zero")
+            .value,
+        Rat::from_integer(0)
+    );
     for value in [
-        PublicValue::Number { stored: "0".into(), displayed: Ok("—".into()), under_status: None },
-        PublicValue::Number { stored: "2".into(), displayed: Ok("2".into()), under_status: Some(fmine_public::key::StatusKind::Withheld) },
+        PublicValue::Number {
+            stored: "0".into(),
+            displayed: Ok("—".into()),
+            under_status: None,
+        },
+        PublicValue::Number {
+            stored: "2".into(),
+            displayed: Ok("2".into()),
+            under_status: Some(fmine_public::key::StatusKind::Withheld),
+        },
         PublicValue::Missing,
     ] {
         let mut changed = cell.clone();
@@ -258,15 +317,47 @@ fn availability_requires_registered_publication_after_period_end() {
     let result = bind(&source, &policy, id, &[cell]).expect("valid publication");
     let mut citation = result.citation.clone();
     citation.locator = "Different.xlsx:YTD!B5".into();
-    assert!(receipt_claim_body(&policy, id, &citation, &result.stored, &result.displayed, result.ownership_source, "corpus/Original.xlsx").is_err());
+    assert!(
+        receipt_claim_body(
+            &policy,
+            id,
+            &citation,
+            &result.stored,
+            &result.displayed,
+            result.ownership_source,
+            "corpus/Original.xlsx"
+        )
+        .is_err()
+    );
     citation = result.citation;
     citation.vintage = "2031Q1".into();
-    assert!(receipt_value_tag(&policy, id, &citation, &result.stored, &result.displayed, result.ownership_source).is_err());
+    assert!(
+        receipt_value_tag(
+            &policy,
+            id,
+            &citation,
+            &result.stored,
+            &result.displayed,
+            result.ownership_source
+        )
+        .is_err()
+    );
     let mut synthetic = policy;
     synthetic.issuer = fmine_public::synthetic::SYNTHETIC_ISSUER.into();
     citation.source = synthetic.issuer.clone();
     citation.vintage = synthetic.period.original_release();
-    assert!(receipt_claim_body(&synthetic, id, &citation, &result.stored, &result.displayed, result.ownership_source, "corpus/Original.xlsx").is_err());
+    assert!(
+        receipt_claim_body(
+            &synthetic,
+            id,
+            &citation,
+            &result.stored,
+            &result.displayed,
+            result.ownership_source,
+            "corpus/Original.xlsx"
+        )
+        .is_err()
+    );
 }
 
 fn comparative(metric: PublicMetric) -> (PublicResolutionPolicy, ObjectId, SourceRow, KeyedCell) {
@@ -287,18 +378,51 @@ fn comparative(metric: PublicMetric) -> (PublicResolutionPolicy, ObjectId, Sourc
 fn explicit_comparative_retains_frozen_target_and_reconstructs_exact_source_claim() {
     for metric in [PublicMetric::ProductionKoz, PublicMetric::AiscUsdPerOz] {
         let (policy, id, registered, cell) = comparative(metric);
-        let result = bind_release(&registered, &policy, id, "2031Q4", std::slice::from_ref(&cell)).expect("selected comparative");
+        let result = bind_release(
+            &registered,
+            &policy,
+            id,
+            "2031Q4",
+            std::slice::from_ref(&cell),
+        )
+        .expect("selected comparative");
         assert_eq!(result.value, Rat::from_integer(390));
-        assert_eq!(result.source.key.valid_period, parse_period_code("2030FY").unwrap());
+        assert_eq!(
+            result.source.key.valid_period,
+            parse_period_code("2030FY").unwrap()
+        );
         assert_eq!(result.citation.vintage, "2031Q4");
         assert_eq!(result.source.claim.claim_id, cell.claim.claim_id);
-        assert_eq!(result.available_at_ns, CivilDate::new(2032, 2, 16).unwrap().to_epoch_days() * NS_PER_DAY);
         assert_eq!(
-            receipt_claim_body_at_vintage(&policy, id, &result.citation, &result.stored, &result.displayed, result.ownership_source, &cell.claim.anchors[0].artifact_path).unwrap(),
+            result.available_at_ns,
+            CivilDate::new(2032, 2, 16).unwrap().to_epoch_days() * NS_PER_DAY
+        );
+        assert_eq!(
+            receipt_claim_body_at_vintage(
+                &policy,
+                id,
+                &result.citation,
+                &result.stored,
+                &result.displayed,
+                result.ownership_source,
+                &cell.claim.anchors[0].artifact_path
+            )
+            .unwrap(),
             cell.claim.canonical_body()
         );
         assert!(bind(&registered, &policy, id, std::slice::from_ref(&cell)).is_err());
-        assert!(receipt_claim_body(&policy, id, &result.citation, &result.stored, &result.displayed, result.ownership_source, &cell.claim.anchors[0].artifact_path).is_err());
+        assert!(
+            receipt_claim_body(
+                &policy,
+                id,
+                &result.citation,
+                &result.stored,
+                &result.displayed,
+                result.ownership_source,
+                &cell.claim.anchors[0].artifact_path
+            )
+            .is_err()
+        );
         assert!(bind_release(&registered, &policy, id, "2032Q4", &[cell]).is_err());
     }
 }
@@ -307,7 +431,8 @@ fn explicit_comparative_retains_frozen_target_and_reconstructs_exact_source_clai
 fn comparative_cannot_change_target_basis_or_authenticate_another_workbook() {
     let (policy, id, registered, cell) = comparative(PublicMetric::AiscUsdPerOz);
     for mutate in [
-        (|c: &mut KeyedCell| c.key.valid_period = parse_period_code("2031FY").unwrap()) as fn(&mut KeyedCell),
+        (|c: &mut KeyedCell| c.key.valid_period = parse_period_code("2031FY").unwrap())
+            as fn(&mut KeyedCell),
         |c| c.key.subject = "Other Mine".into(),
         |c| c.key.unit = "usd_per_lb".into(),
         |c| c.printed_basis = OwnershipBasis::Unprinted,

@@ -153,6 +153,14 @@ arithmetic closure does not establish causation or identify an operational expla
   JSON/Markdown and its digest; complete independent rows still run. Bounds are exact, while the inherited
   floating TCM cross-check makes the report DeterministicPerIsa. This is arithmetic reproduction of stated
   assumptions, not an optimal operating cutoff, a reserve classification or completion of the real-data gate.
+  `SourceRow::claims()` reconstructs canonical input Claims and one derived result Claim, rechecking the
+  retained result against exact source-bound arithmetic. Each input binds the declared case/role, original
+  token and precision, document metadata, reader identities and citation. The result retains every input
+  Claim as a parent and their source anchors. Claims remain issuer assertions; rounding bounds are not
+  confidence intervals. JSON includes canonical bodies and value tags, and Markdown retains Claim links.
+  `SourceRow::check_claims()` validates the complete typed values and envelope against reconstruction;
+  `Claim::check_id()` alone does not authenticate mutable typed values. Altered results refuse rendering,
+  and refused rows retain available evidence without creating a numeric Claim.
 - `lmdi::{LmdiState, LmdiWaterfall, decompose_aisc_lmdi, logarithmic_mean}`
   - `LmdiState` keeps the existing floating-point API. Monetary spend and sold ounces must have compatible
     scales so their quotient is USD/oz: USD/oz or thousand USD/koz. `$M`/`koz` inputs require the explicit

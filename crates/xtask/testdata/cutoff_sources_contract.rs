@@ -4,6 +4,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fmine_core::hash::sha256;
+use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_public::sources::{registry_path, transcriptions_path};
 
 const DOCUMENT: &[u8] =
@@ -277,6 +278,50 @@ fn assert_row_refused(json: &str, id: &str, why: &str) {
         "{row}"
     );
     assert!(row.contains(why), "{row}");
+    assert!(
+        row.contains("\"claims\":null"),
+        "refused rows must not emit Claims: {row}"
+    );
+}
+
+fn string_field<'a>(json: &'a str, key: &str) -> &'a str {
+    json.split_once(&format!("\"{key}\":\""))
+        .unwrap()
+        .1
+        .split('"')
+        .next()
+        .unwrap()
+}
+
+fn claim_objects(row: &str) -> (Vec<&str>, &str) {
+    let claims = row.split_once("\"claims\":").unwrap().1;
+    let mut rest = claims.strip_prefix("{\"inputs\":[").unwrap();
+    let mut inputs = Vec::new();
+    while rest.starts_with('{') {
+        let input = object(rest, "{");
+        inputs.push(input);
+        rest = rest[input.len()..].trim_start_matches(',');
+    }
+    (
+        inputs,
+        object(rest.split_once("\"derived\":").unwrap().1, "{"),
+    )
+}
+
+fn assert_canonical_id(claim: &str) {
+    let hex = string_field(claim, "canonical_body");
+    assert_eq!(hex.len() % 2, 0);
+    let bytes: Vec<_> = (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap())
+        .collect();
+    assert_eq!(
+        string_field(claim, "claim_id"),
+        ObjectId::from_canonical_bytes(PrefixKind::Claim, &bytes).to_string(),
+    );
+    assert!(claim.contains("\"evidence\":\"issuer_assertion\""));
+    assert!(claim.contains("\"confidentiality\":\"public\""));
+    assert!(claim.contains("\"representation\":\"deterministic\""));
 }
 
 #[test]
@@ -586,4 +631,118 @@ fn cutoff_cli_order_is_canonical_and_declared_scope_does_not_read_unused_values(
         fixture.successful(&[]),
         "one unrelated reader cannot contaminate declared quantities"
     );
+}
+
+#[test]
+fn cutoff_cli_claim_ids_reconstruct_and_derived_parents_preserve_every_source() {
+    let fixture = Fixture::new("claim-ancestry", &[Model::Constant]);
+    let output = fixture.successful(&[]);
+    let (inputs, derived) = claim_objects(cutoff_row(&output, "constant_cutoff"));
+    assert_eq!(inputs.len(), 4);
+    let mut parent_ids = Vec::new();
+    let mut source_anchors = Vec::new();
+    for input in inputs {
+        assert_canonical_id(input);
+        assert!(input.contains("\"parents\":[]"));
+        parent_ids.push(format!("\"{}\"", string_field(input, "claim_id")));
+        let anchor = object(input.split_once("\"anchors\":[").unwrap().1, "{");
+        assert_eq!(string_field(anchor, "artifact_path"), "documents/Mine.pdf");
+        assert_eq!(
+            string_field(anchor, "artifact_sha256"),
+            sha256(DOCUMENT).to_hex()
+        );
+        assert_eq!(
+            string_field(anchor, "locator"),
+            format!(
+                "Mine.pdf:p2:Invented cut-off assumptions:{}/Declared",
+                string_field(input, "quantity")
+            ),
+        );
+        source_anchors.push(anchor);
+    }
+    assert_canonical_id(derived);
+    parent_ids.sort();
+    assert!(parent_ids.windows(2).all(|pair| pair[0] != pair[1]));
+    source_anchors.sort();
+    source_anchors.dedup();
+    assert_eq!(source_anchors.len(), 4);
+    assert!(derived.contains(&format!("\"parents\":[{}]", parent_ids.join(","))));
+    assert!(derived.contains(&format!("\"anchors\":[{}]", source_anchors.join(","))));
+    assert!(derived.contains("\"metric_key\":\"cutoff.reproduction\""));
+    assert!(derived.contains("\"computed\":\"2/1\""));
+}
+
+#[test]
+fn cutoff_cli_precision_changes_source_and_derived_identity_without_changing_point() {
+    let mut fixture = Fixture::new("precision-identity", &[Model::Constant]);
+    let before = fixture.successful(&[]);
+    fixture.change("constant_cutoff_cost", |e| e.token = "100.00".into());
+    let after = fixture.successful(&[]);
+    let (old_inputs, old_derived) = claim_objects(cutoff_row(&before, "constant_cutoff"));
+    let (new_inputs, new_derived) = claim_objects(cutoff_row(&after, "constant_cutoff"));
+    let old_cost = old_inputs
+        .into_iter()
+        .find(|c| string_field(c, "role") == "cost")
+        .unwrap();
+    let new_cost = new_inputs
+        .into_iter()
+        .find(|c| string_field(c, "role") == "cost")
+        .unwrap();
+    assert_eq!(string_field(old_cost, "printed"), "100/1");
+    assert_eq!(string_field(new_cost, "printed"), "100/1");
+    assert_eq!(string_field(old_cost, "half_step"), "1/20");
+    assert_eq!(string_field(new_cost, "half_step"), "1/200");
+    assert_ne!(
+        string_field(old_cost, "claim_id"),
+        string_field(new_cost, "claim_id")
+    );
+    assert_ne!(
+        string_field(old_derived, "claim_id"),
+        string_field(new_derived, "claim_id")
+    );
+    assert!(old_derived.contains("\"computed\":\"2/1\""));
+    assert!(new_derived.contains("\"computed\":\"2/1\""));
+    assert_canonical_id(new_cost);
+    assert_canonical_id(new_derived);
+    assert_ne!(cutoff_report(&before), cutoff_report(&after));
+}
+
+#[test]
+fn cutoff_cli_combines_separate_cost_revenue_and_per_ounce_source_claims() {
+    let mut fixture = Fixture::new("cost-deductions", &[Model::Constant]);
+    for (role, quantity, token, unit) in [
+        ("cost", "additional_cost", "50.0", "usd_per_t"),
+        ("revenue_deduction", "royalty_percent", "10.0", "percent"),
+        ("ounce_deduction", "ounce_fee", "31.1034768", "usd_per_oz"),
+    ] {
+        write!(fixture.definitions,
+            "\n[[cutoff_input]]\ncutoff = \"constant_cutoff\"\nrole = \"{role}\"\nquantity = \"{quantity}\"\n").unwrap();
+        for reader in ["synthetic_reader_a", "synthetic_reader_b"] {
+            fixture.entries.push(Entry {
+                quantity: quantity.into(),
+                row: quantity.into(),
+                token: token.into(),
+                unit: unit.into(),
+                basis: BASIS.into(),
+                period: PERIOD.into(),
+                reader,
+            });
+        }
+    }
+    fixture.change("constant_cutoff_published", |e| e.token = "3.37".into());
+    let output = fixture.successful(&[]);
+    let row = cutoff_row(&output, "constant_cutoff");
+    // Net price is (0.90 - 0.01)*3110.34768; total cost 150 and recovery 0.5 give 300/89.
+    assert!(row.contains("\"status\":\"reproduced\""), "{row}");
+    assert!(row.contains("\"computed\":\"300/89\""), "{row}");
+    let (inputs, derived) = claim_objects(row);
+    assert_eq!(inputs.len(), 7);
+    for quantity in ["additional_cost", "royalty_percent", "ounce_fee"] {
+        assert!(
+            inputs
+                .iter()
+                .any(|c| string_field(c, "quantity") == quantity)
+        );
+    }
+    assert_canonical_id(derived);
 }

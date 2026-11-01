@@ -99,7 +99,10 @@ fn bounded_snapshot(path: &Path, limit: u64) -> Result<Vec<u8>> {
 
 /// Only an original or later calendar-quarter release can report the complete frozen period.
 /// This does not assert that the release contains the target, or that its figure was formally restated.
-pub(super) fn release_period(policy: &PublicResolutionPolicy, release: &str) -> Result<PublicPeriod> {
+pub(super) fn release_period(
+    policy: &PublicResolutionPolicy,
+    release: &str,
+) -> Result<PublicPeriod> {
     let period = PublicPeriod::parse(release)?;
     if !matches!(period, PublicPeriod::Quarter { .. })
         || period.end_ns()? < policy.period.end_ns()?
@@ -426,7 +429,14 @@ pub(super) fn receipt_value_tag(
             "receipt is not from the frozen original release",
         ));
     }
-    receipt_value_tag_at_vintage(policy, forecast_id, citation, stored, displayed, ownership_source)
+    receipt_value_tag_at_vintage(
+        policy,
+        forecast_id,
+        citation,
+        stored,
+        displayed,
+        ownership_source,
+    )
 }
 
 fn receipt_value_tag_at_vintage(
@@ -513,9 +523,22 @@ pub(super) fn receipt_claim_body(
     ownership_source: &str,
     anchor_path: &str,
 ) -> Result<Vec<u8>> {
-    receipt_value_tag(policy, forecast_id, citation, stored, displayed, ownership_source)?;
+    receipt_value_tag(
+        policy,
+        forecast_id,
+        citation,
+        stored,
+        displayed,
+        ownership_source,
+    )?;
     receipt_claim_body_at_vintage(
-        policy, forecast_id, citation, stored, displayed, ownership_source, anchor_path,
+        policy,
+        forecast_id,
+        citation,
+        stored,
+        displayed,
+        ownership_source,
+        anchor_path,
     )
 }
 
@@ -587,7 +610,13 @@ fn bind(
     forecast_id: ObjectId,
     cells: &[KeyedCell],
 ) -> Result<ResolvedPublicOutcome> {
-    bind_release(registered, policy, forecast_id, &policy.period.original_release(), cells)
+    bind_release(
+        registered,
+        policy,
+        forecast_id,
+        &policy.period.original_release(),
+        cells,
+    )
 }
 
 fn bind_release(
@@ -664,7 +693,8 @@ fn bind_release(
         || cell.key.line.occurrence != 0
         || cell.key.unit != policy.metric.unit()
         || !same_ownership(cell.key.ownership_basis, policy.ownership)
-        || (!(policy.metric == PublicMetric::ProductionKoz && policy.ownership == PublicOwnership::Full)
+        || (!(policy.metric == PublicMetric::ProductionKoz
+            && policy.ownership == PublicOwnership::Full)
             && !same_ownership(cell.printed_basis, policy.ownership))
         || cell.claim.support != SpatialSupport::PeriodAggregate
     {

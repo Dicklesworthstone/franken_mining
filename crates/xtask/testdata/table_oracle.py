@@ -528,7 +528,7 @@ class TableScenarios(unittest.TestCase):
         root = workspace("grammar")
         for extra in (
             ["--through", "2025Q4"], ["--synthetic"], ["--fix"],
-            ["--as-of", "2026-02-01"], ["--definitions", DEFINITIONS],
+            ["--as-of", "2026-02-01T00:00:00Z"], ["--definitions", DEFINITIONS],
         ):
             with self.subTest(extra=extra):
                 envelope, raw = invoke(root, extra)
@@ -540,6 +540,22 @@ class TableScenarios(unittest.TestCase):
         ):
             envelope, raw = invoke(root, arguments=args)
             self.assertEqual(envelope["exit_code"], 2, raw)
+
+    def test_publication_cut_checks_every_declared_document_and_preserves_arithmetic(self):
+        root = workspace("evidence-cut")
+        retrospective, _ = successful(root)
+        admitted, raw = invoke(root, ["--as-of", "2026-02-01"])
+        self.assertEqual(admitted["exit_code"], 0, raw)
+        self.assertEqual(admitted["payload"]["as_of"], "2026-02-01")
+        self.assertTrue(admitted["payload"]["source_bytes_verified"])
+        self.assertEqual(admitted["payload"]["checks"], retrospective["payload"]["checks"])
+        self.assertNotEqual(admitted["payload"]["digest"], retrospective["payload"]["digest"])
+        self.assertEqual([row["file"] for row in admitted["payload"]["checked_documents"]], [FILE])
+        unavailable, raw = invoke(root, ["--as-of", "2026-01-31"])
+        self.assertEqual((unavailable["exit_code"], unavailable["refusal"]["code"]),
+                         (3, "FMINE-REF-202"), raw)
+        self.assertIn(FILE, unavailable["refusal"]["what"])
+        self.assertIsNone(unavailable["payload"])
 
 
 class CutoffScenarios(unittest.TestCase):
