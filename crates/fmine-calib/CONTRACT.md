@@ -44,7 +44,8 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 - All three committed values were first observed on aarch64-macos. `lib.rs` declares `BitwisePortable`: all three
   agreed on ubuntu-latest (x86_64) and macos-15 (aarch64) in CI run 41237993223 at 84f32ac (bd-hp2j.3). bd-311
   changed the monitor's scores and re-pinned the calib-rest value on aarch64-macos (the probe's PIT bits are
-  unchanged; its wealth and alarm bits are not). No CI run of the new value exists yet.
+  unchanged; its wealth and alarm bits are not). An x86_64-linux rch worker gave the same value; no CI run of it
+  exists yet.
 - `ForecastLedger::evaluate_model` → `Result<CalibrationReport, ScoreError>` delegates to the assessment engine
   and exposes `n_members`, `n_scored`, `n_unresolved` and whole-cohort coverage bounds. This compatibility snapshot
   is always Unscored or Descriptive, since it has no frozen membership. Existing Gaussian `register` ids are

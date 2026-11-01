@@ -3,8 +3,8 @@
 //! and Vecchia/Rosenblatt spatial PIT e-process monitoring (`GB-08`, `BD-311`).
 //! Determinism: BitwisePortable (transcendentals via `fmine_core::det`; the file's three golden digests agreed on
 //! x86_64-linux and aarch64-macos in CI run 41237993223 at 84f32ac, bd-hp2j.3). The calib-rest digest was
-//! re-pinned on aarch64-macos when the spatial monitor's scores changed (bd-311); no x86_64-linux run of the new
-//! value exists yet.
+//! re-pinned on aarch64-macos when the spatial monitor's scores changed (bd-311), and an x86_64-linux rch worker
+//! gave the same value; no CI run of it exists yet.
 
 use fmine_claim::Claim;
 use fmine_core::det;
