@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance"]`
+- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "lint", "forecast"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -24,6 +24,11 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     grade-normalised recovery comparisons for Lumwana, with exact points and input-rounding enclosures
     (bd-srqc). The bound filters workbook releases for a retrospective computation using current verified
     historical documents; it does not establish a historical information cutoff;
+  - `lint <draft> --issuer <issuer> [--through YYYYQn]` or `--synthetic`: bounded cited equalities checked
+    against one verified canonical Claim snapshot, with JSON or readable Markdown output (BD-345);
+  - `forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ
+    [--selector first-published|latest-as-of]`: read-only ordered transcript replay and cohort assessment
+    through `fmine-calib`; first-published is the default (BD-343);
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row
     per file, `{file, present, bytes_ok, digest_ok}` against the registry's size and sha256 (BD-339.S2). A
     mismatch is reported, never refused: doctor stays exit 0, status ok;
@@ -153,6 +158,17 @@ verified source snapshot as assurance. Without a selector they search the curren
   `--synthetic` is exclusive with `--issuer` and `--through`; `--site` and `--as-of` remain guidance-only
   flags. The existing `assure public --through` path continues to skip PDF transcriptions, independently of
   the dedicated recovery command's retrospective workbook bound.
+- DESIGN (BD-345): lint bounds its local UTF-8 draft read, verifies the selected sources once, and delegates
+  every finding to `fmine_public::lint`. Its certificate identifies the source assurance snapshot; the lint
+  payload separately binds the draft and canonical Claim population. Only number spans and findings are
+  emitted, never the draft's full prose. Drafts are never written or sent over a network. A completed check
+  exits zero even when findings report mismatches; invalid syntax is exit two and source failures retain
+  their typed refusals. Publication-time/publicness and discovery modes are not inferred or advertised.
+- DESIGN (BD-343): forecast assessment replays transcript rows in their supplied order using the existing
+  calibration kernel. No alternate scoring formula, default time proof or hidden denominator is introduced.
+  Saved assessment rows enforce the kernel's sealed-cut rules across replay. Both envelope authority fields
+  remain null: transcript and assessment digests identify content, not a durable authority ledger or an
+  external timestamp. The adapter does not verify supplied source citations or issue a forecast.
 - `robot-docs` lists every catalogue row as `{code, exit_code, status, summary}`, `status` being `active` or
   `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 

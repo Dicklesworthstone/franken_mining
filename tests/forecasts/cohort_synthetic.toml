@@ -1,0 +1,94 @@
+# SYNTHETIC: invented forecasts, outcomes, locators, hashes and times; no issuer evidence or external time proof.
+# Read-only replay: fmine forecast assess --ledger tests/forecasts/cohort_synthetic.toml \
+#   --cohort synthetic-demo --as-of 2026-10-31T00:00:00Z --selector latest-as-of
+# Rows execute in this order. Decimal values are quoted strings; only counters are TOML integers.
+schema = "fmine.forecast-ledger.v1"
+lane = "synthetic"
+
+[[forecast]]
+id = "north-unit-cost"
+model_key = "synthetic/north/unit-cost"
+registered_at = "2026-07-01T00:00:00Z"
+outcome_due = "2026-08-31T00:00:00Z"
+kind = "interval"
+lo = "1476"
+hi = "1490"
+nominal = "0.8"
+
+[[forecast]]
+id = "central-unit-cost"
+model_key = "synthetic/central/unit-cost"
+registered_at = "2026-07-01T00:00:00Z"
+outcome_due = "2026-08-31T00:00:00Z"
+kind = "interval"
+lo = "100"
+hi = "120"
+nominal = "0.8"
+
+[[forecast]]
+id = "south-unit-cost"
+model_key = "synthetic/south/unit-cost"
+registered_at = "2026-07-01T00:00:00Z"
+outcome_due = "2026-08-31T00:00:00Z"
+kind = "interval"
+lo = "90"
+hi = "110"
+nominal = "0.8"
+
+[[cohort]]
+name = "synthetic-demo"
+frozen_at = "2026-07-02T00:00:00Z"
+members = "north-unit-cost, central-unit-cost, south-unit-cost"
+resolution_rule = "Invented Q3 unit cost, USD/oz, 100% basis, from the declared synthetic source; no unit-cost subtraction."
+eligible_sources = "synthetic:issuer"
+alpha = "0.2"
+min_calibration_n = 35
+rho_low = "0"
+rho_high = "0.5"
+
+[[outcome]]
+forecast = "north-unit-cost"
+kind = "published"
+available_at = "2026-09-10T00:00:00Z"
+recorded_at = "2026-09-10T01:00:00Z"
+value = "1479"
+source = "synthetic:issuer"
+vintage = "synthetic-first"
+locator = "Invented!A1"
+sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
+
+[[outcome]]
+forecast = "central-unit-cost"
+kind = "published"
+available_at = "2026-09-11T00:00:00Z"
+recorded_at = "2026-09-11T01:00:00Z"
+value = "110"
+source = "synthetic:issuer"
+vintage = "synthetic-first"
+locator = "Invented!A2"
+sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
+
+[[outcome]]
+forecast = "south-unit-cost"
+kind = "missing"
+available_at = "2026-09-12T00:00:00Z"
+recorded_at = "2026-09-12T01:00:00Z"
+reason = "not_published"
+
+# This checkpoint seals September: subsequent writes at or before this cutoff refuse.
+[[assessment]]
+cohort = "synthetic-demo"
+as_of = "2026-09-30T00:00:00Z"
+selector = "first-published"
+
+[[outcome]]
+forecast = "north-unit-cost"
+kind = "restated"
+available_at = "2026-10-15T00:00:00Z"
+recorded_at = "2026-10-15T01:00:00Z"
+value = "1474"
+source = "synthetic:issuer"
+vintage = "synthetic-restated"
+locator = "Invented!A1"
+sha256 = "2222222222222222222222222222222222222222222222222222222222222222"
+supersedes = 1

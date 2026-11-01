@@ -5,11 +5,23 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
 - **LOC Budget:** `18k planned / 21k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "guidance", "waterfall", "recovery"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "guidance", "waterfall", "recovery", "lint"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
 
+- DESIGN (BD-345): `lint::lint_cited(draft, claims)` checks a bounded equality grammar against canonical
+  source assertions. It indexes Claim IDs and latest series once, then compares the named subject, supported
+  metric, period, ownership, denominator and unit. Exact rational half-step intervals decide containment,
+  disjoint values and excessive precision; no floating-point tolerance or implicit unit conversion is used.
+  AISC, total cash costs, cost of sales, gold production and gold sales are supported. Co-product TCC stays
+  distinct from by-product TCC. Unsupported prose and source values remain unchecked, and ambiguous citations
+  or semantic context never produce `verified`.
+  The caller supplies the source-verified snapshot. Staleness means a later release of the same canonical
+  series in that snapshot or explicit Claim supersession; it is not inferred from a wall clock. The report
+  binds exact draft bytes, canonical Claims, rules version and findings. It exposes numeric spans and source
+  Claims without copying entire draft sentences. It does not decide publication availability, disclosure
+  permission, qualitative truth or calibration of source numbers.
 - `sources`: the source registry (`BD-055`, `BD-322`, bd-s9j3.1), read at run time from
   `<workspace>/registries/sources/<issuer>.toml` (schema `fmine.sources.v1`, checked by `fmine_registry::sources`
   and by `xtask registry-check`). It pins each public workbook by file name, URL, byte size and SHA-256 (Barrick:

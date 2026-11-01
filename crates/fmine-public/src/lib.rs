@@ -12,6 +12,7 @@ pub mod citation;
 pub mod consistency;
 pub mod guidance;
 pub mod key;
+pub mod lint;
 pub mod live;
 pub mod mine_ledger;
 pub mod mine_stats;

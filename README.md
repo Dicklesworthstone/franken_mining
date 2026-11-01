@@ -127,6 +127,54 @@ cargo run -p fmine-cli -- claim show clm_REPLACE_WITH_THE_EMITTED_ID --issuer ba
 The response includes both the assurance root and the keyed Claim projection digest. Missing ids and altered
 source files refuse instead of returning a stale cached Claim.
 
+### Check cited numbers in a draft
+
+```bash
+cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2
+cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2 --format markdown
+```
+
+DESIGN (BD-345): cited mode checks explicit equalities against canonical Claims from one hash-verified source
+snapshot. Link the printed number and unit to its exact Claim ID, and state the subject, reporting period,
+ownership basis and metric. For example, using the registered North Mara source Claim:
+
+```markdown
+North Mara Q2 2026 attributable AISC per ounce sold is [$2,577/oz](fmine:clm_f6e6c9b2ea703557f2a3b2f49b22b1aa).
+```
+
+The checker uses exact rounding intervals. It distinguishes value, period and basis mismatches, excessive
+rounding, missing or ambiguous citations, and superseded Claims. It accepts only complete supported equality
+predicates; negations, comparisons and other prose remain `unchecked`. A matching number cannot compensate for
+a wrong site, period, metric or basis. `verified` means agreement with the cited source assertion, not that the
+issuer assertion is true or that disclosure is permitted. Publication-time/publicness checks are not part of
+this slice; `--through` selects registered vintages, not an information-availability date.
+
+The command reads the draft locally, writes no files, and emits number spans and verdicts rather than whole
+sentences. JSON includes the draft and Claim-population digests and the source snapshot root. Findings are data:
+a completed lint exits zero even when it finds mismatches. Missing or altered registered source files refuse.
+Use `--synthetic` with Claims emitted by the built-in synthetic assurance run for an invented demonstration.
+Relative draft paths are resolved against `--workspace`, which defaults to the current workspace.
+
+### Assess a frozen forecast cohort
+
+```bash
+cargo run -p fmine-cli -- forecast assess --ledger tests/forecasts/cohort_synthetic.toml \
+  --cohort synthetic-demo --as-of 2026-10-31T00:00:00Z
+cargo run -p fmine-cli -- forecast assess --ledger tests/forecasts/cohort_synthetic.toml \
+  --cohort synthetic-demo --as-of 2026-10-31T00:00:00Z --selector latest-as-of
+```
+
+DESIGN (BD-343): this read-only adapter replays an ordered transcript through the existing forecast ledger.
+Registrations, cohort freezes, published or missing outcomes, restatements and saved assessments retain their
+order. It reports every cohort member, selected outcome citations, missing reasons, observed scores and
+whole-cohort completion bounds, plus the frozen assumptions behind the effective sample size. The default
+selector preserves the first published outcome; `latest-as-of` reports restatements separately.
+
+The committed example is explicitly synthetic. Transcript times and citations are supplied inputs, not
+independently verified time proofs or source documents. This command neither issues the FY2026 forecast set
+nor replaces `xtask forecast-record-verify`; it makes the cohort and scoring kernel usable while retaining those
+boundaries. Relative transcript paths are resolved against the selected workspace.
+
 ### Export evidence challenges
 
 ```bash

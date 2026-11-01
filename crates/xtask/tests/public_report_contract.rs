@@ -1841,7 +1841,7 @@ mod tests {
             "]},\"unit_discovery\":{\"report_only\":\"which unit the copper rows labelled (millions of pounds) are \
              in, from their site-sheet pairs; never a state, not in the state root\",\"pairs\":0,\
              \"fits\":{\"kt\":0,\"Mlb\":0},\"finding\":\"no_fit\",\"reason_code\":null},\"transcriptions\":null,\
-             \"quarantine\":["
+             \"recovery\":null,\"quarantine\":["
         ));
         for (scope, d) in &found {
             let instances = if *scope == "visible" {

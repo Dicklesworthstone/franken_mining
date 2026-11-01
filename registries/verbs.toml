@@ -27,6 +27,18 @@ mutates_authority = false
 description = "Compare quarterly recovery with agreed historical grade and tails models, preserving rounding intervals and source evidence"
 
 [[verb]]
+path = "lint"
+subsystem = "Portal"
+mutates_authority = false
+description = "Check bounded draft equalities against cited canonical Claims in a verified source snapshot"
+
+[[verb]]
+path = "forecast assess"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Replay an ordered forecast transcript and assess a frozen cohort while retaining every missing outcome"
+
+[[verb]]
 path = "claim show"
 subsystem = "Plumb"
 mutates_authority = false
