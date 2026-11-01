@@ -21,6 +21,12 @@ mutates_authority = false
 description = "Compute remaining production and spending requirements from cited guidance under an explicit sales assumption"
 
 [[verb]]
+path = "track-record"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Compare agreed issuer guidance with original annual outcomes, preserving missing members, comparative vintages and later appearances"
+
+[[verb]]
 path = "recovery gap"
 subsystem = "Crucible"
 mutates_authority = false

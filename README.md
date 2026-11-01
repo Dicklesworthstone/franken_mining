@@ -155,6 +155,37 @@ a completed lint exits zero even when it finds mismatches. Missing or altered re
 Use `--synthetic` with Claims emitted by the built-in synthetic assurance run for an invented demonstration.
 Relative draft paths are resolved against `--workspace`, which defaults to the current workspace.
 
+### Compare issuer guidance with reported annual outcomes
+
+```bash
+cargo run -p fmine-cli -- track-record --issuer barrick --through 2026Q2
+cargo run -p fmine-cli -- track-record --issuer barrick --site north-mara --format markdown
+cargo run -p fmine-cli -- track-record --synthetic
+```
+
+DESIGN (BD-341): this retrospective report binds agreed, page-cited guidance to canonical annual source
+Claims. It verifies registered document and workbook hashes, matches the site, fiscal year, unit and ownership
+basis, and uses the original annual release when that release is registered. Later appearances remain visible
+without replacing the selected outcome. When only a comparative publication is available, its results are
+labelled and summarized separately. `--through` selects workbook releases; it is not an information-availability
+cut or evidence that a forecast was registered before an outcome.
+
+Every guidance document remains a separate vintage. Missing annual cells, withheld periods, divestments and
+incompatible bases remain unresolved members. The report shows exact normalized deviations for ranges,
+rounding-boundary ambiguity, hit and miss counts, and whole-cohort completion bounds. Its separate binomial
+reference interval assumes independent, identically distributed hits; it does not estimate common year effects,
+effective sample size, a bias confidence interval or forecasting skill. No site ranking or price adjustment is
+made, and guidance ranges receive no invented probability level.
+
+The public command requires `registries/transcriptions/<issuer>.toml` with agreed readings from registered
+documents. These transcriptions and source documents remain outside git. Quantity keys follow
+`guidance_<site>_<metric>`, with site hyphens written as underscores; supported metrics are `production_koz`,
+`production_kt`, `aisc_usd_per_oz`, `aisc_usd_per_lb`, `tcc_usd_per_oz` and `c1_usd_per_lb`.
+Production basis is `100%` or `attributable:n/d`. Cost basis also declares its definition, for example
+`attributable:4/5;aisc=issuer-reported-per-sold-oz`; the analogous per-sold-lb, `tcc` and `c1` definitions are
+explicit. Unknown guidance quantities, missing agreed readings and changed source bytes refuse. The synthetic
+command is an invented known-answer demonstration through the same binding and scoring code.
+
 ### Assess a frozen forecast cohort
 
 ```bash

@@ -9,7 +9,7 @@ use fmine_metrics::guidance::{EnvelopeTier, HistoryVerdict, Ownership, Period, Q
 use fmine_numerics::exact_feas::{Interval, Rat};
 use fmine_public::guidance::{GuidanceCompletionReport, NO_CLAIM};
 
-fn text(value: &str) -> String {
+pub(super) fn text(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -25,7 +25,7 @@ fn text(value: &str) -> String {
 }
 
 /// Prefer an exact terminating decimal; retain a nonterminating rational and label its display approximation.
-fn number(value: Rat) -> String {
+pub(super) fn number(value: Rat) -> String {
     let (num, den) = (value.num(), value.den());
     let mut scale = 1_i128;
     for places in 0..=6 {
@@ -50,7 +50,7 @@ fn number(value: Rat) -> String {
     format!("{num}/{den} (≈ {:.2})", value.to_f64())
 }
 
-fn interval(value: Interval) -> String {
+pub(super) fn interval(value: Interval) -> String {
     if value.lo == value.hi {
         number(value.lo)
     } else {

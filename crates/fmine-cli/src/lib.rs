@@ -4,6 +4,8 @@ mod forecast;
 mod guidance;
 mod lint;
 pub mod packet;
+mod track_record;
+mod track_record_data;
 
 use std::path::{Path, PathBuf};
 
@@ -49,6 +51,14 @@ pub enum CliCommand {
     },
     /// Invented evidence exercising the same guidance completion adapter and exact kernel.
     GuidanceSynthetic,
+    /// Describe issuer guidance against original annual outcomes, retaining every unresolved member.
+    TrackRecord {
+        /// `None` selects the explicitly requested synthetic lane.
+        issuer: Option<String>,
+        site: Option<String>,
+        /// Selects source releases, not a historical information-availability cut.
+        through: Option<String>,
+    },
     /// Descriptive recovery comparison against an agreed historical grade/tails relation.
     RecoveryGap {
         issuer: String,
@@ -336,6 +346,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                 };
             }
             "guidance" => return "guidance completion",
+            "track-record" => return "track-record",
             "recovery" => return "recovery gap",
             "lint" => return "lint",
             "forecast" => return "forecast assess",
@@ -381,6 +392,7 @@ pub fn parse_args(
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--json" => format = OutputFormat::Json,
             "--format" => {
                 i += 1;
                 let val = args.get(i).ok_or("missing value for --format")?;
@@ -459,7 +471,7 @@ pub fn parse_args(
     let words = match positional[0].as_str() {
         "assure" | "guidance" | "recovery" | "forecast" | "lint" => 2,
         "claim" => 3,
-        "doctor" | "robot-docs" => 1,
+        "doctor" | "robot-docs" | "track-record" => 1,
         other => return Err(format!("unknown verb '{other}'")),
     };
     if let Some(extra) = positional.get(words) {
@@ -470,16 +482,16 @@ pub fn parse_args(
     }
     if !matches!(
         positional[0].as_str(),
-        "assure" | "claim" | "guidance" | "recovery" | "lint"
+        "assure" | "claim" | "guidance" | "track-record" | "recovery" | "lint"
     ) && (issuer.is_some() || synthetic || through.is_some())
     {
         return Err(
-            "--issuer, --synthetic and --through require an assurance, claim, guidance, recovery or lint command"
+            "--issuer, --synthetic and --through require an assurance, claim, guidance, track-record, recovery or lint command"
                 .to_string(),
         );
     }
-    if positional[0] != "guidance" && site.is_some() {
-        return Err("--site requires 'guidance completion'".to_string());
+    if !matches!(positional[0].as_str(), "guidance" | "track-record") && site.is_some() {
+        return Err("--site requires 'guidance completion' or 'track-record'".to_string());
     }
     if !matches!(positional[0].as_str(), "guidance" | "forecast") && as_of.is_some() {
         return Err("--as-of requires 'guidance completion' or 'forecast assess'".to_string());
@@ -569,6 +581,31 @@ pub fn parse_args(
                     through: through.ok_or("guidance completion requires --through YYYYQn")?,
                     as_of: as_of.ok_or("guidance completion requires --as-of YYYY-MM-DD")?,
                 }
+            }
+        }
+        "track-record" => {
+            if synthetic {
+                if issuer.is_some() || site.is_some() || through.is_some() {
+                    return Err(
+                        "track-record --synthetic takes no issuer, site or through selection"
+                            .to_string(),
+                    );
+                }
+            } else {
+                let name = issuer
+                    .as_deref()
+                    .ok_or("track-record requires --issuer <issuer> or --synthetic")?;
+                if !is_issuer_name(name) || !registry_path(&workspace, name).is_file() {
+                    return Err(format!("unknown issuer '{name}'"));
+                }
+                if site.as_ref().is_some_and(|s| s.trim().is_empty()) {
+                    return Err("track-record --site requires a nonempty subject".to_string());
+                }
+            }
+            CliCommand::TrackRecord {
+                issuer,
+                site,
+                through,
             }
         }
         "recovery" => {
@@ -934,6 +971,16 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             fmine_public::guidance::run_synthetic(),
             "Invented synthetic evidence; this example is not an issuer finding.",
         ),
+        CliCommand::TrackRecord {
+            issuer,
+            site,
+            through,
+        } => track_record::execute(
+            issuer.as_deref(),
+            site.as_deref(),
+            through.as_deref(),
+            workspace_root,
+        ),
         CliCommand::RecoveryGap { issuer, through } => recovery_envelope(
             fmine_public::recovery::run_public(workspace_root, issuer, through.as_deref()),
         ),
@@ -1125,7 +1172,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 .map(|i| format!("\"{}\"", escape_json(i)))
                 .collect();
             let payload = format!(
-                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{ENVELOPE_FIELDS},\"verbs\":[\"assure public --issuer <issuer> [--through YYYYQn]\",\"assure public --synthetic\",\"assure challenges --issuer <issuer> [--through YYYYQn]\",\"assure challenges --synthetic\",\"guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD\",\"guidance completion --synthetic\",\"recovery gap --issuer <issuer> [--through YYYYQn]\",\"recovery gap --synthetic\",\"lint <draft> --issuer <issuer> [--through YYYYQn]\",\"lint <draft> --synthetic\",\"forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ [--selector first-published|latest-as-of]\",\"doctor\",\"claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"claim trace <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"robot-docs\"],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok; lint verdicts are data, including mismatches\",\"2\":\"usage error (unknown verb, flag, issuer or selection); the envelope still prints\"}},\"claim_inspection\":{{\"lookup\":\"Exact canonical IDs from the synthetic run or hash-verified registered sources; explicit selectors bind the ledger snapshot and claims digest\",\"why\":\"Recorded evidence, interpretation, computed color and Claim admission guards; absent assessments remain absent\",\"trace\":\"Available source anchors and registered provenance; unresolved parents are explicit\"}},\"lint\":{{\"mode\":\"cited equality\",\"link\":\"[printed number and unit](fmine:clm_ID)\",\"predicate\":\"One explicit subject, reporting period, ownership basis, supported metric, unit and equality per sentence or line; other prose is unchecked\",\"scope\":\"Selected registered source snapshot; no publication-time or disclosure-permission verdict\"}},\"forecast_assessment\":{{\"mode\":\"read_only_replay\",\"input\":\"Ordered forecast, cohort, outcome and assessment TOML rows\",\"default_selector\":\"first-published\",\"times_and_citations\":\"Supplied records, not external time proof or independently verified sources\"}},\"refusals\":[{}]}}",
+                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{ENVELOPE_FIELDS},\"verbs\":[\"assure public --issuer <issuer> [--through YYYYQn]\",\"assure public --synthetic\",\"assure challenges --issuer <issuer> [--through YYYYQn]\",\"assure challenges --synthetic\",\"guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD\",\"guidance completion --synthetic\",\"track-record --issuer <issuer> [--site <subject>] [--through YYYYQn]\",\"track-record --synthetic\",\"recovery gap --issuer <issuer> [--through YYYYQn]\",\"recovery gap --synthetic\",\"lint <draft> --issuer <issuer> [--through YYYYQn]\",\"lint <draft> --synthetic\",\"forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ [--selector first-published|latest-as-of]\",\"doctor\",\"claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"claim trace <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"robot-docs\"],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok; lint verdicts and track-record misses are data\",\"2\":\"usage error (unknown verb, flag, issuer or selection); the envelope still prints\"}},\"claim_inspection\":{{\"lookup\":\"Exact canonical IDs from the synthetic run or hash-verified registered sources; explicit selectors bind the ledger snapshot and claims digest\",\"why\":\"Recorded evidence, interpretation, computed color and Claim admission guards; absent assessments remain absent\",\"trace\":\"Available source anchors and registered provenance; unresolved parents are explicit\"}},\"lint\":{{\"mode\":\"cited equality\",\"link\":\"[printed number and unit](fmine:clm_ID)\",\"predicate\":\"One explicit subject, reporting period, ownership basis, supported metric, unit and equality per sentence or line; other prose is unchecked\",\"scope\":\"Selected registered source snapshot; no publication-time or disclosure-permission verdict\"}},\"forecast_assessment\":{{\"mode\":\"read_only_replay\",\"input\":\"Ordered forecast, cohort, outcome and assessment TOML rows\",\"default_selector\":\"first-published\",\"times_and_citations\":\"Supplied records, not external time proof or independently verified sources\"}},\"track_record\":{{\"mode\":\"retrospective_descriptive\",\"input\":\"Hash-verified registered workbooks and agreed document transcriptions\",\"outcome_selector\":\"Original annual release when registered; comparative-only outcomes remain separately labelled\",\"scope\":\"Missing members retained; no forecast registration, inferred probability, ranking or price adjustment\"}},\"refusals\":[{}]}}",
                 issuers.join(","),
                 refusals.join(",")
             );
