@@ -44,6 +44,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # macos-15 puts Homebrew's OpenSSL 1.1 first on PATH. Its `ts -verify` cannot build the chain from the
+      # committed rules proof to the pinned DigiCert root ("unable to get local issuer certificate", run
+      # 41322629628); OpenSSL 3 verifies the same proof. The forecast tests and scripts run `openssl` from PATH.
+      - name: OpenSSL 3 first on PATH (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew list --versions openssl@3 >/dev/null || brew install openssl@3
+          echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+          "$(brew --prefix openssl@3)/bin/openssl" version
       - name: Run GATE-LAYERS-00 (xtask check-all)
         run: cargo run -p xtask -- check-all
       # §28.4.3 (BD-012): a change adding LOC to a crate over its planned budget needs an approved BUDGET-AMEND
