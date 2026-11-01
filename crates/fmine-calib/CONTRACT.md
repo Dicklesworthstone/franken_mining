@@ -93,6 +93,15 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   interval remain absent. Summary Claims retain the certified rational `binomial_90_exact` bounds and their
   exact float projections; the `GDA1` version-2 value frame binds both representations. Publication selection
   and source-byte authentication belong to the public adapter.
+- `guidance_scores::claims::summarize_history` binds a single site's multi-year population on one metric,
+  unit and ownership/definition basis. Duplicate years and mixed subjects or bases refuse; unresolved years
+  stay in the denominator. `GuidanceSummary.scope` distinguishes `Annual` from `SiteHistory`, including the
+  latter's exact ordered years. Existing annual summaries retain their byte-identical `GDA1` version-2 value
+  encoding; the new history scope uses version 3. Existing numeric score and summary structures can be
+  projected from these Claims without repeating arithmetic or source selection.
+- Explicit deterministic `Assumed` numerical inputs may remain `Unknown` during hypothetical arithmetic;
+  the result retains that state and evidence. This exception does not admit unknown issuer assertions,
+  placeholders, stale inputs, failed calibration or explicit negative knowledge states.
 - `record` (BD-334.S1, the public forecast record of plan §21.6), all pure:
   - `record_frame`/`record_digest` (`FMREC1`: manifest and forecasts hashed as one) and `rules_frame`/`rules_digest`
     (`FMRUL1`: the rules alone, stamped first);

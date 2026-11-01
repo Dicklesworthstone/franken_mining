@@ -75,6 +75,19 @@ historical digest verification. Supersession names an already recorded replaceme
 refresh records a new status cut without reviving withdrawn or superseded outputs. A failed journal append
 after artifact creation leaves issuance durability unconfirmed: retain the file and resolve the journal before reuse.
 
+In the host-clock grammar, `check --digest ... --require-current` returns `FMINE-REF-202` (exit 3) when current
+reuse is denied, retaining the complete status and byte-verification payload.
+`check --digest ... --as-of YYYY-MM-DDTHH:MM:SSZ` inspects historical status under
+the same fresh trust inputs and never grants current reuse; the two flags are mutually exclusive. The payload
+includes the effective `reliance.as_of_ns`. Without a trusted clock, or if that clock fails, historical artifact
+bytes can still be verified while reliance remains unknown. No historical timestamp can enter a mutation.
+Issuance and reuse delegate to the canonical I/O adapter: they keep the journal lock through create-new writes,
+use private file permissions, and sync both the artifact and its parent directory. Artifact checks reject
+symlinks, FIFOs and other special files before opening them, so they cannot block a withdrawal behind a reader.
+FACT (BD-347, `tests/reliance.rs`): actual-binary regressions exercise exact report bytes, two recipient copies,
+withdrawal and replacement, refused current reuse, stale heads, wrong keys, tampered artifacts, private file modes,
+and a FIFO that must refuse before it can hold a journal lock indefinitely.
+
 ## 3. Authority, Epistemics & Representation
 - Every JSON invocation prints exactly one `FMT-ENV-1` envelope on stdout, a usage error included (`BD-329.S3`).
   Markdown wraps that envelope in a JSON fence, except successful challenge exports, which render the cited
@@ -260,13 +273,6 @@ after artifact creation leaves issuance durability unconfirmed: retain the file 
   report. Successful payloads bind the bundle's SHA-256 and each cone digest. Without a bundle the status
   is `not_checked`; the CLI always reports generator replay as `not_performed`. Supplied metadata remains
   unauthenticated evidence. The pure replay API is a separate caller-mediated operation.
-- The retrospective `track-record` row additionally carries canonical guidance, outcome interpretation and
-  derived-score Claims through `fmine-calib::guidance_scores::claims`. The interpreted outcome is parented to
-  its original source Claim. JSON retains IDs, canonical body bytes, value tags, evidence/knowledge, parents
-  and anchors; Markdown lists the same IDs. Unresolved members still carry guidance. An Unknown synthetic
-  source can support only the explicitly labelled arithmetic illustration, with no score Claim and a visible
-  typed refusal; no source state is promoted. Real Claim admission failures retain their typed refusal.
-  Existing per-site cross-year descriptive summary populations remain unchanged.
 - DESIGN (BD-341): `track-record --as-of` delegates source selection to `fmine_public::guidance::track_record` and
   all scoring to `fmine-calib`. The explicit calendar-date cut prevents an implicit wall-clock information
   set. The payload digest binds guidance, source Claims, selection and results; the envelope's authority
@@ -347,6 +353,16 @@ None: every failure is a usage error or a typed refusal.
   Before numerical use, the adapter rechecks the Claim identity, metric and complete canonical public value
   tag, including the semantic key and typed interpretation. Mutated source assertions remain unresolved
   members with `FMINE-REF-507`; numeric placeholders refuse with `FMINE-REF-208`.
+  The retrospective adapter computes through canonical `guidance_scores::claims` inputs, scores and site-history
+  summaries. Guidance statement IDs bind publication date, printed token, interpretation, locator and document
+  hash. Interpreted outcomes retain the original source Claim as a parent. JSON v1 adds `guidance.source_claim`,
+  `guidance.claim`, `interpreted_outcome_claim`, `score.claim` and each summary's `claim`; existing numeric fields
+  and the row-level `claims` object are projections of those Claims under `guidance-track-record/2`. The Claims
+  retain canonical body bytes, value tags, source ancestry, evidence, knowledge state, confidentiality and UU
+  terms. Markdown exposes their links, included years and certified rational binomial bounds. Explicit numeric
+  Unknown/Assumed synthetic inputs stay Unknown in derived Claims; other admission failures retain typed
+  refusals. Unresolved years remain in the history denominator. This wiring creates neither a calibration
+  verdict nor a probability for guidance.
   Registered-file integration tests construct invented workbooks and two-reader document entries, then check
   exact scores, original/comparative selection, ownership separation, source tampering, missing bytes,
   transcription disagreement, deterministic replay and actual JSON/Markdown executable output.

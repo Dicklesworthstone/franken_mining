@@ -85,8 +85,8 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
          ## Guidance and annual outcomes\n\n\
          Guidance vintage zero is the earliest registered guidance for that site, metric and year; later registered vintages remain separate. \
          A comparative outcome is not the original publication.\n\n\
-         | Site and metric | Year; guidance date | Guidance | Selected outcome | Printed result | Normalized deviation z | Guidance vintage |\n\
-         |---|---|---|---|---|---|---|\n",
+         | Site and metric | Year; guidance date | Guidance | Selected outcome | Printed result | Normalized deviation z | Guidance vintage | Score Claim |\n\
+         |---|---|---|---|---|---|---|---|\n",
         text(&report.issuer),
         text(NO_CLAIM),
         report.digest.to_hex(),
@@ -130,19 +130,30 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
             .unwrap_or_else(|| "Undefined".into());
         let _ = writeln!(
             out,
-            "| {} / {} | {}; {} | {} {} | {outcome} | {result} | {z} | {} |",
+            "| {} / {} | {}; {} | {} {} | {outcome} | {result} | {z} | {} | {} |",
             text(&row.site),
             text(&row.metric),
             row.year,
             text(&row.published_at),
             text(&row.guidance.token),
             text(&row.guidance.unit),
-            row.vintage
+            row.vintage,
+            row.score_claim
+                .as_ref()
+                .map_or_else(|| "Unscored".into(), |c| format!("`{}`", c.claim_id)),
         );
     }
     out.push_str("\nFor a non-degenerate range, z is the printed outcome's distance from the guidance midpoint divided by the guidance half-width. It is not a statistical z-score. Point and one-sided guidance have no z. Printed rounding uncertainty remains distinct from sampling uncertainty.\n\n## Descriptive summaries\n\nEvery missing member remains in the completion-bound denominator. Rows with different units, ownership bases, guidance vintages or comparative-outcome status are not pooled.\n\n");
     for summary in &report.summaries {
         let scores = &summary.scores;
+        let years = match &summary.claim.value.scope {
+            fmine_calib::guidance_scores::claims::SummaryScope::Annual { year } => year.to_string(),
+            fmine_calib::guidance_scores::claims::SummaryScope::SiteHistory { years, .. } => years
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+        };
         let _ = writeln!(
             out,
             "### {} / {} / guidance vintage {}\n\n{}; {}; {}.\n\nMembers: {}; resolved: {}; unresolved: {}. Printed outcomes inside: {}; below: {}; above: {}; boundary-ambiguous: {}.\n",
@@ -163,6 +174,13 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
             scores.below,
             scores.above,
             scores.boundary
+        );
+        let _ = writeln!(
+            out,
+            "Canonical summary Claim: `{}`. Included years: {years}. Evidence: {}; knowledge: {}.\n",
+            summary.claim.claim_id,
+            text(&format!("{:?}", summary.claim.evidence)),
+            text(&format!("{:?}", summary.claim.state)),
         );
         if let Some(rate) = scores.observed_hit_rate {
             let _ = writeln!(
@@ -189,6 +207,13 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
             let _ = writeln!(
                 out,
                 "IID-only binomial reference interval at the stated ninety-percent level: ≈ {lo:.6} to {hi:.6}. This assumes independent, identically distributed hits; it does not account for common year or site effects.\n"
+            );
+        }
+        if let Some(bounds) = scores.iid_reference_interval_90_exact {
+            let _ = writeln!(
+                out,
+                "Certified outward rational enclosure of that same IID reference interval: {}.\n",
+                interval(bounds)
             );
         }
         if let Some(mean) = scores.mean_z {
@@ -288,25 +313,24 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
         let _ = writeln!(
             out,
             "| {label} | Guidance | `{}` |",
-            row.claims.guidance.claim_id
+            row.member.guidance.claim_id
         );
-        if let Some(outcome) = &row.claims.outcome {
+        if let Some(outcome) = &row.member.outcome {
             let _ = writeln!(
                 out,
                 "| {label} | Interpreted outcome | `{}` |",
                 outcome.claim_id
             );
         }
-        match &row.claims.score {
+        match &row.score_claim {
             Some(score) => {
                 let _ = writeln!(out, "| {label} | Derived score | `{}` |", score.claim_id);
             }
             None => {
-                let reason = row.claims.score_refusal.as_ref().map_or_else(
-                    || "No admissible scored outcome".into(),
-                    |refusal| format!("{}: {}", text(refusal.code), text(&refusal.what)),
+                let _ = writeln!(
+                    out,
+                    "| {label} | Derived score | No admissible scored outcome |"
                 );
-                let _ = writeln!(out, "| {label} | Derived score | {reason} |");
             }
         }
     }
@@ -330,7 +354,7 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
             source(&mut out, "Later appearance", cell);
         }
     }
-    out.push_str("\nGuidance ranges carry no invented probability level. Effective sample size and dependence-adjusted bias intervals are not estimated. All authority flags remain false.\n");
+    out.push_str("\nThe JSON report retains each canonical score and summary Claim, its interpreted inputs, source statement, parents, source hashes, evidence state and unknown-unknown terms. A source statement's identity includes its registered publication date. Guidance ranges carry no invented probability level. Effective sample size and dependence-adjusted bias intervals are not estimated. All authority flags remain false.\n");
     out
 }
 
@@ -448,7 +472,7 @@ mod tests {
         assert!(rendered.contains("1.5"));
         assert!(rendered.contains("Source citations"));
         assert!(rendered.contains("Canonical Claim links"));
-        assert!(rendered.contains(&report.rows[0].claims.guidance.claim_id.to_string()));
+        assert!(rendered.contains(&report.rows[0].member.guidance.claim_id.to_string()));
         assert!(rendered.contains(&report.rows[0].guidance.doc_sha256));
         assert!(!rendered.contains("<script>"));
         assert!(!rendered.contains("\n# forged"));

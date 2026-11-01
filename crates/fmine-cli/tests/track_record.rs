@@ -261,7 +261,23 @@ mod tests {
             .find(|c| c.locator == "Synthetic_2024Q4.xlsx:YTD!C5")
             .unwrap();
         assert!(annual.contains(&claim.claim.claim_id.to_string()));
+        assert!(
+            annual.contains(&format!("\"parents\":[\"{}\"]", claim.claim.claim_id)),
+            "the interpreted outcome must retain its exact source Claim parent"
+        );
+        assert!(annual.contains("\"source_claim\":{\"claim_id\":\"clm_"));
+        assert!(annual.contains("\"interpreted_outcome_claim\":{\"claim_id\":\"clm_"));
+        let scored = annual.split_once("\"score\":").unwrap().1;
+        assert!(scored.contains("\"claim\":{\"claim_id\":\"clm_"));
+        assert!(scored.contains("\"value_tag\":\""));
+        assert!(
+            scored.contains("\"knowledge\":\"Unknown\""),
+            "synthetic source knowledge must never be upgraded by scoring"
+        );
+        assert!(scored.contains("\"evidence\":\"Assumed\""));
         assert!(annual.contains(&claim.key.reporting_vintage.file_sha256));
+        assert!(payload.contains("\"scope\":{\"kind\":\"site_history\""));
+        assert!(payload.contains("\"iid_reference_interval_90_exact\":{\"lo\":{\"num\":"));
         assert!(payload.contains("\"source_digest\":\""));
         assert!(payload.contains(&sha256(DOCUMENT).to_hex()));
         for flag in [
@@ -451,7 +467,7 @@ mod tests {
         let root = workspace(tag);
         let mut registry = String::from(
             "schema = \"fmine.sources.v1\"\nissuer = \"synthetic\"\ncorpus_dir = \"corpus\"\n\
-             retrieved_utc = \"synthetic\"\nurl_prefix = \"https://example.invalid/\"\n",
+         retrieved_utc = \"synthetic\"\nurl_prefix = \"https://example.invalid/\"\n",
         );
         let annual = build_minimal_xlsx(&[
             summary_sheet(2023, 100.0, 90.0, true),
@@ -473,7 +489,7 @@ mod tests {
             write!(
                 registry,
                 "\n[[source]]\nfile = \"{file}\"\nkind = \"mine_stats\"\nquarter = \"{quarter}\"\n\
-                 path = \"{file}\"\nurl_basis = \"W1 table\"\nbytes = {}\nsha256 = \"{}\"\n",
+             path = \"{file}\"\nurl_basis = \"W1 table\"\nbytes = {}\nsha256 = \"{}\"\n",
                 bytes.len(),
                 sha256(&bytes).to_hex()
             )
@@ -488,9 +504,9 @@ mod tests {
             write!(
                 registry,
                 "\n[[document]]\nfile = \"{file}\"\ndir = \"documents\"\nkind = \"mda\"\n\
-                 url = \"https://example.invalid/{file}\"\nurl_basis = \"W1 table\"\n\
-                 published_at = \"{date}\"\npublished_at_basis = \"FACT: synthetic fixture date\"\n\
-                 pages = 2\nbytes = {}\nsha256 = \"{}\"\n",
+             url = \"https://example.invalid/{file}\"\nurl_basis = \"W1 table\"\n\
+             published_at = \"{date}\"\npublished_at_basis = \"FACT: synthetic fixture date\"\n\
+             pages = 2\nbytes = {}\nsha256 = \"{}\"\n",
                 bytes.len(),
                 sha256(bytes).to_hex()
             )
@@ -546,12 +562,15 @@ mod tests {
                 if omit_second_quarter_price && *period == "2024Q2" {
                     continue;
                 }
-                write!(readings,
+                write!(
+                    readings,
                     "\n[[entry]]\ndoc = \"{file}\"\ndoc_sha256 = \"{}\"\npage = 1\n\
-                     table = \"Invented price sensitivity\"\nrow = \"{quantity}\"\ncol = \"{period}\"\n\
-                     token = \"{token}\"\nquantity = \"{quantity}\"\nunit = \"usd_per_oz\"\n\
-                     basis = \"{basis}\"\nperiod = \"{period}\"\nreader = \"{reader}\"\n",
-                    sha256(bytes).to_hex()).unwrap();
+                 table = \"Invented price sensitivity\"\nrow = \"{quantity}\"\ncol = \"{period}\"\n\
+                 token = \"{token}\"\nquantity = \"{quantity}\"\nunit = \"usd_per_oz\"\n\
+                 basis = \"{basis}\"\nperiod = \"{period}\"\nreader = \"{reader}\"\n",
+                    sha256(bytes).to_hex()
+                )
+                .unwrap();
             }
         }
         std::fs::write(transcriptions_path(&root, "synthetic"), readings).unwrap();
@@ -666,10 +685,10 @@ mod tests {
             write!(
                 shared_readings,
                 "\n[[entry]]\ndoc = \"Guidance2023.pdf\"\ndoc_sha256 = \"{}\"\npage = 1\n\
-                 table = \"Invented price sensitivity\"\nrow = \"Additional site assumption\"\n\
-                 col = \"2023FY\"\ntoken = \"1600\"\nquantity = \"{SITE}\"\n\
-                 unit = \"usd_per_oz\"\nbasis = \"realized-sales-price\"\n\
-                 period = \"2023FY\"\nreader = \"{reader}\"\n",
+             table = \"Invented price sensitivity\"\nrow = \"Additional site assumption\"\n\
+             col = \"2023FY\"\ntoken = \"1600\"\nquantity = \"{SITE}\"\n\
+             unit = \"usd_per_oz\"\nbasis = \"realized-sales-price\"\n\
+             period = \"2023FY\"\nreader = \"{reader}\"\n",
                 sha256(DOCUMENT).to_hex()
             )
             .unwrap();

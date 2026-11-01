@@ -192,6 +192,15 @@ reference interval assumes independent, identically distributed hits; it does no
 effective sample size, a bias confidence interval or forecasting skill. Guidance ranges receive no invented
 probability level, and the report does not rank sites.
 
+Retrospective scores and site-history summaries also carry canonical Claim IDs, source parents, evidence and
+knowledge state. The JSON includes the original guidance statement, its interpreted target, the interpreted
+outcome, each score and each summary as Claims, while preserving the existing numeric fields and row-level
+`claims` object. Claims expose exact value tags, canonical body bytes and citations; interpreted outcomes point
+to their original workbook Claims. Correcting a guidance publication date changes its evidence identity even
+when the arithmetic is unchanged. Markdown shows the Claim links, included years and exact rational binomial
+bounds; unresolved years remain in the denominator. Hypothetical arithmetic on an explicit Unknown/Assumed
+number preserves that state. Other Claim admission failures retain their typed refusal.
+
 The public command requires `registries/transcriptions/<issuer>.toml` with agreed readings from registered
 documents. These transcriptions and source documents remain outside git. Quantity keys follow
 `guidance_<site>_<metric>`, with site hyphens written as underscores; supported metrics are `production_koz`,
@@ -200,13 +209,6 @@ Production basis is `100%` or `attributable:n/d`. Cost basis also declares its d
 `attributable:4/5;aisc=issuer-reported-per-sold-oz`; the analogous per-sold-lb, `tcc` and `c1` definitions are
 explicit. Unknown guidance quantities, missing agreed readings and changed source bytes refuse. The synthetic
 command is an invented known-answer demonstration through the same binding and scoring code.
-
-JSON rows also carry canonical guidance, interpreted-outcome and derived-score Claims, including their
-content-addressed IDs, exact value tags, canonical body bytes, parent links, evidence states and citations.
-The interpreted outcome points to the original workbook Claim; the score uses the shared Claim-scoring
-kernel and retains both inputs. Markdown lists the same Claim IDs. Missing outcomes retain their guidance
-Claim. Synthetic arithmetic does not promote an Unknown source: a refused score Claim remains explicit.
-
 
 For AISC, the report can show a cited price sensitivity beside the unconditional score:
 `p = royalty * (1 - assumed_price / realized_price)`. It requires every declared original quarter from
@@ -394,6 +396,13 @@ The default freshness window is 300 seconds with a declared clock-skew bound of 
 `init`. An authorized `refresh` appends a fresh status cut using the same key/head/clock options; withdrawals
 remain effective. `supersede` additionally takes `--digest` and `--replacement`, both already recorded outputs.
 After withdrawal or supersession, current reuse refuses even while the original bytes still verify.
+For scripts that only need the current-use gate, add `--require-current` to the host-clock form
+`reliance check --digest ...`; denied reuse exits 3 and retains the full status diagnostics.
+`reliance check --digest ... --as-of YYYY-MM-DDTHH:MM:SSZ` reads historical status
+under the same fresh head/clock inputs and always reports `current_reuse_allowed: false`. It cannot be combined
+with `--require-current`. Checking an artifact without trust inputs still verifies its original bytes, while
+reporting reliance as unknown. Special files and symlinks are refused before opening them; issuance and reuse
+create private files and sync their parent directories as well as their contents.
 Withdrawal requires `--claims clm_…,clm_…` or an explicit `--all-claims` declaration when every statement is affected.
 `reuse` makes a gated local copy without recording a new issuance. `recall --claim clm_…` or the revision query
 lists recorded issuances only: external copies and recipients are not tracked or contacted. If artifact creation
