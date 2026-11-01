@@ -62,7 +62,8 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   scale, with their own printed step and UTF-8 byte spans into the original text. Comma grouping, accounting
   parentheses, signs, percentages, explicit scale words and ranges retain their printed information. An explicit
   scale word scales the number and step; a unit such as `koz` never converts its value. Percent values remain
-  percentage points. A range keeps both endpoint precisions. The token span includes its prefix and suffix.
+  percentage points. `g/t` and `grams per tonne` retain grade values and their printed precision unchanged.
+  A range keeps both endpoint precisions. The token span includes its prefix and suffix.
   `$` alone remains an unspecified dollar currency; `US$` explicitly names USD.
 - Basis and period tokens are finite lexical matches, not a sentence interpretation. Explicit ownership,
   per-ounce denominator, credit convention and definition words stay separate. Only `ownership basis unprinted`

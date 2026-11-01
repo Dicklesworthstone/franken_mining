@@ -14,22 +14,28 @@ The public lane of M0 (`fmine assure public`).
   source assertions. It indexes Claim IDs and latest series once, then compares the named subject, supported
   metric, period, ownership, denominator and unit. Exact rational half-step intervals decide containment,
   disjoint values and excessive precision; no floating-point tolerance or implicit unit conversion is used.
-  AISC, total cash costs, cost of sales, gold production and gold sales are supported. Co-product TCC stays
-  distinct from by-product TCC. Unsupported prose and source values remain unchecked, and ambiguous citations
-  or semantic context never produce `verified`.
+  AISC, total cash costs, cost of sales, gold production, gold sales, processed/head grade and whole-site
+  recovery are supported. Co-product TCC stays distinct from by-product TCC. Grade requires explicit `g/t`
+  (or `grams per tonne`) or percent units; recovery requires percent. Percent-formatted source fractions
+  retain their stored values and use their explicitly displayed percentage-point rounding intervals;
+  `mass_fraction` without a percent display stays unchecked. Bare/mined grade and circuit recovery are
+  outside this grammar. Unsupported prose and source values remain unchecked, and ambiguous citations or
+  semantic context never produce `verified`. Each candidate's Claim ID, metric and canonical value tag are
+  rechecked against its current key and value before verification; altered Claims stay unchecked.
   The caller supplies the source-verified snapshot. Staleness means a later release of the same canonical
   series in that snapshot or explicit Claim supersession; it is not inferred from a wall clock. The report
   binds exact draft bytes, canonical Claims, rules version and findings. It exposes numeric spans and source
   Claims without copying entire draft sentences. It does not decide publication availability, disclosure
   permission, qualitative truth or calibration of source numbers.
 - DESIGN (BD-345.S3): `lint::lint_discover(draft, claims)` accepts the same bounded equality grammar for
-  AISC, gold TCC and gold production. Exact subject, dated period, ownership, denominator, definition and unit select
-  candidates before any numeric comparison. One candidate receives the cited-mode checks; multiple
+  AISC, gold TCC, gold production, processed/head grade and whole-site recovery. Exact subject, dated period,
+  ownership, denominator, definition and unit select candidates before any numeric comparison. One candidate
+  receives the cited-mode checks; multiple
   candidates, including repeated vintages or conflicting source assertions, stay ambiguous and are listed.
   Values never break ties. Explicit citations keep cited-mode checking, and every finding records its mode.
   The source snapshot remains the caller's responsibility; discovery does not infer publication dates.
-  This executable slice has synthetic known-answer and adversarial checks. The six-key extension and the
-  independent labelled-set precision/recall assessment remain open; no general-prose accuracy is claimed.
+  This executable slice has synthetic known-answer and adversarial checks. Copper C1, reserve replacement
+  and the independent labelled-set precision/recall assessment remain open; no general-prose accuracy is claimed.
 - `sources`: the source registry (`BD-055`, `BD-322`, bd-s9j3.1), read at run time from
   `<workspace>/registries/sources/<issuer>.toml` (schema `fmine.sources.v1`, checked by `fmine_registry::sources`
   and by `xtask registry-check`). It pins each public workbook by file name, URL, byte size and SHA-256 (Barrick:

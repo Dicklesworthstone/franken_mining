@@ -14,10 +14,10 @@ use fmine_numerics::exact_feas::Rat;
 use crate::js;
 use crate::key::{
     KeyedCell, OwnershipBasis, Period, PeriodKind, PublicValue, Scope, SeriesKey,
-    SeriesOwnershipBasis, claims_digest,
+    SeriesOwnershipBasis, canonical_value_tag, claims_digest,
 };
 
-pub const RULES_VERSION: &str = "cited-equality/1";
+pub const RULES_VERSION: &str = "cited-equality/2";
 pub const NO_CLAIM: &str = "Checks supported numeric equalities against cited public Claims in the selected source snapshot. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure.";
 pub const DISCOVERY_NO_CLAIM: &str = "Matches supported numeric equalities to public Claims in the selected source snapshot only when their stated semantic keys identify exactly one candidate. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure. General-prose discovery precision has not been measured.";
 
@@ -305,6 +305,8 @@ enum Metric {
     CostOfSales,
     Production,
     Sales,
+    ProcessedGrade,
+    Recovery,
 }
 
 impl Metric {
@@ -330,6 +332,10 @@ fn metric(c: &KeyedCell) -> Option<Metric> {
         | "site:costs per ounce ($/oz):cost of sales" => Metric::CostOfSales,
         "summary:au_prod_100_koz" | "summary:au_prod_attr_koz" => Metric::Production,
         "summary:au_sold_attr_koz" | "ounces sold" => Metric::Sales,
+        "site:average grade (grams per tonne):processed"
+        | "site:average grade (percent):processed"
+        | "site:average grade:processed" => Metric::ProcessedGrade,
+        "site::recovery rate (percent)" => Metric::Recovery,
         _ => return None,
     })
 }
@@ -580,6 +586,10 @@ fn context(text: &str, tokens: &[Token], links: &[Link], index: &Index<'_>) -> C
         ("gold produced", Metric::Production),
         ("gold sales", Metric::Sales),
         ("gold sold", Metric::Sales),
+        ("processed grade", Metric::ProcessedGrade),
+        ("head grade", Metric::ProcessedGrade),
+        ("recovery rate", Metric::Recovery),
+        ("recovery", Metric::Recovery),
         ("production", Metric::Production),
         ("sales", Metric::Sales),
         ("aisc", Metric::Aisc),
@@ -645,10 +655,20 @@ fn period(t: PeriodTok) -> Option<Period> {
     })
 }
 
-fn unit_matches(unit: UnitTok, key: &str) -> bool {
+fn unit_matches(unit: UnitTok, key: &str, metric: Metric) -> bool {
     matches!(
-        (unit, key),
-        (UnitTok::UsdPerOz | UnitTok::DollarPerOz, "usd_per_oz") | (UnitTok::Koz, "koz")
+        (metric, unit, key),
+        (
+            Metric::Aisc | Metric::Tcc | Metric::CostOfSales,
+            UnitTok::UsdPerOz | UnitTok::DollarPerOz,
+            "usd_per_oz"
+        ) | (Metric::Production | Metric::Sales, UnitTok::Koz, "koz")
+            | (Metric::ProcessedGrade, UnitTok::GramsPerTonne, "g_per_t")
+            | (
+                Metric::ProcessedGrade | Metric::Recovery,
+                UnitTok::Percent,
+                "percent" | "wt_pct" | "mass_fraction"
+            )
     )
 }
 
@@ -677,7 +697,23 @@ fn source_box(c: &KeyedCell) -> Option<(Rat, Rat)> {
     let [Token::Number(n)] = tokens.as_slice() else {
         return None;
     };
-    if text.trim() != n.raw.trim() || n.range_with.is_some() || n.percent || n.unit.is_some() {
+    let physical = matches!(metric(c), Some(Metric::ProcessedGrade | Metric::Recovery));
+    // Percent-format workbooks store fractions but print percentage points. Compare that explicit
+    // presentation, preserving both stored value and source Claim; an unformatted fraction is unusable.
+    let source_unit = match (metric(c), c.key.unit.as_str()) {
+        (Some(Metric::ProcessedGrade), "g_per_t") => n.unit.is_none(),
+        (Some(Metric::ProcessedGrade | Metric::Recovery), "percent" | "wt_pct") => {
+            matches!(n.unit, None | Some(UnitTok::Percent))
+        }
+        (Some(Metric::ProcessedGrade | Metric::Recovery), "mass_fraction") => n.percent,
+        (Some(Metric::ProcessedGrade | Metric::Recovery), _) => false,
+        _ => n.unit.is_none(),
+    };
+    if text.trim() != n.raw.trim()
+        || n.range_with.is_some()
+        || !source_unit
+        || (physical && (n.currency.is_some() || n.scale_word.is_some() || n.hedge.is_some()))
+    {
         return None;
     }
     number_box(decimal(n.value)?, decimal(n.step)?)
@@ -794,6 +830,13 @@ fn finding(
     };
     let claim = candidates[0];
     f.source = Some(claim.clone());
+    if claim.claim.check_id().is_err()
+        || claim.claim.metric_key != claim.key.line.label
+        || claim.claim.value_tag() != canonical_value_tag(&claim.key, &claim.claim.value)
+    {
+        f.reason = "source_claim_identity_mismatch";
+        return f;
+    }
     if link_set.len() != 1
         || text[link.label.0..link.label.1].trim() != n.raw.trim()
         || n.range_with.is_some()
@@ -853,7 +896,10 @@ fn finding(
     }
     if ctx.units.is_empty() {
         failures.push((Verdict::Ambiguous, "explicit_unit_required"));
-    } else if !ctx.units.iter().all(|u| unit_matches(*u, &claim.key.unit))
+    } else if !ctx
+        .units
+        .iter()
+        .all(|u| unit_matches(*u, &claim.key.unit, m))
         || n.currency
             .is_some_and(|c| !matches!(c, Currency::Usd | Currency::Dollar) || !m.rate())
     {
@@ -907,7 +953,13 @@ fn discover(
         || ctx.metrics.len() != 1
         || !matches!(
             ctx.metrics.first(),
-            Some(Metric::Aisc | Metric::Tcc | Metric::Production)
+            Some(
+                Metric::Aisc
+                    | Metric::Tcc
+                    | Metric::Production
+                    | Metric::ProcessedGrade
+                    | Metric::Recovery
+            )
         )
         || ctx.subjects.is_empty()
         || tokens
@@ -964,7 +1016,7 @@ fn discover(
         .flatten()
         .copied()
         .filter(|c| {
-            ctx.units.iter().all(|u| unit_matches(*u, &c.key.unit))
+            ctx.units.iter().all(|u| unit_matches(*u, &c.key.unit, m))
                 && !n.currency.is_some_and(|currency| {
                     !matches!(currency, Currency::Usd | Currency::Dollar) || !m.rate()
                 })

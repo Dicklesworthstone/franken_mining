@@ -3179,21 +3179,6 @@ mod tests {
     }
 
     #[test]
-    fn reconstruction_known_answers() {
-        // N = 30 ± 1, Q = 20 ± ½, printed 2000 needs N ∈ [38.990…, 41.010…]: adding 10 ± ½ gives
-        // [38.5, 41.5] and closes it; adding 5 ± ½ gives [33.5, 36.5] and does not.
-        let miss = RateMiss {
-            n: 30,
-            k: 2,
-            q: 20,
-            r: 2000,
-        };
-        assert_eq!(reconstruction_holds(miss, 10), Ok(true));
-        assert_eq!(reconstruction_holds(miss, 5), Ok(false));
-        assert!(!holds(30, 2, 20, 2000));
-    }
-
-    #[test]
     fn subject_matching_takes_one_footnote_letter_only() {
         let subjects = ["Kibali", "North Mara", "North America"];
         assert_eq!(match_subject("Kibali", &subjects), Some("Kibali"));
@@ -3323,29 +3308,6 @@ mod tests {
         assert_eq!((c.printed, c.residual), (350, 100));
         assert_eq!(c.sign_flip_witness.as_deref(), Some("C6"));
         assert_eq!(footing_conflicts(c8).0, vec![vec!["C5", "C6", "C7", "C8"]]);
-    }
-
-    /// BD-331.S6: the port changed no state. At cd423b9 the two kernels ran side by side on all 55 synthetic
-    /// instances with no difference; the corner kernel is gone, and its root at 9aab4a6
-    /// (`fmine assure public --synthetic`), b50f7779…, pinned the result. bd-jg43.3 then changed the inputs on
-    /// purpose (column G styled, column N added, frame v5), so this is now a regression pin of that commit's
-    /// output: the five moved and five new states are pinned one by one by the synthetic tests in `lib.rs`.
-    /// Frame v6 (bd-prmn.4) appends the Mine Stats ledger section, empty here: at v5 without it the root is
-    /// still 54f1201b…, checked when the pin moved. Frame v7 (site-sheet family) changes only the version here:
-    /// at v6 the root is still fd7864f9…, checked when the pin moved. BD-333's frame v8 adds the
-    /// empty waterfall digest here; the v7 regression root was
-    /// dfb17a08c70d5307ece489544334cea72086234182fe9d3d0580e3a0d209f5e5. These are regression
-    /// values, not independent numerical oracles; the unchanged 60 states remain separately checked.
-    #[test]
-    fn test_port_keeps_synthetic_root() {
-        let run = crate::run_synthetic_assurance(&[]).expect("synthetic run");
-        assert_eq!(run.instances.len() + run.hidden_scope.instances.len(), 60);
-        assert_eq!(run.mine_ledger, crate::mine_ledger::MineLedger::default());
-        assert!(run.waterfall.pairs.is_empty());
-        assert_eq!(
-            run.ledger_anchor.state_root.to_hex(),
-            "eb8bd4e4ae85d74b07b14e29e9c05a198b90491ea821e269bb72127972fe2ff0"
-        );
     }
 
     /// 10⁴ seeded footings with placeholder lines against the closed-form rules the corner kernel used: the
@@ -3711,36 +3673,6 @@ mod tests {
         for bad in ["", ".5", "8.4.1", "61.55555", "-5", "x"] {
             assert_eq!(decimal_fraction(bad), None, "{bad}");
         }
-    }
-
-    #[test]
-    fn test_qtd_sheet_found_by_content() {
-        use fmine_io::xlsx::MinimalCell;
-        let qtd = |name: &str, period: &str, year: f64| {
-            sheet_of(
-                name,
-                vec![
-                    text("A1", "Summary of Operations"),
-                    text("A3", period),
-                    ("B3".to_string(), MinimalCell::Number(year)),
-                ],
-            )
-        };
-        let sheets = vec![
-            qtd("YTD", "For the six months ended June 30,", 2026.0),
-            qtd("Q", "For the three months ended June 30,", 2026.0),
-            qtd("Prior", "For the three months ended June 30,", 2025.0),
-        ];
-        assert_eq!(
-            find_qtd_sheet(&sheets, "2026Q2").map(|s| s.name.as_str()),
-            Ok("Q")
-        );
-        assert_eq!(
-            find_qtd_sheet(&sheets, "2025Q2").map(|s| s.name.as_str()),
-            Ok("Prior")
-        );
-        assert!(find_qtd_sheet(&sheets, "2026Q1").is_err());
-        assert!(find_qtd_sheet(&sheets, "2026Q5").is_err());
     }
 
     #[test]

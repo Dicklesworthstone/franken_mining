@@ -156,6 +156,13 @@ candidate goes through the same value, rounding and staleness checks as a cited 
 Claims remain ambiguous, with their source evidence retained; the draft's amount never selects a preferred
 vintage. Existing links keep their cited-mode checks. This bounded grammar does not interpret arbitrary prose.
 
+Discovery supports AISC, gold TCC, gold production, processed/head grade and whole-site recovery. Grade uses
+explicit `g/t` (or `grams per tonne`) or percent units; recovery uses percent. For example, an invented draft
+`Site A Q1 2030 ownership basis unprinted recovery is 91.5%.` checks the source's displayed percentage-point
+interval, including when the workbook stores `0.915` with a percent format. It never compares `91.5%` with a raw
+fraction as though they were the same unit. Bare/mined grade, circuit recovery, copper C1 and reserve replacement
+remain outside discovery's supported grammar. Independently labelled general-prose accuracy remains unmeasured.
+
 The command reads the draft locally, writes no files, and emits number spans and verdicts rather than whole
 sentences. JSON includes the draft and Claim-population digests and the source snapshot root. Findings are data:
 a completed lint exits zero even when it finds mismatches. Missing or altered registered source files refuse.

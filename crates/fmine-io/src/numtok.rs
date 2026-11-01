@@ -51,6 +51,7 @@ pub enum UnitTok {
     Koz,
     Moz,
     Kt,
+    GramsPerTonne,
     Percent,
     Usd,
 }
@@ -349,6 +350,8 @@ fn unit(text: &str, at: usize) -> Option<(usize, UnitTok)> {
         ("USD/lb", U::UsdPerLb),
         ("$/oz", U::DollarPerOz),
         ("$/lb", U::DollarPerLb),
+        ("grams per tonne", U::GramsPerTonne),
+        ("g/t", U::GramsPerTonne),
         ("percent", U::Percent),
         ("per cent", U::Percent),
         ("%", U::Percent),
@@ -782,6 +785,18 @@ mod tests {
         assert_eq!(n.scale_word, None, "a unit is not a scale-word conversion");
         assert_eq!(one("1.6 Moz").unit, Some(UnitTok::Moz));
         assert_eq!(one("€1.6 million").currency, Some(Currency::Eur));
+        for text in ["2.50 g/t", "2.50g/t", "2.50 grams per tonne"] {
+            let n = one(text);
+            assert_eq!(
+                (n.value, n.step, n.unit),
+                (dec(250, 2), dec(1, 2), Some(UnitTok::GramsPerTonne))
+            );
+            assert!(!n.percent);
+            assert_eq!(
+                n.scale_word, None,
+                "a grade unit does not rescale its value"
+            );
+        }
     }
 
     #[test]

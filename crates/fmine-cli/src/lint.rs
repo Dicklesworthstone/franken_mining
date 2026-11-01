@@ -240,6 +240,100 @@ mod tests {
     }
 
     #[test]
+    fn physical_discovery_uses_registered_source_display_precision() {
+        use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
+        use std::fmt::Write as _;
+
+        let workspace = temporary_workspace("physical-discovery");
+        let registry = fmine_public::synthetic::write_issuer_workspace(&workspace)
+            .expect("synthetic registry");
+        let text = |s: &str| MinimalCell::Text(s.into());
+        let bytes = build_minimal_xlsx_styled(
+            &[MinimalSheet {
+                name: "Minestats1".into(),
+                hidden: false,
+                cells: vec![
+                    ("B2".into(), text("Site A")),
+                    ("A3".into(), text("For the three months ended March 31,")),
+                    ("B3".into(), MinimalCell::Number(2030.0)),
+                    ("A4".into(), text("Average grade (grams per tonne)")),
+                    ("A5".into(), text("Processed")),
+                    (
+                        "B5".into(),
+                        MinimalCell::Styled {
+                            raw: "2.50".into(),
+                            xf: 1,
+                        },
+                    ),
+                    ("A7".into(), text("Recovery rate (percent)")),
+                    (
+                        "B7".into(),
+                        MinimalCell::Styled {
+                            raw: "0.915".into(),
+                            xf: 2,
+                        },
+                    ),
+                ],
+            }],
+            Some(&MinimalStyles {
+                num_fmts: vec![(164, "0.00".into()), (165, "0.0%".into())],
+                xfs: vec![0, 164, 165],
+            }),
+        );
+        std::fs::write(workspace.join("corpus/Physical.xlsx"), &bytes)
+            .expect("invented physical source");
+        let mut registered = std::fs::read_to_string(&registry).expect("registry");
+        writeln!(
+            registered,
+            "\n[[source]]\nfile = \"Physical.xlsx\"\nkind = \"mine_stats\"\n\
+             quarter = \"2030Q1\"\npath = \"Physical.xlsx\"\n\
+             url_basis = \"W1 table\"\n\
+             bytes = {}\nsha256 = \"{}\"",
+            bytes.len(),
+            fmine_core::hash::sha256(&bytes).to_hex(),
+        )
+        .expect("source registration");
+        std::fs::write(registry, registered).expect("registered source bytes");
+        let draft = concat!(
+            "Site A Q1 2030 ownership basis unprinted processed grade is 2.50 g/t.\n",
+            "Site A Q1 2030 ownership basis unprinted recovery is 91.5%.\n",
+            "Site A Q1 2030 ownership basis unprinted head grade is 2.500 g/t.\n",
+            "Site A Q1 2030 ownership basis unprinted recovery rate is 0.915%.\n",
+        );
+        std::fs::write(workspace.join("physical.md"), draft).expect("draft");
+        let arguments = args(&["lint", "physical.md", "--issuer", "synthetic", "--discover"]);
+        let envelope = crate::invoke(&arguments, &workspace).0;
+        let json = envelope.to_json();
+        assert_eq!(envelope.exit_code, 0, "{json}");
+        for (verdict, count) in [
+            ("verified", 2),
+            ("rounding_beyond_tolerance", 1),
+            ("value_mismatch", 1),
+        ] {
+            assert_eq!(
+                json.matches(&format!("\"verdict\":\"{verdict}\"")).count(),
+                count,
+                "{json}",
+            );
+        }
+        assert!(json.contains("Physical.xlsx:Minestats1!B5"));
+        assert!(json.contains("Physical.xlsx:Minestats1!B7"));
+        assert!(json.contains("0.915") && json.contains("91.5%"));
+        assert!(json.contains(crate::FLAGS_JSON));
+        assert_eq!(crate::invoke(&arguments, &workspace).0.to_json(), json);
+        let mut markdown = arguments;
+        markdown.extend(args(&["--format", "markdown"]));
+        let (rendered, exit) = crate::run(&markdown, &workspace);
+        assert_eq!(exit, 0);
+        assert!(rendered.contains("rounding_beyond_tolerance"));
+        assert!(rendered.contains("Physical.xlsx:Minestats1!B7"));
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("physical.md")).expect("unchanged draft"),
+            draft,
+        );
+    }
+
+    #[test]
     fn cited_draft_runs_end_to_end_and_does_not_modify_the_workspace() {
         let workspace = temporary_workspace("read-only");
         fmine_public::synthetic::write_issuer_workspace(&workspace).expect("synthetic registry");

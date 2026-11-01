@@ -213,6 +213,10 @@ after artifact creation leaves issuance durability unconfirmed: retain the file 
   existing links retain their cited checks. Multiple semantic matches are exposed and never resolved by the
   draft's amount. The selected source snapshot is verified in either mode. Publication-time/publicness remains
   unassessed; supported discovery grammar is not a general-prose accuracy claim.
+  Both modes include processed/head grade (`g/t`, `grams per tonne` or percent) and whole-site recovery
+  (percent), with explicit subject, dated period and ownership. Percent-format fractions use the source's
+  displayed percentage-point interval while retaining the stored fraction. Bare/mined grade, circuit recovery,
+  copper C1 and reserve replacement remain outside the discovery grammar.
 - DESIGN (BD-343): forecast assessment replays transcript rows in their supplied order using the existing
   calibration kernel. No alternate scoring formula, default time proof or hidden denominator is introduced.
   Saved assessment rows enforce the kernel's sealed-cut rules across replay. Both envelope authority fields
