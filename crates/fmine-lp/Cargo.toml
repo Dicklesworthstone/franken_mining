@@ -1,0 +1,15 @@
+[package]
+name = "fmine-lp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Pushback linear programming: restarted PDHG (PDLP) on a sparse CSR matrix, with a dual bound certified by outward rounding."
+
+[dependencies]
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-numerics = { path = "../fmine-numerics" }
+
+[lints]
+workspace = true
