@@ -3,6 +3,60 @@
 //! Public assurance display/refusal and mutation checks are retained in `public_report_contract.rs`.
 
 #[cfg(test)]
+mod aisc_headers {
+    use fmine_io::xlsx::Sheet;
+    use fmine_public::aisc::find_qtd_sheet;
+
+    fn sheet_of(name: &str, cells: Vec<(String, fmine_io::xlsx::MinimalCell)>) -> Sheet {
+        use fmine_io::xlsx::{MinimalSheet, Workbook, build_minimal_xlsx};
+        let bytes = build_minimal_xlsx(&[MinimalSheet {
+            name: name.to_string(),
+            hidden: false,
+            cells,
+        }]);
+        let wb = Workbook::from_bytes("t.xlsx", &bytes).expect("parses");
+        wb.sheet(name).expect("sheet").clone()
+    }
+
+    fn text(cell: &str, s: &str) -> (String, fmine_io::xlsx::MinimalCell) {
+        (
+            cell.to_string(),
+            fmine_io::xlsx::MinimalCell::Text(s.to_string()),
+        )
+    }
+
+    #[test]
+    fn test_qtd_sheet_found_by_content() {
+        use fmine_io::xlsx::MinimalCell;
+        let qtd = |name: &str, period: &str, year: f64| {
+            sheet_of(
+                name,
+                vec![
+                    text("A1", "Summary of Operations"),
+                    text("A3", period),
+                    ("B3".to_string(), MinimalCell::Number(year)),
+                ],
+            )
+        };
+        let sheets = vec![
+            qtd("YTD", "For the six months ended June 30,", 2026.0),
+            qtd("Q", "For the three months ended June 30,", 2026.0),
+            qtd("Prior", "For the three months ended June 30,", 2025.0),
+        ];
+        assert_eq!(
+            find_qtd_sheet(&sheets, "2026Q2").map(|s| s.name.as_str()),
+            Ok("Q")
+        );
+        assert_eq!(
+            find_qtd_sheet(&sheets, "2025Q2").map(|s| s.name.as_str()),
+            Ok("Prior")
+        );
+        assert!(find_qtd_sheet(&sheets, "2026Q1").is_err());
+        assert!(find_qtd_sheet(&sheets, "2026Q5").is_err());
+    }
+}
+
+#[cfg(test)]
 mod mine_stats_oracle {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;

@@ -11,6 +11,7 @@ description = "Label-anchored .xlsx and HTML filing table extractors with SHA-25
 fmine-claim = { path = "../fmine-claim" }
 fmine-core = { path = "../fmine-core" }
 fmine-evidence = { path = "../fmine-evidence" }
+fmine-runtime = { path = "../fmine-runtime" }
 
 [lints]
 workspace = true

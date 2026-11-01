@@ -14,15 +14,21 @@ pub(crate) fn execute(
     issuer: Option<&str>,
     site: Option<&str>,
     through: Option<&str>,
+    price_subject: Option<&str>,
     root: &Path,
 ) -> Envelope {
     let report = match issuer {
-        Some(issuer) => data::run(root, issuer, site, through),
-        None if site.is_none() && through.is_none() => data::synthetic(),
+        Some(issuer) => match price_subject {
+            Some(subject) => {
+                data::run_with_price_subject(root, issuer, site, through, Some(subject))
+            }
+            None => data::run(root, issuer, site, through),
+        },
+        None if site.is_none() && through.is_none() && price_subject.is_none() => data::synthetic(),
         None => {
             return Envelope::usage_error(
                 "track-record",
-                "site and through selections require an issuer",
+                "site, through and price-subject selections require an issuer",
             );
         }
     };
@@ -38,6 +44,117 @@ pub(crate) fn execute(
         }
         Err(refusal) => Envelope::refused("track-record", refusal, actions),
     }
+}
+
+/// Reuse the evidence-cut comparison's exact selectors and score population for paired sensitivities.
+pub(crate) fn execute_as_of(
+    issuer: &str,
+    site: Option<&str>,
+    as_of: &str,
+    price_subject: Option<&str>,
+    root: &Path,
+) -> Envelope {
+    use fmine_core::codec::Encoder;
+    use fmine_core::hash::blake3_hash;
+    use fmine_evidence::{Refusal, RefusalCode};
+    use fmine_public::guidance::track_record as comparison;
+    use fmine_public::sources::load_issuer_profile;
+    use fmine_public::transcribe::load_guidance_transcription_report;
+
+    let loaded = (|| {
+        let profile = load_issuer_profile(root, issuer)?;
+        let claims = fmine_public::key::mine_stats::load_claims(&profile, root)?;
+        let transcripts = load_guidance_transcription_report(&profile, root, Some(as_of))?
+            .ok_or_else(|| Refusal::new(
+                RefusalCode::NoClaimInDomain201,
+                "register agreed guidance readings before requesting an evidence-cut track record",
+            ))?;
+        let report = comparison::assess(&profile, &transcripts, &claims.claims, site, as_of)?;
+        Ok::<_, Refusal>((profile, claims, transcripts, report))
+    })();
+    let (profile, claims, transcripts, report) = match loaded {
+        Ok(value) => value,
+        Err(refusal) => return crate::track_record_envelope(Err(refusal)),
+    };
+    let mut price_rows = Vec::new();
+    let mut markdown = String::from(
+        "\n## AISC price sensitivities at the evidence cut\n\nFirst-published and latest-registered selections are priced separately without changing their unconditional scores or cohort denominators. Only documents available by the requested cut are admitted. Every planned quarter completed by the cut remains required, even when its original workbook is missing.\n\n",
+    );
+    let js = |value: &str| format!("\"{}\"", crate::escape_json(value));
+    for row in &report.rows {
+        if !matches!(row.metric.as_str(), "aisc_usd_per_oz" | "aisc_usd_per_lb") {
+            continue;
+        }
+        let first = crate::track_record_price::assess_as_of(
+            &profile,
+            &transcripts,
+            &claims.claims,
+            row,
+            &row.first_published,
+            as_of,
+            price_subject,
+        );
+        let latest = crate::track_record_price::assess_as_of(
+            &profile,
+            &transcripts,
+            &claims.claims,
+            row,
+            &row.latest_registered,
+            as_of,
+            price_subject,
+        );
+        price_rows.push(format!(
+            "{{\"site\":{},\"year\":{},\"metric\":{},\"basis\":{},\"unit\":{},\"guidance_at\":{},\"guidance_sha256\":{},\"first_published\":{},\"latest_registered\":{}}}",
+            js(&row.site), row.year, js(&row.metric), js(&row.guidance.basis),
+            js(&row.guidance.unit), js(&row.guidance.locator.to_string()),
+            js(&row.guidance.doc_sha256), first.to_json(), latest.to_json(),
+        ));
+        let _ = writeln!(
+            markdown,
+            "### {} / {} / {} / {}\n\n#### First published\n\n{}\n#### Latest registered\n\n{}",
+            text(&row.site),
+            row.year,
+            text(&row.metric),
+            text(&row.guidance.locator.to_string()),
+            first.to_markdown(),
+            latest.to_markdown(),
+        );
+    }
+    let prices = format!(
+        "{{\"schema\":\"fmine.guidance.track-record.price.as-of.v1\",\"as_of\":{},\"requested_price_subject\":{},\"rows\":[{}]}}",
+        js(as_of),
+        price_subject.map_or_else(|| "null".into(), js),
+        price_rows.join(","),
+    );
+    let base = report.to_json();
+    let prefix = format!("{{\"digest\":{},", js(&report.digest.to_hex()));
+    let Some(body) = base.strip_prefix(&prefix).and_then(|s| s.strip_suffix('}')) else {
+        return crate::track_record_envelope(Err(Refusal::new(
+            RefusalCode::SourceCellUnusable208,
+            "evidence-cut comparison serialization differs from its declared digest frame",
+        )));
+    };
+    let mut frame = Encoder::new_frame(*b"GTAP", 1);
+    frame.put_str(&base);
+    frame.put_str(&prices);
+    let digest = blake3_hash(&frame.finish());
+    let payload = format!(
+        "{{\"digest\":{},\"comparison_digest\":{},\"digest_scope\":\"base_comparison_and_both_price_selections\",{body},\"price_sensitivity\":{prices}}}",
+        js(&digest.to_hex()),
+        js(&report.digest.to_hex()),
+    );
+    let _ = writeln!(
+        markdown,
+        "\nBase comparison digest: {}.\n\nCombined comparison and price digest: {}.\n",
+        report.digest.to_hex(),
+        digest.to_hex(),
+    );
+    let mut envelope = crate::track_record_envelope(Ok(report));
+    envelope.payload_json = payload;
+    if let Some(rendered) = &mut envelope.rendered_markdown {
+        rendered.push_str(&markdown);
+    }
+    envelope
 }
 
 fn printed(cell: &KeyedCell) -> String {
@@ -79,8 +196,8 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
          ## Guidance and annual outcomes\n\n\
          Guidance vintage zero is the earliest registered guidance for that site, metric and year; later registered vintages remain separate. \
          A comparative outcome is not the original publication.\n\n\
-         | Site and metric | Year; guidance date | Guidance | Selected outcome | Printed result | Normalized deviation z | Guidance vintage |\n\
-         |---|---|---|---|---|---|---|\n",
+         | Site and metric | Year; guidance date | Guidance | Selected outcome | Printed result | Normalized deviation z | Guidance vintage | Score Claim |\n\
+         |---|---|---|---|---|---|---|---|\n",
         text(&report.issuer),
         text(NO_CLAIM),
         report.digest.to_hex(),
@@ -124,19 +241,30 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
             .unwrap_or_else(|| "Undefined".into());
         let _ = writeln!(
             out,
-            "| {} / {} | {}; {} | {} {} | {outcome} | {result} | {z} | {} |",
+            "| {} / {} | {}; {} | {} {} | {outcome} | {result} | {z} | {} | {} |",
             text(&row.site),
             text(&row.metric),
             row.year,
             text(&row.published_at),
             text(&row.guidance.token),
             text(&row.guidance.unit),
-            row.vintage
+            row.vintage,
+            row.score_claim
+                .as_ref()
+                .map_or_else(|| "Unscored".into(), |c| format!("`{}`", c.claim_id)),
         );
     }
     out.push_str("\nFor a non-degenerate range, z is the printed outcome's distance from the guidance midpoint divided by the guidance half-width. It is not a statistical z-score. Point and one-sided guidance have no z. Printed rounding uncertainty remains distinct from sampling uncertainty.\n\n## Descriptive summaries\n\nEvery missing member remains in the completion-bound denominator. Rows with different units, ownership bases, guidance vintages or comparative-outcome status are not pooled.\n\n");
     for summary in &report.summaries {
         let scores = &summary.scores;
+        let years = match &summary.claim.value.scope {
+            fmine_calib::guidance_scores::claims::SummaryScope::Annual { year } => year.to_string(),
+            fmine_calib::guidance_scores::claims::SummaryScope::SiteHistory { years, .. } => years
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+        };
         let _ = writeln!(
             out,
             "### {} / {} / guidance vintage {}\n\n{}; {}; {}.\n\nMembers: {}; resolved: {}; unresolved: {}. Printed outcomes inside: {}; below: {}; above: {}; boundary-ambiguous: {}.\n",
@@ -157,6 +285,13 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
             scores.below,
             scores.above,
             scores.boundary
+        );
+        let _ = writeln!(
+            out,
+            "Canonical summary Claim: `{}`. Included years: {years}. Evidence: {}; knowledge: {}.\n",
+            summary.claim.claim_id,
+            text(&format!("{:?}", summary.claim.evidence)),
+            text(&format!("{:?}", summary.claim.state)),
         );
         if let Some(rate) = scores.observed_hit_rate {
             let _ = writeln!(
@@ -185,6 +320,13 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
                 "IID-only binomial reference interval at the stated ninety-percent level: ≈ {lo:.6} to {hi:.6}. This assumes independent, identically distributed hits; it does not account for common year or site effects.\n"
             );
         }
+        if let Some(bounds) = scores.iid_reference_interval_90_exact {
+            let _ = writeln!(
+                out,
+                "Certified outward rational enclosure of that same IID reference interval: {}.\n",
+                interval(bounds)
+            );
+        }
         if let Some(mean) = scores.mean_z {
             let _ = writeln!(
                 out,
@@ -199,6 +341,26 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
                 "Mean-deviation bounds from printed rounding only: {}. These are not a confidence interval for bias.\n",
                 interval(bounds)
             );
+        }
+    }
+    if report
+        .rows
+        .iter()
+        .any(|row| row.price_sensitivity.is_some())
+    {
+        out.push_str("\n## AISC price sensitivity\n\nThe report retains the reported outcome and unconditional score above. A conditional sensitivity is shown only when every declared quarter has usable source evidence and the exact proportionality checks pass.\n\n");
+        for row in &report.rows {
+            if let Some(price) = &row.price_sensitivity {
+                let _ = writeln!(
+                    out,
+                    "### {} / {} / {} / guidance vintage {}\n\n{}",
+                    text(&row.site),
+                    text(&row.metric),
+                    row.year,
+                    row.vintage,
+                    price.to_markdown()
+                );
+            }
         }
     }
     if report.rows.iter().any(
@@ -250,6 +412,39 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
             );
         }
     }
+    out.push_str("\n## Canonical Claim links\n\nThe interpreted outcome retains its original source Claim as a parent. An eligible score Claim cites both the guidance and the interpreted outcome.\n\n| Site, metric and year | Role | Claim or admission result |\n|---|---|---|\n");
+    for row in &report.rows {
+        let label = format!(
+            "{} / {} / {} / vintage {}",
+            text(&row.site),
+            text(&row.metric),
+            row.year,
+            row.vintage
+        );
+        let _ = writeln!(
+            out,
+            "| {label} | Guidance | `{}` |",
+            row.member.guidance.claim_id
+        );
+        if let Some(outcome) = &row.member.outcome {
+            let _ = writeln!(
+                out,
+                "| {label} | Interpreted outcome | `{}` |",
+                outcome.claim_id
+            );
+        }
+        match &row.score_claim {
+            Some(score) => {
+                let _ = writeln!(out, "| {label} | Derived score | `{}` |", score.claim_id);
+            }
+            None => {
+                let _ = writeln!(
+                    out,
+                    "| {label} | Derived score | No admissible scored outcome |"
+                );
+            }
+        }
+    }
     out.push_str("\n## Source citations\n\n| Role | Locator | SHA-256 |\n|---|---|---|\n");
     for row in &report.rows {
         let _ = writeln!(
@@ -270,7 +465,7 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
             source(&mut out, "Later appearance", cell);
         }
     }
-    out.push_str("\nGuidance ranges carry no invented probability level. Effective sample size and dependence-adjusted bias intervals are not estimated. All authority flags remain false.\n");
+    out.push_str("\nThe JSON report retains each canonical score and summary Claim, its interpreted inputs, source statement, parents, source hashes, evidence state and unknown-unknown terms. A source statement's identity includes its registered publication date. Guidance ranges carry no invented probability level. Effective sample size and dependence-adjusted bias intervals are not estimated. All authority flags remain false.\n");
     out
 }
 
@@ -332,6 +527,8 @@ mod tests {
             "north-mara",
             "--through",
             "2026Q2",
+            "--price-subject",
+            "barrick",
         ]);
         let (command, _, _) = parse_args(&query, &root()).expect("public selectors");
         assert_eq!(
@@ -340,6 +537,7 @@ mod tests {
                 issuer: Some("barrick".into()),
                 site: Some("north-mara".into()),
                 through: Some("2026Q2".into()),
+                price_subject: Some("barrick".into()),
             }
         );
         for query in [
@@ -350,6 +548,15 @@ mod tests {
             vec!["track-record", "--issuer", "barrick", "--synthetic"],
             vec!["track-record", "--synthetic", "--site", "north-mara"],
             vec!["track-record", "--synthetic", "--through", "2026Q2"],
+            vec!["track-record", "--synthetic", "--price-subject", "barrick"],
+            vec!["track-record", "--issuer", "barrick", "--price-subject"],
+            vec![
+                "track-record",
+                "--issuer",
+                "barrick",
+                "--price-subject",
+                " ",
+            ],
             vec!["track-record", "--issuer", "barrick", "--site", " "],
             vec!["track-record", "--issuer", "barrick", "--through", "2026Q5"],
             vec!["track-record", "--synthetic", "--as-of", "2026-10-31"],
@@ -375,6 +582,8 @@ mod tests {
         assert!(rendered.contains("Unresolved"));
         assert!(rendered.contains("1.5"));
         assert!(rendered.contains("Source citations"));
+        assert!(rendered.contains("Canonical Claim links"));
+        assert!(rendered.contains(&report.rows[0].member.guidance.claim_id.to_string()));
         assert!(rendered.contains(&report.rows[0].guidance.doc_sha256));
         assert!(!rendered.contains("<script>"));
         assert!(!rendered.contains("\n# forged"));
@@ -400,5 +609,13 @@ mod tests {
         );
         assert!(docs.payload_json.contains("track-record --synthetic"));
         assert!(docs.payload_json.contains("retrospective_descriptive"));
+        assert!(docs.payload_json.contains("[--price-subject <subject>]"));
+        assert!(docs.payload_json.contains("current-period compatibility"));
+        assert_eq!(
+            invoke(&args(&["doctor", "--price-subject", "barrick"]), &root())
+                .0
+                .exit_code,
+            2
+        );
     }
 }

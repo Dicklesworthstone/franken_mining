@@ -2969,6 +2969,8 @@ pub fn footing_discovery(
 mod tests {
     use super::*;
 
+    // Public AISC integration checks live in xtask/tests/public_report_contract.rs.
+
     /// Column K of a one-sheet workbook: `(row, stored text, number format id)`, formats listed as `custom`.
     fn styled_column(cells: &[(u32, &str, u32)], custom: &[(u32, &str)]) -> Sheet {
         use fmine_io::xlsx::{
@@ -3178,71 +3180,6 @@ mod tests {
         assert!(holds(100, 1, 100, 1006));
     }
 
-    #[test]
-    fn reconstruction_known_answers() {
-        // N = 30 ± 1, Q = 20 ± ½, printed 2000 needs N ∈ [38.990…, 41.010…]: adding 10 ± ½ gives
-        // [38.5, 41.5] and closes it; adding 5 ± ½ gives [33.5, 36.5] and does not.
-        let miss = RateMiss {
-            n: 30,
-            k: 2,
-            q: 20,
-            r: 2000,
-        };
-        assert_eq!(reconstruction_holds(miss, 10), Ok(true));
-        assert_eq!(reconstruction_holds(miss, 5), Ok(false));
-        assert!(!holds(30, 2, 20, 2000));
-    }
-
-    #[test]
-    fn subject_matching_takes_one_footnote_letter_only() {
-        let subjects = ["Kibali", "North Mara", "North America"];
-        assert_eq!(match_subject("Kibali", &subjects), Some("Kibali"));
-        assert_eq!(match_subject("Kibalia", &subjects), Some("Kibali"));
-        assert_eq!(match_subject("KibaliA", &subjects), None);
-        assert_eq!(match_subject("Kibaliab", &subjects), None);
-        assert_eq!(match_subject("North Marab", &subjects), Some("North Mara"));
-        assert_eq!(match_subject("Kibali (45%)", &subjects), None);
-    }
-
-    /// BD-331.S3 known answer: North Mara, `Barrick_Q2_2026_AISC.xlsx` 'Q2 2026', (n, q, r) = (117, 37, 2736).
-    #[test]
-    fn test_scaled_rate_north_mara_q2_2026_misses() {
-        assert!(!holds_at(117, 1, 37, 2736, (21, 25)));
-        // s ∈ [5471·73/(2000·235), 5473·75/(2000·233)] = [0.849751…, 0.880847…].
-        assert_eq!(
-            feasible_share(117, 1, 37, 2736),
-            Some(((399_383, 470_000), (410_475, 466_000)))
-        );
-        // Rounded outward; the bead's [0.8498, 0.8808] is the same exact interval rounded to nearest.
-        assert_eq!(
-            feasible_share_text(117, 1, 37, 2736).as_deref(),
-            Some("[0.8497, 0.8809]")
-        );
-        assert!(holds_at(117, 1, 37, 2736, (85, 100)));
-        assert!(holds_at(117, 1, 37, 2736, (88, 100)));
-        assert!(!holds_at(117, 1, 37, 2736, (89, 100)));
-    }
-
-    #[test]
-    fn test_scaled_rate_fit_synthetic() {
-        // Synthetic Site H: 1000·¾·400/150 = 2000 fits; 2200 does not.
-        assert!(holds_at(400, 1, 150, 2000, (3, 4)));
-        assert!(!holds_at(400, 1, 150, 2200, (3, 4)));
-        // 4399·299/(2000·801) = 0.821037…, 4401·301/(2000·799) = 0.828974…
-        assert_eq!(
-            feasible_share_text(400, 1, 150, 2200).as_deref(),
-            Some("[0.8210, 0.8290]")
-        );
-        // At s = 1 the scaled test is the unscaled one.
-        for (n, k, q, r) in [(79, 1, 68, 1162), (79, 1, 68, 1141), (200, 5, 100, 2400)] {
-            assert_eq!(holds_at(n, k, q, r, (2, 2)), holds(n, k, q, r));
-        }
-        // Non-positive inputs have no share interval (the run refuses them).
-        assert_eq!(feasible_share(0, 1, 37, 2736), None);
-        assert_eq!(feasible_share(117, 1, 0, 2736), None);
-        assert_eq!(feasible_share(117, 1, 37, -5), None);
-    }
-
     /// For a (iii) footing: BD-340.S3's conflict sets for the footing as the ledger poses it (from its cited
     /// operands; a placeholder is an exact 0), and the certificate's own cells, total first. Under the component
     /// sum, disregarding any one printed value drops the footing, so the one minimal set is every cell.
@@ -3323,29 +3260,6 @@ mod tests {
         assert_eq!((c.printed, c.residual), (350, 100));
         assert_eq!(c.sign_flip_witness.as_deref(), Some("C6"));
         assert_eq!(footing_conflicts(c8).0, vec![vec!["C5", "C6", "C7", "C8"]]);
-    }
-
-    /// BD-331.S6: the port changed no state. At cd423b9 the two kernels ran side by side on all 55 synthetic
-    /// instances with no difference; the corner kernel is gone, and its root at 9aab4a6
-    /// (`fmine assure public --synthetic`), b50f7779…, pinned the result. bd-jg43.3 then changed the inputs on
-    /// purpose (column G styled, column N added, frame v5), so this is now a regression pin of that commit's
-    /// output: the five moved and five new states are pinned one by one by the synthetic tests in `lib.rs`.
-    /// Frame v6 (bd-prmn.4) appends the Mine Stats ledger section, empty here: at v5 without it the root is
-    /// still 54f1201b…, checked when the pin moved. Frame v7 (site-sheet family) changes only the version here:
-    /// at v6 the root is still fd7864f9…, checked when the pin moved. BD-333's frame v8 adds the
-    /// empty waterfall digest here; the v7 regression root was
-    /// dfb17a08c70d5307ece489544334cea72086234182fe9d3d0580e3a0d209f5e5. These are regression
-    /// values, not independent numerical oracles; the unchanged 60 states remain separately checked.
-    #[test]
-    fn test_port_keeps_synthetic_root() {
-        let run = crate::run_synthetic_assurance(&[]).expect("synthetic run");
-        assert_eq!(run.instances.len() + run.hidden_scope.instances.len(), 60);
-        assert_eq!(run.mine_ledger, crate::mine_ledger::MineLedger::default());
-        assert!(run.waterfall.pairs.is_empty());
-        assert_eq!(
-            run.ledger_anchor.state_root.to_hex(),
-            "eb8bd4e4ae85d74b07b14e29e9c05a198b90491ea821e269bb72127972fe2ff0"
-        );
     }
 
     /// 10⁴ seeded footings with placeholder lines against the closed-form rules the corner kernel used: the
@@ -3711,60 +3625,5 @@ mod tests {
         for bad in ["", ".5", "8.4.1", "61.55555", "-5", "x"] {
             assert_eq!(decimal_fraction(bad), None, "{bad}");
         }
-    }
-
-    #[test]
-    fn test_qtd_sheet_found_by_content() {
-        use fmine_io::xlsx::MinimalCell;
-        let qtd = |name: &str, period: &str, year: f64| {
-            sheet_of(
-                name,
-                vec![
-                    text("A1", "Summary of Operations"),
-                    text("A3", period),
-                    ("B3".to_string(), MinimalCell::Number(year)),
-                ],
-            )
-        };
-        let sheets = vec![
-            qtd("YTD", "For the six months ended June 30,", 2026.0),
-            qtd("Q", "For the three months ended June 30,", 2026.0),
-            qtd("Prior", "For the three months ended June 30,", 2025.0),
-        ];
-        assert_eq!(
-            find_qtd_sheet(&sheets, "2026Q2").map(|s| s.name.as_str()),
-            Ok("Q")
-        );
-        assert_eq!(
-            find_qtd_sheet(&sheets, "2025Q2").map(|s| s.name.as_str()),
-            Ok("Prior")
-        );
-        assert!(find_qtd_sheet(&sheets, "2026Q1").is_err());
-        assert!(find_qtd_sheet(&sheets, "2026Q5").is_err());
-    }
-
-    #[test]
-    fn test_share_footnote_found_by_text() {
-        let s = sheet_of(
-            "Q2 2026",
-            vec![
-                text("A30", "f.  Other footnote."),
-                text(
-                    "A32",
-                    "g.  COS/oz - Gold COS/oz is calculated as cost of sales across our gold operations \
-                     (excluding sites in closure or care and maintenance) divided by ounces sold (both on an \
-                     attributable basis using Barrick's ownership share). ",
-                ),
-            ],
-        );
-        assert_eq!(find_share_footnote(&s).as_deref(), Some("A32"));
-        let none = sheet_of(
-            "Q2 2026",
-            vec![text(
-                "A32",
-                "g.  Gold COS/oz is calculated as cost of sales divided by ounces sold.",
-            )],
-        );
-        assert_eq!(find_share_footnote(&none), None);
     }
 }

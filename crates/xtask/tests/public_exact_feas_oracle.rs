@@ -22,8 +22,8 @@ mod oracle {
         ImpliedError, Interval, Outcome, Rat, Rules, Scope, implied_interval, solve,
     };
     use fmine_public::aisc::{
-        Calc, IdentityFamily, IdentityInstance, IdentityState, OperandRole, OperandValue,
-        feasible_share, implied_ounces, rate_holds, rate_range,
+        Calc, IdentityFamily, IdentityInstance, IdentityState, OperandRole, OperandValue, RateMiss,
+        feasible_share, implied_ounces, rate_holds, rate_range, reconstruction_holds,
     };
     use fmine_public::run_synthetic_assurance;
     use fmine_public::synthetic::SYNTHETIC_SHARES;
@@ -78,6 +78,47 @@ mod oracle {
     /// [`rate_holds`] at 100%, decided.
     fn holds(n: i64, k: i64, q: i64, r: i64) -> bool {
         holds_at(n, k, q, r, (1, 1))
+    }
+
+    #[test]
+    fn reconstruction_known_answers() {
+        // N = 30 ± 1, Q = 20 ± ½, printed 2000 needs N ∈ [38.990…, 41.010…]: adding 10 ± ½ gives
+        // [38.5, 41.5] and closes it; adding 5 ± ½ gives [33.5, 36.5] and does not.
+        let miss = RateMiss {
+            n: 30,
+            k: 2,
+            q: 20,
+            r: 2000,
+        };
+        assert_eq!(reconstruction_holds(miss, 10), Ok(true));
+        assert_eq!(reconstruction_holds(miss, 5), Ok(false));
+        assert!(!holds(30, 2, 20, 2000));
+    }
+
+    /// BD-331.S6: the port changed no state. At cd423b9 the two kernels ran side by side on all 55 synthetic
+    /// instances with no difference; the corner kernel is gone, and its root at 9aab4a6
+    /// (`fmine assure public --synthetic`), b50f7779…, pinned the result. bd-jg43.3 then changed the inputs on
+    /// purpose (column G styled, column N added, frame v5), so this is now a regression pin of that commit's
+    /// output: the five moved and five new states are pinned one by one by the synthetic tests in `lib.rs`.
+    /// Frame v6 (bd-prmn.4) appends the Mine Stats ledger section, empty here: at v5 without it the root is
+    /// still 54f1201b…, checked when the pin moved. Frame v7 (site-sheet family) changes only the version here:
+    /// at v6 the root is still fd7864f9…, checked when the pin moved. BD-333's frame v8 adds the
+    /// empty waterfall digest here; the v7 regression root was
+    /// dfb17a08c70d5307ece489544334cea72086234182fe9d3d0580e3a0d209f5e5. These are regression
+    /// values, not independent numerical oracles; the unchanged 60 states remain separately checked.
+    #[test]
+    fn test_port_keeps_synthetic_root() {
+        let run = run_synthetic_assurance(&[]).expect("synthetic run");
+        assert_eq!(run.instances.len() + run.hidden_scope.instances.len(), 60);
+        assert_eq!(
+            run.mine_ledger,
+            fmine_public::mine_ledger::MineLedger::default()
+        );
+        assert!(run.waterfall.pairs.is_empty());
+        assert_eq!(
+            run.ledger_anchor.state_root.to_hex(),
+            "eb8bd4e4ae85d74b07b14e29e9c05a198b90491ea821e269bb72127972fe2ff0"
+        );
     }
 
     /// bd-prmn.8: the one-cell check and its implied ounces on hand-computed columns.

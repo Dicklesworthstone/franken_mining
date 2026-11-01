@@ -3,12 +3,18 @@
 mod forecast;
 mod guidance;
 mod guidance_capacity;
+pub mod issued;
 mod lint;
 pub mod packet;
 pub mod reliance;
 mod reliance_binding;
+pub mod reliance_explicit;
 mod track_record;
+pub mod track_record_binding;
 mod track_record_data;
+mod track_record_price;
+
+pub use forecast::live as forecast_journal;
 
 use std::path::{Path, PathBuf};
 
@@ -31,6 +37,10 @@ pub enum OutputFormat {
 /// Parsed CLI command (`BD-111`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
+    /// Local issuance status, recall and owner-authorized journal events (BD-347).
+    RelianceExplicit(reliance_explicit::Command),
+    /// Verified assurance issuance or gated current-use retrieval (BD-347).
+    Issued(issued::Command),
     /// `fmine assure public --issuer <issuer> [--through YYYYQn]` (`BD-071`): the gate-eligible run over the
     /// filings in `registries/sources/<issuer>.toml`, optionally only those at or before a quarter.
     AssurePublic {
@@ -39,6 +49,8 @@ pub enum CliCommand {
     },
     /// `fmine assure public --synthetic`: the known-answer run over synthetic workbooks (never gate-eligible).
     AssureSynthetic,
+    /// Save exact assurance bytes and register their recipient under release authority.
+    AssureExport(reliance::Command),
     /// Prepare cited internal-review evidence challenges from an assurance snapshot (BD-349).
     AssureChallenges {
         /// `None` selects the explicitly requested synthetic lane.
@@ -63,12 +75,16 @@ pub enum CliCommand {
         site: Option<String>,
         /// Selects source releases, not a historical information-availability cut.
         through: Option<String>,
+        /// Explicit commodity-price subject; a different subject is a disclosed proxy, never inferred.
+        price_subject: Option<String>,
     },
     /// Compare earliest registered guidance and paired outcomes at an explicit evidence cut.
     TrackRecordAsOf {
         issuer: String,
         site: Option<String>,
         as_of: String,
+        /// Explicit commodity-price subject, evaluated only against evidence available at the cut.
+        price_subject: Option<String>,
     },
     /// Descriptive recovery comparison against an agreed historical grade/tails relation.
     RecoveryGap {
@@ -96,6 +112,8 @@ pub enum CliCommand {
         /// Optional complete ancestry, checked at each forecast's own registration cut.
         provenance: Option<PathBuf>,
     },
+    /// Register, resolve and assess forecasts in a durable journal using the declared host-clock policy.
+    ForecastJournal(forecast_journal::Command),
     /// Issue, withdraw, supersede, inspect and gate reuse of exact report artifacts (BD-347).
     Reliance(reliance::Command),
     /// `fmine doctor` (`BD-115`).
@@ -358,30 +376,72 @@ fn verb_hint(args: &[String]) -> &'static str {
             | "--through"
             | "--site"
             | "--as-of"
+            | "--price-subject"
             | "--ledger"
             | "--cohort"
             | "--selector"
             | "--provenance"
-            | "--capacity-document" => i += 2,
+            | "--capacity-document"
+            | "--output"
+            | "--journal"
+            | "--head"
+            | "--release-key"
+            | "--recipient-role"
+            | "--purpose"
+            | "--code-revision"
+            | "--artifact-format"
+            | "--source-issuance" => i += 2,
             flag if flag.starts_with("--") => i += 1,
             "assure" => {
-                return if args.get(i + 1).map(String::as_str) == Some("challenges") {
-                    "assure challenges"
-                } else {
-                    "assure public"
+                return match args.get(i + 1).map(String::as_str) {
+                    Some("challenges") => "assure challenges",
+                    Some("issue") => "assure issue",
+                    _ => "assure public",
+                };
+            }
+            "recall" => return "recall",
+            "reliance" => {
+                return match args.get(i + 1).map(String::as_str) {
+                    Some("init") => "reliance init",
+                    Some("withdraw") => "reliance withdraw",
+                    Some("supersede") => "reliance supersede",
+                    Some("refresh") => "reliance refresh",
+                    Some("export") => "reliance export",
+                    Some("issue") => "reliance issue",
+                    Some("reuse") => "reliance reuse",
+                    Some("reissue") => "reliance reissue",
+                    Some("recall") => "reliance recall",
+                    _ => "reliance check",
                 };
             }
             "guidance" => return "guidance completion",
             "track-record" => return "track-record",
             "recovery" => return "recovery gap",
             "lint" => return "lint",
-            "forecast" => return "forecast assess",
+            "forecast" => {
+                let mut next = i + 1;
+                while let Some(word) = args.get(next) {
+                    match word.as_str() {
+                        "--json" | "--trust-host-clock" => next += 1,
+                        flag if flag.starts_with("--") => next += 2,
+                        "journal" => return "forecast journal",
+                        _ => return "forecast assess",
+                    }
+                }
+                return "forecast assess";
+            }
             "claim" => {
                 i += 1;
                 while let Some(arg) = args.get(i) {
                     match arg.as_str() {
-                        "--format" | "--workspace" | "--issuer" | "--through" | "--site"
-                        | "--as-of" => i += 2,
+                        "--format"
+                        | "--workspace"
+                        | "--issuer"
+                        | "--through"
+                        | "--site"
+                        | "--as-of"
+                        | "--price-subject"
+                        | "--capacity-document" => i += 2,
                         flag if flag.starts_with("--") => i += 1,
                         "why" => return "claim why",
                         "trace" => return "claim trace",
@@ -391,7 +451,6 @@ fn verb_hint(args: &[String]) -> &'static str {
                 return "claim show";
             }
             "doctor" => return "doctor",
-            "reliance" => return "reliance",
             "robot-docs" => return "robot-docs",
             _ => return "unknown",
         }
@@ -399,14 +458,186 @@ fn verb_hint(args: &[String]) -> &'static str {
     "unknown"
 }
 
+fn parse_forecast_journal(
+    args: &[String],
+    default_root: &Path,
+) -> Result<(forecast_journal::Command, OutputFormat, PathBuf), String> {
+    use std::collections::BTreeMap;
+
+    use fmine_core::hash::Digest32;
+    use forecast_journal::Command;
+
+    fn take(fields: &mut BTreeMap<String, String>, name: &str) -> Result<String, String> {
+        fields
+            .remove(name)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| format!("missing or empty {name}"))
+    }
+
+    fn digest(value: &str) -> Result<Digest32, String> {
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("digest requires 64 lowercase hexadecimal characters".to_string());
+        }
+        let mut bytes = [0; 32];
+        for (i, byte) in bytes.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&value[i * 2..i * 2 + 2], 16)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(Digest32(bytes))
+    }
+
+    let mut fields = BTreeMap::new();
+    let mut words = Vec::new();
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        if argument.starts_with("--") {
+            let value = if matches!(argument.as_str(), "--json" | "--trust-host-clock") {
+                String::new()
+            } else {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .filter(|value| !value.starts_with("--"))
+                    .ok_or_else(|| format!("missing value for {argument}"))?;
+                value.clone()
+            };
+            if fields.insert(argument.clone(), value).is_some() {
+                return Err(format!("duplicate option {argument}"));
+            }
+        } else {
+            words.push(argument.as_str());
+        }
+        index += 1;
+    }
+    let ["forecast", "journal", verb] = words.as_slice() else {
+        return Err(
+            "expected forecast journal init|register|freeze|outcome|assess|inspect".to_string(),
+        );
+    };
+    let format = match fields.remove("--format").as_deref().unwrap_or("json") {
+        "json" => OutputFormat::Json,
+        "markdown" | "md" => OutputFormat::Markdown,
+        _ => return Err("format must be json or markdown".to_string()),
+    };
+    if fields.remove("--json").is_some() && format != OutputFormat::Json {
+        return Err("--json conflicts with --format markdown".to_string());
+    }
+    let workspace = match fields.remove("--workspace") {
+        Some(path) if path.trim().is_empty() => return Err("empty --workspace".to_string()),
+        Some(path) => PathBuf::from(path),
+        None => default_root.to_path_buf(),
+    };
+    let journal = PathBuf::from(take(&mut fields, "--journal")?);
+    let trust_host_clock = fields.remove("--trust-host-clock").is_some();
+    if *verb != "inspect" && !trust_host_clock {
+        return Err(
+            "forecast journal mutations require --trust-host-clock for the declared clock policy"
+                .to_string(),
+        );
+    }
+    if *verb == "inspect" && trust_host_clock {
+        return Err("inspect reads recorded history and takes no --trust-host-clock".to_string());
+    }
+    let command = match *verb {
+        "init" => {
+            let bound = fields
+                .remove("--max-clock-skew-ms")
+                .map_or(Ok(1_000), |value| {
+                    value.parse::<u64>().map_err(|error| error.to_string())
+                })?;
+            let clock_skew_ns = bound
+                .checked_mul(1_000_000)
+                .filter(|bound| *bound <= i64::MAX as u64)
+                .ok_or("clock-skew bound overflows signed nanoseconds")?;
+            Command::Init {
+                journal,
+                cell_id: take(&mut fields, "--cell")?,
+                clock_skew_ns,
+            }
+        }
+        "register" | "freeze" | "outcome" => {
+            let head = digest(&take(&mut fields, "--head")?)?;
+            let request = PathBuf::from(take(&mut fields, "--request")?);
+            match *verb {
+                "register" => Command::Register {
+                    journal,
+                    head,
+                    request,
+                },
+                "freeze" => Command::Freeze {
+                    journal,
+                    head,
+                    request,
+                },
+                _ => Command::Outcome {
+                    journal,
+                    head,
+                    request,
+                },
+            }
+        }
+        "assess" => {
+            let head = digest(&take(&mut fields, "--head")?)?;
+            let cohort = take(&mut fields, "--cohort")?;
+            let as_of = take(&mut fields, "--as-of")?;
+            if fmine_calib::record::parse_utc(&as_of).is_none() {
+                return Err("--as-of requires YYYY-MM-DDTHH:MM:SSZ".to_string());
+            }
+            let selector = fields
+                .remove("--selector")
+                .unwrap_or_else(|| "first-published".to_string());
+            if !matches!(selector.as_str(), "first-published" | "latest-as-of") {
+                return Err("--selector must be first-published or latest-as-of".to_string());
+            }
+            let expected_digest = fields
+                .remove("--expected-digest")
+                .map(|value| digest(&value))
+                .transpose()?;
+            Command::Assess {
+                journal,
+                head,
+                cohort,
+                as_of,
+                selector,
+                expected_digest,
+            }
+        }
+        "inspect" => Command::Inspect {
+            journal,
+            head: fields
+                .remove("--head")
+                .map(|value| digest(&value))
+                .transpose()?,
+        },
+        _ => return Err("unknown forecast journal operation".to_string()),
+    };
+    if let Some(option) = fields.keys().next() {
+        return Err(format!(
+            "option {option} does not apply to forecast journal {verb}"
+        ));
+    }
+    Ok((command, format, workspace))
+}
+
 /// Parses command-line arguments into `(CliCommand, OutputFormat, PathBuf)`.
 pub fn parse_args(
     args: &[String],
     default_root: &Path,
 ) -> Result<(CliCommand, OutputFormat, PathBuf), String> {
-    if verb_hint(args) == "reliance" {
-        return reliance::parse(args, default_root)
-            .map(|(command, format, root)| (CliCommand::Reliance(command), format, root));
+    if verb_hint(args) == "assure public" && args.iter().any(|arg| arg == "--output") {
+        return reliance::parse_export(args, default_root)
+            .map(|(command, format, root)| (CliCommand::AssureExport(command), format, root));
+    }
+    if verb_hint(args) == "forecast journal" {
+        return parse_forecast_journal(args, default_root)
+            .map(|(command, format, root)| (CliCommand::ForecastJournal(command), format, root));
+    }
+    if let Some(command) = parse_reliance_args(args, default_root)? {
+        return Ok(command);
     }
     let mut format = OutputFormat::Json;
     let mut workspace = default_root.to_path_buf();
@@ -415,6 +646,7 @@ pub fn parse_args(
     let mut synthetic = false;
     let mut through = None;
     let mut site = None;
+    let mut price_subject = None;
     let mut as_of = None;
     let mut ledger = None;
     let mut cohort = None;
@@ -463,6 +695,17 @@ pub fn parse_args(
             "--site" => {
                 i += 1;
                 site = Some(args.get(i).ok_or("missing value for --site")?.clone());
+            }
+            "--price-subject" => {
+                i += 1;
+                let subject = args.get(i).ok_or("missing value for --price-subject")?;
+                if subject.trim().is_empty() || subject.chars().any(char::is_control) {
+                    return Err(
+                        "--price-subject requires a nonempty subject without control characters"
+                            .into(),
+                    );
+                }
+                price_subject = Some(subject.clone());
             }
             "--as-of" => {
                 i += 1;
@@ -540,6 +783,9 @@ pub fn parse_args(
     }
     if !matches!(positional[0].as_str(), "guidance" | "track-record") && site.is_some() {
         return Err("--site requires 'guidance completion' or 'track-record'".to_string());
+    }
+    if positional[0] != "track-record" && price_subject.is_some() {
+        return Err("--price-subject requires 'track-record'".to_string());
     }
     if !matches!(
         positional[0].as_str(),
@@ -659,9 +905,14 @@ pub fn parse_args(
                 return Err("track-record selects either --through or --as-of".to_string());
             }
             if synthetic {
-                if issuer.is_some() || site.is_some() || through.is_some() || as_of.is_some() {
+                if issuer.is_some()
+                    || site.is_some()
+                    || through.is_some()
+                    || as_of.is_some()
+                    || price_subject.is_some()
+                {
                     return Err(
-                        "track-record --synthetic takes no issuer, site, through or as-of selection"
+                        "track-record --synthetic takes no issuer, site, through, as-of or price-subject selection"
                             .to_string(),
                     );
                 }
@@ -669,6 +920,7 @@ pub fn parse_args(
                     issuer: None,
                     site: None,
                     through: None,
+                    price_subject: None,
                 }
             } else {
                 let issuer = issuer.ok_or("track-record requires --issuer or --synthetic")?;
@@ -686,12 +938,14 @@ pub fn parse_args(
                         issuer,
                         site,
                         as_of,
+                        price_subject,
                     }
                 } else {
                     CliCommand::TrackRecord {
                         issuer: Some(issuer),
                         site,
                         through,
+                        price_subject,
                     }
                 }
             }
@@ -806,6 +1060,102 @@ pub fn parse_args(
     };
 
     Ok((cmd, format, workspace))
+}
+
+/// DESIGN (BD-347): authority commands have their own strict argument grammar. Only presentation and
+/// workspace selection are global; owner keys, pins and timestamps are never inferred by this router.
+fn parse_reliance_args(
+    args: &[String],
+    default_root: &Path,
+) -> Result<Option<(CliCommand, OutputFormat, PathBuf)>, String> {
+    let mut command = Vec::new();
+    let mut flags = Vec::new();
+    let mut format = OutputFormat::Json;
+    let mut workspace = default_root.to_path_buf();
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        match arg.as_str() {
+            "--json" => format = OutputFormat::Json,
+            "--format" => {
+                i += 1;
+                format = match args.get(i).map(String::as_str) {
+                    Some("json") => OutputFormat::Json,
+                    Some("markdown" | "md") => OutputFormat::Markdown,
+                    Some(other) => {
+                        return Err(format!(
+                            "unsupported --format '{other}' (expected json|markdown)"
+                        ));
+                    }
+                    None => return Err("missing value for --format".to_string()),
+                };
+            }
+            "--workspace" => {
+                i += 1;
+                workspace = PathBuf::from(
+                    args.get(i)
+                        .filter(|value| !value.is_empty() && !value.starts_with("--"))
+                        .ok_or("missing value for --workspace")?,
+                );
+            }
+            flag if flag.starts_with("--") => {
+                flags.push(flag);
+                command.push(arg.clone());
+                if !matches!(
+                    flag,
+                    "--synthetic" | "--trust-host-clock" | "--all-claims" | "--require-current"
+                ) && let Some(value) = args.get(i + 1)
+                {
+                    // DESIGN: preserve even malformed flag-looking values for the strict parser.
+                    // Stripping a global option here would silently repair a missing authority value.
+                    command.push(value.clone());
+                    i += 1;
+                }
+            }
+            _ => command.push(arg.clone()),
+        }
+        i += 1;
+    }
+    let first = command.first().map(String::as_str);
+    let second = command.get(1).map(String::as_str);
+    let explicit = flags.iter().any(|flag| {
+        matches!(
+            *flag,
+            "--key"
+                | "--expected-head"
+                | "--now"
+                | "--uncertainty-ns"
+                | "--max-age-ns"
+                | "--max-skew-ns"
+        )
+    });
+    let parsed = match (first, second) {
+        (Some("assure"), Some("issue")) | (Some("reliance"), Some("export")) => {
+            CliCommand::Issued(issued::parse(&command, &workspace)?)
+        }
+        (Some("reliance"), Some("issue" | "reuse" | "reissue" | "recall")) => {
+            return reliance::parse(args, default_root).map(|(command, format, root)| {
+                Some((CliCommand::Reliance(command), format, root))
+            });
+        }
+        (Some("reliance"), Some("check")) if flags.contains(&"--digest") => {
+            return reliance::parse(args, default_root).map(|(command, format, root)| {
+                Some((CliCommand::Reliance(command), format, root))
+            });
+        }
+        (Some("reliance"), Some("check")) | (Some("recall"), _) => {
+            CliCommand::RelianceExplicit(reliance_explicit::parse(&command)?)
+        }
+        (Some("reliance"), _) if explicit => {
+            CliCommand::RelianceExplicit(reliance_explicit::parse(&command)?)
+        }
+        (Some("reliance"), _) => {
+            return reliance::parse(args, default_root).map(|(command, format, root)| {
+                Some((CliCommand::Reliance(command), format, root))
+            });
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some((parsed, format, workspace)))
 }
 
 /// The envelope of a finished `assure public` report.
@@ -1037,7 +1387,17 @@ fn track_record_envelope(
 pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     let to_doctor = || vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
     match cmd {
+        CliCommand::RelianceExplicit(command) => {
+            reliance_explicit::execute(command, workspace_root)
+        }
+        CliCommand::Issued(command) => issued::execute(command, workspace_root),
         CliCommand::Reliance(command) => reliance::execute(command, workspace_root),
+        CliCommand::AssureExport(command) => {
+            let mut envelope = reliance::execute(command, workspace_root);
+            envelope.verb = "assure public".to_string();
+            envelope
+        }
+        CliCommand::ForecastJournal(command) => forecast_journal::execute(command, workspace_root),
         CliCommand::AssurePublic { issuer, through } => {
             if !is_issuer_name(issuer) || !registry_path(workspace_root, issuer).is_file() {
                 return Envelope::usage_error(
@@ -1132,22 +1492,26 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             issuer,
             site,
             through,
+            price_subject,
         } => track_record::execute(
             issuer.as_deref(),
             site.as_deref(),
             through.as_deref(),
+            price_subject.as_deref(),
             workspace_root,
         ),
         CliCommand::TrackRecordAsOf {
             issuer,
             site,
             as_of,
-        } => track_record_envelope(fmine_public::guidance::track_record::run(
-            workspace_root,
+            price_subject,
+        } => track_record::execute_as_of(
             issuer,
             site.as_deref(),
             as_of,
-        )),
+            price_subject.as_deref(),
+            workspace_root,
+        ),
         CliCommand::RecoveryGap { issuer, through } => recovery_envelope(
             fmine_public::recovery::run_public(workspace_root, issuer, through.as_deref()),
         ),
@@ -1358,16 +1722,30 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "assure public --synthetic",
                 "assure challenges --issuer <issuer> [--through YYYYQn]",
                 "assure challenges --synthetic",
+                "assure issue (--issuer <issuer> [--through YYYYQn] | --synthetic) --output <path> --journal <path> --expected-head <hex> --key <path> --role <generic-role> --purpose <text> --now <UTC> --uncertainty-ns <n>",
+                "reliance init --journal <path> --key <path> --now <UTC> --uncertainty-ns <n> --max-age-ns <n> --max-skew-ns <n>",
+                "reliance check <digest|file> --journal <path> [--head <hex>] [--now <UTC> --uncertainty-ns <n>] [--as-of <UTC>]",
+                "reliance withdraw <digest> --journal <path> --expected-head <hex> --key <path> --now <UTC> --uncertainty-ns <n> --reason <text> --defect code-defect|source-restated|scope-error --claim <id> [--claim <id>]",
+                "reliance supersede <digest> --replacement <hex> --journal <path> --expected-head <hex> --key <path> --now <UTC> --uncertainty-ns <n>",
+                "reliance refresh --journal <path> --expected-head <hex> --key <path> --now <UTC> --uncertainty-ns <n>",
+                "reliance export <file> --output <path> --journal <path> --head <hex> --now <UTC> --uncertainty-ns <n>",
+                "recall --journal <path> (--revision <build-revision> | --claim <id>) [--head <hex>]",
                 "guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD [--capacity-document <registered file>]",
                 "guidance completion --synthetic",
-                "track-record --issuer <issuer> [--site <subject>] [--through YYYYQn]",
-                "track-record --issuer <issuer> [--site <site>] --as-of YYYY-MM-DD",
+                "track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]",
+                "track-record --issuer <issuer> [--site <site>] --as-of YYYY-MM-DD [--price-subject <subject>]",
                 "track-record --synthetic [--json]",
                 "recovery gap --issuer <issuer> [--through YYYYQn]",
                 "recovery gap --synthetic",
                 "lint <draft> --issuer <issuer> [--through YYYYQn] [--discover]",
                 "lint <draft> --synthetic [--discover]",
                 "forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ [--selector first-published|latest-as-of] [--provenance <path>]",
+                "forecast journal init --journal <new-path> --cell <cell-id> --trust-host-clock [--max-clock-skew-ms <bound>]",
+                "forecast journal register --journal <path> --head <hex> --request <path> --trust-host-clock",
+                "forecast journal freeze --journal <path> --head <hex> --request <path> --trust-host-clock",
+                "forecast journal outcome --journal <path> --head <hex> --request <path> --trust-host-clock",
+                "forecast journal assess --journal <path> --head <hex> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock [--selector first-published|latest-as-of] [--expected-digest <hex>]",
+                "forecast journal inspect --journal <path> [--head <hex>]",
                 "doctor",
                 "claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
                 "claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
@@ -1380,17 +1758,27 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "{\"mode\":\"retrospective_descriptive\",\"schema\":\"fmine.guidance.track-record.v1\",",
                 "\"input\":\"Hash-verified registered workbooks and agreed document transcriptions\",",
                 "\"outcome_selector\":\"Original annual releases and comparative-only populations remain separate\",",
+                "\"price_sensitivity\":\"Paired AISC sensitivity on complete declared quarterly evidence, exact proportionality and current-period compatibility; --price-subject explicitly selects a commodity-price proxy\",",
                 "\"as_of\":{\"mode\":\"descriptive_source_comparison\",\"schema\":\"fmine.guidance.track-record.as-of.v1\",",
                 "\"cut\":\"Explicit --as-of YYYY-MM-DD; no inferred wall clock; exclusive with --through\",",
+                "\"price_sensitivity\":\"Separate paired price sensitivities for first-published and latest registered outcomes; prices and completed quarterly history are bounded by the evidence cut\",",
                 "\"population\":\"Earliest registered agreed guidance per subject, metric, fiscal year and ownership basis; revisions remain visible\",",
                 "\"outcomes\":\"First-published and latest registered assessments retain missing members\"},",
                 "\"scope\":\"Registered transcription population; no completeness, historical forecast registration, ranking or calibration verdict\"}"
             );
-            let payload = format!(
+            let mut payload = format!(
                 "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{ENVELOPE_FIELDS},\"verbs\":[{verbs},{reliance_verbs}],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok; lint verdicts and track-record misses are data\",\"2\":\"usage error (unknown verb, flag, issuer or selection); the envelope still prints\"}},\"claim_inspection\":{{\"lookup\":\"Exact canonical IDs from the synthetic run or hash-verified registered sources; explicit selectors bind the ledger snapshot and claims digest\",\"why\":\"Recorded evidence, interpretation, computed color and Claim admission guards; absent assessments remain absent\",\"trace\":\"Available source anchors and registered provenance; unresolved parents are explicit\"}},\"lint\":{{\"mode\":\"cited equality by default; --discover searches uncited equalities\",\"link\":\"[printed number and unit](fmine:clm_ID)\",\"predicate\":\"One explicit subject, reporting period, ownership basis, supported metric, unit and equality per sentence or line; other prose is unchecked\",\"discovery\":\"All semantic candidates remain visible; multiple matches stay ambiguous and the amount never selects a vintage\",\"scope\":\"Selected registered source snapshot; no publication-time or disclosure-permission verdict\"}},\"forecast_assessment\":{{\"mode\":\"read_only_replay\",\"input\":\"Ordered forecast, cohort, outcome and assessment TOML rows\",\"default_selector\":\"first-published\",\"provenance\":{{\"schema\":\"fmine.forecast-provenance.v1\",\"tables\":[\"node\",\"anchor\",\"binding\"],\"cut\":\"Each frozen forecast registered_at, not the assessment date\",\"coverage\":\"Every cohort member, including unresolved outcomes\",\"without_bundle\":\"not_checked\",\"generator_replay\":\"not_performed\",\"example\":\"tests/forecasts/provenance_synthetic.toml\"}},\"times_and_citations\":\"Supplied records, not external time proof or independently verified sources\"}},\"reliance\":{reliance_docs},\"track_record\":{track_record_modes},\"refusals\":[{}]}}",
                 issuers.join(","),
                 refusals.join(",")
             );
+            payload.pop();
+            payload.push_str(concat!(
+                ",\"reliance_explicit\":{\"clock\":\"Caller-supplied --now UTC and --uncertainty-ns; no host clock inference\",",
+                "\"trust\":\"Independent final head required for current reuse; historical --as-of never authorizes reuse\",",
+                "\"identity\":\"assure issue binds the build-time revision, dirty marker and BLAKE3 of the running Linux executable\",",
+                "\"compatibility\":\"Shares the report metadata and journal with reliance issue; grammars cannot be mixed\",",
+                "\"recall\":\"Known issuances and generic roles only; retrieval registers no new recipient and sends no messages\"}}"
+            ));
             Envelope::ok(
                 "robot-docs",
                 payload,
@@ -1585,6 +1973,274 @@ mod tests {
 
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn reliance_router_preserves_required_values_before_global_options() {
+        let mut issue = args(&[
+            "assure",
+            "issue",
+            "--synthetic",
+            "--output",
+            "report.json",
+            "--journal",
+            "journal",
+            "--expected-head",
+            &"a".repeat(64),
+            "--key",
+            "owner.key",
+            "--role",
+            "sponsor",
+            "--purpose",
+            "review",
+            "--now",
+            "2026-11-01T00:00:00Z",
+            "--uncertainty-ns",
+            "0",
+        ]);
+        for (flag, inserted) in [
+            ("--purpose", vec!["--json"]),
+            ("--purpose", vec!["--format", "json"]),
+            ("--key", vec!["--workspace", "/other"]),
+        ] {
+            let mut malformed = issue.clone();
+            let value = malformed.iter().position(|arg| arg == flag).unwrap() + 1;
+            malformed.splice(value..value, inserted.into_iter().map(str::to_string));
+            let error = parse_args(&malformed, Path::new(".")).unwrap_err();
+            assert!(
+                error.contains(&format!("missing value for {flag}")),
+                "{error}"
+            );
+        }
+        issue.splice(0..0, args(&["--workspace", "/selected"]));
+        issue.extend(args(&["--format", "markdown"]));
+        let (command, format, workspace) = parse_args(&issue, Path::new(".")).unwrap();
+        assert!(matches!(command, CliCommand::Issued(_)));
+        assert_eq!(format, OutputFormat::Markdown);
+        assert_eq!(workspace, Path::new("/selected"));
+        for value in ["", "--json"] {
+            assert!(
+                parse_args(
+                    &args(&["--workspace", value, "reliance", "check"]),
+                    Path::new(".")
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn reliance_router_preserves_published_grammar_without_parser_fallback() {
+        let digest = "a".repeat(64);
+        let explicit = args(&[
+            "--json",
+            "reliance",
+            "check",
+            &digest,
+            "--journal",
+            "journal",
+        ]);
+        let host = args(&[
+            "--json",
+            "reliance",
+            "check",
+            "--digest",
+            &digest,
+            "--journal",
+            "journal",
+        ]);
+        assert!(matches!(
+            parse_args(&explicit, Path::new(".")).unwrap().0,
+            CliCommand::RelianceExplicit(_)
+        ));
+        assert!(matches!(
+            parse_args(&host, Path::new(".")).unwrap().0,
+            CliCommand::Reliance(_)
+        ));
+        let mut required = host.clone();
+        required.insert(3, "--require-current".into());
+        assert!(matches!(
+            parse_args(&required, Path::new(".")).unwrap().0,
+            CliCommand::Reliance(_)
+        ));
+        let mut mixed = host;
+        mixed.extend(args(&[
+            "--now",
+            "2026-11-01T00:00:00Z",
+            "--uncertainty-ns",
+            "0",
+        ]));
+        assert!(parse_args(&mixed, Path::new(".")).is_err());
+    }
+
+    #[test]
+    fn forecast_journal_commands_require_explicit_admission_policy_and_exact_heads() {
+        use forecast_journal::Command;
+
+        let root = workspace_root();
+        let head = "ab".repeat(32);
+        let (command, format, selected_root) = parse_args(
+            &args(&[
+                "--format",
+                "markdown",
+                "forecast",
+                "--workspace",
+                "runs",
+                "journal",
+                "init",
+                "--journal",
+                "forecasts.journal",
+                "--cell",
+                "forecast-demo",
+                "--trust-host-clock",
+                "--max-clock-skew-ms",
+                "2",
+            ]),
+            &root,
+        )
+        .expect("explicit clock policy");
+        assert_eq!(format, OutputFormat::Markdown);
+        assert_eq!(selected_root, Path::new("runs"));
+        assert!(
+            matches!(command, CliCommand::ForecastJournal(Command::Init {
+            cell_id, clock_skew_ns: 2_000_000, ..
+        }) if cell_id == "forecast-demo")
+        );
+        for operation in ["register", "freeze", "outcome"] {
+            let (command, _, _) = parse_args(
+                &args(&[
+                    "forecast",
+                    "journal",
+                    operation,
+                    "--journal",
+                    "forecasts.journal",
+                    "--head",
+                    &head,
+                    "--request",
+                    "request.toml",
+                    "--trust-host-clock",
+                ]),
+                &root,
+            )
+            .expect("typed live operation");
+            assert!(matches!(command, CliCommand::ForecastJournal(_)));
+        }
+        let (command, _, _) = parse_args(
+            &args(&[
+                "forecast",
+                "journal",
+                "assess",
+                "--journal",
+                "forecasts.journal",
+                "--head",
+                &head,
+                "--cohort",
+                "demo",
+                "--as-of",
+                "2026-11-01T00:00:00Z",
+                "--trust-host-clock",
+            ]),
+            &root,
+        )
+        .expect("persisted assessment");
+        assert!(
+            matches!(command, CliCommand::ForecastJournal(Command::Assess {
+            selector, expected_digest: None, ..
+        }) if selector == "first-published")
+        );
+        let (command, _, _) = parse_args(
+            &args(&[
+                "forecast",
+                "journal",
+                "inspect",
+                "--journal",
+                "forecasts.journal",
+            ]),
+            &root,
+        )
+        .expect("unpinned historical inspection");
+        assert!(matches!(
+            command,
+            CliCommand::ForecastJournal(Command::Inspect { head: None, .. })
+        ));
+        let docs = execute_command(&CliCommand::RobotDocs, &root);
+        for operation in ["init", "register", "freeze", "outcome", "assess", "inspect"] {
+            assert!(
+                docs.payload_json
+                    .contains(&format!("forecast journal {operation}"))
+            );
+        }
+    }
+
+    #[test]
+    fn forecast_journal_usage_refuses_backdating_flags_ignored_options_and_clock_ambiguity() {
+        let root = workspace_root();
+        let head = "ab".repeat(32);
+        let base = args(&[
+            "forecast",
+            "journal",
+            "register",
+            "--journal",
+            "forecasts.journal",
+            "--head",
+            &head,
+            "--request",
+            "request.toml",
+            "--trust-host-clock",
+        ]);
+        let mut no_clock = base.clone();
+        no_clock.pop();
+        assert!(parse_args(&no_clock, &root).is_err());
+        for extras in [
+            vec!["--registered-at", "2025-01-01T00:00:00Z"],
+            vec!["--head", &head],
+            vec!["--max-clock-skew-ms", "0"],
+            vec!["--issuer", "barrick"],
+            vec!["--json", "--format", "markdown"],
+            vec!["--provenance", "unverified.toml"],
+        ] {
+            let mut bad = base.clone();
+            bad.extend(args(&extras));
+            let (envelope, _) = invoke(&bad, &root);
+            assert_eq!(
+                (envelope.verb.as_str(), envelope.exit_code),
+                ("forecast journal", 2)
+            );
+        }
+        for bad in [
+            vec![
+                "forecast",
+                "journal",
+                "init",
+                "--journal",
+                "x",
+                "--cell",
+                "demo",
+                "--trust-host-clock",
+                "--max-clock-skew-ms",
+                "18446744073709551615",
+            ],
+            vec![
+                "forecast",
+                "journal",
+                "inspect",
+                "--journal",
+                "x",
+                "--trust-host-clock",
+            ],
+            vec![
+                "forecast",
+                "journal",
+                "inspect",
+                "--journal",
+                "x",
+                "--head",
+                "not-a-digest",
+            ],
+            vec!["forecast", "journal", "inspect", "--journal", ""],
+        ] {
+            assert!(parse_args(&args(&bad), &root).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
@@ -1919,6 +2575,29 @@ mod tests {
                 issuer: "barrick".into(),
                 site: Some("north-mara".into()),
                 as_of: "2026-11-01".into(),
+                price_subject: None,
+            }
+        );
+        let (priced, _, _) = parse_args(
+            &args(&[
+                "--price-subject",
+                "Barrick",
+                "track-record",
+                "--issuer",
+                "barrick",
+                "--as-of",
+                "2026-11-01",
+            ]),
+            &workspace_root(),
+        )
+        .expect("explicit price proxy at an evidence cut");
+        assert_eq!(
+            priced,
+            CliCommand::TrackRecordAsOf {
+                issuer: "barrick".into(),
+                site: None,
+                as_of: "2026-11-01".into(),
+                price_subject: Some("Barrick".into()),
             }
         );
         for bad in [
@@ -1965,6 +2644,7 @@ mod tests {
             ],
             vec!["track-record", "--synthetic", "--issuer", "barrick"],
             vec!["track-record", "--synthetic", "--as-of", "2026-11-01"],
+            vec!["track-record", "--synthetic", "--price-subject", "Barrick"],
             vec!["track-record", "--synthetic", "--site", "north-mara"],
             vec!["track-record", "--synthetic", "extra"],
         ] {
@@ -1995,6 +2675,11 @@ mod tests {
         let (docs, _) = invoke(&args(&["robot-docs"]), &workspace_root());
         assert!(docs.payload_json.contains("track-record --issuer"));
         assert!(docs.payload_json.contains("track-record --synthetic"));
+        assert!(docs.payload_json.contains("[--price-subject <subject>]"));
+        assert!(
+            docs.payload_json
+                .contains("Separate paired price sensitivities for first-published and latest registered outcomes; prices and completed quarterly history are bounded by the evidence cut")
+        );
     }
 
     #[test]

@@ -20,6 +20,7 @@ use fmine_numerics::exact_feas::discover::{
     Fit, Printed, TieDiscovery, TieFinding, TieRefusal, discover_tie_conventions,
 };
 use fmine_numerics::exact_feas::{Convention, Rat};
+use fmine_registry::sources::is_date;
 use fmine_registry::transcriptions::{
     Accepted, Agreement, Decimal, Locator, Token, agree, load_transcriptions,
 };
@@ -210,7 +211,7 @@ pub fn load_transcription_report(
     profile: &IssuerProfile,
     root: &Path,
 ) -> Result<Option<TranscriptionReport>, Refusal> {
-    load_report(profile, root, None)
+    load_report(profile, root, None, None, false)
 }
 
 /// Loads only rows whose registered document was public by `as_of`. Future documents' bytes and
@@ -221,20 +222,84 @@ pub fn load_transcription_report_as_of(
     root: &Path,
     as_of: &str,
 ) -> Result<Option<TranscriptionReport>, Refusal> {
-    if !fmine_registry::sources::is_date(as_of) {
-        return Err(Refusal::new(
-            RefusalCode::UndeclaredUnitBasisOrTz107,
-            "transcription as-of needs a valid YYYY-MM-DD date",
-        ));
-    }
-    load_report(profile, root, Some(as_of))
+    load_report(profile, root, Some(as_of), None, false)
+}
+
+/// Loads selected quantities at an evidence cut. Every reader at a selected locator is retained, even
+/// one who entered a different quantity key: scoping must not erase a disagreement. Optional analyses
+/// can retain their own typed byte/agreement failure. `document` optionally limits the selected locators.
+pub fn load_transcription_quantities_as_of(
+    profile: &IssuerProfile,
+    root: &Path,
+    as_of: &str,
+    quantities: &[String],
+    document: Option<&str>,
+) -> Result<Option<TranscriptionReport>, Refusal> {
+    load_report(
+        profile,
+        root,
+        Some(as_of),
+        Some(QuantitySelection::Keys(quantities, document)),
+        false,
+    )
+}
+
+/// Selects all quantity keys with any `prefixes`, including unsupported metrics, before document checks and
+/// agreement. All readers at selected locators remain; registry syntax and identities are checked globally.
+pub fn load_transcription_prefixes(
+    profile: &IssuerProfile,
+    root: &Path,
+    prefixes: &[&str],
+    as_of: Option<&str>,
+) -> Result<Option<TranscriptionReport>, Refusal> {
+    load_report(
+        profile,
+        root,
+        as_of,
+        Some(QuantitySelection::Prefixes(prefixes)),
+        false,
+    )
+}
+
+enum QuantitySelection<'a> {
+    Keys(&'a [String], Option<&'a str>),
+    Prefixes(&'a [&'a str]),
+}
+
+/// Loads guidance and its optional price inputs, retaining incomplete prices as unaccepted evidence.
+/// All readers at selected locators and their document bytes remain checked. Guidance disagreement or
+/// ambiguous rejected quantity identities still refuse; unrelated technical inputs are outside this scope.
+pub fn load_guidance_transcription_report(
+    profile: &IssuerProfile,
+    root: &Path,
+    as_of: Option<&str>,
+) -> Result<Option<TranscriptionReport>, Refusal> {
+    load_report(
+        profile,
+        root,
+        as_of,
+        Some(QuantitySelection::Prefixes(&[
+            "guidance_",
+            "aisc_price_assumption_",
+            "realized_price_",
+        ])),
+        true,
+    )
 }
 
 fn load_report(
     profile: &IssuerProfile,
     root: &Path,
     as_of: Option<&str>,
+    quantities: Option<QuantitySelection<'_>>,
+    guidance_only: bool,
 ) -> Result<Option<TranscriptionReport>, Refusal> {
+    if as_of.is_some_and(|cut| !is_date(cut)) {
+        return Err(Refusal::new(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            "transcription as-of needs a valid YYYY-MM-DD date",
+        ));
+    }
     let path = transcriptions_path(root, &profile.issuer);
     if !path.is_file() {
         return Ok(None);
@@ -250,6 +315,22 @@ fn load_report(
                 .any(|d| d.file == e.locator.doc && d.published_at.as_str() <= cut)
         });
     }
+    if let Some(selection) = quantities {
+        let selected: std::collections::BTreeSet<_> = reg
+            .entries
+            .iter()
+            .filter(|e| match &selection {
+                QuantitySelection::Keys(keys, document) => {
+                    keys.contains(&e.quantity) && document.is_none_or(|doc| e.locator.doc == doc)
+                }
+                QuantitySelection::Prefixes(prefixes) => prefixes
+                    .iter()
+                    .any(|prefix| e.quantity.starts_with(*prefix)),
+            })
+            .map(|e| e.locator.clone())
+            .collect();
+        reg.entries.retain(|e| selected.contains(&e.locator));
+    }
     let cited: Vec<&DocumentRow> = profile
         .documents
         .iter()
@@ -257,7 +338,9 @@ fn load_report(
         .collect();
     let documents = check_documents(&cited, root)?;
     let agreement = agree(&reg);
-    if !agreement.is_consistent() {
+    if !agreement.is_consistent()
+        && !(guidance_only && agreement.is_complete_for_prefix("guidance_"))
+    {
         let mut detail = format!("transcription registry {registry}: readers disagree");
         for d in &agreement.disagreements {
             let _ = write!(

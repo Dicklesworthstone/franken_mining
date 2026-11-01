@@ -1,5 +1,5 @@
 //! Retrospective source binding for issuer guidance (BD-341).
-//! Determinism: DeterministicPerIsa (exact binding; reference interval from the scoring kernel).
+//! Determinism: Exact (canonical source/score Claims and certified rational reference bounds).
 //!
 //! DESIGN: retain each agreed guidance document and missing outcome. A later comparative is never
 //! relabelled as original publication. This adapter does not backdate registrations in the forecast ledger.
@@ -8,7 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use fmine_calib::guidance_scores::{
-    self as scores, Guidance, GuidanceScore, GuidanceSummary, PrintedOutcome, ScoringMember,
+    Guidance, GuidanceScore, GuidanceSummary, PrintedOutcome,
+    claims::{
+        self, GuidanceTarget, GuidanceValue, MemberInput, OutcomeValue, RangeScore, SeriesKey,
+    },
 };
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::anchor::SourceAnchor;
@@ -17,7 +20,7 @@ use fmine_core::hash::{Digest32, blake3_hash, sha256};
 use fmine_evidence::{
     EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
 };
-use fmine_numerics::exact_feas::{Convention, Rat};
+use fmine_numerics::exact_feas::{Convention, Interval, Rat};
 use fmine_public::key::{
     KeyedCell, OwnershipBasis, PeriodKind, PublicValue, Scope, StatusKind, SubjectStatus,
     canonical_value_tag,
@@ -31,7 +34,7 @@ fn js(text: &str) -> String {
     format!("\"{}\"", crate::escape_json(text))
 }
 
-pub const NO_CLAIM: &str = "Retrospective description of cited issuer guidance and reported outcomes. No forecast registration, calibration verdict, ranking, inferred probability or price adjustment.";
+pub const NO_CLAIM: &str = "Retrospective description of cited issuer guidance and reported outcomes. Any price sensitivity remains paired with its unconditional score. No forecast registration, calibration verdict, ranking, inferred probability or causal attribution.";
 type Result<T> = std::result::Result<T, Refusal>;
 
 #[derive(Debug, Clone)]
@@ -64,7 +67,14 @@ pub struct TrackRecordRow {
     pub outcome: OutcomeBinding,
     /// Later appearances remain cited separately and never replace the selected outcome.
     pub later_outcomes: Vec<KeyedCell>,
+    /// Source statement identity includes the registered publication date and the agreed interpretation.
+    pub guidance_source: Claim<Accepted>,
+    pub member: MemberInput,
+    pub score_claim: Option<Claim<RangeScore>>,
+    /// Display projection of score_claim; source-bound arithmetic is performed exactly once.
     pub score: Option<GuidanceScore>,
+    /// Paired AISC sensitivity or a cited unsplit reason; production has no price-sensitivity model.
+    pub price_sensitivity: Option<crate::track_record_price::PriceAssessment>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +86,7 @@ pub struct TrackRecordSummary {
     pub vintage: usize,
     pub comparative: bool,
     pub members: Vec<String>,
+    pub claim: Claim<claims::GuidanceSummary>,
     pub scores: GuidanceSummary,
 }
 
@@ -117,7 +128,7 @@ fn decimal(d: Decimal) -> Result<Rat> {
     Rat::new(d.mantissa, den).map_err(rule_error)
 }
 
-fn site_key(site: &str) -> String {
+pub(super) fn site_key(site: &str) -> String {
     site
         // The registered Mine Stats header prints Zaldívar; its transcription key is ASCII "zaldivar".
         .replace(['í', 'Í'], "i")
@@ -149,7 +160,7 @@ fn basis(text: &str) -> Result<(bool, Rat)> {
     ))
 }
 
-fn cell_basis(basis: OwnershipBasis) -> Result<(bool, Rat)> {
+pub(super) fn cell_basis(basis: OwnershipBasis) -> Result<(bool, Rat)> {
     match basis {
         OwnershipBasis::Consolidated100 => Ok((false, Rat::from_integer(1))),
         OwnershipBasis::Attributable { num, den, .. } if num > 0 && den > 0 && num <= den => Ok((
@@ -181,7 +192,7 @@ fn metric(quantity: &str) -> Option<(&str, &str)> {
     })
 }
 
-fn specification(a: &Accepted, name: &str) -> Result<((bool, Rat), String)> {
+pub(super) fn specification(a: &Accepted, name: &str) -> Result<((bool, Rat), String)> {
     let (unit, suffix) = match name {
         "production_koz" => ("koz", ""),
         "production_kt" => ("kt", ""),
@@ -231,7 +242,22 @@ fn specification(a: &Accepted, name: &str) -> Result<((bool, Rat), String)> {
     Ok((ownership, format!("summary:{line}")))
 }
 
-fn limits(a: &Accepted) -> Result<Guidance> {
+// Raw transcription bases stay on the source record; interpreted series use exact normalized shares.
+fn series_basis(a: &Accepted, metric: &str) -> Result<String> {
+    let ((attributable, share), _) = specification(a, metric)?;
+    let mut basis = if attributable {
+        format!("attributable:{}/{}", share.num(), share.den())
+    } else {
+        "100%".into()
+    };
+    if let Some((_, definition)) = a.basis.split_once(';') {
+        basis.push(';');
+        basis.push_str(definition);
+    }
+    Ok(basis)
+}
+
+pub(super) fn limits(a: &Accepted) -> Result<Guidance> {
     if parse_token(&a.token).map_err(rule_error)? != a.value {
         return Err(failure(
             RefusalCode::SourceCellUnusable208,
@@ -249,6 +275,136 @@ fn limits(a: &Accepted) -> Result<Guidance> {
             })
         }
     }
+}
+
+fn source_digest(text: &str) -> Result<Digest32> {
+    if text.len() != 64 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(failure(
+            RefusalCode::DigestMismatch505,
+            "invalid guidance source digest",
+        ));
+    }
+    let mut bytes = [0; 32];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[2 * i..2 * i + 2], 16).map_err(|_| {
+            failure(
+                RefusalCode::DigestMismatch505,
+                "invalid guidance source digest",
+            )
+        })?;
+    }
+    if bytes == [0; 32] {
+        return Err(failure(
+            RefusalCode::DigestMismatch505,
+            "empty guidance source digest",
+        ));
+    }
+    Ok(Digest32(bytes))
+}
+
+fn interpreted<T, U>(value: T, tag: &str, metric: &str, source: &Claim<U>) -> Claim<T> {
+    Claim::new(
+        metric,
+        value,
+        tag,
+        Representation::Deterministic,
+        source.support,
+        source.additivity,
+        EvidenceClass::Derived.meet(source.evidence),
+        source.epistemic,
+        source.state,
+        source.confidentiality.clone(),
+        source.uu_terms.clone(),
+        vec![source.claim_id],
+        source.anchors.clone(),
+    )
+}
+
+fn guidance_source(
+    a: &Accepted,
+    tag: &str,
+    production: bool,
+    synthetic: bool,
+) -> Result<Claim<Accepted>> {
+    Ok(Claim::new(
+        "guidance.published_statement",
+        a.clone(),
+        tag,
+        Representation::Deterministic,
+        SpatialSupport::PeriodAggregate,
+        if production {
+            AdditivityClass::ExtensiveAdditive
+        } else {
+            AdditivityClass::IntensiveWeighted
+        },
+        if synthetic {
+            EvidenceClass::Assumed
+        } else {
+            EvidenceClass::ISSUER
+        },
+        if synthetic {
+            EpistemicStatus::KnownUnknown(KuKind::Parametric)
+        } else {
+            EpistemicStatus::KnownKnown
+        },
+        if synthetic {
+            KnowledgeState::Estimated
+        } else {
+            KnowledgeState::Known
+        },
+        Confidentiality::public(),
+        vec![],
+        vec![],
+        vec![SourceAnchor::new(
+            &a.locator.doc,
+            source_digest(&a.doc_sha256)?.0,
+            a.locator.to_string(),
+        )],
+    ))
+}
+
+fn scoring_member(
+    source: &Claim<Accepted>,
+    key: SeriesKey,
+    guidance: Guidance,
+    outcome: &OutcomeBinding,
+    numeric: Option<PrintedOutcome>,
+) -> Result<MemberInput> {
+    let value = GuidanceValue {
+        key: key.clone(),
+        target: match guidance {
+            Guidance::Range { lo, hi } => GuidanceTarget::Range { lo, hi },
+            Guidance::Point { value } => GuidanceTarget::Point(value),
+            Guidance::AtMost { upper } => GuidanceTarget::AtMost(upper),
+            Guidance::AtLeast { lower } => GuidanceTarget::AtLeast(lower),
+        },
+    };
+    let tag = value.canonical_tag();
+    let guidance = interpreted(value, &tag, "guidance.interpreted_target", source);
+    let outcome = match (outcome, numeric) {
+        (OutcomeBinding::Resolved { cell, .. }, Some(numeric)) => {
+            cell.claim.check_id()?;
+            let value = OutcomeValue {
+                key,
+                point: numeric.value,
+                rounding: numeric.interval,
+            };
+            let tag = value.canonical_tag();
+            Some(interpreted(
+                value,
+                &tag,
+                "guidance.interpreted_outcome",
+                &cell.claim,
+            ))
+        }
+        (OutcomeBinding::Unresolved { .. }, None) => None,
+        _ => {
+            return Err(rule_error(
+                "outcome selection and numeric interpretation differ",
+            ));
+        }
+    };
+    Ok(MemberInput { guidance, outcome })
 }
 
 fn affected_status<'a>(
@@ -547,7 +703,17 @@ fn assess(
     cells: &[KeyedCell],
     site: Option<&str>,
 ) -> Result<TrackRecordReport> {
-    if !transcripts.agreement.is_consistent() || !transcripts.agreement.single_reader.is_empty() {
+    assess_with_price_subject(profile, transcripts, cells, site, None)
+}
+
+fn assess_with_price_subject(
+    profile: &IssuerProfile,
+    transcripts: &TranscriptionReport,
+    cells: &[KeyedCell],
+    site: Option<&str>,
+    price_subject: Option<&str>,
+) -> Result<TrackRecordReport> {
+    if !transcripts.agreement.is_complete_for_prefix("guidance_") {
         return Err(failure(
             RefusalCode::NotObservable202,
             "complete two-reader agreement before selecting the guidance population",
@@ -657,10 +823,6 @@ fn assess(
             period.year,
             &doc.published_at,
         )?;
-        let score = numeric
-            .map(|y| scores::score(limits, y))
-            .transpose()
-            .map_err(rule_error)?;
         let mut enc = Encoder::new_frame(*b"GTRW", 1);
         for field in [
             a.locator.to_string(),
@@ -674,8 +836,36 @@ fn assess(
         ] {
             enc.put_str(&field);
         }
+        let id = blake3_hash(&enc.finish()).to_hex();
+        let guidance_source = guidance_source(
+            a,
+            &id,
+            name.starts_with("production_"),
+            profile.issuer == fmine_public::synthetic::SYNTHETIC_ISSUER,
+        )?;
+        let member = scoring_member(
+            &guidance_source,
+            SeriesKey {
+                subject: (*subject).to_string(),
+                metric: name.into(),
+                unit: a.unit.clone(),
+                basis: series_basis(a, name)?,
+                year: period.year,
+            },
+            limits,
+            &outcome,
+            numeric,
+        )?;
+        let score_claim = member
+            .outcome
+            .as_ref()
+            .map(|outcome| claims::score(&member.guidance, outcome))
+            .transpose()?;
+        let score = score_claim
+            .as_ref()
+            .map(|claim| GuidanceScore::from(&claim.value));
         rows.push(TrackRecordRow {
-            id: blake3_hash(&enc.finish()).to_hex(),
+            id,
             site: (*subject).to_string(),
             metric: name.into(),
             year: period.year,
@@ -686,7 +876,11 @@ fn assess(
             comparative: comparative_population(profile, period.year),
             outcome,
             later_outcomes,
+            guidance_source,
+            member,
+            score_claim,
             score,
+            price_sensitivity: None,
         });
     }
     if rows.is_empty() {
@@ -711,56 +905,58 @@ fn assess(
                 &b.guidance.locator,
             ))
     });
-    let mut seen = BTreeMap::<(String, String, u16), usize>::new();
+    type Family = (String, String, String, String, u16);
+    let mut seen = BTreeMap::<Family, usize>::new();
     let mut unique = BTreeSet::new();
     for row in &mut rows {
-        if !unique.insert((
-            row.site.clone(),
-            row.metric.clone(),
-            row.year,
-            row.published_at.clone(),
-        )) {
+        let key = &row.member.guidance.value.key;
+        let family = (
+            key.subject.clone(),
+            key.metric.clone(),
+            key.unit.clone(),
+            key.basis.clone(),
+            key.year,
+        );
+        if !unique.insert((family.clone(), row.published_at.clone())) {
             return Err(failure(
                 RefusalCode::NonIdentifiableAttribution104,
-                "multiple guidance rows have the same site, metric, year and publication date; the earliest statement is ambiguous",
+                "multiple guidance rows have the same site, metric, unit, ownership/definition basis, year and publication date; the earliest statement is ambiguous",
             ));
         }
-        let ordinal = seen
-            .entry((row.site.clone(), row.metric.clone(), row.year))
-            .or_default();
+        let ordinal = seen.entry(family).or_default();
         row.vintage = *ordinal;
         *ordinal += 1;
+        if !row.metric.starts_with("production_") {
+            row.price_sensitivity = Some(crate::track_record_price::assess(
+                profile,
+                transcripts,
+                cells,
+                row,
+                profile.through.as_deref(),
+                price_subject,
+            ));
+        }
     }
     type Group = (String, String, String, String, usize, bool);
-    let mut groups = BTreeMap::<Group, Vec<ScoringMember>>::new();
+    let mut groups = BTreeMap::<Group, Vec<&TrackRecordRow>>::new();
     for row in &rows {
-        let numeric = match &row.outcome {
-            OutcomeBinding::Resolved { cell, .. } => Some(numeric(
-                cell,
-                &row.guidance,
-                specification(&row.guidance, &row.metric)?.0,
-                row.metric.starts_with("production_"),
-            )?),
-            OutcomeBinding::Unresolved { .. } => None,
-        };
         groups
             .entry((
                 row.site.clone(),
                 row.metric.clone(),
-                row.guidance.unit.clone(),
-                row.guidance.basis.clone(),
+                row.member.guidance.value.key.unit.clone(),
+                row.member.guidance.value.key.basis.clone(),
                 row.vintage,
                 row.comparative,
             ))
             .or_default()
-            .push(ScoringMember {
-                id: row.id.clone(),
-                guidance: limits(&row.guidance)?,
-                outcome: numeric,
-            });
+            .push(row);
     }
     let mut summaries = Vec::new();
-    for ((site, metric, unit, basis, vintage, comparative), members) in groups {
+    for ((site, metric, unit, basis, vintage, comparative), rows) in groups {
+        let members: Vec<_> = rows.iter().map(|row| row.member.clone()).collect();
+        let claim = claims::summarize_history(&members)?;
+        let scores = GuidanceSummary::from(&claim.value);
         summaries.push(TrackRecordSummary {
             site,
             metric,
@@ -768,8 +964,9 @@ fn assess(
             basis,
             vintage,
             comparative,
-            members: members.iter().map(|m| m.id.clone()).collect(),
-            scores: scores::summarize(&members).map_err(rule_error)?,
+            members: rows.iter().map(|row| row.id.clone()).collect(),
+            claim,
+            scores,
         });
     }
     let mut enc = Encoder::new_frame(*b"GTSR", 1);
@@ -809,16 +1006,205 @@ pub fn run(
     site: Option<&str>,
     through: Option<&str>,
 ) -> Result<TrackRecordReport> {
+    run_with_price_subject(root, issuer, site, through, None)
+}
+
+pub fn run_with_price_subject(
+    root: &Path,
+    issuer: &str,
+    site: Option<&str>,
+    through: Option<&str>,
+    price_subject: Option<&str>,
+) -> Result<TrackRecordReport> {
     let mut profile = load_issuer_profile(root, issuer)?;
     if let Some(bound) = through {
         profile = profile.through(bound)?;
     }
     let claims = fmine_public::key::mine_stats::load_claims(&profile, root)?;
-    let transcripts=fmine_public::transcribe::load_transcription_report(&profile,root)?.ok_or_else(||failure(RefusalCode::NoClaimInDomain201,format!("registries/transcriptions/{issuer}.toml is absent; register guidance documents and agreed readings")))?;
-    let mut report = assess(&profile, &transcripts, &claims.claims, site)?;
+    let transcripts=fmine_public::transcribe::load_guidance_transcription_report(&profile,root,None)?.ok_or_else(||failure(RefusalCode::NoClaimInDomain201,format!("registries/transcriptions/{issuer}.toml is absent; register guidance documents and agreed readings")))?;
+    let mut report =
+        assess_with_price_subject(&profile, &transcripts, &claims.claims, site, price_subject)?;
     report.source_refusals = claims.refusals;
     report.digest = blake3_hash(report.body().as_bytes());
     Ok(report)
+}
+
+fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut body = String::new();
+    for byte in claim.canonical_body() {
+        body.push(char::from(HEX[usize::from(byte >> 4)]));
+        body.push(char::from(HEX[usize::from(byte & 15)]));
+    }
+    let parents = claim
+        .parents
+        .iter()
+        .map(|id| js(&id.to_string()))
+        .collect::<Vec<_>>()
+        .join(",");
+    let anchors = claim
+        .anchors
+        .iter()
+        .map(|anchor| {
+            format!(
+                "{{\"file\":{},\"path\":{},\"sha256\":{},\"locator\":{}}}",
+                js(&anchor.artifact_path),
+                js(&anchor.artifact_path),
+                js(&Digest32(anchor.artifact_sha256).to_hex()),
+                js(&anchor.locator)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let uu_terms = claim.uu_terms.iter().map(|term| format!(
+        "{{\"scenario_id\":{},\"description\":{},\"downside_exposure_usd_m\":{},\"trigger_indicator\":{}}}",
+        js(&term.scenario_id), js(&term.description),
+        if term.downside_exposure_usd_m.is_finite() { term.downside_exposure_usd_m.to_string() } else { "null".into() },
+        js(&term.trigger_indicator)
+    )).collect::<Vec<_>>().join(",");
+    format!(
+        "{{\"claim_id\":{},\"metric\":{},\"metric_key\":{},\"value_tag\":{},\"canonical_body_hex\":{},\"value\":{value},\"representation\":{},\"support\":{},\"additivity\":{},\"evidence\":{},\"epistemic\":{},\"knowledge\":{},\"confidentiality\":{},\"public\":{},\"stale\":{},\"calibration_failed\":{},\"uu_terms\":[{uu_terms}],\"parents\":[{parents}],\"anchors\":[{anchors}]}}",
+        js(&claim.claim_id.to_string()),
+        js(&claim.metric_key),
+        js(&claim.metric_key),
+        js(claim.value_tag()),
+        js(&body),
+        js(&format!("{:?}", claim.representation)),
+        js(&format!("{:?}", claim.support)),
+        js(&format!("{:?}", claim.additivity)),
+        js(&format!("{:?}", claim.evidence)),
+        js(&format!("{:?}", claim.epistemic)),
+        js(&format!("{:?}", claim.state)),
+        js(&claim.confidentiality.to_string()),
+        claim.confidentiality.is_public(),
+        claim.stale,
+        claim.calibration_failed,
+    )
+}
+
+fn rational_json(value: Rat) -> String {
+    format!(
+        "{{\"num\":\"{}\",\"den\":\"{}\"}}",
+        value.num(),
+        value.den()
+    )
+}
+
+fn interval_json(value: Interval) -> String {
+    format!(
+        "{{\"lo\":{},\"hi\":{},\"lo_strict\":{},\"hi_strict\":{}}}",
+        rational_json(value.lo),
+        rational_json(value.hi),
+        value.lo_strict,
+        value.hi_strict
+    )
+}
+
+fn key_json(key: &SeriesKey) -> String {
+    format!(
+        "{{\"subject\":{},\"metric\":{},\"unit\":{},\"basis\":{},\"year\":{}}}",
+        js(&key.subject),
+        js(&key.metric),
+        js(&key.unit),
+        js(&key.basis),
+        key.year
+    )
+}
+
+fn guidance_claim_json(claim: &Claim<GuidanceValue>) -> String {
+    let target = match claim.value.target {
+        GuidanceTarget::Range { lo, hi } => format!(
+            "{{\"kind\":\"range\",\"lo\":{},\"hi\":{}}}",
+            rational_json(lo),
+            rational_json(hi)
+        ),
+        GuidanceTarget::Point(value) => {
+            format!("{{\"kind\":\"point\",\"value\":{}}}", rational_json(value))
+        }
+        GuidanceTarget::AtMost(upper) => {
+            format!(
+                "{{\"kind\":\"at_most\",\"upper\":{}}}",
+                rational_json(upper)
+            )
+        }
+        GuidanceTarget::AtLeast(lower) => {
+            format!(
+                "{{\"kind\":\"at_least\",\"lower\":{}}}",
+                rational_json(lower)
+            )
+        }
+    };
+    claim_json(
+        claim,
+        &format!(
+            "{{\"key\":{},\"target\":{target}}}",
+            key_json(&claim.value.key)
+        ),
+    )
+}
+
+fn outcome_claim_json(claim: &Claim<OutcomeValue>) -> String {
+    let value = &claim.value;
+    claim_json(
+        claim,
+        &format!(
+            "{{\"key\":{},\"point\":{},\"rounding\":{{\"lo\":{},\"hi\":{},\"lo_strict\":{},\"hi_strict\":{}}}}}",
+            key_json(&value.key),
+            rational_json(value.point),
+            rational_json(value.rounding.lo),
+            rational_json(value.rounding.hi),
+            value.rounding.lo_strict,
+            value.rounding.hi_strict,
+        ),
+    )
+}
+
+fn score_claim_json(claim: &Claim<RangeScore>) -> String {
+    let r = |value: Option<Rat>| value.map_or_else(|| "null".into(), rational_json);
+    let hit = match claim.value.hit {
+        claims::Hit::CertainHit => "certain_hit",
+        claims::Hit::CertainMiss => "certain_miss",
+        claims::Hit::Boundary => "boundary",
+    };
+    claim_json(
+        claim,
+        &format!(
+            "{{\"midpoint\":{},\"half_width\":{},\"z\":{},\"z_bounds\":{},\"side\":{},\"boundary\":{},\"hit\":{},\"above_midpoint\":{}}}",
+            r(claim.value.midpoint),
+            r(claim.value.half_width),
+            r(claim.value.z),
+            claim
+                .value
+                .z_bounds
+                .map_or_else(|| "null".into(), interval_json),
+            js(claim.value.side.as_str()),
+            claim.value.boundary,
+            js(hit),
+            claim
+                .value
+                .above_midpoint
+                .map_or_else(|| "null".into(), |b| b.to_string())
+        ),
+    )
+}
+
+impl TrackRecordRow {
+    /// Preserve the published row-level Claim view using the same canonical inputs and score.
+    fn claims_json(&self) -> String {
+        let guidance = guidance_claim_json(&self.member.guidance);
+        let outcome = self
+            .member
+            .outcome
+            .as_ref()
+            .map_or_else(|| "null".into(), outcome_claim_json);
+        let score = self
+            .score_claim
+            .as_ref()
+            .map_or_else(|| "null".into(), score_claim_json);
+        format!(
+            "{{\"guidance\":{guidance},\"outcome\":{outcome},\"score\":{score},\"score_refusal\":null}}"
+        )
+    }
 }
 
 impl TrackRecordReport {
@@ -851,16 +1237,32 @@ impl TrackRecordReport {
                         js(code), js(reason), sources.iter().map(KeyedCell::to_json).collect::<Vec<_>>().join(","))
                 }
             };
-            let score = format!("{{\"rule\":\"guidance.range_score\",\"rules_version\":\"guidance-track-record/1\",\"in\":[{}],\"value\":{}}}",
+            let score = format!("{{\"rule\":\"guidance.range_score\",\"rules_version\":\"guidance-track-record/2\",\"in\":[{}],\"value\":{},\"claim\":{}}}",
                 inputs.iter().map(|s| js(s)).collect::<Vec<_>>().join(","),
-                r.score.as_ref().map_or_else(|| "null".into(), GuidanceScore::to_json));
-            format!("{{\"id\":{},\"site\":{},\"metric\":{},\"year\":{},\"guidance_vintage_ordinal\":{},\"published_at\":{},\"published_at_basis\":{},\"guidance\":{{\"at\":{},\"sha256\":{},\"token\":{},\"unit\":{},\"basis\":{},\"period\":{},\"reader_count\":{}}},\"outcome\":{outcome},\"later_outcomes\":[{}],\"score\":{score}}}",
+                r.score.as_ref().map_or_else(|| "null".into(), GuidanceScore::to_json),
+                r.score_claim.as_ref().map_or_else(|| "null".into(), |c| claim_json(c, &GuidanceScore::from(&c.value).to_json())));
+            let source_value = format!("{{\"statement_id\":{},\"locator\":{},\"sha256\":{},\"token\":{},\"quantity\":{},\"unit\":{},\"basis\":{},\"period\":{},\"published_at\":{}}}",
+                js(&r.id), js(&r.guidance.locator.to_string()), js(&r.guidance.doc_sha256), js(&r.guidance.token),
+                js(&r.guidance.quantity), js(&r.guidance.unit), js(&r.guidance.basis), js(&r.guidance.period), js(&r.published_at));
+            let price = r.price_sensitivity.as_ref().map_or_else(|| "null".into(), crate::track_record_price::PriceAssessment::to_json);
+            format!("{{\"id\":{},\"site\":{},\"metric\":{},\"year\":{},\"guidance_vintage_ordinal\":{},\"published_at\":{},\"published_at_basis\":{},\"guidance\":{{\"at\":{},\"sha256\":{},\"token\":{},\"unit\":{},\"basis\":{},\"period\":{},\"reader_count\":{},\"source_claim\":{},\"claim\":{}}},\"outcome\":{outcome},\"later_outcomes\":[{}],\"interpreted_outcome_claim\":{},\"score\":{score},\"price_sensitivity\":{price},\"claims\":{}}}",
                 js(&r.id), js(&r.site), js(&r.metric), r.year, r.vintage, js(&r.published_at), js(&r.publication_basis),
                 js(&r.guidance.locator.to_string()), js(&r.guidance.doc_sha256), js(&r.guidance.token), js(&r.guidance.unit),
                 js(&r.guidance.basis), js(&r.guidance.period), r.guidance.readers.len(),
-                r.later_outcomes.iter().map(KeyedCell::to_json).collect::<Vec<_>>().join(","))
+                claim_json(&r.guidance_source, &source_value), guidance_claim_json(&r.member.guidance),
+                r.later_outcomes.iter().map(KeyedCell::to_json).collect::<Vec<_>>().join(","),
+                r.member.outcome.as_ref().map_or_else(|| "null".into(), outcome_claim_json), r.claims_json())
         }).collect::<Vec<_>>().join(",");
-        let summaries=self.summaries.iter().map(|s|format!("{{\"site\":{},\"metric\":{},\"unit\":{},\"basis\":{},\"guidance_vintage_ordinal\":{},\"outcome_selector\":{},\"in\":[{}],\"rule\":\"guidance.descriptive_summary\",\"rules_version\":\"guidance-track-record/1\",\"scores\":{}}}",js(&s.site),js(&s.metric),js(&s.unit),js(&s.basis),s.vintage,js(if s.comparative {"comparative_only"} else {"first_published"}),s.members.iter().map(|id|js(id)).collect::<Vec<_>>().join(","),s.scores.to_json())).collect::<Vec<_>>().join(",");
+        let summaries = self.summaries.iter().map(|s| {
+            let scope = match &s.claim.value.scope {
+                claims::SummaryScope::Annual { year } => format!("{{\"kind\":\"annual\",\"year\":{year}}}"),
+                claims::SummaryScope::SiteHistory { subject, basis, years } => format!(
+                    "{{\"kind\":\"site_history\",\"subject\":{},\"basis\":{},\"years\":[{}]}}",
+                    js(subject), js(basis), years.iter().map(u16::to_string).collect::<Vec<_>>().join(",")),
+            };
+            let claim_value = format!("{{\"metric\":{},\"unit\":{},\"scope\":{scope},\"scores\":{}}}", js(&s.metric), js(&s.unit), s.scores.to_json());
+            format!("{{\"site\":{},\"metric\":{},\"unit\":{},\"basis\":{},\"guidance_vintage_ordinal\":{},\"outcome_selector\":{},\"in\":[{}],\"rule\":\"guidance.descriptive_summary\",\"rules_version\":\"guidance-track-record/2\",\"scores\":{},\"claim\":{}}}",js(&s.site),js(&s.metric),js(&s.unit),js(&s.basis),s.vintage,js(if s.comparative {"comparative_only"} else {"first_published"}),s.members.iter().map(|id|js(id)).collect::<Vec<_>>().join(","),s.scores.to_json(),claim_json(&s.claim, &claim_value))
+        }).collect::<Vec<_>>().join(",");
         prefix
             + &format!(
                 "\"schema\":\"fmine.guidance.track-record.v1\",\"issuer\":{},\"lane\":{},\"through\":{},\"source_digest\":{},\"mode\":\"single_site_descriptive_cards\",\"rows\":[{}],\"summaries\":[{}],\"no_affiliation\":{},\"warnings\":[\"Guidance-vintage ordinal is the order of registered documents, not an issuer revision classification.\",\"Workbook release bounds are not historical information-availability cuts. Guidance after year end is left unresolved.\",\"Comparative-only outcomes are scored separately and never treated as original publications.\",\"Rounding enclosures are not sampling confidence intervals. The binomial reference assumes independent identical trials.\",\"Effective sample size, year effects and bias sampling intervals are not estimated; no pooled site score is emitted.\"],\"no_claim\":{}",
@@ -1239,6 +1641,117 @@ mod tests {
     }
 
     #[test]
+    fn canonical_score_and_summary_preserve_source_ancestry_and_uu_terms() {
+        let (profile, transcripts, mut cells) = synthetic_evidence().expect("fixture");
+        let term = fmine_claim::UuTerm {
+            scenario_id: "synthetic-reporting-change".into(),
+            description: "Invented structural reporting uncertainty".into(),
+            downside_exposure_usd_m: 0.0,
+            trigger_indicator: "synthetic restatement".into(),
+        };
+        cells[0].claim.uu_terms.push(term.clone());
+        let report = assess(&profile, &transcripts, &cells, None).expect("canonical report");
+        let row = production(&report);
+        let score = row.score_claim.as_ref().expect("canonical score");
+        let outcome = row.member.outcome.as_ref().expect("canonical outcome");
+        row.member.guidance.check_id().expect("input identity");
+        assert_eq!(
+            row.member.guidance.value_tag(),
+            row.member.guidance.value.canonical_tag()
+        );
+        outcome.check_id().expect("outcome identity");
+        score.check_id().expect("score identity");
+        assert_eq!(score.value_tag(), score.value.canonical_tag());
+        assert_eq!(outcome.parents, vec![cells[0].claim.claim_id]);
+        assert_eq!(
+            row.member.guidance.parents,
+            vec![row.guidance_source.claim_id]
+        );
+        assert!(score.parents.contains(&row.member.guidance.claim_id));
+        assert!(score.parents.contains(&outcome.claim_id));
+        assert_eq!(score.uu_terms, vec![term.clone()]);
+        assert_eq!(score.evidence, EvidenceClass::Assumed);
+        assert_eq!(row.score, Some(GuidanceScore::from(&score.value)));
+        let summary = report
+            .summaries
+            .iter()
+            .find(|s| s.metric == "production_koz")
+            .expect("summary");
+        summary.claim.check_id().expect("summary identity");
+        assert_eq!(
+            summary.claim.value_tag(),
+            summary.claim.value.canonical_tag()
+        );
+        assert_eq!(summary.claim.uu_terms, vec![term]);
+        assert_eq!(
+            summary.scores.iid_reference_interval_90_exact,
+            summary.claim.value.binomial_90_exact
+        );
+        let missing = report
+            .rows
+            .iter()
+            .find(|r| r.metric == "aisc_usd_per_oz")
+            .expect("unresolved cost");
+        let missing_summary = report
+            .summaries
+            .iter()
+            .find(|s| s.metric == "aisc_usd_per_oz")
+            .expect("unresolved summary");
+        assert!(
+            missing_summary
+                .claim
+                .parents
+                .contains(&missing.member.guidance.claim_id)
+        );
+        assert_eq!(
+            (
+                missing_summary.claim.value.members,
+                missing_summary.claim.value.unresolved
+            ),
+            (1, 1)
+        );
+        let json = report.to_json();
+        for id in [
+            row.guidance_source.claim_id,
+            row.member.guidance.claim_id,
+            outcome.claim_id,
+            score.claim_id,
+            summary.claim.claim_id,
+        ] {
+            assert!(json.contains(&format!("\"claim_id\":\"{id}\"")));
+        }
+        assert!(json.contains("synthetic-reporting-change"));
+        let markdown = crate::track_record::render(&report);
+        assert!(markdown.contains(&score.claim_id.to_string()));
+        assert!(markdown.contains(&summary.claim.claim_id.to_string()));
+        assert!(markdown.contains("Certified outward rational enclosure"));
+    }
+
+    #[test]
+    fn publication_date_correction_changes_claim_ancestry_without_changing_arithmetic() {
+        let (profile, mut transcripts, cells) = synthetic_evidence().expect("fixture");
+        let before = assess(&profile, &transcripts, &cells, None).expect("first interpretation");
+        transcripts.documents[0].published_at = "2030-01-16".into();
+        let after =
+            assess(&profile, &transcripts, &cells, None).expect("corrected publication date");
+        let (first, next) = (production(&before), production(&after));
+        assert_eq!(first.score, next.score);
+        assert_ne!(
+            first.guidance_source.claim_id,
+            next.guidance_source.claim_id
+        );
+        assert_ne!(
+            first.member.guidance.claim_id,
+            next.member.guidance.claim_id
+        );
+        assert_ne!(
+            first.score_claim.as_ref().unwrap().claim_id,
+            next.score_claim.as_ref().unwrap().claim_id
+        );
+        assert_ne!(before.digest, after.digest);
+    }
+
+    #[test]
     fn rejected_original_retains_source_bytes_identity_and_later_appearance() {
         let (p, t, mut cells) = synthetic_evidence().expect("fixture");
         let later = revised(&cells[0], 2030, "2031Q1", "110");
@@ -1488,6 +2001,192 @@ mod tests {
                 .code,
             "FMINE-REF-104"
         );
+    }
+
+    fn multi_basis_evidence() -> (IssuerProfile, TranscriptionReport, Vec<KeyedCell>) {
+        let (p, mut t, mut cells) = synthetic_evidence().expect("fixture");
+        t.agreement
+            .accepted
+            .retain(|a| a.quantity.ends_with("production_koz"));
+        let mut full = t.agreement.accepted[0].clone();
+        full.locator.col = "100% production".into();
+        full.basis = "100%".into();
+        full.token = "140 - 160".into();
+        full.value = parse_token(&full.token).expect("full-mine guidance");
+        t.agreement.accepted.push(full);
+        let mut actual = cells[0].clone();
+        actual.key.ownership_basis = OwnershipBasis::Consolidated100;
+        actual.printed_basis = OwnershipBasis::Consolidated100;
+        actual.key.line.label = "summary:au_prod_100_koz".into();
+        actual.locator = "synthetic/2030Q4/production.txt:Annual!B1".into();
+        actual.claim.anchors[0].locator = "Annual!B1".into();
+        actual.claim.value = PublicValue::Number {
+            stored: "150".into(),
+            displayed: Ok("150".into()),
+            under_status: None,
+        };
+        reconstruct(&mut actual);
+        cells.push(actual);
+        (p, t, cells)
+    }
+
+    #[test]
+    fn same_date_full_and_attributable_guidance_keep_independent_scores() {
+        let (p, t, cells) = multi_basis_evidence();
+        let report = assess(&p, &t, &cells, None).expect("independent ownership series");
+        assert_eq!(report.rows.len(), 2);
+        assert_eq!(report.summaries.len(), 2);
+        for row in &report.rows {
+            assert_eq!(row.vintage, 0);
+            let (source, side) = if row.member.guidance.value.key.basis == "100%" {
+                (&cells[1], Side::Inside)
+            } else {
+                assert_eq!(row.member.guidance.value.key.basis, "attributable:4/5");
+                (&cells[0], Side::Above)
+            };
+            assert_eq!(row.score.expect("separate score").side, side);
+            let outcome = row.member.outcome.as_ref().expect("interpreted outcome");
+            assert_eq!(outcome.parents, vec![source.claim.claim_id]);
+            row.score_claim
+                .as_ref()
+                .expect("score Claim")
+                .check_id()
+                .expect("canonical");
+        }
+        assert!(
+            report
+                .summaries
+                .iter()
+                .all(|s| s.vintage == 0 && s.scores.n_members == 1 && s.scores.n_resolved == 1)
+        );
+        let mut attributable_all = t.agreement.accepted[0].clone();
+        attributable_all.basis = "attributable:1/1".into();
+        assert_ne!(
+            series_basis(&attributable_all, "production_koz").expect("attributable"),
+            series_basis(&t.agreement.accepted[1], "production_koz").expect("full")
+        );
+    }
+
+    #[test]
+    fn ownership_series_revision_ordinals_do_not_interleave() {
+        let (p, mut t, mut cells) = multi_basis_evidence();
+        // The full-mine series starts later, but its first statement is still vintage zero.
+        for (index, file, date) in [
+            (1, "full-initial.txt", "2030-03-01"),
+            (0, "attributable-revision.txt", "2030-06-01"),
+            (1, "full-revision.txt", "2030-09-01"),
+        ] {
+            let mut doc = t.documents[0].clone();
+            doc.file = file.into();
+            doc.published_at = date.into();
+            let mut row = t.agreement.accepted[index].clone();
+            row.locator.doc = file.into();
+            t.documents.push(doc);
+            if file == "full-initial.txt" {
+                t.agreement.accepted[index] = row;
+            } else {
+                t.agreement.accepted.push(row);
+            }
+        }
+        let report = assess(&p, &t, &cells, None).expect("both series with revisions");
+        assert_eq!(report.rows.len(), 4);
+        assert_eq!(report.summaries.len(), 4);
+        for basis in ["100%", "attributable:4/5"] {
+            let rows: Vec<_> = report
+                .rows
+                .iter()
+                .filter(|r| r.member.guidance.value.key.basis == basis)
+                .collect();
+            assert_eq!(
+                rows.iter().map(|r| r.vintage).collect::<Vec<_>>(),
+                vec![0, 1]
+            );
+            for summary in report.summaries.iter().filter(|s| s.basis == basis) {
+                assert_eq!(summary.scores.n_members, 1);
+                assert_eq!(summary.members, vec![rows[summary.vintage].id.clone()]);
+            }
+        }
+        t.agreement.accepted.reverse();
+        t.documents.reverse();
+        cells.reverse();
+        assert_eq!(
+            report.to_json(),
+            assess(&p, &t, &cells, None).expect("permutation").to_json()
+        );
+    }
+
+    #[test]
+    fn equivalent_fraction_spellings_share_one_history_without_losing_source_basis() {
+        let (mut p, mut t, cells) = synthetic_evidence().expect("fixture");
+        t.agreement
+            .accepted
+            .retain(|a| a.quantity.ends_with("production_koz"));
+        let mut doc = t.documents[0].clone();
+        doc.file = "guidance-2031.txt".into();
+        doc.published_at = "2031-01-15".into();
+        let mut row = t.agreement.accepted[0].clone();
+        row.locator.doc = doc.file.clone();
+        row.period = "2031FY".into();
+        row.basis = "attributable:8/10".into();
+        t.documents.push(doc);
+        t.agreement.accepted.push(row);
+        let next = revised(&cells[0], 2031, "2031Q4", "115");
+        let mut source = p.sources[0].clone();
+        source.file_name = "2031.txt".into();
+        source.quarter = "2031Q4".into();
+        source.sha256_hex = next.key.reporting_vintage.file_sha256.clone();
+        p.sources.push(source);
+        let report = assess(&p, &t, &[cells[0].clone(), next], None).expect("canonical shares");
+        assert_eq!(report.rows.len(), 2);
+        assert_eq!(report.rows[1].guidance.basis, "attributable:8/10");
+        assert!(
+            report
+                .rows
+                .iter()
+                .all(|r| r.member.guidance.value.key.basis == "attributable:4/5" && r.vintage == 0)
+        );
+        assert_eq!(report.summaries.len(), 1);
+        let summary = &report.summaries[0];
+        assert_eq!(summary.basis, "attributable:4/5");
+        assert_eq!(
+            (
+                summary.scores.n_members,
+                summary.scores.n_resolved,
+                summary.scores.inside
+            ),
+            (2, 2, 1)
+        );
+        summary
+            .claim
+            .check_id()
+            .expect("canonical combined history");
+        let mut cost = t.agreement.accepted[0].clone();
+        cost.unit = "usd_per_oz".into();
+        cost.basis = "attributable:8/10;aisc=issuer-reported-per-sold-oz".into();
+        assert_eq!(
+            series_basis(&cost, "aisc_usd_per_oz").expect("cost definition"),
+            "attributable:4/5;aisc=issuer-reported-per-sold-oz"
+        );
+    }
+
+    #[test]
+    fn same_date_equivalent_basis_duplicates_still_refuse() {
+        let (p, t, cells) = synthetic_evidence().expect("fixture");
+        for basis in ["attributable:4/5", "attributable:8/10"] {
+            let mut transcripts = t.clone();
+            let mut duplicate = transcripts.agreement.accepted[0].clone();
+            duplicate.locator.col = "second attributable statement".into();
+            duplicate.basis = basis.into();
+            duplicate.token = "120 - 130".into();
+            duplicate.value = parse_token(&duplicate.token).expect("conflicting statement");
+            transcripts.agreement.accepted.push(duplicate);
+            assert_eq!(
+                assess(&p, &transcripts, &cells, None)
+                    .expect_err("same-series ambiguity")
+                    .code,
+                "FMINE-REF-104"
+            );
+        }
     }
 
     #[test]
@@ -1743,6 +2442,7 @@ reader = "{reader}"
             reconstruct(&mut c[0]);
             let r = assess(&p, &t, &c, None).expect("negative state stays visible");
             assert!(production(&r).score.is_none(), "{state:?}");
+            assert!(production(&r).score_claim.is_none(), "{state:?}");
             assert!(
                 matches!(&production(&r).outcome,
                     OutcomeBinding::Unresolved { code, .. } if code == "FMINE-REF-202"),
@@ -1771,5 +2471,107 @@ reader = "{reader}"
         assert_eq!(cell.locator, "Annual.xlsx:YTD!D3");
         assert_eq!(cell.key.unit, "usd_per_oz");
         assert_eq!(cell.claim.additivity, AdditivityClass::IntensiveWeighted);
+    }
+
+    #[test]
+    fn canonical_claims_keep_source_parents_and_missing_guidance() {
+        let (p, t, c) = synthetic_evidence().expect("fixture");
+        let r = assess(&p, &t, &c, None).expect("canonical rows");
+        let row = production(&r);
+        let g = &row.member.guidance;
+        let y = row.member.outcome.as_ref().expect("interpreted outcome");
+        let score = row.score_claim.as_ref().expect("canonical score");
+        g.check_id().expect("guidance id");
+        y.check_id().expect("outcome id");
+        score.check_id().expect("score id");
+        assert_eq!(g.value_tag(), g.value.canonical_tag());
+        assert_eq!(y.value_tag(), y.value.canonical_tag());
+        assert_eq!(score.value_tag(), score.value.canonical_tag());
+        assert_eq!(score.value.z, row.score.expect("numeric score").z);
+        assert_eq!(y.parents, vec![c[0].claim.claim_id]);
+        assert!(score.parents.contains(&g.claim_id));
+        assert!(score.parents.contains(&y.claim_id));
+        assert_eq!(score.evidence, EvidenceClass::Assumed);
+        assert!(
+            score
+                .anchors
+                .iter()
+                .any(|a| a.artifact_path == "synthetic-guidance.txt")
+        );
+        assert!(
+            score
+                .anchors
+                .iter()
+                .any(|a| a.artifact_sha256 == c[0].claim.anchors[0].artifact_sha256)
+        );
+        let missing = r
+            .rows
+            .iter()
+            .find(|r| r.metric == "aisc_usd_per_oz")
+            .expect("missing member");
+        missing
+            .member
+            .guidance
+            .check_id()
+            .expect("missing member guidance");
+        assert!(missing.member.outcome.is_none());
+        assert!(missing.score_claim.is_none());
+        assert!(r.to_json().contains("\"canonical_body_hex\""));
+        let legacy = row.claims_json();
+        assert!(legacy.contains("\"metric_key\":\"guidance.interpreted_target\""));
+        assert!(legacy.contains("\"score_refusal\":null"));
+        assert!(legacy.contains("\"hit\":\"certain_miss\""));
+        assert!(legacy.contains("\"z_bounds\":"));
+        assert!(legacy.contains("\"path\":\"synthetic-guidance.txt\""));
+    }
+
+    #[test]
+    fn registered_synthetic_unknown_remains_unknown_in_its_score_claim() {
+        let root = registered_workspace();
+        let r = run(&root, "synthetic", None, None).expect("synthetic arithmetic");
+        for row in &r.rows {
+            assert!(row.score.is_some());
+            assert_eq!(
+                row.member
+                    .outcome
+                    .as_ref()
+                    .expect("source interpretation")
+                    .state,
+                KnowledgeState::Unknown
+            );
+            let score = row.score_claim.as_ref().expect("hypothetical score");
+            assert_eq!(score.state, KnowledgeState::Unknown);
+            assert_eq!(score.evidence, EvidenceClass::Assumed);
+            assert!(row.claims_json().contains("\"score_refusal\":null"));
+        }
+    }
+
+    #[test]
+    fn registered_public_interpretations_use_canonical_derived_claims() {
+        let root = registered_workspace();
+        // The invented test issuer exercises the public path without introducing real filings.
+        for kind in ["sources", "transcriptions"] {
+            let path = root.join(format!("registries/{kind}"));
+            let text =
+                std::fs::read_to_string(path.join("synthetic.toml")).expect("fixture registry");
+            std::fs::write(
+                path.join("example.toml"),
+                text.replace("issuer = \"synthetic\"", "issuer = \"example\""),
+            )
+            .expect("invented public-path registry");
+        }
+        let r = run(&root, "example", None, None).expect("public-path Claims");
+        assert!(!r.synthetic);
+        for row in &r.rows {
+            let score = row.score_claim.as_ref().expect("canonical score");
+            score.check_id().expect("canonical id");
+            assert_eq!(
+                score.evidence,
+                EvidenceClass::Derived.meet(EvidenceClass::ISSUER)
+            );
+            assert_eq!(score.state, KnowledgeState::Known);
+            assert_eq!(score.value.z, row.score.expect("numeric score").z);
+            assert!(row.claims_json().contains("\"score_refusal\":null"));
+        }
     }
 }

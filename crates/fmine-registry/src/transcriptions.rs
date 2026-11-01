@@ -11,7 +11,7 @@
 //! Real rows are held back from the repository pending the owner's decision on OPEN-R7-1 (committing
 //! transcribed values): the default path is git-ignored, and the tests use synthetic rows.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
@@ -366,6 +366,9 @@ pub struct Agreement {
     pub disagreements: Vec<Disagreement>,
     /// One quantity agreed at two locators of one document: `(doc, quantity, locators)`. Neither is accepted.
     pub quantity_clashes: Vec<(String, String, Vec<Locator>)>,
+    /// Every quantity named by any reader at a rejected locator. No raw tokens are retained here.
+    /// Missing metadata remains unknown, including for manually constructed legacy agreements.
+    pub rejected_quantities: BTreeMap<Locator, BTreeSet<String>>,
 }
 
 impl Agreement {
@@ -390,6 +393,44 @@ impl Agreement {
     #[must_use]
     pub fn is_consistent(&self) -> bool {
         self.disagreements.is_empty() && self.quantity_clashes.is_empty()
+    }
+
+    /// Whether this quantity namespace has no pending or conflicting readings. Every reader's identity
+    /// participates: disagreement about whether a quantity is guidance cannot move it outside this gate.
+    /// Unknown or incomplete rejection metadata fails closed. An empty prefix covers every quantity.
+    #[must_use]
+    pub fn is_complete_for_prefix(&self, prefix: &str) -> bool {
+        let rejected: BTreeSet<&Locator> = self
+            .single_reader
+            .iter()
+            .map(|(at, _)| at)
+            .chain(self.disagreements.iter().map(|d| &d.locator))
+            .chain(self.quantity_clashes.iter().flat_map(|(_, _, at)| at))
+            .collect();
+        if rejected.len() != self.rejected_quantities.len() {
+            return false;
+        }
+        for (doc, quantity, locators) in &self.quantity_clashes {
+            if locators.is_empty()
+                || locators.iter().any(|at| {
+                    at.doc != *doc
+                        || self
+                            .rejected_quantities
+                            .get(at)
+                            .is_none_or(|quantities| !quantities.contains(quantity))
+                })
+            {
+                return false;
+            }
+        }
+        rejected.into_iter().all(|at| {
+            self.rejected_quantities.get(at).is_some_and(|quantities| {
+                !quantities.is_empty()
+                    && quantities.iter().all(|quantity| {
+                        is_key(quantity) && !quantity.contains('-') && !quantity.starts_with(prefix)
+                    })
+            })
+        })
     }
 }
 
@@ -458,6 +499,25 @@ pub fn agree(registry: &TranscriptionRegistry) -> Agreement {
             out.accepted
                 .retain(|a| !(a.locator.doc == doc && a.quantity == quantity));
             out.quantity_clashes.push((doc, quantity, locators));
+        }
+    }
+    let rejected: BTreeSet<Locator> = out
+        .single_reader
+        .iter()
+        .map(|(at, _)| at.clone())
+        .chain(out.disagreements.iter().map(|d| d.locator.clone()))
+        .chain(
+            out.quantity_clashes
+                .iter()
+                .flat_map(|(_, _, at)| at.iter().cloned()),
+        )
+        .collect();
+    for entry in &registry.entries {
+        if rejected.contains(&entry.locator) {
+            out.rejected_quantities
+                .entry(entry.locator.clone())
+                .or_default()
+                .insert(entry.quantity.clone());
         }
     }
     out
@@ -768,5 +828,213 @@ mod tests {
             e.reason.contains("is not \"fmine.transcriptions.v1\""),
             "{e}"
         );
+    }
+
+    fn scoped(rows: &[String]) -> Agreement {
+        agree(&parse_transcriptions(&registry(rows), "demo", &docs()).expect("valid readings"))
+    }
+
+    #[test]
+    fn test_scoped_agreement_keeps_optional_pending_rows_outside_guidance() {
+        let mut rows = vec![
+            entry(
+                "reader_a",
+                "Deck.pdf",
+                1,
+                "Guidance",
+                "100",
+                "guidance_site_a_production",
+            ),
+            entry(
+                "reader_b",
+                "Deck.pdf",
+                1,
+                "Guidance",
+                "100",
+                "guidance_site_a_production",
+            ),
+        ];
+        let original = scoped(&rows);
+        rows.push(entry(
+            "reader_a",
+            "Deck.pdf",
+            2,
+            "Price",
+            "2000",
+            "price_site_a_gold",
+        ));
+        let result = scoped(&rows);
+        assert!(result.is_complete_for_prefix("guidance_"));
+        assert!(!result.is_complete_for_prefix("price_"));
+        assert!(!result.is_complete_for_prefix(""));
+        assert_eq!(result.single_reader.len(), 1);
+        assert_eq!(result.accepted, original.accepted);
+        assert_eq!(result.digest(), original.digest());
+        assert_eq!(
+            result.rejected_quantities[&result.single_reader[0].0],
+            BTreeSet::from(["price_site_a_gold".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_scoped_agreement_keeps_all_disagreeing_quantity_identities() {
+        let rows = vec![
+            entry(
+                "reader_a",
+                "Deck.pdf",
+                1,
+                "Same locator",
+                "100",
+                "guidance_site_a_production",
+            ),
+            entry(
+                "reader_b",
+                "Deck.pdf",
+                1,
+                "Same locator",
+                "100",
+                "price_site_a_gold",
+            ),
+            entry(
+                "reader_c",
+                "Deck.pdf",
+                1,
+                "Same locator",
+                "100",
+                "price_site_a_gold",
+            ),
+        ];
+        let result = scoped(&rows);
+        assert!(!result.is_consistent());
+        assert!(!result.is_complete_for_prefix("guidance_"));
+        assert!(!result.is_complete_for_prefix("price_"));
+        assert!(result.accepted.is_empty());
+        assert_eq!(
+            result.rejected_quantities[&result.disagreements[0].locator],
+            BTreeSet::from([
+                "guidance_site_a_production".to_string(),
+                "price_site_a_gold".to_string()
+            ])
+        );
+        let mut reversed = rows;
+        reversed.reverse();
+        assert_eq!(
+            scoped(&reversed).rejected_quantities,
+            result.rejected_quantities
+        );
+    }
+
+    #[test]
+    fn test_scoped_agreement_allows_optional_conflicts_without_resolving_them() {
+        let result = scoped(&[
+            entry(
+                "reader_a",
+                "Deck.pdf",
+                1,
+                "Price",
+                "2000",
+                "price_site_a_gold",
+            ),
+            entry(
+                "reader_b",
+                "Deck.pdf",
+                1,
+                "Price",
+                "2100",
+                "price_site_a_gold",
+            ),
+        ]);
+        assert!(!result.is_consistent());
+        assert!(result.is_complete_for_prefix("guidance_"));
+        assert!(!result.is_complete_for_prefix("price_"));
+        assert_eq!(result.disagreements.len(), 1);
+        assert!(result.accepted.is_empty());
+    }
+
+    #[test]
+    fn test_scoped_agreement_retains_every_quantity_clash_locator() {
+        let mut result = scoped(&[
+            entry(
+                "reader_a",
+                "Deck.pdf",
+                1,
+                "Price A",
+                "2000",
+                "price_site_a_gold",
+            ),
+            entry(
+                "reader_b",
+                "Deck.pdf",
+                1,
+                "Price A",
+                "2000",
+                "price_site_a_gold",
+            ),
+            entry(
+                "reader_c",
+                "Deck.pdf",
+                2,
+                "Price B",
+                "2100",
+                "price_site_a_gold",
+            ),
+            entry(
+                "reader_d",
+                "Deck.pdf",
+                2,
+                "Price B",
+                "2100",
+                "price_site_a_gold",
+            ),
+        ]);
+        assert_eq!(result.quantity_clashes.len(), 1);
+        assert_eq!(result.rejected_quantities.len(), 2);
+        assert!(result.accepted.is_empty());
+        assert!(result.is_complete_for_prefix("guidance_"));
+        assert!(!result.is_complete_for_prefix("price_"));
+        let missing = result.quantity_clashes[0].2[0].clone();
+        result.rejected_quantities.remove(&missing);
+        assert!(!result.is_complete_for_prefix("guidance_"));
+        result
+            .rejected_quantities
+            .insert(missing, BTreeSet::from(["other_quantity".into()]));
+        assert!(!result.is_complete_for_prefix("guidance_"));
+    }
+
+    #[test]
+    fn test_scoped_agreement_unknown_empty_and_orphan_metadata_fail_closed() {
+        let result = scoped(&[entry(
+            "reader_a",
+            "Deck.pdf",
+            1,
+            "Price",
+            "2000",
+            "price_site_a_gold",
+        )]);
+        let at = result.single_reader[0].0.clone();
+        assert!(result.is_complete_for_prefix("guidance_"));
+        let mut unknown = result.clone();
+        unknown.rejected_quantities.clear();
+        assert!(!unknown.is_complete_for_prefix("guidance_"));
+        let mut empty = result.clone();
+        empty
+            .rejected_quantities
+            .insert(at.clone(), BTreeSet::new());
+        assert!(!empty.is_complete_for_prefix("guidance_"));
+        let mut invalid = result.clone();
+        invalid
+            .rejected_quantities
+            .insert(at.clone(), BTreeSet::from([String::new()]));
+        assert!(!invalid.is_complete_for_prefix("guidance_"));
+        let mut orphan = Agreement::default();
+        orphan
+            .rejected_quantities
+            .insert(at, BTreeSet::from(["price_site_a_gold".into()]));
+        assert!(!orphan.is_complete_for_prefix("guidance_"));
+        let mut empty_clash = Agreement::default();
+        empty_clash
+            .quantity_clashes
+            .push(("Deck.pdf".into(), "price_site_a_gold".into(), vec![]));
+        assert!(!empty_clash.is_complete_for_prefix("guidance_"));
     }
 }

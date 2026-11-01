@@ -148,10 +148,15 @@ fn hex(bytes: &[u8; 32]) -> String {
 /// Loads every registered workbook of `profile` from `<root>/<corpus_dir>/`, checking byte size and SHA-256
 /// against the registry. Refuses naming every missing, altered or unparseable file: `FMINE-REF-506` (exit 5)
 /// when any file is missing or unreadable, otherwise `FMINE-REF-505` (exit 8) for digest mismatches alone.
+/// A profile without registered workbooks refuses with `FMINE-REF-201`; documents use their own loader.
 pub fn load_registered_sources(
     profile: &IssuerProfile,
     root: &Path,
 ) -> Result<Vec<LoadedSource>, Refusal> {
+    profile
+        .sources
+        .first()
+        .ok_or_else(|| Refusal::new(RefusalCode::NoClaimInDomain201, "no registered workbooks"))?;
     let dir = root.join(&profile.corpus_dir);
     let mut loaded = Vec::with_capacity(profile.sources.len());
     let mut missing = Vec::new();

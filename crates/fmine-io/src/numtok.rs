@@ -51,6 +51,7 @@ pub enum UnitTok {
     Koz,
     Moz,
     Kt,
+    GramsPerTonne,
     Percent,
     Usd,
 }
@@ -62,12 +63,34 @@ pub enum BasisTok {
     Unprinted,
     PerOzSold,
     PerOzProduced,
+    PerLbSold,
+    PerLbProduced,
     ByProduct,
     CoProduct,
     GoldOunces,
     Geo,
     NonGaap,
     Scorecard,
+}
+
+impl BasisTok {
+    #[must_use]
+    pub const fn is_ownership(self) -> bool {
+        matches!(self, Self::Attributable | Self::Hundred | Self::Unprinted)
+    }
+
+    #[must_use]
+    pub const fn is_denominator(self) -> bool {
+        matches!(
+            self,
+            Self::PerOzSold | Self::PerOzProduced | Self::PerLbSold | Self::PerLbProduced
+        )
+    }
+
+    #[must_use]
+    pub const fn is_credit(self) -> bool {
+        matches!(self, Self::ByProduct | Self::CoProduct)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +218,10 @@ fn basis(text: &str, at: usize) -> Option<(usize, BasisTok)> {
         ("per oz produced", B::PerOzProduced),
         ("per ounce sold", B::PerOzSold),
         ("per oz sold", B::PerOzSold),
+        ("per pound produced", B::PerLbProduced),
+        ("per lb produced", B::PerLbProduced),
+        ("per pound sold", B::PerLbSold),
+        ("per lb sold", B::PerLbSold),
         ("gold equivalent", B::Geo),
         ("gold-equivalent", B::Geo),
         ("geo", B::Geo),
@@ -349,6 +376,8 @@ fn unit(text: &str, at: usize) -> Option<(usize, UnitTok)> {
         ("USD/lb", U::UsdPerLb),
         ("$/oz", U::DollarPerOz),
         ("$/lb", U::DollarPerLb),
+        ("grams per tonne", U::GramsPerTonne),
+        ("g/t", U::GramsPerTonne),
         ("percent", U::Percent),
         ("per cent", U::Percent),
         ("%", U::Percent),
@@ -774,6 +803,9 @@ mod tests {
         let unspecified = one("$1,637/oz");
         assert_eq!(unspecified.currency, Some(Currency::Dollar));
         assert_eq!(unspecified.unit, Some(UnitTok::DollarPerOz));
+        assert_eq!(one("US$1.25/lb").unit, Some(UnitTok::UsdPerLb));
+        assert_eq!(one("$1.25/lb").unit, Some(UnitTok::DollarPerLb));
+        assert_eq!(one("C1 cash costs are US$1.25/lb").value, dec(125, 2));
         let n = one("1.6 koz");
         assert_eq!(
             (n.value, n.step, n.unit),
@@ -782,6 +814,18 @@ mod tests {
         assert_eq!(n.scale_word, None, "a unit is not a scale-word conversion");
         assert_eq!(one("1.6 Moz").unit, Some(UnitTok::Moz));
         assert_eq!(one("€1.6 million").currency, Some(Currency::Eur));
+        for text in ["2.50 g/t", "2.50g/t", "2.50 grams per tonne"] {
+            let n = one(text);
+            assert_eq!(
+                (n.value, n.step, n.unit),
+                (dec(250, 2), dec(1, 2), Some(UnitTok::GramsPerTonne))
+            );
+            assert!(!n.percent);
+            assert_eq!(
+                n.scale_word, None,
+                "a grade unit does not rescale its value"
+            );
+        }
     }
 
     #[test]
@@ -824,6 +868,10 @@ mod tests {
             ("consolidated", BasisTok::Hundred),
             ("per ounce sold", BasisTok::PerOzSold),
             ("per oz produced", BasisTok::PerOzProduced),
+            ("per pound sold", BasisTok::PerLbSold),
+            ("per lb sold", BasisTok::PerLbSold),
+            ("per pound produced", BasisTok::PerLbProduced),
+            ("per lb produced", BasisTok::PerLbProduced),
             ("by-product", BasisTok::ByProduct),
             ("co-product", BasisTok::CoProduct),
             ("gold ounces", BasisTok::GoldOunces),

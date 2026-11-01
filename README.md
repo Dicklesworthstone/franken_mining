@@ -156,6 +156,16 @@ candidate goes through the same value, rounding and staleness checks as a cited 
 Claims remain ambiguous, with their source evidence retained; the draft's amount never selects a preferred
 vintage. Existing links keep their cited-mode checks. This bounded grammar does not interpret arbitrary prose.
 
+Discovery supports AISC, gold TCC, copper C1, gold/copper production, processed/head grade and whole-site recovery.
+Copper C1 requires an explicit per-pound-sold denominator and `US$/lb` or `$/lb`; it does not inherit gold
+TCC's by-product convention. Copper production requires `kt` and an explicit copper metric. Historical site
+production in millions of pounds stays unchecked; no unit conversion is inferred. Grade uses
+explicit `g/t` (or `grams per tonne`) or percent units; recovery uses percent. For example, an invented draft
+`Site A Q1 2030 ownership basis unprinted recovery is 91.5%.` checks the source's displayed percentage-point
+interval, including when the workbook stores `0.915` with a percent format. It never compares `91.5%` with a raw
+fraction as though they were the same unit. Bare/mined grade, circuit recovery and reserve replacement
+remain outside discovery's supported grammar. Independently labelled general-prose accuracy remains unmeasured.
+
 The command reads the draft locally, writes no files, and emits number spans and verdicts rather than whole
 sentences. JSON includes the draft and Claim-population digests and the source snapshot root. Findings are data:
 a completed lint exits zero even when it finds mismatches. Missing or altered registered source files refuse.
@@ -167,6 +177,7 @@ Relative draft paths are resolved against `--workspace`, which defaults to the c
 ```bash
 cargo run -p fmine-cli -- track-record --issuer barrick --through 2026Q2
 cargo run -p fmine-cli -- track-record --issuer barrick --site north-mara --format markdown
+cargo run -p fmine-cli -- track-record --issuer barrick --site north-mara --price-subject barrick --format markdown
 cargo run -p fmine-cli -- track-record --synthetic
 ```
 
@@ -181,8 +192,17 @@ Every guidance document remains a separate vintage. Missing annual cells, withhe
 incompatible bases remain unresolved members. The report shows exact normalized deviations for ranges,
 rounding-boundary ambiguity, hit and miss counts, and whole-cohort completion bounds. Its separate binomial
 reference interval assumes independent, identically distributed hits; it does not estimate common year effects,
-effective sample size, a bias confidence interval or forecasting skill. No site ranking or price adjustment is
-made, and guidance ranges receive no invented probability level.
+effective sample size, a bias confidence interval or forecasting skill. Guidance ranges receive no invented
+probability level, and the report does not rank sites.
+
+Retrospective scores and site-history summaries also carry canonical Claim IDs, source parents, evidence and
+knowledge state. The JSON includes the original guidance statement, its interpreted target, the interpreted
+outcome, each score and each summary as Claims, while preserving the existing numeric fields and row-level
+`claims` object. Claims expose exact value tags, canonical body bytes and citations; interpreted outcomes point
+to their original workbook Claims. Correcting a guidance publication date changes its evidence identity even
+when the arithmetic is unchanged. Markdown shows the Claim links, included years and exact rational binomial
+bounds; unresolved years remain in the denominator. Hypothetical arithmetic on an explicit Unknown/Assumed
+number preserves that state. Other Claim admission failures retain their typed refusal.
 
 The public command requires `registries/transcriptions/<issuer>.toml` with agreed readings from registered
 documents. These transcriptions and source documents remain outside git. Quantity keys follow
@@ -192,6 +212,41 @@ Production basis is `100%` or `attributable:n/d`. Cost basis also declares its d
 `attributable:4/5;aisc=issuer-reported-per-sold-oz`; the analogous per-sold-lb, `tcc` and `c1` definitions are
 explicit. Unknown guidance quantities, missing agreed readings and changed source bytes refuse. The synthetic
 command is an invented known-answer demonstration through the same binding and scoring code.
+
+Both report modes select guidance, price-assumption and realized-price inputs before checking document
+bytes and reader agreement. Adding incomplete or unusable optional
+technical readings does not invalidate these reports. Unsupported guidance keys and every reader at a
+selected locator remain in scope; the complete registry still needs valid syntax and registered identities.
+
+For AISC, the report can show a cited price sensitivity beside the unconditional score:
+`p = royalty * (1 - assumed_price / realized_price)`. It requires every declared original quarter from
+2024Q1 through 2026Q2, shortened by `--through` or the last completed quarter at `--as-of`, to admit a common
+royalty/price coefficient.
+The scored year's ratio must also be compatible. Missing quarters, incompatible evidence and a missing stated
+price assumption leave the result unsplit with an explicit reason. TCC and C1 are never adjusted.
+
+Two-reader price entries use quantity keys
+`aisc_price_assumption_<site>_<yyyyfy>_<unit>` and
+`realized_price_<subject>_<yyyyfy|yyyyqn>_<unit>`, with underscore-separated site/subject names,
+lowercase period in the key, `usd_per_oz` or `usd_per_lb`, and the matching uppercase `YYYYFY` or `YYYYQn`
+in the entry's `period` field. The price assumption must cite the same document as its guidance row.
+An explicitly shared assumption uses `aisc_price_assumption_all_sites_<yyyyfy>_<unit>` and retains its
+single physical citation. Exactly one site-specific or shared assumption may apply; overlapping entries
+leave the sensitivity unsplit with both citations.
+Realized-price documents must be published at or after the claimed quarter or year ends.
+Prices retain their stated commodity-price basis; royalties retain their canonical site ownership basis.
+Site prices are used by default. `--price-subject barrick` explicitly selects that company's price series as
+a proxy and labels it in the result; no company fallback is inferred. JSON and Markdown include the paired
+scores, exact rounding bounds, source cells/pages and hashes. This is a descriptive sensitivity with no causal
+or controllability conclusion.
+Incomplete optional price transcriptions leave the unconditional track record available. The price result
+stays unsplit and names pending or conflicting locators, reader roles, quantity identities and checked
+document hashes. Guidance must still have complete two-reader agreement, including when readers disagree
+about whether a row is guidance. Missing or altered selected guidance/price document bytes retain their
+existing refusals. Unrelated technical sources do not block either track-record mode.
+The explicit `--as-of` report also supports price sensitivity. It bounds both the price documents and
+completed quarterly history by the requested evidence cut, and assesses first-published and latest registered
+outcomes separately.
 
 ### Assess a frozen forecast cohort
 
@@ -242,7 +297,125 @@ DecisionCard API requires this replay certificate and checks that it binds the a
 cut and exact rendered/numeric output. Legacy action, CVaR, flip-margin and VOI fields still lack their own
 Claim provenance, so that wrapper explicitly limits its historical evidence claim to expected NPV.
 
-### Issue a report and check whether it can be reused
+### Register forecasts with a live durable journal
+
+DESIGN (BD-047, BD-343): `forecast journal` records live admissions, freezes cohort membership, appends
+outcomes and restatements, and persists immutable assessments. Every mutation reads the runtime clock while
+holding the journal's exclusive lock. Request files cannot choose `registered_at`, `frozen_at` or `recorded_at`.
+The complete operation, assigned nanosecond time, sequence and previous head are hash-bound and synchronized
+before the command reports success.
+
+The following example uses an **invented unitless forecast** with a distant deadline. Use an unused journal path:
+
+```bash
+mkdir -p runs/forecast-demo
+cargo run -p fmine-cli -- forecast journal init \
+  --journal runs/forecast-demo/history --cell synthetic-forecast-demo \
+  --max-clock-skew-ms 1000 --trust-host-clock
+```
+
+Retain the returned `payload.head` independently of the journal. Supply the latest successful head to each
+mutation; a stale head refuses before writing. The placeholders below stand for those complete hex digests:
+
+```bash
+cargo run -p fmine-cli -- forecast journal register \
+  --journal runs/forecast-demo/history --head HEAD_FROM_INIT \
+  --request tests/forecasts/journal_registration_synthetic.toml --trust-host-clock
+cargo run -p fmine-cli -- forecast journal freeze \
+  --journal runs/forecast-demo/history --head HEAD_FROM_REGISTRATION \
+  --request tests/forecasts/journal_cohort_synthetic.toml --trust-host-clock
+cargo run -p fmine-cli -- forecast journal inspect \
+  --journal runs/forecast-demo/history --head HEAD_FROM_FREEZE
+```
+
+For an actual forecast, the registration request contains one `[[forecast]]` table with `id`, `model_key`,
+`outcome_due`, `kind` and that kind's distribution fields. A freeze request contains one `[[cohort]]` table
+using the membership, resolution-source and scoring-policy fields shown in the committed example. Each request
+has no top-level fields. Decimal values are quoted strings. The latest possible time under the declared
+clock bound must be **strictly before** every affected outcome deadline, including on an empty or quiet journal.
+
+After the outcome becomes available, `forecast journal outcome` accepts one `[[outcome]]` table with the same
+published, missing or restated vocabulary as the replay example above, omitting `recorded_at`. Its
+`available_at` must be at or before the earliest possible current time. Restatements append to the original
+history, and missing members remain in the frozen denominator.
+
+`forecast journal assess --journal <path> --head <latest-head> --cohort <name>
+--as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock` computes and persists an assessment and its closed information
+cut. `--selector first-published` is the default; `latest-as-of` selects eligible restatements. An optional
+`--expected-digest <hex>` refuses a mismatching result without appending. The cut must already be in the past
+under the declared clock bound. Reopening restores these seals and earlier assessment digests. `inspect`
+replays recorded operations without writing; omitting its optional head pin leaves rollback authenticity unchecked.
+
+The response schema is `fmine.forecast-journal.v1`; assessment responses contain the familiar report under
+`payload.report`. `--trust-host-clock` acknowledges an operator-declared clock bound, fixed at initialization;
+it supplies no independent timestamp proof. Source citations remain supplied evidence. This local workflow
+does not issue the FY2026 forecast set or replace the existing external timestamp verification. Clock rollback,
+corrupt or truncated bytes, and stale heads refuse. A failed write retains its bytes for inspection and never
+silently repairs or truncates history.
+
+### Issue reports with explicit time and build identity
+
+DESIGN (BD-347): `assure issue` produces the same verified JSON envelope as `assure public`, including its
+final newline, and records its exact bytes, Claim inventory, ledger anchor, input manifest, build identity,
+generic recipient role and purpose in a local append-only journal. `--output` must name a new file. No command
+sends the report or contacts a recipient. The explicit synthetic lane exercises the same issuance protocol.
+
+The owner supplies a pre-existing private key file containing exactly thirty-two raw bytes, with no Unix
+group or other access; an all-zero key is refused. `NOW` is a UTC timestamp such as
+`2026-11-01T12:00:00Z`; `UNCERTAINTY_NS` is an
+explicit bound supplied by the trusted caller. The CLI does not establish clock accuracy. For example:
+
+```bash
+fmine reliance init --journal reliance.log --key owner.key \
+  --now "$NOW" --uncertainty-ns "$UNCERTAINTY_NS" \
+  --max-age-ns 3600000000000 --max-skew-ns 1000000000
+
+fmine assure issue --synthetic --output report.json --journal reliance.log \
+  --expected-head "$EXPECTED_HEAD" --key owner.key --role sponsor --purpose 'internal review' \
+  --now "$NOW" --uncertainty-ns "$UNCERTAINTY_NS"
+
+fmine reliance check report.json --journal reliance.log --head "$TRUSTED_HEAD" \
+  --now "$NOW" --uncertainty-ns "$UNCERTAINTY_NS"
+fmine reliance export report.json --output current-copy.json --journal reliance.log \
+  --head "$TRUSTED_HEAD" --now "$NOW" --uncertainty-ns "$UNCERTAINTY_NS"
+```
+
+Use `--issuer barrick [--through YYYYQn]` instead of `--synthetic` to issue a report from verified registered
+documents. The mutation's `EXPECTED_HEAD` is the previously committed head; each successful mutation returns
+its successor. A consumer's `TRUSTED_HEAD` must be obtained independently from the release owner. Reading the
+head from an untrusted copy of the same journal supplies no authority. Missing trust or time, stale status,
+clock rollback and excessive uncertainty produce `unknown` and never authorize current reuse. Historical
+`--as-of` inspection also never authorizes reuse, even if the historical status was `current`.
+
+Owner-authorized withdrawal and recall retain the original artifact:
+
+```bash
+fmine reliance withdraw "$OUTPUT_DIGEST" --journal reliance.log \
+  --expected-head "$EXPECTED_HEAD" --key owner.key --reason 'source correction' \
+  --defect source-restated --claim "$CLAIM_ID" \
+  --now "$NOW" --uncertainty-ns "$UNCERTAINTY_NS"
+fmine recall --journal reliance.log --claim "$CLAIM_ID"
+fmine recall --journal reliance.log --revision "$BUILD_REVISION"
+```
+
+DESIGN: withdrawal blocks current reuse while historical bytes still verify. `reliance supersede` links an
+issued digest to an existing issued replacement; the replacement's own status must be checked separately.
+`reliance refresh` appends an owner-authorized freshness cut. Both require the same key, expected head and
+bounded-time arguments as withdrawal. `reliance export` retrieves an existing issuance. Use `assure issue`
+for a freshly generated report, or the host-clock `reliance reissue` below to register another recipient
+while preserving one selected issuance's producer metadata. Only recorded issuances are recallable.
+Recipient roles are `release-owner`, `sponsor`, `reviewer-pool-N` or `agent-session:<hex>`; no personal contact
+fields are stored. Build revision is captured at compilation, with `+dirty` when applicable, and the executable
+itself is hashed. An unavailable build revision refuses issuance. `robot-docs` lists the complete grammar.
+`assure issue` currently requires Linux's executing-image handle so replacing a binary's pathname cannot change
+the recorded binary identity. Other platforms refuse issuance explicitly; status inspection and local
+retrieval remain available where their existing journal-lock support is present.
+
+The explicit-time grammar above shares report metadata and journal storage with the host-clock grammar
+below. Existing `reliance issue`, `reuse` and `recall` commands remain available. Choose one complete grammar
+for each invocation; mixing its authority or time flags is a usage error.
+
+### Issue reports with an explicitly trusted host clock
 
 DESIGN (BD-347): a local reliance journal records exact assurance artifacts, their Claim dependencies and
 generic recipient roles. A matching file digest proves the bytes still match; current reuse also requires a
@@ -266,18 +439,25 @@ Supply that trusted value below; reading a head from the journal being checked c
 
 ```bash
 FMINE_HEAD=REPLACE_WITH_INDEPENDENTLY_TRUSTED_INIT_HEAD
-cargo run -p fmine-cli -- reliance issue --journal runs/reliance-demo/journal \
+cargo run -p fmine-cli -- assure public --synthetic --journal runs/reliance-demo/journal \
   --release-key runs/reliance-demo/release.key --head "$FMINE_HEAD" --trust-host-clock \
-  --synthetic --recipient-role reviewer-pool-1 --purpose review --code-revision "$FMINE_REVISION" \
+  --recipient-role reviewer-pool-1 --purpose review --code-revision "$FMINE_REVISION" \
   --output runs/reliance-demo/report.json
 
 FMINE_HEAD=REPLACE_WITH_INDEPENDENTLY_TRUSTED_POST_ISSUE_HEAD
 FMINE_DIGEST=REPLACE_WITH_RETURNED_ISSUANCE_OUTPUT_DIGEST
+FMINE_ISSUANCE=REPLACE_WITH_RETURNED_ISSUANCE_ID
 cargo run -p fmine-cli -- reliance check --journal runs/reliance-demo/journal \
   --head "$FMINE_HEAD" --trust-host-clock --digest "$FMINE_DIGEST" --artifact runs/reliance-demo/report.json
+cargo run -p fmine-cli -- reliance reissue --journal runs/reliance-demo/journal \
+  --release-key runs/reliance-demo/release.key --head "$FMINE_HEAD" --trust-host-clock \
+  --artifact runs/reliance-demo/report.json --output runs/reliance-demo/sponsor-copy.json \
+  --source-issuance "$FMINE_ISSUANCE" --recipient-role sponsor --purpose review
+
+FMINE_HEAD=REPLACE_WITH_INDEPENDENTLY_TRUSTED_POST_REISSUE_HEAD
 cargo run -p fmine-cli -- reliance reuse --journal runs/reliance-demo/journal \
   --head "$FMINE_HEAD" --trust-host-clock --artifact runs/reliance-demo/report.json \
-  --output runs/reliance-demo/reviewer-copy.json
+  --output runs/reliance-demo/working-copy.json
 cargo run -p fmine-cli -- reliance withdraw --journal runs/reliance-demo/journal \
   --release-key runs/reliance-demo/release.key --head "$FMINE_HEAD" --trust-host-clock \
   --digest "$FMINE_DIGEST" --defect code-defect --all-claims \
@@ -288,18 +468,42 @@ cargo run -p fmine-cli -- reliance recall --journal runs/reliance-demo/journal \
   --head "$FMINE_HEAD" --code-revision "$FMINE_REVISION"
 ```
 
-Replace each head/digest placeholder with its full 64-character lowercase hexadecimal value. The revision is
+Replace each head/digest/issuance placeholder with its full 64-character lowercase hexadecimal value. The revision is
 a full 40-character Git SHA declared by the caller. Use `--issuer barrick` instead of `--synthetic` to issue a
 registered public report. Relative paths use `--workspace`; all new artifact paths must be unused.
+
+With `assure public --output`, `--format json|markdown` controls both the saved artifact and the separate stdout
+receipt, defaulting to JSON. `reliance issue` remains available; only that command accepts `--artifact-format`
+to select the stored format independently. The explicit-time `assure issue` always stores the JSON report;
+its `--format` selects only the receipt rendering. Each issuance and recall entry exposes `issuance_id`, the
+BLAKE3 digest of the canonical issuance record; explicit-time entries also retain the equal `issuance_digest`
+field. This identifies one producer/recipient record; `output_digest` identifies the exact report bytes, and
+`journal_head` identifies the status history to pin independently.
+
+`reissue` checks the selected issuance's exact artifact and current status before creating another recipient
+copy or appending its record. It preserves the original code revision, executable digest, input manifest,
+Claims, anchor, lane and taint; only recipient, purpose and issuance time change. Its new issuance appears in
+recall. A wrong key, missing or stale trust, withdrawn/superseded output or unknown issuance refuses before
+creating the destination. It does not rerun the report or attest a new build identity.
 
 The default freshness window is 300 seconds with a declared clock-skew bound of 1,000 ms, configurable at
 `init`. An authorized `refresh` appends a fresh status cut using the same key/head/clock options; withdrawals
 remain effective. `supersede` additionally takes `--digest` and `--replacement`, both already recorded outputs.
 After withdrawal or supersession, current reuse refuses even while the original bytes still verify.
+For scripts that only need the current-use gate, add `--require-current` to the host-clock form
+`reliance check --digest ...`; denied reuse exits 3 and retains the full status diagnostics.
+`reliance check --digest ... --as-of YYYY-MM-DDTHH:MM:SSZ` reads historical status
+under the same fresh head/clock inputs and always reports `current_reuse_allowed: false`. It cannot be combined
+with `--require-current`. Checking an artifact without trust inputs still verifies its original bytes, while
+reporting reliance as unknown. Special files and symlinks are refused before opening them; issuance and reuse
+create private files and sync their parent directories as well as their contents.
 Withdrawal requires `--claims clm_…,clm_…` or an explicit `--all-claims` declaration when every statement is affected.
 `reuse` makes a gated local copy without recording a new issuance. `recall --claim clm_…` or the revision query
-lists recorded issuances only: external copies and recipients are not tracked or contacted. If artifact creation
-succeeds but the journal append fails, the artifact is unconfirmed and must not be reused until the journal is resolved.
+lists recorded issuances only; no command claims delivery or contacts recipients. Ordinary stdout emissions,
+including shell redirection, and other report families remain unregistered. External copies are not tracked.
+If artifact creation succeeds but the final journal append fails, no confirmed new issuance receipt or recipient
+registration exists. Retain any destination artifact and resolve the journal before using that copy; an earlier
+issuance of the same digest may still be current.
 
 ### Export evidence challenges
 
@@ -361,13 +565,40 @@ The **T1 historical comparison** keeps each quarter's sales and costs coupled. S
 and cost ranges cannot establish a feasible result. A positive result includes an independently checked exact
 replay; an exclusion includes checked certificates and applies only to those historical windows under the
 declared sales assumption. Missing or incompatible windows have explicit reasons, and no usable history stays
-**T3: necessary arithmetic conditions only**. Solver limits remain indeterminate.
+**T3 for the historical comparison**. Solver limits remain indeterminate.
+
+A separate **T2 technical production comparison** binds the remaining requirement to a registered
+`technical_report` PDF and three agreed, page-cited inputs. Use these quantity keys and units, with site
+hyphens written as underscores:
+
+| Quantity key | Unit | Meaning |
+|---|---|---|
+| `technical_<site>_remaining_dry_feed_mt` | `dry_mt` | Million dry metric tonnes over the remaining months |
+| `technical_<site>_head_grade_g_per_t` | `g_per_dry_t` | Gold head grade per dry metric tonne |
+| `technical_<site>_recovery_percent` | `percent` | Gold recovery in explicit percent units |
+
+All three rows must come from the same latest eligible document and declare the same basis:
+`100%;scenario=declared_upper_bound`, `100%;scenario=plan`, or `100%;scenario=nameplate`.
+Their period must be the exact remaining support: `YYYYQ2-Q4` after Q1, `YYYYH2` after Q2, or `YYYYQ4`
+after Q3. Full-mine inputs are converted exactly; the guidance ownership share scales production only.
+No annual rate, average grade or life-of-mine figure is silently converted into a remaining-period bound.
+Declared upper boundaries are exact; printed plan/nameplate points retain their rounding intervals.
+The output includes the scenario production ceiling and optimistic required grade with exact Claims and
+citations. Plan/nameplate comparisons remain conditional, and no T2 result supplies a joint production/AISC
+witness. Missing, altered, disputed or inapplicable optional technical evidence gives a named **T3 technical
+result** while preserving the arithmetic requirements and historical comparison. Newer incomplete inputs
+cannot silently fall back to an older complete report. The synthetic command exercises the positive T2 path.
 
 The report includes the guidance vintage, as-of selection and all source hashes. Workbook availability uses its
 verified retrieval date conservatively where no publication date is registered. JSON preserves exact Claims,
 source-quarter witnesses and certificates; Markdown presents requirements, comparison results and citations.
-Its content digest creates no forecast registration or ledger certificate, and neither historical tier gives a
-probability or mine-capacity conclusion.
+Its content digest creates no forecast registration or ledger certificate, and neither comparison gives a
+probability or physical-impossibility conclusion. A real issuer's T2 result still needs applicable registered
+technical-report evidence; this implementation does not bundle or invent those inputs. Prospective forecast
+registration and the remaining BD-342/M0 acceptance gates stay open.
+
+For a separately selected explicit upper-limit document, use `--capacity-document` and the schema below.
+Its result appears alongside the automatic registered scenario; each retains its own input interpretation.
 
 #### Add an explicit physical production ceiling
 
@@ -407,6 +638,7 @@ Markdown presents both sections. Full BD-342/M0 empirical and acceptance gates r
 ```bash
 cargo run -p fmine-cli -- track-record --issuer barrick --as-of 2026-11-01 --json
 cargo run -p fmine-cli -- track-record --issuer barrick --site north-mara --as-of 2026-11-01 --format markdown
+cargo run -p fmine-cli -- track-record --issuer barrick --site north-mara --as-of 2026-11-01 --price-subject barrick --format markdown
 ```
 
 DESIGN (BD-341): `--as-of` selects a separate evidence-cut report, preserving the retrospective command and
@@ -425,13 +657,19 @@ The report gives exact range-normalized misses, their direction, source-rounding
 rates and bounds that retain unresolved outcomes. Its Clopper–Pearson reference interval is explicitly
 conditional on independent Bernoulli hits; common year or site shocks are not modelled. Guidance ranges
 have no inferred probability level. The report is descriptive and makes no calibration or site-ranking
-claim. Cost comparisons are unconditional on price: a miss alone does not establish an operating failure.
+claim. Base cost comparisons remain unconditional on price: a miss alone does not establish an operating failure.
+AISC rows add the same cited price sensitivity as the retrospective report, assessed separately against each
+selected first-published and latest registered outcome. Annual royalty evidence must come from that outcome's
+own release. Only price documents available by the cut can contribute; the quarterly population ends at the
+last completed quarter within 2024Q1–2026Q2. Missing historical members remain explicit, even when their source
+is unavailable. Site prices are the default; `--price-subject` explicitly selects and labels a proxy.
 
 Each row retains its page or cell citation and file hash. The deterministic payload uses
 `fmine.guidance.track-record.as-of.v1`, distinct from the retrospective `fmine.guidance.track-record.v1`.
-Coverage describes the registered transcription population; the complete historical data gate,
-price-conditional split and cluster-aware inference remain open. Source documents and real transcription
-rows remain outside git.
+The report retains its base comparison digest as `comparison_digest`; the top-level `digest` binds that
+comparison and both price assessments. Coverage describes the registered transcription population; the
+complete historical data gate, causal cost attribution and cluster-aware inference remain open. Source
+documents and real transcription rows remain outside git.
 
 ### Compare Lumwana recovery with its historical grade relation
 

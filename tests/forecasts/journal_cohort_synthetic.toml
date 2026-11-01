@@ -1,0 +1,13 @@
+# SYNTHETIC: membership and a scoring policy for the invented unitless live-registration example.
+# The journal supplies frozen_at. A single member cannot establish calibration.
+[[cohort]]
+name = "synthetic-live-demo"
+members = "synthetic-live-example"
+resolution_rule = "Invented unitless outcome from the declared synthetic source."
+eligible_sources = "synthetic:demo"
+alpha = "0.2"
+min_calibration_n = 35
+rho_low = "0"
+rho_high = "0.5"
+outcome_lo = "0"
+outcome_hi = "100"

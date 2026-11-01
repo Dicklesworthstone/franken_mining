@@ -180,6 +180,7 @@ impl IssuanceRecord {
         }
         Ok(())
     }
+    /// Canonical issuance identity, distinct from its output-byte digest and journal frame/head.
     pub fn digest(&self) -> Result<Digest32, Refusal> {
         self.validate()?;
         let mut enc = Encoder::new_frame(*b"RLYI", 1);
@@ -436,6 +437,7 @@ pub struct RelianceLedger {
     head: Digest32,
     bytes: usize,
     issued: BTreeMap<Digest32, Vec<usize>>,
+    issuance_ids: BTreeMap<Digest32, usize>,
     statuses: BTreeMap<Digest32, Vec<usize>>,
 }
 
@@ -454,6 +456,7 @@ impl RelianceLedger {
             head: Digest32::default(),
             bytes: 0,
             issued: BTreeMap::new(),
+            issuance_ids: BTreeMap::new(),
             statuses: BTreeMap::new(),
         };
         for record in records {
@@ -483,6 +486,17 @@ impl RelianceLedger {
                 _ => None,
             })
             .collect()
+    }
+    /// Select one exact receipt, including its producer provenance, rather than any copy of its bytes.
+    /// DESIGN: this lookup index is rebuilt from canonical records; it adds no durable fields.
+    pub fn issuance(&self, id: Digest32) -> Option<&IssuanceRecord> {
+        self.issuance_ids
+            .get(&id)
+            .and_then(|index| self.records.get(*index))
+            .and_then(|record| match &record.entry {
+                Entry::Issued(issuance) => Some(issuance),
+                _ => None,
+            })
     }
     pub fn copies(&self, digest: Digest32) -> Vec<&IssuanceRecord> {
         self.issued
@@ -550,6 +564,7 @@ impl RelianceLedger {
         let index = self.records.len();
         match &record.entry {
             Entry::Issued(i) => {
+                self.issuance_ids.insert(i.digest()?, index);
                 self.issued.entry(i.output_digest).or_default().push(index);
             }
             Entry::Withdrawn(w) => {
@@ -1075,6 +1090,59 @@ mod tests {
             by_role: RoleId::ReleaseOwner,
             at_ns: at,
         })
+    }
+
+    #[test]
+    fn issuance_identity_selects_exact_provenance_and_is_rebuilt_on_replay() {
+        let (mut log, cap) = setup();
+        let first = issue(b"same synthetic bytes", 110);
+        let mut second = first.clone();
+        second.code_revision = "synthetic-revision-2".into();
+        second.binary_digest = blake3_hash(b"binary-2");
+        second.recipient_role = RoleId::ReviewerPool(2);
+        second.issued_at_ns = 120;
+        let first_id = first.digest().expect("first receipt");
+        let second_id = second.digest().expect("second receipt");
+        assert_ne!(first_id, second_id);
+        assert_ne!(first_id, first.output_digest);
+        for issuance in [&first, &second] {
+            log.append(
+                Entry::Issued(issuance.clone()),
+                &cap,
+                time(issuance.issued_at_ns),
+            )
+            .expect("issue exact provenance");
+        }
+        assert_eq!(log.issuance(first_id), Some(&first));
+        assert_eq!(log.issuance(second_id), Some(&second));
+        assert!(log.issuance(first.output_digest).is_none());
+        assert!(log.issuance(Digest32::default()).is_none());
+        let frames = log
+            .records()
+            .iter()
+            .map(|record| {
+                JournalRecord::from_bytes(&record.to_bytes().expect("canonical frame"))
+                    .expect("decode unchanged format")
+            })
+            .collect::<Vec<_>>();
+        let rebuilt = RelianceLedger::from_records(&frames).expect("rebuild lookup from frames");
+        assert_eq!(rebuilt.head(), log.head());
+        assert_eq!(rebuilt.issuance(first_id), Some(&first));
+        assert_eq!(rebuilt.issuance(second_id), Some(&second));
+        assert_eq!(rebuilt.recall_revision(&first.code_revision), vec![&first]);
+        assert_eq!(
+            rebuilt.recall_revision(&second.code_revision),
+            vec![&second]
+        );
+        let head = log.head();
+        assert!(
+            log.append(Entry::Issued(second.clone()), &cap, time(120))
+                .is_err()
+        );
+        assert_eq!(log.head(), head);
+        assert_eq!(log.issuance(first_id), Some(&first));
+        assert_eq!(log.issuance(second_id), Some(&second));
+        assert_eq!(log.records().len(), 3);
     }
 
     #[test]

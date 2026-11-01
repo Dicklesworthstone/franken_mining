@@ -37,7 +37,8 @@ pub struct Citation {
     pub sha256: Digest32,
 }
 
-/// `basis` is an explicit denominator/ownership convention, compared literally; no conversion is inferred.
+/// `basis` is the explicit ownership/denominator convention of a cost, or the convention of a commodity price.
+/// Bases are compared within each family; no conversion between families is inferred.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CitedValue {
     pub printed: PrintedOutcome,
@@ -90,6 +91,14 @@ pub enum UnsplitReason {
     GuidanceHasNoRange,
     ProportionalityRefuted,
     InsufficientHistory,
+    CurrentPeriodIncompatible,
+}
+
+/// The scored period must admit a coefficient from the historical gate before an adjustment is emitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CurrentPeriodCheck {
+    pub beta: Interval,
+    pub compatible: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +114,7 @@ pub struct ConditionalReport {
     input: PriceInput,
     unconditional: GuidanceScore,
     gate: Gate,
+    current_period: Option<CurrentPeriodCheck>,
     adjustment: Option<Adjustment>,
     unsplit: Option<UnsplitReason>,
     digest: Digest32,
@@ -193,6 +203,19 @@ fn same(a: &CitedValue, b: &CitedValue, subject: bool, period: bool) -> Result<(
     }
     Ok(())
 }
+
+// Commodity prices carry a price convention, not a site's ownership share. Each side retains its
+// own basis; royalty/outcome pairs and price/price pairs are checked by `same` separately.
+fn same_unit_period(a: &CitedValue, b: &CitedValue) -> Result<()> {
+    if a.unit != b.unit {
+        return Err(PriceError::ContextMismatch("unit"));
+    }
+    if a.period != b.period {
+        return Err(PriceError::ContextMismatch("period"));
+    }
+    Ok(())
+}
+
 fn quarter(q: &RoyaltyQuarter) -> Result<()> {
     let id = q.id.as_bytes();
     if id.len() != 6
@@ -206,19 +229,30 @@ fn quarter(q: &RoyaltyQuarter) -> Result<()> {
     }
     royalty(&q.royalty)?;
     positive_price(&q.realized_price)?;
-    same(&q.royalty, &q.realized_price, false, true)
+    same_unit_period(&q.royalty, &q.realized_price)
 }
-fn beta(q: &RoyaltyQuarter) -> Result<Interval> {
-    let (r, p) = (
-        q.royalty.printed.interval,
-        q.realized_price.printed.interval,
-    );
+fn beta(royalty: &CitedValue, price: &CitedValue) -> Result<Interval> {
+    let (r, p) = (royalty.printed.interval, price.printed.interval);
     Ok(Interval {
         lo: exact(r.lo.checked_div(p.hi))?,
         hi: exact(r.hi.checked_div(p.lo))?,
         lo_strict: r.lo_strict || (r.lo != ZERO && p.hi_strict),
         hi_strict: r.hi_strict || (r.hi != ZERO && p.lo_strict),
     })
+}
+
+fn overlaps(a: Interval, b: Interval) -> Result<bool> {
+    for (lo, lo_strict, hi, hi_strict) in [
+        (a.lo, a.lo_strict, b.hi, b.hi_strict),
+        (b.lo, b.lo_strict, a.hi, a.hi_strict),
+    ] {
+        match cmp(lo, hi)? {
+            Ordering::Greater => return Ok(false),
+            Ordering::Equal if lo_strict || hi_strict => return Ok(false),
+            _ => {}
+        }
+    }
+    Ok(true)
 }
 
 /// Exact feasibility of one constant royalty/price ratio across the supplied quarters. Input order is immaterial.
@@ -242,7 +276,7 @@ pub fn proportionality(quarters: &[RoyaltyQuarter]) -> Result<Gate> {
     }
     let mut bounds = Vec::with_capacity(sorted.len());
     for q in &sorted {
-        bounds.push(beta(q)?);
+        bounds.push(beta(&q.royalty, &q.realized_price)?);
     }
     let (mut low, mut high) = (0, 0);
     for (i, b) in bounds.iter().enumerate().skip(1) {
@@ -283,7 +317,7 @@ fn validate_input(i: &PriceInput) -> Result<()> {
     royalty(&i.royalty)?;
     positive_price(&i.realized_price)?;
     same(&i.outcome, &i.royalty, true, true)?;
-    same(&i.outcome, &i.realized_price, false, true)?;
+    same_unit_period(&i.outcome, &i.realized_price)?;
     if !valid_text(&i.price_subject) || i.realized_price.subject != i.price_subject {
         return Err(PriceError::ContextMismatch("price subject"));
     }
@@ -352,7 +386,7 @@ pub fn conditional(input: &PriceInput) -> Result<ConditionalReport> {
     let unconditional =
         score(input.guidance, input.outcome.printed).map_err(|_| PriceError::InvalidGuidance)?;
     let gate = proportionality(&input.quarters)?;
-    let unsplit = if !matches!(input.metric, Metric::GoldAisc | Metric::CopperAisc) {
+    let mut unsplit = if !matches!(input.metric, Metric::GoldAisc | Metric::CopperAisc) {
         Some(UnsplitReason::UnsupportedMetric)
     } else if input.assumed_price.is_none() {
         Some(UnsplitReason::NoStatedPriceAssumption)
@@ -364,6 +398,20 @@ pub fn conditional(input: &PriceInput) -> Result<ConditionalReport> {
             Gate::NotSupported { .. } => Some(UnsplitReason::ProportionalityRefuted),
             Gate::InsufficientHistory => Some(UnsplitReason::InsufficientHistory),
         }
+    };
+    let current_period = if unsplit.is_none()
+        && let Gate::Supported {
+            beta: historical, ..
+        } = &gate
+    {
+        let beta = beta(&input.royalty, &input.realized_price)?;
+        let compatible = overlaps(beta, *historical)?;
+        if !compatible {
+            unsplit = Some(UnsplitReason::CurrentPeriodIncompatible);
+        }
+        Some(CurrentPeriodCheck { beta, compatible })
+    } else {
+        None
     };
     let adjustment = match (&input.assumed_price, unsplit) {
         (Some(a), None) => {
@@ -392,6 +440,7 @@ pub fn conditional(input: &PriceInput) -> Result<ConditionalReport> {
         input,
         unconditional,
         gate,
+        current_period,
         adjustment,
         unsplit,
         digest: Digest32::default(),
@@ -466,6 +515,9 @@ impl ConditionalReport {
     pub fn gate(&self) -> &Gate {
         &self.gate
     }
+    pub fn current_period(&self) -> Option<&CurrentPeriodCheck> {
+        self.current_period.as_ref()
+    }
     pub fn unsplit_reason(&self) -> Option<UnsplitReason> {
         self.unsplit
     }
@@ -523,6 +575,15 @@ impl ConditionalReport {
         )
     }
     fn result_json(&self) -> String {
+        let current_period = self.current_period.map_or_else(
+            || "null".to_string(),
+            |current| format!(
+                "{{\"period\":{},\"royalty_price_ratio\":{},\"compatible_with_supplied_history\":{}}}",
+                quote(&self.input.royalty.period),
+                interval_json(Some(current.beta)),
+                current.compatible
+            ),
+        );
         let adjustment = self.adjustment.as_ref().map_or_else(
             || "null".to_string(),
             |a| {
@@ -535,9 +596,10 @@ impl ConditionalReport {
             },
         );
         format!(
-            "{{\"unconditional\":{},\"gate\":{},\"adjustment\":{},\"unsplit_reason\":{}}}",
+            "{{\"unconditional\":{},\"gate\":{},\"current_period\":{},\"adjustment\":{},\"unsplit_reason\":{}}}",
             self.unconditional.to_json(),
             gate_json(&self.gate),
+            current_period,
             adjustment,
             self.unsplit.map_or_else(
                 || "null".to_string(),
@@ -547,6 +609,7 @@ impl ConditionalReport {
                     UnsplitReason::GuidanceHasNoRange => "guidance_has_no_range",
                     UnsplitReason::ProportionalityRefuted => "proportionality_refuted",
                     UnsplitReason::InsufficientHistory => "insufficient_history",
+                    UnsplitReason::CurrentPeriodIncompatible => "current_period_incompatible",
                 })
             )
         )
@@ -644,11 +707,22 @@ mod tests {
         for price in [1, 1500, 2000, 100_000] {
             i.assumed_price = Some(amount("mine", "2030", price));
             i.realized_price = amount("mine", "2030", price);
+            let royalty = r(price, 20);
+            i.royalty.printed = PrintedOutcome {
+                value: royalty,
+                interval: Interval {
+                    lo: royalty,
+                    hi: royalty,
+                    lo_strict: false,
+                    hi_strict: false,
+                },
+            };
             let report = conditional(&i).expect("identity");
             let a = report.adjustment().expect("supported");
             assert_eq!(a.contribution.value, ZERO);
             assert_eq!(&a.conditional, report.unconditional());
         }
+        i = input();
         i.assumed_price = Some(amount("mine", "2030", 3000));
         i.realized_price = amount("mine", "2030", 2000);
         assert_eq!(
@@ -768,6 +842,91 @@ mod tests {
         i.quarters.push(i.quarters[0].clone());
         assert_eq!(conditional(&i), Err(PriceError::DuplicateQuarter));
     }
+
+    #[test]
+    fn commodity_price_basis_is_separate_from_site_ownership() {
+        let mut i = input();
+        let cost_basis = "sold gold; attributable:3/5";
+        let price_basis = "company realized gold price per sold troy ounce";
+        i.outcome.basis = cost_basis.into();
+        i.royalty.basis = cost_basis.into();
+        i.price_subject = "company".into();
+        i.realized_price.subject = "company".into();
+        i.realized_price.basis = price_basis.into();
+        let assumed = i.assumed_price.as_mut().expect("price");
+        assumed.subject = "company".into();
+        assumed.basis = price_basis.into();
+        for q in &mut i.quarters {
+            q.royalty.basis = cost_basis.into();
+            q.realized_price.subject = "company".into();
+            q.realized_price.basis = price_basis.into();
+        }
+        let report = conditional(&i).expect("explicit commodity price proxy");
+        assert_eq!(
+            report.adjustment().expect("split").contribution.value,
+            n(25)
+        );
+        assert!(report.to_json().contains(cost_basis));
+        assert!(report.to_json().contains(price_basis));
+        assert!(report.to_json().contains("\"price_proxy\":true"));
+
+        let mut wrong = i.clone();
+        wrong.royalty.basis = "sold gold; full project".into();
+        assert_eq!(
+            conditional(&wrong),
+            Err(PriceError::ContextMismatch("basis"))
+        );
+        wrong = i.clone();
+        wrong.assumed_price.as_mut().expect("price").basis = "benchmark spot price".into();
+        assert_eq!(
+            conditional(&wrong),
+            Err(PriceError::ContextMismatch("basis"))
+        );
+        wrong = i;
+        wrong.quarters[0].realized_price.basis = "benchmark spot price".into();
+        assert_eq!(
+            conditional(&wrong),
+            Err(PriceError::ContextMismatch("basis"))
+        );
+    }
+
+    #[test]
+    fn incompatible_current_royalty_ratio_preserves_the_unsplit_score_and_evidence() {
+        let mut i = input();
+        let base = conditional(&i).expect("compatible current period");
+        assert!(base.current_period().expect("checked").compatible);
+        i.royalty = amount("mine", "2030", 200);
+        let report = conditional(&i).expect("unsplit current period");
+        assert_eq!(report.unconditional(), base.unconditional());
+        assert_eq!(report.gate(), base.gate());
+        assert_eq!(
+            report.unsplit_reason(),
+            Some(UnsplitReason::CurrentPeriodIncompatible)
+        );
+        assert!(report.adjustment().is_none());
+        let current = report.current_period().expect("current ratio evidence");
+        assert!(!current.compatible);
+        assert_eq!(current.beta.lo, r(1, 10));
+        assert_eq!(current.beta.hi, r(1, 10));
+        assert!(report.to_json().contains("\"current_period_incompatible\""));
+        assert!(report.to_json().contains("\"royalty_price_ratio\":"));
+        report.validate().expect("both gates retained");
+
+        i.royalty = amount("mine", "2030", 101);
+        i.royalty.printed.interval.lo = n(100);
+        i.royalty.printed.interval.lo_strict = true;
+        assert_eq!(
+            conditional(&i).expect("open boundary").unsplit_reason(),
+            Some(UnsplitReason::CurrentPeriodIncompatible)
+        );
+        i.royalty.printed.interval.lo_strict = false;
+        assert!(
+            conditional(&i)
+                .expect("closed compatible boundary")
+                .adjustment()
+                .is_some()
+        );
+    }
     #[test]
     fn rounding_enclosure_contains_all_independent_corner_results() {
         let mut i = input();
@@ -857,6 +1016,10 @@ mod tests {
         let mut i = input();
         i.assumed_price = Some(amount("mine", "2030", i128::MAX));
         i.realized_price = amount("mine", "2030", 1);
+        // An intentionally extreme synthetic coefficient keeps the gate admissible and reaches the
+        // overflowing multiplication in the adjustment, rather than stopping at current-period mismatch.
+        i.quarters[0].royalty = amount("mine", "2029Q1", 100_000);
+        i.quarters[1].royalty = amount("mine", "2029Q2", 200_000);
         assert_eq!(conditional(&i), Err(PriceError::ArithmeticOverflow));
         assert_eq!(
             score(i.guidance, i.outcome.printed)

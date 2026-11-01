@@ -175,6 +175,23 @@ impl RangeScore {
     }
 }
 
+/// A display projection of the canonical score; no arithmetic or source selection is repeated.
+impl From<&RangeScore> for super::GuidanceScore {
+    fn from(value: &RangeScore) -> Self {
+        Self {
+            side: value.side,
+            boundary: value.boundary,
+            definitely_inside: value.hit == Hit::CertainHit,
+            possibly_inside: value.hit != Hit::CertainMiss,
+            midpoint: value.midpoint,
+            half_width: value.half_width,
+            z: value.z,
+            z_interval: value.z_bounds,
+            above_midpoint: value.above_midpoint,
+        }
+    }
+}
+
 fn refuse(code: RefusalCode, detail: impl Into<String>) -> Refusal {
     Refusal::new(code, format!("guidance score: {}", detail.into()))
 }
@@ -213,8 +230,14 @@ fn ready<T>(c: &Claim<T>, tag: &str) -> Result<()> {
             "failed source calibration",
         ));
     }
+    // Explicit hypothetical arithmetic may retain an Assumed/Unknown numeric input. Its state is
+    // preserved by source_join; this does not make the supplied number an observed outcome.
+    let assumed_number = c.evidence == EvidenceClass::Assumed
+        && c.state == KnowledgeState::Unknown
+        && matches!(c.representation, Representation::Deterministic);
     if matches!(c.representation, Representation::Placeholder { .. })
-        || !matches!(c.state, KnowledgeState::Known | KnowledgeState::Estimated)
+        || (!matches!(c.state, KnowledgeState::Known | KnowledgeState::Estimated)
+            && !assumed_number)
     {
         return Err(refuse(
             RefusalCode::SourceCellUnusable208,
@@ -389,10 +412,23 @@ pub struct MemberInput {
     pub outcome: Option<Claim<OutcomeValue>>,
 }
 
+/// The exact population whose descriptive counts share a denominator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SummaryScope {
+    /// One selected guidance vintage per subject within the same year.
+    Annual { year: u16 },
+    /// One selected guidance vintage per year for one subject on an unchanged basis.
+    SiteHistory {
+        subject: String,
+        basis: String,
+        years: Vec<u16>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct GuidanceSummary {
     pub metric: String,
-    pub year: u16,
+    pub scope: SummaryScope,
     pub unit: String,
     pub members: usize,
     pub resolved: usize,
@@ -428,10 +464,32 @@ pub struct GuidanceSummary {
 impl GuidanceSummary {
     #[must_use]
     pub fn canonical_tag(&self) -> String {
-        let mut e = Encoder::new_frame(*b"GDA1", 2);
+        // Existing annual summaries retain their v2 identity. History has a separate v3 support encoding.
+        let version = match self.scope {
+            SummaryScope::Annual { .. } => 2,
+            SummaryScope::SiteHistory { .. } => 3,
+        };
+        let mut e = Encoder::new_frame(*b"GDA1", version);
         e.put_str(&self.metric);
         e.put_str(&self.unit);
-        e.put_u16(self.year);
+        match &self.scope {
+            SummaryScope::Annual { year } => {
+                e.put_u16(*year);
+            }
+            SummaryScope::SiteHistory {
+                subject,
+                basis,
+                years,
+            } => {
+                e.put_u8(1);
+                e.put_str(subject);
+                e.put_str(basis);
+                e.put_u64(years.len() as u64);
+                for year in years {
+                    e.put_u16(*year);
+                }
+            }
+        }
         for n in [
             self.members,
             self.resolved,
@@ -474,9 +532,48 @@ impl GuidanceSummary {
     }
 }
 
+/// Numeric display fields projected from one source-bound summary, including its exact reference bounds.
+impl From<&GuidanceSummary> for super::GuidanceSummary {
+    fn from(value: &GuidanceSummary) -> Self {
+        Self {
+            n_members: value.members,
+            n_resolved: value.resolved,
+            n_unresolved: value.unresolved,
+            inside: value.printed_hits,
+            below: value.below,
+            above: value.above,
+            boundary: value.boundary,
+            definitely_inside: value.certain_hits,
+            possibly_inside: value.resolved - value.certain_misses,
+            n_ranges: value.z_members,
+            above_midpoint: value.above_midpoint,
+            observed_hit_rate: value.observed_hit_rate,
+            iid_reference_interval_90: value.binomial_90,
+            iid_reference_interval_90_exact: value.binomial_90_exact,
+            whole_cohort_hit_bounds: Some(value.whole_cohort_hit_rate_bounds),
+            rounding_aware_hit_bounds: Some(value.rounding_aware_hit_rate_bounds),
+            above_midpoint_share: value.share_above_midpoint,
+            mean_z: value.mean_z,
+            mean_z_rounding_interval: value.mean_z_rounding,
+            flag: value.flag,
+        }
+    }
+}
+
 /// Summarizes one metric/year/unit and one adapter-selected publication cohort.
 /// A subject may occur once. Revisions must be summarized separately, never as independent members.
 pub fn summarize(members: &[MemberInput]) -> Result<Claim<GuidanceSummary>> {
+    summarize_cohort(members, false)
+}
+
+/// Summarizes one subject's annual history on one metric, unit and ownership/definition basis.
+/// Repeated years are refused: later guidance vintages are separate populations, not extra trials.
+/// The adapter retains the publication selector, including original versus comparative outcomes.
+pub fn summarize_history(members: &[MemberInput]) -> Result<Claim<GuidanceSummary>> {
+    summarize_cohort(members, true)
+}
+
+fn summarize_cohort(members: &[MemberInput], history: bool) -> Result<Claim<GuidanceSummary>> {
     if members.len() > 100_000 {
         return Err(refuse(
             RefusalCode::NumericalCertificateFailed207,
@@ -494,19 +591,28 @@ pub fn summarize(members: &[MemberInput]) -> Result<Claim<GuidanceSummary>> {
     let key = &first.guidance.value.key;
     let mut numerical = Vec::with_capacity(ordered.len());
     let mut subjects = BTreeSet::new();
+    let mut years = BTreeSet::new();
     for member in &ordered {
         validate_guidance(&member.guidance)?;
         let k = &member.guidance.value.key;
-        if k.metric != key.metric || k.year != key.year || k.unit != key.unit {
+        if k.metric != key.metric
+            || k.unit != key.unit
+            || (!history && k.year != key.year)
+            || (history && (k.subject != key.subject || k.basis != key.basis))
+        {
             return Err(refuse(
                 RefusalCode::SupportMismatch102,
-                "mixed metric, year or unit in summary",
+                "mixed metric, unit or declared population support in summary",
             ));
         }
-        if !subjects.insert(&k.subject) {
+        if if history {
+            !years.insert(k.year)
+        } else {
+            !subjects.insert(&k.subject)
+        } {
             return Err(refuse(
                 RefusalCode::BasisMismatch105,
-                "duplicate subject in selected guidance cohort",
+                "duplicate subject or history year in selected guidance cohort",
             ));
         }
         let outcome = member
@@ -537,7 +643,15 @@ pub fn summarize(members: &[MemberInput]) -> Result<Claim<GuidanceSummary>> {
     };
     let summary = GuidanceSummary {
         metric: key.metric.clone(),
-        year: key.year,
+        scope: if history {
+            SummaryScope::SiteHistory {
+                subject: key.subject.clone(),
+                basis: key.basis.clone(),
+                years: years.into_iter().collect(),
+            }
+        } else {
+            SummaryScope::Annual { year: key.year }
+        },
         unit: key.unit.clone(),
         members: raw.n_members,
         resolved: raw.n_resolved,
@@ -1015,5 +1129,200 @@ mod tests {
         assert_eq!(forward, reverse);
         assert!(forward.parents.contains(&id));
         forward.check_id().expect("canonical summary");
+    }
+
+    fn in_year(mut member: MemberInput, year: u16) -> MemberInput {
+        let mut guidance = member.guidance.value;
+        guidance.key.year = year;
+        member.guidance = claim(
+            guidance.clone(),
+            &guidance.canonical_tag(),
+            "synthetic.guidance",
+        );
+        if let Some(outcome) = member.outcome.take() {
+            let mut value = outcome.value;
+            value.key.year = year;
+            member.outcome = Some(claim(
+                value.clone(),
+                &value.canonical_tag(),
+                "synthetic.outcome",
+            ));
+        }
+        member
+    }
+
+    #[test]
+    fn site_history_claim_preserves_years_unresolved_members_and_exact_bounds() {
+        let first = in_year(
+            input(
+                "mine",
+                range(),
+                rat(110, 1),
+                bounds(rat(110, 1), rat(110, 1)),
+            ),
+            2024,
+        );
+        let mut last = in_year(
+            input(
+                "mine",
+                range(),
+                rat(125, 1),
+                bounds(rat(125, 1), rat(125, 1)),
+            ),
+            2025,
+        );
+        let complete = summarize_history(&[first.clone(), last.clone()]).expect("history");
+        assert_eq!(complete.value.members, 2);
+        assert_eq!(complete.value.observed_hit_rate, Some(rat(1, 2)));
+        assert_eq!(complete.value.mean_z, Some(rat(3, 4)));
+        assert_eq!(
+            complete.value.scope,
+            SummaryScope::SiteHistory {
+                subject: "mine".into(),
+                basis: "100%".into(),
+                years: vec![2024, 2025],
+            }
+        );
+        assert!(complete.value.binomial_90_exact.is_some());
+        assert_eq!(complete.value.flag, CalibrationFlag::Descriptive);
+        let display = super::super::GuidanceSummary::from(&complete.value);
+        assert_eq!(
+            display.iid_reference_interval_90_exact,
+            complete.value.binomial_90_exact
+        );
+        assert!(
+            summarize(&[first.clone(), last.clone()]).is_err(),
+            "annual API still refuses a multi-year cohort"
+        );
+        last.outcome = None;
+        let missing =
+            summarize_history(&[last.clone(), first.clone()]).expect("unresolved remains");
+        assert_eq!(
+            (
+                missing.value.members,
+                missing.value.resolved,
+                missing.value.unresolved
+            ),
+            (2, 1, 1)
+        );
+        assert_eq!(
+            missing.value.whole_cohort_hit_rate_bounds,
+            bounds(rat(1, 2), rat(1, 1))
+        );
+        assert!(missing.parents.contains(&last.guidance.claim_id));
+        assert_eq!(
+            missing,
+            summarize_history(&[first, last]).expect("order invariant")
+        );
+        missing.check_id().expect("canonical history");
+    }
+
+    #[test]
+    fn site_history_refuses_duplicate_years_and_mixed_site_or_basis() {
+        let first = in_year(
+            input(
+                "mine",
+                range(),
+                rat(110, 1),
+                bounds(rat(110, 1), rat(110, 1)),
+            ),
+            2024,
+        );
+        let last = in_year(
+            input(
+                "mine",
+                range(),
+                rat(125, 1),
+                bounds(rat(125, 1), rat(125, 1)),
+            ),
+            2025,
+        );
+        assert!(summarize_history(&[first.clone(), first.clone()]).is_err());
+        for change_basis in [false, true] {
+            let mut altered = last.clone();
+            let mut g = altered.guidance.value;
+            if change_basis {
+                g.key.basis = "attributable:4/5".into();
+            } else {
+                g.key.subject = "another-mine".into();
+            }
+            altered.guidance = claim(g.clone(), &g.canonical_tag(), "synthetic.guidance");
+            altered.outcome = None;
+            assert_eq!(
+                summarize_history(&[first.clone(), altered])
+                    .expect_err("mixed support")
+                    .code,
+                "FMINE-REF-102"
+            );
+        }
+    }
+
+    #[test]
+    fn assumed_unknown_arithmetic_preserves_state_and_never_accepts_negative_states() {
+        let original = input(
+            "mine",
+            range(),
+            rat(110, 1),
+            bounds(rat(110, 1), rat(110, 1)),
+        );
+        for state in [
+            KnowledgeState::Unknown,
+            KnowledgeState::Conflicted,
+            KnowledgeState::Stale,
+            KnowledgeState::NotObservable,
+            KnowledgeState::Redacted,
+            KnowledgeState::Indeterminate,
+            KnowledgeState::NotApplicable,
+        ] {
+            let mut member = original.clone();
+            let outcome = member.outcome.as_mut().expect("outcome");
+            outcome.state = state;
+            outcome.claim_id = fmine_core::ObjectId::from_canonical_bytes(
+                fmine_core::PrefixKind::Claim,
+                &outcome.canonical_body(),
+            );
+            if state == KnowledgeState::Unknown {
+                let scored = member_score(&member);
+                assert_eq!(scored.state, KnowledgeState::Unknown);
+                assert_eq!(scored.evidence, EvidenceClass::Assumed);
+                assert_eq!(
+                    summarize_history(&[member.clone()])
+                        .expect("hypothetical history")
+                        .state,
+                    KnowledgeState::Unknown
+                );
+                outcome_placeholder(&mut member);
+                assert!(
+                    score(&member.guidance, member.outcome.as_ref().expect("outcome")).is_err()
+                );
+            } else {
+                assert!(
+                    score(&member.guidance, member.outcome.as_ref().expect("outcome")).is_err(),
+                    "{state:?}"
+                );
+            }
+        }
+        let mut unobserved = original;
+        let outcome = unobserved.outcome.as_mut().expect("outcome");
+        outcome.state = KnowledgeState::Unknown;
+        outcome.evidence = EvidenceClass::ISSUER;
+        outcome.claim_id = fmine_core::ObjectId::from_canonical_bytes(
+            fmine_core::PrefixKind::Claim,
+            &outcome.canonical_body(),
+        );
+        assert!(
+            score(
+                &unobserved.guidance,
+                unobserved.outcome.as_ref().expect("outcome")
+            )
+            .is_err(),
+            "the hypothetical arithmetic exception never admits an unknown issuer assertion"
+        );
+    }
+
+    fn outcome_placeholder(member: &mut MemberInput) {
+        member.outcome.as_mut().expect("outcome").representation = Representation::Placeholder {
+            token: "N/A".into(),
+        };
     }
 }

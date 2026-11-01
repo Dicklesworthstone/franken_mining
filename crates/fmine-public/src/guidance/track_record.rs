@@ -19,7 +19,7 @@ use fmine_registry::transcriptions::{Accepted, Token, parse_token};
 
 use crate::key::{self, KeyedCell, PeriodKind, PublicValue, Scope};
 use crate::sources::{IssuerProfile, SourceKind, load_issuer_profile};
-use crate::transcribe::{CheckedDocument, TranscriptionReport, load_transcription_report_as_of};
+use crate::transcribe::{CheckedDocument, TranscriptionReport, load_transcription_prefixes};
 use crate::{js, mine_ledger::rat_text};
 
 pub const NO_CLAIM: &str = "Descriptive comparison of registered issuer guidance and reported outcomes; no forecast, calibration verdict, site ranking or proof of historical forecast registration. From public filings; no affiliation implied.";
@@ -488,7 +488,7 @@ pub fn assess(
         ));
     }
     let availability = super::available_by(profile, as_of)?;
-    if !transcripts.agreement.is_consistent() || !transcripts.agreement.single_reader.is_empty() {
+    if !transcripts.agreement.is_complete_for_prefix("guidance_") {
         return Err(refuse(
             RefusalCode::NotObservable202,
             "complete two-reader agreement before assessing the guidance population",
@@ -683,7 +683,7 @@ pub fn run(
     let profile = load_issuer_profile(workspace, issuer)?;
     super::available_by(&profile, as_of)?;
     let cells = key::mine_stats::load_claims(&profile, workspace)?;
-    let transcripts = load_transcription_report_as_of(&profile, workspace, as_of)?.ok_or_else(||
+    let transcripts = load_transcription_prefixes(&profile, workspace, &["guidance_"], Some(as_of))?.ok_or_else(||
         refuse(RefusalCode::NoClaimInDomain201, format!("registries/transcriptions/{issuer}.toml is absent; register two independent readings of the guidance")))?;
     assess(&profile, &transcripts, &cells.claims, site, as_of)
 }
@@ -770,7 +770,7 @@ impl TrackRecordReport {
             optional_rat(s.observed_hit_rate),interval(s.whole_cohort_hit_bounds),interval(s.rounding_aware_hit_bounds),interval(s.iid_reference_interval_90_exact),optional_rat(s.mean_z),interval(s.mean_z_rounding_interval),optional_rat(s.above_midpoint_share),js(if s.n_resolved==0{"unscored"}else{"descriptive"})) }).collect::<Vec<_>>().join(",");
         let unsupported=self.unsupported.iter().map(|a|format!("{{\"at\":{},\"sha256\":{},\"quantity\":{},\"reason\":\"unsupported guidance metric\"}}",js(&a.locator.to_string()),js(&a.doc_sha256),js(&a.quantity))).collect::<Vec<_>>().join(",");
         format!(
-            "\"schema\":\"fmine.guidance.track-record.as-of.v1\",\"issuer\":{},\"lane\":{},\"gate_eligible\":false,\"as_of\":{},\"workbooks_available_by\":{},\"population\":\"supported agreed guidance rows in the supplied registry; historical completeness unassessed\",\"guidance_selector\":\"earliest registered document per site, fiscal year, metric and basis; later vintages shown separately\",\"time_proof\":\"not supplied; source dates and conservative exact-byte availability are reported, no retrospective forecast registration\",\"rows\":[{rows}],\"summaries\":[{summaries}],\"unsupported_guidance\":[{unsupported}],\"warnings\":[\"Clopper-Pearson bounds are an IID Bernoulli reference for resolved printed-value hits only; they do not account for selective missingness or outcome rounding. Cross-site and year dependence is unmodelled. Effective sample size is not estimated.\",\"Mean-z bounds propagate printed rounding only, not sampling uncertainty or a confidence interval for bias.\",\"Missing original annual releases remain unresolved in the first-published denominator; later comparatives are separate assessments.\",\"Cost scores are unconditional: gold-price adjustments are not implemented, and a miss does not identify controllable operating causes.\"],\"no_claim\":{}",
+            "\"schema\":\"fmine.guidance.track-record.as-of.v1\",\"issuer\":{},\"lane\":{},\"gate_eligible\":false,\"as_of\":{},\"workbooks_available_by\":{},\"population\":\"supported agreed guidance rows in the supplied registry; historical completeness unassessed\",\"guidance_selector\":\"earliest registered document per site, fiscal year, metric and basis; later vintages shown separately\",\"time_proof\":\"not supplied; source dates and conservative exact-byte availability are reported, no retrospective forecast registration\",\"rows\":[{rows}],\"summaries\":[{summaries}],\"unsupported_guidance\":[{unsupported}],\"warnings\":[\"Clopper-Pearson bounds are an IID Bernoulli reference for resolved printed-value hits only; they do not account for selective missingness or outcome rounding. Cross-site and year dependence is unmodelled. Effective sample size is not estimated.\",\"Mean-z bounds propagate printed rounding only, not sampling uncertainty or a confidence interval for bias.\",\"Missing original annual releases remain unresolved in the first-published denominator; later comparatives are separate assessments.\",\"Cost scores are unconditional in this base comparison. Separately reported price sensitivities sit alongside them; a miss does not identify controllable operating causes.\"],\"no_claim\":{}",
             js(&self.issuer),
             js(if self.synthetic {
                 "synthetic"
@@ -914,7 +914,7 @@ impl TrackRecordReport {
         }
         let _ = write!(
             out,
-            "\nExact ratios are retained. IID reference intervals apply only to resolved printed-value hits; they do not account for selective missingness or outcome rounding. Cross-site and year dependence, effective sample size and bias sampling uncertainty are not estimated. Rounding bounds do not measure forecast uncertainty. Cost scores are unconditional: gold-price adjustments are not implemented, and a miss does not identify controllable operating causes.\n\nReport digest: `{}`.\n",
+            "\nExact ratios are retained. IID reference intervals apply only to resolved printed-value hits; they do not account for selective missingness or outcome rounding. Cross-site and year dependence, effective sample size and bias sampling uncertainty are not estimated. Rounding bounds do not measure forecast uncertainty. Cost scores are unconditional in this base comparison. Separately reported price sensitivities sit alongside them; a miss does not identify controllable operating causes.\n\nReport digest: `{}`.\n",
             self.digest.to_hex()
         );
         out

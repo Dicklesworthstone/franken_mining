@@ -16,10 +16,12 @@ fmine-time = { path = "../fmine-time" }
 
 [dev-dependencies]
 fmine-claim = { path = "../fmine-claim" }
+fmine-cli = { path = "../fmine-cli" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-io = { path = "../fmine-io" }
 fmine-metrics = { path = "../fmine-metrics" }
 fmine-numerics = { path = "../fmine-numerics" }
+fmine-runtime = { path = "../fmine-runtime" }
 
 [lints]
 workspace = true

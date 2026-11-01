@@ -16,6 +16,7 @@ use fmine_core::id::ObjectId;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
 
+pub mod live;
 mod provenance;
 
 const SCHEMA: &str = "fmine.forecast-ledger.v1";
@@ -118,6 +119,10 @@ impl Replay {
     }
 
     fn forecast(&mut self, row: Row<'_>) -> Result<(), Refusal> {
+        self.forecast_at(row, None)
+    }
+
+    fn forecast_at(&mut self, row: Row<'_>, observed_ns: Option<i64>) -> Result<(), Refusal> {
         let kind = row.string("kind")?;
         let payload_fields: &[&str] = match kind {
             "gaussian" => &["mean", "std_dev"],
@@ -158,7 +163,7 @@ impl Replay {
         };
         let id = self.ledger.register_payload(
             row.string("model_key")?,
-            row.time("registered_at")?,
+            row.assigned_time("registered_at", observed_ns)?,
             row.time("outcome_due")?,
             payload,
         )?;
@@ -168,6 +173,10 @@ impl Replay {
     }
 
     fn cohort(&mut self, row: Row<'_>) -> Result<(), Refusal> {
+        self.cohort_at(row, None)
+    }
+
+    fn cohort_at(&mut self, row: Row<'_>, observed_ns: Option<i64>) -> Result<(), Refusal> {
         row.allowed(
             &[
                 "name",
@@ -218,7 +227,7 @@ impl Replay {
             .collect::<Result<Vec<_>, _>>()?;
         let digest = self.ledger.freeze_cohort(CohortSpec {
             name: name.clone(),
-            frozen_at_ns: row.time("frozen_at")?,
+            frozen_at_ns: row.assigned_time("frozen_at", observed_ns)?,
             members,
             resolution_rule: row.string("resolution_rule")?.to_string(),
             eligible_sources: row.identifiers("eligible_sources")?,
@@ -229,6 +238,10 @@ impl Replay {
     }
 
     fn outcome(&mut self, row: Row<'_>) -> Result<(), Refusal> {
+        self.outcome_at(row, None)
+    }
+
+    fn outcome_at(&mut self, row: Row<'_>, observed_ns: Option<i64>) -> Result<(), Refusal> {
         let kind = row.string("kind")?;
         let extra: &[&str] = match kind {
             "published" => &["value", "source", "vintage", "locator", "sha256"],
@@ -274,13 +287,17 @@ impl Replay {
         self.ledger.append_outcome(
             self.forecast_id(row.string("forecast")?)?,
             row.time("available_at")?,
-            row.time("recorded_at")?,
+            row.assigned_time("recorded_at", observed_ns)?,
             value,
         )?;
         Ok(())
     }
 
     fn checkpoint(&mut self, row: Row<'_>) -> Result<(), Refusal> {
+        self.checkpoint_report(row).map(|_| ())
+    }
+
+    fn checkpoint_report(&mut self, row: Row<'_>) -> Result<Assessment, Refusal> {
         row.allowed(&["cohort", "as_of", "selector", "expected_digest"], &[])?;
         let cohort = row.string("cohort")?;
         let as_of_ns = row.time("as_of")?;
@@ -307,7 +324,7 @@ impl Replay {
             digest: report.digest,
             expected,
         });
-        Ok(())
+        Ok(report)
     }
 
     fn forecast_id(&self, alias: &str) -> Result<ObjectId, Refusal> {
@@ -332,6 +349,23 @@ impl Replay {
     }
 
     fn render(&self, report: &Assessment, transcript: Digest32) -> Result<String, Refusal> {
+        self.render_origin(
+            report,
+            transcript,
+            "transcript_sha256",
+            "read_only_replay",
+            "supplied_not_verified",
+        )
+    }
+
+    fn render_origin(
+        &self,
+        report: &Assessment,
+        identity: Digest32,
+        identity_key: &str,
+        mode: &str,
+        authority_times: &str,
+    ) -> Result<String, Refusal> {
         let cohort = self
             .ledger
             .cohort(report.cohort)
@@ -348,9 +382,11 @@ impl Replay {
             if c.expected.is_some() { "true" } else { "null" },
         )).collect::<Vec<_>>().join(",");
         Ok(format!(
-            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":\"read_only_replay\",\"lane\":{},\"transcript_sha256\":{},\"authority_times\":\"supplied_not_verified\",\"source_citations\":\"supplied_not_verified\",\"external_time_proof\":\"not_verified\",\"temporal_validation\":{},\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]}},\"checkpoints\":[{}]}}",
+            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":{},\"lane\":{},{identity_key}:{},\"authority_times\":{},\"source_citations\":\"supplied_not_verified\",\"external_time_proof\":\"not_verified\",\"temporal_validation\":{},\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]}},\"checkpoints\":[{}]}}",
+            js(mode),
             js(&self.lane),
-            js(&transcript.to_hex()),
+            js(&identity.to_hex()),
+            js(authority_times),
             self.temporal_validation
                 .as_deref()
                 .unwrap_or(provenance::NOT_CHECKED),
@@ -361,6 +397,7 @@ impl Replay {
             summary_json(report),
             members,
             checkpoints,
+            identity_key = js(identity_key),
         ))
     }
 
@@ -470,6 +507,15 @@ impl<'a> Row<'a> {
     fn time(&self, key: &str) -> Result<i64, Refusal> {
         time(self.string(key)?)
     }
+    fn assigned_time(&self, key: &str, observed_ns: Option<i64>) -> Result<i64, Refusal> {
+        match observed_ns {
+            Some(_) if self.0.get(key).is_some() => Err(invalid(format!(
+                "live journal requests cannot supply {key}; the writer assigns its observed clock time"
+            ))),
+            Some(now) => Ok(now),
+            None => self.time(key),
+        }
+    }
     fn numbers(&self, key: &str) -> Result<Vec<f64>, Refusal> {
         self.string(key)?
             .split(',')
@@ -565,7 +611,13 @@ fn js(s: &str) -> String {
     format!("\"{}\"", crate::escape_json(s))
 }
 fn utc(ns: i64) -> String {
-    js(&format_utc(ns / 1_000_000_000))
+    let text = format_utc(ns.div_euclid(1_000_000_000));
+    let nanos = ns.rem_euclid(1_000_000_000);
+    if nanos == 0 {
+        js(&text)
+    } else {
+        js(&format!("{}.{nanos:09}Z", text.trim_end_matches('Z')))
+    }
 }
 fn optional_number(n: Option<f64>) -> String {
     n.map_or_else(|| "null".to_string(), |v| v.to_string())

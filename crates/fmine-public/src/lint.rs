@@ -14,10 +14,10 @@ use fmine_numerics::exact_feas::Rat;
 use crate::js;
 use crate::key::{
     KeyedCell, OwnershipBasis, Period, PeriodKind, PublicValue, Scope, SeriesKey,
-    SeriesOwnershipBasis, claims_digest,
+    SeriesOwnershipBasis, canonical_value_tag, claims_digest,
 };
 
-pub const RULES_VERSION: &str = "cited-equality/1";
+pub const RULES_VERSION: &str = "cited-equality/3";
 pub const NO_CLAIM: &str = "Checks supported numeric equalities against cited public Claims in the selected source snapshot. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure.";
 pub const DISCOVERY_NO_CLAIM: &str = "Matches supported numeric equalities to public Claims in the selected source snapshot only when their stated semantic keys identify exactly one candidate. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure. General-prose discovery precision has not been measured.";
 
@@ -302,14 +302,18 @@ impl LintReport {
 enum Metric {
     Aisc,
     Tcc,
+    C1,
     CostOfSales,
     Production,
+    CopperProduction,
     Sales,
+    ProcessedGrade,
+    Recovery,
 }
 
 impl Metric {
     const fn rate(self) -> bool {
-        matches!(self, Self::Aisc | Self::Tcc | Self::CostOfSales)
+        matches!(self, Self::Aisc | Self::Tcc | Self::C1 | Self::CostOfSales)
     }
 }
 
@@ -324,12 +328,22 @@ fn metric(c: &KeyedCell) -> Option<Metric> {
         | "total cash costs per ounce (on a co-product basis)"
         | "site:costs per ounce:total cash costs"
         | "site:costs per ounce ($/oz):total cash costs" => Metric::Tcc,
+        "summary:c1_usd_per_lb"
+        | "site:costs per pound:c1 cash costs"
+        | "site:costs per pound ($/lb):c1 cash costs" => Metric::C1,
         "summary:cos_usd_per_oz"
         | "cost of sales per ounce"
         | "site:costs per ounce:cost of sales"
         | "site:costs per ounce ($/oz):cost of sales" => Metric::CostOfSales,
         "summary:au_prod_100_koz" | "summary:au_prod_attr_koz" => Metric::Production,
+        "summary:cu_prod_100_kt"
+        | "summary:cu_prod_attr_kt"
+        | "site::production (thousands of tonnes)" => Metric::CopperProduction,
         "summary:au_sold_attr_koz" | "ounces sold" => Metric::Sales,
+        "site:average grade (grams per tonne):processed"
+        | "site:average grade (percent):processed"
+        | "site:average grade:processed" => Metric::ProcessedGrade,
+        "site::recovery rate (percent)" => Metric::Recovery,
         _ => return None,
     })
 }
@@ -536,6 +550,7 @@ struct Context {
     periods: Vec<PeriodTok>,
     bases: Vec<BasisTok>,
     units: Vec<UnitTok>,
+    numbers: usize,
     supported: bool,
 }
 
@@ -547,6 +562,7 @@ fn context(text: &str, tokens: &[Token], links: &[Link], index: &Index<'_>) -> C
         periods: Vec::new(),
         bases: Vec::new(),
         units: Vec::new(),
+        numbers: 0,
         supported: false,
     };
     for token in tokens {
@@ -555,11 +571,12 @@ fn context(text: &str, tokens: &[Token], links: &[Link], index: &Index<'_>) -> C
             Token::Period { kind, .. } => c.periods.push(*kind),
             Token::Unit { kind, .. } => c.units.push(*kind),
             Token::Number(n) => {
+                c.numbers += 1;
                 if let Some(u) = n.unit {
                     c.units.push(u);
                 }
             }
-            Token::UnsupportedNumber { .. } => {}
+            Token::UnsupportedNumber { .. } => c.numbers += 1,
         }
         erase(&mut rest, token.span());
     }
@@ -575,11 +592,21 @@ fn context(text: &str, tokens: &[Token], links: &[Link], index: &Index<'_>) -> C
         ("all-in sustaining costs", Metric::Aisc),
         ("all in sustaining costs", Metric::Aisc),
         ("total cash costs", Metric::Tcc),
+        ("copper c1 cash costs", Metric::C1),
+        ("c1 cash costs", Metric::C1),
+        ("copper c1", Metric::C1),
+        ("c1", Metric::C1),
         ("cost of sales", Metric::CostOfSales),
+        ("copper production", Metric::CopperProduction),
+        ("copper produced", Metric::CopperProduction),
         ("gold production", Metric::Production),
         ("gold produced", Metric::Production),
         ("gold sales", Metric::Sales),
         ("gold sold", Metric::Sales),
+        ("processed grade", Metric::ProcessedGrade),
+        ("head grade", Metric::ProcessedGrade),
+        ("recovery rate", Metric::Recovery),
+        ("recovery", Metric::Recovery),
         ("production", Metric::Production),
         ("sales", Metric::Sales),
         ("aisc", Metric::Aisc),
@@ -645,10 +672,26 @@ fn period(t: PeriodTok) -> Option<Period> {
     })
 }
 
-fn unit_matches(unit: UnitTok, key: &str) -> bool {
+fn unit_matches(unit: UnitTok, key: &str, metric: Metric) -> bool {
     matches!(
-        (unit, key),
-        (UnitTok::UsdPerOz | UnitTok::DollarPerOz, "usd_per_oz") | (UnitTok::Koz, "koz")
+        (metric, unit, key),
+        (
+            Metric::Aisc | Metric::Tcc | Metric::CostOfSales,
+            UnitTok::UsdPerOz | UnitTok::DollarPerOz,
+            "usd_per_oz"
+        ) | (Metric::Production | Metric::Sales, UnitTok::Koz, "koz")
+            | (
+                Metric::C1,
+                UnitTok::UsdPerLb | UnitTok::DollarPerLb,
+                "usd_per_lb"
+            )
+            | (Metric::CopperProduction, UnitTok::Kt, "kt")
+            | (Metric::ProcessedGrade, UnitTok::GramsPerTonne, "g_per_t")
+            | (
+                Metric::ProcessedGrade | Metric::Recovery,
+                UnitTok::Percent,
+                "percent" | "wt_pct" | "mass_fraction"
+            )
     )
 }
 
@@ -677,7 +720,23 @@ fn source_box(c: &KeyedCell) -> Option<(Rat, Rat)> {
     let [Token::Number(n)] = tokens.as_slice() else {
         return None;
     };
-    if text.trim() != n.raw.trim() || n.range_with.is_some() || n.percent || n.unit.is_some() {
+    let physical = matches!(metric(c), Some(Metric::ProcessedGrade | Metric::Recovery));
+    // Percent-format workbooks store fractions but print percentage points. Compare that explicit
+    // presentation, preserving both stored value and source Claim; an unformatted fraction is unusable.
+    let source_unit = match (metric(c), c.key.unit.as_str()) {
+        (Some(Metric::ProcessedGrade), "g_per_t") => n.unit.is_none(),
+        (Some(Metric::ProcessedGrade | Metric::Recovery), "percent" | "wt_pct") => {
+            matches!(n.unit, None | Some(UnitTok::Percent))
+        }
+        (Some(Metric::ProcessedGrade | Metric::Recovery), "mass_fraction") => n.percent,
+        (Some(Metric::ProcessedGrade | Metric::Recovery), _) => false,
+        _ => n.unit.is_none(),
+    };
+    if text.trim() != n.raw.trim()
+        || n.range_with.is_some()
+        || !source_unit
+        || (physical && (n.currency.is_some() || n.scale_word.is_some() || n.hedge.is_some()))
+    {
         return None;
     }
     number_box(decimal(n.value)?, decimal(n.step)?)
@@ -695,48 +754,55 @@ fn interval_verdict(n: &NumberToken, c: &KeyedCell) -> Option<Verdict> {
     }
 }
 
+fn missing_basis(c: &Context, metric: Metric) -> Option<&'static str> {
+    if c.bases.iter().filter(|b| b.is_ownership()).count() != 1 {
+        Some("ownership_required")
+    } else if metric.rate() && !c.bases.iter().any(|b| b.is_denominator()) {
+        Some("sold_denominator_required")
+    } else if metric == Metric::Tcc && !c.bases.iter().any(|b| b.is_credit()) {
+        Some("credit_basis_required")
+    } else {
+        None
+    }
+}
+
 fn basis_findings(c: &Context, claim: &KeyedCell, metric: Metric) -> Vec<(Verdict, &'static str)> {
     use BasisTok as B;
     let mut failures = Vec::new();
-    let ownership: Vec<_> = c
-        .bases
-        .iter()
-        .filter(|b| matches!(b, B::Attributable | B::Hundred | B::Unprinted))
-        .copied()
-        .collect();
-    if ownership.len() != 1 {
-        failures.push((Verdict::Ambiguous, "ownership_required"));
-    } else if !matches!(
-        (ownership[0], claim.key.ownership_basis),
-        (B::Attributable, OwnershipBasis::Attributable { .. })
-            | (B::Hundred, OwnershipBasis::Consolidated100)
-            | (B::Unprinted, OwnershipBasis::Unprinted)
-    ) {
+    if let Some(reason) = missing_basis(c, metric) {
+        failures.push((Verdict::Ambiguous, reason));
+    }
+    let ownership: Vec<_> = c.bases.iter().filter(|b| b.is_ownership()).collect();
+    if ownership.len() == 1
+        && !matches!(
+            (ownership[0], claim.key.ownership_basis),
+            (B::Attributable, OwnershipBasis::Attributable { .. })
+                | (B::Hundred, OwnershipBasis::Consolidated100)
+                | (B::Unprinted, OwnershipBasis::Unprinted)
+        )
+    {
         failures.push((Verdict::BasisMismatch, "ownership"));
     }
-    let sold = c.bases.contains(&B::PerOzSold);
-    if metric.rate() && !sold && !c.bases.contains(&B::PerOzProduced) {
-        failures.push((Verdict::Ambiguous, "sold_denominator_required"));
-    }
-    if c.bases.contains(&B::PerOzProduced) || (!metric.rate() && sold) {
+    let sold = if metric == Metric::C1 {
+        B::PerLbSold
+    } else {
+        B::PerOzSold
+    };
+    if c.bases
+        .iter()
+        .any(|b| b.is_denominator() && (!metric.rate() || *b != sold))
+    {
         failures.push((Verdict::BasisMismatch, "sold_produced_denominator"));
     }
     let co_product = claim.key.line.label == "total cash costs per ounce (on a co-product basis)";
-    if metric == Metric::Tcc
-        && !c
-            .bases
-            .iter()
-            .any(|b| matches!(b, B::ByProduct | B::CoProduct))
-    {
-        failures.push((Verdict::Ambiguous, "credit_basis_required"));
-    }
-    if (c.bases.contains(&B::CoProduct) && !co_product)
-        || (c.bases.contains(&B::ByProduct) && co_product)
-        || (c.bases.contains(&B::ByProduct) && !matches!(metric, Metric::Aisc | Metric::Tcc))
-        || c.bases.contains(&B::Geo)
-        || c.bases.contains(&B::Scorecard)
-        || (c.bases.contains(&B::NonGaap) && !matches!(metric, Metric::Aisc | Metric::Tcc))
-    {
+    if c.bases.iter().any(|b| match b {
+        B::CoProduct => !co_product,
+        B::ByProduct => co_product || !matches!(metric, Metric::Aisc | Metric::Tcc),
+        B::Geo | B::Scorecard => true,
+        B::NonGaap => !matches!(metric, Metric::Aisc | Metric::Tcc | Metric::C1),
+        B::GoldOunces => matches!(metric, Metric::C1 | Metric::CopperProduction),
+        _ => false,
+    }) {
         failures.push((Verdict::BasisMismatch, "metric_definition"));
     }
     if claim.basis_evidence.is_some()
@@ -794,6 +860,13 @@ fn finding(
     };
     let claim = candidates[0];
     f.source = Some(claim.clone());
+    if claim.claim.check_id().is_err()
+        || claim.claim.metric_key != claim.key.line.label
+        || claim.claim.value_tag() != canonical_value_tag(&claim.key, &claim.claim.value)
+    {
+        f.reason = "source_claim_identity_mismatch";
+        return f;
+    }
     if link_set.len() != 1
         || text[link.label.0..link.label.1].trim() != n.raw.trim()
         || n.range_with.is_some()
@@ -802,13 +875,7 @@ fn finding(
         return f;
     }
     let ctx = context(text, tokens, link_set, index);
-    if !ctx.supported
-        || tokens
-            .iter()
-            .filter(|t| matches!(t, Token::Number(_) | Token::UnsupportedNumber { .. }))
-            .count()
-            != 1
-    {
+    if !ctx.supported || ctx.numbers != 1 {
         let lower = text.to_ascii_lowercase();
         if ["probability", "chance", "confidence", "likelihood"]
             .iter()
@@ -853,7 +920,10 @@ fn finding(
     }
     if ctx.units.is_empty() {
         failures.push((Verdict::Ambiguous, "explicit_unit_required"));
-    } else if !ctx.units.iter().all(|u| unit_matches(*u, &claim.key.unit))
+    } else if !ctx
+        .units
+        .iter()
+        .all(|u| unit_matches(*u, &claim.key.unit, m))
         || n.currency
             .is_some_and(|c| !matches!(c, Currency::Usd | Currency::Dollar) || !m.rate())
     {
@@ -904,17 +974,18 @@ fn discover(
     let ctx = context(text, tokens, &[], index);
     if !ctx.supported
         || n.range_with.is_some()
-        || ctx.metrics.len() != 1
         || !matches!(
-            ctx.metrics.first(),
-            Some(Metric::Aisc | Metric::Tcc | Metric::Production)
+            ctx.metrics.as_slice(),
+            [Metric::Aisc
+                | Metric::Tcc
+                | Metric::C1
+                | Metric::Production
+                | Metric::CopperProduction
+                | Metric::ProcessedGrade
+                | Metric::Recovery]
         )
         || ctx.subjects.is_empty()
-        || tokens
-            .iter()
-            .filter(|t| matches!(t, Token::Number(_) | Token::UnsupportedNumber { .. }))
-            .count()
-            != 1
+        || ctx.numbers != 1
     {
         return f;
     }
@@ -929,28 +1000,7 @@ fn discover(
         return f;
     };
     let m = ctx.metrics[0];
-    if ctx
-        .bases
-        .iter()
-        .filter(|b| {
-            matches!(
-                b,
-                BasisTok::Attributable | BasisTok::Hundred | BasisTok::Unprinted
-            )
-        })
-        .count()
-        != 1
-        || (m.rate()
-            && !ctx
-                .bases
-                .iter()
-                .any(|b| matches!(b, BasisTok::PerOzSold | BasisTok::PerOzProduced)))
-        || (m == Metric::Tcc
-            && !ctx
-                .bases
-                .iter()
-                .any(|b| matches!(b, BasisTok::ByProduct | BasisTok::CoProduct)))
-    {
+    if missing_basis(&ctx, m).is_some() {
         f.verdict = Verdict::Ambiguous;
         f.reason = "explicit_discovery_basis_required";
         return f;
@@ -964,7 +1014,7 @@ fn discover(
         .flatten()
         .copied()
         .filter(|c| {
-            ctx.units.iter().all(|u| unit_matches(*u, &c.key.unit))
+            ctx.units.iter().all(|u| unit_matches(*u, &c.key.unit, m))
                 && !n.currency.is_some_and(|currency| {
                     !matches!(currency, Currency::Usd | Currency::Dollar) || !m.rate()
                 })
@@ -1004,8 +1054,8 @@ pub fn lint_cited(draft: &str, claims: &[KeyedCell]) -> LintReport {
     lint(draft, claims, LintMode::Cited)
 }
 
-/// Discovers AISC, gold TCC and gold-production citations using the explicit equality grammar of
-/// [`lint_cited`]. Other metric discovery is unchecked. All matching source assertions remain
+/// Discovers AISC, TCC, copper C1, gold/copper production, grade and recovery using the explicit
+/// equality grammar of [`lint_cited`]. Other discovery is unchecked. All matching assertions remain
 /// candidates, including repeated vintages; numeric agreement never breaks a tie. Explicit citations
 /// retain cited-mode checks and are never silently repaired.
 #[must_use]

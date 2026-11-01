@@ -8,6 +8,7 @@ The universal Claim and the checks around it:
 - `ClaimDag` is an in-memory provenance index. It propagates staleness (BD-046, INV-013) and checks G-DISC's evidence clauses.
 - `dag::TemporalGraph` checks a root's temporal ancestry at an availability cut, and `dag::replay` replays a generator through a guarded read view (BD-344).
 - `reliance` is the issued-output journal. It keeps the integrity of issued bytes apart from permission to reuse them now (BD-347).
+- `forecast_journal` is the forecast-operation journal codec, independent of reliance's business ledger (BD-047).
 
 It does no I/O. Storage, locking and key custody belong to the callers in `fmine-io` and `fmine-cli`.
 
@@ -15,7 +16,7 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 - **Layer:** S0
 - **Subsystem:** Plumb
 - **LOC budget:** 16,000 planned / 18,000 ceiling
-- **Allowed Module Families:** `["claim", "dag", "label", "uu", "reliance"]`
+- **Allowed Module Families:** `["claim", "dag", "label", "uu", "reliance", "forecast_journal"]`
 
 ## 2. Inputs
 - **`Claim::new`** takes 13 arguments: metric key, value, canonical value tag, representation, support, additivity, evidence class, epistemic status, knowledge state, label, UU terms, parents and anchors. It takes the evidence class and parents as given. Nothing checks that they agree. `stale`, `calibration_failed` and `supersedes` start false or `None`. They are `pub` fields that callers set afterwards.
@@ -140,6 +141,13 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
   - `capabilities_clock_and_affected_claims_are_checked_before_mutation`;
   - `exact_recall_keeps_recipient_copies_and_distinct_builds_of_identical_bytes` (96 copies);
   - `bounded_codec_preserves_all_bindings_and_tampering_does_not_create_trust` (32,273 claim ids).
+- `IssuanceRecord::digest()` identifies the exact issuance, including its producer and recipient metadata; `RelianceLedger::issuance(id)` selects that record through an index rebuilt during replay. Selecting by output digest alone cannot identify which producing revision a forwarded copy belongs to. The index adds no durable fields and does not change any canonical frame or existing digest.
+
+**Forecast journal (BD-047).**
+- `forecast_journal` defines opaque forecast-operation records independently of reliance's business ledger. `FJR1` schema-1 FMNE frames bind a sequence, previous exact-line BLAKE3, observed Unix nanoseconds and either a genesis header or exact UTF-8 operation text. Genesis has sequence zero and a zero previous digest.
+- The immutable header names the cell and its declared clock-skew bound. Canonical lowercase hex plus LF is the on-disk line; CRC32C and exact re-encoding detect malformed frames.
+- Replay checks contiguous sequence, one genesis, nondecreasing observed time and checked earliest/latest clock bounds. Limits are 64 KiB per operation, 256 bytes per cell id, 100,000 records and 64 MiB of encoded journal lines. It does not parse the operation's business schema.
+- Tests: the BD-047 direct codec tests retain exact multiline UTF-8 operation text, check frame field order and line-head hashing, mutate every byte, and reject noncanonical hex, truncated frames, bad chains and oversized inputs.
 
 ## 5. Refusals
 - **`FMINE-REF-102`** (support mismatch; exit 3), from `verify_support_compatible`.
@@ -167,6 +175,7 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
   - from `insert`, for a self-supersession;
   - from `ReplayStore::insert`, for a replacement or a body whose content id differs;
   - from `reliance`, for a forbidden replacement or issuance change.
+- Forecast journals use `107` for invalid bounded fields/time arithmetic and `502` for noncanonical bytes, malformed chains, incomplete tails and regressing observed time. Forecast semantics retain their own refusals.
 
 `docs/adr/ADR-REFUSALS-01.md` proposes 110, 505 and 507. It asks the owner to confirm 301 for internal data, and leaves G-DISC's code open (`bd-306n.3`). It does not list this crate's other nearest-code uses: 107 in `reliance`, 205 for an `Assertion`, and 304 for G-DISC.
 
@@ -235,6 +244,7 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 - **Four nearest-code uses are unconfirmed.** ADR-REFUSALS-01 covers 301 for internal data and leaves G-DISC's code open. It does not list 107 for malformed reliance input, 205 for an unreviewed `Assertion`, or 304 for G-DISC.
 - **No `//! Determinism:` header** in four files, and the one in `reliance.rs` is not in the form `check-det` parses.
 - **No `claim` or `uu` module.** Those families are the code in `src/lib.rs`.
+- **The forecast journal is an integrity format**, not a forecast evaluator, authority service or external timestamp proof. An internally valid prefix cannot prove that no suffix was removed; rollback detection needs an independently retained final-head pin. Operation validity is enforced by the consuming calibration replay.
 - **A code comment points at the old layout.** It sits on `canonical_body` in `src/lib.rs` and cites "CONTRACT §2". The hashed-body rule is now in Inputs.
 
 ## 11. Public API
@@ -254,8 +264,10 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
   - Status: `UnknownReason`, `RelianceStatus` and `RelianceCheck`.
   - `RelianceLedger`, with:
     - `from_records`, `head`, `header`, `records` and `status_cut_ns`;
-    - `issuances`, `copies`, `recall_revision` and `recall_claim`;
+    - `issuances`, `issuance`, `copies`, `recall_revision` and `recall_claim`;
     - `verify_artifact`, `replay`, `append`, `check` and `gate_current_reuse`.
+  - `issuance(id)` resolves an exact canonical `IssuanceRecord::digest()`, distinct from `copies(output_digest)`.
+- **`forecast_journal`.** `Header`, `Entry`, `Record`, `validate_chain` and `decode_journal`. `Record` exposes bounded binary and line codecs, `chain_head` and `time_bounds`; `Header::time_bounds` returns checked earliest/latest instants. The pure codec never obtains a clock or performs filesystem I/O; live timestamps belong to the locked adapter.
 
 ## 12. Proof obligations
 The plan defines no `PO-CLAIM-*`. The old contract's PO-CLAIM-1 to PO-CLAIM-3 were local labels. Their properties are tested here, under Invariants. The plan's rows that name this crate's work:

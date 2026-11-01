@@ -45,7 +45,9 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   documents, optional `dir` (a plain relative path; default `corpus_dir`), `kind` (`mda`, `aif`,
   `investor_deck`, `partner_filing` or `technical_report`), an `https://` `url` naming a file, a registered `url_basis`,
   `published_at` (a calendar date) with `published_at_basis` starting `"FACT: "` or `"INFERENCE: "` and citing
-  its source, positive `pages` and `bytes`. No value is ever read from a document.
+  its source, positive `pages` and `bytes`. A profile requires at least one validated `[[source]]` or
+  `[[document]]`; document-only partner profiles use the same schema and still require `[[subject]]` rows.
+  Document validation and cross-kind file/digest uniqueness are unchanged. No value is ever read from a document.
 - `transcriptions::{parse_transcriptions, load_transcriptions, TranscriptionRegistry, EntryRow, Locator, Token,
   Decimal, parse_token, agree, Agreement, Accepted, Disagreement, TRANSCRIPTIONS_SCHEMA, MAX_SCALE}` (bd-plx1):
   `registries/transcriptions/<issuer>.toml` (`fmine.transcriptions.v1`; git-ignored pending OPEN-R7-1). Each
@@ -62,6 +64,11 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   accepted rows without readers, so a third reader who agrees reproduces it. Locators are cited
   `<doc>:p<page>:<table>:<row>/<col>`: bd-plx1's form with the table added, since one page can print two tables
   with the same labels.
+  DESIGN (BD-341.S5): `Agreement::rejected_quantities` retains every reader's quantity identity at each
+  pending, disagreeing or clashing locator, without raw tokens. `is_complete_for_prefix` checks a named
+  quantity namespace while treating missing, invalid or orphan identity metadata as incomplete. A mixed
+  guidance/price identity disagreement still blocks guidance; the empty prefix requires global completeness.
+  `is_consistent` and the accepted-row digest retain their existing meanings.
 - `calendars::{load_site_calendars, parse_site_calendars, SiteCalendars}` (BD-029): `registries/calendars.toml`
   (`site_id`, IANA `tz_name`, `day_start_local_hour` 0..=23, `shift_hours` 1..=24, `roster_pattern`) joined with
   the zone snapshot `registries/zones.toml` (header `tzdata`, span `[from_utc_s, to_utc_s)`; one `[[zone]]` per

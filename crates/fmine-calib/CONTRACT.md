@@ -87,6 +87,9 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   rounding intervals admit one common proportionality coefficient. It returns the exact feasible interval
   or two conflicting quarters. Only supported gold/copper AISC ranges with a stated price assumption and
   a passing gate receive the signed adjustment `royalty * (1 - assumed_price / realized_price)`.
+  The scored period's exact royalty/price ratio must also intersect that coefficient interval; a contradictory
+  period remains unsplit with its ratio and historical gate visible. Cost ownership is checked within the
+  outcome/royalty family, and commodity-price basis within the price family; the two are never relabelled equal.
   Exact rounding enclosures, source identities, unit/basis checks and an explicit company-price proxy are
   retained. The immutable conditional report always includes the unconditional score and binds both to its
   inputs. It makes no causal claim and does not establish that the supplied history is complete.
@@ -109,6 +112,15 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   interval remain absent. Summary Claims retain the certified rational `binomial_90_exact` bounds and their
   exact float projections; the `GDA1` version-2 value frame binds both representations. Publication selection
   and source-byte authentication belong to the public adapter.
+- `guidance_scores::claims::summarize_history` binds a single site's multi-year population on one metric,
+  unit and ownership/definition basis. Duplicate years and mixed subjects or bases refuse; unresolved years
+  stay in the denominator. `GuidanceSummary.scope` distinguishes `Annual` from `SiteHistory`, including the
+  latter's exact ordered years. Existing annual summaries retain their byte-identical `GDA1` version-2 value
+  encoding; the new history scope uses version 3. Existing numeric score and summary structures can be
+  projected from these Claims without repeating arithmetic or source selection.
+- Explicit deterministic `Assumed` numerical inputs may remain `Unknown` during hypothetical arithmetic;
+  the result retains that state and evidence. This exception does not admit unknown issuer assertions,
+  placeholders, stale inputs, failed calibration or explicit negative knowledge states.
 - `record` (BD-334.S1, the public forecast record of plan §21.6), all pure:
   - `record_frame`/`record_digest` (`FMREC1`: manifest and forecasts hashed as one) and `rules_frame`/`rules_digest`
     (`FMRUL1`: the rules alone, stamped first);
@@ -186,7 +198,8 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 
 - FACT (BD-341.S5, `guidance_scores::price::tests`): independent exact examples exercise a price contribution
   of twenty-five, unchanged prices, supported and refuted proportionality, open interval endpoints, missing
-  assumptions, unsupported metrics, explicit proxies, altered paired reports, scaling and arithmetic overflow.
+  assumptions, unsupported metrics, explicit proxies with distinct commodity-price bases, incompatible current
+  periods, altered paired reports, scaling and arithmetic overflow.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 A miscalibrated spatial front alarms when either score's wealth reaches `2 / alpha` (40 at `alpha = 0.05`). Nothing

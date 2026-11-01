@@ -97,6 +97,7 @@ dependencies = [
  "fmine-claim",
  "fmine-core",
  "fmine-evidence",
+ "fmine-runtime",
 ]
 
 [[package]]
@@ -178,6 +179,7 @@ version = "0.1.0"
 dependencies = [
  "fmine-calib",
  "fmine-claim",
+ "fmine-cli",
  "fmine-core",
  "fmine-evidence",
  "fmine-io",
@@ -185,5 +187,6 @@ dependencies = [
  "fmine-numerics",
  "fmine-public",
  "fmine-registry",
+ "fmine-runtime",
  "fmine-time",
 ]
