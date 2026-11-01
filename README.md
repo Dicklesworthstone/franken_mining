@@ -693,6 +693,7 @@ A crate joins the workspace only with its first real slice. The first slice cove
   - a certified ultimate pit by pseudoflow, which matches MineLib's published UPIT optima on the 11 instances
     tried, up to 2.1M blocks;
   - nested pit shells across revenue factors;
+  - precedence arcs from slope angles by azimuth sector and geotechnical domain;
 - the public lane: `fmine-io`, `fmine-public`, `fmine-metrics`;
 - `fmine-decide` and `fmine-cli`;
 - `xtask`.

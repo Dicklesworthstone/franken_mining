@@ -5,8 +5,10 @@
 //!   graph. Each pit comes with a pseudoflow certificate that `pitflow::verify` checks without the solver.
 //! - `pitflow::shells`: nested pit shells across exact revenue factors, each one checked against the certified
 //!   optimum at its factor (PO-PUSH-3, `bd-nzwd`).
+//! - `pitflow::slope`: precedence arcs from exact slope tangents per azimuth sector and geotechnical domain, with
+//!   implied arcs dropped and the closure kept (`bd-t75z`).
 //!
-//! Nothing in the workspace calls this crate yet. Slope-template arcs, Bienstock–Zuckerberg, TopoSort and the
-//! stochastic layer are later slices.
+//! Nothing in the workspace calls this crate yet. Bienstock–Zuckerberg, TopoSort and the stochastic layer are later
+//! slices.
 
 pub mod pitflow;

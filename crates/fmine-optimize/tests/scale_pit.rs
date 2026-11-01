@@ -8,15 +8,18 @@
 //!
 //! - Every pit is certified by `verify` inside `solve`, which proves it optimal without an oracle.
 //! - The smallest model is also checked against Dinic (`tests/common`).
+//! - `slope_arc_pits_at_scale` solves the same ore model on `pitflow::slope` arcs (`bd-t75z`).
 //!
 //! What green does not prove:
 //! - anything about MineFlow, the other half of KILL-PUSH-PIT;
 //! - anything about other machines;
-//! - anything about models shaped unlike these, which use one 45° template and ellipsoid ore bodies.
+//! - anything about models shaped unlike these: ellipsoid ore bodies under one 45° 3 × 3 template, or under the
+//!   slope test's two invented domains.
 
 mod common;
 
 use common::{Rng, max_closure_value};
+use fmine_optimize::pitflow::slope::{BlockGrid, Sector, SlopeTable, SlopeTangent, slope_arcs};
 use fmine_optimize::pitflow::{ClosureProblem, solve};
 use std::time::Instant;
 
@@ -38,10 +41,35 @@ const BLOCKS_PER_BODY: usize = 6_000;
 /// A block model in CSR form, built without per-block lists so that 10⁷ blocks fit.
 /// - Block `(i, j, k)` is `(k·ny + j)·nx + i`, with `k = 0` at the surface.
 /// - Each block below the top requires the 3 × 3 blocks above it that exist.
-/// - Waste costs [`WASTE`].
-/// - There is one ore body per [`BLOCKS_PER_BODY`] blocks. Each is an integer ellipsoid with radii 3–9 across and
-///   2–5 down, centred at any depth below the surface, and adds a grade of 5 to 25 times the waste cost.
+/// - Values are [`values`].
 fn model(rng: &mut Rng, (nx, ny, nz): (usize, usize, usize)) -> (Vec<i64>, Vec<usize>, Vec<u32>) {
+    let idx = |i: usize, j: usize, k: usize| (k * ny + j) * nx + i;
+    let weights = values(rng, (nx, ny, nz));
+    let arcs = (nz.saturating_sub(1)) * (3 * nx - 2) * (3 * ny - 2);
+    let mut offsets = Vec::with_capacity(weights.len() + 1);
+    offsets.push(0);
+    let mut targets = Vec::with_capacity(arcs);
+    for k in 0..nz {
+        for j in 0..ny {
+            for i in 0..nx {
+                if k > 0 {
+                    for jj in j.saturating_sub(1)..=(j + 1).min(ny - 1) {
+                        for ii in i.saturating_sub(1)..=(i + 1).min(nx - 1) {
+                            targets.push(idx(ii, jj, k - 1) as u32);
+                        }
+                    }
+                }
+                offsets.push(targets.len());
+            }
+        }
+    }
+    (weights, offsets, targets)
+}
+
+/// Block values: waste costs [`WASTE`]. There is one ore body per [`BLOCKS_PER_BODY`] blocks; each is an integer
+/// ellipsoid with radii 3–9 across and 2–5 down, centred at any depth below the surface, and adds a grade of 5 to 25
+/// times the waste cost.
+fn values(rng: &mut Rng, (nx, ny, nz): (usize, usize, usize)) -> Vec<i64> {
     let idx = |i: usize, j: usize, k: usize| (k * ny + j) * nx + i;
     let mut weights = vec![-WASTE; nx * ny * nz];
     for _ in 0..(weights.len() / BLOCKS_PER_BODY).max(1) {
@@ -75,25 +103,7 @@ fn model(rng: &mut Rng, (nx, ny, nz): (usize, usize, usize)) -> (Vec<i64>, Vec<u
             }
         }
     }
-    let arcs = (nz.saturating_sub(1)) * (3 * nx - 2) * (3 * ny - 2);
-    let mut offsets = Vec::with_capacity(weights.len() + 1);
-    offsets.push(0);
-    let mut targets = Vec::with_capacity(arcs);
-    for k in 0..nz {
-        for j in 0..ny {
-            for i in 0..nx {
-                if k > 0 {
-                    for jj in j.saturating_sub(1)..=(j + 1).min(ny - 1) {
-                        for ii in i.saturating_sub(1)..=(i + 1).min(nx - 1) {
-                            targets.push(idx(ii, jj, k - 1) as u32);
-                        }
-                    }
-                }
-                offsets.push(targets.len());
-            }
-        }
-    }
-    (weights, offsets, targets)
+    weights
 }
 
 #[test]
@@ -169,6 +179,75 @@ fn certified_pits_at_scale() {
                 "{name}: {solve_s:.1} s is over KILL-PUSH-PIT's {KILL_LIMIT_S} s"
             );
         }
+        solved += 1;
+    }
+    assert!(solved > 0, "no model named");
+}
+
+/// Slope arcs (`bd-t75z`) on the same ore model, in place of the fixed 3 × 3 arcs.
+/// - Blocks are 10 m cubes.
+/// - The western half is one domain, with 45° walls facing east and south, 50° facing north and 55° facing west.
+///   The eastern half is another, at 60° all round.
+/// - `FMINE_SLOPE_LEVELS` sets K (default 4). `FMINE_SLOPE_MODELS` picks `slope_2e6` (200 × 200 × 50) and
+///   `slope_1e7` (500 × 400 × 50); the default is both.
+#[test]
+#[ignore = "bd-t75z: slope arcs for up to 10^7 blocks; run in release"]
+fn slope_arc_pits_at_scale() {
+    let levels: u32 = std::env::var("FMINE_SLOPE_LEVELS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4);
+    let names =
+        std::env::var("FMINE_SLOPE_MODELS").unwrap_or_else(|_| "slope_2e6,slope_1e7".to_string());
+    let tan = |rise, run| SlopeTangent::new(rise, run).unwrap();
+    let west = vec![
+        Sector::new(1, 0, tan(1, 1)).unwrap(),
+        Sector::new(0, 1, tan(1192, 1000)).unwrap(),
+        Sector::new(-1, 0, tan(1428, 1000)).unwrap(),
+        Sector::new(0, -1, tan(1, 1)).unwrap(),
+    ];
+    let east = vec![Sector::new(1, 0, tan(1732, 1000)).unwrap()];
+    let table = SlopeTable::new(vec![west, east]).unwrap();
+    let mut solved = 0;
+    for name in names.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let dims = match name {
+            "slope_2e6" => (200, 200, 50),
+            "slope_1e7" => (500, 400, 50),
+            _ => panic!("unknown model {name}"),
+        };
+        let mut rng = Rng(0x0715_5CA1 ^ dims.0 as u64);
+        let weights = values(&mut rng, dims);
+        let domain_of: Vec<u16> = (0..weights.len())
+            .map(|b| u16::from(b % dims.0 >= dims.0 / 2))
+            .collect();
+        let grid =
+            BlockGrid::new([dims.0 as u32, dims.1 as u32, dims.2 as u32], [10, 10, 10]).unwrap();
+        let t0 = Instant::now();
+        let arcs = slope_arcs(&grid, &table, &domain_of, levels).unwrap();
+        let arcs_s = t0.elapsed().as_secs_f64();
+        let (full, boundary) = (arcs.full_cone_arcs(), arcs.boundary_blocks());
+        let (offsets, targets) = arcs.into_csr();
+        let p = ClosureProblem::new(weights, offsets, targets).unwrap();
+        let t1 = Instant::now();
+        let s = solve(&p).unwrap();
+        let solve_s = t1.elapsed().as_secs_f64();
+        println!(
+            "{{\"bead\":\"bd-t75z\",\"model\":\"{name}\",\"dims\":[{},{},{}],\"levels\":{levels},\"blocks\":{},\
+             \"arcs\":{},\"full_cone_arcs\":{full},\"boundary_blocks\":{boundary},\"arcs_s\":{arcs_s:.3},\
+             \"value\":{},\"pit_blocks\":{},\"solve_s\":{solve_s:.3}}}",
+            dims.0,
+            dims.1,
+            dims.2,
+            p.node_count(),
+            p.arc_count(),
+            s.value(),
+            s.pit_size(),
+        );
+        assert!(
+            s.pit_size() > 0 && s.value() > 0,
+            "{name}: no profitable pit"
+        );
+        assert!((p.arc_count() as u64) < full);
         solved += 1;
     }
     assert!(solved > 0, "no model named");

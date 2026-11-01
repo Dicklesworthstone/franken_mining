@@ -1,14 +1,17 @@
 # CONTRACT.md — `fmine-optimize`
 
 ## 1. Purpose
-The Pushback optimisation crate. Two slices so far:
+The Pushback optimisation crate. Three slices so far:
 - `pitflow` (`BD-250`, plan §15.4): the ultimate pit as a maximum-weight closure, by Hochbaum's pseudoflow (lowest-label variant, gap termination) on an `i64` CSR precedence graph. Each pit comes with its pseudoflow certificate, which `verify` checks without the solver.
 - `pitflow::shells` (`bd-nzwd`, plan §15.4 and PO-PUSH-3): nested pit shells across an increasing list of exact revenue factors. These are the pit-by-pit sequence from which pushbacks are chosen.
   - Shell `k` is the union of the pit solved at factor `k` and shell `k − 1`.
   - With non-negative revenue that union is a best pit at factor `k`; the module documentation gives the proof.
   - Each shell's closure, and its value against the certified optimum, is checked before it is returned.
+- `pitflow::slope` (`bd-t75z`, plan §15.4: "implicit precedence arcs from slope templates (azimuth sector × geotechnical domain from §14.2)"): precedence arcs for a regular block grid, from exact slope tangents per domain and azimuth sector.
+  - Each block requires every block whose centre lies in its upward cone, up to K layers above.
+  - Arcs implied by shorter ones are dropped, and every block's closure stays the same.
 
-Nothing in the workspace calls it yet. Slope-template arc generation, Bienstock–Zuckerberg, Lagrangian, TopoSort and the stochastic layer are later slices.
+Nothing in the workspace calls it yet. Bienstock–Zuckerberg, Lagrangian, TopoSort and the stochastic layer are later slices.
 
 - **Crate:** `fmine-optimize`
 - **Layer:** E
@@ -20,7 +23,12 @@ Nothing in the workspace calls it yet. Slope-template arc generation, Bienstock�
 - One `i64` value per block, in a caller-chosen integer money unit; the caller scales and rounds, never this crate.
 - Precedence arcs `u → v`, read "taking `u` requires taking `v`", either as CSR (`ClosureProblem::new(weights, offsets, targets)`) or as one list per block (`from_requirements`). Duplicate arcs and self-loops are accepted. Cycles are accepted too: a cycle's blocks are taken together or not at all.
 - For shells (`ShellModel`): one non-negative `i64` revenue and one `i64` cost per block, the same arcs, and strictly increasing `RevenueFactor`s `num / den` with both parts positive. At a factor a block is worth `num · revenue − den · cost`. That is its value scaled by `den`, so no fraction or float is formed.
-- No frame, slope or block geometry: deriving arcs from slope templates is the caller's for now.
+- For slope arcs, all integers:
+  - a `BlockGrid`: block counts east, north and down, and positive block sizes in one length unit;
+  - a `SlopeTable`: per domain, sectors listed counterclockwise, each starting at a boundary direction `(east, north)` and holding a tangent `rise / run`;
+  - one `u16` domain per block, and K, the number of layers a cone spans.
+
+  Block `(i, j, k)` is `(k·ny + j)·nx + i`, with `k = 0` at the top. The slope that applies is the lower block's, for the direction from it to the upper block. No angle in degrees or float crosses the API: the caller turns an angle into a tangent.
 
 ## 3. Outputs
 - `PitSolution`: `in_pit` (one flag per block), `value` (the pit's total, the maximum over all closed sets), `pit_size`, `arc_flow` (the certificate, one flow per arc in CSR order) and `stats` (`PitStats`: mergers, splits, relabels, largest label).
@@ -29,6 +37,10 @@ Nothing in the workspace calls it yet. Slope-template arc generation, Bienstock�
   - `first_shell`, one `u32` per block: the first shell holding it, or `u32::MAX` if none does;
   - `contains(k, b)`;
   - one `ShellSummary` per factor, holding the factor, the shell's value in units of `1 / den`, its block count and the solved pit's block count.
+- `SlopeArcs` provides:
+  - CSR `offsets` and `targets`, ready for `ClosureProblem::new`;
+  - `arc_count`, and `full_cone_arcs`, the count with every cone block required directly;
+  - `boundary_blocks`, the blocks near a side of the grid or a domain contact whose arcs were reduced one by one.
 
 None is a Claim.
 
@@ -43,7 +55,18 @@ None is a Claim.
   - `tests/shells_oracles.rs` checks both against Dinic, which computes the scaled values itself: 150 random graphs, with costs of either sign, and two block models, each over 8 factors from 1/4 to 3.
   - `two_ore_blocks_enter_at_their_factors` is a hand-derived known answer.
   - `negative_revenue_past_the_constructor_is_caught_by_the_value_check` shows the value check refusing a shell that the union rule cannot make optimal.
-- At scale (`tests/scale_pit.rs`, ignored, run by hand), three synthetic block models of about 10⁶ arcs, 10⁷ arcs and 10⁷ blocks each yield a certified, non-empty pit. The smallest also equals Dinic, and the largest must solve within KILL-PUSH-PIT's 600 s. `model_has_the_planned_arc_count_and_shape` checks the generator.
+- Slope arcs give every block exactly the closure that its full K-level cones give. `tests/slope_oracles.rs` checks this against a brute-force oracle with its own angle order and cone test, which tests every block of every layer up to K above:
+  - on 80 random grids, block sizes, slopes, sectors and domain maps (one to three domains, split, layered or noise), every block's closure is equal, and every arc kept is a cone arc;
+  - the same on 60 layered cases, a near-vertical domain above or below a random steep one. A hand case is added where (0, −2, 4) is implied only through a block two layers up, in the other domain. The 80 random cases missed a planted bug in the interior check's vertical test, even at 4,000 rounds; these catch it;
+  - with one slope everywhere, on 40 random grids, no closure leaves its block's true cone at any height;
+  - on two block models with two domains, the pit solved on slope arcs equals Dinic on the full cones and is closed under them.
+- Known answers (unit tests):
+  - 45° on cubic blocks with K = 1 gives the block above and its four edge neighbours, five arcs;
+  - 60° on cubic blocks with K = 3 gives nine;
+  - flat 20 × 20 × 10 blocks at 45° give only the block above;
+  - a direction on a sector boundary takes that sector's slope;
+  - levels past the bottom of the grid change nothing.
+- At scale (`tests/scale_pit.rs`, ignored, run by hand), three synthetic block models of about 10⁶ arcs, 10⁷ arcs and 10⁷ blocks each yield a certified, non-empty pit. The smallest also equals Dinic, and the largest must solve within KILL-PUSH-PIT's 600 s. `model_has_the_planned_arc_count_and_shape` checks the generator. `slope_arc_pits_at_scale` solves the same ore model on slope arcs, at 2·10⁶ and 10⁷ blocks (§8).
 - GATE-PUSH-PIT1 (`tests/minelib_upit.rs`, ignored by default, run by hand): MineLib UPIT instances integer-scaled at 10⁶ are solved with the certificate verified, equal Dinic exactly, and fall within one whole unit of MineLib's published optimum, a band widened by the bound for any values rounded at read time.
 
 ## 5. Refusals
@@ -67,11 +90,23 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input.
   - a shell that is not closed or is worth less than the best pit at its factor, which the construction rules out.
 
   Tests: `bad_input_is_refused`, and the negative-revenue test above.
+- `FMINE-REF-207` (proposed), from `slope`:
+  - a zero block count or size, or `u32::MAX` or more blocks;
+  - a tangent with a zero rise or run;
+  - a sector boundary of `(0, 0)`;
+  - no domains, more than 65,536, or a domain with no sectors;
+  - boundaries that do not go strictly counterclockwise, within one turn, from a domain's first;
+  - K of 0, a domain list of the wrong length, or a block in a domain the table lacks;
+  - reach boxes over `MAX_SCAN` (2²⁶) candidate offsets in all, or a cone over `MAX_PATTERN` (2¹⁶) offsets;
+  - a cone test that would overflow `u128`;
+  - `u32::MAX` or more arcs.
+
+  Tests: `slope::tests::bad_input_is_refused`, one row each.
 
 No value is clamped, rescaled or perturbed to make a problem fit.
 
 ## 6. Determinism class
-`BitwisePortable`, declared on every file and checked by `xtask check-det`. Integer arithmetic only (`i64`, with `i128` sums in `new` and `verify`); no floating point, hashing, threads or platform-dependent iteration order.
+`BitwisePortable`, declared on every file and checked by `xtask check-det`. Integer arithmetic only (`i64`, with `i128` sums in `new` and `verify`, and `i128` and `u128` in `slope`'s angle and cone tests); no floating point, hashing, threads or platform-dependent iteration order.
 
 ## 7. Evidence class of outputs
 Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState` is assigned.
@@ -81,6 +116,11 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - Fewer than `u32::MAX` blocks and arcs, and absolute values summing below 2⁶².
 - When several closed sets tie for the maximum, one of them is returned. Which one is fixed by the input but is not promised to be the smallest or the largest.
 - Shells need non-negative revenue: the union rule rests on it, and the constructor refuses anything else. A sweep costs one full solve per factor, plus O(n + m) for each shell's check.
+- Slope arcs are the usual K-level approximation of the true cone.
+  - Within K layers, a block's closure holds its whole cone.
+  - Further up it holds what chains of K-level cones reach, so a wall may be steeper there than its slope allows. On the 2·10⁶-block model below, the pit's value fell 2.1% from K = 4 to K = 8.
+  - With one slope everywhere, no closure leaves the true cone. Where sectors or domains differ, chains can reach blocks outside a block's own cone: 3,441 of 109,782 closure blocks within K layers, 3.1%, in `slope_oracles`' random cases.
+  - Near sides and domain contacts, each implied arc is tested against at most `WITNESSES` (8) shorter ones, so a few arcs a full search would drop are kept: 59,083 against 58,279 in those cases, 1.4% more. The closure is unchanged.
 - Memory is linear in blocks and arcs. Each arc costs 24 bytes: a target, a tail and two incidence entries (`u32`), and a flow (`i64`). Each block costs two 8-byte and eight 4-byte fields of solver state, on top of its value and offset. The GATE-PUSH-PIT1 process for mclaughlin, Dinic and parsing included, peaked at 7.3 GB RSS.
 - Wall times measured on one machine (aarch64-macos, release, 2026-11-01). They are local runs, not a benchmark suite.
 
@@ -91,6 +131,11 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   | `tests/scale_pit.rs` arcs_1e6 | 115,200 | 982,204 | 0.06 s | — |
   | `tests/scale_pit.rs` arcs_1e7 | 1,166,400 | 10,130,540 | 2.2 s | 0.43 GB, two models in one process |
   | `tests/scale_pit.rs` blocks_1e7 | 10,000,000 | 87,935,596 | 40.7 s | 3.1 GB |
+  | `scale_pit` slope_2e6, K = 4 | 2,000,000 | 33,564,897 of 102,636,304 | 8.3 s, arcs 0.07 s | 1.0 GB |
+  | `scale_pit` slope_2e6, K = 8 | 2,000,000 | 65,223,274 of 620,800,754 | 16.3 s, arcs 0.47 s | 1.8 GB |
+  | `scale_pit` slope_1e7, K = 4 | 10,000,000 | 168,721,897 of 515,782,954 | 51.8 s, arcs 0.33 s | 5.0 GB |
+
+  The slope rows use the blocks_1e7 ore model with slope arcs in place of the 3 × 3 ones. They have 10 m cubes and two domains: 45° to 55° by sector in the west half, and 60° in the east half. "Of" gives the full-cone count.
 
   The synthetic models cost far more per block than MineLib's. blocks_1e7 made 193M relabels against mclaughlin's 1.3M. Time grows faster than linearly in this family: 8.6× the blocks of arcs_1e7 took 18.6× the time.
 - KILL-PUSH-PIT has two halves:
@@ -123,12 +168,14 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - MineFlow (Deutsch et al.) is not run.
 
 ## 10. Known gaps
-- `BD-250` (bd-250) and `bd-nzwd`: no caller in the workspace yet.
+- `BD-250` (bd-250), `bd-nzwd` and `bd-t75z`: no caller in the workspace yet.
+- Slope arcs have no external gate. MineLib's UPIT files come with their arcs already made, and the workspace holds no geotechnical slope data. The slopes in the tests are invented.
+- Slope arcs cover regular grids only: no sub-blocks, rotated grids, or slopes that vary with depth inside a domain.
+- With more than one domain, the prefix sums cost 4 bytes per block on top of the arcs.
 - Shells have no MineLib gate, because the UPIT files give one value per block with revenue and cost not split. Block models and random graphs stand in for it.
 - MineLib's files are not in the repository, because their licence is not recorded. GATE-PUSH-PIT1 is an ignored test, run by hand with `FMINE_MINELIB_DIR`, and CI does not run it.
 - No current-arc pointer: each merger search rescans all the node's incident arcs from the first. Whether a pointer that skips arcs already passed over is valid under these invariants has not been worked out. There is no highest-label or FIFO variant.
 - Not yet built:
-  - slope-template arc generation (plan §15.4; `bd-t75z`);
   - warm starts across revenue factors, since each factor is a fresh solve;
   - a minimal or maximal choice among tied pits. The shell union gives nesting without one.
 - KILL-PUSH-PIT's MineFlow half is not run (§8). Its 10⁷-block half is an ignored test, run by hand on one machine; CI does not run it.
@@ -145,9 +192,15 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `pitflow::shells::NestedShells` (`first_shell`, `shells`, `contains`)
 - `pitflow::shells::ShellSummary`
 - `pitflow::shells::nested_shells`
+- `pitflow::slope::BlockGrid` (`new`, `block_count`, `index`)
+- `pitflow::slope::SlopeTangent` (`new`), `pitflow::slope::Sector` (`new`), `pitflow::slope::SlopeTable` (`new`, `uniform`)
+- `pitflow::slope::SlopeArcs` (`offsets`, `targets`, `arc_count`, `full_cone_arcs`, `boundary_blocks`, `into_csr`)
+- `pitflow::slope::slope_arcs`
+- `pitflow::slope::MAX_PATTERN`, `MAX_SCAN`, `WITNESSES`
 
 ## 12. Proof obligations
 - PO-PUSH-3 (nested shells are monotone in λ when block values are monotone in λ; plan §15.9 names its discharge "property test"):
   - discharged by `tests/shells_oracles.rs`, under §4's conditions;
   - the union lemma in `pitflow::shells`' documentation is the argument for why it holds. It is not machine-checked.
+- No PO-* covers slope arcs. That dropping implied arcs keeps every closure is argued by induction in `pitflow::slope`'s documentation, not machine-checked; `tests/slope_oracles.rs` checks it on random cases.
 - No other PO-* is discharged here. That the certificate conditions imply optimality is the max-flow/min-cut theorem applied to the closure network (Picard 1976), stated in the module documentation and not machine-checked. That pseudoflow terminates with such a certificate is Hochbaum's (2008) result. The tests check values against oracles and do not prove either.

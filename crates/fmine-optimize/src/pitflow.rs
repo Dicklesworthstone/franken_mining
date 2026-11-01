@@ -27,6 +27,7 @@ const NONE: u32 = u32::MAX;
 pub const ABS_VALUE_SUM_LIMIT: i128 = 1 << 62;
 
 pub mod shells;
+pub mod slope;
 
 fn refuse(detail: String) -> Refusal {
     Refusal::new(RefusalCode::NumericalCertificateFailed207, detail)
