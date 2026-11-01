@@ -204,7 +204,7 @@ Deterministic error collection across all files in lexicographical path order.
 ## 9. Lifted Code & Foundation Dependencies
 `fmine-registry` (the source registries and TOML subset), `fmine-calib` (the pure forecast record),
 `fmine-io` (the shared offline RFC 3161 verifier) and `fmine-public` (the label-anchored Mine Stats reader,
-for `forecast-baseline`); OpenSSL 3.x on `PATH` for `forecast-record-verify`, through the I/O adapter,
+for `forecast-baseline`); OpenSSL 1.1 or 3.x on `PATH` for `forecast-record-verify`, through the I/O adapter,
 and `git` for `forecast-rules-order` only.
 
 ## 10. Non-Goals & Scope Boundary

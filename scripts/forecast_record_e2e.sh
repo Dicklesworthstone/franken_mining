@@ -247,7 +247,7 @@ refused registered_sha "differs from the source registry" xt forecast-record-has
 
 d="$scratch/cutoff_after_proof"
 mkdir -p "$d"
-cp "$rec/rules.toml" "$rec/forecasts.csv" "$d/"
+cp "$rec/rules.toml" "$rec/rules.sha256" "$rec/forecasts.csv" "$d/"
 write_manifest "$d" "$(date -u -r $((now + 86400)) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null ||
   date -u -d "@$((now + 86400))" +%Y-%m-%dT%H:%M:%SZ)" Synthetic_Workbook.xlsx "$ab"
 if (xt forecast-record-hash "$d" >/dev/null) && stamp "$d"; then

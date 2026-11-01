@@ -34,8 +34,8 @@ the consumer's semantic validator. No caller-supplied record timestamp enters th
 validation, complete write and `sync_all` does the committed in-memory snapshot/head advance.
 
 DESIGN (BD-076): `forecast::timestamp` is the shared offline RFC 3161 verifier for the CLI and xtask. It
-authenticates a SHA-256 message imprint against an explicitly supplied PEM root bundle using OpenSSL 3.x.
-Both text decoding and signature verification receive the same bounded receipt snapshot through stdin.
+authenticates a SHA-256 message imprint against an explicitly supplied PEM root bundle using OpenSSL 1.1 or 3.x.
+Text decoding, embedded-certificate extraction and signature verification use the same bounded receipt snapshot.
 `fmine-runtime::process` owns the scoped pipe workers, bounded stdout/stderr capture, and child cleanup;
 the IO layer retains OpenSSL configuration, trust-input fingerprints and typed verification refusals.
 The decoded generation time is provisional until verification succeeds; certificate validity is checked at
@@ -122,9 +122,11 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   no authentication by itself. Each stated accuracy component rounds upward to whole seconds; a nonzero
   fractional generation time widens the upper endpoint by one second. Unspecified components add zero,
   preserving the existing frozen-record verifier's rule.
-  The intermediate-aware entry point accepts an optional bounded PEM file passed only as `-untrusted`;
-  these certificates can complete a chain but never become additional trust anchors. Their fingerprints
-  are checked before and after verification as for the explicitly selected root bundle.
+  The intermediate-aware entry point combines the receipt's embedded certificates with an optional bounded
+  PEM file, passed only as `-untrusted`. An exclusively created private temporary input supplies that chain
+  while the receipt stays on stdin; its owned files are cleaned up after use. These certificates can complete
+  a chain but never become additional trust anchors. Supplied intermediate fingerprints are checked before
+  and after verification as for the explicitly selected root bundle.
 
 ## 5. Guards & Typed Refusals
 - `G-BULL-1`: formula-error cells and `hidden`/`veryHidden` sheets go to `Workbook::quarantined`. Hidden sheets are
@@ -167,7 +169,7 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   fields, malformed fractions, invalid subsecond accuracy components, overflow, wrong imprint algorithm,
   failed signature/chain checks and changed root fingerprints refuse. Missing/unreadable inputs use `506`,
   unavailable OpenSSL uses `202`, and invalid proofs use `505`. OpenSSL runs with `LC_ALL=C`, an empty local
-  configuration and explicit `-CAfile`/`-CAstore`; `SSL_CERT_FILE` names that same file and `SSL_CERT_DIR`
+  configuration and explicit `-CAfile`; `SSL_CERT_FILE` names that same file and `SSL_CERT_DIR`
   names the non-directory file, preventing an ambient hashed trust directory. No network store is selected.
   Both the original and resolved root paths are fingerprinted again before a verified result is returned.
 
@@ -200,7 +202,8 @@ for current reuse; an unpinned replay establishes only internal consistency of t
 - Timestamp parser tests retain exact whole/fractional-second and per-component rounding behavior, refusing
   ambiguous, malformed and overflowing fields. The separately invoked OpenSSL test checks the committed
   DigiCert rules receipt against its expected digest and selected root, and refuses a changed digest or
-  unrelated FreeTSA root. It is an offline integration test, not evidence that caller-chosen roots are trusted.
+  unrelated FreeTSA root, including when the correct root is supplied only as an untrusted certificate.
+  It is an offline integration test, not evidence that caller-chosen roots are trusted.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Missing files, corrupt ZIP or DEFLATE streams and malformed workbooks fail closed with `IoError`. No fallbacks.
@@ -219,7 +222,7 @@ would permit a concurrent withdrawal race.
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim` (V to S0), and `fmine-runtime` (V to S1, explicit clock
   and owned bounded subprocesses).
 - `fmine-calib` supplies the shared `ProofTimes` and UTC parser (V to K0); timestamp verification invokes
-  OpenSSL 3.x on `PATH` with Unix `/dev/stdin` and `/dev/null`. Unsupported installations refuse.
+  OpenSSL 1.1 or 3.x on `PATH` with Unix `/dev/stdin` and `/dev/null`. Unsupported installations refuse.
 
 ## 10. Non-Goals & Scope Boundary
 Reads cells and adapts the reliance model to local files; does not interpret tables (`fmine-public`) or compute

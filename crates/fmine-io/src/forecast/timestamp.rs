@@ -1,12 +1,13 @@
 //! DESIGN (BD-076): offline RFC 3161 verification with caller-selected trust roots.
-//! The receipt is read once; both OpenSSL processes consume that exact snapshot through stdin.
+//! The receipt is read once; OpenSSL consumes that snapshot or bytes derived from it through stdin.
 //! Decoded time is provisional until signature, imprint and certificate checks succeed at genTime.
 //! This authenticates a TSA assertion under the supplied roots, not the caller's choice of roots.
 
-use std::fs::{self, File};
-use std::io::Read;
-use std::path::Path;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fmine_calib::record::{ProofTimes, parse_utc};
 use fmine_core::hash::{Digest32, sha256};
@@ -169,6 +170,11 @@ pub fn proof_times_from_text(text: &str) -> Result<ProofTimes, String> {
 }
 
 fn openssl(command: &mut Command, receipt: &[u8], roots: &Path) -> Result<String, Refusal> {
+    String::from_utf8(openssl_bytes(command, receipt, roots)?)
+        .map_err(|_| invalid("OpenSSL timestamp text is not UTF-8"))
+}
+
+fn openssl_bytes(command: &mut Command, input: &[u8], roots: &Path) -> Result<Vec<u8>, Refusal> {
     // Explicit local configuration and trust inputs prevent environment-supplied stores/providers.
     // A regular file cannot serve as a default hashed CA directory. ts 3.x has no -no-CApath option.
     command
@@ -179,7 +185,7 @@ fn openssl(command: &mut Command, receipt: &[u8], roots: &Path) -> Result<String
         .env_remove("OPENSSL_CONF_INCLUDE")
         .env_remove("OPENSSL_MODULES")
         .env_remove("OPENSSL_ENGINES");
-    let captured = output_with_input(command, receipt, MAX_TEXT_BYTES).map_err(|e| match e {
+    let captured = output_with_input(command, input, MAX_TEXT_BYTES).map_err(|e| match e {
         ProcessError::Spawn(_) => Refusal::new(
             RefusalCode::NotObservable202,
             format!("cannot start offline OpenSSL timestamp verifier: {e}"),
@@ -190,7 +196,7 @@ fn openssl(command: &mut Command, receipt: &[u8], roots: &Path) -> Result<String
     let output = captured.output;
     if !output.status.success() {
         return Err(invalid(format!(
-            "openssl ts failed: {} {}",
+            "OpenSSL timestamp command failed: {} {}",
             String::from_utf8_lossy(&output.stdout).trim(),
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -200,11 +206,85 @@ fn openssl(command: &mut Command, receipt: &[u8], roots: &Path) -> Result<String
             "cannot feed complete timestamp snapshot: {e}"
         )));
     }
-    String::from_utf8(output.stdout).map_err(|_| invalid("OpenSSL timestamp text is not UTF-8"))
+    Ok(output.stdout)
+}
+
+/// DESIGN: the immutable receipt occupies stdin. OpenSSL 1.1 needs embedded certificates explicitly
+/// supplied as a second input, so a private owned file holds only the bounded untrusted PEM snapshot.
+struct TemporaryChain {
+    directory: PathBuf,
+    path: PathBuf,
+}
+
+impl TemporaryChain {
+    fn create(bytes: &[u8]) -> Result<Self, Refusal> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        if bytes.is_empty() || bytes.len() as u64 > MAX_INPUT_BYTES {
+            return Err(unavailable(
+                "combined timestamp chain exceeds its byte bound",
+            ));
+        }
+        for _ in 0..128 {
+            let id = NEXT.fetch_add(1, Ordering::Relaxed);
+            let directory =
+                std::env::temp_dir().join(format!("fmine-timestamp-{}-{id}", std::process::id()));
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            match builder.create(&directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(unavailable(format!(
+                        "cannot create timestamp scratch directory: {error}"
+                    )));
+                }
+            }
+            let path = directory.join("untrusted.pem");
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = match options.open(&path) {
+                Ok(file) => file,
+                Err(error) => {
+                    // This attempt owns the empty directory only; never remove a file it did not create.
+                    let _ = fs::remove_dir(&directory);
+                    return Err(unavailable(format!(
+                        "cannot create timestamp chain snapshot: {error}"
+                    )));
+                }
+            };
+            let snapshot = Self { directory, path };
+            let written = file.write_all(bytes);
+            drop(file);
+            written.map_err(|error| {
+                unavailable(format!("cannot write timestamp chain snapshot: {error}"))
+            })?;
+            return Ok(snapshot);
+        }
+        Err(unavailable(
+            "cannot allocate a private timestamp scratch directory",
+        ))
+    }
+}
+
+impl Drop for TemporaryChain {
+    fn drop(&mut self) {
+        // Only these two exclusively created paths belong to this verification. Cleanup is nonrecursive.
+        let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_dir(&self.directory);
+    }
 }
 
 /// Verify a SHA-256 RFC 3161 reply offline against explicitly supplied PEM trust roots.
-/// Requires OpenSSL 3.x and Unix `/dev/stdin`; unsupported installations refuse. Certificate
+/// Requires OpenSSL 1.1 or newer and Unix `/dev/stdin`; unsupported installations refuse. Certificate
 /// validity is checked at the authenticated genTime, never today's date, and is never disabled.
 /// Roots are fingerprinted before and after verification; a changed file invalidates the result.
 pub fn verify_rfc3161(
@@ -244,13 +324,21 @@ pub fn verify_rfc3161_with_intermediates(
         ));
     }
     let (times, generated) = parsed_times(&text).map_err(invalid)?;
+    let token = openssl_bytes(
+        Command::new("openssl").args(["ts", "-reply", "-in", "/dev/stdin", "-token_out"]),
+        &receipt,
+        &root_path,
+    )?;
+    let mut chain = openssl_bytes(
+        Command::new("openssl").args(["pkcs7", "-inform", "DER", "-print_certs"]),
+        &token,
+        &root_path,
+    )?;
     let mut command = Command::new("openssl");
     command
         .args(["ts", "-verify", "-in", "/dev/stdin", "-digest"])
         .arg(digest.to_hex())
         .arg("-CAfile")
-        .arg(&root_path)
-        .arg("-CAstore")
         .arg(&root_path)
         .arg("-attime")
         .arg(generated.to_string());
@@ -265,13 +353,30 @@ pub fn verify_rfc3161_with_intermediates(
                     "timestamp intermediates changed while resolving their path",
                 ));
             }
-            command.arg("-untrusted").arg(&resolved);
+            chain.push(b'\n');
+            chain.extend(bytes);
             Ok((path, resolved, hash))
         })
         .transpose()?;
+    // ts 1.1/3.x creates an empty trust store and adds explicitly supplied roots. CAfile is enough;
+    // CAstore is unsupported by 1.1. Embedded and supplied certificates enter only the untrusted chain.
+    let temporary_chain = if chain.is_empty() {
+        None
+    } else {
+        let snapshot = TemporaryChain::create(&chain)?;
+        command.arg("-untrusted").arg(&snapshot.path);
+        Some(snapshot)
+    };
     let verified = openssl(&mut command, &receipt, &root_path)?;
     if verified.trim() != "Verification: OK" {
         return Err(invalid("openssl ts did not report Verification: OK"));
+    }
+    if let Some(snapshot) = &temporary_chain
+        && read_bounded(&snapshot.path)? != chain
+    {
+        return Err(invalid(
+            "timestamp untrusted snapshot changed during verification",
+        ));
     }
     if sha256(&read_bounded(trusted_roots)?) != trust_roots_sha256
         || sha256(&read_bounded(&root_path)?) != trust_roots_sha256
@@ -298,6 +403,34 @@ mod tests {
     use fmine_calib::record::{format_utc, parse_hex32};
 
     const TEXT: &str = "Time stamp: Oct 30 14:04:42 2026 GMT\nAccuracy: 0x01 seconds, unspecified millis, unspecified micros\n";
+
+    #[test]
+    fn temporary_chain_is_private_and_cleans_only_its_owned_paths() {
+        let bytes = b"synthetic transport bytes, not a certificate";
+        let first = TemporaryChain::create(bytes).unwrap();
+        let second = TemporaryChain::create(bytes).unwrap();
+        assert_ne!(first.directory, second.directory);
+        assert_eq!(read_bounded(&first.path).unwrap(), bytes);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&first.directory).unwrap().permissions().mode() & 0o077,
+                0
+            );
+            assert_eq!(
+                fs::metadata(&first.path).unwrap().permissions().mode() & 0o077,
+                0
+            );
+        }
+        let removed = first.directory.clone();
+        drop(first);
+        assert!(!removed.exists());
+        assert_eq!(read_bounded(&second.path).unwrap(), bytes);
+        let remaining = second.directory.clone();
+        drop(second);
+        assert!(!remaining.exists());
+    }
 
     #[test]
     fn timestamp_accuracy_rounds_outward_without_floating_point() {
@@ -344,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires OpenSSL 3.x; exercises committed public timestamp and roots offline"]
+    #[ignore = "requires OpenSSL 1.1 or newer; exercises committed public timestamp and roots offline"]
     fn timestamp_public_receipt_binds_digest_and_explicit_roots() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let receipt = root.join("forecasts/fy2026/rules.tsr");
@@ -372,6 +505,18 @@ mod tests {
         assert_eq!(
             verify_rfc3161(&receipt, &other, digest).unwrap_err().code,
             "FMINE-REF-505"
+        );
+        // Supplying the correct root only as an untrusted intermediate cannot authorize the receipt
+        // under the unrelated FreeTSA trust root. Supplying it with the correct authority remains valid.
+        assert_eq!(
+            verify_rfc3161_with_intermediates(&receipt, &other, digest, Some(&roots))
+                .unwrap_err()
+                .code,
+            "FMINE-REF-505"
+        );
+        assert_eq!(
+            verify_rfc3161_with_intermediates(&receipt, &roots, digest, Some(&roots)).unwrap(),
+            verified
         );
     }
 }
