@@ -726,7 +726,24 @@ None: every failure is a usage error or a typed refusal.
   definition metadata into the report. Gold/GEO metal, attributable contained basis, ex-A&D scope, three-year
   window, operand units, signs and price-deck key are explicit. Signed depletion must remain strictly positive
   throughout its rounding interval. Shared amounts are checked jointly; shared quoted-rate reuse refuses as
-  unsupported. No GEO conversion is performed, and no complete real reserve-replacement gate is asserted.
+  unsupported. Replacement ratios consume already-converted GEO amounts; they do not perform a conversion
+  or establish the complete real reserve-replacement gate.
+- DESIGN (BD-340.S4, BD-070): the same definitions path accepts `geo_check` and linked `geo_candidate`
+  declarations over existing reserve rows. `payload.issuer_reserves.geo_checks` retains the exact stated-deck
+  calculation under the declared convention, its proper/point-only/empty fit, and a separate strict-convention
+  comparison across explicit candidate decks. Candidate prices are verified independently of their unrelated
+  reserve amounts. An unusable candidate prevents discovery instead of disappearing from the population;
+  any usable stated-deck result stays visible. Equal-ratio distinct decks remain ambiguous, and identical
+  economic parameters retain every source provider. `checked` and `unavailable` are separate from arithmetic
+  fit. No finding replaces an issuer value, registered deck, current filing or document convention.
+- DESIGN (BD-274): `cutoff` and linked `cutoff_input` declarations use the same verified document/reader
+  loader and delegate to `fmine-metrics::cutoff::source`. Every input comes from the declared technical report,
+  with matching period, explicit role units, physical/model basis and separate gold-price basis. Constant
+  recovery and TCM-over-gold recovery use the existing reproduction kernel; the gold price is an exact quoted
+  parameter and other inputs retain displayed rounding bounds. `payload.checks.cutoffs.rows` distinguishes
+  `reproduced`, `within_input_rounding` and `conflict` from `refused` inputs. Markdown renders the same evidence,
+  exact results and bounds. Arithmetic conflicts are inspection findings with exit zero; source failures keep
+  their typed refusals. This does not select an operating cutoff or classify a resource or reserve.
 - DESIGN (BD-341): `track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]` is a read-only
   adapter over agreed PDF transcriptions, canonical annual Mine Stats Claims and `fmine-calib::guidance_scores`.
   `--synthetic` uses invented inputs through the same adapter. JSON is the default (`--json` is an explicit

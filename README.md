@@ -133,7 +133,7 @@ their envelope has no identity-ledger certificate or issuance anchor. The source
 separately and does not certify the model. Missing IDs and altered source files refuse instead of returning
 a stale cached Claim. Recovery results remain descriptive and uncalibrated.
 
-### Check table identities, reserve roll-forwards and replacement ratios
+### Check cited tables, reserve calculations and cutoffs
 
 DESIGN (BD-340.S5/S8): inspect the existing workbook identities with their source citations and ledger
 certificate, or supply explicit definitions for tables transcribed from registered PDFs:
@@ -278,6 +278,98 @@ are reported separately from amount comparisons, and the latest filing still car
 quantities on different units, ownership bases or contained/recoverable supports are never silently combined.
 The projection retains the supplied declared population; it does not prove complete filing coverage, establish
 an append-only history, normalize a changed price deck or create an `EstimateStatement` or reserve classification.
+
+#### Check GEO against its printed price deck
+
+DESIGN (BD-340.S4, BD-070): `[[geo_check]]` checks **GEO = gold + copper × (copper price / gold price)**
+using the existing reserve rows and their cited prices. This invented addition assumes that `gold_net_2030`,
+`copper_net_2030` and `geo_net_2030` have already been declared as reserve rows, with gold/GEO in `moz` and
+copper in `mlb`. They must share their document, subject, item, year, period, ownership, support and convention.
+The GEO row must declare `deck = "quoted"` and both `gold_price_quantity` and `copper_price_quantity`.
+
+```toml
+[[geo_check]]
+id = "geo_conversion_2030"
+gold_row = "gold_net_2030"
+copper_row = "copper_net_2030"
+geo_row = "geo_net_2030"
+
+# Optional: another declared reserve row supplying both quoted price readings.
+[[geo_candidate]]
+check = "geo_conversion_2030"
+row = "geo_net_2031"
+```
+
+The primary deck always comes from `geo_net_2030`. An optional candidate supplies a separate price hypothesis;
+its unrelated reserve amount need not be available. Every price still requires agreed readings with its source
+hash, locator, unit, period and basis. For an invented known answer, 10.0 Moz gold and 1,000 Mlb copper at
+$1,500/oz and $3.00/lb give 12.0 Moz GEO. Those numbers belong in the source readings, never in these definitions.
+
+`payload.issuer_reserves.geo_checks` retains the exact converted and reported intervals. A completed check has
+`status = "checked"`; its `declared.fit` is `proper`, `points` for boundary-only contact, or `empty` for an
+arithmetic mismatch. Alternative-deck discovery separately reports `found`, `ambiguous` or `no_fit` across the
+explicit candidates and strict conventions. It never replaces the printed deck or the declared convention.
+Distinct decks with the same price ratio remain ambiguous. Missing or unusable evidence gives `unavailable`;
+a missing candidate price blocks discovery while retaining any usable primary-deck calculation.
+
+#### Reproduce a technical report's cutoff from its cited assumptions
+
+DESIGN (BD-274): the same command accepts `[[cutoff]]` declarations whose inputs come from one registered
+`technical_report`. This complete, invented definition file selects four agreed quantities; it contains no
+numerical assumptions:
+
+```toml
+schema = "fmine.table-identities.v1"
+issuer = "demo"
+
+[[cutoff]]
+id = "example_cutoff"
+doc = "Synthetic_Technical_Report.pdf"
+subject = "Example Mine"
+period = "effective_2030_12_31"
+basis = "full;resource"
+price_basis = "resource_price"
+unit = "g_per_t"
+recovery = "constant_percent"
+
+[[cutoff_input]]
+cutoff = "example_cutoff"
+role = "published"
+quantity = "reported_cutoff"
+
+[[cutoff_input]]
+cutoff = "example_cutoff"
+role = "gold_price"
+quantity = "resource_gold_price"
+
+[[cutoff_input]]
+cutoff = "example_cutoff"
+role = "cost"
+quantity = "processing_cost"
+
+[[cutoff_input]]
+cutoff = "example_cutoff"
+role = "recovery"
+quantity = "metallurgical_recovery"
+```
+
+Run it with `fmine check tables --issuer demo --definitions local/cutoffs.toml --format markdown`. The published
+cutoff uses `g_per_t`, costs use `usd_per_t`, recovery uses `percent`, and the gold price uses `usd_per_oz`.
+Every input must match the declared period. The gold price uses `price_basis`; the other inputs use `basis`.
+Multiple `cost` rows explicitly add their separate costs. Optional `revenue_deduction` and `ounce_deduction`
+inputs use `percent` and `usd_per_oz`, respectively.
+
+The gold price is an exact quoted parameter; the other inputs retain their displayed rounding bounds.
+For example, invented readings of $100.0/t cost, 50.0% recovery and $3,110.34768/oz gold reproduce 2.00 g/t.
+`recovery = "tcm_over_gold"` instead requires `recovery_intercept` (`percent`), `recovery_slope` (`g_per_t`)
+and `tcm` (`percent`) inputs. The alternative output unit is `oz_per_short_ton`; an optional `published_metric`
+input checks its printed `g_per_t` equivalent. Cost inputs remain USD per metric tonne.
+
+Results appear under `payload.checks.cutoffs.rows`: `reproduced`, `within_input_rounding`, or `conflict` for a
+completed arithmetic comparison; `refused` with its reason when evidence or assumptions are unusable. JSON
+and Markdown retain exact results, input bounds, citations and source hashes. A conflict remains a finding
+with exit zero. Missing/altered document bytes and disagreeing readers retain the command's typed refusal.
+The result reproduces declared assumptions; it does not choose an operating cutoff or classify a reserve.
 
 ### Check cited numbers in a draft
 

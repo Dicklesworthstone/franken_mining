@@ -6,6 +6,7 @@ check_tables.rs cases; Rust separately retains library-versus-binary rendering p
 """
 
 import argparse
+from fractions import Fraction
 import hashlib
 import json
 from pathlib import Path
@@ -186,6 +187,168 @@ def reserve_workspace(tag, mode="normal", reverse=False):
                 f'table = "Invented reserves"\nrow = "Alternative {quantity}"\ncol = "2024"\n'
                 f'token = "{token}"\nquantity = "{quantity}"\nunit = "{unit}"\n'
                 f'basis = "{basis}"\nperiod = "2024FY"\nreader = "reader_c"\n'
+            )
+    (root / "registries/sources/table_test.toml").write_text(source, encoding="utf-8")
+    (root / "registries/transcriptions/table_test.toml").write_text(readings, encoding="utf-8")
+    (root / DEFINITIONS).write_text(definitions, encoding="utf-8")
+    return root
+
+
+def geo_workspace(tag, mode="matching", reverse=False):
+    """Known-answer amounts and independently cited price hypotheses, all invented."""
+    root = workspace(f"geo-{tag}")
+    source = (root / "registries/sources/table_test.toml").read_text(encoding="utf-8")
+    hashes = {}
+    for file in ("Geo_Statement.pdf", "Candidate_Deck.pdf"):
+        contents = f"%PDF-1.7 invented GEO source {file}; no actual issuer data".encode()
+        (root / "documents" / file).write_bytes(contents)
+        hashes[file] = digest(contents)
+        source += (
+            f'\n[[document]]\nfile = "{file}"\ndir = "documents"\nkind = "mda"\n'
+            f'url = "https://example.invalid/{file}"\nurl_basis = "W1 table"\n'
+            'published_at = "2026-02-01"\npublished_at_basis = "FACT: invented test date"\n'
+            f'pages = 1\nbytes = {len(contents)}\nsha256 = "{hashes[file]}"\n'
+        )
+    specs = [
+        ("gold", "gold", "moz", "10.0", "Geo_Statement.pdf"),
+        ("copper", "copper", "mlb", "1000", "Geo_Statement.pdf"),
+        ("geo", "geo", "moz", "13.0" if mode == "mismatched" else "12.0", "Geo_Statement.pdf"),
+        ("candidate", "geo", "moz", "12.0", "Candidate_Deck.pdf"),
+    ]
+    if reverse:
+        specs.reverse()
+    definitions = 'schema = "fmine.table-identities.v1"\nissuer = "table_test"\n'
+    entries = []
+    for row_id, metal, unit, token, file in specs:
+        definitions += (
+            f'\n[[reserve_row]]\nid = "{row_id}"\ndoc = "{file}"\n'
+            f'quantity = "{row_id}_amount"\nsubject = "Invented Mine"\nitem = "net_change"\n'
+            f'reserve_year = 2024\nperiod = "2024FY"\nmetal = "{metal}"\nunit = "{unit}"\n'
+            'ownership = "full"\nsupport = "contained"\nconvention = "closed"\n'
+        )
+        if metal == "geo":
+            definitions += (
+                'deck = "quoted"\ndeck_period = "2024FY"\ndeck_basis = "reserve_prices"\n'
+                f'gold_price_quantity = "{row_id}_gold_price"\ncopper_price_quantity = "{row_id}_copper_price"\n'
+            )
+            gold_price, copper_price = ("1500", "3.00") if row_id == "geo" else ("1500", "4.50")
+            if row_id == "candidate" and mode == "same_ratio":
+                gold_price, copper_price = "1800", "3.60"
+            if row_id == "candidate" and mode == "duplicate_deck":
+                gold_price, copper_price = "1500", "3.00"
+            entries.extend([
+                (file, f"{row_id}_gold_price", gold_price, "usd_per_oz", "reserve_prices"),
+                (file, f"{row_id}_copper_price", copper_price, "usd_per_lb", "reserve_prices"),
+            ])
+        else:
+            definitions += 'deck = "unstated"\n'
+        if mode == "wrong_unit" and row_id == "copper":
+            unit = "kt"
+        entries.append((file, f"{row_id}_amount", token, unit, f"{metal};full;contained"))
+    definitions += (
+        '\n[[geo_check]]\nid = "conversion"\ngold_row = "gold"\ncopper_row = "copper"\ngeo_row = "geo"\n'
+        '\n[[geo_candidate]]\ncheck = "conversion"\nrow = "candidate"\n'
+    )
+    if reverse:
+        entries.reverse()
+    readings = 'schema = "fmine.transcriptions.v1"\nissuer = "table_test"\n'
+    for file, quantity, token, unit, basis in entries:
+        if (mode, quantity) in (
+            ("missing_amount", "copper_amount"),
+            ("missing_candidate_price", "candidate_copper_price"),
+            ("missing_candidate_amount", "candidate_amount"),
+        ):
+            continue
+        readers = ("reader_b", "reader_a") if reverse else ("reader_a", "reader_b")
+        for reader in readers:
+            if mode == "pending_price" and quantity == "geo_gold_price" and reader == "reader_b":
+                continue
+            readings += (
+                f'\n[[entry]]\ndoc = "{file}"\ndoc_sha256 = "{hashes[file]}"\npage = 1\n'
+                f'table = "Invented GEO conversion"\nrow = "{quantity}"\ncol = "2024"\n'
+                f'token = "{token}"\nquantity = "{quantity}"\nunit = "{unit}"\n'
+                f'basis = "{basis}"\nperiod = "2024FY"\nreader = "{reader}"\n'
+            )
+    (root / "registries/sources/table_test.toml").write_text(source, encoding="utf-8")
+    (root / "registries/transcriptions/table_test.toml").write_text(readings, encoding="utf-8")
+    (root / DEFINITIONS).write_text(definitions, encoding="utf-8")
+    return root
+
+
+def cutoff_workspace(tag, mode="constant", reverse=False):
+    """Exact invented cut-off assumptions read through the same pinned-source loader."""
+    root = workspace(f"cutoff-{tag}")
+    file = "Technical_Report.pdf"
+    contents = b"%PDF-1.7 invented cutoff assumptions; not an authentic technical report"
+    (root / "documents" / file).write_bytes(contents)
+    source = (root / "registries/sources/table_test.toml").read_text(encoding="utf-8")
+    kind = "investor_deck" if mode == "wrong_source" else "technical_report"
+    source += (
+        f'\n[[document]]\nfile = "{file}"\ndir = "documents"\nkind = "{kind}"\n'
+        f'url = "https://example.invalid/{file}"\nurl_basis = "W1 table"\n'
+        'published_at = "2026-02-01"\npublished_at_basis = "FACT: invented test date"\n'
+        f'pages = 1\nbytes = {len(contents)}\nsha256 = "{digest(contents)}"\n'
+    )
+    unit = "oz_per_short_ton" if mode == "short_ton" else "g_per_t"
+    model = "tcm_over_gold" if mode == "grade_dependent" else "constant_percent"
+    published = {
+        "grade_dependent": "1.50", "short_ton": "0.0583", "deductions": "2.50",
+        "within_rounding": "2.01", "conflict": "3.00",
+    }.get(mode, "2.00")
+    entries = [
+        ("published", "cutoff_published", published, unit, "gold;dry;model"),
+        ("gold_price", "cutoff_gold_price", "3110.34768", "usd_per_oz", "evaluation_price"),
+        ("cost", "cutoff_cost", "100" if mode == "within_rounding" else "100.0", "usd_per_t", "gold;dry;model"),
+    ]
+    if mode == "grade_dependent":
+        entries.extend([
+            ("recovery_intercept", "cutoff_intercept", "100.0", "percent", "gold;dry;model"),
+            ("recovery_slope", "cutoff_slope", "50.0", "g_per_t", "gold;dry;model"),
+            ("tcm", "cutoff_tcm", "1.00", "percent", "gold;dry;model"),
+        ])
+    else:
+        entries.append(("recovery", "cutoff_recovery", "50.0", "percent", "gold;dry;model"))
+    if mode == "short_ton":
+        entries.append(("published_metric", "cutoff_metric", "2.00", "g_per_t", "gold;dry;model"))
+    if mode == "deductions":
+        entries[2] = ("cost", "cutoff_cost", "60.0", "usd_per_t", "gold;dry;model")
+        entries.extend([
+            ("cost", "cutoff_sustaining", "40.0", "usd_per_t", "gold;dry;model"),
+            ("revenue_deduction", "cutoff_tax", "10.0", "percent", "gold;dry;model"),
+            ("ounce_deduction", "cutoff_refining", "311.034768", "usd_per_oz", "gold;dry;model"),
+        ])
+    if reverse:
+        entries.reverse()
+    definitions = (
+        'schema = "fmine.table-identities.v1"\nissuer = "table_test"\n'
+        f'\n[[cutoff]]\nid = "cutoff_example"\ndoc = "{file}"\nsubject = "Invented Mine"\n'
+        'period = "effective_2026_01_01"\nbasis = "gold;dry;model"\nprice_basis = "evaluation_price"\n'
+        f'unit = "{unit}"\nrecovery = "{model}"\n'
+    )
+    readings = 'schema = "fmine.transcriptions.v1"\nissuer = "table_test"\n'
+    for role, quantity, token, reading_unit, basis in entries:
+        definitions += f'\n[[cutoff_input]]\ncutoff = "cutoff_example"\nrole = "{role}"\nquantity = "{quantity}"\n'
+        if mode == "missing_cost" and role == "cost":
+            continue
+        if mode == "wrong_unit" and role == "cost":
+            reading_unit = "usd_per_short_ton"
+        if mode == "wrong_price_basis" and role == "gold_price":
+            basis = "different_price_assumption"
+        if mode == "negative_cost" and role == "cost":
+            token = "(100.0)"
+        if mode == "invalid_recovery" and role == "recovery":
+            token = "150.0"
+        if mode == "range_input" and role == "cost":
+            token = "99.0 - 101.0"
+        for reader in ("reader_b", "reader_a") if reverse else ("reader_a", "reader_b"):
+            if mode == "pending_price" and role == "gold_price" and reader == "reader_b":
+                continue
+            actual_token = "100.1" if mode == "disagreed_cost" and role == "cost" and reader == "reader_b" else token
+            readings += (
+                f'\n[[entry]]\ndoc = "{file}"\ndoc_sha256 = "{digest(contents)}"\npage = 1\n'
+                f'table = "Invented cutoff assumptions"\nrow = "{quantity}"\ncol = "Model"\n'
+                f'token = "{actual_token}"\nquantity = "{quantity}"\nunit = "{reading_unit}"\n'
+                f'basis = "{basis}"\nperiod = "effective_2026_01_01"\nreader = "{reader}"\n'
             )
     (root / "registries/sources/table_test.toml").write_text(source, encoding="utf-8")
     (root / "registries/transcriptions/table_test.toml").write_text(readings, encoding="utf-8")
@@ -377,6 +540,203 @@ class TableScenarios(unittest.TestCase):
         ):
             envelope, raw = invoke(root, arguments=args)
             self.assertEqual(envelope["exit_code"], 2, raw)
+
+
+class CutoffScenarios(unittest.TestCase):
+    def cutoff_report(self, root):
+        envelope, raw = successful(root)
+        section = envelope["payload"]["checks"]["cutoffs"]
+        self.assertEqual(section["schema"], "fmine.source-cutoffs.v1")
+        self.assertFalse(section["gate_eligible"])
+        self.assertEqual(len(section["rows"]), 1, raw)
+        self.assertEqual(len(section["digest"]), 64)
+        self.assertEqual(section["rows"][0]["id"], "cutoff_example")
+        return envelope, section
+
+    def test_constant_recovery_cutoff_is_computed_from_cited_exact_inputs(self):
+        root = cutoff_workspace("constant")
+        envelope, section = self.cutoff_report(root)
+        row = section["rows"][0]
+        self.assertEqual(row["status"], "reproduced")
+        result = row["result"]
+        self.assertEqual(Fraction(result["exact"]["computed"]), 2)
+        self.assertEqual(Fraction(result["exact"]["low"]), Fraction(1999, 1001))
+        self.assertEqual(Fraction(result["exact"]["high"]), Fraction(2001, 999))
+        self.assertEqual(result["computed"], "2.000000")
+        self.assertIsNone(row["refusal"])
+        self.assertEqual(len(row["evidence"]), 4)
+        text = compact(section)
+        for quantity in ("cutoff_published", "cutoff_gold_price", "cutoff_cost", "cutoff_recovery"):
+            self.assertIn(quantity, text)
+        self.assertIn(digest((root / "documents/Technical_Report.pdf").read_bytes()), text)
+        self.assertIn("reader_a", text)
+        self.assertIn("reader_b", text)
+        self.assertTrue(all(value is False for value in envelope["flags"].values()))
+        self.assertIsNone(envelope["certificate"])
+        markdown = binary(root, BASE, "markdown")
+        self.assertEqual(markdown.returncode, 0, markdown.stderr)
+        for expected in ("cutoff_example", "Technical_Report.pdf", "cutoff_cost", "reproduced"):
+            self.assertIn(expected, markdown.stdout)
+
+    def test_grade_dependent_recovery_and_named_cost_deductions_use_existing_mathematics(self):
+        for mode, expected in (("grade_dependent", Fraction(3, 2)), ("deductions", Fraction(5, 2))):
+            with self.subTest(mode=mode):
+                _, section = self.cutoff_report(cutoff_workspace(mode, mode))
+                row = section["rows"][0]
+                self.assertEqual(row["status"], "reproduced")
+                self.assertEqual(Fraction(row["result"]["exact"]["computed"]), expected)
+                if mode == "grade_dependent":
+                    self.assertIsNotNone(row["result"]["solver_iterations"])
+                else:
+                    self.assertEqual(len(row["evidence"]), 7)
+
+    def test_short_ton_output_is_explicit_and_keeps_the_published_metric_equivalent(self):
+        _, section = self.cutoff_report(cutoff_workspace("short-ton", "short_ton"))
+        result = section["rows"][0]["result"]
+        self.assertEqual(Fraction(result["exact"]["computed"]), Fraction(7, 120))
+        self.assertEqual(result["unit"], "oz/st")
+        self.assertTrue(result["metric_from_rounded"])
+
+    def test_rounding_compatible_and_conflicting_published_grades_remain_distinct(self):
+        for mode, expected in (("within_rounding", "within_input_rounding"), ("conflict", "conflict")):
+            with self.subTest(mode=mode):
+                _, section = self.cutoff_report(cutoff_workspace(mode, mode))
+                row = section["rows"][0]
+                self.assertEqual(row["status"], expected)
+                self.assertEqual(Fraction(row["result"]["exact"]["computed"]), 2)
+                self.assertIsNone(row["refusal"])
+
+    def test_incomplete_or_incompatible_source_inputs_are_retained_as_refusals(self):
+        for mode in ("missing_cost", "pending_price", "wrong_unit", "wrong_price_basis", "wrong_source",
+                     "negative_cost", "invalid_recovery", "range_input"):
+            with self.subTest(mode=mode):
+                envelope, section = self.cutoff_report(cutoff_workspace(mode, mode))
+                row = section["rows"][0]
+                self.assertEqual(row["status"], "refused")
+                self.assertIsNone(row["result"])
+                self.assertTrue(row["refusal"])
+                self.assertTrue(row["evidence"])
+                self.assertIn("Technical_Report.pdf", compact(row["documents"]))
+                if mode == "pending_price":
+                    self.assertTrue(envelope["payload"]["pending_readings"])
+
+    def test_real_loader_refuses_changed_documents_and_disagreeing_cost_readers(self):
+        root = cutoff_workspace("bytes")
+        path = root / "documents/Technical_Report.pdf"
+        contents = path.read_bytes()
+        path.write_bytes(bytes([contents[0] ^ 1]) + contents[1:])
+        envelope, raw = invoke(root)
+        self.assertEqual((envelope["exit_code"], envelope["refusal"]["code"]), (8, "FMINE-REF-505"), raw)
+        self.assertIsNone(envelope["payload"])
+        envelope, raw = invoke(cutoff_workspace("disagreed", "disagreed_cost"))
+        self.assertEqual((envelope["exit_code"], envelope["refusal"]["code"]), (3, "FMINE-REF-202"), raw)
+        self.assertIsNone(envelope["payload"])
+
+    def test_declaration_and_reader_order_keep_the_source_bound_cutoff_digest(self):
+        root = cutoff_workspace("order-a")
+        _, original = self.cutoff_report(root)
+        self.assertEqual(original, self.cutoff_report(root)[1])
+        self.assertEqual(original, self.cutoff_report(cutoff_workspace("order-b", reverse=True))[1])
+
+
+class GeoScenarios(unittest.TestCase):
+    def geo_report(self, root):
+        envelope, raw = successful(root)
+        reserves = envelope["payload"]["issuer_reserves"]
+        self.assertEqual(len(reserves["geo_checks"]), 1, raw)
+        check = reserves["geo_checks"][0]
+        self.assertEqual(check["id"], "conversion")
+        self.assertEqual(len(check["digest"]), 64)
+        self.assertFalse(reserves["gate_eligible"])
+        return envelope, check
+
+    def test_printed_deck_conversion_retains_exact_bounds_and_every_source(self):
+        root = geo_workspace("matching")
+        envelope, check = self.geo_report(root)
+        self.assertEqual(check["status"], "checked")
+        declared = check["declared"]
+        self.assertEqual(declared["fit"], "proper")
+        rational = lambda value: Fraction(int(value["num"]), int(value["den"]))
+        self.assertEqual(rational(declared["converted"]["lo"]), Fraction(11949, 1000))
+        self.assertEqual(rational(declared["converted"]["hi"]), Fraction(12051, 1000))
+        self.assertEqual(rational(declared["reported"]["lo"]), Fraction(239, 20))
+        self.assertEqual(rational(declared["reported"]["hi"]), Fraction(241, 20))
+        self.assertEqual(check["discovery"]["finding"], "found")
+        self.assertEqual(check["discovery"]["deck_keys"], [declared["deck_key"]])
+        self.assertEqual(len(check["discovery"]["fits"]), 8)
+        self.assertEqual({row["row"] for row in check["amounts"]}, {"gold", "copper", "geo"})
+        self.assertEqual({row["row"] for row in check["decks"]}, {"geo", "candidate"})
+        text = compact(check)
+        for quantity in ("gold_amount", "copper_amount", "geo_amount", "geo_gold_price", "geo_copper_price"):
+            self.assertIn(quantity, text)
+        for file in ("Geo_Statement.pdf", "Candidate_Deck.pdf"):
+            self.assertIn(digest((root / "documents" / file).read_bytes()), text)
+        self.assertTrue(all(value is False for value in envelope["flags"].values()))
+        self.assertIsNone(envelope["certificate"])
+        markdown = binary(root, BASE, "markdown")
+        self.assertEqual(markdown.returncode, 0, markdown.stderr)
+        self.assertIn("conversion", markdown.stdout)
+        self.assertIn("Geo_Statement.pdf", markdown.stdout)
+        self.assertIn("Candidate_Deck.pdf", markdown.stdout)
+        self.assertEqual(check, self.geo_report(root)[1])
+
+    def test_alternative_fit_does_not_rewrite_the_reported_price_deck(self):
+        _, matching = self.geo_report(geo_workspace("matching-control"))
+        envelope, check = self.geo_report(geo_workspace("mismatched", "mismatched"))
+        self.assertEqual(check["status"], "checked")
+        self.assertEqual(check["declared"]["fit"], "empty")
+        self.assertEqual(check["discovery"]["finding"], "found")
+        primary = next(row for row in check["decks"] if row["primary"])
+        candidate = next(row for row in check["decks"] if not row["primary"])
+        self.assertEqual(check["declared"]["deck_key"], primary["key"])
+        self.assertEqual(check["discovery"]["deck_keys"], [candidate["key"]])
+        self.assertNotEqual(primary["key"], candidate["key"])
+        self.assertNotEqual(matching["digest"], check["digest"])
+        geo = next(row for row in envelope["payload"]["issuer_reserves"]["rows"] if row["id"] == "geo")
+        self.assertEqual(geo["deck"]["key"], primary["key"])
+        self.assertEqual(geo["source"]["reading"]["token"], "13.0")
+
+    def test_equal_ratios_remain_ambiguous_and_duplicate_decks_keep_their_providers(self):
+        _, ambiguous = self.geo_report(geo_workspace("same-ratio", "same_ratio"))
+        self.assertEqual(ambiguous["declared"]["fit"], "proper")
+        self.assertEqual(ambiguous["discovery"]["finding"], "ambiguous")
+        self.assertEqual(len(ambiguous["discovery"]["deck_keys"]), 2)
+        _, duplicate = self.geo_report(geo_workspace("duplicate", "duplicate_deck"))
+        self.assertEqual(duplicate["discovery"]["finding"], "found")
+        self.assertEqual(len(duplicate["decks"]), 2)
+        self.assertEqual(len({row["key"] for row in duplicate["decks"]}), 1)
+        self.assertEqual(len(duplicate["discovery"]["fits"]), 4)
+
+    def test_missing_inputs_or_named_candidate_prices_never_create_a_unique_explanation(self):
+        for mode in ("missing_amount", "missing_candidate_price", "pending_price", "wrong_unit"):
+            with self.subTest(mode=mode):
+                _, check = self.geo_report(geo_workspace(mode, mode))
+                self.assertEqual(check["status"], "unavailable")
+                self.assertIsNone(check["discovery"])
+                self.assertTrue(check["refusal"])
+                self.assertEqual(len(check["decks"]), 2)
+                if mode == "missing_candidate_price":
+                    self.assertEqual(check["declared"]["fit"], "proper")
+                    candidate = next(row for row in check["decks"] if not row["primary"])
+                    self.assertTrue(candidate["refusal"])
+
+    def test_candidate_prices_are_usable_without_its_unrelated_reserve_amount(self):
+        envelope, check = self.geo_report(geo_workspace("candidate-amount", "missing_candidate_amount"))
+        self.assertEqual(check["status"], "checked")
+        self.assertEqual(check["discovery"]["finding"], "found")
+        self.assertTrue(any(row["id"] == "candidate" for row in envelope["payload"]["issuer_reserves"]["refused"]))
+
+    def test_source_bytes_are_authenticated_and_input_order_is_irrelevant(self):
+        root = geo_workspace("byte-check")
+        _, original = self.geo_report(root)
+        _, reordered = self.geo_report(geo_workspace("reordered", reverse=True))
+        self.assertEqual(original, reordered)
+        path = root / "documents/Candidate_Deck.pdf"
+        contents = path.read_bytes()
+        path.write_bytes(bytes([contents[0] ^ 1]) + contents[1:])
+        envelope, raw = invoke(root)
+        self.assertEqual((envelope["exit_code"], envelope["refusal"]["code"]), (8, "FMINE-REF-505"), raw)
+        self.assertIsNone(envelope["payload"])
 
 
 class ReserveScenarios(unittest.TestCase):

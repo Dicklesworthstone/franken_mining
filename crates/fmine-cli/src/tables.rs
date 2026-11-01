@@ -1,5 +1,5 @@
 //! Cited table inspection: workbook identities and declared PDF sums, roll-forwards and replacement ratios.
-//! Determinism: Exact (registered bytes, sorted declarations, exact solver and stable rendering).
+//! Determinism: DeterministicPerIsa (exact table algebra; cut-off fixed-point cross-check uses floats).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -395,7 +395,7 @@ fn document_markdown(
             );
         }
     }
-    out
+    out + &report.cutoffs.to_markdown()
 }
 
 fn workbook_envelope(report: &PublicAssuranceReport) -> Envelope {
