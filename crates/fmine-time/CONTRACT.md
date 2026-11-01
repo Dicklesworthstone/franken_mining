@@ -15,26 +15,38 @@ Implements `RecordTime`, `ValidTime`, `TimeEvidence`, proleptic Gregorian `Civil
 - `collection_time`: when the sample, survey pickup or sensor frame was taken;
 - `availability_time`: when the certificate, QA/QC disposition or processed reading became visible to a site
   decision-maker;
-- `record_time`: when the ledger committed it. Here a `RecordTime`, not yet the plan's `(cell, seq)` under an anchor.
+- `record_time`: where the ledger committed it, a `RecordTime`: commit `seq` of authority cell `cell` (plan §25.4),
+  plus the wall-clock reading at commit and its `TimeEvidence`.
 
-A decision time is a property of the query, not of the observation, so it lives on `AsOfQuery`. `availability_time`
-and `record_time` may each equal `collection_time`, and either may come first: a ledger can commit a sample before
-its certificate arrives.
+A decision time is a property of the query, not of the observation, so it lives on `AsOfQuery`, with the `Anchor`
+current at that time. `availability_time` and the commit's wall-clock reading may each equal `collection_time`, and
+either may come first: a ledger can commit a sample before its certificate arrives.
 
 ## 3. Authority, Epistemics & Representation
+Records are ordered by commit, never by wall clock (`INV-012`). `RecordTime::commit_order` orders commits of one
+cell by `seq` and gives `None` across cells. An `Anchor` holds one high-water `seq` per cell (built directly, or from
+one `fmine_core::LedgerAnchor` per cell); it alone decides which commits of which cells a consumer sees. Digests are
+checked when a cross-cell reference is resolved (`BD-108`), not here.
+
 Guarantees zero availability lookahead (`availability_time <= t`) in historical backtests (`INV-016`):
-`QuadTemporalStamp::as_of(t)` is `availability_time ≤ t ∧ record_time ≤ t`, and it is monotone in `t`.
+`QuadTemporalStamp::as_of(t, anchor)` is `availability_time ≤ t ∧ anchor holds record_time`. It is monotone in `t`,
+and in the anchor: an anchor at least as far along in every cell sees all that a lesser one sees.
 
 ## 4. Public API Surface
-- `RecordTime`, `ValidTime`, `TimeEvidence`
+- `RecordTime`, `Anchor`, `ValidTime`, `TimeEvidence`
 - `CivilDate`, `ShiftWindow`, `SiteCalendar`, `FiscalPeriod`, `FiscalCalendar`
 - `QuadTemporalStamp`, `AsOfQuery`
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-108` (assay-availability lookahead, `TimeError::AssayLagLookahead`, `G-TIME-2`), the only variant
   `TimeError::refusal_code` maps. It is a string: the crate sits below `fmine-evidence`.
-- `TimeError::StampOrder`: `QuadTemporalStamp::new` refuses `availability_time` or `record_time` before
-  `collection_time`. Nothing is reordered or clamped. Like `InvalidInterval`, it has no `FMINE-REF` code.
+- `TimeError::StampOrder`: `QuadTemporalStamp::new` refuses `availability_time`, or the commit's wall-clock reading,
+  before `collection_time`. Nothing is reordered or clamped. Like `InvalidInterval`, it has no `FMINE-REF` code.
+- `TimeError::CellNotInAnchor` (`INV-012`): `as_of` and `AsOfQuery::check_admissible` refuse a record whose cell the
+  anchor does not name. It is not left out as a not-yet-committed record is; the consumer reports `not_observable`.
+- `TimeError::AnchorCellRepeated`: an anchor that names a cell twice is refused, never resolved by max or min.
+- Neither has an `FMINE-REF` code. `FMINE-REF-502` (stale anchor) means an anchor older than the state it attests,
+  which is a different case.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-TIME-1`: Bijective `CivilDate <-> epoch_days` across `1900-01-01..2200-12-31`.
