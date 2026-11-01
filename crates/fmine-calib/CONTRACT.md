@@ -8,7 +8,7 @@
 - **Allowed Module Families:** `["ledger", "scoring", "prior", "pit", "record", "guidance_scores"]`
 
 ## 2. Mathematical & Domain Formulation
-Implements the append-only pre-registration `ForecastLedger` (`INV-008`, `FMINE-REF-206`), strictly proper scoring rules (`gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`), `ReferenceClassPrior` (`GB-32`: capex `+28%/+43%`, schedule `+31%`, ramp-up `74%` Yr-1), and `SpatialFrontPitMonitor` (`GB-08` Vecchia/Rosenblatt conditional PIT + `BettingEProcess`).
+Implements the append-only pre-registration `ForecastLedger` (`INV-008`, `FMINE-REF-206`), strictly proper scoring rules (`gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`), `ReferenceClassPrior` (`GB-32`: capex `+28%/+43%`, schedule `+31%`, ramp-up `74%` Yr-1), and `SpatialFrontPitMonitor` (`GB-08` Vecchia/Rosenblatt conditional PIT; plan §10.4's location score `tanh(z/2)` and centred dispersion score `tanh((z^2 - 1)/2) - c0`, each on a `ScoreBettingEProcess` with aGRAPA stakes at alpha/2).
 
 ## 3. Authority, Epistemics & Representation
 Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) and monitors spatial front miscalibration (`G-CAL-1`).
@@ -40,16 +40,33 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   on 10,000 `SCORE_DIGEST_KEY` triples (|z| up to 12).
 - `golden_digest_calib_rest_10k` (bd-hp2j.3): the rest of `lib.rs`, so one class covers the file: Winkler scores,
   reference-class blends, a ledger's report, and 1,000 samples through `SpatialFrontPitMonitor`, whose bias flips
-  to reach both betting limits and the alarm (this also runs `BettingEProcess`). A refusal hashes as `u64::MAX`.
+  to take the location stake to both of its limits and the pair to the alarm. A refusal hashes as `u64::MAX`.
 - All three committed values were first observed on aarch64-macos. `lib.rs` declares `BitwisePortable`: all three
-  agreed on ubuntu-latest (x86_64) and macos-15 (aarch64) in CI run 41237993223 at 84f32ac (bd-hp2j.3).
+  agreed on ubuntu-latest (x86_64) and macos-15 (aarch64) in CI run 41237993223 at 84f32ac (bd-hp2j.3). bd-311
+  changed the monitor's scores and re-pinned the calib-rest value on aarch64-macos (the probe's PIT bits are
+  unchanged; its wealth and alarm bits are not). No CI run of the new value exists yet.
 - `ForecastLedger::evaluate_model` → `Result<CalibrationReport, ScoreError>` delegates to the assessment engine
   and exposes `n_members`, `n_scored`, `n_unresolved` and whole-cohort coverage bounds. This compatibility snapshot
   is always Unscored or Descriptive, since it has no frozen membership. Existing Gaussian `register` ids are
   retained; new `register_payload` ids hash exact canonical bytes. `record_outcome` is an uncited internal
   compatibility path and cannot supply a frozen public cohort.
 - `ProjectArchetype`, `ReferenceClassPrior`
-- `SpatialFrontPitMonitor`
+- `SpatialFrontPitMonitor` (BD-311): `new`, `observe_sample` (PIT and alarm), and the pub `location_eproc` and
+  `dispersion_eproc`. Private to the module: `predictive` (the registered model's conditional mean and standard
+  deviation for a polygon, recording nothing), the two scores, and c0 (`scripts/oracle/front_pit_constants.py`,
+  `test_front_pit_score_constants_known_answers`). Nothing outside the crate calls them yet, and L-6 refuses bare
+  `f64` coordinates in a public fn. `test_front_pit_predictive_known_answers` checks the conditional against one-
+  and two-neighbour hand algebra.
+  `test_spatial_front_pit_detects_58pct_coverage_shift_and_keeps_ville_bound` is the acceptance run. Synthetic truth
+  is drawn from the monitor's own predictive, so it is an exact draw from the registered Vecchia joint law, and the
+  PIT equals Phi(z) at every polygon. On 20,000 null runs of 600 residuals the false-alarm rate is 0.0347
+  (α = 0.05), with a one-sided 95% Clopper–Pearson upper bound of 0.0369; that bound's assertion was added after
+  the first run. Over 200 runs each, the median first alarm is 21 polygons for the location shift that takes 80%
+  coverage to 58%, and 40 for the dispersion shift (σ × 1.589). The plan's ceilings are 25 and 40, so the
+  dispersion median sits on its ceiling. The planted negatives are the uncentred dispersion score (false-alarm
+  rate 0.79) and the scores this monitor used before bd-311 (dispersion median 94). INFERENCE from simulation;
+  HYPOTHESIS for any real pit. Truth from a full Gaussian process, rather than its Vecchia approximation, is not
+  tested.
 - `guidance_scores` (BD-341.S4, descriptive slice): exact `Range`, `Point`, `AtMost` and `AtLeast` guidance
   scores against cited printed outcomes and their declared rounding intervals. `score` reports the printed
   hit/miss side, whether rounding makes the hit ambiguous, and range-only midpoint, half-width and normalized
@@ -170,7 +187,8 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   assumptions, unsupported metrics, explicit proxies, altered paired reports, scaling and arithmetic overflow.
 
 ## 7. Failure Modes & Deterministic Fallbacks
-Miscalibrated spatial fronts trip `BettingEProcess` at `E_t >= 20.0` (`alpha = 0.05`) and downgrade downstream claims.
+A miscalibrated spatial front alarms when either score's wealth reaches `2 / alpha` (40 at `alpha = 0.05`). Nothing
+downstream reads the alarm yet: no claim is downgraded by it, and no InvestigationCase (plan §10.5) exists.
 
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
 - `GATE-HELM-01`

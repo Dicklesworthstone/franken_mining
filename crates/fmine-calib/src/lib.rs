@@ -1,8 +1,10 @@
 //! Frozen forecast ledger (`INV-008`), proper scoring rules (`CRPS`, log, Winkler),
 //! `CalibrationFlag` auto-downgrade (`NL-8`), `REFCLASS-` $\varepsilon$-contamination (`GB-32`),
 //! and Vecchia/Rosenblatt spatial PIT e-process monitoring (`GB-08`, `BD-311`).
-//! Determinism: BitwisePortable (transcendentals via `fmine_core::det`; the file's three golden digests agree on
-//! x86_64-linux and aarch64-macos in CI run 41237993223 at 84f32ac, bd-hp2j.3).
+//! Determinism: BitwisePortable (transcendentals via `fmine_core::det`; the file's three golden digests agreed on
+//! x86_64-linux and aarch64-macos in CI run 41237993223 at 84f32ac, bd-hp2j.3). The calib-rest digest was
+//! re-pinned on aarch64-macos when the spatial monitor's scores changed (bd-311); no x86_64-linux run of the new
+//! value exists yet.
 
 use fmine_claim::Claim;
 use fmine_core::det;
@@ -10,7 +12,7 @@ use fmine_core::hash::blake3_hash;
 use fmine_core::rand::{PhiloxStream, RngKey};
 use fmine_evidence::{EvidenceClass, Refusal, RefusalCode};
 use fmine_numerics::cholesky_solve;
-use fmine_numerics::eproc::BettingEProcess;
+use fmine_numerics::eproc::ScoreBettingEProcess;
 use fmine_numerics::norm_cdf;
 
 pub mod guidance_scores;
@@ -181,7 +183,8 @@ fn calib_rest_bits(key: RngKey) -> Vec<u64> {
     match SpatialFrontPitMonitor::new(0.05, 1.0, 50.0, 8, 0.05) {
         Ok(mut monitor) => {
             for i in 0..1_000 {
-                // A bias that flips at sample 200 takes the e-processes to both betting limits and the alarm.
+                // A bias that flips at sample 200 takes the location stake to both of its limits and the pair to
+                // the alarm.
                 let bias = if i < 200 { 3.0 } else { -3.0 };
                 let sample = SpatialSample {
                     x: 500.0 * unit(),
@@ -194,8 +197,8 @@ fn calib_rest_bits(key: RngKey) -> Vec<u64> {
                     Ok((u, alarm)) => bits.extend([
                         u.to_bits(),
                         u64::from(alarm),
-                        monitor.mean_eproc.wealth.to_bits(),
-                        monitor.spread_eproc.wealth.to_bits(),
+                        monitor.location_eproc.log_wealth().to_bits(),
+                        monitor.dispersion_eproc.log_wealth().to_bits(),
                     ]),
                     Err(_) => bits.extend([u64::MAX; 4]),
                 }
@@ -373,13 +376,42 @@ pub struct SpatialSample {
     pub observed_value: f64,
 }
 
+/// $c_0 = \mathbb{E}_0[\tanh((Z^2 - 1)/2)]$ for $Z \sim N(0, 1)$, the centre of the dispersion score (plan §10.4).
+/// Uncentred, that score has null mean $c_0 \approx -0.075$, a negative stake earns on it, and Ville's bound fails.
+/// From `scripts/oracle/front_pit_constants.py` (Simpson on CPython's `tanh` and `exp`, summed exactly).
+const DISPERSION_SCORE_CENTRE: f64 = -0.074_848_061_759_276_64;
+/// $\mathbb{E}_0[\tanh(Z/2)^2]$: the location stake's prior second moment (same script).
+const LOCATION_SCORE_SECOND_MOMENT: f64 = 0.173_516_143_432_371_87;
+/// $\mathbb{E}_0[(\tanh((Z^2 - 1)/2) - c_0)^2]$: the dispersion stake's prior second moment (same script).
+const DISPERSION_SCORE_SECOND_MOMENT: f64 = 0.188_861_986_137_620_65;
+/// The stake truncation $c$: each wealth factor stays at or above $1 - c$. The plan's simulated detection times
+/// (§10.4) are reproduced at 0.5.
+const STAKE_TRUNCATION: f64 = 0.5;
+/// Bounds on the dispersion score: its infimum is $\tanh(-1/2) - c_0 \approx -0.38727$ (at $z = 0$), its supremum
+/// $1 - c_0$. The declared range is slightly wider, so a last-place rounding never refuses a score.
+const DISPERSION_SCORE_RANGE: (f64, f64) = (-0.3873, 1.0749);
+
+/// The location score $\psi_{loc}(z) = \tanh(z/2)$: in $(-1, 1)$, mean 0 under $N(0, 1)$ by symmetry.
+fn location_score(z: f64) -> f64 {
+    det::tanh(z / 2.0)
+}
+
+/// The centred dispersion score $\psi_{disp}(z) = \tanh((z^2 - 1)/2) - c_0$: mean 0 under $N(0, 1)$, positive on
+/// average when the model's spread is too small.
+fn dispersion_score(z: f64) -> f64 {
+    det::tanh((z * z - 1.0) / 2.0) - DISPERSION_SCORE_CENTRE
+}
+
 /// Vecchia-conditioned Rosenblatt PIT sequential monitor (`Monitor::SpatialFrontPit`, `GB-08`, `BD-311`).
 ///
-/// Decorrelates each new spatial observation $y_i$ against up to `max_neighbors` nearest prior
-/// observations under an isotropic exponential covariance $C(h) = \sigma_0^2 \mathbb{I}(h=0) + \sigma_1^2 \exp(-h / r)$,
-/// maps the standardized conditional residual $z_i^* = (y_i - \mu_{i|\mathcal{N}(i)}) / \sigma_{i|\mathcal{N}(i)}$
-/// to $u_i = \Phi(z_i^*) \in (0, 1)$, and updates a pair of anytime-valid `BettingEProcess` monitors
-/// (one for mean bias, one for variance/spread error).
+/// Each polygon or ring $y_k$, taken in availability order, is conditioned on up to `max_neighbors` nearest
+/// earlier observations under an isotropic exponential covariance
+/// $C(h) = \sigma_0^2 \mathbb{I}(h=0) + \sigma_1^2 \exp(-h / r)$ (the registered Vecchia joint model). The
+/// standardized conditional residual $z_k = (y_k - \mu_{k|\mathcal{N}(k)}) / \sigma_{k|\mathcal{N}(k)}$ is i.i.d.
+/// $N(0, 1)$ when that model is the true joint law, however correlated the polygons are (Rosenblatt 1952). Two
+/// [`ScoreBettingEProcess`]es bet against that null, each at half of `alpha`: one on the location score
+/// $\tanh(z/2)$, one on the centred dispersion score $\tanh((z^2 - 1)/2) - c_0$ (plan §10.4). The pair alarms when either wealth reaches $2/\alpha$, so the false-alarm
+/// probability over any horizon is at most `alpha`.
 #[derive(Debug, Clone)]
 pub struct SpatialFrontPitMonitor {
     pub nugget_var: f64,
@@ -387,8 +419,8 @@ pub struct SpatialFrontPitMonitor {
     pub range_m: f64,
     pub max_neighbors: usize,
     pub history: Vec<SpatialSample>,
-    pub mean_eproc: BettingEProcess,
-    pub spread_eproc: BettingEProcess,
+    pub location_eproc: ScoreBettingEProcess,
+    pub dispersion_eproc: ScoreBettingEProcess,
 }
 
 impl SpatialFrontPitMonitor {
@@ -422,8 +454,8 @@ impl SpatialFrontPitMonitor {
             return Err(ScoreError::AlphaOutOfDomain(alpha));
         }
         // Each monitor gets half of `alpha`. Only a subnormal `alpha` whose half rounds to 0 is refused here.
-        let eproc = |null_mean| {
-            BettingEProcess::new(null_mean, alpha * 0.5)
+        let eproc = |(lo, hi), second_moment| {
+            ScoreBettingEProcess::new(lo, hi, second_moment, STAKE_TRUNCATION, alpha * 0.5)
                 .map_err(|_| ScoreError::AlphaOutOfDomain(alpha))
         };
         Ok(Self {
@@ -432,8 +464,8 @@ impl SpatialFrontPitMonitor {
             range_m,
             max_neighbors,
             history: Vec::new(),
-            mean_eproc: eproc(0.5)?,
-            spread_eproc: eproc(0.25)?,
+            location_eproc: eproc((-1.0, 1.0), LOCATION_SCORE_SECOND_MOMENT)?,
+            dispersion_eproc: eproc(DISPERSION_SCORE_RANGE, DISPERSION_SCORE_SECOND_MOMENT)?,
         })
     }
 
@@ -449,29 +481,30 @@ impl SpatialFrontPitMonitor {
         }
     }
 
-    /// Conditions `sample` on its nearest Vecchia predecessors, computes the whitened Rosenblatt PIT $u_i$,
-    /// updates the e-processes, and appends `sample` to the conditioning history (`BD-311`).
+    /// The registered model's predictive distribution for an observation at `(x, y, z)` with prior mean
+    /// `prior_mean`, given the history: the Gaussian conditional mean and standard deviation on the nearest
+    /// `max_neighbors` earlier observations. Its 80% interval is `mean ± 1.2816 sd`. Nothing is recorded.
     ///
-    /// Refuses with `FMINE-REF-109` a sample with a NaN or infinite coordinate, prior mean or value, and changes
-    /// nothing (bd-a482). An infinite value used to give a PIT of 1 and join the history, so every later sample
-    /// conditioned on it.
-    pub fn observe_sample(&mut self, sample: SpatialSample) -> Result<(f64, bool), Refusal> {
-        let fields = [
-            ("x", sample.x),
-            ("y", sample.y),
-            ("z", sample.z),
-            ("prior_mean", sample.prior_mean),
-            ("observed_value", sample.observed_value),
-        ];
+    /// Refuses with `FMINE-REF-109` a NaN or infinite coordinate or prior mean, and with `FMINE-REF-207` a
+    /// neighbour covariance that is not positive definite.
+    fn predictive(&self, x: f64, y: f64, z: f64, prior_mean: f64) -> Result<(f64, f64), Refusal> {
+        let fields = [("x", x), ("y", y), ("z", z), ("prior_mean", prior_mean)];
         if let Some((name, value)) = fields.into_iter().find(|(_, v)| !v.is_finite()) {
             return Err(Refusal::new(
                 RefusalCode::OutsidePhysicalDomain109,
                 format!("spatial sample {name} is {value}"),
             ));
         }
+        let sample = SpatialSample {
+            x,
+            y,
+            z,
+            prior_mean,
+            observed_value: prior_mean,
+        };
         let total_var = self.nugget_var + self.sill_var;
-        let (cond_mean, cond_std) = if self.history.is_empty() {
-            (sample.prior_mean, total_var.sqrt())
+        if self.history.is_empty() {
+            Ok((sample.prior_mean, det::sqrt(total_var)))
         } else {
             let mut indexed_dists: Vec<(f64, usize)> = self
                 .history
@@ -484,8 +517,16 @@ impl SpatialFrontPitMonitor {
                     (dx * dx + dy * dy + dz * dz, idx)
                 })
                 .collect();
-            indexed_dists.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+            // Distance, then history index: a total order, so the k nearest and their order are those of a full
+            // sort. Selecting them first keeps each step linear in the history.
+            let order = |a: &(f64, usize), b: &(f64, usize)| {
+                a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1))
+            };
             let k = indexed_dists.len().min(self.max_neighbors);
+            if k < indexed_dists.len() {
+                indexed_dists.select_nth_unstable_by(k, order);
+            }
+            indexed_dists[..k].sort_by(order);
             let neighbors: Vec<SpatialSample> = indexed_dists[..k]
                 .iter()
                 .map(|&(_, idx)| self.history[idx])
@@ -512,18 +553,34 @@ impl SpatialFrontPitMonitor {
                 var_red += weights[i] * k_vec[i];
             }
             let c_var = (total_var - var_red).max(self.nugget_var);
-            (mu, c_var.sqrt())
-        };
+            Ok((mu, det::sqrt(c_var)))
+        }
+    }
 
+    /// Conditions `sample` on its nearest Vecchia predecessors (the private `predictive`), bets both scores on the
+    /// standardized residual, and appends `sample` to the conditioning history (`BD-311`). Returns the PIT
+    /// $u = \Phi(z)$ and whether the pair has alarmed.
+    ///
+    /// Refuses with `FMINE-REF-109` a sample with a NaN or infinite coordinate, prior mean or value, and changes
+    /// nothing (bd-a482). An infinite value used to give a PIT of 1 and join the history, so every later sample
+    /// conditioned on it. A refusal from either e-process also changes nothing.
+    pub fn observe_sample(&mut self, sample: SpatialSample) -> Result<(f64, bool), Refusal> {
+        if !sample.observed_value.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                format!("spatial sample observed_value is {}", sample.observed_value),
+            ));
+        }
+        let (cond_mean, cond_std) =
+            self.predictive(sample.x, sample.y, sample.z, sample.prior_mean)?;
         let z_star = (sample.observed_value - cond_mean) / cond_std;
-        let u_pit = norm_cdf(z_star);
-        // Finite inputs can still overflow the conditional mean and give a NaN PIT. Refuse it before either
-        // e-process moves, so that both observations below succeed or neither runs.
-        if !(0.0..=1.0).contains(&u_pit) {
+        // Finite inputs can still overflow the conditional mean and give a NaN residual. Refuse it before either
+        // e-process moves.
+        if z_star.is_nan() {
             return Err(Refusal::new(
                 RefusalCode::NumericalCertificateFailed207,
                 format!(
-                    "spatial PIT is {u_pit} (observed {}, prior mean {})",
+                    "spatial residual is NaN (observed {}, prior mean {})",
                     sample.observed_value, sample.prior_mean
                 ),
             ));
@@ -531,15 +588,19 @@ impl SpatialFrontPitMonitor {
         let refuse = |e: fmine_numerics::eproc::EProcError| {
             Refusal::new(RefusalCode::NumericalCertificateFailed207, e.to_string())
         };
-        self.mean_eproc.observe(u_pit).map_err(refuse)?;
-        //Under Uniform(0,1), E[(u - 0.5)^2] = 1/12, and E[|u - 0.5|] = 0.25.
-        self.spread_eproc
-            .observe((u_pit - 0.5).abs())
+        // Both bets succeed or neither is kept.
+        let mut location = self.location_eproc.clone();
+        location.observe(location_score(z_star)).map_err(refuse)?;
+        let mut dispersion = self.dispersion_eproc.clone();
+        dispersion
+            .observe(dispersion_score(z_star))
             .map_err(refuse)?;
+        self.location_eproc = location;
+        self.dispersion_eproc = dispersion;
         self.history.push(sample);
 
-        let alarm = self.mean_eproc.rejected_null() || self.spread_eproc.rejected_null();
-        Ok((u_pit, alarm))
+        let alarm = self.location_eproc.rejected_null() || self.dispersion_eproc.rejected_null();
+        Ok((norm_cdf(z_star), alarm))
     }
 }
 
@@ -551,6 +612,7 @@ mod tests {
     use fmine_core::id::{ObjectId, PrefixKind};
     use fmine_core::rand::{PhiloxStream, RngKey};
     use fmine_evidence::{EpistemicStatus, KnowledgeState, KuKind};
+    use fmine_numerics::eproc::BettingEProcess;
 
     /// bd-hp2j.2: the literal is the bits `det::ln(2π)` returns, so the log score depends on no platform libm.
     #[test]
@@ -584,7 +646,10 @@ mod tests {
         "d3a20c177f23259db387f4451373c8662dbd4d3178ec2b24e6b0e05d05b75f65";
     const GAUSSIAN_LOG_SCORE_10K: &str =
         "b59d447a25e88d6a669ac00492a8bb883be9a28ac4db057865be3cf659a8b1a8";
-    const CALIB_REST_10K: &str = "0652013fb792cbe11d0da7eb5b378ca8f2af427cdd42447f3a9fd792348af9c5";
+    // bd-311 replaced the spatial monitor's scores (PIT and |PIT - 1/2|) with the plan's tanh scores and aGRAPA
+    // stakes. The probe's PIT bits are unchanged; its wealth and alarm bits are not. Re-pinned on aarch64-macos;
+    // the value before was 0652013fb792cbe11d0da7eb5b378ca8f2af427cdd42447f3a9fd792348af9c5.
+    const CALIB_REST_10K: &str = "9b06b492532266132b0df763ea0937e90f56bde07ef230789678c7a36134aedd";
 
     #[test]
     fn test_golden_digest_calib_rest_10k() {
@@ -1074,7 +1139,10 @@ mod tests {
         monitor
             .observe_sample(sample(0.0, 1.4))
             .expect("finite sample");
-        let wealth = (monitor.mean_eproc.wealth, monitor.spread_eproc.wealth);
+        let eprocs = (
+            monitor.location_eproc.clone(),
+            monitor.dispersion_eproc.clone(),
+        );
         for bad in [
             sample(0.0, f64::NAN),
             sample(0.0, f64::INFINITY),
@@ -1083,16 +1151,324 @@ mod tests {
             let refusal = monitor.observe_sample(bad).expect_err("refused");
             assert_eq!(refusal.code, RefusalCode::OutsidePhysicalDomain109.as_str());
             assert_eq!(
-                (monitor.mean_eproc.wealth, monitor.spread_eproc.wealth),
-                wealth
+                (
+                    monitor.location_eproc.clone(),
+                    monitor.dispersion_eproc.clone()
+                ),
+                eprocs
             );
             assert_eq!(monitor.history.len(), 1);
-            assert_eq!(monitor.mean_eproc.n_steps, 1);
+            assert_eq!(monitor.location_eproc.n_steps(), 1);
         }
         monitor
             .observe_sample(sample(5.0, 0.6))
             .expect("finite sample");
         assert_eq!(monitor.history.len(), 2);
+    }
+
+    /// Simpson on [-12, 12] with compensated summation, on `fmine_core::det`.
+    fn normal_expectation(f: impl Fn(f64) -> f64) -> f64 {
+        let (a, n) = (-12.0_f64, 240_000_u32);
+        let h = 24.0 / f64::from(n);
+        let (mut sum, mut carry) = (0.0_f64, 0.0_f64);
+        for i in 0..=n {
+            let z = a + f64::from(i) * h;
+            let weight = if i == 0 || i == n {
+                1.0
+            } else if i % 2 == 1 {
+                4.0
+            } else {
+                2.0
+            };
+            let term = weight * f(z) * det::exp(-0.5 * z * z);
+            let next = sum + term;
+            carry += if sum.abs() >= term.abs() {
+                (sum - next) + term
+            } else {
+                (term - next) + sum
+            };
+            sum = next;
+        }
+        (sum + carry) * h / 3.0 / det::sqrt(2.0 * std::f64::consts::PI)
+    }
+
+    /// The scores' constants against `scripts/oracle/front_pit_constants.py`, and that both scores have null
+    /// mean 0 once centred.
+    #[test]
+    fn test_front_pit_score_constants_known_answers() {
+        let c0 = normal_expectation(|z| det::tanh((z * z - 1.0) / 2.0));
+        let q_loc = normal_expectation(|z| location_score(z) * location_score(z));
+        let q_disp = normal_expectation(|z| dispersion_score(z) * dispersion_score(z));
+        for (name, got, pinned) in [
+            ("c0", c0, DISPERSION_SCORE_CENTRE),
+            ("q_loc", q_loc, LOCATION_SCORE_SECOND_MOMENT),
+            ("q_disp", q_disp, DISPERSION_SCORE_SECOND_MOMENT),
+        ] {
+            assert!((got - pinned).abs() <= 1e-14, "{name}: {got} vs {pinned}");
+        }
+        assert!(normal_expectation(location_score).abs() <= 1e-15);
+        assert!(normal_expectation(dispersion_score).abs() <= 1e-14);
+        // The declared dispersion range holds the score's infimum (z = 0) and supremum.
+        let (lo, hi) = DISPERSION_SCORE_RANGE;
+        assert!(lo < dispersion_score(0.0) && dispersion_score(1e300) < hi);
+    }
+
+    /// The acceptance test below draws its truth from `predictive`, so it cannot see a wrong predictive. These are
+    /// the Gaussian conditionals worked by hand: with total variance t = nugget + sill and C(h) = sill e^(-h/r),
+    /// one neighbour gives mean prior + C(h) r1 / t and variance t - C(h)^2 / t; two give the 2 x 2 solve.
+    #[test]
+    fn test_front_pit_predictive_known_answers() {
+        let (nugget, sill, range) = (0.2, 0.8, 40.0);
+        let total = nugget + sill;
+        let c = |h: f64| sill * (-h / range).exp();
+        let mut monitor = SpatialFrontPitMonitor::new(nugget, sill, range, 1, 0.05).expect("valid");
+        assert_eq!(
+            monitor.predictive(3.0, 4.0, 0.0, 2.5).expect("finite"),
+            (2.5, total.sqrt())
+        );
+        let at = |x, y, prior_mean, observed_value| SpatialSample {
+            x,
+            y,
+            z: 0.0,
+            prior_mean,
+            observed_value,
+        };
+        monitor
+            .observe_sample(at(0.0, 0.0, 1.0, 1.6))
+            .expect("finite");
+        // The farther point, 50 m away, must not be used with one neighbour.
+        monitor
+            .observe_sample(at(60.0, 0.0, 1.0, -3.0))
+            .expect("finite");
+        let (mean, sd) = monitor.predictive(6.0, 8.0, 0.0, 2.0).expect("finite");
+        let ch = c(10.0);
+        assert!((mean - (2.0 + ch * 0.6 / total)).abs() <= 1e-14, "{mean}");
+        assert!(
+            (sd - (total - ch * ch / total).sqrt()).abs() <= 1e-14,
+            "{sd}"
+        );
+
+        let mut two = SpatialFrontPitMonitor::new(nugget, sill, range, 2, 0.05).expect("valid");
+        two.observe_sample(at(0.0, 0.0, 1.0, 1.6)).expect("finite");
+        two.observe_sample(at(20.0, 0.0, 1.0, 0.7)).expect("finite");
+        let (mean, sd) = two.predictive(10.0, 0.0, 0.0, 1.0).expect("finite");
+        // Symmetric case: both neighbours 10 m away, 20 m apart, so the weights are equal: w = C(10) / (t + C(20)).
+        let w = c(10.0) / (total + c(20.0));
+        assert!((mean - (1.0 + w * (0.6 - 0.3))).abs() <= 1e-14, "{mean}");
+        assert!(
+            (sd - (total - 2.0 * w * c(10.0)).sqrt()).abs() <= 1e-14,
+            "{sd}"
+        );
+
+        let refusal = two
+            .predictive(f64::NAN, 0.0, 0.0, 1.0)
+            .expect_err("refused");
+        assert_eq!(refusal.code, RefusalCode::OutsidePhysicalDomain109.as_str());
+    }
+
+    /// Seed of the bd-311 acceptance runs, fixed before the first run.
+    const FRONT_PIT_SEED: u64 = 0x0042_4433_3131;
+    /// From `scripts/oracle/front_pit_constants.py`: the location shift and the spread factor at which the
+    /// model's 80% interval covers 58%.
+    const SHIFT_58: f64 = 1.054_676_155_906_398_2;
+    const SPREAD_58: f64 = 1.589_183_779_920_438_2;
+
+    fn front_key(partition: u32, run: u32) -> RngKey {
+        RngKey {
+            seed_root: FRONT_PIT_SEED,
+            partition,
+            domain: 1,
+            var_group: 1,
+            realization: run,
+            brick: 0,
+        }
+    }
+
+    /// Polygon `k` of a bench mined row by row: 20 polygons a row at 10 m, rows 10 m apart, on a prior-mean trend.
+    fn polygon(k: usize) -> (f64, f64, f64) {
+        let (x, y) = ((k % 20) as f64 * 10.0, (k / 20) as f64 * 10.0);
+        (x, y, 2.0 + 0.002 * (x + y))
+    }
+
+    /// One run of the monitor on synthetic truth: each polygon is drawn as `mean + sd * z` from the monitor's own
+    /// predictive, so with `z ~ N(0, 1)` the run is an exact draw from the registered Vecchia joint law. Returns
+    /// the residuals and the first alarm (1-based). Checks at every polygon that the PIT is `Phi(z)`.
+    fn front_run(
+        draw: &mut dyn FnMut() -> f64,
+        horizon: usize,
+        stop_at_alarm: bool,
+    ) -> (Vec<f64>, Option<usize>) {
+        let mut monitor =
+            SpatialFrontPitMonitor::new(0.2, 0.8, 40.0, 8, 0.05).expect("valid parameters");
+        let mut zs = Vec::with_capacity(horizon);
+        let mut first = None;
+        for k in 0..horizon {
+            let (x, y, prior_mean) = polygon(k);
+            let (mean, sd) = monitor.predictive(x, y, 0.0, prior_mean).expect("finite");
+            let z = draw();
+            let (u, alarm) = monitor
+                .observe_sample(SpatialSample {
+                    x,
+                    y,
+                    z: 0.0,
+                    prior_mean,
+                    observed_value: mean + sd * z,
+                })
+                .expect("finite");
+            assert!(
+                (u - norm_cdf(z)).abs() <= 1e-12,
+                "polygon {k}: PIT {u}, Phi(z) {}",
+                norm_cdf(z)
+            );
+            zs.push(z);
+            if alarm && first.is_none() {
+                first = Some(k + 1);
+                if stop_at_alarm {
+                    break;
+                }
+            }
+        }
+        (zs, first)
+    }
+
+    /// First alarm (1-based) of a pair of e-processes fed `scores(z)` for each residual.
+    fn pair_alarm<A, B>(
+        zs: &[f64],
+        mut a: A,
+        mut b: B,
+        step: impl Fn(&mut A, &mut B, f64) -> bool,
+    ) -> Option<usize> {
+        zs.iter()
+            .position(|&z| step(&mut a, &mut b, z))
+            .map(|i| i + 1)
+    }
+
+    fn median(times: &[Option<usize>], censor: usize) -> usize {
+        let mut t: Vec<usize> = times.iter().map(|x| x.unwrap_or(censor + 1)).collect();
+        t.sort_unstable();
+        t[t.len() / 2]
+    }
+
+    /// bd-311 acceptance (plan §39 BD-311: median alarm ≤ 25 polygons for the 58%-coverage location shift and
+    /// ≤ 40 for the dispersion shift; null false-alarm rate ≤ α over 600 polygons). Declared before the first run:
+    /// - end to end, 200 null runs of 600 polygons through the monitor: the PIT is `Phi(z)` at every polygon, and
+    ///   each run's first alarm is the one the pair of score e-processes gives on its residuals;
+    /// - those e-processes, configured as the monitor configures them, on 20,000 null runs of 600 i.i.d. N(0, 1)
+    ///   residuals: false-alarm rate ≤ α = 0.05;
+    /// - end to end, 200 runs each: every run alarms within 300 polygons; median ≤ 25 under z ~ N(1.0547, 1) and
+    ///   ≤ 40 under z ~ N(0, 1.5892²), the two shifts that take 80% coverage to 58%.
+    ///
+    /// Added after the first run (694 of 20,000 alarmed): the one-sided 95% Clopper–Pearson upper bound on that
+    /// false-alarm rate is ≤ α too, the statistic GATE-PLUMB-E5 asks of a correctly specified control.
+    ///
+    /// Planted negatives on the same residuals: the dispersion score left uncentred breaks the false-alarm bound,
+    /// and the scores this monitor used before bd-311 (the PIT and |PIT - 1/2| on `BettingEProcess`) miss the
+    /// dispersion criterion.
+    #[test]
+    fn test_spatial_front_pit_detects_58pct_coverage_shift_and_keeps_ville_bound() {
+        let q90 = 1.281_551_565_544_600_4;
+        let cover = |lo: f64, hi: f64| norm_cdf(hi) - norm_cdf(lo);
+        assert!((cover(-q90 - SHIFT_58, q90 - SHIFT_58) - 0.58).abs() < 1e-9);
+        assert!((cover(-q90 / SPREAD_58, q90 / SPREAD_58) - 0.58).abs() < 1e-9);
+
+        let fresh = SpatialFrontPitMonitor::new(0.2, 0.8, 40.0, 8, 0.05).expect("valid parameters");
+        let pair = |zs: &[f64], centre: f64| {
+            let disp_range = (det::tanh(-0.5) - centre, 1.0 - centre);
+            let disp = ScoreBettingEProcess::new(
+                disp_range.0,
+                disp_range.1,
+                DISPERSION_SCORE_SECOND_MOMENT,
+                STAKE_TRUNCATION,
+                0.025,
+            )
+            .expect("valid");
+            pair_alarm(zs, fresh.location_eproc.clone(), disp, |loc, disp, z| {
+                loc.observe(location_score(z)).expect("in range");
+                disp.observe(det::tanh((z * z - 1.0) / 2.0) - centre)
+                    .expect("in range");
+                loc.rejected_null() || disp.rejected_null()
+            })
+        };
+        let monitor_pair = |zs: &[f64]| {
+            pair_alarm(
+                zs,
+                fresh.location_eproc.clone(),
+                fresh.dispersion_eproc.clone(),
+                |loc, disp, z| {
+                    loc.observe(location_score(z)).expect("in range");
+                    disp.observe(dispersion_score(z)).expect("in range");
+                    loc.rejected_null() || disp.rejected_null()
+                },
+            )
+        };
+        let before_bd311 = |zs: &[f64]| {
+            let eproc = |m| BettingEProcess::new(m, 0.025).expect("valid");
+            pair_alarm(zs, eproc(0.5), eproc(0.25), |mean, spread, z| {
+                let u = norm_cdf(z);
+                mean.observe(u).expect("in [0, 1]");
+                spread.observe((u - 0.5).abs()).expect("in [0, 1]");
+                mean.rejected_null() || spread.rejected_null()
+            })
+        };
+
+        // End to end under the null.
+        let mut e2e_alarms = 0;
+        for run in 0..200 {
+            let mut rng = PhiloxStream::new(front_key(1, run));
+            let (zs, first) = front_run(&mut || rng.next_normal(), 600, false);
+            assert_eq!(first, monitor_pair(&zs), "null run {run}");
+            e2e_alarms += usize::from(first.is_some());
+        }
+
+        // The false-alarm rate, on i.i.d. residuals.
+        let (runs, mut alarms, mut uncentred) = (20_000_u32, 0_u32, 0_u32);
+        for run in 0..runs {
+            let mut rng = PhiloxStream::new(front_key(2, run));
+            let zs: Vec<f64> = (0..600).map(|_| rng.next_normal()).collect();
+            alarms += u32::from(monitor_pair(&zs).is_some());
+            uncentred += u32::from(pair(&zs, 0.0).is_some());
+        }
+        let fpr = f64::from(alarms) / f64::from(runs);
+        let (_, fpr_upper) = fmine_numerics::exact_feas::power::clopper_pearson(
+            u64::from(alarms),
+            u64::from(runs),
+            0.10,
+        )
+        .expect("alarms <= runs");
+        let fpr_uncentred = f64::from(uncentred) / f64::from(runs);
+
+        // End to end under the two 58% alternatives.
+        let shifted = |partition: u32, shift: f64, spread: f64| {
+            let mut now = Vec::new();
+            let mut old = Vec::new();
+            for run in 0..200 {
+                let mut rng = PhiloxStream::new(front_key(partition, run));
+                let (_, first) = front_run(&mut || shift + spread * rng.next_normal(), 300, true);
+                now.push(first);
+                let mut rng = PhiloxStream::new(front_key(partition, run));
+                let zs: Vec<f64> = (0..300)
+                    .map(|_| shift + spread * rng.next_normal())
+                    .collect();
+                old.push(before_bd311(&zs));
+            }
+            (now, old)
+        };
+        let (location, location_old) = shifted(3, SHIFT_58, 1.0);
+        let (dispersion, dispersion_old) = shifted(4, 0.0, SPREAD_58);
+        let (m_loc, m_disp) = (median(&location, 300), median(&dispersion, 300));
+        let (o_loc, o_disp) = (median(&location_old, 300), median(&dispersion_old, 300));
+        println!(
+            "bd-311: null end to end {e2e_alarms}/200 alarmed; false-alarm rate {fpr:.4} over {runs} runs of 600, \
+             one-sided 95% upper bound {fpr_upper:.4} (uncentred dispersion score {fpr_uncentred:.4}); median \
+             alarm {m_loc} polygons (location), {m_disp} (dispersion); before bd-311 {o_loc} and {o_disp}"
+        );
+        assert!(fpr <= 0.05, "false-alarm rate {fpr}");
+        assert!(fpr_upper <= 0.05, "false-alarm upper bound {fpr_upper}");
+        assert!(location.iter().chain(&dispersion).all(Option::is_some));
+        assert!(m_loc <= 25, "location median {m_loc}");
+        assert!(m_disp <= 40, "dispersion median {m_disp}");
+        assert!(fpr_uncentred > 0.05, "uncentred {fpr_uncentred}");
+        assert!(o_disp > 40, "the scores before bd-311 gave {o_disp}");
     }
 
     #[test]
