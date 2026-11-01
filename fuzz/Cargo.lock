@@ -62,8 +62,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-cli"
+version = "0.1.0"
+dependencies = [
+ "fmine-array",
+ "fmine-calib",
+ "fmine-claim",
+ "fmine-core",
+ "fmine-crs",
+ "fmine-decide",
+ "fmine-evidence",
+ "fmine-io",
+ "fmine-metrics",
+ "fmine-numerics",
+ "fmine-public",
+ "fmine-registry",
+ "fmine-runtime",
+ "fmine-time",
+ "fmine-units",
+]
+
+[[package]]
 name = "fmine-core"
 version = "0.1.0"
+
+[[package]]
+name = "fmine-crs"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+]
+
+[[package]]
+name = "fmine-decide"
+version = "0.1.0"
+dependencies = [
+ "fmine-calib",
+ "fmine-claim",
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-numerics",
+ "fmine-time",
+]
 
 [[package]]
 name = "fmine-evidence"
@@ -78,7 +118,9 @@ version = "0.0.0"
 dependencies = [
  "fmine-calib",
  "fmine-claim",
+ "fmine-cli",
  "fmine-core",
+ "fmine-evidence",
  "fmine-io",
  "fmine-registry",
  "libfuzzer-sys",
@@ -95,12 +137,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-metrics"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-numerics",
+ "fmine-registry",
+ "fmine-time",
+ "fmine-units",
+]
+
+[[package]]
 name = "fmine-numerics"
 version = "0.1.0"
 dependencies = [
  "fmine-array",
  "fmine-core",
  "fmine-evidence",
+ "fmine-units",
+]
+
+[[package]]
+name = "fmine-public"
+version = "0.1.0"
+dependencies = [
+ "fmine-calib",
+ "fmine-claim",
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-io",
+ "fmine-metrics",
+ "fmine-numerics",
+ "fmine-registry",
+ "fmine-time",
  "fmine-units",
 ]
 

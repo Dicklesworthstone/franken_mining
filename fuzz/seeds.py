@@ -99,7 +99,8 @@ def workbook(compression: int) -> bytes:
 def main() -> None:
     root, out = Path(sys.argv[1]), Path(sys.argv[2])
     seeds: dict[str, list[bytes]] = {t: [] for t in
-                                     ("codec", "anchor", "journal", "xlsx", "numfmt", "registry", "record", "html")}
+                                     ("codec", "anchor", "journal", "xlsx", "numfmt", "registry", "record", "html",
+                                      "cli")}
 
     # codec: mode, script length, script (one read per byte), payload.
     rng = random.Random(17)
@@ -175,6 +176,18 @@ def main() -> None:
         b"<tr><td colspan=\"2\">Total &amp; more</td></tr></table><p>x</p><table><tr><td>1</td></tr></table>"
         b"</body></html>")
     seeds["html"].append(b"<table><thead><tr><th>a<th>b</thead><tbody><tr><td>1<td>2</tbody></table>")
+
+    # cli: selector 0 and NUL-separated arguments, one seed per registered verb, plain and with common options;
+    # selector 1 and NUL-separated envelope fields.
+    verbs = re.findall(rb'^path = "([^"]+)"', (reg / "verbs.toml").read_bytes(), re.M)
+    options = [b"--issuer", b"barrick", b"--through", b"2026Q2", b"--format", b"markdown", b"--workspace", b"w"]
+    for v in verbs:
+        words = v.split(b" ")
+        seeds["cli"].append(b"\x00" + b"\x00".join(words))
+        seeds["cli"].append(b"\x00" + b"\x00".join(words + options))
+    seeds["cli"].append(b"\x00" + b"\x00".join([b"assure", b"public", b"--issuer", b"barrick", b"--output", b"o"]))
+    seeds["cli"].append(b"\x01" + b"\x00".join(
+        [b"assure public", b"what \"quoted\"", b"fmine robot-docs", b"why\tnow", b"w1", b"anc_x", b"00ff"]))
 
     for target, items in seeds.items():
         d = out / target

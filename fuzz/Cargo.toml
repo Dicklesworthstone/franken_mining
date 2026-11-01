@@ -18,6 +18,8 @@ fmine-claim = { path = "../crates/fmine-claim" }
 fmine-io = { path = "../crates/fmine-io" }
 fmine-registry = { path = "../crates/fmine-registry" }
 fmine-calib = { path = "../crates/fmine-calib" }
+fmine-cli = { path = "../crates/fmine-cli" }
+fmine-evidence = { path = "../crates/fmine-evidence" }
 
 [workspace]
 members = ["."]
@@ -77,6 +79,13 @@ bench = false
 [[bin]]
 name = "html"
 path = "fuzz_targets/html.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cli"
+path = "fuzz_targets/cli.rs"
 test = false
 doc = false
 bench = false
