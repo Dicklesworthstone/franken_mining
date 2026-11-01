@@ -33,6 +33,12 @@ assigns the next sequence and previous head, checks monotone observed time and d
 the consumer's semantic validator. No caller-supplied record timestamp enters this API. Only after successful
 validation, complete write and `sync_all` does the committed in-memory snapshot/head advance.
 
+DESIGN (BD-076): `forecast::timestamp` is the shared offline RFC 3161 verifier for the CLI and xtask. It
+authenticates a SHA-256 message imprint against an explicitly supplied PEM root bundle using OpenSSL 3.x.
+Both text decoding and signature verification receive the same bounded receipt snapshot through stdin.
+The decoded generation time is provisional until verification succeeds; certificate validity is checked at
+that signed time with `-attime`, without disabling certificate checks or sampling the host clock.
+
 ## 3. Authority, Epistemics & Representation
 Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a `SourceAnchor`
 (`artifact_path`, sha256, `sheet!cell`).
@@ -107,6 +113,16 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   `records`, `header`, `head` and `is_pinned` expose the committed snapshot. `append(request, clock, validate)`
   invokes the validation closure before writing; its caller replays `ForecastLedger` semantics on staged state.
   A successful append clears the old pin status; the newly returned head must be retained independently.
+- `forecast::timestamp::{verify_rfc3161, verify_rfc3161_with_intermediates, VerifiedTimestamp,
+  proof_times_from_text}`. Verification takes
+  receipt and trust-root paths plus the expected digest, returning `fmine_calib::record::ProofTimes` and
+  SHA-256 fingerprints of both input files. The text parser is exposed for known-answer tests and performs
+  no authentication by itself. Each stated accuracy component rounds upward to whole seconds; a nonzero
+  fractional generation time widens the upper endpoint by one second. Unspecified components add zero,
+  preserving the existing frozen-record verifier's rule.
+  The intermediate-aware entry point accepts an optional bounded PEM file passed only as `-untrusted`;
+  these certificates can complete a chain but never become additional trust anchors. Their fingerprints
+  are checked before and after verification as for the explicitly selected root bundle.
 
 ## 5. Guards & Typed Refusals
 - `G-BULL-1`: formula-error cells and `hidden`/`veryHidden` sheets go to `Workbook::quarantined`. Hidden sheets are
@@ -145,6 +161,13 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   A validator refusal preserves its original code and leaves disk bytes, sequence and committed head unchanged.
   A failed write/sync poisons the handle; no retry or repair is attempted. Creation failures may leave an
   uninitialized path, which is retained for inspection rather than overwritten by a second create.
+- Timestamp inputs must be nonempty regular, non-symlink files of at most 4 MiB. Duplicate time/accuracy
+  fields, malformed fractions, invalid subsecond accuracy components, overflow, wrong imprint algorithm,
+  failed signature/chain checks and changed root fingerprints refuse. Missing/unreadable inputs use `506`,
+  unavailable OpenSSL uses `202`, and invalid proofs use `505`. OpenSSL runs with `LC_ALL=C`, an empty local
+  configuration and explicit `-CAfile`/`-CAstore`; `SSL_CERT_FILE` names that same file and `SSL_CERT_DIR`
+  names the non-directory file, preventing an ambient hashed trust directory. No network store is selected.
+  Both the original and resolved root paths are fingerprinted again before a verified result is returned.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-IO-1`: on the 18 registered Barrick workbooks, the per-workbook census (visible and hidden sheets; numeric,
@@ -172,6 +195,10 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   exercise shared/exclusive lock contention, reject stale pins, corrupt/truncated/rolled-back files and clock
   rollback, and prove validator failures do not write. A real read-only descriptor triggers append failure and
   verifies poisoning while retaining the previous committed snapshot. Oversized and special files refuse.
+- Timestamp parser tests retain exact whole/fractional-second and per-component rounding behavior, refusing
+  ambiguous, malformed and overflowing fields. The separately invoked OpenSSL test checks the committed
+  DigiCert rules receipt against its expected digest and selected root, and refuses a changed digest or
+  unrelated FreeTSA root. It is an offline integration test, not evidence that caller-chosen roots are trusted.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Missing files, corrupt ZIP or DEFLATE streams and malformed workbooks fail closed with `IoError`. No fallbacks.
@@ -188,6 +215,8 @@ would permit a concurrent withdrawal race.
 
 ## 9. Lifted Code & Foundation Dependencies
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim` (V to S0), and `fmine-runtime` (V to S1, explicit clock).
+- `fmine-calib` supplies the shared `ProofTimes` and UTC parser (V to K0); timestamp verification invokes
+  OpenSSL 3.x on `PATH` with Unix `/dev/stdin` and `/dev/null`. Unsupported installations refuse.
 
 ## 10. Non-Goals & Scope Boundary
 Reads cells and adapts the reliance model to local files; does not interpret tables (`fmine-public`) or compute
@@ -201,3 +230,6 @@ It cannot establish that all detached copies were recalled; it records only know
 The forecast store provides local durable ordering, not external time authenticity, replication or a substitute
 for forecast semantic replay. Its declared host-clock bound is an operator assumption. Advisory locks coordinate
 cooperating processes; independently retained pins detect a changed final head but do not authenticate the writer.
+The separate timestamp adapter authenticates the TSA's assertion under the caller's selected roots. It does
+not select or endorse a TSA, fetch revocation information, perform network verification or establish that a
+local test authority is an independent time witness. Its input fingerprints permit the trust choice to be audited.

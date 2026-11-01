@@ -128,9 +128,11 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   verified against the compiled SHA-256 pins for the checked-in DigiCert or FreeTSA root PEM. A supplied
   `tsa_chain.pem` contributes only untrusted intermediates. Certificate validity is evaluated at the token's
   signed time, and a separately authenticated rules proof must strictly precede the record proof including
-  both accuracy bounds. Changed proof/root bytes refuse. `proof_times_from_text` reads signed time and
-  accuracy; an overflowing interval refuses. `rules_hash` refuses malformed rules or an `OPEN` marker;
-  the record is validated against the dates its rules state and the CSV against their universe and targets.
+  both accuracy bounds. The shared `fmine_io::forecast::timestamp` implementation verifies one receipt snapshot
+  and refuses changed root/intermediate fingerprints; xtask also matches the returned root fingerprint to
+  its compiled pin. Its text parser is reexported as `proof_times_from_text`; duplicate or malformed fields
+  and overflowing intervals refuse. `rules_hash` refuses malformed rules or an `OPEN` marker; the record is
+  validated against the dates its rules state and the CSV against their universe and targets.
   The manifest's advisory registry-hash binding includes registered documents as well as workbooks.
   This authenticates the frozen declarations and detects conflicting registered digests; it does not prove
   actual input use or replay a generator. Source adapters separately verify the bodies they consume.
@@ -195,9 +197,10 @@ Deterministic error collection across all files in lexicographical path order.
 - `GATE-ORACLE-01` (`BD-013`)
 
 ## 9. Lifted Code & Foundation Dependencies
-`fmine-registry` (the source registries and TOML subset), `fmine-calib` (the pure forecast record) and
-`fmine-public` (the label-anchored Mine Stats reader, for `forecast-baseline`); `openssl` on `PATH` for
-`forecast-record-verify` and `git` for `forecast-rules-order` only.
+`fmine-registry` (the source registries and TOML subset), `fmine-calib` (the pure forecast record),
+`fmine-io` (the shared offline RFC 3161 verifier) and `fmine-public` (the label-anchored Mine Stats reader,
+for `forecast-baseline`); OpenSSL 3.x on `PATH` for `forecast-record-verify`, through the I/O adapter,
+and `git` for `forecast-rules-order` only.
 
 ## 10. Non-Goals & Scope Boundary
 Never linked by any production crate.

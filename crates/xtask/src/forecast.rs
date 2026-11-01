@@ -4,7 +4,7 @@
 //! - `forecast-record-hash <dir>` validates `manifest.toml` against the source registries and the `rules.toml`
 //!   beside it, then writes `record.sha256` (the `FMREC1` digest of `manifest.toml` and `forecasts.csv`);
 //! - `forecast-record-verify <dir>` recomputes both digests, checks the RFC 3161 reply `record.tsr` against the
-//!   pinned checked-in public authority roots with `openssl ts -verify`, reads the signed time and accuracy,
+//!   pinned checked-in public authority roots through the shared `fmine_io::forecast::timestamp` verifier,
 //!   requires an earlier authenticated rules proof, and validates the manifest against that interval;
 //!   `tsa_chain.pem`, when supplied, contributes only untrusted intermediate certificates;
 //! - `forecast-rules-order` checks in git history that the FY2026 rules were committed before any forecast
@@ -28,6 +28,9 @@ use fmine_calib::record::{
     self, BaselineKind, ProofTimes, Quarter, Rat, RecordDates, RecordManifest, RecordRules,
     RegisteredDigest, SiteStatus, format_utc, parse_hex32, parse_utc,
 };
+use fmine_core::hash::Digest32;
+pub use fmine_io::forecast::timestamp::proof_times_from_text;
+use fmine_io::forecast::timestamp::verify_rfc3161_with_intermediates;
 use fmine_public::mine_stats::{
     LabelVocabulary, MineStatsCell, MineStatsValue, View, read_mine_stats,
 };
@@ -495,95 +498,6 @@ pub fn record_hash(root: &Path, dir: &Path) -> Res<String> {
     Ok(loaded.digest)
 }
 
-fn openssl(args: &[&str]) -> Res<String> {
-    let out = Command::new("openssl")
-        .args(args)
-        .output()
-        .map_err(|e| vec![format!("cannot run openssl: {e}")])?;
-    if !out.status.success() {
-        return fail(format!(
-            "openssl {} failed: {} {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stdout).trim(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-/// Seconds of one `Accuracy:` part: `0x01 seconds`, `500 millis`, `unspecified micros`.
-fn accuracy_part(part: &str, unit: &str, per_second: u64) -> Result<u64, String> {
-    let Some(value) = part.trim().strip_suffix(unit).map(str::trim) else {
-        return Err(format!("accuracy part {part:?} is not in {unit}"));
-    };
-    if value == "unspecified" {
-        return Ok(0);
-    }
-    let n = match value.strip_prefix("0x") {
-        Some(h) => u64::from_str_radix(h, 16),
-        None => value.parse(),
-    }
-    .map_err(|_| format!("accuracy value {value:?}"))?;
-    Ok(n.div_ceil(per_second))
-}
-
-/// The proof interval from `openssl ts -reply -text`: `Time stamp: Oct 30 14:04:42 2026 GMT` (a fraction of a
-/// second widens the upper bound by one second) widened both ways by `Accuracy:`, each part rounded up to whole
-/// seconds; an unspecified part adds nothing.
-pub fn proof_times_from_text(text: &str) -> Result<ProofTimes, String> {
-    let line = |prefix: &str| {
-        text.lines()
-            .find_map(|l| l.trim().strip_prefix(prefix).map(str::trim))
-            .ok_or(format!("no {prefix:?} line"))
-    };
-    let stamp: Vec<&str> = line("Time stamp:")?.split_whitespace().collect();
-    let [month, day, time, year, "GMT"] = stamp[..] else {
-        return Err(format!("unreadable time stamp {stamp:?}"));
-    };
-    let m = MONTHS
-        .iter()
-        .position(|&x| x == month)
-        .ok_or(format!("month {month:?}"))?;
-    let (whole, fraction) = time.split_once('.').unwrap_or((time, ""));
-    let iso = format!("{year}-{:02}-{:0>2}T{whole}Z", m + 1, day);
-    let t = parse_utc(&iso).ok_or(format!("time stamp {iso:?}"))?;
-    let parts: Vec<&str> = line("Accuracy:")?.split(',').collect();
-    let accuracy = if parts == ["unspecified"] {
-        0
-    } else {
-        let [s, ms, us] = parts[..] else {
-            return Err(format!("unreadable accuracy {parts:?}"));
-        };
-        [
-            accuracy_part(s, "seconds", 1)?,
-            accuracy_part(ms, "millis", 1_000)?,
-            accuracy_part(us, "micros", 1_000_000)?,
-        ]
-        .into_iter()
-        .try_fold(0_u64, u64::checked_add)
-        .ok_or("accuracy overflows")?
-    };
-    let accuracy = i64::try_from(accuracy).map_err(|_| "accuracy overflows".to_string())?;
-    let partial = i64::from(fraction.bytes().any(|b| b != b'0'));
-    // An accuracy wide enough to leave the representable times widens nothing: it refuses.
-    match (
-        t.checked_sub(accuracy),
-        t.checked_add(partial).and_then(|u| u.checked_add(accuracy)),
-    ) {
-        (Some(lower_utc), Some(upper_utc)) => Ok(ProofTimes {
-            lower_utc,
-            upper_utc,
-        }),
-        _ => Err(format!(
-            "accuracy of {accuracy} s overflows the proof interval"
-        )),
-    }
-}
-
 /// Public timestamp authorities accepted by the record protocol. The SHA-256 pins the complete checked-in
 /// PEM bytes, not a caller's replacement certificate or a file named tsa_chain.pem.
 const TSA_ROOTS: [(&str, &str); 2] = [
@@ -603,18 +517,10 @@ fn trusted_timestamp(
     file: &str,
     digest: &str,
 ) -> Res<(ProofTimes, String)> {
-    let path = dir.join(file);
-    let stamp = read(&path)?;
-    let path_text = path.to_string_lossy();
-    // Parsing does not authenticate these times. Authentication below checks the signature and certificate
-    // at the token's own genTime, so an authority certificate expiring later does not erase an old record.
-    let text = openssl(&["ts", "-reply", "-in", &path_text, "-text"])?;
-    let proof = proof_times_from_text(&text).map_err(|e| vec![format!("{file}: {e}")])?;
-    let midpoint = i128::from(proof.lower_utc)
-        + (i128::from(proof.upper_utc) - i128::from(proof.lower_utc)) / 2;
-    let attime = midpoint.to_string();
+    let digest = parse_hex32(digest)
+        .ok_or_else(|| vec!["computed record digest is not SHA-256".to_string()])?;
     let intermediates = dir.join("tsa_chain.pem");
-    let intermediates_text = intermediates.to_string_lossy();
+    let intermediates = intermediates.exists().then_some(intermediates.as_path());
     let mut failures = Vec::new();
     for (relative, expected) in TSA_ROOTS {
         let ca = root.join(relative);
@@ -631,28 +537,19 @@ fn trusted_timestamp(
             ));
             continue;
         }
-        let ca_text = ca.to_string_lossy();
-        // OpenSSL ts (3.x and 4.x apps/ts.c::create_cert_store) builds an empty trust store and adds
-        // only explicitly supplied CAfile/CApath/CAstore. Unlike openssl verify, ts has no
-        // -no-CApath/-no-CAstore options. Supplying only CAfile therefore excludes ambient roots.
-        let mut args = vec![
-            "ts", "-verify", "-digest", digest, "-in", &path_text, "-CAfile", &ca_text, "-attime",
-            &attime,
-        ];
-        if intermediates.exists() {
-            args.extend(["-untrusted", &intermediates_text]);
-        }
-        match openssl(&args) {
-            Ok(output) if output.contains("Verification: OK") => {
-                if read(&path)? != stamp || read(&ca)? != bytes {
-                    return fail("timestamp or trust root changed during verification".into());
-                }
-                return Ok((proof, relative.into()));
+        match verify_rfc3161_with_intermediates(
+            &dir.join(file),
+            &ca,
+            Digest32(digest),
+            intermediates,
+        ) {
+            Ok(verified) if verified.trust_roots_sha256.to_hex() == expected => {
+                return Ok((verified.times, relative.into()));
             }
-            Ok(_) => failures.push(format!(
-                "{file}: verification did not report OK with {relative}"
-            )),
-            Err(errors) => failures.extend(errors),
+            Ok(_) => {
+                return fail("timestamp trust root changed after checking its compiled pin".into());
+            }
+            Err(error) => failures.push(error.to_string()),
         }
     }
     failures.insert(
@@ -1113,6 +1010,7 @@ mod tests {
         let err = rules_order(&shallow).expect_err("shallow clone");
         assert!(err[0].contains("shallow clone"), "{err:?}");
     }
+
     /// Synthetic manifest, real registered metadata: PDFs must obey the same digest binding as workbooks.
     #[test]
     fn registered_document_hashes_are_bound_by_manifest_validation() {

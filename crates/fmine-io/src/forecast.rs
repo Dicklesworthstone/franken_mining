@@ -4,6 +4,8 @@
 //! The operation schema belongs to the caller; this store does not implement a second forecast ledger.
 //! Local clocks, advisory locks and hash chains establish neither external time proof nor authenticity.
 
+pub mod timestamp;
+
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{Read, Write};
 use std::path::Path;
