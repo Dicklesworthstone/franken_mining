@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod beads;
+pub mod claims;
 pub mod contracts;
 pub mod forecast;
 pub mod int_as;
@@ -534,13 +535,15 @@ fn module_name(item: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
-/// Check `L-6` (`BD-009`): no bare `f64` physical quantity parameters (`tonnes: f64`, `grade: f64`, `ounces: f64`, `moisture: f64`)
-/// in `K` or `E` public function signatures.
+/// Check `L-6` (`BD-009`, bd-u56b): no `pub fn` of a `K` or `E` crate takes a bare `f64`, unless
+/// `registries/l6_allow.toml` names the parameter with its kind and reason ([`claims`]). `fmine-numerics` is not
+/// scanned: its solvers work on bare numbers by design. A missing allow-list reads as empty.
 pub fn check_claims(root: &Path) -> Result<(), Vec<String>> {
     let report = check_loc_budget(root)?;
     let crate_layers: BTreeMap<String, String> =
         report.rows.into_iter().map(|r| (r.name, r.layer)).collect();
 
+    let mut sites = Vec::new();
     let mut errors = Vec::new();
     for member_toml in workspace_member_manifests(root)? {
         let (pkg_name, _, _) = parse_cargo_manifest(&member_toml)?;
@@ -548,14 +551,37 @@ pub fn check_claims(root: &Path) -> Result<(), Vec<String>> {
         if !(layer.starts_with('K') || layer == "E") || pkg_name == "fmine-numerics" {
             continue;
         }
-        let src_dir = member_toml.parent().unwrap_or(root).join("src");
-        for rs_file in collect_rs_files(&src_dir) {
-            let content = fs::read_to_string(&rs_file).unwrap_or_default();
-            let prod_code = strip_cfg_test(&content);
-            if let Err(e) = check_bare_quantity_signature(&rs_file, &prod_code) {
-                errors.push(e);
+        let crate_dir = member_toml.parent().unwrap_or(root);
+        for rs_file in collect_rs_files(&crate_dir.join("src")) {
+            let content = match fs::read_to_string(&rs_file) {
+                Ok(c) => c,
+                Err(e) => {
+                    errors.push(format!("{}: unreadable: {e}", rs_file.display()));
+                    continue;
+                }
+            };
+            let file = rs_file
+                .strip_prefix(crate_dir)
+                .unwrap_or(&rs_file)
+                .to_string_lossy()
+                .replace('\\', "/");
+            for bare in claims::bare_f64_params(&strip_cfg_test(&content)) {
+                sites.push(claims::Site {
+                    krate: pkg_name.clone(),
+                    file: file.clone(),
+                    bare,
+                });
             }
         }
+    }
+    let allow_text = match fs::read_to_string(root.join(claims::ALLOW_PATH)) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(vec![format!("{}: {e}", claims::ALLOW_PATH)]),
+    };
+    match claims::parse_allow(&allow_text) {
+        Ok(rows) => errors.extend(claims::evaluate(&sites, &rows)),
+        Err(e) => errors.extend(e),
     }
 
     if errors.is_empty() {
@@ -565,29 +591,18 @@ pub fn check_claims(root: &Path) -> Result<(), Vec<String>> {
     }
 }
 
-/// Check a source string for bare `f64` physical quantities in `pub fn` signatures (`L-6`, `BD-009`).
+/// Check one source string with no allow-list: any bare `f64` parameter of a `pub fn` fails (`L-6`).
 pub fn check_bare_quantity_signature(path: &Path, prod_code: &str) -> Result<(), String> {
-    let banned_params = [
-        "wet_tonnes: f64",
-        "dry_tonnes: f64",
-        "grade_gpt: f64",
-        "moisture_pct: f64",
-        "ounces_gold: f64",
-    ];
-    for line in prod_code.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("pub fn ") {
-            for pat in banned_params {
-                if trimmed.contains(pat) {
-                    return Err(format!(
-                        "{}: bare physical quantity `{pat}` in K/E public signature `{trimmed}` (violates L-6; use Qty<D, B, R> or ExactQty)",
-                        path.display()
-                    ));
-                }
-            }
-        }
+    match claims::bare_f64_params(prod_code).first() {
+        Some(b) => Err(format!(
+            "{}:{}: `{}: f64` in K/E public fn `{}` (L-6): take a typed quantity (fmine-units) or a Claim",
+            path.display(),
+            b.line,
+            b.param,
+            b.func
+        )),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// The determinism classes of plan §29.2, as a `//! Determinism: <class>` header names them.

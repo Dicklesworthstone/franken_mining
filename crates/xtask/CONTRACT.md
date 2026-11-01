@@ -21,7 +21,7 @@ The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` chec
   - `docs/delivery/` (BUDGET-AMEND and GATE records);
   - `.beads/issues.jsonl`, `deny.toml` and `franken-stack.lock`;
   - the plan's §8.4 codes and its Appendix F.1 rows.
-- **Registries.** `registries/`: `loc_budget.toml`, `lifts.toml`, `lift_drift.toml`, `refusals.toml`, `sources/*.toml`, `calendars.toml` and `zones.toml`.
+- **Registries.** `registries/`: `loc_budget.toml`, `lifts.toml`, `lift_drift.toml`, `refusals.toml`, `l6_allow.toml`, `sources/*.toml`, `calendars.toml` and `zones.toml`.
 - **External programs, read-only:**
   - `cargo tree`, for `check-int-as-001a` and `check-oracle`;
   - `git rev-parse`, `diff`, `ls-files`, `ls-tree` and `show`, for `check-amend`, `check-lifts --upstream`, `check-lift-drift` and `forecast-rules-order`;
@@ -53,7 +53,7 @@ The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` chec
   - `check_layers`: `test_seeded_upward_layer_edge_fails`;
   - `check_caps`: `test_seeded_open_child_region_fails`, `test_seeded_detached_worker_or_timer_fails_outside_the_runtime`;
   - `check_deps`: `test_seeded_tokio_fails_check_deps_in_every_declaration_form`;
-  - `check_claims`: `test_seeded_bare_f64_quantity_fails`;
+  - `check_claims`: `test_seeded_bare_f64_quantity_fails`, `test_l6_any_bare_f64_parameter_fails_on_one_line_or_several`, `test_l6_allow_rows_excuse_their_sites_and_refuse_stale_or_empty_ones`;
   - `check_det`: `test_seeded_std_transcendental_in_bitwise_portable_fails`;
   - `check_scope`: `test_seeded_smuggled_module_fails_check_scope`;
   - `check_oracle`: `test_seeded_oracle_outside_the_workspace_fails_the_closure_but_not_check_deps`;
@@ -69,7 +69,7 @@ Exit 2, naming each finding. The findings are:
 - `open_child_region` outside `fmine-runtime`, or a banned capability (L-3);
 - a lift provenance mismatch (L-7);
 - an undeclared module family (§28.4);
-- one of the five bare-`f64` parameters below in a K/E `pub fn` (L-6);
+- a parameter typed bare `f64` in a K/E `pub fn` that no `registries/l6_allow.toml` row names, or a row that names no such parameter (L-6);
 - a K/E file without a determinism class, or a std transcendental in a BitwisePortable module (PO-NUM-2);
 - a change adding LOC to a crate over its ceiling, or over planned without an approved amendment (§28.4);
 - an oracle crate in a production closure, or a fixture without its capture record (GATE-ORACLE-01);
@@ -88,7 +88,8 @@ Not applicable: no Claims are emitted.
 - The static checks read text, not a Rust syntax tree:
   - `check-det` matches `.name(` and `f64::name(` outside comments and test code.
   - `check_scope` matches the `mod` lines of `src/lib.rs`.
-  - `check_claims` (L-6) matches only five literal parameters, `wet_tonnes: f64`, `dry_tonnes: f64`, `grade_gpt: f64`, `moisture_pct: f64` and `ounces_gold: f64`, and only on a line that starts `pub fn ` (`src/lib.rs:569`). A multi-line signature, or any other parameter name, passes.
+  - `check_claims` (L-6) reads each `pub fn` signature, across lines, in the production code of the K and E crates except `fmine-numerics`. Test code and line comments are skipped. A parameter fails when its type is exactly `f64`. It does not check return types, which the plan's L-6 also names, nor `pub(crate)` or private functions, slices, tuples, closures' arguments or struct fields. A `pub fn` written inside a string literal is read as code.
+  - An allow row matches by crate, file, function name and parameter, not by `impl` type, so two `pub fn new` in one file share their rows.
 - `check-amend` needs the root to be a git work tree's top level. Without one it is a warning in `check-all`, and an error with `--base`.
 - `check-lifts --upstream` and `check-lift-drift` need a frankensim checkout. CI runs only the drift check, each quarter (`.github/workflows/lift-drift.yml`). `test_upstream_known_answers_when_a_checkout_is_given` passes without running when `FRANKENSIM_PATH` is unset.
 - `forecast-baseline` needs the registered workbooks under `corpus_of_input_docs/`, so it never runs in CI (RISK-31). Its test is `#[ignore]` for that reason. So are 26 tests in `tests/`, which need registered workbooks, PDFs or the local transcription registry.
@@ -100,7 +101,7 @@ Not applicable: no Claims are emitted.
 - The other checks have no external oracle: their tests are seeded violations.
 
 ## 10. Known gaps
-- **L-6 lint.** It catches five literal names (see Validity domain), and bd-009 closed on it. K/E public functions that take a bare `f64` quantity under any other name pass it. Examples are `fmine_metrics::compute_geo(gold_koz, copper_mlb)` and `fmine_decide`'s `from_linear_sensitivity(…, npv_advantage_usd_m, …)`.
+- **L-6 debt (bd-u56b).** `registries/l6_allow.toml` holds six `debt` rows, fifteen bare physical or money parameters that existed when the deny-by-default rule landed. They are in `fmine-calib` (`new`: variogram nugget, sill and range), `fmine-decide` (`from_linear_sensitivity`, `build`) and `fmine-metrics` (`compute_geo`, `compute`, `solve_cutoff_grade`). Each should take a typed quantity or a Claim. Bare `f64` return types are not checked at all.
 - **Gaps in check-all and CI:**
   - `check-all` does not run `contracts`, which waits for bd-2a73.2 to rewrite every contract, nor `check-beads`. CI runs `check-all`, `check-amend --base`, `loc` and the quarterly drift check, so neither of the two runs there.
   - `check_scope` still holds the older rule of sections 1 to 10, which a twelve-section contract also meets.
@@ -166,7 +167,12 @@ Not applicable: no Claims are emitted.
   - it cites a `GATE-…` token with no `docs/delivery/<token>*.md` record holding a `Verdict: PASS` line (R-GATE);
   - it is closed over a `blocks` dependency that is not closed (R-BLOCKED).
   A `test:` reference's last `::` segment must be a `fn` anywhere under `crates/`. It is not looked up in the named crate, because tests have moved between crates since they were cited. A `record:` reference must be a file, and `ci:` and `commit:` are format-checked only. Ten closes within 60 s is a warning (R-WINDOW). The JSONL reader is hand-written (no serde), and a malformed line is an error naming its number.
-- `check_claims(root: &Path) -> Result<(), Vec<String>>` and `check_bare_quantity_signature` (L-6, BD-009): the five literal parameters of the Validity domain, in K and E production code.
+- `check_claims(root: &Path) -> Result<(), Vec<String>>` (L-6, BD-009, bd-u56b): deny by default. Every bare `f64` parameter of a K/E `pub fn` fails unless `registries/l6_allow.toml` names it.
+  - A row is `[[allow]]` with `crate`, `file` (relative to the crate), `fn`, `params` (comma-separated), `kind` and `reason`.
+  - `kind` is `generic` (dimensionless, or a statistical function over values in the caller's own unit) or `debt` (a physical quantity or money passed bare).
+  - A row fails when a field is missing, unknown or not a string, the kind is neither, the reason or `params` is empty, a parameter is listed twice in the file, or a parameter matches no site. A key or table outside `[[allow]]` fails too, and a missing file reads as empty.
+  - `check_bare_quantity_signature(path, prod_code)` fails on the first bare `f64` parameter of one source, with no allow-list.
+- `claims::{bare_f64_params, parse_allow, evaluate, BareParam, AllowRow, Site, ALLOW_PATH, KINDS}`: the scanner, the allow-list reader and the matcher behind `check_claims`.
 - `check_det(root: &Path) -> Result<DetReport, Vec<String>>` (bd-hp2j.1; command `check-det`, and `check-all` prints its line `{"check":"check-det","files","headers_missing":0,"violations":0,"bitwise_files"}`).
   - Every production file of a K or E crate declares `//! Determinism: <class>`, with a §29.2 class (`DET_CLASSES`).
   - A `BitwisePortable` file calls none of `BANNED_TRANSCENDENTALS`, as `.name(` or `f64::name(`, outside comments and test code (`banned_transcendental_calls`).
@@ -215,7 +221,12 @@ Not applicable: no Claims are emitted.
   - `test_seeded_method_call_ln_in_bitwise_portable_fails`;
   - `test_seeded_ufcs_f64_exp_in_bitwise_portable_fails`;
   - `test_workspace_check_det_passes_and_logs`.
-- PO-UNIT-2 (no K or E public function takes a bare `f64` for a physical quantity) is not discharged. `check_claims` and `test_seeded_bare_f64_quantity_fails` cover only the five literal names (Known gaps).
+- PO-UNIT-2 (no K or E public function takes a bare `f64` for a physical quantity) is enforced for parameters by `check_claims` in `check-all`, and is not discharged while the six debt rows remain and returns go unchecked (Known gaps). Tests:
+  - `test_l6_any_bare_f64_parameter_fails_on_one_line_or_several`;
+  - `test_l6_typed_private_and_commented_parameters_pass`;
+  - `test_l6_allow_rows_excuse_their_sites_and_refuse_stale_or_empty_ones`;
+  - `test_seeded_bare_f64_quantity_fails`;
+  - `test_workspace_check_all_gate_layers_00_passes`.
 - GATE-ORACLE-01 (no oracle crate in a production closure; every fixture has its capture record). Tests:
   - `test_seeded_oracle_outside_the_workspace_fails_the_closure_but_not_check_deps`;
   - `test_every_fixture_needs_a_record_with_its_digest`.

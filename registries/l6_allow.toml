@@ -1,0 +1,128 @@
+# L-6 allow-list (plan PO-UNIT-2; bd-u56b). `xtask check-claims` fails on every parameter typed bare `f64` in a
+# `pub fn` of a K or E crate (fmine-numerics excepted) unless a row here names its crate, file, function and
+# parameter. A row whose parameter no longer exists fails too.
+#
+# kind = "generic": dimensionless, or a statistical function over values in the caller's own unit.
+# kind = "debt":    a physical quantity or money passed bare. It should become a typed quantity (fmine-units) or a
+#                   Claim; bd-u56b stays open while any debt row remains. The debt rows record the sites that existed
+#                   when this lint landed (2026-11-01). New code does not get one (AGENTS.md L-6: redesign the API).
+
+[[allow]]
+crate = "fmine-calib"
+file = "src/ledger.rs"
+fn = "register"
+params = "mean, std_dev"
+kind = "generic"
+reason = "compatibility path: Gaussian forecast parameters in the forecast target's own unit; the ledger is unit-agnostic"
+
+[[allow]]
+crate = "fmine-calib"
+file = "src/ledger.rs"
+fn = "record_outcome"
+params = "realized"
+kind = "generic"
+reason = "compatibility path: the realized value in the forecast target's own unit"
+
+[[allow]]
+crate = "fmine-calib"
+file = "src/lib.rs"
+fn = "gaussian_crps"
+params = "mean, std_dev, y"
+kind = "generic"
+reason = "proper scoring rule over a Gaussian and a realization, all in one caller-chosen unit"
+
+[[allow]]
+crate = "fmine-calib"
+file = "src/lib.rs"
+fn = "gaussian_log_score"
+params = "mean, std_dev, y"
+kind = "generic"
+reason = "proper scoring rule over a Gaussian and a realization, all in one caller-chosen unit"
+
+[[allow]]
+crate = "fmine-calib"
+file = "src/lib.rs"
+fn = "winkler_interval_score"
+params = "lo, hi, y"
+kind = "generic"
+reason = "interval score over bounds and a realization, all in one caller-chosen unit"
+
+[[allow]]
+crate = "fmine-calib"
+file = "src/lib.rs"
+fn = "winkler_interval_score"
+params = "alpha"
+kind = "generic"
+reason = "dimensionless miscoverage level in (0, 1)"
+
+[[allow]]
+crate = "fmine-calib"
+file = "src/lib.rs"
+fn = "blend"
+params = "base_mean, base_std"
+kind = "generic"
+reason = "moment matching of a baseline forecast in the target's own unit"
+
+[[allow]]
+crate = "fmine-calib"
+file = "src/lib.rs"
+fn = "new"
+params = "alpha"
+kind = "generic"
+reason = "SpatialFrontPitMonitor significance level, dimensionless"
+
+[[allow]]
+crate = "fmine-calib"
+file = "src/lib.rs"
+fn = "new"
+params = "nugget_var, sill_var, range_m"
+kind = "debt"
+reason = "SpatialFrontPitMonitor variogram: nugget and sill variances in squared grade units and the range in metres, passed bare"
+
+[[allow]]
+crate = "fmine-decide"
+file = "src/lib.rs"
+fn = "from_linear_sensitivity"
+params = "baseline_value, npv_advantage_usd_m, d_npv_d_param"
+kind = "debt"
+reason = "FlipMargin: a parameter value whose unit is a string, NPV in USD millions and its derivative, passed bare"
+
+[[allow]]
+crate = "fmine-decide"
+file = "src/lib.rs"
+fn = "build"
+params = "cvar95_loss_usd_m"
+kind = "debt"
+reason = "DecisionCard CVaR loss in USD millions, passed bare beside a Claim for the expected NPV"
+
+[[allow]]
+crate = "fmine-metrics"
+file = "src/lib.rs"
+fn = "compute_geo"
+params = "gold_koz, copper_mlb"
+kind = "debt"
+reason = "gold in koz and copper in Mlb, passed bare"
+
+[[allow]]
+crate = "fmine-metrics"
+file = "src/lib.rs"
+fn = "compute"
+params = "depletion_moz, organic_additions_moz, greenfield_conversions_moz"
+kind = "debt"
+reason = "reserve movements in Moz, passed bare"
+
+[[allow]]
+crate = "fmine-metrics"
+file = "src/lib.rs"
+fn = "solve_cutoff_grade"
+params = "processing_and_ga_usd_per_t, net_metal_price_usd_per_unit, initial_guess"
+kind = "debt"
+reason = "unit cost in USD/t, net price in USD per metal unit and a starting grade, passed bare"
+
+[[allow]]
+crate = "fmine-metrics"
+file = "src/lmdi.rs"
+fn = "logarithmic_mean"
+params = "a, b"
+kind = "generic"
+reason = "the LMDI logarithmic mean of two positive values of one quantity, as pure arithmetic"
