@@ -48,9 +48,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # macos-15 puts Homebrew's OpenSSL 1.1 first on PATH. Its `ts -verify` cannot build the chain from the
-      # committed rules proof to the pinned DigiCert root ("unable to get local issuer certificate", run
-      # 41322629628); OpenSSL 3 verifies the same proof. The forecast tests and scripts run `openssl` from PATH.
+      # macos-15 puts Homebrew's OpenSSL 1.1 first on PATH. Before f44d600 its `ts -verify` could not build the
+      # chain from the committed rules proof to the pinned DigiCert root ("unable to get local issuer
+      # certificate", run 41322629628). f44d600 passes the embedded certificates as an untrusted chain, which
+      # its author reports 1.1.1w verifying; no CI run has checked that yet. This step keeps macOS on OpenSSL 3,
+      # which verifies the proof (3.6.5 and 4.0.3, locally). The forecast tests and scripts run `openssl` from PATH.
       - name: OpenSSL 3 first on PATH (macOS)
         if: runner.os == 'macOS'
         run: |

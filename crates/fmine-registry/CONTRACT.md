@@ -15,7 +15,7 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
 
 ## 4. Public API Surface
 - `table_identities::{parse_table_identities, load_table_identities, TableIdentityRegistry, TableIdentity,
-  Term, IdentityKind, TermRole}` (BD-340.S5): strict `fmine.table-identities.v1` declarations for source-bound
+  Term, Replacement, IdentityKind, TermRole}` (BD-340.S5, BD-063): strict `fmine.table-identities.v1` declarations for source-bound
   PDF arithmetic, without source values. Every identity names its registered document, family, sum or
   roll-forward kind, total quantity and period, unit, basis, construction and tie convention. Linked term rows
   explicitly name each member quantity, period, sign and role. A roll-forward has exactly one positive opening
@@ -23,6 +23,19 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   membership is declared rather than inferred. Duplicate quantities, unknown documents/fields, orphan terms,
   missing periods and invalid signs/roles refuse. One construction applies per family and one tie convention
   per document, preventing selection of a rounding rule per instance. `validate` rechecks caller-built structs.
+  `reserve_replacement` identities require one numerator and denominator, a versioned gold-ounce or GEO
+  definition, explicit matching ounce units, percentage factor 100 and a price-deck key. The percentage and
+  both operands share a three-year `YYYY-YYYY` window. Basis is explicitly attributable contained gold/GEO,
+  excluding acquisitions/divestments, with the same deck key. Gold requires `none`; GEO requires a named deck.
+  Replacement metadata cannot decorate a sum or roll-forward. Shared amount quantities remain permitted;
+  reuse of a quoted percentage in another same-document identity refuses as unsupported nonlinear coupling.
+  DESIGN (BD-335): optional `[[reserve_row]]` entries add explicit subject, reserve item/year, period, metal,
+  unit, ownership, contained/recoverable support and convention; their source basis is the exact agreed string
+  `<metal>;<ownership>;<support>`. An opening belongs to the preceding fiscal year. A quoted deck names the
+  same-document gold and/or copper price quantities and their period/basis; GEO requires both. An unstated
+  deck cannot carry price fields. Duplicate row ids, document/quantity aliases, incompatible units/periods,
+  invalid ownership fractions and inconsistent document conventions refuse. `quantities_by_document` selects
+  the sorted union of arithmetic operands, reserve assertions and price readings; reserve-only definitions run.
 - `RegistryCatalog`, `RegistryError`
 - `toml_subset::{parse_subset, TomlDoc, TomlRow, TomlField, TomlValue, SubsetError}`: a strict TOML subset (`[[table]]` rows, basic strings, integers, comments); anything else refuses naming the line (bd-s9j3.1)
 - `sources::{parse_sources_registry, load_sources_registry, SourcesRegistry, SourceRow, ReconstructionRow, BasisRow, MissingFactRow, MineStatsLabelRow, ShareRow, RegionMemberRow, SourcesError, is_quarter, is_url_basis, URL_BASES, URL_BASIS_FETCHED}`, `SourcesRegistry::members_of`, `RegionMemberRow::holds_for`: issuer source registries (each `url_basis` is `"W1 table"`, `"W1 naming rule"` or `"fetched and verified YYYY-MM-DD"` with a calendar date, BD-339.S3; each `[[reconstruction]]` declares `basis = "reconstructed"`, or `"stated"` with `quote_doc` (a registered file), `quote_locator` (`sheet!cell`) and `quote_prefix`, BD-331.S2; optional `[[missing_fact]]` rows, BD-331.S2: `subject`, `family`, `text` (prose with no digits), `evidence`, optional `closing_document`, once per subject and family; optional `[[mine_stats_label]]` rows: `label`, optional `section`, duplicates refused; optional `kind = "site" | "region"` on `[[subject]]`; optional `[[share]]` rows, BD-331.S3: `subject` (a registered non-region subject, once), positive `num` ≤ `den`, `evidence`, optional Mine Stats `label`; optional `[[region_member]]` rows, BD-331.S4: `region` (a registered region), `member` (a registered non-region subject), release quarter `first` and optional `last` ≥ `first`, no two rows of one member over overlapping releases) `registries/sources/<issuer>.toml` (`fmine.sources.v1`), checked on load
@@ -82,6 +95,10 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   quantity namespace while treating missing, invalid or orphan identity metadata as incomplete. A mixed
   guidance/price identity disagreement still blocks guidance; the empty prefix requires global completeness.
   `is_consistent` and the accepted-row digest retain their existing meanings.
+  DESIGN (BD-335): `accepted_pending_clashes` identifies accepted quantities that also have a pending
+  location in the same document, including identical printed values. Diagnostics retain both locations
+  and the pending reader; unknown rejection identity conservatively competes with accepted quantities in
+  that document. Unrelated pending quantities remain available for per-row reporting.
 - `calendars::{load_site_calendars, parse_site_calendars, SiteCalendars}` (BD-029): `registries/calendars.toml`
   (`site_id`, IANA `tz_name`, `day_start_local_hour` 0..=23, `shift_hours` 1..=24, `roster_pattern`) joined with
   the zone snapshot `registries/zones.toml` (header `tzdata`, span `[from_utc_s, to_utc_s)`; one `[[zone]]` per

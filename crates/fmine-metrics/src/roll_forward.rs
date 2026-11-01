@@ -10,11 +10,14 @@ use std::fmt::Write as _;
 
 use fmine_core::hash::sha256;
 use fmine_numerics::exact_feas::{self as xf, Rat};
+use fmine_registry::metrics::{MetricDefinition, MetricFamily, MetricRegistry};
 use fmine_registry::sources::{DocumentRow, is_date};
 use fmine_registry::table_identities::{
     IdentityKind, TableIdentity, TableIdentityRegistry, TermRole,
 };
 use fmine_registry::transcriptions::{Accepted, Token, parse_token};
+
+pub mod quarter;
 
 pub const SCHEMA: &str = "fmine.pdf-table-check.v1";
 pub const NO_CLAIM: &str = "Checks the declared identities of registered issuer assertions under stated rounding and membership assumptions. It does not verify the truth of the issuer's figures, establish complete reserve coverage, select a true vintage, classify a reserve, or supply a corrected published value. Document-byte authentication and independent reader agreement are caller obligations.";
@@ -50,12 +53,14 @@ pub struct ComponentCheck {
 pub struct TableReport {
     pub issuer: String,
     pub definitions: Vec<TableIdentity>,
+    /// Exact registered definitions selected by replacement identities, retained in the report digest.
+    pub metric_definitions: Vec<MetricDefinition>,
     pub cells: Vec<SourceCell>,
     pub components: Vec<ComponentCheck>,
     pub refused: Vec<IdentityRefusal>,
 }
 
-fn convention(name: &str) -> xf::Convention {
+pub(crate) fn convention(name: &str) -> xf::Convention {
     match name {
         "half_up" => xf::Convention::HalfUp,
         "half_down" => xf::Convention::HalfDown,
@@ -85,7 +90,7 @@ fn reading_key(a: &Accepted) -> (&str, &str, &str, &str, &str, &str) {
     )
 }
 
-fn canonical_readings(readings: &mut [Accepted]) {
+pub(crate) fn canonical_readings(readings: &mut [Accepted]) {
     let value_key = |a: &Accepted| match a.value {
         Token::Point(d) => (0_u8, d.mantissa, d.scale, 0, 0),
         Token::Range(lo, hi) => (1, lo.mantissa, lo.scale, hi.mantissa, hi.scale),
@@ -121,12 +126,34 @@ fn source_cell(
     definition: &TableIdentity,
     quantity: &str,
     period: &str,
+    unit: &str,
+    readings: &[Accepted],
+    document: &DocumentRow,
+) -> Result<SourceCell, String> {
+    bind_reading(
+        &definition.doc,
+        quantity,
+        period,
+        unit,
+        &definition.basis,
+        readings,
+        document,
+    )
+}
+
+/// Shared source boundary for arithmetic and typed issuer reserve assertions. Bytes are checked by callers.
+pub(crate) fn bind_reading(
+    doc: &str,
+    quantity: &str,
+    period: &str,
+    unit: &str,
+    basis: &str,
     readings: &[Accepted],
     document: &DocumentRow,
 ) -> Result<SourceCell, String> {
     let matches: Vec<_> = readings
         .iter()
-        .filter(|a| a.locator.doc == definition.doc && a.quantity == quantity)
+        .filter(|a| a.locator.doc == doc && a.quantity == quantity)
         .collect();
     let a = match matches.as_slice() {
         [a] => *a,
@@ -159,7 +186,7 @@ fn source_cell(
             "ambiguous rendered locator from distinct source labels",
         ));
     }
-    if a.unit != definition.unit || a.basis != definition.basis || a.period != period {
+    if a.unit != unit || a.basis != basis || a.period != period {
         return Err(refuse(
             "unit, basis or period differs from the explicit declaration",
         ));
@@ -239,13 +266,26 @@ fn bind(
         definition,
         &definition.total,
         &definition.total_period,
+        &definition.unit,
         readings,
         document,
     )?;
     let mut sources = vec![total];
     let mut terms = Vec::new();
     for term in &definition.terms {
-        let source = source_cell(definition, &term.quantity, &term.period, readings, document)?;
+        let unit = match (&definition.replacement, term.role) {
+            (Some(r), TermRole::Numerator) => &r.numerator_unit,
+            (Some(r), TermRole::Denominator) => &r.denominator_unit,
+            _ => &definition.unit,
+        };
+        let source = source_cell(
+            definition,
+            &term.quantity,
+            &term.period,
+            unit,
+            readings,
+            document,
+        )?;
         terms.push((term, source.cell.locator.clone()));
         sources.push(source);
     }
@@ -279,6 +319,55 @@ fn bind(
                 total,
             )
         }
+        IdentityKind::ReserveReplacement => {
+            let replacement = definition
+                .replacement
+                .as_ref()
+                .ok_or("missing replacement metadata")?;
+            let numerator = terms
+                .iter()
+                .find(|(t, _)| t.role == TermRole::Numerator)
+                .ok_or("missing numerator")?;
+            let denominator = terms
+                .iter()
+                .find(|(t, _)| t.role == TermRole::Denominator)
+                .ok_or("missing denominator")?;
+            let cell = sources
+                .iter()
+                .find(|s| s.cell.locator == denominator.1)
+                .ok_or("missing denominator source")?;
+            let half = cell
+                .cell
+                .step
+                .checked_div(Rat::from_integer(2))
+                .map_err(|e| e.to_string())?;
+            let bounds = convention(&definition.convention)
+                .interval(cell.cell.printed, half)
+                .map_err(|e| format!("denominator rounding interval unavailable: {e:?}"))?;
+            let minimum = if denominator.0.sign == 1 {
+                bounds.lo
+            } else {
+                bounds.hi.checked_neg().map_err(|e| e.to_string())?
+            };
+            if minimum.signum() <= 0 {
+                return Err("signed depletion denominator rounding interval must be strictly positive and bounded away from zero".into());
+            }
+            xf::Identity {
+                id: definition.id.clone(),
+                family: definition.family.clone(),
+                closure: xf::Closure::Definitional,
+                kind: xf::IdentityKind::Ratio {
+                    rate: total.clone(),
+                    num: numerator.1.clone(),
+                    den: denominator.1.clone(),
+                    factor: Rat::from_integer(
+                        i128::from(replacement.factor)
+                            * i128::from(numerator.0.sign)
+                            * i128::from(denominator.0.sign),
+                    ),
+                },
+            }
+        }
     };
     Ok((identity, sources))
 }
@@ -292,6 +381,27 @@ pub fn assess(
     readings: &[Accepted],
     documents: &[DocumentRow],
 ) -> TableReport {
+    assess_inner(registry, readings, documents, None)
+}
+
+/// Also authenticates each declared replacement definition against the supplied metric registry.
+/// The caller still verifies document bytes and reader agreement. No GEO conversion is performed.
+#[must_use]
+pub fn assess_with_metrics(
+    registry: &TableIdentityRegistry,
+    readings: &[Accepted],
+    documents: &[DocumentRow],
+    metrics: &MetricRegistry,
+) -> TableReport {
+    assess_inner(registry, readings, documents, Some(metrics))
+}
+
+fn assess_inner(
+    registry: &TableIdentityRegistry,
+    readings: &[Accepted],
+    documents: &[DocumentRow],
+    metrics: Option<&MetricRegistry>,
+) -> TableReport {
     let mut definitions = registry.identities.clone();
     definitions.sort_by(|a, b| a.id.cmp(&b.id));
     for definition in &mut definitions {
@@ -300,6 +410,7 @@ pub fn assess(
     let mut report = TableReport {
         issuer: registry.issuer.clone(),
         definitions,
+        metric_definitions: Vec::new(),
         cells: Vec::new(),
         components: Vec::new(),
         refused: Vec::new(),
@@ -315,7 +426,34 @@ pub fn assess(
     }
     let mut groups: BTreeMap<String, Vec<(xf::Identity, Vec<SourceCell>)>> = BTreeMap::new();
     for definition in &report.definitions {
-        match bind(definition, readings, documents) {
+        let bound = (|| {
+            if let Some(replacement) = &definition.replacement {
+                let selected: Vec<_> = metrics
+                    .into_iter()
+                    .flat_map(|m| &m.definitions)
+                    .filter(|d| d.id == replacement.definition)
+                    .collect();
+                let [metric] = selected.as_slice() else {
+                    return Err(format!(
+                        "replacement requires exactly one registered metric definition {}",
+                        replacement.definition
+                    ));
+                };
+                if metric.family != MetricFamily::ReserveReplacement
+                    || metric.unit != "percent"
+                    || metric.formula.trim().is_empty()
+                    || metric.source.trim().is_empty()
+                    || metric.evidence.trim().is_empty()
+                {
+                    return Err("replacement definition must be a cited reserve_replacement percentage definition".into());
+                }
+                if !report.metric_definitions.iter().any(|d| d.id == metric.id) {
+                    report.metric_definitions.push((*metric).clone());
+                }
+            }
+            bind(definition, readings, documents)
+        })();
+        match bound {
             Ok(bound) => groups
                 .entry(definition.doc.clone())
                 .or_default()
@@ -328,6 +466,7 @@ pub fn assess(
             }),
         }
     }
+    report.metric_definitions.sort_by(|a, b| a.id.cmp(&b.id));
     for (doc, bound) in groups {
         let definitions: Vec<_> = report.definitions.iter().filter(|d| d.doc == doc).collect();
         let Some(first) = definitions.first() else {
@@ -456,7 +595,7 @@ pub fn assess(
     report
 }
 
-fn js(s: &str) -> String {
+pub(crate) fn js(s: &str) -> String {
     let mut out = String::from("\"");
     for ch in s.chars() {
         match ch {
@@ -482,7 +621,7 @@ fn strings(values: &[String]) -> String {
     )
 }
 
-fn rat(value: Rat) -> String {
+pub(crate) fn rat(value: Rat) -> String {
     format!(
         "{{\"num\":\"{}\",\"den\":\"{}\"}}",
         value.num(),
@@ -490,7 +629,7 @@ fn rat(value: Rat) -> String {
     )
 }
 
-fn interval(value: &xf::Interval) -> String {
+pub(crate) fn interval(value: &xf::Interval) -> String {
     format!(
         "{{\"lo\":{},\"hi\":{},\"lo_strict\":{},\"hi_strict\":{}}}",
         rat(value.lo),
@@ -500,7 +639,7 @@ fn interval(value: &xf::Interval) -> String {
     )
 }
 
-fn accepted_json(a: &Accepted) -> String {
+pub(crate) fn accepted_json(a: &Accepted) -> String {
     let decimal = |d: fmine_registry::transcriptions::Decimal| {
         format!("{{\"mantissa\":\"{}\",\"scale\":{}}}", d.mantissa, d.scale)
     };
@@ -530,7 +669,11 @@ fn accepted_json(a: &Accepted) -> String {
     )
 }
 
-fn definition_json(d: &TableIdentity) -> String {
+pub(crate) fn definition_json(d: &TableIdentity) -> String {
+    let replacement = d.replacement.as_ref().map_or_else(|| "null".into(), |r| format!(
+        "{{\"definition\":{},\"numerator_unit\":{},\"denominator_unit\":{},\"factor\":{},\"price_deck\":{}}}",
+        js(&r.definition), js(&r.numerator_unit), js(&r.denominator_unit), r.factor, js(&r.price_deck)
+    ));
     let terms = d
         .terms
         .iter()
@@ -546,7 +689,7 @@ fn definition_json(d: &TableIdentity) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"id\":{},\"doc\":{},\"family\":{},\"kind\":{},\"total\":{},\"total_period\":{},\"unit\":{},\"basis\":{},\"construction\":{},\"convention\":{},\"terms\":[{}]}}",
+        "{{\"id\":{},\"doc\":{},\"family\":{},\"kind\":{},\"total\":{},\"total_period\":{},\"unit\":{},\"basis\":{},\"construction\":{},\"convention\":{},\"replacement\":{replacement},\"terms\":[{}]}}",
         js(&d.id),
         js(&d.doc),
         js(&d.family),
@@ -636,6 +779,12 @@ fn blame_json(blame: &xf::BlameOutcome) -> String {
 
 impl TableReport {
     fn body(&self) -> String {
+        let metric_definitions = self.metric_definitions.iter().map(|d| format!(
+            "{{\"id\":{},\"family\":\"reserve_replacement\",\"unit\":{},\"formula\":{},\"source\":{},\"evidence\":{},\"credit_basis\":{},\"extends\":{},\"supersedes\":{}}}",
+            js(&d.id), js(&d.unit), js(&d.formula), js(&d.source), js(&d.evidence),
+            js(match d.credit_basis { fmine_registry::metrics::CreditBasis::ByProduct => "by_product", fmine_registry::metrics::CreditBasis::CoProduct => "co_product" }),
+            strings(&d.extends), d.supersedes.as_ref().map_or_else(|| "null".into(), |s| js(s))
+        )).collect::<Vec<_>>().join(",");
         let definitions = self
             .definitions
             .iter()
@@ -685,7 +834,7 @@ impl TableReport {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "\"schema\":{},\"issuer\":{},\"gate_eligible\":false,\"definitions\":[{definitions}],\"cells\":[{cells}],\"components\":[{components}],\"refused\":[{refused}],\"no_claim\":{}",
+            "\"schema\":{},\"issuer\":{},\"gate_eligible\":false,\"definitions\":[{definitions}],\"metric_definitions\":[{metric_definitions}],\"cells\":[{cells}],\"components\":[{components}],\"refused\":[{refused}],\"no_claim\":{}",
             js(SCHEMA),
             js(&self.issuer),
             js(NO_CLAIM)
@@ -757,6 +906,7 @@ mod tests {
             basis: "attributable;contained".into(),
             construction: "rounded_once".into(),
             convention: "closed".into(),
+            replacement: None,
             terms: terms
                 .iter()
                 .map(|(quantity, period, sign)| Term {
@@ -773,6 +923,7 @@ mod tests {
         TableIdentityRegistry {
             issuer: "synthetic".into(),
             identities,
+            reserve_rows: Vec::new(),
         }
     }
 

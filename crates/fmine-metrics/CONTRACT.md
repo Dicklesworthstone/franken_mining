@@ -8,7 +8,10 @@ The public-lane metric kernels. Each one takes supplied numbers and computes a m
 - the production and AISC a year still needs to meet guidance, and whether the site's own history reaches it (`guidance`, `guidance::quarters`);
 - an optimistic production ceiling from stated feed, grade and recovery (`capacity`);
 - a grade-normalised recovery comparison (`recovery`);
-- the declared arithmetic identities of a PDF table, such as a roll-forward, over agreed readings (`roll_forward`);
+- the declared arithmetic identities of a PDF table, such as a roll-forward, over agreed readings, and reserve-replacement ratios bound to a cited definition (`roll_forward`, `roll_forward::assess_with_metrics`);
+- a quarter derived from cumulative disclosures (Q2 = H1 − Q1, Q3 = 9M − H1, Q4 = FY − 9M) and checked against a draft's displayed figure (`roll_forward::quarter`, BD-345.S4);
+- H1 and FY as sums of complete quarters, carried as Claims (`public_derivation`, BD-345.S4);
+- a source-bound projection of an issuer's declared reserve rows, with their filing vintages and quoted price decks (`reserves`, BD-335);
 - whether the reporters of one asset agree on the gold it produced or sold, on one 100% basis (`mirror`);
 - at the crate root: an AISC consolidation check, GEO under a price deck, reserve replacement and a float cut-off solver.
 
@@ -18,7 +21,7 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Layer:** E
 - **Subsystem:** Bullion
 - **LOC budget:** 18,000 planned / 21,000 ceiling
-- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "roll_forward", "mirror"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserves", "roll_forward", "mirror", "public_derivation"]`
 
 ## 2. Inputs
 - **Crate root.** Bare `f64` values: site AISC rows and bridge totals, gold koz and copper Mlb with a `PriceDeck`, reserve movements in Moz, and a cost, net price, starting grade and recovery closure for `solve_cutoff_grade`.
@@ -28,7 +31,10 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **`guidance`.** `CompletionInputs`: six `Claim<Quantity>`, for the production and AISC guidance, the YTD production, sales and AISC, and a separately declared remaining-sales scenario. `compare_history` takes `HistoricalContinuation`s; `quarters::compare_quarters` takes `QuarterlyHistory` windows.
 - **`capacity`.** A signed remaining-production `Claim<Quantity>`, and `CapacityLimits`: three `Claim<PhysicalLimit>` for dry feed, head grade and recovery.
 - **`recovery`.** `TrainingRow`s and an `OperatingRow` of `Claim<recovery::Quantity>`, in percent and kt units.
-- **`roll_forward`.** Explicit PDF identity declarations, agreed point readings and their registered document metadata. The caller authenticates the actual registered bytes and the reader agreement before public use.
+- **`roll_forward`.** Explicit PDF identity declarations, agreed point readings and their registered document metadata. `assess_with_metrics` also takes the metric registry. The caller authenticates the actual registered bytes and the reader agreement before public use.
+- **`roll_forward::quarter`.** A `Quantity` (additive gold production or sales in koz, or copper production in kt), the target quarter, a draft `Printed` value and step, and `Observation`s. Source ids name the actual operands. A caller-authenticated series key binds issuer, subject, year, scope and perimeter version, metric, unit, occurrence and an explicit normalised ownership. Each observation states its cumulative ending quarter and either its displayed value and step or an unusable value.
+- **`public_derivation`.** A `Rule` and `Claim<Amount>`s: exactly Q1 and Q2, or Q1 to Q4, of one extensive `AmountKind`. Rates and grades cannot enter the enum. The caller authenticates the source bytes and publication availability.
+- **`reserves`.** A `TableIdentityRegistry`, `Accepted` readings and `DocumentRow`s.
 - **`mirror`.** `Claim<MirrorReading>`s under `READING_METRIC`: gold produced or sold, in koz, over one declared asset, operation perimeter and calendar period, each box on a fixed full or attributable basis. `mirror::transcriptions::bind` builds them from already-agreed S0 `Accepted` rows and a `DocumentRow`.
 - **Every `Quantity`** carries exact rational bounds, a subject, a calendar-month `Period`, an `Ownership` and a kind. Units are fixed by the kind, never inferred from magnitudes.
 
@@ -46,7 +52,10 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **`compare_history` and `quarters::compare_quarters`** give an `EnvelopeTier` (`T1` or `T3`), a `HistoryVerdict` (`WithinEnvelope`, `ExceedsEnvelope` or `Indeterminate`) and one check per history. A positive check carries a witness Claim. A quarterly exclusion carries checked `exact_feas` certificates. `fmine-public`'s `guidance/history.rs` calls the quarterly path.
 - **`capacity::compare_production`** gives a `CapacityReport`: two derived Claims (the ceiling and the grade needed at maximum feed and recovery) and a `CapacityVerdict`. `fmine-cli`'s `guidance_capacity.rs` calls it.
 - **`recovery::fit` and `recovery::project`** give `Claim<Fit>` and a `Projection` of two model Claims, `ConstantTails` and `GradeDependentTails`. `fmine-public`'s `recovery.rs` calls them.
-- **`roll_forward::assess`** gives a `TableReport` (schema `fmine.pdf-table-check.v1`). Conflicts carry the kernel certificate digest and minimum or inclusion-minimal correction sets with exact implied intervals. Feasible components carry the narrowed ranges satisfying all declared identities. The JSON report and its SHA-256 digest bind all declarations, admitted source readings, rejected candidate readings, reader roles, filing metadata and results. `fmine-cli`'s `tables.rs` calls it.
+- **`roll_forward::assess`** gives a `TableReport` (schema `fmine.pdf-table-check.v1`). Conflicts carry the kernel certificate digest and minimum or inclusion-minimal correction sets with exact implied intervals. Feasible components carry the narrowed ranges satisfying all declared identities. The JSON report and its SHA-256 digest bind all declarations, admitted source readings, rejected candidate readings, reader roles, filing metadata and results. **`assess_with_metrics`** also binds each reserve-replacement ratio to exactly one cited percentage definition in the metric registry, and the definition's full metadata enters the report digest. `fmine-cli`'s `tables.rs` calls `assess_with_metrics`.
+- **`roll_forward::quarter::assess`** gives a `Report`: a `Status` (`Derived`, `PrecisionNotEstablished`, `Contradicted`, `ConflictingDerivations`, `NotAvailable` or `Refused`), and every evaluated `Pair` with its exact interval, relation and rule (`H1-Q1`, `9M-H1` or `FY-9M`). JSON bounds are exact rational strings. `WARNING` says that derived information is not an issuer disclosure. No target-period Claim is made. `fmine-cli`'s `lint_publicness.rs` calls it.
+- **`public_derivation::derive`** gives the H1 or FY `Claim<Amount>`, or a `Refusal`. `fmine-cli`'s `lint_publicness/sums.rs` calls it.
+- **`reserves::assess`** gives a `ReserveReport`: every admitted or refused `IssuerReserveRow`, the `CurrentSelection`, each `VintageComparison`, the `ReserveDeck` prices and the document metadata, with JSON, Markdown and digests over all of them. `fmine-cli`'s `tables.rs` calls it.
 - **`mirror::compare`** gives a `MirrorReport` with a `MirrorVerdict`. `Consistent` carries a checked source-basis witness and a common full-basis Claim. `Conflict` carries the checked certificate/digest, blame status and inclusion-minimal source sets. `Indeterminate` has no common quantity. `fmine-cli`'s `mirror.rs` calls it.
 
 ## 4. Invariants
@@ -54,7 +63,7 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   - `solve_cutoff_grade`: `test_cutoff_refuses_out_of_domain_inputs` and `test_cutoff_refuses_non_convergence`.
   - Cut-off reproduction: `test_no_positive_net_is_refused_not_clamped`.
   - Signed results stay signed: `signed_derived_requirements_are_never_clamped`, `signed_requirements_and_closed_ceiling_boundaries_are_preserved`, `negative_gaps_and_extrapolated_recovery_are_not_clamped` and `test_signed_nonpositive_cost_is_not_forced_into_a_logarithm`.
-- **Exact arithmetic that overflows refuses with 207, and no partial result is returned.** `exact_overflow_is_a_numerical_refusal`, `exact_arithmetic_overflow_is_a_typed_refusal`, `zero_denominators_invalid_domains_and_overflow_refuse` and `test_invalid_precision_source_and_overflow_refuse`.
+- **Exact arithmetic that overflows refuses with 207, and no partial result is returned.** `exact_overflow_is_a_numerical_refusal`, `exact_arithmetic_overflow_is_a_typed_refusal`, `zero_denominators_invalid_domains_and_overflow_refuse`, `test_invalid_precision_source_and_overflow_refuse` and `exact_sum_overflow_refuses_in_both_directions_without_partial_output`. In `roll_forward::quarter`, overflow gives `Refused`, never a success status: `exact_overflow_is_a_refusal_with_no_success_status`.
 - **A printed rate never moves a waterfall bar.** The factors close on supplied spend ÷ ounces sold, and the printed-rate gap is a separate item. `test_supplied_cost_drives_factors_and_printed_rate_only_drives_gaps`, `test_printed_gaps_never_change_bars_and_equal_gaps_survive` and `test_equal_endpoint_gaps_remain_visible_when_gap_change_is_zero`.
 - **The legacy LMDI closes or refuses.** A non-finite effect, an unrepresentable rate, or a closure residual above 1e-9 USD/oz refuses with 207. `test_synthetic_two_period_exact_lmdi`, `test_unrepresentable_rates_refuse_instead_of_returning_nan`, `test_invalid_inputs_name_the_period_and_field` and `test_log_space_avoids_product_overflow_and_subnormal_ratio_rounding`.
 - **The typed waterfall.**
@@ -76,32 +85,50 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
   - No history, or a solver cap, gives `Indeterminate`: `missing_history_and_solver_caps_remain_indeterminate`.
 - **The capacity ceiling scales production by the attributable share, never grade or recovery.** `ownership_scales_production_not_the_physical_limits` and `rounding_uses_upper_physical_bounds_and_never_averages_rates`.
 - **The two recovery variances keep their denominators apart** (`SSE/(n−1)` and `SSE/(n−2)`): `residual_sample_sd_and_regression_error_use_distinct_denominators`. Wider input boxes never narrow an output: `widening_rounding_never_narrows_model_outputs`.
-- **Derived Claims keep their provenance and never gain strength.** `derived_claims_preserve_provenance_and_never_upgrade_evidence`, `derived_claims_keep_uncertainty_confidentiality_and_source_identity`, `ordering_is_deterministic_and_evidence_cannot_be_strengthened` and `fit_and_both_models_preserve_every_registered_venture_and_wall`.
+- **Derived Claims keep their provenance and never gain strength.** `derived_claims_preserve_provenance_and_never_upgrade_evidence`, `derived_claims_keep_uncertainty_confidentiality_and_source_identity`, `ordering_is_deterministic_and_evidence_cannot_be_strengthened`, `fit_and_both_models_preserve_every_registered_venture_and_wall` and `summation_preserves_source_identity_weaker_metadata_and_unknown_terms`.
 - **A roll-forward identity binds only agreeing members (BD-340.S5, BD-331.S7).** Units, basis, member periods, raw-token precision, distinct reader identities, page bounds and source hashes must agree. Shared cells within a document are solved jointly by `exact_feas`; each feasible witness and infeasible certificate is checked again before emission. Different documents remain separate vintages.
+- **A reserve-replacement ratio is exact and bound to one definition (BD-063).** `assess_with_metrics` uses the definition's declared numerator and denominator signs and scaling. The signed depletion interval must be strictly positive and bounded away from zero. Shared amounts enter the same joint solve as the sums and roll-forwards. Original source tokens are unchanged, and gold and GEO definitions, windows and deck keys stay distinct. There is no implicit metal or price conversion and no shared-rate nonlinear solve. `crates/xtask/tests/reserve_replacement.rs` covers it.
+- **A derived quarter keeps both operands' displayed uncertainty (BD-345.S4).** A printed value `v` with positive step `s` is the closed enclosure `[v−s/2, v+s/2]`, and subtraction is `[a.lo−b.hi, a.hi−b.lo]`. Every admitted cumulative/prior pair is assessed. A draft is `Derived` only when its own displayed enclosure contains every pair's enclosure and the competing assertions for each cumulative period share a common interval. Numeric agreement never selects a source vintage. `cumulative_rules_preserve_exact_rounding_and_signed_zero_results`, `every_competing_pair_is_retained_and_a_matching_vintage_never_wins_a_tie` and `missing_or_unusable_members_and_incompatible_series_refuse_positive_derivation`.
+- **A quarter sum needs complete, disjoint quarters of one series (BD-345.S4).** Issuer, subject, scope, metric and unit, explicit ownership and calendar year must match. Closed source bounds add in exact rationals and keep their signs. `quarter_sums_require_complete_disjoint_half_or_full_year`, `different_basis_unit_scope_and_year_do_not_mix`, `addition_propagates_rounding_and_keeps_zero_as_a_real_observation` and `canonical_but_unusable_and_placeholder_inputs_never_become_summed_amounts`.
+- **The current reserve row is the latest eligible filing, and nothing falls back silently (BD-335).** Only registered MD&A and AIF documents supply current rows, chosen by the latest declared publication date. Declared rows are considered before reading availability, so an unusable newer filing blocks fallback to an older one, and same-date filings stay ambiguous. Investor decks only cross-check. Partner filings and technical reports are refused as implicit issuer filings. All supplied earlier vintages stay visible. The economic key (issuer, subject, reserve year, item, metal, unit, ownership and contained or recoverable support) excludes the deck. A quoted deck binds positive agreed gold and copper price readings from the same document, with their period, basis, units and citations. A different or unstated deck gives a named comparison state and asserts no reserve restatement. Comparable rows intersect their exact declared rounding intervals and keep open ends. `latest_filed_row_wins_and_later_deck_never_replaces_it`, `missing_new_value_or_deck_price_blocks_silent_old_filing_fallback`, `same_date_filings_remain_ambiguous_even_with_one_unusable_row`, `deck_change_updates_current_without_claiming_a_reserve_restatement` and `half_open_tie_bounds_do_not_report_false_compatibility`.
+- **A reserve report binds everything it was given.** A registry-wide refusal binds all supplied declarations, documents and raw and admitted readings in a canonical input digest, keeping duplicates, so a change to a rejected input changes the digest. `inputs_are_order_invariant_and_rejected_metadata_remains_digest_bound`, `registry_refusal_binds_invalid_declarations_documents_and_raw_and_admitted_values` and `registry_refusal_fingerprint_includes_identities_and_preserves_duplicates_and_order`.
 - **The mirror works on one common 100% quantity (BD-346.S3).** Scale identities express it; the existing exact feasibility solver and independent checkers produce a witness or exclusion certificate. Fixed tolerances and inferred partner shares are absent. At least two reporters are required, but their shares need not sum to one. The nonnegative physical domain is explicit: a printed zero keeps its original negative-to-positive rounding box, while the common interval is intersected with `x >= 0` and the reported witness is checked there. Canonical tags bind reporter identity, numeric source anchor, operation membership, inclusive validity dates and the exact typed quantity. Inputs, normalized Claims and proof cells share one sorted order, and minimal-source indices address that order. Conflict sets' disjoint normalized intervals independently establish minimality; an incomplete blame search remains explicit.
 
 ## 5. Refusals
-`lmdi`, `lmdi::waterfall`, `guidance`, `guidance::quarters`, `capacity` and `recovery` refuse with these codes:
-- **`FMINE-REF-102`** (support mismatch; exit 3): a non-aggregate or invalid month support, or periods that do not line up. From `guidance`, `quarters`, `capacity` and `recovery`.
-- **`FMINE-REF-103`** (non-additive average; exit 3): additivity that does not match the quantity. From `guidance`, `capacity` and `recovery`.
+`lmdi`, `lmdi::waterfall`, `guidance`, `guidance::quarters`, `capacity`, `recovery` and `public_derivation` refuse with these codes:
+- **`FMINE-REF-102`** (support mismatch; exit 3): a non-aggregate or invalid month support, or periods that do not line up. From `guidance`, `quarters`, `capacity`, `recovery` and `public_derivation`.
+- **`FMINE-REF-103`** (non-additive average; exit 3): additivity that does not match the quantity. From `guidance`, `capacity`, `recovery` and `public_derivation`.
 - **`FMINE-REF-104`** (non-identifiable attribution; exit 3). From the waterfall: a sold-ounce box that touches zero, unmatched or ambiguous line identities, or lines that do not sum to the cost. From `recovery`: a denominator box that touches zero, fewer than three annual observations, or a duplicate year. The zero-denominator and too-few-rows cases use the nearest code.
 - **`FMINE-REF-105`** (basis mismatch; exit 3): a kind, unit, subject, ownership or AISC-definition mismatch, or repeated history ids. From every Claim kernel, and from the waterfall for unequal bases. `guidance` also uses it for an attributable share outside (0, 1].
-- **`FMINE-REF-107`** (undeclared unit, basis or time zone; exit 3): an undeclared subject or definition, or an unprinted waterfall basis. From `guidance`, `capacity`, `recovery` and the waterfall.
+- **`FMINE-REF-107`** (undeclared unit, basis or time zone; exit 3): an undeclared subject or definition, or an unprinted waterfall basis. From `guidance`, `capacity`, `recovery`, `public_derivation` and the waterfall.
 - **`FMINE-REF-108`** (assay lookahead; exit 3), used for time order: a history at or after the guidance year, or a quarter that does not follow every training year. From `guidance`, `quarters` and `recovery`.
 - **`FMINE-REF-109`** (outside physical domain; proposed, exit 3). From the legacy LMDI: a non-positive or non-finite input, or recovery above one. From the waterfall: a negative half-step, or a share outside (0, 1]. From the Claim kernels: reversed bounds, or a value outside its domain.
-- **`FMINE-REF-201`** (no claim in domain; exit 3): a missing source locator or digest, or a history with no id or no quarters. From the waterfall, `guidance`, `quarters`, `capacity` and `recovery`.
+- **`FMINE-REF-201`** (no claim in domain; exit 3): a missing source locator or digest, a history with no id or no quarters, or no operands. From the waterfall, `guidance`, `quarters`, `capacity`, `recovery` and `public_derivation`.
 - **`FMINE-REF-202`** (not observable; exit 3): an input whose state is neither `Known` nor `Estimated`. From `guidance`, `capacity` and `recovery`.
 - **`FMINE-REF-203`** (outside AOA; exit 3).
   - From `guidance`, `capacity` and `recovery`, for an open interval bound. The kernels need closed rounding bounds. This is the nearest code.
   - From `AiscConsolidationBridge::verify_rollup`, when the numerator gap exceeds 0.5 $M (Validity domain).
 - **`FMINE-REF-205`** (calibration required; exit 3): an input that failed calibration. From `guidance`, `capacity` and `recovery`.
 - **`FMINE-REF-207`** (numerical certificate failed; proposed, exit 3): exact overflow, a failed witness or certificate, an invalid enclosure, or a failed closure. From every Claim kernel, both LMDI paths and `quarters`.
-- **`FMINE-REF-208`** (source cell unusable; proposed, exit 3): a placeholder input. From `guidance`, `capacity` and `recovery`.
-- **`FMINE-REF-502`** (stale anchor; exit 6): a stale input. From `guidance`, `capacity` and `recovery`.
+- **`FMINE-REF-208`** (source cell unusable; proposed, exit 3): a placeholder input. From `guidance`, `capacity`, `recovery` and `public_derivation`.
+- **`FMINE-REF-301`** (MNPI wall; exit 7): a private source. From `public_derivation` and `mirror`.
+- **`FMINE-REF-502`** (stale anchor; exit 6): a stale input. From `guidance`, `capacity`, `recovery` and `public_derivation`.
+- **`FMINE-REF-507`** (frozen record mutation; exit 6): a source Claim whose metric or value differs from its canonical identity. From `public_derivation` and `mirror`.
 
 `mirror` refuses unsupported cost definitions/kinds, unequal assets and invalid shares (`105`), unequal periods or invalid dates (`102`), missing/unequal operation perimeters or validity straddles (`104`), missing numeric/context citations (`201`), private sources (`301`), placeholders (`208`), stale/unknown/conflicted/failed-calibration inputs (`502`/`202`/`205`), and mutated canonical Claims (`507`). Reversed bounds or negative reported midpoints refuse (`109`); open source bounds refuse (`203`). Arithmetic overflow/checker failures refuse (`207`); solver limits remain `Indeterminate`. `mirror::transcriptions::bind` refuses mismatched numeric or ownership document names, hashes and pages before construction.
 
 `roll_forward` does not refuse a table for one bad identity. A missing, ambiguous or incompatible member keeps an `IdentityRefusal` with its available evidence, and independent complete identities still run.
+
+`roll_forward::quarter` reports, rather than raises:
+- **`Refused`** for malformed or duplicate source identities, unequal semantic series, unusable admitted values, non-positive precision, unsupported cumulative periods, checked arithmetic overflow, or more than 4,096 candidate pairs;
+- **`NotAvailable`** when either period is missing;
+- **`PrecisionNotEstablished`** when the enclosures overlap but the draft's precision is not reached;
+- **`ConflictingDerivations`** for mutually inconsistent period assertions or differing pair conclusions;
+- **`Contradicted`** when every pair's enclosure is disjoint from the draft's.
+
+A dash is never zero, signed differences stay signed, and no failure selects a numerically convenient subset. Source identity and publication-cut admission are the adapter's duty.
+
+`reserves` refuses a row as a `ReserveRefusal` kept in the report: an unsupported source role, a wrong price, unit, period, reader or document metadata (`unsupported_sources_are_refused_and_deck_only_has_no_current_row`, `source_guards_reject_wrong_prices_units_periods_readers_and_metadata`).
 
 The other modules have local errors with no refusal code:
 - **`CutoffError`**: `NonPositiveCost`, `NonPositivePrice`, `NonPositiveGuess`, `RecoveryOutOfDomain` and `NotConverged`.
@@ -111,7 +138,7 @@ The other modules have local errors with no refusal code:
 
 ## 6. Determinism class
 **DeterministicPerIsa** for the crate, the weakest of its files' `//! Determinism:` headers:
-- **Exact:** `capacity.rs`, `guidance.rs`, `guidance/quarters.rs`, `mirror.rs`, `mirror/transcriptions.rs` and `roll_forward.rs`. These use checked rational arithmetic, canonical input tags and sorted identities.
+- **Exact:** `capacity.rs`, `guidance.rs`, `guidance/quarters.rs`, `mirror.rs`, `mirror/transcriptions.rs`, `public_derivation.rs`, `reserves.rs`, `roll_forward.rs` and `roll_forward/quarter.rs`. These use checked rational arithmetic, canonical input tags and sorted identities.
 - **BitwisePortable:** `lmdi.rs`. Its two golden digests, `golden_digest_logarithmic_mean_10k` and `golden_digest_decompose_aisc_lmdi_10k`, agreed on x86_64-linux and aarch64-macos in CI run 41237993223 at 84f32ac (bd-hp2j.3). `test_golden_digest_logarithmic_mean_10k` and `test_golden_digest_decompose_aisc_lmdi_10k` pin them.
 - **DeterministicPerIsa:**
   - `lib.rs` has no cross-host digest test (plan §29.2, bd-hp2j.1);
@@ -123,9 +150,11 @@ The other modules have local errors with no refusal code:
 
 ## 7. Evidence class of outputs
 - **`guidance` and `capacity`** give `Derived`, met with every parent's class. So a result is never stronger than its weakest input. An issuer `Assertion` stays an `Assertion`. Epistemic status and state take the weaker of their parents'. Confidentiality is joined, and anchors, parent ids and UU terms are kept. The exact set lives in the value, so the representation is `Deterministic`.
+- **`public_derivation`** keeps the parents' identities, source anchors, evidence, knowledge, confidentiality and UU terms. The result is arithmetic over assertions, never a new issuer disclosure or a physical truth. `WARNING` says so.
 - **`recovery`** starts from `ModelledUncalibrated`, `KnownUnknown(Parametric)` and `Estimated`, then meets its sources'. A model output is never calibrated here (NL-4). It adds one model UU term, named by `RULES_VERSION` and `MODEL_CAVEAT`.
+- **`reserves`** rows keep their fields private and report a constant `EvidenceClass::ISSUER`, so relabelling cannot promote them. `reserves::NO_CLAIM` states that they are issuer assertions, not classified reserves.
 - **`mirror`**'s normalized and common Claims retain immediate source parents, anchors, weaker evidence/knowledge/epistemics, and every distinct UU term, including different terms sharing a scenario id. No assertion is promoted. `mirror::transcriptions::bind` preserves the supplied evidence class.
-- **The other outputs carry no Claim and no evidence class.** These are the root items, `definitions`, `cutoff`, both LMDI paths and `roll_forward`. `WATERFALL_NO_CLAIM`, `WATERFALL_RULES_VERSION`, `recovery::NO_CLAIM`, `roll_forward::NO_CLAIM` and `mirror::NO_CLAIM` state the descriptive reading. A `Conflict` or `Reproduced` cut-off state speaks to the printed inputs only, not to whether they suit the mine.
+- **The other outputs carry no Claim and no evidence class.** These are the root items, `definitions`, `cutoff`, both LMDI paths, `roll_forward` and `roll_forward::quarter`. `WATERFALL_NO_CLAIM`, `WATERFALL_RULES_VERSION`, `recovery::NO_CLAIM`, `roll_forward::NO_CLAIM`, `quarter::WARNING` and `mirror::NO_CLAIM` state the descriptive reading. A `Conflict` or `Reproduced` cut-off state speaks to the printed inputs only, not to whether they suit the mine.
 
 ## 8. Validity domain
 - **The root items are bare `f64`.** Four L-6 rows in `registries/l6_allow.toml` cover them. Three are debt: `compute_geo`, `ReserveReplacementBridge::compute` and `solve_cutoff_grade`. One is generic: `logarithmic_mean`.
@@ -142,6 +171,8 @@ The other modules have local errors with no refusal code:
 - **Capacity** multiplies the three maxima. That gives an optimistic ceiling, not a plan. `NotExcluded` is not a feasibility witness.
 - **Recovery** fits two descriptive annual models and applies them to quarters. Its enclosures cover input rounding, not sampling error. An extrapolated recovery outside 0–100% is kept as computed.
 - **The PDF identity adapter (`roll_forward`, BD-340.S5)** verifies declared arithmetic of issuer assertions, not their truth or completeness. It never emits reserve classifications, selects a preferred filing/deck vintage, silently changes a printed sign, or supplies an issuer-attributed corrected figure. Synthetic E692-shaped arithmetic is a known-answer test of the binding; the authentic historical transcription and independent census gates remain open. Closed intervals are agnostic about ties; a named half-open convention is never changed to rescue a row. No file I/O occurs here: callers authenticate actual registered bytes and reader agreement before public use.
+- **The additive quarter kernel and the quarter sums** authenticate no workbook bytes, publication dates or ownership registry. The caller must admit all eligible evidence first. They give no probabilistic confidence, source ranking, implicit unit conversion, subtraction of non-additive rates, or permission to disclose. A non-obvious arithmetic consequence can itself be new information. These are exact arithmetic enclosures, not forecasts or confidence intervals.
+- **`reserves`** is a projection, not a durable append-only store, a complete filing census or an `EstimateStatement`.
 - **The mirror** authenticates no filing bytes, human readership, publication date or issuer affiliation; its caller must bind those facts before supplying source Claims. It does not infer missing perimeters, aggregate incomparable operations, select vintages, invent an absent partner share, bridge costs/capex, transfer bridges between assets, or decide which reporter is physically correct. Its transcription binding consumes already-agreed S0 rows, without authenticating bytes or publication availability; accepted rows alone cannot prove that an omitted rejection did not exist.
 
 ## 9. Oracles
@@ -150,7 +181,8 @@ The other modules have local errors with no refusal code:
   - `cod_01_ceiling_and_required_grade_are_exact`;
   - `independent_exact_fit_and_two_model_known_answers`;
   - `test_recovery_na_exact_signed_fallback_known_answer`;
-  - `test_fixed_point_cutoff_grade_solver`.
+  - `test_fixed_point_cutoff_grade_solver`;
+  - `roll_forward::quarter::tests`: four tests with independently calculated decimal half-step subtraction for Q2, Q3 and Q4, signed and zero results, a narrower draft precision, all competing pairs, input-order invariance, internally conflicting assertions even under a coarse draft, missing and invalid operands, ambiguous series, duplicate ids, unsupported periods and exact overflow. The T-layer source-to-lint controls separately exercise workbook display precision, source identity, dates, ownership and perimeter admission.
 - **Exhaustive and independent checks.**
   - Integer enumerations: `historical_verdict_matches_exhaustive_discrete_continuations` and `small_point_histories_match_independent_integer_inequalities`.
   - Corner sweeps: `rounding_enclosures_contain_every_synthetic_training_and_operating_corner` and the two waterfall corner tests.
@@ -193,6 +225,7 @@ The other modules have local errors with no refusal code:
 - **Codes are not used the same way.** An attributable share outside (0, 1] gives 105 in `guidance` but 109 in the waterfall.
 - **No cross-host digest** for `lib.rs`, `cutoff`, the typed waterfall or `recovery`.
 - **The mirror's real-data work is open.** Actual FY2023–FY2025 partner-source reproduction and the full synthetic power gate (BD-346.S6) remain separate BD-346 work.
+- **The quarter work does not close the wider gates.** The additive quarter kernel and the quarter sums do not close the general derived-identity or the independently labelled disclosure-lint assessment gates.
 
 ## 11. Public API
 - **Root:** `SiteAiscRow`, `AiscConsolidationBridge::verify_rollup`, `PriceDeck` with `barrick_reserve(year)`, `GeoBreakdown`, `compute_geo`, `ReserveReplacementBridge::compute`, `CUTOFF_MAX_ITER`, `CUTOFF_TOL`, `CutoffSolution`, `CutoffError` and `solve_cutoff_grade`. The root re-exports `LmdiState`, `LmdiWaterfall`, `decompose_aisc_lmdi` and `logarithmic_mean`.
@@ -208,7 +241,10 @@ The other modules have local errors with no refusal code:
   - `quarters`: `QuarterlyHistory`, `WindowTotals`, `QuarterWitness`, `QuarterlyWitness`, `CheckedCertificate`, `QuarterlyCheck`, `QuarterlyHistoryReport`, `aggregate_quarters`, `check_quarter_witness` and `compare_quarters`.
 - **`capacity`:** `PhysicalKind`, `PhysicalLimit` with `canonical_tag`, `CapacityLimits`, `CapacityVerdict`, `CapacityReport` and `compare_production`.
 - **`recovery`:** `RULES_VERSION`, `NO_CLAIM`, `MODEL_CAVEAT`, `QuantityKind`, `Quantity`, `TrainingRow`, `OperatingRow`, `Estimate`, `SquareRoot`, `Fit`, `Model`, `ModelProjection`, `Projection`, `fit` and `project`. It re-exports `Ownership` and `Period` from `guidance`.
-- **`roll_forward`:** `SCHEMA`, `NO_CLAIM`, `assess`, `TableReport`, `SourceCell`, `ComponentCheck` and `IdentityRefusal` (BD-340.S5, BD-331.S7).
+- **`roll_forward`:** `SCHEMA`, `NO_CLAIM`, `assess`, `assess_with_metrics`, `TableReport`, `SourceCell`, `ComponentCheck` and `IdentityRefusal` (BD-340.S5, BD-331.S7, BD-063).
+- **`roll_forward::quarter`:** `WARNING`, `Quantity`, `Printed`, `Observation`, `Status`, `Pair`, `Report` and `assess` (BD-345.S4).
+- **`public_derivation`:** `INPUT_METRIC`, `WARNING`, `AmountKind`, `Amount`, `Rule` and `derive` (BD-345.S4).
+- **`reserves`:** `NO_CLAIM`, `ReserveKey`, `SourceRole`, `ReserveDeck`, `IssuerReserveRow`, `ReserveRefusal`, `CurrentSelection`, `VintageComparison`, `ReserveReport` and `assess` (BD-335).
 - **`mirror`:** `READING_METRIC`, `NO_CLAIM`, `Perimeter`, `MirrorReading`, `MirrorCommon`, `MirrorReport`, `MirrorVerdict` and `compare` (BD-346). `mirror::transcriptions`: `BoundReadings`, `bind`, `keys` and `period_label`. `bind(subject, period, kind, issuer, document, rows, evidence)` returns the separately cited ownership Claim, when needed, and source reading Claims.
 
 ## 12. Proof obligations

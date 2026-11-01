@@ -1,6 +1,7 @@
 //! Certified outward Clopper-Pearson endpoints for the explicitly iid Bernoulli reference model.
 //! Determinism: Exact (integer binomial enclosures and dyadic root brackets).
 
+use std::cmp::Ordering;
 use std::fmt::Display;
 
 use fmine_evidence::{Refusal, RefusalCode};
@@ -46,24 +47,25 @@ pub fn clopper_pearson_90_with_limit(
     n: usize,
     max_iterations: usize,
 ) -> Result<Interval, Refusal> {
-    clopper_pearson_with_limit(k, n, Rat::new(9, 10).map_err(numerical)?, max_iterations)
+    clopper_pearson_with_limit(k, n, exact(Rat::new(9, 10))?, max_iterations)
 }
 
-/// Two-sided Clopper-Pearson interval at a declared coverage level, conditional on iid Bernoulli
-/// trials. Endpoints are outward dyadic brackets, with the same certificate and resource bound as CP90.
-/// Arithmetic that cannot certify the tail comparison refuses instead of using a floating approximation.
+/// Two-sided Clopper-Pearson at an explicitly supplied confidence level in `(0, 1)`. The level is
+/// exact; in particular a frozen 95% rule cannot be silently evaluated as a 90% reference interval.
+/// The same outward `2^-40` endpoint and resource guarantees as [`clopper_pearson_90`] apply.
 pub fn clopper_pearson(k: usize, n: usize, level: Rat) -> Result<Interval, Refusal> {
     clopper_pearson_with_limit(k, n, level, GRID_BITS as usize)
 }
 
-fn clopper_pearson_with_limit(
+/// As [`clopper_pearson`], with an explicit endpoint iteration budget.
+pub fn clopper_pearson_with_limit(
     k: usize,
     n: usize,
     level: Rat,
     max_iterations: usize,
 ) -> Result<Interval, Refusal> {
     let one = Rat::from_integer(1);
-    if level.signum() <= 0 || exact(level.checked_cmp(one))? != std::cmp::Ordering::Less {
+    if level.signum() <= 0 || exact(level.checked_cmp(one))? != Ordering::Less {
         return Err(numerical(
             "confidence level must be strictly between zero and one",
         ));
@@ -111,13 +113,13 @@ fn lower_endpoint(k: usize, n: usize, tail: Rat, max_iterations: usize) -> Resul
                 i128::try_from(PROBABILITY_SCALE).map_err(numerical)?,
             ))
         };
-        let hi_cmp = exact(bound(tail_hi)?.checked_cmp(tail))?;
-        let lo_cmp = exact(bound(tail_lo)?.checked_cmp(tail))?;
-        if hi_cmp == std::cmp::Ordering::Less {
+        let high_sign = exact(bound(tail_hi)?.checked_cmp(tail))?;
+        let low_sign = exact(bound(tail_lo)?.checked_cmp(tail))?;
+        if high_sign == Ordering::Less {
             lo = mid;
-        } else if lo_cmp == std::cmp::Ordering::Greater {
+        } else if low_sign == Ordering::Greater {
             hi = mid;
-        } else if lo_cmp == std::cmp::Ordering::Equal && hi_cmp == std::cmp::Ordering::Equal {
+        } else if low_sign == Ordering::Equal && high_sign == Ordering::Equal {
             return Ok(mid);
         } else {
             return Err(numerical(
@@ -325,6 +327,7 @@ mod tests {
             }
         }
     }
+
     #[test]
     fn declared_cp95_has_certified_closed_form_edges_and_contains_cp90() {
         let level = rat(19, 20);
@@ -350,5 +353,116 @@ mod tests {
         assert_eq!(dyadic.hi, ONE);
         assert!(clopper_pearson(0, 0, ZERO).is_err());
         assert!(clopper_pearson(0, 0, ONE).is_err());
+    }
+
+    #[test]
+    fn test_frozen_95_percent_level_against_independent_binomial_sum() {
+        // FACT: 90-digit Python Decimal direct sum(comb(n,j)*p^j*(1-p)^(n-j)), 300 bisections
+        // at tail 1/40. These values are rounded to 24 decimal places, independently of this evaluator.
+        let cases = [
+            (0, 10, "0", "0.308497107818760823906668"),
+            (10, 10, "0.691502892181239176093332", "1"),
+            (
+                1,
+                10,
+                "0.002528578544461784502220",
+                "0.445016117028195420263300",
+            ),
+            (
+                5,
+                10,
+                "0.187086028447398531644798",
+                "0.812913971552601468355202",
+            ),
+            (
+                8,
+                10,
+                "0.443904537692358458221792",
+                "0.974789273673166629948867",
+            ),
+            (
+                1,
+                2,
+                "0.012579117093425049128077",
+                "0.987420882906574950871923",
+            ),
+            (
+                50,
+                100,
+                "0.398321129503300979436390",
+                "0.601678870496699020563610",
+            ),
+        ];
+        let step = rat(1, i128::from(GRID));
+        let rounding = rat(1, 2_000_000_000_000_000_000_000_000);
+        for (k, n, lower, upper) in cases {
+            let actual = clopper_pearson(k, n, rat(19, 20)).unwrap();
+            let lower = Rat::from_decimal_str(lower).unwrap();
+            let upper = Rat::from_decimal_str(upper).unwrap();
+            let lower_outer = if lower == ZERO {
+                ZERO
+            } else {
+                lower.checked_sub(rounding).unwrap()
+            };
+            let upper_outer = if upper == ONE {
+                ONE
+            } else {
+                upper.checked_add(rounding).unwrap()
+            };
+            assert!(
+                actual.lo.checked_cmp(lower_outer).unwrap() != Ordering::Greater,
+                "{k}/{n}"
+            );
+            assert!(
+                actual.hi.checked_cmp(upper_outer).unwrap() != Ordering::Less,
+                "{k}/{n}"
+            );
+            assert!(
+                lower
+                    .checked_sub(actual.lo)
+                    .unwrap()
+                    .checked_cmp(step)
+                    .unwrap()
+                    != Ordering::Greater
+            );
+            assert!(
+                actual
+                    .hi
+                    .checked_sub(upper)
+                    .unwrap()
+                    .checked_cmp(step)
+                    .unwrap()
+                    != Ordering::Greater
+            );
+        }
+    }
+
+    #[test]
+    fn test_90_percent_grid_endpoints_are_unchanged_and_general_levels_refuse_bad_inputs() {
+        // The previous CP90 oracle roots rounded outward on the 2^40 grid, independent of the new level API.
+        for (k, n, lo, hi) in [
+            (0, 10, 0, 284_625_683_238_i128),
+            (10, 10, 814_885_944_538, 1_099_511_627_776),
+            (1, 10, 5_625_317_972, 433_387_134_272),
+            (5, 10, 244_576_577_053, 854_935_050_723),
+            (8, 10, 542_167_753_122, 1_059_081_004_249),
+        ] {
+            let expected = closed(rat(lo, i128::from(GRID)), rat(hi, i128::from(GRID)));
+            assert_eq!(clopper_pearson_90(k, n).unwrap(), expected);
+            assert_eq!(clopper_pearson(k, n, rat(9, 10)).unwrap(), expected);
+        }
+        // At 75%, a single success has a dyadic lower endpoint exactly 1/8; equality must certify it.
+        assert_eq!(
+            clopper_pearson(1, 1, rat(3, 4)).unwrap(),
+            closed(rat(1, 8), ONE)
+        );
+        assert_eq!(
+            clopper_pearson(0, 0, rat(19, 20)).unwrap(),
+            closed(ZERO, ONE)
+        );
+        for level in [ZERO, ONE, rat(-1, 2), rat(3, 2)] {
+            assert!(clopper_pearson(1, 2, level).is_err());
+        }
+        assert!(clopper_pearson_with_limit(1, 2, rat(19, 20), 0).is_err());
     }
 }

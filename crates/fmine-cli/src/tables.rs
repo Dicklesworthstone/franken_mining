@@ -1,4 +1,4 @@
-//! Cited table inspection: existing workbook identities and explicitly declared PDF roll-forwards.
+//! Cited table inspection: workbook identities and declared PDF sums, roll-forwards and replacement ratios.
 //! Determinism: Exact (registered bytes, sorted declarations, exact solver and stable rendering).
 
 use std::collections::BTreeMap;
@@ -12,6 +12,7 @@ use fmine_numerics::exact_feas::{BlameOutcome, CorrectionLabel, Interval, Outcom
 use fmine_public::sources::{IssuerProfile, load_issuer_profile, transcriptions_path};
 use fmine_public::transcribe::{check_docs, load_transcription_quantities_as_of};
 use fmine_public::{PublicAssuranceReport, run_public_assurance, run_synthetic_assurance};
+use fmine_registry::metrics::MetricRegistry;
 use fmine_registry::table_identities::parse_table_identities;
 
 use crate::guidance::{number, text};
@@ -93,16 +94,7 @@ fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<
         })?;
 
     // Verify even a declared document with no transcribed rows: an absent member must not hide absent bytes.
-    let mut quantities: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-    for identity in &definitions.identities {
-        let keys = quantities.entry(&identity.doc).or_default();
-        keys.push(identity.total.clone());
-        keys.extend(identity.terms.iter().map(|term| term.quantity.clone()));
-    }
-    for keys in quantities.values_mut() {
-        keys.sort();
-        keys.dedup();
-    }
+    let quantities = definitions.quantities_by_document();
     let documents: Vec<_> = profile
         .documents
         .iter()
@@ -124,12 +116,35 @@ fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<
                 ),
             ));
         };
+        let clashes = report.agreement.accepted_pending_clashes();
+        if !clashes.is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::NotObservable202,
+                clashes.join("; "),
+            ));
+        }
         accepted.extend(report.agreement.accepted);
         pending.extend(report.agreement.single_reader);
     }
     accepted.sort_by(|a, b| a.locator.cmp(&b.locator));
     pending.sort();
-    let report = roll_forward::assess(&definitions, &accepted, &profile.documents);
+    let metrics = if definitions
+        .identities
+        .iter()
+        .any(|d| d.replacement.is_some())
+    {
+        MetricRegistry::load_from_root(root).map_err(|e| {
+            Refusal::new(
+                RefusalCode::InputMissingOrUnreadable506,
+                format!("reserve replacement requires registries/metrics.toml: {e}"),
+            )
+        })?
+    } else {
+        MetricRegistry::default()
+    };
+    let report =
+        roll_forward::assess_with_metrics(&definitions, &accepted, &profile.documents, &metrics);
+    let reserves = fmine_metrics::reserves::assess(&definitions, &accepted, &profile.documents);
     let pending_json = pending
         .iter()
         .map(|(at, reader)| {
@@ -143,10 +158,11 @@ fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<
         .join(",");
     let body = format!(
         "{{\"schema\":\"fmine.table-check.v1\",\"mode\":\"declared_pdf\",\"lane\":\"public\",\"gate_eligible\":false,\
-        \"issuer\":{},\"definitions_sha256\":{},\"checks\":{},\"pending_readings\":[{}],\"no_claim\":{}}}",
+        \"issuer\":{},\"definitions_sha256\":{},\"checks\":{},\"issuer_reserves\":{},\"pending_readings\":[{}],\"no_claim\":{}}}",
         js(&profile.issuer),
         js(&sha256(&bytes).to_hex()),
         report.to_json(),
+        reserves.to_json(),
         pending_json,
         js(NO_CLAIM),
     );
@@ -154,12 +170,9 @@ fn document_tables(root: &Path, profile: &IssuerProfile, path: &Path) -> Result<
     let payload = format!("{{\"digest\":{},{}", js(&digest), &body[1..]);
     let mut envelope = Envelope::ok("check tables", payload, actions());
     envelope.no_claim = Some(NO_CLAIM);
-    envelope.rendered_markdown = Some(document_markdown(
-        &profile.issuer,
-        &report,
-        &pending,
-        &digest,
-    ));
+    envelope.rendered_markdown = Some(
+        document_markdown(&profile.issuer, &report, &pending, &digest) + &reserves.to_markdown(),
+    );
     Ok(envelope)
 }
 
@@ -224,6 +237,34 @@ fn document_markdown(
             text(&d.construction),
             text(&d.convention)
         );
+    }
+    if report.definitions.iter().any(|d| d.replacement.is_some()) {
+        out.push_str("\n## Reserve replacement definitions\n\n| Identity | Definition / window | Numerator / denominator units | Factor / price deck |\n|---|---|---|---|\n");
+        for d in &report.definitions {
+            if let Some(r) = &d.replacement {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} / {} | {} / {} | {} / {} |",
+                    text(&d.id),
+                    text(&r.definition),
+                    text(&d.total_period),
+                    text(&r.numerator_unit),
+                    text(&r.denominator_unit),
+                    r.factor,
+                    text(&r.price_deck),
+                );
+            }
+        }
+        for definition in &report.metric_definitions {
+            let _ = writeln!(
+                out,
+                "\n**{}**: {}. Source: {} ({}).\n",
+                text(&definition.id),
+                text(&definition.formula),
+                text(&definition.source),
+                text(&definition.evidence),
+            );
+        }
     }
     out.push_str(
         "\n## Joint results\n\n| Identities | Result | Checked certificate |\n|---|---|---|\n",

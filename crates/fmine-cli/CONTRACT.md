@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -74,6 +74,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     bundle checks all declared ancestors at each frozen forecast's registration cut (BD-344);
   - `forecast journal init|register|freeze|outcome|assess|inspect|report --journal <path>`: durable forecast admission,
     cohort freezing, append-only resolution and persisted assessment seals with runtime-assigned times (BD-047);
+  - `forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <pem>`:
+    authenticated frozen-record assessment and common-population baseline comparison in JSON or Markdown (BD-076);
   - `reliance init|issue|reissue|check|reuse|withdraw|supersede|refresh|recall --journal <path>`: local issued-output
     status and exact artifact reuse, with capability-authorized mutations and generic recipient roles (BD-347);
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row
@@ -88,36 +90,79 @@ All three Claim commands accept `--issuer <issuer> [--through YYYYQn]` or `--syn
 verified source snapshot as assurance. Without a selector they search the current canonical projections.
 `--json` is an alias for `--format json`.
 
+DESIGN (BD-115): an explicit selector also resolves the recovery report's retained ownership, training,
+fit, operating and projection Claims. Canonical identity and public clearance are checked before emission.
+Typed values, canonical body bytes, value tags, parents, source anchors, recorded evidence and actual color/UU
+guards remain visible. The trace walks the retained closure and names unresolved parents or unanchored leaves.
+The recovery digest is separate from `source_identity_anchor_id` and `source_identity_state_root`;
+`recovery_in_identity_certificate` is false, and the derived read's envelope anchor and certificate stay null.
+This is a current verified projection, not a historical Claim store, calibration or freshness assessment.
+Workbook Claim reads retain their established payload and identity-ledger certificate.
+
 ### Durable forecast registration (BD-047)
 
 DESIGN: `forecast journal init` binds a cell id and operator-declared clock uncertainty to a new journal.
 `register`, `freeze`, `outcome` and `assess` require an exact predecessor `--head`; all mutations require
 `--trust-host-clock`. The runtime clock is sampled under the journal's exclusive lock. The captured nanoseconds
-reach `ForecastLedger` directly; a caller cannot supply registration, freeze or recording time. A registration
-or cohort freeze must precede every affected deadline even at the clock's upper bound. Outcome availability
-and assessment cuts must be at or before its lower bound. Clock rollback is refused, never clamped.
+remain in the journal frame's `observed_ns`; new admissions assign `ForecastLedger` registration, freeze and
+recording times to the upper bound, `observed_ns + clock_skew_ns`. A caller cannot supply those times.
+A registration or cohort freeze must precede every affected deadline even at that upper bound. Outcome
+availability and assessment cuts must be at or before the lower bound. Clock rollback is refused, never clamped.
 
-Requests contain one permitted TOML table with no top-level fields. `FJR1` version one operations use the frozen
-`fmine.forecast-ledger.v1` row grammar, with the three assigned-time fields prohibited. Semantic replay uses the
-existing calibration kernel. Every new assessment operation binds the actual computed result in its existing
-`expected_digest` field, even when the caller supplies no expectation. The digest is computed under the writer
-lock; a caller's conflicting expectation refuses, and the append callback still checks clock bounds and
-replays the complete semantic transition before any write. Reopening verifies each bound result, global seals,
-frozen membership, missing outcomes and original/restated selection. Legacy unbound checkpoints remain readable
-and retain their explicit weaker binding status; existing frame bytes and semantic identities do not change.
+Requests still contain one permitted TOML table with no top-level fields, using the frozen
+`fmine.forecast-ledger.v1` row grammar with the three assigned-time fields prohibited. The writer validates
+that request, then adds only `schema = "fmine.forecast-operation.v2"` to the stored operation. The `FJR1`
+frame format is unchanged. Replay dispatches per operation: legacy rows without top-level fields retain
+their original observed-time semantics and identities; v2 rows use the upper bound. Unknown schemas or extra
+top-level fields refuse. Mixed journals preserve both policies without rewriting earlier operations.
+
+The existing calibration kernel requires an outcome's availability and recording time to be at or before the
+assessment cut. For example, an observed recording at `12:00:01.500Z` with a one-second skew bound is assigned
+`12:00:02.500Z`; an otherwise eligible outcome remains unresolved at a later assessment's `12:00:02Z` cut.
+This closes the interval in which an outcome's recording uncertainty could cross its historical information cut.
+
+Every new assessment operation binds the actual computed result in its existing `expected_digest` field,
+even when the caller supplies no expectation; that field is mandatory for v2 replay. The digest is computed
+under the writer lock; a caller's conflicting expectation refuses, and the append callback still checks clock
+bounds and replays the complete semantic transition before any write. The callback also prepares the complete
+receipt and report against the candidate record and head, so a rendering refusal leaves the journal unchanged.
+Success is returned only after append and sync. Reopening verifies each bound result, global seals, frozen
+membership, missing outcomes and original/restated selection. Legacy unbound checkpoints remain readable and
+retain their explicit weaker binding status; existing frame bytes and semantic identities do not change.
 
 The `fmine.forecast-journal.v1` payload reports the cell, exact head, clock bounds, operation schema, inventories
-and checkpoints. An assessment adds `report` with mode `durable_journal`. `inspect` is read-only and can verify
-an independently retained head; an unpinned read establishes internal consistency only.
-`report --assessment <digest> [--head <hex>]` retrieves one existing persisted assessment under the journal's
-shared lock. It accepts no new cohort/cut/selector and samples no clock. The saved tuple selects the existing
-kernel result, whose digest must match; missing assessments refuse `FMINE-REF-201`, wrong head pins retain
-`FMINE-REF-502`, and digest mismatches retain `FMINE-REF-505`. It appends nothing and creates no new persistent
-seal. The payload identifies `persisted_assessment` retrieval, the selected digest, read-only status, observed
-host-clock time basis and `result_digest_binding` (`persisted_checkpoint` or `caller_requested_digest_only`).
-The nested report's mode is `persisted_assessment_replay`; its assessment content is unchanged while its
-surrounding head and checkpoint inventory reflect the opened journal. Source citations remain
-unverified, external time proof is not verified, and envelope authority anchors/certificates remain null.
+and checkpoints. `operation_schema` continues to identify the row grammar. `operation_version_counts` contains
+`legacy_v1` and `v2` counts excluding genesis; their sum is `n_operations`. `record_time_policy` is `none`,
+`legacy_observed`, `clock_upper_bound` or `mixed`. An assessment adds `report` with mode `durable_journal`;
+its version counts and time policy describe the prefix through its first persisted checkpoint. A v2 checkpoint
+over legacy operations remains mixed and does not upgrade the earlier time evidence. `inspect` is read-only
+and can verify an independently retained head; an unpinned read establishes internal consistency only.
+`report --assessment <digest> [--head <hex>] [--provenance <path>]` retrieves one existing persisted assessment
+under the journal's shared lock. It accepts no new cohort/cut/selector and samples no clock. The saved tuple
+selects the existing kernel result, whose digest must match; missing assessments refuse `FMINE-REF-201`, wrong
+head pins retain `FMINE-REF-502`, and digest mismatches retain `FMINE-REF-505`. It appends nothing and creates no
+new persistent seal. The payload identifies `persisted_assessment` retrieval, the selected digest, read-only status and
+`result_digest_binding` (`persisted_checkpoint` or `caller_requested_digest_only`), using the first matching
+checkpoint's binding even if a later checkpoint pins the same digest. Its `record_time_basis` is
+`observed_host_clock_with_declared_uncertainty`, `clock_upper_bound_with_declared_uncertainty` or
+`mixed_versioned_record_times`, according to that first checkpoint's prefix.
+
+Without a supplemental provenance bundle, the complete nested `payload.report` is reconstructed at the first
+matching checkpoint, retaining its original `journal_head`, `durable_journal` mode, checkpoint prefix,
+time-policy labels and `expected_digest_matched` values. Under the same implementation, this JSON is byte-identical
+to the original checkpoint's report after later appends, restatements and reopening. Repeating an assessment
+does not replace its first report. The outer
+payload's head and inventories describe the currently opened journal, including any later checkpoints; its
+retrieval metadata remains separate from the historical report. The stored digest binds the assessment result;
+this contract does not freeze report presentation across software versions. Source citations remain unverified;
+`--trust-host-clock` declares an operator's bound and provides no independent timestamp proof. External time
+proof is not verified, and envelope authority anchors/certificates remain null.
+An optional provenance bundle checks every frozen member at its exact recorded registration time, including
+unresolved members, using the existing temporal-cone verifier. Provenance timestamps alone accept strict UTC
+fractions of one through nine digits with checked nanosecond conversion. A leakage refusal retains the structured
+frontier and shortest paths. The supplied bundle digest and temporal result are supplemental: the saved
+assessment digest and journal bytes remain unchanged. This does not bind the bundle into the original
+registration, authenticate its declared times or perform generator replay.
 Malformed inputs, stale heads and semantic refusal cannot append. A failed write/sync poisons the writer and
 retains unconfirmed bytes for inspection. No command repairs, truncates or deletes journal history.
 
@@ -223,6 +268,8 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
 - `run` (what `fmine` prints, and its exit code), `invoke`, `parse_args`, `execute_command`
 - `forecast_journal::{Command, execute, execute_with_clock}`: the actual host-clock adapter or an explicitly
   injected clock capability for callers/tests. Trust in an injected clock belongs to its caller, not request data.
+- `forecast_record::{Command, execute}`: a read-only adapter over exact frozen record bytes, explicit RFC 3161
+  trust roots and registered original sources; numerical scoring delegates to `fmine-calib`.
 - `packet::{packets_from_report, ChallengePacket}`; immutable packet accessors, `validate`, `to_json`,
   `to_markdown`. The existing assurance engine computes the states; this module packages their evidence.
 - `track_record_binding::{run, assess, assess_snapshot, synthetic, synthetic_as_of, TrackRecordInput,
@@ -415,20 +462,69 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   attributable shares stay unresolved even when one amount matches. Unknown publication dates remain
   unknown; retrieval dates never establish publication. Changing dates or their basis changes the report
   digest while the numerical Claim remains unchanged. JSON and Markdown retain both assessments, and
-  neither grants disclosure permission or a regulatory-compliance claim. This slice does not derive
-  unpublished identities or assess forward guidance. Synthetic/unknown evidence cannot become a public
-  disclosure assertion.
+  neither grants disclosure permission or a regulatory-compliance claim. Synthetic/unknown evidence cannot
+  become a public disclosure assertion.
+  `lint_publicness` also delegates Q2 = H1 − Q1, Q3 = 9M − H1 and Q4 = FY − 9M to the exact
+  `fmine_metrics::roll_forward::quarter` kernel for gold production/sales (`koz`) and copper production (`kt`).
+  The shared equality target binds the original draft's subject, metric, year, unit and ownership syntax;
+  no target-period Claim is invented. All relevant cumulative candidates retain their provenance. Only
+  dated, usable public issuer Claims available by the cut can supply values, and every admitted pair must
+  share explicit normalized ownership, occurrence and registered perimeter. Missing display precision,
+  placeholders, changing scope, incompatible bases and conflicting vintages cannot establish a derivation.
+  Closed displayed-number intervals propagate exactly; rates are excluded by the typed quantity API.
+  The `derivation` object retains every pair and exact enclosure, input evidence and the new-information
+  warning. `derivable` never overrides a direct disclosed or contradictory assertion. Derived values
+  remain arithmetic assessments rather than new issuer Claims, forecasts, calibration or disclosure authority.
+  `lint_publicness::sums` additionally binds complete Q1/Q2 sums for H1 and Q1/Q2/Q3/Q4 sums for FY
+  to `fmine_metrics::public_derivation`. The same extensive quantity, source-admission and dated-cut
+  constraints apply. Exactly one eligible source is required per quarter; competing vintages stay
+  ambiguous without selecting by their amounts. Unusable operands with unknown publication dates
+  block the derivation; only positively post-cut operands may be excluded before usability checks.
+  The `quarter_sum` object retains every candidate, exact bounds, canonical interpreted input Claims,
+  derived Claim bodies and source ancestry. Its full enclosure must fit the draft's displayed interval
+  before `derivable` is reported. Direct disclosures and contradictions retain priority, while missing
+  quarters, unknown dates, insufficient precision and arithmetic refusals remain visible. These Claims
+  establish arithmetic over source assertions, never an additional issuer disclosure or permission.
   Both modes include processed/head grade (`g/t`, `grams per tonne` or percent) and whole-site recovery
   (percent), with explicit subject, dated period and ownership. Percent-format fractions use the source's
   displayed percentage-point interval while retaining the stored fraction. Bare/mined grade, circuit recovery,
   and reserve replacement remain outside the discovery grammar. Copper C1 requires explicit per-pound-sold
   and `US$/lb` or `$/lb` tokens; copper production requires `kt`. C1 does not inherit gold TCC's credit
   convention, and historical site production in millions of pounds remains unchecked.
+- DESIGN (BD-345.S4): `lint --as-of` also supplies an independent `forward_guidance` assessment for a
+  standalone line explicitly marked `forecast` or `guidance`, with one equality, registered site, fiscal
+  year, ownership basis and unit. Gold/copper production, gold/copper AISC, TCC and C1 reuse the canonical
+  guidance transcription binder. The latest matching publication at or before the cut supplies the
+  comparison; same-date ties, distinct attributable shares and pending readers remain unresolved.
+  Draft point/range endpoints are compared exactly, with no implied probability or rounding tolerance.
+  Canonical source and interpreted Claims, ancestry, date basis, hash and page locator remain in the report.
+  Guidance is selected by quantity and date before document bytes are read. Its source failures remain
+  local findings and cannot discard the workbook equality result. A document-only registry is supported;
+  it emits no workbook state root, authority anchor or certificate. Pending readers conservatively block
+  the same quantity even across other years or ownership bases. Unrestricted prose, explicit share syntax,
+  real issuer coverage and disclosure permission remain outside this predicate.
 - DESIGN (BD-343): forecast assessment replays transcript rows in their supplied order using the existing
   calibration kernel. No alternate scoring formula, default time proof or hidden denominator is introduced.
   Saved assessment rows enforce the kernel's sealed-cut rules across replay. Both envelope authority fields
   remain null: transcript and assessment digests identify content, not a durable authority ledger or an
   external timestamp. The adapter does not verify supplied source citations or issue a forecast.
+- DESIGN (BD-076): `forecast record score` binds the manifest, forecast CSV and rules to their exact framed
+  SHA-256 digests and verifies both timestamp signatures through `fmine_io::forecast::timestamp`. Complete
+  proof intervals enforce rules-before-record, the frozen registration deadline, the scored-year boundary
+  and the explicit assessment cut. Trust roots are caller-selected and fingerprinted; a successful signature
+  check does not grant public authority to a local root. This path does not weaken xtask's compiled root pins.
+  Original FY-minus-nine-month production retains signed residuals; unit costs use Q4 QTD values directly.
+  Source hashes, exact displayed values, raw tokens and canonical Claims remain bound to the report.
+  Guidance uses the latest pre-cut publication and two-reader agreement; fixed Q3/history benchmark inputs
+  follow the frozen rule and may postdate the forecast cut. Their availability and manifest membership are
+  explicit. Missing originals, unknown guidance and incomplete history retain the full cohort and named
+  unavailable comparators. Only historical ratio pairs require strictly positive values; a printed zero
+  point remains valid. Every mean in the paired comparison uses the same complete member set.
+  Publication-date availability is bounded at end of day, with an explicitly labelled retrieval fallback;
+  frozen source retrieval times come from the manifest. JSON and Markdown expose completion bounds, the
+  conditional iid reference and rho sensitivity separately. The assessment digest binds record/rules hashes,
+  proof metadata, source evidence and scores. All authority flags remain false, anchor/certificate stay null,
+  and no sample size promotes the descriptive report to a calibration claim.
 - DESIGN (BD-344): `--provenance` reads a strict `fmine.forecast-provenance.v1` bundle, binds exact forecast
   IDs, and checks every cohort member's complete declared ancestry at its registration time. The scoring
   `--as-of` time cannot admit later evidence. Forecast roots must be derived, name inputs and have a performed
@@ -460,6 +556,10 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 
 ## 6. Proof Obligations (`PO-*`)
+- FACT (BD-345.S4, `xtask/tests/public_lint_derivations.rs`): actual minimal workbook bytes and registered
+  source metadata exercise quarter differences, exact displayed rounding, all competing vintages, date cuts,
+  unknown dates, tampering, signed/zero/placeholder behavior, direct contradictions and ownership/perimeter
+  admission. JSON and Markdown preserve the source Claims and warning; authority flags remain false.
 - DESIGN (BD-346, `tests/mirror.rs` and `xtask/testdata/mirror_oracle.py`): documents-only synthetic reporters
   exercise registered byte and reader
   verification, exact common intervals and point contact, checked witnesses/minimal conflict sets, 45%+45%
@@ -478,11 +578,11 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   `{i 2120, ii 3, iii 4, iv 17, v 391, np 60}`.
 - `PO-ADIT-1`: every verb's envelope matches a hand-written frame (`test_po_adit_1_golden_every_verb`; payload,
   anchor, certificate and refusal text masked), and `tests/e2e_envelope.sh` checks the printed line of each.
-- `PO-CLI-4` (BD-115): `test_claim_show_why_trace_golden` compares all three synthetic inspection payloads
+- `PO-CLI-4` (BD-115, T `public_claim_inspection`): `test_claim_show_why_trace_golden` compares all three synthetic inspection payloads
   with hand-written expected output. Default tests preserve guard failures, explicitly partial provenance,
   exact-ID lookup and altered-source refusal for every view. The ignored real source test checks E474's
   issuer assertion, refused color and registered source trace without upgrading its evidence.
-- FACT (BD-115, CLI tests): `test_claim_show_reads_reported_claims_and_refuses_invented_ids` round-trips numeric
+- FACT (BD-115, T `public_claim_inspection`): `test_claim_show_reads_reported_claims_and_refuses_invented_ids` round-trips numeric
   and placeholder Claim ids, projection digest and ledger root through all three selected views. The corpus test
   `test_claim_show_reads_real_mine_stats_and_aisc_claims` covers both adapters. `test_claim_show_rechecks_registered_source_bytes`
   exercises the registered-file path, preserves a through bound despite a later altered source, and refuses
@@ -540,7 +640,7 @@ None: every failure is a usage error or a typed refusal.
   Actual NGM, Pueblo Viejo and Kibali filing coverage, resolved NGM vend-in boundaries, capex and cost/accounting
   bridges remain open; synthetic/source-adapter checks do not close full BD-346 acceptance.
 - DESIGN (BD-340.S5/S8): `check tables` exposes the existing workbook identity ledger, or checks a strict
-  `--definitions` registry of PDF sums and reserve roll-forwards. The PDF mode verifies every declared
+  `--definitions` registry of PDF sums, reserve roll-forwards and named reserve-replacement ratios. The PDF mode verifies every declared
   document's bytes, even when its values have no readings, and selects only the declared quantities while
   retaining all readers at their locators. It delegates exact arithmetic, joint consistency, checked
   certificates and correction sets to `fmine-metrics::roll_forward`; it selects no corrected value.
@@ -549,8 +649,19 @@ None: every failure is a usage error or a typed refusal.
   their available evidence. PDF report digests bind definitions, readings, results and pending readers;
   they are not authority-ledger anchors or external timestamps. Workbook mode retains its existing ledger
   anchor and certificate. All authority flags remain false. JSON and Markdown retain signed source tokens,
-  period, unit, basis, document vintage and citations. This slice does not classify reserves, infer table
-  membership, establish filing/deck precedence or complete the real-PDF acceptance population.
+  period, unit, basis, document vintage and citations. Optional `reserve_row` declarations also collect their
+  same-document price readings and render `fmine-metrics::reserves` under `payload.issuer_reserves`.
+  Definitions and every selected source remain hash-bound. The arithmetic slice does not classify reserves,
+  infer table membership or complete the real-PDF acceptance population. The separate declared reserve-row
+  projection selects the latest dated MD&A/AIF filing, keeps older vintages and investor-deck cross-checks
+  visible, and retains ambiguous or unusable latest filings rather than falling back to an older assertion.
+  An accepted value or price with a competing pending location refuses `FMINE-REF-202` with both citations;
+  ordinary missing second readings remain visible as unavailable rows and pending evidence.
+  Replacement declarations additionally load the selected workspace's metric registry and bind the selected
+  definition metadata into the report. Gold/GEO metal, attributable contained basis, ex-A&D scope, three-year
+  window, operand units, signs and price-deck key are explicit. Signed depletion must remain strictly positive
+  throughout its rounding interval. Shared amounts are checked jointly; shared quoted-rate reuse refuses as
+  unsupported. No GEO conversion is performed, and no complete real reserve-replacement gate is asserted.
 - DESIGN (BD-341): `track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]` is a read-only
   adapter over agreed PDF transcriptions, canonical annual Mine Stats Claims and `fmine-calib::guidance_scores`.
   `--synthetic` uses invented inputs through the same adapter. JSON is the default (`--json` is an explicit

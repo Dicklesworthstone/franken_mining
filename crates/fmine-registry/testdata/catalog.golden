@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 36
+[verbs] 37
 assure public
 assure challenges
 check tables
@@ -83,6 +83,7 @@ track-record
 recovery gap
 lint
 forecast assess
+forecast record score
 forecast journal init
 forecast journal register
 forecast journal freeze

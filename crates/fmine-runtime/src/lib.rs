@@ -1,6 +1,8 @@
 //! DESIGN: the runtime owns the explicit host wall-clock adapter. A reading provides no claim of clock
 //! synchronization, bounded uncertainty, monotonicity, authority or external time proof.
 
+pub mod process;
+
 use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

@@ -1,10 +1,12 @@
 //! FrankenMining CLI (`fmine`) implementation (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+mod claim_inspection;
 mod forecast;
 mod guidance;
 mod guidance_capacity;
 pub mod issued;
 mod lint;
+mod lint_guidance;
 mod lint_publicness;
 pub mod mirror;
 pub mod packet;
@@ -19,6 +21,7 @@ mod track_record_data;
 mod track_record_price;
 
 pub use forecast::live as forecast_journal;
+pub use forecast::record_score as forecast_record;
 
 use std::path::{Path, PathBuf};
 
@@ -139,6 +142,8 @@ pub enum CliCommand {
     },
     /// Register, resolve and assess forecasts in a durable journal using the declared host-clock policy.
     ForecastJournal(forecast_journal::Command),
+    /// Score a time-proved frozen record against original outcomes and its registered baselines (BD-076).
+    ForecastRecord(forecast_record::Command),
     /// Issue, withdraw, supersede, inspect and gate reuse of exact report artifacts (BD-347).
     Reliance(reliance::Command),
     /// `fmine doctor` (`BD-115`).
@@ -454,6 +459,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         "--json" | "--trust-host-clock" => next += 1,
                         flag if flag.starts_with("--") => next += 2,
                         "journal" => return "forecast journal",
+                        "record" => return "forecast record score",
                         _ => return "forecast assess",
                     }
                 }
@@ -654,6 +660,16 @@ fn parse_forecast_journal(
                 .map(|value| digest(&value))
                 .transpose()?,
             assessment: digest(&take(&mut fields, "--assessment")?)?,
+            provenance: fields
+                .remove("--provenance")
+                .map(|path| {
+                    if path.trim().is_empty() {
+                        Err("empty --provenance".to_string())
+                    } else {
+                        Ok(PathBuf::from(path))
+                    }
+                })
+                .transpose()?,
         },
         _ => return Err("unknown forecast journal operation".to_string()),
     };
@@ -677,6 +693,10 @@ pub fn parse_args(
     if verb_hint(args) == "forecast journal" {
         return parse_forecast_journal(args, default_root)
             .map(|(command, format, root)| (CliCommand::ForecastJournal(command), format, root));
+    }
+    if verb_hint(args) == "forecast record score" {
+        return forecast_record::parse(args, default_root)
+            .map(|(command, format, root)| (CliCommand::ForecastRecord(command), format, root));
     }
     if let Some(command) = parse_reliance_args(args, default_root)? {
         return Ok(command);
@@ -1333,66 +1353,6 @@ fn report_envelope(
     )
 }
 
-/// A Claim lookup is a read of the current verified projection, never construction from a supplied id.
-/// Both the identity-ledger root and the keyed projection digest are exposed: interpretation changes can
-/// change the latter without moving the former (BD-332). Inspection views retain this same snapshot.
-fn public_claim_envelope(
-    report: &fmine_public::PublicAssuranceReport,
-    profile: &fmine_public::sources::IssuerProfile,
-    id: &str,
-    view: ClaimView,
-    selector: &str,
-) -> Envelope {
-    let Some(cell) = report
-        .public_claims
-        .cells
-        .values()
-        .find(|cell| cell.claim.claim_id.to_string() == id)
-    else {
-        return Envelope::refused(
-            view.verb(),
-            Refusal::new(
-                RefusalCode::NoClaimInDomain201,
-                format!(
-                    "claim '{id}' is absent from the selected {} snapshot",
-                    report.issuer
-                ),
-            ),
-            vec![NextAction::new(
-                format!("fmine assure public {selector}"),
-                "the verified source snapshot containing these public Claims",
-            )],
-        );
-    };
-    let digest = fmine_public::key::claims_digest(report.public_claims.cells.values()).to_hex();
-    let inspection = match view {
-        ClaimView::Show => String::new(),
-        ClaimView::Why => format!(",\"why\":{}", fmine_public::key::inspect::why_json(cell)),
-        ClaimView::Trace => format!(
-            ",\"trace\":{}",
-            fmine_public::key::inspect::trace_json(cell, profile)
-        ),
-    };
-    let payload = format!(
-        "{{\"schema\":\"fmine.claim_read.v1\",\"issuer\":\"{}\",\"lane\":\"{}\",\
-         \"read_mode\":\"verified_source_projection\",\"claims_digest\":\"{digest}\",\
-         \"claim\":{},\"stale\":{},\"calibration_failed\":{},\"decision_uu_present\":{}{inspection}}}",
-        escape_json(&report.issuer),
-        report.lane.as_str(),
-        cell.to_json(),
-        cell.claim.stale,
-        cell.claim.calibration_failed,
-        !cell.claim.uu_terms.is_empty(),
-    );
-    Envelope::report(
-        view.verb(),
-        report.ledger_anchor.anchor_id().to_string(),
-        report.ledger_anchor.state_root.to_hex(),
-        payload,
-        claim_actions(id, view, selector),
-    )
-}
-
 fn challenge_envelope(report: &fmine_public::PublicAssuranceReport) -> Result<Envelope, Refusal> {
     let packets = packet::packets_from_report(report)?;
     let bodies: Vec<String> = packets
@@ -1524,6 +1484,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             envelope
         }
         CliCommand::ForecastJournal(command) => forecast_journal::execute(command, workspace_root),
+        CliCommand::ForecastRecord(command) => forecast_record::execute(command, workspace_root),
         CliCommand::CheckTables {
             issuer,
             through,
@@ -1846,7 +1807,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             if let Some((selector, snapshot)) = selected {
                 return match snapshot {
                     Ok((report, profile)) => {
-                        public_claim_envelope(&report, &profile, id, view, &selector)
+                        claim_inspection::selected(&report, &profile, id, view, &selector)
                     }
                     Err(refusal) => Envelope::refused(view.verb(), refusal, to_doctor()),
                 };
@@ -1904,7 +1865,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal outcome --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal assess --journal <path> --head <hex> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock [--selector first-published|latest-as-of] [--expected-digest <hex>]",
                 "forecast journal inspect --journal <path> [--head <hex>]",
-                "forecast journal report --journal <path> --assessment <digest> [--head <hex>]",
+                "forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <trusted-pem>",
+                "forecast journal report --journal <path> --assessment <digest> [--head <hex>] [--provenance <path>]",
                 "doctor",
                 "claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
                 "claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
@@ -2146,272 +2108,6 @@ mod tests {
     }
 
     #[test]
-    fn reliance_router_preserves_required_values_before_global_options() {
-        let mut issue = args(&[
-            "assure",
-            "issue",
-            "--synthetic",
-            "--output",
-            "report.json",
-            "--journal",
-            "journal",
-            "--expected-head",
-            &"a".repeat(64),
-            "--key",
-            "owner.key",
-            "--role",
-            "sponsor",
-            "--purpose",
-            "review",
-            "--now",
-            "2026-11-01T00:00:00Z",
-            "--uncertainty-ns",
-            "0",
-        ]);
-        for (flag, inserted) in [
-            ("--purpose", vec!["--json"]),
-            ("--purpose", vec!["--format", "json"]),
-            ("--key", vec!["--workspace", "/other"]),
-        ] {
-            let mut malformed = issue.clone();
-            let value = malformed.iter().position(|arg| arg == flag).unwrap() + 1;
-            malformed.splice(value..value, inserted.into_iter().map(str::to_string));
-            let error = parse_args(&malformed, Path::new(".")).unwrap_err();
-            assert!(
-                error.contains(&format!("missing value for {flag}")),
-                "{error}"
-            );
-        }
-        issue.splice(0..0, args(&["--workspace", "/selected"]));
-        issue.extend(args(&["--format", "markdown"]));
-        let (command, format, workspace) = parse_args(&issue, Path::new(".")).unwrap();
-        assert!(matches!(command, CliCommand::Issued(_)));
-        assert_eq!(format, OutputFormat::Markdown);
-        assert_eq!(workspace, Path::new("/selected"));
-        for value in ["", "--json"] {
-            assert!(
-                parse_args(
-                    &args(&["--workspace", value, "reliance", "check"]),
-                    Path::new(".")
-                )
-                .is_err()
-            );
-        }
-    }
-
-    #[test]
-    fn reliance_router_preserves_published_grammar_without_parser_fallback() {
-        let digest = "a".repeat(64);
-        let explicit = args(&[
-            "--json",
-            "reliance",
-            "check",
-            &digest,
-            "--journal",
-            "journal",
-        ]);
-        let host = args(&[
-            "--json",
-            "reliance",
-            "check",
-            "--digest",
-            &digest,
-            "--journal",
-            "journal",
-        ]);
-        assert!(matches!(
-            parse_args(&explicit, Path::new(".")).unwrap().0,
-            CliCommand::RelianceExplicit(_)
-        ));
-        assert!(matches!(
-            parse_args(&host, Path::new(".")).unwrap().0,
-            CliCommand::Reliance(_)
-        ));
-        let mut required = host.clone();
-        required.insert(3, "--require-current".into());
-        assert!(matches!(
-            parse_args(&required, Path::new(".")).unwrap().0,
-            CliCommand::Reliance(_)
-        ));
-        let mut mixed = host;
-        mixed.extend(args(&[
-            "--now",
-            "2026-11-01T00:00:00Z",
-            "--uncertainty-ns",
-            "0",
-        ]));
-        assert!(parse_args(&mixed, Path::new(".")).is_err());
-    }
-
-    #[test]
-    fn forecast_assessment_selectors_and_time_resolution_are_explicit() {
-        let base = [
-            "forecast",
-            "assess",
-            "--ledger",
-            "tests/forecasts/cohort_synthetic.toml",
-            "--cohort",
-            "synthetic-demo",
-            "--as-of",
-            "2026-10-31T00:00:00Z",
-        ];
-        let (command, _, _) = parse_args(&args(&base), &workspace_root()).expect("assessment args");
-        assert!(
-            matches!(command, CliCommand::ForecastAssess { selector, .. } if selector == "first-published")
-        );
-        let mut latest = args(&base);
-        latest.extend(args(&["--selector", "latest-as-of"]));
-        let (command, _, _) = parse_args(&latest, &workspace_root()).expect("restated selection");
-        assert!(
-            matches!(command, CliCommand::ForecastAssess { selector, .. } if selector == "latest-as-of")
-        );
-        let mut guarded = latest;
-        guarded.extend(args(&[
-            "--provenance",
-            "tests/forecasts/provenance_synthetic.toml",
-        ]));
-        let (command, _, _) = parse_args(&guarded, &workspace_root()).expect("provenance selector");
-        assert!(
-            matches!(command, CliCommand::ForecastAssess { provenance: Some(path), .. }
-            if path == Path::new("tests/forecasts/provenance_synthetic.toml"))
-        );
-        for bad in [
-            vec!["forecast"],
-            vec!["forecast", "freeze"],
-            vec!["forecast", "assess"],
-            vec![
-                "forecast",
-                "assess",
-                "--ledger",
-                "cohort.toml",
-                "--cohort",
-                "demo",
-                "--as-of",
-                "2026-10-31",
-            ],
-            vec![
-                "forecast",
-                "assess",
-                "--ledger",
-                "cohort.toml",
-                "--cohort",
-                "demo",
-                "--as-of",
-                "2026-10-31T00:00:00Z",
-                "--selector",
-                "latest",
-            ],
-            vec!["forecast", "assess", "--synthetic"],
-            vec!["forecast", "assess", "--issuer", "barrick"],
-        ] {
-            let (envelope, _) = invoke(&args(&bad), &workspace_root());
-            assert_eq!(
-                (envelope.verb.as_str(), envelope.exit_code),
-                ("forecast assess", 2),
-                "{bad:?}"
-            );
-        }
-        let (envelope, _) = invoke(
-            &args(&[
-                "guidance",
-                "completion",
-                "--issuer",
-                "barrick",
-                "--site",
-                "north-mara",
-                "--through",
-                "2026Q2",
-                "--as-of",
-                "2026-10-31T00:00:00Z",
-            ]),
-            &workspace_root(),
-        );
-        assert_eq!(
-            envelope.exit_code, 2,
-            "guidance keeps its calendar-date contract"
-        );
-    }
-
-    #[test]
-    fn forecast_assessment_checks_all_supplied_provenance_without_issuing_a_certificate() {
-        let selected = args(&[
-            "forecast",
-            "assess",
-            "--ledger",
-            "tests/forecasts/cohort_synthetic.toml",
-            "--cohort",
-            "synthetic-demo",
-            "--as-of",
-            "2026-10-31T00:00:00Z",
-            "--provenance",
-            "tests/forecasts/provenance_synthetic.toml",
-        ]);
-        let (env, _) = invoke(&selected, &workspace_root());
-        assert_eq!(env.status, "ok", "{}", env.to_json());
-        assert_eq!(env.exit_code, 0);
-        assert!(env.anchor_id.is_none() && env.certificate.is_none());
-        assert!(
-            env.payload_json
-                .contains("\"temporal_validation\":{\"status\":\"checked\"")
-        );
-        assert_eq!(env.payload_json.matches("\"cone_digest\"").count(), 3);
-        assert!(
-            env.payload_json
-                .contains("\"n_members\":3,\"n_resolved\":2,\"n_unresolved\":1")
-        );
-        assert!(
-            env.payload_json
-                .contains("\"generator_replay\":\"not_performed\"")
-        );
-        assert_eq!(
-            env.to_json(),
-            invoke(&selected, &workspace_root()).0.to_json()
-        );
-        let (docs, _) = invoke(&args(&["robot-docs"]), &workspace_root());
-        assert!(docs.payload_json.contains("[--provenance <path>]"));
-        assert!(docs.payload_json.contains("fmine.forecast-provenance.v1"));
-        for bad in [
-            args(&["doctor", "--provenance", "unused.toml"]),
-            args(&["forecast", "assess", "--provenance"]),
-        ] {
-            assert_eq!(invoke(&bad, &workspace_root()).0.exit_code, 2);
-        }
-    }
-
-    #[test]
-    fn test_cli_assure_synthetic_end_to_end() {
-        let root = workspace_root();
-        let (cmd, fmt, ws) =
-            parse_args(&args(&["assure", "public", "--synthetic"]), &root).expect("parse");
-        assert_eq!(
-            (cmd.clone(), fmt),
-            (CliCommand::AssureSynthetic, OutputFormat::Json)
-        );
-        let env = execute_command(&cmd, &ws);
-        assert_eq!((env.exit_code, env.status), (0, "ok"));
-        assert!(env.anchor_id.as_deref().unwrap_or("").starts_with("anc_"));
-        let json = env.to_json();
-        assert!(json.contains(
-            "\"payload\":{\"issuer\":\"synthetic\",\"lane\":\"synthetic\",\"gate_eligible\":false"
-        ));
-        // bd-jg43.3: column G scored on displayed values, column N "Site G" refused by format.
-        assert!(
-            json.contains("\"totals\":{\"i\":40,\"ii\":2,\"iii\":1,\"iv\":2,\"v\":5,\"np\":5}")
-        );
-        // The next actions sit in the envelope, not the payload.
-        assert_eq!(
-            env.next_actions.first().map(|a| a.command.as_str()),
-            Some("fmine assure public --issuer barrick")
-        );
-        assert!(
-            json.contains(
-                "\"next_actions\":[{\"command\":\"fmine assure public --issuer barrick\""
-            )
-        );
-        assert!(!env.payload_json.contains("next_actions"));
-    }
-
-    #[test]
     fn test_challenge_command_renders_cited_json_and_readable_markdown() {
         let query = args(&["assure", "challenges", "--synthetic"]);
         let (env, _) = invoke(&query, &workspace_root());
@@ -2443,68 +2139,6 @@ mod tests {
         assert!(markdown.contains("## Source operands"));
         assert!(markdown.contains("invented synthetic workbooks"));
         assert!(!markdown.contains("external_use_allowed\":true"));
-    }
-
-    #[test]
-    fn test_guidance_command_is_exact_cited_and_explicitly_conditional() {
-        let query = args(&["guidance", "completion", "--synthetic"]);
-        let (env, _) = invoke(&query, &workspace_root());
-        assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
-        assert_eq!(env.verb, "guidance completion");
-        assert!(env.payload_json.contains("\"lane\":\"synthetic\""));
-        assert!(env.payload_json.contains("\"envelope_tier\":\"T1\""));
-        assert!(
-            env.payload_json
-                .contains("within_supplied_history_under_sales_scenario")
-        );
-        assert!(env.payload_json.contains("\"independently_checked\":true"));
-        // Invented target 200..230 minus actual 68 rounded to the nearest koz gives [131.5,162.5].
-        assert!(
-            env.payload_json
-                .contains("\"lo\":\"263/2\",\"hi\":\"325/2\"")
-        );
-        assert!(
-            env.payload_json
-                .contains("ASSUMPTION: repeat preceding-year")
-        );
-        assert!(env.payload_json.contains("\"source_claims\":[{"));
-        assert!(
-            env.anchor_id.is_none(),
-            "a computation is not a registered forecast"
-        );
-        assert!(
-            env.certificate.is_none(),
-            "a content digest is not a ledger root"
-        );
-        let digest = fmine_public::guidance::run_synthetic()
-            .expect("synthetic guidance")
-            .digest
-            .to_hex();
-        assert!(
-            env.payload_json
-                .contains(&format!("\"digest\":\"{digest}\""))
-        );
-        assert_eq!(env.no_claim, Some(fmine_public::guidance::NO_CLAIM));
-        assert_eq!(invoke(&query, &workspace_root()).0, env);
-        let (markdown, exit) = run(
-            &args(&[
-                "guidance",
-                "completion",
-                "--synthetic",
-                "--format",
-                "markdown",
-            ]),
-            &workspace_root(),
-        );
-        assert_eq!(exit, 0);
-        assert!(markdown.starts_with("# Guidance completion:"));
-        assert!(markdown.contains("Invented synthetic evidence"));
-        assert!(markdown.contains("131.5 to 162.5 koz"));
-        assert!(markdown.contains("Checked witness"));
-        assert!(markdown.contains("## Source citations"));
-        assert!(markdown.contains("conditional on that sales interval"));
-        assert!(markdown.contains("not a mine-capacity conclusion or a forecast"));
-        assert!(!markdown.starts_with("```json"));
     }
 
     #[test]
@@ -2552,227 +2186,6 @@ mod tests {
         assert!(markdown.contains("1 unresolved of 2 members"));
         assert!(markdown.contains("## Sources"));
         assert!(markdown.contains("Synthetic invented evidence"));
-    }
-
-    #[test]
-    fn test_track_record_requires_an_explicit_evidence_cut_and_registered_inputs() {
-        let (command, _, _) = parse_args(
-            &args(&[
-                "track-record",
-                "--issuer",
-                "barrick",
-                "--site",
-                "north-mara",
-                "--as-of",
-                "2026-11-01",
-            ]),
-            &workspace_root(),
-        )
-        .expect("explicit evidence cut");
-        assert_eq!(
-            command,
-            CliCommand::TrackRecordAsOf {
-                issuer: "barrick".into(),
-                site: Some("north-mara".into()),
-                as_of: "2026-11-01".into(),
-                price_subject: None,
-            }
-        );
-        let (priced, _, _) = parse_args(
-            &args(&[
-                "--price-subject",
-                "Barrick",
-                "track-record",
-                "--issuer",
-                "barrick",
-                "--as-of",
-                "2026-11-01",
-            ]),
-            &workspace_root(),
-        )
-        .expect("explicit price proxy at an evidence cut");
-        assert_eq!(
-            priced,
-            CliCommand::TrackRecordAsOf {
-                issuer: "barrick".into(),
-                site: None,
-                as_of: "2026-11-01".into(),
-                price_subject: Some("Barrick".into()),
-            }
-        );
-        for bad in [
-            vec!["track-record"],
-            vec!["track-record", "--as-of", "2026-11-01"],
-            vec![
-                "track-record",
-                "--issuer",
-                "unknown",
-                "--as-of",
-                "2026-11-01",
-            ],
-            vec![
-                "track-record",
-                "--issuer",
-                "barrick",
-                "--as-of",
-                "2026-02-30",
-            ],
-            vec![
-                "track-record",
-                "--issuer",
-                "barrick",
-                "--as-of",
-                "2026-11-01T00:00:00Z",
-            ],
-            vec![
-                "track-record",
-                "--issuer",
-                "barrick",
-                "--as-of",
-                "2026-11-01",
-                "--site",
-                "",
-            ],
-            vec![
-                "track-record",
-                "--issuer",
-                "barrick",
-                "--through",
-                "2025Q4",
-                "--as-of",
-                "2026-11-01",
-            ],
-            vec!["track-record", "--synthetic", "--issuer", "barrick"],
-            vec!["track-record", "--synthetic", "--as-of", "2026-11-01"],
-            vec!["track-record", "--synthetic", "--price-subject", "Barrick"],
-            vec!["track-record", "--synthetic", "--site", "north-mara"],
-            vec!["track-record", "--synthetic", "extra"],
-        ] {
-            let (env, _) = invoke(&args(&bad), &workspace_root());
-            assert_eq!(env.exit_code, 2, "{bad:?}: {}", env.to_json());
-            assert!(env.anchor_id.is_none());
-            assert!(env.certificate.is_none());
-        }
-        let ws = no_corpus_workspace("track-record-no-inputs");
-        let (env, _) = invoke(
-            &args(&[
-                "track-record",
-                "--issuer",
-                "barrick",
-                "--as-of",
-                "2026-11-01",
-            ]),
-            &ws,
-        );
-        assert_eq!(env.status, "refused");
-        let refusal = env.refusal.expect("missing registered workbooks");
-        assert_eq!(refusal.code, "FMINE-REF-506");
-        assert!(refusal.what.contains("Barrick_Q1_2024_Mine_Stats.xlsx"));
-        assert!(refusal.what.contains("Barrick_Q2_2026_Mine_Stats.xlsx"));
-        assert_eq!(env.payload_json, "null");
-        assert!(env.anchor_id.is_none());
-        assert!(env.certificate.is_none());
-        let (docs, _) = invoke(&args(&["robot-docs"]), &workspace_root());
-        assert!(docs.payload_json.contains("track-record --issuer"));
-        assert!(docs.payload_json.contains("track-record --synthetic"));
-        assert!(docs.payload_json.contains("[--price-subject <subject>]"));
-        assert!(
-            docs.payload_json
-                .contains("Separate paired price sensitivities for first-published and latest registered outcomes; prices and completed quarterly history are bounded by the evidence cut")
-        );
-    }
-
-    #[test]
-    fn test_recovery_command_preserves_models_citations_and_authority_boundary() {
-        let query = args(&["recovery", "gap", "--synthetic"]);
-        let (env, _) = invoke(&query, &workspace_root());
-        assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
-        assert_eq!(env.verb, "recovery gap");
-        for required in [
-            "\"schema\":\"fmine.recovery.gap.v1\"",
-            "\"lane\":\"synthetic\"",
-            "\"constant_tails\":{",
-            "\"grade_dependent_tails\":{",
-            "\"gap_pp\":{\"point\":{",
-            "\"source_claims\":[{",
-            "\"training_inputs\":[{",
-            "\"anchors\":[{",
-            "\"descriptive_only\":true",
-            "\"identifying\":false",
-            "\"calibration\":\"uncalibrated_descriptive_model\"",
-            "conservative input-rounding enclosures, not confidence or prediction intervals",
-            "\"monetary_downside\":\"unquantified\"",
-        ] {
-            assert!(env.payload_json.contains(required), "missing {required}");
-        }
-        assert!(env.anchor_id.is_none());
-        assert!(env.certificate.is_none());
-        assert_eq!(env.no_claim, Some(fmine_metrics::recovery::NO_CLAIM));
-        assert!(env.to_json().contains(FLAGS));
-        let digest = fmine_public::recovery::run_synthetic()
-            .expect("synthetic recovery")
-            .digest()
-            .to_hex();
-        assert!(
-            env.payload_json
-                .contains(&format!("\"digest\":\"{digest}\""))
-        );
-        assert_eq!(invoke(&query, &workspace_root()).0, env);
-    }
-
-    #[test]
-    fn test_recovery_command_requires_evidence_and_unambiguous_selectors() {
-        let ws = no_corpus_workspace("recovery-no-corpus");
-        let (env, _) = invoke(&args(&["recovery", "gap", "--issuer", "barrick"]), &ws);
-        assert_eq!(env.status, "refused");
-        assert_eq!(env.refusal.expect("missing source").code, "FMINE-REF-506");
-        assert_eq!(env.payload_json, "null");
-        assert!(env.anchor_id.is_none());
-        assert!(env.certificate.is_none());
-        let (command, _, _) = parse_args(
-            &args(&[
-                "recovery",
-                "gap",
-                "--issuer",
-                "barrick",
-                "--through",
-                "2025Q4",
-            ]),
-            &workspace_root(),
-        )
-        .expect("retrospective workbook selection");
-        assert_eq!(
-            command,
-            CliCommand::RecoveryGap {
-                issuer: "barrick".into(),
-                through: Some("2025Q4".into()),
-            }
-        );
-        for bad in [
-            vec!["recovery"],
-            vec!["recovery", "gap"],
-            vec!["recovery", "unknown", "--synthetic"],
-            vec!["recovery", "gap", "--issuer", "unknown"],
-            vec!["recovery", "gap", "--synthetic", "--issuer", "barrick"],
-            vec!["recovery", "gap", "--synthetic", "--through", "2025Q4"],
-            vec![
-                "recovery",
-                "gap",
-                "--issuer",
-                "barrick",
-                "--through",
-                "2025Q5",
-            ],
-            vec!["recovery", "gap", "--synthetic", "--site", "Lumwana"],
-            vec!["recovery", "gap", "--synthetic", "--as-of", "2026-10-31"],
-            vec!["recovery", "gap", "--synthetic", "extra"],
-        ] {
-            let (env, _) = invoke(&args(&bad), &workspace_root());
-            assert_eq!(env.exit_code, 2, "{bad:?}: {}", env.to_json());
-            assert!(env.payload_json.starts_with("{\"error\":"));
-            assert!(env.anchor_id.is_none());
-            assert!(env.certificate.is_none());
-        }
     }
 
     #[test]
@@ -3237,405 +2650,6 @@ mod tests {
             (env.exit_code, env.status, env.refusal.is_none()),
             (2, "usage_error", true)
         );
-    }
-
-    #[test]
-    fn test_cli_claim_show_refuses_invalid_id() {
-        for action in ["show", "why", "trace"] {
-            let env = invoke(&args(&["claim", action, "clm_0001"]), &workspace_root()).0;
-            assert_eq!((env.exit_code, env.status), (3, "refused"));
-            assert_eq!(env.verb, format!("claim {action}"));
-            let json = env.to_json();
-            assert!(json.contains("\"code\":\"FMINE-REF-201\""), "{json}");
-            assert!(json.contains("invalid public claim id"), "{json}");
-        }
-    }
-
-    /// BD-115: hand-written inspection payloads around the independently tested canonical cell JSON.
-    /// The synthetic source is not registered on disk and remains an assumption with an unbounded color.
-    #[test]
-    fn test_claim_show_why_trace_golden() {
-        let report = run_synthetic_assurance(&[]).expect("synthetic report");
-        let cell = report
-            .public_claims
-            .cells
-            .get("Synthetic_AISC.xlsx:Q1 2030!B5")
-            .expect("source cell");
-        let id = cell.claim.claim_id.to_string();
-        let canonical = cell.to_json();
-        assert!(canonical.contains("\"stored\":\"500\",\"displayed\":\"500\""));
-        let uu_refusal = "{\"code\":\"FMINE-REF-204\",\"exit_code\":3,\
-            \"what\":\"Unbudgeted unknowns: a decision-facing claim carries no unknown-unknown (UU) budget (G-UU, INV-015): \
-            claim 'cost of sales applicable to gold production' has epistemic status KnownUnknown(Parametric) but zero UuTerm scenarios\",\
-            \"fix\":\"Attach an explicit UU term (an unmodelled budget or a flip margin).\"}";
-        let why = format!(
-            "{{\"schema\":\"fmine.claim.why.v1\",\"claim\":{canonical},\
-             \"interpretation\":\"The source number and its displayed text are preserved; extraction does not verify its truth.\",\
-             \"evidence_class\":\"Assumed\",\"epistemic_status\":\"KnownUnknown(Parametric)\",\"knowledge_state\":\"Unknown\",\
-             \"representation\":\"Deterministic\",\"support\":\"PeriodAggregate\",\"additivity\":\"ExtensiveAdditive\",\"confidentiality\":\"Public\",\
-             \"color\":{{\"status\":\"available\",\"value\":{{\"kind\":\"estimated\",\"estimator\":\"class:assumed\",\
-             \"dispersion\":null,\"dispersion_status\":\"unbounded\"}},\"refusal\":null}},\
-             \"uu_terms\":[],\"uu_guard\":{{\"status\":\"refused\",\"refusal\":{uu_refusal}}},\
-             \"public_export_guard\":{{\"status\":\"passed\",\"refusal\":null}},\
-             \"decision_admission\":{{\"scope\":\"Claim color and UU guards only\",\"claim_guards_pass\":false,\
-             \"first_refusal\":{uu_refusal},\"decision_context\":null,\"flip_margin\":null}},\
-             \"calibration\":{{\"failed\":false,\"assessment\":null}},\
-             \"freshness\":{{\"recorded_stale\":false,\"assessment\":\"not_assessed\",\
-             \"reason\":\"This source projection has no clock or dependency-invalidation replay.\"}}}}"
-        );
-        let trace = format!(
-            "{{\"schema\":\"fmine.claim.trace.v1\",\"claim\":{canonical},\"scope\":\"source_leaf\",\
-             \"complete_for_claim\":true,\"parents\":[],\"unresolved_parents\":[],\
-             \"anchors\":[{{\"artifact_path\":\"Synthetic_AISC.xlsx\",\"sha256\":\"{}\",\
-             \"locator\":\"Q1 2030!B5\",\"registered_source\":null}}],\"supersedes\":null,\"recorded_stale\":false,\
-             \"boundary\":\"Source cells and their registered interpretation are the leaves of this public projection; no upstream measurement history or dependency replay is asserted.\"}}",
-            cell.key.reporting_vintage.file_sha256,
-        );
-        for (action, want) in [("show", canonical), ("why", why), ("trace", trace)] {
-            let argv = args(&["claim", action, &id]);
-            let (env, format) = invoke(&argv, &workspace_root());
-            assert_eq!(
-                (env.status, env.exit_code, format),
-                ("ok", 0, OutputFormat::Json)
-            );
-            assert_eq!(env.verb, format!("claim {action}"));
-            assert_eq!(env.payload_json, want, "{action}");
-            assert_eq!(env.to_json().matches(FLAGS).count(), 1);
-            assert_eq!(env.certificate, None);
-            assert!(
-                env.next_actions
-                    .iter()
-                    .all(|a| resolves(&a.command, &workspace_root()))
-            );
-            assert!(
-                env.next_actions
-                    .iter()
-                    .any(|a| a.command == "fmine assure public --synthetic")
-            );
-            assert_eq!(invoke(&argv, &workspace_root()).0.to_json(), env.to_json());
-        }
-    }
-
-    #[test]
-    fn test_claim_why_uses_recorded_guards_and_trace_keeps_unresolved_parents() {
-        let report = run_synthetic_assurance(&[]).expect("synthetic report");
-        let mut cell = report.public_claims.cells["Synthetic_AISC.xlsx:Q1 2030!B5"].clone();
-        cell.claim.uu_terms.push(fmine_claim::UuTerm {
-            scenario_id: "synthetic-downside".into(),
-            description: "Invented test scenario".into(),
-            downside_exposure_usd_m: 2.5,
-            trigger_indicator: "synthetic trigger".into(),
-        });
-        let why = fmine_public::key::inspect::why_json(&cell);
-        assert!(why.contains("\"claim_guards_pass\":true"));
-        assert!(why.contains("\"downside_exposure_usd_m\":2.5"));
-        assert!(why.contains("synthetic-downside"));
-        assert!(why.contains("\"decision_context\":null"));
-        cell.claim.calibration_failed = true;
-        cell.claim.stale = true;
-        let why = fmine_public::key::inspect::why_json(&cell);
-        assert!(why.contains("FMINE-REF-205"));
-        assert!(why.contains("\"claim_guards_pass\":false"));
-        assert!(why.contains("\"recorded_stale\":true"));
-        assert!(why.contains("\"assessment\":\"not_assessed\""));
-        let parent = fmine_core::id::ObjectId::from_canonical_bytes(
-            fmine_core::id::PrefixKind::Claim,
-            b"unresolved-synthetic-parent",
-        );
-        cell.claim.parents.push(parent);
-        let trace = fmine_public::key::inspect::trace_json(
-            &cell,
-            &fmine_public::synthetic::synthetic_profile(),
-        );
-        assert!(trace.contains("\"scope\":\"partial_provenance\",\"complete_for_claim\":false"));
-        assert!(trace.contains(&format!("\"unresolved_parents\":[\"{parent}\"]")));
-    }
-
-    #[test]
-    fn test_claim_inspection_absent_id_is_not_replaced_by_a_synthetic_claim() {
-        let missing = fmine_core::id::ObjectId::from_canonical_bytes(
-            fmine_core::id::PrefixKind::Claim,
-            b"absent-public-claim",
-        )
-        .to_string();
-        let ws = scratch("claim-absent");
-        for action in ["show", "why", "trace"] {
-            let env = invoke(&args(&["claim", action, &missing]), &ws).0;
-            assert_eq!((env.status, env.exit_code), ("refused", 3));
-            assert_eq!(env.refusal.expect("refusal").code, "FMINE-REF-201");
-            assert_eq!(env.payload_json, "null");
-        }
-    }
-
-    #[test]
-    fn test_cli_claim_show_resolves_aisc_and_refuses_altered_source() {
-        let ws = synthetic_workspace("claim-show-aisc");
-        let profile = load_issuer_profile(&ws, "synthetic").expect("registry");
-        let report = run_public_assurance(&profile, &ws).expect("report");
-        let source = profile
-            .sources
-            .iter()
-            .find(|s| s.kind == fmine_public::sources::SourceKind::AiscReconciliation)
-            .expect("AISC source");
-        let claim = report
-            .public_claims
-            .cells
-            .values()
-            .find(|c| c.locator.starts_with(&format!("{}:", source.file_name)))
-            .expect("emitted AISC claim");
-        let id = claim.claim.claim_id.to_string();
-        for action in ["show", "why", "trace"] {
-            let env = invoke(&args(&["claim", action, &id]), &ws).0;
-            assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
-            if action == "show" {
-                assert_eq!(env.payload_json, claim.to_json());
-            }
-            if action == "why" {
-                assert!(env.payload_json.contains("\"claim_guards_pass\":false"));
-                assert!(env.payload_json.contains("FMINE-REF-204"));
-            }
-            if action == "trace" {
-                assert!(env.payload_json.contains("\"scope\":\"source_leaf\""));
-                assert!(
-                    env.payload_json
-                        .contains(&format!("\"url\":\"{}\"", source.url))
-                );
-                assert!(!env.payload_json.contains("\"registered_source\":null"));
-            }
-            assert!(env.payload_json.contains("\"evidence\":\"synthetic\""));
-            assert!(env.to_json().contains(FLAGS_JSON));
-            assert!(env.next_actions.iter().all(|a| resolves(&a.command, &ws)));
-        }
-
-        let path = ws.join(&profile.corpus_dir).join(&source.file_name);
-        let mut bytes = std::fs::read(&path).expect("source bytes");
-        bytes.push(0);
-        std::fs::write(&path, bytes).expect("alter the registered source");
-        for action in ["show", "why", "trace"] {
-            let refused = invoke(&args(&["claim", action, &id]), &ws).0;
-            assert_eq!((refused.status, refused.exit_code), ("refused", 8));
-            assert_eq!(refused.refusal.expect("refusal").code, "FMINE-REF-505");
-            assert_eq!(refused.payload_json, "null");
-        }
-    }
-
-    #[test]
-    #[ignore = "needs the registered Barrick workbooks"]
-    fn test_cli_claim_show_resolves_public_source_claim() {
-        let root = workspace_root();
-        let profile = load_issuer_profile(&root, "barrick").expect("registry");
-        let claims = fmine_public::key::mine_stats::load_claims(&profile, &root).expect("claims");
-        let first = claims
-            .claims
-            .iter()
-            .find(|c| c.locator == "Barrick_Q1_2024_Mine_Stats.xlsx:QTD!G23")
-            .expect("E474 first");
-        let env = execute_command(
-            &CliCommand::ClaimShow {
-                id: first.claim.claim_id.to_string(),
-                issuer: None,
-                through: None,
-                synthetic: false,
-            },
-            &root,
-        );
-        assert_eq!((env.status, env.exit_code), ("ok", 0));
-        assert_eq!(env.payload_json, first.to_json());
-        assert!(env.to_json().contains("1479"));
-        assert!(env.to_json().contains(FLAGS_JSON));
-        let id = first.claim.claim_id.to_string();
-        let why = invoke(&args(&["claim", "why", &id]), &root).0;
-        assert_eq!((why.status, why.exit_code), ("ok", 0));
-        assert!(why.payload_json.contains("Assertion { source: Issuer }"));
-        assert!(why.payload_json.contains("\"knowledge_state\":\"Known\""));
-        assert!(why.payload_json.contains("FMINE-REF-205"));
-        assert!(!why.payload_json.contains("FMINE-REF-204"));
-        assert!(why.payload_json.contains("\"claim_guards_pass\":false"));
-        let trace = invoke(&args(&["claim", "trace", &id]), &root).0;
-        assert_eq!((trace.status, trace.exit_code), ("ok", 0));
-        assert!(trace.payload_json.contains("\"complete_for_claim\":true"));
-        assert!(
-            trace
-                .payload_json
-                .contains(&first.key.reporting_vintage.file_sha256)
-        );
-        let source = profile
-            .sources
-            .iter()
-            .find(|s| s.file_name == "Barrick_Q1_2024_Mine_Stats.xlsx")
-            .expect("registered source");
-        assert!(trace.payload_json.contains(&source.url));
-        assert!(trace.payload_json.contains("\"locator\":\"QTD!G23\""));
-    }
-
-    #[test]
-    fn test_claim_show_reads_reported_claims_and_refuses_invented_ids() {
-        let report = run_synthetic_assurance(&[]).expect("synthetic report");
-        for is_numeric in [false, true] {
-            let cell = report
-                .public_claims
-                .cells
-                .values()
-                .find(|c| {
-                    matches!(c.claim.value, fmine_public::key::PublicValue::Number { .. })
-                        == is_numeric
-                })
-                .expect("numeric and placeholder Claims");
-            let id = cell.claim.claim_id.to_string();
-            for action in ["show", "why", "trace"] {
-                let query = args(&["claim", action, &id, "--synthetic"]);
-                let (env, _) = invoke(&query, &workspace_root());
-                assert_eq!((env.exit_code, env.status), (0, "ok"), "{}", env.to_json());
-                assert!(env.payload_json.contains(&cell.to_json()));
-                assert!(env.payload_json.contains("\"lane\":\"synthetic\""));
-                assert_eq!(
-                    env.certificate,
-                    Some(report.ledger_anchor.state_root.to_hex())
-                );
-                assert!(env.payload_json.contains(
-                    &fmine_public::key::claims_digest(report.public_claims.cells.values()).to_hex()
-                ));
-                if action != "show" {
-                    assert!(env.payload_json.contains(&format!("\"{action}\":{{")));
-                }
-                assert!(env.to_json().contains(FLAGS));
-                assert_eq!(
-                    invoke(&query, &workspace_root()).0,
-                    env,
-                    "the same source snapshot reads byte-identically"
-                );
-                assert!(
-                    env.next_actions
-                        .iter()
-                        .all(|a| a.command.ends_with("--synthetic"))
-                );
-            }
-        }
-        for action in ["show", "why", "trace"] {
-            let (unknown, _) = invoke(
-                &args(&["claim", action, "clm_invented", "--synthetic"]),
-                &workspace_root(),
-            );
-            assert_eq!((unknown.exit_code, unknown.status), (3, "refused"));
-            assert_eq!(unknown.payload_json, "null");
-            assert!(
-                unknown
-                    .refusal
-                    .expect("missing id refusal")
-                    .what
-                    .contains("absent")
-            );
-        }
-    }
-
-    #[test]
-    #[ignore = "needs the registered Barrick workbooks"]
-    fn test_claim_show_reads_real_mine_stats_and_aisc_claims() {
-        let root = workspace_root();
-        let profile = load_issuer_profile(&root, "barrick").expect("profile");
-        let report = run_public_assurance(&profile, &root).expect("verified public report");
-        for is_mine_stats in [false, true] {
-            let cell = report
-                .public_claims
-                .cells
-                .values()
-                .find(|c| {
-                    (c.key.line.label.starts_with("site:")
-                        || c.key.line.label.starts_with("summary:"))
-                        == is_mine_stats
-                })
-                .expect("both real-source adapters emit Claims");
-            let id = cell.claim.claim_id.to_string();
-            let (env, _) = invoke(&args(&["claim", "show", &id, "--issuer", "barrick"]), &root);
-            assert_eq!(env.exit_code, 0, "{}", env.to_json());
-            assert!(env.payload_json.contains(&cell.to_json()));
-            assert!(env.payload_json.contains("\"lane\":\"public\""));
-            assert_eq!(
-                env.certificate,
-                Some(report.ledger_anchor.state_root.to_hex())
-            );
-        }
-    }
-
-    #[test]
-    fn test_claim_show_rechecks_registered_source_bytes() {
-        let ws = synthetic_workspace("claim-source-integrity");
-        let profile = load_issuer_profile(&ws, "synthetic").expect("registered synthetic source");
-        let bounded = profile.clone().through("2030Q1").expect("bound");
-        let report = run_public_assurance(&bounded, &ws).expect("verified report");
-        let cell = report
-            .public_claims
-            .cells
-            .values()
-            .next()
-            .expect("public claim");
-        let id = cell.claim.claim_id.to_string();
-        let later = profile
-            .sources
-            .iter()
-            .find(|s| s.quarter == "2030Q2")
-            .expect("later source");
-        std::fs::write(
-            ws.join(&profile.corpus_dir).join(&later.file_name),
-            b"altered later source",
-        )
-        .expect("alter later scratch fixture");
-        for action in ["show", "why", "trace"] {
-            let query = args(&[
-                "claim",
-                action,
-                &id,
-                "--issuer",
-                "synthetic",
-                "--through",
-                "2030Q1",
-            ]);
-            let (read, _) = invoke(&query, &ws);
-            assert_eq!(read.exit_code, 0, "{}", read.to_json());
-            assert!(read.payload_json.contains(&cell.to_json()));
-            assert_eq!(
-                read.certificate,
-                Some(report.ledger_anchor.state_root.to_hex())
-            );
-            assert!(
-                read.next_actions
-                    .iter()
-                    .all(|a| a.command.ends_with("--issuer synthetic --through 2030Q1"))
-            );
-            assert!(read.next_actions.iter().all(|a| resolves(&a.command, &ws)));
-            let unbounded = invoke(&args(&["claim", action, &id, "--issuer", "synthetic"]), &ws).0;
-            assert_eq!(
-                unbounded.refusal.expect("later source mismatch").code,
-                "FMINE-REF-505"
-            );
-            let wrong_lane = invoke(&args(&["claim", action, &id, "--synthetic"]), &ws).0;
-            assert_eq!(
-                wrong_lane.refusal.expect("id absent from fixture").code,
-                "FMINE-REF-201"
-            );
-        }
-        let path = ws
-            .join(&profile.corpus_dir)
-            .join(&bounded.sources[0].file_name);
-        std::fs::write(path, b"altered registered source").expect("alter scratch fixture");
-        for action in ["show", "why", "trace"] {
-            let query = args(&[
-                "claim",
-                action,
-                &id,
-                "--issuer",
-                "synthetic",
-                "--through",
-                "2030Q1",
-            ]);
-            let (refused, _) = invoke(&query, &ws);
-            assert_eq!((refused.exit_code, refused.status), (8, "refused"));
-            assert_eq!(
-                refused.refusal.expect("digest refusal").code,
-                "FMINE-REF-505"
-            );
-            assert_eq!(refused.payload_json, "null");
-        }
     }
 
     /// Gate run on the real registered workbooks (public lane; the files are not in git). Run with

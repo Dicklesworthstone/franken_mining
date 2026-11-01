@@ -124,10 +124,16 @@ To resolve a Claim against a particular assurance snapshot, use the same issuer 
 cargo run -p fmine-cli -- claim show clm_REPLACE_WITH_THE_EMITTED_ID --issuer barrick --through 2026Q2
 ```
 
-The response includes both the assurance root and the keyed Claim projection digest. Missing ids and altered
-source files refuse instead of returning a stale cached Claim.
+For workbook Claims, the response includes both the assurance root and the keyed Claim projection digest.
+The same explicit issuer selection also resolves the recovery report's ownership, training, fitted-model,
+operating-input and projection Claims. `show` retains the typed value and canonical body; `why` runs the
+recorded Claim guards; `trace` follows the retained parents through the model to the workbook or agreed PDF
+source anchors. Missing parents remain explicit. Recovery reads carry their separate model-report digest;
+their envelope has no identity-ledger certificate or issuance anchor. The source identity root is identified
+separately and does not certify the model. Missing IDs and altered source files refuse instead of returning
+a stale cached Claim. Recovery results remain descriptive and uncalibrated.
 
-### Check table identities and reserve roll-forwards
+### Check table identities, reserve roll-forwards and replacement ratios
 
 DESIGN (BD-340.S5/S8): inspect the existing workbook identities with their source citations and ledger
 certificate, or supply explicit definitions for tables transcribed from registered PDFs:
@@ -156,7 +162,7 @@ kind = "roll_forward"
 total = "closing_reserves_2025"
 total_period = "2025FY"
 unit = "koz"
-basis = "100%"
+basis = "gold;full;contained"
 construction = "rounded_once"
 convention = "closed"
 
@@ -191,10 +197,87 @@ result. Conflict reports retain correction sets and implied intervals without se
 Missing agreed operands remain listed identities. A mathematical conflict is a finding with exit zero;
 unreadable/changed source files and reader disagreements preserve their typed refusals.
 
+Reserve replacement uses `kind = "reserve_replacement"` in the same declarations file. It requires a named
+`reserve_replacement.gold_oz@…` or `reserve_replacement.geo@…` definition from `registries/metrics.toml`,
+`unit = "percent"`, `factor = 100`, and explicit, identical `numerator_unit` and `denominator_unit`.
+Exactly two terms use `role = "numerator"` and `role = "denominator"`. The percentage and both cumulative
+amounts must name the same three-year `YYYY-YYYY` window. For example, a gold declaration uses:
+
+```toml
+kind = "reserve_replacement"
+definition = "reserve_replacement.gold_oz@barrick-fy2025"
+total_period = "2023-2025"
+unit = "percent"
+numerator_unit = "moz"
+denominator_unit = "moz"
+factor = 100
+price_deck = "none"
+basis = "attributable;contained;metal=gold;ex_ad;deck=none"
+```
+
+These fields replace the corresponding identity fields in a complete declaration; they supply no numerical
+inputs. GEO uses `metal=geo` and an explicit matching deck key in both `price_deck` and `basis`. It checks
+already-converted GEO amounts and performs no implicit price or metal conversion. Each term's sign applies
+to its original printed token; the resulting depletion interval must be strictly positive. Shared net-change
+or depletion amounts can participate in sums or roll-forwards, and all those constraints are checked jointly.
+Reusing the quoted percentage in another identity refuses because that would require a general nonlinear
+constraint. JSON and Markdown retain the named definition, window, deck, tokens, locators and checked result.
+
 DESIGN boundary: these are arithmetic checks on issuer assertions. Different filing/deck vintages remain
 separate documents. The command does not determine which vintage is true, classify reserves or establish
 GATE-HALL-01. Its PDF report digest binds the declarations, readings and results; it is not a ledger anchor or
-external timestamp. Authentic historical PDF readings and the full reserve-vintage store remain open.
+external timestamp. Authentic historical PDF readings and complete historical coverage remain open.
+
+#### Keep reserve filing vintages and their price decks separate
+
+DESIGN (BD-335): optional `[[reserve_row]]` declarations add an issuer-reserve register projection to the same
+`check tables --definitions` command. The following invented declaration can be appended to the example
+above; a file containing only reserve declarations is also supported:
+
+```toml
+[[reserve_row]]
+id = "closing_gold_2025"
+doc = "Synthetic_Reserves.pdf"
+quantity = "closing_reserves_2025"
+subject = "Example Mine"
+item = "closing"
+reserve_year = 2025
+period = "2025FY"
+metal = "gold"
+unit = "koz"
+ownership = "full"
+support = "contained"
+convention = "closed"
+deck = "quoted"
+deck_period = "2025FY"
+deck_basis = "reserve_prices"
+gold_price_quantity = "reserve_gold_price_2025"
+```
+
+The reserve reading must independently agree on basis `gold;full;contained`, as well as its quantity, period,
+unit, token and locator. An attributable basis explicitly names a fraction, for example
+`gold;attributable:123/200;contained`. Opening rows use the preceding year's period. Supported items are
+opening, acquisitions/divestments, depletion, net change and closing; signed printed adjustments remain signed.
+The document's declared rounding convention also controls reserve-row comparisons.
+
+A quoted price deck comes from independently agreed price readings in the **same document**, with the declared
+deck period and basis. Gold prices use `usd_per_oz`; copper prices use `usd_per_lb`. GEO requires both price
+quantities. No prices are entered into the definition file. Use `deck = "unstated"` and omit every price field
+when the source does not state its deck; two unstated decks never establish equivalent assumptions.
+
+JSON exposes `payload.issuer_reserves`, and Markdown adds reserve assertions, selections, comparisons and
+unavailable rows. Every admitted row retains its source token, exact rounding interval, source hash, readers,
+publication evidence, interpreted economic key and separately cited price deck. All rows are issuer assertions.
+For the same issuer, subject, item, reserve year, metal, unit, ownership and support, the latest declared MD&A or
+AIF filing is current. A later investor deck remains a cross-check. Competing filings on the latest date stay
+ambiguous; a missing or unusable latest filing or price reading blocks fallback to an older filing.
+An accepted value with a competing pending location refuses with both citations, even when the tokens match.
+
+Earlier filings remain visible, including their disagreement with the current selection. Changed price decks
+are reported separately from amount comparisons, and the latest filing still carries its own deck. Source
+quantities on different units, ownership bases or contained/recoverable supports are never silently combined.
+The projection retains the supplied declared population; it does not prove complete filing coverage, establish
+an append-only history, normalize a changed price deck or create an `EstimateStatement` or reserve classification.
 
 ### Check cited numbers in a draft
 
@@ -229,8 +312,35 @@ visible beside this assessment; this does not authorize disclosure or establish 
 Workbook `[[source]]` rows may declare `published_at` and `published_at_basis` together, with a cited
 `FACT: ` or `INFERENCE: ` basis. An omitted date stays unknown: the reporting quarter and retrieval date
 cannot manufacture a publication date. Correcting these metadata changes the public-record report digest
-without changing the workbook's numerical Claim. Derived identities and forward guidance are not assessed
-by this first public-record slice.
+without changing the workbook's numerical Claim.
+
+The same assessment can derive additive quarters from dated cumulative disclosures: **Q2 = H1 − Q1**,
+**Q3 = nine months − H1**, and **Q4 = full year − nine months**. Supported quantities are gold production
+and sales in `koz`, and copper production in `kt`. For example, an uncited draft line
+`Example Mine Q4 2030 100% basis gold production is 100 koz.` can be checked with:
+
+```bash
+cargo run -p fmine-cli -- lint draft.md --issuer <registered-issuer> --as-of 2031-03-01 --discover
+```
+
+Every required input must have a registered publication date at or before the cut and the same explicit
+ownership and perimeter basis. The calculation uses displayed rounding intervals: subtracting `200.0`
+and `100.0` gives the exact enclosure `[99.9, 100.1]`, so a draft claiming `100.0` has more precision than
+those inputs establish. All competing source pairs, their Claims, hashes and publication evidence remain
+in JSON and Markdown. Future and undated disclosures cannot fill a missing input; dashes cannot become zero.
+Rates such as AISC, grades and recovery are not subtracted. A successful `derivable` result retains the
+separate direct-publication assessment and warns that the derived figure may itself be new information.
+It is arithmetic over issuer assertions, not permission to disclose them.
+
+Complete quarter sets can also establish **H1 = Q1 + Q2** and **FY = Q1 + Q2 + Q3 + Q4** for those
+same additive quantities. For example, `Example Mine H1 2030 100% basis gold production is 300 koz.`
+can be supported by dated Q1 and Q2 disclosures of `100.0` and `200.0`: their exact sum enclosure is
+`[299.9, 300.1]`. A draft stating `300.0` would claim more precision than those inputs establish.
+The `quarter_sum` report preserves the interpreted input Claims, canonical derived Claim and complete
+source ancestry. Every quarter must be present on the same subject, metric, ownership and scope basis;
+competing eligible vintages stay ambiguous. Missing or undated quarters cannot become zero, and a
+supporting sum cannot conceal a directly disclosed contradiction. Rates and ownership scaling remain
+outside these arithmetic rules.
 
 DESIGN (BD-345.S3): `--discover` also searches for source Claims when a supported equality has no Claim link.
 The subject, metric, reporting period, ownership basis and unit must still be stated explicitly. A unique
@@ -253,6 +363,20 @@ sentences. JSON includes the draft and Claim-population digests and the source s
 a completed lint exits zero even when it finds mismatches. Missing or altered registered source files refuse.
 Use `--synthetic` with Claims emitted by the built-in synthetic assurance run for an invented demonstration.
 Relative draft paths are resolved against `--workspace`, which defaults to the current workspace.
+
+With `--as-of`, explicitly marked forward statements also receive a separate `forward_guidance`
+assessment. For example, these invented lines use the supported grammar:
+
+```text
+Example Mine FY2030 100% basis gold production forecast is 125 koz.
+Copper Mine FY2030 100% basis AISC guidance is $3.40 - 3.75/lb per pound sold.
+```
+
+The comparison uses the latest agreed, registered guidance published by the date, retaining its page,
+hash, ownership basis and canonical source Claims. Conflicting latest statements and incomplete readers
+stay unresolved. Point and range endpoints are compared exactly; this does not verify a forecast or
+permit disclosure. Document-only registries work, and an optional guidance failure is reported alongside
+the historical numerical check.
 
 ### Compare issuer guidance with reported annual outcomes
 
@@ -561,9 +685,55 @@ forecast under this loss, without establishing skill or calibration. Optional co
 arithmetic overflow, preserve the verified forecast/outcome scores and appear as explicit unavailable or
 refused comparisons. The `benchmark_assessment` object carries the detailed statuses, evidence and results.
 
+Each comparator also gets an exact full-cohort bound on the mean forecast-minus-comparator interval loss,
+including every unresolved outcome. With the same frozen alpha, the two interval losses have matching tail
+slopes, so their difference is bounded over all real outcomes even though either individual loss is unbounded.
+The report keeps the full live-member denominator, names pending outcomes and missing benchmark intervals,
+and isolates arithmetic refusals to the affected comparison. For example, an invented observed lead of
+`-20` can become `[-20, 30]` after admitting one pending outcome: either method could finish ahead. A wholly
+negative completion interval retains the forecast's lower loss across every admitted completion. These are
+arithmetic completion bounds, with no probability, confidence or calibration claim. The paired scoring API
+preserves the same bounds and missing-member states.
+
 The timestamp authenticates the frozen record and its declarations. Consumed source bodies are separately
 verified; actual input use and forecast generation are not replayed. This command creates no forecasts,
 registrations or time proofs; an absent or incomplete FY2026 record refuses.
+
+### Compare a frozen record at an explicit evidence cut
+
+DESIGN (BD-076): the production CLI exposes the record assessment in JSON or Markdown, with an explicit
+assessment time and caller-selected timestamp trust roots:
+
+```bash
+cargo run -p fmine-cli -- forecast record score --record path/to/frozen-record \
+  --as-of 2027-02-15T00:00:00Z --tsa-roots forecasts/tsa/digicert-trusted-root-g4.pem
+cargo run -p fmine-cli -- forecast record score --record path/to/frozen-record \
+  --as-of 2027-02-15T00:00:00Z --tsa-roots forecasts/tsa/digicert-trusted-root-g4.pem \
+  --format markdown
+```
+
+The directory must contain `manifest.toml`, `forecasts.csv`, `rules.toml`, `record.sha256`, `rules.sha256`,
+`record.tsr` and `rules.tsr`. Both signatures and message imprints are verified using OpenSSL 3 at their signed
+generation times. The complete rules proof must precede the complete record proof; the record must satisfy
+its frozen deadline, precede the scored year's end, and exist by `--as-of`. The selected PEM's fingerprint
+is reported. Selecting a local root expresses caller trust; it does not confer public timestamp authority or
+replace the pinned-authority acceptance policy of `xtask forecast-record-verify`.
+
+The command reads original releases with verified source bytes and displayed exact values. Production
+retains the signed FY-minus-nine-month result; Q4 unit costs use the printed quarterly rate. Guidance is
+selected before the forecast information cutoff. The rules' fixed Q3 observation and historical persistence
+pool can become available later and are checked against the assessment cut, with that information-set
+difference disclosed. Missing originals, ambiguous guidance and incomplete history retain named unavailable
+rows. Registered publication dates bound availability conservatively through the end of that date; when absent,
+the report labels its retrieval-time fallback explicitly. Frozen input timestamps stay those in the manifest.
+
+Every declared site and target remains visible. JSON and Markdown show each method's exact loss and coverage,
+the common-population mean comparison, whole-live-cohort completion bounds, the declared binomial reference
+and correlation sensitivity. Missing outcomes and missing comparators cannot change the population used by
+only one method. Source cells, canonical Claim IDs, raw values, document hashes, baseline calculations and
+unavailable reasons accompany the scores. The assessment digest binds this evidence and the proof metadata.
+The report is descriptive or unscored, with null authority fields and no claim of forecasting skill or calibration.
+It does not generate the own-model forecasts still required for the final FY2026 record.
 
 ### Register forecasts with a live durable journal
 
@@ -571,7 +741,8 @@ DESIGN (BD-047, BD-343): `forecast journal` records live admissions, freezes coh
 outcomes and restatements, and persists immutable assessments. Every mutation reads the runtime clock while
 holding the journal's exclusive lock. Request files cannot choose `registered_at`, `frozen_at` or `recorded_at`.
 The complete operation, assigned nanosecond time, sequence and previous head are hash-bound and synchronized
-before the command reports success.
+before the command reports success. For an appended operation, the candidate receipt and report are rendered
+before writing, so a rendering refusal cannot follow a successful append; output is released only after sync.
 
 The following example uses an **invented unitless forecast** with a distant deadline. Use an unused journal path:
 
@@ -601,18 +772,27 @@ For an actual forecast, the registration request contains one `[[forecast]]` tab
 using the membership, resolution-source and scoring-policy fields shown in the committed example. Each request
 has no top-level fields. Decimal values are quoted strings. The latest possible time under the declared
 clock bound must be **strictly before** every affected outcome deadline, including on an empty or quiet journal.
+For new operations, the writer internally adds `schema = "fmine.forecast-operation.v2"`; callers must not
+include this marker in their request files. The frame retains the sampled `observed_ns`, while registration,
+cohort freeze and outcome recording times use the clock's upper bound (`observed_ns + clock_skew_ns`).
 
 After the outcome becomes available, `forecast journal outcome` accepts one `[[outcome]]` table with the same
 published, missing or restated vocabulary as the replay example above, omitting `recorded_at`. Its
 `available_at` must be at or before the earliest possible current time. Restatements append to the original
 history, and missing members remain in the frozen denominator.
 
+For example, an outcome available at `12:00:00Z` and recorded at an observed `12:00:01.500Z` with a one-second
+uncertainty has a recording upper bound of `12:00:02.500Z`. A later assessment cut at `12:00:02Z` leaves that
+outcome unresolved; a cut at `12:00:03Z` can include it. This prevents a recording from entering a historical
+information cut while its declared uncertainty still crosses that cut.
+
 `forecast journal assess --journal <path> --head <latest-head> --cohort <name>
 --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock` computes and persists an assessment and its closed information
 cut. `--selector first-published` is the default; `latest-as-of` selects eligible restatements. An optional
 `--expected-digest <hex>` refuses a mismatching result without appending. Every new assessment also stores its
 actual result digest in the operation, including when the caller omits that option. Replay checks that binding
-and refuses a different result. The cut must already be in the past under the declared clock bound.
+and refuses a different result; a v2 assessment without its stored digest is invalid. The cut must already
+be in the past under the declared clock bound.
 Reopening restores these seals and earlier assessment digests. `inspect`
 replays recorded operations without writing; omitting its optional head pin leaves rollback authenticity unchecked.
 
@@ -627,12 +807,34 @@ cargo run -p fmine-cli -- forecast journal report \
 The digest placeholders stand for complete hex values from successful receipts. `report` retrieves the saved
 cohort, cut and outcome selector, including original/restated citations and unresolved members. It samples no
 clock and leaves the journal's bytes, head and assessment count unchanged. An absent assessment or mismatched
-head refuses; the command never substitutes another assessment. JSON retains the original assessment content
-under `payload.report.assessment`, while the surrounding journal head and checkpoint inventory describe the
-currently opened history. Omitting `--head` permits an unpinned read with that limitation disclosed.
+head refuses; the command never substitutes another assessment. Without a supplemental `--provenance` bundle,
+JSON reconstructs the complete `payload.report` at the first checkpoint matching that digest, including its
+original `journal_head`, checkpoint inventory, `durable_journal` mode, time policy and digest-binding status.
+With the same implementation, later appends, restatements and reopening leave this nested report byte-identical.
+The outer `payload.head` and inventories describe the currently opened history, and `read_only: true`
+identifies the retrieval. Omitting `--head`
+permits an unpinned read with that limitation disclosed. This is deterministic replay of the saved assessment;
+it does not promise an unchanged presentation across software versions.
 Older checkpoints without a stored result digest remain readable; `result_digest_binding` distinguishes their
-caller-requested digest check from a result digest bound into the journal. Recording times remain observed
-host-clock times under the journal's declared uncertainty policy.
+caller-requested digest check from a result digest bound into the first checkpoint. A later checkpoint pinning
+the same result cannot upgrade that original binding. Legacy operations without an internal schema marker
+retain their observed recording times, existing identities and results. New v2 operations can follow them in
+the same journal; replay applies each operation's original time policy.
+
+`payload.operation_version_counts` reports `legacy_v1` and `v2` counts, excluding genesis.
+`payload.record_time_policy` is `none`, `legacy_observed`, `clock_upper_bound` or `mixed`. The nested report
+describes the operation prefix through that assessment's first saved checkpoint, so later appends do not
+change its time-policy labels. A v2 assessment over legacy history remains explicitly mixed; adding a result
+digest does not upgrade the earlier clock evidence.
+
+Add `--provenance <path>` to check the saved cohort's declared ancestry at each forecast's recorded
+registration time. The same `fmine.forecast-provenance.v1` bundle used by `forecast assess` applies, including
+bindings for unresolved members. Its UTC timestamps accept one through nine fractional digits, so an exact
+nanosecond registration can be represented without rounding. A future ancestor refuses with its leakage
+frontier and shortest path. Successful output adds the supplied bundle's digest and temporal check to the
+report while preserving the original assessment digest and journal bytes. This later-supplied metadata is
+not an ancestry commitment made at registration or an external timestamp proof; generator replay remains
+`not_performed`.
 
 The response schema is `fmine.forecast-journal.v1`; assessment responses contain the familiar report under
 `payload.report`. `--trust-host-clock` acknowledges an operator-declared clock bound, fixed at initialization;

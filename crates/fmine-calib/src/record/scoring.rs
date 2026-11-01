@@ -13,6 +13,8 @@ use fmine_numerics::exact_feas::Interval;
 use super::{ForecastRow, Rat, RecordRules, SiteStatus, interval_score};
 use crate::guidance_scores::clopper_pearson_exact;
 
+pub mod paired;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssessmentError(pub String);
 
@@ -93,6 +95,27 @@ fn mean(sum: Rat, n: usize) -> Result<Option<Rat>> {
     } else {
         Ok(Some(exact(sum.checked_div(count(n)?))?))
     }
+}
+
+/// Shared exact interval loss and inclusive hit rule for the forecast and declared baseline methods.
+fn interval_result(lo: Rat, hi: Rat, alpha: Rat, outcome: Rat) -> Result<(Rat, bool)> {
+    Ok((
+        exact(interval_score(lo, hi, alpha, outcome))?,
+        le(lo, outcome)? && le(outcome, hi)?,
+    ))
+}
+
+/// Shared frozen equicorrelation sensitivity. This is not an estimated dependence model.
+fn effective_n(n: usize, rho_low: Rat, rho_high: Rat) -> Result<(Rat, Rat)> {
+    let at = |rho: Rat| -> Result<Rat> {
+        if n == 0 {
+            return Ok(Rat::from_integer(0));
+        }
+        let denominator =
+            exact(Rat::from_integer(1).checked_add(exact(count(n - 1)?.checked_mul(rho))?))?;
+        exact(count(n)?.checked_div(denominator))
+    };
+    Ok((at(rho_high)?, at(rho_low)?))
 }
 
 /// Score each frozen live forecast exactly once and list the not-published universe separately. Unknown,
@@ -195,12 +218,10 @@ pub fn assess(
             let width = exact(f.hi.checked_sub(f.lo))?;
             // Validates alpha even when every outcome is missing.
             exact(interval_score(f.lo, f.hi, rules.alpha, f.point))?;
-            let loss = y
-                .map(|y| exact(interval_score(f.lo, f.hi, rules.alpha, y)))
+            let scored = y
+                .map(|y| interval_result(f.lo, f.hi, rules.alpha, y))
                 .transpose()?;
-            let hit = y
-                .map(|y| -> Result<bool> { Ok(le(f.lo, y)? && le(y, f.hi)?) })
-                .transpose()?;
+            let (loss, hit) = scored.map_or((None, None), |(loss, hit)| (Some(loss), Some(hit)));
             match loss {
                 Some(loss) => {
                     n_scored += 1;
@@ -223,14 +244,6 @@ pub fn assess(
             });
         }
         let n_unresolved = n_frozen - n_scored;
-        let effective = |rho: Rat| -> Result<Rat> {
-            if n_scored == 0 {
-                return Ok(zero);
-            }
-            let denominator =
-                exact(one.checked_add(exact(count(n_scored - 1)?.checked_mul(rho))?))?;
-            exact(count(n_scored)?.checked_div(denominator))
-        };
         let observed_mean = mean(sum, n_scored)?;
         targets.push(TargetScore {
             target: target.id.clone(),
@@ -262,7 +275,7 @@ pub fn assess(
             } else {
                 None
             },
-            effective_n: (effective(rules.rho_high)?, effective(rules.rho_low)?),
+            effective_n: effective_n(n_scored, rules.rho_low, rules.rho_high)?,
         });
     }
     Ok(RecordScore { members, targets })
@@ -287,6 +300,113 @@ pub struct ComparisonExclusion {
     pub missing_run_rate_persistence: bool,
 }
 
+/// Arithmetic bounds over every frozen live member, allowing each unresolved outcome any real value.
+/// These are completion bounds, not confidence intervals. A missing comparator leaves the bounds absent;
+/// it never reduces the denominator to members with available evidence.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComparisonCompletion {
+    pub pending_outcomes: Vec<String>,
+    pub missing_benchmarks: Vec<String>,
+    pub mean_difference_bounds: Option<(Rat, Rat)>,
+    pub arithmetic_refusal: Option<String>,
+}
+
+/// Exact global extrema of IS(forecast, y) - IS(benchmark, y), including signed and point intervals.
+/// The difference is continuous and piecewise linear, with knots at the four endpoints. When alpha is
+/// shared, the coefficients of y cancel in both tails, so extrema occur at those knots. Different alpha
+/// values do not have this cancellation and are refused. No physical bound or probability model is assumed.
+pub fn interval_score_difference_bounds(
+    forecast: (Rat, Rat),
+    benchmark: (Rat, Rat),
+    forecast_alpha: Rat,
+    benchmark_alpha: Rat,
+) -> Result<(Rat, Rat)> {
+    if forecast_alpha != benchmark_alpha {
+        return Err(AssessmentError(
+            "finite global interval-loss difference bounds require the same alpha".into(),
+        ));
+    }
+    // The score primitive checks alpha, both interval orders and all arithmetic at every knot.
+    let difference = |y| -> Result<Rat> {
+        exact(
+            exact(interval_score(forecast.0, forecast.1, forecast_alpha, y))?.checked_sub(exact(
+                interval_score(benchmark.0, benchmark.1, benchmark_alpha, y),
+            )?),
+        )
+    };
+    let initial = difference(forecast.0)?;
+    let (mut lo, mut hi) = (initial, initial);
+    for y in [forecast.1, benchmark.0, benchmark.1] {
+        let value = difference(y)?;
+        if le(value, lo)? {
+            lo = value;
+        }
+        if le(hi, value)? {
+            hi = value;
+        }
+    }
+    Ok((lo, hi))
+}
+
+fn completion<'a>(
+    alpha: Rat,
+    rows: impl IntoIterator<Item = (&'a MemberScore, &'a ForecastRow, Option<(Rat, Rat)>)>,
+) -> ComparisonCompletion {
+    let rows: Vec<_> = rows.into_iter().collect();
+    let mut result = ComparisonCompletion {
+        pending_outcomes: rows
+            .iter()
+            .filter(|(m, _, _)| m.outcome.is_none())
+            .map(|(m, _, _)| m.site.clone())
+            .collect(),
+        missing_benchmarks: rows
+            .iter()
+            .filter(|(_, _, b)| b.is_none())
+            .map(|(m, _, _)| m.site.clone())
+            .collect(),
+        mean_difference_bounds: None,
+        arithmetic_refusal: None,
+    };
+    if rows.is_empty() || !result.missing_benchmarks.is_empty() {
+        return result;
+    }
+    let bounds = (|| -> Result<Option<(Rat, Rat)>> {
+        let (mut lower, mut upper) = (Rat::from_integer(0), Rat::from_integer(0));
+        for (member, forecast, baseline) in &rows {
+            let (b_lo, b_hi) =
+                baseline.ok_or_else(|| AssessmentError("missing comparator".into()))?;
+            let (lo, hi) = match member.outcome {
+                Some(actual) => {
+                    let forecast_loss = member.interval_score.ok_or_else(|| {
+                        AssessmentError("resolved forecast has no interval score".into())
+                    })?;
+                    let baseline_loss = exact(interval_score(b_lo, b_hi, alpha, actual))?;
+                    let difference = exact(forecast_loss.checked_sub(baseline_loss))?;
+                    (difference, difference)
+                }
+                None => interval_score_difference_bounds(
+                    (forecast.lo, forecast.hi),
+                    (b_lo, b_hi),
+                    alpha,
+                    alpha,
+                )?,
+            };
+            lower = exact(lower.checked_add(lo))?;
+            upper = exact(upper.checked_add(hi))?;
+        }
+        Ok(match (mean(lower, rows.len())?, mean(upper, rows.len())?) {
+            (Some(lo), Some(hi)) => Some((lo, hi)),
+            _ => None,
+        })
+    })();
+    // This optional completion must not erase valid observed means or the other baseline's bounds.
+    match bounds {
+        Ok(bounds) => result.mean_difference_bounds = bounds,
+        Err(error) => result.arithmetic_refusal = Some(error.to_string()),
+    };
+    result
+}
+
 /// Exact descriptive losses on one identical member set. Negative differences favor the forecast
 /// under the frozen interval loss; they do not establish predictive skill or calibration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -300,6 +420,8 @@ pub struct TargetComparison {
     pub mean_run_rate_persistence_score: Option<Rat>,
     pub forecast_minus_issuer_guidance: Option<Rat>,
     pub forecast_minus_run_rate_persistence: Option<Rat>,
+    pub issuer_guidance_completion: ComparisonCompletion,
+    pub run_rate_persistence_completion: ComparisonCompletion,
 }
 
 /// Compare all three intervals only where the actual and both comparators are available. Every live
@@ -313,6 +435,21 @@ pub fn compare(
     benchmarks: &[BenchmarkRow],
 ) -> Result<Vec<TargetComparison>> {
     let assessment = assess(rules, forecasts, outcomes)?;
+    compare_assessment(rules, forecasts, &assessment, benchmarks)
+}
+
+// The paired report already holds the validated full-population assessment. Share this comparison
+// rather than re-evaluating its model losses and certified coverage bounds.
+fn compare_assessment(
+    rules: &RecordRules,
+    forecasts: &[ForecastRow],
+    assessment: &RecordScore,
+    benchmarks: &[BenchmarkRow],
+) -> Result<Vec<TargetComparison>> {
+    let by_forecast: BTreeMap<_, _> = forecasts
+        .iter()
+        .map(|f| ((f.site.as_str(), f.target.as_str()), f))
+        .collect();
     let forecast_keys: BTreeSet<_> = forecasts
         .iter()
         .map(|f| (f.site.as_str(), f.target.as_str()))
@@ -354,6 +491,7 @@ pub fn compare(
         let mut common_members = Vec::new();
         let mut exclusions = Vec::new();
         let (mut forecast_sum, mut guidance_sum, mut persistence_sum) = (zero, zero, zero);
+        let mut completion_rows = Vec::new();
         for member in assessment
             .members
             .iter()
@@ -367,6 +505,10 @@ pub fn compare(
                         member.site, member.target
                     ))
                 })?;
+            let forecast = by_forecast
+                .get(&(member.site.as_str(), member.target.as_str()))
+                .ok_or_else(|| AssessmentError("frozen member has no forecast".into()))?;
+            completion_rows.push((member, *forecast, *benchmark));
             if let (Some(actual), Some((g_lo, g_hi)), Some((p_lo, p_hi))) = (
                 member.outcome,
                 benchmark.issuer_guidance,
@@ -394,6 +536,18 @@ pub fn compare(
             }
         }
         let common_count = common_members.len();
+        let issuer_guidance_completion = completion(
+            rules.alpha,
+            completion_rows.iter().map(|(member, forecast, benchmark)| {
+                (*member, *forecast, benchmark.issuer_guidance)
+            }),
+        );
+        let run_rate_persistence_completion = completion(
+            rules.alpha,
+            completion_rows.iter().map(|(member, forecast, benchmark)| {
+                (*member, *forecast, benchmark.run_rate_persistence)
+            }),
+        );
         comparisons.push(TargetComparison {
             target: target.target.clone(),
             n_frozen: target.n_frozen,
@@ -410,6 +564,8 @@ pub fn compare(
                 exact(forecast_sum.checked_sub(persistence_sum))?,
                 common_count,
             )?,
+            issuer_guidance_completion,
+            run_rate_persistence_completion,
         });
     }
     Ok(comparisons)
@@ -729,5 +885,272 @@ mod tests {
             scored.forecast_minus_run_rate_persistence,
             Some(Rat::from_integer(970))
         );
+    }
+
+    #[test]
+    fn completion_knots_include_inner_endpoints_and_constant_tails() {
+        let r = Rat::from_integer;
+        let alpha = Rat::new(1, 5).unwrap();
+        for (f, b, expected) in [
+            ((90, 110), (95, 105), (-40, 10)),
+            ((90, 110), (100, 120), (-100, 100)),
+            ((0, 0), (5, 5), (-50, 50)),
+        ] {
+            let f = (r(f.0), r(f.1));
+            let b = (r(b.0), r(b.1));
+            let bounds = interval_score_difference_bounds(f, b, alpha, alpha).unwrap();
+            assert_eq!(bounds, (r(expected.0), r(expected.1)));
+            assert_eq!(
+                interval_score_difference_bounds(b, f, alpha, alpha).unwrap(),
+                (r(-expected.1), r(-expected.0))
+            );
+        }
+        // Enumerate signed, overlapping, disjoint and point intervals. Direct losses at a half-step
+        // grid attain both extrema; independent tail points verify cancellation outside all knots.
+        let intervals: Vec<_> = (-2..=2)
+            .flat_map(|lo| (lo..=2).map(move |hi| (r(lo), r(hi))))
+            .collect();
+        for &f in &intervals {
+            for &b in &intervals {
+                let (lo, hi) = interval_score_difference_bounds(f, b, alpha, alpha).unwrap();
+                let difference = |y| {
+                    interval_score(f.0, f.1, alpha, y)
+                        .unwrap()
+                        .checked_sub(interval_score(b.0, b.1, alpha, y).unwrap())
+                        .unwrap()
+                };
+                let values: Vec<_> = (-12..=12)
+                    .map(|i| difference(Rat::new(i, 2).unwrap()))
+                    .collect();
+                assert!(
+                    values
+                        .iter()
+                        .all(|&v| le(lo, v).unwrap() && le(v, hi).unwrap())
+                );
+                assert!(values.contains(&lo) && values.contains(&hi));
+                assert_eq!(difference(r(-10)), difference(r(-11)));
+                assert_eq!(difference(r(10)), difference(r(11)));
+            }
+        }
+    }
+
+    #[test]
+    fn pending_outcomes_can_reverse_an_observed_lead_or_leave_it_robust() {
+        let (r, f, mut y) = data();
+        let int = Rat::from_integer;
+        y[0].value = Some(int(100));
+        y[1].value = None;
+        let mut b = benchmarks(&f);
+        for row in &mut b {
+            row.issuer_guidance = Some((int(80), int(120)));
+        }
+        let report = compare(&r, &f, &y, &b).unwrap();
+        let score = &report[0];
+        assert_eq!(score.forecast_minus_issuer_guidance, Some(int(-20)));
+        assert_eq!(
+            score.issuer_guidance_completion.mean_difference_bounds,
+            Some((int(-20), int(30)))
+        );
+        assert_eq!(
+            score.issuer_guidance_completion.pending_outcomes,
+            [f[1].site.clone()]
+        );
+        assert_eq!(score.n_frozen, 2);
+        assert_eq!(
+            assess(&r, &f, &y).unwrap().targets[0].full_mean_interval_score_upper,
+            None
+        );
+
+        b[0].issuer_guidance = Some((int(0), int(200)));
+        let robust = compare(&r, &f, &y, &b).unwrap();
+        assert_eq!(
+            robust[0].issuer_guidance_completion.mean_difference_bounds,
+            Some((int(-100), int(-50)))
+        );
+        y[1].value = Some(int(120));
+        let resolved = compare(&r, &f, &y, &b).unwrap();
+        assert_eq!(
+            resolved[0]
+                .issuer_guidance_completion
+                .mean_difference_bounds,
+            Some((int(-50), int(-50)))
+        );
+        assert_eq!(resolved[0].forecast_minus_issuer_guidance, Some(int(-50)));
+        assert!(
+            resolved[0]
+                .issuer_guidance_completion
+                .pending_outcomes
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn missing_comparator_keeps_the_full_denominator_and_other_completion_available() {
+        let (r, f, mut y) = data();
+        y[1].value = None;
+        let mut b = benchmarks(&f);
+        for (row, forecast) in b.iter_mut().zip(&f) {
+            row.issuer_guidance = Some((forecast.lo, forecast.hi));
+            row.run_rate_persistence = Some((forecast.lo, forecast.hi));
+        }
+        b[1].issuer_guidance = None;
+        let score = compare(&r, &f, &y, &b).unwrap().remove(0);
+        assert_eq!(score.n_frozen, 2);
+        assert_eq!(
+            score.issuer_guidance_completion.mean_difference_bounds,
+            None
+        );
+        assert_eq!(
+            score.issuer_guidance_completion.missing_benchmarks,
+            [f[1].site.clone()]
+        );
+        let zero = Rat::from_integer(0);
+        assert_eq!(
+            score.run_rate_persistence_completion.mean_difference_bounds,
+            Some((zero, zero))
+        );
+        b[1].issuer_guidance = b[1].run_rate_persistence;
+        y[0].value = None;
+        let all_pending = compare(&r, &f, &y, &b).unwrap().remove(0);
+        assert!(all_pending.common_members.is_empty());
+        assert_eq!(all_pending.mean_forecast_score, None);
+        assert_eq!(
+            all_pending
+                .issuer_guidance_completion
+                .pending_outcomes
+                .len(),
+            2
+        );
+        assert_eq!(
+            all_pending
+                .issuer_guidance_completion
+                .mean_difference_bounds,
+            Some((zero, zero))
+        );
+    }
+
+    #[test]
+    fn completion_overflow_is_local_and_never_discards_existing_observed_losses() {
+        let (r, f, mut y) = data();
+        y[0].value = Some(Rat::from_integer(100));
+        y[1].value = None;
+        let mut b = benchmarks(&f);
+        for (row, forecast) in b.iter_mut().zip(&f) {
+            row.issuer_guidance = Some((forecast.lo, forecast.hi));
+            row.run_rate_persistence = Some((forecast.lo, forecast.hi));
+        }
+        let huge = Rat::from_integer(i128::MAX);
+        b[1].issuer_guidance = Some((huge, huge));
+        let score = compare(&r, &f, &y, &b).unwrap().remove(0);
+        assert_eq!(score.mean_forecast_score, Some(Rat::from_integer(20)));
+        assert_eq!(score.mean_issuer_guidance_score, score.mean_forecast_score);
+        assert_eq!(
+            score.mean_run_rate_persistence_score,
+            score.mean_forecast_score
+        );
+        assert!(
+            score
+                .issuer_guidance_completion
+                .arithmetic_refusal
+                .is_some()
+        );
+        assert_eq!(
+            score.issuer_guidance_completion.mean_difference_bounds,
+            None
+        );
+        assert_eq!(
+            score.issuer_guidance_completion.pending_outcomes,
+            [f[1].site.clone()]
+        );
+        assert_eq!(
+            score.run_rate_persistence_completion.mean_difference_bounds,
+            Some((Rat::from_integer(0), Rat::from_integer(0)))
+        );
+    }
+
+    #[test]
+    fn completion_bounds_scale_translate_and_ignore_input_permutations() {
+        let (r, mut f, mut y) = data();
+        y[1].value = None;
+        let mut b = benchmarks(&f);
+        let original = compare(&r, &f, &y, &b).unwrap();
+        f.reverse();
+        y.reverse();
+        b.reverse();
+        assert_eq!(compare(&r, &f, &y, &b).unwrap(), original);
+        let scale = Rat::new(3, 2).unwrap();
+        let transform = |v: Rat| {
+            v.checked_mul(scale)
+                .unwrap()
+                .checked_add(Rat::from_integer(7))
+                .unwrap()
+        };
+        for row in &mut f {
+            row.point = transform(row.point);
+            row.lo = transform(row.lo);
+            row.hi = transform(row.hi);
+        }
+        for row in &mut y {
+            row.value = row.value.map(transform);
+        }
+        for row in &mut b {
+            row.issuer_guidance = row
+                .issuer_guidance
+                .map(|(lo, hi)| (transform(lo), transform(hi)));
+            row.run_rate_persistence = row
+                .run_rate_persistence
+                .map(|(lo, hi)| (transform(lo), transform(hi)));
+        }
+        let changed = compare(&r, &f, &y, &b).unwrap();
+        for (old, new) in [
+            (
+                &original[0].issuer_guidance_completion,
+                &changed[0].issuer_guidance_completion,
+            ),
+            (
+                &original[0].run_rate_persistence_completion,
+                &changed[0].run_rate_persistence_completion,
+            ),
+        ] {
+            assert_eq!(
+                new.mean_difference_bounds,
+                old.mean_difference_bounds.map(|(lo, hi)| (
+                    lo.checked_mul(scale).unwrap(),
+                    hi.checked_mul(scale).unwrap()
+                ))
+            );
+            assert_eq!(new.pending_outcomes, old.pending_outcomes);
+        }
+    }
+
+    #[test]
+    fn completion_primitive_refuses_unequal_alpha_invalid_inputs_and_overflow() {
+        let r = Rat::from_integer;
+        let alpha = Rat::new(1, 5).unwrap();
+        assert!(
+            interval_score_difference_bounds(
+                (r(0), r(1)),
+                (r(0), r(1)),
+                alpha,
+                Rat::new(1, 4).unwrap()
+            )
+            .is_err()
+        );
+        for invalid in [r(-1), r(0), r(1), r(2)] {
+            assert!(
+                interval_score_difference_bounds((r(0), r(1)), (r(0), r(1)), invalid, invalid)
+                    .is_err()
+            );
+        }
+        for (f, b) in [
+            ((1, 0), (0, 1)),
+            ((0, 1), (1, 0)),
+            ((0, 1), (i128::MAX, i128::MAX)),
+        ] {
+            assert!(
+                interval_score_difference_bounds((r(f.0), r(f.1)), (r(b.0), r(b.1)), alpha, alpha)
+                    .is_err()
+            );
+        }
     }
 }

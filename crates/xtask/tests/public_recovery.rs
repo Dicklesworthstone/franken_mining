@@ -6,7 +6,7 @@
 #![cfg(test)]
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fmine_claim::{Claim, UuTerm};
 use fmine_evidence::{EvidenceClass, KnowledgeState};
@@ -515,6 +515,324 @@ fn inherited_quantified_uu_survives_model_and_json() {
     assert_parent_definitions(&report);
 }
 
+const INSPECTION_ISSUER: &str = "invented_recovery";
+
+/// Registered public-source adapter over invented evidence. The reserved `synthetic` issuer deliberately
+/// marks workbook values Unknown, so it cannot exercise positive operating-model projection admission.
+fn inspection_workspace() -> PathBuf {
+    use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
+    let root = std::env::temp_dir().join(format!(
+        "fmine-recovery-inspection-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("test clock")
+            .as_nanos()
+    ));
+    let registry = synthetic::write_issuer_workspace(&root).expect("registered fixture");
+    let text = |value: &str| MinimalCell::Text(value.into());
+    let numeric = |value: &str, xf| MinimalCell::Styled {
+        raw: value.into(),
+        xf,
+    };
+    let workbook = build_minimal_xlsx_styled(
+        &[MinimalSheet {
+            name: "Minestats4".into(),
+            hidden: false,
+            cells: vec![
+                ("A1".into(), text("Mine Statistics (Copper)")),
+                ("B2".into(), text("Lumwana")),
+                ("A3".into(), text("For the three months ended March 31,")),
+                ("B3".into(), MinimalCell::Number(2025.0)),
+                ("A4".into(), text("Average grade (percent)")),
+                ("A5".into(), text("Processed")),
+                ("B5".into(), numeric("0.62", 0)),
+                ("A6".into(), text("Recovery rate (percent)")),
+                ("B6".into(), numeric("90", 1)),
+                ("A7".into(), text("Tonnes processed (thousands)")),
+                ("B7".into(), numeric("6000", 1)),
+                ("A8".into(), text("Production (thousands of tonnes)")),
+                ("B8".into(), numeric("33", 1)),
+            ],
+        }],
+        Some(&MinimalStyles {
+            num_fmts: vec![],
+            xfs: vec![2, 1],
+        }),
+    );
+    let file = "Synthetic_Recovery_Stats.xlsx";
+    std::fs::write(root.join("corpus").join(file), &workbook).expect("workbook");
+    let doc = "Synthetic_Recovery.pdf";
+    let doc_bytes =
+        b"Invented annual recovery history and full-site ownership context, not a public document.";
+    let sha = fmine_core::hash::sha256(doc_bytes).to_hex();
+    std::fs::write(root.join("corpus").join(doc), doc_bytes).expect("document");
+    let mut sources = std::fs::read_to_string(&registry)
+        .expect("source registry")
+        .replace(
+            "issuer = \"synthetic\"",
+            &format!("issuer = \"{INSPECTION_ISSUER}\""),
+        );
+    sources.push_str(&format!("\n[[source]]\nfile = \"{file}\"\nkind = \"mine_stats\"\nquarter = \"2025Q1\"\npath = \"{file}\"\nurl_basis = \"W1 table\"\nbytes = {}\nsha256 = \"{}\"\n\n[[subject]]\nname = \"Lumwana\"\n\n[[document]]\nfile = \"{doc}\"\nkind = \"aif\"\nurl = \"https://example.invalid/{doc}\"\nurl_basis = \"W1 table\"\npublished_at = \"2025-01-01\"\npublished_at_basis = \"FACT: invented fixture date\"\npages = 38\nbytes = {}\nsha256 = \"{sha}\"\n", workbook.len(), fmine_core::hash::sha256(&workbook).to_hex(), doc_bytes.len()));
+    std::fs::write(
+        root.join("registries/sources")
+            .join(format!("{INSPECTION_ISSUER}.toml")),
+        sources,
+    )
+    .expect("source metadata");
+    let (_, readings, _) = fixture();
+    let mut entries =
+        format!("schema = \"fmine.transcriptions.v1\"\nissuer = \"{INSPECTION_ISSUER}\"\n");
+    for mut reading in readings.agreement.accepted {
+        if reading.quantity == recovery::OWNERSHIP_QUANTITY {
+            reading.locator.page = 38;
+            reading.locator.table = "Copper Mineral Reserves".into();
+            reading.locator.row = "Lumwana surface (100%)".into();
+            reading.locator.col = "Based on attributable tonnes".into();
+        }
+        let at = &reading.locator;
+        for reader in ["synthetic-reader-a", "synthetic-reader-b"] {
+            entries.push_str(&format!("\n[[entry]]\ndoc = \"{doc}\"\ndoc_sha256 = \"{sha}\"\npage = {}\ntable = \"{}\"\nrow = \"{}\"\ncol = \"{}\"\ntoken = \"{}\"\nquantity = \"{}\"\nunit = \"{}\"\nbasis = \"{}\"\nperiod = \"{}\"\nreader = \"{reader}\"\n", at.page, at.table, at.row, at.col, reading.token, reading.quantity, reading.unit, reading.basis, reading.period));
+        }
+    }
+    std::fs::create_dir_all(root.join("registries/transcriptions")).expect("readings directory");
+    std::fs::write(
+        root.join("registries/transcriptions")
+            .join(format!("{INSPECTION_ISSUER}.toml")),
+        entries,
+    )
+    .expect("two readers");
+    root
+}
+
+fn inspected(root: &Path, view: &str, id: &str, synthetic: bool) -> fmine_cli::Envelope {
+    let mut args = vec!["claim".into(), view.into(), id.into()];
+    if synthetic {
+        args.push("--synthetic".into());
+    } else {
+        args.extend(["--issuer".into(), INSPECTION_ISSUER.into()]);
+    }
+    args.extend([
+        "--workspace".into(),
+        root.display().to_string(),
+        "--format".into(),
+        "json".into(),
+    ]);
+    let (envelope, _) = fmine_cli::invoke(&args, Path::new("unavailable-default"));
+    envelope
+}
+
+fn inspection_field<'a>(json: &'a str, key: &str) -> &'a str {
+    json.split_once(&format!("\"{key}\":\""))
+        .expect("named JSON scalar")
+        .1
+        .split('"')
+        .next()
+        .expect("quoted scalar")
+}
+
+fn inspection_body(json: &str) -> Vec<u8> {
+    let body = inspection_field(json, "canonical_body_hex");
+    (0..body.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&body[at..at + 2], 16).expect("hex body"))
+        .collect()
+}
+
+#[test]
+fn recovery_claim_inspection_resolves_every_category_and_transitive_sources() {
+    use fmine_core::id::{ObjectId, PrefixKind};
+    let root = inspection_workspace();
+    let profile = fmine_public::load_issuer_profile(&root, INSPECTION_ISSUER).expect("profile");
+    let source_report =
+        fmine_public::run_public_assurance(&profile, &root).expect("verified report");
+    let report = source_report
+        .recovery
+        .as_ref()
+        .expect("recovery in assurance");
+    let row = &report.quarters[0];
+    let operating = row.operating.as_ref().expect("typed operating inputs");
+    let models = row.outcome.as_ref().expect("derived projections");
+    let selections = [
+        (
+            report.ownership.claim_id,
+            report.ownership.canonical_body(),
+            "ownership",
+        ),
+        (
+            report.training[0].head.claim_id,
+            report.training[0].head.canonical_body(),
+            "training",
+        ),
+        (report.fit.claim_id, report.fit.canonical_body(), "fit"),
+        (
+            operating.head.claim_id,
+            operating.head.canonical_body(),
+            "operating",
+        ),
+        (
+            models.constant_tails.claim_id,
+            models.constant_tails.canonical_body(),
+            "projection",
+        ),
+        (
+            models.grade_dependent_tails.claim_id,
+            models.grade_dependent_tails.canonical_body(),
+            "projection",
+        ),
+    ];
+    for (id, expected_body, category) in selections {
+        for view in ["show", "why", "trace"] {
+            let envelope = inspected(&root, view, &id.to_string(), false);
+            assert_eq!(envelope.exit_code, 0, "{category} {view}: {envelope:?}");
+            assert!(envelope.anchor_id.is_none());
+            assert!(envelope.certificate.is_none());
+            let json = &envelope.payload_json;
+            assert_eq!(
+                inspection_field(json, "recovery_digest"),
+                report.digest().to_hex()
+            );
+            assert_eq!(
+                inspection_field(json, "source_identity_state_root"),
+                source_report.ledger_anchor.state_root.to_hex()
+            );
+            assert_eq!(
+                inspection_field(json, "source_identity_anchor_id"),
+                source_report.ledger_anchor.anchor_id().to_string()
+            );
+            assert!(json.contains("\"recovery_in_identity_certificate\":false"));
+            assert!(json.contains("\"descriptive_only\":true"));
+            assert_eq!(inspection_field(json, "category"), category);
+            assert_eq!(inspection_field(json, "claim_id"), id.to_string());
+            assert_eq!(inspection_body(json), expected_body);
+            assert_eq!(
+                ObjectId::from_canonical_bytes(PrefixKind::Claim, &inspection_body(json)),
+                id
+            );
+            assert!(envelope.next_actions.iter().all(|action| {
+                action
+                    .command
+                    .contains(&format!("--issuer {INSPECTION_ISSUER}"))
+            }));
+            for flag in [
+                "reserve_disclosure_claim",
+                "execution_authorized",
+                "geotechnical_signoff",
+                "regulatory_compliance_claim",
+            ] {
+                assert!(envelope.to_json().contains(&format!("\"{flag}\":false")));
+            }
+        }
+    }
+    let show = inspected(
+        &root,
+        "show",
+        &models.constant_tails.claim_id.to_string(),
+        false,
+    );
+    assert!(
+        show.payload_json
+            .contains("\"gap_pp\":{\"point\":\"539/155\"")
+    );
+    let why = inspected(&root, "why", &report.fit.claim_id.to_string(), false);
+    assert!(why.payload_json.contains("\"assessment\":null"));
+    assert!(why.payload_json.contains("\"decision_context\":null"));
+    assert!(
+        why.payload_json
+            .contains("\"canonical_id_guard\":{\"status\":\"passed\"")
+    );
+    assert!(
+        why.payload_json
+            .contains("\"public_export_guard\":{\"status\":\"passed\"")
+    );
+    let source_why = inspected(&root, "why", &operating.head.claim_id.to_string(), false);
+    assert!(
+        source_why
+            .payload_json
+            .contains("\"color\":{\"status\":\"refused\""),
+        "registered source assertions do not acquire a color: {}",
+        source_why.payload_json
+    );
+    assert!(source_why.payload_json.contains("FMINE-REF-205"));
+    let trace = inspected(
+        &root,
+        "trace",
+        &models.constant_tails.claim_id.to_string(),
+        false,
+    );
+    assert!(trace.payload_json.contains("\"complete_for_claim\":true"));
+    assert!(trace.payload_json.contains("\"unresolved_parents\":[]"));
+    assert!(trace.payload_json.contains("\"unanchored_leaves\":[]"));
+    for id in [
+        report.fit.claim_id,
+        report.ownership.claim_id,
+        report.training[0].head.claim_id,
+        operating.head.claim_id,
+        row.inputs[0].claim.claim_id,
+    ] {
+        assert!(
+            trace
+                .payload_json
+                .contains(&format!("\"claim_id\":\"{id}\"")),
+            "transitive ancestor {id}"
+        );
+    }
+    for source in ["Synthetic_Recovery.pdf", "Synthetic_Recovery_Stats.xlsx"] {
+        assert!(trace.payload_json.contains(source));
+    }
+    let original = &row.inputs[0];
+    let workbook = inspected(&root, "show", &original.claim.claim_id.to_string(), false);
+    assert_eq!(
+        workbook.anchor_id,
+        Some(source_report.ledger_anchor.anchor_id().to_string())
+    );
+    assert!(workbook.payload_json.contains(&original.to_json()));
+    assert!(
+        workbook
+            .payload_json
+            .contains("\"read_mode\":\"verified_source_projection\"")
+    );
+    let absent = inspected(&root, "show", &report.fit.claim_id.to_string(), true);
+    assert_eq!(
+        absent.refusal.expect("no cross-snapshot fallback").code,
+        "FMINE-REF-201"
+    );
+}
+
+#[test]
+fn recovery_claim_inspection_refuses_changed_or_missing_registered_evidence() {
+    let root = inspection_workspace();
+    let profile = fmine_public::load_issuer_profile(&root, INSPECTION_ISSUER).expect("profile");
+    let report = fmine_public::run_public_assurance(&profile, &root).expect("source report");
+    let id = report.recovery.expect("recovery").fit.claim_id.to_string();
+    for file in ["Synthetic_Recovery.pdf", "Synthetic_Recovery_Stats.xlsx"] {
+        let path = root.join("corpus").join(file);
+        let original = std::fs::read(&path).expect("original evidence");
+        let mut changed = original.clone();
+        changed[0] ^= 1;
+        std::fs::write(&path, changed).expect("tampered evidence");
+        for view in ["show", "why", "trace"] {
+            let envelope = inspected(&root, view, &id, false);
+            assert_eq!(
+                envelope.refusal.expect("source hash refusal").code,
+                "FMINE-REF-505"
+            );
+            assert_eq!(envelope.payload_json, "null");
+        }
+        std::fs::write(&path, original).expect("restore fixture evidence");
+        let held = path.with_extension("held-for-test");
+        std::fs::rename(&path, &held).expect("make fixture source unavailable");
+        assert_eq!(
+            inspected(&root, "show", &id, false)
+                .refusal
+                .expect("absent source")
+                .code,
+            "FMINE-REF-506"
+        );
+        std::fs::rename(&held, &path).expect("restore fixture source");
+    }
+}
+
 #[test]
 #[ignore = "requires the verified public PDFs/workbooks and local two-reader transcription registry"]
 fn real_lumwana_matches_independent_source_oracle() {
@@ -643,4 +961,128 @@ fn real_lumwana_matches_independent_source_oracle() {
     let again = recovery::run_public(&root, "barrick", Some("2026Q2")).expect("repeat");
     assert_eq!(report.digest(), again.digest());
     assert_eq!(report.to_json(), again.to_json());
+}
+
+/// Public-API command contracts belong beside the source-adapter acceptance tests.
+mod cli_contract {
+    use std::path::PathBuf;
+
+    use fmine_cli::{CliCommand, invoke, parse_args};
+    use fmine_public::sources::registry_path;
+
+    const FLAGS: &str = "{\"reserve_disclosure_claim\":false,\"execution_authorized\":false,\
+                         \"geotechnical_signoff\":false,\"regulatory_compliance_claim\":false}";
+
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .to_path_buf()
+    }
+
+    fn args(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    fn no_corpus_workspace(tag: &str) -> PathBuf {
+        let ws = std::env::temp_dir().join(format!("fmine-cli-{tag}-{}", std::process::id()));
+        let reg = registry_path(&ws, "barrick");
+        std::fs::create_dir_all(reg.parent().expect("dir")).expect("registry dir");
+        std::fs::copy(registry_path(&workspace_root(), "barrick"), &reg).expect("copy registry");
+        ws
+    }
+
+    #[test]
+    fn test_recovery_command_preserves_models_citations_and_authority_boundary() {
+        let query = args(&["recovery", "gap", "--synthetic"]);
+        let (env, _) = invoke(&query, &workspace_root());
+        assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
+        assert_eq!(env.verb, "recovery gap");
+        for required in [
+            "\"schema\":\"fmine.recovery.gap.v1\"",
+            "\"lane\":\"synthetic\"",
+            "\"constant_tails\":{",
+            "\"grade_dependent_tails\":{",
+            "\"gap_pp\":{\"point\":{",
+            "\"source_claims\":[{",
+            "\"training_inputs\":[{",
+            "\"anchors\":[{",
+            "\"descriptive_only\":true",
+            "\"identifying\":false",
+            "\"calibration\":\"uncalibrated_descriptive_model\"",
+            "conservative input-rounding enclosures, not confidence or prediction intervals",
+            "\"monetary_downside\":\"unquantified\"",
+        ] {
+            assert!(env.payload_json.contains(required), "missing {required}");
+        }
+        assert!(env.anchor_id.is_none());
+        assert!(env.certificate.is_none());
+        assert_eq!(env.no_claim, Some(fmine_metrics::recovery::NO_CLAIM));
+        assert!(env.to_json().contains(FLAGS));
+        let digest = fmine_public::recovery::run_synthetic()
+            .expect("synthetic recovery")
+            .digest()
+            .to_hex();
+        assert!(
+            env.payload_json
+                .contains(&format!("\"digest\":\"{digest}\""))
+        );
+        assert_eq!(invoke(&query, &workspace_root()).0, env);
+    }
+
+    #[test]
+    fn test_recovery_command_requires_evidence_and_unambiguous_selectors() {
+        let ws = no_corpus_workspace("recovery-no-corpus");
+        let (env, _) = invoke(&args(&["recovery", "gap", "--issuer", "barrick"]), &ws);
+        assert_eq!(env.status, "refused");
+        assert_eq!(env.refusal.expect("missing source").code, "FMINE-REF-506");
+        assert_eq!(env.payload_json, "null");
+        assert!(env.anchor_id.is_none());
+        assert!(env.certificate.is_none());
+        let (command, _, _) = parse_args(
+            &args(&[
+                "recovery",
+                "gap",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2025Q4",
+            ]),
+            &workspace_root(),
+        )
+        .expect("retrospective workbook selection");
+        assert_eq!(
+            command,
+            CliCommand::RecoveryGap {
+                issuer: "barrick".into(),
+                through: Some("2025Q4".into()),
+            }
+        );
+        for bad in [
+            vec!["recovery"],
+            vec!["recovery", "gap"],
+            vec!["recovery", "unknown", "--synthetic"],
+            vec!["recovery", "gap", "--issuer", "unknown"],
+            vec!["recovery", "gap", "--synthetic", "--issuer", "barrick"],
+            vec!["recovery", "gap", "--synthetic", "--through", "2025Q4"],
+            vec![
+                "recovery",
+                "gap",
+                "--issuer",
+                "barrick",
+                "--through",
+                "2025Q5",
+            ],
+            vec!["recovery", "gap", "--synthetic", "--site", "Lumwana"],
+            vec!["recovery", "gap", "--synthetic", "--as-of", "2026-10-31"],
+            vec!["recovery", "gap", "--synthetic", "extra"],
+        ] {
+            let (env, _) = invoke(&args(&bad), &workspace_root());
+            assert_eq!(env.exit_code, 2, "{bad:?}: {}", env.to_json());
+            assert!(env.payload_json.starts_with("{\"error\":"));
+            assert!(env.anchor_id.is_none());
+            assert!(env.certificate.is_none());
+        }
+    }
 }

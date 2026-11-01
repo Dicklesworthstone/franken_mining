@@ -17,6 +17,8 @@ use crate::{
     CalibrationFlag, CalibrationReport, ScoreError, gaussian_crps, winkler_interval_score,
 };
 
+pub mod binding;
+
 /// Plan §21.6's floor on independent outcomes for a positive calibration claim. A policy may be stricter.
 pub const MIN_CALIBRATION_N: usize = 35;
 
@@ -584,6 +586,18 @@ impl ForecastLedger {
         if self.cohort_names.contains_key(&spec.name) {
             return Err(frozen("cohort name already frozen; create a new cohort"));
         }
+        let public_policy =
+            binding::PublicResolutionPolicy::parse_resolution_rule(&spec.resolution_rule)?;
+        if let Some(policy) = &public_policy {
+            policy.validate_cohort(&spec)?;
+            for cohort in self.cohorts.values() {
+                if let Some(prior) = binding::PublicResolutionPolicy::parse_resolution_rule(
+                    &cohort.spec.resolution_rule,
+                )? {
+                    policy.validate_shared_targets(&prior)?;
+                }
+            }
+        }
         self.check_record_time(spec.frozen_at_ns)?;
         let mut enc = Encoder::new_frame(*b"COH1", 1);
         enc.put_str(&spec.name);
@@ -608,6 +622,9 @@ impl ForecastLedger {
                 return Err(late(
                     "cohort must freeze after registration and before any outcome is due or recorded",
                 ));
+            }
+            if let Some(policy) = &public_policy {
+                policy.validate_forecast(rec)?;
             }
             let event = matches!(rec.payload, ForecastPayload::Bernoulli { .. });
             if event

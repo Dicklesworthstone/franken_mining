@@ -26,6 +26,13 @@
   flags. Empty common sets have no means or score differences. Negative forecast-minus-baseline differences
   favor the forecast under the frozen loss, without asserting skill, calibration or probability semantics
   for an issuer's range. The ordinary assessment retains the full frozen population independently.
+  Each comparator also has exact full-frozen-cohort mean-loss-difference completion bounds. For shared
+  alpha, `interval_score_difference_bounds` evaluates the four endpoint knots: the difference is piecewise
+  linear and both tails are constant. Known outcomes contribute their exact difference; unresolved outcomes
+  contribute the global extrema over all real values, divided by the full live-member count. Missing
+  comparators leave bounds absent with named members; arithmetic refusal is local to its completion and
+  preserves observed means and the other comparator. Different alpha values cannot use this cancellation.
+  These arithmetic completion bounds are neither confidence intervals nor predictive-skill claims.
 Implements the append-only pre-registration `ForecastLedger` (`INV-008`, `FMINE-REF-206`), strictly proper scoring rules (`gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`), `ReferenceClassPrior` (`GB-32`: capex `+28%/+43%`, schedule `+31%`, ramp-up `74%` Yr-1), and `SpatialFrontPitMonitor` (`GB-08` Vecchia/Rosenblatt conditional PIT; plan §10.4's location score `tanh(z/2)` and centred dispersion score `tanh((z^2 - 1)/2) - c0`, each on a `ScoreBettingEProcess` with aGRAPA stakes at alpha/2).
 
 ## 3. Authority, Epistemics & Representation
@@ -38,6 +45,21 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   Payloads are Gaussian, an interval with a stated or explicitly absent level, quantiles, or an event probability.
   Forecast registrations, cohort freezes and outcomes share a monotone record-time watermark: an already
   observed miss cannot be excluded by backdating a new cohort containing only other, unresolved members.
+- DESIGN: `ledger::binding::PublicResolutionPolicy` freezes registered-public resolution semantics in the
+  existing `CohortSpec.resolution_rule` string. Its reserved `fmine.public-resolution.v1:` prefix contains a
+  canonical `PRP1`/v1 frame encoded as lowercase hexadecimal. It binds issuer, metric, explicit unit and source
+  field, calendar FY/quarter, original release, exact ownership fraction and every forecast-id-to-subject mapping.
+  The initial metrics are gold production in koz and issuer-reported AISC per sold gold ounce in USD/oz;
+  full production and attributable production remain distinct even at an attributable fraction of one.
+  `validate`, `to_resolution_rule`, `parse_resolution_rule`, period and ownership helpers perform no I/O.
+  Legacy free-text rules retain their existing behavior; malformed reserved rules refuse.
+  `freeze_cohort` requires the policy's members to equal the cohort exactly and its issuer to be the sole eligible
+  source. Each forecast deadline must be at or before the final nanosecond of the target calendar period,
+  while registration and cohort freeze remain strictly before that deadline. A forecast shared by multiple
+  public cohorts must retain the same issuer, metric, period, ownership and subject in each; cohort populations
+  may differ. Binary events cannot be reinterpreted as production or cost quantities. Source authentication,
+  original-release selection, printed rounding and publication availability remain adapter responsibilities;
+  neither the period end nor this pure policy authenticates when a forecast or source became available.
 - `append_outcome` records hash-chained `Published`, `Restated` and `Missing` events with separate availability
   and recording times. A restatement must name the latest numeric predecessor and a new cited source vintage.
   The original forecast is never mutated. Eligibility and a declared physical outcome domain are checked.
@@ -164,6 +186,31 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
     number is left out and counted, never imputed), `ratio_quantiles` (the ratios at α/2 and 1 − α/2) and
     `persistence_interval` (point × those ratios; inverse ECDF only: exact, since exp of a quantile of log ratios
     is then an observed ratio; the linear estimator's bounds are irrational and refuse with `NotExact`)
+- DESIGN (BD-076): `record::scoring::paired::assess(rules, forecasts, outcomes, baselines)` consumes the parsed frozen
+  rules, exactly one forecast for each live site × target, an explicit `OutcomeRow` for every declared site ×
+  target, and a `BaselineRow` for every site × declared baseline. `Availability::Unavailable(reason)` retains
+  missing outcomes and baselines; omission, duplicates and additions outside the universe refuse.
+  Both canonical comparator kinds, `issuer_guidance` and `run_rate_persistence`, must be declared per target.
+  `RecordAssessment` retains every declared member in rules order, including sites marked `NotPublished`
+  before forecasting. Coverage and its hypothetical completion bounds use the frozen **live** population;
+  pre-excluded sites have no invented forecast and are counted separately by name.
+  Each target reports exact interval scores, method-specific availability/scored counts and observed means,
+  coverage, an equicorrelation n_eff sensitivity over the frozen rho range, and a paired count/mean for the
+  common population where the forecast, outcome and every declared baseline are available. Membership,
+  paired means and forecast-minus-baseline differences reuse `record::scoring::compare`'s common calculation;
+  both full-live-cohort loss-difference completion objects are retained in the typed target summary and JSON,
+  including pending/missing names and local arithmetic refusal, independently of the common-set means.
+  negative differences favor the forecast loss without a skill claim. Calibration remains `Descriptive` or,
+  without resolved live outcomes, `Unscored`,
+  even if the record's sample threshold is exceeded.
+  `RecordAssessment::to_json()` emits `fmine.forecast-record.scores.v1`, preserving rational numerator and
+  denominator strings. It never verifies sources, chooses an outcome vintage, transforms an ownership basis
+  or authenticates the record's time proof; those are adapter responsibilities.
+- DESIGN (BD-076): `guidance_scores::clopper_pearson_exact(k, n, coverage_level)` and its `_with_limit` form
+  generalize the certified dyadic enclosure to the frozen confidence level, including FY2026's 95%. Existing
+  CP90 entry points retain their endpoints. The interval applies to resolved members under the explicit iid
+  reference assumption, without adjustment for missingness, site dependence or rounding. Completion bounds
+  and n_eff sensitivity remain separate from this reference interval.
 
 ## 5. Guards & Typed Refusals
 `ForecastLedger` refusals, by condition (`test_ledger_refusals_by_condition`):
@@ -173,12 +220,20 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   such a forecast cannot enter a cohort, which needs a strictly later freeze before the outcome.
   A registration, cohort freeze or outcome behind the shared record watermark or at/before a sealed assessment
   cut also refuses. A refused mutation changes neither watermark nor stored records.
+  A public-bound forecast deadline after its target calendar period ends also refuses, so an arbitrary later
+  deadline cannot register a forecast for a target that has already ended.
 - `FMINE-REF-507` (frozen record mutation, exit 6): a second registration of one forecast id, a reused cohort
   name, a second one-shot outcome, an invalid restatement predecessor or reused source vintage, or reinterpretation
   of a withdrawn, changed-definition or divested target as its old quantity without a new resolution rule.
+  A second public cohort cannot change a shared forecast's semantic target.
 - `FMINE-REF-109` (outside physical domain, exit 3): a non-finite mean or outcome, `std_dev <= 0`, or a policy
   attempting to lower the positive-calibration minimum below 35 independent outcomes.
 - `FMINE-REF-201` (no claim in domain, exit 3): an unknown forecast/cohort, or an ineligible outcome source.
+- Paired record scoring uses `FMINE-REF-107` for malformed rules or population rows, `FMINE-REF-109` for invalid
+  intervals/probability parameters, and `FMINE-REF-207` for exact arithmetic overflow or an uncertified CP endpoint.
+  Signed FY-minus-9M residuals, negative per-unit costs and negative Q4-implied issuer guidance ranges are not
+  clamped or excluded after observation. The adapter validates underlying physical totals and flags a negative
+  literal residual as a discrepancy; the frozen subtraction is not a claim about physical Q4 production.
 
 206 and 507 are proposed codes (`docs/adr/ADR-REFUSALS-01.md`).
 
@@ -218,6 +273,12 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   of twenty-five, unchanged prices, supported and refuted proportionality, open interval endpoints, missing
   assumptions, unsupported metrics, explicit proxies with distinct commodity-price bases, incompatible current
   periods, altered paired reports, scaling and arithmetic overflow.
+- `record::scoring::paired::tests` supplies independent interval-score answers, common-population means, live-cohort
+  completion bounds and n_eff fractions, and exercises retained unavailable/excluded members, input-order
+  invariance, strict population rejection, signed original-release residuals, net cost credits and arithmetic refusal.
+  `guidance_scores::certified::tests::test_frozen_95_percent_level_against_independent_binomial_sum` compares
+  95% endpoints with an independent 90-digit Decimal binomial summation. A separate regression pins the
+  previous CP90 grid endpoints and a dyadic exact-root case.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 A miscalibrated spatial front alarms when either score's wealth reaches `2 / alpha` (40 at `alpha = 0.05`). Nothing
@@ -243,3 +304,6 @@ already selected, citation-bound outcomes: it does not freeze forecasts, authent
 select a vintage. Its rational payloads and one-sided guidance do not extend the ledger's durable floating-point
 forecast format. Adapters must retain the frozen membership and selector separately; completion bounds do not
 substitute for statistical confidence intervals. Mean-z bounds propagate source rounding only.
+The frozen-record scorer consumes already transformed, selected inputs. Its completion bounds do not make an
+unavailable baseline into a published prediction; its confidence references do not establish forecasting skill.
+The actual FY2026 record and outcomes remain subject to the Q3 source gate, external time proof and later release.
