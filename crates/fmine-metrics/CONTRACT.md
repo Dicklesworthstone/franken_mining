@@ -37,6 +37,14 @@ metric tonnes, gold head grade in g/t and recovery as a fraction. Their product 
 troy-ounce constant `31.1034768` g/oz and scaled only by an explicit attributable share. The product of maxima
 is an optimistic upper ceiling even when those maxima cannot occur together; it is not a feasible plan.
 
+DESIGN (BD-345.S4): `roll_forward::quarter` derives Q2 = H1 − Q1, Q3 = 9M − H1 and Q4 = FY − 9M
+for additive gold production/sales in koz and copper production in kt. A printed value `v` with positive
+step `s` supplies the closed enclosure `[v−s/2, v+s/2]`. Subtraction uses `[a.lo−b.hi, a.hi−b.lo]`;
+both operands' displayed uncertainty is retained. Every admitted cumulative/prior pair is assessed.
+A draft is `Derived` only when its own displayed enclosure contains every pair's enclosure and the
+competing assertions for each cumulative period share a common interval. Numeric agreement never selects
+a preferred source vintage. These are exact arithmetic enclosures, not forecasts or confidence intervals.
+
 DESIGN (bd-srqc, W4 §3.3): `recovery` fits exactly two descriptive annual relations and applies them to later
 quarters. Head grade `h` and recovery `R` are explicitly in percent, and implied tails grade is
 `t = h·(1−R/100)`. M-a uses mean tails; M-b is OLS `t = a+b·h`. Pairwise sums of squared head-grade
@@ -59,6 +67,14 @@ the multiplicative-to-additive LMDI accounting identity (`GB-26`). Its public-da
 arithmetic closure does not establish causation or identify an operational explanation (plan §21.6, E699).
 
 ## 4. Public API Surface
+- `roll_forward::quarter::{Quantity, Printed, Observation, Report, Status, assess}`: source IDs identify
+  actual operands; a caller-authenticated series key binds issuer, subject, year, scope/perimeter version,
+  additive metric, unit, occurrence and explicit normalized ownership. Each observation states its
+  cumulative ending quarter and either its displayed value/step or an unusable value. The report retains
+  every evaluated pair, exact interval, relation and rule (`H1-Q1`, `9M-H1`, `FY-9M`). JSON bounds are
+  exact rational strings. The source adapter enriches these fields with full source/date evidence.
+  `WARNING` distinguishes derived information from an issuer disclosure. No target-period Claim is
+  manufactured and no input value is promoted to a physically established fact.
 - `roll_forward::{assess, TableReport, SourceCell, ComponentCheck, IdentityRefusal}` (BD-340.S5,
   BD-331.S7): binds explicit PDF identity declarations to agreed point readings and their registered document
   metadata. Units, basis, member periods, raw-token precision, distinct reader identities, page bounds and
@@ -201,6 +217,14 @@ arithmetic closure does not establish causation or identify an operational expla
 
 ## 5. Guards & Typed Refusals
 
+- `roll_forward::quarter` refuses malformed or duplicate source identities, unequal semantic series,
+  unusable admitted values, nonpositive precision, unsupported cumulative periods, checked arithmetic
+  overflow, and more than 4,096 candidate pairs. Missing either period yields `NotAvailable`; overlapping
+  but insufficient precision yields `PrecisionNotEstablished`. Mutually inconsistent period assertions
+  or differing pair conclusions remain `ConflictingDerivations`; all disjoint pair enclosures yield
+  `Contradicted`. A dash is never zero, signed differences remain signed, and no failure selects a
+  numerically convenient subset. Source identity and publication-cut admission are adapter obligations.
+
 - The mirror refuses unsupported cost definitions/kinds, unequal assets and invalid shares (`105`),
   unequal periods or invalid dates (`102`), missing/unequal operation perimeters or validity straddles
   (`104`), missing numeric/context citations (`201`), private sources (`301`), placeholders (`208`),
@@ -246,6 +270,12 @@ arithmetic closure does not establish causation or identify an operational expla
   failure.
 
 ## 6. Proof Obligations (`PO-*`)
+- FACT (BD-345.S4, `roll_forward::quarter::tests`): four focused tests cover independently calculated
+  decimal half-step subtraction for Q2/Q3/Q4, signed and zero results, narrower draft precision,
+  all competing pairs, input-order invariance, internally conflicting assertions even under a coarse
+  draft, missing/invalid operands, ambiguous series, duplicate IDs, unsupported periods and exact overflow.
+  These pure known answers establish arithmetic/refusal behavior. The T-layer source-to-lint controls
+  separately exercise workbook display precision, source identity, dates, ownership and perimeter admission.
 - `PO-MET-1`: `LmdiWaterfall::sum_of_factors() == total_delta` to `< 1e-10` in the synthetic two-period case
   (`+$1,285/oz`; its numbers were once mislabelled as Barrick's, R7-C054). Its independently calculated sales
   timing bar is −536.9148672729303 USD/oz, and its printed gaps are zero because the supplied cost/quantity
@@ -345,6 +375,12 @@ path uses a printed-rate discrepancy as a balancing factor.
   and the S0 rows in `fmine-registry`.
 
 ## 10. Non-Goals & Scope Boundary
+The additive quarter kernel authenticates no workbook bytes, publication dates or ownership registry.
+Its caller must admit all eligible evidence before assessment. It supplies no probabilistic confidence,
+source ranking, implicit unit conversion, subtraction of non-additive rates, or disclosure permission.
+A non-obvious arithmetic consequence can itself be new information. This bounded feature does not close
+the general derived-identity or independently labelled disclosure-lint assessment gates.
+
 DESIGN (BD-340.S5): the PDF identity adapter verifies declared arithmetic of issuer assertions, not their truth
 or completeness. It never emits reserve classifications, selects a preferred filing/deck vintage, silently
 changes a printed sign, or supplies an issuer-attributed corrected figure. Synthetic E692-shaped arithmetic is

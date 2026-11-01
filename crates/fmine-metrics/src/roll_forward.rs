@@ -16,6 +16,8 @@ use fmine_registry::table_identities::{
 };
 use fmine_registry::transcriptions::{Accepted, Token, parse_token};
 
+pub mod quarter;
+
 pub const SCHEMA: &str = "fmine.pdf-table-check.v1";
 pub const NO_CLAIM: &str = "Checks the declared identities of registered issuer assertions under stated rounding and membership assumptions. It does not verify the truth of the issuer's figures, establish complete reserve coverage, select a true vintage, classify a reserve, or supply a corrected published value. Document-byte authentication and independent reader agreement are caller obligations.";
 
