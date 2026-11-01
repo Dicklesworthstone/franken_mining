@@ -6,6 +6,7 @@ mod guidance_capacity;
 pub mod issued;
 mod lint;
 mod lint_publicness;
+pub mod mirror;
 pub mod packet;
 pub mod reliance;
 mod reliance_binding;
@@ -40,6 +41,8 @@ pub enum OutputFormat {
 /// Parsed CLI command (`BD-111`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
+    /// Compare explicitly selected public JV production/sales assertions on a common dated perimeter.
+    Mirror(mirror::Command),
     /// Local issuance status, recall and owner-authorized journal events (BD-347).
     RelianceExplicit(reliance_explicit::Command),
     /// Verified assurance issuance or gated current-use retrieval (BD-347).
@@ -439,6 +442,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                 };
             }
             "guidance" => return "guidance completion",
+            "mirror" => return "mirror",
             "check" => return "check tables",
             "track-record" => return "track-record",
             "recovery" => return "recovery gap",
@@ -1182,8 +1186,8 @@ pub fn parse_args(
     Ok((cmd, format, workspace))
 }
 
-/// DESIGN (BD-347): authority commands have their own strict argument grammar. Only presentation and
-/// workspace selection are global; owner keys, pins and timestamps are never inferred by this router.
+/// DESIGN (BD-347, BD-346): commands with strict selectors keep their own argument grammar. Only
+/// presentation and workspace selection are global; evidence, keys and timestamps are never inferred.
 fn parse_reliance_args(
     args: &[String],
     default_root: &Path,
@@ -1249,6 +1253,7 @@ fn parse_reliance_args(
         )
     });
     let parsed = match (first, second) {
+        (Some("mirror"), _) => CliCommand::Mirror(mirror::parse(&command)?),
         (Some("assure"), Some("issue")) | (Some("reliance"), Some("export")) => {
             CliCommand::Issued(issued::parse(&command, &workspace)?)
         }
@@ -1507,6 +1512,7 @@ fn track_record_envelope(
 pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     let to_doctor = || vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
     match cmd {
+        CliCommand::Mirror(command) => mirror::execute(command, workspace_root),
         CliCommand::RelianceExplicit(command) => {
             reliance_explicit::execute(command, workspace_root)
         }

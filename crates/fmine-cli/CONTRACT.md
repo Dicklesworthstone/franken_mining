@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -64,6 +64,10 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `lint <draft> --issuer <issuer> [--through YYYYQn] [--discover]` or `--synthetic [--discover]`: bounded
     equalities checked against one verified canonical Claim snapshot, with JSON or readable Markdown output.
     Discovery searches for uncited matches while preserving ambiguous candidate sets (BD-345);
+  - `mirror --asset <slug> --period <YYYY|YYYYQn|YYYYHn> --as-of YYYY-MM-DD
+    --left-issuer <issuer> --left-document <file> --right-issuer <issuer> --right-document <file>
+    [--metric production|sold]` or `--synthetic`: exact gold-production or ounces-sold compatibility under
+    independently cited ownership and a common dated perimeter; production is the default (BD-346);
   - `forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ
     [--selector first-published|latest-as-of] [--provenance <path>]`: read-only ordered transcript replay and
     cohort assessment through `fmine-calib`; first-published is the default (BD-343). An optional provenance
@@ -188,6 +192,15 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   quarter retains its earliest registered release and comparative status, both model outputs or a named
   refusal, citations and input-rounding bounds. The residual sample and regression-error SDs retain their
   separate denominator conventions and numerical-evaluation bounds.
+- A successful `mirror` emits `fmine.jv_mirror.v1` with both reporters' raw readings, source metadata,
+  ownership Claims, source/perimeter anchors, normalized 100% Claims and an exact common interval or a
+  checked exclusion certificate. The proof retains original closed rounding cells and Scale identities;
+  checked minimal source sets are explicitly non-exhaustive, and indeterminate attribution keeps its reason.
+  Source-set indices address the canonical `inputs` array; proof cells retain their scope for digest replay.
+  `physical_nonnegative` constrains the common quantity without erasing a printed zero's negative half-step.
+  The canonical payload digest binds evidence and selection; `anchor_id` and envelope `certificate` stay null,
+  `gate_eligible` is false, and the four authority flags stay false. Markdown renders the same sources and
+  result. Synthetic inputs and their derived Claims remain Assumed; no affiliation or physical-truth claim is made.
 - DESIGN (BD-341): the retrospective `track-record` payload retains `fmine.guidance.track-record.v1`; optional
   `--cohort-as-of` selects `fmine.guidance.track_record.v1` dated cohorts through `track_record_binding` and the
   Claim scoring path. Its digest binds evidence and computation; `anchor_id` and `certificate` remain null.
@@ -238,6 +251,25 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   partially withheld annual outcomes remain unresolved; later releases cannot erase the original reason.
 
 ## 5. Guards & Typed Refusals
+- DESIGN (BD-346): `mirror` selects two distinct issuer profiles and explicit documents, without default
+  partners, shares or asset boundaries. Documents-only profiles use the existing sources/transcription
+  schemas and required `[[subject]]`; workbook consumers retain their no-workbook refusal. Selected documents
+  must be `mda`, `aif` or `partner_filing`, with a `FACT: ` publication basis and a publication date between
+  the reporting-period end and the requested as-of cut, inclusive. Registered byte/hash failures retain
+  `FMINE-REF-506`/`505`; incomplete selected reader agreement retains `202`, including a differing quantity
+  key at a selected locator. All supplied selected assertions participate; unrelated documents are excluded.
+  Keys are `mirror_<asset_underscored>_<lowercase_period>_gold_produced_100_koz`, `_gold_produced_attr_koz`
+  and `_ownership_percent`, replacing `gold_produced` with `gold_sold` for sold ounces. Entry periods are
+  uppercase `YYYYFY`, `YYYYQn` or `YYYYHn`; numeric units are `koz`, ownership is an exact point in `percent`.
+  Attributable inputs require a separately cited ownership row; full-mine inputs require no invented share.
+  Every basis has the fixed grammar
+  `<100%|attributable|equity>;perimeter=<slug>;members=<slug+slug>;valid=<YYYY-MM-DD/YYYY-MM-DD>;scope_page=<page>;scope_table=<label>;scope_row=<label>;scope_col=<label>`.
+  Operation lists are complete and duplicate-free, both reporters' perimeter IDs and member sets must match,
+  and validity covers the entire requested period. Scope locators reference the same checked document.
+  The ownership row must match its attributable row's dated perimeter. Missing scope/share evidence refuses
+  `104`; incompatible units, bases or non-point quantities refuse `105`; no calendar, perimeter or cost bridge
+  is inferred. Quantity intervals retain closed half-last-place precision; exact ownership scaling and the
+  independently checked feasibility/certificate come from `fmine_metrics::mirror`.
 - DESIGN (BD-347): the explicit-time grammar never samples the host clock or trusts a journal head it just
   read. The existing host-clock grammar requires its separate `--trust-host-clock` declaration; flags from
   the two grammars cannot be mixed. Unpinned, stale, future or insufficiently bounded status is `unknown`, never permission to reuse.
@@ -428,6 +460,13 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 
 ## 6. Proof Obligations (`PO-*`)
+- DESIGN (BD-346, `tests/mirror.rs` and `xtask/testdata/mirror_oracle.py`): documents-only synthetic reporters
+  exercise registered byte and reader
+  verification, exact common intervals and point contact, checked witnesses/minimal conflict sets, 45%+45%
+  ownership, physical zero, scope/date/unit refusals, isolated optional sources and same-named partner files.
+  Python's standard rational arithmetic independently checks serialized normalization, witness equations and
+  minimal interval conflicts. Real-binary JSON/Markdown, false flags, canonical ordering and evidence-bound
+  digests are exercised without claiming real partner-filing coverage.
 - FACT (BD-347, `tests/reliance_lifecycle.rs`): real-binary synthetic workflows cover issuance, exact ordinary
   report bytes, multiple recipient roles, pinned checks, recall, withdrawal, supersession and current retrieval.
   Wrong keys, stale writers, unsafe trust, altered registered workbooks and existing destinations refuse while
@@ -496,6 +535,10 @@ None: every failure is a usage error or a typed refusal.
   `fmine-metrics`.
 
 ## 10. Non-Goals & Scope Boundary
+- The mirror currently supports produced and sold gold in koz from explicitly selected, agreed document
+  assertions. It neither selects a correct reporter nor establishes physical truth or disclosure permission.
+  Actual NGM, Pueblo Viejo and Kibali filing coverage, resolved NGM vend-in boundaries, capex and cost/accounting
+  bridges remain open; synthetic/source-adapter checks do not close full BD-346 acceptance.
 - DESIGN (BD-340.S5/S8): `check tables` exposes the existing workbook identity ledger, or checks a strict
   `--definitions` registry of PDF sums and reserve roll-forwards. The PDF mode verifies every declared
   document's bytes, even when its values have no readings, and selects only the declared quantities while

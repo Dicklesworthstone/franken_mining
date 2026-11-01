@@ -402,11 +402,11 @@ fn j(s: &str) -> String {
     out
 }
 
-fn rational(r: Rat) -> String {
+pub(super) fn rational(r: Rat) -> String {
     format!("{{\"num\":\"{}\",\"den\":\"{}\"}}", r.num(), r.den())
 }
 
-fn interval(i: Interval) -> String {
+pub(super) fn interval(i: Interval) -> String {
     format!(
         "{{\"lo\":{},\"hi\":{},\"lo_strict\":{},\"hi_strict\":{}}}",
         rational(i.lo),

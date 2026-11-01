@@ -27,6 +27,12 @@ mutates_authority = false
 description = "Compute remaining production and spending requirements from cited guidance under an explicit sales assumption"
 
 [[verb]]
+path = "mirror"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Compare cited JV production or sales assertions under explicit ownership and a common dated operating perimeter"
+
+[[verb]]
 path = "track-record"
 subsystem = "Plumb"
 mutates_authority = false

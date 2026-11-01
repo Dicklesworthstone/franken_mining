@@ -367,6 +367,79 @@ completed quarterly history by the requested evidence cut, and assesses first-pu
 outcomes separately.
 `--cohort-as-of` keeps unconditional scores and cannot be combined with `--price-subject`.
 
+### Mirror two reporters' gold production or sales
+
+```bash
+cargo run -p fmine-cli -- mirror --synthetic
+cargo run -p fmine-cli -- mirror --synthetic --format markdown
+```
+
+DESIGN (BD-346): the mirror checks whether two reporters' printed gold quantities admit a common 100%
+quantity under their independently cited ownership and complete dated operating perimeter. The synthetic
+demo uses invented evidence. To use registered filings, explicitly select both issuers and documents;
+the following names are placeholders for your local registries:
+
+```bash
+cargo run -p fmine-cli -- mirror --asset example-jv --period 2025 --as-of 2026-02-01 \
+  --left-issuer issuer_a --left-document Left.pdf \
+  --right-issuer issuer_b --right-document Right.pdf --metric production --format markdown
+```
+
+`--metric production` is the default; `--metric sold` checks ounces sold separately. Periods are calendar
+years (`2025` or `2025FY`), quarters (`2025Q1` through `2025Q4`) or halves (`2025H1`, `2025H2`).
+`--synthetic` is exclusive with source selectors. JSON is the default; `--workspace` selects the local root.
+
+Each issuer uses the existing `registries/sources/<issuer>.toml` and ignored
+`registries/transcriptions/<issuer>.toml`. A sources registry can contain only validated `[[document]]`
+rows plus its required metadata and `[[subject]]`; no dummy workbook is needed. Select a document of kind
+`mda`, `aif` or `partner_filing`, with a cited `FACT: ` publication-date basis. Its `published_at` must be
+on or after the requested period ends and on or before `--as-of`. The run verifies the selected bytes and
+every reader at each selected locator, including readers who used a different quantity key. Missing,
+altered, pending or conflicting selected evidence refuses. Unselected documents do not supply fallback data.
+
+Transcription keys include the asset with hyphens replaced by underscores and a lowercase period. For
+`example-jv`, FY2025 production uses:
+
+| Quantity key | Unit | Basis prefix |
+| --- | --- | --- |
+| `mirror_example_jv_2025fy_gold_produced_100_koz` | `koz` | `100%` |
+| `mirror_example_jv_2025fy_gold_produced_attr_koz` | `koz` | `attributable` |
+| `mirror_example_jv_2025fy_ownership_percent` | `percent` | `equity` |
+
+For sales, replace `gold_produced` with `gold_sold`; the ownership key stays the same. Every entry's
+`period` is the corresponding uppercase `2025FY`, `2025Q1` or `2025H1` form. At least one full-mine or
+attributable quantity is required from each issuer, and both assertions participate when supplied.
+Attributable quantities require the separate ownership row at its own page/table/row/column. Its printed
+point is an exact stated percent, converted rationally to a share; a range or missing share is not inferred
+from the other partner. Two reporters need not own the entire venture.
+
+Each row's basis appends the following exact fields. This is an **invented grammar example**, not an
+assertion about any mine:
+
+```toml
+basis = "attributable;perimeter=group;members=mine-a+mine-b;valid=2025-01-01/2025-12-31;scope_page=2;scope_table=Scope;scope_row=Operations;scope_col=2025"
+```
+
+Use `100%` or `equity` instead of `attributable` for the other roles. `members` is the complete operation
+list, with distinct slug names separated by `+`. The inclusive `valid` dates must cover the whole reporting
+period. The scope fields cite the page and labels in the same selected document that establish that
+perimeter; both readers must agree on this context. An ownership row must match its attributable row's
+dated perimeter. The reporters must name the same perimeter and complete member set; broader and narrower
+sets are not silently intersected. A change of reporting region alone establishes no change in operations.
+
+Printed quantities retain exact closed half-last-place rounding bounds. Dividing attributable intervals by
+the cited shares produces the full-mine comparison. A common interval carries a checked witness; a conflict
+carries a checked exclusion certificate and checked inclusion-minimal source sets, without claiming that
+the set list is exhaustive. Indeterminate attribution remains explicit. Printed zero keeps its original
+rounding interval, while the common physical quantity is constrained to be nonnegative. JSON and Markdown
+retain both reporters, tokens, ownership and scope citations, source hashes and publication-date bases.
+All authority flags remain false, with no issuance anchor or authority certificate. Agreement does not
+establish physical truth, select a correct reporter or authorize disclosure.
+
+Real partner-filing coverage for NGM, Pueblo Viejo and Kibali remains open, including independently read
+ownership and dated perimeter evidence. The unresolved NGM vend-in dates and shares are not supplied by
+defaults. Capex, cost-definition and accounting bridges, and full BD-346 acceptance, remain open.
+
 ### Assess a frozen forecast cohort
 
 ```bash
