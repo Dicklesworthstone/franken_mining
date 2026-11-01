@@ -43,6 +43,14 @@ The public lane of M0 (`fmine assure public`).
   The source snapshot remains the caller's responsibility; discovery does not infer publication dates.
   This executable slice has synthetic known-answer and adversarial checks. Reserve replacement and the
   independent labelled-set precision/recall assessment remain open; no general-prose accuracy is claimed.
+- DESIGN (BD-345.S4): `lint::equality_target(draft, span, prototype)` parses the same bounded equality
+  against a prototype's subject, metric, ownership, definition and unit without using its source amount
+  or requiring a Claim for the requested period. The returned `EqualityTarget` carries that explicit
+  period and the draft's exact decimal value/step. It supplies no evidence that the target is published
+  or derivable. The caller must retain competing source populations, resolve ownership/perimeter ambiguity
+  and authenticate the publication cut. Cited checking and this semantic query share the pure
+  `fmine_io::numtok::equality` context grammar, parameterized by known subjects and citation spans;
+  unsupported residual prose, ambiguous/malformed links and missing required basis never become matches.
 - `sources`: the source registry (`BD-055`, `BD-322`, bd-s9j3.1), read at run time from
   `<workspace>/registries/sources/<issuer>.toml` (schema `fmine.sources.v1`, checked by `fmine_registry::sources`
   and by `xtask registry-check`). It pins each public workbook by file name, URL, byte size and SHA-256 (Barrick:

@@ -454,9 +454,19 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   attributable shares stay unresolved even when one amount matches. Unknown publication dates remain
   unknown; retrieval dates never establish publication. Changing dates or their basis changes the report
   digest while the numerical Claim remains unchanged. JSON and Markdown retain both assessments, and
-  neither grants disclosure permission or a regulatory-compliance claim. This slice does not derive
-  unpublished identities or assess forward guidance. Synthetic/unknown evidence cannot become a public
-  disclosure assertion.
+  neither grants disclosure permission or a regulatory-compliance claim. Synthetic/unknown evidence cannot
+  become a public disclosure assertion.
+  `lint_publicness` also delegates Q2 = H1 − Q1, Q3 = 9M − H1 and Q4 = FY − 9M to the exact
+  `fmine_metrics::roll_forward::quarter` kernel for gold production/sales (`koz`) and copper production (`kt`).
+  The shared equality target binds the original draft's subject, metric, year, unit and ownership syntax;
+  no target-period Claim is invented. All relevant cumulative candidates retain their provenance. Only
+  dated, usable public issuer Claims available by the cut can supply values, and every admitted pair must
+  share explicit normalized ownership, occurrence and registered perimeter. Missing display precision,
+  placeholders, changing scope, incompatible bases and conflicting vintages cannot establish a derivation.
+  Closed displayed-number intervals propagate exactly; rates are excluded by the typed quantity API.
+  The `derivation` object retains every pair and exact enclosure, input evidence and the new-information
+  warning. `derivable` never overrides a direct disclosed or contradictory assertion. Derived values
+  remain arithmetic assessments rather than new issuer Claims, forecasts, calibration or disclosure authority.
   Both modes include processed/head grade (`g/t`, `grams per tonne` or percent) and whole-site recovery
   (percent), with explicit subject, dated period and ownership. Percent-format fractions use the source's
   displayed percentage-point interval while retaining the stored fraction. Bare/mined grade, circuit recovery,
@@ -528,6 +538,10 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 
 ## 6. Proof Obligations (`PO-*`)
+- FACT (BD-345.S4, `xtask/tests/public_lint_derivations.rs`): actual minimal workbook bytes and registered
+  source metadata exercise quarter differences, exact displayed rounding, all competing vintages, date cuts,
+  unknown dates, tampering, signed/zero/placeholder behavior, direct contradictions and ownership/perimeter
+  admission. JSON and Markdown preserve the source Claims and warning; authority flags remain false.
 - DESIGN (BD-346, `tests/mirror.rs` and `xtask/testdata/mirror_oracle.py`): documents-only synthetic reporters
   exercise registered byte and reader
   verification, exact common intervals and point contact, checked witnesses/minimal conflict sets, 45%+45%

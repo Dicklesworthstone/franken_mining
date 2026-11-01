@@ -6,15 +6,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
-use fmine_claim::{Representation, SpatialSupport};
+use fmine_claim::{AdditivityClass, Representation, SpatialSupport};
 use fmine_core::hash::{Digest32, blake3_hash, sha256};
 use fmine_evidence::{EvidenceClass, KnowledgeState, Refusal, RefusalCode};
-use fmine_public::key::{KeyedCell, Period, PublicValue, Scope, canonical_value_tag};
-use fmine_public::lint::{LintFinding, LintMode, LintReport, Verdict, lint_cited};
+use fmine_io::numtok::{Dec, Token, tokenize};
+use fmine_metrics::roll_forward::quarter::{self, Observation, Printed, Quantity, Status};
+use fmine_numerics::exact_feas::Rat;
+use fmine_public::key::{
+    KeyedCell, OwnershipBasis, Period, PeriodKind, PublicValue, Scope, canonical_value_tag,
+};
+use fmine_public::lint::{LintFinding, LintMode, LintReport, Verdict, equality_target, lint_cited};
 use fmine_public::sources::{IssuerProfile, RegisteredSource};
 use fmine_registry::sources::{PUBLISHED_AT_BASES, is_date};
 
-pub(super) const NO_CLAIM: &str = "Checks supported equalities against dated, registered public sources at the requested cut. Earliest means earliest matching registered publication, not a complete search of the public record. It does not establish the truth of an issuer assertion, authorize disclosure or assess legal compliance. Derived identities and forward guidance are not assessed.";
+pub(super) const NO_CLAIM: &str = "Checks supported equalities and additive cumulative-to-quarter differences against dated, registered public sources at the requested cut. Earliest means earliest matching registered publication, not a complete search of the public record. Exact derived enclosures retain displayed rounding uncertainty and every admitted candidate pair. A non-obvious derived figure can itself be new information and requires disclosure review. This does not establish the truth of an issuer assertion, authorize disclosure or assess legal compliance. Other derived identities and forward guidance are not assessed.";
 
 #[derive(Debug, Clone)]
 pub(super) struct Publication {
@@ -43,6 +48,13 @@ struct Finding {
     status: &'static str,
     reason: &'static str,
     first_registered_disclosure: Option<String>,
+    evidence: Vec<SourceEvidence>,
+    derivation: Option<Derivation>,
+}
+
+#[derive(Debug, Clone)]
+struct Derivation {
+    report: quarter::Report,
     evidence: Vec<SourceEvidence>,
 }
 
@@ -182,6 +194,233 @@ fn usable(c: &KeyedCell) -> bool {
         )
 }
 
+fn source_evidence(
+    c: &KeyedCell,
+    profile: &IssuerProfile,
+    publications: &BTreeMap<(String, String), &Publication>,
+    as_of: &str,
+    retrieved: Option<&str>,
+) -> SourceEvidence {
+    let source = source_for(c, profile);
+    let publication = source
+        .and_then(|s| publications.get(&(s.file_name.clone(), s.sha256_hex.clone())))
+        .copied();
+    let (admission, reason) = if !usable(c) || c.key.issuer != profile.issuer {
+        (
+            "unusable",
+            "source_claim_identity_or_evidence_not_admissible",
+        )
+    } else if source.is_none() {
+        (
+            "unusable",
+            "source_filename_hash_release_or_locator_not_registered",
+        )
+    } else if let Some(p) = publication {
+        if p.published_at.as_str() <= as_of {
+            (
+                "published_by_cut",
+                "registered_publication_date_at_or_before_cut",
+            )
+        } else {
+            ("after_cut", "registered_publication_date_after_cut")
+        }
+    } else {
+        (
+            "date_unknown",
+            "retrieval_and_reporting_period_do_not_establish_publication",
+        )
+    };
+    SourceEvidence {
+        source: c.clone(),
+        file: source.map(|s| s.file_name.clone()),
+        url: source.map(|s| s.url.clone()),
+        published_at: publication.map(|p| p.published_at.clone()),
+        publication_basis: publication.map(|p| p.published_at_basis.clone()),
+        known_available_by: source.and(retrieved).map(str::to_string),
+        relation: "unchecked",
+        admission,
+        reason,
+    }
+}
+
+fn sort_evidence(evidence: &mut Vec<SourceEvidence>) {
+    evidence.sort_by(|a, b| {
+        (&a.published_at, &a.source.locator, a.source.claim.claim_id).cmp(&(
+            &b.published_at,
+            &b.source.locator,
+            b.source.claim.claim_id,
+        ))
+    });
+    evidence.dedup_by(|a, b| a.source.claim.claim_id == b.source.claim.claim_id);
+}
+
+fn quantity(c: &KeyedCell) -> Option<Quantity> {
+    match (c.key.line.label.as_str(), c.key.unit.as_str()) {
+        ("summary:au_prod_100_koz" | "summary:au_prod_attr_koz", "koz") => {
+            Some(Quantity::GoldProductionKoz)
+        }
+        ("summary:au_sold_attr_koz" | "ounces sold", "koz") => Some(Quantity::GoldSalesKoz),
+        (
+            "summary:cu_prod_100_kt"
+            | "summary:cu_prod_attr_kt"
+            | "site::production (thousands of tonnes)",
+            "kt",
+        ) => Some(Quantity::CopperProductionKt),
+        _ => None,
+    }
+}
+
+fn cumulative_quarter(kind: PeriodKind) -> Option<u8> {
+    match kind {
+        PeriodKind::Quarter(1) => Some(1),
+        PeriodKind::H1 => Some(2),
+        PeriodKind::NineMonths => Some(3),
+        PeriodKind::FullYear => Some(4),
+        _ => None,
+    }
+}
+
+fn explicit_basis(basis: OwnershipBasis) -> Option<String> {
+    match basis {
+        OwnershipBasis::Consolidated100 => Some("100%".into()),
+        OwnershipBasis::Attributable { num, den, .. } if num > 0 && den > 0 && num <= den => {
+            let share = Rat::new(i128::from(num), i128::from(den)).ok()?;
+            Some(format!("attributable:{}/{}", share.num(), share.den()))
+        }
+        _ => None,
+    }
+}
+
+fn decimal(d: Dec) -> Option<Rat> {
+    Rat::new(d.mantissa, 10_i128.checked_pow(d.scale)?).ok()
+}
+
+fn printed(c: &KeyedCell) -> Option<Printed> {
+    let PublicValue::Number {
+        displayed: Ok(text),
+        under_status: None,
+        ..
+    } = &c.claim.value
+    else {
+        return None;
+    };
+    let tokens = tokenize(text);
+    let [Token::Number(n)] = tokens.as_slice() else {
+        return None;
+    };
+    if text.trim() != n.raw.trim()
+        || n.range_with.is_some()
+        || n.unit.is_some()
+        || n.currency.is_some()
+        || n.scale_word.is_some()
+        || n.hedge.is_some()
+    {
+        return None;
+    }
+    Some(Printed {
+        value: decimal(n.value)?,
+        step: decimal(n.step)?,
+    })
+}
+
+fn derivation(
+    draft: &str,
+    f: &LintFinding,
+    cells: &[KeyedCell],
+    profile: &IssuerProfile,
+    publications: &BTreeMap<(String, String), &Publication>,
+    as_of: &str,
+    retrieved: Option<&str>,
+) -> Option<Derivation> {
+    // Prototypes bind prose only. No target-period Claim is manufactured, and a prototype's numeric
+    // value never selects a vintage. Gather every sibling, including corrected/conflicting bases.
+    let prototypes: Vec<_> = cells
+        .iter()
+        .filter_map(|c| {
+            let kind = quantity(c)?;
+            let target = equality_target(draft, f.span, c)?;
+            let PeriodKind::Quarter(q @ 2..=4) = target.period.kind else {
+                return None;
+            };
+            (c.key.valid_period.year == target.period.year
+                && c.key.ownership_basis != OwnershipBasis::Unprinted)
+                .then_some((c, target, q, kind))
+        })
+        .collect();
+    let (_, target, q, kind) = *prototypes.first()?;
+    let mut evidence: Vec<_> = cells
+        .iter()
+        .filter(|c| {
+            quantity(c) == Some(kind)
+                && c.key.valid_period.year == target.period.year
+                && cumulative_quarter(c.key.valid_period.kind).is_some_and(|n| n == q || n == q - 1)
+                && prototypes.iter().any(|(p, _, _, _)| {
+                    p.key.issuer == c.key.issuer
+                        && p.key.subject == c.key.subject
+                        && std::mem::discriminant(&p.key.ownership_basis)
+                            == std::mem::discriminant(&c.key.ownership_basis)
+                })
+        })
+        .map(|c| source_evidence(c, profile, publications, as_of, retrieved))
+        .collect();
+    sort_evidence(&mut evidence);
+    let inputs = evidence
+        .iter_mut()
+        .filter_map(|e| {
+            if !e.published_at.as_deref().is_some_and(|date| date <= as_of) {
+                return None;
+            }
+            let c = &e.source;
+            let basis = explicit_basis(c.key.ownership_basis);
+            let compatible = basis.is_some()
+                && c.claim.additivity == AdditivityClass::ExtensiveAdditive
+                && !matches!(&c.key.scope, Scope::Region { map_version } if map_version.is_empty() || map_version.starts_with("unregistered:"))
+                && !(c.basis_evidence.is_some()
+                    && c.printed_basis != OwnershipBasis::Unprinted
+                    && explicit_basis(c.printed_basis) != basis);
+            let value = (e.admission == "published_by_cut" && compatible)
+                .then(|| printed(c))
+                .flatten();
+            e.relation = if value.is_some() {
+                "cumulative_input"
+            } else {
+                "unusable_cumulative_input"
+            };
+            let series = format!(
+                "{:?}",
+                (
+                    &c.key.issuer,
+                    &c.key.subject,
+                    target.period.year,
+                    &c.key.scope,
+                    kind,
+                    &c.key.unit,
+                    c.key.line.occurrence,
+                    basis
+                )
+            );
+            Some(Observation {
+                source_id: c.claim.claim_id.to_string(),
+                series,
+                through_quarter: cumulative_quarter(c.key.valid_period.kind)?,
+                printed: value,
+            })
+        })
+        .collect::<Vec<_>>();
+    Some(Derivation {
+        report: quarter::assess(
+            kind,
+            q,
+            Printed {
+                value: decimal(target.value)?,
+                step: decimal(target.step)?,
+            },
+            &inputs,
+        ),
+        evidence,
+    })
+}
+
 // Probe the original line without changing its prose or amount. Discovery stores the selected Claim id
 // as metadata; its temporary comparison must insert a link. Cited findings already have a link to replace.
 fn probe(draft: &str, f: &LintFinding, c: &KeyedCell) -> Option<LintFinding> {
@@ -239,7 +478,6 @@ fn relation(f: Option<&LintFinding>) -> &'static str {
 
 // Singleton probes must not erase an ambiguous ownership share from the original semantic population.
 fn ambiguous_attributable_shares(f: &LintFinding, candidates: &[&KeyedCell]) -> bool {
-    use fmine_public::key::OwnershipBasis;
     let population: Vec<_> = if f.candidates.is_empty() {
         let Some(source) = &f.source else {
             return false;
@@ -265,15 +503,11 @@ fn ambiguous_attributable_shares(f: &LintFinding, candidates: &[&KeyedCell]) -> 
     };
     let mut shares = BTreeSet::new();
     for c in population {
-        if let OwnershipBasis::Attributable { num, den, .. } = c.key.ownership_basis {
-            if num <= 0 || den <= 0 || num > den {
-                return true;
-            }
-            let Ok(share) = fmine_numerics::exact_feas::Rat::new(i128::from(num), i128::from(den))
-            else {
+        if matches!(c.key.ownership_basis, OwnershipBasis::Attributable { .. }) {
+            let Some(share) = explicit_basis(c.key.ownership_basis) else {
                 return true;
             };
-            shares.insert((share.num(), share.den()));
+            shares.insert(share);
         }
     }
     shares.len() > 1
@@ -334,67 +568,19 @@ pub(super) fn assess(
             reason: "no_unique_supported_semantic_target",
             first_registered_disclosure: None,
             evidence: Vec::new(),
+            derivation: None,
         };
         if keys.len() == 1 {
             let candidates = keys.iter().next().and_then(|k| index.get(k));
             let ambiguous_share = candidates.is_some_and(|c| ambiguous_attributable_shares(f, c));
             for c in candidates.into_iter().flatten() {
-                let matched_source = source_for(c, profile);
-                let publication = matched_source
-                    .and_then(|s| publications.get(&(s.file_name.clone(), s.sha256_hex.clone())))
-                    .copied();
-                let (admission, reason) = if !usable(c) || c.key.issuer != profile.issuer {
-                    (
-                        "unusable",
-                        "source_claim_identity_or_evidence_not_admissible",
-                    )
-                } else if matched_source.is_none() {
-                    (
-                        "unusable",
-                        "source_filename_hash_release_or_locator_not_registered",
-                    )
-                } else if let Some(p) = publication {
-                    if p.published_at.as_str() <= as_of {
-                        (
-                            "published_by_cut",
-                            "registered_publication_date_at_or_before_cut",
-                        )
-                    } else {
-                        ("after_cut", "registered_publication_date_after_cut")
-                    }
-                } else {
-                    (
-                        "date_unknown",
-                        "retrieval_and_reporting_period_do_not_establish_publication",
-                    )
-                };
-                let comparison = if admission == "unusable" {
-                    "unchecked"
-                } else {
-                    relation(probe(draft, f, c).as_ref())
-                };
-                result.evidence.push(SourceEvidence {
-                    source: (*c).clone(),
-                    file: matched_source.map(|s| s.file_name.clone()),
-                    url: matched_source.map(|s| s.url.clone()),
-                    published_at: publication.map(|p| p.published_at.clone()),
-                    publication_basis: publication.map(|p| p.published_at_basis.clone()),
-                    known_available_by: matched_source.and(retrieved).map(str::to_string),
-                    relation: comparison,
-                    admission,
-                    reason,
-                });
+                let mut evidence = source_evidence(c, profile, &publications, as_of, retrieved);
+                if evidence.admission != "unusable" {
+                    evidence.relation = relation(probe(draft, f, c).as_ref());
+                }
+                result.evidence.push(evidence);
             }
-            result.evidence.sort_by(|a, b| {
-                (&a.published_at, &a.source.locator, a.source.claim.claim_id).cmp(&(
-                    &b.published_at,
-                    &b.source.locator,
-                    b.source.claim.claim_id,
-                ))
-            });
-            result
-                .evidence
-                .dedup_by(|a, b| a.source.claim.claim_id == b.source.claim.claim_id);
+            sort_evidence(&mut result.evidence);
             if ambiguous_share {
                 result.reason = "attributable_share_unspecified";
             } else if let Some(first) = result.evidence.iter().find(|e| {
@@ -408,6 +594,12 @@ pub(super) fn assess(
             }) {
                 result.status = "disclosed_other_basis";
                 result.reason = "a_matching_amount_is_published_with_an_incompatible_basis";
+            } else if result.evidence.iter().any(|e| {
+                e.admission == "published_by_cut" && e.relation == "different_value_same_basis"
+            }) {
+                result.status = "contradicts_disclosed";
+                result.reason =
+                    "dated_same_basis_assertions_have_nonoverlapping_displayed_intervals";
             } else if result
                 .evidence
                 .iter()
@@ -415,12 +607,6 @@ pub(super) fn assess(
             {
                 result.status = "publication_date_unknown";
                 result.reason = "matching_series_has_no_registered_publication_date";
-            } else if result.evidence.iter().any(|e| {
-                e.admission == "published_by_cut" && e.relation == "different_value_same_basis"
-            }) {
-                result.status = "contradicts_disclosed";
-                result.reason =
-                    "dated_same_basis_assertions_have_nonoverlapping_displayed_intervals";
             } else if result
                 .evidence
                 .iter()
@@ -439,6 +625,22 @@ pub(super) fn assess(
                 result.status = "evidence_unusable";
                 result.reason = "source_identity_or_evidence_admission_failed";
             }
+        }
+        result.derivation = derivation(draft, f, cells, profile, &publications, as_of, retrieved);
+        if result
+            .derivation
+            .as_ref()
+            .is_some_and(|d| d.report.status == Status::Derived)
+            && !matches!(
+                result.status,
+                "disclosed" | "disclosed_other_basis" | "contradicts_disclosed"
+            )
+            && !result.evidence.iter().any(|e| {
+                e.admission == "published_by_cut" && e.relation == "different_value_same_basis"
+            })
+        {
+            result.status = "derivable";
+            result.reason = "every_admitted_cumulative_difference_supports_the_draft_precision";
         }
         findings.push(result);
     }
@@ -468,18 +670,33 @@ impl SourceEvidence {
     }
 }
 
+impl Derivation {
+    fn to_json(&self) -> String {
+        format!(
+            "{{{},\"evidence\":[{}]}}",
+            self.report.body_json(),
+            self.evidence
+                .iter()
+                .map(SourceEvidence::to_json)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    }
+}
+
 impl PublicnessReport {
     fn body_json(&self) -> String {
         let findings = self.findings.iter().map(|f| {
             format!(
-                "{{\"span\":{{\"start_byte\":{},\"end_byte\":{}}},\"status\":{},\"reason\":{},\"first_registered_disclosure\":{},\"evidence\":[{}]}}",
+                "{{\"span\":{{\"start_byte\":{},\"end_byte\":{}}},\"status\":{},\"reason\":{},\"first_registered_disclosure\":{},\"evidence\":[{}],\"derivation\":{}}}",
                 f.span.0, f.span.1, js(f.status), js(f.reason),
                 optional(f.first_registered_disclosure.as_deref()),
                 f.evidence.iter().map(SourceEvidence::to_json).collect::<Vec<_>>().join(","),
+                f.derivation.as_ref().map_or_else(|| "null".into(), Derivation::to_json),
             )
         }).collect::<Vec<_>>().join(",");
         format!(
-            "\"schema\":\"fmine.lint.public-record.v1\",\"as_of\":{},\"draft_sha256\":{},\"claims_digest\":{},\"publication_selection\":\"earliest matching dated registered assertion; later and conflicting assertions retained\",\"unsupported\":[\"derived_identities\",\"forward_guidance\"],\"no_claim\":{},\"findings\":[{}]",
+            "\"schema\":\"fmine.lint.public-record.v1\",\"as_of\":{},\"draft_sha256\":{},\"claims_digest\":{},\"publication_selection\":\"earliest matching dated registered assertion; later and conflicting assertions retained\",\"unsupported\":[\"non_additive_or_other_derived_identities\",\"forward_guidance\"],\"no_claim\":{},\"findings\":[{}]",
             js(&self.as_of),
             js(&self.draft_digest.to_hex()),
             js(&self.claims_digest.to_hex()),
@@ -528,7 +745,34 @@ impl PublicnessReport {
         out.push_str("\n### Publication evidence\n\n");
         for f in &self.findings {
             let _ = writeln!(out, "- {}..{}: {}.", f.span.0, f.span.1, f.reason);
-            for e in &f.evidence {
+            if let Some(d) = &f.derivation {
+                let _ = writeln!(
+                    out,
+                    "  - Cumulative derivation {}: {}. {}.",
+                    d.report.rule(),
+                    d.report.status.as_str(),
+                    escape(&d.report.reason)
+                );
+                for pair in &d.report.pairs {
+                    let _ = writeln!(
+                        out,
+                        "    - {} minus {}: [{}/{}, {}/{}] {}; {}.",
+                        pair.cumulative_claim,
+                        pair.prior_claim,
+                        pair.interval.lo.num(),
+                        pair.interval.lo.den(),
+                        pair.interval.hi.num(),
+                        pair.interval.hi.den(),
+                        d.report.quantity.unit(),
+                        pair.relation.as_str()
+                    );
+                }
+            }
+            for e in f
+                .evidence
+                .iter()
+                .chain(f.derivation.iter().flat_map(|d| &d.evidence))
+            {
                 let _ = writeln!(
                     out,
                     "  - {}: {}; {}; publication {} ({}); SHA-256 {}; Claim {}.",

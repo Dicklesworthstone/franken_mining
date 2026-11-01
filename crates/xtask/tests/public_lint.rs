@@ -8,7 +8,7 @@ use fmine_public::key::{
     KeyedCell, LineKey, NilReason, OwnershipBasis, Period, PeriodKind, PublicKey, PublicValue,
     Scope, ShareSource, Vintage, classify, from_mine_stats, public_claim,
 };
-use fmine_public::lint::{LintMode, Verdict, lint_cited, lint_discover};
+use fmine_public::lint::{LintMode, Verdict, equality_target, lint_cited, lint_discover};
 use fmine_public::mine_stats::read_mine_stats;
 use fmine_public::synthetic::synthetic_profile;
 
@@ -73,6 +73,136 @@ fn verdict(text: &str, claims: &[KeyedCell]) -> Verdict {
     let report = lint_cited(text, claims);
     assert_eq!(report.findings.len(), 1, "{}", report.to_json());
     report.findings[0].verdict
+}
+
+#[test]
+fn equality_target_parses_a_different_period_without_inventing_source_evidence() {
+    let prototype = observation("999", |key| {
+        key.unit = "koz".into();
+        key.line.label = "summary:au_prod_100_koz".into();
+        key.ownership_basis = OwnershipBasis::Consolidated100;
+    });
+    let original = prototype.to_json();
+    for amount in ["120.00 koz", "-120.00 koz"] {
+        let plain = format!("Évidence.\nSite A H1 2030 100% basis gold production is {amount}.");
+        let cited = plain.replace(
+            amount,
+            &format!("[{amount}](fmine:{})", prototype.claim.claim_id),
+        );
+        for draft in [plain, cited] {
+            let at = draft.find(amount).expect("amount");
+            let target = equality_target(&draft, (at, at + amount.len()), &prototype)
+                .expect("bounded equality semantics");
+            assert_eq!(
+                target.period,
+                Period {
+                    year: 2030,
+                    kind: PeriodKind::H1
+                }
+            );
+            assert_eq!(
+                target.value,
+                fmine_io::numtok::Dec {
+                    mantissa: if amount.starts_with('-') {
+                        -12000
+                    } else {
+                        12000
+                    },
+                    scale: 2,
+                }
+            );
+            assert_eq!(
+                target.step,
+                fmine_io::numtok::Dec {
+                    mantissa: 1,
+                    scale: 2
+                }
+            );
+        }
+    }
+    assert_eq!(prototype.to_json(), original);
+}
+
+#[test]
+fn equality_target_requires_the_whole_supported_semantic_context_and_exact_span() {
+    let prototype = observation("999", |key| {
+        key.unit = "koz".into();
+        key.line.label = "summary:au_prod_100_koz".into();
+        key.ownership_basis = OwnershipBasis::Consolidated100;
+    });
+    let good = "Site A H1 2030 100% basis gold production is 120 koz.";
+    let at = good.find("120 koz").expect("amount");
+    assert!(equality_target(good, (at, at + 7), &prototype).is_some());
+    for (from, to) in [
+        ("Site A", "Site B"),
+        ("Site A", "Site A and Site A"),
+        ("H1 2030", "H1"),
+        ("H1 2030", "H1 2030 FY2030"),
+        ("100% basis", "attributable"),
+        ("100% basis", ""),
+        ("gold production", "gold sales"),
+        ("gold production", "copper production"),
+        ("is", "will be"),
+        ("is", "was probably"),
+        ("120 koz", "120 kt"),
+        ("120 koz", "120-130 koz"),
+        ("120 koz", "120 koz plus 5 koz"),
+        ("120 koz", "120 koz (fmine:broken)"),
+    ] {
+        let draft = good.replace(from, to);
+        let findings = lint_discover(&draft, std::slice::from_ref(&prototype)).findings;
+        assert!(!findings.is_empty(), "{draft}");
+        for f in findings {
+            assert!(
+                equality_target(&draft, f.span, &prototype).is_none(),
+                "{draft}"
+            );
+        }
+    }
+    for span in [
+        (at, at + 3),
+        (at + 1, at + 7),
+        (at, good.len() + 1),
+        (at + 7, at),
+    ] {
+        assert!(equality_target(good, span, &prototype).is_none());
+    }
+    let unicode = format!("É.\n{good}");
+    assert!(equality_target(&unicode, (1, 2), &prototype).is_none());
+}
+
+#[test]
+fn equality_target_preserves_rate_definitions_and_rejects_malformed_links() {
+    let prototype = observation("999", |_| {});
+    let good = "Site A FY2030 ownership basis unprinted AISC per ounce sold is $1,250/oz.";
+    let parse = |draft: &str| {
+        let at = draft.find("$1,250/oz").expect("amount");
+        equality_target(draft, (at, at + "$1,250/oz".len()), &prototype)
+    };
+    assert!(parse(good).is_some());
+    for (from, to) in [
+        ("per ounce sold", "per ounce produced"),
+        ("per ounce sold", "per pound sold"),
+        ("per ounce sold", ""),
+        ("AISC", "TCC"),
+        ("AISC", "scorecard AISC"),
+        ("AISC", "co-product AISC"),
+        ("$1,250/oz", "[$1,250/oz](fmine:broken)"),
+        (
+            "$1,250/oz",
+            "[$1,250/oz](fmine:clm_00000000000000000000000000000000",
+        ),
+        (
+            "$1,250/oz",
+            "[$1,250/oz and more](fmine:clm_00000000000000000000000000000000)",
+        ),
+    ] {
+        let draft = good.replace(from, to);
+        assert!(parse(&draft).is_none(), "{draft}");
+    }
+    let other_amount = good.replace("$1,250/oz", "$200/oz");
+    let at = other_amount.find("$200/oz").expect("amount");
+    assert!(equality_target(&other_amount, (at, at + "$200/oz".len()), &prototype).is_some());
 }
 
 #[allow(clippy::expect_used)]

@@ -79,6 +79,10 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   percentage points. `g/t` and `grams per tonne` retain grade values and their printed precision unchanged.
   A range keeps both endpoint precisions. The token span includes its prefix and suffix.
   `$` alone remains an unspecified dollar currency; `US$` explicitly names USD.
+- `numtok::equality::{Context, Metric, context}` is the shared bounded one-number equality grammar for
+  cited checks and derived-value queries. Callers supply known subjects and citation spans; the parser
+  retains the same explicit metric, period, ownership and unit requirements and refuses residual prose.
+  It creates no Claim, selects no source vintage and supplies no missing semantic or evidence metadata.
 - Basis and period tokens are finite lexical matches, not a sentence interpretation. Explicit ownership,
   per-ounce/per-pound sold or produced denominators, credit convention and definition words stay separate.
   `BasisTok` classifies ownership, denominator and credit tokens lexically without supplying a missing basis.

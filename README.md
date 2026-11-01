@@ -286,8 +286,25 @@ visible beside this assessment; this does not authorize disclosure or establish 
 Workbook `[[source]]` rows may declare `published_at` and `published_at_basis` together, with a cited
 `FACT: ` or `INFERENCE: ` basis. An omitted date stays unknown: the reporting quarter and retrieval date
 cannot manufacture a publication date. Correcting these metadata changes the public-record report digest
-without changing the workbook's numerical Claim. Derived identities and forward guidance are not assessed
-by this first public-record slice.
+without changing the workbook's numerical Claim.
+
+The same assessment can derive additive quarters from dated cumulative disclosures: **Q2 = H1 − Q1**,
+**Q3 = nine months − H1**, and **Q4 = full year − nine months**. Supported quantities are gold production
+and sales in `koz`, and copper production in `kt`. For example, an uncited draft line
+`Example Mine Q4 2030 100% basis gold production is 100 koz.` can be checked with:
+
+```bash
+cargo run -p fmine-cli -- lint draft.md --issuer <registered-issuer> --as-of 2031-03-01 --discover
+```
+
+Every required input must have a registered publication date at or before the cut and the same explicit
+ownership and perimeter basis. The calculation uses displayed rounding intervals: subtracting `200.0`
+and `100.0` gives the exact enclosure `[99.9, 100.1]`, so a draft claiming `100.0` has more precision than
+those inputs establish. All competing source pairs, their Claims, hashes and publication evidence remain
+in JSON and Markdown. Future and undated disclosures cannot fill a missing input; dashes cannot become zero.
+Rates such as AISC, grades and recovery are not subtracted. A successful `derivable` result retains the
+separate direct-publication assessment and warns that the derived figure may itself be new information.
+It is arithmetic over issuer assertions, not permission to disclose them.
 
 DESIGN (BD-345.S3): `--discover` also searches for source Claims when a supported equality has no Claim link.
 The subject, metric, reporting period, ownership basis and unit must still be stated explicitly. A unique

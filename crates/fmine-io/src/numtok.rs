@@ -4,6 +4,8 @@
 
 pub type Span = (usize, usize);
 
+pub mod equality;
+
 /// `mantissa / 10^scale`, without floating point. Trailing decimal places remain significant in `step`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Dec {
