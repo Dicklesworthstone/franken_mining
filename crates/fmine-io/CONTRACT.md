@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Ingestion`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt"]`
+- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok"]`
 
 ## 2. Mathematical & Domain Formulation
 Pure-Rust ZIP and RFC 1951 DEFLATE (`zip_inflate`); `.xlsx` workbook, shared-string and worksheet extraction
@@ -45,6 +45,17 @@ Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a
   stored sign. The value, x100 for `%`, is rounded half away from zero to 15 significant digits and then to the
   section's decimals. Section choice and both roundings are hypotheses that the LibreOffice cross-check decides.
   Every format construct outside the supported subset refuses the code by name, as do General non-integers.
+- `numtok::{tokenize, Token, NumberToken, Dec, BasisTok, PeriodTok, UnitTok, Currency, ScaleWord, Hedge, Span}`
+  (BD-345.S1): pure lexical inputs for cited disclosure lint. Numbers use exact `i128` mantissa and decimal
+  scale, with their own printed step and UTF-8 byte spans into the original text. Comma grouping, accounting
+  parentheses, signs, percentages, explicit scale words and ranges retain their printed information. An explicit
+  scale word scales the number and step; a unit such as `koz` never converts its value. Percent values remain
+  percentage points. A range keeps both endpoint precisions. The token span includes its prefix and suffix.
+  `$` alone remains an unspecified dollar currency; `US$` explicitly names USD.
+- Basis and period tokens are finite lexical matches, not a sentence interpretation. Explicit ownership,
+  per-ounce denominator, credit convention and definition words stay separate. Only `ownership basis unprinted`
+  or `unprinted ownership` supplies the unprinted marker. Quarter/half tokens without a year keep `None`;
+  no current year is supplied. Explicit period and ownership metadata do not become extra numerical amounts.
 
 ## 5. Guards & Typed Refusals
 - `G-BULL-1`: formula-error cells and `hidden`/`veryHidden` sheets go to `Workbook::quarantined`. Hidden sheets are
@@ -64,6 +75,11 @@ Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a
   registered file's integrity is its SHA-256 against the source registry.
 - XML text decodes the five named entities and `&#10;`, `&#13;`, `&#160;`, each once (`&amp;` last); no DTD or
   entity declaration is read, so nothing expands.
+- `numtok` keeps malformed grouping, unsupported attached notation, decimal overflow and ambiguous standalone
+  dash signs as `UnsupportedNumber`, allowing the consumer to remain unchecked. It never rounds an overflowing
+  input into range. Trailing zeros retain the finest printed step; hedge words are qualifiers and do not invent
+  a wider tolerance. Claim IDs embedded in words are not quantities. Unrecognised prose remains for the caller's
+  supported-predicate check; tokenisation alone never produces a verification verdict.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-IO-1`: on the 18 registered Barrick workbooks, the per-workbook census (visible and hidden sheets; numeric,
@@ -71,6 +87,9 @@ Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a
   `fmine-public`'s ignored real-file test).
 - `PO-IO-2`: writer-to-parser round trip on a synthetic workbook reproduces typed cells, quarantine, census and a
   digest computed from the fixed listing format (unit test).
+- `PO-IO-3` (BD-345.S1): synthetic known answers check the documented decimal/step examples, accounting negatives,
+  range endpoint precision, each basis/period class, explicit currency and unit distinctions, UTF-8 spans and
+  malformed/overflowing numbers. Seeded Philox text checks totality and non-overlapping character-boundary spans.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Missing files, corrupt ZIP or DEFLATE streams and malformed workbooks fail closed with `IoError`. No fallbacks.
@@ -83,3 +102,6 @@ Missing files, corrupt ZIP or DEFLATE streams and malformed workbooks fail close
 
 ## 10. Non-Goals & Scope Boundary
 Reads cells; does not interpret tables (`fmine-public`) or compute metrics (`fmine-metrics`).
+The draft tokenizer recognises a bounded ASCII-number and lexical-context grammar, not arbitrary mathematical
+notation or prose semantics. It makes no publicness, calibration or legal conclusion. The two-reader issuer
+sentence corpus and its precision/recall study remain separate work; synthetic lexer tests do not stand in for it.
