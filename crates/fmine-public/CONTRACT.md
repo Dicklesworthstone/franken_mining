@@ -438,7 +438,7 @@ The public lane of M0 (`fmine assure public`).
     no registered members gives a release-specific unknown map. Company totals are company scope; other
     subjects are site scope. No joint-venture kind is inferred without a registered classification.
   - `KeyedCell { locator, key, claim, printed_basis, basis_evidence, status_evidence, label_as_printed, unit_evidence }`,
-    `public_claim`, `raw_token`, `series`, `claims_digest`, `KeyedCell::to_json` and
+    `public_claim`, `canonical_value_tag`, `raw_token`, `series`, `claims_digest`, `KeyedCell::to_json` and
     `PublicAssuranceReport::public_claims`: the existing public-assurance JSON includes `public_claims` with
     schema `fmine.public_claims.v1`, its separate digest, cells, refusals and `unregistered_all_zero`.
     Each accepted cell carries its Claim id, `file:sheet!cell`, file SHA-256, complete key, original and

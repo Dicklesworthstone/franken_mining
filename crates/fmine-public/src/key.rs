@@ -410,39 +410,24 @@ pub fn public_claim(
     key: PublicKey,
     value: PublicValue,
 ) -> KeyedCell {
-    let mut enc = Encoder::new_frame(*b"PVAL", 1);
-    encode_value(&mut enc, &value);
-    let tag = format!(
-        "{}|{}",
-        key.canonical_tag(raw_token(&value)),
-        blake3_hash(&enc.finish()).to_hex()
-    );
-    let (representation, evidence, epistemic, state) =
-        if matches!(value, PublicValue::Number { .. }) {
-            let synthetic = key.issuer == crate::synthetic::SYNTHETIC_ISSUER;
+    let tag = canonical_value_tag(&key, &value);
+    let numeric = matches!(value, PublicValue::Number { .. });
+    let representation = if numeric {
+        Representation::Deterministic
+    } else {
+        Representation::Placeholder {
+            token: raw_token(&value).to_string(),
+        }
+    };
+    let (evidence, epistemic, state) =
+        if numeric && key.issuer != crate::synthetic::SYNTHETIC_ISSUER {
             (
-                Representation::Deterministic,
-                if synthetic {
-                    EvidenceClass::Assumed
-                } else {
-                    EvidenceClass::ISSUER
-                },
-                if synthetic {
-                    EpistemicStatus::KnownUnknown(KuKind::Parametric)
-                } else {
-                    EpistemicStatus::KnownKnown
-                },
-                if synthetic {
-                    KnowledgeState::Unknown
-                } else {
-                    KnowledgeState::Known
-                },
+                EvidenceClass::ISSUER,
+                EpistemicStatus::KnownKnown,
+                KnowledgeState::Known,
             )
         } else {
             (
-                Representation::Placeholder {
-                    token: raw_token(&value).to_string(),
-                },
                 EvidenceClass::Assumed,
                 EpistemicStatus::KnownUnknown(KuKind::Parametric),
                 KnowledgeState::Unknown,
@@ -485,6 +470,19 @@ pub fn public_claim(
         label_as_printed: None,
         unit_evidence: None,
     }
+}
+
+/// The existing public Claim value tag, shared with consumers that recheck a supplied keyed value.
+/// It binds the semantic key, stored token, displayed value and subject-status interpretation.
+#[must_use]
+pub fn canonical_value_tag(key: &PublicKey, value: &PublicValue) -> String {
+    let mut enc = Encoder::new_frame(*b"PVAL", 1);
+    encode_value(&mut enc, value);
+    format!(
+        "{}|{}",
+        key.canonical_tag(raw_token(value)),
+        blake3_hash(&enc.finish()).to_hex()
+    )
 }
 
 /// Groups figures without losing earlier vintages or colliding cells. Order is independent of input order.

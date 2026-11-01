@@ -275,6 +275,9 @@ None: every failure is a usage error or a typed refusal.
   Unresolved outcomes retain every selected canonical source Claim, including simultaneous conflicting cells,
   so refusal does not erase its reported token, interpretation, locator or source hash. Later appearances stay
   separate. JSON and Markdown both expose that rejected evidence without scoring it or dropping its member.
+  Before numerical use, the adapter rechecks the Claim identity, metric and complete canonical public value
+  tag, including the semantic key and typed interpretation. Mutated source assertions remain unresolved
+  members with `FMINE-REF-507`; numeric placeholders refuse with `FMINE-REF-208`.
   Registered-file integration tests construct invented workbooks and two-reader document entries, then check
   exact scores, original/comparative selection, ownership separation, source tampering, missing bytes,
   transcription disagreement, deterministic replay and actual JSON/Markdown executable output.

@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 //! BD-341: source-to-score CLI checks on invented workbooks and two synthetic reader records.
 //! The PDF stubs are hash-bound bytes, never evidence that a real document or human reading was checked.
 

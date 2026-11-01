@@ -20,6 +20,7 @@ use fmine_evidence::{
 use fmine_numerics::exact_feas::{Convention, Rat};
 use fmine_public::key::{
     KeyedCell, OwnershipBasis, PeriodKind, PublicValue, Scope, StatusKind, SubjectStatus,
+    canonical_value_tag,
 };
 use fmine_public::sources::{IssuerProfile, SourceKind, load_issuer_profile};
 use fmine_public::transcribe::{CheckedDocument, TranscriptionReport};
@@ -280,6 +281,18 @@ fn numeric(
     own: (bool, Rat),
     production: bool,
 ) -> Result<PrintedOutcome> {
+    cell.claim.check_id()?;
+    if cell.claim.metric_key != cell.key.line.label
+        || cell.claim.value_tag() != canonical_value_tag(&cell.key, &cell.claim.value)
+    {
+        return Err(failure(
+            RefusalCode::FrozenRecordMutation507,
+            format!(
+                "{} key or interpreted value differs from its canonical Claim",
+                cell.locator
+            ),
+        ));
+    }
     if cell_basis(cell.key.ownership_basis)? != own || cell.key.unit != a.unit {
         return Err(failure(
             RefusalCode::BasisMismatch105,
@@ -312,6 +325,15 @@ fn numeric(
         return Err(failure(
             RefusalCode::SupportMismatch102,
             format!("{} has incompatible support or additivity", cell.locator),
+        ));
+    }
+    if matches!(
+        cell.claim.representation,
+        Representation::Placeholder { .. }
+    ) {
+        return Err(failure(
+            RefusalCode::SourceCellUnusable208,
+            format!("{} is an unresolved placeholder", cell.locator),
         ));
     }
     let synthetic_number = cell.key.issuer == fmine_public::synthetic::SYNTHETIC_ISSUER
@@ -916,14 +938,16 @@ fn synthetic_evidence() -> Result<(IssuerProfile, TranscriptionReport, Vec<Keyed
         },
     };
     let path = "synthetic/2030Q4/production.txt";
+    let value = PublicValue::Number {
+        stored: "125".into(),
+        displayed: Ok("125".into()),
+        under_status: None,
+    };
+    let tag = canonical_value_tag(&key, &value);
     let claim = Claim::new(
         &key.line.label,
-        PublicValue::Number {
-            stored: "125".into(),
-            displayed: Ok("125".into()),
-            under_status: None,
-        },
-        &key.canonical_tag("125"),
+        value,
+        &tag,
         Representation::Deterministic,
         SpatialSupport::PeriodAggregate,
         AdditivityClass::ExtensiveAdditive,
@@ -990,14 +1014,16 @@ mod tests {
         cell.key.reporting_vintage.file_sha256 = digest.to_hex();
         let path = format!("synthetic/{release}/{year}.txt");
         cell.locator = format!("{path}:Annual!C1");
+        let value = PublicValue::Number {
+            stored: token.into(),
+            displayed: Ok(token.into()),
+            under_status: None,
+        };
+        let tag = canonical_value_tag(&cell.key, &value);
         cell.claim = Claim::new(
             &cell.key.line.label,
-            PublicValue::Number {
-                stored: token.into(),
-                displayed: Ok(token.into()),
-                under_status: None,
-            },
-            &cell.key.canonical_tag(token),
+            value,
+            &tag,
             Representation::Deterministic,
             SpatialSupport::PeriodAggregate,
             AdditivityClass::ExtensiveAdditive,
@@ -1010,6 +1036,26 @@ mod tests {
             vec![SourceAnchor::new(path, digest.0, "Annual!C1")],
         );
         cell
+    }
+
+    // Intentional source changes construct a new Claim; mutation tests deliberately skip this.
+    fn reconstruct(cell: &mut KeyedCell) {
+        let c = &cell.claim;
+        cell.claim = Claim::new(
+            &cell.key.line.label,
+            c.value.clone(),
+            &canonical_value_tag(&cell.key, &c.value),
+            c.representation.clone(),
+            c.support,
+            c.additivity,
+            c.evidence,
+            c.epistemic,
+            c.state,
+            c.confidentiality.clone(),
+            c.uu_terms.clone(),
+            c.parents.clone(),
+            c.anchors.clone(),
+        );
     }
 
     #[test]
@@ -1135,6 +1181,7 @@ mod tests {
             (OwnershipBasis::Unprinted, "FMINE-REF-107"),
         ] {
             c[0].key.ownership_basis = basis;
+            reconstruct(&mut c[0]);
             let r = assess(&p, &t, &c, None).expect("named unresolved outcome");
             assert!(
                 matches!(&production(&r).outcome,OutcomeBinding::Unresolved{code:c,..} if c==code)
@@ -1203,6 +1250,7 @@ mod tests {
             token: "—".into(),
             reason: fmine_public::key::NilReason::Unknown,
         };
+        reconstruct(&mut actuals[1]);
         let after = assess(&p, &t, &actuals, None).expect("one missing comparative");
         let s = &after.summaries[0];
         assert_eq!(after.summaries.len(), 1);
@@ -1235,12 +1283,14 @@ mod tests {
         t.agreement.accepted[0].unit = "kt".into();
         c[0].key.line.label = "summary:cu_prod_attr_kt".into();
         c[0].key.unit = "kt".into();
+        reconstruct(&mut c[0]);
         let good = assess(&p, &t, &c, None).expect("copper source");
         assert_eq!(
             production(&good).score.expect("score").z,
             Some(Rat::new(3, 2).expect("z"))
         );
         c[0].key.unit = "Mlb".into();
+        reconstruct(&mut c[0]);
         assert!(
             matches!(&production(&assess(&p,&t,&c,None).expect("unresolved unit")).outcome,OutcomeBinding::Unresolved{code,..} if code=="FMINE-REF-105")
         );
@@ -1443,6 +1493,83 @@ reader = "{reader}"
     }
 
     #[test]
+    fn registered_cell_mutations_cannot_reuse_its_canonical_identity() {
+        let root = registered_workspace();
+        let p = load_issuer_profile(&root, "synthetic").expect("profile");
+        let t = fmine_public::transcribe::load_transcription_report(&p, &root)
+            .expect("checked transcripts")
+            .expect("agreement");
+        let source = fmine_public::key::mine_stats::load_claims(&p, &root)
+            .expect("checked workbook")
+            .claims;
+        let i = source
+            .iter()
+            .position(|c| c.locator == "Annual.xlsx:YTD!C3")
+            .expect("attributable production");
+        let before = assess(&p, &t, &source, None).expect("canonical source");
+        assert_eq!(
+            production(&before).score.expect("score").z,
+            Some(Rat::new(3, 2).unwrap())
+        );
+        source[i].claim.check_id().expect("source identity");
+        assert_eq!(
+            source[i].claim.value_tag(),
+            canonical_value_tag(&source[i].key, &source[i].claim.value)
+        );
+
+        for mutation in 0..5 {
+            let mut changed = source.clone();
+            let cell = &mut changed[i];
+            match mutation {
+                0 => {
+                    let PublicValue::Number { displayed, .. } = &mut cell.claim.value else {
+                        panic!("numeric fixture")
+                    };
+                    *displayed = Ok("105".into());
+                    // Claim::check_id alone cannot detect a displayed-value mutation.
+                    cell.claim.check_id().expect("stored body unchanged");
+                }
+                1 => cell.key.line.occurrence += 1,
+                2 => cell.claim.state = KnowledgeState::Known,
+                3 => cell.claim.anchors[0].locator = "YTD!B3".into(),
+                _ => cell.claim.metric_key = "another metric".into(),
+            }
+            let after = assess(&p, &t, &changed, None).expect("named unresolved member");
+            assert!(production(&after).score.is_none(), "mutation {mutation}");
+            assert!(matches!(&production(&after).outcome,
+                OutcomeBinding::Unresolved { code, .. } if code == "FMINE-REF-507"));
+            let summary = after
+                .summaries
+                .iter()
+                .find(|s| s.metric == "production_koz")
+                .unwrap();
+            assert_eq!(
+                (
+                    summary.scores.n_members,
+                    summary.scores.n_resolved,
+                    summary.scores.n_unresolved
+                ),
+                (1, 0, 1)
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_placeholder_remains_unresolved_even_with_usable_knowledge_state() {
+        let (p, t, mut c) = synthetic_evidence().expect("fixture");
+        c[0].claim.representation = Representation::Placeholder {
+            token: "N/A".into(),
+        };
+        c[0].claim
+            .check_id()
+            .expect("representation is outside current Claim body");
+        let report = assess(&p, &t, &c, None).expect("retained member");
+        assert!(production(&report).score.is_none());
+        assert!(matches!(&production(&report).outcome,
+            OutcomeBinding::Unresolved { code, .. } if code == "FMINE-REF-208"));
+    }
+
+    #[test]
     fn registered_altered_and_missing_documents_refuse_without_fallback() {
         let root = registered_workspace();
         std::fs::write(root.join("docs/Guidance.pdf"), b"altered synthetic bytes")
@@ -1469,6 +1596,7 @@ reader = "{reader}"
             KnowledgeState::Unknown,
         ] {
             c[0].claim.state = state;
+            reconstruct(&mut c[0]);
             let r = assess(&p, &t, &c, None).expect("allowed synthetic number");
             assert!(production(&r).score.is_some(), "{state:?}");
         }
@@ -1481,6 +1609,7 @@ reader = "{reader}"
             KnowledgeState::NotApplicable,
         ] {
             c[0].claim.state = state;
+            reconstruct(&mut c[0]);
             let r = assess(&p, &t, &c, None).expect("negative state stays visible");
             assert!(production(&r).score.is_none(), "{state:?}");
             assert!(

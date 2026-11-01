@@ -1,4 +1,5 @@
 //! DESIGN (BD-341.S5): an exact, source-bound price sensitivity beside the unconditional guidance score.
+//! Determinism: Exact (rational arithmetic and ordered source populations).
 //! The gate tests only the supplied quarterly population. It neither establishes causality nor authenticates
 //! documents, their dates, or the completeness of that population. No failed gate produces an adjustment.
 
