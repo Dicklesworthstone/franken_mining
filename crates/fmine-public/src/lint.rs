@@ -19,6 +19,31 @@ use crate::key::{
 
 pub const RULES_VERSION: &str = "cited-equality/1";
 pub const NO_CLAIM: &str = "Checks supported numeric equalities against cited public Claims in the selected source snapshot. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure.";
+pub const DISCOVERY_NO_CLAIM: &str = "Matches supported numeric equalities to public Claims in the selected source snapshot only when their stated semantic keys identify exactly one candidate. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure. General-prose discovery precision has not been measured.";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LintMode {
+    Cited,
+    Discovered,
+}
+
+impl LintMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cited => "cited",
+            Self::Discovered => "discovered",
+        }
+    }
+
+    #[must_use]
+    pub const fn no_claim(self) -> &'static str {
+        match self {
+            Self::Cited => NO_CLAIM,
+            Self::Discovered => DISCOVERY_NO_CLAIM,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Verdict {
@@ -89,6 +114,7 @@ impl Verdict {
 
 #[derive(Debug, Clone)]
 pub struct LintFinding {
+    pub mode: LintMode,
     pub span: Span,
     pub raw: String,
     pub step: Option<String>,
@@ -99,12 +125,16 @@ pub struct LintFinding {
     /// The exact canonical source assertion, not a Claim manufactured from the draft.
     pub source: Option<KeyedCell>,
     pub later: Vec<KeyedCell>,
+    /// All semantically matching candidates when discovery cannot choose uniquely. Numeric agreement
+    /// never removes a competing candidate, and older registered vintages are not silently discarded.
+    pub candidates: Vec<KeyedCell>,
 }
 
 impl LintFinding {
     fn to_json(&self) -> String {
         format!(
-            "{{\"span\":{},\"raw\":{},\"step\":{},\"claim\":{},\"verdict\":{},\"also\":[{}],\"reason\":{},\"fix\":{},\"source_claim\":{},\"later_claims\":[{}]}}",
+            "{{\"mode\":{},\"span\":{},\"raw\":{},\"step\":{},\"claim\":{},\"verdict\":{},\"also\":[{}],\"reason\":{},\"fix\":{},\"source_claim\":{},\"later_claims\":[{}],\"candidate_claims\":[{}]}}",
+            js(self.mode.as_str()),
             span_json(self.span),
             js(&self.raw),
             self.step.as_deref().map_or_else(|| "null".into(), js),
@@ -125,12 +155,18 @@ impl LintFinding {
                 .map(KeyedCell::to_json)
                 .collect::<Vec<_>>()
                 .join(","),
+            self.candidates
+                .iter()
+                .map(KeyedCell::to_json)
+                .collect::<Vec<_>>()
+                .join(","),
         )
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct LintReport {
+    pub mode: LintMode,
     pub draft_digest: Digest32,
     pub claims_digest: Digest32,
     pub findings: Vec<LintFinding>,
@@ -149,11 +185,12 @@ impl LintReport {
             *counts.entry(finding.verdict).or_insert(0_usize) += 1;
         }
         format!(
-            "\"schema\":\"fmine.disclosure_lint.v1\",\"rules_version\":{},\"mode\":\"cited\",\"draft_sha256\":{},\"claims_digest\":{},\"publicness\":\"not_assessed\",\"staleness_rule\":\"later release of the same canonical series in the selected snapshot, or an explicit stale/superseded Claim\",\"interpretation_limit\":{},\"numbers\":\"{}\",\"by_verdict\":{{{}}},\"unchecked_spans\":[{}],\"findings\":[{}]",
+            "\"schema\":\"fmine.disclosure_lint.v1\",\"rules_version\":{},\"mode\":{},\"draft_sha256\":{},\"claims_digest\":{},\"publicness\":\"not_assessed\",\"staleness_rule\":\"later release of the same canonical series in the selected snapshot, or an explicit stale/superseded Claim\",\"interpretation_limit\":{},\"numbers\":\"{}\",\"by_verdict\":{{{}}},\"unchecked_spans\":[{}],\"findings\":[{}]",
             js(RULES_VERSION),
+            js(self.mode.as_str()),
             js(&self.draft_digest.to_hex()),
             js(&self.claims_digest.to_hex()),
-            js(NO_CLAIM),
+            js(self.mode.no_claim()),
             self.findings.len(),
             counts
                 .iter()
@@ -193,7 +230,12 @@ impl LintReport {
     #[must_use]
     pub fn to_markdown(&self) -> String {
         let mut out = format!(
-            "# Cited disclosure lint\n\n{NO_CLAIM}\n\nReport: `{}`\n\n| Bytes | Amount | Verdict | Source |\n| --- | --- | --- | --- |\n",
+            "# {} disclosure lint\n\n{}\n\nReport: `{}`\n\n| Bytes | Mode | Amount | Verdict | Source |\n| --- | --- | --- | --- | --- |\n",
+            match self.mode {
+                LintMode::Cited => "Cited",
+                LintMode::Discovered => "Discovered",
+            },
+            self.mode.no_claim(),
             self.digest().to_hex()
         );
         let escape = |s: &str| {
@@ -207,19 +249,45 @@ impl LintReport {
         for f in &self.findings {
             let _ = writeln!(
                 out,
-                "| {}..{} | {} | {} | {} |",
+                "| {}..{} | {} | {} | {} | {} |",
                 f.span.0,
                 f.span.1,
+                f.mode.as_str(),
                 escape(&f.raw),
                 f.verdict.as_str(),
-                f.source
-                    .as_ref()
-                    .map_or_else(|| "unresolved".into(), |c| escape(&c.locator))
+                f.source.as_ref().map_or_else(
+                    || if f.candidates.is_empty() {
+                        "unresolved".into()
+                    } else {
+                        format!("{} candidates; see guidance", f.candidates.len())
+                    },
+                    |c| format!("{} ({})", escape(&c.locator), c.claim.claim_id)
+                )
             );
         }
         out.push_str("\n## Finding guidance\n\n");
         for f in &self.findings {
-            let _ = writeln!(out, "- {}..{}: {}", f.span.0, f.span.1, f.verdict.fix());
+            let _ = writeln!(
+                out,
+                "- {}..{} ({}; {}): {}",
+                f.span.0,
+                f.span.1,
+                f.mode.as_str(),
+                f.reason,
+                f.verdict.fix()
+            );
+            if !f.candidates.is_empty() {
+                out.push('\n');
+                for candidate in &f.candidates {
+                    let _ = writeln!(
+                        out,
+                        "  - Candidate `{}`: {}.",
+                        candidate.claim.claim_id,
+                        escape(&candidate.locator)
+                    );
+                }
+                out.push('\n');
+            }
         }
         let _ = writeln!(
             out,
@@ -286,6 +354,7 @@ struct Index<'a> {
     shares: BTreeMap<AttributionKey, BTreeSet<(i64, i64)>>,
     superseded: BTreeSet<String>,
     subjects: Vec<String>,
+    discovery: BTreeMap<(String, Period, Metric), Vec<&'a KeyedCell>>,
 }
 
 impl<'a> Index<'a> {
@@ -296,6 +365,7 @@ impl<'a> Index<'a> {
             shares: BTreeMap::new(),
             superseded: BTreeSet::new(),
             subjects: Vec::new(),
+            discovery: BTreeMap::new(),
         };
         let mut subjects = BTreeSet::new();
         for c in claims {
@@ -326,12 +396,24 @@ impl<'a> Index<'a> {
                 index.shares.entry(key).or_default().insert((num, den));
             }
             subjects.insert(c.key.subject.to_ascii_lowercase());
+            if let Some(m) = metric(c) {
+                index
+                    .discovery
+                    .entry((c.key.subject.to_ascii_lowercase(), c.key.valid_period, m))
+                    .or_default()
+                    .push(c);
+            }
         }
         index.subjects = subjects.into_iter().collect();
         index
             .subjects
             .sort_by(|a, b| b.len().cmp(&a.len()).then(a.cmp(b)));
-        for cells in index.ids.values_mut().chain(index.latest.values_mut()) {
+        for cells in index
+            .ids
+            .values_mut()
+            .chain(index.latest.values_mut())
+            .chain(index.discovery.values_mut())
+        {
             cells.sort_by_cached_key(|c| c.to_json());
         }
         index
@@ -676,6 +758,7 @@ fn finding(
     index: &Index<'_>,
 ) -> LintFinding {
     let mut f = LintFinding {
+        mode: LintMode::Cited,
         span: (offset + n.span.0, offset + n.span.1),
         raw: n.raw.clone(),
         step: decimal(n.step).map(|q| {
@@ -691,6 +774,7 @@ fn finding(
         reason: "unsupported_predicate",
         source: None,
         later: Vec::new(),
+        candidates: Vec::new(),
     };
     let links: Vec<_> = link_set
         .iter()
@@ -806,14 +890,135 @@ fn finding(
     f
 }
 
+fn discover(
+    n: &NumberToken,
+    offset: usize,
+    text: &str,
+    tokens: &[Token],
+    index: &Index<'_>,
+) -> LintFinding {
+    let mut f = finding(n, offset, text, tokens, &[], index);
+    f.mode = LintMode::Discovered;
+    f.verdict = Verdict::Unchecked;
+    f.reason = "unsupported_discovery_predicate";
+    let ctx = context(text, tokens, &[], index);
+    if !ctx.supported
+        || n.range_with.is_some()
+        || ctx.metrics.len() != 1
+        || !matches!(
+            ctx.metrics.first(),
+            Some(Metric::Aisc | Metric::Tcc | Metric::Production)
+        )
+        || ctx.subjects.is_empty()
+        || tokens
+            .iter()
+            .filter(|t| matches!(t, Token::Number(_) | Token::UnsupportedNumber { .. }))
+            .count()
+            != 1
+    {
+        return f;
+    }
+    if ctx.subjects.len() != 1 || ctx.periods.len() != 1 || ctx.units.is_empty() {
+        f.verdict = Verdict::Ambiguous;
+        f.reason = "complete_equality_context_required";
+        return f;
+    }
+    let Some(period) = period(ctx.periods[0]) else {
+        f.verdict = Verdict::Ambiguous;
+        f.reason = "dated_supported_period_required";
+        return f;
+    };
+    let m = ctx.metrics[0];
+    if ctx
+        .bases
+        .iter()
+        .filter(|b| {
+            matches!(
+                b,
+                BasisTok::Attributable | BasisTok::Hundred | BasisTok::Unprinted
+            )
+        })
+        .count()
+        != 1
+        || (m.rate()
+            && !ctx
+                .bases
+                .iter()
+                .any(|b| matches!(b, BasisTok::PerOzSold | BasisTok::PerOzProduced)))
+        || (m == Metric::Tcc
+            && !ctx
+                .bases
+                .iter()
+                .any(|b| matches!(b, BasisTok::ByProduct | BasisTok::CoProduct)))
+    {
+        f.verdict = Verdict::Ambiguous;
+        f.reason = "explicit_discovery_basis_required";
+        return f;
+    }
+    // DESIGN (BD-345.S3): candidate selection uses semantic keys alone. Even a stale or nonnumeric
+    // candidate remains visible, so its absence cannot turn another source into a unique match.
+    let candidates: Vec<_> = index
+        .discovery
+        .get(&(ctx.subjects[0].clone(), period, m))
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|c| {
+            ctx.units.iter().all(|u| unit_matches(*u, &c.key.unit))
+                && !n.currency.is_some_and(|currency| {
+                    !matches!(currency, Currency::Usd | Currency::Dollar) || !m.rate()
+                })
+                && basis_findings(&ctx, c, m)
+                    .iter()
+                    .all(|(_, reason)| *reason == "registered_printed_basis_conflict")
+        })
+        .collect();
+    match candidates.as_slice() {
+        [] => {
+            f.verdict = Verdict::Uncited;
+            f.reason = "no_claim_matching_stated_keys";
+        }
+        [claim] => {
+            // Reuse every cited-mode check without changing the user's draft or manufacturing a Claim.
+            let link = Link {
+                span: n.span,
+                label: n.span,
+                id: claim.claim.claim_id.to_string(),
+            };
+            f = finding(n, offset, text, tokens, &[link], index);
+            f.mode = LintMode::Discovered;
+        }
+        _ => {
+            f.verdict = Verdict::Ambiguous;
+            f.reason = "multiple_claims_matching_stated_keys";
+            f.candidates = candidates.into_iter().cloned().collect();
+        }
+    }
+    f
+}
+
 /// Checks one supported equality per sentence/line. The caller supplies a canonical, source-verified
 /// snapshot; no publication timestamp, ownership share, metric definition or calibration is invented.
 #[must_use]
 pub fn lint_cited(draft: &str, claims: &[KeyedCell]) -> LintReport {
+    lint(draft, claims, LintMode::Cited)
+}
+
+/// Discovers AISC, gold TCC and gold-production citations using the explicit equality grammar of
+/// [`lint_cited`]. Other metric discovery is unchecked. All matching source assertions remain
+/// candidates, including repeated vintages; numeric agreement never breaks a tie. Explicit citations
+/// retain cited-mode checks and are never silently repaired.
+#[must_use]
+pub fn lint_discover(draft: &str, claims: &[KeyedCell]) -> LintReport {
+    lint(draft, claims, LintMode::Discovered)
+}
+
+fn lint(draft: &str, claims: &[KeyedCell], mode: LintMode) -> LintReport {
     let index = Index::new(claims);
     let mut sorted: Vec<_> = claims.iter().collect();
     sorted.sort_by_cached_key(|c| c.to_json());
     let mut report = LintReport {
+        mode,
         draft_digest: sha256(draft.as_bytes()),
         claims_digest: claims_digest(sorted),
         findings: Vec::new(),
@@ -829,14 +1034,20 @@ pub fn lint_cited(draft: &str, claims: &[KeyedCell]) -> LintReport {
         let before = report.findings.len();
         for token in &tokens {
             match token {
-                Token::Number(n) => report
-                    .findings
-                    .push(finding(n, span.0, text, &tokens, &links, &index)),
+                Token::Number(n) => report.findings.push(
+                    if mode == LintMode::Discovered && links.is_empty() && !text.contains("fmine:")
+                    {
+                        discover(n, span.0, text, &tokens, &index)
+                    } else {
+                        finding(n, span.0, text, &tokens, &links, &index)
+                    },
+                ),
                 Token::UnsupportedNumber {
                     span: s,
                     raw,
                     reason,
                 } => report.findings.push(LintFinding {
+                    mode,
                     span: (span.0 + s.0, span.0 + s.1),
                     raw: raw.clone(),
                     step: None,
@@ -846,6 +1057,7 @@ pub fn lint_cited(draft: &str, claims: &[KeyedCell]) -> LintReport {
                     reason,
                     source: None,
                     later: Vec::new(),
+                    candidates: Vec::new(),
                 }),
                 _ => {}
             }

@@ -1,4 +1,4 @@
-//! Local draft adapter for the cited equality checker (BD-345). A draft never leaves the process, and only
+//! Local draft adapter for the cited and discovery equality checkers (BD-345). A draft never leaves the process, and only
 //! number spans and their verdicts reach stdout. The source snapshot is verified once for the entire draft.
 
 use std::io::Read;
@@ -35,6 +35,7 @@ pub(super) fn execute(
     path: &Path,
     issuer: Option<&str>,
     through: Option<&str>,
+    discover: bool,
     root: &Path,
 ) -> Envelope {
     let actions = || vec![NextAction::new("fmine robot-docs", crate::ROBOT_DOCS_WHY)];
@@ -70,7 +71,11 @@ pub(super) fn execute(
         }
     };
     let claims: Vec<_> = snapshot.public_claims.cells.values().cloned().collect();
-    let lint = fmine_public::lint::lint_cited(&draft, &claims);
+    let lint = if discover {
+        fmine_public::lint::lint_discover(&draft, &claims)
+    } else {
+        fmine_public::lint::lint_cited(&draft, &claims)
+    };
     let cut = through.map_or_else(|| "null".to_string(), |s| format!("\"{}\"", escape_json(s)));
     let payload = format!(
         "{{\"schema\":\"fmine.lint_snapshot.v1\",\"issuer\":\"{}\",\"lane\":\"{}\",\
@@ -89,7 +94,7 @@ pub(super) fn execute(
         payload,
         actions(),
     );
-    envelope.no_claim = Some(fmine_public::lint::NO_CLAIM);
+    envelope.no_claim = Some(lint.mode.no_claim());
     envelope.rendered_markdown = Some(lint.to_markdown());
     envelope
 }
@@ -131,7 +136,6 @@ mod tests {
             vec!["lint", "draft.md", "--issuer", "barrick", "--synthetic"],
             vec!["lint", "draft.md", "--synthetic", "--through", "2026Q2"],
             vec!["lint", "draft.md", "--synthetic", "--as-of", "2026-10-31"],
-            vec!["lint", "draft.md", "--synthetic", "--discover"],
             vec!["lint", "draft.md", "--synthetic", "--site", "north-mara"],
             vec!["lint", "draft.md", "--synthetic", "extra"],
         ] {
@@ -164,7 +168,7 @@ mod tests {
     fn missing_draft_is_a_named_refusal_and_is_never_created() {
         let path = root().join("corpus_of_input_docs/lint-does-not-exist.md");
         assert!(!path.exists());
-        let envelope = execute(&path, None, None, &root());
+        let envelope = execute(&path, None, None, false, &root());
         assert_eq!(envelope.status, "refused");
         assert!(
             envelope
@@ -174,6 +178,65 @@ mod tests {
                 .contains("lint-does-not-exist.md")
         );
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn discovery_is_explicit_and_keeps_source_verification_and_local_draft_privacy() {
+        let workspace = temporary_workspace("discovery");
+        fmine_public::synthetic::write_issuer_workspace(&workspace).expect("synthetic registry");
+        let draft = "Site A Q1 2030 ownership basis unprinted AISC per ounce sold is $1,250/oz.\n\
+                     PRIVATE_DISCOVERY_TEXT_MUST_NOT_BE_ECHOED.\n";
+        let path = workspace.join("draft.md");
+        std::fs::write(&path, draft).expect("local draft");
+        let mut arguments = args(&["lint", "draft.md", "--issuer", "synthetic"]);
+        let cited = crate::invoke(&arguments, &workspace).0;
+        assert_eq!(cited.exit_code, 0);
+        assert!(cited.payload_json.contains("\"verdict\":\"uncited\""));
+
+        arguments.push("--discover".to_string());
+        let envelope = crate::invoke(&arguments, &workspace).0;
+        let json = envelope.to_json();
+        assert_eq!(envelope.exit_code, 0, "{json}");
+        assert!(json.contains("\"verdict\":\"verified\""), "{json}");
+        assert!(json.contains("Synthetic_AISC.xlsx:Q1 2030!B16"), "{json}");
+        assert!(json.contains(crate::FLAGS_JSON));
+        assert!(!json.contains("PRIVATE_DISCOVERY_TEXT"));
+        assert_eq!(crate::invoke(&arguments, &workspace).0.to_json(), json);
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("draft retained"),
+            draft
+        );
+
+        let mut markdown = arguments.clone();
+        markdown.extend(args(&["--format", "markdown"]));
+        let (text, code) = crate::run(&markdown, &workspace);
+        assert_eq!(code, 0);
+        assert!(text.contains("verified") && text.contains("Synthetic_AISC.xlsx"));
+        assert!(!text.contains("PRIVATE_DISCOVERY_TEXT"));
+
+        let profile = load_issuer_profile(&workspace, "synthetic").expect("registry");
+        let source = workspace
+            .join(&profile.corpus_dir)
+            .join(&profile.sources[0].file_name);
+        let mut bytes = std::fs::read(&source).expect("source fixture");
+        bytes.push(0);
+        std::fs::write(&source, bytes).expect("alter source fixture");
+        assert_eq!(
+            crate::invoke(&arguments, &workspace)
+                .0
+                .refusal
+                .expect("source refusal")
+                .code,
+            "FMINE-REF-505"
+        );
+
+        for words in [
+            vec!["doctor", "--discover"],
+            vec!["assure", "public", "--synthetic", "--discover"],
+            vec!["forecast", "assess", "--discover"],
+        ] {
+            assert_eq!(crate::invoke(&args(&words), &workspace).0.exit_code, 2);
+        }
     }
 
     #[test]
@@ -277,6 +340,7 @@ mod tests {
             Path::new("draft.md"),
             Some("barrick"),
             Some("2026Q2"),
+            false,
             &workspace,
         );
         let refusal = envelope.refusal.expect("missing corpus");
@@ -296,7 +360,7 @@ mod tests {
             "North Mara Q2 2026 attributable AISC per ounce sold is [$2,577/oz](fmine:clm_f6e6c9b2ea703557f2a3b2f49b22b1aa).\n",
             "Total Gold Q1 2024 ownership basis unprinted AISC per ounce sold is [$1,479/oz](fmine:clm_4750828f283992dd0a3fbf0db5febf70).\n",
         )).expect("local real-reference draft");
-        let envelope = execute(&draft, Some("barrick"), Some("2026Q2"), &root());
+        let envelope = execute(&draft, Some("barrick"), Some("2026Q2"), false, &root());
         assert_eq!(envelope.exit_code, 0, "{}", envelope.to_json());
         assert_eq!(
             envelope
@@ -317,7 +381,7 @@ mod tests {
                 .payload_json
                 .contains("Barrick_Q2_2026_Mine_Stats.xlsx:QTD!G19")
         );
-        let historical = execute(&draft, Some("barrick"), Some("2024Q1"), &root());
+        let historical = execute(&draft, Some("barrick"), Some("2024Q1"), false, &root());
         assert_eq!(historical.exit_code, 0);
         assert_eq!(
             historical

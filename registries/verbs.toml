@@ -36,7 +36,7 @@ description = "Compare quarterly recovery with agreed historical grade and tails
 path = "lint"
 subsystem = "Portal"
 mutates_authority = false
-description = "Check bounded draft equalities against cited canonical Claims in a verified source snapshot"
+description = "Check bounded draft equalities against cited Claims or discover unambiguous source matches in a verified snapshot"
 
 [[verb]]
 path = "forecast assess"

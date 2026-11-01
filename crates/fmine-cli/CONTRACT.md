@@ -24,8 +24,9 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     grade-normalised recovery comparisons for Lumwana, with exact points and input-rounding enclosures
     (bd-srqc). The bound filters workbook releases for a retrospective computation using current verified
     historical documents; it does not establish a historical information cutoff;
-  - `lint <draft> --issuer <issuer> [--through YYYYQn]` or `--synthetic`: bounded cited equalities checked
-    against one verified canonical Claim snapshot, with JSON or readable Markdown output (BD-345);
+  - `lint <draft> --issuer <issuer> [--through YYYYQn] [--discover]` or `--synthetic [--discover]`: bounded
+    equalities checked against one verified canonical Claim snapshot, with JSON or readable Markdown output.
+    Discovery searches for uncited matches while preserving ambiguous candidate sets (BD-345);
   - `forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ
     [--selector first-published|latest-as-of] [--provenance <path>]`: read-only ordered transcript replay and
     cohort assessment through `fmine-calib`; first-published is the default (BD-343). An optional provenance
@@ -175,7 +176,10 @@ verified source snapshot as assurance. Without a selector they search the curren
   payload separately binds the draft and canonical Claim population. Only number spans and findings are
   emitted, never the draft's full prose. Drafts are never written or sent over a network. A completed check
   exits zero even when findings report mismatches; invalid syntax is exit two and source failures retain
-  their typed refusals. Publication-time/publicness and discovery modes are not inferred or advertised.
+  their typed refusals. Explicit `--discover` delegates uncited equalities to the public discovery engine;
+  existing links retain their cited checks. Multiple semantic matches are exposed and never resolved by the
+  draft's amount. The selected source snapshot is verified in either mode. Publication-time/publicness remains
+  unassessed; supported discovery grammar is not a general-prose accuracy claim.
 - DESIGN (BD-343): forecast assessment replays transcript rows in their supplied order using the existing
   calibration kernel. No alternate scoring formula, default time proof or hidden denominator is introduced.
   Saved assessment rows enforce the kernel's sealed-cut rules across replay. Both envelope authority fields

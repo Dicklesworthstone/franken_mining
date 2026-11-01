@@ -22,6 +22,14 @@ The public lane of M0 (`fmine assure public`).
   binds exact draft bytes, canonical Claims, rules version and findings. It exposes numeric spans and source
   Claims without copying entire draft sentences. It does not decide publication availability, disclosure
   permission, qualitative truth or calibration of source numbers.
+- DESIGN (BD-345.S3): `lint::lint_discover(draft, claims)` accepts the same bounded equality grammar for
+  AISC, gold TCC and gold production. Exact subject, dated period, ownership, denominator, definition and unit select
+  candidates before any numeric comparison. One candidate receives the cited-mode checks; multiple
+  candidates, including repeated vintages or conflicting source assertions, stay ambiguous and are listed.
+  Values never break ties. Explicit citations keep cited-mode checking, and every finding records its mode.
+  The source snapshot remains the caller's responsibility; discovery does not infer publication dates.
+  This executable slice has synthetic known-answer and adversarial checks. The six-key extension and the
+  independent labelled-set precision/recall assessment remain open; no general-prose accuracy is claimed.
 - `sources`: the source registry (`BD-055`, `BD-322`, bd-s9j3.1), read at run time from
   `<workspace>/registries/sources/<issuer>.toml` (schema `fmine.sources.v1`, checked by `fmine_registry::sources`
   and by `xtask registry-check`). It pins each public workbook by file name, URL, byte size and SHA-256 (Barrick:
