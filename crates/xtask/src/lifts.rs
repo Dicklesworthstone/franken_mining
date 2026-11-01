@@ -561,11 +561,11 @@ mod tests {
     }
 
     #[test]
-    fn test_committed_registry_passes_with_four_lifts_and_five_analogues() {
+    fn test_committed_registry_passes_with_seven_lifts_and_five_analogues() {
         let root = workspace_root();
         check_lifts(&root).expect("committed lifts");
         let (lifts, analogues) = load(&root).expect("registry");
-        assert_eq!((lifts.len(), analogues.len()), (4, 5));
+        assert_eq!((lifts.len(), analogues.len()), (7, 5));
     }
 
     /// Local only: set `FRANKENSIM_PATH` to a frankensim checkout that holds the pinned commit. The shared count
@@ -577,8 +577,26 @@ mod tests {
             println!("skipped: FRANKENSIM_PATH is not set");
             return;
         };
-        let log = check_upstream(&workspace_root(), Path::new(&up)).expect("every lift holds");
-        assert_eq!(log.len(), 4, "{log:?}");
+        // One row is under MIN_OVERLAP_PERCENT, and that is its known answer: fs-sparse keeps precond.rs's tests in
+        // tests/precond_battery.rs, so the target's test module shares no line with the source
+        // (registries/lifts.toml). Every digest must still match, and no other row may be flagged.
+        let log =
+            check_upstream(&workspace_root(), Path::new(&up)).expect_err("precond.rs flagged");
+        assert_eq!(log.len(), 7, "{log:?}");
+        assert!(
+            log.iter().all(|l| l.contains("\"sha256_ok\":true")),
+            "{log:?}"
+        );
+        let flagged: Vec<&String> = log
+            .iter()
+            .filter(|l| l.contains("\"not_a_lift\":true"))
+            .collect();
+        assert_eq!(flagged.len(), 1, "{log:?}");
+        assert!(
+            flagged[0].contains("crates/fs-sparse/src/precond.rs")
+                && flagged[0].contains("\"shared\":38,"),
+            "{log:?}"
+        );
         assert!(log[0].contains("\"shared\":82,"), "{log:?}");
         assert!(
             log[2].contains("crates/fs-rand/src/philox.rs") && log[2].contains(SHA),

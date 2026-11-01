@@ -1,0 +1,1907 @@
+//! Provenance: frankensim crates/fs-sparse/src/direct.rs @ 20463525d9775a18c1b237d2676f364f367175ab; licence LicenseRef-MIT-OpenAI-Anthropic-Rider; Changes: amd_order and LdltFactor::solve return Result (NotSquare, RhsLength, NonFiniteRhs) instead of panicking; the symbolic and assembly asserts, the heap and stack expects and the root-residual debug_assert refuse with LdltError::Invariant; Display texts drop the FS-SPARSE-DIRECT codes; tests take a test_ prefix and build matrices through a helper, exactly_singular_shift_refuses_instead_of_perturbing comes from tests/direct_casebook.rs, and residual known answers and a dense-Cholesky differential are new; Left out: DirectOrdering::NestedDissection and analyze_with_coordinates (ordering_nd.rs)
+//! Determinism: DeterministicPerIsa (no cross-host digest test; plan §29.2, bd-hp2j.1).
+//!
+//! Sparse symmetric direct factorization: supernodal multifrontal LDLᵀ with
+//! AMD fill-reducing ordering, restricted (within-supernode) 1×1/2×2
+//! threshold pivoting, and Sylvester inertia.
+//!
+//! WHY THIS EXISTS — shift-invert modal analysis factors (K − σM), which is
+//! symmetric INDEFINITE for interior shifts, and the inertia of D is exactly
+//! the eigenvalue count below σ that spectrum-slicing certification needs
+//! (Sylvester's law). Cholesky alone cannot serve that consumer; iterative
+//! solvers cannot produce inertia at all.
+//!
+//! DESIGN — three explicit stages with separate cost models:
+//! 1. [`amd_order`]: approximate-minimum-degree ordering (Amestoy–Davis–Duff
+//!    quotient-graph algorithm; v1 without supervariable merging — an
+//!    ordering-QUALITY boundary, never a correctness one).
+//! 2. [`SymbolicLdlt::analyze`]: elimination tree, postorder, per-column L
+//!    structure, and fundamental supernodes (exact structure-match test, so
+//!    within-supernode column exchanges provably preserve the symbolic
+//!    factorization). Reusable across every matrix with the SAME pattern —
+//!    each shift σ in (K − σM) refactors numerically but never re-analyzes.
+//! 3. [`SymbolicLdlt::factor`]: multifrontal numeric factorization. Each
+//!    supernode assembles a dense frontal matrix (original entries plus
+//!    children's Schur updates), factors its fully-summed block with
+//!    threshold pivoting restricted to that block (Duff–Reid growth test,
+//!    1×1 and symmetric 2×2 pivots), and passes the Schur complement to its
+//!    assembly-tree parent.
+//!
+//! DELAYED PIVOTS make restricted pivoting complete: a fully-summed column
+//! with no acceptable pivot migrates inside the update matrix to its parent
+//! front, where more of the matrix has accumulated and 2×2 partners exist
+//! (the MA57/MUMPS mechanism). Only a column that remains unpivotable at a ROOT
+//! front refuses with a named error instead of perturbing: a perturbed
+//! factorization would silently corrupt the inertia count that downstream
+//! certification treats as authority (refuse, never clamp).
+//!
+//! Every stage is sequential with index-ordered tie-breaking: repeat
+//! factorization of the same matrix is bitwise identical (tested).
+
+use super::Csr;
+
+/// Fill-reducing ordering strategy for [`SymbolicLdlt::analyze`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectOrdering {
+    /// Identity permutation — the fill-comparison baseline and the debug aid.
+    Natural,
+    /// Approximate minimum degree ([`amd_order`]). The default.
+    Amd,
+}
+
+/// Options for the numeric factorization stage.
+#[derive(Debug, Clone, Copy)]
+pub struct LdltOptions {
+    /// Relative pivot threshold `u` in (0, 0.5] (Duff–Reid). A 1×1 pivot
+    /// `a_kk` is accepted only when `|a_kk| ≥ u·γ_k` (γ_k = largest
+    /// off-diagonal magnitude in the candidate column within the front); a
+    /// 2×2 pivot must bound the multiplier growth by `1/u`. Larger `u` is
+    /// more stable, smaller `u` accepts more pivots. Default `0.01`.
+    pub pivot_threshold: f64,
+    /// Permit symmetric 2×2 pivots (required for saddle-point/zero-diagonal
+    /// indefinite matrices). Default `true`; disabling exists so tests can
+    /// prove the 2×2 path is load-bearing.
+    pub allow_2x2: bool,
+    /// Relative zero-pivot floor: a pivot (or 2×2 block determinant, squared
+    /// scale) below `zero_pivot_rel · max|A|` (resp. its square) refuses as
+    /// numerically singular. Default `256·ε ≈ 5.7e-14`.
+    pub zero_pivot_rel: f64,
+    /// Cap on numeric factor + scratch payload bytes (not process RSS).
+    /// Symbolic estimate is admitted before numeric allocation; delayed
+    /// pivots are checked again before each widened front allocation.
+    pub max_factor_bytes: Option<usize>,
+}
+
+impl Default for LdltOptions {
+    fn default() -> LdltOptions {
+        LdltOptions {
+            pivot_threshold: 0.01,
+            allow_2x2: true,
+            zero_pivot_rel: 256.0 * f64::EPSILON,
+            max_factor_bytes: None,
+        }
+    }
+}
+
+/// Sylvester inertia of the factored matrix: eigenvalue sign counts of D
+/// (equal to those of A by Sylvester's law of inertia). There is no zero
+/// count — a numerically singular pivot refuses instead of recording a zero
+/// eigenvalue claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Inertia {
+    /// Number of positive eigenvalues.
+    pub positive: usize,
+    /// Number of negative eigenvalues.
+    pub negative: usize,
+}
+
+/// Work/memory/pivot accounting for one numeric factorization.
+#[derive(Debug, Clone, Copy)]
+pub struct FactorStats {
+    /// Matrix dimension.
+    pub n: usize,
+    /// Stored nonzeros of the input matrix (both triangles as given).
+    pub nnz_a: usize,
+    /// Nonzeros of L including the unit diagonal.
+    pub nnz_l: usize,
+    /// `nnz_l / nnz_a` (1.0 when `nnz_a` is 0).
+    pub fill_ratio: f64,
+    /// Approximate floating-point operation count of the numeric phase.
+    pub flops: u64,
+    /// Peak bytes of live frontal + update-matrix storage.
+    pub peak_front_bytes: usize,
+    /// Number of supernodes.
+    pub supernodes: usize,
+    /// Count of 1×1 pivots taken.
+    pub pivots_1x1: usize,
+    /// Count of 2×2 pivots taken.
+    pub pivots_2x2: usize,
+    /// Column-delay events: a fully-summed column with no acceptable pivot
+    /// migrated to its parent front and was eliminated there (a column
+    /// delayed through several ancestors counts once per hop).
+    pub pivots_delayed: usize,
+    /// Largest frontal matrix dimension encountered (delays widen ancestor
+    /// fronts, so this can exceed the symbolic prediction).
+    pub max_front_dim: usize,
+    /// Conservative peak numeric payload (factor, front, updates, scratch).
+    /// Includes simultaneous front/L/update construction; excludes allocator
+    /// overhead, the caller's CSR and the retained symbolic analysis.
+    pub peak_factor_bytes: usize,
+}
+
+/// Typed refusals of the direct-factorization stages.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LdltError {
+    /// The matrix is not square.
+    NotSquare {
+        /// Rows of the offending matrix.
+        nrows: usize,
+        /// Columns of the offending matrix.
+        ncols: usize,
+    },
+    /// The sparsity pattern is not structurally symmetric; `(row, col)` is a
+    /// witness entry whose mirror is absent.
+    StructurallyAsymmetric {
+        /// Witness row.
+        row: usize,
+        /// Witness column.
+        col: usize,
+    },
+    /// A stored value is NaN or infinite. Non-finite input would contaminate
+    /// every downstream claim, so it fails closed here.
+    NonFiniteEntry {
+        /// Row of the non-finite entry.
+        row: usize,
+        /// Column of the non-finite entry.
+        col: usize,
+    },
+    /// `factor` was called with a matrix whose pattern differs from the one
+    /// this symbolic analysis was computed for.
+    PatternMismatch,
+    /// Invalid [`LdltOptions`] field (threshold outside (0, 0.5], or a
+    /// non-positive zero-pivot floor).
+    InvalidOptions {
+        /// Name of the offending option field.
+        field: &'static str,
+    },
+    /// Numeric work was refused before the allocation that would exceed cap.
+    FactorBudget { estimated_bytes: usize, cap: usize },
+    /// No acceptable 1×1 or 2×2 pivot exists in a ROOT front's fully-summed
+    /// block after delayed-pivot migration: the matrix is numerically
+    /// singular (or beyond the threshold's reach). The factorization
+    /// REFUSES rather than perturbs.
+    PivotBreakdown {
+        /// Column in the ORIGINAL index space where elimination stopped.
+        orig_col: usize,
+        /// The same column in elimination (permuted) order.
+        permuted_col: usize,
+        /// Best candidate pivot magnitude seen in the block.
+        best_abs: f64,
+        /// The magnitude the threshold test demanded.
+        required: f64,
+        /// Whether 2×2 pivots were permitted during the search.
+        two_by_two_enabled: bool,
+    },
+    /// `solve` was given a right-hand side whose length is not `n`.
+    RhsLength { expected: usize, got: usize },
+    /// `solve` was given a NaN or infinite right-hand-side entry.
+    NonFiniteRhs { index: usize },
+    /// An internal invariant of the symbolic or numeric stage did not hold. Upstream asserted these; here they
+    /// refuse, so a defect gives no factorization rather than a panic.
+    Invariant { what: &'static str },
+}
+
+impl core::fmt::Display for LdltError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            LdltError::NotSquare { nrows, ncols } => {
+                write!(f, "LDLt needs a square matrix, not {nrows}x{ncols}")
+            }
+            LdltError::StructurallyAsymmetric { row, col } => {
+                write!(
+                    f,
+                    "pattern is not symmetric: entry ({row},{col}) has no stored mirror"
+                )
+            }
+            LdltError::NonFiniteEntry { row, col } => {
+                write!(f, "entry ({row},{col}) is NaN or infinite")
+            }
+            LdltError::PatternMismatch => {
+                write!(f, "matrix pattern differs from the analyzed one")
+            }
+            LdltError::InvalidOptions { field } => write!(f, "invalid LDLt option: {field}"),
+            LdltError::FactorBudget {
+                estimated_bytes,
+                cap,
+            } => write!(
+                f,
+                "numeric payload {estimated_bytes} bytes exceeds the cap of {cap}"
+            ),
+            LdltError::PivotBreakdown {
+                orig_col,
+                permuted_col,
+                best_abs,
+                required,
+                two_by_two_enabled,
+            } => write!(
+                f,
+                "pivot breakdown: no acceptable pivot at original column {orig_col} (elimination position \
+                 {permuted_col}); best |candidate| {best_abs:.3e} < required {required:.3e}; 2x2 pivots {}",
+                if *two_by_two_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            ),
+            LdltError::RhsLength { expected, got } => {
+                write!(f, "right-hand side has length {got}, expected {expected}")
+            }
+            LdltError::NonFiniteRhs { index } => {
+                write!(f, "right-hand side entry {index} is NaN or infinite")
+            }
+            LdltError::Invariant { what } => write!(f, "LDLt invariant failed: {what}"),
+        }
+    }
+}
+
+impl std::error::Error for LdltError {}
+
+// ---------------------------------------------------------------------------
+// AMD ordering
+// ---------------------------------------------------------------------------
+
+/// Approximate minimum degree ordering (Amestoy–Davis–Duff) on the symmetric
+/// pattern of `a` (the pattern is symmetrized internally; values are
+/// ignored). Returns `perm` with `perm[k]` = the original index eliminated
+/// k-th. Deterministic: minimum approximate degree with smallest-index
+/// tie-breaking. Refuses a non-square matrix.
+///
+/// v1 boundary: no supervariable (indistinguishable-node) merging and no
+/// dense-row special case — both affect ordering quality and speed on some
+/// graphs, never correctness.
+#[allow(clippy::needless_range_loop)] // index-parallel arrays throughout
+#[allow(clippy::too_many_lines)] // one quotient-graph elimination loop; splitting hides invariants
+pub fn amd_order(a: &Csr) -> Result<Vec<usize>, LdltError> {
+    if a.nrows() != a.ncols() {
+        return Err(LdltError::NotSquare {
+            nrows: a.nrows(),
+            ncols: a.ncols(),
+        });
+    }
+    let n = a.nrows();
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    // Symmetrized adjacency without the diagonal.
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for r in 0..n {
+        let (cols, _) = a.row_at(r);
+        for &c in cols {
+            if c != r {
+                adj[r].push(c);
+            }
+        }
+    }
+    for r in 0..n {
+        let (cols, _) = a.row_at(r);
+        for &c in cols {
+            if c != r && !a_contains(a, c, r) {
+                adj[c].push(r);
+            }
+        }
+    }
+    for l in &mut adj {
+        l.sort_unstable();
+        l.dedup();
+    }
+
+    // Quotient graph state. Element ids reuse the pivot variable's id.
+    let mut elems_of: Vec<Vec<usize>> = vec![Vec::new(); n]; // elements adjacent to variable
+    let mut elem_vars: Vec<Vec<usize>> = vec![Vec::new(); n]; // element -> boundary variables
+    let mut elem_alive = vec![false; n];
+    let mut var_alive = vec![true; n];
+    let mut degree: Vec<usize> = adj.iter().map(Vec::len).collect();
+
+    // Lazy min-heap of (degree, index).
+    let mut heap: std::collections::BinaryHeap<core::cmp::Reverse<(usize, usize)>> =
+        (0..n).map(|i| core::cmp::Reverse((degree[i], i))).collect();
+
+    let mut perm = Vec::with_capacity(n);
+    let mut marked = vec![usize::MAX; n]; // stamp array for Lp membership
+    let mut w_stamp = vec![usize::MAX; n]; // stamp array for |Le \ Lp| counters
+    let mut w_val = vec![0usize; n];
+
+    for step in 0..n {
+        // Pop until a live entry whose recorded degree is current.
+        let p = loop {
+            let Some(core::cmp::Reverse((d, i))) = heap.pop() else {
+                return Err(LdltError::Invariant {
+                    what: "amd heap exhausted early",
+                });
+            };
+            if var_alive[i] && degree[i] == d {
+                break i;
+            }
+        };
+        var_alive[p] = false;
+        perm.push(p);
+
+        // Lp = (adj[p] ∪ ⋃_{e ∈ E_p} Le) \ {p}, live variables only.
+        let mut lp: Vec<usize> = adj[p].iter().copied().filter(|&v| var_alive[v]).collect();
+        for &e in &elems_of[p] {
+            if elem_alive[e] {
+                lp.extend(
+                    elem_vars[e]
+                        .iter()
+                        .copied()
+                        .filter(|&v| var_alive[v] && v != p),
+                );
+            }
+        }
+        lp.sort_unstable();
+        lp.dedup();
+        for &e in &elems_of[p] {
+            elem_alive[e] = false; // absorbed into the new element p
+        }
+        for &v in &lp {
+            marked[v] = step;
+        }
+
+        // |Le \ Lp| for every live element touching Lp, via the classic
+        // decrement pass (i ∈ E_e ∩ Lp ⇔ e ∈ E_i for i ∈ Lp).
+        for &i in &lp {
+            for &e in &elems_of[i] {
+                if elem_alive[e] {
+                    if w_stamp[e] != step {
+                        w_stamp[e] = step;
+                        w_val[e] = elem_vars[e].iter().filter(|&&v| var_alive[v]).count();
+                    }
+                    w_val[e] -= 1;
+                }
+            }
+        }
+        // Absorb elements entirely contained in Lp.
+        for &i in &lp {
+            for &e in &elems_of[i] {
+                if elem_alive[e] && w_stamp[e] == step && w_val[e] == 0 {
+                    elem_alive[e] = false;
+                }
+            }
+        }
+
+        let remaining = n - step - 1;
+        for &i in &lp {
+            // Prune variable adjacency: members of Lp now reach i through
+            // element p; dead variables drop.
+            adj[i].retain(|&v| var_alive[v] && marked[v] != step);
+            elems_of[i].retain(|&e| elem_alive[e]);
+            elems_of[i].push(p);
+            // Approximate external degree (ADD bound).
+            let mut d = adj[i].len() + (lp.len() - 1);
+            for &e in &elems_of[i] {
+                if e != p && w_stamp[e] == step {
+                    d += w_val[e];
+                }
+            }
+            let d = d.min(remaining);
+            degree[i] = d;
+            heap.push(core::cmp::Reverse((d, i)));
+        }
+        elem_vars[p] = lp;
+        elem_alive[p] = true;
+        elems_of[p].clear();
+    }
+    Ok(perm)
+}
+
+fn a_contains(a: &Csr, r: usize, c: usize) -> bool {
+    let (cols, _) = a.row_at(r);
+    cols.binary_search(&c).is_ok()
+}
+
+// ---------------------------------------------------------------------------
+// Symbolic analysis
+// ---------------------------------------------------------------------------
+
+const NONE: usize = usize::MAX;
+
+#[derive(Debug, Clone)]
+struct SnodeSym {
+    /// First column (elimination order) of this supernode.
+    col_start: usize,
+    /// Number of columns.
+    width: usize,
+    /// Below-block row structure (elimination-order ids, ascending) — shared
+    /// by every column of the supernode (exact-match certified).
+    panel: Vec<usize>,
+    /// Assembly-tree parent supernode, or `NONE`.
+    parent: usize,
+    /// Children supernodes (ascending).
+    children: Vec<usize>,
+}
+
+/// Reusable symbolic factorization of a symmetric sparsity pattern:
+/// permutation, elimination tree, supernode partition, and L structure.
+/// One `analyze` serves every numeric [`SymbolicLdlt::factor`] with the
+/// same pattern — the shift ladder (K − σᵢM) analyzes once and factors per
+/// shift.
+#[derive(Debug, Clone)]
+pub struct SymbolicLdlt {
+    n: usize,
+    /// `perm[k]` = original index eliminated k-th (AMD ∘ etree postorder).
+    perm: Vec<usize>,
+    /// Inverse of `perm`.
+    iperm: Vec<usize>,
+    snodes: Vec<SnodeSym>,
+    /// nnz(L) including the unit diagonal.
+    nnz_l: usize,
+    /// Exact pattern the analysis was computed for (mismatch guard).
+    pat_row_ptr: Vec<usize>,
+    pat_col_idx: Vec<usize>,
+    /// Cached before any numeric call; budget refusal allocates no fronts.
+    factor_bytes: usize,
+}
+
+impl SymbolicLdlt {
+    /// Analyze the symmetric pattern of `a`: validate squareness and
+    /// structural symmetry, order (AMD or natural), build the elimination
+    /// tree and its postorder, compute per-column L structures, and certify
+    /// fundamental supernodes by EXACT structure comparison.
+    pub fn analyze(a: &Csr, ordering: DirectOrdering) -> Result<SymbolicLdlt, LdltError> {
+        if a.nrows() != a.ncols() {
+            return Err(LdltError::NotSquare {
+                nrows: a.nrows(),
+                ncols: a.ncols(),
+            });
+        }
+        let n = a.nrows();
+        // Structural symmetry: every (r,c) needs its mirror.
+        for r in 0..n {
+            let (cols, _) = a.row_at(r);
+            for &c in cols {
+                if !a_contains(a, c, r) {
+                    return Err(LdltError::StructurallyAsymmetric { row: r, col: c });
+                }
+            }
+        }
+        let base_perm = match ordering {
+            DirectOrdering::Natural => (0..n).collect::<Vec<usize>>(),
+            DirectOrdering::Amd => amd_order(a)?,
+        };
+        let mut base_iperm = vec![0usize; n];
+        for (k, &o) in base_perm.iter().enumerate() {
+            base_iperm[o] = k;
+        }
+        // Lower-triangular adjacency in base elimination order.
+        let ladj = build_lower_adj(a, &base_iperm);
+        let parent0 = etree(&ladj);
+        let post = postorder(&parent0);
+        // Compose: final elimination order.
+        let perm: Vec<usize> = post.iter().map(|&k| base_perm[k]).collect();
+        let mut iperm = vec![0usize; n];
+        for (k, &o) in perm.iter().enumerate() {
+            iperm[o] = k;
+        }
+        let ladj = build_lower_adj(a, &iperm);
+        let parent = etree(&ladj); // relabeled tree, recomputed for simplicity
+        let colstruct = col_structs(&ladj, &parent);
+
+        // Fundamental supernodes, certified by exact structure match:
+        // col j may join col j+1's supernode iff struct(j) = {j+1} ∪ struct(j+1).
+        let mut snodes: Vec<SnodeSym> = Vec::new();
+        let mut snode_of = vec![NONE; n.max(1)];
+        let mut j = 0usize;
+        while j < n {
+            let start = j;
+            while j + 1 < n
+                && parent[j] == j + 1
+                && colstruct[j].len() == colstruct[j + 1].len() + 1
+                && colstruct[j].first() == Some(&(j + 1))
+                && colstruct[j][1..] == colstruct[j + 1][..]
+            {
+                j += 1;
+            }
+            let width = j - start + 1;
+            let panel: Vec<usize> = colstruct[start][width - 1..].to_vec();
+            let id = snodes.len();
+            for slot in &mut snode_of[start..=j] {
+                *slot = id;
+            }
+            snodes.push(SnodeSym {
+                col_start: start,
+                width,
+                panel,
+                parent: NONE,
+                children: Vec::new(),
+            });
+            j += 1;
+        }
+        for id in 0..snodes.len() {
+            let last = snodes[id].col_start + snodes[id].width - 1;
+            let p = parent[last];
+            if p != NONE {
+                let ps = snode_of[p];
+                snodes[id].parent = ps;
+                snodes[ps].children.push(id);
+            }
+        }
+        let nnz_l = n + colstruct.iter().map(Vec::len).sum::<usize>();
+        let (pat_row_ptr, pat_col_idx) = pattern_of(a);
+        let mut symbolic = SymbolicLdlt {
+            n,
+            perm,
+            iperm,
+            snodes,
+            nnz_l,
+            pat_row_ptr,
+            pat_col_idx,
+            factor_bytes: 0,
+        };
+        symbolic.factor_bytes = symbolic.compute_factor_bytes();
+        Ok(symbolic)
+    }
+
+    /// Dimension of the analyzed pattern.
+    #[must_use]
+    pub fn n(&self) -> usize {
+        self.n
+    }
+
+    /// nnz(L) including the unit diagonal (a pure function of the pattern
+    /// and ordering — available before any numeric work, so callers can
+    /// budget memory).
+    #[must_use]
+    pub fn nnz_l(&self) -> usize {
+        self.nnz_l
+    }
+
+    /// Number of supernodes.
+    #[must_use]
+    pub fn supernode_count(&self) -> usize {
+        self.snodes.len()
+    }
+
+    /// The elimination permutation (`perm[k]` = original index eliminated
+    /// k-th).
+    #[must_use]
+    pub fn permutation(&self) -> &[usize] {
+        &self.perm
+    }
+
+    /// Retained symbolic payload, excluding allocator metadata/capacity slack.
+    #[must_use]
+    pub fn symbolic_bytes(&self) -> usize {
+        let words = self.perm.len()
+            + self.iperm.len()
+            + self.pat_row_ptr.len()
+            + self.pat_col_idx.len()
+            + self
+                .snodes
+                .iter()
+                .map(|s| s.panel.len() + s.children.len())
+                .sum::<usize>();
+        words
+            .saturating_mul(core::mem::size_of::<usize>())
+            .saturating_add(
+                self.snodes
+                    .len()
+                    .saturating_mul(core::mem::size_of::<SnodeSym>()),
+            )
+    }
+
+    fn numeric_base_bytes(&self) -> usize {
+        self.n
+            .saturating_mul(2 * core::mem::size_of::<usize>())
+            .saturating_add(
+                (self.pat_row_ptr.len() + self.pat_col_idx.len())
+                    .saturating_mul(core::mem::size_of::<usize>()),
+            )
+            .saturating_add(self.snodes.len().saturating_mul(
+                core::mem::size_of::<SnodeNum>() + core::mem::size_of::<Option<Update>>(),
+            ))
+    }
+
+    /// No-delay symbolic upper estimate of numeric payload. Pivot delays can
+    /// widen fronts, so factor() additionally admits the actual dimensions.
+    #[must_use]
+    pub fn estimated_factor_bytes(&self) -> usize {
+        self.factor_bytes
+    }
+
+    fn compute_factor_bytes(&self) -> usize {
+        let mut stored = self.numeric_base_bytes();
+        let mut live = 0usize;
+        let mut peak = stored;
+        let mut updates = vec![0usize; self.snodes.len()];
+        for (sid, s) in self.snodes.iter().enumerate() {
+            let m = s.width + s.panel.len();
+            let next = m
+                .saturating_mul(s.width)
+                .saturating_mul(8)
+                .saturating_add(m.saturating_mul(core::mem::size_of::<usize>()))
+                .saturating_add(s.width.saturating_mul(core::mem::size_of::<DBlock>()));
+            let update = s
+                .panel
+                .len()
+                .saturating_mul(s.panel.len())
+                .saturating_mul(8)
+                .saturating_add(s.panel.len().saturating_mul(core::mem::size_of::<usize>()));
+            peak = peak.max(
+                stored
+                    .saturating_add(live)
+                    .saturating_add(m.saturating_mul(m).saturating_mul(16))
+                    .saturating_add(m.saturating_mul(s.width).saturating_mul(8))
+                    .saturating_add(s.width.saturating_mul(core::mem::size_of::<DBlock>()))
+                    .saturating_add(m.saturating_mul(80)),
+            );
+            for &child in &s.children {
+                live = live.saturating_sub(updates[child]);
+            }
+            updates[sid] = update;
+            live = live.saturating_add(update);
+            stored = stored.saturating_add(next);
+        }
+        peak
+    }
+
+    /// No-delay, all-1x1 flop estimate in the numeric owner's counting units.
+    /// This is a structural cost estimate, not measured numeric work.
+    #[must_use]
+    pub fn estimated_flops(&self) -> u64 {
+        self.snodes.iter().fold(0u64, |sum, s| {
+            let m = s.width + s.panel.len();
+            (0..s.width).fold(sum, |sum, k| {
+                sum.saturating_add(((m - k) as u64).saturating_mul((m - k) as u64))
+            })
+        })
+    }
+
+    /// Numeric multifrontal factorization of `a` (which must carry exactly
+    /// the analyzed pattern) as P·A·Pᵀ = L·D·Lᵀ with unit-lower L and D of
+    /// 1×1/2×2 blocks. Refuses (never perturbs) on pivot breakdown.
+    #[allow(clippy::too_many_lines)] // one coherent numeric pipeline; splitting obscures the data flow
+    pub fn factor(&self, a: &Csr, opts: &LdltOptions) -> Result<LdltFactor, LdltError> {
+        let estimate = self.estimated_factor_bytes();
+        admit_factor_bytes(estimate, opts.max_factor_bytes)?;
+        // NaN thresholds fail the finiteness test, so both gates fail closed.
+        if !opts.pivot_threshold.is_finite()
+            || opts.pivot_threshold <= 0.0
+            || opts.pivot_threshold > 0.5
+        {
+            return Err(LdltError::InvalidOptions {
+                field: "pivot_threshold must be in (0, 0.5]",
+            });
+        }
+        if !opts.zero_pivot_rel.is_finite() || opts.zero_pivot_rel <= 0.0 {
+            return Err(LdltError::InvalidOptions {
+                field: "zero_pivot_rel must be positive",
+            });
+        }
+        let (rp, ci) = pattern_of(a);
+        if rp != self.pat_row_ptr || ci != self.pat_col_idx {
+            return Err(LdltError::PatternMismatch);
+        }
+        let n = self.n;
+        let mut max_abs = 0.0f64;
+        for r in 0..n {
+            let (cols, vals) = a.row_at(r);
+            for (&c, &v) in cols.iter().zip(vals) {
+                if !v.is_finite() {
+                    return Err(LdltError::NonFiniteEntry { row: r, col: c });
+                }
+                max_abs = max_abs.max(v.abs());
+            }
+        }
+        let zero_tol = opts.zero_pivot_rel * max_abs.max(f64::MIN_POSITIVE);
+
+        let mut stats = FactorStats {
+            n,
+            nnz_a: a.nnz(),
+            nnz_l: self.nnz_l,
+            fill_ratio: if a.nnz() == 0 {
+                1.0
+            } else {
+                self.nnz_l as f64 / a.nnz() as f64
+            },
+            flops: 0,
+            peak_front_bytes: 0,
+            supernodes: self.snodes.len(),
+            pivots_1x1: 0,
+            pivots_2x2: 0,
+            pivots_delayed: 0,
+            max_front_dim: 0,
+            peak_factor_bytes: estimate,
+        };
+        let mut nnz_l_actual = 0usize;
+        let mut inertia = Inertia {
+            positive: 0,
+            negative: 0,
+        };
+        let mut snodes_num: Vec<SnodeNum> = Vec::with_capacity(self.snodes.len());
+        let mut updates: Vec<Option<Update>> = vec![None; self.snodes.len()];
+        let mut live_update_bytes = 0usize;
+        let mut live_update_payload_bytes = 0usize;
+        let mut retained_factor_bytes = self.numeric_base_bytes();
+
+        // Scratch var→local-position map, stamped and reset per supernode so
+        // the factorization stays O(front work), not O(n · supernodes).
+        let mut pos = vec![usize::MAX; n];
+
+        for (sid, sym) in self.snodes.iter().enumerate() {
+            let w = sym.width;
+            // DELAYED PIVOTS: fully-summed columns of this front are the
+            // supernode's own block columns PLUS any columns a descendant
+            // failed to pivot and passed upward inside its update matrix
+            // (recognizable as update vars below `col_start` — every
+            // non-delayed update row is a struct row, which is ≥ col_start).
+            // A delayed column is fully summed here because its remaining
+            // structure was contained in the child front, which the assembly
+            // tree embeds in this one.
+            let mut delayed: Vec<usize> = Vec::new();
+            for &ch in &sym.children {
+                if let Some(up) = updates[ch].as_ref() {
+                    delayed.extend(up.vars.iter().copied().filter(|&v| v < sym.col_start));
+                }
+            }
+            delayed.sort_unstable();
+            let mut fs: Vec<usize> = delayed;
+            fs.extend(sym.col_start..sym.col_start + w);
+            let wf = fs.len();
+            let m = wf + sym.panel.len();
+            // Delays may exceed the symbolic prediction. Bound all numeric
+            // payloads that coexist while this front is harvested, BEFORE
+            // allocating any of them. Saturation refuses finite caps.
+            let required = retained_factor_bytes
+                .saturating_add(live_update_payload_bytes)
+                .saturating_add(m.saturating_mul(m).saturating_mul(16))
+                .saturating_add(m.saturating_mul(wf).saturating_mul(8))
+                .saturating_add(wf.saturating_mul(core::mem::size_of::<DBlock>()))
+                .saturating_add(m.saturating_mul(80));
+            admit_factor_bytes(required, opts.max_factor_bytes)?;
+            stats.peak_factor_bytes = stats.peak_factor_bytes.max(required);
+            stats.max_front_dim = stats.max_front_dim.max(m);
+            // Local layout: fully-summed columns first, then panel rows.
+            let mut front_local: Vec<usize> = fs;
+            front_local.extend(sym.panel.iter().copied());
+            for (idx, &v) in front_local.iter().enumerate() {
+                pos[v] = idx;
+            }
+            let mut f = vec![0.0f64; m * m];
+            let front_bytes = m * m * 8;
+            stats.peak_front_bytes = stats.peak_front_bytes.max(front_bytes + live_update_bytes);
+
+            // Scatter original entries of the OWN block columns (values read
+            // from the row of the eliminated column; the input contract is a
+            // numerically symmetric matrix). Delayed columns are NOT
+            // rescattered: their original entries already entered the
+            // descendant front and travel here inside its update matrix.
+            for j in sym.col_start..sym.col_start + w {
+                let c = pos[j];
+                let orig = self.perm[j];
+                let (cols, vals) = a.row_at(orig);
+                for (&oc, &v) in cols.iter().zip(vals) {
+                    let pi = self.iperm[oc];
+                    if pi >= j {
+                        let li = pos[pi];
+                        if li == usize::MAX {
+                            return Err(LdltError::Invariant {
+                                what: "symbolic invariant: neighbor outside front",
+                            });
+                        }
+                        f[li + c * m] += v;
+                        if li != c {
+                            f[c + li * m] += v;
+                        }
+                    }
+                }
+            }
+            // Extend-add the children's Schur updates (delayed rows/columns
+            // included — their labels are in this front by construction).
+            for &ch in &sym.children {
+                let Some(up) = updates[ch].take() else {
+                    return Err(LdltError::Invariant {
+                        what: "child update consumed twice",
+                    });
+                };
+                live_update_bytes -= up.data.len() * 8;
+                live_update_payload_bytes -=
+                    up.data.len() * 8 + up.vars.len() * core::mem::size_of::<usize>();
+                let mut map: Vec<usize> = Vec::with_capacity(up.vars.len());
+                for &v in &up.vars {
+                    let li = pos[v];
+                    if li == usize::MAX {
+                        return Err(LdltError::Invariant {
+                            what: "assembly invariant: child var outside parent front",
+                        });
+                    }
+                    map.push(li);
+                }
+                let q = up.vars.len();
+                for cj in 0..q {
+                    let dst_c = map[cj];
+                    for ri in 0..q {
+                        f[map[ri] + dst_c * m] += up.data[ri + cj * q];
+                    }
+                }
+            }
+            for &v in &front_local {
+                pos[v] = usize::MAX;
+            }
+
+            // Factor the fully-summed block with restricted pivoting.
+            let mut local2var = front_local;
+            let mut dblocks: Vec<DBlock> = Vec::new();
+            let mut k = 0usize;
+            while k < wf {
+                let choice = choose_pivot(&f, m, wf, k, opts, zero_tol);
+                match choice {
+                    PivotChoice::One(q) => {
+                        if q != k {
+                            swap_sym(&mut f, m, k, q);
+                            local2var.swap(k, q);
+                        }
+                        let d = f[k + k * m];
+                        if d > 0.0 {
+                            inertia.positive += 1;
+                        } else {
+                            inertia.negative += 1;
+                        }
+                        stats.pivots_1x1 += 1;
+                        dblocks.push(DBlock::Single(d));
+                        for i in k + 1..m {
+                            f[i + k * m] /= d;
+                        }
+                        for jc in k + 1..m {
+                            let cj = d * f[jc + k * m];
+                            for i in jc..m {
+                                let t = f[i + k * m] * cj;
+                                f[i + jc * m] -= t;
+                                if i != jc {
+                                    f[jc + i * m] = f[i + jc * m];
+                                }
+                            }
+                        }
+                        stats.flops += ((m - k) as u64) * ((m - k) as u64);
+                        k += 1;
+                    }
+                    PivotChoice::Two(pq, qq) => {
+                        if pq != k {
+                            swap_sym(&mut f, m, k, pq);
+                            local2var.swap(k, pq);
+                        }
+                        // After the first swap, the partner may have moved.
+                        let qq = if qq == k { pq } else { qq };
+                        if qq != k + 1 {
+                            swap_sym(&mut f, m, k + 1, qq);
+                            local2var.swap(k + 1, qq);
+                        }
+                        let e11 = f[k + k * m];
+                        let e21 = f[(k + 1) + k * m];
+                        let e22 = f[(k + 1) + (k + 1) * m];
+                        let det = e11 * e22 - e21 * e21;
+                        if det < 0.0 {
+                            inertia.positive += 1;
+                            inertia.negative += 1;
+                        } else if e11 + e22 > 0.0 {
+                            inertia.positive += 2;
+                        } else {
+                            inertia.negative += 2;
+                        }
+                        stats.pivots_2x2 += 1;
+                        dblocks.push(DBlock::Pair(e11, e21, e22));
+                        let inv11 = e22 / det;
+                        let inv21 = -e21 / det;
+                        let inv22 = e11 / det;
+                        let acol: Vec<f64> = (k + 2..m).map(|i| f[i + k * m]).collect();
+                        let bcol: Vec<f64> = (k + 2..m).map(|i| f[i + (k + 1) * m]).collect();
+                        for (idx, i) in (k + 2..m).enumerate() {
+                            let l1 = acol[idx].mul_add(inv11, bcol[idx] * inv21);
+                            let l2 = acol[idx].mul_add(inv21, bcol[idx] * inv22);
+                            f[i + k * m] = l1;
+                            f[i + (k + 1) * m] = l2;
+                        }
+                        for (jdx, jc) in (k + 2..m).enumerate() {
+                            let aj = acol[jdx];
+                            let bj = bcol[jdx];
+                            for i in jc..m {
+                                let t = f[i + k * m].mul_add(aj, f[i + (k + 1) * m] * bj);
+                                f[i + jc * m] -= t;
+                                if i != jc {
+                                    f[jc + i * m] = f[i + jc * m];
+                                }
+                            }
+                        }
+                        stats.flops += 2 * ((m - k) as u64) * ((m - k) as u64);
+                        // The intra-pair coupling lives in D, not L: the
+                        // 2×2 block is eliminated jointly, so L's strict
+                        // lower entry inside the pair is exactly zero.
+                        f[(k + 1) + k * m] = 0.0;
+                        f[k + (k + 1) * m] = 0.0;
+                        k += 2;
+                    }
+                    PivotChoice::Fail { best_abs, required } => {
+                        if sym.parent == NONE {
+                            // No parent front exists to absorb the columns:
+                            // the matrix is numerically singular (or beyond
+                            // the threshold's reach). Refuse, never perturb.
+                            return Err(LdltError::PivotBreakdown {
+                                orig_col: self.perm[local2var[k]],
+                                permuted_col: local2var[k],
+                                best_abs,
+                                required,
+                                two_by_two_enabled: opts.allow_2x2,
+                            });
+                        }
+                        // Delay every remaining fully-summed column to the
+                        // parent front (no further mass can arrive in THIS
+                        // front, so re-scanning here cannot succeed).
+                        break;
+                    }
+                }
+            }
+            let k_elim = k;
+            let delayed_here = wf - k_elim;
+            stats.pivots_delayed += delayed_here;
+
+            // Harvest L: unit-diagonal dense trapezoid, col-major m×k_elim.
+            let mut l = vec![0.0f64; m * k_elim];
+            for c in 0..k_elim {
+                l[c + c * m] = 1.0;
+                for i in c + 1..m {
+                    l[i + c * m] = f[i + c * m];
+                }
+                nnz_l_actual += m - c;
+            }
+            // Remaining rows: delayed columns (if any) then panel.
+            let remaining = m - k_elim;
+            // Schur complement (plus any delayed rows/columns) → parent
+            // update. A root supernode provably has an empty panel, and its
+            // delay path returned above, so remaining == 0 there.
+            if sym.parent == NONE && remaining > 0 {
+                return Err(LdltError::Invariant {
+                    what: "root left residual rows",
+                });
+            }
+            if sym.parent != NONE && remaining > 0 {
+                let mut data = vec![0.0f64; remaining * remaining];
+                for cj in 0..remaining {
+                    for ri in 0..remaining {
+                        data[ri + cj * remaining] = f[(k_elim + ri) + (k_elim + cj) * m];
+                    }
+                }
+                live_update_bytes += data.len() * 8;
+                live_update_payload_bytes +=
+                    data.len() * 8 + remaining * core::mem::size_of::<usize>();
+                stats.peak_front_bytes = stats.peak_front_bytes.max(live_update_bytes);
+                updates[sid] = Some(Update {
+                    vars: local2var[k_elim..].to_vec(),
+                    data,
+                });
+            }
+            snodes_num.push(SnodeNum {
+                block_vars: local2var[..k_elim].to_vec(),
+                panel_vars: local2var[k_elim..].to_vec(),
+                l,
+                d: dblocks,
+            });
+            retained_factor_bytes = retained_factor_bytes
+                .saturating_add(m.saturating_mul(k_elim).saturating_mul(8))
+                .saturating_add(m.saturating_mul(core::mem::size_of::<usize>()))
+                .saturating_add(k_elim.saturating_mul(core::mem::size_of::<DBlock>()));
+        }
+
+        stats.nnz_l = nnz_l_actual;
+        stats.fill_ratio = if a.nnz() == 0 {
+            1.0
+        } else {
+            stats.nnz_l as f64 / a.nnz() as f64
+        };
+        Ok(LdltFactor {
+            n,
+            perm: self.perm.clone(),
+            snodes: snodes_num,
+            inertia,
+            stats,
+        })
+    }
+}
+
+fn admit_factor_bytes(estimated_bytes: usize, cap: Option<usize>) -> Result<(), LdltError> {
+    if let Some(cap) = cap
+        && estimated_bytes > cap
+    {
+        return Err(LdltError::FactorBudget {
+            estimated_bytes,
+            cap,
+        });
+    }
+    Ok(())
+}
+
+fn pattern_of(a: &Csr) -> (Vec<usize>, Vec<usize>) {
+    let n = a.nrows();
+    let mut row_ptr = Vec::with_capacity(n + 1);
+    let mut col_idx = Vec::with_capacity(a.nnz());
+    row_ptr.push(0);
+    for r in 0..n {
+        let (cols, _) = a.row_at(r);
+        col_idx.extend_from_slice(cols);
+        row_ptr.push(col_idx.len());
+    }
+    (row_ptr, col_idx)
+}
+
+/// Lower-triangular adjacency in elimination order: for permuted row `i`,
+/// the sorted permuted neighbors `j < i`.
+fn build_lower_adj(a: &Csr, iperm: &[usize]) -> Vec<Vec<usize>> {
+    let n = a.nrows();
+    let mut ladj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for r in 0..n {
+        let (cols, _) = a.row_at(r);
+        let pi = iperm[r];
+        for &c in cols {
+            let pj = iperm[c];
+            if pj < pi {
+                ladj[pi].push(pj);
+            }
+        }
+    }
+    for l in &mut ladj {
+        l.sort_unstable();
+    }
+    ladj
+}
+
+/// Elimination tree (Liu's algorithm with path compression).
+fn etree(ladj: &[Vec<usize>]) -> Vec<usize> {
+    let n = ladj.len();
+    let mut parent = vec![NONE; n];
+    let mut ancestor = vec![NONE; n];
+    for (i, lower) in ladj.iter().enumerate() {
+        for &j in lower {
+            let mut t = j;
+            while ancestor[t] != NONE && ancestor[t] != i {
+                let next = ancestor[t];
+                ancestor[t] = i;
+                t = next;
+            }
+            if ancestor[t] == NONE {
+                ancestor[t] = i;
+                parent[t] = i;
+            }
+        }
+    }
+    parent
+}
+
+/// Iterative etree postorder with ascending-child determinism.
+fn postorder(parent: &[usize]) -> Vec<usize> {
+    let n = parent.len();
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut roots = Vec::new();
+    for j in 0..n {
+        if parent[j] == NONE {
+            roots.push(j);
+        } else {
+            children[parent[j]].push(j);
+        }
+    }
+    let mut post = Vec::with_capacity(n);
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    for &r in &roots {
+        stack.push((r, 0));
+        while let Some(top) = stack.last_mut() {
+            let (node, next) = *top;
+            if next < children[node].len() {
+                top.1 += 1;
+                stack.push((children[node][next], 0));
+            } else {
+                post.push(node);
+                stack.pop();
+            }
+        }
+    }
+    post
+}
+
+/// Per-column below-diagonal L structure via the row-wise etree traversal
+/// (each row i is added to the structure of every column on the path from
+/// its lower neighbors up to i). Rows arrive in ascending order, so each
+/// structure vector is sorted.
+fn col_structs(ladj: &[Vec<usize>], parent: &[usize]) -> Vec<Vec<usize>> {
+    let n = ladj.len();
+    let mut cs: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut stamp = vec![NONE; n];
+    for i in 0..n {
+        stamp[i] = i;
+        for &j in &ladj[i] {
+            let mut t = j;
+            while t != i && stamp[t] != i {
+                cs[t].push(i);
+                stamp[t] = i;
+                let p = parent[t];
+                if p == NONE {
+                    break;
+                }
+                t = p;
+            }
+        }
+    }
+    cs
+}
+
+enum PivotChoice {
+    One(usize),
+    Two(usize, usize),
+    Fail { best_abs: f64, required: f64 },
+}
+
+/// Largest off-diagonal magnitude of local column `c` among rows `k..m`.
+fn gamma_of(f: &[f64], m: usize, k: usize, c: usize) -> f64 {
+    let mut g = 0.0f64;
+    for i in k..m {
+        if i != c {
+            g = g.max(f[i + c * m].abs());
+        }
+    }
+    g
+}
+
+/// Deterministic restricted pivot search inside the fully-summed block
+/// `k..w` of an m×m front: first acceptable 1×1 (current column, then
+/// ascending scan), else the lexicographically first acceptable 2×2 under
+/// the Duff–Reid growth bound, else a typed failure report.
+fn choose_pivot(
+    f: &[f64],
+    m: usize,
+    w: usize,
+    k: usize,
+    opts: &LdltOptions,
+    zero_tol: f64,
+) -> PivotChoice {
+    let u = opts.pivot_threshold;
+    let mut best_abs = 0.0f64;
+    let mut required = zero_tol;
+    for q in k..w {
+        let dq = f[q + q * m].abs();
+        let gq = gamma_of(f, m, k, q);
+        best_abs = best_abs.max(dq);
+        required = required.max(u * gq).max(zero_tol);
+        if dq > zero_tol && dq >= u * gq {
+            return PivotChoice::One(q);
+        }
+    }
+    if opts.allow_2x2 && w - k >= 2 {
+        let det_tol = zero_tol * zero_tol;
+        for p in k..w {
+            for q in p + 1..w {
+                let e11 = f[p + p * m];
+                let e21 = f[q + p * m];
+                let e22 = f[q + q * m];
+                let det = e11 * e22 - e21 * e21;
+                if det.abs() <= det_tol {
+                    continue;
+                }
+                let gp = gamma_pair(f, m, k, p, q);
+                let gq = gamma_pair(f, m, k, q, p);
+                let g1 = e22.abs().mul_add(gp, e21.abs() * gq) / det.abs();
+                let g2 = e21.abs().mul_add(gp, e11.abs() * gq) / det.abs();
+                if g1.max(g2) <= 1.0 / u {
+                    return PivotChoice::Two(p, q);
+                }
+            }
+        }
+    }
+    PivotChoice::Fail { best_abs, required }
+}
+
+/// Largest magnitude in local column `c` among rows `k..m` excluding both
+/// pivot-pair rows.
+fn gamma_pair(f: &[f64], m: usize, k: usize, c: usize, other: usize) -> f64 {
+    let mut g = 0.0f64;
+    for i in k..m {
+        if i != c && i != other {
+            g = g.max(f[i + c * m].abs());
+        }
+    }
+    g
+}
+
+/// Symmetric row+column swap of a full col-major m×m matrix.
+fn swap_sym(f: &mut [f64], m: usize, a: usize, b: usize) {
+    if a == b {
+        return;
+    }
+    for r in 0..m {
+        f.swap(r + a * m, r + b * m);
+    }
+    for c in 0..m {
+        f.swap(a + c * m, b + c * m);
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Update {
+    vars: Vec<usize>,
+    data: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DBlock {
+    Single(f64),
+    Pair(f64, f64, f64), // (d11, d21, d22)
+}
+
+#[derive(Debug, Clone)]
+struct SnodeNum {
+    /// Block columns in PIVOT order (elimination-order ids).
+    block_vars: Vec<usize>,
+    /// Panel rows (elimination-order ids, ascending).
+    panel_vars: Vec<usize>,
+    /// Dense unit-diagonal trapezoid, col-major (block+panel) × width.
+    l: Vec<f64>,
+    /// D blocks in pivot order.
+    d: Vec<DBlock>,
+}
+
+/// Numeric LDLᵀ factorization: P·A·Pᵀ = L·D·Lᵀ. Produced by
+/// [`SymbolicLdlt::factor`]; serves any number of right-hand sides via
+/// [`LdltFactor::solve`] and exposes the Sylvester [`Inertia`] that
+/// spectrum-slicing certification consumes.
+#[derive(Debug, Clone)]
+pub struct LdltFactor {
+    n: usize,
+    perm: Vec<usize>,
+    snodes: Vec<SnodeNum>,
+    inertia: Inertia,
+    stats: FactorStats,
+}
+
+impl LdltFactor {
+    /// Sylvester inertia of A (sign counts of D). `zero` is structurally
+    /// absent: singular pivots refuse during factorization.
+    #[must_use]
+    pub fn inertia(&self) -> Inertia {
+        self.inertia
+    }
+
+    /// Work/memory/pivot accounting of the factorization.
+    #[must_use]
+    pub fn stats(&self) -> &FactorStats {
+        &self.stats
+    }
+
+    /// Solve A·x = b. Refuses a right-hand side of the wrong length ([`LdltError::RhsLength`]) or with a NaN or
+    /// infinite entry ([`LdltError::NonFiniteRhs`]).
+    pub fn solve(&self, b: &[f64]) -> Result<Vec<f64>, LdltError> {
+        if b.len() != self.n {
+            return Err(LdltError::RhsLength {
+                expected: self.n,
+                got: b.len(),
+            });
+        }
+        if let Some(index) = b.iter().position(|v| !v.is_finite()) {
+            return Err(LdltError::NonFiniteRhs { index });
+        }
+        // y indexed by elimination-order id.
+        let mut y = vec![0.0f64; self.n];
+        for (k, &o) in self.perm.iter().enumerate() {
+            y[k] = b[o];
+        }
+        // Forward: L z = P b.
+        for s in &self.snodes {
+            let w = s.block_vars.len();
+            let m = w + s.panel_vars.len();
+            let mut v: Vec<f64> = Vec::with_capacity(m);
+            v.extend(s.block_vars.iter().map(|&i| y[i]));
+            v.extend(s.panel_vars.iter().map(|&i| y[i]));
+            for k in 0..w {
+                let vk = v[k];
+                for (i, vi) in v.iter_mut().enumerate().skip(k + 1) {
+                    *vi = s.l[i + k * m].mul_add(-vk, *vi);
+                }
+            }
+            for (k, &i) in s.block_vars.iter().enumerate() {
+                y[i] = v[k];
+            }
+            for (k, &i) in s.panel_vars.iter().enumerate() {
+                y[i] = v[w + k];
+            }
+        }
+        // Diagonal: D w = z.
+        for s in &self.snodes {
+            let mut k = 0usize;
+            for blk in &s.d {
+                match *blk {
+                    DBlock::Single(d) => {
+                        y[s.block_vars[k]] /= d;
+                        k += 1;
+                    }
+                    DBlock::Pair(d11, d21, d22) => {
+                        let det = d11 * d22 - d21 * d21;
+                        let z1 = y[s.block_vars[k]];
+                        let z2 = y[s.block_vars[k + 1]];
+                        y[s.block_vars[k]] = (d22 * z1 - d21 * z2) / det;
+                        y[s.block_vars[k + 1]] = (d11 * z2 - d21 * z1) / det;
+                        k += 2;
+                    }
+                }
+            }
+        }
+        // Backward: Lᵀ x = w.
+        for s in self.snodes.iter().rev() {
+            let w = s.block_vars.len();
+            let m = w + s.panel_vars.len();
+            let mut v: Vec<f64> = Vec::with_capacity(m);
+            v.extend(s.block_vars.iter().map(|&i| y[i]));
+            v.extend(s.panel_vars.iter().map(|&i| y[i]));
+            for k in (0..w).rev() {
+                let mut acc = v[k];
+                for (i, &vi) in v.iter().enumerate().skip(k + 1) {
+                    acc = s.l[i + k * m].mul_add(-vi, acc);
+                }
+                v[k] = acc;
+            }
+            for (k, &i) in s.block_vars.iter().enumerate() {
+                y[i] = v[k];
+            }
+        }
+        // Un-permute.
+        let mut x = vec![0.0f64; self.n];
+        for (k, &o) in self.perm.iter().enumerate() {
+            x[o] = y[k];
+        }
+        Ok(x)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::{csr, laplacian_2d, lcg};
+    use super::*;
+
+    /// tridiag(-1, 2, -1): eigenvalues 2 − 2cos(kπ/(n+1)), k = 1..n.
+    fn tridiag(n: usize) -> Csr {
+        let mut e = Vec::new();
+        for i in 0..n {
+            e.push((i, i, 2.0));
+            if i > 0 {
+                e.push((i, i - 1, -1.0));
+            }
+            if i + 1 < n {
+                e.push((i, i + 1, -1.0));
+            }
+        }
+        csr(n, n, &e)
+    }
+
+    fn shifted(a: &Csr, sigma: f64) -> Csr {
+        let n = a.nrows();
+        let mut e = Vec::new();
+        for r in 0..n {
+            let (cols, vals) = a.row_at(r);
+            for (&c, &v) in cols.iter().zip(vals) {
+                e.push((r, c, v));
+            }
+        }
+        for i in 0..n {
+            e.push((i, i, -sigma));
+        }
+        csr(n, n, &e)
+    }
+
+    /// Random sparse symmetric matrix with a stored diagonal.
+    fn random_sym(n: usize, extra_per_row: usize, seed: u64) -> Csr {
+        let mut s = seed;
+        let mut e = Vec::new();
+        for i in 0..n {
+            e.push((i, i, 4.0 + lcg(&mut s)));
+        }
+        for i in 0..n {
+            for _ in 0..extra_per_row {
+                let j = ((lcg(&mut s) + 0.5) * n as f64) as usize % n;
+                if i != j {
+                    let v = lcg(&mut s);
+                    e.push((i, j, v));
+                    e.push((j, i, v));
+                }
+            }
+        }
+        csr(n, n, &e)
+    }
+
+    fn factor(a: &Csr, ordering: DirectOrdering, opts: &LdltOptions) -> LdltFactor {
+        let sym = SymbolicLdlt::analyze(a, ordering).expect("analyze");
+        sym.factor(a, opts).expect("factor")
+    }
+
+    fn max_abs(a: &Csr) -> f64 {
+        let mut m = 0.0f64;
+        for r in 0..a.nrows() {
+            let (_, vals) = a.row_at(r);
+            for &v in vals {
+                m = m.max(v.abs());
+            }
+        }
+        m
+    }
+
+    fn mul(a: &Csr, x: &[f64]) -> Vec<f64> {
+        let mut y = vec![0.0; a.nrows()];
+        a.spmv(x, &mut y).expect("lengths match");
+        y
+    }
+
+    /// Residual gate ‖A·x − b‖∞ ≤ tol·‖A‖·(‖x‖∞ + ‖b‖∞-ish).
+    fn check_solve(a: &Csr, f: &LdltFactor, seed: u64, tol_scale: f64) {
+        let n = a.nrows();
+        let mut s = seed;
+        let x_true: Vec<f64> = (0..n).map(|_| lcg(&mut s)).collect();
+        let b = mul(a, &x_true);
+        let x = f.solve(&b).expect("solve");
+        let ax = mul(a, &x);
+        let xin: f64 = x.iter().fold(0.0f64, |m, &v| m.max(v.abs()));
+        let tol = tol_scale * (n as f64) * f64::EPSILON * max_abs(a) * xin.max(1.0);
+        for i in 0..n {
+            assert!(
+                (ax[i] - b[i]).abs() <= tol,
+                "solve residual row {i}: {} vs tol {tol}",
+                (ax[i] - b[i]).abs()
+            );
+        }
+    }
+
+    fn max_err(x: &[f64], want: &[f64]) -> f64 {
+        x.iter()
+            .zip(want)
+            .fold(0.0f64, |m, (a, b)| m.max((a - b).abs()))
+    }
+
+    #[test]
+    fn test_ldlt_residual_known_answers() {
+        // Closed forms, not outputs of this code. tridiag(-1,2,-1)·x = 1 has x_i = i(n+1−i)/2 and
+        // tridiag(-1,2,-1)·x = e_1 has x_i = (n+1−i)/(n+1), i = 1..n.
+        let n = 50;
+        let t = tridiag(n);
+        let ones = vec![1.0; n];
+        let mut e1 = vec![0.0; n];
+        e1[0] = 1.0;
+        let parabola: Vec<f64> = (1..=n).map(|i| (i * (n + 1 - i)) as f64 / 2.0).collect();
+        let ramp: Vec<f64> = (1..=n)
+            .map(|i| (n + 1 - i) as f64 / (n + 1) as f64)
+            .collect();
+        for ordering in [DirectOrdering::Natural, DirectOrdering::Amd] {
+            let f = factor(&t, ordering, &LdltOptions::default());
+            let x = f.solve(&ones).expect("solve");
+            assert!(max_err(&x, &parabola) <= 1e-9, "{ordering:?}: parabola");
+            assert!(
+                max_err(&mul(&t, &x), &ones) <= 1e-11,
+                "{ordering:?}: residual"
+            );
+            let x = f.solve(&e1).expect("solve");
+            assert!(max_err(&x, &ramp) <= 1e-12, "{ordering:?}: ramp");
+        }
+        // [[0,1],[1,0]]·x = (3,5) has x = (5,3); only a 2×2 pivot factors it, and it is exact here.
+        let swap = csr(2, 2, &[(0, 1, 1.0), (1, 0, 1.0)]);
+        let f = factor(&swap, DirectOrdering::Natural, &LdltOptions::default());
+        assert_eq!(f.solve(&[3.0, 5.0]).expect("solve"), vec![5.0, 3.0]);
+        // KKT [[2I₃, Bᵀ],[B, 0]] with B = [[1,0,0],[0,1,0]]: x = (1,2,3), y = (4,5) gives b = (6,9,6,1,2).
+        let kkt = csr(
+            5,
+            5,
+            &[
+                (0, 0, 2.0),
+                (1, 1, 2.0),
+                (2, 2, 2.0),
+                (3, 0, 1.0),
+                (0, 3, 1.0),
+                (4, 1, 1.0),
+                (1, 4, 1.0),
+            ],
+        );
+        let f = factor(&kkt, DirectOrdering::Amd, &LdltOptions::default());
+        let x = f.solve(&[6.0, 9.0, 6.0, 1.0, 2.0]).expect("solve");
+        assert!(
+            max_err(&x, &[1.0, 2.0, 3.0, 4.0, 5.0]) <= 1e-14,
+            "kkt: {x:?}"
+        );
+        // Manufactured solution on the 16×16 grid Laplacian: integer x, so b = A·x is exact.
+        let a = laplacian_2d(16);
+        let x_true: Vec<f64> = (0..a.nrows()).map(|u| (u % 7) as f64 - 3.0).collect();
+        let b = mul(&a, &x_true);
+        let f = factor(&a, DirectOrdering::Amd, &LdltOptions::default());
+        let x = f.solve(&b).expect("solve");
+        assert!(max_err(&x, &x_true) <= 1e-10, "grid manufactured solution");
+        println!(
+            "{{\"suite\":\"fmine-numerics-sparse-direct\",\"case\":\"residual-known-answers\",\"systems\":5,\"verdict\":\"pass\"}}"
+        );
+    }
+
+    #[test]
+    fn test_ldlt_agrees_with_dense_cholesky() {
+        // Differential against crate::cholesky_solve, which shares no code with this module.
+        for (n, extra, seed) in [(8usize, 2usize, 41u64), (20, 3, 42)] {
+            let a = random_sym(n, extra, seed);
+            let mut dense = vec![0.0; n * n];
+            for r in 0..n {
+                let (cols, vals) = a.row_at(r);
+                for (&c, &v) in cols.iter().zip(vals) {
+                    dense[r * n + c] = v;
+                }
+            }
+            let mut s = seed;
+            let b: Vec<f64> = (0..n).map(|_| lcg(&mut s)).collect();
+            let want = crate::cholesky_solve(&dense, &b, n).expect("SPD by diagonal dominance");
+            let f = factor(&a, DirectOrdering::Amd, &LdltOptions::default());
+            assert_eq!(f.inertia().negative, 0);
+            let x = f.solve(&b).expect("solve");
+            assert!(max_err(&x, &want) <= 1e-12, "n={n}");
+        }
+    }
+
+    #[test]
+    fn test_etree_matches_hand_example() {
+        // Davis, Direct Methods, ch. 4 style: pattern chosen so the tree is
+        // hand-checkable. Lower entries: (1,0),(2,1),(3,0),(3,2).
+        let mut e: Vec<(usize, usize, f64)> = (0..4).map(|i| (i, i, 4.0)).collect();
+        for (r, c) in [(1usize, 0usize), (2, 1), (3, 0), (3, 2)] {
+            e.push((r, c, -1.0));
+            e.push((c, r, -1.0));
+        }
+        let a = csr(4, 4, &e);
+        let iperm: Vec<usize> = (0..4).collect();
+        let ladj = build_lower_adj(&a, &iperm);
+        let parent = etree(&ladj);
+        // col 0: first lower neighbor is row 1 → parent 1; col 1 → 2; col 2 → 3.
+        assert_eq!(parent, vec![1, 2, 3, NONE]);
+    }
+
+    #[test]
+    fn test_amd_is_a_permutation_on_assorted_graphs() {
+        for a in [tridiag(17), random_sym(40, 3, 7), laplacian_2d(8)] {
+            let p = amd_order(&a).expect("square");
+            let n = a.nrows();
+            assert_eq!(p.len(), n);
+            let mut seen = vec![false; n];
+            for &v in &p {
+                assert!(v < n && !seen[v], "amd emitted a non-permutation");
+                seen[v] = true;
+            }
+        }
+    }
+
+    #[test]
+    fn test_amd_beats_natural_ordering_on_the_arrow_matrix() {
+        // Arrow pointing the WRONG way: dense first row/column. Natural
+        // ordering eliminates column 0 first and fills completely; any
+        // minimum-degree ordering eliminates the pendant nodes first and
+        // keeps L linear in n.
+        let n = 200;
+        let mut e: Vec<(usize, usize, f64)> = (0..n).map(|i| (i, i, 4.0)).collect();
+        for j in 1..n {
+            e.push((0, j, -1.0));
+            e.push((j, 0, -1.0));
+        }
+        let a = csr(n, n, &e);
+        let nat = SymbolicLdlt::analyze(&a, DirectOrdering::Natural).expect("analyze");
+        let amd = SymbolicLdlt::analyze(&a, DirectOrdering::Amd).expect("analyze");
+        assert!(
+            nat.nnz_l() > n * (n - 1) / 4,
+            "natural ordering should fill catastrophically (got {})",
+            nat.nnz_l()
+        );
+        assert!(
+            amd.nnz_l() < 4 * n,
+            "amd must keep the arrow sparse (got {})",
+            amd.nnz_l()
+        );
+        println!(
+            "{{\"suite\":\"fmine-numerics-sparse-direct\",\"case\":\"amd-vs-natural-arrow\",\"nnz_l_natural\":{},\"nnz_l_amd\":{},\"verdict\":\"pass\"}}",
+            nat.nnz_l(),
+            amd.nnz_l()
+        );
+    }
+
+    #[test]
+    fn test_spd_tridiagonal_solve_and_inertia() {
+        let n = 50;
+        let a = tridiag(n);
+        let f = factor(&a, DirectOrdering::Amd, &LdltOptions::default());
+        assert_eq!(
+            f.inertia(),
+            Inertia {
+                positive: n,
+                negative: 0
+            }
+        );
+        assert_eq!(f.stats().pivots_2x2, 0, "SPD must factor with 1x1 pivots");
+        check_solve(&a, &f, 11, 8.0);
+    }
+
+    #[test]
+    fn test_zero_diagonal_indefinite_needs_the_2x2_path() {
+        // [[0,1],[1,0]] — eigenvalues ±1; no 1×1 pivot exists.
+        let a = csr(2, 2, &[(0, 1, 1.0), (1, 0, 1.0)]);
+        let f = factor(&a, DirectOrdering::Natural, &LdltOptions::default());
+        assert_eq!(
+            f.inertia(),
+            Inertia {
+                positive: 1,
+                negative: 1
+            }
+        );
+        assert_eq!(f.stats().pivots_2x2, 1);
+        check_solve(&a, &f, 3, 8.0);
+
+        // MUTATION CONTROL: with 2×2 pivots disabled, the same matrix must
+        // REFUSE with the named breakdown — proving the 2×2 path is
+        // load-bearing, not decorative.
+        let sym = SymbolicLdlt::analyze(&a, DirectOrdering::Natural).expect("analyze");
+        let opts = LdltOptions {
+            allow_2x2: false,
+            ..LdltOptions::default()
+        };
+        let err = sym.factor(&a, &opts).expect_err("must refuse");
+        assert!(
+            matches!(
+                err,
+                LdltError::PivotBreakdown {
+                    two_by_two_enabled: false,
+                    ..
+                }
+            ),
+            "expected pivot breakdown, got {err}"
+        );
+    }
+
+    #[test]
+    fn test_saddle_point_kkt_inertia() {
+        // [[A, Bᵀ],[B, 0]] with A = 2·I₃ SPD, B = [[1,0,0],[0,1,0]] full
+        // row rank → inertia (3, 2) by the standard KKT result.
+        let mut e: Vec<(usize, usize, f64)> = (0..3).map(|i| (i, i, 2.0)).collect();
+        for (bi, &c) in [0usize, 1usize].iter().enumerate() {
+            e.push((3 + bi, c, 1.0));
+            e.push((c, 3 + bi, 1.0));
+        }
+        let a = csr(5, 5, &e);
+        let f = factor(&a, DirectOrdering::Amd, &LdltOptions::default());
+        assert_eq!(
+            f.inertia(),
+            Inertia {
+                positive: 3,
+                negative: 2
+            }
+        );
+        check_solve(&a, &f, 5, 8.0);
+    }
+
+    #[test]
+    fn test_inertia_certifies_analytic_eigenvalue_counts_across_shifts() {
+        // The spectrum-slicing property: for K = tridiag(-1,2,-1) the
+        // eigenvalues are λ_k = 2 − 2cos(kπ/(n+1)), so the inertia of
+        // K − σI must equal the analytic counts on both sides of σ.
+        let n = 60;
+        let k_mat = tridiag(n);
+        let sym = SymbolicLdlt::analyze(&k_mat, DirectOrdering::Amd).expect("analyze");
+        for sigma in [0.1, 0.5, 1.0, 2.0, 3.7] {
+            let a = shifted(&k_mat, sigma);
+            let f = sym.factor(&a, &LdltOptions::default()).expect("factor");
+            let below = (1..=n)
+                .filter(|&k| {
+                    2.0 - 2.0
+                        * fmine_core::det::cos(k as f64 * std::f64::consts::PI / (n as f64 + 1.0))
+                        < sigma
+                })
+                .count();
+            assert_eq!(
+                f.inertia(),
+                Inertia {
+                    positive: n - below,
+                    negative: below
+                },
+                "inertia mismatch at sigma={sigma}"
+            );
+        }
+        println!(
+            "{{\"suite\":\"fmine-numerics-sparse-direct\",\"case\":\"inertia-vs-analytic\",\"shifts\":5,\"verdict\":\"pass\"}}"
+        );
+    }
+
+    #[test]
+    fn test_exactly_singular_shift_refuses_instead_of_perturbing() {
+        // σ = 4 is an exact eigenvalue of the s×s grid Laplacian (λ = 4 whenever i + j = s + 1), so K − 4I is
+        // exactly singular. A perturbed factorization would fabricate an inertia where none exists.
+        let k = laplacian_2d(30);
+        let a = shifted(&k, 4.0);
+        let sym = SymbolicLdlt::analyze(&k, DirectOrdering::Amd).expect("analyze");
+        let err = sym
+            .factor(&a, &LdltOptions::default())
+            .expect_err("singular shift must refuse");
+        assert!(matches!(err, LdltError::PivotBreakdown { .. }), "{err}");
+    }
+
+    #[test]
+    fn test_reconstruction_and_solve_on_random_symmetric_matrices() {
+        for (n, extra, seed) in [(12usize, 2usize, 1u64), (40, 3, 2), (80, 5, 3)] {
+            let a = random_sym(n, extra, seed);
+            let f = factor(&a, DirectOrdering::Amd, &LdltOptions::default());
+            assert_eq!(f.inertia().positive + f.inertia().negative, n);
+            check_solve(&a, &f, seed ^ 0xABCD, 64.0);
+        }
+    }
+
+    #[test]
+    fn test_indefinite_random_matrices_solve_within_gate() {
+        // Indefinite: flip diagonal signs on alternating rows.
+        for (n, seed) in [(30usize, 21u64), (70, 22)] {
+            let base = random_sym(n, 3, seed);
+            let mut e = Vec::new();
+            for r in 0..n {
+                let (cols, vals) = base.row_at(r);
+                for (&c, &v) in cols.iter().zip(vals) {
+                    e.push((r, c, if r == c && r % 2 == 1 { -v } else { v }));
+                }
+            }
+            let a = csr(n, n, &e);
+            let f = factor(&a, DirectOrdering::Amd, &LdltOptions::default());
+            assert!(f.inertia().negative >= n / 4, "should be indefinite");
+            check_solve(&a, &f, seed ^ 0x77, 64.0);
+        }
+    }
+
+    #[test]
+    fn test_factorization_is_bitwise_deterministic() {
+        let a = random_sym(60, 4, 0xDE7);
+        let sym = SymbolicLdlt::analyze(&a, DirectOrdering::Amd).expect("analyze");
+        let f1 = sym.factor(&a, &LdltOptions::default()).expect("factor");
+        let f2 = sym.factor(&a, &LdltOptions::default()).expect("factor");
+        assert_eq!(f1.perm, f2.perm);
+        for (s1, s2) in f1.snodes.iter().zip(&f2.snodes) {
+            assert_eq!(s1.block_vars, s2.block_vars);
+            assert!(
+                s1.l.iter()
+                    .zip(&s2.l)
+                    .all(|(x, y)| x.to_bits() == y.to_bits()),
+                "L values must be bitwise identical"
+            );
+        }
+        let b: Vec<f64> = (0..60).map(|i| f64::from(i) - 30.0).collect();
+        let x1 = f1.solve(&b).expect("solve");
+        let x2 = f2.solve(&b).expect("solve");
+        assert!(x1.iter().zip(&x2).all(|(a, b)| a.to_bits() == b.to_bits()));
+    }
+
+    #[test]
+    fn test_symbolic_reuse_rejects_pattern_mismatch() {
+        let a = tridiag(10);
+        let sym = SymbolicLdlt::analyze(&a, DirectOrdering::Amd).expect("analyze");
+        // Same pattern, different values (a shift) → accepted.
+        let shifted_a = shifted(&a, 0.25);
+        assert!(sym.factor(&shifted_a, &LdltOptions::default()).is_ok());
+        // Different pattern → typed refusal.
+        let b = tridiag(11);
+        assert!(matches!(
+            sym.factor(&b, &LdltOptions::default()),
+            Err(LdltError::PatternMismatch)
+        ));
+    }
+
+    #[test]
+    fn test_named_refusals_fire() {
+        let rect = csr(2, 3, &[(0, 0, 1.0)]);
+        assert!(matches!(
+            SymbolicLdlt::analyze(&rect, DirectOrdering::Amd),
+            Err(LdltError::NotSquare { nrows: 2, ncols: 3 })
+        ));
+        assert_eq!(
+            amd_order(&rect),
+            Err(LdltError::NotSquare { nrows: 2, ncols: 3 })
+        );
+        let asym = csr(2, 2, &[(0, 0, 1.0), (1, 1, 1.0), (0, 1, 1.0)]);
+        assert!(matches!(
+            SymbolicLdlt::analyze(&asym, DirectOrdering::Amd),
+            Err(LdltError::StructurallyAsymmetric { row: 0, col: 1 })
+        ));
+        let nan = csr(2, 2, &[(0, 0, 1.0), (1, 1, f64::NAN)]);
+        let sym = SymbolicLdlt::analyze(&nan, DirectOrdering::Amd).expect("analyze");
+        assert!(matches!(
+            sym.factor(&nan, &LdltOptions::default()),
+            Err(LdltError::NonFiniteEntry { row: 1, col: 1 })
+        ));
+        // Numerically singular (an exactly zero matrix with stored pattern).
+        let zero = csr(3, 3, &[(0, 0, 0.0), (1, 1, 0.0), (2, 2, 0.0)]);
+        let sym = SymbolicLdlt::analyze(&zero, DirectOrdering::Amd).expect("analyze");
+        assert!(matches!(
+            sym.factor(&zero, &LdltOptions::default()),
+            Err(LdltError::PivotBreakdown { .. })
+        ));
+        let a = tridiag(3);
+        let sym = SymbolicLdlt::analyze(&a, DirectOrdering::Amd).expect("analyze");
+        for bad in [
+            LdltOptions {
+                pivot_threshold: 0.9,
+                ..LdltOptions::default()
+            },
+            LdltOptions {
+                pivot_threshold: f64::NAN,
+                ..LdltOptions::default()
+            },
+            LdltOptions {
+                zero_pivot_rel: 0.0,
+                ..LdltOptions::default()
+            },
+        ] {
+            assert!(matches!(
+                sym.factor(&a, &bad),
+                Err(LdltError::InvalidOptions { .. })
+            ));
+        }
+        let capped = LdltOptions {
+            max_factor_bytes: Some(1),
+            ..LdltOptions::default()
+        };
+        assert!(matches!(
+            sym.factor(&a, &capped),
+            Err(LdltError::FactorBudget { cap: 1, .. })
+        ));
+        let f = sym.factor(&a, &LdltOptions::default()).expect("factor");
+        assert_eq!(
+            f.solve(&[1.0, 2.0]),
+            Err(LdltError::RhsLength {
+                expected: 3,
+                got: 2
+            })
+        );
+        assert_eq!(
+            f.solve(&[1.0, f64::INFINITY, 0.0]),
+            Err(LdltError::NonFiniteRhs { index: 1 })
+        );
+    }
+
+    #[test]
+    fn test_empty_and_singleton_matrices() {
+        let empty = csr(0, 0, &[]);
+        let f = factor(&empty, DirectOrdering::Amd, &LdltOptions::default());
+        assert_eq!(f.solve(&[]).expect("solve"), Vec::<f64>::new());
+        assert_eq!(
+            f.inertia(),
+            Inertia {
+                positive: 0,
+                negative: 0
+            }
+        );
+
+        let one = csr(1, 1, &[(0, 0, -3.0)]);
+        let f = factor(&one, DirectOrdering::Natural, &LdltOptions::default());
+        assert_eq!(
+            f.inertia(),
+            Inertia {
+                positive: 0,
+                negative: 1
+            }
+        );
+        let x = f.solve(&[6.0]).expect("solve");
+        assert!((x[0] + 2.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_grid_laplacian_factors_under_both_orderings_with_fill_recorded() {
+        let a = laplacian_2d(16); // 256 unknowns
+        let nat = SymbolicLdlt::analyze(&a, DirectOrdering::Natural).expect("analyze");
+        let amd = SymbolicLdlt::analyze(&a, DirectOrdering::Amd).expect("analyze");
+        assert!(
+            amd.nnz_l() < nat.nnz_l(),
+            "AMD must fill less than natural on the grid"
+        );
+        let f = amd.factor(&a, &LdltOptions::default()).expect("factor");
+        assert_eq!(f.inertia().negative, 0, "grid Laplacian is SPD");
+        check_solve(&a, &f, 31, 64.0);
+        println!(
+            "{{\"suite\":\"fmine-numerics-sparse-direct\",\"case\":\"grid-fill\",\"n\":256,\"nnz_l_natural\":{},\"nnz_l_amd\":{},\"supernodes\":{},\"max_front\":{},\"verdict\":\"pass\"}}",
+            nat.nnz_l(),
+            amd.nnz_l(),
+            f.stats().supernodes,
+            f.stats().max_front_dim
+        );
+    }
+}

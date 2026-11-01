@@ -6,12 +6,15 @@
 //! - Brent's bracketed root-finder (`brent_root`), which refuses on a missing sign change, a non-finite value or
 //!   non-convergence and never returns an unconverged iterate (bd-t1dk)
 //! - Standard normal CDF (`norm_cdf`) and Acklam inverse quantile (`norm_inv`)
-//! - Lifted `frankensim` modules: `eproc`, `voi`, `risk`, `tropical`.
+//! - `eproc`, `voi`, `risk`, `tropical`: original code with `frankensim` analogues (registries/lifts.toml).
 //! - `exact_feas`: exact rounding-interval feasibility with checked witnesses and Farkas certificates (bd-4wvl.1).
+//! - `sparse`: lifted from `frankensim` fs-sparse (BD-145): COO/CSR with SpMV, AMD + supernodal LDLᵀ with inertia,
+//!   PCG with ILU(0). DeterministicPerIsa, declared per file.
 
 pub mod eproc;
 pub mod exact_feas;
 pub mod risk;
+pub mod sparse;
 pub mod tropical;
 pub mod voi;
 

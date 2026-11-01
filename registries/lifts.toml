@@ -46,6 +46,32 @@ licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
 target = "crates/fmine-evidence/src/color.rs"
 guard_test = "color::tests::test_compose_never_promotes"
 
+[[lift]]
+source = "crates/fs-sparse/src/lib.rs"
+commit = "20463525d9775a18c1b237d2676f364f367175ab"
+sha256_at_lift = "b7c3aac07ac37695efb7c87b4d14fb78e3e4fb9935c50967c34a060d60e63e5a"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+target = "crates/fmine-numerics/src/sparse.rs"
+guard_test = "sparse::tests::test_spmv_matches_dense_reference"
+
+[[lift]]
+source = "crates/fs-sparse/src/direct.rs"
+commit = "20463525d9775a18c1b237d2676f364f367175ab"
+sha256_at_lift = "fe673a8747807278aa6ec60f93db6649c78547d93d6d40e4361ac628b74fb8f2"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+target = "crates/fmine-numerics/src/sparse/direct.rs"
+guard_test = "sparse::direct::tests::test_ldlt_residual_known_answers"
+
+# `check-lifts --upstream` reads 15% here: the source keeps its tests in tests/precond_battery.rs, so this file's
+# test module shares no line with it. The code above `#[cfg(test)]` shares 29%.
+[[lift]]
+source = "crates/fs-sparse/src/precond.rs"
+commit = "20463525d9775a18c1b237d2676f364f367175ab"
+sha256_at_lift = "6059ccb4f85b72a2fb43ac9045691c96b24e3ab21c67688a9a93fab3a70c1e5a"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+target = "crates/fmine-numerics/src/sparse/precond.rs"
+guard_test = "sparse::precond::tests::test_pcg_residual_known_answers"
+
 [[analogue]]
 target = "crates/fmine-evidence/src/lattice.rs"
 upstream = "crates/fs-evidence/src/lib.rs"

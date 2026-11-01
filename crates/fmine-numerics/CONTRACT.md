@@ -4,14 +4,14 @@
 - **Crate:** `fmine-numerics`
 - **Layer:** `K0` (Kernel Foundation)
 - **Subsystem:** `Kernels`
-- **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["eproc", "voi", "risk", "tropical", "exact_feas"]`
+- **LOC Budget:** `30k planned / 35k ceiling` (`registries/loc_budget.toml`)
+- **Allowed Module Families:** `["eproc", "voi", "risk", "tropical", "exact_feas", "sparse"]`
 
 ## 2. Mathematical & Domain Formulation
-Implements Cholesky SPD factorization (`cholesky_solve`), Brent root-finding (`brent_root`), normal CDF/PPF (`norm_cdf`, `norm_inv`), anytime-valid betting e-processes (`BettingEProcess`), Value of Information (`VoiProblem`, `EVPI`, `EVSI`), coherent Rockafellar-Uryasev `CVaR` (`compute_cvar`), and `(max,+)`/`(min,+)` tropical critical-path algebra (`TropicalDag`, `GB-19`).
+Implements Cholesky SPD factorization (`cholesky_solve`), Brent root-finding (`brent_root`), normal CDF/PPF (`norm_cdf`, `norm_inv`), anytime-valid betting e-processes (`BettingEProcess`), Value of Information (`VoiProblem`, `EVPI`, `EVSI`), coherent Rockafellar-Uryasev `CVaR` (`compute_cvar`), and `(max,+)`/`(min,+)` tropical critical-path algebra (`TropicalDag`, `GB-19`). `sparse` (BD-145) holds canonical CSR with deterministic COO assembly, AMD ordering with a supernodal multifrontal LDLᵀ (1×1/2×2 threshold pivoting, delayed pivots, Sylvester inertia), and PCG with ILU(0). WLS (bd-149), kriging (bd-238) and PDLP (bd-251) are planned consumers; none calls it yet.
 
 ## 3. Authority, Epistemics & Representation
-Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism class: `lib.rs` is `BitwisePortable`: `norm_cdf` and `norm_inv` delegate to `fmine_core::det` (bd-hp2j.2), and both of its golden digests agreed on ubuntu-latest (x86_64) and macos-15 (aarch64) in CI run 41237993223 at 84f32ac (bd-hp2j.3). The other modules stay `DeterministicPerIsa`.
+Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism class: `lib.rs` is `BitwisePortable`: `norm_cdf` and `norm_inv` delegate to `fmine_core::det` (bd-hp2j.2), and both of its golden digests agreed on ubuntu-latest (x86_64) and macos-15 (aarch64) in CI run 41237993223 at 84f32ac (bd-hp2j.3). The other modules stay `DeterministicPerIsa`; so do the three `sparse` files, which repeat bitwise on one host (tested) but have no cross-host digest.
 
 ## 4. Public API Surface
 - `cholesky_solve`, `norm_cdf`, `norm_inv`. `norm_inv` clamps nothing: `p` outside [0, 1] or NaN gives NaN, and 0
@@ -25,6 +25,16 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
 - `voi::{VoiProblem, VoiSummary}`
 - `risk::{TailRiskSummary, compute_cvar, max_drawdown}`
 - `tropical::{TropicalEdge, TropicalDag, TropicalScheduleResult}`
+- `sparse` (BD-145, lifted from fs-sparse; see §9):
+  - `Coo::{new, push, staged, assemble}`: duplicates accumulate in insertion order after a stable (row, col)
+    sort, so the matrix is bitwise independent of push interleaving. `Csr::{from_parts, nrows, ncols, nnz, row,
+    get, spmv}`: `from_parts` validates the canonical invariant (strictly ascending columns per row); `row` and
+    `get` are `None` outside the matrix.
+  - `direct::{amd_order, SymbolicLdlt, LdltFactor, LdltOptions, DirectOrdering::{Natural, Amd}, Inertia,
+    FactorStats}`: analyze once per pattern, `factor` per set of values (the K − σM shift ladder),
+    `LdltFactor::{solve, inertia, stats}`. A singular matrix refuses; it is never perturbed.
+  - `precond::{Precond, IdentityPrecond, Ilu0, ilu0, pcg, PcgSolution}`: `pcg` returns the iterate only when
+    ‖r‖₂/‖b‖₂ ≤ `tol`.
 - `exact_feas` (bd-4wvl.1 BD-340.S1, bd-4wvl.2 BD-340.S2): exact rounding-interval feasibility over
   `Rat = fmine_units::ExactQty`.
   - `Cell`, `Convention::{Closed, HalfUp, HalfDown, HalfEven, Truncate}` and `Convention::interval`; `End`
@@ -147,6 +157,15 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
   a diagonal pivot is `<= 1e-12` (`test_cholesky_non_spd_refuses_207`).
 - `TropicalDag::earliest_starts` returns `None` on a positive precedence cycle; it is not a refusal code.
 - `NON_IDENTIFIABLE` (`FMINE-REF-104`, non-identifiable attribution) marks an ambiguous construction finding.
+- `sparse` refuses with typed errors, not refusal codes:
+  - `SparseError::{TooManyRows, OutOfRange, NonCanonical { reason, row }, LengthMismatch}`;
+  - `LdltError::{NotSquare, StructurallyAsymmetric, NonFiniteEntry, PatternMismatch, InvalidOptions,
+    FactorBudget, PivotBreakdown, RhsLength, NonFiniteRhs, Invariant}`. `PivotBreakdown` is a root front with
+    no acceptable pivot after delays (`test_exactly_singular_shift_refuses_instead_of_perturbing`).
+    `Invariant` replaces upstream's asserts;
+  - `IluError::{NotSquare, NonFiniteEntry, Breakdown { row }}`;
+  - `PcgError::{Sparse, NotSquare, NonFinite, InvalidTolerance, Breakdown { iter, quantity, value },
+    NotConverged}`. No variant carries an iterate (`test_pcg_refusals_carry_no_iterate`).
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-NUM-1`: `0 <= EVSI <= EVPI` across all prior covariance and action sets (`GATE-HELM-02`).
@@ -155,15 +174,22 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Indefinite matrices fail closed with `FMINE-REF-207`; cyclic precedence graphs give `None`, never a schedule.
+A singular sparse matrix gives `PivotBreakdown`, never a perturbed factor or inertia; PCG that misses its tolerance
+gives `NotConverged`, never the last iterate.
 
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
 - `GATE-HELM-02`
 - `GATE-FSIM-DRIFT`
 
 ## 9. Lifted Code & Foundation Dependencies
-No lifted code. `src/eproc.rs`, `src/voi.rs`, `src/risk.rs` and `src/tropical.rs` are original, listed as
-`[[analogue]]` rows in `registries/lifts.toml` so GATE-FSIM-DRIFT still watches their upstream counterparts. A real
-lift of any of them is a per-module decision under BD-022.
+`src/sparse.rs`, `src/sparse/direct.rs` and `src/sparse/precond.rs` are lifted from frankensim
+`crates/fs-sparse/src/{lib,direct,precond}.rs` at 20463525d (BD-145, plan §27.1 wave 0). Each has a `[[lift]]` row
+in `registries/lifts.toml`, and its first line lists its changes (panics became typed refusals) and what was left
+out: BSR, SELL-C-σ, the FMA capsule, `ops`, nested dissection, Chebyshev and SA-AMG. Guard tests are the residual
+known answers in `direct` and `precond` and SpMV against a dense reference in `sparse`.
+`src/eproc.rs`, `src/voi.rs`, `src/risk.rs` and `src/tropical.rs` are original, listed as `[[analogue]]` rows so
+GATE-FSIM-DRIFT still watches their upstream counterparts. A real lift of any of them is a per-module decision
+under BD-022.
 
 ## 10. Non-Goals & Scope Boundary
 Zero I/O (`std::fs`, `std::net`) or domain-specific accounting rules (`L-3`).
