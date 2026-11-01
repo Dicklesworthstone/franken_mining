@@ -248,6 +248,12 @@ None: every failure is a usage error or a typed refusal.
   Source-byte failures preserve their typed refusals. The payload digest binds the selected source inventory
   and report; it is not a ledger anchor, forecast registration or external timestamp. All authority flags stay
   false. Unsupported guidance metrics and incomplete agreement refuse instead of disappearing from the report.
+  Unresolved outcomes retain every selected canonical source Claim, including simultaneous conflicting cells,
+  so refusal does not erase its reported token, interpretation, locator or source hash. Later appearances stay
+  separate. JSON and Markdown both expose that rejected evidence without scoring it or dropping its member.
+  Registered-file integration tests construct invented workbooks and two-reader document entries, then check
+  exact scores, original/comparative selection, ownership separation, source tampering, missing bytes,
+  transcription disagreement, deterministic replay and actual JSON/Markdown executable output.
   The adapter supports gold/copper production and explicit issuer-reported per-sold-unit AISC, TCC and C1;
   cost-definition changes, price conditioning, automatic transcription, year-effect estimation and full BD-341
   data/coverage gates remain outside this slice. Actual calculations live in the calibration kernel.

@@ -42,6 +42,8 @@ pub enum OutcomeBinding {
     Unresolved {
         code: String,
         reason: String,
+        /// Selected source evidence remains inspectable even when it cannot supply a scored number.
+        sources: Vec<KeyedCell>,
     },
 }
 
@@ -92,11 +94,11 @@ fn failure(code: RefusalCode, what: impl Into<String>) -> Refusal {
     Refusal::new(code, format!("guidance track record: {}", what.into()))
 }
 
-fn unresolved(code: RefusalCode, reason: impl Into<String>) -> OutcomeBinding {
-    let refusal = failure(code, reason);
+fn unresolved(refusal: Refusal, sources: Vec<KeyedCell>) -> OutcomeBinding {
     OutcomeBinding::Unresolved {
         code: refusal.code.into(),
         reason: refusal.what,
+        sources,
     }
 }
 
@@ -381,34 +383,27 @@ fn binding(
     published_at: &str,
 ) -> Result<(OutcomeBinding, Vec<KeyedCell>, Option<PrintedOutcome>)> {
     let (own, line) = specification(row, name)?;
-    if published_at > format!("{year:04}-12-31").as_str() {
-        return Ok((
-            unresolved(
-                RefusalCode::AssayLookahead108,
-                "guidance published after the outcome year; cannot establish a forward statement without an independently evidenced outcome-availability date",
-            ),
-            vec![],
-            None,
-        ));
-    }
-    if let Some(status) = affected_status(&profile.subject_statuses, subject, year) {
+    let blocked = if published_at > format!("{year:04}-12-31").as_str() {
+        Some(failure(
+            RefusalCode::AssayLookahead108,
+            "guidance published after the outcome year; cannot establish a forward statement without an independently evidenced outcome-availability date",
+        ))
+    } else if let Some(status) = affected_status(&profile.subject_statuses, subject, year) {
         let reason = match status.kind {
             StatusKind::Disposed => "divested",
             StatusKind::Withheld => "definition_changed_by_withheld_period",
             StatusKind::CareAndMaintenance => "not_published_during_care_and_maintenance",
         };
-        return Ok((
-            unresolved(
-                RefusalCode::NotObservable202,
-                format!(
-                    "{reason}: annual support overlaps or adjoins the disposal boundary in {}",
-                    status.evidence
-                ),
+        Some(failure(
+            RefusalCode::NotObservable202,
+            format!(
+                "{reason}: annual support overlaps or adjoins the disposal boundary in {}",
+                status.evidence
             ),
-            vec![],
-            None,
-        ));
-    }
+        ))
+    } else {
+        None
+    };
     let original = format!("{year}Q4");
     let has_original = profile
         .sources
@@ -427,8 +422,16 @@ fn binding(
         })
         .collect();
     candidates.sort_by(|a, b| {
-        (&a.key.reporting_vintage.release, &a.locator)
-            .cmp(&(&b.key.reporting_vintage.release, &b.locator))
+        (
+            &a.key.reporting_vintage.release,
+            &a.locator,
+            a.claim.claim_id,
+        )
+            .cmp(&(
+                &b.key.reporting_vintage.release,
+                &b.locator,
+                b.claim.claim_id,
+            ))
     });
     let selected = if has_original {
         Some(original.as_str())
@@ -440,8 +443,13 @@ fn binding(
     let Some(selected) = selected else {
         return Ok((
             unresolved(
-                RefusalCode::NoClaimInDomain201,
-                "not_published: no registered annual outcome",
+                blocked.unwrap_or_else(|| {
+                    failure(
+                        RefusalCode::NoClaimInDomain201,
+                        "not_published: no registered annual outcome",
+                    )
+                }),
+                vec![],
             ),
             vec![],
             None,
@@ -458,13 +466,24 @@ fn binding(
         .filter(|c| c.key.reporting_vintage.release.as_str() > selected)
         .cloned()
         .collect();
+    // A timing or perimeter restriction blocks scoring, not visibility of the selected source evidence.
+    if let Some(refusal) = blocked {
+        return Ok((
+            unresolved(refusal, first.into_iter().cloned().collect()),
+            later,
+            None,
+        ));
+    }
     let cell = match first.as_slice() {
         [one] => *one,
         [] => {
             return Ok((
                 unresolved(
-                    RefusalCode::NoClaimInDomain201,
-                    "no annual summary cell in the original registered release; later comparatives cannot replace it",
+                    failure(
+                        RefusalCode::NoClaimInDomain201,
+                        "no annual summary cell in the original registered release; later comparatives cannot replace it",
+                    ),
+                    vec![],
                 ),
                 later,
                 None,
@@ -473,8 +492,11 @@ fn binding(
         _ => {
             return Ok((
                 unresolved(
-                    RefusalCode::NonIdentifiableAttribution104,
-                    "multiple annual source cells in the selected release",
+                    failure(
+                        RefusalCode::NonIdentifiableAttribution104,
+                        "multiple annual source cells in the selected release",
+                    ),
+                    first.into_iter().cloned().collect(),
                 ),
                 later,
                 None,
@@ -490,14 +512,7 @@ fn binding(
             later,
             Some(value),
         )),
-        Err(e) => Ok((
-            OutcomeBinding::Unresolved {
-                code: e.code.into(),
-                reason: e.what,
-            },
-            later,
-            None,
-        )),
+        Err(e) => Ok((unresolved(e, vec![cell.clone()]), later, None)),
     }
 }
 
@@ -764,12 +779,29 @@ impl TrackRecordReport {
             .collect::<Vec<_>>()
             .join(",");
         let prefix = format!("\"source_refusals\":[{source_refusals}],");
-        let rows=self.rows.iter().map(|r| {
-            let (outcome,inputs)=match &r.outcome {
-                OutcomeBinding::Resolved{cell,comparative}=>(format!("{{\"state\":{},\"source\":{}}}",js(if *comparative {"resolved_on_comparative_vintage"} else {"resolved_first_published"}),cell.to_json()),vec![r.guidance.locator.to_string(),cell.locator.clone()]),
-                OutcomeBinding::Unresolved{code,reason}=>(format!("{{\"state\":\"unresolved\",\"code\":{},\"reason\":{}}}",js(code),js(reason)),vec![r.guidance.locator.to_string()]),
+        let rows = self.rows.iter().map(|r| {
+            let mut inputs = vec![r.guidance.locator.to_string()];
+            let outcome = match &r.outcome {
+                OutcomeBinding::Resolved { cell, comparative } => {
+                    inputs.push(cell.locator.clone());
+                    format!("{{\"state\":{},\"source\":{}}}", js(if *comparative {
+                        "resolved_on_comparative_vintage"
+                    } else { "resolved_first_published" }), cell.to_json())
+                }
+                OutcomeBinding::Unresolved { code, reason, sources } => {
+                    inputs.extend(sources.iter().map(|c| c.locator.clone()));
+                    format!("{{\"state\":\"unresolved\",\"code\":{},\"reason\":{},\"sources\":[{}]}}",
+                        js(code), js(reason), sources.iter().map(KeyedCell::to_json).collect::<Vec<_>>().join(","))
+                }
             };
-            format!("{{\"id\":{},\"site\":{},\"metric\":{},\"year\":{},\"guidance_vintage_ordinal\":{},\"published_at\":{},\"published_at_basis\":{},\"guidance\":{{\"at\":{},\"sha256\":{},\"token\":{},\"unit\":{},\"basis\":{},\"period\":{},\"reader_count\":{}}},\"outcome\":{},\"later_outcomes\":[{}],\"score\":{{\"rule\":\"guidance.range_score\",\"rules_version\":\"guidance-track-record/1\",\"in\":[{}],\"value\":{}}}}}",js(&r.id),js(&r.site),js(&r.metric),r.year,r.vintage,js(&r.published_at),js(&r.publication_basis),js(&r.guidance.locator.to_string()),js(&r.guidance.doc_sha256),js(&r.guidance.token),js(&r.guidance.unit),js(&r.guidance.basis),js(&r.guidance.period),r.guidance.readers.len(),outcome,r.later_outcomes.iter().map(KeyedCell::to_json).collect::<Vec<_>>().join(","),inputs.iter().map(|s|js(s)).collect::<Vec<_>>().join(","),r.score.as_ref().map_or_else(||"null".into(),GuidanceScore::to_json))
+            let score = format!("{{\"rule\":\"guidance.range_score\",\"rules_version\":\"guidance-track-record/1\",\"in\":[{}],\"value\":{}}}",
+                inputs.iter().map(|s| js(s)).collect::<Vec<_>>().join(","),
+                r.score.as_ref().map_or_else(|| "null".into(), GuidanceScore::to_json));
+            format!("{{\"id\":{},\"site\":{},\"metric\":{},\"year\":{},\"guidance_vintage_ordinal\":{},\"published_at\":{},\"published_at_basis\":{},\"guidance\":{{\"at\":{},\"sha256\":{},\"token\":{},\"unit\":{},\"basis\":{},\"period\":{},\"reader_count\":{}}},\"outcome\":{outcome},\"later_outcomes\":[{}],\"score\":{score}}}",
+                js(&r.id), js(&r.site), js(&r.metric), r.year, r.vintage, js(&r.published_at), js(&r.publication_basis),
+                js(&r.guidance.locator.to_string()), js(&r.guidance.doc_sha256), js(&r.guidance.token), js(&r.guidance.unit),
+                js(&r.guidance.basis), js(&r.guidance.period), r.guidance.readers.len(),
+                r.later_outcomes.iter().map(KeyedCell::to_json).collect::<Vec<_>>().join(","))
         }).collect::<Vec<_>>().join(",");
         let summaries=self.summaries.iter().map(|s|format!("{{\"site\":{},\"metric\":{},\"unit\":{},\"basis\":{},\"guidance_vintage_ordinal\":{},\"outcome_selector\":{},\"in\":[{}],\"rule\":\"guidance.descriptive_summary\",\"rules_version\":\"guidance-track-record/1\",\"scores\":{}}}",js(&s.site),js(&s.metric),js(&s.unit),js(&s.basis),s.vintage,js(if s.comparative {"comparative_only"} else {"first_published"}),s.members.iter().map(|id|js(id)).collect::<Vec<_>>().join(","),s.scores.to_json())).collect::<Vec<_>>().join(",");
         prefix
@@ -1028,6 +1060,72 @@ mod tests {
     }
 
     #[test]
+    fn rejected_original_retains_source_bytes_identity_and_later_appearance() {
+        let (p, t, mut cells) = synthetic_evidence().expect("fixture");
+        let later = revised(&cells[0], 2030, "2031Q1", "110");
+        cells[0].claim.stale = true;
+        let original = cells[0].clone();
+        cells.push(later.clone());
+        let report = assess(&p, &t, &cells, None).expect("unscored original");
+        let row = production(&report);
+        let OutcomeBinding::Unresolved { code, sources, .. } = &row.outcome else {
+            panic!("original must stay unresolved");
+        };
+        assert_eq!(code, "FMINE-REF-502");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].to_json(), original.to_json());
+        assert_eq!(row.later_outcomes[0].to_json(), later.to_json());
+        assert!(row.score.is_none());
+        let summary = report
+            .summaries
+            .iter()
+            .find(|s| s.metric == "production_koz")
+            .expect("summary");
+        assert_eq!(
+            (
+                summary.scores.n_members,
+                summary.scores.n_resolved,
+                summary.scores.n_unresolved
+            ),
+            (1, 0, 1)
+        );
+        let json = report.to_json();
+        assert!(json.contains(&format!("\"sources\":[{}]", original.to_json())));
+        let markdown = crate::track_record::render(&report);
+        assert!(markdown.contains("Rejected outcome evidence"));
+        assert!(markdown.contains(&original.claim.claim_id.to_string()));
+        assert!(markdown.contains(&original.key.reporting_vintage.file_sha256));
+    }
+
+    #[test]
+    fn ambiguous_selected_sources_are_all_cited_in_canonical_order() {
+        let (p, t, mut cells) = synthetic_evidence().expect("fixture");
+        let conflicting = revised(&cells[0], 2030, "2030Q4", "110");
+        cells.push(conflicting);
+        let report = assess(&p, &t, &cells, None).expect("ambiguous originals");
+        let row = production(&report);
+        let OutcomeBinding::Unresolved { code, sources, .. } = &row.outcome else {
+            panic!("simultaneous assertions must remain unresolved");
+        };
+        assert_eq!(code, "FMINE-REF-104");
+        assert_eq!(sources.len(), 2);
+        assert!(row.score.is_none());
+        let json = report.to_json();
+        let markdown = crate::track_record::render(&report);
+        for source in &cells {
+            assert!(sources.iter().any(|s| s.to_json() == source.to_json()));
+            assert!(json.contains(&source.to_json()));
+            assert!(markdown.contains(&source.claim.claim_id.to_string()));
+            assert!(markdown.contains(&source.key.reporting_vintage.file_sha256));
+        }
+        cells.reverse();
+        assert_eq!(
+            json,
+            assess(&p, &t, &cells, None).expect("reordered").to_json()
+        );
+    }
+
+    #[test]
     fn attributable_guidance_never_binds_to_full_or_unprinted_ownership() {
         let (p, t, mut c) = synthetic_evidence().expect("fixture");
         for (basis, code) in [
@@ -1061,6 +1159,11 @@ mod tests {
             let r = assess(&p, &t, &c, None).expect("unresolved annual perimeter");
             assert_eq!(r.rows.len(), 2);
             assert!(r.rows.iter().all(|r| r.score.is_none()));
+            let OutcomeBinding::Unresolved { sources, .. } = &production(&r).outcome else {
+                panic!("restricted outcome");
+            };
+            assert_eq!(sources.len(), 1);
+            assert_eq!(sources[0].to_json(), c[0].to_json());
             assert_eq!(
                 r.summaries
                     .iter()

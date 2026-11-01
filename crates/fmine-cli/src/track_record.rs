@@ -63,7 +63,7 @@ fn source(out: &mut String, kind: &str, cell: &KeyedCell) {
     }
 }
 
-fn render(report: &TrackRecordReport) -> String {
+pub(super) fn render(report: &TrackRecordReport) -> String {
     let label = if report.synthetic {
         "Invented synthetic evidence; these results are not issuer findings."
     } else {
@@ -98,7 +98,7 @@ fn render(report: &TrackRecordReport) -> String {
                     "first published"
                 }
             ),
-            OutcomeBinding::Unresolved { code, reason } => {
+            OutcomeBinding::Unresolved { code, reason, .. } => {
                 format!("Unresolved: {} — {}", text(code), text(reason))
             }
         };
@@ -201,6 +201,29 @@ fn render(report: &TrackRecordReport) -> String {
             );
         }
     }
+    if report.rows.iter().any(
+        |r| matches!(&r.outcome, OutcomeBinding::Unresolved { sources, .. } if !sources.is_empty()),
+    ) {
+        out.push_str("## Rejected outcome evidence\n\nThese selected source cells remain unscored. Their reported values, interpretations and source hashes are retained for review; later appearances do not replace them.\n\n| Site and metric | Year | Release | Source value | Locator | Claim |\n|---|---|---|---|---|---|\n");
+        for row in &report.rows {
+            if let OutcomeBinding::Unresolved { sources, .. } = &row.outcome {
+                for cell in sources {
+                    let _ = writeln!(
+                        out,
+                        "| {} / {} | {} | {} | {} | {} | `{}` |",
+                        text(&row.site),
+                        text(&row.metric),
+                        row.year,
+                        text(&cell.key.reporting_vintage.release),
+                        printed(cell),
+                        text(&cell.locator),
+                        cell.claim.claim_id
+                    );
+                }
+            }
+        }
+        out.push('\n');
+    }
     out.push_str("## Later outcome appearances\n\nThese appearances remain visible and never overwrite the selected outcome or enter its score.\n\n| Site and metric | Year | Release | Printed outcome | Locator |\n|---|---|---|---|---|\n");
     for row in &report.rows {
         for cell in &row.later_outcomes {
@@ -235,8 +258,13 @@ fn render(report: &TrackRecordReport) -> String {
             text(&row.guidance.locator.to_string()),
             row.guidance.doc_sha256
         );
-        if let OutcomeBinding::Resolved { cell, .. } = &row.outcome {
-            source(&mut out, "Selected outcome", cell);
+        match &row.outcome {
+            OutcomeBinding::Resolved { cell, .. } => source(&mut out, "Selected outcome", cell),
+            OutcomeBinding::Unresolved { sources, .. } => {
+                for cell in sources {
+                    source(&mut out, "Rejected outcome", cell);
+                }
+            }
         }
         for cell in &row.later_outcomes {
             source(&mut out, "Later appearance", cell);
