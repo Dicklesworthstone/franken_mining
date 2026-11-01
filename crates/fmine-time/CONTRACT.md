@@ -8,7 +8,7 @@
 - **Allowed Module Families:** `["stamp", "calendar", "quad"]`
 
 ## 2. Mathematical & Domain Formulation
-Implements `RecordTime`, `ValidTime`, `TimeEvidence`, proleptic Gregorian `CivilDate` (Howard Hinnant algorithm), `SiteCalendar`, `FiscalCalendar`, and `QuadTemporalStamp` with `AsOfQuery` (`G-TIME-1`, `G-TIME-2`).
+Implements `RecordTime`, `ValidTime`, `TimeEvidence`, proleptic Gregorian `CivilDate` (Howard Hinnant algorithm) with ISO 8601 weekday and week, `SiteCalendar`, `FiscalCalendar`, and `QuadTemporalStamp` with `AsOfQuery` (`G-TIME-1`, `G-TIME-2`).
 
 `QuadTemporalStamp` holds the four times of plan §6.3, private so that no stamp can hold an impossible order:
 - `physical_valid_time`: the interval over which the physical state held;
@@ -49,7 +49,9 @@ and in the anchor: an anchor at least as far along in every cell sees all that a
   which is a different case.
 
 ## 6. Proof Obligations (`PO-*`)
-- `PO-TIME-1`: Bijective `CivilDate <-> epoch_days` across `1900-01-01..2200-12-31`.
+- `PO-TIME-1`: Bijective `CivilDate <-> epoch_days` across `1900-01-01..2200-12-31`, and epoch days, ISO weekday
+  and ISO week agree with the pinned oracle table `fixtures/fmine-time/civil_iso_1900_2200.txt` (CPython
+  `datetime`, 16 dates a year; capture record beside it; generator `scripts/oracle/civil_iso_table.py`).
 - `PO-TIME-2`: `AsOfQuery::admits` refuses any stamp with `t_avail > as_of_cutoff` (`FMINE-REF-108`).
 
 ## 7. Failure Modes & Deterministic Fallbacks

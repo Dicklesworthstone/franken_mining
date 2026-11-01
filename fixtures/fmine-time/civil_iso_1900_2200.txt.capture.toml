@@ -1,0 +1,11 @@
+# Capture record (§33.2) for civil_iso_1900_2200.txt: PO-TIME-1's pinned oracle table (bd-029).
+# The inputs are the generator script; it states which dates are listed and the line format.
+oracle = "CPython datetime (proleptic Gregorian date.toordinal and date.isocalendar)"
+version = "Python 3.15.0"
+platform = "arm64-darwin"
+inputs_digest = "sha256:99395824e1416d8cbe6838eaabad099812cfcc69e94bd30f52c23b25e64742dd"
+outputs_digest = "sha256:c937a9216b1e74c9da0d2273213a3e6f887c62254015286ba4ccd021501ed105"
+command = "python3 -I scripts/oracle/civil_iso_table.py"
+captured_by = "coding agent that wrote the fmine-time code under test (no separate lab runner)"
+date = "2026-11-01"
+licence = "Generated calendar facts; the oracle is CPython (PSF-2.0); the generator is this repository's licence"

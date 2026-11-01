@@ -312,6 +312,28 @@ impl CivilDate {
             day: d as u8,
         }
     }
+
+    /// ISO 8601 weekday: Monday = 1 through Sunday = 7 (`BD-029`).
+    #[must_use]
+    pub const fn iso_weekday(self) -> u8 {
+        // 1970-01-01 was a Thursday.
+        ((self.to_epoch_days() + 3).rem_euclid(7) + 1) as u8
+    }
+
+    /// ISO 8601 week-numbering year and week (`1..=53`): the week, Monday to Sunday, that holds the date's Thursday
+    /// (`BD-029`). Early January can fall in the previous year's last week, and late December in next year's week 1.
+    #[must_use]
+    pub const fn iso_week(self) -> (i32, u8) {
+        let thursday = self.to_epoch_days() - self.iso_weekday() as i64 + 4;
+        let year = Self::from_epoch_days(thursday).year;
+        let jan1 = Self {
+            year,
+            month: 1,
+            day: 1,
+        }
+        .to_epoch_days();
+        (year, ((thursday - jan1) / 7 + 1) as u8)
+    }
 }
 
 /// Returns `true` if `year` is a proleptic Gregorian leap year.
@@ -549,6 +571,30 @@ mod tests {
         assert!(CivilDate::new(1900, 2, 29).is_err());
         assert!(CivilDate::new(2000, 2, 29).is_ok());
         assert!(CivilDate::new(2024, 2, 29).is_ok());
+    }
+
+    /// PO-TIME-1 (BD-029): epoch days, weekday and ISO week agree with the pinned CPython oracle table, 16 dates a
+    /// year over 1900-2200 (the table's capture record is beside it in fixtures/fmine-time/).
+    #[test]
+    fn test_po_time_1_calendar_matches_the_pinned_oracle_table() {
+        let table = include_str!("../../../fixtures/fmine-time/civil_iso_1900_2200.txt");
+        let mut rows = 0;
+        for line in table.lines() {
+            let f: Vec<&str> = line.split(' ').collect();
+            assert_eq!(f.len(), 5, "{line}");
+            let ymd: Vec<i64> = f[0].split('-').map(|p| p.parse().unwrap()).collect();
+            let date = CivilDate::new(ymd[0] as i32, ymd[1] as u8, ymd[2] as u8).expect(line);
+            let epoch: i64 = f[1].parse().unwrap();
+            assert_eq!(date.to_epoch_days(), epoch, "{line}");
+            assert_eq!(CivilDate::from_epoch_days(epoch), date, "{line}");
+            assert_eq!(date.iso_weekday(), f[2].parse::<u8>().unwrap(), "{line}");
+            let week = (f[3].parse::<i32>().unwrap(), f[4].parse::<u8>().unwrap());
+            assert_eq!(date.iso_week(), week, "{line}");
+            rows += 1;
+        }
+        assert_eq!(rows, 16 * 301, "16 dates in each year 1900-2200");
+        assert!(table.starts_with("1900-01-01 -25567 1 1900 1\n"));
+        assert!(table.ends_with("2200-12-31 84370 3 2201 1\n"));
     }
 
     #[test]
