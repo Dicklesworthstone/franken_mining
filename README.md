@@ -133,6 +133,48 @@ their envelope has no identity-ledger certificate or issuance anchor. The source
 separately and does not certify the model. Missing IDs and altered source files refuse instead of returning
 a stale cached Claim. Recovery results remain descriptive and uncalibrated.
 
+### Compare explicit decision alternatives
+
+DESIGN (BD-225, plan §22): `decide card` evaluates an explicitly declared finite scenario model and renders a
+draft DecisionCard. Run the invented expansion exercise supplied in the repository:
+
+```bash
+cargo run -p fmine-cli -- decide card tests/decisions/expansion.toml --format markdown
+cargo run -p fmine-cli -- decide card tests/decisions/expansion.toml --json
+```
+
+The model declares named states with exact rational probabilities, monetary payoffs for every action in every
+state, one explicit do-nothing action, a common currency and valuation basis, and a named unknown-risk scenario
+with its trigger and downside exposure. `payoff.value` is in **major currency units**, with at most four decimal
+places. `uu.downside_usd_m` is explicitly in USD millions. Weights must be strictly positive and sum exactly to
+one. Missing or duplicate states, incompatible currencies, missing unknown-risk terms and unsupported fields
+refuse the comparison; the engine does not repair the model or drop alternatives.
+
+The exercise has a 60% high state and a 40% low state. These are invented input assumptions. The computed results,
+in USD millions, are:
+
+| Alternative | Expected NPV | CVaR95 of loss | Mean regret | Maximum regret |
+|---|---:|---:|---:|---:|
+| Build the expansion | 100 | 200 | 102 | 255 |
+| Smaller fixed-return option | 55 | −55 | 147 | 245 |
+| Do nothing | 0 | 0 | 202 | 300 |
+
+Expected value ranks the expansion first; minimax regret ranks the smaller option first. Regret compares each
+action with the best payoff in the **same named state**. CVaR95 integrates exactly the worst 5% of signed loss
+`-NPV`, including only the needed fraction of a boundary state's probability. An all-gain alternative can
+therefore have negative tail loss. The card also reports weighted inverse-CDF P10/P50/P90, complete per-state
+payoffs and regret, both rankings and every tied winner. All calculations use checked exact arithmetic; JSON
+monetary results are rational strings in major currency units.
+
+The command hashes the actual model bytes and retains the complete input Claims, source anchors, evidence
+labels, confidentiality and unknown-risk terms in its output. The output Claim and report digest bind that full
+input metadata as well as the computed statistics. Editing an assumption changes the identity even when it
+leaves the numerical ranking unchanged. Model-file inputs remain **Assumed, internal and uncalibrated**; supplied
+probabilities do not become calibrated by passing arithmetic checks. The explicit unknown-risk terms remain
+outside the priced scenario matrix. This comparison supplies no feasibility approval, calibrated selection
+frequency, VOI calculation, historical replay proof or durable decision-ledger entry. It does not pass the full
+BD-225 or Helm acceptance gates.
+
 ### Check cited tables, reserve calculations and cutoffs
 
 DESIGN (BD-340.S5/S8): inspect the existing workbook identities with their source citations and ledger

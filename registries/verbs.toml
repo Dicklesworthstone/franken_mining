@@ -3,6 +3,12 @@
 schema_version = 1
 
 [[verb]]
+path = "decide card"
+subsystem = "Helm"
+mutates_authority = false
+description = "Compare explicit monetary alternatives on shared declared scenarios, retaining exact risk, regret, assumptions and source evidence"
+
+[[verb]]
 path = "assure public"
 subsystem = "Bullion"
 mutates_authority = true

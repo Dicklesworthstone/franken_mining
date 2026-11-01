@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "decision", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -29,6 +29,12 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Negative production is unusable. A degenerate printed range is interpreted as a point target.
 - **Envelope:** `FMT-ENV-1` (`schema_version: "fmine.env.v1"`).
 - **Verbs:**
+  - `decide card <model-file>`: a conditional monetary comparison on declared finite scenarios (BD-225).
+    The adapter reads at most 4 MiB of UTF-8 from a regular file, hashes the actual bytes, and delegates parsing
+    and exact evaluation to `fmine-decide::card`. The model supplies all weights, actions, payoffs and UU terms;
+    every imported Claim remains Assumed and internal. JSON includes the source path/hash, complete core card,
+    exact rankings, risk and regret. Markdown renders the same result and evidence. No issuance certificate,
+    historical cut, calibration verdict, operational feasibility or execution authority is manufactured.
   - `assure public --issuer <issuer> [--through YYYYQn]`: the gate-eligible run over the filings in
     `registries/sources/<issuer>.toml`, optionally only those at or before a quarter;
   - `assure public --synthetic`: the known-answer run, never gate-eligible;

@@ -1,6 +1,7 @@
 //! FrankenMining CLI (`fmine`) implementation (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
 mod claim_inspection;
+mod decision;
 mod forecast;
 mod guidance;
 mod guidance_capacity;
@@ -44,6 +45,8 @@ pub enum OutputFormat {
 /// Parsed CLI command (`BD-111`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
+    /// Compare explicit monetary alternatives on one declared finite scenario set (BD-225).
+    DecideCard { model: PathBuf },
     /// Compare explicitly selected public JV production/sales assertions on a common dated perimeter.
     Mirror(mirror::Command),
     /// Local issuance status, recall and owner-authorized journal events (BD-347).
@@ -453,6 +456,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                 };
             }
             "guidance" => return "guidance completion",
+            "decide" => return "decide card",
             "mirror" => return "mirror",
             "check" => return "check tables",
             "track-record" => return "track-record",
@@ -898,7 +902,7 @@ pub fn parse_args(
     // error, never ignored, so every next action that parses means what it says.
     let words = match positional[0].as_str() {
         "assure" | "check" | "guidance" | "recovery" | "forecast" | "lint" => 2,
-        "claim" => 3,
+        "claim" | "decide" => 3,
         "doctor" | "robot-docs" | "track-record" => 1,
         other => return Err(format!("unknown verb '{other}'")),
     };
@@ -954,6 +958,17 @@ pub fn parse_args(
     }
 
     let cmd = match positional[0].as_str() {
+        "decide" => {
+            let [_, subcommand, model] = positional.as_slice() else {
+                return Err("expected 'fmine decide card <model-file>'".into());
+            };
+            if subcommand != "card" || model.trim().is_empty() {
+                return Err("expected 'fmine decide card <model-file>'".into());
+            }
+            CliCommand::DecideCard {
+                model: PathBuf::from(model),
+            }
+        }
         "check" => {
             if positional.get(1).map(String::as_str) != Some("tables") {
                 return Err("expected 'fmine check tables'".to_string());
@@ -1533,6 +1548,7 @@ fn track_record_envelope(
 pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     let to_doctor = || vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
     match cmd {
+        CliCommand::DecideCard { model } => decision::execute(model, workspace_root),
         CliCommand::Mirror(command) => mirror::execute(command, workspace_root),
         CliCommand::RelianceExplicit(command) => {
             reliance_explicit::execute(command, workspace_root)
@@ -1895,6 +1911,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 .map(|i| format!("\"{}\"", escape_json(i)))
                 .collect();
             let verbs = [
+                "decide card <model-file>",
                 "assure public --issuer <issuer> [--through YYYYQn]",
                 "assure public --synthetic",
                 "assure challenges --issuer <issuer> [--through YYYYQn]",
@@ -1963,6 +1980,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 refusals.join(",")
             );
             payload.pop();
+            payload.push_str(",\"decision\":");
+            payload.push_str(decision::ROBOT_DOCS_JSON);
             payload.push_str(concat!(
                 ",\"table_checks\":{\"schema\":\"fmine.table-check.v1\",",
                 "\"workbooks\":\"Existing assurance identities, source citations and ledger certificate\",",
