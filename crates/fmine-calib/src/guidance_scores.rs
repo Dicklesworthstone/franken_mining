@@ -21,7 +21,8 @@ pub mod price;
 
 mod certified;
 pub use certified::{
-    MAX_CP_TRIALS, clopper_pearson_90 as clopper_pearson_90_exact,
+    MAX_CP_TRIALS, clopper_pearson as clopper_pearson_exact,
+    clopper_pearson_90 as clopper_pearson_90_exact,
     clopper_pearson_90_with_limit as clopper_pearson_90_exact_with_limit,
 };
 

@@ -15,7 +15,10 @@ The public lane of M0 (`fmine assure public`).
   metric, period, ownership, denominator and unit. Exact rational half-step intervals decide containment,
   disjoint values and excessive precision; no floating-point tolerance or implicit unit conversion is used.
   AISC, total cash costs, copper C1, cost of sales, gold/copper production, gold sales, processed/head grade
-  and whole-site recovery are supported. Co-product TCC stays distinct from by-product TCC. Canonical copper
+  and whole-site recovery are supported. AISC and cost of sales include canonical copper summary/site
+  rows with explicit pound-sold denominators and `usd_per_lb` units; their rounding, source identity and
+  ownership checks are the same as for gold, with no ounce/pound conversion. Cost-of-sales discovery
+  remains outside the supported grammar. Co-product TCC stays distinct from by-product TCC. Canonical copper
   C1 summary/site rows require explicit `$/lb` or `US$/lb` and per-pound-sold denominators; by/co-product,
   gold-ounce and produced-denominator assertions are not inferred from C1. Copper production requires an
   explicit copper metric and canonical `kt`; historical millions-of-pounds site rows stay unchecked.
@@ -950,6 +953,9 @@ The public lane of M0 (`fmine assure public`).
   their implementations. The integration groups preserve the original fixtures, assertions and ignore rules.
 
 ## 10. Non-Goals & Scope Boundary
+- DESIGN (BD-340.S5): `transcribe::check_docs` exposes the existing byte/digest verification for explicitly
+  declared PDF tables. A consumer can require a document even when it has no transcription rows, so missing
+  evidence cannot hide a missing or changed file. The consumer still owns identity definitions and arithmetic.
 - Operates only on public disclosures (`Confidentiality::public()`).
 - Makes no reserve, resource, geotechnical, regulatory or investment claim.
 - Implies no issuer affiliation.

@@ -376,11 +376,11 @@ fn revisions_do_not_double_weight_the_original_cohort() {
         1
     );
     t.documents[1].published_at = "2030-01-15".into();
-    assert_eq!(assess(&t, &cells, &[]).unwrap_err().code, "FMINE-REF-105");
+    assert_eq!(assess(&t, &cells, &[]).unwrap_err().code, "FMINE-REF-104");
 }
 
 #[test]
-fn unchanged_target_with_changed_basis_is_revised_before_a_true_reaffirmation() {
+fn unchanged_target_on_a_new_basis_starts_a_series_before_a_true_reaffirmation() {
     let (mut t, cells) = track_record::synthetic_evidence().unwrap();
     for (file, date) in [
         ("changed-basis-guidance.txt", "2030-06-01"),
@@ -404,7 +404,7 @@ fn unchanged_target_with_changed_basis_is_revised_before_a_true_reaffirmation() 
         rows[1].guidance.value.key.basis
     );
     assert_eq!(rows[0].vintage_kind, "initial_registered");
-    assert_eq!(rows[1].vintage_kind, "revised");
+    assert_eq!(rows[1].vintage_kind, "initial_registered");
     assert_eq!(rows[2].vintage_kind, "reaffirmed");
     assert_eq!(rows[1].guidance.value, rows[2].guidance.value);
     assert!(rows[1].original.outcome.is_none());

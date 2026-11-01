@@ -5,10 +5,10 @@ The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` chec
 - generate the refusal catalogue;
 - capture oracle fixtures;
 - check contracts and beads;
-- hash, verify and order the FY2026 forecast record;
+- hash, verify, score and order the FY2026 forecast record;
 - write the `fmine` binary's bill of materials (`sbom`, BD-073).
 
-`tests/` (25 files) also holds the public lane's cross-crate integration tests. No production crate links it.
+`tests/` (29 files) also holds the public lane's cross-crate integration tests. No production crate links it.
 
 - **Crate:** `xtask`
 - **Layer:** T
@@ -27,11 +27,11 @@ The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` chec
 - **External programs, read-only:**
   - `cargo tree`, for `check-int-as-001a`, `check-oracle` and `sbom`;
   - `git rev-parse`, `diff`, `ls-files`, `ls-tree` and `show`, for `check-amend`, `check-lifts --upstream`, `check-lift-drift` and `forecast-rules-order`;
-  - `openssl ts`, for `forecast-record-verify`.
+  - `openssl ts`, for `forecast-record-verify` and `forecast-record-score`.
 - **Library dependencies:**
   - `fmine-registry`, for the source registries, its TOML subset and the calendars;
-  - `fmine-calib`, for the pure forecast record;
-  - `fmine-public`, for the label-anchored Mine Stats reader that `forecast-baseline` uses;
+  - `fmine-calib`, for the pure forecast record and its scoring;
+  - `fmine-public`, for the label-anchored Mine Stats reader that `forecast-baseline` and `forecast-record-score` use;
   - `fmine-core` and `fmine-time`.
 - **Root.** The workspace is the checkout xtask was built from (`CARGO_MANIFEST_DIR`'s grandparent), not the current directory.
 
@@ -96,12 +96,12 @@ Not applicable: no Claims are emitted.
 - `check-amend` needs the root to be a git work tree's top level. Without one it is a warning in `check-all`, and an error with `--base`.
 - `check-lifts --upstream` and `check-lift-drift` need a frankensim checkout. CI runs only the drift check, each quarter (`.github/workflows/lift-drift.yml`). `test_upstream_known_answers_when_a_checkout_is_given` passes without running when `FRANKENSIM_PATH` is unset.
 - `sbom` describes the closure over all targets (`--target all`), so a crate used only on another platform is listed too. A path package has no purl, since `pkg:cargo/<name>` would name a crates.io crate. A licence is the manifest's declared `license` field: the workspace declares MIT, but `LICENSE` reads "MIT License (with OpenAI/Anthropic Rider)" (E681), so the bill's MIT is the declaration, not necessarily the full terms, until the owner decides (RISK-17). The output is checked by its tests and parses as JSON; it has not been validated against the official CycloneDX schema.
-- `forecast-baseline` needs the registered workbooks under `corpus_of_input_docs/`, so it never runs in CI (RISK-31). Its test is `#[ignore]` for that reason. So are 26 tests in `tests/`, which need registered workbooks, PDFs or the local transcription registry.
+- `forecast-baseline` needs the registered workbooks under `corpus_of_input_docs/`, so it never runs in CI (RISK-31). Its test is `#[ignore]` for that reason. So are 30 tests in `tests/`, which need registered workbooks, PDFs or the local transcription registry.
 
 ## 9. Oracles
 - The plan text: §8.4 for `check-refusals` (`test_committed_registry_catalogue_and_plan_agree`) and Appendix F.1 for `check-stack-lock` (`test_lock_ids_match_appendix_f1`).
 - The frankensim checkout, whose blobs `check-lifts --upstream` and `check-lift-drift` hash through `git show` (`test_rule_e_upstream_digest_and_overlap`, `test_rule_g_drift_against_a_seeded_upstream`).
-- `openssl ts -verify` against `tsa_chain.pem`, for a forecast record's time (`test_proof_times_from_openssl_text`).
+- `openssl ts -verify` against the checked-in DigiCert or FreeTSA root, whose sha256 is pinned in `TSA_ROOTS` (`tsa_chain.pem` adds only untrusted intermediates), for a forecast record's time (`test_proof_times_from_openssl_text`).
 - The other checks have no external oracle: their tests are seeded violations.
 
 ## 10. Known gaps
@@ -209,15 +209,22 @@ Not applicable: no Claims are emitted.
 - `check_all(root: &Path) -> Result<LocReport, Vec<String>>` (BD-015): every check above except `contracts`, `check-beads`, `check-lifts --upstream`, `check-lift-drift` and the forecast commands.
 - `forecast::{rules_hash, record_hash, record_verify}` (BD-334.S1). The commands are `forecast-rules-hash <rules.toml>`, `forecast-record-hash <dir>` and `forecast-record-verify <dir>`: the IO around the pure `fmine_calib::record`.
   - They write `rules.sha256` and `record.sha256`, and replace a different digest only while no proof (`.tsr`, `.ots`) stands beside it.
-  - `record_verify` takes the record's time only from `record.tsr`, after `openssl ts -verify` against `tsa_chain.pem` passes. `forecast::proof_times_from_text` reads the reply's time stamp and accuracy, and an accuracy that overflows the interval refuses.
+  - `record_verify` takes the record's time only from a signed `record.tsr` verified against the compiled SHA-256 pins for the checked-in DigiCert or FreeTSA root PEM (`TSA_ROOTS`). A supplied `tsa_chain.pem` contributes only untrusted intermediates. Certificate validity is evaluated at the token's signed time, and a separately authenticated rules proof must strictly precede the record proof including both accuracy bounds. Changed proof/root bytes refuse. `forecast::proof_times_from_text` reads signed time and accuracy; an overflowing interval refuses.
   - `rules_hash` refuses rules that do not parse or still carry an `OPEN` marker.
   - The record is validated against the dates its rules state, and its `forecasts.csv` against their universe and targets.
+  - The manifest's advisory registry-hash binding includes registered documents as well as workbooks. This authenticates the frozen declarations and detects conflicting registered digests; it does not prove actual input use or replay a generator. Source adapters separately verify the bodies they consume.
+- DESIGN (BD-334/BD-068): `forecast::record_score` (command `forecast-record-score <dir>`) shares that verifier and scores the already loaded frozen manifest/CSV/rules against registered original-release Mine Stats Claims. It writes nothing.
+  - It verifies time proofs before opening outcome workbooks. Production is the signed exact difference between original FY and original nine-month totals on the explicit 100% basis; AISC uses the original Q4 QTD rate directly. Later comparatives never fill missing originals. Published numeric observations, including zero and source-status flags, retain their declared measurement meaning and source evidence. A Q2 ownership-label reference is used only when its exact registered bytes occur in the frozen manifest.
+  - Every frozen site/target remains visible, with unresolved and not-forecast states. The deterministic JSON assessment includes exact losses, observed and full-cohort coverage/loss bounds, the declared iid reference interval and rho sensitivity, source Claims/digests/locators, proof bounds and an assessment digest. It creates no forecast or timestamp and claims no calibration.
+  - `forecast::scoring::benchmarks` supplies the frozen issuer-guidance and persistence comparators to `fmine_calib::record::scoring::compare`. Guidance uses the latest agreed pre-cut document; same-day publication metadata needs exact manifest-bound bytes and an earlier declared retrieval, whose declared status is retained. No older guidance substitutes for an uncertain latest candidate. Original nine-month displayed production supplies the signed annual-guidance remainder; cost rates are never subtracted.
+  - The fixed original Q3 point and consecutive-quarter persistence pool are separate registered benchmark information sets, with manifest membership disclosed. Missing/unreadable required history refuses the comparator rather than shortening its pool. Printed zero and signed points remain valid; only historical ratio pairs carry the frozen positive-number restriction. Source Claims retain stored and displayed values.
+  - All three means and both differences use one identical complete member set, retaining every exclusion. Per-target arithmetic refusal retains that population and the other target; the final optional adapter boundary preserves unconditional forecast/outcome scores. `benchmark_assessment` serializes statuses, exact results, source/timing evidence and pool exclusions. Issuer guidance has no inferred nominal probability, and no same-information-set, skill or calibration claim is made.
 - `forecast::persistence_baselines` (command `forecast-baseline`) computes each `run_rate_persistence` baseline of the FY2026 rules from the registered Mine Stats workbooks.
   - The workbooks are read through `fmine-public` under the registered vocabulary, and a workbook with a refused cell refuses.
   - Each baseline gives the pool's size, the pairs left out and the two ratio quantiles. Once the point quarter's workbook is registered, it also gives each live site's exact interval.
   - It needs the corpus, so it never runs in CI (RISK-31).
-  - `forecast-baseline --as-of YYYY-MM-DD` adds `forecast::guidance::run`'s issuer-guidance baseline to that persistence output. It selects the latest registered two-reader annual guidance at the inclusive date cut; ties and pending newer readings stay unavailable. Production divides by its stated attributable share before subtracting the original Q3-release nine-month Claim; AISC retains its per-sold-ounce interval unchanged. All frozen sites and targets remain visible, including excluded sites and missing originals. Negative remainders are retained. The report binds rules, exact intervals, source Claims, PDF locators/digests/readers and availability evidence. Workbook retrieval is the conservative availability bound because per-workbook publication dates are not registered; unsupported earlier cuts refuse. No forecast, time proof or calibration claim is created. Actual registered-file integration controls are `tests/forecast_guidance_baseline.rs`.
-  - `scripts/forecast_record_e2e.sh` runs all three on a synthetic record with a throwaway local TSA, whose certificate is named test_tsa and is never a record's proof. `scripts/verify_rules_timestamp.sh` checks the rules' proofs with openssl and ots alone.
+  - `forecast-baseline --as-of YYYY-MM-DD` adds `forecast::guidance::run`'s issuer-guidance baseline to that persistence output. It selects the latest registered two-reader annual guidance at the inclusive date cut; ties and pending newer readings stay unavailable. Production divides by its stated attributable share before subtracting the original Q3-release nine-month Claim; AISC retains its per-sold-ounce interval unchanged. All frozen sites and targets remain visible, including excluded sites and missing originals. Negative remainders are retained. The report binds rules, exact intervals, source Claims, PDF locators/digests/readers and availability evidence. This baseline uses workbook retrieval as its conservative availability bound, including when per-workbook publication dates are registered; earlier cuts refuse. No forecast, time proof or calibration claim is created. Actual registered-file integration controls are `tests/forecast_guidance_baseline.rs`.
+  - `scripts/forecast_record_e2e.sh` checks synthetic digest/mutation failures and verifies that a throwaway local TSA (`test_tsa`) cannot authenticate a public record. The committed rules proof is independently checked under the pinned public authority in unit tests, including wrong-digest refusal. `scripts/verify_rules_timestamp.sh` checks the rules' proofs with openssl and ots alone.
 - `sbom::{sbom, build, render, parse_lock}` (BD-073; command `sbom [--binary <path>]`). The bill is CycloneDX 1.5 JSON for `fmine-cli`'s normal and build closure, as `cargo tree --locked -e normal,build --target all` resolves it, so dev-dependencies and `xtask` stay out.
   - Each component has its name, version and licence expression. A path package has its relative path, a crates.io package its purl and the lock's SHA-256 checksum, and a git package a purl whose `vcs_url` holds the lock's full commit.
   - `dependencies` lists every component's direct edges. The metadata records the toolchain channel, `Cargo.lock`'s sha256 and the `cargo tree` command. With `--binary`, the root component also carries the binary's file name and sha256.

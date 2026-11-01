@@ -401,6 +401,26 @@ pub(super) fn render(report: &TrackRecordReport) -> String {
             );
         }
     }
+    if !report.pending_transcriptions.is_empty() {
+        out.push_str("\n## Pending reader agreement\n\nThese locators await an independent agreeing reading before entering a scored population:\n\n");
+        for locator in &report.pending_transcriptions {
+            let _ = writeln!(out, "- {}", text(locator));
+        }
+    }
+    if !report.unsupported_guidance.is_empty() {
+        out.push_str("\n## Guidance awaiting metric support\n\nThese agreed rows remain outside the supported-metric populations.\n\n| Quantity | Printed target | Locator | SHA-256 |\n|---|---|---|---|\n");
+        for row in &report.unsupported_guidance {
+            let _ = writeln!(
+                out,
+                "| {} | {} {} | {} | `{}` |",
+                text(&row.quantity),
+                text(&row.token),
+                text(&row.unit),
+                text(&row.locator.to_string()),
+                text(&row.doc_sha256)
+            );
+        }
+    }
     if !report.source_refusals.is_empty() {
         out.push_str("\n## Source mapping refusals\n\nThese source cells did not produce usable canonical Claims. They are retained here so missing evidence is visible.\n\n| Locator | Reason |\n|---|---|\n");
         for refusal in &report.source_refusals {
@@ -559,7 +579,7 @@ mod tests {
             ],
             vec!["track-record", "--issuer", "barrick", "--site", " "],
             vec!["track-record", "--issuer", "barrick", "--through", "2026Q5"],
-            vec!["track-record", "--synthetic", "--as-of", "2026-10-31"],
+            vec!["track-record", "--synthetic", "--as-of", "2026-02-30"],
             vec!["track-record", "--synthetic", "--selector", "latest-as-of"],
             vec!["track-record", "--synthetic", "--rank"],
         ] {

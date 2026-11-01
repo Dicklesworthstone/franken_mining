@@ -11,7 +11,7 @@ use fmine_numerics::exact_feas::{Interval, Rat};
 use fmine_public::guidance::capacity::{TechnicalAssessment, TechnicalScenarioKind};
 use fmine_public::guidance::{GuidanceCompletionReport, NO_CLAIM};
 
-pub(super) fn text(value: &str) -> String {
+pub(crate) fn text(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -27,7 +27,7 @@ pub(super) fn text(value: &str) -> String {
 }
 
 /// Prefer an exact terminating decimal; retain a nonterminating rational and label its display approximation.
-pub(super) fn number(value: Rat) -> String {
+pub(crate) fn number(value: Rat) -> String {
     let (num, den) = (value.num(), value.den());
     let mut scale = 1_i128;
     for places in 0..=6 {
@@ -52,7 +52,7 @@ pub(super) fn number(value: Rat) -> String {
     format!("{num}/{den} (≈ {:.2})", value.to_f64())
 }
 
-pub(super) fn interval(value: Interval) -> String {
+pub(crate) fn interval(value: Interval) -> String {
     if value.lo == value.hi {
         number(value.lo)
     } else {

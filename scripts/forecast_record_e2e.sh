@@ -10,8 +10,8 @@
 #   reports it verified against the TSA's root, and unverified against its leaf alone;
 # - hash: forecast-record-hash writes record.sha256, equal to the FMREC1 frame hashed by the shell;
 # - stamp: `openssl ts -query` and `-reply` with the test TSA write record.tsr;
-# - verify: forecast-record-verify passes (after 31 Dec 2026 it must refuse instead: any FY2026 proof made then
-#   is after the deadline);
+# - verify: forecast-record-verify refuses the local test TSA: only the pinned public authority roots
+#   can authenticate a record's time. Pure manifest tests separately exercise proof cutoffs and deadlines;
 # - planted defects, each refused with its own reason: an OPEN marker left in the rules; a forecast changed
 #   after hashing; a live site × target with no forecast; a forecast for a not_published site; rules.toml
 #   changed after hashing; record.sha256 re-hashed over a changed manifest; a manifest naming another record; a
@@ -203,17 +203,7 @@ else
   log stamp false "" "$(tail -3 "$rec/record.tsr.log")"
 fi
 
-if [ "$now" -le 1798761599 ]; then # 2026-12-31T23:59:59Z
-  out="$(xt forecast-record-verify "$rec")"
-  rc=$?
-  if [ "$rc" -eq 0 ]; then
-    log verify true "$record_hex" "$out"
-  else
-    log verify false "" "exit $rc: $out"
-  fi
-else
-  refused verify_after_deadline "after the deadline" xt forecast-record-verify "$rec"
-fi
+refused local_tsa_not_public_authority "no trusted RFC 3161 proof" xt forecast-record-verify "$rec"
 
 # --- planted defects, each in its own copy of the record ------------------------------------------------------
 copy() { cp -R "$rec" "$scratch/$1" && printf '%s' "$scratch/$1"; }
@@ -246,7 +236,7 @@ refused other_record "is not the rules' record" xt forecast-record-hash "$d"
 
 d="$(copy wrong_chain)"
 cp "$tsa/tsa.pem" "$d/tsa_chain.pem"
-refused wrong_chain "Verification: FAILED" xt forecast-record-verify "$d"
+refused wrong_chain "no trusted RFC 3161 proof" xt forecast-record-verify "$d"
 
 registered="$(grep -m1 '^file = ' "$root/registries/sources/barrick.toml" | cut -d'"' -f2)"
 d="$scratch/registered_sha"
@@ -261,7 +251,8 @@ cp "$rec/rules.toml" "$rec/forecasts.csv" "$d/"
 write_manifest "$d" "$(date -u -r $((now + 86400)) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null ||
   date -u -d "@$((now + 86400))" +%Y-%m-%dT%H:%M:%SZ)" Synthetic_Workbook.xlsx "$ab"
 if (xt forecast-record-hash "$d" >/dev/null) && stamp "$d"; then
-  refused cutoff_after_proof "cut-off is not before" xt forecast-record-verify "$d"
+  # A local signature cannot authenticate even an otherwise well-formed cutoff comparison.
+  refused cutoff_after_proof_untrusted "no trusted RFC 3161 proof" xt forecast-record-verify "$d"
 else
   log cutoff_after_proof false "" "could not hash and stamp the record"
 fi

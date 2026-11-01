@@ -8,6 +8,24 @@
 - **Allowed Module Families:** `["ledger", "scoring", "prior", "pit", "record", "guidance_scores"]`
 
 ## 2. Mathematical & Domain Formulation
+
+- DESIGN (BD-334/BD-068): `record::scoring::assess` validates the frozen site/target universe and scores each
+  live forecast exactly once with exact rational interval loss. Unknown, duplicate and omitted resolutions
+  refuse; explicit unresolved members remain in the frozen denominator. Per-target output separates observed
+  coverage and mean loss from whole-cohort completion bounds. Unresolved intervals contribute at least their
+  width to the full mean loss; no finite upper loss is invented. Not-published frozen sites remain separately
+  visible. Exact effective sample-size endpoints use the declared rho range as sensitivity, not an estimated
+  correlation. The generalized certified `clopper_pearson_exact` uses the declared confidence level with the
+  existing outward integer-binomial/dyadic bounds. Its iid Bernoulli reference is not a calibration verdict.
+  This kernel reads no files, authenticates no timestamps and selects no public sources; the xtask adapter
+  must verify the record and bind original-release source Claims before calling it.
+  `record::scoring::compare` computes forecast, issuer-guidance and persistence losses on one identical
+  complete member set. Every live forecast needs an explicit benchmark row; omitted, duplicate or foreign
+  rows refuse, and inverted intervals refuse even when actuals are missing. Signed and point comparator
+  intervals are valid. Every excluded member retains all applicable missing-actual/guidance/persistence
+  flags. Empty common sets have no means or score differences. Negative forecast-minus-baseline differences
+  favor the forecast under the frozen loss, without asserting skill, calibration or probability semantics
+  for an issuer's range. The ordinary assessment retains the full frozen population independently.
 Implements the append-only pre-registration `ForecastLedger` (`INV-008`, `FMINE-REF-206`), strictly proper scoring rules (`gaussian_crps`, `gaussian_log_score`, `winkler_interval_score`), `ReferenceClassPrior` (`GB-32`: capex `+28%/+43%`, schedule `+31%`, ramp-up `74%` Yr-1), and `SpatialFrontPitMonitor` (`GB-08` Vecchia/Rosenblatt conditional PIT; plan §10.4's location score `tanh(z/2)` and centred dispersion score `tanh((z^2 - 1)/2) - c0`, each on a `ScoreBettingEProcess` with aGRAPA stakes at alpha/2).
 
 ## 3. Authority, Epistemics & Representation

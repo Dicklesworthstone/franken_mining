@@ -127,12 +127,82 @@ cargo run -p fmine-cli -- claim show clm_REPLACE_WITH_THE_EMITTED_ID --issuer ba
 The response includes both the assurance root and the keyed Claim projection digest. Missing ids and altered
 source files refuse instead of returning a stale cached Claim.
 
+### Check table identities and reserve roll-forwards
+
+DESIGN (BD-340.S5/S8): inspect the existing workbook identities with their source citations and ledger
+certificate, or supply explicit definitions for tables transcribed from registered PDFs:
+
+```bash
+cargo run -p fmine-cli -- check tables --synthetic --format markdown
+cargo run -p fmine-cli -- check tables --issuer barrick --through 2026Q2 --json
+cargo run -p fmine-cli -- check tables --issuer demo --definitions local/reserve_tables.toml --format markdown
+```
+
+The definitions mode reads only its named documents and quantities. Each document must be registered under
+the selected issuer and match its registered SHA-256 and size, even when no reading has yet been entered.
+Values come from the existing two-reader transcription registry. Definitions contain membership and rules;
+they contain no source values. This invented example declares closing reserves as opening reserves plus a
+signed net change minus a positively printed depletion:
+
+```toml
+schema = "fmine.table-identities.v1"
+issuer = "demo"
+
+[[identity]]
+id = "gold_reserves_2025"
+doc = "Synthetic_Reserves.pdf"
+family = "gold_reserve_rollforward"
+kind = "roll_forward"
+total = "closing_reserves_2025"
+total_period = "2025FY"
+unit = "koz"
+basis = "100%"
+construction = "rounded_once"
+convention = "closed"
+
+[[term]]
+identity = "gold_reserves_2025"
+quantity = "closing_reserves_2024"
+period = "2024FY"
+sign = 1
+role = "opening"
+
+[[term]]
+identity = "gold_reserves_2025"
+quantity = "depletion_2025"
+period = "2025FY"
+sign = -1
+role = "move"
+
+[[term]]
+identity = "gold_reserves_2025"
+quantity = "net_change_2025"
+period = "2025FY"
+sign = 1
+role = "move"
+```
+
+The coefficient applies to the signed printed token: a depletion already printed in parentheses normally
+uses `sign = 1`. A `kind = "sum"` identity uses `role = "member"` terms and explicitly declares each member's
+period, including multi-year totals. One rounding construction applies to a family, and one tie convention
+applies to a document. The parser rejects competing declarations. Shared cells are solved jointly; every
+connected component reports a checked witness, a checked conflict certificate, or an explicit indeterminate
+result. Conflict reports retain correction sets and implied intervals without selecting a corrected value.
+Missing agreed operands remain listed identities. A mathematical conflict is a finding with exit zero;
+unreadable/changed source files and reader disagreements preserve their typed refusals.
+
+DESIGN boundary: these are arithmetic checks on issuer assertions. Different filing/deck vintages remain
+separate documents. The command does not determine which vintage is true, classify reserves or establish
+GATE-HALL-01. Its PDF report digest binds the declarations, readings and results; it is not a ledger anchor or
+external timestamp. Authentic historical PDF readings and the full reserve-vintage store remain open.
+
 ### Check cited numbers in a draft
 
 ```bash
 cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2
 cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2 --format markdown
 cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2 --discover
+cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2 --as-of 2026-08-11 --format markdown
 ```
 
 DESIGN (BD-345): cited mode checks explicit equalities against canonical Claims from one hash-verified source
@@ -147,8 +217,20 @@ The checker uses exact rounding intervals. It distinguishes value, period and ba
 rounding, missing or ambiguous citations, and superseded Claims. It accepts only complete supported equality
 predicates; negations, comparisons and other prose remain `unchecked`. A matching number cannot compensate for
 a wrong site, period, metric or basis. `verified` means agreement with the cited source assertion, not that the
-issuer assertion is true or that disclosure is permitted. Publication-time/publicness checks are not part of
-this slice; `--through` selects registered vintages, not an information-availability date.
+issuer assertion is true or that disclosure is permitted. `--through` selects registered source vintages.
+
+DESIGN (BD-345.S4): `--as-of YYYY-MM-DD` adds an independent public-record assessment for each supported
+equality. It reports the earliest matching dated registered assertion, its exact Claim, locator, file hash,
+publication date and the date's stated basis. Other-basis matches, contradictory values, unsupported precision,
+post-cut publications, undated sources and inadmissible evidence remain explicit. Competing attributable
+shares cannot become an unambiguous disclosure merely because one amount matches. The equality verdict stays
+visible beside this assessment; this does not authorize disclosure or establish legal compliance.
+
+Workbook `[[source]]` rows may declare `published_at` and `published_at_basis` together, with a cited
+`FACT: ` or `INFERENCE: ` basis. An omitted date stays unknown: the reporting quarter and retrieval date
+cannot manufacture a publication date. Correcting these metadata changes the public-record report digest
+without changing the workbook's numerical Claim. Derived identities and forward guidance are not assessed
+by this first public-record slice.
 
 DESIGN (BD-345.S3): `--discover` also searches for source Claims when a supported equality has no Claim link.
 The subject, metric, reporting period, ownership basis and unit must still be stated explicitly. A unique
@@ -210,10 +292,46 @@ documents. These transcriptions and source documents remain outside git. Quantit
 `production_kt`, `aisc_usd_per_oz`, `aisc_usd_per_lb`, `tcc_usd_per_oz` and `c1_usd_per_lb`.
 Production basis is `100%` or `attributable:n/d`. Cost basis also declares its definition, for example
 `attributable:4/5;aisc=issuer-reported-per-sold-oz`; the analogous per-sold-lb, `tcc` and `c1` definitions are
-explicit. Unknown guidance quantities, missing agreed readings and changed source bytes refuse. The synthetic
-command is an invented known-answer demonstration through the same binding and scoring code.
+explicit. Registered runs require complete two-reader agreement across the selected guidance namespace.
+The retrospective command also refuses unsupported guidance quantities; the dated comparison modes retain
+them as diagnostics. The pure source-binding API can retain pending guidance readings alongside admitted rows.
+Missing or changed source bytes refuse. The synthetic command is an invented known-answer demonstration
+through the same binding and scoring code.
 
-Both report modes select guidance, price-assumption and realized-price inputs before checking document
+#### Restrict original-outcome cohorts to an evidence date
+
+```bash
+cargo run -p fmine-cli -- track-record --issuer barrick --cohort-as-of 2026-10-31 --site north-mara
+cargo run -p fmine-cli -- track-record --issuer barrick --cohort-as-of 2026-10-31 --through 2026Q2 --format markdown
+cargo run -p fmine-cli -- track-record --synthetic --cohort-as-of 2032-12-31 --format markdown
+```
+
+The optional `--cohort-as-of` selects a dated projection through the same checked source binder. It uses registered
+document publication dates and conservative workbook-retrieval availability. The retrospective command above
+does not claim an information-availability date. Neither mode authenticates an external timestamp or registers
+a forecast. Units, ownership bases, canonical Claim identities, and metric definitions are checked in both.
+An unprinted ownership basis is never inferred to mean full ownership.
+
+Dated summaries group sites by metric, annual period, canonical basis and guidance publication date. They retain every admitted
+member, including missing original outcomes. Later comparative appearances have separate scores and never fill
+the original cohort. Revisions remain separate; an unchanged range on a changed ownership basis is a revision.
+The retrospective view retains its per-site history summaries across years and separate comparative populations.
+The separate `--as-of` mode selects the earliest registered guidance and compares first-published and latest
+outcomes at its evidence cut. `--cohort-as-of` preserves each guidance publication as its own cohort; the two
+date selectors cannot be combined.
+
+For a guidance range `[L, U]`, the exact normalized position is `(outcome - midpoint) / half_width`.
+The dated synthetic example has three sites with `[100, 120]` guidance: an original outcome of `125` gives exactly
+`3/2`; another sits on a rounding boundary, and the third lacks an original outcome. Missing members remain in
+whole-cohort completion bounds. Rounding-aware bounds additionally preserve boundary ambiguity. Point guidance
+has no normalized range position. Exact rational IID reference bounds are retained alongside display projections;
+they do not estimate dependence, effective sample size, bias confidence intervals or forecasting skill.
+
+Historical guidance transcriptions and the full M0/BD-341 data, dependence and coverage gates remain open.
+This cohort mode keeps unconditional scores; the paired sensitivities below require their own cited price
+and royalty evidence. JSON is the default (`--json` also selects it); Markdown includes comparisons and citations.
+
+Track-record source loading selects guidance, price-assumption and realized-price inputs before checking document
 bytes and reader agreement. Adding incomplete or unusable optional
 technical readings does not invalidate these reports. Unsupported guidance keys and every reader at a
 selected locator remain in scope; the complete registry still needs valid syntax and registered identities.
@@ -247,6 +365,80 @@ existing refusals. Unrelated technical sources do not block either track-record 
 The explicit `--as-of` report also supports price sensitivity. It bounds both the price documents and
 completed quarterly history by the requested evidence cut, and assesses first-published and latest registered
 outcomes separately.
+`--cohort-as-of` keeps unconditional scores and cannot be combined with `--price-subject`.
+
+### Mirror two reporters' gold production or sales
+
+```bash
+cargo run -p fmine-cli -- mirror --synthetic
+cargo run -p fmine-cli -- mirror --synthetic --format markdown
+```
+
+DESIGN (BD-346): the mirror checks whether two reporters' printed gold quantities admit a common 100%
+quantity under their independently cited ownership and complete dated operating perimeter. The synthetic
+demo uses invented evidence. To use registered filings, explicitly select both issuers and documents;
+the following names are placeholders for your local registries:
+
+```bash
+cargo run -p fmine-cli -- mirror --asset example-jv --period 2025 --as-of 2026-02-01 \
+  --left-issuer issuer_a --left-document Left.pdf \
+  --right-issuer issuer_b --right-document Right.pdf --metric production --format markdown
+```
+
+`--metric production` is the default; `--metric sold` checks ounces sold separately. Periods are calendar
+years (`2025` or `2025FY`), quarters (`2025Q1` through `2025Q4`) or halves (`2025H1`, `2025H2`).
+`--synthetic` is exclusive with source selectors. JSON is the default; `--workspace` selects the local root.
+
+Each issuer uses the existing `registries/sources/<issuer>.toml` and ignored
+`registries/transcriptions/<issuer>.toml`. A sources registry can contain only validated `[[document]]`
+rows plus its required metadata and `[[subject]]`; no dummy workbook is needed. Select a document of kind
+`mda`, `aif` or `partner_filing`, with a cited `FACT: ` publication-date basis. Its `published_at` must be
+on or after the requested period ends and on or before `--as-of`. The run verifies the selected bytes and
+every reader at each selected locator, including readers who used a different quantity key. Missing,
+altered, pending or conflicting selected evidence refuses. Unselected documents do not supply fallback data.
+
+Transcription keys include the asset with hyphens replaced by underscores and a lowercase period. For
+`example-jv`, FY2025 production uses:
+
+| Quantity key | Unit | Basis prefix |
+| --- | --- | --- |
+| `mirror_example_jv_2025fy_gold_produced_100_koz` | `koz` | `100%` |
+| `mirror_example_jv_2025fy_gold_produced_attr_koz` | `koz` | `attributable` |
+| `mirror_example_jv_2025fy_ownership_percent` | `percent` | `equity` |
+
+For sales, replace `gold_produced` with `gold_sold`; the ownership key stays the same. Every entry's
+`period` is the corresponding uppercase `2025FY`, `2025Q1` or `2025H1` form. At least one full-mine or
+attributable quantity is required from each issuer, and both assertions participate when supplied.
+Attributable quantities require the separate ownership row at its own page/table/row/column. Its printed
+point is an exact stated percent, converted rationally to a share; a range or missing share is not inferred
+from the other partner. Two reporters need not own the entire venture.
+
+Each row's basis appends the following exact fields. This is an **invented grammar example**, not an
+assertion about any mine:
+
+```toml
+basis = "attributable;perimeter=group;members=mine-a+mine-b;valid=2025-01-01/2025-12-31;scope_page=2;scope_table=Scope;scope_row=Operations;scope_col=2025"
+```
+
+Use `100%` or `equity` instead of `attributable` for the other roles. `members` is the complete operation
+list, with distinct slug names separated by `+`. The inclusive `valid` dates must cover the whole reporting
+period. The scope fields cite the page and labels in the same selected document that establish that
+perimeter; both readers must agree on this context. An ownership row must match its attributable row's
+dated perimeter. The reporters must name the same perimeter and complete member set; broader and narrower
+sets are not silently intersected. A change of reporting region alone establishes no change in operations.
+
+Printed quantities retain exact closed half-last-place rounding bounds. Dividing attributable intervals by
+the cited shares produces the full-mine comparison. A common interval carries a checked witness; a conflict
+carries a checked exclusion certificate and checked inclusion-minimal source sets, without claiming that
+the set list is exhaustive. Indeterminate attribution remains explicit. Printed zero keeps its original
+rounding interval, while the common physical quantity is constrained to be nonnegative. JSON and Markdown
+retain both reporters, tokens, ownership and scope citations, source hashes and publication-date bases.
+All authority flags remain false, with no issuance anchor or authority certificate. Agreement does not
+establish physical truth, select a correct reporter or authorize disclosure.
+
+Real partner-filing coverage for NGM, Pueblo Viejo and Kibali remains open, including independently read
+ownership and dated perimeter evidence. The unresolved NGM vend-in dates and shares are not supplied by
+defaults. Capex, cost-definition and accounting bridges, and full BD-346 acceptance, remain open.
 
 ### Assess a frozen forecast cohort
 
@@ -297,6 +489,82 @@ DecisionCard API requires this replay certificate and checks that it binds the a
 cut and exact rendered/numeric output. Legacy action, CVaR, flip-margin and VOI fields still lack their own
 Claim provenance, so that wrapper explicitly limits its historical evidence claim to expected NPV.
 
+### Compute the frozen issuer-guidance baseline
+
+DESIGN (BD-334): the forecast record fixes two comparators. The existing `forecast-baseline` command computes
+persistence; an explicit publication-date cut also evaluates issuer guidance from the registered files:
+
+```bash
+cargo run -p xtask -- forecast-baseline --as-of 2026-11-01
+```
+
+The command retains every site and target in the frozen rules. Production guidance is divided by the share
+printed with that guidance, then the original Q3 release's nine-month production on the 100% basis is
+subtracted. AISC guidance remains its published per-sold-ounce interval: unit costs are not subtracted across
+periods. For example, synthetic attributable guidance `[240, 300]` at a 60% share and nine-month production
+of `300` gives an exact Q4 comparator of `[100, 200]`. The calculation uses the displayed workbook number,
+while its citation retains both stored and displayed values. Negative remainders are reported unchanged.
+
+The latest agreed guidance on or before the cut is selected. Competing values on its latest publication date,
+newer pending readings, missing original actuals, or unsupported labels remain explicit unavailable rows.
+Excluded sites remain named `not_published` members. Before the Q3 workbook is registered, production
+comparators remain unavailable; their guidance evidence is still shown. AISC comparators can be available
+independently. The report binds exact endpoints, rules, document hashes, reader roles, and canonical actual
+Claims. It is followed by the existing persistence output.
+
+This baseline uses the latest registered workbook retrieval date as a conservative availability bound and
+refuses earlier cuts, including when individual source publication metadata is present. Retrieval is not a
+publication date. This is a source calculation, not an externally timestamped forecast or a calibration claim.
+It does not choose a model for FrankenMining's own forecasts or generate the final FY2026 forecast record.
+
+### Score an externally timestamped public forecast record
+
+```bash
+cargo run -p xtask -- forecast-record-verify path/to/frozen-record
+cargo run -p xtask -- forecast-record-score path/to/frozen-record
+```
+
+DESIGN (BD-334/BD-068): these commands require a complete frozen record: `manifest.toml`, `forecasts.csv`,
+`rules.toml`, their digest files, an authenticated `record.tsr` and an earlier authenticated rules proof.
+The verifier accepts the pinned checked-in DigiCert or FreeTSA roots; a supplied `tsa_chain.pem` contributes
+only untrusted intermediate certificates. A locally generated TSA cannot establish the record's time.
+Rules must precede the record even after accounting for both proofs' stated accuracy.
+
+Scoring verifies the record before opening registered original-release outcome workbooks. Q4 production is
+the exact signed difference between the original FY and nine-month totals on the explicit 100% basis.
+Q4 AISC uses its printed quarterly rate directly. Outcomes use the exact **displayed** numeric value while
+retaining the stored token and source Claim for audit; printed zero counts, and a displayed dash stays missing.
+Later comparative releases cannot substitute for missing originals. Ownership-label changes remain visible
+even when registry corrections make the effective ownership fractions equal.
+
+Every frozen site/target remains in the report, with unresolved and not-forecast members listed separately.
+The deterministic JSON includes exact interval losses, observed and whole-cohort coverage/loss bounds, the
+declared iid coverage reference and correlation sensitivity, source hashes/cell citations, proof bounds and
+an assessment digest. It remains explicitly uncalibrated.
+
+The same assessment computes both preregistered comparators. Issuer guidance must be strictly before the
+frozen information cutoff; date-only metadata on the cutoff day remains unresolved unless the exact document
+is in the frozen manifest with an earlier declared retrieval. The report names that declaration and does not
+present it as independent proof of publication time. Production guidance is converted to the 100% basis and
+reduced by the original nine-month displayed total; the AISC range is used directly. Signed remainders and
+point ranges remain unchanged, and issuer guidance is assigned no nominal probability.
+
+Persistence uses the frozen original Q3 observation and original consecutive-quarter ratio pool, with
+displayed numbers, source Claims, pool exclusions and manifest membership retained. Those fixed benchmark
+observations can follow the forecast cutoff; the report makes no claim that the methods had the same
+information. Missing or unreadable required historical sources refuse the comparator instead of silently
+shortening its pool. Printed zero is a valid persistence point.
+
+For each target, all three interval-score means and both forecast-minus-comparator differences use exactly
+the same eligible sites. Every excluded site lists all missing inputs. A negative difference favors the
+forecast under this loss, without establishing skill or calibration. Optional comparator failures, including
+arithmetic overflow, preserve the verified forecast/outcome scores and appear as explicit unavailable or
+refused comparisons. The `benchmark_assessment` object carries the detailed statuses, evidence and results.
+
+The timestamp authenticates the frozen record and its declarations. Consumed source bodies are separately
+verified; actual input use and forecast generation are not replayed. This command creates no forecasts,
+registrations or time proofs; an absent or incomplete FY2026 record refuses.
+
 ### Register forecasts with a live durable journal
 
 DESIGN (BD-047, BD-343): `forecast journal` records live admissions, freezes cohort membership, appends
@@ -342,9 +610,29 @@ history, and missing members remain in the frozen denominator.
 `forecast journal assess --journal <path> --head <latest-head> --cohort <name>
 --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock` computes and persists an assessment and its closed information
 cut. `--selector first-published` is the default; `latest-as-of` selects eligible restatements. An optional
-`--expected-digest <hex>` refuses a mismatching result without appending. The cut must already be in the past
-under the declared clock bound. Reopening restores these seals and earlier assessment digests. `inspect`
+`--expected-digest <hex>` refuses a mismatching result without appending. Every new assessment also stores its
+actual result digest in the operation, including when the caller omits that option. Replay checks that binding
+and refuses a different result. The cut must already be in the past under the declared clock bound.
+Reopening restores these seals and earlier assessment digests. `inspect`
 replays recorded operations without writing; omitting its optional head pin leaves rollback authenticity unchecked.
+
+Recover a complete saved assessment using its exact `payload.report.assessment.digest`:
+
+```bash
+cargo run -p fmine-cli -- forecast journal report \
+  --journal runs/forecast-demo/history --assessment ASSESSMENT_DIGEST \
+  --head LATEST_RETAINED_HEAD --format markdown
+```
+
+The digest placeholders stand for complete hex values from successful receipts. `report` retrieves the saved
+cohort, cut and outcome selector, including original/restated citations and unresolved members. It samples no
+clock and leaves the journal's bytes, head and assessment count unchanged. An absent assessment or mismatched
+head refuses; the command never substitutes another assessment. JSON retains the original assessment content
+under `payload.report.assessment`, while the surrounding journal head and checkpoint inventory describe the
+currently opened history. Omitting `--head` permits an unpinned read with that limitation disclosed.
+Older checkpoints without a stored result digest remain readable; `result_digest_binding` distinguishes their
+caller-requested digest check from a result digest bound into the journal. Recording times remain observed
+host-clock times under the journal's declared uncertainty policy.
 
 The response schema is `fmine.forecast-journal.v1`; assessment responses contain the familiar report under
 `payload.report`. `--trust-host-clock` acknowledges an operator-declared clock bound, fixed at initialization;

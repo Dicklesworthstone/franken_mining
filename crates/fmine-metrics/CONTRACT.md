@@ -8,6 +8,8 @@ The public-lane metric kernels. Each one takes supplied numbers and computes a m
 - the production and AISC a year still needs to meet guidance, and whether the site's own history reaches it (`guidance`, `guidance::quarters`);
 - an optimistic production ceiling from stated feed, grade and recovery (`capacity`);
 - a grade-normalised recovery comparison (`recovery`);
+- the declared arithmetic identities of a PDF table, such as a roll-forward, over agreed readings (`roll_forward`);
+- whether the reporters of one asset agree on the gold it produced or sold, on one 100% basis (`mirror`);
 - at the crate root: an AISC consolidation check, GEO under a price deck, reserve replacement and a float cut-off solver.
 
 The results are descriptive arithmetic. None identifies an operational cause, forecasts, or proves physical feasibility. The crate does no I/O at run time.
@@ -16,7 +18,7 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Layer:** E
 - **Subsystem:** Bullion
 - **LOC budget:** 18,000 planned / 21,000 ceiling
-- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "roll_forward", "mirror"]`
 
 ## 2. Inputs
 - **Crate root.** Bare `f64` values: site AISC rows and bridge totals, gold koz and copper Mlb with a `PriceDeck`, reserve movements in Moz, and a cost, net price, starting grade and recovery closure for `solve_cutoff_grade`.
@@ -26,6 +28,8 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **`guidance`.** `CompletionInputs`: six `Claim<Quantity>`, for the production and AISC guidance, the YTD production, sales and AISC, and a separately declared remaining-sales scenario. `compare_history` takes `HistoricalContinuation`s; `quarters::compare_quarters` takes `QuarterlyHistory` windows.
 - **`capacity`.** A signed remaining-production `Claim<Quantity>`, and `CapacityLimits`: three `Claim<PhysicalLimit>` for dry feed, head grade and recovery.
 - **`recovery`.** `TrainingRow`s and an `OperatingRow` of `Claim<recovery::Quantity>`, in percent and kt units.
+- **`roll_forward`.** Explicit PDF identity declarations, agreed point readings and their registered document metadata. The caller authenticates the actual registered bytes and the reader agreement before public use.
+- **`mirror`.** `Claim<MirrorReading>`s under `READING_METRIC`: gold produced or sold, in koz, over one declared asset, operation perimeter and calendar period, each box on a fixed full or attributable basis. `mirror::transcriptions::bind` builds them from already-agreed S0 `Accepted` rows and a `DocumentRow`.
 - **Every `Quantity`** carries exact rational bounds, a subject, a calendar-month `Period`, an `Ownership` and a kind. Units are fixed by the kind, never inferred from magnitudes.
 
 ## 3. Outputs
@@ -42,6 +46,8 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **`compare_history` and `quarters::compare_quarters`** give an `EnvelopeTier` (`T1` or `T3`), a `HistoryVerdict` (`WithinEnvelope`, `ExceedsEnvelope` or `Indeterminate`) and one check per history. A positive check carries a witness Claim. A quarterly exclusion carries checked `exact_feas` certificates. `fmine-public`'s `guidance/history.rs` calls the quarterly path.
 - **`capacity::compare_production`** gives a `CapacityReport`: two derived Claims (the ceiling and the grade needed at maximum feed and recovery) and a `CapacityVerdict`. `fmine-cli`'s `guidance_capacity.rs` calls it.
 - **`recovery::fit` and `recovery::project`** give `Claim<Fit>` and a `Projection` of two model Claims, `ConstantTails` and `GradeDependentTails`. `fmine-public`'s `recovery.rs` calls them.
+- **`roll_forward::assess`** gives a `TableReport` (schema `fmine.pdf-table-check.v1`). Conflicts carry the kernel certificate digest and minimum or inclusion-minimal correction sets with exact implied intervals. Feasible components carry the narrowed ranges satisfying all declared identities. The JSON report and its SHA-256 digest bind all declarations, admitted source readings, rejected candidate readings, reader roles, filing metadata and results. `fmine-cli`'s `tables.rs` calls it.
+- **`mirror::compare`** gives a `MirrorReport` with a `MirrorVerdict`. `Consistent` carries a checked source-basis witness and a common full-basis Claim. `Conflict` carries the checked certificate/digest, blame status and inclusion-minimal source sets. `Indeterminate` has no common quantity. `fmine-cli`'s `mirror.rs` calls it.
 
 ## 4. Invariants
 - **Refuse, never clamp.**
@@ -71,6 +77,8 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **The capacity ceiling scales production by the attributable share, never grade or recovery.** `ownership_scales_production_not_the_physical_limits` and `rounding_uses_upper_physical_bounds_and_never_averages_rates`.
 - **The two recovery variances keep their denominators apart** (`SSE/(n−1)` and `SSE/(n−2)`): `residual_sample_sd_and_regression_error_use_distinct_denominators`. Wider input boxes never narrow an output: `widening_rounding_never_narrows_model_outputs`.
 - **Derived Claims keep their provenance and never gain strength.** `derived_claims_preserve_provenance_and_never_upgrade_evidence`, `derived_claims_keep_uncertainty_confidentiality_and_source_identity`, `ordering_is_deterministic_and_evidence_cannot_be_strengthened` and `fit_and_both_models_preserve_every_registered_venture_and_wall`.
+- **A roll-forward identity binds only agreeing members (BD-340.S5, BD-331.S7).** Units, basis, member periods, raw-token precision, distinct reader identities, page bounds and source hashes must agree. Shared cells within a document are solved jointly by `exact_feas`; each feasible witness and infeasible certificate is checked again before emission. Different documents remain separate vintages.
+- **The mirror works on one common 100% quantity (BD-346.S3).** Scale identities express it; the existing exact feasibility solver and independent checkers produce a witness or exclusion certificate. Fixed tolerances and inferred partner shares are absent. At least two reporters are required, but their shares need not sum to one. The nonnegative physical domain is explicit: a printed zero keeps its original negative-to-positive rounding box, while the common interval is intersected with `x >= 0` and the reported witness is checked there. Canonical tags bind reporter identity, numeric source anchor, operation membership, inclusive validity dates and the exact typed quantity. Inputs, normalized Claims and proof cells share one sorted order, and minimal-source indices address that order. Conflict sets' disjoint normalized intervals independently establish minimality; an incomplete blame search remains explicit.
 
 ## 5. Refusals
 `lmdi`, `lmdi::waterfall`, `guidance`, `guidance::quarters`, `capacity` and `recovery` refuse with these codes:
@@ -91,6 +99,10 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **`FMINE-REF-208`** (source cell unusable; proposed, exit 3): a placeholder input. From `guidance`, `capacity` and `recovery`.
 - **`FMINE-REF-502`** (stale anchor; exit 6): a stale input. From `guidance`, `capacity` and `recovery`.
 
+`mirror` refuses unsupported cost definitions/kinds, unequal assets and invalid shares (`105`), unequal periods or invalid dates (`102`), missing/unequal operation perimeters or validity straddles (`104`), missing numeric/context citations (`201`), private sources (`301`), placeholders (`208`), stale/unknown/conflicted/failed-calibration inputs (`502`/`202`/`205`), and mutated canonical Claims (`507`). Reversed bounds or negative reported midpoints refuse (`109`); open source bounds refuse (`203`). Arithmetic overflow/checker failures refuse (`207`); solver limits remain `Indeterminate`. `mirror::transcriptions::bind` refuses mismatched numeric or ownership document names, hashes and pages before construction.
+
+`roll_forward` does not refuse a table for one bad identity. A missing, ambiguous or incompatible member keeps an `IdentityRefusal` with its available evidence, and independent complete identities still run.
+
 The other modules have local errors with no refusal code:
 - **`CutoffError`**: `NonPositiveCost`, `NonPositivePrice`, `NonPositiveGuess`, `RecoveryOutOfDomain` and `NotConverged`.
 - **`MetricFailure`**: `UnknownDefinition`, `NotACostDefinition`, `UnregisteredItem`, `NonPositiveOunces`, `AllocationRequired`, `AllocationNotApplicable` and `Exact`.
@@ -99,7 +111,7 @@ The other modules have local errors with no refusal code:
 
 ## 6. Determinism class
 **DeterministicPerIsa** for the crate, the weakest of its files' `//! Determinism:` headers:
-- **Exact:** `capacity.rs`, `guidance.rs` and `guidance/quarters.rs`. These use checked rational arithmetic, canonical input tags and sorted identities.
+- **Exact:** `capacity.rs`, `guidance.rs`, `guidance/quarters.rs`, `mirror.rs`, `mirror/transcriptions.rs` and `roll_forward.rs`. These use checked rational arithmetic, canonical input tags and sorted identities.
 - **BitwisePortable:** `lmdi.rs`. Its two golden digests, `golden_digest_logarithmic_mean_10k` and `golden_digest_decompose_aisc_lmdi_10k`, agreed on x86_64-linux and aarch64-macos in CI run 41237993223 at 84f32ac (bd-hp2j.3). `test_golden_digest_logarithmic_mean_10k` and `test_golden_digest_decompose_aisc_lmdi_10k` pin them.
 - **DeterministicPerIsa:**
   - `lib.rs` has no cross-host digest test (plan §29.2, bd-hp2j.1);
@@ -112,7 +124,8 @@ The other modules have local errors with no refusal code:
 ## 7. Evidence class of outputs
 - **`guidance` and `capacity`** give `Derived`, met with every parent's class. So a result is never stronger than its weakest input. An issuer `Assertion` stays an `Assertion`. Epistemic status and state take the weaker of their parents'. Confidentiality is joined, and anchors, parent ids and UU terms are kept. The exact set lives in the value, so the representation is `Deterministic`.
 - **`recovery`** starts from `ModelledUncalibrated`, `KnownUnknown(Parametric)` and `Estimated`, then meets its sources'. A model output is never calibrated here (NL-4). It adds one model UU term, named by `RULES_VERSION` and `MODEL_CAVEAT`.
-- **The other outputs carry no Claim and no evidence class.** These are the root items, `definitions`, `cutoff` and both LMDI paths. `WATERFALL_NO_CLAIM`, `WATERFALL_RULES_VERSION` and `recovery::NO_CLAIM` state the descriptive reading. A `Conflict` or `Reproduced` cut-off state speaks to the printed inputs only, not to whether they suit the mine.
+- **`mirror`**'s normalized and common Claims retain immediate source parents, anchors, weaker evidence/knowledge/epistemics, and every distinct UU term, including different terms sharing a scenario id. No assertion is promoted. `mirror::transcriptions::bind` preserves the supplied evidence class.
+- **The other outputs carry no Claim and no evidence class.** These are the root items, `definitions`, `cutoff`, both LMDI paths and `roll_forward`. `WATERFALL_NO_CLAIM`, `WATERFALL_RULES_VERSION`, `recovery::NO_CLAIM`, `roll_forward::NO_CLAIM` and `mirror::NO_CLAIM` state the descriptive reading. A `Conflict` or `Reproduced` cut-off state speaks to the printed inputs only, not to whether they suit the mine.
 
 ## 8. Validity domain
 - **The root items are bare `f64`.** Four L-6 rows in `registries/l6_allow.toml` cover them. Three are debt: `compute_geo`, `ReserveReplacementBridge::compute` and `solve_cutoff_grade`. One is generic: `logarithmic_mean`.
@@ -128,6 +141,8 @@ The other modules have local errors with no refusal code:
 - **Guidance** works on closed intervals, with sales and AISC strictly positive and production at least zero. Its results are necessary arithmetic conditions, not forecasts or probabilities. `T1` is the supplied history only. `ExceedsEnvelope` says nothing about physical capacity.
 - **Capacity** multiplies the three maxima. That gives an optimistic ceiling, not a plan. `NotExcluded` is not a feasibility witness.
 - **Recovery** fits two descriptive annual models and applies them to quarters. Its enclosures cover input rounding, not sampling error. An extrapolated recovery outside 0–100% is kept as computed.
+- **The PDF identity adapter (`roll_forward`, BD-340.S5)** verifies declared arithmetic of issuer assertions, not their truth or completeness. It never emits reserve classifications, selects a preferred filing/deck vintage, silently changes a printed sign, or supplies an issuer-attributed corrected figure. Synthetic E692-shaped arithmetic is a known-answer test of the binding; the authentic historical transcription and independent census gates remain open. Closed intervals are agnostic about ties; a named half-open convention is never changed to rescue a row. No file I/O occurs here: callers authenticate actual registered bytes and reader agreement before public use.
+- **The mirror** authenticates no filing bytes, human readership, publication date or issuer affiliation; its caller must bind those facts before supplying source Claims. It does not infer missing perimeters, aggregate incomparable operations, select vintages, invent an absent partner share, bridge costs/capex, transfer bridges between assets, or decide which reporter is physically correct. Its transcription binding consumes already-agreed S0 rows, without authenticating bytes or publication availability; accepted rows alone cannot prove that an omitted rejection did not exist.
 
 ## 9. Oracles
 - **Exact hand known answers**, all synthetic:
@@ -141,6 +156,7 @@ The other modules have local errors with no refusal code:
   - Corner sweeps: `rounding_enclosures_contain_every_synthetic_training_and_operating_corner` and the two waterfall corner tests.
 - **High-precision known answers** for the logarithmic mean: `test_logarithmic_mean_high_precision_tiny_and_large_known_answers` and `test_logarithmic_mean_enclosure_known_answers_near_equality_and_tiny_scale`.
 - **Seeded populations** from Philox streams: `test_cutoff_property_seeded`, `test_property_fallback_exact_random_lines_with_negatives`, `test_property_lmdi_order_independent_and_enclosure_contains_point` and the two golden digests.
+- **The mirror (BD-346, `mirror::tests`).** Ten focused tests cover the exact three-source tie at 100 koz; the 1000/615/385 case; independent witness/certificate checks and corrupted proofs; minimal conflict pairs; zero's explicit domain; two 45% reporters and sold quantities; reporter-order/full-basis metamorphisms; dated scope and evidence/UU preservation; same document basenames across issuers; semantic, source, canonical-mutation and numerical-cap refusals. A separate integer-rounding oracle keeps the known truth inside the common interval for 256 synthetic worlds. This is not the full BD-346.S6 power study. Direct transcription-binding tests additionally check exact source/share Claims.
 - **The registries.**
   - `test_seven_corpus_cutoffs_e182_e184` runs every row of `registries/published_cutoffs.toml` and pins each row's state (E182–E184).
   - The `definitions` tests read `registries/metrics.toml`, including `test_price_decks_read_from_the_registry`.
@@ -176,6 +192,7 @@ The other modules have local errors with no refusal code:
   - `solve_cutoff_grade` runs only inside `cutoff`'s cross-check.
 - **Codes are not used the same way.** An attributable share outside (0, 1] gives 105 in `guidance` but 109 in the waterfall.
 - **No cross-host digest** for `lib.rs`, `cutoff`, the typed waterfall or `recovery`.
+- **The mirror's real-data work is open.** Actual FY2023–FY2025 partner-source reproduction and the full synthetic power gate (BD-346.S6) remain separate BD-346 work.
 
 ## 11. Public API
 - **Root:** `SiteAiscRow`, `AiscConsolidationBridge::verify_rollup`, `PriceDeck` with `barrick_reserve(year)`, `GeoBreakdown`, `compute_geo`, `ReserveReplacementBridge::compute`, `CUTOFF_MAX_ITER`, `CUTOFF_TOL`, `CutoffSolution`, `CutoffError` and `solve_cutoff_grade`. The root re-exports `LmdiState`, `LmdiWaterfall`, `decompose_aisc_lmdi` and `logarithmic_mean`.
@@ -191,6 +208,8 @@ The other modules have local errors with no refusal code:
   - `quarters`: `QuarterlyHistory`, `WindowTotals`, `QuarterWitness`, `QuarterlyWitness`, `CheckedCertificate`, `QuarterlyCheck`, `QuarterlyHistoryReport`, `aggregate_quarters`, `check_quarter_witness` and `compare_quarters`.
 - **`capacity`:** `PhysicalKind`, `PhysicalLimit` with `canonical_tag`, `CapacityLimits`, `CapacityVerdict`, `CapacityReport` and `compare_production`.
 - **`recovery`:** `RULES_VERSION`, `NO_CLAIM`, `MODEL_CAVEAT`, `QuantityKind`, `Quantity`, `TrainingRow`, `OperatingRow`, `Estimate`, `SquareRoot`, `Fit`, `Model`, `ModelProjection`, `Projection`, `fit` and `project`. It re-exports `Ownership` and `Period` from `guidance`.
+- **`roll_forward`:** `SCHEMA`, `NO_CLAIM`, `assess`, `TableReport`, `SourceCell`, `ComponentCheck` and `IdentityRefusal` (BD-340.S5, BD-331.S7).
+- **`mirror`:** `READING_METRIC`, `NO_CLAIM`, `Perimeter`, `MirrorReading`, `MirrorCommon`, `MirrorReport`, `MirrorVerdict` and `compare` (BD-346). `mirror::transcriptions`: `BoundReadings`, `bind`, `keys` and `period_label`. `bind(subject, period, kind, issuer, document, rows, evidence)` returns the separately cited ownership Claim, when needed, and source reading Claims.
 
 ## 12. Proof obligations
 The plan defines no `PO-MET-*`. The old contract's PO-MET-1 to PO-MET-8 were local labels, and their properties are tested here (Invariants). The plan's §21.8 rows that touch this crate:

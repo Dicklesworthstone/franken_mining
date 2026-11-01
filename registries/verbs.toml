@@ -15,10 +15,22 @@ mutates_authority = false
 description = "Prepare cited internal-review evidence challenge packets from visible assurance exceptions"
 
 [[verb]]
+path = "check tables"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Inspect cited workbook identities or declared PDF sums and reserve roll-forwards under exact rounding rules"
+
+[[verb]]
 path = "guidance completion"
 subsystem = "Bullion"
 mutates_authority = false
 description = "Compute remaining production and spending requirements from cited guidance under an explicit sales assumption"
+
+[[verb]]
+path = "mirror"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Compare cited JV production or sales assertions under explicit ownership and a common dated operating perimeter"
 
 [[verb]]
 path = "track-record"
@@ -79,6 +91,12 @@ path = "forecast journal inspect"
 subsystem = "Plumb"
 mutates_authority = false
 description = "Replay and inspect a forecast journal, optionally checking an independently retained final-head digest"
+
+[[verb]]
+path = "forecast journal report"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Recover a persisted forecast assessment by exact digest without sampling a clock or changing the journal"
 
 [[verb]]
 path = "reliance init"
