@@ -2,10 +2,11 @@
 //! independent checks. A release capability identifies a local role, never physical human review.
 
 use std::collections::BTreeMap;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use fmine_calib::record::parse_utc;
 use fmine_claim::ClaimId;
 use fmine_claim::reliance::{
     DefectClass, Entry, Header, IssuanceLane, IssuanceRecord, RelianceCheck, RelianceStatus,
@@ -14,23 +15,22 @@ use fmine_claim::reliance::{
 use fmine_core::hash::{Blake3, Digest32, blake3_hash};
 use fmine_core::id::PrefixKind;
 use fmine_evidence::{Refusal, RefusalCode};
-use fmine_io::reliance::{Journal, ReleaseKey};
+use fmine_io::reliance::{Journal, MAX_ARTIFACT_BYTES, ReleaseKey, read_artifact};
 use fmine_runtime::{HostWallClock, WallClock};
 
 use crate::{Envelope, OutputFormat, escape_json, reliance_binding};
 
-const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 pub(crate) const VERBS_JSON: &str = concat!(
     r#""reliance init --journal <path> --release-key <private-32-byte-file>","#,
     r#""reliance issue --journal <path> --head <hex> --release-key <path> --trust-host-clock --synthetic|--issuer <issuer> --output <new-path> --recipient-role <role> --purpose review --code-revision <git-sha>","#,
-    r#""reliance check --journal <path> --digest <hex> [--artifact <path>] [--head <hex> --trust-host-clock]","#,
+    r#""reliance check --journal <path> --digest <hex> [--artifact <path>] [--head <hex> --trust-host-clock] [--as-of <UTC>|--require-current]","#,
     r#""reliance reuse --journal <path> --artifact <path> --output <new-path> --head <hex> --trust-host-clock","#,
     r#""reliance withdraw --journal <path> --head <hex> --release-key <path> --trust-host-clock --digest <hex> --defect code-defect|source-restated|scope-error --claims <ids>|--all-claims --reason <text>","#,
     r#""reliance supersede --journal <path> --head <hex> --release-key <path> --trust-host-clock --digest <hex> --replacement <hex>","#,
     r#""reliance refresh --journal <path> --head <hex> --release-key <path> --trust-host-clock","#,
     r#""reliance recall --journal <path> --code-revision <git-sha>|--claim <id>""#,
 );
-pub(crate) const ROBOT_DOCS_JSON: &str = r#"{"mode":"local_capability_authority","default_read":"unknown_without_trusted_head_and_time","pin":"exact final head obtained independently of untrusted journal bytes","clock":"explicit operator-declared bounded host clock; never external time proof","artifact":"exact stored bytes including final newline; receipt is separate","revision":"caller-declared Git SHA; executable BLAKE3 measured separately","recall":"recorded local issuances only; reuse copies are not new recipient registrations; no notifications","release_role":"release-owner capability; no human-review attestation","roles":["release-owner","sponsor","reviewer-pool-N","agent-session:<32 lowercase hex>"],"purpose":["analysis","review","decision-support"]}"#;
+pub(crate) const ROBOT_DOCS_JSON: &str = r#"{"mode":"local_capability_authority","default_read":"unknown_without_trusted_head_and_time","pin":"exact final head obtained independently of untrusted journal bytes","clock":"explicit operator-declared bounded host clock; never external time proof","historical_check":"--as-of UTC queries history under a fresh trusted status cut and never grants current reuse","current_gate":"check --require-current refuses unknown, withdrawn and superseded outputs while retaining status diagnostics; excludes --as-of","artifact":"exact stored bytes including final newline; receipt is separate","revision":"caller-declared Git SHA; executable BLAKE3 measured separately","recall":"recorded local issuances only; reuse copies are not new recipient registrations; no notifications","release_role":"release-owner capability; no human-review attestation","roles":["release-owner","sponsor","reviewer-pool-N","agent-session:<32 lowercase hex>"],"purpose":["analysis","review","decision-support"]}"#;
 const NO_CLAIM: &str = "Local report reliance only. A release key establishes local capability possession, not human review. Host-clock bounds are operator declarations, not external time proofs. Recall covers only recorded issuances; no external copies or recipients are contacted.";
 
 /// Parsed local journal operation. Construction is through the strict CLI parser.
@@ -68,6 +68,8 @@ enum Operation {
     Check {
         digest: Digest32,
         artifact: Option<PathBuf>,
+        as_of_ns: Option<i64>,
+        require_current: bool,
     },
     Reuse {
         artifact: PathBuf,
@@ -171,7 +173,11 @@ pub(crate) fn parse(
         if arg.starts_with("--") {
             let value = if matches!(
                 arg.as_str(),
-                "--synthetic" | "--trust-host-clock" | "--all-claims" | "--json"
+                "--synthetic"
+                    | "--trust-host-clock"
+                    | "--all-claims"
+                    | "--json"
+                    | "--require-current"
             ) {
                 String::new()
             } else {
@@ -264,10 +270,27 @@ pub(crate) fn parse(
                 )?,
             }
         }
-        "check" => Operation::Check {
-            digest: digest(&required(&mut fields, "--digest")?)?,
-            artifact: fields.remove("--artifact").map(PathBuf::from),
-        },
+        "check" => {
+            let as_of_ns = fields.remove("--as-of").map(|value| {
+                parse_utc(&value)
+                    .and_then(|seconds| seconds.checked_mul(1_000_000_000))
+                    .filter(|ns| *ns >= 0)
+                    .ok_or_else(|| "--as-of requires YYYY-MM-DDTHH:MM:SSZ within nonnegative i64 nanoseconds".to_string())
+            }).transpose()?;
+            let require_current = fields.remove("--require-current").is_some();
+            if require_current && as_of_ns.is_some() {
+                return Err(
+                    "--as-of is historical inspection and cannot grant --require-current"
+                        .to_string(),
+                );
+            }
+            Operation::Check {
+                digest: digest(&required(&mut fields, "--digest")?)?,
+                artifact: fields.remove("--artifact").map(PathBuf::from),
+                as_of_ns,
+                require_current,
+            }
+        }
         "reuse" => Operation::Reuse {
             artifact: PathBuf::from(required(&mut fields, "--artifact")?),
             output: PathBuf::from(required(&mut fields, "--output")?),
@@ -388,47 +411,6 @@ fn text(value: &str) -> String {
     format!("\"{}\"", escape_json(value))
 }
 
-fn write_new(path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|e| {
-            io_error(format!(
-                "cannot create new artifact {}: {e}",
-                path.display()
-            ))
-        })?;
-    file.write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|e| {
-            io_error(format!(
-                "artifact write incomplete at {}: {e}; no overwrite or removal attempted",
-                path.display()
-            ))
-        })
-}
-
-fn read_artifact(path: &Path) -> Result<Vec<u8>, Refusal> {
-    let file =
-        File::open(path).map_err(|e| io_error(format!("artifact {}: {e}", path.display())))?;
-    if !file
-        .metadata()
-        .map_err(|e| io_error(e.to_string()))?
-        .is_file()
-    {
-        return Err(io_error("artifact must be a regular file"));
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_ARTIFACT_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| io_error(e.to_string()))?;
-    if bytes.len() as u64 > MAX_ARTIFACT_BYTES {
-        return Err(io_error("artifact exceeds 64 MiB bound"));
-    }
-    Ok(bytes)
-}
-
 fn hash_file(path: &Path) -> Result<Digest32, Refusal> {
     let mut file =
         File::open(path).map_err(|e| io_error(format!("binary image {}: {e}", path.display())))?;
@@ -534,10 +516,13 @@ fn check_json(check: &RelianceCheck) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"status\":{},\"current_reuse_allowed\":{},\"status_cut_ns\":{},\"reason\":{reason},\
+        "{{\"status\":{},\"current_reuse_allowed\":{},\"as_of_ns\":{},\"status_cut_ns\":{},\"reason\":{reason},\
          \"replacement_digest\":{replacement},\"affected_claims\":[{claims}]}}",
         text(check.status.as_str()),
         check.current_reuse_allowed,
+        check
+            .as_of_ns
+            .map_or_else(|| "null".to_string(), |n| n.to_string()),
         check.status_cut_ns,
     )
 }
@@ -553,6 +538,19 @@ fn receipt(operation: &str, journal: &Journal, fields: &str) -> String {
 
 pub(crate) fn execute(command: &Command, root: &Path) -> Envelope {
     let verb = format!("reliance {}", operation_name(&command.operation));
+    if matches!(command.operation, Operation::Check { .. }) {
+        let mut envelope = match inspect_check(command, root, &now_ns) {
+            Ok((payload, None)) => Envelope::ok(verb, payload, Vec::new()),
+            Ok((payload, Some(refusal))) => {
+                let mut env = Envelope::refused(verb, refusal, Vec::new());
+                env.payload_json = payload;
+                env
+            }
+            Err(refusal) => Envelope::refused(verb, refusal, Vec::new()),
+        };
+        envelope.no_claim = Some(NO_CLAIM);
+        return envelope;
+    }
     let result = executable().and_then(|image| execute_with(command, root, &now_ns, &image));
     let mut envelope = match result {
         Ok(payload) => Envelope::ok(verb, payload, Vec::new()),
@@ -560,6 +558,68 @@ pub(crate) fn execute(command: &Command, root: &Path) -> Envelope {
     };
     envelope.no_claim = Some(NO_CLAIM);
     envelope
+}
+
+/// Inspection preserves integrity diagnostics independently of freshness. A failed or untrusted clock
+/// supplies no trusted time; it cannot prevent historical byte verification or silently grant reuse.
+fn inspect_check(
+    command: &Command,
+    root: &Path,
+    clock: &dyn Fn() -> Result<i64, Refusal>,
+) -> Result<(String, Option<Refusal>), Refusal> {
+    let Operation::Check {
+        digest,
+        artifact,
+        as_of_ns,
+        require_current,
+    } = &command.operation
+    else {
+        return Err(io_error("operation is not a reliance check"));
+    };
+    let access = &command.access;
+    // Check reports Unknown on a missing/mismatched pin. The same shared lock covers artifact reads.
+    let journal = Journal::open_read(&absolute(root, &access.journal), None)?;
+    let time = if access.trust_host_clock {
+        clock()
+            .ok()
+            .and_then(|now| trusted_time(access, journal.ledger().header(), now))
+    } else {
+        None
+    };
+    let context = TrustContext {
+        pinned_head: access.head,
+        time,
+    };
+    let check = journal.ledger().check(*digest, *as_of_ns, &context);
+    let verified = if let Some(artifact) = artifact {
+        journal
+            .ledger()
+            .verify_artifact(*digest, &read_artifact(&absolute(root, artifact))?)?;
+        true
+    } else {
+        false
+    };
+    let refusal = if *require_current {
+        journal.ledger().gate_current_reuse(*digest, &context).err()
+    } else {
+        None
+    };
+    let payload = receipt(
+        "check",
+        &journal,
+        &format!(
+            "\"output_digest\":{},\"artifact_bytes_verified\":{verified},\"head_verified\":{},\"clock_evidence\":{},\"reliance\":{}",
+            text(&digest.to_hex()),
+            access.head == Some(journal.head()),
+            text(if time.is_some() {
+                "operator_declared_bounded_host_clock"
+            } else {
+                "offline_uncertain"
+            }),
+            check_json(&check)
+        ),
+    );
+    Ok((payload, refusal))
 }
 
 /// The executable and clock are runtime dependencies. CLI arguments can select neither a historical
@@ -594,52 +654,23 @@ fn execute_with(
                 "\"current_reuse_allowed\":false,\"pin_instruction\":\"retain this head through an independently trusted channel; the log cannot authenticate itself\"",
             ))
         }
-        Operation::Check { digest, artifact } => {
-            // Let the kernel report Unknown on a missing or mismatched pin rather than promoting a log
-            // simply because it parses. The shared lock covers artifact reads and the status decision.
-            let journal = Journal::open_read(&path, None)?;
-            let time = trusted_time(access, journal.ledger().header(), clock()?);
-            let context = TrustContext {
-                pinned_head: access.head,
-                time,
-            };
-            let check = journal.ledger().check(*digest, None, &context);
-            let verified = if let Some(artifact) = artifact {
-                let bytes = read_artifact(&absolute(root, artifact))?;
-                journal.ledger().verify_artifact(*digest, &bytes)?;
-                true
-            } else {
-                false
-            };
-            Ok(receipt(
-                "check",
-                &journal,
-                &format!(
-                    "\"output_digest\":{},\"artifact_bytes_verified\":{verified},\"head_verified\":{},\"clock_evidence\":{},\"reliance\":{}",
-                    text(&digest.to_hex()),
-                    access.head == Some(journal.head()),
-                    text(if time.is_some() {
-                        "operator_declared_bounded_host_clock"
-                    } else {
-                        "offline_uncertain"
-                    }),
-                    check_json(&check)
-                ),
-            ))
-        }
+        Operation::Check { .. } => inspect_check(command, root, clock)
+            .and_then(|(payload, refusal)| refusal.map_or(Ok(payload), Err)),
         Operation::Reuse { artifact, output } => {
-            let journal = Journal::open_read(&path, None)?;
-            // Read once from one file handle; these same bytes are hashed and written under the journal
-            // read lock. Replacing the source path between verification and copying cannot change them.
-            let bytes = read_artifact(&absolute(root, artifact))?;
-            let digest = blake3_hash(&bytes);
-            let context = TrustContext {
-                pinned_head: access.head,
-                time: trusted_time(access, journal.ledger().header(), clock()?),
-            };
-            journal.ledger().gate_current_reuse(digest, &context)?;
-            journal.ledger().verify_artifact(digest, &bytes)?;
-            write_new(&absolute(root, output), &bytes)?;
+            let journal = Journal::open_read(&path, access.head)?;
+            let time = if access.trust_host_clock {
+                trusted_time(access, journal.ledger().header(), clock()?)
+            } else {
+                None
+            }
+            .ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::NotObservable202,
+                    "current reuse requires an explicitly trusted bounded clock",
+                )
+            })?;
+            let digest =
+                journal.export_current(&absolute(root, artifact), &absolute(root, output), time)?;
             Ok(receipt(
                 "reuse",
                 &journal,
@@ -782,21 +813,13 @@ fn execute_mutation(
             "host clock bound was not explicitly trusted",
         )
     })?;
-    journal.validate_append(&entry, &key, time)?;
-    if let Some((path, bytes)) = &artifact {
-        write_new(path, bytes)?;
-    }
-    if let Err(error) = journal.append(entry.clone(), &key, time) {
-        if artifact.is_some() {
-            return Err(Refusal::new(
-                RefusalCode::InputMissingOrUnreadable506,
-                format!(
-                    "artifact bytes were saved but issuance durability is unconfirmed: {}; retain the artifact and resolve the journal before any reuse",
-                    error.what
-                ),
-            ));
-        }
-        return Err(error);
+    if let Some((path, bytes)) = artifact {
+        let Entry::Issued(issue) = &entry else {
+            return Err(io_error("artifact does not belong to an issuance"));
+        };
+        journal.issue_bytes(&path, &bytes, issue.clone(), &key, time)?;
+    } else {
+        journal.append(entry.clone(), &key, time)?;
     }
     let fields = match &entry {
         Entry::Issued(issue) => format!("\"issuance\":{}", issue_json(issue)),
@@ -813,7 +836,9 @@ fn execute_mutation(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt, symlink};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     const REVISION: &str = "1111111111111111111111111111111111111111";
@@ -1307,6 +1332,200 @@ mod tests {
     }
 
     #[test]
+    fn historical_checks_never_grant_reuse_and_current_gate_keeps_diagnostics() {
+        let root = fixture();
+        issue(
+            &root,
+            "report.json",
+            "sponsor",
+            "json",
+            REVISION,
+            "release.key",
+            START + 1,
+        )
+        .unwrap();
+        let output = blake3_hash(&std::fs::read(root.join("report.json")).unwrap()).to_hex();
+        withdraw(&root, &output, START + 2_000_000_000).unwrap();
+        let as_of = fmine_calib::record::format_utc(START / 1_000_000_000 + 1);
+        let historical = call(
+            &root,
+            &[
+                "check",
+                "--digest",
+                &output,
+                "--artifact",
+                "report.json",
+                "--head",
+                &head(&root),
+                "--trust-host-clock",
+                "--as-of",
+                &as_of,
+            ],
+            START + 3_000_000_000,
+        )
+        .unwrap();
+        assert!(historical.contains("\"status\":\"current\""));
+        assert!(historical.contains("\"current_reuse_allowed\":false"));
+        assert!(historical.contains("\"artifact_bytes_verified\":true"));
+        assert!(historical.contains(&format!("\"as_of_ns\":{}", START + 1_000_000_000)));
+        let args = [
+            "reliance",
+            "check",
+            "--journal",
+            "journal.log",
+            "--digest",
+            &output,
+            "--artifact",
+            "report.json",
+            "--head",
+            &head(&root),
+            "--trust-host-clock",
+            "--require-current",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let (command, _, _) = parse(&args, &root).unwrap();
+        let (payload, refusal) =
+            inspect_check(&command, &root, &|| Ok(START + 3_000_000_000)).unwrap();
+        assert_eq!(refusal.unwrap().code, "FMINE-REF-202");
+        assert!(payload.contains("\"status\":\"withdrawn\""));
+        assert!(payload.contains("\"artifact_bytes_verified\":true"));
+        let mut offline = command.clone();
+        offline.access.trust_host_clock = false;
+        let envelope = execute(&offline, &root);
+        assert_eq!(envelope.exit_code, 3);
+        assert!(envelope.payload_json.contains("trusted_time_unavailable"));
+        assert!(
+            envelope
+                .payload_json
+                .contains("\"artifact_bytes_verified\":true")
+        );
+    }
+
+    #[test]
+    fn unavailable_clock_preserves_byte_verification_without_current_permission() {
+        let root = fixture();
+        issue(
+            &root,
+            "report.json",
+            "sponsor",
+            "json",
+            REVISION,
+            "release.key",
+            START + 1,
+        )
+        .unwrap();
+        let output = blake3_hash(&std::fs::read(root.join("report.json")).unwrap()).to_hex();
+        let args = [
+            "reliance",
+            "check",
+            "--journal",
+            "journal.log",
+            "--digest",
+            &output,
+            "--artifact",
+            "report.json",
+            "--head",
+            &head(&root),
+            "--trust-host-clock",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let (command, _, _) = parse(&args, &root).unwrap();
+        let (payload, refusal) =
+            inspect_check(&command, &root, &|| Err(io_error("clock unavailable"))).unwrap();
+        assert!(refusal.is_none());
+        assert!(payload.contains("\"status\":\"unknown\""));
+        assert!(payload.contains("trusted_time_unavailable"));
+        assert!(payload.contains("\"artifact_bytes_verified\":true"));
+        assert!(payload.contains("\"current_reuse_allowed\":false"));
+        let mut offline = command;
+        offline.access.trust_host_clock = false;
+        let calls = std::cell::Cell::new(0);
+        inspect_check(&offline, &root, &|| {
+            calls.set(calls.get() + 1);
+            Ok(START)
+        })
+        .unwrap();
+        assert_eq!(calls.get(), 0);
+    }
+
+    #[test]
+    fn canonical_artifact_paths_refuse_symlinks_and_create_private_copies() {
+        let root = fixture();
+        issue(
+            &root,
+            "report.json",
+            "sponsor",
+            "json",
+            REVISION,
+            "release.key",
+            START + 1,
+        )
+        .unwrap();
+        let output = blake3_hash(&std::fs::read(root.join("report.json")).unwrap()).to_hex();
+        let pin = head(&root);
+        assert_eq!(
+            std::fs::metadata(root.join("report.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        symlink(root.join("report.json"), root.join("linked.json")).unwrap();
+        for args in [
+            vec!["check", "--digest", &output, "--artifact", "linked.json"],
+            vec![
+                "reuse",
+                "--artifact",
+                "linked.json",
+                "--output",
+                "blocked.json",
+                "--head",
+                &pin,
+                "--trust-host-clock",
+            ],
+        ] {
+            assert_eq!(
+                call(&root, &args, START + 2).unwrap_err().code,
+                "FMINE-REF-506"
+            );
+        }
+        assert!(!root.join("blocked.json").exists());
+        assert_eq!(head(&root), pin);
+        call(
+            &root,
+            &[
+                "reuse",
+                "--artifact",
+                "report.json",
+                "--output",
+                "copy.json",
+                "--head",
+                &pin,
+                "--trust-host-clock",
+            ],
+            START + 2,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::metadata(root.join("copy.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::read(root.join("report.json")).unwrap(),
+            std::fs::read(root.join("copy.json")).unwrap()
+        );
+    }
+
+    #[test]
     fn parser_rejects_implicit_authority_names_backdates_and_unused_flags() {
         let root = Path::new(".");
         let args = [
@@ -1325,6 +1544,31 @@ mod tests {
         assert!(matches!(command, crate::CliCommand::Reliance(_)));
         assert_eq!(format, OutputFormat::Json);
         for words in [
+            vec![
+                "reliance",
+                "check",
+                "--digest",
+                &"a".repeat(64),
+                "--as-of",
+                "2000-01-01T00:00:00Z",
+                "--require-current",
+            ],
+            vec![
+                "reliance",
+                "check",
+                "--digest",
+                &"a".repeat(64),
+                "--as-of",
+                "2300-01-01T00:00:00Z",
+            ],
+            vec![
+                "reliance",
+                "recall",
+                "--code-revision",
+                REVISION,
+                "--as-of",
+                "2000-01-01T00:00:00Z",
+            ],
             vec![
                 "reliance",
                 "check",
