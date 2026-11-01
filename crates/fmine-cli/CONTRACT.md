@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_data", "track_record_price", "lint", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued"]`
+- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_binding", "track_record_data", "track_record_price", "lint", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -164,6 +164,15 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   bumping `schema_version` are open for the FMT-ENV-1 owner.
 
 ## 4. Public API Surface
+- DESIGN (BD-341): `track_record_binding::{run, assess, assess_snapshot, synthetic_as_of}` supplies
+  checked, canonical guidance/outcome projections for command adapters. Registered runs require complete
+  two-reader agreement across the guidance namespace; unrelated optional price failures remain separate.
+  Annual original outcomes come from the matching Q4 release; comparative appearances remain distinct.
+  Publication cohorts retain missing originals and separate revisions, with exact rational scores and bounds.
+  Statement, interpreted target/outcome, score and summary Claims retain source parents and evidence state.
+  Synthetic Assumed/Unknown inputs stay Unknown; non-public inputs and inconsistent lane labels refuse.
+  This composition uses public source loaders and the calibration kernel, without claiming external
+  timestamps, a calibration verdict or complete historical issuer coverage.
 - `OutputFormat`, `CliCommand`, `Envelope`, `NextAction`
 - `run` (what `fmine` prints, and its exit code), `invoke`, `parse_args`, `execute_command`
 - `forecast_journal::{Command, execute, execute_with_clock}`: the actual host-clock adapter or an explicitly

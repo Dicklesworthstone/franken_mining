@@ -10,6 +10,7 @@ pub mod reliance;
 mod reliance_binding;
 pub mod reliance_explicit;
 mod track_record;
+pub mod track_record_binding;
 mod track_record_data;
 mod track_record_price;
 
