@@ -631,6 +631,59 @@ mod tests {
         assert_eq!(early_close.check_admissible(&stamp), Ok(false));
     }
 
+    /// BD-309: fire-assay turnarounds of 3 to 21 days (plan §6.3). Every routing decision taken while the
+    /// certificate is outstanding, to the last nanosecond, refuses with FMINE-REF-108 (G-TIME-2). From the instant it
+    /// is available the routing query admits it, and a period close admits it at any decision time.
+    #[test]
+    fn test_fire_assay_lag_of_3_to_21_days_is_refused_until_available() {
+        let collected = 2 * NS_PER_DAY + 7 * NS_PER_HOUR;
+        let period = ValidTime::new(0, 30 * NS_PER_DAY).unwrap();
+        let query = |t: i64, purpose| AsOfQuery {
+            as_of_decision_ns: t,
+            anchor: site_at(1),
+            for_physical_period: period,
+            purpose,
+        };
+        for lag_days in 3..=21 {
+            let available = collected + lag_days * NS_PER_DAY;
+            let stamp = QuadTemporalStamp::new(
+                ValidTime::instant(collected),
+                collected,
+                available,
+                RecordTime::new(SITE, 1, collected + NS_PER_HOUR, TimeEvidence::HostSynced),
+            )
+            .unwrap();
+            let outstanding = (collected..available)
+                .step_by(6 * NS_PER_HOUR as usize)
+                .chain([available - 1]);
+            for t in outstanding {
+                let err = query(t, QueryPurpose::OperationalDecision)
+                    .check_admissible(&stamp)
+                    .expect_err("certificate outstanding");
+                assert_eq!(
+                    err,
+                    TimeError::AssayLagLookahead {
+                        availability_time: available,
+                        as_of_decision_ns: t,
+                    },
+                    "lag {lag_days} d, decision at {t}"
+                );
+                assert_eq!(err.refusal_code(), Some("FMINE-REF-108"));
+                assert_eq!(
+                    query(t, QueryPurpose::RetrospectiveAccounting).check_admissible(&stamp),
+                    Ok(true)
+                );
+            }
+            for t in [available, available + NS_PER_DAY] {
+                assert_eq!(
+                    query(t, QueryPurpose::OperationalDecision).check_admissible(&stamp),
+                    Ok(true),
+                    "lag {lag_days} d, decision at {t}"
+                );
+            }
+        }
+    }
+
     const SITE: &str = "CELL-SITE(lumwana)";
 
     fn site_at(seq: u64) -> Anchor {
