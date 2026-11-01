@@ -41,8 +41,8 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 - `golden_digest_calib_rest_10k` (bd-hp2j.3): the rest of `lib.rs`, so one class covers the file: Winkler scores,
   reference-class blends, a ledger's report, and 1,000 samples through `SpatialFrontPitMonitor`, whose bias flips
   to reach both betting limits and the alarm (this also runs `BettingEProcess`). A refusal hashes as `u64::MAX`.
-- All three committed values were first observed on aarch64-macos; `lib.rs` declares `BitwisePortable` only after
-  ubuntu-latest and macos-15 agree in one CI run.
+- All three committed values were first observed on aarch64-macos. `lib.rs` declares `BitwisePortable`: all three
+  agreed on ubuntu-latest (x86_64) and macos-15 (aarch64) in CI run 41237993223 at 84f32ac (bd-hp2j.3).
 - `ForecastLedger::evaluate_model` → `Result<CalibrationReport, ScoreError>` delegates to the assessment engine
   and exposes `n_members`, `n_scored`, `n_unresolved` and whole-cohort coverage bounds. This compatibility snapshot
   is always Unscored or Descriptive, since it has no frozen membership. Existing Gaussian `register` ids are

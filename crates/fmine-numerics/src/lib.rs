@@ -1,6 +1,7 @@
 //! Deterministic numerical kernels (`WP-02`, `BD-022`):
-//! Determinism: DeterministicPerIsa (`norm_cdf` and `norm_inv` delegate to `fmine_core::det`; `brent_root` and
-//! `cholesky_solve` use only `+ − × ÷` and `sqrt`. BitwisePortable once one CI run passes its digests, bd-hp2j.3).
+//! Determinism: BitwisePortable (`norm_cdf` and `norm_inv` delegate to `fmine_core::det`; `brent_root` and
+//! `cholesky_solve` use only `+ − × ÷` and `sqrt`. Both golden digests agree on x86_64-linux and aarch64-macos in
+//! CI run 41237993223 at 84f32ac, bd-hp2j.3).
 //! - Dense SPD Cholesky solver (`cholesky_solve`, `FMINE-REF-207`)
 //! - Brent's bracketed root-finder (`brent_root`), which refuses on a missing sign change, a non-finite value or
 //!   non-convergence and never returns an unconverged iterate (bd-t1dk)

@@ -94,7 +94,8 @@ arithmetic closure does not establish causation or identify an operational expla
   logarithmic-mean branch is relative at every positive scale, so its tiny-wide-ratio digest changes too.
   These intentional mathematical/semantic changes invalidate the v1 snapshots; independent high-precision
   known answers establish correctness, while the v2 bit snapshots remain regression and host-agreement
-  checks. `lmdi.rs` declares `BitwisePortable` only after ubuntu-latest and macos-15 agree in one CI run.
+  checks. `lmdi.rs` declares `BitwisePortable`: both digests agreed on ubuntu-latest (x86_64) and macos-15
+  (aarch64) in CI run 41237993223 at 84f32ac (bd-hp2j.3). `lib.rs` and the other modules stay `DeterministicPerIsa`.
 - `guidance::{Quantity, QuantityKind, Ownership, Period, CompletionInputs, complete}` (BD-342): all physical and
   monetary inputs/outputs are `Claim<Quantity>`, with exact rational bounds, subject, month support, ownership,
   quantity/unit, and a named AISC definition. `Quantity::canonical_tag` binds every interpretation field.

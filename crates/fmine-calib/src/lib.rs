@@ -1,8 +1,8 @@
 //! Frozen forecast ledger (`INV-008`), proper scoring rules (`CRPS`, log, Winkler),
 //! `CalibrationFlag` auto-downgrade (`NL-8`), `REFCLASS-` $\varepsilon$-contamination (`GB-32`),
 //! and Vecchia/Rosenblatt spatial PIT e-process monitoring (`GB-08`, `BD-311`).
-//! Determinism: DeterministicPerIsa (transcendentals via `fmine_core::det`; BitwisePortable once one CI run passes
-//! the file's three digests on both hosts, bd-hp2j.3).
+//! Determinism: BitwisePortable (transcendentals via `fmine_core::det`; the file's three golden digests agree on
+//! x86_64-linux and aarch64-macos in CI run 41237993223 at 84f32ac, bd-hp2j.3).
 
 use fmine_claim::Claim;
 use fmine_core::det;

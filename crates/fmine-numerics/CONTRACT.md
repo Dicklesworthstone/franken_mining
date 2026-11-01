@@ -11,7 +11,7 @@
 Implements Cholesky SPD factorization (`cholesky_solve`), Brent root-finding (`brent_root`), normal CDF/PPF (`norm_cdf`, `norm_inv`), anytime-valid betting e-processes (`BettingEProcess`), Value of Information (`VoiProblem`, `EVPI`, `EVSI`), coherent Rockafellar-Uryasev `CVaR` (`compute_cvar`), and `(max,+)`/`(min,+)` tropical critical-path algebra (`TropicalDag`, `GB-19`).
 
 ## 3. Authority, Epistemics & Representation
-Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism class: `DeterministicPerIsa`, not yet `BitwisePortable`: `norm_cdf` and `norm_inv` delegate to `fmine_core::det` (bd-hp2j.2), and the class changes only with a cross-host golden digest (bd-hp2j.3).
+Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism class: `lib.rs` is `BitwisePortable`: `norm_cdf` and `norm_inv` delegate to `fmine_core::det` (bd-hp2j.2), and both of its golden digests agreed on ubuntu-latest (x86_64) and macos-15 (aarch64) in CI run 41237993223 at 84f32ac (bd-hp2j.3). The other modules stay `DeterministicPerIsa`.
 
 ## 4. Public API Surface
 - `cholesky_solve`, `norm_cdf`, `norm_inv`. `norm_inv` clamps nothing: `p` outside [0, 1] or NaN gives NaN, and 0
@@ -19,7 +19,7 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
 - `golden_digest_norm_cdf_inv_10k`, `golden_digest_cholesky_brent_10k` (bd-hp2j.3): BLAKE3 over the output bits on
   10,000 `NUMERICS_DIGEST_KEY` inputs (|z| up to 12, p from 1e-304 to 1 − 1e-16; seeded 3×3 SPD systems and cube
   roots). `cholesky_solve` and `brent_root` get their own digest so that one class can cover `lib.rs`. The values
-  were first observed on aarch64-macos; the class flips only after ubuntu-latest and macos-15 agree in one CI run.
+  were first observed on aarch64-macos, and agreed on both CI hosts in run 41237993223 at 84f32ac.
 - `brent_root` → `Result<Root, RootError>`: `NoSignChange`, `NonFinite` (endpoint or iterate) and `NotConverged` refuse; an unconverged iterate is never returned (bd-t1dk)
 - `eproc::{BettingEProcess, EProcStatus}`
 - `voi::{VoiProblem, VoiSummary}`

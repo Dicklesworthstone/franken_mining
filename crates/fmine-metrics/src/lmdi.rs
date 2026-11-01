@@ -2,7 +2,8 @@
 //! The factors close on supplied spend divided by ounces sold; printed-rate reconciliation stays separate.
 //!
 //! Every logarithm goes through `fmine_core::det` (bd-hp2j.2), never the platform libm.
-//! Determinism: DeterministicPerIsa (BitwisePortable once one CI run passes its digests on both hosts, bd-hp2j.3).
+//! Determinism: BitwisePortable (its two golden digests agree on x86_64-linux and aarch64-macos in CI run
+//! 41237993223 at 84f32ac, bd-hp2j.3).
 
 use fmine_core::det;
 use fmine_core::hash::blake3_hash;
