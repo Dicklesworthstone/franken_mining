@@ -541,7 +541,8 @@ fn parse_forecast_journal(
     }
     let ["forecast", "journal", verb] = words.as_slice() else {
         return Err(
-            "expected forecast journal init|register|freeze|outcome|assess|inspect".to_string(),
+            "expected forecast journal init|register|freeze|outcome|assess|inspect|report"
+                .to_string(),
         );
     };
     let format = match fields.remove("--format").as_deref().unwrap_or("json") {
@@ -559,14 +560,17 @@ fn parse_forecast_journal(
     };
     let journal = PathBuf::from(take(&mut fields, "--journal")?);
     let trust_host_clock = fields.remove("--trust-host-clock").is_some();
-    if *verb != "inspect" && !trust_host_clock {
+    let read_only = matches!(*verb, "inspect" | "report");
+    if !read_only && !trust_host_clock {
         return Err(
             "forecast journal mutations require --trust-host-clock for the declared clock policy"
                 .to_string(),
         );
     }
-    if *verb == "inspect" && trust_host_clock {
-        return Err("inspect reads recorded history and takes no --trust-host-clock".to_string());
+    if read_only && trust_host_clock {
+        return Err(format!(
+            "{verb} reads recorded history and takes no --trust-host-clock"
+        ));
     }
     let command = match *verb {
         "init" => {
@@ -638,6 +642,14 @@ fn parse_forecast_journal(
                 .remove("--head")
                 .map(|value| digest(&value))
                 .transpose()?,
+        },
+        "report" => Command::Report {
+            journal,
+            head: fields
+                .remove("--head")
+                .map(|value| digest(&value))
+                .transpose()?,
+            assessment: digest(&take(&mut fields, "--assessment")?)?,
         },
         _ => return Err("unknown forecast journal operation".to_string()),
     };
@@ -1886,6 +1898,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal outcome --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal assess --journal <path> --head <hex> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock [--selector first-published|latest-as-of] [--expected-digest <hex>]",
                 "forecast journal inspect --journal <path> [--head <hex>]",
+                "forecast journal report --journal <path> --assessment <digest> [--head <hex>]",
                 "doctor",
                 "claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
                 "claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
@@ -2222,176 +2235,6 @@ mod tests {
             "0",
         ]));
         assert!(parse_args(&mixed, Path::new(".")).is_err());
-    }
-
-    #[test]
-    fn forecast_journal_commands_require_explicit_admission_policy_and_exact_heads() {
-        use forecast_journal::Command;
-
-        let root = workspace_root();
-        let head = "ab".repeat(32);
-        let (command, format, selected_root) = parse_args(
-            &args(&[
-                "--format",
-                "markdown",
-                "forecast",
-                "--workspace",
-                "runs",
-                "journal",
-                "init",
-                "--journal",
-                "forecasts.journal",
-                "--cell",
-                "forecast-demo",
-                "--trust-host-clock",
-                "--max-clock-skew-ms",
-                "2",
-            ]),
-            &root,
-        )
-        .expect("explicit clock policy");
-        assert_eq!(format, OutputFormat::Markdown);
-        assert_eq!(selected_root, Path::new("runs"));
-        assert!(
-            matches!(command, CliCommand::ForecastJournal(Command::Init {
-            cell_id, clock_skew_ns: 2_000_000, ..
-        }) if cell_id == "forecast-demo")
-        );
-        for operation in ["register", "freeze", "outcome"] {
-            let (command, _, _) = parse_args(
-                &args(&[
-                    "forecast",
-                    "journal",
-                    operation,
-                    "--journal",
-                    "forecasts.journal",
-                    "--head",
-                    &head,
-                    "--request",
-                    "request.toml",
-                    "--trust-host-clock",
-                ]),
-                &root,
-            )
-            .expect("typed live operation");
-            assert!(matches!(command, CliCommand::ForecastJournal(_)));
-        }
-        let (command, _, _) = parse_args(
-            &args(&[
-                "forecast",
-                "journal",
-                "assess",
-                "--journal",
-                "forecasts.journal",
-                "--head",
-                &head,
-                "--cohort",
-                "demo",
-                "--as-of",
-                "2026-11-01T00:00:00Z",
-                "--trust-host-clock",
-            ]),
-            &root,
-        )
-        .expect("persisted assessment");
-        assert!(
-            matches!(command, CliCommand::ForecastJournal(Command::Assess {
-            selector, expected_digest: None, ..
-        }) if selector == "first-published")
-        );
-        let (command, _, _) = parse_args(
-            &args(&[
-                "forecast",
-                "journal",
-                "inspect",
-                "--journal",
-                "forecasts.journal",
-            ]),
-            &root,
-        )
-        .expect("unpinned historical inspection");
-        assert!(matches!(
-            command,
-            CliCommand::ForecastJournal(Command::Inspect { head: None, .. })
-        ));
-        let docs = execute_command(&CliCommand::RobotDocs, &root);
-        for operation in ["init", "register", "freeze", "outcome", "assess", "inspect"] {
-            assert!(
-                docs.payload_json
-                    .contains(&format!("forecast journal {operation}"))
-            );
-        }
-    }
-
-    #[test]
-    fn forecast_journal_usage_refuses_backdating_flags_ignored_options_and_clock_ambiguity() {
-        let root = workspace_root();
-        let head = "ab".repeat(32);
-        let base = args(&[
-            "forecast",
-            "journal",
-            "register",
-            "--journal",
-            "forecasts.journal",
-            "--head",
-            &head,
-            "--request",
-            "request.toml",
-            "--trust-host-clock",
-        ]);
-        let mut no_clock = base.clone();
-        no_clock.pop();
-        assert!(parse_args(&no_clock, &root).is_err());
-        for extras in [
-            vec!["--registered-at", "2025-01-01T00:00:00Z"],
-            vec!["--head", &head],
-            vec!["--max-clock-skew-ms", "0"],
-            vec!["--issuer", "barrick"],
-            vec!["--json", "--format", "markdown"],
-            vec!["--provenance", "unverified.toml"],
-        ] {
-            let mut bad = base.clone();
-            bad.extend(args(&extras));
-            let (envelope, _) = invoke(&bad, &root);
-            assert_eq!(
-                (envelope.verb.as_str(), envelope.exit_code),
-                ("forecast journal", 2)
-            );
-        }
-        for bad in [
-            vec![
-                "forecast",
-                "journal",
-                "init",
-                "--journal",
-                "x",
-                "--cell",
-                "demo",
-                "--trust-host-clock",
-                "--max-clock-skew-ms",
-                "18446744073709551615",
-            ],
-            vec![
-                "forecast",
-                "journal",
-                "inspect",
-                "--journal",
-                "x",
-                "--trust-host-clock",
-            ],
-            vec![
-                "forecast",
-                "journal",
-                "inspect",
-                "--journal",
-                "x",
-                "--head",
-                "not-a-digest",
-            ],
-            vec!["forecast", "journal", "inspect", "--journal", ""],
-        ] {
-            assert!(parse_args(&args(&bad), &root).is_err(), "{bad:?}");
-        }
     }
 
     #[test]

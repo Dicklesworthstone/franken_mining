@@ -58,6 +58,12 @@ pub enum Command {
         journal: PathBuf,
         head: Option<Digest32>,
     },
+    /// Retrieve an existing persisted assessment without sampling a clock or extending the journal.
+    Report {
+        journal: PathBuf,
+        head: Option<Digest32>,
+        assessment: Digest32,
+    },
 }
 
 impl Command {
@@ -69,6 +75,7 @@ impl Command {
             Self::Outcome { .. } => "outcome",
             Self::Assess { .. } => "assess",
             Self::Inspect { .. } => "inspect",
+            Self::Report { .. } => "report",
         }
     }
 }
@@ -120,6 +127,16 @@ fn perform(
                 head.is_some(),
             );
         }
+        Command::Report {
+            journal,
+            head,
+            assessment,
+        } => {
+            let journal = Journal::open_read(&root.join(journal), *head)?;
+            let mut state = replay(&journal)?;
+            let report = persisted_report(&mut state, *assessment)?;
+            return presentation(&journal, &state, "report", Some(&report), head.is_some());
+        }
         _ => {}
     }
     let (path, head) = match command {
@@ -143,17 +160,28 @@ fn perform(
             ..
         } => {
             // Validate before constructing the exact internal operation; this table is persisted and replayed.
-            time(as_of)?;
-            selection(selector)?;
+            let as_of_ns = time(as_of)?;
+            let selected = selection(selector)?;
+            let cohort_literal = toml_string(cohort)?;
+            // Bind the computed result, not just its query. This state is private to the retained writer
+            // lock; the append callback still checks clock bounds before any bytes or receipt are published.
+            let digest = state.assessment(cohort, as_of_ns, selected)?.digest;
+            if expected_digest.is_some_and(|expected| expected != digest) {
+                return Err(Refusal::new(
+                    RefusalCode::DigestMismatch505,
+                    format!(
+                        "assessment checkpoint expected {}, replay produced {digest}",
+                        expected_digest.map_or_else(String::new, |value| value.to_hex()),
+                    ),
+                ));
+            }
             let mut request = format!(
                 "[[assessment]]\ncohort = {}\nas_of = {}\nselector = {}\n",
-                toml_string(cohort)?,
+                cohort_literal,
                 toml_string(as_of)?,
                 toml_string(selector)?,
             );
-            if let Some(digest) = expected_digest {
-                let _ = writeln!(request, "expected_digest = {}", js(&digest.to_hex()));
-            }
+            let _ = writeln!(request, "expected_digest = {}", js(&digest.to_hex()));
             (request, "assessment")
         }
         _ => return Err(invalid("this operation has no request")),
@@ -170,6 +198,45 @@ fn perform(
         assessment.as_ref(),
         true,
     )
+}
+
+fn persisted_report(state: &mut Replay, digest: Digest32) -> Result<Assessment, Refusal> {
+    let (cohort, as_of_ns, selector) = state
+        .checkpoints
+        .iter()
+        .find(|checkpoint| checkpoint.digest == digest)
+        .map(|checkpoint| {
+            (
+                checkpoint.cohort.clone(),
+                checkpoint.as_of_ns,
+                checkpoint.selector,
+            )
+        })
+        .ok_or_else(|| {
+            absent(format!(
+                "assessment {digest} was not persisted in this journal"
+            ))
+        })?;
+    // Replay already populated this exact immutable assessment and its seal. This retrieves the cached
+    // result; accepting arbitrary cohort/cut inputs here would introduce a new assessment instead.
+    let report = state.assessment(&cohort, as_of_ns, selector)?;
+    if report.digest != digest {
+        return Err(Refusal::new(
+            RefusalCode::DigestMismatch505,
+            format!(
+                "persisted assessment {digest} replayed with a different digest {}",
+                report.digest
+            ),
+        ));
+    }
+    Ok(report)
+}
+
+fn digest_is_bound(state: &Replay, digest: Digest32) -> bool {
+    state
+        .checkpoints
+        .iter()
+        .any(|checkpoint| checkpoint.digest == digest && checkpoint.expected == Some(digest))
 }
 
 fn read_request(path: &Path) -> Result<String, Refusal> {
@@ -351,11 +418,16 @@ fn presentation(
         .iter()
         .map(|checkpoint| {
             format!(
-                "{{\"cohort\":{},\"as_of_ns\":{},\"selector\":{},\"digest\":{}}}",
+                "{{\"cohort\":{},\"as_of_ns\":{},\"selector\":{},\"digest\":{},\"result_digest_binding\":{}}}",
                 js(&checkpoint.cohort),
                 checkpoint.as_of_ns,
                 js(selector_name(checkpoint.selector)),
                 js(&checkpoint.digest.to_hex()),
+                js(if checkpoint.expected.is_some() {
+                    "persisted_checkpoint"
+                } else {
+                    "legacy_unbound"
+                }),
             )
         })
         .collect::<Vec<_>>()
@@ -366,14 +438,32 @@ fn presentation(
                 a,
                 journal.head(),
                 "journal_head",
-                "durable_journal",
+                if operation == "report" {
+                    "persisted_assessment_replay"
+                } else {
+                    "durable_journal"
+                },
                 "operator_declared_bounded_host_clock",
             )
         })
         .transpose()?
         .unwrap_or_else(|| "null".into());
+    let retrieval = if operation == "report" {
+        let selected = assessment.ok_or_else(|| absent("persisted assessment report missing"))?;
+        format!(
+            ",\"report_origin\":\"persisted_assessment\",\"selected_assessment_digest\":{},\"result_digest_binding\":{},\"read_only\":true,\"record_time_basis\":\"observed_host_clock_with_declared_uncertainty\"",
+            js(&selected.digest.to_hex()),
+            js(if digest_is_bound(state, selected.digest) {
+                "persisted_checkpoint"
+            } else {
+                "caller_requested_digest_only"
+            }),
+        )
+    } else {
+        String::new()
+    };
     let payload = format!(
-        "{{\"schema\":\"fmine.forecast-journal.v1\",\"operation_schema\":\"{OPERATION_SCHEMA}\",\"operation\":{},\"head\":{},\"expected_head_checked\":{pinned},\"cell_id\":{},\"clock_skew_ns\":{},\"sequence\":{},\"observed_ns\":{},\"observed_at\":{},\"clock_bounds\":{{\"earliest_ns\":{earliest},\"latest_ns\":{latest}}},\"n_operations\":{},\"n_forecasts\":{},\"n_cohorts\":{},\"n_outcomes\":{outcomes},\"n_assessments\":{},\"clock_basis\":\"operator_declared_bounded_host_clock\",\"external_time_proof\":\"not_verified\",\"source_citations\":\"supplied_not_verified\",\"forecasts\":[{forecasts}],\"cohorts\":[{cohorts}],\"assessments\":[{checkpoints}],\"report\":{report}}}",
+        "{{\"schema\":\"fmine.forecast-journal.v1\",\"operation_schema\":\"{OPERATION_SCHEMA}\",\"operation\":{},\"head\":{},\"expected_head_checked\":{pinned},\"cell_id\":{},\"clock_skew_ns\":{},\"sequence\":{},\"observed_ns\":{},\"observed_at\":{},\"clock_bounds\":{{\"earliest_ns\":{earliest},\"latest_ns\":{latest}}},\"n_operations\":{},\"n_forecasts\":{},\"n_cohorts\":{},\"n_outcomes\":{outcomes},\"n_assessments\":{},\"clock_basis\":\"operator_declared_bounded_host_clock\",\"external_time_proof\":\"not_verified\",\"source_citations\":\"supplied_not_verified\",\"forecasts\":[{forecasts}],\"cohorts\":[{cohorts}],\"assessments\":[{checkpoints}]{retrieval},\"report\":{report}}}",
         js(operation),
         js(&journal.head().to_hex()),
         js(&journal.header().cell_id),
@@ -410,6 +500,19 @@ fn markdown(
         state.checkpoints.len(),
     );
     if let Some(report) = assessment {
+        if operation == "report" {
+            let _ = writeln!(
+                out,
+                "\nRetrieved persisted assessment `{}` read-only. Its recording instants remain observed host-clock times under the declared uncertainty bound.",
+                report.digest,
+            );
+            let binding = if digest_is_bound(state, report.digest) {
+                "The persisted checkpoint binds this result digest."
+            } else {
+                "The legacy checkpoint did not bind a result digest; this retrieval verifies the caller-requested digest."
+            };
+            let _ = writeln!(out, "\n{binding}");
+        }
         let _ = writeln!(
             out,
             "\n## Assessment\n\nCut: {}; selector: {}. Members: {}; resolved: {}; unresolved: {}.\n\nAssessment digest: `{}`.\n\n| Forecast | Outcome |\n|---|---|",

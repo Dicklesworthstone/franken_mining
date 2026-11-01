@@ -216,7 +216,7 @@ mod tests {
                 "retrieved_utc = \"2030-06-01T00:00:00Z\"",
             );
         if let Some(date) = published_at {
-            let file = "file = \"Synthetic_AISC.xlsx\"\n";
+            let file = "[[source]]\nfile = \"Synthetic_AISC.xlsx\"\n";
             assert_eq!(registry.matches(file).count(), 1);
             registry = registry.replace(
                 file,

@@ -302,11 +302,28 @@ fn guidance_units_sold_denominator_and_ownership_are_required() {
 
 #[test]
 fn missing_original_nine_months_stays_missing_and_no_comparative_fills_it() {
+    let assert_missing_original = |report: &BaselineReport| {
+        assert_eq!(report.rows.len(), 26);
+        let production = row(report, "production");
+        assert_eq!(production.status, "not_available");
+        assert_eq!(
+            production.reason,
+            "original Q3-release nine-month production is not available"
+        );
+        assert!(production.interval.is_none());
+        assert!(production.actuals.is_empty());
+        assert_eq!(production.guidance.len(), 1);
+        assert_eq!(production.guidance[0].document.file, "Revision.pdf");
+        let cost = row(report, "unit_cost");
+        assert_eq!(cost.status, "available");
+        assert_eq!(cost.interval, interval(900, 1100));
+        assert!(cost.actuals.is_empty());
+        assert_eq!(cost.guidance.len(), 1);
+        assert_eq!(cost.guidance[0].document.file, "Revision.pdf");
+    };
     let root = fixture(false, "300");
     let r = run(&root);
-    assert_eq!(r.rows.len(), 26);
-    assert!(row(&r, "production").interval.is_none());
-    assert_eq!(row(&r, "unit_cost").interval, interval(900, 1100));
+    assert_missing_original(&r);
     source(
         &root,
         "2026Q4",
@@ -317,8 +334,7 @@ fn missing_original_nine_months_stays_missing_and_no_comparative_fills_it() {
         .replace("2026-10-01T00:00:00Z", "2027-01-15T00:00:00Z");
     std::fs::write(registry(&root), text).unwrap();
     let later = guidance::run(&root, "2027-02-01").unwrap();
-    assert!(row(&later, "production").interval.is_none());
-    assert!(row(&later, "production").actuals.is_empty());
+    assert_missing_original(&later);
 }
 
 #[test]

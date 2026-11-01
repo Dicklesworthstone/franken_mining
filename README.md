@@ -516,9 +516,29 @@ history, and missing members remain in the frozen denominator.
 `forecast journal assess --journal <path> --head <latest-head> --cohort <name>
 --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock` computes and persists an assessment and its closed information
 cut. `--selector first-published` is the default; `latest-as-of` selects eligible restatements. An optional
-`--expected-digest <hex>` refuses a mismatching result without appending. The cut must already be in the past
-under the declared clock bound. Reopening restores these seals and earlier assessment digests. `inspect`
+`--expected-digest <hex>` refuses a mismatching result without appending. Every new assessment also stores its
+actual result digest in the operation, including when the caller omits that option. Replay checks that binding
+and refuses a different result. The cut must already be in the past under the declared clock bound.
+Reopening restores these seals and earlier assessment digests. `inspect`
 replays recorded operations without writing; omitting its optional head pin leaves rollback authenticity unchecked.
+
+Recover a complete saved assessment using its exact `payload.report.assessment.digest`:
+
+```bash
+cargo run -p fmine-cli -- forecast journal report \
+  --journal runs/forecast-demo/history --assessment ASSESSMENT_DIGEST \
+  --head LATEST_RETAINED_HEAD --format markdown
+```
+
+The digest placeholders stand for complete hex values from successful receipts. `report` retrieves the saved
+cohort, cut and outcome selector, including original/restated citations and unresolved members. It samples no
+clock and leaves the journal's bytes, head and assessment count unchanged. An absent assessment or mismatched
+head refuses; the command never substitutes another assessment. JSON retains the original assessment content
+under `payload.report.assessment`, while the surrounding journal head and checkpoint inventory describe the
+currently opened history. Omitting `--head` permits an unpinned read with that limitation disclosed.
+Older checkpoints without a stored result digest remain readable; `result_digest_binding` distinguishes their
+caller-requested digest check from a result digest bound into the journal. Recording times remain observed
+host-clock times under the journal's declared uncertainty policy.
 
 The response schema is `fmine.forecast-journal.v1`; assessment responses contain the familiar report under
 `payload.report`. `--trust-host-clock` acknowledges an operator-declared clock bound, fixed at initialization;

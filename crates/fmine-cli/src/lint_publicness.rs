@@ -10,7 +10,7 @@ use fmine_claim::{Representation, SpatialSupport};
 use fmine_core::hash::{Digest32, blake3_hash, sha256};
 use fmine_evidence::{EvidenceClass, KnowledgeState, Refusal, RefusalCode};
 use fmine_public::key::{KeyedCell, Period, PublicValue, Scope, canonical_value_tag};
-use fmine_public::lint::{LintFinding, LintReport, Verdict, lint_cited};
+use fmine_public::lint::{LintFinding, LintMode, LintReport, Verdict, lint_cited};
 use fmine_public::sources::{IssuerProfile, RegisteredSource};
 use fmine_registry::sources::{PUBLISHED_AT_BASES, is_date};
 
@@ -182,8 +182,8 @@ fn usable(c: &KeyedCell) -> bool {
         )
 }
 
-// Probe only the original line, retaining all its prose and amount. Replacing a source link is an
-// internal comparison, never a modification to the user's draft or a newly created source Claim.
+// Probe the original line without changing its prose or amount. Discovery stores the selected Claim id
+// as metadata; its temporary comparison must insert a link. Cited findings already have a link to replace.
 fn probe(draft: &str, f: &LintFinding, c: &KeyedCell) -> Option<LintFinding> {
     let before = draft.get(..f.span.0)?;
     let after = draft.get(f.span.1..)?;
@@ -192,13 +192,13 @@ fn probe(draft: &str, f: &LintFinding, c: &KeyedCell) -> Option<LintFinding> {
     let line = draft.get(start..end)?;
     let span = (f.span.0 - start, f.span.1 - start);
     let id = c.claim.claim_id.to_string();
-    let (text, expected) = match &f.claim_id {
-        Some(original) if original.len() == id.len() => (
+    let (text, expected) = match (f.mode, &f.claim_id) {
+        (LintMode::Cited, Some(original)) if original.len() == id.len() => (
             line.replace(&format!("fmine:{original}"), &format!("fmine:{id}")),
             span,
         ),
-        Some(_) => return None,
-        None => (
+        (LintMode::Cited, Some(_)) => return None,
+        _ => (
             format!(
                 "{}[{}](fmine:{id}){}",
                 &line[..span.0],

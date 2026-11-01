@@ -87,6 +87,12 @@ mutates_authority = false
 description = "Replay and inspect a forecast journal, optionally checking an independently retained final-head digest"
 
 [[verb]]
+path = "forecast journal report"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Recover a persisted forecast assessment by exact digest without sampling a clock or changing the journal"
+
+[[verb]]
 path = "reliance init"
 subsystem = "Adit"
 mutates_authority = true

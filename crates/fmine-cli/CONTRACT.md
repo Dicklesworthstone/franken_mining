@@ -68,7 +68,7 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     [--selector first-published|latest-as-of] [--provenance <path>]`: read-only ordered transcript replay and
     cohort assessment through `fmine-calib`; first-published is the default (BD-343). An optional provenance
     bundle checks all declared ancestors at each frozen forecast's registration cut (BD-344);
-  - `forecast journal init|register|freeze|outcome|assess|inspect --journal <path>`: durable forecast admission,
+  - `forecast journal init|register|freeze|outcome|assess|inspect|report --journal <path>`: durable forecast admission,
     cohort freezing, append-only resolution and persisted assessment seals with runtime-assigned times (BD-047);
   - `reliance init|issue|reissue|check|reuse|withdraw|supersede|refresh|recall --journal <path>`: local issued-output
     status and exact artifact reuse, with capability-authorized mutations and generic recipient roles (BD-347);
@@ -95,12 +95,24 @@ and assessment cuts must be at or before its lower bound. Clock rollback is refu
 
 Requests contain one permitted TOML table with no top-level fields. `FJR1` version one operations use the frozen
 `fmine.forecast-ledger.v1` row grammar, with the three assigned-time fields prohibited. Semantic replay uses the
-existing calibration kernel. Assessment operations are persisted, retaining their optional expected digest,
-global seals, frozen membership, missing outcomes and original/restated selection across reopening.
+existing calibration kernel. Every new assessment operation binds the actual computed result in its existing
+`expected_digest` field, even when the caller supplies no expectation. The digest is computed under the writer
+lock; a caller's conflicting expectation refuses, and the append callback still checks clock bounds and
+replays the complete semantic transition before any write. Reopening verifies each bound result, global seals,
+frozen membership, missing outcomes and original/restated selection. Legacy unbound checkpoints remain readable
+and retain their explicit weaker binding status; existing frame bytes and semantic identities do not change.
 
 The `fmine.forecast-journal.v1` payload reports the cell, exact head, clock bounds, operation schema, inventories
 and checkpoints. An assessment adds `report` with mode `durable_journal`. `inspect` is read-only and can verify
-an independently retained head; an unpinned read establishes internal consistency only. Source citations remain
+an independently retained head; an unpinned read establishes internal consistency only.
+`report --assessment <digest> [--head <hex>]` retrieves one existing persisted assessment under the journal's
+shared lock. It accepts no new cohort/cut/selector and samples no clock. The saved tuple selects the existing
+kernel result, whose digest must match; missing assessments refuse `FMINE-REF-201`, wrong head pins retain
+`FMINE-REF-502`, and digest mismatches retain `FMINE-REF-505`. It appends nothing and creates no new persistent
+seal. The payload identifies `persisted_assessment` retrieval, the selected digest, read-only status, observed
+host-clock time basis and `result_digest_binding` (`persisted_checkpoint` or `caller_requested_digest_only`).
+The nested report's mode is `persisted_assessment_replay`; its assessment content is unchanged while its
+surrounding head and checkpoint inventory reflect the opened journal. Source citations remain
 unverified, external time proof is not verified, and envelope authority anchors/certificates remain null.
 Malformed inputs, stale heads and semantic refusal cannot append. A failed write/sync poisons the writer and
 retains unconfirmed bytes for inspection. No command repairs, truncates or deletes journal history.

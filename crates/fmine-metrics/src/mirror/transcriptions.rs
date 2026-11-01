@@ -1,7 +1,7 @@
 //! DESIGN (BD-346): pure interpretation of agreed source rows into production/sales mirror Claims.
 //! The caller authenticates document bytes, publication availability and complete reader agreement.
 //! This module binds the supplied document identity, dated perimeter and separately cited equity share.
-//! Determinism: Exact.
+//! Determinism: Exact
 
 use std::collections::{BTreeMap, BTreeSet};
 
