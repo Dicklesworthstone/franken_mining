@@ -12,8 +12,10 @@
      - FACT: the modules marked `//! Determinism: BitwisePortable` are the seven fmine-core files `lib.rs`, `id.rs`,
        `det.rs`, `hash.rs`, `anchor.rs`, `rand.rs` and `codec.rs`. Their tests, including the 10k-input golden
        hash, pass on `x86_64-linux` and `aarch64-darwin` (`ci:40974504857@748da79`). `wasm32` is untested.
-     - OPEN: `fmine-calib` and `fmine-metrics::lmdi` call std `exp` and `ln` (R7-C019), so they are not
-       BitwisePortable until NEW-det (`bd-hp2j`) lands.
+     - FACT (NEW-det, `bd-hp2j`, 2026-11-01): `fmine-calib/src/lib.rs`, `fmine-metrics/src/lmdi.rs` and
+       `fmine-numerics/src/lib.rs` make no std transcendental call (`xtask check-det`; R7-C019's `exp` and `ln` go
+       through `fmine_core::det`), and are marked BitwisePortable (commit `9e7a96c`), ten files in all. Their seven 10k-input golden digests printed the
+       same values on `ubuntu-latest` (x86_64) and `macos-15` (aarch64) in `ci:41237993223@84f32ac`.
      - `TargetDeterministic` linear-algebra and optimization solves record the target triple and certificate
        tolerance (`FMT-CERT-1`) once they exist.
 - **Status:** FD-row fallback taken (own kernels in `fmine-numerics`); admission PENDING until a foundation enters
