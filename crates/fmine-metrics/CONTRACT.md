@@ -5,7 +5,7 @@
 - **Layer:** `E` (Enterprise & Decision)
 - **Subsystem:** `Enterprise`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserves", "roll_forward", "mirror", "public_derivation"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserve_replacement", "reserves", "roll_forward", "mirror", "public_derivation"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), a spend-based Logarithmic Mean Divisia Index (`lmdi`, `GB-26`, BD-333.S1), and cut-off grade arithmetic (`solve_cutoff_grade`, exact registered references and source-bound technical-report checks). Authentic source reproduction of E182–E184 remains a separate data gate.
@@ -67,6 +67,20 @@ the multiplicative-to-additive LMDI accounting identity (`GB-26`). Its public-da
 arithmetic closure does not establish causation or identify an operational explanation (plan §21.6, E699).
 
 ## 4. Public API Surface
+- `reserve_replacement::{assess, ReplacementReport, SeriesAssessment}` (BD-063): binds the complete declared
+  annual window to agreed PDF point readings and a versioned metric rule. It computes the ratio of cumulative
+  net changes to depletion using exact rationals; negative net changes remain signed, and depletion follows the
+  explicit positive/negative source convention. The supported bases are attributable gold or GEO excluding
+  acquisitions/divestments, with matching `oz`, `koz` or `Moz` operands and no implicit conversion. Each GEO
+  year retains its named reserve-price deck and definition evidence; already-converted GEO is never converted
+  again. Source periods, registered hashes, publication chronology, unique cells and reader roles are rechecked.
+  Annual printed sums and any separately cited aggregate printed totals retain their own points and closed
+  half-step enclosures. Their bounds intersect to form the joint ratio enclosure; disjoint constraints refuse
+  with all available evidence, without replacing either point. Rounded headlines are separately assessed for
+  interval compatibility. Approximate language remains unassessed with no manufactured tolerance. Missing,
+  duplicate, mismatched, zero-crossing denominator or overflowing inputs refuse. The deterministic report
+  digest binds selections, relevant rules/decks, source metadata, admitted readings and results. Actual file
+  authentication and independent reader agreement remain caller obligations; this is not reserve validation.
 - `reserves::{assess, IssuerReserveRow, ReserveDeck, ReserveKey, ReserveReport}` (BD-335): a source-bound
   projection of declared reserve assertions. Rows retain separate economic, quoted-price-deck and filing-vintage
   identities, their exact printed bounds and all source/price readings. Private row fields and a constant

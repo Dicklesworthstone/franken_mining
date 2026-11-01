@@ -17,6 +17,7 @@ pub mod lmdi;
 pub mod mirror;
 pub mod public_derivation;
 pub mod recovery;
+pub mod reserve_replacement;
 pub mod reserves;
 pub mod roll_forward;
 

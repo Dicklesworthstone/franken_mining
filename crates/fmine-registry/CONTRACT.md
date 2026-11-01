@@ -5,7 +5,7 @@
 - **Layer:** `S0` (Substrate)
 - **Subsystem:** `Bedrock`
 - **LOC Budget:** `10k planned / 12k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["calendars", "catalog", "metrics", "parser", "sources", "table_identities", "toml_subset", "transcriptions"]`
+- **Allowed Module Families:** `["calendars", "catalog", "metrics", "parser", "reserve_replacement", "sources", "table_identities", "toml_subset", "transcriptions"]`
 
 ## 2. Mathematical & Domain Formulation
 Parses and validates the 8 canonical TOML registries in `registries/` (`loc_budget`, `workspace_topology`, `lifts`, `units`, `crs`, `calendars`, `refusals`, `verbs`) and verifies 1:1 alignment between `registries/refusals.toml` and `fmine_evidence::CATALOG` (generated from that file; `xtask check-refusals` checks the generation).
@@ -14,6 +14,21 @@ Parses and validates the 8 canonical TOML registries in `registries/` (`loc_budg
 Serves as the schema and registry catalog authority for `fmine doctor` and `xtask`.
 
 ## 4. Public API Surface
+- `metrics::{ReserveMetal, ReserveReplacementRule}`, `MetricRegistry::reserve_replacements`, and
+  `MetricRegistry::reserve_replacement` (BD-063): optional strict `[[reserve_replacement]]` rows attach one
+  explicit rule to a registered reserve-replacement definition. Metal is `gold` or `gold_equivalent`, the
+  window is 1–100 years, the amount unit is `oz`, `koz`, or `Moz`, and the basis is nonempty. The
+  `excludes_acquisitions_divestments` field accepts only the strings `"true"` and `"false"` and exposes a bool;
+  the shared TOML subset is unchanged. Gold forbids `geo_definition`; GEO requires a registered definition
+  in the GEO family. Duplicate rules, unknown fields, missing or mistyped fields, invalid windows/units,
+  and wrong-family references refuse. Rules are not inferred or inherited for unconfigured definitions.
+  The two existing Barrick definitions explicitly use three years, Moz, and exclusion of acquisitions and
+  divestments, with their distinct attributable metal bases. No issuer numeric inputs are registered here.
+- `reserve_replacement::{parse_replacement_registry, ReplacementRegistry}`, `ReplacementRegistry::validate`
+  (BD-063): strict value-free `[[series]]` declarations link `[[year]]` rows and optional `[[aggregate]]` and
+  `[[headline]]` rows. Each annual window is complete and contiguous, depletion sign is explicit, and rows
+  are canonically sorted. Quantity, document, period, and basis fields are selectors, not numeric inputs.
+  An approximate headline never supplies an invented tolerance.
 - `table_identities::{parse_table_identities, load_table_identities, TableIdentityRegistry, TableIdentity,
   Term, Replacement, IdentityKind, TermRole}` (BD-340.S5, BD-063): strict `fmine.table-identities.v1` declarations for source-bound
   PDF arithmetic, without source values. Every identity names its registered document, family, sum or
