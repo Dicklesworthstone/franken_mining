@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -89,6 +89,15 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 All three Claim commands accept `--issuer <issuer> [--through YYYYQn]` or `--synthetic` to select the same
 verified source snapshot as assurance. Without a selector they search the current canonical projections.
 `--json` is an alias for `--format json`.
+
+DESIGN (BD-115): an explicit selector also resolves the recovery report's retained ownership, training,
+fit, operating and projection Claims. Canonical identity and public clearance are checked before emission.
+Typed values, canonical body bytes, value tags, parents, source anchors, recorded evidence and actual color/UU
+guards remain visible. The trace walks the retained closure and names unresolved parents or unanchored leaves.
+The recovery digest is separate from `source_identity_anchor_id` and `source_identity_state_root`;
+`recovery_in_identity_certificate` is false, and the derived read's envelope anchor and certificate stay null.
+This is a current verified projection, not a historical Claim store, calibration or freshness assessment.
+Workbook Claim reads retain their established payload and identity-ledger certificate.
 
 ### Durable forecast registration (BD-047)
 
@@ -537,11 +546,11 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   `{i 2120, ii 3, iii 4, iv 17, v 391, np 60}`.
 - `PO-ADIT-1`: every verb's envelope matches a hand-written frame (`test_po_adit_1_golden_every_verb`; payload,
   anchor, certificate and refusal text masked), and `tests/e2e_envelope.sh` checks the printed line of each.
-- `PO-CLI-4` (BD-115): `test_claim_show_why_trace_golden` compares all three synthetic inspection payloads
+- `PO-CLI-4` (BD-115, T `public_claim_inspection`): `test_claim_show_why_trace_golden` compares all three synthetic inspection payloads
   with hand-written expected output. Default tests preserve guard failures, explicitly partial provenance,
   exact-ID lookup and altered-source refusal for every view. The ignored real source test checks E474's
   issuer assertion, refused color and registered source trace without upgrading its evidence.
-- FACT (BD-115, CLI tests): `test_claim_show_reads_reported_claims_and_refuses_invented_ids` round-trips numeric
+- FACT (BD-115, T `public_claim_inspection`): `test_claim_show_reads_reported_claims_and_refuses_invented_ids` round-trips numeric
   and placeholder Claim ids, projection digest and ledger root through all three selected views. The corpus test
   `test_claim_show_reads_real_mine_stats_and_aisc_claims` covers both adapters. `test_claim_show_rechecks_registered_source_bytes`
   exercises the registered-file path, preserves a through bound despite a later altered source, and refuses

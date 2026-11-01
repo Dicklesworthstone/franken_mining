@@ -124,8 +124,14 @@ To resolve a Claim against a particular assurance snapshot, use the same issuer 
 cargo run -p fmine-cli -- claim show clm_REPLACE_WITH_THE_EMITTED_ID --issuer barrick --through 2026Q2
 ```
 
-The response includes both the assurance root and the keyed Claim projection digest. Missing ids and altered
-source files refuse instead of returning a stale cached Claim.
+For workbook Claims, the response includes both the assurance root and the keyed Claim projection digest.
+The same explicit issuer selection also resolves the recovery report's ownership, training, fitted-model,
+operating-input and projection Claims. `show` retains the typed value and canonical body; `why` runs the
+recorded Claim guards; `trace` follows the retained parents through the model to the workbook or agreed PDF
+source anchors. Missing parents remain explicit. Recovery reads carry their separate model-report digest;
+their envelope has no identity-ledger certificate or issuance anchor. The source identity root is identified
+separately and does not certify the model. Missing IDs and altered source files refuse instead of returning
+a stale cached Claim. Recovery results remain descriptive and uncalibrated.
 
 ### Check table identities and reserve roll-forwards
 
