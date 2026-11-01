@@ -125,7 +125,7 @@ and checkpoints. `operation_schema` continues to identify the row grammar. `oper
 its version counts and time policy describe the prefix through its first persisted checkpoint. A v2 checkpoint
 over legacy operations remains mixed and does not upgrade the earlier time evidence. `inspect` is read-only
 and can verify an independently retained head; an unpinned read establishes internal consistency only.
-`report --assessment <digest> [--head <hex>]` retrieves one existing persisted assessment under the journal's
+`report --assessment <digest> [--head <hex>] [--provenance <path>]` retrieves one existing persisted assessment under the journal's
 shared lock. It accepts no new cohort/cut/selector and samples no clock. The saved tuple selects the existing
 kernel result, whose digest must match; missing assessments refuse `FMINE-REF-201`, wrong head pins retain
 `FMINE-REF-502`, and digest mismatches retain `FMINE-REF-505`. It appends nothing and creates no new persistent
@@ -138,6 +138,12 @@ surrounding head and checkpoint inventory reflect the opened journal. Its time-p
 selected checkpoint's prefix rather than later appended operations. Source citations remain unverified;
 `--trust-host-clock` declares an operator's bound and provides no independent timestamp proof. External time
 proof is not verified, and envelope authority anchors/certificates remain null.
+An optional provenance bundle checks every frozen member at its exact recorded registration time, including
+unresolved members, using the existing temporal-cone verifier. Provenance timestamps alone accept strict UTC
+fractions of one through nine digits with checked nanosecond conversion. A leakage refusal retains the structured
+frontier and shortest paths. The supplied bundle digest and temporal result are supplemental: the saved
+assessment digest and journal bytes remain unchanged. This does not bind the bundle into the original
+registration, authenticate its declared times or perform generator replay.
 Malformed inputs, stale heads and semantic refusal cannot append. A failed write/sync poisons the writer and
 retains unconfirmed bytes for inspection. No command repairs, truncates or deletes journal history.
 

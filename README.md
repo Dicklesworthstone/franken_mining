@@ -664,6 +664,15 @@ describes the operation prefix through that assessment's first saved checkpoint,
 change its time-policy labels. A v2 assessment over legacy history remains explicitly mixed; adding a result
 digest does not upgrade the earlier clock evidence.
 
+Add `--provenance <path>` to check the saved cohort's declared ancestry at each forecast's recorded
+registration time. The same `fmine.forecast-provenance.v1` bundle used by `forecast assess` applies, including
+bindings for unresolved members. Its UTC timestamps accept one through nine fractional digits, so an exact
+nanosecond registration can be represented without rounding. A future ancestor refuses with its leakage
+frontier and shortest path. Successful output adds the supplied bundle's digest and temporal check to the
+report while preserving the original assessment digest and journal bytes. This later-supplied metadata is
+not an ancestry commitment made at registration or an external timestamp proof; generator replay remains
+`not_performed`.
+
 The response schema is `fmine.forecast-journal.v1`; assessment responses contain the familiar report under
 `payload.report`. `--trust-host-clock` acknowledges an operator-declared clock bound, fixed at initialization;
 it supplies no independent timestamp proof. Source citations remain supplied evidence. This local workflow

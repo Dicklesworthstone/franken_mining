@@ -14,8 +14,8 @@ use fmine_registry::toml_subset::{TomlDoc, TomlValue};
 use fmine_runtime::{HostWallClock, WallClock};
 
 use super::{
-    Assessment, MemberOutcome, Replay, Row, absent, cohort_json, invalid, js, missing_name,
-    parse_subset, payload_json, selection, selector_name, time, utc,
+    Assessment, AssessmentFailure, MemberOutcome, Replay, Row, absent, cohort_json, invalid, js,
+    missing_name, parse_subset, payload_json, selection, selector_name, time, utc,
 };
 use crate::{DOCTOR_WHY, Envelope, NextAction};
 
@@ -100,6 +100,7 @@ pub enum Command {
         journal: PathBuf,
         head: Option<Digest32>,
         assessment: Digest32,
+        provenance: Option<PathBuf>,
     },
 }
 
@@ -135,7 +136,13 @@ pub fn execute_with_clock(command: &Command, root: &Path, clock: &dyn WallClock)
             envelope.rendered_markdown = Some(markdown);
             envelope
         }
-        Err(refusal) => Envelope::refused(&verb, refusal, actions),
+        Err(failure) => {
+            let mut envelope = Envelope::refused(&verb, failure.refusal, actions);
+            if let Some(diagnostics) = failure.diagnostics {
+                envelope.payload_json = diagnostics;
+            }
+            envelope
+        }
     }
 }
 
@@ -143,7 +150,7 @@ fn perform(
     command: &Command,
     root: &Path,
     clock: &dyn WallClock,
-) -> Result<(String, String), Refusal> {
+) -> Result<(String, String), AssessmentFailure> {
     match command {
         Command::Init {
             journal,
@@ -152,7 +159,8 @@ fn perform(
         } => {
             let journal =
                 Journal::create(&root.join(journal), cell_id.as_str(), *clock_skew_ns, clock)?;
-            return presentation(&journal, &replay(&journal)?, "init", None, false);
+            return presentation(&journal, &replay(&journal)?, "init", None, false)
+                .map_err(Into::into);
         }
         Command::Inspect { journal, head } => {
             let journal = Journal::open_read(&root.join(journal), *head)?;
@@ -162,17 +170,27 @@ fn perform(
                 "inspect",
                 None,
                 head.is_some(),
-            );
+            )
+            .map_err(Into::into);
         }
         Command::Report {
             journal,
             head,
             assessment,
+            provenance,
         } => {
             let journal = Journal::open_read(&root.join(journal), *head)?;
             let mut state = replay(&journal)?;
             let report = persisted_report(&mut state, *assessment)?;
-            return presentation(&journal, &state, "report", Some(&report), head.is_some());
+            if let Some(path) = provenance {
+                state.temporal_validation = Some(super::provenance::verify(
+                    &root.join(path),
+                    &state,
+                    &report,
+                )?);
+            }
+            return presentation(&journal, &state, "report", Some(&report), head.is_some())
+                .map_err(Into::into);
         }
         _ => {}
     }
@@ -181,7 +199,7 @@ fn perform(
         | Command::Freeze { journal, head, .. }
         | Command::Outcome { journal, head, .. }
         | Command::Assess { journal, head, .. } => (journal, *head),
-        _ => return Err(invalid("this operation needs a writer")),
+        _ => return Err(invalid("this operation needs a writer").into()),
     };
     let mut journal = Journal::open_write(&root.join(path), head)?;
     let mut state = replay(&journal)?;
@@ -210,7 +228,8 @@ fn perform(
                         "assessment checkpoint expected {}, replay produced {digest}",
                         expected_digest.map_or_else(String::new, |value| value.to_hex()),
                     ),
-                ));
+                )
+                .into());
             }
             let mut request = format!(
                 "[[assessment]]\ncohort = {}\nas_of = {}\nselector = {}\n",
@@ -221,7 +240,7 @@ fn perform(
             let _ = writeln!(request, "expected_digest = {}", js(&digest.to_hex()));
             (request, "assessment")
         }
-        _ => return Err(invalid("this operation has no request")),
+        _ => return Err(invalid("this operation has no request").into()),
     };
     let request = version_request(&request, table)?;
     let mut assessment = None;
@@ -236,6 +255,7 @@ fn perform(
         assessment.as_ref(),
         true,
     )
+    .map_err(Into::into)
 }
 
 fn persisted_report(state: &mut Replay, digest: Digest32) -> Result<Assessment, Refusal> {
@@ -637,6 +657,9 @@ fn markdown(
         state.cohorts.len(),
         state.checkpoints.len(),
     );
+    if state.temporal_validation.is_some() {
+        out.push_str("\nDeclared ancestry was checked at each forecast's registration. Supplied time metadata is not independently verified; generator replay was not performed. JSON includes the provenance-file hash and per-forecast cone digests.\n");
+    }
     if let Some(report) = assessment {
         if operation == "report" {
             let _ = writeln!(

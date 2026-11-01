@@ -193,6 +193,33 @@ pub(super) fn verify(
     Bundle::parse(text)?.verify(replay, report, &sha256(&bytes).to_hex())
 }
 
+/// Provenance must preserve a live registration's exact nanoseconds. The journal's frozen request
+/// grammar remains unchanged; only supplied provenance timestamps admit fractional seconds.
+fn timestamp(text: &str) -> Result<i64, Refusal> {
+    let Some((whole, fraction)) = text.split_once('.') else {
+        return super::time(text);
+    };
+    let invalid_time = || {
+        invalid(format!(
+            "{text:?} must be UTC with 1..=9 fractional second digits within the signed nanosecond range"
+        ))
+    };
+    let fraction = fraction
+        .strip_suffix('Z')
+        .filter(|digits| {
+            (1..=9).contains(&digits.len()) && digits.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        .ok_or_else(invalid_time)?;
+    let seconds = super::parse_utc(&format!("{whole}Z")).ok_or_else(invalid_time)?;
+    let mut nanos = fraction
+        .bytes()
+        .fold(0_i128, |n, byte| n * 10 + i128::from(byte - b'0'));
+    for _ in fraction.len()..9 {
+        nanos *= 10;
+    }
+    i64::try_from(i128::from(seconds) * 1_000_000_000 + nanos).map_err(|_| invalid_time())
+}
+
 fn node(row: &Row<'_>) -> Result<TemporalNode, Refusal> {
     row.allowed(
         &[
@@ -231,11 +258,11 @@ fn node(row: &Row<'_>) -> Result<TemporalNode, Refusal> {
         .unwrap_or_default();
     let available_at = row
         .optional_string("available_at")?
-        .map(super::time)
+        .map(timestamp)
         .transpose()?;
     let performed_at = row
         .optional_string("performed_at")?
-        .map(super::time)
+        .map(timestamp)
         .transpose()?;
     let availability = match row.string("origin")? {
         "source" if performed_at.is_none() => Availability::Source { available_at },
@@ -253,7 +280,7 @@ fn node(row: &Row<'_>) -> Result<TemporalNode, Refusal> {
     let seq = row.optional_integer("seq")?;
     let recorded_at = row
         .optional_string("recorded_at")?
-        .map(super::time)
+        .map(timestamp)
         .transpose()?;
     let recorded_at = match (cell, seq, recorded_at) {
         (None, None, None) => None,

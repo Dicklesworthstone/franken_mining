@@ -96,7 +96,7 @@ description = "Replay and inspect a forecast journal, optionally checking an ind
 path = "forecast journal report"
 subsystem = "Plumb"
 mutates_authority = false
-description = "Recover a persisted forecast assessment by exact digest without sampling a clock or changing the journal"
+description = "Recover a persisted forecast assessment by exact digest, optionally checking supplied temporal provenance, without changing the journal"
 
 [[verb]]
 path = "reliance init"

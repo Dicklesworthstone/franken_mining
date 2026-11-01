@@ -443,6 +443,7 @@ fn v2_outcomes_cross_historical_cuts_only_at_their_upper_bound_and_keep_checked_
                 journal: journal.path.clone(),
                 head: Some(journal.head),
                 assessment: assessment_digest(saved),
+                provenance: None,
             },
             0,
         );
@@ -495,6 +496,7 @@ fn v2_outcomes_cross_historical_cuts_only_at_their_upper_bound_and_keep_checked_
                 journal: path.clone(),
                 head: Some(pin),
                 assessment: before_digest,
+                provenance: None,
             },
             0,
         );
@@ -588,6 +590,7 @@ fn legacy_observed_ids_and_assessment_digest_survive_v2_appends_with_mixed_label
             journal: journal.path.clone(),
             head: Some(journal.head),
             assessment: digest,
+            provenance: None,
         },
         0,
     );
@@ -635,6 +638,7 @@ fn legacy_observed_ids_and_assessment_digest_survive_v2_appends_with_mixed_label
             journal: journal.path.clone(),
             head: Some(journal.head),
             assessment: digest,
+            provenance: None,
         },
         0,
     );

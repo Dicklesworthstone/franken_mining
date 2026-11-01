@@ -12,7 +12,7 @@ use fmine_calib::record::{parse_hex32, parse_utc};
 use fmine_claim::forecast_journal::Entry;
 use fmine_cli::forecast_journal::{Command, execute_with_clock};
 use fmine_cli::{CliCommand, Envelope, OutputFormat, execute_command, invoke, parse_args};
-use fmine_core::hash::Digest32;
+use fmine_core::hash::{Digest32, sha256};
 use fmine_io::forecast::Journal as DurableJournal;
 use fmine_registry::toml_subset::{TomlValue, parse_subset};
 use fmine_runtime::{ClockError, WallClock};
@@ -119,6 +119,10 @@ impl Journal {
     }
 
     fn append(&mut self, text: &str, at: &str) {
+        self.append_at(text, ns(at));
+    }
+
+    fn append_at(&mut self, text: &str, at: i64) {
         let request = PathBuf::from(format!("request-{}.toml", self.requests));
         self.requests += 1;
         fs::write(self.root.join(&request), text).expect("synthetic operation");
@@ -142,7 +146,7 @@ impl Journal {
             },
             other => panic!("unexpected synthetic operation {other}"),
         };
-        self.write(command, ns(at));
+        self.write(command, at);
     }
 
     fn assess(&mut self, cut: &str, selector: &str) -> String {
@@ -160,11 +164,21 @@ impl Journal {
     }
 
     fn report(&self, assessment: Digest32, head: Option<Digest32>) -> Envelope {
+        self.report_with_provenance(assessment, head, None)
+    }
+
+    fn report_with_provenance(
+        &self,
+        assessment: Digest32,
+        head: Option<Digest32>,
+        provenance: Option<PathBuf>,
+    ) -> Envelope {
         execute_with_clock(
             &Command::Report {
                 journal: JOURNAL.into(),
                 head,
                 assessment,
+                provenance,
             },
             &self.root,
             &NeverClock,
@@ -177,16 +191,20 @@ impl Journal {
 }
 
 fn saved_reports() -> (Journal, String, String) {
+    saved_reports_with_fraction(0)
+}
+
+fn saved_reports_with_fraction(fraction_ns: i64) -> (Journal, String, String) {
     let mut journal = Journal::new();
     for (alias, at) in [
         ("f1", "2030-01-02T00:00:00Z"),
         ("f2", "2030-01-03T00:00:00Z"),
     ] {
-        journal.append(
+        journal.append_at(
             &format!(
                 "[[forecast]]\nid = \"{alias}\"\nmodel_key = \"synthetic:{alias}\"\noutcome_due = \"2030-12-31T00:00:00Z\"\nkind = \"interval\"\nlo = \"40\"\nhi = \"50\"\nnominal = \"0.8\"\n"
             ),
-            at,
+            ns(at) + fraction_ns,
         );
     }
     journal.append(
@@ -599,6 +617,7 @@ fn saved_report_cli_routes_without_accepting_mutation_or_cut_flags() {
         assert!(
             matches!(command, CliCommand::ForecastJournal(Command::Report {
             journal: path, head: actual_head, assessment: actual,
+            provenance: None,
         }) if path == Path::new(JOURNAL) && actual_head == expected_head && actual == selected)
         );
         let (envelope, format) = invoke(&invocation, Path::new("."));
@@ -651,5 +670,374 @@ fn saved_report_cli_routes_without_accepting_mutation_or_cut_flags() {
         .find(|entry| entry.contains("path = \"forecast journal report\""))
         .expect("registered saved-report verb");
     assert!(entry.contains("mutates_authority = false"), "{entry}");
+    assert_eq!(journal.bytes(), before);
+}
+
+const OBSERVATION: &str = "evd_11111111111111111111111111111111";
+const FITTED: &str = "mod_22222222222222222222222222222222";
+const EXCLUSION: &str = "evd_33333333333333333333333333333333";
+const DECK: &str = "evd_44444444444444444444444444444444";
+const BRIDGE: &str = "clm_55555555555555555555555555555555";
+
+fn registration<'a>(report: &'a str, alias: &str) -> (&'a str, &'a str) {
+    let forecast = report
+        .split_once(&format!("\"alias\":\"{alias}\""))
+        .expect("registered forecast")
+        .1;
+    (
+        string_field(forecast, "forecast_id"),
+        string_field(forecast, "registered_at"),
+    )
+}
+
+fn provenance_bundle(report: &str, changed_time: Option<(&str, &str)>) -> String {
+    let mut bundle =
+        String::from("schema = \"fmine.forecast-provenance.v1\"\nlane = \"supplied\"\n");
+    let bridge_parents = format!("{FITTED}, {EXCLUSION}, {DECK}");
+    for (index, (id, kind, field, at, parents)) in [
+        (
+            OBSERVATION,
+            "observation",
+            "available_at",
+            "2029-12-31T23:59:59Z",
+            "",
+        ),
+        (
+            FITTED,
+            "fitted_parameters",
+            "performed_at",
+            "2030-01-01T00:00:00Z",
+            OBSERVATION,
+        ),
+        (
+            EXCLUSION,
+            "exclusion_act",
+            "performed_at",
+            "2030-01-01T00:00:00Z",
+            OBSERVATION,
+        ),
+        (
+            DECK,
+            "price_deck",
+            "available_at",
+            "2030-01-01T00:00:00Z",
+            "",
+        ),
+        (
+            BRIDGE,
+            "claim",
+            "performed_at",
+            "2030-01-01T00:00:00Z",
+            bridge_parents.as_str(),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let at = changed_time
+            .filter(|(node, _)| *node == id)
+            .map_or(at, |(_, at)| at);
+        let origin = if field == "available_at" {
+            "source"
+        } else {
+            "derived"
+        };
+        bundle.push_str(&format!(
+            "\n[[node]]\nid = \"{id}\"\nkind = \"{kind}\"\norigin = \"{origin}\"\n{field} = \"{at}\"\nrecord_cell = \"inputs\"\nseq = {}\nrecorded_at = \"2030-01-01T00:00:00Z\"\n", index + 1,
+        ));
+        if !parents.is_empty() {
+            bundle.push_str(&format!("parents = \"{parents}\"\n"));
+        }
+    }
+    for (seq, alias) in [(1, "f1"), (2, "f2")] {
+        let (id, at) = registration(report, alias);
+        bundle.push_str(&format!(
+            "\n[[anchor]]\nid = \"{alias}\"\ncell = \"inputs\"\nseq = 10\n\n[[anchor]]\nid = \"{alias}\"\ncell = \"synthetic-report-cell\"\nseq = {seq}\n\n[[node]]\nid = \"{id}\"\nkind = \"forecast\"\norigin = \"derived\"\nperformed_at = \"{at}\"\nparents = \"{FITTED}, {BRIDGE}\"\nrecord_cell = \"synthetic-report-cell\"\nseq = {seq}\nrecorded_at = \"{at}\"\n\n[[binding]]\nforecast = \"{alias}\"\nforecast_id = \"{id}\"\nanchor = \"{alias}\"\n",
+        ));
+    }
+    bundle
+}
+
+fn checked_report(journal: &Journal, saved: &str, bundle: &str) -> Envelope {
+    let path = journal.root.join("provenance.toml");
+    fs::write(&path, bundle).expect("supplied synthetic ancestry");
+    let before = journal.bytes();
+    let envelope = journal.report_with_provenance(
+        digest_field(assessment(saved), "digest"),
+        Some(journal.head),
+        Some("provenance.toml".into()),
+    );
+    assert_eq!(
+        journal.bytes(),
+        before,
+        "provenance checks never extend history"
+    );
+    assert_eq!(
+        fs::read(path).expect("retained provenance"),
+        bundle.as_bytes()
+    );
+    envelope
+}
+
+#[test]
+fn saved_report_checks_fractional_registration_provenance_without_changing_results() {
+    let (journal, early, latest) = saved_reports_with_fraction(123_456_789);
+    let bundle = provenance_bundle(&early, None);
+    for saved in [&early, &latest] {
+        let envelope = checked_report(&journal, saved, &bundle);
+        assert_eq!(envelope.exit_code, 0, "{envelope:?}");
+        assert_eq!(assessment(&envelope.payload_json), assessment(saved));
+        assert_eq!(digest_field(&envelope.payload_json, "head"), journal.head);
+        assert_eq!(
+            digest_field(&envelope.payload_json, "provenance_sha256"),
+            sha256(bundle.as_bytes())
+        );
+        for fragment in [
+            "\"status\":\"checked\"",
+            "\"scope\":\"declared_ancestry_at_registration\"",
+            "\"time_evidence\":\"supplied_not_verified\"",
+            "\"generator_replay\":\"not_performed\"",
+            "\"external_time_proof\":\"not_verified\"",
+            "\"forecast\":\"f1\"",
+            "\"forecast\":\"f2\"",
+            "\"decision_cut\":\"2030-01-02T00:00:01.123456789Z\"",
+            "\"decision_cut\":\"2030-01-03T00:00:01.123456789Z\"",
+        ] {
+            assert!(
+                envelope.payload_json.contains(fragment),
+                "missing {fragment}: {envelope:?}"
+            );
+        }
+        assert_eq!(envelope.certificate, None);
+        assert_eq!(envelope.anchor_id, None);
+        for flag in [
+            "reserve_disclosure_claim",
+            "execution_authorized",
+            "geotechnical_signoff",
+            "regulatory_compliance_claim",
+        ] {
+            assert!(envelope.to_json().contains(&format!("\"{flag}\":false")));
+        }
+        assert!(
+            envelope
+                .rendered_markdown
+                .expect("readable report")
+                .contains("Declared ancestry was checked")
+        );
+    }
+    // The public parser carries the supplied bundle through to this same read-only path.
+    let invocation = args(&[
+        "forecast",
+        "journal",
+        "report",
+        "--journal",
+        JOURNAL,
+        "--assessment",
+        &digest_field(assessment(&early), "digest").to_hex(),
+        "--provenance",
+        "provenance.toml",
+        "--head",
+        &journal.head.to_hex(),
+    ]);
+    let (parsed, _, root) =
+        parse_args(&invocation, &journal.root).expect("provenance report route");
+    let CliCommand::ForecastJournal(command) = parsed else {
+        panic!("journal report route")
+    };
+    let routed = execute_with_clock(&command, &root, &NeverClock);
+    assert_eq!(routed.exit_code, 0, "{routed:?}");
+    assert_eq!(assessment(&routed.payload_json), assessment(&early));
+    for operation in ["inspect", "assess", "register"] {
+        assert!(
+            parse_args(
+                &args(&[
+                    "forecast",
+                    "journal",
+                    operation,
+                    "--journal",
+                    JOURNAL,
+                    "--provenance",
+                    "provenance.toml"
+                ]),
+                &journal.root
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn saved_report_provenance_retains_minimal_frontiers_and_checks_unresolved_members() {
+    let (journal, early, _) = saved_reports_with_fraction(123_456_789);
+    let (root, _) = registration(&early, "f1");
+    // V2 registration is the observed instant plus this journal's one-second uncertainty bound.
+    let future = "2030-01-02T00:00:01.123456790Z";
+    for (node, suffix) in [
+        (OBSERVATION, vec![FITTED, OBSERVATION]),
+        (FITTED, vec![FITTED]),
+        (EXCLUSION, vec![BRIDGE, EXCLUSION]),
+        (DECK, vec![BRIDGE, DECK]),
+    ] {
+        let bundle = provenance_bundle(&early, Some((node, future)));
+        let refused = checked_report(&journal, &early, &bundle);
+        assert_eq!(
+            refused
+                .refusal
+                .as_ref()
+                .expect("typed temporal refusal")
+                .code,
+            "FMINE-REF-110"
+        );
+        let path = std::iter::once(root)
+            .chain(suffix)
+            .map(|id| format!("\"{id}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        for fragment in [
+            "\"status\":\"refused\"".to_string(),
+            "\"forecast\":\"f1\"".to_string(),
+            format!("\"node\":\"{node}\""),
+            format!("\"available_at\":\"{future}\""),
+            "\"after_cut\":true".to_string(),
+            format!("\"path\":[{path}]"),
+        ] {
+            assert!(
+                refused.payload_json.contains(&fragment),
+                "missing {fragment}: {refused:?}"
+            );
+        }
+    }
+    let bundle = provenance_bundle(&early, None);
+    let (unresolved, _) = registration(&early, "f2");
+    let missing_binding = bundle.replace(
+        &format!(
+            "[[binding]]\nforecast = \"f2\"\nforecast_id = \"{unresolved}\"\nanchor = \"f2\"\n"
+        ),
+        "",
+    );
+    let missing = checked_report(&journal, &early, &missing_binding);
+    let refusal = missing
+        .refusal
+        .expect("unresolved member still needs ancestry");
+    assert_eq!(refusal.code, "FMINE-REF-110");
+    assert!(refusal.what.contains("f2"));
+    for (bad, code) in [
+        (
+            bundle.replace("available_at = \"2029-12-31T23:59:59Z\"", ""),
+            "FMINE-REF-110",
+        ),
+        (
+            bundle.replace(
+                &format!("forecast_id = \"{root}\""),
+                "forecast_id = \"for_00000000000000000000000000000000\"",
+            ),
+            "FMINE-REF-110",
+        ),
+        (
+            bundle.replace("lane = \"supplied\"", "lane = \"synthetic\""),
+            "FMINE-REF-107",
+        ),
+        (
+            bundle.replace(
+                "performed_at = \"2030-01-02T00:00:01.123456789Z\"",
+                "performed_at = \"2030-01-02T00:00:01.123456788Z\"",
+            ),
+            "FMINE-REF-110",
+        ),
+    ] {
+        let refused = checked_report(&journal, &early, &bad);
+        assert_eq!(
+            refused.refusal.expect("invalid ancestry refuses").code,
+            code
+        );
+    }
+}
+
+#[test]
+fn provenance_fractional_times_preserve_nanoseconds_and_refuse_ambiguous_or_overflowing_dates() {
+    let (journal, early, _) = saved_reports_with_fraction(123_456_789);
+    let mut cones = std::collections::BTreeSet::new();
+    for digits in 1..=9 {
+        let at = format!("2030-01-02T00:00:01.{}Z", &"123456789"[..digits]);
+        let bundle = provenance_bundle(&early, Some((OBSERVATION, &at)));
+        let envelope = checked_report(&journal, &early, &bundle);
+        assert_eq!(envelope.exit_code, 0, "{envelope:?}");
+        cones.insert(string_field(&envelope.payload_json, "cone_digest").to_string());
+    }
+    assert_eq!(
+        cones.len(),
+        9,
+        "fractional values must never be truncated to seconds"
+    );
+    let short = provenance_bundle(&early, Some((OBSERVATION, "2030-01-02T00:00:01.1Z")));
+    let padded = provenance_bundle(
+        &early,
+        Some((OBSERVATION, "2030-01-02T00:00:01.100000000Z")),
+    );
+    let a = checked_report(&journal, &early, &short);
+    let b = checked_report(&journal, &early, &padded);
+    assert_eq!(
+        string_field(&a.payload_json, "cone_digest"),
+        string_field(&b.payload_json, "cone_digest")
+    );
+    assert_ne!(
+        string_field(&a.payload_json, "provenance_sha256"),
+        string_field(&b.payload_json, "provenance_sha256")
+    );
+    let original = checked_report(&journal, &early, &provenance_bundle(&early, None));
+    for edge in [
+        "1677-09-21T00:12:43.145224192Z",
+        "2262-04-11T23:47:16.854775807Z",
+    ] {
+        let bundle = format!(
+            "{}\n[[node]]\nid = \"evd_66666666666666666666666666666666\"\nkind = \"registry_row\"\norigin = \"source\"\navailable_at = \"{edge}\"\n",
+            provenance_bundle(&early, None)
+        );
+        let envelope = checked_report(&journal, &early, &bundle);
+        assert_eq!(envelope.exit_code, 0, "{envelope:?}");
+        assert_eq!(
+            string_field(&envelope.payload_json, "cone_digest"),
+            string_field(&original.payload_json, "cone_digest")
+        );
+    }
+    for invalid in [
+        "2030-01-02T00:00:00.Z",
+        "2030-01-02T00:00:00.1234567890Z",
+        "2030-01-02T00:00:00.1+00:00",
+        "2030-01-02T00:00:00.1",
+        "2030-01-02T00:00:00.1e2Z",
+        "2030-01-02T00:00:00.1.2Z",
+        "2030-01-02T00:00:00.１２Z",
+        "2030-01-02T00:00:60.1Z",
+        "1677-09-21T00:12:43.145224191Z",
+        "2262-04-11T23:47:16.854775808Z",
+    ] {
+        let envelope = checked_report(
+            &journal,
+            &early,
+            &provenance_bundle(&early, Some((OBSERVATION, invalid))),
+        );
+        assert_eq!(
+            envelope.refusal.expect("invalid fractional UTC").code,
+            "FMINE-REF-107",
+            "{invalid}"
+        );
+    }
+    // Fractional input support is confined to provenance, not a reinterpretation of FJR1 operation grammar.
+    fs::write(journal.root.join("fractional-due.toml"), "[[forecast]]\nid = \"new\"\nmodel_key = \"synthetic\"\noutcome_due = \"2035-01-01T00:00:00.1Z\"\nkind = \"bernoulli\"\nprobability = \"0.5\"\n").expect("incompatible operation fixture");
+    let before = journal.bytes();
+    let refused = execute_with_clock(
+        &Command::Register {
+            journal: JOURNAL.into(),
+            head: journal.head,
+            request: "fractional-due.toml".into(),
+        },
+        &journal.root,
+        &FixedClock(ns(LATE_CUT) + 2 * SECOND),
+    );
+    assert_eq!(
+        refused.refusal.expect("original journal grammar").code,
+        "FMINE-REF-107"
+    );
     assert_eq!(journal.bytes(), before);
 }
