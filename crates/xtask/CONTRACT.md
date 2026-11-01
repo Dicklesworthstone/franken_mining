@@ -14,7 +14,7 @@ Enforces the structural invariants of the workspace (`L-1`..`L-7`, `PO-NUM-2`, `
 Pure static verifier over repository source files and TOML registries; produces deterministic pass/fail diagnostics (`GATE-LAYERS-00`).
 The `forecast-*` commands are the exception: they write a record's digest files and run `openssl ts` and `git`
 (BD-334.S1, S2). `gen-refusals` is the other: it writes `crates/fmine-evidence/src/refusal_catalog.rs`.
-`check-int-as-001a`, also run by `check-all`, runs `cargo tree`. `check-amend`, also run by `check-all`, runs
+`check-int-as-001a` and `check-oracle`, both also run by `check-all`, run `cargo tree`. `check-amend`, also run by `check-all`, runs
 `git rev-parse`, `git diff`, `git ls-files`, `git ls-tree` and `git show`, read-only.
 
 ## 4. Public API Surface
@@ -83,7 +83,16 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   `BitwisePortable` file calls none of `BANNED_TRANSCENDENTALS` as `.name(` or `f64::name(` outside comments and
   test code (`banned_transcendental_calls`); only `DET_EXEMPT` (`crates/fmine-core/src/det.rs`) is exempt; an
   unreadable file is an error.
-- `check_oracle(root: &Path) -> Result<(), Vec<String>>`
+- `check_oracle(root: &Path) -> Result<oracle::Report, Vec<String>>` and `oracle::{check, closure_findings,
+  check_capture_records, record_errors}` (GATE-ORACLE-01, BD-013, §33.2; command `check-oracle`, and `check-all`
+  runs `oracle::check` and prints `{"check":"gate-oracle-01","closure_packages","fixtures","oracles_in_closure":0}`):
+  - `check_deps`' direct check, then `cargo tree -e normal,build` over the workspace without `xtask` and the
+    member oracle crates: any `ORACLE_CRATES` package at any depth fails, naming the path. This catches an oracle
+    reached through a crate outside the workspace, which the direct check cannot see. Dev-dependencies are not in
+    the closure.
+  - Every file under `fixtures/` needs `<file>.capture.toml` beside it with the nine §33.2 fields once each; its
+    `outputs_digest` must be the fixture's sha256, and a record with no fixture fails. The form is
+    `docs/templates/CAPTURE-RECORD.md`.
 - `check_sources_registry(root: &Path) -> Result<Vec<String>, Vec<String>>` (`registry-check`; on success one
   `{"stage":"registry",…}` JSON log line per `registries/sources/*.toml`)
 - `refusals::{check_refusals, gen_refusals}` (BD-328; commands `check-refusals`, `gen-refusals`, and `check-all`
@@ -115,7 +124,7 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   refuses a shallow clone, whose history cannot show the order.
 
 ## 5. Guards & Typed Refusals
-Fails CI (`exit 2`) on any upward layer edge (`L-1`), banned dependency (`L-5`), `open_child_region` escalation outside `fmine-runtime` (`L-3`), lift provenance mismatch (`L-7`), undeclared module family (`§28.4`), bare `f64` physical quantity in `K`/`E` public signatures (`L-6`), a `K`/`E` file without a determinism class or a `std` transcendental in a `BitwisePortable` module (`PO-NUM-2`), a change adding LOC to a crate over its ceiling, or over planned without an approved amendment (`§28.4`), oracle crate in a production closure (`GATE-ORACLE-01`), or a `franken-stack.lock` id set that differs from plan Appendix F.1 (`BD-326.S1`).
+Fails CI (`exit 2`) on any upward layer edge (`L-1`), banned dependency (`L-5`), `open_child_region` escalation outside `fmine-runtime` (`L-3`), lift provenance mismatch (`L-7`), undeclared module family (`§28.4`), bare `f64` physical quantity in `K`/`E` public signatures (`L-6`), a `K`/`E` file without a determinism class or a `std` transcendental in a `BitwisePortable` module (`PO-NUM-2`), a change adding LOC to a crate over its ceiling, or over planned without an approved amendment (`§28.4`), oracle crate in a production closure or a fixture without its capture record (`GATE-ORACLE-01`), or a `franken-stack.lock` id set that differs from plan Appendix F.1 (`BD-326.S1`).
 
 ## 6. Proof Obligations (`PO-*`)
 Each check has a positive workspace test and a seeded negative violation unit test (`BD-003`..`BD-015`).

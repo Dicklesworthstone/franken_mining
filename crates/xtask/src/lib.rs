@@ -9,6 +9,7 @@ pub mod forecast;
 pub mod int_as;
 pub mod lifts;
 pub mod loc;
+pub mod oracle;
 pub mod refusals;
 
 /// Summary row for a single crate's LOC budget (`BD-003`, `BD-012`).
@@ -300,16 +301,7 @@ pub fn check_deps(root: &Path) -> Result<(), Vec<String>> {
         )]);
     }
 
-    let oracle_crates: BTreeSet<&str> = [
-        "fmine-oracles",
-        "fmine-gen",
-        "fmine-verify",
-        "fmine-derive",
-        "frankensympy",
-        "fsym-core",
-    ]
-    .into_iter()
-    .collect();
+    let oracle_crates: BTreeSet<&str> = oracle::ORACLE_CRATES.into_iter().collect();
 
     let mut errors = Vec::new();
     for member_toml in workspace_member_manifests(root)? {
@@ -339,9 +331,11 @@ pub fn check_deps(root: &Path) -> Result<(), Vec<String>> {
     }
 }
 
-/// Alias for `GATE-ORACLE-01` check (`BD-013`).
-pub fn check_oracle(root: &Path) -> Result<(), Vec<String>> {
-    check_deps(root)
+/// `GATE-ORACLE-01` (`BD-013`): [`check_deps`]' direct check, then [`oracle::check`]'s production closure and
+/// fixture capture records.
+pub fn check_oracle(root: &Path) -> Result<oracle::Report, Vec<String>> {
+    check_deps(root)?;
+    oracle::check(root)
 }
 
 /// Check capability rules (`L-3`, `BD-006`): ban `open_child_region` outside `fmine-runtime`,
@@ -871,6 +865,9 @@ pub fn check_all(root: &Path) -> Result<LocReport, Vec<String>> {
     if let Err(e) = check_deps(root) {
         all_errors.extend(e);
     }
+    if let Err(e) = oracle::check(root) {
+        all_errors.extend(e);
+    }
     if let Err(e) = check_caps(root) {
         all_errors.extend(e);
     }
@@ -1044,6 +1041,19 @@ pub(crate) fn strip_kv_usize(line: &str, key: &str) -> Option<usize> {
         return None;
     }
     v.trim().parse::<usize>().ok()
+}
+
+/// `YYYY-MM-DD`, digits only (the shape, not the calendar).
+pub(crate) fn is_iso_date(value: &str) -> bool {
+    let d = value.as_bytes();
+    d.len() == 10
+        && d.iter().enumerate().all(|(i, b)| {
+            if i == 4 || i == 7 {
+                *b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        })
 }
 
 pub(crate) fn count_rust_loc(dir: &Path) -> usize {

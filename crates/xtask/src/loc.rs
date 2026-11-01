@@ -107,16 +107,7 @@ fn is_approval(value: &str) -> bool {
     else {
         return false;
     };
-    let d = date.as_bytes();
-    !who.trim().is_empty()
-        && d.len() == 10
-        && d.iter().enumerate().all(|(i, b)| {
-            if i == 4 || i == 7 {
-                *b == b'-'
-            } else {
-                b.is_ascii_digit()
-            }
-        })
+    !who.trim().is_empty() && crate::is_iso_date(date)
 }
 
 /// The record id a file name gives, or `None` when it is not `BUDGET-AMEND-nnn….md`.

@@ -226,7 +226,7 @@ pub fn evaluate(closures: &[(String, String)], manifest: &str, stack_lock: &str)
     }
 }
 
-fn cargo_tree(root: &Path, target: &[&str]) -> Result<String, String> {
+pub(crate) fn cargo_tree(root: &Path, target: &[&str]) -> Result<String, String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let out = Command::new(cargo)
         .current_dir(root)

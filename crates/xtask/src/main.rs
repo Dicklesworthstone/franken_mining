@@ -74,7 +74,10 @@ fn main() -> ExitCode {
         }
         "check-layers" => run_one("check-layers", xtask::check_layers(&root)),
         "check-deps" => run_one("check-deps", xtask::check_deps(&root)),
-        "check-oracle" => run_one("check-oracle", xtask::check_oracle(&root)),
+        "check-oracle" => run_one(
+            "check-oracle",
+            xtask::check_oracle(&root).map(|r| println!("{}", r.log_line())),
+        ),
         "check-caps" => run_one("check-caps", xtask::check_caps(&root)),
         "check-lifts" => match args.get(1).map(String::as_str) {
             None => run_one("check-lifts", xtask::lifts::check_lifts(&root)),
@@ -205,6 +208,9 @@ fn main() -> ExitCode {
                 }
                 if let Ok(lock) = xtask::check_stack_lock(&root) {
                     println!("{}", lock.log_line());
+                }
+                if let Ok(report) = xtask::oracle::check(&root) {
+                    println!("{}", report.log_line());
                 }
                 if let Ok(report) = xtask::refusals::check_refusals(&root) {
                     println!("{}", report.log_line());
