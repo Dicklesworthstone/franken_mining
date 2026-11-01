@@ -49,6 +49,10 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   with one unit. A scope covers a claim only when its full period lies within the quarter bounds.
   `region_members` remains the sole membership map. The E461 golden test pins the source digest and quote
   plus all 18 region-summary selectors for 2024Q1 through 2025Q4.
+- DESIGN (BD-345.S4): workbook `SourceRow` accepts optional `published_at` and `published_at_basis`
+  together. The date must be a calendar date and the basis must cite a source after `FACT: ` or
+  `INFERENCE: `. Both remain absent for older registries; neither quarter labels nor retrieval dates
+  manufacture a publication date. These fields support dated public-record checks and do not authorize disclosure.
 - `sources::{DocumentRow, DOCUMENT_KINDS, PUBLISHED_AT_BASES}`, `SourcesRegistry::documents`, `sources::is_date`
   (bd-plx1): optional `[[document]]` rows, one PDF each: a bare `file` and a sha256 unique across workbooks and
   documents, optional `dir` (a plain relative path; default `corpus_dir`), `kind` (`mda`, `aif`,

@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued"]`
+- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -361,8 +361,19 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   exits zero even when findings report mismatches; invalid syntax is exit two and source failures retain
   their typed refusals. Explicit `--discover` delegates uncited equalities to the public discovery engine;
   existing links retain their cited checks. Multiple semantic matches are exposed and never resolved by the
-  draft's amount. The selected source snapshot is verified in either mode. Publication-time/publicness remains
-  unassessed; supported discovery grammar is not a general-prose accuracy claim.
+  draft's amount. The selected source snapshot is verified in either mode; supported discovery grammar is
+  not a general-prose accuracy claim.
+- DESIGN (BD-345.S4): `lint --issuer <issuer> --as-of YYYY-MM-DD` adds a dated public-record companion
+  report without changing the equality assessment. Optional source publication dates and their cited
+  FACT/INFERENCE bases come from the same single registry parse as the numerical source projection.
+  Earliest means earliest matching dated registered assertion. Every finding retains exact canonical
+  source Claims, byte spans, locators, file hashes, date bases and rejected or later evidence. Ambiguous
+  attributable shares stay unresolved even when one amount matches. Unknown publication dates remain
+  unknown; retrieval dates never establish publication. Changing dates or their basis changes the report
+  digest while the numerical Claim remains unchanged. JSON and Markdown retain both assessments, and
+  neither grants disclosure permission or a regulatory-compliance claim. This slice does not derive
+  unpublished identities or assess forward guidance. Synthetic/unknown evidence cannot become a public
+  disclosure assertion.
   Both modes include processed/head grade (`g/t`, `grams per tonne` or percent) and whole-site recovery
   (percent), with explicit subject, dated period and ownership. Percent-format fractions use the source's
   displayed percentage-point interval while retaining the stored fraction. Bare/mined grade, circuit recovery,

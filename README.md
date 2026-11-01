@@ -133,6 +133,7 @@ source files refuse instead of returning a stale cached Claim.
 cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2
 cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2 --format markdown
 cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2 --discover
+cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2 --as-of 2026-08-11 --format markdown
 ```
 
 DESIGN (BD-345): cited mode checks explicit equalities against canonical Claims from one hash-verified source
@@ -147,8 +148,20 @@ The checker uses exact rounding intervals. It distinguishes value, period and ba
 rounding, missing or ambiguous citations, and superseded Claims. It accepts only complete supported equality
 predicates; negations, comparisons and other prose remain `unchecked`. A matching number cannot compensate for
 a wrong site, period, metric or basis. `verified` means agreement with the cited source assertion, not that the
-issuer assertion is true or that disclosure is permitted. Publication-time/publicness checks are not part of
-this slice; `--through` selects registered vintages, not an information-availability date.
+issuer assertion is true or that disclosure is permitted. `--through` selects registered source vintages.
+
+DESIGN (BD-345.S4): `--as-of YYYY-MM-DD` adds an independent public-record assessment for each supported
+equality. It reports the earliest matching dated registered assertion, its exact Claim, locator, file hash,
+publication date and the date's stated basis. Other-basis matches, contradictory values, unsupported precision,
+post-cut publications, undated sources and inadmissible evidence remain explicit. Competing attributable
+shares cannot become an unambiguous disclosure merely because one amount matches. The equality verdict stays
+visible beside this assessment; this does not authorize disclosure or establish legal compliance.
+
+Workbook `[[source]]` rows may declare `published_at` and `published_at_basis` together, with a cited
+`FACT: ` or `INFERENCE: ` basis. An omitted date stays unknown: the reporting quarter and retrieval date
+cannot manufacture a publication date. Correcting these metadata changes the public-record report digest
+without changing the workbook's numerical Claim. Derived identities and forward guidance are not assessed
+by this first public-record slice.
 
 DESIGN (BD-345.S3): `--discover` also searches for source Claims when a supported equality has no Claim link.
 The subject, metric, reporting period, ownership basis and unit must still be stated explicitly. A unique

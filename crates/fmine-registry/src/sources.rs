@@ -75,6 +75,10 @@ pub struct SourceRow {
     pub url_basis: String,
     pub bytes: u64,
     pub sha256: String,
+    /// Optional publication date for these registered bytes or their text, never inferred from retrieval.
+    pub published_at: Option<String>,
+    /// Required with the date; uses the same FACT/INFERENCE citation convention as documents.
+    pub published_at_basis: Option<String>,
 }
 
 /// One registered reconstruction (plan §21.6 state (ii)).
@@ -734,6 +738,8 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "url_basis",
             "bytes",
             "sha256",
+            "published_at",
+            "published_at_basis",
         ])?;
         let (file, file_line) = f.string("file")?;
         let (kind, kind_line) = f.string("kind")?;
@@ -787,6 +793,33 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         if !digests.insert(sha256.clone()) {
             return fail(sha_line, format!("duplicate sha256 {sha256}"));
         }
+        let published_at = f.optional_string("published_at")?;
+        let published_at_basis = f.optional_string("published_at_basis")?;
+        match (&published_at, &published_at_basis) {
+            (None, None) => {}
+            (Some(date), Some(basis)) => {
+                if !is_date(date) {
+                    return fail(row.line, format!("published_at {date:?} is not YYYY-MM-DD"));
+                }
+                if !PUBLISHED_AT_BASES.iter().any(|prefix| {
+                    basis
+                        .strip_prefix(prefix)
+                        .is_some_and(|citation| !citation.trim().is_empty())
+                }) || basis.chars().any(char::is_control)
+                {
+                    return fail(
+                        row.line,
+                        "published_at_basis must start with FACT: or INFERENCE: and cite its source without control characters",
+                    );
+                }
+            }
+            _ => {
+                return fail(
+                    row.line,
+                    "published_at and published_at_basis must be supplied together",
+                );
+            }
+        }
         sources.push(SourceRow {
             file,
             kind,
@@ -795,6 +828,8 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             url_basis,
             bytes,
             sha256,
+            published_at,
+            published_at_basis,
         });
     }
     let mut documents = Vec::new();
@@ -1879,6 +1914,53 @@ mod tests {
         ] {
             let e = refusal(&minimal(&b, &bad));
             assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
+        }
+    }
+
+    #[test]
+    fn workbook_publication_requires_a_cited_date_pair_without_retrieval_inference() {
+        let old = parse_sources_registry(&minimal("", "")).expect("undated registry");
+        assert_eq!(old.sources[0].published_at, None);
+        assert_eq!(old.sources[0].published_at_basis, None);
+        let base = source_b("mine_stats", SHA_B);
+        let dated = format!(
+            "{base}published_at = \"2030-08-10\"\npublished_at_basis = \"INFERENCE: synthetic release page\"\n"
+        );
+        let parsed = parse_sources_registry(&minimal(&dated, "")).expect("cited date");
+        assert_eq!(
+            parsed.sources[1].published_at.as_deref(),
+            Some("2030-08-10")
+        );
+        assert_eq!(
+            parsed.sources[1].published_at_basis.as_deref(),
+            Some("INFERENCE: synthetic release page")
+        );
+        assert_eq!(parsed.sources[0].published_at, None);
+        for (fields, reason) in [
+            ("published_at = \"2030-08-10\"\n", "supplied together"),
+            (
+                "published_at_basis = \"FACT: synthetic index\"\n",
+                "supplied together",
+            ),
+            (
+                "published_at = \"2030-02-29\"\npublished_at_basis = \"FACT: index\"\n",
+                "YYYY-MM-DD",
+            ),
+            (
+                "published_at = \"2030-08-10\"\npublished_at_basis = \"retrieved\"\n",
+                "cite its source",
+            ),
+            (
+                "published_at = \"2030-08-10\"\npublished_at_basis = \"FACT: \"\n",
+                "cite its source",
+            ),
+            (
+                "published_at = \"2030-08-10\"\npublished_at_basis = 1\n",
+                "string",
+            ),
+        ] {
+            let error = refusal(&minimal(&format!("{base}{fields}"), ""));
+            assert!(error.reason.contains(reason), "{fields}: {error}");
         }
     }
 

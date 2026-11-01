@@ -291,7 +291,7 @@ impl LintReport {
         }
         let _ = writeln!(
             out,
-            "\nUnchecked prose spans: {}. Publication availability and disclosure permission are unassessed.\n",
+            "\nUnchecked prose spans: {}. Equality checks alone do not establish publication availability or disclosure permission.\n",
             self.unchecked_spans.len()
         );
         out
