@@ -632,6 +632,173 @@ mod tests {
     }
 
     #[test]
+    fn typed_outcome_vintage_permissions_refuse_without_advancing_authority() {
+        use crate::ledger::{MemberOutcome, OutcomeCitation, OutcomeKind, OutcomeSelector};
+
+        let end = PublicPeriod::Year(1970).end_ns().unwrap();
+        let revision = PublicPeriod::Quarter {
+            year: 1971,
+            quarter: 2,
+        }
+        .end_ns()
+        .unwrap()
+            + 1;
+        let citation = |vintage: &str| OutcomeCitation {
+            source: "barrick".into(),
+            vintage: vintage.into(),
+            locator: "Invented.xlsx:YTD!B3".into(),
+            sha256: fmine_core::hash::sha256(vintage.as_bytes()).0,
+        };
+        for vintages in [
+            PublicVintagePolicy::OriginalOnly,
+            PublicVintagePolicy::RegisteredComparatives,
+        ] {
+            let (mut ledger, ids) = forecasts(end);
+            let target = policy(&ids);
+            let mut frozen = spec(&target, "typed", 2);
+            frozen.resolution_rule = target.to_resolution_rule_with_vintages(vintages).unwrap();
+            let cohort = ledger.freeze_cohort(frozen).unwrap();
+            assert_eq!(
+                ledger
+                    .append_outcome(
+                        ids[0],
+                        revision + 100,
+                        revision + 100,
+                        OutcomeKind::Published {
+                            value: 110.0,
+                            citation: citation("1971Q1"),
+                        },
+                    )
+                    .unwrap_err()
+                    .code,
+                "FMINE-REF-507"
+            );
+            assert!(ledger.outcomes(ids[0]).is_empty());
+            assert_eq!(
+                ledger
+                    .append_outcome(
+                        ids[0],
+                        end + 1,
+                        end + 1,
+                        OutcomeKind::Published {
+                            value: 110.0,
+                            citation: citation("1970Q4"),
+                        },
+                    )
+                    .unwrap(),
+                1
+            );
+            let forbidden = if vintages == PublicVintagePolicy::OriginalOnly {
+                "1971Q1"
+            } else {
+                "1970Q3"
+            };
+            assert_eq!(
+                ledger
+                    .append_outcome(
+                        ids[0],
+                        revision + 100,
+                        revision + 100,
+                        OutcomeKind::Restated {
+                            value: 115.0,
+                            citation: citation(forbidden),
+                            supersedes: 1,
+                        },
+                    )
+                    .unwrap_err()
+                    .code,
+                "FMINE-REF-507"
+            );
+            assert_eq!(ledger.outcomes(ids[0]).len(), 1);
+            // Failed future writes must not move the global authority watermark.
+            assert_eq!(
+                ledger
+                    .append_outcome(
+                        ids[1],
+                        end + 2,
+                        end + 2,
+                        OutcomeKind::Published {
+                            value: 110.0,
+                            citation: citation("1970Q4"),
+                        },
+                    )
+                    .unwrap(),
+                1
+            );
+            let latest = if vintages == PublicVintagePolicy::RegisteredComparatives {
+                assert_eq!(
+                    ledger
+                        .append_outcome(
+                            ids[0],
+                            revision,
+                            revision,
+                            OutcomeKind::Restated {
+                                value: 115.0,
+                                citation: citation("1971Q2"),
+                                supersedes: 1,
+                            },
+                        )
+                        .unwrap(),
+                    2
+                );
+                let before = ledger.outcomes(ids[0]).to_vec();
+                assert_eq!(
+                    ledger
+                        .append_outcome(
+                            ids[0],
+                            revision + 100,
+                            revision + 100,
+                            OutcomeKind::Restated {
+                                value: 112.0,
+                                citation: citation("1971Q1"),
+                                supersedes: 2,
+                            },
+                        )
+                        .unwrap_err()
+                        .code,
+                    "FMINE-REF-507"
+                );
+                assert_eq!(ledger.outcomes(ids[0]), before.as_slice());
+                assert_eq!(before.len(), 2);
+                // A refused older release must not move the global authority watermark.
+                assert_eq!(
+                    ledger
+                        .append_outcome(
+                            ids[1],
+                            revision + 1,
+                            revision + 1,
+                            OutcomeKind::Restated {
+                                value: 110.0,
+                                citation: citation("1971Q2"),
+                                supersedes: 1,
+                            },
+                        )
+                        .unwrap(),
+                    2
+                );
+                115.0
+            } else {
+                110.0
+            };
+            for (selector, expected) in [
+                (OutcomeSelector::FirstPublished, 110.0),
+                (OutcomeSelector::LatestAsOf, latest),
+            ] {
+                let assessment = ledger.assess(cohort, revision + 2, selector).unwrap();
+                let member = assessment
+                    .per_member
+                    .iter()
+                    .find(|member| member.forecast_id == ids[0])
+                    .unwrap();
+                match &member.outcome {
+                    MemberOutcome::Resolved { value, .. } => assert_eq!(*value, expected),
+                    other => panic!("expected retained publication, got {other:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
     fn prefix_frame_version_and_explicit_vintage_mode_must_be_canonical() {
         let policy = policy(&[ObjectId::from_raw(PrefixKind::Forecast, [1; 16])]);
         let original = policy.to_resolution_rule().unwrap();
@@ -889,7 +1056,7 @@ mod tests {
                         value: 110.0,
                         citation: OutcomeCitation {
                             source: "barrick".into(),
-                            vintage: "invented-original".into(),
+                            vintage: "1970Q4".into(),
                             locator: "invented:site_a".into(),
                             sha256: [1; 32],
                         },

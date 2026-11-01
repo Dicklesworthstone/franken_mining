@@ -72,6 +72,9 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   neither the period end nor this pure policy authenticates when a forecast or source became available.
 - `append_outcome` records hash-chained `Published`, `Restated` and `Missing` events with separate availability
   and recording times. A restatement must name the latest numeric predecessor and a new cited source vintage.
+  Every typed cohort's frozen vintage permission is rechecked before appending a numeric outcome, including
+  when callers use the kernel directly. A typed public restatement must strictly advance the latest numeric
+  release. Refused publications or restatements do not advance authority time.
   The original forecast is never mutated. Eligibility and a declared physical outcome domain are checked.
 - `assess(cohort, as_of_ns, FirstPublished | LatestAsOf)` retains an immutable assessment. Both event times must
   be at or before the cut. Later events cannot be backdated into an already assessed cut. Every member remains

@@ -770,6 +770,27 @@ impl ForecastLedger {
                         "outcome source is outside the cohort's frozen eligible sources",
                     ));
                 }
+                if let Some((policy, vintages)) =
+                    binding::PublicResolutionPolicy::parse_resolution_rule_with_vintages(
+                        &cohort.spec.resolution_rule,
+                    )?
+                {
+                    vintages.validate_release(
+                        policy.period,
+                        &citation.vintage,
+                        matches!(&kind, OutcomeKind::Restated { .. }),
+                    )?;
+                    if last_value
+                        .and_then(|event| event.kind.publication())
+                        .is_some_and(|(_, prior)| {
+                            citation.vintage.as_str() <= prior.vintage.as_str()
+                        })
+                    {
+                        return Err(frozen(
+                            "a public restatement must follow the latest numeric source release",
+                        ));
+                    }
+                }
                 if cohort
                     .spec
                     .policy

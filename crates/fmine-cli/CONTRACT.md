@@ -122,7 +122,9 @@ freeze and resolution operations described below use v3, and explicit vintage po
 restatements use v4. The `FJR1`
 frame format is unchanged. Replay dispatches per operation: legacy rows without top-level fields retain
 their original observed-time semantics and identities; v2 rows use the upper bound. Unknown schemas or extra
-top-level fields refuse. Mixed journals preserve both policies without rewriting earlier operations.
+top-level fields refuse.
+Replay also requires v4 for explicit `public_vintages` freezes; v4 admits only that freeze grammar or a
+`registered_restatement`. Relabeling an ordinary operation or downgrading a new permission field refuses. Mixed journals preserve both policies without rewriting earlier operations.
 
 DESIGN: a public-bound freeze adds `public_issuer`, `public_metric`, `public_period`, `public_ownership`
 and `public_members` to the cohort request, with `resolution_rule = "registered-public-cell"`.
@@ -147,6 +149,8 @@ QTD/YTD summary sheet blocks admission: an unusable competing row cannot disappe
 Unrelated detailed-sheet refusals do not replace the target. A later comparative cannot fill a missing original.
 An unmarked printed zero remains valid. Cross-crate forecast replay controls retain their CLI harness and all
 assertions in `crates/xtask/testdata/forecast_replay_controls.rs`.
+The six cross-crate forecast-record source fixture tests likewise retain their CLI harness and unchanged
+assertions in `crates/xtask/testdata/forecast_record_sources.rs`.
 Publication date and its registered FACT/INFERENCE basis are mandatory; that date must fall after the
 complete target period. Retrieval never substitutes for a missing publication date, and the stated basis
 is retained metadata rather than independent proof of publication time. Conservative availability is

@@ -830,6 +830,20 @@ fn apply(
         return Err(invalid("a stored live request needs exactly one table"));
     }
     let row = &doc.rows[0];
+    let vintage_freeze = row.table == "cohort" && row.get("public_vintages").is_some();
+    if row.get("public_vintages").is_some() && version != OperationVersion::V4 {
+        return Err(invalid(
+            "public vintage policy requires operation version four",
+        ));
+    }
+    if version == OperationVersion::V4
+        && row.table != "registered_restatement"
+        && !vintage_freeze
+    {
+        return Err(invalid(
+            "operation version four requires a public-vintage freeze or registered restatement",
+        ));
+    }
     if expected_table.is_some_and(|expected| row.table != expected) {
         return Err(invalid(format!(
             "{} request cannot contain [[{}]]",
