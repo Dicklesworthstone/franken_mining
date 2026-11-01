@@ -89,6 +89,7 @@ forecast journal register
 forecast journal freeze
 forecast journal outcome
 forecast journal resolve
+forecast journal restate
 forecast journal assess
 forecast journal inspect
 forecast journal report

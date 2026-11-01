@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use fmine_calib::ledger::binding::{
-    PublicMetric, PublicOwnership, PublicPeriod, PublicResolutionPolicy,
+    PublicMetric, PublicOwnership, PublicPeriod, PublicResolutionPolicy, PublicVintagePolicy,
 };
 use fmine_calib::record::{format_utc, parse_hex32, parse_utc};
 use fmine_calib::{
@@ -203,6 +203,7 @@ impl Replay {
                 "public_period",
                 "public_ownership",
                 "public_members",
+                "public_vintages",
             ],
             &[],
         )?;
@@ -259,6 +260,7 @@ impl Replay {
             "public_period",
             "public_ownership",
             "public_members",
+            "public_vintages",
         ];
         if !fields.iter().any(|key| row.0.get(key).is_some()) {
             if rule == "registered-public-cell" {
@@ -294,7 +296,10 @@ impl Replay {
             ownership: PublicOwnership::parse(row.string("public_ownership")?)?,
             members,
         }
-        .to_resolution_rule()
+        .to_resolution_rule_with_vintages(PublicVintagePolicy::parse(
+            row.optional_string("public_vintages")?
+                .unwrap_or("original_only"),
+        )?)
     }
 
     fn public_policy(
@@ -302,6 +307,15 @@ impl Replay {
         cohort: &str,
         forecast: ObjectId,
     ) -> Result<PublicResolutionPolicy, Refusal> {
+        self.public_policy_with_vintages(cohort, forecast)
+            .map(|(policy, _)| policy)
+    }
+
+    fn public_policy_with_vintages(
+        &self,
+        cohort: &str,
+        forecast: ObjectId,
+    ) -> Result<(PublicResolutionPolicy, PublicVintagePolicy), Refusal> {
         let cohort_id = self
             .cohorts
             .get(cohort)
@@ -310,15 +324,16 @@ impl Replay {
             .ledger
             .cohort(*cohort_id)
             .ok_or_else(|| absent("frozen cohort missing"))?;
-        let policy =
-            PublicResolutionPolicy::parse_resolution_rule(&cohort.spec.resolution_rule)?
-                .ok_or_else(|| invalid("cohort has no frozen public source-resolution policy"))?;
+        let (policy, vintages) = PublicResolutionPolicy::parse_resolution_rule_with_vintages(
+            &cohort.spec.resolution_rule,
+        )?
+        .ok_or_else(|| invalid("cohort has no frozen public source-resolution policy"))?;
         if !policy.members.contains_key(&forecast) {
             return Err(invalid(
                 "forecast is outside the frozen public source population",
             ));
         }
-        Ok(policy)
+        Ok((policy, vintages))
     }
 
     fn public_bound(&self, forecast: ObjectId) -> Result<bool, Refusal> {
@@ -752,11 +767,15 @@ fn pair((lo, hi): (f64, f64)) -> String {
 fn cohort_json(cohort: &Cohort) -> String {
     let spec = &cohort.spec;
     let p = &spec.policy;
-    let public = PublicResolutionPolicy::parse_resolution_rule(&spec.resolution_rule)
-        .ok().flatten().map_or_else(|| "null".into(), |policy| format!(
-            "{{\"issuer\":{},\"metric\":{},\"unit\":{},\"period\":{},\"ownership\":{},\"outcome_selector\":\"original_release_only\",\"members\":[{}]}}",
+    let public = PublicResolutionPolicy::parse_resolution_rule_with_vintages(&spec.resolution_rule)
+        .ok().flatten().map_or_else(|| "null".into(), |(policy, vintages)| format!(
+            "{{\"issuer\":{},\"metric\":{},\"unit\":{},\"period\":{},\"ownership\":{},\"outcome_selector\":{},\"members\":[{}]}}",
             js(&policy.issuer), js(policy.metric.as_str()), js(policy.metric.unit()),
             js(&policy.period.label()), js(&policy.ownership.label()),
+            js(match vintages {
+                PublicVintagePolicy::OriginalOnly => "original_release_only",
+                PublicVintagePolicy::RegisteredComparatives => "original_then_registered_comparatives",
+            }),
             policy.members.iter().map(|(id, subject)| format!("{{\"forecast_id\":{},\"subject\":{}}}", js(&id.to_string()), js(subject))).collect::<Vec<_>>().join(","),
         ));
     format!(

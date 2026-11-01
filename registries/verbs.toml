@@ -93,6 +93,12 @@ mutates_authority = true
 description = "Resolve a frozen public target from the digest-verified original workbook Claim, retaining exact source evidence"
 
 [[verb]]
+path = "forecast journal restate"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Append a source-verified later comparative permitted by the frozen cohort policy, preserving the original outcome"
+
+[[verb]]
 path = "forecast journal assess"
 subsystem = "Plumb"
 mutates_authority = true

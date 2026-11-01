@@ -923,10 +923,37 @@ publication basis. The registered publication date must fall after the complete 
 never supplies a missing publication date. Date-only availability conservatively begins at midnight after
 the publication day. The stated FACT/INFERENCE basis is retained metadata, not independent proof of that time.
 Missing original releases, altered bytes, placeholders, ambiguous cells and ownership mismatches refuse
-without changing the journal; later comparatives are never substituted. Caller-supplied `outcome` requests
-cannot bypass a frozen public binding. Historical reports reconstruct the recorded source Claim without
-requiring the workbook to remain on disk. This first source-bound route resolves original outcomes;
-source-bound restatements and automatic missing-status events remain future work.
+without changing the journal. Caller-supplied `outcome` requests cannot bypass a frozen public binding.
+Historical reports reconstruct the recorded source Claim without requiring the workbook to remain on disk.
+
+To retain later comparative revisions as separately scored outcomes, include this field in the cohort
+request **before freezing it**:
+
+```toml
+public_vintages = "registered_comparatives"
+```
+
+DESIGN: the default `original_only` policy retains its existing canonical bytes and meaning. Opting in
+freezes a distinct version-two public resolution policy; another cohort cannot change this permission
+for a shared forecast ID. First admit the original release with `resolve`. Then, after registering a later
+workbook and its publication evidence, append the comparative with:
+
+```bash
+cargo run -p fmine-cli -- forecast journal restate \
+  --journal runs/forecast-demo/history --head LATEST_RETAINED_HEAD \
+  --cohort fy2027-production --forecast north-mara-production \
+  --release 2028Q1 --trust-host-clock
+```
+
+The writer verifies the later workbook's exact bytes and the same frozen subject, physical period,
+metric, unit and ownership. A changed cost denominator or ownership basis refuses. The reporting quarter
+must follow the original and every admitted numeric vintage; publication must follow both the target period
+and that reporting quarter. A later comparative cannot fill a missing original. The writer selects the
+superseded event under lock; callers supply neither its sequence nor an outcome value. `first-published`
+continues to score the original, while `latest-as-of` uses a restatement only once both its availability
+and recording time fall within the assessment cut. Each event retains its own source Claim and publication
+evidence. Previously saved reports retain their original result, journal prefix and source admission after
+later revisions. Automatic missing-status events remain future work.
 
 For example, an outcome available at `12:00:00Z` and recorded at an observed `12:00:01.500Z` with a one-second
 uncertainty has a recording upper bound of `12:00:02.500Z`. A later assessment cut at `12:00:02Z` leaves that
@@ -968,8 +995,9 @@ the same result cannot upgrade that original binding. Legacy operations without 
 retain their observed recording times, existing identities and results. New v2 operations can follow them in
 the same journal; replay applies each operation's original time policy.
 
-`payload.operation_version_counts` reports `legacy_v1` and `v2` counts, plus `v3` when present, excluding genesis.
-Version three stores public-bound freezes and generated source admissions with the same bounded-clock policy.
+`payload.operation_version_counts` reports `legacy_v1` and `v2` counts, plus `v3` and `v4` when present,
+excluding genesis. Version three stores original public-bound freezes and source admissions. Version four
+stores explicit vintage policies and generated comparative restatements, with the same bounded-clock policy.
 `payload.record_time_policy` is `none`, `legacy_observed`, `clock_upper_bound` or `mixed`. The nested report
 describes the operation prefix through that assessment's first saved checkpoint, so later appends do not
 change its time-policy labels. A v2 assessment over legacy history remains explicitly mixed; adding a result

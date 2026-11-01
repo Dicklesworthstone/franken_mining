@@ -151,6 +151,17 @@ struct Fixture {
 
 impl Fixture {
     fn new(metric: &str, ownership: &str, period: &str, lo: i64, hi: i64) -> Self {
+        Self::with_vintages(metric, ownership, period, lo, hi, None)
+    }
+
+    fn with_vintages(
+        metric: &str,
+        ownership: &str,
+        period: &str,
+        lo: i64,
+        hi: i64,
+        vintages: Option<&str>,
+    ) -> Self {
         let root = std::env::temp_dir().join(format!(
             "fmine-registered-outcome-{}-{}",
             std::process::id(),
@@ -187,10 +198,13 @@ impl Fixture {
             },
             ns("2030-01-02T00:00:00Z"),
         );
+        let vintages = vintages.map_or_else(String::new, |value| {
+            format!("public_vintages = \"{value}\"\n")
+        });
         let freeze = fixture.request(
             "freeze.toml",
             &format!(
-                "[[cohort]]\nname = \"{COHORT}\"\nmembers = \"one\"\nresolution_rule = \"registered-public-cell\"\neligible_sources = \"{ISSUER}\"\npublic_issuer = \"{ISSUER}\"\npublic_metric = \"{metric}\"\npublic_period = \"{period}\"\npublic_ownership = \"{ownership}\"\npublic_members = \"one=Site A\"\n"
+                "[[cohort]]\nname = \"{COHORT}\"\nmembers = \"one\"\nresolution_rule = \"registered-public-cell\"\neligible_sources = \"{ISSUER}\"\npublic_issuer = \"{ISSUER}\"\npublic_metric = \"{metric}\"\npublic_period = \"{period}\"\npublic_ownership = \"{ownership}\"\npublic_members = \"one=Site A\"\n{vintages}"
             ),
         );
         fixture.ok(
@@ -761,12 +775,8 @@ fn unreadable_summary_competitors_refuse_before_append_but_detail_errors_stay_se
         fs::write(registry, text).unwrap();
         let profile = load_issuer_profile(&fixture.root, ISSUER).unwrap();
         let sources = fmine_public::load_registered_sources(&profile, &fixture.root).unwrap();
-        let read = fmine_public::mine_stats::read_mine_stats(
-            &sources[0].workbook,
-            "2030Q4",
-            None,
-        )
-        .unwrap();
+        let read = fmine_public::mine_stats::read_mine_stats(&sources[0].workbook, "2030Q4", None)
+            .unwrap();
         assert!(
             read.refusals
                 .iter()
@@ -774,9 +784,9 @@ fn unreadable_summary_competitors_refuse_before_append_but_detail_errors_stay_se
             "the planted cell/header must actually be refused by the reader"
         );
         assert!(
-            read.values.iter().any(|row| row.sheet == "YTD"
-                && row.cell == "B5"
-                && row.site == "Site A"),
+            read.values
+                .iter()
+                .any(|row| row.sheet == "YTD" && row.cell == "B5" && row.site == "Site A"),
             "the valid original remains present after the competing error is dropped"
         );
         if bad_sheet == "Minestats1" {
@@ -786,4 +796,356 @@ fn unreadable_summary_competitors_refuse_before_append_but_detail_errors_stay_se
             fixture.refuse(&fixture.resolve(), ns(AVAILABLE), "FMINE-REF-208");
         }
     }
+}
+
+fn registered_cost(
+    fixture: &Fixture,
+    release: &str,
+    published: &str,
+    value: &str,
+    ownership: &str,
+    label: &str,
+) {
+    let mut annual = sheet("YTD", "twelve", "400.4", label, "December 31");
+    for (address, cell) in &mut annual.cells {
+        if address == "D5" {
+            *cell = MinimalCell::Styled {
+                raw: value.into(),
+                xf: 0,
+            };
+        } else if address == "A5" {
+            *cell = MinimalCell::Text(format!("Site A ({ownership}%)"));
+        }
+    }
+    let bytes = build_minimal_xlsx_styled(
+        &[annual],
+        Some(&MinimalStyles {
+            num_fmts: vec![],
+            xfs: vec![1],
+        }),
+    );
+    let file = format!("{release}.xlsx");
+    fs::write(fixture.root.join("corpus").join(&file), &bytes).unwrap();
+    // These fixture registries contain one header/subject section followed only by source rows.
+    let path = registry_path(&fixture.root, ISSUER);
+    let old = fs::read_to_string(&path).unwrap();
+    let mut sections = old.split("\n[[source]]\n");
+    let mut registry = sections.next().unwrap().to_string();
+    for row in sections {
+        if !row.starts_with(&format!("file = \"{file}\"\n")) {
+            registry.push_str("\n[[source]]\n");
+            registry.push_str(row);
+        }
+    }
+    registry.push_str(&format!(
+        "\n[[source]]\nfile = \"{file}\"\nkind = \"mine_stats\"\nquarter = \"{release}\"\npath = \"{file}\"\nurl_basis = \"W1 table\"\nbytes = {}\nsha256 = \"{}\"\npublished_at = \"{published}\"\npublished_at_basis = \"FACT: invented comparative release fixture\"\n",
+        bytes.len(),
+        sha256(&bytes),
+    ));
+    fs::write(path, registry).unwrap();
+}
+
+fn revision_fixture(vintages: Option<&str>) -> Fixture {
+    let fixture = Fixture::with_vintages(
+        "aisc_usd_per_oz",
+        "attributable:3/5",
+        "2030FY",
+        1476,
+        1490,
+        vintages,
+    );
+    registered_cost(
+        &fixture,
+        "2030Q4",
+        "2031-02-15",
+        "1479.4",
+        "60",
+        "All-in sustaining costs ($/oz)",
+    );
+    fixture
+}
+
+fn restate(fixture: &Fixture, release: &str) -> Command {
+    Command::Restate {
+        journal: JOURNAL.into(),
+        head: fixture.head,
+        cohort: COHORT.into(),
+        forecast: "one".into(),
+        release: release.into(),
+    }
+}
+
+fn assess_revision(fixture: &mut Fixture, cut: &str, selector: &str) -> Envelope {
+    fixture.ok(
+        Command::Assess {
+            journal: JOURNAL.into(),
+            head: fixture.head,
+            cohort: COHORT.into(),
+            as_of: cut.into(),
+            selector: selector.into(),
+            expected_digest: None,
+        },
+        ns(cut),
+    )
+}
+
+fn full_report(payload: &str) -> &str {
+    payload
+        .split_once("\"report\":")
+        .unwrap()
+        .1
+        .strip_suffix('}')
+        .unwrap()
+}
+
+fn reopen_revision(fixture: &Fixture, digest: Digest32) -> Envelope {
+    let before = fixture.bytes();
+    let report = execute_with_clock(
+        &Command::Report {
+            journal: JOURNAL.into(),
+            head: Some(fixture.head),
+            assessment: digest,
+            provenance: None,
+            timestamp: None,
+        },
+        &fixture.root,
+        &NeverClock,
+    );
+    assert_eq!(report.exit_code, 0, "{report:?}");
+    assert_eq!(fixture.bytes(), before);
+    report
+}
+
+#[test]
+fn registered_comparatives_preserve_first_scores_and_immutable_saved_reports() {
+    let mut fixture = revision_fixture(Some("registered_comparatives"));
+    fixture.ok(fixture.resolve(), ns(AVAILABLE));
+    let original = assess_revision(&mut fixture, CUT, "first-published");
+    let original_body = assessment(&original.payload_json);
+    assert!(original_body.contains("\"interval_score\":{\"n_scored\":1,\"observed_mean\":14,"));
+    assert!(original_body.contains("\"coverage\":{\"inside\":1,"));
+    assert!(original_body.contains("\"value\":1479,"));
+    let original_digest = digest_field(original_body, "digest");
+    let original_report = full_report(&original.payload_json).to_string();
+
+    registered_cost(
+        &fixture,
+        "2031Q1",
+        "2031-05-15",
+        "1474.4",
+        "60",
+        "All-in sustaining costs ($/oz)",
+    );
+    let admitted = fixture.ok(restate(&fixture, "2031Q1"), ns("2031-05-16T00:00:00Z"));
+    assert!(admitted.payload_json.contains("\"n_outcomes\":2"));
+    let revised = assess_revision(&mut fixture, "2031-05-17T00:00:00Z", "latest-as-of");
+    let revised_body = assessment(&revised.payload_json);
+    for expected in [
+        "\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0",
+        "\"interval_score\":{\"n_scored\":1,\"observed_mean\":34,",
+        "\"coverage\":{\"inside\":0,",
+        "\"value\":1474,",
+        "\"kind\":\"restated\"",
+        "\"supersedes\":1",
+        "\"vintage\":\"2031Q1\"",
+        "\"calibration_flag\":\"descriptive\"",
+    ] {
+        assert!(
+            revised_body.contains(expected),
+            "missing {expected}: {revised_body}"
+        );
+    }
+    let revised_digest = digest_field(revised_body, "digest");
+    assert_ne!(original_digest, revised_digest);
+    let revised_report = full_report(&revised.payload_json).to_string();
+    let still_first = assess_revision(&mut fixture, "2031-05-18T00:00:00Z", "first-published");
+    assert!(assessment(&still_first.payload_json).contains("\"value\":1479,"));
+    assert!(
+        assessment(&still_first.payload_json)
+            .contains("\"interval_score\":{\"n_scored\":1,\"observed_mean\":14,")
+    );
+
+    // Signed issuer cost is retained literally; admitting a new vintage does not clamp it to zero.
+    registered_cost(
+        &fixture,
+        "2031Q2",
+        "2031-08-15",
+        "-12.4",
+        "60",
+        "All-in sustaining costs ($/oz)",
+    );
+    fixture.ok(restate(&fixture, "2031Q2"), ns("2031-08-16T00:00:00Z"));
+    let signed = assess_revision(&mut fixture, "2031-08-17T00:00:00Z", "latest-as-of");
+    let signed_body = assessment(&signed.payload_json);
+    assert!(signed_body.contains("\"value\":-12,"));
+    assert!(signed_body.contains("\"supersedes\":2"));
+    assert!(signed_body.contains("\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0"));
+    assert!(signed_body.contains("\"interval_score\":{\"n_scored\":1,\"observed_mean\":14894,"));
+
+    // Admission snapshots remain replayable after subsequent corrections and current file changes.
+    fs::write(
+        fixture.root.join("corpus/2030Q4.xlsx"),
+        b"changed after admission",
+    )
+    .unwrap();
+    fs::write(
+        fixture.root.join("corpus/2031Q1.xlsx"),
+        b"changed after correction",
+    )
+    .unwrap();
+    fs::write(registry_path(&fixture.root, ISSUER), b"changed registry").unwrap();
+    for (digest, expected) in [
+        (original_digest, original_report),
+        (revised_digest, revised_report),
+    ] {
+        let reopened = reopen_revision(&fixture, digest);
+        assert_eq!(full_report(&reopened.payload_json), expected);
+        assert!(
+            reopened
+                .payload_json
+                .contains("\"source_bytes_reverified_on_replay\":false")
+        );
+    }
+}
+
+#[test]
+fn registered_restatements_refuse_unfrozen_policy_bad_sources_and_invalid_chronology_atomically() {
+    for defect in [
+        "original_only",
+        "no_original",
+        "same_release",
+        "earlier_release",
+        "missing_source",
+        "altered_source",
+        "changed_ownership",
+        "changed_cost_basis",
+        "future_publication",
+        "incomplete_release",
+        "repeated_release",
+    ] {
+        let mode = (defect != "original_only").then_some("registered_comparatives");
+        let mut fixture = revision_fixture(mode);
+        if defect != "no_original" {
+            fixture.ok(fixture.resolve(), ns(AVAILABLE));
+        }
+        let release = if defect == "incomplete_release" {
+            "2031Q2"
+        } else {
+            "2031Q1"
+        };
+        registered_cost(
+            &fixture,
+            release,
+            if defect == "future_publication" {
+                "2031-05-20"
+            } else {
+                "2031-05-15"
+            },
+            "1474.4",
+            if defect == "changed_ownership" {
+                "50"
+            } else {
+                "60"
+            },
+            if defect == "changed_cost_basis" {
+                "All-in sustaining costs ($/oz) per produced ounce"
+            } else {
+                "All-in sustaining costs ($/oz)"
+            },
+        );
+        let path = fixture.root.join("corpus").join(format!("{release}.xlsx"));
+        if defect == "missing_source" {
+            fs::rename(&path, path.with_extension("xlsx.saved")).unwrap();
+        } else if defect == "altered_source" {
+            let mut bytes = fs::read(&path).unwrap();
+            bytes.push(0);
+            fs::write(&path, bytes).unwrap();
+        } else if defect == "repeated_release" {
+            fixture.ok(restate(&fixture, release), ns("2031-05-16T00:00:00Z"));
+        }
+        let selected = match defect {
+            "same_release" => "2030Q4",
+            "earlier_release" => "2030Q3",
+            _ => release,
+        };
+        let before = fixture.bytes();
+        let result = execute_with_clock(
+            &restate(&fixture, selected),
+            &fixture.root,
+            &FixedClock(ns("2031-05-17T00:00:00Z")),
+        );
+        assert_ne!(result.exit_code, 0, "{defect} was accepted: {result:?}");
+        assert_eq!(fixture.bytes(), before, "{defect} appended bytes");
+        assert!(DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).is_ok());
+    }
+}
+
+#[test]
+fn a_second_cohort_cannot_upgrade_an_original_only_shared_outcome_stream() {
+    let fixture = revision_fixture(None);
+    let request = fixture.request(
+        "upgrade-policy.toml",
+        &format!(
+            "[[cohort]]\nname = \"upgraded\"\nmembers = \"one\"\nresolution_rule = \"registered-public-cell\"\neligible_sources = \"{ISSUER}\"\npublic_issuer = \"{ISSUER}\"\npublic_metric = \"aisc_usd_per_oz\"\npublic_period = \"2030FY\"\npublic_ownership = \"attributable:3/5\"\npublic_members = \"one=Site A\"\npublic_vintages = \"registered_comparatives\"\n"
+        ),
+    );
+    fixture.refuse(
+        &Command::Freeze {
+            journal: JOURNAL.into(),
+            head: fixture.head,
+            request,
+        },
+        ns("2030-01-04T00:00:00Z"),
+        "FMINE-REF-507",
+    );
+}
+
+#[test]
+fn restate_cli_accepts_only_a_registered_release_and_never_a_caller_value_or_predecessor() {
+    let fixture = revision_fixture(Some("registered_comparatives"));
+    let words = [
+        "forecast",
+        "journal",
+        "restate",
+        "--journal",
+        JOURNAL,
+        "--head",
+        &fixture.head.to_hex(),
+        "--cohort",
+        COHORT,
+        "--forecast",
+        "one",
+        "--release",
+        "2031Q1",
+        "--trust-host-clock",
+    ];
+    let args: Vec<_> = words.iter().map(|word| (*word).to_string()).collect();
+    let (command, _, root) = parse_args(&args, &fixture.root).unwrap();
+    assert_eq!(root, fixture.root);
+    assert_eq!(
+        command,
+        CliCommand::ForecastJournal(restate(&fixture, "2031Q1"))
+    );
+    for extra in [
+        ["--value", "999"],
+        ["--supersedes", "1"],
+        ["--request", "caller.toml"],
+        ["--available-at", "2031-05-16T00:00:00Z"],
+    ] {
+        let mut changed = args.clone();
+        changed.extend(extra.into_iter().map(str::to_string));
+        assert!(parse_args(&changed, &fixture.root).is_err());
+    }
+    for invalid in ["2031FY", "2031Q0", "unknown"] {
+        let mut changed = args.clone();
+        let index = changed.iter().position(|s| s == "--release").unwrap() + 1;
+        changed[index] = invalid.into();
+        assert!(parse_args(&changed, &fixture.root).is_err());
+    }
+    let no_trust: Vec<_> = args
+        .iter()
+        .filter(|s| *s != "--trust-host-clock")
+        .cloned()
+        .collect();
+    assert!(parse_args(&no_trust, &fixture.root).is_err());
 }

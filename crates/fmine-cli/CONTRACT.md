@@ -112,7 +112,8 @@ availability and assessment cuts must be at or before the lower bound. Clock rol
 Requests still contain one permitted TOML table with no top-level fields, using the frozen
 `fmine.forecast-ledger.v1` row grammar with the three assigned-time fields prohibited. The writer validates
 an ordinary request, then adds `schema = "fmine.forecast-operation.v2"` to the stored operation; the public-bound
-freeze and resolution operations described below use v3. The `FJR1`
+freeze and resolution operations described below use v3, and explicit vintage policies and comparative
+restatements use v4. The `FJR1`
 frame format is unchanged. Replay dispatches per operation: legacy rows without top-level fields retain
 their original observed-time semantics and identities; v2 rows use the upper bound. Unknown schemas or extra
 top-level fields refuse. Mixed journals preserve both policies without rewriting earlier operations.
@@ -155,8 +156,28 @@ and identity before restoring the event. This prevents value, subject, period, b
 `source_admissions` and each selected member's `source_admission` distinguish recorded source verification
 from unverified supplied outcomes. Replay does not re-read source files or assert present file availability.
 The journal head binds admission evidence; the existing assessment digest binds the cohort, numeric event
-and citations. This slice resolves original releases; source-bound restatements and automatic status events
-remain outside its supported domain. Refused resolutions leave members unresolved in the frozen denominator.
+and citations. Refused resolutions leave members unresolved in the frozen denominator.
+
+DESIGN (BD-343): `public_vintages = "registered_comparatives"` is an optional pre-freeze permission for
+source-bound restatements. Omission or `original_only` retains the existing version-one policy bytes;
+opting in uses the canonical version-two policy. A shared forecast ID cannot acquire different vintage
+permissions through another cohort. `forecast journal restate --journal <path> --head <hex>
+--cohort <name> --forecast <alias> --release YYYYQn --trust-host-clock` requires an already admitted,
+source-verified original outcome. Under the writer lock it selects the latest numeric predecessor and
+resolves a strictly later registered reporting quarter against the same physical target, subject, metric,
+unit, ownership and sold-ounce cost definition. The registered publication day must follow both the target
+period and selected reporting quarter; availability remains midnight after that day. Neither the numeric
+value, source Claim, publication evidence nor superseded sequence is accepted from the caller.
+
+The generated `registered_restatement` operation uses `fmine.forecast-operation.v4` and retains the
+predecessor sequence alongside the same complete source evidence as an original admission. Replay checks
+the frozen permission, original admission, chronological predecessor and reconstructed canonical source
+Claim before appending `OutcomeKind::Restated`. The kernel retains the original event for `first-published`
+and selects a later event for `latest-as-of` only within both its availability and recording cuts. Saved
+reports retain their first checkpoint's prefix, operation-version counts and selected source admission.
+No source files are re-read during report replay. Unknown versions, repeated or earlier releases, changed
+ownership/denominators, missing originals and altered source bytes refuse without a journal append.
+Automatic status events remain outside the supported domain.
 
 The existing calibration kernel requires an outcome's availability and recording time to be at or before the
 assessment cut. For example, an observed recording at `12:00:01.500Z` with a one-second skew bound is assigned

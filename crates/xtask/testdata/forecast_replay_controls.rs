@@ -385,8 +385,8 @@ fn kernel_refusals_keep_their_original_codes_at_the_io_boundary() {
 
 #[test]
 fn file_adapter_is_deterministic_read_only_and_explicit_about_unverified_inputs() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/forecasts/cohort_synthetic.toml");
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/forecasts/cohort_synthetic.toml");
     let before = std::fs::read(&path).expect("fixture bytes");
     let output =
         assess(&path, "synthetic-demo", CUT, "latest-as-of", None).expect("file assessment");

@@ -557,7 +557,7 @@ fn parse_forecast_journal(
     }
     let ["forecast", "journal", verb] = words.as_slice() else {
         return Err(
-            "expected forecast journal init|register|freeze|outcome|resolve|assess|inspect|report"
+            "expected forecast journal init|register|freeze|outcome|resolve|restate|assess|inspect|report"
                 .to_string(),
         );
     };
@@ -632,6 +632,21 @@ fn parse_forecast_journal(
             cohort: take(&mut fields, "--cohort")?,
             forecast: take(&mut fields, "--forecast")?,
         },
+        "restate" => {
+            let release = take(&mut fields, "--release")?;
+            if !fmine_registry::sources::is_quarter(&release) {
+                return Err(
+                    "--release requires a canonical YYYYQ1..4 reporting quarter".to_string()
+                );
+            }
+            Command::Restate {
+                journal,
+                head: digest(&take(&mut fields, "--head")?)?,
+                cohort: take(&mut fields, "--cohort")?,
+                forecast: take(&mut fields, "--forecast")?,
+                release,
+            }
+        }
         "assess" => {
             let head = digest(&take(&mut fields, "--head")?)?;
             let cohort = take(&mut fields, "--cohort")?;
@@ -1912,6 +1927,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal freeze --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal outcome --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal resolve --journal <path> --head <hex> --cohort <name> --forecast <alias> --trust-host-clock",
+                "forecast journal restate --journal <path> --head <hex> --cohort <name> --forecast <alias> --release YYYYQn --trust-host-clock",
                 "forecast journal assess --journal <path> --head <hex> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock [--selector first-published|latest-as-of] [--expected-digest <hex>]",
                 "forecast journal inspect --journal <path> [--head <hex>]",
                 "forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <trusted-pem>",

@@ -216,10 +216,7 @@ pub(super) fn resolve_release(
     }) {
         return Err(refusal(
             RefusalCode::SourceCellUnusable208,
-            format!(
-                "summary reader refused {}: {}",
-                error.locator, error.reason
-            ),
+            format!("summary reader refused {}: {}", error.locator, error.reason),
         ));
     }
     let period = policy.period.label();
