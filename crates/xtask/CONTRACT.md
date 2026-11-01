@@ -95,7 +95,7 @@ Not applicable: no Claims are emitted.
   - An allow row matches by crate, file, function name and parameter, not by `impl` type, so two `pub fn new` in one file share their rows.
 - `check-amend` needs the root to be a git work tree's top level. Without one it is a warning in `check-all`, and an error with `--base`.
 - `check-lifts --upstream` and `check-lift-drift` need a frankensim checkout. CI runs only the drift check, each quarter (`.github/workflows/lift-drift.yml`). `test_upstream_known_answers_when_a_checkout_is_given` passes without running when `FRANKENSIM_PATH` is unset.
-- `sbom` describes the closure over all targets (`--target all`), so a crate used only on another platform is listed too. A path package has no purl, since `pkg:cargo/<name>` would name a crates.io crate. The output is checked by its tests and parses as JSON; it has not been validated against the official CycloneDX schema.
+- `sbom` describes the closure over all targets (`--target all`), so a crate used only on another platform is listed too. A path package has no purl, since `pkg:cargo/<name>` would name a crates.io crate. A licence is the manifest's declared `license` field: the workspace declares MIT, but `LICENSE` reads "MIT License (with OpenAI/Anthropic Rider)" (E681), so the bill's MIT is the declaration, not necessarily the full terms, until the owner decides (RISK-17). The output is checked by its tests and parses as JSON; it has not been validated against the official CycloneDX schema.
 - `forecast-baseline` needs the registered workbooks under `corpus_of_input_docs/`, so it never runs in CI (RISK-31). Its test is `#[ignore]` for that reason. So are 26 tests in `tests/`, which need registered workbooks, PDFs or the local transcription registry.
 
 ## 9. Oracles
