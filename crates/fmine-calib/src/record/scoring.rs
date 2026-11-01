@@ -13,6 +13,8 @@ use fmine_numerics::exact_feas::Interval;
 use super::{ForecastRow, Rat, RecordRules, SiteStatus, interval_score};
 use crate::guidance_scores::clopper_pearson_exact;
 
+pub mod paired;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssessmentError(pub String);
 
@@ -93,6 +95,27 @@ fn mean(sum: Rat, n: usize) -> Result<Option<Rat>> {
     } else {
         Ok(Some(exact(sum.checked_div(count(n)?))?))
     }
+}
+
+/// Shared exact interval loss and inclusive hit rule for the forecast and declared baseline methods.
+fn interval_result(lo: Rat, hi: Rat, alpha: Rat, outcome: Rat) -> Result<(Rat, bool)> {
+    Ok((
+        exact(interval_score(lo, hi, alpha, outcome))?,
+        le(lo, outcome)? && le(outcome, hi)?,
+    ))
+}
+
+/// Shared frozen equicorrelation sensitivity. This is not an estimated dependence model.
+fn effective_n(n: usize, rho_low: Rat, rho_high: Rat) -> Result<(Rat, Rat)> {
+    let at = |rho: Rat| -> Result<Rat> {
+        if n == 0 {
+            return Ok(Rat::from_integer(0));
+        }
+        let denominator =
+            exact(Rat::from_integer(1).checked_add(exact(count(n - 1)?.checked_mul(rho))?))?;
+        exact(count(n)?.checked_div(denominator))
+    };
+    Ok((at(rho_high)?, at(rho_low)?))
 }
 
 /// Score each frozen live forecast exactly once and list the not-published universe separately. Unknown,
@@ -195,12 +218,10 @@ pub fn assess(
             let width = exact(f.hi.checked_sub(f.lo))?;
             // Validates alpha even when every outcome is missing.
             exact(interval_score(f.lo, f.hi, rules.alpha, f.point))?;
-            let loss = y
-                .map(|y| exact(interval_score(f.lo, f.hi, rules.alpha, y)))
+            let scored = y
+                .map(|y| interval_result(f.lo, f.hi, rules.alpha, y))
                 .transpose()?;
-            let hit = y
-                .map(|y| -> Result<bool> { Ok(le(f.lo, y)? && le(y, f.hi)?) })
-                .transpose()?;
+            let (loss, hit) = scored.map_or((None, None), |(loss, hit)| (Some(loss), Some(hit)));
             match loss {
                 Some(loss) => {
                     n_scored += 1;
@@ -223,14 +244,6 @@ pub fn assess(
             });
         }
         let n_unresolved = n_frozen - n_scored;
-        let effective = |rho: Rat| -> Result<Rat> {
-            if n_scored == 0 {
-                return Ok(zero);
-            }
-            let denominator =
-                exact(one.checked_add(exact(count(n_scored - 1)?.checked_mul(rho))?))?;
-            exact(count(n_scored)?.checked_div(denominator))
-        };
         let observed_mean = mean(sum, n_scored)?;
         targets.push(TargetScore {
             target: target.id.clone(),
@@ -262,7 +275,7 @@ pub fn assess(
             } else {
                 None
             },
-            effective_n: (effective(rules.rho_high)?, effective(rules.rho_low)?),
+            effective_n: effective_n(n_scored, rules.rho_low, rules.rho_high)?,
         });
     }
     Ok(RecordScore { members, targets })
@@ -313,6 +326,17 @@ pub fn compare(
     benchmarks: &[BenchmarkRow],
 ) -> Result<Vec<TargetComparison>> {
     let assessment = assess(rules, forecasts, outcomes)?;
+    compare_assessment(rules, forecasts, &assessment, benchmarks)
+}
+
+// The paired report already holds the validated full-population assessment. Share this comparison
+// rather than re-evaluating its model losses and certified coverage bounds.
+fn compare_assessment(
+    rules: &RecordRules,
+    forecasts: &[ForecastRow],
+    assessment: &RecordScore,
+    benchmarks: &[BenchmarkRow],
+) -> Result<Vec<TargetComparison>> {
     let forecast_keys: BTreeSet<_> = forecasts
         .iter()
         .map(|f| (f.site.as_str(), f.target.as_str()))

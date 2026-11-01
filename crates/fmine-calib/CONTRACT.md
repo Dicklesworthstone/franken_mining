@@ -145,6 +145,29 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
     number is left out and counted, never imputed), `ratio_quantiles` (the ratios at α/2 and 1 − α/2) and
     `persistence_interval` (point × those ratios; inverse ECDF only: exact, since exp of a quantile of log ratios
     is then an observed ratio; the linear estimator's bounds are irrational and refuse with `NotExact`)
+- DESIGN (BD-076): `record::scoring::paired::assess(rules, forecasts, outcomes, baselines)` consumes the parsed frozen
+  rules, exactly one forecast for each live site × target, an explicit `OutcomeRow` for every declared site ×
+  target, and a `BaselineRow` for every site × declared baseline. `Availability::Unavailable(reason)` retains
+  missing outcomes and baselines; omission, duplicates and additions outside the universe refuse.
+  Both canonical comparator kinds, `issuer_guidance` and `run_rate_persistence`, must be declared per target.
+  `RecordAssessment` retains every declared member in rules order, including sites marked `NotPublished`
+  before forecasting. Coverage and its hypothetical completion bounds use the frozen **live** population;
+  pre-excluded sites have no invented forecast and are counted separately by name.
+  Each target reports exact interval scores, method-specific availability/scored counts and observed means,
+  coverage, an equicorrelation n_eff sensitivity over the frozen rho range, and a paired count/mean for the
+  common population where the forecast, outcome and every declared baseline are available. Membership,
+  paired means and forecast-minus-baseline differences reuse `record::scoring::compare`'s common calculation;
+  negative differences favor the forecast loss without a skill claim. Calibration remains `Descriptive` or,
+  without resolved live outcomes, `Unscored`,
+  even if the record's sample threshold is exceeded.
+  `RecordAssessment::to_json()` emits `fmine.forecast-record.scores.v1`, preserving rational numerator and
+  denominator strings. It never verifies sources, chooses an outcome vintage, transforms an ownership basis
+  or authenticates the record's time proof; those are adapter responsibilities.
+- DESIGN (BD-076): `guidance_scores::clopper_pearson_exact(k, n, coverage_level)` and its `_with_limit` form
+  generalize the certified dyadic enclosure to the frozen confidence level, including FY2026's 95%. Existing
+  CP90 entry points retain their endpoints. The interval applies to resolved members under the explicit iid
+  reference assumption, without adjustment for missingness, site dependence or rounding. Completion bounds
+  and n_eff sensitivity remain separate from this reference interval.
 
 ## 5. Guards & Typed Refusals
 `ForecastLedger` refusals, by condition (`test_ledger_refusals_by_condition`):
@@ -160,6 +183,11 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 - `FMINE-REF-109` (outside physical domain, exit 3): a non-finite mean or outcome, `std_dev <= 0`, or a policy
   attempting to lower the positive-calibration minimum below 35 independent outcomes.
 - `FMINE-REF-201` (no claim in domain, exit 3): an unknown forecast/cohort, or an ineligible outcome source.
+- Paired record scoring uses `FMINE-REF-107` for malformed rules or population rows, `FMINE-REF-109` for invalid
+  intervals/probability parameters, and `FMINE-REF-207` for exact arithmetic overflow or an uncertified CP endpoint.
+  Signed FY-minus-9M residuals, negative per-unit costs and negative Q4-implied issuer guidance ranges are not
+  clamped or excluded after observation. The adapter validates underlying physical totals and flags a negative
+  literal residual as a discrepancy; the frozen subtraction is not a claim about physical Q4 production.
 
 206 and 507 are proposed codes (`docs/adr/ADR-REFUSALS-01.md`).
 
@@ -199,6 +227,12 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   of twenty-five, unchanged prices, supported and refuted proportionality, open interval endpoints, missing
   assumptions, unsupported metrics, explicit proxies with distinct commodity-price bases, incompatible current
   periods, altered paired reports, scaling and arithmetic overflow.
+- `record::scoring::paired::tests` supplies independent interval-score answers, common-population means, live-cohort
+  completion bounds and n_eff fractions, and exercises retained unavailable/excluded members, input-order
+  invariance, strict population rejection, signed original-release residuals, net cost credits and arithmetic refusal.
+  `guidance_scores::certified::tests::test_frozen_95_percent_level_against_independent_binomial_sum` compares
+  95% endpoints with an independent 90-digit Decimal binomial summation. A separate regression pins the
+  previous CP90 grid endpoints and a dyadic exact-root case.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Miscalibrated spatial fronts trip `BettingEProcess` at `E_t >= 20.0` (`alpha = 0.05`) and downgrade downstream claims.
@@ -223,3 +257,6 @@ already selected, citation-bound outcomes: it does not freeze forecasts, authent
 select a vintage. Its rational payloads and one-sided guidance do not extend the ledger's durable floating-point
 forecast format. Adapters must retain the frozen membership and selector separately; completion bounds do not
 substitute for statistical confidence intervals. Mean-z bounds propagate source rounding only.
+The frozen-record scorer consumes already transformed, selected inputs. Its completion bounds do not make an
+unavailable baseline into a published prediction; its confidence references do not establish forecasting skill.
+The actual FY2026 record and outcomes remain subject to the Q3 source gate, external time proof and later release.
