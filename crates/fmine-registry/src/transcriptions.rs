@@ -395,6 +395,35 @@ impl Agreement {
         self.disagreements.is_empty() && self.quantity_clashes.is_empty()
     }
 
+    /// Accepted quantities with competing pending locations in the same document, in stable order.
+    /// Missing rejection metadata leaves the pending identity unknown and conservatively competing.
+    /// An unrelated pending quantity does not invalidate an otherwise agreed value.
+    #[must_use]
+    pub fn accepted_pending_clashes(&self) -> Vec<String> {
+        let mut clashes = BTreeSet::new();
+        for (at, reader) in &self.single_reader {
+            let quantities = self.rejected_quantities.get(at);
+            let unknown = quantities.is_none_or(BTreeSet::is_empty);
+            for accepted in &self.accepted {
+                if accepted.locator.doc == at.doc
+                    && (unknown || quantities.is_some_and(|q| q.contains(&accepted.quantity)))
+                {
+                    clashes.insert(format!(
+                        "quantity {}: accepted at {}; pending at {at} by {reader}{}",
+                        accepted.quantity,
+                        accepted.locator,
+                        if unknown {
+                            " (quantity identity unknown)"
+                        } else {
+                            ""
+                        },
+                    ));
+                }
+            }
+        }
+        clashes.into_iter().collect()
+    }
+
     /// Whether this quantity namespace has no pending or conflicting readings. Every reader's identity
     /// participates: disagreement about whether a quantity is guidance cannot move it outside this gate.
     /// Unknown or incomplete rejection metadata fails closed. An empty prefix covers every quantity.
@@ -685,6 +714,61 @@ mod tests {
         shuffled.reverse();
         let b = agree(&parse_transcriptions(&registry(&shuffled), "demo", &docs()).expect("valid"));
         assert_eq!(b.digest(), a.digest());
+    }
+
+    #[test]
+    fn pending_quantity_competitors_retain_both_locations_even_for_equal_values() {
+        let mut rows = golden();
+        rows.push(entry(
+            "reader_c",
+            "Deck.pdf",
+            13,
+            "Depletion",
+            "(3.6)",
+            "depletion",
+        ));
+        let agreement = agree(&parse_transcriptions(&registry(&rows), "demo", &docs()).unwrap());
+        let clashes = agreement.accepted_pending_clashes();
+        assert_eq!(clashes.len(), 1);
+        assert!(clashes[0].contains("quantity depletion"));
+        assert!(clashes[0].contains("accepted at Deck.pdf:p14:"));
+        assert!(clashes[0].contains("pending at Deck.pdf:p13:"));
+        assert!(clashes[0].contains("reader_c"));
+        // Ordinary consistency permits pending reads; consumers requiring a unique quantity opt in.
+        assert!(agreement.is_consistent());
+        rows.reverse();
+        let reordered = agree(&parse_transcriptions(&registry(&rows), "demo", &docs()).unwrap());
+        assert_eq!(clashes, reordered.accepted_pending_clashes());
+
+        let mut unknown = agreement.clone();
+        unknown.rejected_quantities.clear();
+        assert_eq!(unknown.accepted_pending_clashes().len(), 2);
+        assert!(
+            unknown
+                .accepted_pending_clashes()
+                .iter()
+                .all(|s| s.contains("identity unknown"))
+        );
+        let at = unknown.single_reader[0].0.clone();
+        unknown.rejected_quantities.insert(at, BTreeSet::new());
+        assert_eq!(unknown.accepted_pending_clashes().len(), 2);
+    }
+
+    #[test]
+    fn unrelated_pending_quantities_and_other_documents_do_not_compete() {
+        let mut rows = golden();
+        rows.push(entry(
+            "reader_c", "Deck.pdf", 13, "Opening", "10.0", "opening",
+        ));
+        let mut agreement =
+            agree(&parse_transcriptions(&registry(&rows), "demo", &docs()).unwrap());
+        assert!(agreement.accepted_pending_clashes().is_empty());
+        let pending = agreement.single_reader[0].0.clone();
+        agreement
+            .rejected_quantities
+            .insert(pending, ["depletion".into()].into());
+        agreement.accepted.retain(|a| a.locator.doc == "Mda.pdf");
+        assert!(agreement.accepted_pending_clashes().is_empty());
     }
 
     #[test]

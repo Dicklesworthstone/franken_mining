@@ -16,6 +16,7 @@ pub mod guidance;
 pub mod lmdi;
 pub mod mirror;
 pub mod recovery;
+pub mod reserves;
 pub mod roll_forward;
 
 use fmine_core::anchor::SourceAnchor;

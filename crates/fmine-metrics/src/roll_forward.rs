@@ -57,7 +57,7 @@ pub struct TableReport {
     pub refused: Vec<IdentityRefusal>,
 }
 
-fn convention(name: &str) -> xf::Convention {
+pub(crate) fn convention(name: &str) -> xf::Convention {
     match name {
         "half_up" => xf::Convention::HalfUp,
         "half_down" => xf::Convention::HalfDown,
@@ -87,7 +87,7 @@ fn reading_key(a: &Accepted) -> (&str, &str, &str, &str, &str, &str) {
     )
 }
 
-fn canonical_readings(readings: &mut [Accepted]) {
+pub(crate) fn canonical_readings(readings: &mut [Accepted]) {
     let value_key = |a: &Accepted| match a.value {
         Token::Point(d) => (0_u8, d.mantissa, d.scale, 0, 0),
         Token::Range(lo, hi) => (1, lo.mantissa, lo.scale, hi.mantissa, hi.scale),
@@ -126,9 +126,30 @@ fn source_cell(
     readings: &[Accepted],
     document: &DocumentRow,
 ) -> Result<SourceCell, String> {
+    bind_reading(
+        &definition.doc,
+        quantity,
+        period,
+        &definition.unit,
+        &definition.basis,
+        readings,
+        document,
+    )
+}
+
+/// Shared source boundary for arithmetic and typed issuer reserve assertions. Bytes are checked by callers.
+pub(crate) fn bind_reading(
+    doc: &str,
+    quantity: &str,
+    period: &str,
+    unit: &str,
+    basis: &str,
+    readings: &[Accepted],
+    document: &DocumentRow,
+) -> Result<SourceCell, String> {
     let matches: Vec<_> = readings
         .iter()
-        .filter(|a| a.locator.doc == definition.doc && a.quantity == quantity)
+        .filter(|a| a.locator.doc == doc && a.quantity == quantity)
         .collect();
     let a = match matches.as_slice() {
         [a] => *a,
@@ -161,7 +182,7 @@ fn source_cell(
             "ambiguous rendered locator from distinct source labels",
         ));
     }
-    if a.unit != definition.unit || a.basis != definition.basis || a.period != period {
+    if a.unit != unit || a.basis != basis || a.period != period {
         return Err(refuse(
             "unit, basis or period differs from the explicit declaration",
         ));
@@ -458,7 +479,7 @@ pub fn assess(
     report
 }
 
-fn js(s: &str) -> String {
+pub(crate) fn js(s: &str) -> String {
     let mut out = String::from("\"");
     for ch in s.chars() {
         match ch {
@@ -484,7 +505,7 @@ fn strings(values: &[String]) -> String {
     )
 }
 
-fn rat(value: Rat) -> String {
+pub(crate) fn rat(value: Rat) -> String {
     format!(
         "{{\"num\":\"{}\",\"den\":\"{}\"}}",
         value.num(),
@@ -492,7 +513,7 @@ fn rat(value: Rat) -> String {
     )
 }
 
-fn interval(value: &xf::Interval) -> String {
+pub(crate) fn interval(value: &xf::Interval) -> String {
     format!(
         "{{\"lo\":{},\"hi\":{},\"lo_strict\":{},\"hi_strict\":{}}}",
         rat(value.lo),
@@ -502,7 +523,7 @@ fn interval(value: &xf::Interval) -> String {
     )
 }
 
-fn accepted_json(a: &Accepted) -> String {
+pub(crate) fn accepted_json(a: &Accepted) -> String {
     let decimal = |d: fmine_registry::transcriptions::Decimal| {
         format!("{{\"mantissa\":\"{}\",\"scale\":{}}}", d.mantissa, d.scale)
     };
@@ -532,7 +553,7 @@ fn accepted_json(a: &Accepted) -> String {
     )
 }
 
-fn definition_json(d: &TableIdentity) -> String {
+pub(crate) fn definition_json(d: &TableIdentity) -> String {
     let terms = d
         .terms
         .iter()
@@ -775,6 +796,7 @@ mod tests {
         TableIdentityRegistry {
             issuer: "synthetic".into(),
             identities,
+            reserve_rows: Vec::new(),
         }
     }
 

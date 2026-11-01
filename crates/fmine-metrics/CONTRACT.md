@@ -5,7 +5,7 @@
 - **Layer:** `E` (Enterprise & Decision)
 - **Subsystem:** `Enterprise`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "roll_forward", "mirror"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserves", "roll_forward", "mirror"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), a spend-based Logarithmic Mean Divisia Index (`lmdi`, `GB-26`, BD-333.S1), and fixed-point marginal cut-off grade solver (`solve_cutoff_grade`; synthetic known answer only, the published cut-offs E182–E184 are not yet reproduced).
@@ -67,6 +67,22 @@ the multiplicative-to-additive LMDI accounting identity (`GB-26`). Its public-da
 arithmetic closure does not establish causation or identify an operational explanation (plan §21.6, E699).
 
 ## 4. Public API Surface
+- `reserves::{assess, IssuerReserveRow, ReserveDeck, ReserveKey, ReserveReport}` (BD-335): a source-bound
+  projection of declared reserve assertions. Rows retain separate economic, quoted-price-deck and filing-vintage
+  identities, their exact printed bounds and all source/price readings. Private row fields and a constant
+  `EvidenceClass::ISSUER` accessor prohibit promotion by relabelling. The economic key includes issuer, subject,
+  reserve year, item, metal, unit, ownership and contained/recoverable support; it deliberately excludes the deck.
+  Only registered MD&A/AIF documents supply current rows, selected by the latest declared publication date.
+  The selection considers declared rows before checking reading availability: an unusable newer filing blocks
+  fallback to an older one. Same-date filings remain ambiguous. Investor decks only cross-check; partner filings
+  and technical reports are refused as implicit issuer filings. All supplied earlier vintages remain visible.
+  Quoted decks bind positive agreed gold/copper price readings in the same document, including their period,
+  basis, units and citations. Different or unstated decks produce named comparison states without asserting a
+  reserve restatement. Comparable rows intersect their exact declared rounding intervals, retaining open ends.
+  JSON/Markdown and digests include every admitted or refused row, selection, price and document metadata.
+  A registry-wide refusal also binds all supplied declarations, documents and raw/admitted readings in a
+  canonical input digest, retaining duplicates and making rejected-input mutations distinguishable.
+  This projection is not a durable append-only store, a complete filing census or an `EstimateStatement`.
 - `roll_forward::quarter::{Quantity, Printed, Observation, Report, Status, assess}`: source IDs identify
   actual operands; a caller-authenticated series key binds issuer, subject, year, scope/perimeter version,
   additive metric, unit, occurrence and explicit normalized ownership. Each observation states its
