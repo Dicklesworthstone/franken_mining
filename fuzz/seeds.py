@@ -102,11 +102,12 @@ def main() -> None:
                                      ("codec", "anchor", "journal", "xlsx", "numfmt", "registry", "record", "html",
                                       "cli")}
 
-    # codec: mode, script length, script (one read per byte), payload.
+    # codec: mode, script length, script (one read per byte), payload. A script byte's kind is its value mod 11 and
+    # its bound its high nibble: every kind once, then bytes, strings and sequences under small, mid and no bounds.
     rng = random.Random(17)
     payload = bytes(rng.randrange(256) for _ in range(160))
     for mode in (0, 1, 2, 5):
-        script = bytes(range(10)) + bytes([0x18, 0x29, 0x38, 0x49, 0xF8, 0xF9])
+        script = bytes(range(11)) + bytes([0x13, 0x2A, 0x36, 0x4A, 0x15, 0xFA, 0xFB, 0xFC])
         seeds["codec"].append(bytes([mode, len(script)]) + script + payload)
 
     # anchor: selector 2 wraps the body in a version-0 frame, selector 5 in a version-1 frame.

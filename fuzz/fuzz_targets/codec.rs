@@ -6,11 +6,18 @@
 //! - Round trip: the script and payload define typed values. The encoder writes them, and the decoder must read back
 //!   exactly the same values and then find no trailing bytes. Flipping any one bit of the frame must be refused,
 //!   since CRC32C detects every single-bit error.
+//! - Canonical order: a sequence read back is strictly ascending and within its count bound, and the encoder takes a
+//!   sequence exactly when it is strictly ascending, writing nothing otherwise.
 #![no_main]
 
+use std::collections::BTreeSet;
+
 use fmine_core::codec::{Decoder, Encoder, MAX_FRAME_BYTES};
-use fmine_fuzz::shape;
+use fmine_fuzz::{MIN_FRAME, shape};
 use libfuzzer_sys::fuzz_target;
+
+/// The number of read kinds a script byte chooses from.
+const OPS: u8 = 11;
 
 const TAG: [u8; 4] = *b"FUZZ";
 
@@ -26,6 +33,7 @@ enum Value {
     Fixed32([u8; 32]),
     Bytes(Vec<u8>),
     Str(String),
+    Seq(Vec<u16>),
 }
 
 /// The bound a length-prefixed read uses for script byte `op`, from 0 to past `MAX_FRAME_BYTES`.
@@ -39,7 +47,7 @@ fn bound(op: u8) -> usize {
 
 fn read(dec: &mut Decoder<'_>, op: u8) -> Option<Value> {
     let max = bound(op);
-    let value = match op % 10 {
+    let value = match op % OPS {
         0 => Value::U8(dec.get_u8().ok()?),
         1 => Value::U16(dec.get_u16().ok()?),
         2 => Value::U32(dec.get_u32().ok()?),
@@ -56,7 +64,7 @@ fn read(dec: &mut Decoder<'_>, op: u8) -> Option<Value> {
             );
             Value::Bytes(bytes.to_vec())
         }
-        _ => {
+        9 => {
             let s = dec.get_str(max).ok()?;
             assert!(
                 s.len() <= max.min(MAX_FRAME_BYTES),
@@ -64,8 +72,38 @@ fn read(dec: &mut Decoder<'_>, op: u8) -> Option<Value> {
             );
             Value::Str(s.to_owned())
         }
+        _ => {
+            let seq = dec.get_canonical_seq(max, Decoder::get_u16).ok()?;
+            assert!(
+                seq.len() <= max,
+                "get_canonical_seq returned past its bound"
+            );
+            assert!(
+                seq.windows(2).all(|w| w[0] < w[1]),
+                "get_canonical_seq returned a sequence out of order"
+            );
+            Value::Seq(seq)
+        }
     };
     Some(value)
+}
+
+/// The encoder must take `raw` exactly when it is strictly ascending, and write nothing when it refuses.
+fn check_encoder_order(raw: &[u16]) {
+    let ascending = raw.windows(2).all(|w| w[0] < w[1]);
+    let mut enc = Encoder::new_frame(TAG, 1);
+    let taken = enc.put_canonical_seq(raw, |e, v| e.put_u16(*v)).is_ok();
+    assert_eq!(
+        taken, ascending,
+        "put_canonical_seq misjudged the order of {raw:?}"
+    );
+    if !taken {
+        assert_eq!(
+            enc.finish().len(),
+            MIN_FRAME,
+            "a refused sequence wrote bytes"
+        );
+    }
 }
 
 /// Takes `n` bytes from the front of `rest`.
@@ -84,7 +122,7 @@ fn arr<const N: usize>(rest: &mut &[u8]) -> Option<[u8; N]> {
 
 /// The value script byte `op` takes from the payload, or `None` once the payload runs out.
 fn value(op: u8, rest: &mut &[u8]) -> Option<Value> {
-    Some(match op % 10 {
+    Some(match op % OPS {
         0 => Value::U8(arr::<1>(rest)?[0]),
         1 => Value::U16(u16::from_le_bytes(arr(rest)?)),
         2 => Value::U32(u32::from_le_bytes(arr(rest)?)),
@@ -93,7 +131,7 @@ fn value(op: u8, rest: &mut &[u8]) -> Option<Value> {
         5 => Value::I128(i128::from_le_bytes(arr(rest)?)),
         6 => Value::Fixed4(arr(rest)?),
         7 => Value::Fixed32(arr(rest)?),
-        k => {
+        k @ (8 | 9) => {
             let n = usize::from(arr::<1>(rest)?[0]).min(bound(op));
             let bytes = take(rest, n)?;
             if k == 8 {
@@ -101,6 +139,19 @@ fn value(op: u8, rest: &mut &[u8]) -> Option<Value> {
             } else {
                 Value::Str(std::str::from_utf8(bytes).ok()?.to_owned())
             }
+        }
+        _ => {
+            let n = usize::from(arr::<1>(rest)?[0]).min(bound(op));
+            let raw = (0..n)
+                .map(|_| arr(rest).map(u16::from_le_bytes))
+                .collect::<Option<Vec<u16>>>()?;
+            check_encoder_order(&raw);
+            Value::Seq(
+                raw.into_iter()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
+            )
         }
     })
 }
@@ -117,6 +168,9 @@ fn write(enc: &mut Encoder, v: &Value) {
         Value::Fixed32(x) => enc.put_fixed(x),
         Value::Bytes(x) => enc.put_bytes(x),
         Value::Str(x) => enc.put_str(x),
+        Value::Seq(x) => enc
+            .put_canonical_seq(x, |e, v| e.put_u16(*v))
+            .expect("a set's elements are in canonical order"),
     }
 }
 

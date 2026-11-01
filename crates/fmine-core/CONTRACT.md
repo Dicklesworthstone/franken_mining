@@ -19,13 +19,15 @@ Byte slices (hashing, frame decoding), ID strings (`ObjectId` parsing), `f64` ar
 
 ## 4. Invariants
 - A frame decodes only with its magic, tag, a supported version (N or N-1), in-bounds lengths, no trailing bytes and a matching CRC32C: `test_frame_roundtrip_and_tamper_detection`, `test_crc32c_iscsi_known_answer`.
+- A set written with `put_canonical_seq` has one encoding, and reads back equal: `test_canonical_seq_round_trips_and_refuses_disorder`.
 - ID text and bytes round-trip for all 16 prefixes, in a fixed order: `test_all_prefixes_roundtrip_and_order`, `test_id_display_and_parse_property_seeded` (10,000 seeded rounds).
 - A version-0 (N-1) anchor still decodes: `test_anchor_v1_and_n_minus_1_roundtrip`.
 
 ## 5. Refusals
 No `FMINE-REF-nnn` code is emitted here; callers map these typed errors.
 - `IdParseError`: `UnknownPrefix`, `InvalidHexLength`, `InvalidHexChar` (`src/id.rs:111`); `test_invalid_ids_refused`.
-- `CodecError`: `InvalidMagic`, `UnexpectedTag`, `UnsupportedVersion`, `UnexpectedEof`, `LengthOutOfBounds`, `NonCanonicalOrder`, `TrailingBytes`, `CrcMismatch` (`src/codec.rs:14`). Only `CrcMismatch` has a test of its own.
+- `CodecError`: `InvalidMagic`, `UnexpectedTag`, `UnsupportedVersion`, `UnexpectedEof`, `LengthOutOfBounds`, `InvalidUtf8`, `NonCanonicalOrder`, `TrailingBytes`, `CrcMismatch` (`src/codec.rs:14`). Each has a test that triggers it: `test_each_header_error_is_its_own_variant`, `test_each_body_error_is_its_own_variant`, `test_canonical_seq_round_trips_and_refuses_disorder`, `test_frame_roundtrip_and_tamper_detection`.
+- `Encoder::put_canonical_seq` refuses elements that are not strictly ascending (`NonCanonicalOrder`) and writes nothing; `Decoder::get_canonical_seq` refuses a count over its bound (`LengthOutOfBounds`) and a repeated or out-of-order element (`NonCanonicalOrder`), and reserves memory for no more elements than there are bytes left.
 
 ## 6. Determinism class
 All seven files declare `//! Determinism: BitwisePortable`: `lib.rs`, `anchor.rs`, `codec.rs`, `det.rs`, `hash.rs`, `id.rs`, `rand.rs`. `xtask check-det` checks that none calls a std transcendental (PO-NUM-2); `det.rs` is its one exemption (`DET_EXEMPT`), being the replacement for them.
@@ -48,7 +50,7 @@ Not applicable: the crate emits digests, identifiers and numbers, not Claims, so
 - `Encoder::put_bytes` writes `u32::MAX` as the length of a slice longer than `u32::MAX` bytes, then the whole slice. That clamps instead of refusing: the length no longer matches the bytes that follow. No caller comes near 4 GiB, and the decoder's 64 MiB cap would refuse the frame, but the encoder should refuse it itself.
 - BD-016, BD-018, BD-019, BD-020 (bd-016, bd-018, bd-019, bd-020): the code and tests exist, but each stays open behind the GATE-LAYERS-00 chain (bd-016 waits on bd-015, which waits on bd-012). BD-021 (bd-021) also waits on BD-017.
 - No wasm32 run of the `det` golden digest (PO-NUM-2's third target).
-- Seven of the eight `CodecError` variants have no test of their own.
+- No frame format uses `put_canonical_seq`/`get_canonical_seq` yet. `fmine-claim`'s reliance codec checks its Claim-id order by hand (`decode_claims`) and refuses disorder with FMINE-REF-107; moving it onto the shared reader would turn that into the 502 its codec errors map to, which is the reliance owner's call.
 
 ## 11. Public API
 - `id::{PrefixKind, ObjectId, IdParseError}`
