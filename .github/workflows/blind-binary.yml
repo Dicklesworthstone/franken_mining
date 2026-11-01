@@ -32,3 +32,13 @@ jobs:
           path: target/release/fmine
           if-no-files-found: error
           retention-days: 90
+      # BD-073: the CycloneDX bill for this binary, with its sha256 in the root component. A separate artifact, so
+      # the binary's artifact holds exactly what it always has.
+      - name: SBOM
+        run: cargo run -p xtask --locked -- sbom --binary target/release/fmine > fmine.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fmine-sbom-${{ github.sha }}
+          path: fmine.cdx.json
+          if-no-files-found: error
+          retention-days: 90

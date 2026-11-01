@@ -1,11 +1,12 @@
 # CONTRACT.md — `xtask`
 
 ## 1. Purpose
-The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` checks the structural rules over the source tree and `registries/*.toml`: L-1 to L-7, PO-NUM-2, GATE-ORACLE-01 and the §28.4 LOC budget. Other commands do four jobs:
+The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` checks the structural rules over the source tree and `registries/*.toml`: L-1 to L-7, PO-NUM-2, GATE-ORACLE-01 and the §28.4 LOC budget. Other commands do five jobs:
 - generate the refusal catalogue;
 - capture oracle fixtures;
 - check contracts and beads;
-- hash, verify and order the FY2026 forecast record.
+- hash, verify and order the FY2026 forecast record;
+- write the `fmine` binary's bill of materials (`sbom`, BD-073).
 
 `tests/` (25 files) also holds the public lane's cross-crate integration tests. No production crate links it.
 
@@ -13,17 +14,18 @@ The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` chec
 - **Layer:** T
 - **Subsystem:** Testpit
 - **LOC budget:** not budgeted (dev-only tool; no row in registries/loc_budget.toml)
-- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "oracle", "forecast", "refusals", "int_as", "beads", "contracts"]`
+- **Allowed Module Families:** `["loc", "layers", "deps", "caps", "lifts", "scope", "claims", "det", "oracle", "forecast", "refusals", "int_as", "beads", "contracts", "sbom"]`
 
 ## 2. Inputs
 - **The tree.** Member `Cargo.toml` files, `crates/**/*.rs` and `crates/*/CONTRACT.md`. Also:
   - `fixtures/` and their capture records;
   - `docs/delivery/` (BUDGET-AMEND and GATE records);
   - `.beads/issues.jsonl`, `deny.toml` and `franken-stack.lock`;
+  - `Cargo.lock` and `rust-toolchain.toml`, for `sbom`;
   - the plan's §8.4 codes and its Appendix F.1 rows.
 - **Registries.** `registries/`: `loc_budget.toml`, `lifts.toml`, `lift_drift.toml`, `refusals.toml`, `l6_allow.toml`, `sources/*.toml`, `calendars.toml` and `zones.toml`.
 - **External programs, read-only:**
-  - `cargo tree`, for `check-int-as-001a` and `check-oracle`;
+  - `cargo tree`, for `check-int-as-001a`, `check-oracle` and `sbom`;
   - `git rev-parse`, `diff`, `ls-files`, `ls-tree` and `show`, for `check-amend`, `check-lifts --upstream`, `check-lift-drift` and `forecast-rules-order`;
   - `openssl ts`, for `forecast-record-verify`.
 - **Library dependencies:**
@@ -34,7 +36,7 @@ The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` chec
 - **Root.** The workspace is the checkout xtask was built from (`CARGO_MANIFEST_DIR`'s grandparent), not the current directory.
 
 ## 3. Outputs
-- **Lines and exit codes.** `<check>: PASS` or `<check> FAIL: <path:line …>` lines, and the JSON log lines named under Public API. The exit code is 0 on a pass and 2 on any failure; a usage error is also 2.
+- **Lines and exit codes.** `<check>: PASS` or `<check> FAIL: <path:line …>` lines, and the JSON log lines named under Public API. The exit code is 0 on a pass and 2 on any failure; a usage error is also 2. `sbom` prints its CycloneDX document on stdout and nothing else there; its failures go to stderr.
 - **Files written** (every other command writes nothing):
   - `gen-refusals`: `crates/fmine-evidence/src/refusal_catalog.rs`;
   - `capture-fixture`: a fixture and its capture record;
@@ -59,7 +61,8 @@ The T-layer verifier of the workspace (GATE-LAYERS-00, BD-015). `check-all` chec
   - `check_oracle`: `test_seeded_oracle_outside_the_workspace_fails_the_closure_but_not_check_deps`;
   - `check_sources_registry`: `test_registry_check_on_workspace_and_on_a_broken_copy`;
   - `loc::check_amend`: `test_synthetic_overrun_blocks_a_merge`;
-  - `beads`: `test_golden_negative_control`.
+  - `beads`: `test_golden_negative_control`;
+  - `sbom`: `undescribable_closures_are_refused`.
   `check_calendars` has none here.
 
 ## 5. Refusals
@@ -79,7 +82,7 @@ Exit 2, naming each finding. The findings are:
 No `FMINE-REF-nnn` code is emitted: `check-refusals` checks those codes, it does not raise them.
 
 ## 6. Determinism class
-Undeclared: `xtask check-det` requires a header only in the K and E layers. A check's result depends on the tree and, for `check-amend`, `check-lift-drift`, `check-lifts --upstream` and `forecast-rules-order`, on git history. Source files (`collect_rs_files`) and source registries are visited in sorted path order. `capture-fixture` records today's UTC date and the host's `<arch>-<os>`.
+Undeclared: `xtask check-det` requires a header only in the K and E layers. A check's result depends on the tree and, for `check-amend`, `check-lift-drift`, `check-lifts --upstream` and `forecast-rules-order`, on git history. Source files (`collect_rs_files`) and source registries are visited in sorted path order. `capture-fixture` records today's UTC date and the host's `<arch>-<os>`. `sbom` writes no timestamp or serial number, sorts its components and edges, and writes paths relative to the root, so its bytes depend only on the closure, `Cargo.lock`, `rust-toolchain.toml` and the binary (`rendering_is_cyclonedx_and_independent_of_lock_order`).
 
 ## 7. Evidence class of outputs
 Not applicable: no Claims are emitted.
@@ -92,6 +95,7 @@ Not applicable: no Claims are emitted.
   - An allow row matches by crate, file, function name and parameter, not by `impl` type, so two `pub fn new` in one file share their rows.
 - `check-amend` needs the root to be a git work tree's top level. Without one it is a warning in `check-all`, and an error with `--base`.
 - `check-lifts --upstream` and `check-lift-drift` need a frankensim checkout. CI runs only the drift check, each quarter (`.github/workflows/lift-drift.yml`). `test_upstream_known_answers_when_a_checkout_is_given` passes without running when `FRANKENSIM_PATH` is unset.
+- `sbom` describes the closure over all targets (`--target all`), so a crate used only on another platform is listed too. A path package has no purl, since `pkg:cargo/<name>` would name a crates.io crate. The output is checked by its tests and parses as JSON; it has not been validated against the official CycloneDX schema.
 - `forecast-baseline` needs the registered workbooks under `corpus_of_input_docs/`, so it never runs in CI (RISK-31). Its test is `#[ignore]` for that reason. So are 26 tests in `tests/`, which need registered workbooks, PDFs or the local transcription registry.
 
 ## 9. Oracles
@@ -213,6 +217,11 @@ Not applicable: no Claims are emitted.
   - Each baseline gives the pool's size, the pairs left out and the two ratio quantiles. Once the point quarter's workbook is registered, it also gives each live site's exact interval.
   - It needs the corpus, so it never runs in CI (RISK-31).
   - `scripts/forecast_record_e2e.sh` runs all three on a synthetic record with a throwaway local TSA, whose certificate is named test_tsa and is never a record's proof. `scripts/verify_rules_timestamp.sh` checks the rules' proofs with openssl and ots alone.
+- `sbom::{sbom, build, render, parse_lock}` (BD-073; command `sbom [--binary <path>]`). The bill is CycloneDX 1.5 JSON for `fmine-cli`'s normal and build closure, as `cargo tree --locked -e normal,build --target all` resolves it, so dev-dependencies and `xtask` stay out.
+  - Each component has its name, version and licence expression. A path package has its relative path, a crates.io package its purl and the lock's SHA-256 checksum, and a git package a purl whose `vcs_url` holds the lock's full commit.
+  - `dependencies` lists every component's direct edges. The metadata records the toolchain channel, `Cargo.lock`'s sha256 and the `cargo tree` command. With `--binary`, the root component also carries the binary's file name and sha256.
+  - It refuses a package the lock lacks or holds more than once, a path outside the workspace, a registry other than crates.io, a crates.io package without a checksum, a git source without a commit, and a tree whose single root is not `fmine-cli`.
+  - `the_workspace_bill_is_the_manifest_closure` checks the real bill against the closure read from the member manifests without cargo. `.github/workflows/blind-binary.yml` uploads the bill beside the blind binary.
 - `forecast::rules_order` (BD-334.S2; command `forecast-rules-order`): the commit adding `forecasts/fy2026/rules.toml` is a strict ancestor of every commit touching `forecasts/fy2026/forecasts.csv`. It refuses a shallow clone, whose history cannot show the order.
 
 ## 12. Proof obligations

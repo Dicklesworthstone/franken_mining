@@ -250,6 +250,29 @@ fn main() -> ExitCode {
                 }
             }),
         ),
+        // The bill goes to stdout alone, so it can be redirected to a file.
+        "sbom" => {
+            let binary = match (args.get(1).map(String::as_str), args.get(2)) {
+                (None, _) => None,
+                (Some("--binary"), Some(path)) if args.len() == 3 => Some(PathBuf::from(path)),
+                _ => {
+                    eprintln!("usage: xtask sbom [--binary <path>]");
+                    return ExitCode::from(2);
+                }
+            };
+            match xtask::sbom::sbom(&root, binary.as_deref()) {
+                Ok(json) => {
+                    print!("{json}");
+                    ExitCode::SUCCESS
+                }
+                Err(errs) => {
+                    for e in errs {
+                        eprintln!("sbom FAIL: {e}");
+                    }
+                    ExitCode::from(2)
+                }
+            }
+        }
         "check-int-as-001a" => match xtask::int_as::check_int_as_001a(&root) {
             Ok((report, lock)) => {
                 if args.get(1).map(String::as_str) == Some("--json") {

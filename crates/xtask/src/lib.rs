@@ -13,6 +13,7 @@ pub mod lifts;
 pub mod loc;
 pub mod oracle;
 pub mod refusals;
+pub mod sbom;
 
 /// Summary row for a single crate's LOC budget (`BD-003`, `BD-012`).
 #[derive(Clone, Debug, PartialEq, Eq)]
