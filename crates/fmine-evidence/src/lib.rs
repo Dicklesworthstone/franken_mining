@@ -16,7 +16,7 @@ pub use refusal_catalog::{CATALOG, RefusalCode};
 
 use std::fmt;
 
-/// Structured refusal diagnostic with actionable remedy (`INV-011`, `BD-039`).
+/// Structured refusal diagnostic with actionable remedy (`§8.4`, `BD-039`).
 ///
 /// Outside this crate the only constructor is [`Refusal::new`], which takes a [`RefusalCode`], so every
 /// refusal carries a code from `registries/refusals.toml` (BD-328):
