@@ -53,6 +53,10 @@ recall retains each copy. Their artifact/Claim/anchor/lane binding cannot change
 applies to the output digest across all copies, and reissuance cannot resurrect it. Withdrawal names a nonempty
 subset of the artifact's Claims. Replacements must already be issued and current; self-links, cycles and changing
 an existing replacement link refuse. Withdrawing a replacement never restores its predecessor.
+`IssuanceRecord::digest()` identifies the exact issuance, including its producer and recipient metadata;
+`RelianceLedger::issuance(id)` selects that record through an index rebuilt during replay. Selecting by output
+digest alone cannot identify which producing revision a forwarded copy belongs to. The index adds no durable
+fields and does not change any canonical frame or existing digest.
 
 The independent reliance format uses `RLYJ` schema-1 canonical frames, with bounded counts/strings and CRC32C.
 Its previous field binds BLAKE3 of the exact preceding lowercase hex frame plus LF. Frame digest, line-chain head,
@@ -100,6 +104,7 @@ This first export slice accepts only `Confidentiality::public()` and never decla
   JournalRecord, ReleaseCapability, TrustedTime, TrustContext, RelianceStatus, RelianceCheck, RelianceLedger}`.
   The ledger exposes bounded replay/live append, integrity checks, current-use gating, historical status and
   exact revision/Claim recall over the known issued population, including every generic recipient copy.
+  `issuance(id)` resolves an exact canonical `IssuanceRecord::digest()`, distinct from `copies(output_digest)`.
 - `dag::{TemporalGraph, TemporalNode, NodeKind, Availability, ConeCut, CheckedCone, ConeError, ConeViolation}`;
   `TemporalGraph::check` and `verify_claim` bind the actual Claim's ID, kind and immediate parent set.
 - `dag::replay::{ReplayStore, ReplayView, ReplayCertificate, ReplayError, verify_replay}`; store insertion

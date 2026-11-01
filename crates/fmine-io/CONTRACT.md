@@ -69,7 +69,7 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   per-ounce denominator, credit convention and definition words stay separate. Only `ownership basis unprinted`
   or `unprinted ownership` supplies the unprinted marker. Quarter/half tokens without a year keep `None`;
   no current year is supplied. Explicit period and ownership metadata do not become extra numerical amounts.
-- `reliance::{Journal, ReleaseKey, MAX_JOURNAL_BYTES, MAX_JOURNAL_RECORDS}`. `Journal::create` uses
+- `reliance::{Journal, ReleaseKey, ReissueRequest, MAX_JOURNAL_BYTES, MAX_JOURNAL_RECORDS}`. `Journal::create` uses
   `create_new`, validates genesis, writes and syncs it, and on Unix syncs its existing parent directory.
   `open_read(path, optional_pin)` retains a shared OS file lock; `open_write(path, expected_head)` retains
   an exclusive lock through replay, expected-head comparison and all subsequent appends. `ledger` and `head`
@@ -81,6 +81,14 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   the issuance, retaining its exclusive journal lock throughout. `export_current` reads bounded bytes once,
   verifies their issuance and current-use status, and creates a byte-identical local copy while retaining
   an independently pinned journal lock. Retrieval does not register a new recipient or assert receipt.
+- DESIGN (BD-347): `Journal::reissue_current` registers a new generic recipient and purpose for the exact
+  `ReissueRequest::source_issuance` identity, not an arbitrary issuance with the same output digest. It requires
+  a healthy, independently pinned exclusive writer, reads the artifact once, verifies its selected output
+  digest and gates current status before creating a destination or advancing the status cut. It preserves
+  every selected producer field, changing only recipient, purpose and issuance time, then uses `issue_bytes`
+  for capability/transition validation, private `create_new`, sync and append. Neither a stale status cut nor
+  withdrawn/superseded bytes can be refreshed by forwarding. The new record establishes a local registered
+  copy; it does not establish delivery or carry forward a human sign-off.
 - `ReleaseKey::read` accepts an exact-size, nonzero regular, non-symlink file. On Unix it refuses group/other access;
   on platforms where this private-file policy is unsupported it refuses. `sha256` exposes only its public
   header commitment. The adapter does not generate keys or choose an operator's state directory.
@@ -135,12 +143,18 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   refuse after withdrawal; invalid digest, key, time, stale or absent trust, and an existing destination
   cannot create an authorized output. A failed final append retains the unissued artifact and poisons its
   writer. Artifact reads refuse special files and inputs over the separate 64 MiB bound.
+- `reliance::tests` checks that forwarding selects the requested producer when different revisions emitted
+  identical bytes, preserves its full provenance and adds only that revision's new recipient to recall.
+  Missing/wrong receipt identity, pin, writer authority, key, bounded clock, current status, exact bytes or
+  an available destination cannot create a new forwarding record or alter the previous head.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Missing files, corrupt ZIP or DEFLATE streams and malformed workbooks fail closed with `IoError`. No fallbacks.
 Reliance failures return registered `Refusal`s. A caller issuing a new artifact holds the writer lock, validates
 its entry first, creates and syncs the exact artifact with `create_new`, then appends the issuance. If that final
-append fails, the artifact remains unissued and cannot pass the current-use gate. A current-use export keeps its
+append fails, a previously unissued digest cannot pass the current-use gate. Failed forwarding of an already
+issued digest adds no recipient record or successful issuance receipt; its existing status remains unchanged.
+A current-use export keeps its
 pinned shared journal handle alive through its exact-byte copy; checking and dropping the handle before copying
 would permit a concurrent withdrawal race.
 

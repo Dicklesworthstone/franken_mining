@@ -16,7 +16,7 @@ use std::path::Path;
 
 use fmine_claim::reliance::{
     Entry, Header, IssuanceRecord, JournalRecord, MAX_RECORD_BYTES, ReleaseCapability,
-    RelianceLedger, TrustContext, TrustedTime,
+    RelianceLedger, RoleId, TrustContext, TrustedTime,
 };
 use fmine_core::hash::{Digest32, blake3_hash, sha256};
 use fmine_evidence::{Refusal, RefusalCode};
@@ -27,6 +27,15 @@ pub const MAX_JOURNAL_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_JOURNAL_RECORDS: usize = 100_000;
 /// Exact issued-artifact bytes retained in memory for one verified write or current-use copy.
 pub const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Register a new generic recipient while retaining one exact source issuance's producer provenance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReissueRequest {
+    /// `IssuanceRecord::digest()`, not the output-byte digest or journal head.
+    pub source_issuance: Digest32,
+    pub recipient_role: RoleId,
+    pub purpose: String,
+}
 
 /// A local bearer capability loaded from an exact 32-byte private file. Debug never exposes its bytes.
 pub struct ReleaseKey([u8; 32]);
@@ -265,6 +274,60 @@ impl Journal {
         let next = self.prepare_append(Entry::Issued(issuance), key, time)?;
         write_artifact_new(output_path, bytes)?;
         self.commit_append(next)
+    }
+
+    /// Forward current bytes to a registered recipient under a pinned exclusive journal lock.
+    /// DESIGN: select the exact source receipt and preserve all producer provenance. The current-use gate
+    /// runs against the existing head before the new issuance can advance the status cut. Only recipient,
+    /// purpose and issuance time change; this registers a local copy, not delivery or a new human sign-off.
+    pub fn reissue_current(
+        &mut self,
+        source_path: &Path,
+        destination_path: &Path,
+        request: ReissueRequest,
+        key: &ReleaseKey,
+        time: TrustedTime,
+    ) -> Result<JournalRecord, Refusal> {
+        if !self.writable {
+            return Err(authority(
+                "registered forwarding requires an exclusive writer handle",
+            ));
+        }
+        if self.poisoned {
+            return Err(integrity(
+                "reliance writer is poisoned after an incomplete append",
+            ));
+        }
+        if !self.is_pinned() {
+            return Err(Refusal::new(
+                RefusalCode::NotObservable202,
+                "registered forwarding requires an independently pinned final head",
+            ));
+        }
+        let mut issuance = self
+            .ledger
+            .issuance(request.source_issuance)
+            .cloned()
+            .ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::NoClaimInDomain201,
+                    "source issuance identity is not registered in this journal",
+                )
+            })?;
+        let bytes = read_artifact(source_path)?;
+        self.ledger
+            .verify_artifact(issuance.output_digest, &bytes)?;
+        self.ledger.gate_current_reuse(
+            issuance.output_digest,
+            &TrustContext {
+                pinned_head: Some(self.head()),
+                time: Some(time),
+            },
+        )?;
+        issuance.recipient_role = request.recipient_role;
+        issuance.purpose = request.purpose;
+        issuance.issued_at_ns = time.now_ns;
+        self.issue_bytes(destination_path, &bytes, issuance, key, time)
     }
 
     /// Copy an already issued artifact for current reuse, keeping this journal lock throughout the copy.
@@ -529,7 +592,7 @@ mod tests {
     use super::*;
     use fmine_claim::Confidentiality;
     use fmine_claim::reliance::{
-        DefectClass, IssuanceLane, IssuanceRecord, RoleId, StatusRefresh, Withdrawal,
+        DefectClass, IssuanceLane, IssuanceRecord, RoleId, StatusRefresh, Supersession, Withdrawal,
     };
     use fmine_core::LedgerAnchor;
     use fmine_core::hash::blake3_hash;
@@ -622,6 +685,14 @@ mod tests {
             recipient_role: RoleId::Sponsor,
             purpose: "synthetic review".to_string(),
             issued_at_ns: 10,
+        }
+    }
+
+    fn reissue_request(source: &IssuanceRecord) -> ReissueRequest {
+        ReissueRequest {
+            source_issuance: source.digest().expect("source issuance identity"),
+            recipient_role: RoleId::ReviewerPool(7),
+            purpose: "synthetic forwarded review".to_string(),
         }
     }
 
@@ -755,6 +826,315 @@ mod tests {
         );
         assert!(!blocked.exists());
         assert_eq!(std::fs::read(&output).expect("original preserved"), bytes);
+    }
+
+    #[test]
+    fn registered_forwarding_preserves_the_selected_producer_and_recall_population() {
+        let dir = workspace();
+        let path = dir.join("journal");
+        let source = dir.join("first-producer");
+        let output = dir.join("forwarded");
+        let bytes = b"synthetic output\n";
+        let first = issuance();
+        let mut second = first.clone();
+        second.code_revision = "2222222".to_string();
+        second.binary_digest = blake3_hash(b"second synthetic executable");
+        second.issued_at_ns = 11;
+        let mut journal = Journal::create(&path, header()).expect("create");
+        journal
+            .issue_bytes(&source, bytes, first.clone(), &key(), time(10))
+            .expect("first producer");
+        journal
+            .issue_bytes(
+                &dir.join("second-producer"),
+                bytes,
+                second.clone(),
+                &key(),
+                time(11),
+            )
+            .expect("same bytes from a different producer");
+        let prior_head = journal.head();
+        let prior_bytes = std::fs::read(&path).expect("prior history");
+        drop(journal);
+        let mut writer = Journal::open_write(&path, prior_head).expect("pinned writer");
+        let request = reissue_request(&first);
+        let mut expected = first.clone();
+        expected.recipient_role = request.recipient_role.clone();
+        expected.purpose = request.purpose.clone();
+        expected.issued_at_ns = 12;
+        let record = writer
+            .reissue_current(&source, &output, request, &key(), time(12))
+            .expect("registered forwarding");
+        assert_eq!(record.entry, Entry::Issued(expected.clone()));
+        assert_eq!(std::fs::read(&output).expect("forwarded bytes"), bytes);
+        assert_eq!(std::fs::read(&source).expect("original bytes"), bytes);
+        assert!(
+            std::fs::read(&path)
+                .expect("appended history")
+                .starts_with(&prior_bytes)
+        );
+        assert_eq!(
+            writer.ledger().copies(first.output_digest),
+            vec![&first, &second, &expected]
+        );
+        assert_eq!(
+            writer.ledger().recall_revision(&first.code_revision),
+            vec![&first, &expected]
+        );
+        assert_eq!(
+            writer.ledger().recall_revision(&second.code_revision),
+            vec![&second]
+        );
+        assert!(
+            !writer.is_pinned(),
+            "new issuance does not grant a new external pin"
+        );
+        assert!(
+            Journal::open_read(&path, None).is_err(),
+            "writer lock remains held"
+        );
+        let head = writer.head();
+        drop(writer);
+        let replayed = Journal::open_read(&path, Some(head)).expect("replay registered copy");
+        assert_eq!(
+            replayed
+                .ledger()
+                .issuance(first.digest().expect("first ID")),
+            Some(&first)
+        );
+        assert_eq!(
+            replayed
+                .ledger()
+                .issuance(second.digest().expect("second ID")),
+            Some(&second)
+        );
+        assert_eq!(
+            replayed
+                .ledger()
+                .issuance(expected.digest().expect("new ID")),
+            Some(&expected)
+        );
+    }
+
+    #[test]
+    fn registered_forwarding_preflight_never_creates_output_or_refreshes_invalid_state() {
+        let dir = workspace();
+        let path = dir.join("journal");
+        let source = dir.join("source");
+        let altered = dir.join("altered");
+        let missing = dir.join("missing");
+        let output = dir.join("forwarded");
+        let issued = issuance();
+        let id = issued.digest().expect("receipt ID");
+        let mut journal = Journal::create(&path, header()).expect("create");
+        journal
+            .issue_bytes(
+                &source,
+                b"synthetic output\n",
+                issued.clone(),
+                &key(),
+                time(10),
+            )
+            .expect("issue");
+        let head = journal.head();
+        let before = std::fs::read(&path).expect("prior journal");
+        drop(journal);
+        write_new(&altered, b"changed synthetic output\n");
+        let mut writer = Journal::open_write(&path, head).expect("pinned writer");
+        for (source_id, source_path, purpose, release_key, clock, code) in [
+            (
+                Digest32::default(),
+                &source,
+                "review",
+                key(),
+                time(11),
+                "FMINE-REF-201",
+            ),
+            (
+                issued.output_digest,
+                &source,
+                "review",
+                key(),
+                time(11),
+                "FMINE-REF-201",
+            ),
+            (id, &missing, "review", key(), time(11), "FMINE-REF-506"),
+            (id, &altered, "review", key(), time(11), "FMINE-REF-505"),
+            (
+                id,
+                &source,
+                "review",
+                ReleaseKey([9; 32]),
+                time(11),
+                "FMINE-REF-304",
+            ),
+            (id, &source, "review", key(), time(106), "FMINE-REF-202"),
+            (id, &source, "review", key(), time(9), "FMINE-REF-202"),
+            (
+                id,
+                &source,
+                "review",
+                key(),
+                TrustedTime {
+                    now_ns: 11,
+                    uncertainty_ns: 6,
+                },
+                "FMINE-REF-202",
+            ),
+            (id, &source, "", key(), time(11), "FMINE-REF-107"),
+        ] {
+            let request = ReissueRequest {
+                source_issuance: source_id,
+                recipient_role: RoleId::ReviewerPool(7),
+                purpose: purpose.to_string(),
+            };
+            assert_eq!(
+                writer
+                    .reissue_current(source_path, &output, request, &release_key, clock)
+                    .expect_err("invalid forwarding")
+                    .code,
+                code
+            );
+            assert!(!output.exists(), "preflight must precede output creation");
+            assert_eq!(writer.head(), head);
+            assert_eq!(writer.ledger().status_cut_ns(), 10);
+            assert_eq!(writer.ledger().issuances(), vec![&issued]);
+            assert_eq!(std::fs::read(&path).expect("unchanged history"), before);
+        }
+        write_new(&output, b"existing destination");
+        assert_eq!(
+            writer
+                .reissue_current(&source, &output, reissue_request(&issued), &key(), time(11))
+                .expect_err("must not overwrite")
+                .code,
+            "FMINE-REF-506"
+        );
+        assert_eq!(
+            std::fs::read(&output).expect("retained destination"),
+            b"existing destination"
+        );
+        assert_eq!(writer.head(), head);
+        assert_eq!(std::fs::read(&path).expect("unchanged history"), before);
+    }
+
+    #[test]
+    fn registered_forwarding_requires_a_pinned_healthy_writer() {
+        let dir = workspace();
+        let path = dir.join("journal");
+        let source = dir.join("source");
+        let output = dir.join("forwarded");
+        let issued = issuance();
+        let mut journal = Journal::create(&path, header()).expect("create");
+        journal
+            .issue_bytes(
+                &source,
+                b"synthetic output\n",
+                issued.clone(),
+                &key(),
+                time(10),
+            )
+            .expect("issue");
+        let head = journal.head();
+        let before = std::fs::read(&path).expect("prior history");
+        assert_eq!(
+            journal
+                .reissue_current(&source, &output, reissue_request(&issued), &key(), time(11))
+                .expect_err("written head is not a pin")
+                .code,
+            "FMINE-REF-202"
+        );
+        drop(journal);
+        let mut reader = Journal::open_read(&path, Some(head)).expect("pinned reader");
+        assert_eq!(
+            reader
+                .reissue_current(&source, &output, reissue_request(&issued), &key(), time(11))
+                .expect_err("reader cannot register forwarding")
+                .code,
+            "FMINE-REF-304"
+        );
+        assert!(!output.exists());
+        drop(reader);
+        let mut writer = Journal::open_write(&path, head).expect("pinned writer");
+        writer.poisoned = true;
+        assert_eq!(
+            writer
+                .reissue_current(&source, &output, reissue_request(&issued), &key(), time(11))
+                .expect_err("poisoned writer cannot create output")
+                .code,
+            "FMINE-REF-502"
+        );
+        assert!(!output.exists());
+        assert_eq!(writer.head(), head);
+        assert_eq!(std::fs::read(&path).expect("unchanged history"), before);
+    }
+
+    #[test]
+    fn registered_forwarding_never_reissues_withdrawn_or_superseded_bytes() {
+        for superseded in [false, true] {
+            let dir = workspace();
+            let path = dir.join("journal");
+            let source = dir.join("source");
+            let output = dir.join("forwarded");
+            let issued = issuance();
+            let mut journal = Journal::create(&path, header()).expect("create");
+            journal
+                .issue_bytes(
+                    &source,
+                    b"synthetic output\n",
+                    issued.clone(),
+                    &key(),
+                    time(10),
+                )
+                .expect("issue");
+            let entry = if superseded {
+                let mut replacement = issued.clone();
+                replacement.output_digest = blake3_hash(b"replacement\n");
+                replacement.issued_at_ns = 11;
+                journal
+                    .issue_bytes(
+                        &dir.join("replacement"),
+                        b"replacement\n",
+                        replacement.clone(),
+                        &key(),
+                        time(11),
+                    )
+                    .expect("issue replacement");
+                Entry::Superseded(Supersession {
+                    output_digest: issued.output_digest,
+                    by_digest: replacement.output_digest,
+                    by_role: RoleId::ReleaseOwner,
+                    at_ns: 12,
+                })
+            } else {
+                Entry::Withdrawn(Withdrawal {
+                    output_digest: issued.output_digest,
+                    reason: "synthetic code defect".to_string(),
+                    affected_claims: issued.output_claims.clone(),
+                    defect_class: DefectClass::CodeDefect,
+                    by_role: RoleId::ReleaseOwner,
+                    at_ns: 12,
+                })
+            };
+            journal
+                .append(entry, &key(), time(12))
+                .expect("terminal status");
+            let head = journal.head();
+            let before = std::fs::read(&path).expect("terminal history");
+            drop(journal);
+            let mut writer = Journal::open_write(&path, head).expect("pinned writer");
+            assert_eq!(
+                writer
+                    .reissue_current(&source, &output, reissue_request(&issued), &key(), time(13))
+                    .expect_err("terminal status cannot be refreshed by forwarding")
+                    .code,
+                "FMINE-REF-202"
+            );
+            assert!(!output.exists());
+            assert_eq!(writer.head(), head);
+            assert_eq!(writer.ledger().status_cut_ns(), 12);
+            assert_eq!(writer.ledger().copies(issued.output_digest), vec![&issued]);
+            assert_eq!(std::fs::read(&path).expect("unchanged history"), before);
+        }
     }
 
     #[test]
