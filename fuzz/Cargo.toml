@@ -1,0 +1,82 @@
+# Coverage-guided fuzz targets, one per decoder (plan §32.4 and §33.4, PO-PORT-1; BD-017, BD-197). Run them with
+# scripts/fuzz.sh. This package is its own workspace, so it is never built, linted or shipped with the product, and
+# its dependency (libfuzzer-sys, which compiles LLVM's libFuzzer from C++) never reaches the `fmine` binary.
+[package]
+name = "fmine-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+fmine-core = { path = "../crates/fmine-core" }
+fmine-claim = { path = "../crates/fmine-claim" }
+fmine-io = { path = "../crates/fmine-io" }
+fmine-registry = { path = "../crates/fmine-registry" }
+fmine-calib = { path = "../crates/fmine-calib" }
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "codec"
+path = "fuzz_targets/codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "anchor"
+path = "fuzz_targets/anchor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "journal"
+path = "fuzz_targets/journal.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xlsx"
+path = "fuzz_targets/xlsx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "numfmt"
+path = "fuzz_targets/numfmt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "registry"
+path = "fuzz_targets/registry.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "record"
+path = "fuzz_targets/record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "html"
+path = "fuzz_targets/html.rs"
+test = false
+doc = false
+bench = false

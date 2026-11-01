@@ -1,0 +1,6 @@
+# cargo-fuzz's default output directories, used when a target is run with `cargo fuzz run` instead of
+# scripts/fuzz.sh (which keeps everything under the rch target base).
+target/
+corpus/
+artifacts/
+coverage/

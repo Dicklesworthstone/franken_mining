@@ -44,7 +44,8 @@ Not applicable: the crate emits digests, identifiers and numbers, not Claims, so
 - `det` golden digest over 10^4 inputs, pinned in `test_golden_hash_10k_inputs` (`927a7106…1684`). CI runs it on x86_64-linux and aarch64-darwin; wasm32 is not run.
 
 ## 10. Known gaps
-- BD-017 (bd-017): no codec fuzz target and no 24 h fuzz record.
+- BD-017 (bd-017): the codec has coverage-guided fuzz targets (`fuzz/fuzz_targets/codec.rs`, `anchor.rs` and `journal.rs`, run by `scripts/fuzz.sh`), but no 24 h run and no record of one yet.
+- `Encoder::put_bytes` writes `u32::MAX` as the length of a slice longer than `u32::MAX` bytes, then the whole slice. That clamps instead of refusing: the length no longer matches the bytes that follow. No caller comes near 4 GiB, and the decoder's 64 MiB cap would refuse the frame, but the encoder should refuse it itself.
 - BD-016, BD-018, BD-019, BD-020 (bd-016, bd-018, bd-019, bd-020): the code and tests exist, but each stays open behind the GATE-LAYERS-00 chain (bd-016 waits on bd-015, which waits on bd-012). BD-021 (bd-021) also waits on BD-017.
 - No wasm32 run of the `det` golden digest (PO-NUM-2's third target).
 - Seven of the eight `CodecError` variants have no test of their own.

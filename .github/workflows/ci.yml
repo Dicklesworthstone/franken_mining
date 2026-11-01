@@ -16,6 +16,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: clippy (warnings denied)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The fuzz targets (fuzz/, their own workspace; plan §32.4) are outside every workspace command above, so a
+      # change to a decoder's API would break them unseen. This only compiles them; scripts/fuzz.sh runs them.
+      - name: Fuzz targets compile
+        run: cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
 
   # BD-326 (bd-i787.2): advisories, bans, licences and sources over the graph of deny.toml's three targets. The
   # advisory database is fetched first, retried once, so the check itself runs offline.
