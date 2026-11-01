@@ -28,7 +28,7 @@ Callers: fmine-calib, fmine-claim, fmine-cli, fmine-decide, fmine-registry and x
 `CivilDate` values with their epoch days, ISO weekday and ISO week; UTC offsets, and UTC instants for local times; production-day cuts in UTC (`site_day_cut_utc_ns`); `QuadTemporalStamp`; visibility verdicts from `as_of` and `AsOfQuery::check_admissible`. None is a Claim.
 
 ## 4. Invariants
-- INV-012, records ordered by commit and never by wall clock. `RecordTime::commit_order` orders commits of one cell by `seq` and gives `None` across cells, and the anchor alone decides cross-cell visibility. Tests: `test_record_order_is_by_seq_within_a_cell_and_none_across_cells`, `test_cross_cell_visibility_follows_the_anchor_not_the_wall_clock`.
+- INV-012, cross-cell references resolve at the consumer's anchor or are not observable. Records are ordered by commit, never by wall clock: `RecordTime::commit_order` orders commits of one cell by `seq` and gives `None` across cells, and the anchor alone decides cross-cell visibility. Only the anchor half is here; digest checks are BD-108's. Tests: `test_record_order_is_by_seq_within_a_cell_and_none_across_cells`, `test_cross_cell_visibility_follows_the_anchor_not_the_wall_clock`.
 - INV-016, no availability lookahead. `as_of(t, anchor)` holds when `availability_time ≤ t` and the anchor holds `record_time`, and it is monotone in `t`. Tests: `test_quad_temporal_assay_lag_guard_g_time_2`, `test_fire_assay_lag_of_3_to_21_days_is_refused_until_available`, `test_late_reading_is_invisible_until_available_and_committed`, `test_as_of_is_monotone_in_t`.
 - The four times stay separate, and no stamp holds an impossible order: `test_stamp_keeps_the_four_times_apart`, `test_stamp_admits_no_lag_and_a_record_before_availability`.
 
