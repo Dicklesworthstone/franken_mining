@@ -155,6 +155,37 @@ a completed lint exits zero even when it finds mismatches. Missing or altered re
 Use `--synthetic` with Claims emitted by the built-in synthetic assurance run for an invented demonstration.
 Relative draft paths are resolved against `--workspace`, which defaults to the current workspace.
 
+### Compare issuer guidance with reported annual outcomes
+
+```bash
+cargo run -p fmine-cli -- track-record --issuer barrick --through 2026Q2
+cargo run -p fmine-cli -- track-record --issuer barrick --site north-mara --format markdown
+cargo run -p fmine-cli -- track-record --synthetic
+```
+
+DESIGN (BD-341): this retrospective report binds agreed, page-cited guidance to canonical annual source
+Claims. It verifies registered document and workbook hashes, matches the site, fiscal year, unit and ownership
+basis, and uses the original annual release when that release is registered. Later appearances remain visible
+without replacing the selected outcome. When only a comparative publication is available, its results are
+labelled and summarized separately. `--through` selects workbook releases; it is not an information-availability
+cut or evidence that a forecast was registered before an outcome.
+
+Every guidance document remains a separate vintage. Missing annual cells, withheld periods, divestments and
+incompatible bases remain unresolved members. The report shows exact normalized deviations for ranges,
+rounding-boundary ambiguity, hit and miss counts, and whole-cohort completion bounds. Its separate binomial
+reference interval assumes independent, identically distributed hits; it does not estimate common year effects,
+effective sample size, a bias confidence interval or forecasting skill. No site ranking or price adjustment is
+made, and guidance ranges receive no invented probability level.
+
+The public command requires `registries/transcriptions/<issuer>.toml` with agreed readings from registered
+documents. These transcriptions and source documents remain outside git. Quantity keys follow
+`guidance_<site>_<metric>`, with site hyphens written as underscores; supported metrics are `production_koz`,
+`production_kt`, `aisc_usd_per_oz`, `aisc_usd_per_lb`, `tcc_usd_per_oz` and `c1_usd_per_lb`.
+Production basis is `100%` or `attributable:n/d`. Cost basis also declares its definition, for example
+`attributable:4/5;aisc=issuer-reported-per-sold-oz`; the analogous per-sold-lb, `tcc` and `c1` definitions are
+explicit. Unknown guidance quantities, missing agreed readings and changed source bytes refuse. The synthetic
+command is an invented known-answer demonstration through the same binding and scoring code.
+
 ### Assess a frozen forecast cohort
 
 ```bash
@@ -175,6 +206,35 @@ independently verified time proofs or source documents. This command neither iss
 nor replaces `xtask forecast-record-verify`; it makes the cohort and scoring kernel usable while retaining those
 boundaries. Relative transcript paths are resolved against the selected workspace.
 
+Check every member's evidence ancestry at its own registration time with a provenance bundle:
+
+```bash
+cargo run -p fmine-cli -- forecast assess --ledger tests/forecasts/cohort_synthetic.toml \
+  --cohort synthetic-demo --as-of 2026-10-31T00:00:00Z \
+  --provenance tests/forecasts/provenance_synthetic.toml
+```
+
+DESIGN (BD-344): the bundle's `node`, `anchor` and `binding` tables declare complete parent links, availability
+or performed times, and ledger cell/sequence positions. Bindings must match the exact frozen forecast IDs, with
+one for every cohort member, including missing outcomes. A derived object's availability is the latest of its
+inputs and its performed time; an earlier declared availability refuses. Record visibility is checked against
+the named anchor's per-cell high-water marks. The later `--as-of` assessment date cannot admit inputs that were
+unavailable when the forecast was registered.
+
+Successful output carries a digest for each checked ancestry. A future input, backdated fit, cycle, missing
+ancestor or missing time refuses with `FMINE-REF-110`; future-input diagnostics include the earliest offending
+ancestors and shortest paths from the forecast. Without `--provenance`, temporal validation explicitly says
+`not_checked`. These are checks of supplied metadata, not independent proof of publication or recording times.
+The CLI does not execute a supplied forecast generator and reports `generator_replay: not_performed`.
+
+The pure `fmine_claim::dag::replay` API separately reruns a generator against immutable content-addressed bytes
+and a view that denies inadmissible reads. A replay certificate requires identical output and read receipts,
+declared ancestry for every read, and no denied read even if the generator swallows its error. It can police only
+reads through that view; the caller must rebuild the result and supply the same seeds. The retrospective
+DecisionCard API requires this replay certificate and checks that it binds the actual expected-NPV Claim,
+cut and exact rendered/numeric output. Legacy action, CVaR, flip-margin and VOI fields still lack their own
+Claim provenance, so that wrapper explicitly limits its historical evidence claim to expected NPV.
+
 ### Export evidence challenges
 
 ```bash
@@ -192,14 +252,22 @@ verified note. Periods, units and ownership bases remain distinct. The renderer 
 against the canonical comparison engine before exporting them. On the registered corpus through 2026Q2,
 all nine known unexplained changes and all 60 ownership-conflict findings appear once in the exported packets;
 E474 retains both the original 1,479 and later 1,474 USD/oz assertions with their source cells. Disclosed-only
-changes and non-comparable region boundaries stay in the assurance report. PDF transcription conflicts are
-not yet packetized. Use `--synthetic` in place of the issuer selector for an invented known-answer demonstration.
+changes and non-comparable region boundaries stay in the assurance report. Use `--synthetic` in place of the
+issuer selector for an invented known-answer demonstration.
 
 Identity-transition packets additionally preserve corrected, broken or reclassified AISC calculations across
 releases, including a change in classification with identical printed values. They keep the original states,
 operands, certificates and source Claims for both appearances, and request the evidence or inclusion rule that
 explains the transition. Ambiguous earliest releases retain every assertion with no selected first assertion.
 Transition classifications and chronology are rechecked against the canonical identity ledger before export.
+
+PDF transcription conflicts also render as packets when the local two-reader transcription registry is present.
+Run `assure challenges --issuer barrick` without `--through` to include that document evidence; the existing
+quarter-bounded assurance snapshot excludes PDF transcriptions. Each packet retains the agreed printed tokens,
+page, table, row and column labels, units, ownership basis, period, reader roles and verified document hashes.
+The exporter recomputes the rounding-convention comparison before reporting a numerical conflict. Incompatible
+quantity contexts are reported separately and never treated as evidence that two comparable numbers disagree.
+Neither assertion is chosen as correct, and a later document is not assumed to be an issuer correction.
 
 ### Calculate guidance completion requirements
 

@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "lint", "forecast"]`
+- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "track_record", "track_record_data", "lint", "forecast"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -27,8 +27,9 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `lint <draft> --issuer <issuer> [--through YYYYQn]` or `--synthetic`: bounded cited equalities checked
     against one verified canonical Claim snapshot, with JSON or readable Markdown output (BD-345);
   - `forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ
-    [--selector first-published|latest-as-of]`: read-only ordered transcript replay and cohort assessment
-    through `fmine-calib`; first-published is the default (BD-343);
+    [--selector first-published|latest-as-of] [--provenance <path>]`: read-only ordered transcript replay and
+    cohort assessment through `fmine-calib`; first-published is the default (BD-343). An optional provenance
+    bundle checks all declared ancestors at each frozen forecast's registration cut (BD-344);
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row
     per file, `{file, present, bytes_ok, digest_ok}` against the registry's size and sha256 (BD-339.S2). A
     mismatch is reported, never refused: doctor stays exit 0, status ok;
@@ -144,6 +145,14 @@ verified source snapshot as assurance. Without a selector they search the curren
     release has `first_registered: null` and every `earliest_registered_assertions` entry is retained. Closing
     requests name both compared locators and the missing rule or evidence; the transition itself assigns no
     disclosure classification. Persisted and single-vintage histories add no transition packet.
+  - `transcription_conflict` packets preserve agreed PDF assertions with page/table/row/column locators,
+    raw tokens, exact decimals, units, basis, period, reader roles and checked document metadata. The exporter
+    recomputes the registered rounding-convention comparison and checks the retained conflict population.
+    A mismatched quantity context is reported as such, never as a numerical issuer discrepancy. Truncation
+    remains among the candidate conventions; nearest-rounding failure alone does not establish a conflict.
+    The packet digest binds this evidence separately from the workbook ledger root. Reader agreement does
+    not supply the packet's independent human review. Quarter-bounded assurance runs retain their existing
+    behavior of excluding PDF transcriptions; the unbounded issuer run includes the local registry when present.
 - DESIGN (BD-342): guidance delegates acquisition to `fmine_public::guidance` and arithmetic to
   `fmine_metrics::guidance`. Its payload digest binds the cited inputs and explicit scenario. `anchor_id` and
   `certificate` remain null because this is not a registered forecast or ledger snapshot. Missing two-reader
@@ -172,6 +181,15 @@ verified source snapshot as assurance. Without a selector they search the curren
   Saved assessment rows enforce the kernel's sealed-cut rules across replay. Both envelope authority fields
   remain null: transcript and assessment digests identify content, not a durable authority ledger or an
   external timestamp. The adapter does not verify supplied source citations or issue a forecast.
+- DESIGN (BD-344): `--provenance` reads a strict `fmine.forecast-provenance.v1` bundle, binds exact forecast
+  IDs, and checks every cohort member's complete declared ancestry at its registration time. The scoring
+  `--as-of` time cannot admit later evidence. Forecast roots must be derived, name inputs and have a performed
+  time equal to registration. Availability and cell/sequence anchor checks delegate to `fmine_claim::dag`.
+  Missing members, missing times/parents, cycles, backdating and future ancestors refuse. Future-input
+  refusals include structured frontier nodes and shortest paths in the envelope payload, without a score
+  report. Successful payloads bind the bundle's SHA-256 and each cone digest. Without a bundle the status
+  is `not_checked`; the CLI always reports generator replay as `not_performed`. Supplied metadata remains
+  unauthenticated evidence. The pure replay API is a separate caller-mediated operation.
 - `robot-docs` lists every catalogue row as `{code, exit_code, status, summary}`, `status` being `active` or
   `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 
@@ -221,10 +239,28 @@ None: every failure is a usage error or a typed refusal.
   `fmine-metrics`.
 
 ## 10. Non-Goals & Scope Boundary
+- DESIGN (BD-341): `track-record --issuer <issuer> [--site <subject>] [--through YYYYQn]` is a read-only
+  adapter over agreed PDF transcriptions, canonical annual Mine Stats Claims and `fmine-calib::guidance_scores`.
+  `--synthetic` uses invented inputs through the same adapter. JSON is the default (`--json` is an explicit
+  alias); Markdown renders the same selected values, unresolved reasons, later appearances and source hashes.
+  Original annual releases and comparative-only selections have separate populations, including unresolved
+  members. Every guidance document is retained; its ordinal is registered order, not proof of initial guidance.
+  Source-byte failures preserve their typed refusals. The payload digest binds the selected source inventory
+  and report; it is not a ledger anchor, forecast registration or external timestamp. All authority flags stay
+  false. Unsupported guidance metrics and incomplete agreement refuse instead of disappearing from the report.
+  Unresolved outcomes retain every selected canonical source Claim, including simultaneous conflicting cells,
+  so refusal does not erase its reported token, interpretation, locator or source hash. Later appearances stay
+  separate. JSON and Markdown both expose that rejected evidence without scoring it or dropping its member.
+  Registered-file integration tests construct invented workbooks and two-reader document entries, then check
+  exact scores, original/comparative selection, ownership separation, source tampering, missing bytes,
+  transcription disagreement, deterministic replay and actual JSON/Markdown executable output.
+  The adapter supports gold/copper production and explicit issuer-reported per-sold-unit AISC, TCC and C1;
+  cost-definition changes, price conditioning, automatic transcription, year-effect estimation and full BD-341
+  data/coverage gates remain outside this slice. Actual calculations live in the calibration kernel.
 - Computes nothing itself: all calculation is delegated to the `V`/`E`/`K`/`S0` crates.
 - Never writes to any external system.
-- Challenge packets do not yet cover PDF transcription conflicts, hidden or
-  not-published instances. Human review and external-release sequencing remain open.
+- Challenge packets do not cover hidden or not-published instances. Human review and external-release
+  sequencing remain open for every packet, including PDF transcription conflicts.
 - Guidance completion supplies a T1 finite historical comparison when usable original-quarter evidence exists,
   otherwise T3 necessary arithmetic, under a declared sales scenario. It supplies no probability of meeting
   guidance, public technical capacity envelope or completed M0 gate.
