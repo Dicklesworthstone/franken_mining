@@ -1,56 +1,62 @@
 # CONTRACT.md — `fmine-core`
 
-## 1. Charter & Layer
+## 1. Purpose
+The S0 substrate every crate builds on: object identifiers, the `FMNE` binary codec, BLAKE3 and SHA-256 digests, deterministic elementary functions, counter-based random streams and the `FMT-ANCHOR-1` ledger anchor. It holds no domain quantities (`fmine-units`), no calendars (`fmine-time`), and no I/O or async runtime.
+
+Three files are lifted from frankensim at `20463525d9775a18c1b237d2676f364f367175ab` under `LicenseRef-MIT-OpenAI-Anthropic-Rider` (`registries/lifts.toml`): `fs-math/src/det.rs` → `src/det.rs`, `fs-blake3/src/lib.rs` → `src/hash.rs`, `fs-rand/src/philox.rs` → `src/rand.rs`.
+
 - **Crate:** `fmine-core`
-- **Layer:** `S0` (Substrate)
-- **Subsystem:** `Bedrock`
-- **LOC Budget:** `12k planned / 14k ceiling` (`registries/loc_budget.toml`)
+- **Layer:** S0
+- **Subsystem:** Bedrock
+- **LOC budget:** 12,000 planned / 14,000 ceiling
 - **Allowed Module Families:** `["id", "codec", "hash", "det", "rand", "anchor"]`
 
-## 2. Mathematical & Domain Formulation
-Provides the foundational `BitwisePortable` primitives for the entire workspace:
-- Content-addressed 256-bit BLAKE3 digests and SHA-256 hash-chain/MMR digests (`hash`).
-- Elementary functions free of platform `libm` (`det`): `exp`, `expm1`, `ln`, `sin`, `cos`, `sin_cos`, `tanh`, `atan`,
-  `atan2`, `erf`, `norm_cdf`, `norm_ppf`, `powi`, `hypot` and `sqrt`. Same bits on every host; not correctly rounded
-  (`ln(2)` is `LN_2` exactly, `exp(1)` within 1 ulp of `E`, `ln(2π)` 1 ulp above the correctly rounded value). `erf` is
-  A&S 7.1.6's positive series below 2.5 and 1 − erfc by continued fraction above, within 10 ulp of 60-digit
-  references (8 measured); it replaced A&S 7.1.26, whose 1.5e-7 error put `norm_cdf(0)` off 0.5 (bd-hp2j.2).
-- Counter-based `Philox4x32-10` and scrambled `Sobol/Owen` quasi-Monte Carlo sequences keyed by the 6-tuple `(seed_root, partition, domain, var_group, realization, brick)` (`rand`, `ADR-RNG-01`).
-- Canonical little-endian binary framing (`FMNE` magic, bounds checks, Castagnoli CRC32C) (`codec`) and `FMT-ANCHOR-1` `LedgerAnchor` (`anchor`).
+## 2. Inputs
+Byte slices (hashing, frame decoding), ID strings (`ObjectId` parsing), `f64` arguments (`det`), `RngKey` 6-tuples `(seed_root, partition, domain, var_group, realization, brick)` (`rand`), and `LedgerAnchor` fields. It reads no files and no registries.
 
-## 3. Authority, Epistemics & Representation
-Owns `LedgerAnchor` (`FMT-ANCHOR-1`) and canonical object identifiers (`ObjectId`, `PrefixKind`, `§0.3`). Every `Claim`, `DecisionCard`, and projection row pins an anchor and a BLAKE3 content digest.
+## 3. Outputs
+`Digest32` (BLAKE3, SHA-256, `mmr_parent`), `ObjectId` and its canonical text, `FMNE` frames (`Encoder::finish`), `f64` results, Philox blocks and Sobol/Owen points, and `LedgerAnchor` frames. None is a Claim.
 
-## 4. Public API Surface
+## 4. Invariants
+- A frame decodes only with its magic, tag, a supported version (N or N-1), in-bounds lengths, no trailing bytes and a matching CRC32C: `test_frame_roundtrip_and_tamper_detection`, `test_crc32c_iscsi_known_answer`.
+- ID text and bytes round-trip for all 16 prefixes, in a fixed order: `test_all_prefixes_roundtrip_and_order`, `test_id_display_and_parse_property_seeded` (10,000 seeded rounds).
+- A version-0 (N-1) anchor still decodes: `test_anchor_v1_and_n_minus_1_roundtrip`.
+
+## 5. Refusals
+No `FMINE-REF-nnn` code is emitted here; callers map these typed errors.
+- `IdParseError`: `UnknownPrefix`, `InvalidHexLength`, `InvalidHexChar` (`src/id.rs:111`); `test_invalid_ids_refused`.
+- `CodecError`: `InvalidMagic`, `UnexpectedTag`, `UnsupportedVersion`, `UnexpectedEof`, `LengthOutOfBounds`, `NonCanonicalOrder`, `TrailingBytes`, `CrcMismatch` (`src/codec.rs:14`). Only `CrcMismatch` has a test of its own.
+
+## 6. Determinism class
+All seven files declare `//! Determinism: BitwisePortable`: `lib.rs`, `anchor.rs`, `codec.rs`, `det.rs`, `hash.rs`, `id.rs`, `rand.rs`. `xtask check-det` checks that none calls a std transcendental (PO-NUM-2); `det.rs` is its one exemption (`DET_EXEMPT`), being the replacement for them.
+
+## 7. Evidence class of outputs
+Not applicable: the crate emits digests, identifiers and numbers, not Claims, so it assigns no `EvidenceClass` or `KnowledgeState`.
+
+## 8. Validity domain
+- `det` is deterministic, not correctly rounded: `ln(2)` is `LN_2` exactly (`test_det_ln_2_equals_ln_2_constant`), `exp(1)` is within 1 ulp of `E` (`test_det_exp_1_within_one_ulp`), and `erf` is within 10 ulp of 60-digit references (`test_det_erf_within_ten_ulp_of_reference`).
+- `norm_ppf(p)` is finite only for `p` in (0, 1). It returns NaN outside [0, 1] and ±∞ at 0 and 1, rather than refusing (`src/det.rs:316`); `test_norm_cdf_and_ppf_roundtrip` covers the round trip.
+- Decoded frames are capped at `MAX_FRAME_BYTES` (64 MiB).
+
+## 9. Oracles
+- Official BLAKE3 test vectors: `test_official_blake3_vectors`; FIPS 180 SHA-256 vectors: `test_official_sha256_vectors`; the iSCSI CRC32C check value: `test_crc32c_iscsi_known_answer`.
+- Random123 `Philox4x32-10` known answers: `test_philox4x32_known_answers`. The vectors' source was not re-checked (BD-323.S2 note on BD-020).
+- `det` golden digest over 10^4 inputs, pinned in `test_golden_hash_10k_inputs` (`927a7106…1684`). CI runs it on x86_64-linux and aarch64-darwin; wasm32 is not run.
+
+## 10. Known gaps
+- BD-017 (bd-017): no codec fuzz target and no 24 h fuzz record.
+- BD-016, BD-018, BD-019, BD-020 (bd-016, bd-018, bd-019, bd-020): the code and tests exist, but each stays open behind the GATE-LAYERS-00 chain (bd-016 waits on bd-015, which waits on bd-012). BD-021 (bd-021) also waits on BD-017.
+- No wasm32 run of the `det` golden digest (PO-NUM-2's third target).
+- Seven of the eight `CodecError` variants have no test of their own.
+
+## 11. Public API
 - `id::{PrefixKind, ObjectId, IdParseError}`
-- `codec::{MAGIC_FMNE, CodecError, Encoder, Decoder, crc32c}`
-- `hash::{Blake3, Digest32, sha256, blake3_hash, mmr_parent}`
-- `det::{exp, expm1, ln, sin, cos, sin_cos, tanh, atan, atan2, erf, norm_cdf, norm_ppf, powi, hypot, sqrt,
-  golden_digest_10k}`
+- `codec::{MAGIC_FMNE, MAX_FRAME_BYTES, CodecError, Encoder, Decoder, crc32c}`
+- `hash::{Blake3, Digest32, blake3_hash, sha256, mmr_parent}`
+- `det::{exp, expm1, ln, sin, cos, sin_cos, tanh, atan, atan2, erf, norm_cdf, norm_ppf, powi, hypot, sqrt, golden_digest_10k}`
 - `rand::{RngKey, PhiloxStream, philox4x32_10, sobol_owen_2d}`
-- `anchor::{LedgerAnchor, FMT_ANCHOR_V1}`
+- `anchor::{LedgerAnchor, SourceAnchor, FMT_ANCHOR_V1}`
 
-## 5. Guards & Typed Refusals
-- `IdParseError`: rejects unknown prefixes, uppercase characters, or invalid hex payloads.
-- `CodecError`: rejects invalid `FMNE` magic, unsupported format versions, length-bound violations, trailing bytes, or CRC32C mismatches.
-
-## 6. Proof Obligations (`PO-*`)
-- `PO-NUM-2`: `det` golden digest over $10^4$ inputs is bit-identical across `aarch64-darwin`, `x86_64-linux`, and `wasm32`.
-- `PO-BED-9`: Official BLAKE3 and Random123 `Philox4x32-10` known-answer vectors pass bit-for-bit.
-
-## 7. Failure Modes & Deterministic Fallbacks
-Corrupted binary frames or anchors fail closed with `CodecError::CrcMismatch` or `CodecError::UnsupportedVersion`; N/N-1 schema versions decode deterministically.
-
-## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
-- `GATE-DET-01` (cross-ISA bitwise determinism)
-- `GATE-FSIM-DRIFT` (`registries/lifts.toml`)
-
-## 9. Lifted Code & Foundation Dependencies
-- `crates/fs-math/src/det.rs` @ `20463525d9775a18c1b237d2676f364f367175ab` -> `src/det.rs`
-- `crates/fs-blake3/src/lib.rs` @ `20463525d9775a18c1b237d2676f364f367175ab` -> `src/hash.rs`
-- `crates/fs-rand/src/philox.rs` @ `20463525d9775a18c1b237d2676f364f367175ab` -> `src/rand.rs`
-
-Each lift is under `LicenseRef-MIT-OpenAI-Anthropic-Rider`, frankensim's licence at that commit.
-
-## 10. Non-Goals & Scope Boundary
-Contains zero domain quantities (`fmine-units`), zero civil/quad-temporal calendars (`fmine-time`), and zero I/O or async runtime dependencies (`L-2`).
+## 12. Proof obligations
+- PO-NUM-2 (no std transcendental in a BitwisePortable module): `xtask check-det` in `check-all`; the pinned digest `test_golden_hash_10k_inputs`.
+- PO-BED-9 (same inputs, seed and revision give the same digest): `test_golden_hash_10k_inputs`, `test_philox4x32_known_answers`, `test_sobol_owen_stratification`.
