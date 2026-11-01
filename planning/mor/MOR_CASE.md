@@ -1622,3 +1622,48 @@ against them and run on the 18 registered workbooks (BD-321, BD-322).
     +1.
   - **Not claimed.** The 2019–2022 and total cells have one reader plus mine. Self-verified on this machine;
     nothing has run in CI.
+- **E858** omf-rust's dependency closure and Parquet profile (bd-190, OPEN-B4-06; FACT, retrieved 2026-11-01, unless
+  marked).
+  - **Source.** `github.com/gmggroup/omf-rust` at `64d305790b3415618a01f00a94cd914acd0b80ba` (main, 2025-05-15),
+    licence MIT, package `omf` 0.2.0-beta.1. It is not on crates.io: the crates.io API answers "crate `omf` does not
+    exist". `Cargo.toml` sha256 `82b1638ce0047b2faeea6a3973325ea13c2abf3e8e1f29a1350ea8e00024e814`.
+  - **Dependencies.** `chrono`, `flate2`, `schemars` (with its `chrono` feature), `serde`, `serde_json`, `thiserror`
+    and `zip` 3 are unconditional. `parquet` 54.2 (default features off, `flate2` on), `bytes` and `image` are
+    optional, and the default features turn all three on.
+  - **Arrays need `parquet`.** `src/lib.rs` compiles the `data` and `pqarray` modules only under
+    `feature = "parquet"` (sha256 `bebcc79f423b169bf50b98fac94a79474b3cf6377ad47118d380f4885788b56d`), so no array
+    can be read without it.
+  - **Against L-5** (`deny.toml` at HEAD 651921b). `parquet` is on the deny list. `chrono` is allowed only beneath the
+    listed suite wrappers, and `xtask check-deps` bans it as a direct dependency; `src/date_time.rs` imports it
+    directly (sha256 `249803c616e9750fd4b7ad86c867cdadc3ea432419eb0b7f9898a87f487c82a4`). A git dependency outside
+    the suite's GitHub organisation is refused as well (`[sources] unknown-git = "deny"`). The first KILL-6
+    condition therefore holds.
+  - **What omf-rust writes.** `src/pqarray/write.rs` (sha256
+    `b20391abc96ee314ea991aebbb97b392e0c07543f47d05f7cf28263fa2768bee`) sets `WriterVersion::PARQUET_2_0`, GZIP,
+    `Encoding::PLAIN`, dictionary off, statistics off and row groups of 1,048,576 rows. The GZIP level is the
+    writer's `Compression`, 6 by default and 0–9 at the caller's choice (`src/file/writer.rs`, sha256
+    `2ec125236ad14c7a4a0c28c31829f1d74bb6ef445ecfc9acd7d42052e5107985`). The same file writes the JSON index,
+    `index.json.gz`, as a gzip stream.
+  - **Schemas.** `src/file/parquet/schemas.rs` (sha256
+    `35415eaaf138820149dbc7a7b597e0891aba8a7e953f41796f5e8c6f3cd9ca7c`) accepts the physical types INT32, INT64,
+    FLOAT, DOUBLE, BOOLEAN and BYTE_ARRAY, with the logical types integer(8, unsigned), integer(32, unsigned), date,
+    timestamp(micros, UTC) and string. No field is repeated. The only groups are optional `vector` and `color`
+    groups of required leaves, so definition levels are at most 1 and there are no repetition levels.
+  - **Zip members are stored.** `src/file/zip_container.rs` (sha256
+    `350c4feb10b071cc41c856f91dacffda173f8d0abc093894781c763d12ee1c30`) writes `CompressionMethod::Stored` and refuses
+    any compressed member.
+  - **This repository** (HEAD 651921b). `crates/fmine-io/src/zip_inflate.rs` already reads a zip central directory
+    and inflates RFC 1951 DEFLATE, in 559 lines with its tests. No workspace crate depends on `serde`.
+  - **Second condition, estimated (INFERENCE, not measured).** A reader for this profile needs:
+    - a Thrift compact decoder for the footer and page headers;
+    - v1 and v2 data pages;
+    - the RLE/bit-packed hybrid for definition levels;
+    - PLAIN values of the six physical types;
+    - GZIP framing over the existing inflate (shared with the index);
+    - the logical-type and OMF schema checks;
+    - typed refusals for everything else (other encodings or codecs, repeated fields).
+
+    The estimate is 2,000–3,000 lines of code, about twice that with tests, against KILL-6's 8,000. KILL-6 therefore
+    has not fired. BD-194 re-checks it against its measured count.
+  - **Not checked.** Files from writers other than omf-rust (none was examined), and omf-rust's full transitive
+    closure (`cargo tree` was not run).

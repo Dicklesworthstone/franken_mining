@@ -7099,7 +7099,7 @@ Production code is either lifted (with provenance and a licence check) or reimpl
 
 | Format / system | Posture | Oracle | Note |
 |---|---|---|---|
-| OMF v2 | Lift the omf-rust (MIT) schema/JSON layer **only after a dependency audit** | Pinned omf-rust build, lab lane only | HYPOTHESIS: OMF v2 stores arrays as Parquet inside a zip, and omf-rust may link `arrow`/`parquet` (banned, L-5). If so, reimplement a minimal Parquet subset (plain + RLE/bit-packed levels). OPEN-B4-06. |
+| OMF v2 | Reimplement a minimal Parquet subset (audit done, E858). The omf-rust (MIT) schema/JSON layer is built on `serde`, `serde_json`, `schemars` and `chrono`, so it is not lifted as is: BD-194 rewrites it unless the owner admits `serde` | Pinned omf-rust build, lab lane only | FACT (E858): OMF v2 stores arrays as Parquet inside a zip of stored members. omf-rust needs `parquet` for every array and imports `chrono` directly (both banned, L-5). Its writer uses Parquet 2.0 pages, GZIP, PLAIN, no dictionary and no repeated fields. The subset reads that profile and refuses the rest. OPEN-B4-06 closed. |
 | LAS 1.4 | Reimplement (fixed binary layout) | PDAL / LAStools | — |
 | LAZ | Lift a pure-Rust laszip decoder after a licence check, or defer | LAStools | Decode first, encode later |
 | E57 | Reimplement a subset (XML + CRC'd binary pages; cartesian, intensity, pose) | libE57Format | — |
@@ -7113,7 +7113,9 @@ Production code is either lifted (with provenance and a licence check) or reimpl
 | Public filings (SEDAR+, EDGAR, issuer releases) | `fmine-public` parses filings into Public-basis Claims | Hand-checked fixtures | The M0 lane (§31.1) |
 
 ✖ **KILL-6 (OMF purity).** If omf-rust needs banned dependencies *and* the Parquet subset exceeds 8k LOC: exchange
-OMF through lab-oracle conversion to CSV/DXF in the interim, and say so.
+OMF through lab-oracle conversion to CSV/DXF in the interim, and say so. Evaluated 2026-11-01 (BD-190, E858): the
+first condition holds, and the second is estimated not to (2,000–3,000 lines of code; INFERENCE), so KILL-6 has not
+fired. BD-194 re-checks it against its measured line count.
 
 ### 32.3 Coexistence with Avathon
 
@@ -7146,7 +7148,8 @@ evidence-only write-back is OPEN-B4-08.
 | GATE-PORT-01 | Oracle agreement on fixture corpora: LAS/E57 point counts and bounds exact; GeoTIFF values exact; DXF entities exact; CRS within §25.5 tolerances | M1 (LAS, DXF, CSV dialects), M2 (E57, GeoTIFF) |
 | GATE-PORT-02 | One full acQuire/Datamine export set from the pilot site imported with ≤ 0.1% rows rejected, every rejection explained | M2 |
 
-- **OPEN-B4-06.** omf-rust's actual dependency closure.
+- **OPEN-B4-06 (closed: yes, banned).** omf-rust's actual dependency closure: `parquet` for every array, and `chrono`
+  imported directly (E858). KILL-6 has not fired (§32.2).
 - **OPEN-B4-08.** Will Avathon consume anchor-pinned feeds and accept evidence-only write-back?
 - **OPEN-PORT-1.** Which pilot-site systems export what, and how often. This is a data-acquisition gate input
   (§34.4).
