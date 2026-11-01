@@ -5,7 +5,7 @@
 - **Layer:** `S0` (Substrate)
 - **Subsystem:** `Bedrock`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["claim", "dag", "label", "uu"]`
+- **Allowed Module Families:** `["claim", "dag", "label", "uu", "reliance"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements `Claim<T>`, `Representation`, `SpatialSupport`, `AdditivityClass`, `Confidentiality`, `UuTerm` (`INV-015`), non-lossy binary composition (`compose_binary`, `NL-1..NL-8`), and `ClaimDag` transitive staleness propagation (`INV-013`).
@@ -45,6 +45,22 @@ A claim carries `evidence`, `epistemic` and `state` separately. Its colour is co
 constructor takes one and its basis is private (`compile_fail` doctest on `Claim`). `with_regime` names a claim's anchor,
 which counts only for a class `project_color` lets stand on one, so it cannot raise a colour.
 
+DESIGN (BD-347): `reliance` separates the integrity of historical issued bytes from permission for current reuse.
+An issuance binds their exact BLAKE3, sorted unique Claim ids, actual `LedgerAnchor`, code revision, executable
+digest, input-manifest root, public/synthetic lane, confidentiality, public taint, generic recipient role and
+purpose. Identical bytes may have multiple issued copies, including different producing revisions and binaries;
+recall retains each copy. Their artifact/Claim/anchor/lane binding cannot change. Withdrawal or supersession
+applies to the output digest across all copies, and reissuance cannot resurrect it. Withdrawal names a nonempty
+subset of the artifact's Claims. Replacements must already be issued and current; self-links, cycles and changing
+an existing replacement link refuse. Withdrawing a replacement never restores its predecessor.
+
+The independent reliance format uses `RLYJ` schema-1 canonical frames, with bounded counts/strings and CRC32C.
+Its previous field binds BLAKE3 of the exact preceding lowercase hex frame plus LF. Frame digest, line-chain head,
+issuance digest (`RLYI`) and output-byte digest remain distinct. Replay bounds are 4 MiB per decoded frame, 64 MiB
+total decoded frames, 100,000 records, and 100,000 Claim ids per issuance. Existing `CLM1` and anchor bytes are
+unchanged. A self-consistent hash chain is not authenticated authority: an independently obtained exact current
+head pin is required, not an ancestor pin or a head copied from the same untrusted input.
+
 DESIGN (BD-344, INV-016): `dag::TemporalGraph` seals provenance metadata for observations, interpretations,
 fitted parameters, correlation cards, exclusion acts, decks, registry rows, priors, Claims, forecasts, decisions
 and recipes. Derived availability is max(all input availability, performed time), optionally delayed by an
@@ -63,6 +79,16 @@ bind the checked cone, exact output and receipts. This is a pure in-memory repla
 ## 3. Authority, Epistemics & Representation
 A decision-facing claim whose status is not `KnownKnown` requires a non-empty `uu_terms` (`G-UU`, `FMINE-REF-204`). Every claim enforces `Confidentiality` isolation (`INV-007`, `FMINE-REF-301` and `FMINE-REF-302`).
 
+Reliance live appends require an opaque `ReleaseCapability` verified against the configured release-key digest,
+and a separately supplied bounded `TrustedTime`. Neither is decoded from the journal. The capability proves local
+key possession, not a human signature or external time attestation. The I/O boundary owns key custody, policy
+admission, exclusive locking, expected-head comparison and durable publication. Replay never refreshes a cut;
+only a recorded authorized append advances it. Current checks default to unknown without trusted time and an
+independent exact head. Their freshness bound includes both reader uncertainty and the issuing clock's immutable
+maximum uncertainty. Future cuts, clock rollback, excessive uncertainty and expired cuts are unknown. Historical
+as-of checks never authorize current reuse; `gate_current_reuse` always evaluates the runtime's current time.
+This first export slice accepts only `Confidentiality::public()` and never declassifies a private or walled label.
+
 ## 4. Public API Surface
 - `Claim<T>` (`with_regime`, `color`, `value_tag`, `canonical_body`, `check_id`, `downgraded`), `Representation`,
   `SpatialSupport`, `AdditivityClass`, `UuTerm`
@@ -70,6 +96,10 @@ A decision-facing claim whose status is not `KnownKnown` requires a non-empty `u
   `VentureId`, `WallId`, `LabelError`
 - `compose_binary`, which takes the `IntervalOp` its colour composes under
 - `ClaimDag` (`insert`, which refuses as `check_id` does; `guard_disclosure_export`), `DagNode`
+- `reliance::{Header, RoleId, IssuanceRecord, IssuanceLane, Withdrawal, Supersession, StatusRefresh, Entry,
+  JournalRecord, ReleaseCapability, TrustedTime, TrustContext, RelianceStatus, RelianceCheck, RelianceLedger}`.
+  The ledger exposes bounded replay/live append, integrity checks, current-use gating, historical status and
+  exact revision/Claim recall over the known issued population, including every generic recipient copy.
 - `dag::{TemporalGraph, TemporalNode, NodeKind, Availability, ConeCut, CheckedCone, ConeError, ConeViolation}`;
   `TemporalGraph::check` and `verify_claim` bind the actual Claim's ID, kind and immediate parent set.
 - `dag::replay::{ReplayStore, ReplayView, ReplayCertificate, ReplayError, verify_replay}`; store insertion
@@ -97,6 +127,11 @@ A decision-facing claim whose status is not `KnownKnown` requires a non-empty `u
 - `FMINE-REF-507` (frozen record mutation, proposed, `Claim::check_id`, `ClaimDag::insert` and
   `ClaimDag::guard_disclosure_export`), exit 6: the claim's id is not the id of its current body. Insertion also
   refuses a self-supersession because a correction must have a distinct identity.
+- Reliance reuses `107` for malformed/bounded-schema inputs, `201` for unissued artifacts or unknown affected
+  Claims, `202` for unavailable current reuse, `301` for private/walled export, `304` for missing/wrong capability
+  or runtime time, `502` for chain/codec integrity or regressing chronology, `505` for changed artifact bytes,
+  and `507` for prohibited replacement/issuance mutation. Status-specific details distinguish withdrawn,
+  superseded and unknown without inventing a new refusal catalogue entry.
 - `FMINE-REF-110` (temporal cone or replay, proposed under ADR-REFUSALS-01), exit 3: inadmissible or incomplete
   ancestry, backdated availability, a cycle, an undeclared read, a denied read, or differing replay outputs.
   Replay-store replacement or a payload whose content-derived ID differs refuses with `FMINE-REF-507`.
@@ -123,6 +158,13 @@ A decision-facing claim whose status is not `KnownKnown` requires a non-empty `u
 ## 7. Failure Modes & Deterministic Fallbacks
 Adding `IntensiveMassWeighted` claims without mass weights or combining mismatched `SpatialSupport` fails closed with `FMINE-REF-103` / `FMINE-REF-102`.
 
+Reliance protocol known answers cover offline/stale readers, the exact conservative freshness boundary,
+unauthorized or backdated writes, previously pinned/truncated/forged histories, withdrawn replacements, immutable
+historical bytes/anchors and no resurrection. A deterministic generated population checks exact revision and
+Claim recall across 96 recipient/build copies with unchanged source state. Canonical-codec tests change every
+byte of each protocol frame, distinguish frame addresses from line heads, round-trip 32,273 Claim references,
+and reject noncanonical roles, ordering, duplicates and private labels.
+
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
 - `GATE-CLAIM-01`
 
@@ -131,6 +173,11 @@ Adding `IntensiveMassWeighted` claims without mass weights or combining mismatch
 
 ## 10. Non-Goals & Scope Boundary
 Does not perform workbook I/O (`fmine-io`) or CLI formatting (`fmine-cli`).
+Reliance does not send recalls, claim that all detached copies have been found, authenticate a caller-authored
+journal by itself, or carry an old sign-off forward. Roles are a closed vocabulary (`release-owner`, `sponsor`,
+numeric reviewer pools and hexadecimal agent sessions); there is no name, email or contact field. Recall by
+Claim uses the original explicit Claim identity, which remains available after that Claim is superseded; this
+module does not invent a Claim-successor relationship or subscribe to a separate dependency graph.
 
 Temporal metadata is supplied evidence, not an independently authenticated time or ledger proof. The graph
 cannot prove that an engine declared every input; the replay seam checks only reads mediated by `ReplayView`.

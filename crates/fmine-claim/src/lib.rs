@@ -68,6 +68,7 @@ pub enum AdditivityClass {
 
 pub mod dag;
 mod label;
+pub mod reliance;
 
 pub use label::{Confidentiality, LabelError, LabelRegistry, VentureId, WallId};
 

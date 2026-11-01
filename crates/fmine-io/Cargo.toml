@@ -8,6 +8,7 @@ publish = false
 description = "Label-anchored .xlsx and HTML filing table extractors with SHA-256 provenance and G-BULL-1/G-BULL-2 quarantine."
 
 [dependencies]
+fmine-claim = { path = "../fmine-claim" }
 fmine-core = { path = "../fmine-core" }
 fmine-evidence = { path = "../fmine-evidence" }
 

@@ -84,6 +84,7 @@ dependencies = [
 name = "fmine-io"
 version = "0.1.0"
 dependencies = [
+ "fmine-claim",
  "fmine-core",
  "fmine-evidence",
 ]

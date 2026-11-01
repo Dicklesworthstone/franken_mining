@@ -4,8 +4,8 @@
 - **Crate:** `fmine-io`
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Ingestion`
-- **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok"]`
+- **LOC Budget:** `40k planned / 46k ceiling` (`registries/loc_budget.toml`)
+- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance"]`
 
 ## 2. Mathematical & Domain Formulation
 Pure-Rust ZIP and RFC 1951 DEFLATE (`zip_inflate`); `.xlsx` workbook, shared-string and worksheet extraction
@@ -22,9 +22,21 @@ can use a real filing's layout without shipping any issuer's bytes. `build_minim
 styles part (`MinimalStyles`: custom formats and `cellXfs`) for `MinimalCell::Styled` cells; with `None` its bytes
 are exactly `build_minimal_xlsx`'s (golden test).
 
+`reliance` is the filesystem adapter for the S0 reliance model (BD-347). A journal is one canonical
+`fmine_claim::reliance::JournalRecord` frame per lowercase hexadecimal line, ending in LF. Each record's
+`previous` field binds BLAKE3 of the complete preceding line, including LF; genesis uses the zero digest.
+The S0 codec and transition rules remain the durable-format authority.
+
 ## 3. Authority, Epistemics & Representation
 Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a `SourceAnchor`
 (`artifact_path`, sha256, `sheet!cell`).
+
+A reliance journal's header registers a release role and SHA-256 commitment to a private, raw 32-byte key.
+The key is never written to the journal or exposed by Debug. Possession is a local release capability, not
+proof of a human identity, signature, notification or attestation. Every append checks the capability and
+explicit `TrustedTime` supplied under the owner's policy. The adapter never infers trusted time from a
+system clock, journal timestamp or network service. An independently trusted exact final-head pin is required
+for current reuse; an unpinned replay establishes only internal consistency of the inspected bytes.
 
 ## 4. Public API Surface
 - `IoError`, `HtmlTable`, `extract_html_tables`
@@ -56,6 +68,16 @@ Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a
   per-ounce denominator, credit convention and definition words stay separate. Only `ownership basis unprinted`
   or `unprinted ownership` supplies the unprinted marker. Quarter/half tokens without a year keep `None`;
   no current year is supplied. Explicit period and ownership metadata do not become extra numerical amounts.
+- `reliance::{Journal, ReleaseKey, MAX_JOURNAL_BYTES, MAX_JOURNAL_RECORDS}`. `Journal::create` uses
+  `create_new`, validates genesis, writes and syncs it, and on Unix syncs its existing parent directory.
+  `open_read(path, optional_pin)` retains a shared OS file lock; `open_write(path, expected_head)` retains
+  an exclusive lock through replay, expected-head comparison and all subsequent appends. `ledger` and `head`
+  expose the committed snapshot. `validate_append` stages the same checks without writing; `append` publishes
+  its new head only after the complete line is written and synced. A new head is not automatically marked
+  externally pinned. Dropping the handle releases the lock.
+- `ReleaseKey::read` accepts an exact-size regular, non-symlink file. On Unix it refuses group/other access;
+  on platforms where this private-file policy is unsupported it refuses. `sha256` exposes only its public
+  header commitment. The adapter does not generate keys or choose an operator's state directory.
 
 ## 5. Guards & Typed Refusals
 - `G-BULL-1`: formula-error cells and `hidden`/`veryHidden` sheets go to `Workbook::quarantined`. Hidden sheets are
@@ -80,6 +102,14 @@ Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a
   input into range. Trailing zeros retain the finest printed step; hedge words are qualifiers and do not invent
   a wider tolerance. Claim IDs embedded in words are not quantities. Unrecognised prose remains for the caller's
   supported-predicate check; tokenisation alone never produces a verification verdict.
+- Reliance reads are bounded to 64 MiB and 100,000 records; each decoded frame is bounded by the S0 4 MiB
+  limit. Empty, odd-length, uppercase or overlong hex lines, incomplete final lines, invalid frames, illegal
+  transitions and wrong final-head pins refuse. An ancestor pin never accepts a newer untrusted suffix.
+  Journal integrity/head/locking failures use `FMINE-REF-502`; unreadable paths use `FMINE-REF-506`;
+  missing release authority or unsupported private-key protection uses `FMINE-REF-304`.
+- No repair, truncation, replacement or fallback journal is attempted. A failed write or sync poisons its
+  writer handle and retains all bytes for inspection. OS locks coordinate cooperating local writers and
+  readers; filesystem access controls and the external pin remain necessary against file replacement.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-IO-1`: on the 18 registered Barrick workbooks, the per-workbook census (visible and hidden sheets; numeric,
@@ -90,18 +120,32 @@ Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a
 - `PO-IO-3` (BD-345.S1): synthetic known answers check the documented decimal/step examples, accounting negatives,
   range endpoint precision, each basis/period class, explicit currency and unit distinctions, UTF-8 spans and
   malformed/overflowing numbers. Seeded Philox text checks totality and non-overlapping character-boundary spans.
+- `PO-IO-4` (BD-347): synthetic filesystem tests preserve every previously committed byte through issuance
+  and withdrawal, check exact line heads, reject wrong keys before append, verify shared/exclusive lock
+  exclusion and expected-head CAS under concurrent writers, refuse corrupted/torn/reordered/replayed journals,
+  retain committed state after an I/O failure, and refuse insecure or malformed key files. These tests exercise
+  local filesystem behavior; they do not establish partner receipt or hardware power-loss durability.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Missing files, corrupt ZIP or DEFLATE streams and malformed workbooks fail closed with `IoError`. No fallbacks.
+Reliance failures return registered `Refusal`s. A caller issuing a new artifact holds the writer lock, validates
+its entry first, creates and syncs the exact artifact with `create_new`, then appends the issuance. If that final
+append fails, the artifact remains unissued and cannot pass the current-use gate. A current-use export keeps its
+pinned shared journal handle alive through its exact-byte copy; checking and dropping the handle before copying
+would permit a concurrent withdrawal race.
 
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
 - `GATE-BULL-01` (part 1, extraction fidelity)
 
 ## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-evidence`.
+- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim` (V to S0).
 
 ## 10. Non-Goals & Scope Boundary
-Reads cells; does not interpret tables (`fmine-public`) or compute metrics (`fmine-metrics`).
+Reads cells and adapts the reliance model to local files; does not interpret tables (`fmine-public`) or compute
+metrics (`fmine-metrics`).
 The draft tokenizer recognises a bounded ASCII-number and lexical-context grammar, not arbitrary mathematical
 notation or prose semantics. It makes no publicness, calibration or legal conclusion. The two-reader issuer
 sentence corpus and its precision/recall study remain separate work; synthetic lexer tests do not stand in for it.
+The reliance file is a bounded local seam until the authority ledger is available. It is not a replicated
+authority service, authentication signature, clock synchronisation service, key manager or notification system.
+It cannot establish that all detached copies were recalled; it records only known issuances.

@@ -3,6 +3,7 @@
 
 pub mod numfmt;
 pub mod numtok;
+pub mod reliance;
 pub mod styles;
 pub mod xlsx;
 pub mod zip_inflate;
