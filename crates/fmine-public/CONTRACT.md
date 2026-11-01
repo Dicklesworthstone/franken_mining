@@ -232,6 +232,9 @@ The public lane of M0 (`fmine assure public`).
   `PublicAssuranceReport::recovery` (bd-srqc). `RecoveryReport::{digest, to_json}` emits
   `fmine.recovery.gap.v1`, binding the accepted source rows, fit, selected quarterly source Claims, results
   and refusal codes with its own digest. The existing identity/waterfall state root is unchanged.
+  The payload defines the ownership, annual and converted operating parent Claims with exact quantities,
+  rounding bounds, parents and source anchors, alongside the unchanged raw workbook Claims. Inherited
+  quantified UU exposures retain their cited values; the model's own unquantified term remains explicit.
   - `assess` returns no section when no recovery inputs are registered. Once registration is started,
     incomplete or conflicting historical/ownership evidence refuses explicitly. Valid training with an
     unusable operating quarter retains that quarter as a named refusal, with computed/refused counts.

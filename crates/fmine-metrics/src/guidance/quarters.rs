@@ -725,7 +725,7 @@ mod tests {
             EvidenceClass::Assumed,
             EpistemicStatus::KnownUnknown(KuKind::Parametric),
             KnowledgeState::Estimated,
-            ConfidentialityTier::Public,
+            Confidentiality::public(),
             vec![],
             vec![],
             vec![SourceAnchor::new(

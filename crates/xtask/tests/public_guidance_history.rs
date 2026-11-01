@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use fmine_claim::{Claim, ConfidentialityTier, Representation, SpatialSupport};
+    use fmine_claim::{Claim, Confidentiality, Representation, SpatialSupport};
     use fmine_core::anchor::SourceAnchor;
     use fmine_core::hash::sha256;
     use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, KuKind};
@@ -46,7 +46,7 @@ mod tests {
             EvidenceClass::Assumed,
             EpistemicStatus::KnownUnknown(KuKind::Parametric),
             KnowledgeState::Estimated,
-            ConfidentialityTier::Public,
+            Confidentiality::public(),
             vec![],
             vec![],
             vec![SourceAnchor::new(&c.locator, digest.0, "invented value")],

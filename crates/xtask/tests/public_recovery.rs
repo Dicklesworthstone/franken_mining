@@ -5,8 +5,10 @@
 //! from the frozen source-only recovery_census.py oracle; no real historical input tokens are embedded.
 #![cfg(test)]
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use fmine_claim::{Claim, UuTerm};
 use fmine_evidence::{EvidenceClass, KnowledgeState};
 use fmine_numerics::exact_feas::Rat;
 use fmine_public::key::{KeyedCell, OwnershipBasis, PublicValue};
@@ -14,7 +16,7 @@ use fmine_public::recovery::{self, RecoveryReport};
 use fmine_public::sources::{DocumentRow, IssuerProfile, RegisteredSource, SourceKind};
 use fmine_public::synthetic;
 use fmine_public::transcribe::TranscriptionReport;
-use fmine_registry::transcriptions::Agreement;
+use fmine_registry::transcriptions::{Agreement, parse_token};
 
 fn rat(n: i128, d: i128) -> Rat {
     Rat::new(n, d).expect("independent rational")
@@ -82,6 +84,77 @@ fn assessed(p: &IssuerProfile, t: &TranscriptionReport, cells: &[KeyedCell]) -> 
         .expect("active model")
 }
 
+fn remember<T>(definitions: &mut BTreeMap<String, Vec<String>>, claim: &Claim<T>) {
+    let mut parents: Vec<_> = claim.parents.iter().map(ToString::to_string).collect();
+    parents.sort();
+    assert!(
+        definitions
+            .insert(claim.claim_id.to_string(), parents)
+            .is_none()
+    );
+}
+
+/// Claim IDs contain only canonical ASCII; inspect their stable envelope fields without another JSON dependency.
+fn assert_parent_definitions(report: &RecoveryReport) {
+    let mut expected = BTreeMap::new();
+    remember(&mut expected, &report.ownership);
+    remember(&mut expected, &report.fit);
+    for row in &report.training {
+        remember(&mut expected, &row.head);
+        remember(&mut expected, &row.recovery);
+    }
+    for quarter in &report.quarters {
+        for source in &quarter.inputs {
+            remember(&mut expected, &source.claim);
+        }
+        if let Some(row) = &quarter.operating {
+            for claim in [&row.head, &row.recovery, &row.processed, &row.produced] {
+                remember(&mut expected, claim);
+            }
+        }
+        if let Ok(projection) = &quarter.outcome {
+            remember(&mut expected, &projection.constant_tails);
+            remember(&mut expected, &projection.grade_dependent_tails);
+        }
+    }
+    let json = report.to_json();
+    let mut actual = BTreeMap::new();
+    for definition in json.split("\"claim_id\":\"").skip(1) {
+        let (id, fields) = definition.split_once('"').expect("quoted Claim ID");
+        assert!(id.starts_with("clm_"));
+        let mut parents = fields
+            .split_once("\"parents\":[")
+            .map(|(_, values)| values.split_once(']').expect("closed parent array").0)
+            .into_iter()
+            .flat_map(|values| values.split(','))
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                s.strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .expect("quoted parent ID")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        parents.sort();
+        assert!(
+            actual.insert(id.to_string(), parents).is_none(),
+            "duplicate definition {id}"
+        );
+    }
+    assert_eq!(
+        actual, expected,
+        "every typed and raw input must be defined with its parents"
+    );
+    for (child, parents) in &actual {
+        for parent in parents {
+            assert!(
+                actual.contains_key(parent),
+                "undefined {parent}, parent of {child}"
+            );
+        }
+    }
+}
+
 #[test]
 fn synthetic_exact_models_sources_and_descriptive_output() {
     let report = recovery::run_synthetic().expect("synthetic recovery");
@@ -141,6 +214,7 @@ fn synthetic_exact_models_sources_and_descriptive_output() {
         );
     }
     let json = report.to_json();
+    assert_parent_definitions(&report);
     for text in [
         "fmine.recovery.gap.v1",
         "\"descriptive_only\":true",
@@ -215,6 +289,30 @@ fn missing_history_reader_or_source_evidence_refuses() {
             .code,
         "FMINE-REF-202"
     );
+    let mut uncited = t.clone();
+    uncited.agreement.accepted[target].locator.page = 0;
+    assert_eq!(
+        recovery::assess(&p, Some(&uncited), &cells)
+            .expect_err("historical citation is required")
+            .code,
+        "FMINE-REF-201"
+    );
+    // A coherent changed reading must flow through fitting and the report commitment.
+    let baseline = assessed(&p, &t, &cells);
+    let mut changed = t.clone();
+    changed.agreement.accepted[target].token = "0.77".into();
+    changed.agreement.accepted[target].value =
+        parse_token("0.77").expect("invented changed head grade");
+    let changed = assessed(&p, &changed, &cells);
+    assert_ne!(
+        baseline.fit.value.intercept.point,
+        changed.fit.value.intercept.point
+    );
+    assert_ne!(
+        baseline.fit.value.slope.point,
+        changed.fit.value.slope.point
+    );
+    assert_ne!(baseline.digest(), changed.digest());
 }
 
 #[test]
@@ -311,6 +409,113 @@ fn full_site_context_does_not_rewrite_source_keys_and_order_is_stable() {
 }
 
 #[test]
+fn ownership_context_matches_exact_subject_table_and_column() {
+    let (p, t, cells) = fixture();
+    let target = t
+        .agreement
+        .accepted
+        .iter()
+        .position(|a| a.quantity == recovery::OWNERSHIP_QUANTITY)
+        .expect("ownership context");
+    for (field, value) in [
+        ("row", "Not Lumwana (100%)"),
+        ("row", "Lumwana (100%) elsewhere"),
+        ("table", "Unrelated ownership table"),
+        ("col", "Other interest (%)"),
+    ] {
+        let mut changed = t.clone();
+        let locator = &mut changed.agreement.accepted[target].locator;
+        match field {
+            "row" => locator.row = value.into(),
+            "table" => locator.table = value.into(),
+            "col" => locator.col = value.into(),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            recovery::assess(&p, Some(&changed), &cells)
+                .expect_err("exact ownership source labels")
+                .code,
+            "FMINE-REF-107",
+            "{field}: {value}"
+        );
+    }
+}
+
+#[test]
+fn direct_api_rejects_malformed_through_before_corpus_io() {
+    let unavailable =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("unavailable_recovery_workspace");
+    let (mut p, t, cells) = fixture();
+    for through in [
+        "2026", "2026Q0", "2026Q5", "202AQ1", "2026Q1x", "2026q1", " 2026Q1", "2026Q1 ",
+    ] {
+        assert_eq!(
+            recovery::run_public(&unavailable, "barrick", Some(through))
+                .expect_err("syntax precedes source I/O")
+                .code,
+            "FMINE-REF-107",
+            "{through:?}"
+        );
+        p.through = Some(through.into());
+        assert_eq!(
+            recovery::assess(&p, Some(&t), &cells)
+                .expect_err("active direct profile bound")
+                .code,
+            "FMINE-REF-107",
+            "{through:?}"
+        );
+        assert!(
+            recovery::assess(&p, None, &cells)
+                .expect("no registered recovery inputs")
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn inherited_quantified_uu_survives_model_and_json() {
+    let (p, t, mut cells) = fixture();
+    let risk = UuTerm {
+        scenario_id: "synthetic-source-risk".into(),
+        description: "Invented, explicitly quantified source downside".into(),
+        downside_exposure_usd_m: 12.5,
+        trigger_indicator: "Synthetic source scenario".into(),
+    };
+    cells[0].claim.uu_terms.push(risk.clone());
+    let report = assessed(&p, &t, &cells);
+    let projection = report.quarters[0].outcome.as_ref().expect("models");
+    for model in [
+        &projection.constant_tails,
+        &projection.grade_dependent_tails,
+    ] {
+        assert!(model.uu_terms.contains(&risk));
+    }
+    let json = report.to_json();
+    let occurrences = json
+        .split("\"scenario_id\":\"synthetic-source-risk\"")
+        .skip(1)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        occurrences.len(),
+        3,
+        "one operating Claim and both projections retain the inherited amount"
+    );
+    for tail in occurrences {
+        let term = tail.split_once('}').expect("closed inherited amount").0;
+        assert!(term.contains("\"monetary_downside\":\"source_estimate\""));
+        assert!(term.contains("\"downside_exposure_usd_m\":{\"v\":12.5"));
+        assert!(term.contains("\"rule\":\"recovery.inherited_uu\""));
+        assert!(term.contains("\"rules_version\":\"public-recovery/1\""));
+        assert!(term.contains("\"in\":["));
+    }
+    assert!(
+        json.contains("\"monetary_downside\":\"unquantified\""),
+        "the model's separate omitted-mechanism term remains unquantified"
+    );
+    assert_parent_definitions(&report);
+}
+
+#[test]
 #[ignore = "requires the verified public PDFs/workbooks and local two-reader transcription registry"]
 fn real_lumwana_matches_independent_source_oracle() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -320,6 +525,7 @@ fn real_lumwana_matches_independent_source_oracle() {
     assert_eq!(report.training.len(), 10);
     assert_eq!(report.transcriptions.len(), 20);
     assert_eq!(report.documents.len(), 2);
+    assert_parent_definitions(&report);
     // NL-2 orders issuer assertions below modelled evidence: derivation cannot promote the inputs.
     // Estimated knowledge and the explicit calibration field retain the model interpretation.
     assert_eq!(report.fit.evidence, EvidenceClass::ISSUER);

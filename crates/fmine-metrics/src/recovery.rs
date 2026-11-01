@@ -9,7 +9,7 @@
 use std::cmp::Ordering;
 
 use fmine_claim::{
-    AdditivityClass, Claim, ConfidentialityTier, Representation, SpatialSupport, UuTerm,
+    AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport, UuTerm,
 };
 use fmine_core::{Encoder, blake3_hash, det};
 use fmine_evidence::{
@@ -461,7 +461,7 @@ struct Provenance {
     evidence: EvidenceClass,
     epistemic: EpistemicStatus,
     state: KnowledgeState,
-    confidentiality: ConfidentialityTier,
+    confidentiality: Confidentiality,
     uu: Vec<UuTerm>,
     anchors: Vec<fmine_core::anchor::SourceAnchor>,
     parents: Vec<fmine_claim::ClaimId>,
@@ -469,13 +469,13 @@ struct Provenance {
 
 impl Provenance {
     fn new() -> Self {
-        Self { evidence: EvidenceClass::ModelledUncalibrated, epistemic: EpistemicStatus::KnownUnknown(KuKind::Parametric), state: KnowledgeState::Estimated, confidentiality: ConfidentialityTier::Public, uu: vec![UuTerm { scenario_id: RULES_VERSION.into(), description: MODEL_CAVEAT.into(), downside_exposure_usd_m: 0.0, trigger_indicator: "Ore mix, grind, throughput, concentrate mass pull or annual-to-quarter support differs; monetary downside remains unquantified.".into() }], anchors: Vec::new(), parents: Vec::new() }
+        Self { evidence: EvidenceClass::ModelledUncalibrated, epistemic: EpistemicStatus::KnownUnknown(KuKind::Parametric), state: KnowledgeState::Estimated, confidentiality: Confidentiality::public(), uu: vec![UuTerm { scenario_id: RULES_VERSION.into(), description: MODEL_CAVEAT.into(), downside_exposure_usd_m: 0.0, trigger_indicator: "Ore mix, grind, throughput, concentrate mass pull or annual-to-quarter support differs; monetary downside remains unquantified.".into() }], anchors: Vec::new(), parents: Vec::new() }
     }
     fn include<T>(&mut self, c: &Claim<T>) {
         self.evidence = self.evidence.meet(c.evidence);
         self.epistemic = self.epistemic.and(c.epistemic);
         self.state = self.state.and(c.state);
-        self.confidentiality = self.confidentiality.combine(c.confidentiality);
+        self.confidentiality = self.confidentiality.join(&c.confidentiality);
         for term in &c.uu_terms {
             if !self.uu.iter().any(|t| t == term) {
                 self.uu.push(term.clone());
