@@ -5,7 +5,7 @@
 - **Layer:** `E` (Enterprise & Decision)
 - **Subsystem:** `Enterprise`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "roll_forward"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "roll_forward", "mirror"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), a spend-based Logarithmic Mean Divisia Index (`lmdi`, `GB-26`, BD-333.S1), and fixed-point marginal cut-off grade solver (`solve_cutoff_grade`; synthetic known answer only, the published cut-offs E182–E184 are not yet reproduced).
@@ -44,6 +44,14 @@ differences and head/tails cross-products form the slope, avoiding cancellation 
 Quarterly M-b projection uses the equivalent centred form `mean(t)+b·(h−mean(h))`, retaining the shared fit
 centering when propagating rounding. All displayed-input estimates are exact rationals; closed enclosures
 cover the supplied rounding boxes, not statistical confidence or prediction intervals.
+
+DESIGN (BD-346.S3): `mirror` compares gold produced or sold in koz over one explicitly declared asset,
+operation perimeter and calendar period. Each reported box has a fixed full or attributable basis. Scale
+identities express one common 100% quantity; the existing exact feasibility solver and independent checkers
+produce a witness or exclusion certificate. Fixed tolerances and inferred partner shares are absent.
+At least two reporters are required, but their shares need not sum to one. The nonnegative physical domain
+is explicit: a printed zero keeps its original negative-to-positive rounding box, while the common interval
+is intersected with `x >= 0` and the reported witness is checked there. A negative printed midpoint refuses.
 
 ## 3. Authority, Epistemics & Representation
 Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when `L_corp` is omitted) and checks
@@ -173,7 +181,32 @@ arithmetic closure does not establish causation or identify an operational expla
     `Quantity::canonical_tag`, `Fit::canonical_tag` and `ModelProjection::canonical_tag` bind the exact
     calculation, interpretation and support. Sorting annual observations leaves the result unchanged.
 
+- `mirror::{Perimeter, MirrorReading, MirrorCommon, MirrorReport, MirrorVerdict, compare}` (BD-346):
+  source inputs are `Claim<MirrorReading>` under `READING_METRIC`. Canonical tags bind reporter identity,
+  numeric source anchor, operation membership, inclusive validity dates and the exact typed quantity.
+  Inputs, normalized Claims and proof cells share one sorted order; minimal-source indices address that
+  order. `Consistent` carries a checked source-basis witness and a common full-basis Claim. `Conflict`
+  carries the checked certificate/digest, blame status and inclusion-minimal source sets, whose disjoint
+  normalized intervals independently establish minimality. An incomplete blame search remains explicit.
+  `Indeterminate` has no common quantity. All source boxes, Scale identities and Closed rules are exposed.
+  Normalized/common Claims retain immediate source parents, anchors, weaker evidence/knowledge/epistemics,
+  and every distinct UU term, including different terms sharing a scenario id. No assertion is promoted.
+- `mirror::transcriptions::{BoundReadings, bind, keys, period_label}` interprets already-agreed S0
+  `Accepted` rows and a `DocumentRow`, without IO. `bind(subject, period, kind, issuer, document, rows,
+  evidence)` returns the separately cited ownership Claim, when needed, and source reading Claims.
+  Numeric and ownership rows must name the selected document/hash and valid pages; printed tokens,
+  periods, units, exact equity percentages and complete dated perimeter context remain explicit.
+  The supplied evidence class is preserved. The caller checks bytes, availability and all reader results;
+  accepted rows alone cannot prove that an omitted rejection did not exist.
+
 ## 5. Guards & Typed Refusals
+
+- The mirror refuses unsupported cost definitions/kinds, unequal assets and invalid shares (`105`),
+  unequal periods or invalid dates (`102`), missing/unequal operation perimeters or validity straddles
+  (`104`), missing numeric/context citations (`201`), private sources (`301`), placeholders (`208`),
+  stale/unknown/conflicted/failed-calibration inputs (`502`/`202`/`205`), and mutated canonical Claims (`507`).
+  Reversed bounds or negative reported midpoints refuse (`109`); open source bounds refuse (`203`).
+  Arithmetic overflow/checker failures refuse (`207`); solver limits remain `Indeterminate`.
 - `FMINE-REF-203` (`ConsolidationBridgeMissing`, `G-BULL-3`)
 - `FMINE-REF-109` (outside physical domain, proposed; exit 3) on non-positive or non-finite LMDI state inputs,
   or recovery above one, naming the period and field.
@@ -288,7 +321,17 @@ arithmetic closure does not establish causation or identify an operational expla
   confidentiality/UU propagation and the admission/domain/overflow refusals have direct tests. No historical
   issuer training rows are embedded in these synthetic fixtures.
 
+FACT (BD-346, `mirror::tests`): ten focused tests cover the exact three-source tie at 100 koz; the
+1000/615/385 case; independent witness/certificate checks and corrupted proofs; minimal conflict pairs;
+zero's explicit domain; two 45% reporters and sold quantities; reporter-order/full-basis metamorphisms;
+dated scope and evidence/UU preservation; same document basenames across issuers; semantic, source,
+canonical-mutation and numerical-cap refusals. A separate integer-rounding oracle keeps the known truth
+inside the common interval for 256 synthetic worlds. This is not the full BD-346.S6 power study.
+Direct transcription-binding tests additionally check exact source/share Claims and refuse mismatched
+numeric or ownership document names, hashes and pages before construction.
+
 ## 7. Failure Modes & Deterministic Fallbacks
+
 The legacy floating API refuses non-positive physical inputs. The typed public API attempts the exact signed
 additive fallback when physical factor boxes cannot support logarithms; if the supplied lines cannot justify
 that fallback it refuses explicitly. Missing consolidation adjustments and numerical failures refuse. Neither
@@ -298,7 +341,8 @@ path uses a printed-rate discrepancy as a balancing factor.
 - `GATE-BULL-01`
 
 ## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`.
+- Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`,
+  and the S0 rows in `fmine-registry`.
 
 ## 10. Non-Goals & Scope Boundary
 DESIGN (BD-340.S5): the PDF identity adapter verifies declared arithmetic of issuer assertions, not their truth
@@ -306,9 +350,18 @@ or completeness. It never emits reserve classifications, selects a preferred fil
 changes a printed sign, or supplies an issuer-attributed corrected figure. Synthetic E692-shaped arithmetic is
 a known-answer test of the binding; the authentic historical transcription and independent census gates remain
 open. Closed intervals are agnostic about ties; a named half-open convention is never changed to rescue a row.
+
+The mirror kernel authenticates no filing bytes, human readership, publication date or issuer affiliation;
+its caller must bind those facts before supplying source Claims. It does not infer missing perimeters,
+aggregate incomparable operations, select vintages, invent an absent partner share, bridge costs/capex,
+transfer bridges between assets, or decide which reporter is physically correct. Actual FY2023–FY2025
+partner-source reproduction and the full synthetic power gate remain separate BD-346 work.
+
 Pure metric kernel in layer `E`; workbook parsing, first-vintage pairing, per-period basis authentication,
-source Claim bindings and public rendering live in `fmine-io` / `fmine-public` (`V`, BD-333.S2/S3). The typed
-kernel supplies the numerical and provenance-locator contract, not real-file eligibility counts or causal claims.
+workbook source Claim bindings and public rendering live in `fmine-io` / `fmine-public` (`V`, BD-333.S2/S3).
+The mirror's pure transcription binding consumes already-agreed S0 rows, without authenticating bytes or
+publication availability. The typed kernel supplies the numerical and provenance-locator contract, not
+real-file eligibility counts or causal claims.
 
 BD-342's kernel is exact arithmetic on supplied, cited gold/koz and USD/oz quantities, with a declared positive
 cost domain. It does not acquire or transcribe guidance, register future forecasts, infer missing inputs, equate
