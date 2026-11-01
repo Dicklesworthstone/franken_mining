@@ -9,14 +9,15 @@
 //! price requires an explicit price subject; it is never substituted.
 //! Commodity-price bases remain as transcribed, separate from the source's cost ownership basis.
 //!
-//! The gate population is 2024Q1–2026Q2, intersected only with an explicit --through bound. Every member
-//! needs an original-release royalty and an unambiguous agreed price. The bound restricts the quarterly
-//! population, not publication dates of retrospective PDF evidence. No missing quarter is silently dropped.
+//! The gate population is 2024Q1–2026Q2, intersected with an explicit --through bound for retrospective
+//! reports or with completed quarters at an explicit evidence cut. Every member needs an original-release
+//! royalty and an unambiguous agreed price. Retrospective --through bounds do not restrict PDF publication
+//! dates; evidence-cut callers use only documents available by their cut. Missing quarters stay required.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use fmine_calib::guidance_scores::{PrintedOutcome, price};
+use fmine_calib::guidance_scores::{GuidanceScore, PrintedOutcome, price};
 use fmine_claim::{AdditivityClass, Representation, SpatialSupport};
 use fmine_core::hash::Digest32;
 use fmine_evidence::{EvidenceClass, KnowledgeState};
@@ -449,7 +450,8 @@ fn checked_cell(
         return Err("source unit, ownership, support, status or public evidence mismatch".into());
     }
     let synthetic = p.issuer == fmine_public::synthetic::SYNTHETIC_ISSUER
-        && c.claim.evidence == EvidenceClass::Assumed;
+        && c.claim.evidence == EvidenceClass::Assumed
+        && c.claim.state == KnowledgeState::Unknown;
     if !matches!(
         c.claim.state,
         KnowledgeState::Known | KnowledgeState::Estimated
@@ -526,6 +528,16 @@ fn rejected_identity(
     format!("{locator} (quantities: {quantities}; {documents})")
 }
 
+struct PriceRow<'a> {
+    site: &'a str,
+    metric: &'a str,
+    year: u16,
+    guidance: &'a Accepted,
+    published_at: &'a str,
+    outcome: Option<&'a KeyedCell>,
+    score: Option<&'a GuidanceScore>,
+}
+
 pub(crate) fn assess(
     profile: &IssuerProfile,
     transcripts: &TranscriptionReport,
@@ -534,7 +546,37 @@ pub(crate) fn assess(
     through: Option<&str>,
     price_subject: Option<&str>,
 ) -> PriceAssessment {
-    let subject = price_subject.unwrap_or(&row.site);
+    let selected = match &row.outcome {
+        OutcomeBinding::Resolved { cell, .. } => Some(cell.as_ref()),
+        OutcomeBinding::Unresolved { .. } => None,
+    };
+    assess_row(
+        profile,
+        transcripts,
+        cells,
+        PriceRow {
+            site: &row.site,
+            metric: &row.metric,
+            year: row.year,
+            guidance: &row.guidance,
+            published_at: &row.published_at,
+            outcome: selected,
+            score: row.score.as_ref(),
+        },
+        through,
+        price_subject,
+    )
+}
+
+fn assess_row(
+    profile: &IssuerProfile,
+    transcripts: &TranscriptionReport,
+    cells: &[KeyedCell],
+    row: PriceRow<'_>,
+    through: Option<&str>,
+    price_subject: Option<&str>,
+) -> PriceAssessment {
+    let subject = price_subject.unwrap_or(row.site);
     let mut out = PriceAssessment {
         reason: None,
         missing: vec![],
@@ -554,7 +596,7 @@ pub(crate) fn assess(
         cells: vec![],
         transcripts: vec![],
     };
-    let (metric, unit) = match row.metric.as_str() {
+    let (metric, unit) = match row.metric {
         "aisc_usd_per_oz" => (price::Metric::GoldAisc, price::RateUnit::UsdPerTroyOunce),
         "aisc_usd_per_lb" => (price::Metric::CopperAisc, price::RateUnit::UsdPerPound),
         _ => {
@@ -592,18 +634,18 @@ pub(crate) fn assess(
         }
         return out;
     }
-    let OutcomeBinding::Resolved { cell, .. } = &row.outcome else {
+    let Some(cell) = row.outcome else {
         out.reason = Some("outcome_unresolved".into());
         return out;
     };
     out.cells
-        .push(("selected unconditional outcome".into(), (**cell).clone()));
+        .push(("selected unconditional outcome".into(), cell.clone()));
     let period = format!("{}FY", row.year);
     let guidance_check = (|| {
-        let doc = checked_document(&row.guidance, transcripts)?;
+        let doc = checked_document(row.guidance, transcripts)?;
         let (guidance_basis, expected_line) =
-            specification(&row.guidance, &row.metric).map_err(|e| e.to_string())?;
-        if !transcripts.agreement.accepted.contains(&row.guidance)
+            specification(row.guidance, row.metric).map_err(|e| e.to_string())?;
+        if !transcripts.agreement.accepted.contains(row.guidance)
             || row.guidance.period != period
             || cell.key.valid_period.code() != period
             || cell.key.subject != row.site
@@ -618,10 +660,10 @@ pub(crate) fn assess(
         }
         out.transcripts.push(TranscriptEvidence {
             role: "scored guidance".into(),
-            entry: row.guidance.clone(),
+            entry: (*row.guidance).clone(),
             documents: vec![doc.clone()],
         });
-        Ok((basis, limits(&row.guidance).map_err(|e| e.to_string())?))
+        Ok((basis, limits(row.guidance).map_err(|e| e.to_string())?))
     })();
     let (basis, guidance) = match guidance_check {
         Ok(v) => v,
@@ -639,7 +681,7 @@ pub(crate) fn assess(
         out.reason = Some("invalid_source_evidence".into());
         return out;
     }
-    let assumed_quantities = [slug(&row.site), "all_sites".into()].map(|subject| {
+    let assumed_quantities = [slug(row.site), "all_sites".into()].map(|subject| {
         format!(
             "aisc_price_assumption_{subject}_{}_{}",
             period.to_ascii_lowercase(),
@@ -673,7 +715,7 @@ pub(crate) fn assess(
     let royalty = out.royalty(
         profile,
         cells,
-        &row.site,
+        row.site,
         &period,
         &cell.key.reporting_vintage.release,
         &basis,
@@ -698,7 +740,7 @@ pub(crate) fn assess(
     );
     let mut quarters = Vec::new();
     for q in out.quarters.clone() {
-        let royalty = out.royalty(profile, cells, &row.site, &q, &q, &basis, unit);
+        let royalty = out.royalty(profile, cells, row.site, &q, &q, &basis, unit);
         let realized_price = out.transcription(
             transcripts,
             &format!("realized price {q}"),
@@ -746,7 +788,7 @@ pub(crate) fn assess(
         quarters,
     };
     match price::conditional(&input) {
-        Ok(report) if row.score.as_ref() == Some(report.unconditional()) => {
+        Ok(report) if row.score == Some(report.unconditional()) => {
             out.reason = report.unsplit_reason().map(|r| format!("{r:?}"));
             out.report = Some(report);
         }
@@ -761,4 +803,207 @@ pub(crate) fn assess(
         }
     }
     out
+}
+
+/// Price the public report's exact first/latest selection, preserving its unresolved denominator.
+/// History is bounded by completed planned quarters, not by whichever workbook happens to exist.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn assess_as_of(
+    profile: &IssuerProfile,
+    transcripts: &TranscriptionReport,
+    cells: &[KeyedCell],
+    row: &fmine_public::guidance::track_record::TrackRecordRow,
+    outcome: &fmine_public::guidance::track_record::OutcomeAssessment,
+    as_of: &str,
+    price_subject: Option<&str>,
+) -> PriceAssessment {
+    let completed = POPULATION
+        .iter()
+        .copied()
+        .rfind(|quarter| {
+            let Some(period) = fmine_public::key::parse_period_code(quarter) else {
+                return false;
+            };
+            let (_, (_, month)) = period.months();
+            let end = format!(
+                "{:04}-{month:02}-{}",
+                period.year,
+                if month == 3 || month == 12 { 31 } else { 30 }
+            );
+            end.as_str() <= as_of
+        })
+        .unwrap_or("2023Q4");
+    let source = match outcome.sources.as_slice() {
+        [cell]
+            if outcome.score.is_some()
+                && outcome.refusal.is_none()
+                && crate::track_record_data::site_key(&cell.key.subject) == row.site =>
+        {
+            Some(cell)
+        }
+        _ => None,
+    };
+    let mut assessment = assess_row(
+        profile,
+        transcripts,
+        cells,
+        PriceRow {
+            site: source.map_or(row.site.as_str(), |c| c.key.subject.as_str()),
+            metric: &row.metric,
+            year: row.year,
+            guidance: &row.guidance,
+            published_at: &row.document.published_at,
+            outcome: source,
+            score: outcome.score.as_ref(),
+        },
+        Some(completed),
+        price_subject,
+    );
+    assessment.scope = format!(
+        "2024Q1–2026Q2 intersected with quarters completed by evidence cut {as_of}; missing original releases remain required"
+    );
+    if !is_date(as_of) {
+        assessment.reason = Some("invalid_source_context".into());
+        assessment.report = None;
+        assessment
+            .missing
+            .push("evidence cut must be YYYY-MM-DD".into());
+    } else if source.is_none() {
+        assessment.cells.extend(
+            outcome
+                .sources
+                .iter()
+                .cloned()
+                .map(|c| ("unscored evidence-cut outcome".into(), c)),
+        );
+        if outcome.score.is_some() {
+            assessment.reason = Some("invalid_source_evidence".into());
+            assessment.missing.push(
+                "scored evidence-cut outcome must have one matching canonical site source".into(),
+            );
+        }
+    }
+    assessment
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fmine_claim::{Claim, Confidentiality};
+    use fmine_core::{anchor::SourceAnchor, hash::sha256};
+    use fmine_evidence::{EpistemicStatus, KuKind};
+    use fmine_public::key::{LineKey, Period, PeriodKind, PublicKey, Vintage};
+    use fmine_public::sources::RegisteredSource;
+
+    #[test]
+    fn synthetic_assumed_royalties_never_override_negative_knowledge_states() {
+        let source_bytes = b"invented Q1 2024 royalty: 50 USD per ounce";
+        let source_digest = sha256(source_bytes);
+        let file = "Synthetic_Royalty_2024Q1.xlsx";
+        let mut profile = fmine_public::synthetic::synthetic_profile();
+        profile.sources.push(RegisteredSource {
+            file_name: file.into(),
+            kind: SourceKind::MineStats,
+            quarter: "2024Q1".into(),
+            url: format!("https://example.invalid/{file}"),
+            url_basis: "DESIGN: invented in-memory source".into(),
+            bytes: source_bytes.len() as u64,
+            sha256_hex: source_digest.to_hex(),
+        });
+        let key = PublicKey {
+            issuer: profile.issuer.clone(),
+            subject: "Site A".into(),
+            valid_period: Period {
+                year: 2024,
+                kind: PeriodKind::Quarter(1),
+            },
+            reporting_vintage: Vintage {
+                release: "2024Q1".into(),
+                file_sha256: source_digest.to_hex(),
+            },
+            ownership_basis: OwnershipBasis::Consolidated100,
+            scope: Scope::Site,
+            unit: "usd_per_oz".into(),
+            line: LineKey {
+                label: "site:costs per ounce:royalties".into(),
+                occurrence: 0,
+            },
+        };
+        let cell_for_state = |state| {
+            let value = PublicValue::Number {
+                stored: "50".into(),
+                displayed: Ok("50".into()),
+                under_status: None,
+            };
+            let value_tag = canonical_value_tag(&key, &value);
+            let claim = Claim::new(
+                &key.line.label,
+                value,
+                &value_tag,
+                Representation::Deterministic,
+                SpatialSupport::PeriodAggregate,
+                AdditivityClass::IntensiveWeighted,
+                EvidenceClass::Assumed,
+                EpistemicStatus::KnownUnknown(KuKind::Parametric),
+                state,
+                Confidentiality::public(),
+                vec![],
+                vec![],
+                vec![SourceAnchor::new(file, source_digest.0, "QTD!B7")],
+            );
+            KeyedCell {
+                locator: format!("{file}:QTD!B7"),
+                key: key.clone(),
+                claim,
+                printed_basis: key.ownership_basis,
+                basis_evidence: None,
+                status_evidence: None,
+                label_as_printed: None,
+                unit_evidence: None,
+            }
+        };
+        for state in [
+            KnowledgeState::Known,
+            KnowledgeState::Estimated,
+            KnowledgeState::Unknown,
+        ] {
+            let cell = cell_for_state(state);
+            cell.claim.check_id().expect("new canonical source Claim");
+            let cited = checked_cell(
+                &profile,
+                &cell,
+                "usd_per_oz",
+                "100%",
+                price::RateUnit::UsdPerTroyOunce,
+            )
+            .unwrap_or_else(|error| panic!("{state:?}: {error}"));
+            assert_eq!(cited.printed.value, Rat::from_integer(50));
+            assert_eq!(cited.citation.locator, cell.locator);
+            assert_eq!(cited.citation.sha256, source_digest);
+        }
+        for state in [
+            KnowledgeState::Conflicted,
+            KnowledgeState::NotObservable,
+            KnowledgeState::Redacted,
+            KnowledgeState::Stale,
+            KnowledgeState::Indeterminate,
+            KnowledgeState::NotApplicable,
+        ] {
+            let cell = cell_for_state(state);
+            // Rehash the changed state so failure cannot come from a stale Claim id.
+            cell.claim.check_id().expect("new canonical source Claim");
+            let error = checked_cell(
+                &profile,
+                &cell,
+                "usd_per_oz",
+                "100%",
+                price::RateUnit::UsdPerTroyOunce,
+            )
+            .expect_err("synthetic evidence must preserve an explicit negative state");
+            assert_eq!(
+                error, "source is not an observable numeric claim",
+                "{state:?}"
+            );
+        }
+    }
 }

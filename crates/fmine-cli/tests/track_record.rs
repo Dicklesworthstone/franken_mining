@@ -1043,4 +1043,213 @@ mod tests {
             assert!(result.to_json().contains("FMINE-REF-202"));
         }
     }
+
+    /// Invented filings for an imaginary issuer exercise the normal Assertion path.
+    /// Synthetic-lane Unknown Claims remain inadmissible to the public as-of scorer.
+    fn as_of_price_workspace(tag: &str, subject: &str) -> PathBuf {
+        let root = price_workspace(tag, subject, false);
+        let source = std::fs::read_to_string(registry_path(&root, "synthetic"))
+            .unwrap()
+            .replace("issuer = \"synthetic\"", "issuer = \"pricecut\"")
+            .replace(
+                "retrieved_utc = \"synthetic\"",
+                "retrieved_utc = \"2024-06-30T00:00:00Z\"",
+            );
+        std::fs::write(registry_path(&root, "pricecut"), source).unwrap();
+        let entries = std::fs::read_to_string(transcriptions_path(&root, "synthetic"))
+            .unwrap()
+            .replace("issuer = \"synthetic\"", "issuer = \"pricecut\"");
+        std::fs::write(transcriptions_path(&root, "pricecut"), entries).unwrap();
+        root
+    }
+
+    fn price_at(root: &Path, cut: &str, subject: Option<&str>) -> Envelope {
+        let mut args: Vec<String> = ["track-record", "--issuer", "pricecut", "--as-of", cut]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        if let Some(subject) = subject {
+            args.extend(["--price-subject".into(), subject.into()]);
+        }
+        let (result, format) = fmine_cli::invoke(&args, root);
+        assert_eq!(format, OutputFormat::Json);
+        result
+    }
+
+    fn checked_price_at(root: &Path, cut: &str, subject: Option<&str>) -> Envelope {
+        let result = price_at(root, cut, subject);
+        assert_eq!(result.exit_code, 0, "{}", result.to_json());
+        result
+    }
+
+    #[test]
+    fn as_of_prices_preserve_base_population_and_bind_both_selections() {
+        let root = as_of_price_workspace("asof-paired", "site_a");
+        let result = checked_price_at(&root, "2024-07-01", None);
+        let base = fmine_public::guidance::track_record::run(&root, "pricecut", None, "2024-07-01")
+            .unwrap();
+        let base_json = base.to_json();
+        let prefix = format!("{{\"digest\":\"{}\",", base.digest);
+        let body = base_json
+            .strip_prefix(&prefix)
+            .unwrap()
+            .strip_suffix('}')
+            .unwrap();
+        assert!(
+            result.payload_json.contains(body),
+            "base rows and denominators changed"
+        );
+        assert!(
+            result
+                .payload_json
+                .contains(&format!("\"comparison_digest\":\"{}\"", base.digest))
+        );
+        assert!(
+            !result.payload_json.starts_with(&prefix),
+            "combined digest must bind price evidence"
+        );
+        assert!(
+            result
+                .payload_json
+                .contains("\"digest_scope\":\"base_comparison_and_both_price_selections\"")
+        );
+        let prices = result
+            .payload_json
+            .split_once("\"price_sensitivity\":")
+            .unwrap()
+            .1;
+        assert_eq!(
+            prices
+                .matches("\"price_contribution\":{\"num\":\"25\",\"den\":\"1\"}")
+                .count(),
+            2
+        );
+        assert!(prices.contains("\"site\":\"site-a\""), "{prices}");
+        assert!(prices.contains("\"price_subject\":\"Site A\""), "{prices}");
+        assert!(prices.contains("\"required_quarters\":[\"2024Q1\",\"2024Q2\"]"));
+        assert!(!prices.contains("explicitly requested --through"));
+        assert_eq!(result, checked_price_at(&root, "2024-07-01", None));
+        let markdown = result.rendered_markdown.as_ref().unwrap();
+        assert!(markdown.contains("#### First published"));
+        assert!(markdown.contains("#### Latest registered"));
+        assert!(markdown.contains("Combined comparison and price digest"));
+        assert!(!markdown.contains("gold-price adjustments are not implemented"));
+    }
+
+    #[test]
+    fn as_of_price_documents_after_the_cut_cannot_change_earlier_output() {
+        let root = as_of_price_workspace("asof-price-future", "company");
+        let before = checked_price_at(&root, "2024-06-30", Some("Company"));
+        assert!(!before.payload_json.contains("\"price_contribution\":"));
+        let after = checked_price_at(&root, "2024-07-01", Some("Company"));
+        assert!(
+            after
+                .payload_json
+                .contains("\"price_contribution\":{\"num\":\"25\",\"den\":\"1\"}")
+        );
+        assert!(after.payload_json.contains("\"explicit_proxy\":true"));
+        let readings_path = transcriptions_path(&root, "pricecut");
+        let readings = std::fs::read_to_string(&readings_path).unwrap();
+        let mut changed_readers = 0;
+        let conflicted = readings
+            .split("\n[[entry]]")
+            .map(|entry| {
+                if entry.contains("quantity = \"realized_price_company_2024q2_usd_per_oz\"")
+                    && entry.contains("reader = \"reader_b\"")
+                {
+                    changed_readers += 1;
+                    assert_eq!(entry.matches("token = \"2000\"").count(), 1);
+                    entry.replace("token = \"2000\"", "token = \"2100\"")
+                } else {
+                    entry.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n[[entry]]");
+        assert_eq!(changed_readers, 1);
+        std::fs::write(&readings_path, conflicted).unwrap();
+        assert_eq!(
+            before,
+            checked_price_at(&root, "2024-06-30", Some("Company"))
+        );
+        let conflicted_report = checked_price_at(&root, "2024-07-01", Some("Company"));
+        assert!(
+            conflicted_report
+                .payload_json
+                .contains("incomplete_transcription_agreement")
+        );
+        assert!(
+            !conflicted_report
+                .payload_json
+                .contains("\"price_contribution\":")
+        );
+        std::fs::write(readings_path, readings).unwrap();
+        let path = root.join("documents/Prices.pdf");
+        let original = std::fs::read(&path).unwrap();
+        let mut changed = original.clone();
+        changed[0] ^= 1;
+        std::fs::write(&path, changed).unwrap();
+        assert_eq!(
+            before,
+            checked_price_at(&root, "2024-06-30", Some("Company"))
+        );
+        let refused = price_at(&root, "2024-07-01", Some("Company"));
+        assert_eq!(refused.refusal.as_ref().unwrap().code, "FMINE-REF-505");
+        std::fs::write(path, original).unwrap();
+    }
+
+    #[test]
+    fn as_of_price_population_keeps_completed_but_unregistered_quarters() {
+        let root = as_of_price_workspace("asof-price-population", "site_a");
+        let before = checked_price_at(&root, "2024-09-29", None);
+        assert!(before.payload_json.contains("\"price_contribution\":"));
+        let completed = checked_price_at(&root, "2024-09-30", None);
+        let prices = completed
+            .payload_json
+            .split_once("\"price_sensitivity\":")
+            .unwrap()
+            .1;
+        assert!(prices.contains("\"required_quarters\":[\"2024Q1\",\"2024Q2\",\"2024Q3\"]"));
+        assert!(prices.contains("required original Mine Stats release is not registered"));
+        assert!(!prices.contains("\"price_contribution\":"));
+        assert!(completed.payload_json.contains("\"n_scored\":1"));
+    }
+
+    #[test]
+    fn as_of_price_selections_use_their_own_outcome_and_royalty_vintage() {
+        let root = as_of_price_workspace("asof-price-vintages", "site_a");
+        let mut comparative_royalty = royalty_sheet(2023, "twelve", 100.0);
+        comparative_royalty.name = "Minestats1".into();
+        let bytes = build_minimal_xlsx(&[
+            summary_sheet(2024, 100.0, 90.0, true),
+            royalty_sheet(2024, "three", 100.0),
+            comparative_royalty,
+        ]);
+        let path = root.join("corpus/Synthetic_Price_2024Q2.xlsx");
+        let original = std::fs::read(&path).unwrap();
+        let old = format!(
+            "bytes = {}\nsha256 = \"{}\"",
+            original.len(),
+            sha256(&original)
+        );
+        let new = format!("bytes = {}\nsha256 = \"{}\"", bytes.len(), sha256(&bytes));
+        let registry = registry_path(&root, "pricecut");
+        let source = std::fs::read_to_string(&registry).unwrap();
+        assert_eq!(source.matches(&old).count(), 1);
+        std::fs::write(&registry, source.replace(&old, &new)).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        let result = checked_price_at(&root, "2024-07-01", None);
+        let prices = result
+            .payload_json
+            .split_once("\"price_sensitivity\":")
+            .unwrap()
+            .1;
+        let (first, latest) = prices.split_once("\"latest_registered\":").unwrap();
+        assert!(first.contains("Synthetic_Price_2023Q4.xlsx:YTD!D5"));
+        assert!(first.contains("\"z\":{\"num\":\"-1\",\"den\":\"4\"}"));
+        assert!(latest.contains("Synthetic_Price_2024Q2.xlsx:YTD!K5"));
+        assert!(latest.contains("Synthetic_Price_2024Q2.xlsx:Minestats1!B5"));
+        assert!(latest.contains("\"z\":{\"num\":\"-3\",\"den\":\"4\"}"));
+        assert!(result.payload_json.contains("\"later_comparative\""));
+    }
 }

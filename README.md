@@ -210,14 +210,15 @@ Production basis is `100%` or `attributable:n/d`. Cost basis also declares its d
 explicit. Unknown guidance quantities, missing agreed readings and changed source bytes refuse. The synthetic
 command is an invented known-answer demonstration through the same binding and scoring code.
 
-Both report modes select guidance before checking document bytes and reader agreement; the retrospective
-mode also selects its price-assumption and realized-price inputs. Adding incomplete or unusable optional
+Both report modes select guidance, price-assumption and realized-price inputs before checking document
+bytes and reader agreement. Adding incomplete or unusable optional
 technical readings does not invalidate these reports. Unsupported guidance keys and every reader at a
 selected locator remain in scope; the complete registry still needs valid syntax and registered identities.
 
 For AISC, the report can show a cited price sensitivity beside the unconditional score:
 `p = royalty * (1 - assumed_price / realized_price)`. It requires every declared original quarter from
-2024Q1 through 2026Q2 (or the earlier explicit `--through` bound) to admit a common royalty/price coefficient.
+2024Q1 through 2026Q2, shortened by `--through` or the last completed quarter at `--as-of`, to admit a common
+royalty/price coefficient.
 The scored year's ratio must also be compatible. Missing quarters, incompatible evidence and a missing stated
 price assumption leave the result unsplit with an explicit reason. TCC and C1 are never adjusted.
 
@@ -240,7 +241,9 @@ stays unsplit and names pending or conflicting locators, reader roles, quantity 
 document hashes. Guidance must still have complete two-reader agreement, including when readers disagree
 about whether a row is guidance. Missing or altered selected guidance/price document bytes retain their
 existing refusals. Unrelated technical sources do not block either track-record mode.
-Price sensitivity belongs to the retrospective report; `--price-subject` cannot be combined with `--as-of`.
+The explicit `--as-of` report also supports price sensitivity. It bounds both the price documents and
+completed quarterly history by the requested evidence cut, and assesses first-published and latest registered
+outcomes separately.
 
 ### Assess a frozen forecast cohort
 
@@ -551,6 +554,7 @@ Markdown presents both sections. Full BD-342/M0 empirical and acceptance gates r
 ```bash
 cargo run -p fmine-cli -- track-record --issuer barrick --as-of 2026-11-01 --json
 cargo run -p fmine-cli -- track-record --issuer barrick --site north-mara --as-of 2026-11-01 --format markdown
+cargo run -p fmine-cli -- track-record --issuer barrick --site north-mara --as-of 2026-11-01 --price-subject barrick --format markdown
 ```
 
 DESIGN (BD-341): `--as-of` selects a separate evidence-cut report, preserving the retrospective command and
@@ -569,13 +573,19 @@ The report gives exact range-normalized misses, their direction, source-rounding
 rates and bounds that retain unresolved outcomes. Its Clopper–Pearson reference interval is explicitly
 conditional on independent Bernoulli hits; common year or site shocks are not modelled. Guidance ranges
 have no inferred probability level. The report is descriptive and makes no calibration or site-ranking
-claim. Cost comparisons are unconditional on price: a miss alone does not establish an operating failure.
+claim. Base cost comparisons remain unconditional on price: a miss alone does not establish an operating failure.
+AISC rows add the same cited price sensitivity as the retrospective report, assessed separately against each
+selected first-published and latest registered outcome. Annual royalty evidence must come from that outcome's
+own release. Only price documents available by the cut can contribute; the quarterly population ends at the
+last completed quarter within 2024Q1–2026Q2. Missing historical members remain explicit, even when their source
+is unavailable. Site prices are the default; `--price-subject` explicitly selects and labels a proxy.
 
 Each row retains its page or cell citation and file hash. The deterministic payload uses
 `fmine.guidance.track-record.as-of.v1`, distinct from the retrospective `fmine.guidance.track-record.v1`.
-Coverage describes the registered transcription population; the complete historical data gate,
-price-conditional split and cluster-aware inference remain open. Source documents and real transcription
-rows remain outside git.
+The report retains its base comparison digest as `comparison_digest`; the top-level `digest` binds that
+comparison and both price assessments. Coverage describes the registered transcription population; the
+complete historical data gate, causal cost attribution and cluster-aware inference remain open. Source
+documents and real transcription rows remain outside git.
 
 ### Compare Lumwana recovery with its historical grade relation
 

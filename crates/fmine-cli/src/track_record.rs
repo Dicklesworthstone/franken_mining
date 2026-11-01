@@ -46,6 +46,117 @@ pub(crate) fn execute(
     }
 }
 
+/// Reuse the evidence-cut comparison's exact selectors and score population for paired sensitivities.
+pub(crate) fn execute_as_of(
+    issuer: &str,
+    site: Option<&str>,
+    as_of: &str,
+    price_subject: Option<&str>,
+    root: &Path,
+) -> Envelope {
+    use fmine_core::codec::Encoder;
+    use fmine_core::hash::blake3_hash;
+    use fmine_evidence::{Refusal, RefusalCode};
+    use fmine_public::guidance::track_record as comparison;
+    use fmine_public::sources::load_issuer_profile;
+    use fmine_public::transcribe::load_guidance_transcription_report;
+
+    let loaded = (|| {
+        let profile = load_issuer_profile(root, issuer)?;
+        let claims = fmine_public::key::mine_stats::load_claims(&profile, root)?;
+        let transcripts = load_guidance_transcription_report(&profile, root, Some(as_of))?
+            .ok_or_else(|| Refusal::new(
+                RefusalCode::NoClaimInDomain201,
+                "register agreed guidance readings before requesting an evidence-cut track record",
+            ))?;
+        let report = comparison::assess(&profile, &transcripts, &claims.claims, site, as_of)?;
+        Ok::<_, Refusal>((profile, claims, transcripts, report))
+    })();
+    let (profile, claims, transcripts, report) = match loaded {
+        Ok(value) => value,
+        Err(refusal) => return crate::track_record_envelope(Err(refusal)),
+    };
+    let mut price_rows = Vec::new();
+    let mut markdown = String::from(
+        "\n## AISC price sensitivities at the evidence cut\n\nFirst-published and latest-registered selections are priced separately without changing their unconditional scores or cohort denominators. Only documents available by the requested cut are admitted. Every planned quarter completed by the cut remains required, even when its original workbook is missing.\n\n",
+    );
+    let js = |value: &str| format!("\"{}\"", crate::escape_json(value));
+    for row in &report.rows {
+        if !matches!(row.metric.as_str(), "aisc_usd_per_oz" | "aisc_usd_per_lb") {
+            continue;
+        }
+        let first = crate::track_record_price::assess_as_of(
+            &profile,
+            &transcripts,
+            &claims.claims,
+            row,
+            &row.first_published,
+            as_of,
+            price_subject,
+        );
+        let latest = crate::track_record_price::assess_as_of(
+            &profile,
+            &transcripts,
+            &claims.claims,
+            row,
+            &row.latest_registered,
+            as_of,
+            price_subject,
+        );
+        price_rows.push(format!(
+            "{{\"site\":{},\"year\":{},\"metric\":{},\"basis\":{},\"unit\":{},\"guidance_at\":{},\"guidance_sha256\":{},\"first_published\":{},\"latest_registered\":{}}}",
+            js(&row.site), row.year, js(&row.metric), js(&row.guidance.basis),
+            js(&row.guidance.unit), js(&row.guidance.locator.to_string()),
+            js(&row.guidance.doc_sha256), first.to_json(), latest.to_json(),
+        ));
+        let _ = writeln!(
+            markdown,
+            "### {} / {} / {} / {}\n\n#### First published\n\n{}\n#### Latest registered\n\n{}",
+            text(&row.site),
+            row.year,
+            text(&row.metric),
+            text(&row.guidance.locator.to_string()),
+            first.to_markdown(),
+            latest.to_markdown(),
+        );
+    }
+    let prices = format!(
+        "{{\"schema\":\"fmine.guidance.track-record.price.as-of.v1\",\"as_of\":{},\"requested_price_subject\":{},\"rows\":[{}]}}",
+        js(as_of),
+        price_subject.map_or_else(|| "null".into(), js),
+        price_rows.join(","),
+    );
+    let base = report.to_json();
+    let prefix = format!("{{\"digest\":{},", js(&report.digest.to_hex()));
+    let Some(body) = base.strip_prefix(&prefix).and_then(|s| s.strip_suffix('}')) else {
+        return crate::track_record_envelope(Err(Refusal::new(
+            RefusalCode::SourceCellUnusable208,
+            "evidence-cut comparison serialization differs from its declared digest frame",
+        )));
+    };
+    let mut frame = Encoder::new_frame(*b"GTAP", 1);
+    frame.put_str(&base);
+    frame.put_str(&prices);
+    let digest = blake3_hash(&frame.finish());
+    let payload = format!(
+        "{{\"digest\":{},\"comparison_digest\":{},\"digest_scope\":\"base_comparison_and_both_price_selections\",{body},\"price_sensitivity\":{prices}}}",
+        js(&digest.to_hex()),
+        js(&report.digest.to_hex()),
+    );
+    let _ = writeln!(
+        markdown,
+        "\nBase comparison digest: {}.\n\nCombined comparison and price digest: {}.\n",
+        report.digest.to_hex(),
+        digest.to_hex(),
+    );
+    let mut envelope = crate::track_record_envelope(Ok(report));
+    envelope.payload_json = payload;
+    if let Some(rendered) = &mut envelope.rendered_markdown {
+        rendered.push_str(&markdown);
+    }
+    envelope
+}
+
 fn printed(cell: &KeyedCell) -> String {
     let token = match &cell.claim.value {
         PublicValue::Number {

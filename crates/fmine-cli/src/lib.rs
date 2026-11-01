@@ -78,6 +78,8 @@ pub enum CliCommand {
         issuer: String,
         site: Option<String>,
         as_of: String,
+        /// Explicit commodity-price subject, evaluated only against evidence available at the cut.
+        price_subject: Option<String>,
     },
     /// Descriptive recovery comparison against an agreed historical grade/tails relation.
     RecoveryGap {
@@ -701,9 +703,6 @@ pub fn parse_args(
             if through.is_some() && as_of.is_some() {
                 return Err("track-record selects either --through or --as-of".to_string());
             }
-            if as_of.is_some() && price_subject.is_some() {
-                return Err("track-record --as-of cannot be combined with --price-subject; price sensitivity is available in retrospective mode".to_string());
-            }
             if synthetic {
                 if issuer.is_some()
                     || site.is_some()
@@ -738,6 +737,7 @@ pub fn parse_args(
                         issuer,
                         site,
                         as_of,
+                        price_subject,
                     }
                 } else {
                     CliCommand::TrackRecord {
@@ -1297,12 +1297,14 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             issuer,
             site,
             as_of,
-        } => track_record_envelope(fmine_public::guidance::track_record::run(
-            workspace_root,
+            price_subject,
+        } => track_record::execute_as_of(
             issuer,
             site.as_deref(),
             as_of,
-        )),
+            price_subject.as_deref(),
+            workspace_root,
+        ),
         CliCommand::RecoveryGap { issuer, through } => recovery_envelope(
             fmine_public::recovery::run_public(workspace_root, issuer, through.as_deref()),
         ),
@@ -1524,7 +1526,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD [--capacity-document <registered file>]",
                 "guidance completion --synthetic",
                 "track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]",
-                "track-record --issuer <issuer> [--site <site>] --as-of YYYY-MM-DD",
+                "track-record --issuer <issuer> [--site <site>] --as-of YYYY-MM-DD [--price-subject <subject>]",
                 "track-record --synthetic [--json]",
                 "recovery gap --issuer <issuer> [--through YYYYQn]",
                 "recovery gap --synthetic",
@@ -1545,8 +1547,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "\"outcome_selector\":\"Original annual releases and comparative-only populations remain separate\",",
                 "\"price_sensitivity\":\"Paired AISC sensitivity on complete declared quarterly evidence, exact proportionality and current-period compatibility; --price-subject explicitly selects a commodity-price proxy\",",
                 "\"as_of\":{\"mode\":\"descriptive_source_comparison\",\"schema\":\"fmine.guidance.track-record.as-of.v1\",",
-                "\"cut\":\"Explicit --as-of YYYY-MM-DD; no inferred wall clock; exclusive with --through and --price-subject\",",
-                "\"price_sensitivity\":\"Unconditional scores only; --price-subject is rejected\",",
+                "\"cut\":\"Explicit --as-of YYYY-MM-DD; no inferred wall clock; exclusive with --through\",",
+                "\"price_sensitivity\":\"Separate paired price sensitivities for first-published and latest registered outcomes; prices and completed quarterly history are bounded by the evidence cut\",",
                 "\"population\":\"Earliest registered agreed guidance per subject, metric, fiscal year and ownership basis; revisions remain visible\",",
                 "\"outcomes\":\"First-published and latest registered assessments retain missing members\"},",
                 "\"scope\":\"Registered transcription population; no completeness, historical forecast registration, ranking or calibration verdict\"}"
@@ -2190,9 +2192,10 @@ mod tests {
                 issuer: "barrick".into(),
                 site: Some("north-mara".into()),
                 as_of: "2026-11-01".into(),
+                price_subject: None,
             }
         );
-        let (mixed, _) = invoke(
+        let (priced, _, _) = parse_args(
             &args(&[
                 "--price-subject",
                 "Barrick",
@@ -2203,14 +2206,16 @@ mod tests {
                 "2026-11-01",
             ]),
             &workspace_root(),
-        );
-        assert_eq!((mixed.verb.as_str(), mixed.exit_code), ("track-record", 2));
-        assert_eq!(mixed.status, "usage_error");
-        assert!(mixed.refusal.is_none());
-        assert!(
-            mixed
-                .payload_json
-                .contains("--as-of cannot be combined with --price-subject")
+        )
+        .expect("explicit price proxy at an evidence cut");
+        assert_eq!(
+            priced,
+            CliCommand::TrackRecordAsOf {
+                issuer: "barrick".into(),
+                site: None,
+                as_of: "2026-11-01".into(),
+                price_subject: Some("Barrick".into()),
+            }
         );
         for bad in [
             vec!["track-record"],
@@ -2290,7 +2295,7 @@ mod tests {
         assert!(docs.payload_json.contains("[--price-subject <subject>]"));
         assert!(
             docs.payload_json
-                .contains("Unconditional scores only; --price-subject is rejected")
+                .contains("Separate paired price sensitivities for first-published and latest registered outcomes; prices and completed quarterly history are bounded by the evidence cut")
         );
     }
 

@@ -30,7 +30,7 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     with optional `--capacity-document <registered file>`, or `--synthetic`:
     cited remaining-production and AISC requirements plus joint historical-window comparisons under an explicit
     historical-sales scenario, in JSON or readable `--format markdown` (BD-342);
-  - `track-record --issuer <issuer> [--site <site>] [--through YYYYQn | --as-of YYYY-MM-DD]` or `--synthetic`: cited issuer
+  - `track-record --issuer <issuer> [--site <site>] [--through YYYYQn | --as-of YYYY-MM-DD] [--price-subject <subject>]` or `--synthetic`: cited issuer
     guidance against first-published annual outcomes, with separate comparative assessments, retained missing
     members, exact descriptive scores and JSON or readable Markdown output (BD-341);
   - `recovery gap --issuer <issuer> [--through YYYYQn]` or `--synthetic`: two cited historical
@@ -291,7 +291,14 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   and transcription failures keep their typed refusals. The explicit-cut schema is
   `fmine.guidance.track-record.as-of.v1`; the existing retrospective command and its synthetic lane retain
   `fmine.guidance.track-record.v1`. `--through` and `--as-of` are mutually exclusive; synthetic selection
-  remains retrospective and accepts neither filter.
+  remains retrospective and accepts neither filter. Both real-source modes accept `--price-subject`.
+  The explicit-cut report retains the base digest as `comparison_digest`; its top-level `digest` binds the
+  base comparison and separately selected first-published/latest-registered price assessments in a framed
+  `GTAP` version 1 encoding. Price documents are restricted to the same evidence cut; annual royalty Claims
+  must belong to the corresponding selected outcome release. Required quarterly history ends at the last
+  completed quarter within the declared 2024Q1–2026Q2 range; unavailable members remain explicit. Later price
+  documents cannot change the earlier-cut result. The borrowed pricing view reuses the exact public selector
+  and preserves canonical Claim chains without manufacturing replacement inputs.
 - `robot-docs` lists every catalogue row as `{code, exit_code, status, summary}`, `status` being `active` or
   `proposed` (`docs/adr/ADR-REFUSALS-01.md`).
 
@@ -356,8 +363,8 @@ None: every failure is a usage error or a typed refusal.
   and report; it is not a ledger anchor, forecast registration or external timestamp. All authority flags stay
   false. Unsupported guidance metrics and incomplete guidance agreement refuse instead of disappearing from the report.
   Both retrospective and explicit-as-of entry paths load the `guidance_` population before source-byte and
-  reader checks. Retrospective selection also retains `aisc_price_assumption_` and `realized_price_` for its
-  paired price sensitivity. Missing, altered, pending or disputed optional technical rows do not change a valid
+  reader checks. Both CLI modes also retain `aisc_price_assumption_` and `realized_price_` for their
+  paired price sensitivities. Missing, altered, pending or disputed optional technical rows do not change a valid
   guidance report. Conflicting guidance readers, unsupported guidance and invalid registered identities remain visible
   or refused according to each mode's existing rules; quantity selection never discards a reader at a selected locator.
   Unresolved outcomes retain every selected canonical source Claim, including simultaneous conflicting cells,
@@ -384,7 +391,8 @@ None: every failure is a usage error or a typed refusal.
   gates remain outside this slice. Actual calculations live in the calibration kernel.
 - DESIGN (BD-341.S5): `track_record_price` binds agreed, hash-verified price readings and canonical original
   Mine Stats royalty Claims to the exact paired sensitivity kernel. Every expected quarter from 2024Q1 through
-  2026Q2 is required, truncated only by an explicit `--through` bound; missing releases or unusable inputs leave
+  2026Q2 is required, truncated by an explicit `--through` bound or the last completed quarter at `--as-of`;
+  missing releases or unusable inputs leave
   the row unsplit with its reason and evidence. Price assumptions must come from the same guidance document;
   realized-price documents must be dated at or after the end of their stated period.
   An explicitly transcribed `all_sites` assumption can serve several guidance rows from that same document
@@ -394,6 +402,8 @@ None: every failure is a usage error or a typed refusal.
   AISC sensitivity also requires the scored period's royalty/price interval to meet the historical coefficient.
   JSON and Markdown retain the unconditional score beside every conditional result, exact input-rounding
   bounds and source citations. TCC and C1 remain unsplit. No controllability or causal claim is created.
+  Numeric royalty Claims must be Known or Estimated, except explicitly synthetic deterministic Assumed/Unknown
+  inputs. That exception never overrides Conflicted, NotObservable, Redacted, Stale or other negative states.
   Incomplete optional price transcriptions preserve the unconditional report, while pricing returns
   `incomplete_transcription_agreement` with pending/conflicting locators, reader roles, quantity identities
   and checked source hashes. The complete report digest binds these diagnostics. Guidance completeness
@@ -416,6 +426,6 @@ None: every failure is a usage error or a typed refusal.
 - Track-record coverage is the registered two-reader transcription population, not a complete historical
   issuer census. Guidance has no inferred probability level. The binomial reference interval is conditional
   on independent trials; source-rounding and missing-outcome bounds have separate meanings. Evidence-cut
-  reports remain unconditional on price and reject `--price-subject`; the paired sensitivity above belongs
-  to retrospective reports. Causal cost attribution, cluster inference, forecast registration and the full
+  reports retain their unconditional scores alongside separate first-published and latest-registered price
+  sensitivities. Causal cost attribution, cluster inference, forecast registration and the full
   guidance data gate remain open.
