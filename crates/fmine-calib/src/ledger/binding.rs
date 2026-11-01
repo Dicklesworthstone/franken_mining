@@ -12,7 +12,62 @@ use super::{CohortSpec, ForecastPayload, FrozenForecast, domain, frozen, late};
 
 const RESERVED: &str = "fmine.public-resolution";
 pub const PUBLIC_RESOLUTION_PREFIX: &str = "fmine.public-resolution.v1:";
+pub const PUBLIC_RESOLUTION_V2_PREFIX: &str = "fmine.public-resolution.v2:";
 const MAX_MEMBERS: usize = 4096;
+
+/// Whether later registered disclosures may append a separate outcome vintage. The first outcome always
+/// comes from the original release; this permission never allows a comparative to fill a missing original.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicVintagePolicy {
+    OriginalOnly,
+    RegisteredComparatives,
+}
+
+impl PublicVintagePolicy {
+    pub fn parse(value: &str) -> Result<Self, Refusal> {
+        match value {
+            "original_only" => Ok(Self::OriginalOnly),
+            "registered_comparatives" => Ok(Self::RegisteredComparatives),
+            _ => Err(domain("unsupported public outcome-vintage policy")),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OriginalOnly => "original_only",
+            Self::RegisteredComparatives => "registered_comparatives",
+        }
+    }
+
+    /// Validate the frozen calendar-release permission. The adapter must additionally authenticate the
+    /// selected source and require an existing original outcome and the latest restatement predecessor.
+    pub fn validate_release(
+        self,
+        target: PublicPeriod,
+        release: &str,
+        restatement: bool,
+    ) -> Result<(), Refusal> {
+        target.end_ns()?;
+        let selected = PublicPeriod::parse(release)?;
+        if !matches!(selected, PublicPeriod::Quarter { .. }) || selected.label() != release {
+            return Err(domain(
+                "a public source release must be a canonical YYYYQ1..4 quarter",
+            ));
+        }
+        let original = target.original_release();
+        if !restatement && release != original {
+            return Err(frozen(
+                "the first public outcome must use its frozen original release",
+            ));
+        }
+        if restatement && (self != Self::RegisteredComparatives || release <= original.as_str()) {
+            return Err(frozen(
+                "the frozen policy does not permit this comparative restatement",
+            ));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublicMetric {
@@ -206,8 +261,20 @@ impl PublicResolutionPolicy {
     }
 
     pub fn to_resolution_rule(&self) -> Result<String, Refusal> {
+        self.to_resolution_rule_with_vintages(PublicVintagePolicy::OriginalOnly)
+    }
+
+    /// Original-only retains its exact v1 bytes; comparative permission is an explicit v2 commitment.
+    pub fn to_resolution_rule_with_vintages(
+        &self,
+        vintages: PublicVintagePolicy,
+    ) -> Result<String, Refusal> {
         self.validate()?;
-        let mut enc = Encoder::new_frame(*b"PRP1", 1);
+        let (prefix, version) = match vintages {
+            PublicVintagePolicy::OriginalOnly => (PUBLIC_RESOLUTION_PREFIX, 1),
+            PublicVintagePolicy::RegisteredComparatives => (PUBLIC_RESOLUTION_V2_PREFIX, 2),
+        };
+        let mut enc = Encoder::new_frame(*b"PRP1", version);
         for value in [
             self.issuer.as_str(),
             self.metric.as_str(),
@@ -219,12 +286,15 @@ impl PublicResolutionPolicy {
         ] {
             enc.put_str(value);
         }
+        if version == 2 {
+            enc.put_str(vintages.as_str());
+        }
         enc.put_u32(self.members.len() as u32);
         for (id, subject) in &self.members {
             enc.put_fixed(&id.bytes);
             enc.put_str(subject);
         }
-        let mut rule = String::from(PUBLIC_RESOLUTION_PREFIX);
+        let mut rule = String::from(prefix);
         for byte in enc.finish() {
             const HEX: &[u8] = b"0123456789abcdef";
             rule.push(char::from(HEX[usize::from(byte >> 4)]));
@@ -235,13 +305,25 @@ impl PublicResolutionPolicy {
 
     /// Legacy free-text rules return `None`; any malformed reserved policy is a typed refusal.
     pub fn parse_resolution_rule(rule: &str) -> Result<Option<Self>, Refusal> {
+        Self::parse_resolution_rule_with_vintages(rule)
+            .map(|parsed| parsed.map(|(policy, _)| policy))
+    }
+
+    /// Decode the target and its frozen vintage permission without changing legacy free-text handling.
+    pub fn parse_resolution_rule_with_vintages(
+        rule: &str,
+    ) -> Result<Option<(Self, PublicVintagePolicy)>, Refusal> {
         if !rule.trim().to_ascii_lowercase().starts_with(RESERVED) {
             return Ok(None);
         }
         let bad = || domain("invalid or noncanonical frozen public-resolution policy");
-        let hex = rule
-            .strip_prefix(PUBLIC_RESOLUTION_PREFIX)
-            .ok_or_else(bad)?;
+        let (hex, version) = if let Some(hex) = rule.strip_prefix(PUBLIC_RESOLUTION_PREFIX) {
+            (hex, 1)
+        } else if let Some(hex) = rule.strip_prefix(PUBLIC_RESOLUTION_V2_PREFIX) {
+            (hex, 2)
+        } else {
+            return Err(bad());
+        };
         if hex.len() > 2_000_000 || hex.len() % 2 != 0 {
             return Err(bad());
         }
@@ -259,7 +341,7 @@ impl PublicResolutionPolicy {
                 Ok(nibble(pair[0]).ok_or_else(bad)? * 16 + nibble(pair[1]).ok_or_else(bad)?)
             })
             .collect::<Result<Vec<_>, Refusal>>()?;
-        let mut dec = Decoder::open_frame(&bytes, *b"PRP1", 1, 1).map_err(|_| bad())?;
+        let mut dec = Decoder::open_frame(&bytes, *b"PRP1", version, version).map_err(|_| bad())?;
         let issuer = dec.get_str(64).map_err(|_| bad())?.to_owned();
         let metric = PublicMetric::parse(dec.get_str(32).map_err(|_| bad())?)?;
         let unit = dec.get_str(32).map_err(|_| bad())?;
@@ -273,6 +355,11 @@ impl PublicResolutionPolicy {
         {
             return Err(bad());
         }
+        let vintages = if version == 1 {
+            PublicVintagePolicy::OriginalOnly
+        } else {
+            PublicVintagePolicy::parse(dec.get_str(32).map_err(|_| bad())?)?
+        };
         let count = dec.get_u32().map_err(|_| bad())? as usize;
         if count == 0 || count > MAX_MEMBERS {
             return Err(bad());
@@ -293,10 +380,10 @@ impl PublicResolutionPolicy {
             ownership,
             members,
         };
-        if policy.to_resolution_rule()? != rule {
+        if policy.to_resolution_rule_with_vintages(vintages)? != rule {
             return Err(bad());
         }
-        Ok(Some(policy))
+        Ok(Some((policy, vintages)))
     }
 
     pub fn validate_cohort(&self, spec: &CohortSpec) -> Result<(), Refusal> {
@@ -406,6 +493,184 @@ mod tests {
             resolution_rule: policy.to_resolution_rule().unwrap(),
             eligible_sources: vec![policy.issuer.clone()],
             policy: AssessmentPolicy::default(),
+        }
+    }
+
+    #[test]
+    fn vintage_permission_keeps_the_v1_known_answer_and_changes_the_v2_commitment() {
+        let policy = policy(&[ObjectId::from_raw(PrefixKind::Forecast, [1; 16])]);
+        // Independent frame-specification known answer: length-prefixed UTF-8 fields, one raw id,
+        // and CRC32C. No candidate serializer produced this literal.
+        let original = concat!(
+            "fmine.public-resolution.v1:",
+            "464d4e45505250310100070000006261727269636b0e00000070726f64756374696f6e5f6b6f7a",
+            "030000006b6f7a1700000073756d6d6172793a61755f70726f645f3130305f6b6f7a0600000031",
+            "3937304659060000003139373051340400000031303025010000000101010101010101010101",
+            "010101010106000000736974655f305cd3eb77",
+        );
+        assert_eq!(policy.to_resolution_rule().unwrap(), original);
+        assert_eq!(
+            policy
+                .to_resolution_rule_with_vintages(PublicVintagePolicy::OriginalOnly)
+                .unwrap(),
+            original
+        );
+        assert_eq!(
+            PublicResolutionPolicy::parse_resolution_rule_with_vintages(original).unwrap(),
+            Some((policy.clone(), PublicVintagePolicy::OriginalOnly))
+        );
+        let comparative = policy
+            .to_resolution_rule_with_vintages(PublicVintagePolicy::RegisteredComparatives)
+            .unwrap();
+        assert!(comparative.starts_with(PUBLIC_RESOLUTION_V2_PREFIX));
+        assert_ne!(comparative, original);
+        assert_eq!(
+            PublicResolutionPolicy::parse_resolution_rule_with_vintages(&comparative).unwrap(),
+            Some((policy.clone(), PublicVintagePolicy::RegisteredComparatives))
+        );
+        assert_eq!(
+            PublicResolutionPolicy::parse_resolution_rule(&comparative).unwrap(),
+            Some(policy)
+        );
+        assert_eq!(
+            PublicResolutionPolicy::parse_resolution_rule_with_vintages("legacy rule").unwrap(),
+            None
+        );
+        assert!(PublicVintagePolicy::parse("latest").is_err());
+    }
+
+    #[test]
+    fn comparative_permission_never_replaces_an_original_or_accepts_an_earlier_release() {
+        for target in [
+            PublicPeriod::Year(2026),
+            PublicPeriod::Quarter {
+                year: 2026,
+                quarter: 1,
+            },
+        ] {
+            let original = target.original_release();
+            for mode in [
+                PublicVintagePolicy::OriginalOnly,
+                PublicVintagePolicy::RegisteredComparatives,
+            ] {
+                assert!(mode.validate_release(target, &original, false).is_ok());
+                assert!(mode.validate_release(target, &original, true).is_err());
+                assert!(mode.validate_release(target, "2027Q1", false).is_err());
+                assert_eq!(
+                    mode.validate_release(target, "2027Q1", true).is_ok(),
+                    mode == PublicVintagePolicy::RegisteredComparatives
+                );
+                for bad in ["2025Q4", "2027FY", "2027Q0", "2027Q5", "2027Q1 ", "9999Q1"] {
+                    assert!(mode.validate_release(target, bad, true).is_err(), "{bad}");
+                }
+            }
+        }
+        assert!(
+            PublicVintagePolicy::RegisteredComparatives
+                .validate_release(
+                    PublicPeriod::Quarter {
+                        year: 2026,
+                        quarter: 1
+                    },
+                    "2026Q2",
+                    true
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn changing_a_shared_forecasts_vintage_permission_refuses_without_advancing_the_ledger() {
+        for initial in [
+            PublicVintagePolicy::OriginalOnly,
+            PublicVintagePolicy::RegisteredComparatives,
+        ] {
+            let other = if initial == PublicVintagePolicy::OriginalOnly {
+                PublicVintagePolicy::RegisteredComparatives
+            } else {
+                PublicVintagePolicy::OriginalOnly
+            };
+            let (mut ledger, ids) = forecasts(PublicPeriod::Year(1970).end_ns().unwrap());
+            let policy = policy(&ids[..1]);
+            let mut first = spec(&policy, "first", 2);
+            first.resolution_rule = policy.to_resolution_rule_with_vintages(initial).unwrap();
+            let first_digest = ledger.freeze_cohort(first.clone()).unwrap();
+            let mut conflicting = spec(&policy, "second", 200);
+            conflicting.resolution_rule = policy.to_resolution_rule_with_vintages(other).unwrap();
+            assert_eq!(
+                ledger.freeze_cohort(conflicting).unwrap_err().code,
+                "FMINE-REF-507"
+            );
+            let mut compatible = first.clone();
+            compatible.name = "second".into();
+            compatible.frozen_at_ns = 3;
+            assert!(ledger.freeze_cohort(compatible).is_ok());
+            assert_eq!(
+                ledger.cohort(first_digest).unwrap().spec.resolution_rule,
+                first.resolution_rule
+            );
+
+            // A different forecast may use a different permission, even for the same physical subject.
+            let mut disjoint = policy.clone();
+            disjoint.members = BTreeMap::from([(ids[1], "site_0".into())]);
+            let mut third = spec(&disjoint, "third", 4);
+            third.resolution_rule = disjoint.to_resolution_rule_with_vintages(other).unwrap();
+            assert!(ledger.freeze_cohort(third).is_ok());
+        }
+        let (mut original_ledger, ids) = forecasts(PublicPeriod::Year(1970).end_ns().unwrap());
+        let (mut comparative_ledger, _) = forecasts(PublicPeriod::Year(1970).end_ns().unwrap());
+        let policy = policy(&ids);
+        let original = spec(&policy, "same", 2);
+        let mut comparative = original.clone();
+        comparative.resolution_rule = policy
+            .to_resolution_rule_with_vintages(PublicVintagePolicy::RegisteredComparatives)
+            .unwrap();
+        assert_ne!(
+            original_ledger.freeze_cohort(original).unwrap(),
+            comparative_ledger.freeze_cohort(comparative).unwrap()
+        );
+    }
+
+    #[test]
+    fn prefix_frame_version_and_explicit_vintage_mode_must_be_canonical() {
+        let policy = policy(&[ObjectId::from_raw(PrefixKind::Forecast, [1; 16])]);
+        let original = policy.to_resolution_rule().unwrap();
+        let comparative = policy
+            .to_resolution_rule_with_vintages(PublicVintagePolicy::RegisteredComparatives)
+            .unwrap();
+        for forged in [
+            comparative.replacen(PUBLIC_RESOLUTION_V2_PREFIX, PUBLIC_RESOLUTION_PREFIX, 1),
+            original.replacen(PUBLIC_RESOLUTION_PREFIX, PUBLIC_RESOLUTION_V2_PREFIX, 1),
+            comparative.replacen("v2:", "v3:", 1),
+            format!("{comparative}00"),
+        ] {
+            assert!(PublicResolutionPolicy::parse_resolution_rule_with_vintages(&forged).is_err());
+        }
+        for mode in ["original_only", "unknown"] {
+            let mut enc = Encoder::new_frame(*b"PRP1", 2);
+            for field in [
+                "barrick",
+                "production_koz",
+                "koz",
+                "summary:au_prod_100_koz",
+                "1970FY",
+                "1970Q4",
+                "100%",
+                mode,
+            ] {
+                enc.put_str(field);
+            }
+            enc.put_u32(1);
+            enc.put_fixed(&[1; 16]);
+            enc.put_str("site_0");
+            let forged = format!(
+                "{PUBLIC_RESOLUTION_V2_PREFIX}{}",
+                enc.finish()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            );
+            assert!(PublicResolutionPolicy::parse_resolution_rule_with_vintages(&forged).is_err());
         }
     }
 

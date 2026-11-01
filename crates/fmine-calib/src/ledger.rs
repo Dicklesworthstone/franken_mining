@@ -586,15 +586,28 @@ impl ForecastLedger {
         if self.cohort_names.contains_key(&spec.name) {
             return Err(frozen("cohort name already frozen; create a new cohort"));
         }
-        let public_policy =
-            binding::PublicResolutionPolicy::parse_resolution_rule(&spec.resolution_rule)?;
-        if let Some(policy) = &public_policy {
+        let public_policy = binding::PublicResolutionPolicy::parse_resolution_rule_with_vintages(
+            &spec.resolution_rule,
+        )?;
+        if let Some((policy, vintages)) = &public_policy {
             policy.validate_cohort(&spec)?;
             for cohort in self.cohorts.values() {
-                if let Some(prior) = binding::PublicResolutionPolicy::parse_resolution_rule(
-                    &cohort.spec.resolution_rule,
-                )? {
+                if let Some((prior, prior_vintages)) =
+                    binding::PublicResolutionPolicy::parse_resolution_rule_with_vintages(
+                        &cohort.spec.resolution_rule,
+                    )?
+                {
                     policy.validate_shared_targets(&prior)?;
+                    if *vintages != prior_vintages
+                        && policy
+                            .members
+                            .keys()
+                            .any(|id| prior.members.contains_key(id))
+                    {
+                        return Err(frozen(
+                            "a forecast already has a different frozen public outcome-vintage policy",
+                        ));
+                    }
                 }
             }
         }
@@ -623,7 +636,7 @@ impl ForecastLedger {
                     "cohort must freeze after registration and before any outcome is due or recorded",
                 ));
             }
-            if let Some(policy) = &public_policy {
+            if let Some((policy, _)) = &public_policy {
                 policy.validate_forecast(rec)?;
             }
             let event = matches!(rec.payload, ForecastPayload::Bernoulli { .. });

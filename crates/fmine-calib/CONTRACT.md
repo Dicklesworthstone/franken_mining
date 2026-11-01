@@ -52,11 +52,19 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   The initial metrics are gold production in koz and issuer-reported AISC per sold gold ounce in USD/oz;
   full production and attributable production remain distinct even at an attributable fraction of one.
   `validate`, `to_resolution_rule`, `parse_resolution_rule`, period and ownership helpers perform no I/O.
+  `PublicVintagePolicy::OriginalOnly` keeps those exact v1 bytes and permissions. An opt-in
+  `RegisteredComparatives` policy is encoded by `to_resolution_rule_with_vintages` as a
+  `fmine.public-resolution.v2:`/`PRP1`-v2 rule with an explicit mode string. Its first admission still requires
+  the original release; `validate_release` allows separate restatements only from later canonical calendar
+  quarters. `parse_resolution_rule_with_vintages` returns both target and permission; the original parser
+  retains its target-only API. No v1 record is reinterpreted as permitting a comparative. Authentication,
+  the existence of an original outcome and the latest predecessor remain admission responsibilities.
   Legacy free-text rules retain their existing behavior; malformed reserved rules refuse.
   `freeze_cohort` requires the policy's members to equal the cohort exactly and its issuer to be the sole eligible
   source. Each forecast deadline must be at or before the final nanosecond of the target calendar period,
   while registration and cohort freeze remain strictly before that deadline. A forecast shared by multiple
-  public cohorts must retain the same issuer, metric, period, ownership and subject in each; cohort populations
+  public cohorts must retain the same issuer, metric, period, ownership, subject and outcome-vintage permission
+  in each; cohort populations
   may differ. Within one public cohort, each physical subject can occur only once, so multiple models of the
   same outcome must use separate cohorts and cannot inflate the calibration denominator.
   Binary events cannot be reinterpreted as production or cost quantities. Source authentication,
