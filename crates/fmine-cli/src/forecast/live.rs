@@ -203,10 +203,10 @@ fn perform(
     };
     let mut journal = Journal::open_write(&root.join(path), head)?;
     let mut state = replay(&journal)?;
-    let (request, table) = match command {
-        Command::Register { request, .. } => (read_request(&root.join(request))?, "forecast"),
-        Command::Freeze { request, .. } => (read_request(&root.join(request))?, "cohort"),
-        Command::Outcome { request, .. } => (read_request(&root.join(request))?, "outcome"),
+    let (request, table, selected) = match command {
+        Command::Register { request, .. } => (read_request(&root.join(request))?, "forecast", None),
+        Command::Freeze { request, .. } => (read_request(&root.join(request))?, "cohort", None),
+        Command::Outcome { request, .. } => (read_request(&root.join(request))?, "outcome", None),
         Command::Assess {
             cohort,
             as_of,
@@ -238,24 +238,48 @@ fn perform(
                 toml_string(selector)?,
             );
             let _ = writeln!(request, "expected_digest = {}", js(&digest.to_hex()));
-            (request, "assessment")
+            (request, "assessment", Some(digest))
         }
         _ => return Err(invalid("this operation has no request").into()),
     };
     let request = version_request(&request, table)?;
-    let mut assessment = None;
+    let previous = version_counts(journal.records(), &state, selected)?;
+    let mut response = None;
     journal.append(&request, clock, |record, header| {
-        assessment = apply(&mut state, record, header, Some(table))?;
+        let assessment = apply(&mut state, record, header, Some(table))?;
+        // Every new writer operation carries v2; replayed legacy prefixes retain their original counts.
+        let versions = VersionCounts {
+            v2: previous.versions.v2 + 1,
+            ..previous.versions
+        };
+        let report_origin = match (previous.report_origin, assessment.as_ref()) {
+            (Some(origin), _) => Some(origin),
+            (None, Some(_)) => Some(ReportOrigin {
+                checkpoint_head: record.chain_head()?,
+                checkpoint_count: state.checkpoints.len(),
+                versions,
+            }),
+            (None, None) => None,
+        };
+        // A rendering refusal must precede the durable append. The prepared response is released only
+        // after append and sync succeed; a failed append drops this staged state and its response.
+        response = Some(presentation_at(
+            header,
+            record,
+            &state,
+            command.operation(),
+            assessment.as_ref(),
+            true,
+            PresentationContext {
+                versions,
+                report_origin,
+            },
+        )?);
         Ok(())
     })?;
-    presentation(
-        &journal,
-        &state,
-        command.operation(),
-        assessment.as_ref(),
-        true,
-    )
-    .map_err(Into::into)
+    response
+        .ok_or_else(|| absent("synced forecast operation has no prepared response"))
+        .map_err(Into::into)
 }
 
 fn persisted_report(state: &mut Replay, digest: Digest32) -> Result<Assessment, Refusal> {
@@ -294,7 +318,8 @@ fn digest_is_bound(state: &Replay, digest: Digest32) -> bool {
     state
         .checkpoints
         .iter()
-        .any(|checkpoint| checkpoint.digest == digest && checkpoint.expected == Some(digest))
+        .find(|checkpoint| checkpoint.digest == digest)
+        .is_some_and(|checkpoint| checkpoint.expected == Some(digest))
 }
 
 fn read_request(path: &Path) -> Result<String, Refusal> {
@@ -478,14 +503,27 @@ impl VersionCounts {
     }
 }
 
-/// A report's policy describes its original prefix, never operations appended after that checkpoint.
+#[derive(Debug, Clone, Copy)]
+struct ReportOrigin {
+    checkpoint_head: Digest32,
+    checkpoint_count: usize,
+    versions: VersionCounts,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PresentationContext {
+    versions: VersionCounts,
+    report_origin: Option<ReportOrigin>,
+}
+
+/// Compact origin metadata preserves a report's original head and prefix without caching growing JSON.
 fn version_counts(
     records: &[Record],
     state: &Replay,
     selected: Option<Digest32>,
-) -> Result<(VersionCounts, Option<VersionCounts>), Refusal> {
+) -> Result<PresentationContext, Refusal> {
     let mut counts = VersionCounts::default();
-    let mut report_counts = None;
+    let mut report_origin = None;
     let mut checkpoint_index = 0;
     for record in records {
         let Entry::Operation(request) = &record.entry else {
@@ -505,16 +543,20 @@ fn version_counts(
                 .checkpoints
                 .get(checkpoint_index)
                 .ok_or_else(|| absent("replayed checkpoint metadata missing"))?;
-            if report_counts.is_none() && selected == Some(checkpoint.digest) {
-                report_counts = Some(counts);
+            if report_origin.is_none() && selected == Some(checkpoint.digest) {
+                report_origin = Some(ReportOrigin {
+                    checkpoint_head: record.chain_head()?,
+                    checkpoint_count: checkpoint_index + 1,
+                    versions: counts,
+                });
             }
             checkpoint_index += 1;
         }
     }
-    if selected.is_some() && report_counts.is_none() {
-        return Err(absent("selected assessment has no stored operation prefix"));
-    }
-    Ok((counts, report_counts))
+    Ok(PresentationContext {
+        versions: counts,
+        report_origin,
+    })
 }
 
 fn presentation(
@@ -528,9 +570,33 @@ fn presentation(
         .records()
         .last()
         .ok_or_else(|| absent("journal genesis missing"))?;
-    let (earliest, latest) = last.time_bounds(journal.header())?;
-    let (versions, report_versions) =
-        version_counts(journal.records(), state, assessment.map(|a| a.digest))?;
+    let context = version_counts(journal.records(), state, assessment.map(|a| a.digest))?;
+    presentation_at(
+        journal.header(),
+        last,
+        state,
+        operation,
+        assessment,
+        pinned,
+        context,
+    )
+}
+
+fn presentation_at(
+    header: &Header,
+    last: &Record,
+    state: &Replay,
+    operation: &str,
+    assessment: Option<&Assessment>,
+    pinned: bool,
+    context: PresentationContext,
+) -> Result<(String, String), Refusal> {
+    let (earliest, latest) = last.time_bounds(header)?;
+    let head = last.chain_head()?;
+    let PresentationContext {
+        versions,
+        report_origin,
+    } = context;
     let outcomes: usize = state
         .forecasts
         .values()
@@ -574,23 +640,20 @@ fn presentation(
         .join(",");
     let report = assessment
         .map(|a| -> Result<String, Refusal> {
+            let origin = report_origin
+                .ok_or_else(|| absent("selected assessment has no stored operation prefix"))?;
             let report = state.render_origin(
                 a,
-                journal.head(),
+                origin.checkpoint_head,
                 "journal_head",
-                if operation == "report" {
-                    "persisted_assessment_replay"
-                } else {
-                    "durable_journal"
-                },
+                "durable_journal",
                 "operator_declared_bounded_host_clock",
+                Some(origin.checkpoint_count),
             )?;
             let prefix = report
                 .strip_suffix('}')
                 .ok_or_else(|| invalid("invalid rendered forecast report"))?;
-            let versions =
-                report_versions.ok_or_else(|| absent("report version metadata missing"))?;
-            Ok(format!("{prefix},{}}}", versions.fields()))
+            Ok(format!("{prefix},{}}}", origin.versions.fields()))
         })
         .transpose()?
         .unwrap_or_else(|| "null".into());
@@ -604,8 +667,9 @@ fn presentation(
             } else {
                 "caller_requested_digest_only"
             }),
-            js(report_versions
+            js(report_origin
                 .ok_or_else(|| absent("report time policy missing"))?
+                .versions
                 .basis()),
         )
     } else {
@@ -614,13 +678,13 @@ fn presentation(
     let payload = format!(
         "{{\"schema\":\"fmine.forecast-journal.v1\",\"operation_schema\":\"{OPERATION_SCHEMA}\",\"operation\":{},\"head\":{},\"expected_head_checked\":{pinned},\"cell_id\":{},\"clock_skew_ns\":{},\"sequence\":{},\"observed_ns\":{},\"observed_at\":{},\"clock_bounds\":{{\"earliest_ns\":{earliest},\"latest_ns\":{latest}}},\"n_operations\":{},\"n_forecasts\":{},\"n_cohorts\":{},\"n_outcomes\":{outcomes},\"n_assessments\":{},{},\"clock_basis\":\"operator_declared_bounded_host_clock\",\"external_time_proof\":\"not_verified\",\"source_citations\":\"supplied_not_verified\",\"forecasts\":[{forecasts}],\"cohorts\":[{cohorts}],\"assessments\":[{checkpoints}]{retrieval},\"report\":{report}}}",
         js(operation),
-        js(&journal.head().to_hex()),
-        js(&journal.header().cell_id),
-        journal.header().clock_skew_ns,
+        js(&head.to_hex()),
+        js(&header.cell_id),
+        header.clock_skew_ns,
         last.sequence,
         last.observed_ns,
         utc(last.observed_ns),
-        journal.records().len() - 1,
+        last.sequence,
         state.forecasts.len(),
         state.cohorts.len(),
         state.checkpoints.len(),
@@ -629,18 +693,20 @@ fn presentation(
     Ok((
         payload,
         markdown(
-            journal,
+            header,
+            head,
             state,
             operation,
             assessment,
             outcomes,
-            report_versions.unwrap_or(versions),
+            report_origin.map_or(versions, |origin| origin.versions),
         ),
     ))
 }
 
 fn markdown(
-    journal: &Journal,
+    header: &Header,
+    head: Digest32,
     state: &Replay,
     operation: &str,
     assessment: Option<&Assessment>,
@@ -650,9 +716,9 @@ fn markdown(
     use crate::guidance::text;
     let mut out = format!(
         "# Forecast journal: {operation}\n\nCell: {}. Head: `{}`.\n\n{NO_CLAIM}\n\nClock uncertainty bound: {} ns. Forecasts: {}; frozen cohorts: {}; outcome events: {outcomes}; persisted assessments: {}.\n",
-        text(&journal.header().cell_id),
-        journal.head().to_hex(),
-        journal.header().clock_skew_ns,
+        text(&header.cell_id),
+        head.to_hex(),
+        header.clock_skew_ns,
         state.forecasts.len(),
         state.cohorts.len(),
         state.checkpoints.len(),

@@ -124,10 +124,11 @@ This closes the interval in which an outcome's recording uncertainty could cross
 Every new assessment operation binds the actual computed result in its existing `expected_digest` field,
 even when the caller supplies no expectation; that field is mandatory for v2 replay. The digest is computed
 under the writer lock; a caller's conflicting expectation refuses, and the append callback still checks clock
-bounds and replays the complete semantic transition before any write. Reopening verifies each bound result,
-global seals, frozen membership, missing outcomes and original/restated selection. Legacy unbound checkpoints
-remain readable and retain their explicit weaker binding status; existing frame bytes and semantic identities
-do not change.
+bounds and replays the complete semantic transition before any write. The callback also prepares the complete
+receipt and report against the candidate record and head, so a rendering refusal leaves the journal unchanged.
+Success is returned only after append and sync. Reopening verifies each bound result, global seals, frozen
+membership, missing outcomes and original/restated selection. Legacy unbound checkpoints remain readable and
+retain their explicit weaker binding status; existing frame bytes and semantic identities do not change.
 
 The `fmine.forecast-journal.v1` payload reports the cell, exact head, clock bounds, operation schema, inventories
 and checkpoints. `operation_schema` continues to identify the row grammar. `operation_version_counts` contains
@@ -136,17 +137,24 @@ and checkpoints. `operation_schema` continues to identify the row grammar. `oper
 its version counts and time policy describe the prefix through its first persisted checkpoint. A v2 checkpoint
 over legacy operations remains mixed and does not upgrade the earlier time evidence. `inspect` is read-only
 and can verify an independently retained head; an unpinned read establishes internal consistency only.
-`report --assessment <digest> [--head <hex>] [--provenance <path>]` retrieves one existing persisted assessment under the journal's
-shared lock. It accepts no new cohort/cut/selector and samples no clock. The saved tuple selects the existing
-kernel result, whose digest must match; missing assessments refuse `FMINE-REF-201`, wrong head pins retain
-`FMINE-REF-502`, and digest mismatches retain `FMINE-REF-505`. It appends nothing and creates no new persistent
-seal. The payload identifies `persisted_assessment` retrieval, the selected digest, read-only status and
-`result_digest_binding` (`persisted_checkpoint` or `caller_requested_digest_only`). Its `record_time_basis`
-is `observed_host_clock_with_declared_uncertainty`, `clock_upper_bound_with_declared_uncertainty` or
-`mixed_versioned_record_times`, according to the selected checkpoint's prefix.
-The nested report's mode is `persisted_assessment_replay`; its assessment content is unchanged while its
-surrounding head and checkpoint inventory reflect the opened journal. Its time-policy labels retain the
-selected checkpoint's prefix rather than later appended operations. Source citations remain unverified;
+`report --assessment <digest> [--head <hex>] [--provenance <path>]` retrieves one existing persisted assessment
+under the journal's shared lock. It accepts no new cohort/cut/selector and samples no clock. The saved tuple
+selects the existing kernel result, whose digest must match; missing assessments refuse `FMINE-REF-201`, wrong
+head pins retain `FMINE-REF-502`, and digest mismatches retain `FMINE-REF-505`. It appends nothing and creates no
+new persistent seal. The payload identifies `persisted_assessment` retrieval, the selected digest, read-only status and
+`result_digest_binding` (`persisted_checkpoint` or `caller_requested_digest_only`), using the first matching
+checkpoint's binding even if a later checkpoint pins the same digest. Its `record_time_basis` is
+`observed_host_clock_with_declared_uncertainty`, `clock_upper_bound_with_declared_uncertainty` or
+`mixed_versioned_record_times`, according to that first checkpoint's prefix.
+
+Without a supplemental provenance bundle, the complete nested `payload.report` is reconstructed at the first
+matching checkpoint, retaining its original `journal_head`, `durable_journal` mode, checkpoint prefix,
+time-policy labels and `expected_digest_matched` values. Under the same implementation, this JSON is byte-identical
+to the original checkpoint's report after later appends, restatements and reopening. Repeating an assessment
+does not replace its first report. The outer
+payload's head and inventories describe the currently opened journal, including any later checkpoints; its
+retrieval metadata remains separate from the historical report. The stored digest binds the assessment result;
+this contract does not freeze report presentation across software versions. Source citations remain unverified;
 `--trust-host-clock` declares an operator's bound and provides no independent timestamp proof. External time
 proof is not verified, and envelope authority anchors/certificates remain null.
 An optional provenance bundle checks every frozen member at its exact recorded registration time, including

@@ -705,7 +705,8 @@ DESIGN (BD-047, BD-343): `forecast journal` records live admissions, freezes coh
 outcomes and restatements, and persists immutable assessments. Every mutation reads the runtime clock while
 holding the journal's exclusive lock. Request files cannot choose `registered_at`, `frozen_at` or `recorded_at`.
 The complete operation, assigned nanosecond time, sequence and previous head are hash-bound and synchronized
-before the command reports success.
+before the command reports success. For an appended operation, the candidate receipt and report are rendered
+before writing, so a rendering refusal cannot follow a successful append; output is released only after sync.
 
 The following example uses an **invented unitless forecast** with a distant deadline. Use an unused journal path:
 
@@ -770,13 +771,19 @@ cargo run -p fmine-cli -- forecast journal report \
 The digest placeholders stand for complete hex values from successful receipts. `report` retrieves the saved
 cohort, cut and outcome selector, including original/restated citations and unresolved members. It samples no
 clock and leaves the journal's bytes, head and assessment count unchanged. An absent assessment or mismatched
-head refuses; the command never substitutes another assessment. JSON retains the original assessment content
-under `payload.report.assessment`, while the surrounding journal head and checkpoint inventory describe the
-currently opened history. Omitting `--head` permits an unpinned read with that limitation disclosed.
+head refuses; the command never substitutes another assessment. Without a supplemental `--provenance` bundle,
+JSON reconstructs the complete `payload.report` at the first checkpoint matching that digest, including its
+original `journal_head`, checkpoint inventory, `durable_journal` mode, time policy and digest-binding status.
+With the same implementation, later appends, restatements and reopening leave this nested report byte-identical.
+The outer `payload.head` and inventories describe the currently opened history, and `read_only: true`
+identifies the retrieval. Omitting `--head`
+permits an unpinned read with that limitation disclosed. This is deterministic replay of the saved assessment;
+it does not promise an unchanged presentation across software versions.
 Older checkpoints without a stored result digest remain readable; `result_digest_binding` distinguishes their
-caller-requested digest check from a result digest bound into the journal. Legacy operations without an internal
-schema marker retain their observed recording times, existing identities and results. New v2 operations can
-follow them in the same journal; replay applies each operation's original time policy.
+caller-requested digest check from a result digest bound into the first checkpoint. A later checkpoint pinning
+the same result cannot upgrade that original binding. Legacy operations without an internal schema marker
+retain their observed recording times, existing identities and results. New v2 operations can follow them in
+the same journal; replay applies each operation's original time policy.
 
 `payload.operation_version_counts` reports `legacy_v1` and `v2` counts, excluding genesis.
 `payload.record_time_policy` is `none`, `legacy_observed`, `clock_upper_bound` or `mixed`. The nested report

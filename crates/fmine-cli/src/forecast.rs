@@ -357,6 +357,7 @@ impl Replay {
             "transcript_sha256",
             "read_only_replay",
             "supplied_not_verified",
+            None,
         )
     }
 
@@ -367,6 +368,7 @@ impl Replay {
         identity_key: &str,
         mode: &str,
         authority_times: &str,
+        checkpoint_count: Option<usize>,
     ) -> Result<String, Refusal> {
         let cohort = self
             .ledger
@@ -378,7 +380,7 @@ impl Replay {
             .map(|m| self.member_json(m))
             .collect::<Result<Vec<_>, _>>()?
             .join(",");
-        let checkpoints = self.checkpoints.iter().map(|c| format!(
+        let checkpoints = self.checkpoints.iter().take(checkpoint_count.unwrap_or(self.checkpoints.len())).map(|c| format!(
             "{{\"cohort\":{},\"as_of\":{},\"selector\":{},\"digest\":{},\"expected_digest_matched\":{}}}",
             js(&c.cohort), utc(c.as_of_ns), js(selector_name(c.selector)), js(&c.digest.to_hex()),
             if c.expected.is_some() { "true" } else { "null" },

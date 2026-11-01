@@ -69,6 +69,15 @@ fn assessment(json: &str) -> &str {
         .0
 }
 
+// The nested report is the final payload field; retain its full object, removing only the outer brace.
+fn nested_report(json: &str) -> &str {
+    json.split_once("\"report\":")
+        .expect("nested report")
+        .1
+        .strip_suffix('}')
+        .expect("payload end")
+}
+
 fn args(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_string()).collect()
 }
@@ -305,6 +314,17 @@ fn saved_reports_reopen_without_clock_or_mutation() {
             assert_eq!(envelope.certificate, None);
             let payload = &envelope.payload_json;
             assert_eq!(assessment(payload), expected);
+            let original_report = nested_report(saved);
+            let replayed_report = nested_report(payload);
+            assert_eq!(replayed_report, original_report);
+            assert_eq!(
+                digest_field(replayed_report, "journal_head"),
+                digest_field(saved, "head")
+            );
+            assert_eq!(string_field(replayed_report, "mode"), "durable_journal");
+            if digest == early_digest {
+                assert!(!replayed_report.contains(&latest_digest.to_hex()));
+            }
             assert_eq!(digest_field(payload, "head"), journal.head);
             assert_eq!(digest_field(payload, "selected_assessment_digest"), digest);
             let retrieval = payload
@@ -317,7 +337,6 @@ fn saved_reports_reopen_without_clock_or_mutation() {
             );
             for fragment in [
                 "\"report_origin\":\"persisted_assessment\"".to_string(),
-                "\"mode\":\"persisted_assessment_replay\"".to_string(),
                 "\"record_time_basis\":\"clock_upper_bound_with_declared_uncertainty\"".to_string(),
                 "\"read_only\":true".to_string(),
                 "\"n_assessments\":2".to_string(),
@@ -411,6 +430,54 @@ fn legacy_unbound_assessments_remain_readable_without_claiming_a_persisted_resul
     assert!(result.contains("\"status\":\"resolved\",\"value\":45,"));
     assert!(result.contains("\"status\":\"unresolved\",\"reason\":\"not_published\""));
     assert_eq!(journal.bytes(), before);
+
+    // A later writer can pin the same numerical result, but cannot retroactively pin its earlier prefix.
+    let original_head = journal.head;
+    journal.write(
+        Command::Assess {
+            journal: JOURNAL.into(),
+            head: journal.head,
+            cohort: "two-sites".into(),
+            as_of: LATE_CUT.into(),
+            selector: "first-published".into(),
+            expected_digest: Some(digest),
+        },
+        ns("2031-02-01T00:00:00Z"),
+    );
+    assert_ne!(journal.head, original_head);
+    let after = journal.bytes();
+    let reopened = journal.report(digest, Some(journal.head));
+    assert_eq!(reopened.exit_code, 0, "{reopened:?}");
+    let current = &reopened.payload_json;
+    assert_eq!(nested_report(current), nested_report(payload));
+    assert_eq!(
+        digest_field(nested_report(current), "journal_head"),
+        original_head
+    );
+    assert_eq!(digest_field(current, "head"), journal.head);
+    assert!(current.contains("\"n_assessments\":4"));
+    let retrieval = current
+        .split_once("\"selected_assessment_digest\":")
+        .expect("historical retrieval receipt")
+        .1;
+    assert_eq!(
+        string_field(retrieval, "result_digest_binding"),
+        "caller_requested_digest_only"
+    );
+    let checkpoints = current
+        .split_once("\"assessments\":[")
+        .expect("replayed checkpoint inventory")
+        .1
+        .split_once(']')
+        .expect("inventory end")
+        .0;
+    let pinned_duplicate = checkpoints.rsplit_once("},{").expect("later duplicate").1;
+    assert_eq!(digest_field(pinned_duplicate, "digest"), digest);
+    assert_eq!(
+        string_field(pinned_duplicate, "result_digest_binding"),
+        "persisted_checkpoint"
+    );
+    assert_eq!(journal.bytes(), after);
 }
 
 #[test]
