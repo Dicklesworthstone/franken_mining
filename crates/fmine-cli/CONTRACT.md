@@ -475,6 +475,16 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   The `derivation` object retains every pair and exact enclosure, input evidence and the new-information
   warning. `derivable` never overrides a direct disclosed or contradictory assertion. Derived values
   remain arithmetic assessments rather than new issuer Claims, forecasts, calibration or disclosure authority.
+  `lint_publicness::sums` additionally binds complete Q1/Q2 sums for H1 and Q1/Q2/Q3/Q4 sums for FY
+  to `fmine_metrics::public_derivation`. The same extensive quantity, source-admission and dated-cut
+  constraints apply. Exactly one eligible source is required per quarter; competing vintages stay
+  ambiguous without selecting by their amounts. Unusable operands with unknown publication dates
+  block the derivation; only positively post-cut operands may be excluded before usability checks.
+  The `quarter_sum` object retains every candidate, exact bounds, canonical interpreted input Claims,
+  derived Claim bodies and source ancestry. Its full enclosure must fit the draft's displayed interval
+  before `derivable` is reported. Direct disclosures and contradictions retain priority, while missing
+  quarters, unknown dates, insufficient precision and arithmetic refusals remain visible. These Claims
+  establish arithmetic over source assertions, never an additional issuer disclosure or permission.
   Both modes include processed/head grade (`g/t`, `grams per tonne` or percent) and whole-site recovery
   (percent), with explicit subject, dated period and ownership. Percent-format fractions use the source's
   displayed percentage-point interval while retaining the stored fraction. Bare/mined grade, circuit recovery,

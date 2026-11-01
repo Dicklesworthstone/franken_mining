@@ -5,7 +5,7 @@
 - **Layer:** `E` (Enterprise & Decision)
 - **Subsystem:** `Enterprise`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserves", "roll_forward", "mirror"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserves", "roll_forward", "mirror", "public_derivation"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), a spend-based Logarithmic Mean Divisia Index (`lmdi`, `GB-26`, BD-333.S1), and fixed-point marginal cut-off grade solver (`solve_cutoff_grade`; synthetic known answer only, the published cut-offs E182–E184 are not yet reproduced).
@@ -83,6 +83,13 @@ arithmetic closure does not establish causation or identify an operational expla
   A registry-wide refusal also binds all supplied declarations, documents and raw/admitted readings in a
   canonical input digest, retaining duplicates and making rejected-input mutations distinguishable.
   This projection is not a durable append-only store, a complete filing census or an `EstimateStatement`.
+- DESIGN (BD-345.S4): `public_derivation::{Amount, AmountKind, Rule, derive}` supplies complete-quarter
+  sums for H1 and FY, carried as canonical Claims. Exactly Q1/Q2 or Q1/Q2/Q3/Q4 is required; issuer,
+  subject, scope, metric/unit, explicit ownership and calendar year must match. Closed source bounds
+  add in exact rationals, retaining signed bounds and refusing overflow. Rates and grades cannot enter
+  the extensive quantity enum. Parent identities, source anchors, evidence, knowledge, confidentiality
+  and UU terms survive derivation. The caller authenticates source bytes and publication availability;
+  the result establishes arithmetic over assertions, never a new issuer disclosure or physical truth.
 - `roll_forward::quarter::{Quantity, Printed, Observation, Report, Status, assess}`: source IDs identify
   actual operands; a caller-authenticated series key binds issuer, subject, year, scope/perimeter version,
   additive metric, unit, occurrence and explicit normalized ownership. Each observation states its

@@ -880,6 +880,391 @@ fn direct_contradiction_is_not_overridden_by_compatible_derived_arithmetic() {
     }
 }
 
+fn quarter_sum_report(report: &Envelope) -> &str {
+    let body = report
+        .payload_json
+        .split_once("\"quarter_sum\":")
+        .expect("quarter-sum field")
+        .1;
+    assert!(body.starts_with('{'), "{}", report.to_json());
+    body
+}
+
+fn sum_source(
+    root: &Path,
+    quarter: u8,
+    subject: &str,
+    metric: &str,
+    value: MinimalCell,
+    precision: &str,
+    date: Option<&str>,
+) -> String {
+    source(
+        root,
+        &format!("Quarter{quarter}.xlsx"),
+        &format!("2030Q{quarter}"),
+        date,
+        precision,
+        &[summary(&format!("Q{quarter}"), subject, metric, value)],
+    )
+}
+
+#[test]
+fn complete_half_and_year_sums_keep_exact_enclosures_and_canonical_parent_chains() {
+    for (n, period, amount, lower, upper) in [
+        (2, "H1 2030", "300", (2999, 10), (3001, 10)),
+        (4, "FY2030", "1000", (4999, 5), (5001, 5)),
+    ] {
+        let root = derivation_workspace();
+        let hashes: Vec<_> = (1..=n)
+            .map(|q| {
+                sum_source(
+                    &root,
+                    q,
+                    "Example Mine (60%)",
+                    PRODUCTION,
+                    number(&format!("{}.01", 100 * u16::from(q))),
+                    "0.0",
+                    Some("2031-02-01"),
+                )
+            })
+            .collect();
+        let draft = format!("Example Mine {period} 100% basis gold production is {amount} koz.");
+        let report = assess(&root, &draft, "2031-02-01");
+        let sum = quarter_sum_report(&report);
+        assert_eq!(
+            string_field(sum, "status"),
+            "derived",
+            "{}",
+            report.to_json()
+        );
+        assert!(report.payload_json.contains("\"status\":\"derivable\""));
+        assert_eq!(string_field(sum, "rule"), "public-disclosure.quarter-sum/1");
+        let derived = sum.split_once("\"derived_claim\":").unwrap().1;
+        assert!(derived.contains(&format!(
+            "\"lo\":{{\"num\":\"{}\",\"den\":\"{}\"}}",
+            lower.0, lower.1
+        )));
+        assert!(derived.contains(&format!(
+            "\"hi\":{{\"num\":\"{}\",\"den\":\"{}\"}}",
+            upper.0, upper.1
+        )));
+        assert!(derived.contains(&format!(
+            "\"evidence\":\"{:?}\"",
+            fmine_evidence::EvidenceClass::ISSUER
+        )));
+        let encoded = string_field(derived, "canonical_body_hex");
+        let bytes: Vec<_> = encoded
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect();
+        assert_eq!(
+            fmine_core::ObjectId::from_canonical_bytes(fmine_core::PrefixKind::Claim, &bytes)
+                .to_string(),
+            string_field(derived, "claim_id")
+        );
+        let profile = load_issuer_profile(&root, DERIVATION_ISSUER).unwrap();
+        let snapshot = fmine_public::run_public_assurance(&profile, &root).unwrap();
+        for c in snapshot
+            .public_claims
+            .cells
+            .values()
+            .filter(|c| c.key.line.label == "summary:au_prod_100_koz")
+        {
+            assert!(sum.contains(&format!("\"parents\":[\"{}\"]", c.claim.claim_id)));
+        }
+        for hash in hashes {
+            assert!(sum.contains(&hash));
+        }
+        assert!(sum.contains("non-obvious derived figure"));
+        assert_eq!(report, assess(&root, &draft, "2031-02-01"));
+        let (markdown, code) = run(
+            &args(&[
+                "lint",
+                "derived.md",
+                "--issuer",
+                DERIVATION_ISSUER,
+                "--discover",
+                "--as-of",
+                "2031-02-01",
+                "--format",
+                "markdown",
+            ]),
+            &root,
+        );
+        assert_eq!(code, 0);
+        for expected in [
+            "Quarter sum",
+            "Quarter1.xlsx",
+            "Derived Claim",
+            "public-disclosure.quarter-sum/1",
+        ] {
+            assert!(markdown.contains(expected), "{markdown}");
+        }
+    }
+}
+
+#[test]
+fn quarter_sums_require_every_dated_quarter_without_zero_or_future_fallbacks() {
+    for missing in ["absent", "future", "undated", "nil"] {
+        let root = derivation_workspace();
+        for q in 1..=3 {
+            sum_source(
+                &root,
+                q,
+                "Example Mine (60%)",
+                PRODUCTION,
+                number("100"),
+                "0.0",
+                Some("2031-02-01"),
+            );
+        }
+        if missing != "absent" {
+            sum_source(
+                &root,
+                4,
+                "Example Mine (60%)",
+                PRODUCTION,
+                if missing == "nil" {
+                    MinimalCell::Text("—".into())
+                } else {
+                    number("100")
+                },
+                "0.0",
+                match missing {
+                    "future" => Some("2031-02-02"),
+                    "undated" => None,
+                    _ => Some("2031-02-01"),
+                },
+            );
+        }
+        let draft = "Example Mine FY2030 100% basis gold production is 400 koz.";
+        let report = assess(&root, draft, "2031-02-01");
+        assert_eq!(
+            string_field(quarter_sum_report(&report), "status"),
+            "not_available",
+            "{missing}: {}",
+            report.to_json()
+        );
+        assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+        if missing != "absent" {
+            assert!(quarter_sum_report(&report).contains("Quarter4.xlsx"));
+        }
+        if missing == "future" {
+            assert!(quarter_sum_report(&report).contains("\"admission\":\"after_cut\""));
+            let later = assess(&root, draft, "2031-02-02");
+            assert_eq!(
+                string_field(quarter_sum_report(&later), "status"),
+                "derived"
+            );
+        }
+        if missing == "undated" {
+            assert!(quarter_sum_report(&report).contains("\"admission\":\"date_unknown\""));
+        }
+    }
+}
+
+#[test]
+fn quarter_sum_precision_and_competing_vintages_cannot_be_selected_by_the_amount() {
+    let root = derivation_workspace();
+    for q in 1..=2 {
+        sum_source(
+            &root,
+            q,
+            "Example Mine (60%)",
+            PRODUCTION,
+            number("100"),
+            "0",
+            Some("2030-08-01"),
+        );
+    }
+    let draft = "Example Mine H1 2030 100% basis gold production is 200 koz.";
+    let precise = assess(&root, draft, "2030-08-01");
+    assert_eq!(
+        string_field(quarter_sum_report(&precise), "status"),
+        "precision_not_established"
+    );
+    assert!(!precise.payload_json.contains("\"status\":\"derivable\""));
+    let wider = assess(&root, &draft.replace("200 koz", "0.20k koz"), "2030-08-01");
+    assert_eq!(
+        string_field(quarter_sum_report(&wider), "status"),
+        "derived"
+    );
+    let wrong = assess(&root, &draft.replace("200 koz", "300 koz"), "2030-08-01");
+    assert_eq!(
+        string_field(quarter_sum_report(&wrong), "status"),
+        "contradicted"
+    );
+    source(
+        &root,
+        "CompetingQuarter.xlsx",
+        "2031Q2",
+        Some("2031-08-01"),
+        "0",
+        &[summary(
+            "Q2",
+            "Example Mine (60%)",
+            PRODUCTION,
+            number("200"),
+        )],
+    );
+    let prior = assess(&root, &draft.replace("200 koz", "0.20k koz"), "2031-07-31");
+    assert_eq!(
+        string_field(quarter_sum_report(&prior), "status"),
+        "derived"
+    );
+    for amount in ["0.20k", "0.30k"] {
+        let report = assess(
+            &root,
+            &draft.replace("200 koz", &format!("{amount} koz")),
+            "2031-08-01",
+        );
+        assert_eq!(
+            string_field(quarter_sum_report(&report), "status"),
+            "ambiguous"
+        );
+        assert!(!report.payload_json.contains("\"status\":\"derivable\""));
+        for source in ["Quarter1.xlsx", "Quarter2.xlsx", "CompetingQuarter.xlsx"] {
+            assert!(quarter_sum_report(&report).contains(source));
+        }
+    }
+}
+
+#[test]
+fn quarter_sums_support_copper_and_sales_but_refuse_mixed_shares_metrics_and_units() {
+    for (metric1, metric2, subject2, prose, available) in [
+        (
+            "Copper produced (thousands of tonnes 100%)",
+            "Copper produced (thousands of tonnes 100%)",
+            "Example Mine (60%)",
+            "Example Mine H1 2030 100% basis copper production is 200 kt.",
+            true,
+        ),
+        (
+            SALES,
+            SALES,
+            "Example Mine (60%)",
+            "Example Mine H1 2030 attributable gold sold is 200 koz.",
+            true,
+        ),
+        (
+            ATTRIBUTABLE,
+            ATTRIBUTABLE,
+            "Example Mine (80%)",
+            "Example Mine H1 2030 attributable gold production is 200 koz.",
+            false,
+        ),
+        (
+            PRODUCTION,
+            SALES,
+            "Example Mine (60%)",
+            "Example Mine H1 2030 100% basis gold production is 200 koz.",
+            false,
+        ),
+        (
+            PRODUCTION,
+            PRODUCTION,
+            "Other Mine (60%)",
+            "Example Mine H1 2030 100% basis gold production is 200 koz.",
+            false,
+        ),
+        (
+            PRODUCTION,
+            PRODUCTION,
+            "Example Mine (60%)",
+            "Example Mine H1 2030 100% basis gold production is 200 kt.",
+            false,
+        ),
+        (
+            "AISC ($/oz)",
+            "AISC ($/oz)",
+            "Example Mine (60%)",
+            "Example Mine H1 2030 attributable AISC per ounce sold is $200/oz.",
+            false,
+        ),
+    ] {
+        let root = derivation_workspace();
+        sum_source(
+            &root,
+            1,
+            "Example Mine (60%)",
+            metric1,
+            number("100"),
+            "0.0",
+            Some("2030-08-01"),
+        );
+        sum_source(
+            &root,
+            2,
+            subject2,
+            metric2,
+            number("100"),
+            "0.0",
+            Some("2030-08-01"),
+        );
+        let report = assess(&root, prose, "2030-08-01");
+        assert_eq!(
+            report.payload_json.contains("\"status\":\"derivable\""),
+            available,
+            "{prose}: {}",
+            report.to_json()
+        );
+        if metric1 == ATTRIBUTABLE {
+            assert!(quarter_sum_report(&report).contains("FMINE-REF-105"));
+        }
+    }
+}
+
+#[test]
+fn direct_disclosures_and_contradictions_keep_priority_over_quarter_sum_findings() {
+    for (quarter_value, cumulative, expected, sum_status) in [
+        ("100", "300", "disclosed", "contradicted"),
+        ("150", "500", "contradicts_disclosed", "derived"),
+    ] {
+        let root = derivation_workspace();
+        for q in 1..=2 {
+            sum_source(
+                &root,
+                q,
+                "Example Mine (60%)",
+                PRODUCTION,
+                number(quarter_value),
+                "0.0",
+                Some("2030-08-01"),
+            );
+        }
+        source(
+            &root,
+            "DisclosedHalf.xlsx",
+            "2030Q3",
+            Some("2030-09-01"),
+            "0.0",
+            &[summary(
+                "H1",
+                "Example Mine (60%)",
+                PRODUCTION,
+                number(cumulative),
+            )],
+        );
+        let report = assess(
+            &root,
+            "Example Mine H1 2030 100% basis gold production is 300 koz.",
+            "2030-09-01",
+        );
+        let public = report
+            .payload_json
+            .split_once("\"public_record\":")
+            .unwrap()
+            .1;
+        assert_eq!(string_field(public, "status"), expected);
+        assert_eq!(
+            string_field(quarter_sum_report(&report), "status"),
+            sum_status
+        );
+    }
+}
+
 #[test]
 fn regional_subtraction_requires_the_same_registered_membership_at_both_releases() {
     for (membership, prior_release, available) in [

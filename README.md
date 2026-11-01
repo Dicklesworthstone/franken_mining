@@ -332,6 +332,16 @@ Rates such as AISC, grades and recovery are not subtracted. A successful `deriva
 separate direct-publication assessment and warns that the derived figure may itself be new information.
 It is arithmetic over issuer assertions, not permission to disclose them.
 
+Complete quarter sets can also establish **H1 = Q1 + Q2** and **FY = Q1 + Q2 + Q3 + Q4** for those
+same additive quantities. For example, `Example Mine H1 2030 100% basis gold production is 300 koz.`
+can be supported by dated Q1 and Q2 disclosures of `100.0` and `200.0`: their exact sum enclosure is
+`[299.9, 300.1]`. A draft stating `300.0` would claim more precision than those inputs establish.
+The `quarter_sum` report preserves the interpreted input Claims, canonical derived Claim and complete
+source ancestry. Every quarter must be present on the same subject, metric, ownership and scope basis;
+competing eligible vintages stay ambiguous. Missing or undated quarters cannot become zero, and a
+supporting sum cannot conceal a directly disclosed contradiction. Rates and ownership scaling remain
+outside these arithmetic rules.
+
 DESIGN (BD-345.S3): `--discover` also searches for source Claims when a supported equality has no Claim link.
 The subject, metric, reporting period, ownership basis and unit must still be stated explicitly. A unique
 candidate goes through the same value, rounding and staleness checks as a cited Claim. Multiple matching

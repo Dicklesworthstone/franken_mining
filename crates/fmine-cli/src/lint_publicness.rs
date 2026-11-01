@@ -19,7 +19,9 @@ use fmine_public::lint::{LintFinding, LintMode, LintReport, Verdict, equality_ta
 use fmine_public::sources::{IssuerProfile, RegisteredSource};
 use fmine_registry::sources::{PUBLISHED_AT_BASES, is_date};
 
-pub(super) const NO_CLAIM: &str = "Checks supported equalities and additive cumulative-to-quarter differences against dated, registered public sources at the requested cut. Earliest means earliest matching registered publication, not a complete search of the public record. Exact derived enclosures retain displayed rounding uncertainty and every admitted candidate pair. A non-obvious derived figure can itself be new information and requires disclosure review. This does not establish the truth of an issuer assertion, authorize disclosure or assess legal compliance. Other derived identities and forward guidance are not assessed.";
+mod sums;
+
+pub(super) const NO_CLAIM: &str = "Checks supported equalities, additive cumulative-to-quarter differences and complete quarter sums against dated, registered public sources at the requested cut. Earliest means earliest matching registered publication, not a complete search of the public record. Exact derived enclosures retain displayed rounding uncertainty and source ancestry. A non-obvious derived figure can itself be new information and requires disclosure review. This does not establish the truth of an issuer assertion, authorize disclosure or assess legal compliance. Other derived identities are not assessed; explicitly marked forward statements have their own guidance assessment.";
 
 #[derive(Debug, Clone)]
 pub(super) struct Publication {
@@ -50,6 +52,7 @@ struct Finding {
     first_registered_disclosure: Option<String>,
     evidence: Vec<SourceEvidence>,
     derivation: Option<Derivation>,
+    quarter_sum: Option<sums::Assessment>,
 }
 
 #[derive(Debug, Clone)]
@@ -569,6 +572,7 @@ pub(super) fn assess(
             first_registered_disclosure: None,
             evidence: Vec::new(),
             derivation: None,
+            quarter_sum: None,
         };
         if keys.len() == 1 {
             let candidates = keys.iter().next().and_then(|k| index.get(k));
@@ -627,10 +631,24 @@ pub(super) fn assess(
             }
         }
         result.derivation = derivation(draft, f, cells, profile, &publications, as_of, retrieved);
-        if result
+        result.quarter_sum =
+            sums::assess(draft, f, cells, profile, &publications, as_of, retrieved);
+        let derived_reason = if result
             .derivation
             .as_ref()
             .is_some_and(|d| d.report.status == Status::Derived)
+        {
+            Some("every_admitted_cumulative_difference_supports_the_draft_precision")
+        } else if result
+            .quarter_sum
+            .as_ref()
+            .is_some_and(|s| s.status == "derived")
+        {
+            Some("complete_dated_quarter_sum_supports_the_draft_precision")
+        } else {
+            None
+        };
+        if let Some(reason) = derived_reason
             && !matches!(
                 result.status,
                 "disclosed" | "disclosed_other_basis" | "contradicts_disclosed"
@@ -640,7 +658,7 @@ pub(super) fn assess(
             })
         {
             result.status = "derivable";
-            result.reason = "every_admitted_cumulative_difference_supports_the_draft_precision";
+            result.reason = reason;
         }
         findings.push(result);
     }
@@ -688,15 +706,16 @@ impl PublicnessReport {
     fn body_json(&self) -> String {
         let findings = self.findings.iter().map(|f| {
             format!(
-                "{{\"span\":{{\"start_byte\":{},\"end_byte\":{}}},\"status\":{},\"reason\":{},\"first_registered_disclosure\":{},\"evidence\":[{}],\"derivation\":{}}}",
+                "{{\"span\":{{\"start_byte\":{},\"end_byte\":{}}},\"status\":{},\"reason\":{},\"first_registered_disclosure\":{},\"evidence\":[{}],\"derivation\":{},\"quarter_sum\":{}}}",
                 f.span.0, f.span.1, js(f.status), js(f.reason),
                 optional(f.first_registered_disclosure.as_deref()),
                 f.evidence.iter().map(SourceEvidence::to_json).collect::<Vec<_>>().join(","),
                 f.derivation.as_ref().map_or_else(|| "null".into(), Derivation::to_json),
+                f.quarter_sum.as_ref().map_or_else(|| "null".into(), sums::Assessment::to_json),
             )
         }).collect::<Vec<_>>().join(",");
         format!(
-            "\"schema\":\"fmine.lint.public-record.v1\",\"as_of\":{},\"draft_sha256\":{},\"claims_digest\":{},\"publication_selection\":\"earliest matching dated registered assertion; later and conflicting assertions retained\",\"unsupported\":[\"non_additive_or_other_derived_identities\",\"forward_guidance\"],\"no_claim\":{},\"findings\":[{}]",
+            "\"schema\":\"fmine.lint.public-record.v1\",\"as_of\":{},\"draft_sha256\":{},\"claims_digest\":{},\"publication_selection\":\"earliest matching dated registered assertion; later and conflicting assertions retained\",\"unsupported\":[\"rate_or_ownership_scaling_identities\",\"unrestricted_prose\"],\"no_claim\":{},\"findings\":[{}]",
             js(&self.as_of),
             js(&self.draft_digest.to_hex()),
             js(&self.claims_digest.to_hex()),
@@ -745,6 +764,9 @@ impl PublicnessReport {
         out.push_str("\n### Publication evidence\n\n");
         for f in &self.findings {
             let _ = writeln!(out, "- {}..{}: {}.", f.span.0, f.span.1, f.reason);
+            if let Some(sum) = &f.quarter_sum {
+                out.push_str(&sum.to_markdown());
+            }
             if let Some(d) = &f.derivation {
                 let _ = writeln!(
                     out,
@@ -772,6 +794,7 @@ impl PublicnessReport {
                 .evidence
                 .iter()
                 .chain(f.derivation.iter().flat_map(|d| &d.evidence))
+                .chain(f.quarter_sum.iter().flat_map(|s| &s.evidence))
             {
                 let _ = writeln!(
                     out,
@@ -902,6 +925,49 @@ mod tests {
         cut: &str,
     ) -> PublicnessReport {
         assess(text, &lint_cited(text, cells), cells, profile, dates, cut).expect("assessment")
+    }
+
+    #[test]
+    fn quarter_sum_unverifiable_competitors_block_unless_positively_after_cut() {
+        let (profile, mut cells, mut dates) = fixture(&["100.0", "200.0", "100.0"]);
+        for (i, c) in cells.iter_mut().enumerate() {
+            c.key.unit = "koz".into();
+            c.key.line.label = "summary:au_prod_100_koz".into();
+            c.key.valid_period.kind = PeriodKind::Quarter(if i == 1 { 2 } else { 1 });
+            c.key.ownership_basis = OwnershipBasis::Consolidated100;
+            c.printed_basis = OwnershipBasis::Consolidated100;
+            c.claim = Claim::new(
+                &c.key.line.label,
+                c.claim.value.clone(),
+                &canonical_value_tag(&c.key, &c.claim.value),
+                Representation::Deterministic,
+                SpatialSupport::PeriodAggregate,
+                AdditivityClass::ExtensiveAdditive,
+                c.claim.evidence,
+                c.claim.epistemic,
+                c.claim.state,
+                c.claim.confidentiality.clone(),
+                c.claim.uu_terms.clone(),
+                vec![],
+                c.claim.anchors.clone(),
+            );
+        }
+        dates[2].published_at = "2030-08-02".into();
+        cells[2].claim.metric_key.push_str("-tampered");
+        let text = "Site A H1 2030 100% basis gold production is 300 koz.";
+        let earlier = evaluate(text, &cells, &profile, &dates, "2030-08-01");
+        assert_eq!(
+            earlier.findings[0].quarter_sum.as_ref().unwrap().status,
+            "derived"
+        );
+        assert_eq!(earlier.findings[0].status, "derivable");
+        cells[2].locator.push_str("-unverifiable");
+        let blocked = evaluate(text, &cells, &profile, &dates, "2030-08-01");
+        let sum = blocked.findings[0].quarter_sum.as_ref().unwrap();
+        assert_eq!(sum.status, "not_available");
+        assert_ne!(blocked.findings[0].status, "derivable");
+        assert_eq!(sum.evidence.len(), 3);
+        assert!(sum.to_json().contains("unusable_quarter_operand"));
     }
 
     #[test]

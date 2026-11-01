@@ -15,6 +15,7 @@ pub mod definitions;
 pub mod guidance;
 pub mod lmdi;
 pub mod mirror;
+pub mod public_derivation;
 pub mod recovery;
 pub mod reserves;
 pub mod roll_forward;
