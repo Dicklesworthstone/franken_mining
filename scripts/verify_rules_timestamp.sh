@@ -69,9 +69,21 @@ for tsr in "$dir"/rules*.tsr; do
   ok=false
   by=""
   why="no *.pem in $tsa_dir"
+  # The reply's own certificates, given again as untrusted intermediates. LibreSSL (macOS /usr/bin/openssl)
+  # does not build the chain from the certificates inside the token, so DigiCert's reply failed there with
+  # "unable to get local issuer certificate". Untrusted certificates cannot be a trust anchor: that is still one
+  # of tsa_dir/*.pem.
+  embedded="$(openssl ts -reply -in "$tsr" -token_out 2>/dev/null | openssl pkcs7 -inform DER -print_certs 2>/dev/null)"
   for chain in "$tsa_dir"/*.pem; do
     [ -f "$chain" ] || continue
-    if out="$(openssl ts -verify -digest "$hex" -in "$tsr" -CAfile "$chain" 2>&1)"; then
+    if [ -n "$embedded" ]; then
+      out="$(openssl ts -verify -digest "$hex" -in "$tsr" -CAfile "$chain" -untrusted <(printf '%s\n' "$embedded") 2>&1)"
+      rc=$?
+    else
+      out="$(openssl ts -verify -digest "$hex" -in "$tsr" -CAfile "$chain" 2>&1)"
+      rc=$?
+    fi
+    if [ "$rc" -eq 0 ]; then
       ok=true
       by="$(basename "$chain")"
       break
