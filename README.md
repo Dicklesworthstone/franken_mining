@@ -242,6 +242,65 @@ DecisionCard API requires this replay certificate and checks that it binds the a
 cut and exact rendered/numeric output. Legacy action, CVaR, flip-margin and VOI fields still lack their own
 Claim provenance, so that wrapper explicitly limits its historical evidence claim to expected NPV.
 
+### Issue a report and check whether it can be reused
+
+DESIGN (BD-347): a local reliance journal records exact assurance artifacts, their Claim dependencies and
+generic recipient roles. A matching file digest proves the bytes still match; current reuse also requires a
+fresh status cut and an independently trusted journal head. The default without trusted head/time inputs is
+`unknown`. `--trust-host-clock` declares the operator's clock bound, not an external time proof. Possessing the
+release key establishes local capability, not human review or regulatory authority.
+
+This Bash example uses an invented report and ignored local files. Generate a private **raw 32-byte** key
+(not hexadecimal text), without printing it or overwriting an existing key:
+
+```bash
+mkdir -p runs/reliance-demo
+(umask 077; set -o noclobber; head -c 32 /dev/urandom > runs/reliance-demo/release.key)
+FMINE_REVISION=$(git rev-parse HEAD) # Caller-declared metadata; the running executable is hashed separately.
+cargo run -p fmine-cli -- reliance init --journal runs/reliance-demo/journal \
+  --release-key runs/reliance-demo/release.key --release-role release-owner
+```
+
+Retain each successful mutation's returned `payload.journal_head` through an independently trusted channel.
+Supply that trusted value below; reading a head from the journal being checked cannot authenticate it.
+
+```bash
+FMINE_HEAD=REPLACE_WITH_INDEPENDENTLY_TRUSTED_INIT_HEAD
+cargo run -p fmine-cli -- reliance issue --journal runs/reliance-demo/journal \
+  --release-key runs/reliance-demo/release.key --head "$FMINE_HEAD" --trust-host-clock \
+  --synthetic --recipient-role reviewer-pool-1 --purpose review --code-revision "$FMINE_REVISION" \
+  --output runs/reliance-demo/report.json
+
+FMINE_HEAD=REPLACE_WITH_INDEPENDENTLY_TRUSTED_POST_ISSUE_HEAD
+FMINE_DIGEST=REPLACE_WITH_RETURNED_ISSUANCE_OUTPUT_DIGEST
+cargo run -p fmine-cli -- reliance check --journal runs/reliance-demo/journal \
+  --head "$FMINE_HEAD" --trust-host-clock --digest "$FMINE_DIGEST" --artifact runs/reliance-demo/report.json
+cargo run -p fmine-cli -- reliance reuse --journal runs/reliance-demo/journal \
+  --head "$FMINE_HEAD" --trust-host-clock --artifact runs/reliance-demo/report.json \
+  --output runs/reliance-demo/reviewer-copy.json
+cargo run -p fmine-cli -- reliance withdraw --journal runs/reliance-demo/journal \
+  --release-key runs/reliance-demo/release.key --head "$FMINE_HEAD" --trust-host-clock \
+  --digest "$FMINE_DIGEST" --defect code-defect --all-claims \
+  --reason "All report statements require review after a producer defect"
+
+FMINE_HEAD=REPLACE_WITH_INDEPENDENTLY_TRUSTED_POST_WITHDRAWAL_HEAD
+cargo run -p fmine-cli -- reliance recall --journal runs/reliance-demo/journal \
+  --head "$FMINE_HEAD" --code-revision "$FMINE_REVISION"
+```
+
+Replace each head/digest placeholder with its full 64-character lowercase hexadecimal value. The revision is
+a full 40-character Git SHA declared by the caller. Use `--issuer barrick` instead of `--synthetic` to issue a
+registered public report. Relative paths use `--workspace`; all new artifact paths must be unused.
+
+The default freshness window is 300 seconds with a declared clock-skew bound of 1,000 ms, configurable at
+`init`. An authorized `refresh` appends a fresh status cut using the same key/head/clock options; withdrawals
+remain effective. `supersede` additionally takes `--digest` and `--replacement`, both already recorded outputs.
+After withdrawal or supersession, current reuse refuses even while the original bytes still verify.
+Withdrawal requires `--claims clm_…,clm_…` or an explicit `--all-claims` declaration when every statement is affected.
+`reuse` makes a gated local copy without recording a new issuance. `recall --claim clm_…` or the revision query
+lists recorded issuances only: external copies and recipients are not tracked or contacted. If artifact creation
+succeeds but the journal append fails, the artifact is unconfirmed and must not be reused until the journal is resolved.
+
 ### Export evidence challenges
 
 ```bash

@@ -4,6 +4,8 @@ mod forecast;
 mod guidance;
 mod lint;
 pub mod packet;
+pub mod reliance;
+mod reliance_binding;
 mod track_record;
 mod track_record_data;
 
@@ -85,6 +87,8 @@ pub enum CliCommand {
         /// Optional complete ancestry, checked at each forecast's own registration cut.
         provenance: Option<PathBuf>,
     },
+    /// Issue, withdraw, supersede, inspect and gate reuse of exact report artifacts (BD-347).
+    Reliance(reliance::Command),
     /// `fmine doctor` (`BD-115`).
     Doctor,
     /// Read an existing public Claim from a verified issuer snapshot or the explicit synthetic lane
@@ -369,6 +373,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                 return "claim show";
             }
             "doctor" => return "doctor",
+            "reliance" => return "reliance",
             "robot-docs" => return "robot-docs",
             _ => return "unknown",
         }
@@ -381,6 +386,10 @@ pub fn parse_args(
     args: &[String],
     default_root: &Path,
 ) -> Result<(CliCommand, OutputFormat, PathBuf), String> {
+    if verb_hint(args) == "reliance" {
+        return reliance::parse(args, default_root)
+            .map(|(command, format, root)| (CliCommand::Reliance(command), format, root));
+    }
     let mut format = OutputFormat::Json;
     let mut workspace = default_root.to_path_buf();
     let mut positional = Vec::new();
@@ -926,6 +935,7 @@ fn recovery_envelope(result: Result<fmine_public::recovery::RecoveryReport, Refu
 pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     let to_doctor = || vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
     match cmd {
+        CliCommand::Reliance(command) => reliance::execute(command, workspace_root),
         CliCommand::AssurePublic { issuer, through } => {
             if !is_issuer_name(issuer) || !registry_path(workspace_root, issuer).is_file() {
                 return Envelope::usage_error(
@@ -1208,6 +1218,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 .iter()
                 .map(|i| format!("\"{}\"", escape_json(i)))
                 .collect();
+            let reliance_verbs = reliance::VERBS_JSON;
+            let reliance_docs = reliance::ROBOT_DOCS_JSON;
             let payload = format!(
                 concat!(
                     "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{envelope_fields},\"verbs\":[",
@@ -1218,6 +1230,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                     "\"recovery gap --issuer <issuer> [--through YYYYQn]\",\"recovery gap --synthetic\",",
                     "\"lint <draft> --issuer <issuer> [--through YYYYQn] [--discover]\",\"lint <draft> --synthetic [--discover]\",",
                     "\"forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ [--selector first-published|latest-as-of] [--provenance <path>]\",",
+                    "{reliance_verbs},",
                     "\"doctor\",\"claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",",
                     "\"claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",",
                     "\"claim trace <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"robot-docs\"],",
@@ -1238,6 +1251,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                     "\"coverage\":\"Every cohort member, including unresolved outcomes\",\"without_bundle\":\"not_checked\",",
                     "\"generator_replay\":\"not_performed\",\"example\":\"tests/forecasts/provenance_synthetic.toml\"}},",
                     "\"times_and_citations\":\"Supplied records, not external time proof or independently verified sources\"}},",
+                    "\"reliance\":{reliance_docs},",
                     "\"track_record\":{{\"mode\":\"retrospective_descriptive\",",
                     "\"input\":\"Hash-verified registered workbooks and agreed document transcriptions\",",
                     "\"outcome_selector\":\"Original annual release when registered; comparative-only outcomes remain separately labelled\",",
@@ -1245,6 +1259,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                     "\"refusals\":[{refusals}]}}"
                 ),
                 envelope_fields = ENVELOPE_FIELDS,
+                reliance_verbs = reliance_verbs,
+                reliance_docs = reliance_docs,
                 issuers = issuers.join(","),
                 refusals = refusals.join(",")
             );

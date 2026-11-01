@@ -4,8 +4,8 @@
 - **Crate:** `fmine-cli`
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
-- **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "track_record", "track_record_data", "lint", "forecast"]`
+- **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
+- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "track_record", "track_record_data", "lint", "forecast", "reliance", "reliance_binding"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -31,6 +31,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     [--selector first-published|latest-as-of] [--provenance <path>]`: read-only ordered transcript replay and
     cohort assessment through `fmine-calib`; first-published is the default (BD-343). An optional provenance
     bundle checks all declared ancestors at each frozen forecast's registration cut (BD-344);
+  - `reliance init|issue|check|reuse|withdraw|supersede|refresh|recall --journal <path>`: local issued-output
+    status and exact artifact reuse, with capability-authorized mutations and generic recipient roles (BD-347);
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row
     per file, `{file, present, bytes_ok, digest_ok}` against the registry's size and sha256 (BD-339.S2). A
     mismatch is reported, never refused: doctor stays exit 0, status ok;
@@ -41,6 +43,23 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
 All three Claim commands accept `--issuer <issuer> [--through YYYYQn]` or `--synthetic` to select the same
 verified source snapshot as assurance. Without a selector they search the current canonical projections.
+
+### Issued-output reliance (BD-347)
+
+`issue` renders the existing assurance envelope and binds its exact bytes, sorted output Claim IDs, actual
+ledger anchor, source/transcription/cutoff registry bytes and optional-file absence, consumed workbook/PDF
+hashes, lane and public label. The runtime executable is hashed; `--code-revision` is explicitly caller-declared.
+Public clearance, explicit staleness and canonical Claim IDs are checked without declassification. `init` binds
+a private raw 32-byte release key to the journal's role and freshness policy; capability possession proves no
+human review or regulatory authority. Later mutations require that key, an exact independently trusted `--head`
+and `--trust-host-clock`. That clock flag declares the operator's bound; it supplies no external time proof.
+Missing, mismatched or stale trust inputs leave `check` unknown and refuse current `reuse`. All artifact writes
+use create-new semantics. `reuse` holds the journal read lock through its status check and local copy; it appends
+no issuance and cannot track that copy. `recall` covers recorded issuances only and sends no notifications.
+Withdrawal names affected Claim IDs, or explicitly declares that all statements are affected; it preserves
+historical digest verification. Supersession names an already recorded replacement;
+refresh records a new status cut without reviving withdrawn or superseded outputs. A failed journal append
+after artifact creation leaves issuance durability unconfirmed: retain the file and resolve the journal before reuse.
 
 ## 3. Authority, Epistemics & Representation
 - Every JSON invocation prints exactly one `FMT-ENV-1` envelope on stdout, a usage error included (`BD-329.S3`).
@@ -239,6 +258,7 @@ None: every failure is a usage error or a typed refusal.
 
 ## 9. Lifted Code & Foundation Dependencies
 - Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-crs`, `fmine-evidence`, `fmine-claim`,
+  `fmine-runtime` (explicit host-clock boundary),
   `fmine-registry`, `fmine-array`, `fmine-numerics`, `fmine-calib`, `fmine-decide`, `fmine-io`, `fmine-public`,
   `fmine-metrics`.
 

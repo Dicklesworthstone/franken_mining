@@ -1,0 +1,11 @@
+[package]
+name = "fmine-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Explicit runtime wall-clock capability adapter; clock quality remains an owner policy input."
+
+[lints]
+workspace = true

@@ -945,15 +945,17 @@ fn synthetic_evidence() -> Result<(IssuerProfile, TranscriptionReport, Vec<Keyed
         label_as_printed: None,
         unit_evidence: None,
     };
-    // The shared synthetic profile has no on-disk sources; this fixture supplies its own invented bytes.
+    // The shared in-memory synthetic profile intentionally has no registered sources. This fixture
+    // declares its own original release so withholding that outcome cannot select a later comparative.
+    profile.corpus_dir = "synthetic/2030Q4".into();
     profile
         .sources
         .push(fmine_public::sources::RegisteredSource {
-            file_name: path.into(),
+            file_name: "production.txt".into(),
             kind: SourceKind::MineStats,
             quarter: "2030Q4".into(),
-            url: "synthetic:invented-annual-production".into(),
-            url_basis: "DESIGN: invented source bytes; no external retrieval".into(),
+            url: "https://example.invalid/2030Q4/production.txt".into(),
+            url_basis: "DESIGN: invented in-memory source".into(),
             bytes: outcome_bytes.len() as u64,
             sha256_hex: digest.to_hex(),
         });

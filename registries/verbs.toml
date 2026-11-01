@@ -45,6 +45,54 @@ mutates_authority = false
 description = "Replay a frozen forecast cohort, retain missing outcomes, and optionally check all declared ancestry at registration with --provenance"
 
 [[verb]]
+path = "reliance init"
+subsystem = "Adit"
+mutates_authority = true
+description = "Create a local issuance journal bound to a release capability and explicit freshness policy"
+
+[[verb]]
+path = "reliance issue"
+subsystem = "Adit"
+mutates_authority = true
+description = "Generate and record an assurance artifact with exact bytes, Claims, inputs, runtime binary and recipient role"
+
+[[verb]]
+path = "reliance check"
+subsystem = "Adit"
+mutates_authority = false
+description = "Check issued-output status against independently trusted head and clock inputs, optionally verifying artifact bytes"
+
+[[verb]]
+path = "reliance reuse"
+subsystem = "Adit"
+mutates_authority = false
+description = "Create a local copy only after verifying exact artifact bytes and current reliance status"
+
+[[verb]]
+path = "reliance withdraw"
+subsystem = "Adit"
+mutates_authority = true
+description = "Append an authorized withdrawal with a reason, defect class and affected Claims"
+
+[[verb]]
+path = "reliance supersede"
+subsystem = "Adit"
+mutates_authority = true
+description = "Append an authorized replacement link between recorded issued artifacts"
+
+[[verb]]
+path = "reliance refresh"
+subsystem = "Adit"
+mutates_authority = true
+description = "Append an authorized current status cut without erasing withdrawals or supersessions"
+
+[[verb]]
+path = "reliance recall"
+subsystem = "Adit"
+mutates_authority = false
+description = "List recorded local issuances affected by a declared code revision or Claim without contacting recipients"
+
+[[verb]]
 path = "claim show"
 subsystem = "Plumb"
 mutates_authority = false

@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 15
+[verbs] 23
 assure public
 assure challenges
 guidance completion
@@ -81,6 +81,14 @@ track-record
 recovery gap
 lint
 forecast assess
+reliance init
+reliance issue
+reliance check
+reliance reuse
+reliance withdraw
+reliance supersede
+reliance refresh
+reliance recall
 claim show
 claim why
 claim trace

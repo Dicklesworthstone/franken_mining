@@ -15,6 +15,7 @@ path = "src/main.rs"
 fmine-core = { path = "../fmine-core" }
 fmine-units = { path = "../fmine-units" }
 fmine-time = { path = "../fmine-time" }
+fmine-runtime = { path = "../fmine-runtime" }
 fmine-crs = { path = "../fmine-crs" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-claim = { path = "../fmine-claim" }

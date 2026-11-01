@@ -46,6 +46,7 @@ dependencies = [
  "fmine-numerics",
  "fmine-public",
  "fmine-registry",
+ "fmine-runtime",
  "fmine-time",
  "fmine-units",
 ]
@@ -135,6 +136,10 @@ dependencies = [
  "fmine-evidence",
  "fmine-time",
 ]
+
+[[package]]
+name = "fmine-runtime"
+version = "0.1.0"
 
 [[package]]
 name = "fmine-time"

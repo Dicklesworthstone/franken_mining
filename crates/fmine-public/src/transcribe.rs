@@ -125,7 +125,7 @@ fn tie_refusal(e: &TieRefusal) -> String {
 }
 
 /// The tie over accepted point values that two or more documents print under one quantity key.
-fn tie_outcome(accepted: &[Accepted]) -> Option<Result<TieOutcome, String>> {
+pub fn tie_outcome(accepted: &[Accepted]) -> Option<Result<TieOutcome, String>> {
     let points: Vec<(&Accepted, Decimal)> = accepted
         .iter()
         .filter_map(|a| match a.value {
