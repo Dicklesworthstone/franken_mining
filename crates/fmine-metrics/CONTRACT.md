@@ -5,7 +5,7 @@
 - **Layer:** `E` (Enterprise & Decision)
 - **Subsystem:** `Enterprise`
 - **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "roll_forward"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), a spend-based Logarithmic Mean Divisia Index (`lmdi`, `GB-26`, BD-333.S1), and fixed-point marginal cut-off grade solver (`solve_cutoff_grade`; synthetic known answer only, the published cut-offs E182–E184 are not yet reproduced).
@@ -51,6 +51,17 @@ the multiplicative-to-additive LMDI accounting identity (`GB-26`). Its public-da
 arithmetic closure does not establish causation or identify an operational explanation (plan §21.6, E699).
 
 ## 4. Public API Surface
+- `roll_forward::{assess, TableReport, SourceCell, ComponentCheck, IdentityRefusal}` (BD-340.S5,
+  BD-331.S7): binds explicit PDF identity declarations to agreed point readings and their registered document
+  metadata. Units, basis, member periods, raw-token precision, distinct reader identities, page bounds and
+  source hashes must agree. Missing, ambiguous or incompatible members retain a refused identity and its
+  available evidence; independent complete identities still run. Shared cells within a document are solved
+  jointly by `exact_feas`; each feasible witness and infeasible certificate is checked again before emission.
+  Conflicts carry the kernel certificate digest and minimum or inclusion-minimal correction sets with exact
+  implied intervals. Feasible components carry the narrowed ranges satisfying all declared identities.
+  Different documents remain separate vintages. The JSON report and its SHA-256 digest bind all declarations,
+  admitted source readings, rejected candidate readings, reader roles, filing metadata and results. No file
+  I/O occurs here: callers authenticate actual registered bytes and reader agreement before public use.
 - `SiteAiscRow`, `AiscConsolidationBridge`
 - `PriceDeck` (`barrick_reserve(year)`), `GeoBreakdown`, `compute_geo`
 - `ReserveReplacementBridge`
@@ -290,6 +301,11 @@ path uses a printed-rate discrepancy as a balancing factor.
 - Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`.
 
 ## 10. Non-Goals & Scope Boundary
+DESIGN (BD-340.S5): the PDF identity adapter verifies declared arithmetic of issuer assertions, not their truth
+or completeness. It never emits reserve classifications, selects a preferred filing/deck vintage, silently
+changes a printed sign, or supplies an issuer-attributed corrected figure. Synthetic E692-shaped arithmetic is
+a known-answer test of the binding; the authentic historical transcription and independent census gates remain
+open. Closed intervals are agnostic about ties; a named half-open convention is never changed to rescue a row.
 Pure metric kernel in layer `E`; workbook parsing, first-vintage pairing, per-period basis authentication,
 source Claim bindings and public rendering live in `fmine-io` / `fmine-public` (`V`, BD-333.S2/S3). The typed
 kernel supplies the numerical and provenance-locator contract, not real-file eligibility counts or causal claims.

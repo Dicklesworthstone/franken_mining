@@ -3,6 +3,7 @@
 pub mod calendars;
 pub mod metrics;
 pub mod sources;
+pub mod table_identities;
 pub mod toml_subset;
 pub mod transcriptions;
 

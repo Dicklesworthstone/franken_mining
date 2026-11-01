@@ -5,7 +5,7 @@
 - **Layer:** `S0` (Substrate)
 - **Subsystem:** `Bedrock`
 - **LOC Budget:** `10k planned / 12k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["calendars", "catalog", "metrics", "parser", "sources", "toml_subset", "transcriptions"]`
+- **Allowed Module Families:** `["calendars", "catalog", "metrics", "parser", "sources", "table_identities", "toml_subset", "transcriptions"]`
 
 ## 2. Mathematical & Domain Formulation
 Parses and validates the 8 canonical TOML registries in `registries/` (`loc_budget`, `workspace_topology`, `lifts`, `units`, `crs`, `calendars`, `refusals`, `verbs`) and verifies 1:1 alignment between `registries/refusals.toml` and `fmine_evidence::CATALOG` (generated from that file; `xtask check-refusals` checks the generation).
@@ -14,6 +14,15 @@ Parses and validates the 8 canonical TOML registries in `registries/` (`loc_budg
 Serves as the schema and registry catalog authority for `fmine doctor` and `xtask`.
 
 ## 4. Public API Surface
+- `table_identities::{parse_table_identities, load_table_identities, TableIdentityRegistry, TableIdentity,
+  Term, IdentityKind, TermRole}` (BD-340.S5): strict `fmine.table-identities.v1` declarations for source-bound
+  PDF arithmetic, without source values. Every identity names its registered document, family, sum or
+  roll-forward kind, total quantity and period, unit, basis, construction and tie convention. Linked term rows
+  explicitly name each member quantity, period, sign and role. A roll-forward has exactly one positive opening
+  and at least one movement; signed printed values are multiplied by the explicit coefficient. Multi-year
+  membership is declared rather than inferred. Duplicate quantities, unknown documents/fields, orphan terms,
+  missing periods and invalid signs/roles refuse. One construction applies per family and one tie convention
+  per document, preventing selection of a rounding rule per instance. `validate` rechecks caller-built structs.
 - `RegistryCatalog`, `RegistryError`
 - `toml_subset::{parse_subset, TomlDoc, TomlRow, TomlField, TomlValue, SubsetError}`: a strict TOML subset (`[[table]]` rows, basic strings, integers, comments); anything else refuses naming the line (bd-s9j3.1)
 - `sources::{parse_sources_registry, load_sources_registry, SourcesRegistry, SourceRow, ReconstructionRow, BasisRow, MissingFactRow, MineStatsLabelRow, ShareRow, RegionMemberRow, SourcesError, is_quarter, is_url_basis, URL_BASES, URL_BASIS_FETCHED}`, `SourcesRegistry::members_of`, `RegionMemberRow::holds_for`: issuer source registries (each `url_basis` is `"W1 table"`, `"W1 naming rule"` or `"fetched and verified YYYY-MM-DD"` with a calendar date, BD-339.S3; each `[[reconstruction]]` declares `basis = "reconstructed"`, or `"stated"` with `quote_doc` (a registered file), `quote_locator` (`sheet!cell`) and `quote_prefix`, BD-331.S2; optional `[[missing_fact]]` rows, BD-331.S2: `subject`, `family`, `text` (prose with no digits), `evidence`, optional `closing_document`, once per subject and family; optional `[[mine_stats_label]]` rows: `label`, optional `section`, duplicates refused; optional `kind = "site" | "region"` on `[[subject]]`; optional `[[share]]` rows, BD-331.S3: `subject` (a registered non-region subject, once), positive `num` ≤ `den`, `evidence`, optional Mine Stats `label`; optional `[[region_member]]` rows, BD-331.S4: `region` (a registered region), `member` (a registered non-region subject), release quarter `first` and optional `last` ≥ `first`, no two rows of one member over overlapping releases) `registries/sources/<issuer>.toml` (`fmine.sources.v1`), checked on load
