@@ -67,6 +67,7 @@ pub enum AdditivityClass {
 }
 
 pub mod dag;
+pub mod forecast_journal;
 mod label;
 pub mod reliance;
 

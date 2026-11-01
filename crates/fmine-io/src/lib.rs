@@ -3,6 +3,7 @@
 
 pub mod numfmt;
 pub mod numtok;
+pub mod forecast;
 pub mod reliance;
 pub mod styles;
 pub mod xlsx;

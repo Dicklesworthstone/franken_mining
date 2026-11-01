@@ -88,6 +88,7 @@ dependencies = [
  "fmine-claim",
  "fmine-core",
  "fmine-evidence",
+ "fmine-runtime",
 ]
 
 [[package]]

@@ -5,7 +5,7 @@
 - **Layer:** `S0` (Substrate)
 - **Subsystem:** `Bedrock`
 - **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["claim", "dag", "label", "uu", "reliance"]`
+- **Allowed Module Families:** `["claim", "dag", "label", "uu", "reliance", "forecast_journal"]`
 
 ## 2. Mathematical & Domain Formulation
 Implements `Claim<T>`, `Representation`, `SpatialSupport`, `AdditivityClass`, `Confidentiality`, `UuTerm` (`INV-015`), non-lossy binary composition (`compose_binary`, `NL-1..NL-8`), and `ClaimDag` transitive staleness propagation (`INV-013`).
@@ -53,10 +53,6 @@ recall retains each copy. Their artifact/Claim/anchor/lane binding cannot change
 applies to the output digest across all copies, and reissuance cannot resurrect it. Withdrawal names a nonempty
 subset of the artifact's Claims. Replacements must already be issued and current; self-links, cycles and changing
 an existing replacement link refuse. Withdrawing a replacement never restores its predecessor.
-`IssuanceRecord::digest()` identifies the exact issuance, including its producer and recipient metadata;
-`RelianceLedger::issuance(id)` selects that record through an index rebuilt during replay. Selecting by output
-digest alone cannot identify which producing revision a forwarded copy belongs to. The index adds no durable
-fields and does not change any canonical frame or existing digest.
 
 The independent reliance format uses `RLYJ` schema-1 canonical frames, with bounded counts/strings and CRC32C.
 Its previous field binds BLAKE3 of the exact preceding lowercase hex frame plus LF. Frame digest, line-chain head,
@@ -64,6 +60,14 @@ issuance digest (`RLYI`) and output-byte digest remain distinct. Replay bounds a
 total decoded frames, 100,000 records, and 100,000 Claim ids per issuance. Existing `CLM1` and anchor bytes are
 unchanged. A self-consistent hash chain is not authenticated authority: an independently obtained exact current
 head pin is required, not an ancestor pin or a head copied from the same untrusted input.
+
+DESIGN (BD-047): `forecast_journal` defines opaque forecast-operation records independently of reliance's
+business ledger. `FJR1` schema-1 FMNE frames bind a sequence, previous exact-line BLAKE3, observed Unix nanoseconds
+and either a genesis header or exact UTF-8 operation text. Genesis has sequence zero and a zero previous digest.
+The immutable header names the cell and its declared clock-skew bound. Canonical lowercase hex plus LF is the
+on-disk line; CRC32C and exact re-encoding detect malformed frames. Replay checks contiguous sequence, one genesis,
+nondecreasing observed time and checked earliest/latest clock bounds. Limits are 64 KiB per operation, 256 bytes
+per cell id, 100,000 records and 64 MiB of encoded journal lines. It does not parse the operation's business schema.
 
 DESIGN (BD-344, INV-016): `dag::TemporalGraph` seals provenance metadata for observations, interpretations,
 fitted parameters, correlation cards, exclusion acts, decks, registry rows, priors, Claims, forecasts, decisions
@@ -104,11 +108,13 @@ This first export slice accepts only `Confidentiality::public()` and never decla
   JournalRecord, ReleaseCapability, TrustedTime, TrustContext, RelianceStatus, RelianceCheck, RelianceLedger}`.
   The ledger exposes bounded replay/live append, integrity checks, current-use gating, historical status and
   exact revision/Claim recall over the known issued population, including every generic recipient copy.
-  `issuance(id)` resolves an exact canonical `IssuanceRecord::digest()`, distinct from `copies(output_digest)`.
 - `dag::{TemporalGraph, TemporalNode, NodeKind, Availability, ConeCut, CheckedCone, ConeError, ConeViolation}`;
   `TemporalGraph::check` and `verify_claim` bind the actual Claim's ID, kind and immediate parent set.
 - `dag::replay::{ReplayStore, ReplayView, ReplayCertificate, ReplayError, verify_replay}`; store insertion
   checks canonical IDs, and certificates expose immutable output and read receipts.
+- `forecast_journal::{Header, Entry, Record, validate_chain, decode_journal}`. `Record` exposes bounded binary
+  and line codecs, `chain_head` and `time_bounds`; `Header::time_bounds` returns checked earliest/latest instants.
+  The pure codec never obtains a clock or performs filesystem I/O; live timestamps belong to the locked adapter.
 
 ## 5. Guards & Typed Refusals
 - `FMINE-REF-102` (support mismatch, `verify_support_compatible`, `G-GEO-1`), exit 3
@@ -140,6 +146,8 @@ This first export slice accepts only `Confidentiality::public()` and never decla
 - `FMINE-REF-110` (temporal cone or replay, proposed under ADR-REFUSALS-01), exit 3: inadmissible or incomplete
   ancestry, backdated availability, a cycle, an undeclared read, a denied read, or differing replay outputs.
   Replay-store replacement or a payload whose content-derived ID differs refuses with `FMINE-REF-507`.
+- Forecast journals use `107` for invalid bounded fields/time arithmetic and `502` for noncanonical bytes,
+  malformed chains, incomplete tails and regressing observed time. Forecast semantics retain their own refusals.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-CLAIM-1`: `compose_binary` keeps the placeholder (`None`), takes the `meet` of classes and the `and` of states
@@ -159,6 +167,8 @@ This first export slice accepts only `Confidentiality::public()` and never decla
   (`test_canonical_body_and_claim_id_golden`). A write to each hashed field is refused by `check_id` and by
   `ClaimDag::insert`, which then stores nothing (`test_edited_claim_is_refused_and_unhashed_fields_are_not`).
   `downgraded` never raises a class (`test_downgraded_supersedes_and_never_raises`).
+- BD-047 direct codec tests retain exact multiline UTF-8 operation text, check frame field order and line-head
+  hashing, mutate every byte, and reject noncanonical hex, truncated frames, bad chains and oversized inputs.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Adding `IntensiveMassWeighted` claims without mass weights or combining mismatched `SpatialSupport` fails closed with `FMINE-REF-103` / `FMINE-REF-102`.
@@ -183,6 +193,9 @@ journal by itself, or carry an old sign-off forward. Roles are a closed vocabula
 numeric reviewer pools and hexadecimal agent sessions); there is no name, email or contact field. Recall by
 Claim uses the original explicit Claim identity, which remains available after that Claim is superseded; this
 module does not invent a Claim-successor relationship or subscribe to a separate dependency graph.
+The forecast journal is an integrity format, not a forecast evaluator, authority service or external timestamp
+proof. An internally valid prefix cannot prove that no suffix was removed; rollback detection needs an
+independently retained final-head pin. Operation validity is enforced by the consuming calibration replay.
 
 Temporal metadata is supplied evidence, not an independently authenticated time or ledger proof. The graph
 cannot prove that an engine declared every input; the replay seam checks only reads mediated by `ReplayView`.

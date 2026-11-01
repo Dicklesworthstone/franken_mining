@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Ingestion`
 - **LOC Budget:** `40k planned / 46k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance"]`
+- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance", "forecast"]`
 
 ## 2. Mathematical & Domain Formulation
 Pure-Rust ZIP and RFC 1951 DEFLATE (`zip_inflate`); `.xlsx` workbook, shared-string and worksheet extraction
@@ -26,6 +26,12 @@ are exactly `build_minimal_xlsx`'s (golden test).
 `fmine_claim::reliance::JournalRecord` frame per lowercase hexadecimal line, ending in LF. Each record's
 `previous` field binds BLAKE3 of the complete preceding line, including LF; genesis uses the zero digest.
 The S0 codec and transition rules remain the durable-format authority.
+
+DESIGN (BD-047): `forecast` stores S0 `forecast_journal::Record` lines without interpreting their operation
+schema. A live append samples an injected `fmine_runtime::WallClock` while holding the exclusive journal lock,
+assigns the next sequence and previous head, checks monotone observed time and declared skew bounds, then calls
+the consumer's semantic validator. No caller-supplied record timestamp enters this API. Only after successful
+validation, complete write and `sync_all` does the committed in-memory snapshot/head advance.
 
 ## 3. Authority, Epistemics & Representation
 Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a `SourceAnchor`
@@ -69,7 +75,7 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   per-ounce denominator, credit convention and definition words stay separate. Only `ownership basis unprinted`
   or `unprinted ownership` supplies the unprinted marker. Quarter/half tokens without a year keep `None`;
   no current year is supplied. Explicit period and ownership metadata do not become extra numerical amounts.
-- `reliance::{Journal, ReleaseKey, ReissueRequest, MAX_JOURNAL_BYTES, MAX_JOURNAL_RECORDS}`. `Journal::create` uses
+- `reliance::{Journal, ReleaseKey, MAX_JOURNAL_BYTES, MAX_JOURNAL_RECORDS}`. `Journal::create` uses
   `create_new`, validates genesis, writes and syncs it, and on Unix syncs its existing parent directory.
   `open_read(path, optional_pin)` retains a shared OS file lock; `open_write(path, expected_head)` retains
   an exclusive lock through replay, expected-head comparison and all subsequent appends. `ledger` and `head`
@@ -81,17 +87,16 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   the issuance, retaining its exclusive journal lock throughout. `export_current` reads bounded bytes once,
   verifies their issuance and current-use status, and creates a byte-identical local copy while retaining
   an independently pinned journal lock. Retrieval does not register a new recipient or assert receipt.
-- DESIGN (BD-347): `Journal::reissue_current` registers a new generic recipient and purpose for the exact
-  `ReissueRequest::source_issuance` identity, not an arbitrary issuance with the same output digest. It requires
-  a healthy, independently pinned exclusive writer, reads the artifact once, verifies its selected output
-  digest and gates current status before creating a destination or advancing the status cut. It preserves
-  every selected producer field, changing only recipient, purpose and issuance time, then uses `issue_bytes`
-  for capability/transition validation, private `create_new`, sync and append. Neither a stale status cut nor
-  withdrawn/superseded bytes can be refreshed by forwarding. The new record establishes a local registered
-  copy; it does not establish delivery or carry forward a human sign-off.
 - `ReleaseKey::read` accepts an exact-size, nonzero regular, non-symlink file. On Unix it refuses group/other access;
   on platforms where this private-file policy is unsupported it refuses. `sha256` exposes only its public
   header commitment. The adapter does not generate keys or choose an operator's state directory.
+- `forecast::{Journal, MAX_JOURNAL_BYTES, MAX_JOURNAL_RECORDS, MAX_REQUEST_BYTES}`. `create(path, cell_id,
+  clock_skew_ns, clock)` uses create-new semantics, a private Unix mode, exclusive lock, runtime-stamped genesis
+  and file/parent-directory sync. `open_read(path, optional_head)` retains a shared lock; `open_write(path,
+  expected_head)` retains an exclusive lock through complete replay, final-head comparison and append.
+  `records`, `header`, `head` and `is_pinned` expose the committed snapshot. `append(request, clock, validate)`
+  invokes the validation closure before writing; its caller replays `ForecastLedger` semantics on staged state.
+  A successful append clears the old pin status; the newly returned head must be retained independently.
 
 ## 5. Guards & Typed Refusals
 - `G-BULL-1`: formula-error cells and `hidden`/`veryHidden` sheets go to `Workbook::quarantined`. Hidden sheets are
@@ -124,6 +129,12 @@ for current reuse; an unpinned replay establishes only internal consistency of t
 - No repair, truncation, replacement or fallback journal is attempted. A failed write or sync poisons its
   writer handle and retains all bytes for inspection. OS locks coordinate cooperating local writers and
   readers; filesystem access controls and the external pin remain necessary against file replacement.
+- Forecast journals enforce the same 64 MiB and 100,000-record storage limits with a 64 KiB operation limit.
+  The S0 codec rejects corrupt/truncated/noncanonical chains. Runtime clock failures, rollback, wrong final heads,
+  lock conflicts and changed file lengths refuse with `502`; unavailable paths use `506`, malformed fields `107`.
+  A validator refusal preserves its original code and leaves disk bytes, sequence and committed head unchanged.
+  A failed write/sync poisons the handle; no retry or repair is attempted. Creation failures may leave an
+  uninitialized path, which is retained for inspection rather than overwritten by a second create.
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-IO-1`: on the 18 registered Barrick workbooks, the per-workbook census (visible and hidden sheets; numeric,
@@ -143,18 +154,16 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   refuse after withdrawal; invalid digest, key, time, stale or absent trust, and an existing destination
   cannot create an authorized output. A failed final append retains the unissued artifact and poisons its
   writer. Artifact reads refuse special files and inputs over the separate 64 MiB bound.
-- `reliance::tests` checks that forwarding selects the requested producer when different revisions emitted
-  identical bytes, preserves its full provenance and adds only that revision's new recipient to recall.
-  Missing/wrong receipt identity, pin, writer authority, key, bounded clock, current status, exact bytes or
-  an available destination cannot create a new forwarding record or alter the previous head.
+- BD-047 direct filesystem tests reopen exact operations and pinned heads, preserve prefixes across appends,
+  exercise shared/exclusive lock contention, reject stale pins, corrupt/truncated/rolled-back files and clock
+  rollback, and prove validator failures do not write. A real read-only descriptor triggers append failure and
+  verifies poisoning while retaining the previous committed snapshot. Oversized and special files refuse.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Missing files, corrupt ZIP or DEFLATE streams and malformed workbooks fail closed with `IoError`. No fallbacks.
 Reliance failures return registered `Refusal`s. A caller issuing a new artifact holds the writer lock, validates
 its entry first, creates and syncs the exact artifact with `create_new`, then appends the issuance. If that final
-append fails, a previously unissued digest cannot pass the current-use gate. Failed forwarding of an already
-issued digest adds no recipient record or successful issuance receipt; its existing status remains unchanged.
-A current-use export keeps its
+append fails, the artifact remains unissued and cannot pass the current-use gate. A current-use export keeps its
 pinned shared journal handle alive through its exact-byte copy; checking and dropping the handle before copying
 would permit a concurrent withdrawal race.
 
@@ -162,7 +171,7 @@ would permit a concurrent withdrawal race.
 - `GATE-BULL-01` (part 1, extraction fidelity)
 
 ## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim` (V to S0).
+- Depends on `fmine-core`, `fmine-evidence`, `fmine-claim` (V to S0), and `fmine-runtime` (V to S1, explicit clock).
 
 ## 10. Non-Goals & Scope Boundary
 Reads cells and adapts the reliance model to local files; does not interpret tables (`fmine-public`) or compute
@@ -173,3 +182,6 @@ sentence corpus and its precision/recall study remain separate work; synthetic l
 The reliance file is a bounded local seam until the authority ledger is available. It is not a replicated
 authority service, authentication signature, clock synchronisation service, key manager or notification system.
 It cannot establish that all detached copies were recalled; it records only known issuances.
+The forecast store provides local durable ordering, not external time authenticity, replication or a substitute
+for forecast semantic replay. Its declared host-clock bound is an operator assumption. Advisory locks coordinate
+cooperating processes; independently retained pins detect a changed final head but do not authenticate the writer.
