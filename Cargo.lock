@@ -19,6 +19,7 @@ dependencies = [
  "fmine-numerics",
  "fmine-registry",
  "fmine-time",
+ "fmine-units",
 ]
 
 [[package]]

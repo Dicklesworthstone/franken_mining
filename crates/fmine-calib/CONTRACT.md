@@ -52,7 +52,8 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   retained; new `register_payload` ids hash exact canonical bytes. `record_outcome` is an uncited internal
   compatibility path and cannot supply a frozen public cohort.
 - `ProjectArchetype`, `ReferenceClassPrior`
-- `SpatialFrontPitMonitor` (BD-311): `new`, `observe_sample` (PIT and alarm), and the pub `location_eproc` and
+- `SpatialFrontPitMonitor` (BD-311): `new` (nugget and sill variances, the range as a `fmine_units::Qty<Length>`,
+  the neighbourhood size and alpha), `observe_sample` (PIT and alarm), and the pub `location_eproc` and
   `dispersion_eproc`. Private to the module: `predictive` (the registered model's conditional mean and standard
   deviation for a polygon, recording nothing), the two scores, and c0 (`scripts/oracle/front_pit_constants.py`,
   `test_front_pit_score_constants_known_answers`). Nothing outside the crate calls them yet, and L-6 refuses bare
@@ -195,8 +196,8 @@ downstream reads the alarm yet: no claim is downgraded by it, and no Investigati
 - `GATE-HELM-01`
 
 ## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`, and `fmine-registry` (S0)
-  for the TOML subset the record's manifest is written in.
+- Depends on `fmine-core`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`, `fmine-registry` (S0)
+  for the TOML subset the record's manifest is written in, and `fmine-units` (S0) for the monitor's range.
 
 ## 10. Non-Goals & Scope Boundary
 Pure calibration and scoring kernel; does not perform file I/O (`L-3`).

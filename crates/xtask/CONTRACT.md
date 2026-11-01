@@ -101,7 +101,7 @@ Not applicable: no Claims are emitted.
 - The other checks have no external oracle: their tests are seeded violations.
 
 ## 10. Known gaps
-- **L-6 debt (bd-u56b).** `registries/l6_allow.toml` holds six `debt` rows, fifteen bare physical or money parameters that existed when the deny-by-default rule landed. They are in `fmine-calib` (`new`: variogram nugget, sill and range), `fmine-decide` (`from_linear_sensitivity`, `build`) and `fmine-metrics` (`compute_geo`, `compute`, `solve_cutoff_grade`). Each should take a typed quantity or a Claim. Bare `f64` return types are not checked at all.
+- **L-6 debt (bd-u56b).** `registries/l6_allow.toml` holds five `debt` rows, twelve bare physical or money parameters that existed when the deny-by-default rule landed. They are in `fmine-decide` (`from_linear_sensitivity`, `build`) and `fmine-metrics` (`compute_geo`, `compute`, `solve_cutoff_grade`). The sixth, `fmine-calib`'s `SpatialFrontPitMonitor::new`, now takes its range as a `Qty<Length>`; its two variances are a `generic` row, since the monitor is unit-agnostic. Each should take a typed quantity or a Claim. Bare `f64` return types are not checked at all.
 - **Gaps in check-all and CI:**
   - `check-all` does not run `contracts`, which waits for bd-2a73.2 to rewrite every contract, nor `check-beads`. CI runs `check-all`, `check-amend --base`, `loc` and the quarterly drift check, so neither of the two runs there.
   - `check_scope` still holds the older rule of sections 1 to 10, which a twelve-section contract also meets.
@@ -221,7 +221,7 @@ Not applicable: no Claims are emitted.
   - `test_seeded_method_call_ln_in_bitwise_portable_fails`;
   - `test_seeded_ufcs_f64_exp_in_bitwise_portable_fails`;
   - `test_workspace_check_det_passes_and_logs`.
-- PO-UNIT-2 (no K or E public function takes a bare `f64` for a physical quantity) is enforced for parameters by `check_claims` in `check-all`, and is not discharged while the six debt rows remain and returns go unchecked (Known gaps). Tests:
+- PO-UNIT-2 (no K or E public function takes a bare `f64` for a physical quantity) is enforced for parameters by `check_claims` in `check-all`, and is not discharged while the five debt rows remain and returns go unchecked (Known gaps). Tests:
   - `test_l6_any_bare_f64_parameter_fails_on_one_line_or_several`;
   - `test_l6_typed_private_and_commented_parameters_pass`;
   - `test_l6_allow_rows_excuse_their_sites_and_refuse_stale_or_empty_ones`;

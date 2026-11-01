@@ -75,9 +75,9 @@ reason = "SpatialFrontPitMonitor significance level, dimensionless"
 crate = "fmine-calib"
 file = "src/lib.rs"
 fn = "new"
-params = "nugget_var, sill_var, range_m"
-kind = "debt"
-reason = "SpatialFrontPitMonitor variogram: nugget and sill variances in squared grade units and the range in metres, passed bare"
+params = "nugget_var, sill_var"
+kind = "generic"
+reason = "SpatialFrontPitMonitor covariance: nugget and sill variances of the caller's observed values, in their unit squared; the monitor is unit-agnostic (the range is a Qty<Length> since 2026-11-01)"
 
 [[allow]]
 crate = "fmine-decide"

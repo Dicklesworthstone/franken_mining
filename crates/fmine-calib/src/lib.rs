@@ -14,6 +14,7 @@ use fmine_evidence::{EvidenceClass, Refusal, RefusalCode};
 use fmine_numerics::cholesky_solve;
 use fmine_numerics::eproc::ScoreBettingEProcess;
 use fmine_numerics::norm_cdf;
+use fmine_units::{Length, Qty};
 
 pub mod guidance_scores;
 pub mod ledger;
@@ -180,7 +181,7 @@ fn calib_rest_bits(key: RngKey) -> Vec<u64> {
     }
     let mut rng = PhiloxStream::new(key);
     let mut unit = || rng.next_f64_open01();
-    match SpatialFrontPitMonitor::new(0.05, 1.0, 50.0, 8, 0.05) {
+    match SpatialFrontPitMonitor::new(0.05, 1.0, Qty::new(50.0), 8, 0.05) {
         Ok(mut monitor) => {
             for i in 0..1_000 {
                 // A bias that flips at sample 200 takes the location stake to both of its limits and the pair to
@@ -416,7 +417,7 @@ fn dispersion_score(z: f64) -> f64 {
 pub struct SpatialFrontPitMonitor {
     pub nugget_var: f64,
     pub sill_var: f64,
-    pub range_m: f64,
+    pub range_m: Qty<Length>,
     pub max_neighbors: usize,
     pub history: Vec<SpatialSample>,
     pub location_eproc: ScoreBettingEProcess,
@@ -425,13 +426,14 @@ pub struct SpatialFrontPitMonitor {
 
 impl SpatialFrontPitMonitor {
     /// Creates a new `SpatialFrontPitMonitor` with exponential variogram parameters and significance `alpha`.
+    /// The nugget and sill are variances of the observed quantity, in its unit squared; the range is a length.
     ///
     /// Refuses (rather than floors or clamps, bd-8wrk) a nugget or sill below 1e-6, a range below 1 m, a
     /// neighbourhood outside 1..=16 and `alpha` outside (0, 1).
     pub fn new(
         nugget_var: f64,
         sill_var: f64,
-        range_m: f64,
+        range_m: Qty<Length>,
         max_neighbors: usize,
         alpha: f64,
     ) -> Result<Self, ScoreError> {
@@ -444,7 +446,7 @@ impl SpatialFrontPitMonitor {
         };
         check("nugget_var", nugget_var, nugget_var >= 1e-6)?;
         check("sill_var", sill_var, sill_var >= 1e-6)?;
-        check("range_m", range_m, range_m >= 1.0)?;
+        check("range_m", range_m.value(), range_m.value() >= 1.0)?;
         check(
             "max_neighbors",
             max_neighbors as f64,
@@ -477,7 +479,7 @@ impl SpatialFrontPitMonitor {
         if h < 1e-9 {
             self.nugget_var + self.sill_var
         } else {
-            self.sill_var * det::exp(-h / self.range_m)
+            self.sill_var * det::exp(-h / self.range_m.value())
         }
     }
 
@@ -1093,32 +1095,33 @@ mod tests {
     fn test_spatial_monitor_refuses_out_of_domain_parameters() {
         let p = |name: &'static str, value: f64| Err(ScoreError::InvalidParameter { name, value });
         assert_eq!(
-            SpatialFrontPitMonitor::new(0.0, 0.75, 30.0, 6, 0.02).map(|_| ()),
+            SpatialFrontPitMonitor::new(0.0, 0.75, Qty::new(30.0), 6, 0.02).map(|_| ()),
             p("nugget_var", 0.0)
         );
         assert_eq!(
-            SpatialFrontPitMonitor::new(0.25, -1.0, 30.0, 6, 0.02).map(|_| ()),
+            SpatialFrontPitMonitor::new(0.25, -1.0, Qty::new(30.0), 6, 0.02).map(|_| ()),
             p("sill_var", -1.0)
         );
         assert_eq!(
-            SpatialFrontPitMonitor::new(0.25, 0.75, 0.5, 6, 0.02).map(|_| ()),
+            SpatialFrontPitMonitor::new(0.25, 0.75, Qty::new(0.5), 6, 0.02).map(|_| ()),
             p("range_m", 0.5)
         );
         assert_eq!(
-            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 0, 0.02).map(|_| ()),
+            SpatialFrontPitMonitor::new(0.25, 0.75, Qty::new(30.0), 0, 0.02).map(|_| ()),
             p("max_neighbors", 0.0)
         );
         assert_eq!(
-            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 17, 0.02).map(|_| ()),
+            SpatialFrontPitMonitor::new(0.25, 0.75, Qty::new(30.0), 17, 0.02).map(|_| ()),
             p("max_neighbors", 17.0)
         );
         assert_eq!(
-            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 1.0).map(|_| ()),
+            SpatialFrontPitMonitor::new(0.25, 0.75, Qty::new(30.0), 6, 1.0).map(|_| ()),
             Err(ScoreError::AlphaOutOfDomain(1.0))
         );
         // bd-a482: half of the smallest subnormal rounds to 0, which the e-processes refuse instead of clamping.
         assert_eq!(
-            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, f64::from_bits(1)).map(|_| ()),
+            SpatialFrontPitMonitor::new(0.25, 0.75, Qty::new(30.0), 6, f64::from_bits(1))
+                .map(|_| ()),
             Err(ScoreError::AlphaOutOfDomain(f64::from_bits(1)))
         );
     }
@@ -1127,8 +1130,8 @@ mod tests {
     /// infinite one gave a PIT of 1 and joined the history.
     #[test]
     fn test_spatial_monitor_refuses_non_finite_sample_and_changes_nothing() {
-        let mut monitor =
-            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 0.05).expect("valid parameters");
+        let mut monitor = SpatialFrontPitMonitor::new(0.25, 0.75, Qty::new(30.0), 6, 0.05)
+            .expect("valid parameters");
         let sample = |x, observed_value| SpatialSample {
             x,
             y: 0.0,
@@ -1221,7 +1224,8 @@ mod tests {
         let (nugget, sill, range) = (0.2, 0.8, 40.0);
         let total = nugget + sill;
         let c = |h: f64| sill * (-h / range).exp();
-        let mut monitor = SpatialFrontPitMonitor::new(nugget, sill, range, 1, 0.05).expect("valid");
+        let mut monitor =
+            SpatialFrontPitMonitor::new(nugget, sill, Qty::new(range), 1, 0.05).expect("valid");
         assert_eq!(
             monitor.predictive(3.0, 4.0, 0.0, 2.5).expect("finite"),
             (2.5, total.sqrt())
@@ -1248,7 +1252,8 @@ mod tests {
             "{sd}"
         );
 
-        let mut two = SpatialFrontPitMonitor::new(nugget, sill, range, 2, 0.05).expect("valid");
+        let mut two =
+            SpatialFrontPitMonitor::new(nugget, sill, Qty::new(range), 2, 0.05).expect("valid");
         two.observe_sample(at(0.0, 0.0, 1.0, 1.6)).expect("finite");
         two.observe_sample(at(20.0, 0.0, 1.0, 0.7)).expect("finite");
         let (mean, sd) = two.predictive(10.0, 0.0, 0.0, 1.0).expect("finite");
@@ -1298,8 +1303,8 @@ mod tests {
         horizon: usize,
         stop_at_alarm: bool,
     ) -> (Vec<f64>, Option<usize>) {
-        let mut monitor =
-            SpatialFrontPitMonitor::new(0.2, 0.8, 40.0, 8, 0.05).expect("valid parameters");
+        let mut monitor = SpatialFrontPitMonitor::new(0.2, 0.8, Qty::new(40.0), 8, 0.05)
+            .expect("valid parameters");
         let mut zs = Vec::with_capacity(horizon);
         let mut first = None;
         for k in 0..horizon {
@@ -1371,7 +1376,8 @@ mod tests {
         assert!((cover(-q90 - SHIFT_58, q90 - SHIFT_58) - 0.58).abs() < 1e-9);
         assert!((cover(-q90 / SPREAD_58, q90 / SPREAD_58) - 0.58).abs() < 1e-9);
 
-        let fresh = SpatialFrontPitMonitor::new(0.2, 0.8, 40.0, 8, 0.05).expect("valid parameters");
+        let fresh = SpatialFrontPitMonitor::new(0.2, 0.8, Qty::new(40.0), 8, 0.05)
+            .expect("valid parameters");
         let pair = |zs: &[f64], centre: f64| {
             let disp_range = (det::tanh(-0.5) - centre, 1.0 - centre);
             let disp = ScoreBettingEProcess::new(
@@ -1474,8 +1480,8 @@ mod tests {
     #[test]
     fn test_vecchia_spatial_front_pit_eprocess_gb08() {
         // 1. Under well-specified spatial innovations, monitor does not trip false alarm.
-        let mut monitor_ok =
-            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 0.02).expect("valid parameters");
+        let mut monitor_ok = SpatialFrontPitMonitor::new(0.25, 0.75, Qty::new(30.0), 6, 0.02)
+            .expect("valid parameters");
         let mut rng = PhiloxStream::new(RngKey {
             seed_root: 777,
             partition: 1,
@@ -1500,8 +1506,8 @@ mod tests {
         }
 
         // 2. Under systematic +1.5g/t unmodeled high-grade shear zone, monitor trips alarm.
-        let mut monitor_shift =
-            SpatialFrontPitMonitor::new(0.25, 0.75, 30.0, 6, 0.05).expect("valid parameters");
+        let mut monitor_shift = SpatialFrontPitMonitor::new(0.25, 0.75, Qty::new(30.0), 6, 0.05)
+            .expect("valid parameters");
         let mut tripped = false;
         for i in 0..60 {
             let x = (i as f64) * 10.0;
