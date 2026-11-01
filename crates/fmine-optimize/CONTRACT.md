@@ -30,6 +30,7 @@ None is a Claim.
 - Values equal an independent Dinic maximum flow (`tests/common`, no shared code) on 300 random graphs (`random_graphs_match_dinic`) and on 15 open-pit-shaped block models up to 30 × 30 × 8 with 3 × 3 slope cones (`block_models_match_dinic`). `block_model_pit_is_a_union_of_cones` checks closure on a block model.
 - The same input gives the same pit, flows and counters (`rerun_is_identical`).
 - `verify` refuses planted bad certificates: an unclosed pit, flow into the pit, a wrong-signed excess, a negative flow (`verify_refuses_planted_certificates`).
+- At scale (`tests/scale_pit.rs`, ignored, run by hand), three synthetic block models of about 10⁶ arcs, 10⁷ arcs and 10⁷ blocks each yield a certified, non-empty pit. The smallest also equals Dinic, and the largest must solve within KILL-PUSH-PIT's 600 s. `model_has_the_planned_arc_count_and_shape` checks the generator.
 - GATE-PUSH-PIT1 (`tests/minelib_upit.rs`, ignored by default, run by hand): MineLib UPIT instances integer-scaled at 10⁶ are solved with the certificate verified, equal Dinic exactly, and fall within one whole unit of MineLib's published optimum, a band widened by the bound for any values rounded at read time.
 
 ## 5. Refusals
@@ -58,7 +59,20 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - Fewer than `u32::MAX` blocks and arcs, and absolute values summing below 2⁶².
 - When several closed sets tie for the maximum, one of them is returned. Which one is fixed by the input but is not promised to be the smallest or the largest.
 - Memory is linear in blocks and arcs. Each arc costs 24 bytes: a target, a tail and two incidence entries (`u32`), and a flow (`i64`). Each block costs two 8-byte and eight 4-byte fields of solver state, on top of its value and offset. The GATE-PUSH-PIT1 process for mclaughlin, Dinic and parsing included, peaked at 7.3 GB RSS.
-- Measured once on one machine (aarch64-macos, release, GATE-PUSH-PIT1 runs of 2026-11-01): 0.255 s for mclaughlin_limit (112,687 blocks, 3,035,483 arcs) and 1.243 s for mclaughlin (2,140,342 blocks, 73,143,770 arcs). These are single local runs, not a benchmark. KILL-PUSH-PIT (within 5× MineFlow on the largest MineLib UPIT, and 10⁷ blocks in 10 minutes or less) has not been run, because MineFlow is not available here.
+- Wall times measured on one machine (aarch64-macos, release, 2026-11-01). They are local runs, not a benchmark suite.
+
+  | Instance | Blocks | Arcs | Solve | Peak RSS |
+  |---|---|---|---|---|
+  | MineLib mclaughlin_limit | 112,687 | 3,035,483 | 0.22–0.26 s | — |
+  | MineLib mclaughlin | 2,140,342 | 73,143,770 | 1.1–1.2 s | 7.3 GB, Dinic and parsing included |
+  | `tests/scale_pit.rs` arcs_1e6 | 115,200 | 982,204 | 0.06 s | — |
+  | `tests/scale_pit.rs` arcs_1e7 | 1,166,400 | 10,130,540 | 2.2 s | 0.43 GB, two models in one process |
+  | `tests/scale_pit.rs` blocks_1e7 | 10,000,000 | 87,935,596 | 40.7 s | 3.1 GB |
+
+  The synthetic models cost far more per block than MineLib's. blocks_1e7 made 193M relabels against mclaughlin's 1.3M. Time grows faster than linearly in this family: 8.6× the blocks of arcs_1e7 took 18.6× the time.
+- KILL-PUSH-PIT has two halves:
+  - 10⁷ blocks in 10 minutes or less: `scale_pit` asserts this, and the one run took 40.7 s;
+  - within 5× MineFlow on the largest MineLib UPIT: not run, because MineFlow is not available here.
 
 ## 9. Oracles
 - Brute force over all subsets, on the unit tests' small instances.
@@ -90,7 +104,8 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - MineLib's files are not in the repository, because their licence is not recorded. GATE-PUSH-PIT1 is an ignored test, run by hand with `FMINE_MINELIB_DIR`, and CI does not run it.
 - No current-arc pointer: each merger search rescans all the node's incident arcs from the first. Whether a pointer that skips arcs already passed over is valid under these invariants has not been worked out. There is no highest-label or FIFO variant.
 - No slope-template arc generation (plan §15.4's 45° cone templates), no nested shells or parametric λ sweep, no warm start, and no minimal or maximal choice among tied pits.
-- No performance gate. KILL-PUSH-PIT is not run (§8), and no 10⁷-block instance exists here.
+- KILL-PUSH-PIT's MineFlow half is not run (§8). Its 10⁷-block half is an ignored test, run by hand on one machine; CI does not run it.
+- No fnx (franken_networkx) graph code is used. Precedence graphs are this crate's own CSR (`BD-266`, the fallback in plan §27.4's fnx row), and fnx's `preflow_push` has not been run as an oracle.
 
 ## 11. Public API
 - `pitflow::ClosureProblem`: `new`, `from_requirements`, `node_count`, `arc_count`, `weights`, `requires`
