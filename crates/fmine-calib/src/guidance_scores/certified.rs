@@ -1,4 +1,4 @@
-//! Certified outward CP90 endpoints for the explicitly iid Bernoulli reference model.
+//! Certified outward Clopper-Pearson endpoints for the explicitly iid Bernoulli reference model.
 //! Determinism: Exact (integer binomial enclosures and dyadic root brackets).
 
 use std::fmt::Display;
@@ -46,6 +46,29 @@ pub fn clopper_pearson_90_with_limit(
     n: usize,
     max_iterations: usize,
 ) -> Result<Interval, Refusal> {
+    clopper_pearson_with_limit(k, n, Rat::new(9, 10).map_err(numerical)?, max_iterations)
+}
+
+/// Two-sided Clopper-Pearson interval at a declared coverage level, conditional on iid Bernoulli
+/// trials. Endpoints are outward dyadic brackets, with the same certificate and resource bound as CP90.
+/// Arithmetic that cannot certify the tail comparison refuses instead of using a floating approximation.
+pub fn clopper_pearson(k: usize, n: usize, level: Rat) -> Result<Interval, Refusal> {
+    clopper_pearson_with_limit(k, n, level, GRID_BITS as usize)
+}
+
+fn clopper_pearson_with_limit(
+    k: usize,
+    n: usize,
+    level: Rat,
+    max_iterations: usize,
+) -> Result<Interval, Refusal> {
+    let one = Rat::from_integer(1);
+    if level.signum() <= 0 || exact(level.checked_cmp(one))? != std::cmp::Ordering::Less {
+        return Err(numerical(
+            "confidence level must be strictly between zero and one",
+        ));
+    }
+    let tail = exact(exact(one.checked_sub(level))?.checked_div(Rat::from_integer(2)))?;
     if k > n {
         return Err(Refusal::new(
             RefusalCode::OutsidePhysicalDomain109,
@@ -57,11 +80,11 @@ pub fn clopper_pearson_90_with_limit(
             "binomial trial count exceeds the certified evaluator's resource bound",
         ));
     }
-    let lo = lower_endpoint(k, n, max_iterations)?;
+    let lo = lower_endpoint(k, n, tail, max_iterations)?;
     let complement_lo = if n - k == k {
         lo
     } else {
-        lower_endpoint(n - k, n, max_iterations)?
+        lower_endpoint(n - k, n, tail, max_iterations)?
     };
     let hi = GRID - complement_lo;
     Ok(closed(
@@ -70,8 +93,8 @@ pub fn clopper_pearson_90_with_limit(
     ))
 }
 
-/// Return the lower grid neighbour of P(Binomial(n,p) >= k) = 1/20, certified by tail enclosures.
-fn lower_endpoint(k: usize, n: usize, max_iterations: usize) -> Result<u64, Refusal> {
+/// Return the lower grid neighbour of P(Binomial(n,p) >= k) = tail, certified by enclosures.
+fn lower_endpoint(k: usize, n: usize, tail: Rat, max_iterations: usize) -> Result<u64, Refusal> {
     if k == 0 {
         return Ok(0);
     }
@@ -82,10 +105,20 @@ fn lower_endpoint(k: usize, n: usize, max_iterations: usize) -> Result<u64, Refu
         }
         let mid = lo + (hi - lo) / 2;
         let (tail_lo, tail_hi) = binomial_survival_bounds(k, n, mid);
-        if 20 * tail_hi < PROBABILITY_SCALE {
+        let bound = |v: u128| {
+            exact(Rat::new(
+                i128::try_from(v).map_err(numerical)?,
+                i128::try_from(PROBABILITY_SCALE).map_err(numerical)?,
+            ))
+        };
+        let hi_cmp = exact(bound(tail_hi)?.checked_cmp(tail))?;
+        let lo_cmp = exact(bound(tail_lo)?.checked_cmp(tail))?;
+        if hi_cmp == std::cmp::Ordering::Less {
             lo = mid;
-        } else if 20 * tail_lo > PROBABILITY_SCALE {
+        } else if lo_cmp == std::cmp::Ordering::Greater {
             hi = mid;
+        } else if lo_cmp == std::cmp::Ordering::Equal && hi_cmp == std::cmp::Ordering::Equal {
+            return Ok(mid);
         } else {
             return Err(numerical(
                 "binomial tail enclosure cannot certify a root-bracket sign",
@@ -291,5 +324,31 @@ mod tests {
                 last = current;
             }
         }
+    }
+    #[test]
+    fn declared_cp95_has_certified_closed_form_edges_and_contains_cp90() {
+        let level = rat(19, 20);
+        // With one success in one trial, the exact lower endpoint is alpha/2 = 1/40.
+        let all = clopper_pearson(1, 1, level).unwrap();
+        let step = rat(1, i128::from(GRID));
+        assert_eq!(all.hi, ONE);
+        assert!(all.lo.checked_cmp(rat(1, 40)).unwrap() != Ordering::Greater);
+        assert!(
+            all.lo
+                .checked_add(step)
+                .unwrap()
+                .checked_cmp(rat(1, 40))
+                .unwrap()
+                != Ordering::Less
+        );
+        let p90 = clopper_pearson_90(3, 10).unwrap();
+        let p95 = clopper_pearson(3, 10, level).unwrap();
+        assert!(p95.lo.checked_cmp(p90.lo).unwrap() == Ordering::Less);
+        assert!(p95.hi.checked_cmp(p90.hi).unwrap() == Ordering::Greater);
+        let dyadic = clopper_pearson(1, 1, rat(1, 2)).unwrap();
+        assert_eq!(dyadic.lo, rat(1, 4));
+        assert_eq!(dyadic.hi, ONE);
+        assert!(clopper_pearson(0, 0, ZERO).is_err());
+        assert!(clopper_pearson(0, 0, ONE).is_err());
     }
 }

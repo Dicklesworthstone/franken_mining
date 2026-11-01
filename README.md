@@ -334,6 +334,33 @@ DecisionCard API requires this replay certificate and checks that it binds the a
 cut and exact rendered/numeric output. Legacy action, CVaR, flip-margin and VOI fields still lack their own
 Claim provenance, so that wrapper explicitly limits its historical evidence claim to expected NPV.
 
+### Score an externally timestamped public forecast record
+
+```bash
+cargo run -p xtask -- forecast-record-verify path/to/frozen-record
+cargo run -p xtask -- forecast-record-score path/to/frozen-record
+```
+
+DESIGN (BD-334/BD-068): these commands require a complete frozen record: `manifest.toml`, `forecasts.csv`,
+`rules.toml`, their digest files, an authenticated `record.tsr` and an earlier authenticated rules proof.
+The verifier accepts the pinned checked-in DigiCert or FreeTSA roots; a supplied `tsa_chain.pem` contributes
+only untrusted intermediate certificates. A locally generated TSA cannot establish the record's time.
+Rules must precede the record even after accounting for both proofs' stated accuracy.
+
+Scoring verifies the record before opening registered original-release outcome workbooks. Q4 production is
+the exact signed difference between the original FY and nine-month totals on the explicit 100% basis.
+Q4 AISC uses its printed quarterly rate directly. Outcomes use the exact **displayed** numeric value while
+retaining the stored token and source Claim for audit; printed zero counts, and a displayed dash stays missing.
+Later comparative releases cannot substitute for missing originals. Ownership-label changes remain visible
+even when registry corrections make the effective ownership fractions equal.
+
+Every frozen site/target remains in the report, with unresolved and not-forecast members listed separately.
+The deterministic JSON includes exact interval losses, observed and whole-cohort coverage/loss bounds, the
+declared iid coverage reference and correlation sensitivity, source hashes/cell citations, proof bounds and
+an assessment digest. It remains explicitly uncalibrated. Registered benchmark comparisons and the three-way
+comparison are `not_assessed` in this scoring path. This command creates no forecasts, registrations or time
+proofs; an absent or incomplete FY2026 record refuses.
+
 ### Register forecasts with a live durable journal
 
 DESIGN (BD-047, BD-343): `forecast journal` records live admissions, freezes cohort membership, appends

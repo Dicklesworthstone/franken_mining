@@ -4,8 +4,9 @@
 //! - `forecast-record-hash <dir>` validates `manifest.toml` against the source registries and the `rules.toml`
 //!   beside it, then writes `record.sha256` (the `FMREC1` digest of `manifest.toml` and `forecasts.csv`);
 //! - `forecast-record-verify <dir>` recomputes both digests, checks the RFC 3161 reply `record.tsr` against the
-//!   certificate chain `tsa_chain.pem` with `openssl ts -verify`, reads the reply's time and accuracy, and
-//!   validates the manifest against that interval;
+//!   pinned checked-in public authority roots with `openssl ts -verify`, reads the signed time and accuracy,
+//!   requires an earlier authenticated rules proof, and validates the manifest against that interval;
+//!   `tsa_chain.pem`, when supplied, contributes only untrusted intermediate certificates;
 //! - `forecast-rules-order` checks in git history that the FY2026 rules were committed before any forecast
 //!   (BD-334.S2).
 //!
@@ -19,6 +20,9 @@ use std::path::Path;
 use std::process::Command;
 
 use std::collections::BTreeMap;
+
+mod scoring;
+pub use scoring::record_score;
 
 use fmine_calib::record::{
     self, BaselineKind, ProofTimes, Quarter, Rat, RecordDates, RecordManifest, RecordRules,
@@ -123,6 +127,8 @@ struct Loaded {
     digest: String,
     rules_digest: String,
     registered: Vec<(String, [u8; 32])>,
+    rules: RecordRules,
+    forecasts: Vec<record::ForecastRow>,
 }
 
 /// Reads and checks everything that needs no proof: the manifest parses, it binds the rules file beside it and
@@ -149,7 +155,7 @@ fn load(root: &Path, dir: &Path) -> Res<Loaded> {
             manifest.record_id, rules.record_id
         ));
     }
-    record::parse_forecasts(&csv, &rules).map_err(|e| vec![e.to_string()])?;
+    let forecasts = record::parse_forecasts(&csv, &rules).map_err(|e| vec![e.to_string()])?;
     let registered = registered_digests(root)?;
     let findings = findings(&manifest, &registered, None, rules.dates);
     if !findings.is_empty() {
@@ -161,6 +167,8 @@ fn load(root: &Path, dir: &Path) -> Res<Loaded> {
         dates: rules.dates,
         manifest,
         registered,
+        rules,
+        forecasts,
     })
 }
 
@@ -571,11 +579,87 @@ pub fn proof_times_from_text(text: &str) -> Result<ProofTimes, String> {
     }
 }
 
-/// `forecast-record-verify <dir>`: both digests recomputed, the RFC 3161 reply checked and its interval
-/// validated against the manifest. Returns one line per check.
-pub fn record_verify(root: &Path, dir: &Path) -> Res<Vec<String>> {
-    let loaded = load(root, dir)?;
-    let mut lines = Vec::new();
+/// Public timestamp authorities accepted by the record protocol. The SHA-256 pins the complete checked-in
+/// PEM bytes, not a caller's replacement certificate or a file named tsa_chain.pem.
+const TSA_ROOTS: [(&str, &str); 2] = [
+    (
+        "forecasts/tsa/digicert-trusted-root-g4.pem",
+        "ce7d6b44f5d510391be98c8d76b18709400a30cd87659bfebe1c6f97ff5181ee",
+    ),
+    (
+        "forecasts/tsa/freetsa-root.pem",
+        "2151b61137ffa86bf664691ba67e7da0b19f98c758e3d228d5d8ebf27e044438",
+    ),
+];
+
+fn trusted_timestamp(
+    root: &Path,
+    dir: &Path,
+    file: &str,
+    digest: &str,
+) -> Res<(ProofTimes, String)> {
+    let path = dir.join(file);
+    let stamp = read(&path)?;
+    let path_text = path.to_string_lossy();
+    // Parsing does not authenticate these times. Authentication below checks the signature and certificate
+    // at the token's own genTime, so an authority certificate expiring later does not erase an old record.
+    let text = openssl(&["ts", "-reply", "-in", &path_text, "-text"])?;
+    let proof = proof_times_from_text(&text).map_err(|e| vec![format!("{file}: {e}")])?;
+    let midpoint = i128::from(proof.lower_utc)
+        + (i128::from(proof.upper_utc) - i128::from(proof.lower_utc)) / 2;
+    let attime = midpoint.to_string();
+    let intermediates = dir.join("tsa_chain.pem");
+    let intermediates_text = intermediates.to_string_lossy();
+    let mut failures = Vec::new();
+    for (relative, expected) in TSA_ROOTS {
+        let ca = root.join(relative);
+        let bytes = match read(&ca) {
+            Ok(bytes) => bytes,
+            Err(errors) => {
+                failures.extend(errors);
+                continue;
+            }
+        };
+        if fmine_core::hash::sha256(&bytes).to_hex() != expected {
+            failures.push(format!(
+                "{relative}: trusted-root bytes differ from the compiled pin"
+            ));
+            continue;
+        }
+        let ca_text = ca.to_string_lossy();
+        // OpenSSL ts (3.x and 4.x apps/ts.c::create_cert_store) builds an empty trust store and adds
+        // only explicitly supplied CAfile/CApath/CAstore. Unlike openssl verify, ts has no
+        // -no-CApath/-no-CAstore options. Supplying only CAfile therefore excludes ambient roots.
+        let mut args = vec![
+            "ts", "-verify", "-digest", digest, "-in", &path_text, "-CAfile", &ca_text, "-attime",
+            &attime,
+        ];
+        if intermediates.exists() {
+            args.extend(["-untrusted", &intermediates_text]);
+        }
+        match openssl(&args) {
+            Ok(output) if output.contains("Verification: OK") => {
+                if read(&path)? != stamp || read(&ca)? != bytes {
+                    return fail("timestamp or trust root changed during verification".into());
+                }
+                return Ok((proof, relative.into()));
+            }
+            Ok(_) => failures.push(format!(
+                "{file}: verification did not report OK with {relative}"
+            )),
+            Err(errors) => failures.extend(errors),
+        }
+    }
+    failures.insert(
+        0,
+        format!("{file}: no trusted RFC 3161 proof; a record-supplied root is not an authority"),
+    );
+    Err(failures)
+}
+
+/// Verifies the exact already-loaded manifest, forecasts and rules. Both verify and score use this path;
+/// scoring never rereads mutable record payloads after establishing their frozen digest.
+fn verify_loaded(root: &Path, dir: &Path, loaded: &Loaded) -> Res<(Vec<String>, ProofTimes)> {
     let stored = fs::read_to_string(dir.join("record.sha256"))
         .map_err(|e| vec![format!("cannot read record.sha256: {e}")])?;
     if stored.trim_end() != loaded.digest {
@@ -585,39 +669,12 @@ pub fn record_verify(root: &Path, dir: &Path) -> Res<Vec<String>> {
             loaded.digest
         ));
     }
-    lines.push(format!("record digest {}", loaded.digest));
-    lines.push(format!("rules digest {}", loaded.rules_digest));
-    let tsr = dir.join("record.tsr");
-    let chain = dir.join("tsa_chain.pem");
-    if !tsr.exists() {
-        return fail("no record.tsr beside the record: a time comes only from a proof".to_string());
+    let stored_rules = fs::read_to_string(dir.join("rules.sha256"))
+        .map_err(|e| vec![format!("cannot read rules.sha256: {e}")])?;
+    if stored_rules.trim_end() != loaded.rules_digest {
+        return fail("rules.sha256 differs from the rules bound by the frozen manifest".into());
     }
-    let (tsr_s, chain_s) = (tsr.to_string_lossy(), chain.to_string_lossy());
-    let out = openssl(&[
-        "ts",
-        "-verify",
-        "-digest",
-        &loaded.digest,
-        "-in",
-        &tsr_s,
-        "-CAfile",
-        &chain_s,
-    ])?;
-    if !out.contains("Verification: OK") {
-        return fail(format!(
-            "openssl ts -verify did not report OK: {}",
-            out.trim()
-        ));
-    }
-    lines.push("record.tsr verifies against tsa_chain.pem".to_string());
-    let text = openssl(&["ts", "-reply", "-in", &tsr_s, "-text"])?;
-    let proof = proof_times_from_text(&text).map_err(|e| vec![format!("record.tsr: {e}")])?;
-    lines.push(format!(
-        "proof interval [{}, {}], label {}",
-        format_utc(proof.lower_utc),
-        format_utc(proof.upper_utc),
-        loaded.manifest.label.as_str()
-    ));
+    let (proof, authority) = trusted_timestamp(root, dir, "record.tsr", &loaded.digest)?;
     let found = findings(
         &loaded.manifest,
         &loaded.registered,
@@ -627,12 +684,49 @@ pub fn record_verify(root: &Path, dir: &Path) -> Res<Vec<String>> {
     if !found.is_empty() {
         return Err(found);
     }
-    if dir.join("record.ots").exists() {
-        lines.push(
-            "record.ots present but not checked here: run `ots verify record.ots`".to_string(),
-        );
+    let mut prior_rules = Vec::new();
+    let mut rule_failures = Vec::new();
+    for file in ["rules.tsr", "rules.freetsa.tsr"] {
+        if dir.join(file).exists() {
+            match trusted_timestamp(root, dir, file, &loaded.rules_digest) {
+                Ok((times, authority)) => {
+                    prior_rules.push((times.upper_utc, file, times, authority))
+                }
+                Err(errors) => rule_failures.extend(errors),
+            }
+        }
     }
-    Ok(lines)
+    prior_rules.sort_by_key(|p| p.0);
+    let Some((_, rules_file, rules_proof, rules_authority)) = prior_rules.first() else {
+        rule_failures.insert(0, "no trusted timestamp for the frozen rules".into());
+        return Err(rule_failures);
+    };
+    if rules_proof.upper_utc >= proof.lower_utc {
+        return fail("the rules proof must strictly precede the record proof, including both accuracy bounds".into());
+    }
+    let mut lines = vec![
+        format!("record digest {}", loaded.digest),
+        format!("rules digest {}", loaded.rules_digest),
+        format!("record.tsr verifies against pinned {authority}"),
+        format!("{rules_file} verifies against pinned {rules_authority} before record.tsr"),
+        format!(
+            "proof interval [{}, {}], label {}",
+            format_utc(proof.lower_utc),
+            format_utc(proof.upper_utc),
+            loaded.manifest.label.as_str()
+        ),
+    ];
+    if dir.join("record.ots").exists() {
+        lines.push("record.ots present but not checked here: run ots verify record.ots".into());
+    }
+    Ok((lines, proof))
+}
+
+/// forecast-record-verify: frozen digests, independently signed timestamps under pinned public
+/// authorities, strict rules-before-record ordering, and the manifest's information cut and deadline.
+pub fn record_verify(root: &Path, dir: &Path) -> Res<Vec<String>> {
+    let loaded = load(root, dir)?;
+    verify_loaded(root, dir, &loaded).map(|(lines, _)| lines)
 }
 
 #[cfg(test)]
@@ -1013,5 +1107,20 @@ mod tests {
         assert!(out.status.success(), "{out:?}");
         let err = rules_order(&shallow).expect_err("shallow clone");
         assert!(err[0].contains("shallow clone"), "{err:?}");
+    }
+    #[test]
+    fn committed_rules_verify_under_pinned_public_authorities_at_their_signed_time() {
+        let root = workspace_root();
+        let dir = root.join("forecasts/fy2026");
+        let bytes = fs::read(dir.join("rules.toml")).unwrap();
+        let digest = record::rules_digest(&bytes).to_hex();
+        for (path, expected) in TSA_ROOTS {
+            let bytes = fs::read(root.join(path)).unwrap();
+            assert_eq!(fmine_core::hash::sha256(&bytes).to_hex(), expected);
+        }
+        let (proof, authority) = trusted_timestamp(&root, &dir, "rules.tsr", &digest).unwrap();
+        assert!(authority.ends_with("digicert-trusted-root-g4.pem"));
+        assert!(proof.upper_utc < record::FY2026_DATES.nowcast_from);
+        assert!(trusted_timestamp(&root, &dir, "rules.tsr", &"00".repeat(32)).is_err());
     }
 }

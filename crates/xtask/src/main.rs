@@ -187,7 +187,10 @@ fn main() -> ExitCode {
                 }
             }),
         ),
-        "forecast-rules-hash" | "forecast-record-hash" | "forecast-record-verify" => {
+        "forecast-rules-hash"
+        | "forecast-record-hash"
+        | "forecast-record-verify"
+        | "forecast-record-score" => {
             let Some(path) = args.get(1).map(PathBuf::from) else {
                 eprintln!("{cmd} needs a path");
                 return ExitCode::from(2);
@@ -197,6 +200,7 @@ fn main() -> ExitCode {
                 "forecast-record-hash" => {
                     xtask::forecast::record_hash(&root, &path).map(|d| vec![d])
                 }
+                "forecast-record-score" => xtask::forecast::record_score(&root, &path),
                 _ => xtask::forecast::record_verify(&root, &path),
             };
             run_one(

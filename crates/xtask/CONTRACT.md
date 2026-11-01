@@ -124,11 +124,25 @@ The `forecast-*` commands are the exception: they write a record's digest files 
 - `forecast::{rules_hash, record_hash, record_verify}` (BD-334.S1; commands `forecast-rules-hash <rules.toml>`,
   `forecast-record-hash <dir>`, `forecast-record-verify <dir>`): the IO around the pure `fmine_calib::record`.
   They write `rules.sha256` and `record.sha256`, and replace a different digest only while no proof (`.tsr`,
-  `.ots`) stands beside it. `record_verify`
-  takes the record's time only from `record.tsr`, after `openssl ts -verify` against `tsa_chain.pem` passes
-  (`forecast::proof_times_from_text` reads the reply's time stamp and accuracy; an accuracy that overflows the
-  interval refuses). `rules_hash` refuses rules that do not parse or still carry an `OPEN` marker; the record is
-  validated against the dates its rules state, and its `forecasts.csv` against their universe and targets.
+  `.ots`) stands beside it. `record_verify` takes the record's time only from a signed `record.tsr`
+  verified against the compiled SHA-256 pins for the checked-in DigiCert or FreeTSA root PEM. A supplied
+  `tsa_chain.pem` contributes only untrusted intermediates. Certificate validity is evaluated at the token's
+  signed time, and a separately authenticated rules proof must strictly precede the record proof including
+  both accuracy bounds. Changed proof/root bytes refuse. `proof_times_from_text` reads signed time and
+  accuracy; an overflowing interval refuses. `rules_hash` refuses malformed rules or an `OPEN` marker;
+  the record is validated against the dates its rules state and the CSV against their universe and targets.
+- DESIGN (BD-334/BD-068): `forecast::record_score` (command `forecast-record-score <dir>`) shares that verifier
+  and scores the already loaded frozen manifest/CSV/rules against registered original-release Mine Stats
+  Claims. It verifies time proofs before opening outcome workbooks. Production is the signed exact difference
+  between original FY and original nine-month totals on the explicit 100% basis; AISC uses the original Q4
+  QTD rate directly. Later comparatives never fill missing originals. Published numeric observations,
+  including zero and source-status flags, retain their declared measurement meaning and source evidence.
+  A Q2 ownership-label reference is used only when its exact registered bytes occur in the frozen manifest.
+  Every frozen site/target remains visible, with unresolved and not-forecast states. The deterministic JSON
+  assessment includes exact losses, observed and full-cohort coverage/loss bounds, the declared iid reference
+  interval and rho sensitivity, source Claims/digests/locators, proof bounds and an assessment digest.
+  It creates no forecast or timestamp and claims no calibration. Registered benchmark comparisons remain
+  explicitly `not_assessed`; this adapter does not infer missing issuer guidance or a three-way result.
 - `forecast::persistence_baselines` (command `forecast-baseline`): each `run_rate_persistence` baseline of the
   FY2026 rules from the registered Mine Stats workbooks (read through `fmine-public` under the registered
   vocabulary; a workbook with a refused cell refuses): the pool's size, the pairs left out, the two ratio
@@ -143,8 +157,10 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   and availability evidence. Workbook retrieval is the conservative availability bound because per-workbook
   publication dates are not registered; unsupported earlier cuts refuse. No forecast, time proof or calibration
   claim is created. Actual registered-file integration controls are `tests/forecast_guidance_baseline.rs`.
-  `scripts/forecast_record_e2e.sh` runs all three on a synthetic record with a throwaway local TSA (`test_tsa`,
-  never a record's proof); `scripts/verify_rules_timestamp.sh` checks the rules' proofs with openssl/ots alone.
+  `scripts/forecast_record_e2e.sh` checks synthetic digest/mutation failures and verifies that a throwaway
+  local TSA (`test_tsa`) cannot authenticate a public record. The committed rules proof is independently
+  checked under the pinned public authority in unit tests, including wrong-digest refusal.
+  `scripts/verify_rules_timestamp.sh` checks the rules' proofs with openssl/ots alone.
 - `forecast::rules_order` (BD-334.S2; command `forecast-rules-order`): the commit adding
   `forecasts/fy2026/rules.toml` is a strict ancestor of every commit touching `forecasts/fy2026/forecasts.csv`;
   refuses a shallow clone, whose history cannot show the order.
