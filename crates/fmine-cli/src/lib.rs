@@ -5,6 +5,7 @@ mod guidance;
 mod guidance_capacity;
 pub mod issued;
 mod lint;
+mod lint_guidance;
 mod lint_publicness;
 pub mod mirror;
 pub mod packet;

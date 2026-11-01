@@ -254,6 +254,20 @@ a completed lint exits zero even when it finds mismatches. Missing or altered re
 Use `--synthetic` with Claims emitted by the built-in synthetic assurance run for an invented demonstration.
 Relative draft paths are resolved against `--workspace`, which defaults to the current workspace.
 
+With `--as-of`, explicitly marked forward statements also receive a separate `forward_guidance`
+assessment. For example, these invented lines use the supported grammar:
+
+```text
+Example Mine FY2030 100% basis gold production forecast is 125 koz.
+Copper Mine FY2030 100% basis AISC guidance is $3.40 - 3.75/lb per pound sold.
+```
+
+The comparison uses the latest agreed, registered guidance published by the date, retaining its page,
+hash, ownership basis and canonical source Claims. Conflicting latest statements and incomplete readers
+stay unresolved. Point and range endpoints are compared exactly; this does not verify a forecast or
+permit disclosure. Document-only registries work, and an optional guidance failure is reported alongside
+the historical numerical check.
+
 ### Compare issuer guidance with reported annual outcomes
 
 ```bash

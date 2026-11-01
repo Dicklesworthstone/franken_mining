@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -444,6 +444,18 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   and reserve replacement remain outside the discovery grammar. Copper C1 requires explicit per-pound-sold
   and `US$/lb` or `$/lb` tokens; copper production requires `kt`. C1 does not inherit gold TCC's credit
   convention, and historical site production in millions of pounds remains unchecked.
+- DESIGN (BD-345.S4): `lint --as-of` also supplies an independent `forward_guidance` assessment for a
+  standalone line explicitly marked `forecast` or `guidance`, with one equality, registered site, fiscal
+  year, ownership basis and unit. Gold/copper production, gold/copper AISC, TCC and C1 reuse the canonical
+  guidance transcription binder. The latest matching publication at or before the cut supplies the
+  comparison; same-date ties, distinct attributable shares and pending readers remain unresolved.
+  Draft point/range endpoints are compared exactly, with no implied probability or rounding tolerance.
+  Canonical source and interpreted Claims, ancestry, date basis, hash and page locator remain in the report.
+  Guidance is selected by quantity and date before document bytes are read. Its source failures remain
+  local findings and cannot discard the workbook equality result. A document-only registry is supported;
+  it emits no workbook state root, authority anchor or certificate. Pending readers conservatively block
+  the same quantity even across other years or ownership bases. Unrestricted prose, explicit share syntax,
+  real issuer coverage and disclosure permission remain outside this predicate.
 - DESIGN (BD-343): forecast assessment replays transcript rows in their supplied order using the existing
   calibration kernel. No alternate scoring formula, default time proof or hidden denominator is introduced.
   Saved assessment rows enforce the kernel's sealed-cut rules across replay. Both envelope authority fields
