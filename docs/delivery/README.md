@@ -6,6 +6,9 @@ This directory holds machine- and human-verifiable admission records (`INT-*`), 
 - [`INT-AS-001.md`](./INT-AS-001.md) — `asupersync =0.5.0` and `franken-evidence` / `franken-decision` adapter boundary (`BD-257`) (not admitted).
 - [`INT-NUM-001.md`](./INT-NUM-001.md) — Numerics foundation stack (`fsci =0.4.0`, `fp`, `fnp`, `fj`) closure & cross-ISA determinism scope (`BD-308`) (not admitted).
 
+## Decisions
+- [`DECISION-BD-012-direct-push-blocking.md`](./DECISION-BD-012-direct-push-blocking.md) — what "CI blocks merges" (§28.4.4) means when every change is pushed straight to `main` (`BD-012`).
+
 ## Budget amendments (none approved)
 Form: [`docs/templates/BUDGET-AMEND.md`](../templates/BUDGET-AMEND.md). `xtask check-amend` reads these records (§28.4.3, `BD-012`).
 - [`BUDGET-AMEND-001-fmine-public.md`](./BUDGET-AMEND-001-fmine-public.md) — `fmine-public` 18000 → 22000 planned, for the `check tables` binding (`bd-4wvl.8`) (PENDING).
