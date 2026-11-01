@@ -62,6 +62,11 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   accepted rows without readers, so a third reader who agrees reproduces it. Locators are cited
   `<doc>:p<page>:<table>:<row>/<col>`: bd-plx1's form with the table added, since one page can print two tables
   with the same labels.
+  DESIGN (BD-341.S5): `Agreement::rejected_quantities` retains every reader's quantity identity at each
+  pending, disagreeing or clashing locator, without raw tokens. `is_complete_for_prefix` checks a named
+  quantity namespace while treating missing, invalid or orphan identity metadata as incomplete. A mixed
+  guidance/price identity disagreement still blocks guidance; the empty prefix requires global completeness.
+  `is_consistent` and the accepted-row digest retain their existing meanings.
 - `calendars::{load_site_calendars, parse_site_calendars, SiteCalendars}` (BD-029): `registries/calendars.toml`
   (`site_id`, IANA `tz_name`, `day_start_local_hour` 0..=23, `shift_hours` 1..=24, `roster_pattern`) joined with
   the zone snapshot `registries/zones.toml` (header `tzdata`, span `[from_utc_s, to_utc_s)`; one `[[zone]]` per

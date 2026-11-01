@@ -346,7 +346,7 @@ None: every failure is a usage error or a typed refusal.
   members. Every guidance document is retained; its ordinal is registered order, not proof of initial guidance.
   Source-byte failures preserve their typed refusals. The payload digest binds the selected source inventory
   and report; it is not a ledger anchor, forecast registration or external timestamp. All authority flags stay
-  false. Unsupported guidance metrics and incomplete agreement refuse instead of disappearing from the report.
+  false. Unsupported guidance metrics and incomplete guidance agreement refuse instead of disappearing from the report.
   Unresolved outcomes retain every selected canonical source Claim, including simultaneous conflicting cells,
   so refusal does not erase its reported token, interpretation, locator or source hash. Later appearances stay
   separate. JSON and Markdown both expose that rejected evidence without scoring it or dropping its member.
@@ -381,6 +381,11 @@ None: every failure is a usage error or a typed refusal.
   AISC sensitivity also requires the scored period's royalty/price interval to meet the historical coefficient.
   JSON and Markdown retain the unconditional score beside every conditional result, exact input-rounding
   bounds and source citations. TCC and C1 remain unsplit. No controllability or causal claim is created.
+  Incomplete optional price transcriptions preserve the unconditional report, while pricing returns
+  `incomplete_transcription_agreement` with pending/conflicting locators, reader roles, quantity identities
+  and checked source hashes. The complete report digest binds these diagnostics. Guidance completeness
+  remains mandatory; mixed guidance/price identity disagreements and unknown rejection identities refuse.
+  Missing or altered cited document bytes still refuse before either report can be produced.
 - Computes nothing itself: all calculation is delegated to the `V`/`E`/`K`/`S0` crates.
 - Writes only explicitly requested local reliance journals and artifact files; never sends messages or writes
   to an external system. Recall covers recorded copies; local retrieval does not prove remote delivery or

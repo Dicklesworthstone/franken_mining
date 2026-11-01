@@ -230,6 +230,10 @@ Site prices are used by default. `--price-subject barrick` explicitly selects th
 a proxy and labels it in the result; no company fallback is inferred. JSON and Markdown include the paired
 scores, exact rounding bounds, source cells/pages and hashes. This is a descriptive sensitivity with no causal
 or controllability conclusion.
+Incomplete optional price transcriptions leave the unconditional track record available. The price result
+stays unsplit and names pending or conflicting locators, reader roles, quantity identities and checked
+document hashes. Guidance must still have complete two-reader agreement, including when readers disagree
+about whether a row is guidance. Missing or altered cited document bytes retain their existing refusals.
 Price sensitivity belongs to the retrospective report; `--price-subject` cannot be combined with `--as-of`.
 
 ### Assess a frozen forecast cohort

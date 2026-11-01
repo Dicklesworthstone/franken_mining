@@ -698,7 +698,7 @@ fn assess_with_price_subject(
     site: Option<&str>,
     price_subject: Option<&str>,
 ) -> Result<TrackRecordReport> {
-    if !transcripts.agreement.is_consistent() || !transcripts.agreement.single_reader.is_empty() {
+    if !transcripts.agreement.is_complete_for_prefix("guidance_") {
         return Err(failure(
             RefusalCode::NotObservable202,
             "complete two-reader agreement before selecting the guidance population",
@@ -1004,7 +1004,7 @@ pub fn run_with_price_subject(
         profile = profile.through(bound)?;
     }
     let claims = fmine_public::key::mine_stats::load_claims(&profile, root)?;
-    let transcripts=fmine_public::transcribe::load_transcription_report(&profile,root)?.ok_or_else(||failure(RefusalCode::NoClaimInDomain201,format!("registries/transcriptions/{issuer}.toml is absent; register guidance documents and agreed readings")))?;
+    let transcripts=fmine_public::transcribe::load_guidance_transcription_report(&profile,root,None)?.ok_or_else(||failure(RefusalCode::NoClaimInDomain201,format!("registries/transcriptions/{issuer}.toml is absent; register guidance documents and agreed readings")))?;
     let mut report =
         assess_with_price_subject(&profile, &transcripts, &claims.claims, site, price_subject)?;
     report.source_refusals = claims.refusals;

@@ -324,7 +324,8 @@ The public lane of M0 (`fmine assure public`).
   value, both as displayed (`mine_ledger::displayed_number`). Units kt and Mlb (1 Mlb = 45,359,237/10⁸ kt,
   from `AVDP_LB_TO_GRAMS_NUM`) are tried on those numbers alone, apart from the registered alias. The section
   holds counts only and is not in the state root.
-- `transcribe::{load_transcription_report, load_transcription_report_as_of, transcription_json, TranscriptionReport, CheckedDocument,
+- `transcribe::{load_transcription_report, load_transcription_report_as_of, load_guidance_transcription_report,
+  transcription_json, TranscriptionReport, CheckedDocument,
   TieOutcome}`, `sources::{DocumentRow, transcriptions_path}`, `IssuerProfile::documents` and
   `PublicAssuranceReport::transcriptions` (bd-plx1, bd-4wvl.4 part 2). When
   `<workspace>/registries/transcriptions/<issuer>.toml` exists and the run has no `--through` bound (documents
@@ -341,6 +342,11 @@ The public lane of M0 (`fmine assure public`).
   - The guidance-specific as-of loader filters future documents before byte checks, reader agreement and tie
     analysis; it still validates registry syntax and document identities. General assurance checks all cited
     documents as before.
+  - DESIGN (BD-341.S5): `load_guidance_transcription_report` explicitly scopes the agreement gate to
+    guidance. Rejected optional readings remain in the returned report and cannot be used for a price split.
+    The optional evidence cut is validated before any absent-registry return and applied before agreement;
+    all in-cut document byte/hash checks remain mandatory. Mixed guidance/optional identities or unknown
+    rejection identities refuse. Both general loaders retain their stricter disagreement behavior.
   - The dedicated recovery loader deliberately uses the current verified historical documents even with a
     workbook `through` bound, and states that retrospective interpretation in its payload. It does not change
     the ordinary assurance loader's bound behavior or infer historical availability from a PDF cover date.

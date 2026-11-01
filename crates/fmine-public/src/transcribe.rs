@@ -20,6 +20,7 @@ use fmine_numerics::exact_feas::discover::{
     Fit, Printed, TieDiscovery, TieFinding, TieRefusal, discover_tie_conventions,
 };
 use fmine_numerics::exact_feas::{Convention, Rat};
+use fmine_registry::sources::is_date;
 use fmine_registry::transcriptions::{
     Accepted, Agreement, Decimal, Locator, Token, agree, load_transcriptions,
 };
@@ -210,7 +211,7 @@ pub fn load_transcription_report(
     profile: &IssuerProfile,
     root: &Path,
 ) -> Result<Option<TranscriptionReport>, Refusal> {
-    load_report(profile, root, None)
+    load_report(profile, root, None, false)
 }
 
 /// Loads only rows whose registered document was public by `as_of`. Future documents' bytes and
@@ -227,13 +228,31 @@ pub fn load_transcription_report_as_of(
             "transcription as-of needs a valid YYYY-MM-DD date",
         ));
     }
-    load_report(profile, root, Some(as_of))
+    load_report(profile, root, Some(as_of), false)
+}
+
+/// Loads a guidance report while retaining incomplete optional transcriptions as unaccepted evidence.
+/// Guidance disagreements and unknown pending quantity identities still refuse. Every cited document's
+/// bytes remain checked; the general assurance loaders retain their all-quantity agreement gate.
+pub fn load_guidance_transcription_report(
+    profile: &IssuerProfile,
+    root: &Path,
+    as_of: Option<&str>,
+) -> Result<Option<TranscriptionReport>, Refusal> {
+    if as_of.is_some_and(|cut| !is_date(cut)) {
+        return Err(Refusal::new(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            "as-of must be YYYY-MM-DD",
+        ));
+    }
+    load_report(profile, root, as_of, true)
 }
 
 fn load_report(
     profile: &IssuerProfile,
     root: &Path,
     as_of: Option<&str>,
+    guidance_only: bool,
 ) -> Result<Option<TranscriptionReport>, Refusal> {
     let path = transcriptions_path(root, &profile.issuer);
     if !path.is_file() {
@@ -257,7 +276,9 @@ fn load_report(
         .collect();
     let documents = check_documents(&cited, root)?;
     let agreement = agree(&reg);
-    if !agreement.is_consistent() {
+    if !agreement.is_consistent()
+        && !(guidance_only && agreement.is_complete_for_prefix("guidance_"))
+    {
         let mut detail = format!("transcription registry {registry}: readers disagree");
         for d in &agreement.disagreements {
             let _ = write!(

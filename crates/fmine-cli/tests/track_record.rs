@@ -752,4 +752,117 @@ mod tests {
         assert!(price.contains("Prices.pdf:p1:Invented price sensitivity:realized_price_site_a_2024q2_usd_per_oz/2024Q2"));
         assert!(price.contains("\"published_at\":\"2024-01-01\""));
     }
+
+    fn revise_price_reader(
+        root: &Path,
+        quantity: &str,
+        reader: &str,
+        replacement: Option<(&str, &str)>,
+    ) {
+        let path = transcriptions_path(root, "synthetic");
+        let readings = std::fs::read_to_string(&path).unwrap();
+        let quantity_line = format!("quantity = \"{quantity}\"");
+        let reader_line = format!("reader = \"{reader}\"");
+        let mut changed = 0;
+        let mut revised = String::new();
+        for (index, entry) in readings.split("\n[[entry]]").enumerate() {
+            if index == 0 {
+                revised.push_str(entry);
+                continue;
+            }
+            let targeted = entry.contains(&quantity_line) && entry.contains(&reader_line);
+            if targeted {
+                changed += 1;
+                if let Some((from, to)) = replacement {
+                    assert_eq!(entry.matches(from).count(), 1);
+                    revised.push_str("\n[[entry]]");
+                    revised.push_str(&entry.replace(from, to));
+                }
+            } else {
+                revised.push_str("\n[[entry]]");
+                revised.push_str(entry);
+            }
+        }
+        assert_eq!(changed, 1, "mutation must target one reader at one locator");
+        std::fs::write(path, revised).unwrap();
+    }
+
+    #[test]
+    fn incomplete_optional_price_evidence_keeps_the_unconditional_track_record() {
+        for disagree in [false, true] {
+            let root = price_workspace(
+                if disagree {
+                    "price-conflicting-optional"
+                } else {
+                    "price-pending-optional"
+                },
+                "site_a",
+                false,
+            );
+            let before = successful(&root, &["--through", "2024Q2"]);
+            revise_price_reader(
+                &root,
+                "realized_price_site_a_2024q2_usd_per_oz",
+                "reader_b",
+                disagree.then_some(("token = \"2000\"", "token = \"2100\"")),
+            );
+            let after = successful(&root, &["--through", "2024Q2"]);
+            let annual = row(&after.payload_json, "aisc_usd_per_oz", 2023);
+            assert_eq!(
+                selected(annual),
+                selected(row(&before.payload_json, "aisc_usd_per_oz", 2023)),
+            );
+            assert!(annual.contains("\"z\":{\"num\":\"0\",\"den\":\"1\"}"));
+            let price = annual.split_once("\"price_sensitivity\":").unwrap().1;
+            assert!(
+                price.contains("\"unsplit_reason\":\"incomplete_transcription_agreement\""),
+                "{price}"
+            );
+            assert!(!price.contains("\"price_contribution\":"), "{price}");
+            assert!(price.contains("Prices.pdf:p1:Invented price sensitivity:realized_price_site_a_2024q2_usd_per_oz/2024Q2"), "{price}");
+            assert!(price.contains("reader_a"), "{price}");
+            assert_eq!(after, successful(&root, &["--through", "2024Q2"]));
+
+            // The general assurance loader retains its stricter all-quantity disagreement gate.
+            let profile = load_issuer_profile(&root, "synthetic").unwrap();
+            let general = fmine_public::transcribe::load_transcription_report(&profile, &root);
+            assert_eq!(general.is_err(), disagree);
+
+            // Optional evidence never waives a byte-integrity failure.
+            std::fs::write(
+                root.join("documents/Prices.pdf"),
+                b"altered optional price bytes",
+            )
+            .unwrap();
+            let result = invoke(&root, &["--through", "2024Q2"]);
+            assert_eq!(result.exit_code, 8);
+            assert!(result.to_json().contains("FMINE-REF-505"));
+        }
+    }
+
+    #[test]
+    fn incomplete_or_ambiguously_named_guidance_still_refuses_the_population() {
+        let missing = price_workspace("guidance-reader-pending", "site_a", false);
+        revise_price_reader(
+            &missing,
+            "guidance_site_a_aisc_usd_per_oz",
+            "reader_b",
+            None,
+        );
+        let mixed = price_workspace("price-guidance-name-conflict", "site_a", false);
+        revise_price_reader(
+            &mixed,
+            "realized_price_site_a_2024q2_usd_per_oz",
+            "reader_b",
+            Some((
+                "quantity = \"realized_price_site_a_2024q2_usd_per_oz\"",
+                "quantity = \"guidance_site_a_aisc_usd_per_oz\"",
+            )),
+        );
+        for root in [missing, mixed] {
+            let result = invoke(&root, &["--through", "2024Q2"]);
+            assert_eq!(result.exit_code, 3, "{}", result.to_json());
+            assert!(result.to_json().contains("FMINE-REF-202"));
+        }
+    }
 }

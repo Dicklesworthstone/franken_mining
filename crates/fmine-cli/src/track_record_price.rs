@@ -505,6 +505,27 @@ fn checked_cell(
 }
 
 /// Never replaces or selects an outcome. Missing price evidence only leaves this sensitivity unsplit.
+/// Preserve rejected identities without presenting disputed numeric readings as accepted inputs.
+fn rejected_identity(
+    transcripts: &TranscriptionReport,
+    locator: &fmine_registry::transcriptions::Locator,
+) -> String {
+    let quantities = transcripts
+        .agreement
+        .rejected_quantities
+        .get(locator)
+        .map(|values| values.iter().cloned().collect::<Vec<_>>().join(", "))
+        .unwrap_or_else(|| "unknown quantity identity".into());
+    let documents = transcripts
+        .documents
+        .iter()
+        .filter(|document| document.file == locator.doc)
+        .map(|document| format!("sha256 {}", document.sha256))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{locator} (quantities: {quantities}; {documents})")
+}
+
 pub(crate) fn assess(
     profile: &IssuerProfile,
     transcripts: &TranscriptionReport,
@@ -541,12 +562,34 @@ pub(crate) fn assess(
             return out;
         }
     };
-    if through.is_some_and(|t| !is_quarter(t))
-        || slug(subject).is_empty()
-        || !transcripts.agreement.is_consistent()
-        || !transcripts.agreement.single_reader.is_empty()
-    {
+    if through.is_some_and(|t| !is_quarter(t)) || slug(subject).is_empty() {
         out.reason = Some("invalid_source_context".into());
+        return out;
+    }
+    if !transcripts.agreement.is_consistent() || !transcripts.agreement.single_reader.is_empty() {
+        out.reason = Some("incomplete_transcription_agreement".into());
+        for (locator, reader) in &transcripts.agreement.single_reader {
+            out.missing.push(format!(
+                "{}: awaiting an independent second reader; present reader {reader}",
+                rejected_identity(transcripts, locator),
+            ));
+        }
+        for disagreement in &transcripts.agreement.disagreements {
+            out.missing.push(format!(
+                "{}: readers {} disagree on {}",
+                rejected_identity(transcripts, &disagreement.locator),
+                disagreement.readers.join(", "),
+                disagreement.fields.join(", "),
+            ));
+        }
+        for (_, quantity, locators) in &transcripts.agreement.quantity_clashes {
+            for locator in locators {
+                out.missing.push(format!(
+                    "{}: quantity {quantity} is claimed at multiple locators",
+                    rejected_identity(transcripts, locator),
+                ));
+            }
+        }
         return out;
     }
     let OutcomeBinding::Resolved { cell, .. } = &row.outcome else {
