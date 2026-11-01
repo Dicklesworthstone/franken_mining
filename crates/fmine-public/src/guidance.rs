@@ -37,6 +37,7 @@ use crate::sources::{IssuerProfile, load_issuer_profile};
 use crate::transcribe::{CheckedDocument, TranscriptionReport, load_transcription_report_as_of};
 
 pub mod history;
+pub mod track_record;
 
 const COST_BASIS: &str = "issuer-reported-per-sold-oz";
 pub const NO_CLAIM: &str = "Arithmetic and finite historical-window comparisons under a declared sales assumption; no forecast, probability of meeting guidance, physical-capacity verdict or regulatory claim.";
@@ -210,6 +211,8 @@ fn available_by(profile: &IssuerProfile, as_of: &str) -> Result<String> {
 
 fn site_key(subject: &str) -> String {
     subject
+        // The registered Mine Stats header prints Zaldívar; its transcription key is ASCII "zaldivar".
+        .replace(['í', 'Í'], "i")
         .to_ascii_lowercase()
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|s| !s.is_empty())

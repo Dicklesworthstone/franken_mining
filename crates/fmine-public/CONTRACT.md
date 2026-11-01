@@ -138,6 +138,38 @@ The public lane of M0 (`fmine assure public`).
   scenario before making a joint comparison. Checked witnesses preserve original and hypothetical supports;
   checked exclusion certificates apply only to the supplied finite windows. No usable window stays T3, and
   solver caps remain indeterminate.
+- `guidance::track_record` (BD-341): `run(workspace, issuer, site, as_of)` verifies the source registry,
+  workbook bytes and two-reader document transcriptions before comparing registered annual guidance with
+  same-site, same-year Mine Stats full-year outcomes. `assess` accepts already authenticated projections;
+  `synthetic` exercises the same adapter with invented evidence. `TrackRecordReport::to_json` and
+  `to_markdown` retain guidance citations, outcome Claims, source digests, refusals and a deterministic report
+  digest. The digest binds a descriptive report, not a forecast ledger or historical timestamp proof.
+  The explicit information-cut mode emits `fmine.guidance.track-record.as-of.v1`, distinct from the CLI's
+  retrospective `fmine.guidance.track-record.v1` payload and its workbook-release `--through` selection.
+  - Supported transcription quantities are `guidance_<site>_production_koz`, `production_kt`,
+    `aisc_usd_per_oz`, `aisc_usd_per_lb`, `tcc_usd_per_oz` and `c1_usd_per_lb`. Each requires an explicit
+    full calendar year and matching unit/ownership basis. Cost bases additionally name
+    `;<aisc|tcc|c1>=issuer-reported-per-sold-<oz|lb>`. The supported, agreed registered population is
+    explicit; unsupported quantities are named, and absent historical guidance is not invented.
+  - Every agreed guidance vintage remains visible. Summaries use the earliest registered document date per
+    site/year/metric/normalized basis; tied earliest rows yield one unresolved denominator member. Later
+    revisions cannot replace an initial miss or create extra members. Distinct metrics, units, ownership
+    shares and years have separate summaries; regions and issuer totals do not enter site cohorts.
+  - The original annual release and latest registered appearance have separate assessments. A comparative
+    without the original remains `comparative_only_original_missing`; it never fills the first-published
+    denominator. Missing, unreadable, withheld, disposed, stale and incompatible outcomes remain unresolved,
+    retaining every selected source. Guidance whose registered exact-byte availability is after the target
+    year cannot acquire a historical score. An explicit as-of cut and conservative workbook retrieval dates
+    prevent invented historical availability.
+    Registered disposal or withholding overlapping any part of the target year also prevents scoring an
+    unflagged annual stub. Disposal's closing month is recovered from the profile's first-full-month rule,
+    including a December closure; the registered evidence remains in the refusal. Maintenance alone does
+    not suppress a genuine annual zero. The source cell must equal its Claim anchor's file, locator and hash.
+  - `fmine_calib::guidance_scores` computes exact printed-value hit classifications, rounding ambiguity,
+    range midpoint/half-width and standardized distance. A declared `ScoringMember` exists for each earliest
+    member, including missing outcomes. Completion bounds, rounding-aware completion bounds and the exact
+    outward 90% IID Clopper-Pearson reference interval remain separate. Point guidance has no standardized
+    distance. All results are `Descriptive` or `Unscored`; no calibration threshold is inferred.
 - `recovery` (bd-srqc): fits constant implied tails and an OLS tails-on-head-grade relation to the agreed
   annual Lumwana observations for 2013–2022, using `fmine_metrics::recovery`. It projects both onto each
   later visible site-quarter's head grade, recovery, processed mass and reported copper production.
@@ -156,6 +188,8 @@ The public lane of M0 (`fmine assure public`).
 - `key` (BD-332.S2/S3): projects visible AISC arithmetic operands and Mine Stats reads into source-anchored
   `Claim<PublicValue>` values. Subject, period, release, basis, scope, unit and semantic line belong to the key;
   coordinates remain citations. The raw readers and numerical identity ledgers retain their existing behavior.
+  `canonical_value_tag` exposes the existing key/raw/typed-value encoding so adapters can reject changes to
+  displayed values or status interpretations without changing any existing Claim identity.
 - `consistency` (bd-504e.1): groups visible AISC identities by the total or rate's `SeriesKey` and identity
   family. It reports the state at the earliest registered release once per identity, retains the all-files
   counts, and reports every adjacent appearance. "Earliest registered" never asserts first publication.
@@ -819,6 +853,13 @@ The public lane of M0 (`fmine assure public`).
   synthetic T1 path, rolling and cross-year windows, original-vintage-only selection, missing history, guidance-year
   cutoffs, incompatible source Claims and a separately restricted sales scenario. Every emitted source-quarter
   witness is checked against its original source intervals; missing history cannot produce a positive verdict.
+- FACT (BD-341, `xtask/tests/public_track_record.rs`): source-selector controls cover original versus later
+  outcomes, comparative-only history, missing members, stale and incompatible Claims, retained revisions,
+  normalized equivalent shares, ambiguous earliest guidance, duplicate outcomes, mutated bindings,
+  unregistered digests, pending readings, late guidance and future outcomes. A synthetic on-disk registry
+  verifies real workbook/document loading and two-reader agreement, retains a placeholder as unresolved, and
+  refuses an altered cited document. Exact hand-derived scores and completion bounds, deterministic input
+  order, site filtering and source-bearing JSON/Markdown are exercised through the public adapter.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 - A sheet with a cost-of-sales row but no locatable structure becomes a `TableRefusal`.
@@ -839,6 +880,8 @@ The public lane of M0 (`fmine assure public`).
 - Depends on `fmine-numerics` (BD-331.S6): the ledger's exact kernel (`exact_feas`, BD-340).
   `crates/xtask/tests/public_exact_feas_oracle.rs` keeps the old closed-form corner rule as an independent oracle for rates (at a
   share, and the (iv) range exactly); `test_property_footings_match_closed_form` does the same for footings.
+- Depends on `fmine-calib::guidance_scores` (BD-341) for validated descriptive guidance scoring and exact
+  IID reference bounds. Source acquisition, chronology and basis compatibility remain this adapter's duty.
 - Depends on `fmine-registry` for source/status/basis registries. Cross-crate oracle and registry tests live in
   `crates/xtask/tests/public_exact_feas_blame.rs`, `public_exact_feas_oracle.rs`, `public_laap_2023.rs` and
   `public_registry.rs`; the prior integration entry files retain documentation redirects.
@@ -854,6 +897,10 @@ The public lane of M0 (`fmine assure public`).
   exists. Historical sales persistence is an assumption, not a production/sales equality or a capacity bound.
   The T1 result excludes or admits only supplied historical windows under that assumption. Public technical-report
   T2 evidence binding remains open; no historical exclusion establishes that a mine cannot meet guidance.
+- The guidance track record does not establish a complete historical population, authentic prior forecast
+  registration, calibrated coverage, independence, effective sample size, a bias confidence interval or a
+  site ranking. Cost scores are unconditional; gold-price adjustments and attribution to controllable
+  operations remain unimplemented. This useful report slice does not close the full BD-341 data gate.
 - Recovery comparison is descriptive and non-identifying. Ore type, grind, throughput, concentrate mass
   pull and annual-to-quarter support remain explicit model limitations. Signed differences do not establish
   causation, recoverable production, investment value or forecasting skill. This slice emits no dollar

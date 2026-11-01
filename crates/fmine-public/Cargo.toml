@@ -13,6 +13,7 @@ fmine-units = { path = "../fmine-units" }
 fmine-time = { path = "../fmine-time" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-claim = { path = "../fmine-claim" }
+fmine-calib = { path = "../fmine-calib" }
 fmine-io = { path = "../fmine-io" }
 fmine-metrics = { path = "../fmine-metrics" }
 fmine-registry = { path = "../fmine-registry" }
