@@ -279,7 +279,7 @@ fn original_is_required_and_stale_or_duplicate_revisions_never_append() {
     f.release("2031Q4", "2032-02-15", "470.4");
     f.refuse(f.revision("2031Q4"), REVISION, "FMINE-REF-107");
     f.original();
-    f.refuse(f.revision("2030Q4"), REVISION, "FMINE-REF-107");
+    f.refuse(f.revision("2030Q4"), REVISION, "FMINE-REF-507");
     f.refuse(
         f.revision("2031Q4"),
         "2032-02-15T23:59:59Z",
@@ -385,4 +385,16 @@ fn replay_rejects_a_rehashed_receipt_with_a_different_predecessor() {
         &NeverClock,
     );
     assert_eq!(out.refusal.unwrap().code, "FMINE-REF-107");
+}
+
+#[test]
+fn negative_production_revision_is_refused_without_losing_the_original() {
+    let mut f = Fixture::new();
+    f.original();
+    f.release("2031Q4", "2032-02-15", "-1");
+    f.refuse(f.revision("2031Q4"), REVISION, "FMINE-REF-208");
+    let current = f.assess(LATE, "latest-as-of", "2032-03-01T00:00:01Z");
+    assert!(assessment(&current.payload_json).contains("\"value\":400,"));
+    assert!(assessment(&current.payload_json).contains("\"kind\":\"published\""));
+    assert!(current.payload_json.contains("\"n_outcomes\":1"));
 }
