@@ -20,6 +20,8 @@ use crate::roll_forward::{
     interval, js, rat,
 };
 
+pub mod geo;
+
 pub const NO_CLAIM: &str = "Issuer assertions from the declared registered source population, not classified reserves or independently verified physical quantities. Current means latest declared eligible MD&A or AIF filing; it is not a truth judgment or proof of complete filing coverage. Investor decks are cross-checks only. Changed or unstated price decks do not establish a reserve restatement.";
 
 /// The economic comparison key deliberately excludes the price deck and filing vintage.
@@ -133,6 +135,7 @@ pub struct ReserveReport {
     pub rows: Vec<IssuerReserveRow>,
     pub selections: Vec<CurrentSelection>,
     pub comparisons: Vec<VintageComparison>,
+    pub geo_checks: Vec<geo::GeoCheckReport>,
     pub refused: Vec<ReserveRefusal>,
     pub registry_refusal: Option<String>,
     /// Binds the complete supplied population when invalid registry metadata prevents row binding.
@@ -173,6 +176,24 @@ fn bind(
     let bounds = convention(&row.convention)
         .interval(source.cell.printed, half)
         .map_err(|e| format!("rounding interval unavailable: {e:?}"))?;
+    let deck = bind_deck(row, readings, document)?;
+    Ok(IssuerReserveRow {
+        declaration: row.clone(),
+        economic_key: ReserveKey::of(issuer, row),
+        source_role,
+        source,
+        interval: bounds,
+        deck,
+    })
+}
+
+// A candidate deck is a price hypothesis; its availability does not depend on an unrelated reserve amount.
+fn bind_deck(
+    row: &ReserveDeclaration,
+    readings: &[Accepted],
+    document: &DocumentRow,
+) -> Result<ReserveDeck, String> {
+    role(document)?;
     let mut deck = ReserveDeck {
         key: None,
         period: row.deck_period.clone(),
@@ -219,14 +240,7 @@ fn bind(
         );
         deck.key = Some(sha256(canonical.as_bytes()).to_hex());
     }
-    Ok(IssuerReserveRow {
-        declaration: row.clone(),
-        economic_key: ReserveKey::of(issuer, row),
-        source_role,
-        source,
-        interval: bounds,
-        deck,
-    })
+    Ok(deck)
 }
 
 fn evidence(row: &ReserveDeclaration, readings: &[Accepted]) -> Vec<Accepted> {
@@ -326,6 +340,7 @@ pub fn assess(
         rows: Vec::new(),
         selections: Vec::new(),
         comparisons: Vec::new(),
+        geo_checks: Vec::new(),
         refused: Vec::new(),
         registry_refusal: None,
         refused_input_digest: None,
@@ -421,6 +436,7 @@ pub fn assess(
             }
         }
     }
+    report.geo_checks = geo::assess(registry, readings, documents);
     report
 }
 
@@ -510,13 +526,27 @@ fn refused_input_digest(
             .collect(),
     );
     let reserves = array(registry.reserve_rows.iter().map(declaration_json).collect());
+    let geo_checks = array(
+        registry
+            .geo_checks
+            .iter()
+            .map(geo::declaration_json)
+            .collect(),
+    );
+    let cutoffs = array(
+        registry
+            .cutoffs
+            .iter()
+            .map(crate::cutoff::source::declaration_json)
+            .collect(),
+    );
     let documents = array(documents.iter().map(document_json).collect());
     let mut readings = readings.to_vec();
     canonical_readings(&mut readings);
     let readings = array(readings.iter().map(accepted_json).collect());
     sha256(
         format!(
-            "{{\"schema\":\"fmine.reserve-refused-input.v1\",\"issuer\":{},\"identities\":[{identities}],\"reserve_rows\":[{reserves}],\"documents\":[{documents}],\"readings\":[{readings}]}}",
+            "{{\"schema\":\"fmine.reserve-refused-input.v1\",\"issuer\":{},\"identities\":[{identities}],\"reserve_rows\":[{reserves}],\"geo_checks\":[{geo_checks}],\"cutoffs\":[{cutoffs}],\"documents\":[{documents}],\"readings\":[{readings}]}}",
             js(&registry.issuer)
         )
         .as_bytes(),
@@ -639,8 +669,14 @@ impl ReserveReport {
             })
             .collect::<Vec<_>>()
             .join(",");
+        let geo_checks = self
+            .geo_checks
+            .iter()
+            .map(geo::GeoCheckReport::to_json)
+            .collect::<Vec<_>>()
+            .join(",");
         format!(
-            "\"schema\":\"fmine.issuer-reserves.v1\",\"issuer\":{},\"gate_eligible\":false,\"rows\":[{rows}],\"selections\":[{selections}],\"comparisons\":[{comparisons}],\"refused\":[{refused}],\"registry_refusal\":{},\"refused_input_digest\":{},\"no_claim\":{}",
+            "\"schema\":\"fmine.issuer-reserves.v1\",\"issuer\":{},\"gate_eligible\":false,\"rows\":[{rows}],\"selections\":[{selections}],\"comparisons\":[{comparisons}],\"geo_checks\":[{geo_checks}],\"refused\":[{refused}],\"registry_refusal\":{},\"refused_input_digest\":{},\"no_claim\":{}",
             js(&self.issuer),
             option(&self.registry_refusal),
             option(&self.refused_input_digest),
@@ -751,6 +787,9 @@ impl ReserveReport {
         if let Some(reason) = &self.registry_refusal {
             let _ = writeln!(out, "\nRegistry refused: {}\n", text(reason));
         }
+        for check in &self.geo_checks {
+            out.push_str(&check.to_markdown());
+        }
         for r in &self.refused {
             let _ = writeln!(
                 out,
@@ -849,6 +888,8 @@ mod tests {
                 issuer: "synthetic".into(),
                 identities: Vec::new(),
                 reserve_rows: rows,
+                geo_checks: Vec::new(),
+                cutoffs: Vec::new(),
             },
             readings,
             documents,

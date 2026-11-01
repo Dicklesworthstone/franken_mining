@@ -8,6 +8,8 @@ use std::path::Path;
 use crate::sources::{DocumentRow, Fields, SourcesError, fail};
 use crate::toml_subset::{TomlValue, parse_subset};
 
+pub mod cutoff;
+
 pub const TABLE_IDENTITIES_SCHEMA: &str = "fmine.table-identities.v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +186,83 @@ pub struct TableIdentityRegistry {
     pub issuer: String,
     pub identities: Vec<TableIdentity>,
     pub reserve_rows: Vec<ReserveDeclaration>,
+    pub geo_checks: Vec<GeoCheckDeclaration>,
+    pub cutoffs: Vec<cutoff::CutoffDeclaration>,
+}
+
+/// Explicit GEO membership and optional, source-cited alternative deck hypotheses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeoCheckDeclaration {
+    pub id: String,
+    pub gold_row: String,
+    pub copper_row: String,
+    pub geo_row: String,
+    pub candidate_deck_rows: Vec<String>,
+}
+
+impl GeoCheckDeclaration {
+    fn validate(&self, rows: &[ReserveDeclaration]) -> Result<(), SourcesError> {
+        let bad = |reason: &str| SourcesError {
+            line: 0,
+            reason: format!("GEO check {}: {reason}", self.id),
+        };
+        let find = |id: &str| {
+            rows.iter()
+                .find(|row| row.id == id)
+                .ok_or_else(|| bad("every amount and candidate must name a declared reserve row"))
+        };
+        let (gold, copper, geo) = (
+            find(&self.gold_row)?,
+            find(&self.copper_row)?,
+            find(&self.geo_row)?,
+        );
+        if gold.metal != "gold"
+            || gold.unit != "moz"
+            || copper.metal != "copper"
+            || copper.unit != "mlb"
+            || geo.metal != "geo"
+            || geo.unit != "moz"
+        {
+            return Err(bad(
+                "amount rows require gold/GEO in moz and copper in mlb; no implicit rescaling",
+            ));
+        }
+        for row in [gold, copper] {
+            if row.doc != geo.doc
+                || row.subject != geo.subject
+                || row.item != geo.item
+                || row.reserve_year != geo.reserve_year
+                || row.period != geo.period
+                || row.ownership_key() != geo.ownership_key()
+                || row.support != geo.support
+                || row.convention != geo.convention
+            {
+                return Err(bad(
+                    "amount rows must share document, subject, item, year, period, ownership, support and convention",
+                ));
+            }
+        }
+        let mut candidates = BTreeSet::from([&self.geo_row]);
+        for id in &self.candidate_deck_rows {
+            if !candidates.insert(id) {
+                return Err(bad(
+                    "candidate deck rows must be distinct and must not repeat the primary GEO row",
+                ));
+            }
+        }
+        for id in candidates {
+            let row = find(id)?;
+            if row.deck != "quoted"
+                || row.gold_price_quantity.is_none()
+                || row.copper_price_quantity.is_none()
+            {
+                return Err(bad(
+                    "primary and candidate decks require both quoted gold and copper prices",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Interpretation of one issuer assertion; price-deck values themselves remain in agreed source readings.
@@ -362,6 +441,12 @@ impl TableIdentityRegistry {
                     .cloned(),
             );
         }
+        for cutoff in &self.cutoffs {
+            selected
+                .entry(cutoff.doc.clone())
+                .or_default()
+                .extend(cutoff.inputs.iter().map(|input| input.quantity.clone()));
+        }
         selected
             .into_iter()
             .map(|(doc, keys)| (doc, keys.into_iter().collect()))
@@ -370,10 +455,14 @@ impl TableIdentityRegistry {
 
     /// Rechecks public structs at a consumer boundary, including caller-constructed declarations.
     pub fn validate(&self, documents: &[DocumentRow]) -> Result<(), SourcesError> {
-        if !key(&self.issuer) || (self.identities.is_empty() && self.reserve_rows.is_empty()) {
+        if !key(&self.issuer)
+            || (self.identities.is_empty()
+                && self.reserve_rows.is_empty()
+                && self.cutoffs.is_empty())
+        {
             return fail(
                 0,
-                "an issuer key and at least one table identity or reserve row are required",
+                "an issuer key and at least one table identity, reserve row or cutoff are required",
             );
         }
         let mut ids = BTreeSet::new();
@@ -509,6 +598,18 @@ impl TableIdentityRegistry {
                 );
             }
         }
+        for check in &self.geo_checks {
+            if !key(&check.id) || !ids.insert(&check.id) {
+                return fail(0, "GEO checks require unique ids across all declarations");
+            }
+            check.validate(&self.reserve_rows)?;
+        }
+        for cutoff in &self.cutoffs {
+            if !ids.insert(&cutoff.id) {
+                return fail(0, "cutoffs require unique ids across all declarations");
+            }
+            cutoff.validate(documents)?;
+        }
         Ok(())
     }
 }
@@ -536,10 +637,27 @@ pub fn parse_table_identities(
     }
     let mut identities = Vec::new();
     let mut reserve_rows = Vec::new();
+    let mut geo_checks = Vec::new();
+    let mut geo_candidates = Vec::new();
     let mut terms = Vec::new();
     for row in &parsed.rows {
         let f = Fields::of_row(row);
         match row.table.as_str() {
+            "cutoff" | "cutoff_input" => {}
+            "geo_check" => {
+                f.only(&["id", "gold_row", "copper_row", "geo_row"])?;
+                geo_checks.push(GeoCheckDeclaration {
+                    id: f.string("id")?.0,
+                    gold_row: f.string("gold_row")?.0,
+                    copper_row: f.string("copper_row")?.0,
+                    geo_row: f.string("geo_row")?.0,
+                    candidate_deck_rows: Vec::new(),
+                });
+            }
+            "geo_candidate" => {
+                f.only(&["check", "row"])?;
+                geo_candidates.push((f.string("check")?.0, f.string("row")?.0, row.line));
+            }
             "reserve_row" => {
                 f.only(&[
                     "id",
@@ -711,10 +829,22 @@ pub fn parse_table_identities(
     for identity in &mut identities {
         identity.terms.sort_by(|a, b| a.quantity.cmp(&b.quantity));
     }
+    for (id, row, line) in geo_candidates {
+        let Some(check) = geo_checks.iter_mut().find(|check| check.id == id) else {
+            return fail(line, format!("GEO candidate names unknown check {id:?}"));
+        };
+        check.candidate_deck_rows.push(row);
+    }
+    geo_checks.sort_by(|a, b| a.id.cmp(&b.id));
+    for check in &mut geo_checks {
+        check.candidate_deck_rows.sort();
+    }
     let registry = TableIdentityRegistry {
         issuer: named,
         identities,
         reserve_rows,
+        geo_checks,
+        cutoffs: cutoff::parse(&parsed)?,
     };
     registry.validate(documents)?;
     Ok(registry)
@@ -876,6 +1006,91 @@ mod tests {
                 .reason
                 .contains("document/quantity")
         );
+    }
+
+    fn geo_text() -> String {
+        let mut text =
+            "schema = \"fmine.table-identities.v1\"\nissuer = \"synthetic\"\n".to_string();
+        for (id, metal, unit) in [
+            ("gold", "gold", "moz"),
+            ("copper", "copper", "mlb"),
+            ("geo", "geo", "moz"),
+            ("alternative", "geo", "moz"),
+        ] {
+            text.push_str(&format!(
+                "[[reserve_row]]\nid = \"{id}\"\ndoc = \"Report.pdf\"\nquantity = \"{id}\"\n\
+                subject = \"invented_issuer\"\nitem = \"closing\"\nreserve_year = 2030\nperiod = \"2030FY\"\n\
+                metal = \"{metal}\"\nunit = \"{unit}\"\nownership = \"full\"\nsupport = \"contained\"\n\
+                convention = \"closed\"\ndeck = \"quoted\"\ndeck_period = \"2030FY\"\ndeck_basis = \"reserve_prices\"\n\
+                gold_price_quantity = \"gold_price\"\ncopper_price_quantity = \"copper_price\"\n"
+            ));
+        }
+        text.push_str("[[geo_check]]\nid = \"conversion\"\ngold_row = \"gold\"\ncopper_row = \"copper\"\ngeo_row = \"geo\"\n[[geo_candidate]]\ncheck = \"conversion\"\nrow = \"alternative\"\n");
+        text
+    }
+
+    #[test]
+    fn geo_checks_bind_explicit_membership_and_existing_price_sources() {
+        let mut registry = parse_table_identities(&geo_text(), "synthetic", &[doc()]).unwrap();
+        assert_eq!(registry.geo_checks[0].candidate_deck_rows, ["alternative"]);
+        assert_eq!(
+            registry.quantities_by_document()["Report.pdf"],
+            [
+                "alternative",
+                "copper",
+                "copper_price",
+                "geo",
+                "gold",
+                "gold_price"
+            ]
+        );
+        for row in &mut registry.reserve_rows[..3] {
+            row.ownership = "attributable:1/2".into();
+        }
+        registry.reserve_rows[0].ownership = "attributable:2/4".into();
+        assert!(registry.validate(&[doc()]).is_ok());
+        for text in [
+            geo_text().replace("gold_row = \"gold\"", "gold_row = \"unknown\""),
+            geo_text().replace("check = \"conversion\"", "check = \"orphan\""),
+            geo_text().replace("row = \"alternative\"", "row = \"geo\""),
+            geo_text().replace("unit = \"mlb\"", "unit = \"kt\""),
+            format!(
+                "{}[[geo_candidate]]\ncheck = \"conversion\"\nrow = \"alternative\"\n",
+                geo_text()
+            ),
+        ] {
+            assert!(parse_table_identities(&text, "synthetic", &[doc()]).is_err());
+        }
+    }
+
+    #[test]
+    fn geo_members_cannot_mix_source_vintages_or_economic_interpretations() {
+        let registry = parse_table_identities(&geo_text(), "synthetic", &[doc()]).unwrap();
+        let mut other_doc = doc();
+        other_doc.file = "Other.pdf".into();
+        other_doc.sha256 = "b".repeat(64);
+        let docs = [doc(), other_doc];
+        let changes: [fn(&mut ReserveDeclaration); 8] = [
+            |row| row.doc = "Other.pdf".into(),
+            |row| row.subject = "other_subject".into(),
+            |row| row.item = "net_change".into(),
+            |row| {
+                row.reserve_year = 2029;
+                row.period = "2029FY".into();
+            },
+            |row| row.ownership = "attributable:1/2".into(),
+            |row| row.support = "recoverable".into(),
+            |row| row.unit = "koz".into(),
+            |row| row.convention = "truncate".into(),
+        ];
+        for change in changes {
+            let mut invalid = registry.clone();
+            change(&mut invalid.reserve_rows[0]);
+            assert!(invalid.validate(&docs).is_err());
+        }
+        let mut invalid = registry;
+        invalid.reserve_rows[3].copper_price_quantity = None;
+        assert!(invalid.validate(&docs).is_err());
     }
 
     #[test]

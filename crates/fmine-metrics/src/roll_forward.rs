@@ -3,7 +3,7 @@
 //! The caller verifies registered document bytes and reader agreement. This pure adapter rechecks the
 //! admitted rows against those declarations, preserves each filing vintage, and delegates every arithmetic
 //! verdict to the checked exact solver. It never creates a reserve classification or chooses a corrected value.
-//! Determinism: Exact (rational arithmetic, sorted inputs, declarations and certificates bound by the digest).
+//! Determinism: DeterministicPerIsa (table checks are exact; optional cutoffs inherit a float solver cross-check).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -58,6 +58,7 @@ pub struct TableReport {
     pub cells: Vec<SourceCell>,
     pub components: Vec<ComponentCheck>,
     pub refused: Vec<IdentityRefusal>,
+    pub cutoffs: crate::cutoff::source::SourceReport,
 }
 
 pub(crate) fn convention(name: &str) -> xf::Convention {
@@ -414,8 +415,10 @@ fn assess_inner(
         cells: Vec::new(),
         components: Vec::new(),
         refused: Vec::new(),
+        cutoffs: crate::cutoff::source::assess(&registry.cutoffs, readings, documents),
     };
     if let Err(error) = registry.validate(documents) {
+        report.cutoffs.refuse_all(&error.to_string());
         report.refused.push(IdentityRefusal {
             identity: "registry".into(),
             doc: String::new(),
@@ -834,9 +837,10 @@ impl TableReport {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "\"schema\":{},\"issuer\":{},\"gate_eligible\":false,\"definitions\":[{definitions}],\"metric_definitions\":[{metric_definitions}],\"cells\":[{cells}],\"components\":[{components}],\"refused\":[{refused}],\"no_claim\":{}",
+            "\"schema\":{},\"issuer\":{},\"gate_eligible\":false,\"definitions\":[{definitions}],\"metric_definitions\":[{metric_definitions}],\"cells\":[{cells}],\"components\":[{components}],\"refused\":[{refused}],\"cutoffs\":{},\"no_claim\":{}",
             js(SCHEMA),
             js(&self.issuer),
+            self.cutoffs.to_json(),
             js(NO_CLAIM)
         )
     }
@@ -924,6 +928,8 @@ mod tests {
             issuer: "synthetic".into(),
             identities,
             reserve_rows: Vec::new(),
+            geo_checks: Vec::new(),
+            cutoffs: Vec::new(),
         }
     }
 

@@ -36,6 +36,20 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   deck cannot carry price fields. Duplicate row ids, document/quantity aliases, incompatible units/periods,
   invalid ownership fractions and inconsistent document conventions refuse. `quantities_by_document` selects
   the sorted union of arithmetic operands, reserve assertions and price readings; reserve-only definitions run.
+  DESIGN (BD-340.S4, BD-070): `GeoCheckDeclaration` binds `[[geo_check]]` gold/copper/GEO reserve-row ids
+  and optional linked `[[geo_candidate]]` price-deck row ids. Amounts share one document, subject, reserve
+  item/year, period, normalized ownership, support and convention, with gold/GEO in Moz and copper in Mlb.
+  The GEO row supplies the primary quoted deck; every explicit candidate also declares both price readings.
+  Duplicate/orphan candidates, implicit rescaling and mixed economic/source interpretations refuse.
+- DESIGN (BD-274): `table_identities::cutoff::{CutoffDeclaration, CutoffInput, InputRole, RecoveryModel, Unit}`
+  adds `[[cutoff]]` and linked `[[cutoff_input]]` declarations to `TableIdentityRegistry.cutoffs`. Each names
+  one registered document, subject, period, physical/model basis, separate price basis, output unit and
+  recovery model; numerical values come only from agreed source readings. Explicit roles require one
+  published grade, one gold price, at least one cost and exactly the chosen recovery model's parameters.
+  Optional deductions and an oz/short-ton row's metric equivalent remain separately named. Unknown fields,
+  orphan inputs, duplicate quantity keys and incompatible roles/units refuse. `quantities_by_document`
+  includes every required reading. Parsing, validation and ordering are Exact; document eligibility,
+  point-value binding and numerical-domain checks belong to the metrics source adapter.
 - `RegistryCatalog`, `RegistryError`
 - `toml_subset::{parse_subset, TomlDoc, TomlRow, TomlField, TomlValue, SubsetError}`: a strict TOML subset (`[[table]]` rows, basic strings, integers, comments); anything else refuses naming the line (bd-s9j3.1)
 - `sources::{parse_sources_registry, load_sources_registry, SourcesRegistry, SourceRow, ReconstructionRow, BasisRow, MissingFactRow, MineStatsLabelRow, ShareRow, RegionMemberRow, SourcesError, is_quarter, is_url_basis, URL_BASES, URL_BASIS_FETCHED}`, `SourcesRegistry::members_of`, `RegionMemberRow::holds_for`: issuer source registries (each `url_basis` is `"W1 table"`, `"W1 naming rule"` or `"fetched and verified YYYY-MM-DD"` with a calendar date, BD-339.S3; each `[[reconstruction]]` declares `basis = "reconstructed"`, or `"stated"` with `quote_doc` (a registered file), `quote_locator` (`sheet!cell`) and `quote_prefix`, BD-331.S2; optional `[[missing_fact]]` rows, BD-331.S2: `subject`, `family`, `text` (prose with no digits), `evidence`, optional `closing_document`, once per subject and family; optional `[[mine_stats_label]]` rows: `label`, optional `section`, duplicates refused; optional `kind = "site" | "region"` on `[[subject]]`; optional `[[share]]` rows, BD-331.S3: `subject` (a registered non-region subject, once), positive `num` ≤ `den`, `evidence`, optional Mine Stats `label`; optional `[[region_member]]` rows, BD-331.S4: `region` (a registered region), `member` (a registered non-region subject), release quarter `first` and optional `last` ≥ `first`, no two rows of one member over overlapping releases) `registries/sources/<issuer>.toml` (`fmine.sources.v1`), checked on load

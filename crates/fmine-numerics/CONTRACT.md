@@ -126,6 +126,9 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
     sum that point. `DeckFinding::{Found, Ambiguous (FMINE-REF-104), NoFit}` reads the proper fits only, and
     `conventions` lists the conventions with one. Found is not registered: the row's stated deck is the
     caller's. Refused: a price of zero or below (`NotPositive`), a negative step, an overflow.
+  - `evaluate_geo(relation, deck, convention) -> Result<GeoEvaluation, ShareRefusal>` exposes the same exact
+    conversion bounds for the explicitly stated deck and convention, including `Closed`. It retains converted
+    and reported intervals, strict endpoints and proper/point-only/empty fit without choosing a new deck.
 - `exact_feas::generator` (bd-4wvl.7, BD-340.S7; `Exact`): clean random tables for the soundness, metamorphic
   and power tests. (`gen` is a reserved word in edition 2024, so the module is `generator`.)
   - `generate(key, &GenSpec) -> Result<Generated, GenError>` and `generate_vintage(key, spec, vintage)`: one

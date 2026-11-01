@@ -8,7 +8,7 @@
 - **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserves", "roll_forward", "mirror", "public_derivation"]`
 
 ## 2. Mathematical & Domain Formulation
-Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), a spend-based Logarithmic Mean Divisia Index (`lmdi`, `GB-26`, BD-333.S1), and fixed-point marginal cut-off grade solver (`solve_cutoff_grade`; synthetic known answer only, the published cut-offs E182–E184 are not yet reproduced).
+Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), a spend-based Logarithmic Mean Divisia Index (`lmdi`, `GB-26`, BD-333.S1), and cut-off grade arithmetic (`solve_cutoff_grade`, exact registered references and source-bound technical-report checks). Authentic source reproduction of E182–E184 remains a separate data gate.
 
 The LMDI bridge recomputes each endpoint as `A = supplied total_aisc_spend / oz_sold`. Its six bars are
 `L(A1,A0)·Δln(C)` and `−L(A1,A0)·Δln(X)` for `X` in tonnes, grade, recovery, metal balance
@@ -83,6 +83,17 @@ arithmetic closure does not establish causation or identify an operational expla
   A registry-wide refusal also binds all supplied declarations, documents and raw/admitted readings in a
   canonical input digest, retaining duplicates and making rejected-input mutations distinguishable.
   This projection is not a durable append-only store, a complete filing census or an `EstimateStatement`.
+- `reserves::geo::GeoCheckReport` (BD-340.S4, BD-070): explicit gold/copper/GEO row membership is checked
+  with the existing exact GEO interval and deck-discovery kernels. Three source-verified amounts share
+  document vintage, subject, reserve item/year, period, ownership and support; gold/GEO use Moz and copper
+  uses Mlb without implicit conversion. The primary GEO row supplies its quoted gold/copper prices as exact
+  parameters. Its declared convention controls the stated-deck result and exact converted/reported bounds;
+  proper fits, tie-only contact and empty intersections remain distinct. Optional candidates use independently
+  bound price readings: their unrelated reserve amounts are unnecessary. Missing candidate prices prevent
+  discovery, retaining every named source and any usable stated-deck result. Identical parameter keys retain
+  every source provider; distinct equal-ratio decks stay ambiguous. JSON/Markdown expose all strict-convention
+  fits, declared/candidate sources and content digests. A found key is conditional on this check's supplied
+  candidate set, never a correction, actual-issuer-calculation claim or document-wide convention selection.
 - DESIGN (BD-345.S4): `public_derivation::{Amount, AmountKind, Rule, derive}` supplies complete-quarter
   sums for H1 and FY, carried as canonical Claims. Exactly Q1/Q2 or Q1/Q2/Q3/Q4 is required; issuer,
   subject, scope, metric/unit, explicit ownership and calendar year must match. Closed source bounds
@@ -123,12 +134,25 @@ arithmetic closure does not establish causation or identify an operational expla
   (BD-060): AISC and AIC from `registries/metrics.toml`. A line the definition neither counts nor excludes is refused,
   and every result names its definition and any successor.
 - `cutoff::{parse_cases, reproduce, CutoffCase, CutoffReport, CutoffState, Printed, Recovery}` (BD-274): the
-  published cut-offs in `registries/published_cutoffs.toml`, recomputed on exact rationals from the printed inputs.
+  reference cut-offs in `registries/published_cutoffs.toml`, recomputed on exact rationals from registered tokens.
   Each comes back `Reproduced`, `WithinInputRounding` or `Conflict`; `CutoffReport::to_json` prints exact results to
   six places, never through a float.
-- `cutoff::{section, CutoffSection, CUTOFFS_REGISTRY}`: every row reproduced, as the JSON object an issuer run of
+- `cutoff::{section, CutoffSection, CUTOFFS_REGISTRY}`: every reference row assessed, as the JSON object an issuer run of
   `fmine assure public` carries as `published_cutoffs`: the registry's sha256, the count in each state and the rows in
-  registry order, with the registry's `issuer`. A row that cannot be computed fails the whole section.
+  registry order, with the registry's `issuer`. A row that cannot be computed fails the whole section. This is
+  source-unverified `reference_input_arithmetic`, explicitly `source_verified:false` and `gate_eligible:false`;
+  neither actual report bytes nor independent readings are authenticated by this legacy section.
+- DESIGN (BD-274): `cutoff::source::{assess, SourceRow, SourceReport}` binds declared roles to point-only
+  accepted readings from one registered `technical_report`, retaining exact units, period, separate physical
+  and price bases, source hashes, locators and reader identities. The caller authenticates document bytes and
+  complete agreement. Gold price is an exact stated parameter; other inputs carry closed half-last-place
+  boxes and the published grade uses half-up rounding. Positive grades, price and total-cost boxes,
+  nonnegative cost/deduction tokens, TCM in [0,100] percent and effective recovery in (0,100] are required;
+  a TCM intercept above 100 is permitted when effective recovery remains valid. There is no implicit unit or
+  ownership conversion. `TableReport.cutoffs` retains every declaration, available source and refusal in
+  JSON/Markdown and its digest; complete independent rows still run. Bounds are exact, while the inherited
+  floating TCM cross-check makes the report DeterministicPerIsa. This is arithmetic reproduction of stated
+  assumptions, not an optimal operating cutoff, a reserve classification or completion of the real-data gate.
 - `lmdi::{LmdiState, LmdiWaterfall, decompose_aisc_lmdi, logarithmic_mean}`
   - `LmdiState` keeps the existing floating-point API. Monetary spend and sold ounces must have compatible
     scales so their quotient is USD/oz: USD/oz or thousand USD/koz. `$M`/`koz` inputs require the explicit

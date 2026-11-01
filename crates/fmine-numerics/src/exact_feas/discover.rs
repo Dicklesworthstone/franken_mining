@@ -661,6 +661,28 @@ pub struct GeoRelation {
     pub geo: Factor,
 }
 
+/// Exact printed-input enclosure at one explicitly chosen price deck and rounding convention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeoEvaluation {
+    pub converted: Interval,
+    pub reported: Interval,
+    pub fit: Fit,
+}
+
+/// Checks the declared deck without replacing it with a discovered alternative. Prices are exact quoted
+/// parameters, gold/GEO amounts are Moz and copper amounts are Mlb. `Closed` retains tie-only contact as
+/// `Points`; it is not evidence of a proper strict-convention fit. No source authentication occurs here.
+pub fn evaluate_geo(
+    relation: &GeoRelation,
+    deck: &Deck,
+    convention: Convention,
+) -> Result<GeoEvaluation, ShareRefusal> {
+    if deck.gold.signum() <= 0 || deck.copper.signum() <= 0 {
+        return Err(ShareRefusal::NotPositive);
+    }
+    geo_evaluation(relation, deck.copper.checked_div(deck.gold)?, convention)
+}
+
 /// How one deck fits one row's relations under one convention.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeckFit {
@@ -705,26 +727,33 @@ pub struct DeckDiscovery {
 /// so its range runs from the sum of the low ends to the sum of the high ends, each end open when an input end
 /// is; it fits where it meets the GEO cell's range. A meet of one point fits only at a tie, unless exact inputs
 /// make the sum that one point.
-fn geo_fit(rel: &GeoRelation, r: Rat, convention: Convention) -> Result<Fit, ShareRefusal> {
+fn geo_evaluation(
+    rel: &GeoRelation,
+    r: Rat,
+    convention: Convention,
+) -> Result<GeoEvaluation, ShareRefusal> {
     let g = factor_interval(rel.gold, convention)?;
     let c = factor_interval(rel.copper, convention)?;
-    let sum = Bound {
-        lo: Some(End {
-            at: g.lo.checked_add(r.checked_mul(c.lo)?)?,
-            strict: g.lo_strict || c.lo_strict,
-        }),
-        hi: Some(End {
-            at: g.hi.checked_add(r.checked_mul(c.hi)?)?,
-            strict: g.hi_strict || c.hi_strict,
-        }),
+    let converted = Interval {
+        lo: g.lo.checked_add(r.checked_mul(c.lo)?)?,
+        hi: g.hi.checked_add(r.checked_mul(c.hi)?)?,
+        lo_strict: g.lo_strict || c.lo_strict,
+        hi_strict: g.hi_strict || c.hi_strict,
     };
-    let range = sum.meet(Bound::of(factor_interval(rel.geo, convention)?))?;
-    Ok(if range.is_empty()? {
+    let sum = Bound::of(converted);
+    let reported = factor_interval(rel.geo, convention)?;
+    let range = sum.meet(Bound::of(reported))?;
+    let fit = if range.is_empty()? {
         Fit::Empty
     } else if is_point(&range)? && !is_point(&sum)? {
         Fit::Points
     } else {
         Fit::Proper
+    };
+    Ok(GeoEvaluation {
+        converted,
+        reported,
+        fit,
     })
 }
 
@@ -744,7 +773,7 @@ pub fn discover_deck(
             let r = deck.copper.checked_div(deck.gold)?;
             let mut fit = Fit::Proper;
             for rel in relations {
-                match geo_fit(rel, r, convention)? {
+                match geo_evaluation(rel, r, convention)?.fit {
                     Fit::Empty => fit = Fit::Empty,
                     Fit::Points if fit == Fit::Proper => fit = Fit::Points,
                     _ => {}
@@ -1375,6 +1404,41 @@ mod tests {
         assert_eq!(
             alone.finding,
             DeckFinding::Ambiguous(vec!["1400/3.00".to_string(), "1500/3.25".to_string()])
+        );
+    }
+
+    #[test]
+    fn declared_geo_check_keeps_closed_tie_contact_separate_from_strict_fit() {
+        let relation = GeoRelation {
+            gold: Factor {
+                printed: Rat::from_integer(0),
+                step: Rat::from_integer(0),
+            },
+            copper: Factor {
+                printed: Rat::from_integer(1000),
+                step: Rat::from_integer(1),
+            },
+            geo: Factor {
+                printed: Rat::new(1001, 1000).unwrap(),
+                step: Rat::new(1, 1000).unwrap(),
+            },
+        };
+        let mut deck = Deck {
+            name: "invented".into(),
+            gold: Rat::from_integer(1000),
+            copper: Rat::from_integer(1),
+        };
+        let closed = evaluate_geo(&relation, &deck, Convention::Closed).unwrap();
+        assert_eq!(closed.fit, Fit::Points);
+        assert_eq!(closed.converted.hi, closed.reported.lo);
+        assert!(!closed.converted.hi_strict);
+        let open = evaluate_geo(&relation, &deck, Convention::HalfUp).unwrap();
+        assert_eq!(open.fit, Fit::Empty);
+        assert!(open.converted.hi_strict);
+        deck.gold = Rat::from_integer(0);
+        assert_eq!(
+            evaluate_geo(&relation, &deck, Convention::Closed),
+            Err(ShareRefusal::NotPositive)
         );
     }
 
