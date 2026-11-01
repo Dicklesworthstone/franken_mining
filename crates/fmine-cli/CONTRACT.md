@@ -15,6 +15,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `assure public --issuer <issuer> [--through YYYYQn]`: the gate-eligible run over the filings in
     `registries/sources/<issuer>.toml`, optionally only those at or before a quarter;
   - `assure public --synthetic`: the known-answer run, never gate-eligible;
+  - either assurance selector with `--output <new-path>` and the host-clock issuance options below: save and
+    register the exact report artifact, returning a separate issuance receipt;
   - `assure issue`: owner-authorized issuance of a freshly verified public or explicitly synthetic assurance
     report to a new local file, binding exact JSON bytes, canonical Claims, ledger anchor, source manifest,
     build-time revision, executable digest, generic recipient role and purpose (BD-347);
@@ -46,7 +48,7 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     bundle checks all declared ancestors at each frozen forecast's registration cut (BD-344);
   - `forecast journal init|register|freeze|outcome|assess|inspect --journal <path>`: durable forecast admission,
     cohort freezing, append-only resolution and persisted assessment seals with runtime-assigned times (BD-047);
-  - `reliance init|issue|check|reuse|withdraw|supersede|refresh|recall --journal <path>`: local issued-output
+  - `reliance init|issue|reissue|check|reuse|withdraw|supersede|refresh|recall --journal <path>`: local issued-output
     status and exact artifact reuse, with capability-authorized mutations and generic recipient roles (BD-347);
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row
     per file, `{file, present, bytes_ok, digest_ok}` against the registry's size and sha256 (BD-339.S2). A
@@ -83,20 +85,36 @@ retains unconfirmed bytes for inspection. No command repairs, truncates or delet
 
 ### Issued-output reliance (BD-347)
 
-`issue` renders the existing assurance envelope and binds its exact bytes, sorted output Claim IDs, actual
+`assure public --output <new-path>` requires `--journal`, `--head`, `--release-key`, `--trust-host-clock`,
+`--recipient-role`, `--purpose` and `--code-revision`. Its `--format json|markdown` controls both the saved
+artifact and stdout receipt rendering, with JSON as the default; the receipt is separate from the stored
+report bytes. `--artifact-format` belongs only to `reliance issue`, which retains independent artifact formatting.
+Both host-clock issuance routes render the existing assurance envelope and bind its exact bytes, sorted output Claim IDs, actual
 ledger anchor, source/transcription/cutoff registry bytes and optional-file absence, consumed workbook/PDF
 hashes, lane and public label. The runtime executable is hashed; `--code-revision` is explicitly caller-declared.
 Public clearance, explicit staleness and canonical Claim IDs are checked without declassification. `init` binds
 a private raw 32-byte release key to the journal's role and freshness policy; capability possession proves no
-human review or regulatory authority. Later mutations require that key, an exact independently trusted `--head`
+human review or regulatory authority. Host-clock mutations require that key, an exact independently trusted `--head`
 and `--trust-host-clock`. That clock flag declares the operator's bound; it supplies no external time proof.
-Missing, mismatched or stale trust inputs leave `check` unknown and refuse current `reuse`. All artifact writes
-use create-new semantics. `reuse` holds the journal read lock through its status check and local copy; it appends
-no issuance and cannot track that copy. `recall` covers recorded issuances only and sends no notifications.
+Missing, mismatched or stale trust inputs leave `check` unknown and refuse current `reuse` or `reissue`.
+`reissue` takes `--artifact`, `--output`, `--source-issuance`, `--recipient-role` and `--purpose`, plus the
+journal/key/head/clock options. It selects one existing issuance by its canonical `issuance_id`, checks exact
+bytes and current freshness before creating a destination or appending, and preserves the original code revision,
+binary, input manifest, Claims, anchor, lane and taint; only recipient, purpose and issuance time change.
+Authorization failure, unknown status, staleness, withdrawal or supersession refuses before destination creation.
+Issuance and recall results expose `issuance_id` (BLAKE3 of the canonical IssuanceRecord frame), distinct from
+`output_digest` (exact artifact bytes) and `journal_head` (the status history). Explicit-time results retain the
+equal `issuance_digest` compatibility field. Identical artifact bytes need not identify one producer issuance.
+All artifact writes use create-new semantics. `reuse` holds the journal read lock through its status check and
+local copy; it appends no issuance and cannot track that copy. `recall` covers recorded issuances only and sends
+no notifications. Ordinary stdout report emissions and other report families remain unregistered; this is not
+complete BD-347 coverage or proof of delivery.
 Withdrawal names affected Claim IDs, or explicitly declares that all statements are affected; it preserves
 historical digest verification. Supersession names an already recorded replacement;
-refresh records a new status cut without reviving withdrawn or superseded outputs. A failed journal append
-after artifact creation leaves issuance durability unconfirmed: retain the file and resolve the journal before reuse.
+refresh records a new status cut without reviving withdrawn or superseded outputs. If artifact creation succeeds
+but the final journal append fails, no confirmed new issuance receipt or recipient registration exists. Retain
+any destination artifact and resolve the journal before using that copy; an earlier issuance of the same digest
+may still be current.
 
 In the host-clock grammar, `check --digest ... --require-current` returns `FMINE-REF-202` (exit 3) when current
 reuse is denied, retaining the complete status and byte-verification payload.
@@ -160,17 +178,18 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   A historical `--as-of` result never grants current reuse. Check and recall emit metadata, not artifact bytes.
   Mutation keys are exact nonzero private binary files. Append uses a caller-supplied expected head under an
   exclusive lock; wrong keys, stale writers and invalid transitions cannot overwrite an artifact or journal.
-  Issuance uses the same verified source projection and JSON envelope as `assure public`, including its final
-  newline. Inputs are bound separately from exact output bytes. Source errors retain their original refusal.
+  `assure issue` uses the same verified source projection and JSON envelope as `assure public`, including its final
+  newline; its `--format` affects only receipt rendering. Inputs are bound separately from exact output bytes.
+  Source errors retain their original refusal.
   For `assure issue`, build revision is embedded by `build.rs`; a dirty build is marked and an unknown or
   unrelated enclosing-repository revision refuses issuance. The opened Linux `/proc/self/exe` image is
   hashed with BLAKE3, preserving identity across pathname replacement. Platforms without a supported
   executing-image handle refuse this command with `FMINE-REF-202`.
-  A runtime checkout cannot relabel an installed executable. No supplied revision, Claim list or artifact
-  digest substitutes for the producer's verified report. Owner-key possession is local release capability,
+  A runtime checkout cannot relabel an installed executable. For `assure issue`, no supplied revision, Claim list
+  or artifact digest substitutes for the producer's verified report. Owner-key possession is local release capability,
   not a human signature, disclosure clearance or an independent time proof.
-  Both issue commands share `reliance_binding` for the exact envelope, Claim closure and input manifest,
-  and use `Journal::issue_bytes`; both retrieval commands use `Journal::export_current`. This preserves
+  New-report issuance routes share `reliance_binding` for the exact envelope, Claim closure and input manifest,
+  and use `Journal::issue_bytes`; `reliance reuse` and `reliance export` use `Journal::export_current`. This preserves
   cross-command artifact identity, private create-new writes, parent-directory synchronization and journal
   locking throughout the status check and copy. Shared record rendering labels revision evidence as
   recorded; only the immediate `assure issue` receipt attests build-time capture.

@@ -48,6 +48,8 @@ pub enum CliCommand {
     },
     /// `fmine assure public --synthetic`: the known-answer run over synthetic workbooks (never gate-eligible).
     AssureSynthetic,
+    /// Save exact assurance bytes and register their recipient under release authority.
+    AssureExport(reliance::Command),
     /// Prepare cited internal-review evidence challenges from an assurance snapshot (BD-349).
     AssureChallenges {
         /// `None` selects the explicitly requested synthetic lane.
@@ -378,7 +380,16 @@ fn verb_hint(args: &[String]) -> &'static str {
             | "--cohort"
             | "--selector"
             | "--provenance"
-            | "--capacity-document" => i += 2,
+            | "--capacity-document"
+            | "--output"
+            | "--journal"
+            | "--head"
+            | "--release-key"
+            | "--recipient-role"
+            | "--purpose"
+            | "--code-revision"
+            | "--artifact-format"
+            | "--source-issuance" => i += 2,
             flag if flag.starts_with("--") => i += 1,
             "assure" => {
                 return match args.get(i + 1).map(String::as_str) {
@@ -397,6 +408,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                     Some("export") => "reliance export",
                     Some("issue") => "reliance issue",
                     Some("reuse") => "reliance reuse",
+                    Some("reissue") => "reliance reissue",
                     Some("recall") => "reliance recall",
                     _ => "reliance check",
                 };
@@ -615,6 +627,10 @@ pub fn parse_args(
     args: &[String],
     default_root: &Path,
 ) -> Result<(CliCommand, OutputFormat, PathBuf), String> {
+    if verb_hint(args) == "assure public" && args.iter().any(|arg| arg == "--output") {
+        return reliance::parse_export(args, default_root)
+            .map(|(command, format, root)| (CliCommand::AssureExport(command), format, root));
+    }
     if verb_hint(args) == "forecast journal" {
         return parse_forecast_journal(args, default_root)
             .map(|(command, format, root)| (CliCommand::ForecastJournal(command), format, root));
@@ -1115,7 +1131,7 @@ fn parse_reliance_args(
         (Some("assure"), Some("issue")) | (Some("reliance"), Some("export")) => {
             CliCommand::Issued(issued::parse(&command, &workspace)?)
         }
-        (Some("reliance"), Some("issue" | "reuse" | "recall")) => {
+        (Some("reliance"), Some("issue" | "reuse" | "reissue" | "recall")) => {
             return reliance::parse(args, default_root).map(|(command, format, root)| {
                 Some((CliCommand::Reliance(command), format, root))
             });
@@ -1375,6 +1391,11 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         }
         CliCommand::Issued(command) => issued::execute(command, workspace_root),
         CliCommand::Reliance(command) => reliance::execute(command, workspace_root),
+        CliCommand::AssureExport(command) => {
+            let mut envelope = reliance::execute(command, workspace_root);
+            envelope.verb = "assure public".to_string();
+            envelope
+        }
         CliCommand::ForecastJournal(command) => forecast_journal::execute(command, workspace_root),
         CliCommand::AssurePublic { issuer, through } => {
             if !is_issuer_name(issuer) || !registry_path(workspace_root, issuer).is_file() {

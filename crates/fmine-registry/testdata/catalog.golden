@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 32
+[verbs] 33
 assure public
 assure challenges
 guidance completion
@@ -89,6 +89,7 @@ forecast journal assess
 forecast journal inspect
 reliance init
 reliance issue
+reliance reissue
 reliance check
 reliance reuse
 reliance withdraw

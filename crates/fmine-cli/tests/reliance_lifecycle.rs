@@ -28,6 +28,21 @@ impl Workspace {
         Self::with_policy(CREATED, 60_000_000_000, 2)
     }
 
+    fn with_live_clock() -> (Self, String) {
+        let seconds = i64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("test host clock follows Unix epoch")
+                .as_secs(),
+        )
+        .expect("test time fits nanosecond calendar");
+        let created = fmine_calib::record::format_utc(seconds);
+        // The explicit fixture uses the actual current second. Host-clock commands then use their own
+        // current instant under this deliberately generous synthetic policy, without backdating.
+        let workspace = Self::with_policy(&created, 600_000_000_000, 1_000_000_000);
+        (workspace, created)
+    }
+
     fn with_policy(created: &str, max_age_ns: u64, max_skew_ns: u64) -> Self {
         static SERIAL: AtomicU64 = AtomicU64::new(0);
         let nonce = SystemTime::now()
@@ -76,7 +91,7 @@ impl Workspace {
             .expect("make synthetic release key private");
     }
 
-    fn run(&self, args: &[&str], expected: i32) -> String {
+    fn run_text(&self, args: &[&str], expected: i32) -> String {
         let output = Command::new(env!("CARGO_BIN_EXE_fmine"))
             .current_dir(&self.0)
             .args(args)
@@ -91,6 +106,11 @@ impl Workspace {
             "{args:?}\nstdout: {text}\nstderr: {}",
             String::from_utf8_lossy(&output.stderr),
         );
+        text
+    }
+
+    fn run(&self, args: &[&str], expected: i32) -> String {
+        let text = self.run_text(args, expected);
         assert_eq!(text.lines().count(), 1, "one envelope: {text}");
         assert!(
             text.starts_with("{\"schema_version\":\"fmine.env.v1\","),
@@ -855,4 +875,307 @@ fn explicit_and_host_clock_commands_share_issuances_and_withdrawal_authority() {
     assert!(!w.path("blocked-cross-interface.json").exists());
     assert_eq!(fs::read(w.path("explicit.json")).unwrap(), bytes);
     assert_eq!(fs::read(w.path("host.json")).unwrap(), bytes);
+}
+
+#[test]
+fn ordinary_assurance_output_registers_the_exact_selected_format() {
+    let (w, _) = Workspace::with_live_clock();
+    let revision = env!("FMINE_BUILD_REVISION").trim_end_matches("+dirty");
+    let binary_digest = blake3_hash(&fs::read(env!("CARGO_BIN_EXE_fmine")).unwrap());
+    let genesis = w.head();
+    w.run(
+        &[
+            "assure",
+            "public",
+            "--synthetic",
+            "--output",
+            "missing-authority.json",
+        ],
+        2,
+    );
+    assert!(!w.path("missing-authority.json").exists());
+    assert_eq!(w.head(), genesis);
+    assert!(w.records().is_empty());
+
+    for (index, (format, output)) in [("json", "report.json"), ("markdown", "report.md")]
+        .into_iter()
+        .enumerate()
+    {
+        let head = w.head();
+        let preview_args = ["assure", "public", "--synthetic", "--format", format];
+        let preview = if format == "json" {
+            w.run(&preview_args, 0)
+        } else {
+            w.run_text(&preview_args, 0)
+        };
+        assert_eq!(w.head(), head, "an ordinary preview creates no issuance");
+        let head = head.to_hex();
+        let args = [
+            "assure",
+            "public",
+            "--synthetic",
+            "--output",
+            output,
+            "--journal",
+            "reliance.log",
+            "--head",
+            &head,
+            "--release-key",
+            "owner.key",
+            "--trust-host-clock",
+            "--recipient-role",
+            "sponsor",
+            "--purpose",
+            "review",
+            "--code-revision",
+            revision,
+            "--format",
+            format,
+        ];
+        let receipt = if format == "json" {
+            w.run(&args, 0)
+        } else {
+            w.run_text(&args, 0)
+        };
+        let bytes = fs::read(w.path(output)).unwrap();
+        assert_eq!(
+            bytes,
+            preview.as_bytes(),
+            "selected artifact preserves exact report and LF"
+        );
+        assert_ne!(
+            bytes,
+            receipt.as_bytes(),
+            "receipt is separate from the issued report"
+        );
+        let records = w.records();
+        assert_eq!(records.len(), index + 1);
+        let issued = &records[index];
+        assert_eq!(issued.output_digest, blake3_hash(&bytes));
+        assert_eq!(issued.code_revision, revision);
+        assert_eq!(issued.binary_digest, binary_digest);
+        assert_eq!(issued.recipient_role, RoleId::Sponsor);
+        assert_eq!(issued.lane, IssuanceLane::Synthetic);
+        assert!(!issued.output_claims.is_empty());
+        assert_ne!(issued.anchor.state_root, Digest32::default());
+        assert!(
+            receipt.contains(&format!("\"issuance_id\":\"{}\"", issued.digest().unwrap())),
+            "{receipt}"
+        );
+        assert!(
+            receipt.contains(&format!("\"output_digest\":\"{}\"", issued.output_digest)),
+            "{receipt}"
+        );
+        if format == "markdown" {
+            assert!(
+                preview.starts_with("# fmine `assure public` (ok)\n"),
+                "{preview}"
+            );
+            assert!(
+                receipt.starts_with("# fmine `assure public` (ok)\n"),
+                "{receipt}"
+            );
+            assert!(receipt.contains("\"operation\":\"issue\""), "{receipt}");
+            assert!(preview.ends_with("```\n"));
+            assert!(receipt.ends_with("```\n"));
+        }
+    }
+    let before = fs::read(w.path("reliance.log")).unwrap();
+    let retained = fs::read(w.path("report.json")).unwrap();
+    w.run(
+        &[
+            "assure",
+            "public",
+            "--synthetic",
+            "--output",
+            "report.json",
+            "--journal",
+            "reliance.log",
+            "--head",
+            &w.head().to_hex(),
+            "--release-key",
+            "owner.key",
+            "--trust-host-clock",
+            "--recipient-role",
+            "reviewer-pool-8",
+            "--purpose",
+            "review",
+            "--code-revision",
+            revision,
+        ],
+        5,
+    );
+    assert_eq!(fs::read(w.path("reliance.log")).unwrap(), before);
+    assert_eq!(fs::read(w.path("report.json")).unwrap(), retained);
+    assert_eq!(w.records().len(), 2);
+}
+
+#[test]
+fn explicit_receipt_alias_forwards_original_provenance_and_withdrawal_blocks_new_recipient() {
+    let (w, created) = Workspace::with_live_clock();
+    let receipt = w.issue("original.json", "sponsor", &created, "owner.key", 0);
+    let source_id = receipt
+        .split_once("\"issuance_id\":\"")
+        .expect("explicit receipt exposes the interoperable issuance ID")
+        .1
+        .split('"')
+        .next()
+        .expect("issuance ID terminator");
+    let first = w.records()[0].clone();
+    assert_eq!(source_id, first.digest().unwrap().to_hex());
+    assert!(
+        receipt.contains(&format!("\"issuance_digest\":\"{source_id}\"")),
+        "{receipt}"
+    );
+    let bytes = fs::read(w.path("original.json")).unwrap();
+    assert_eq!(first.output_digest, blake3_hash(&bytes));
+    assert_eq!(
+        first.binary_digest,
+        blake3_hash(&fs::read(env!("CARGO_BIN_EXE_fmine")).unwrap())
+    );
+    let forwarded = w.run(
+        &[
+            "reliance",
+            "reissue",
+            "--journal",
+            "reliance.log",
+            "--head",
+            &w.head().to_hex(),
+            "--release-key",
+            "owner.key",
+            "--trust-host-clock",
+            "--artifact",
+            "original.json",
+            "--output",
+            "forwarded.json",
+            "--source-issuance",
+            source_id,
+            "--recipient-role",
+            "reviewer-pool-9",
+            "--purpose",
+            "review",
+        ],
+        0,
+    );
+    assert!(
+        forwarded.contains(&format!("\"source_issuance_id\":\"{source_id}\"")),
+        "{forwarded}"
+    );
+    assert!(
+        forwarded.contains("\"delivery_confirmed\":false"),
+        "{forwarded}"
+    );
+    assert_eq!(fs::read(w.path("forwarded.json")).unwrap(), bytes);
+    assert_eq!(fs::read(w.path("original.json")).unwrap(), bytes);
+    let records = w.records();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0], first);
+    let second = &records[1];
+    assert!(second.issued_at_ns >= first.issued_at_ns);
+    let mut expected = first.clone();
+    expected.recipient_role = RoleId::ReviewerPool(9);
+    expected.purpose = "review".to_string();
+    expected.issued_at_ns = second.issued_at_ns;
+    assert_eq!(
+        *second, expected,
+        "forwarding preserves every original producer field"
+    );
+    assert_ne!(second.digest().unwrap(), first.digest().unwrap());
+    assert!(
+        forwarded.contains(&format!("\"issuance_id\":\"{}\"", second.digest().unwrap())),
+        "{forwarded}"
+    );
+
+    let recall = w.run(
+        &[
+            "recall",
+            "--journal",
+            "reliance.log",
+            "--revision",
+            &first.code_revision,
+        ],
+        0,
+    );
+    assert!(recall.contains("\"copies\":2"), "{recall}");
+    for record in &records {
+        let id = record.digest().unwrap();
+        assert!(
+            recall.contains(&format!("\"issuance_digest\":\"{id}\"")),
+            "{recall}"
+        );
+        assert!(
+            recall.contains(&format!("\"issuance_id\":\"{id}\"")),
+            "{recall}"
+        );
+        assert!(
+            recall.contains(&format!("\"recipient_role\":\"{}\"", record.recipient_role)),
+            "{recall}"
+        );
+    }
+    let by_claim = w.run(
+        &[
+            "reliance",
+            "recall",
+            "--journal",
+            "reliance.log",
+            "--claim",
+            &first.output_claims[0].to_string(),
+        ],
+        0,
+    );
+    assert!(by_claim.contains("\"known_copy_count\":2"), "{by_claim}");
+    w.run(
+        &[
+            "reliance",
+            "withdraw",
+            "--journal",
+            "reliance.log",
+            "--head",
+            &w.head().to_hex(),
+            "--release-key",
+            "owner.key",
+            "--trust-host-clock",
+            "--digest",
+            &first.output_digest.to_hex(),
+            "--all-claims",
+            "--defect",
+            "code-defect",
+            "--reason",
+            "invented forwarding source defect",
+        ],
+        0,
+    );
+    let head = w.head();
+    let journal = fs::read(w.path("reliance.log")).unwrap();
+    let refused = w.run(
+        &[
+            "reliance",
+            "reissue",
+            "--journal",
+            "reliance.log",
+            "--head",
+            &head.to_hex(),
+            "--release-key",
+            "owner.key",
+            "--trust-host-clock",
+            "--artifact",
+            "forwarded.json",
+            "--output",
+            "blocked.json",
+            "--source-issuance",
+            source_id,
+            "--recipient-role",
+            "reviewer-pool-10",
+            "--purpose",
+            "review",
+        ],
+        3,
+    );
+    assert!(refused.contains("FMINE-REF-202"), "{refused}");
+    assert!(!w.path("blocked.json").exists());
+    assert_eq!(w.head(), head);
+    assert_eq!(fs::read(w.path("reliance.log")).unwrap(), journal);
+    assert_eq!(w.records(), records);
+    assert_eq!(fs::read(w.path("original.json")).unwrap(), bytes);
+    assert_eq!(fs::read(w.path("forwarded.json")).unwrap(), bytes);
 }

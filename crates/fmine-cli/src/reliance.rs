@@ -15,22 +15,24 @@ use fmine_claim::reliance::{
 use fmine_core::hash::{Blake3, Digest32, blake3_hash};
 use fmine_core::id::PrefixKind;
 use fmine_evidence::{Refusal, RefusalCode};
-use fmine_io::reliance::{Journal, MAX_ARTIFACT_BYTES, ReleaseKey, read_artifact};
+use fmine_io::reliance::{Journal, MAX_ARTIFACT_BYTES, ReissueRequest, ReleaseKey, read_artifact};
 use fmine_runtime::{HostWallClock, WallClock};
 
 use crate::{Envelope, OutputFormat, escape_json, reliance_binding};
 
 pub(crate) const VERBS_JSON: &str = concat!(
+    r#""assure public --synthetic|--issuer <issuer> --output <new-path> --journal <path> --head <hex> --release-key <path> --trust-host-clock --recipient-role <role> --purpose review --code-revision <git-sha>","#,
     r#""reliance init --journal <path> --release-key <private-32-byte-file>","#,
     r#""reliance issue --journal <path> --head <hex> --release-key <path> --trust-host-clock --synthetic|--issuer <issuer> --output <new-path> --recipient-role <role> --purpose review --code-revision <git-sha>","#,
     r#""reliance check --journal <path> --digest <hex> [--artifact <path>] [--head <hex> --trust-host-clock] [--as-of <UTC>|--require-current]","#,
     r#""reliance reuse --journal <path> --artifact <path> --output <new-path> --head <hex> --trust-host-clock","#,
+    r#""reliance reissue --journal <path> --head <hex> --release-key <path> --trust-host-clock --artifact <path> --output <new-path> --source-issuance <hex> --recipient-role <role> --purpose review","#,
     r#""reliance withdraw --journal <path> --head <hex> --release-key <path> --trust-host-clock --digest <hex> --defect code-defect|source-restated|scope-error --claims <ids>|--all-claims --reason <text>","#,
     r#""reliance supersede --journal <path> --head <hex> --release-key <path> --trust-host-clock --digest <hex> --replacement <hex>","#,
     r#""reliance refresh --journal <path> --head <hex> --release-key <path> --trust-host-clock","#,
     r#""reliance recall --journal <path> --code-revision <git-sha>|--claim <id>""#,
 );
-pub(crate) const ROBOT_DOCS_JSON: &str = r#"{"mode":"local_capability_authority","default_read":"unknown_without_trusted_head_and_time","pin":"exact final head obtained independently of untrusted journal bytes","clock":"explicit operator-declared bounded host clock; never external time proof","historical_check":"--as-of UTC queries history under a fresh trusted status cut and never grants current reuse","current_gate":"check --require-current refuses unknown, withdrawn and superseded outputs while retaining status diagnostics; excludes --as-of","artifact":"exact stored bytes including final newline; receipt is separate","revision":"caller-declared Git SHA; executable BLAKE3 measured separately","recall":"recorded local issuances only; reuse copies are not new recipient registrations; no notifications","release_role":"release-owner capability; no human-review attestation","roles":["release-owner","sponsor","reviewer-pool-N","agent-session:<32 lowercase hex>"],"purpose":["analysis","review","decision-support"]}"#;
+pub(crate) const ROBOT_DOCS_JSON: &str = r#"{"mode":"local_capability_authority","default_read":"unknown_without_trusted_head_and_time","pin":"exact final head obtained independently of untrusted journal bytes","clock":"explicit operator-declared bounded host clock; never external time proof","historical_check":"--as-of UTC queries history under a fresh trusted status cut and never grants current reuse","current_gate":"check --require-current refuses unknown, withdrawn and superseded outputs while retaining status diagnostics; excludes --as-of","artifact":"exact stored bytes including final newline; receipt is separate","assurance_export":"assure public --output requires issuance authority and recipient; --format selects artifact and receipt format","issuance_id":"BLAKE3 of the canonical issuance frame; distinct from artifact digest and journal head","revision":"issue and assure public --output declare the Git SHA; executable BLAKE3 measured separately; reissue preserves the selected producer metadata","reissue":"selects an exact source issuance and records the new recipient after a fresh current-status check","recall":"recorded local issuances only; reissue registers another recipient, reuse does not; no notifications","release_role":"release-owner capability; no human-review attestation","roles":["release-owner","sponsor","reviewer-pool-N","agent-session:<32 lowercase hex>"],"purpose":["analysis","review","decision-support"]}"#;
 const NO_CLAIM: &str = "Local report reliance only. A release key establishes local capability possession, not human review. Host-clock bounds are operator declarations, not external time proofs. Recall covers only recorded issuances; no external copies or recipients are contacted.";
 
 /// Parsed local journal operation. Construction is through the strict CLI parser.
@@ -74,6 +76,14 @@ enum Operation {
     Reuse {
         artifact: PathBuf,
         output: PathBuf,
+    },
+    Reissue {
+        key: PathBuf,
+        artifact: PathBuf,
+        output: PathBuf,
+        source_issuance: Digest32,
+        recipient: RoleId,
+        purpose: String,
     },
     Withdraw {
         key: PathBuf,
@@ -139,6 +149,16 @@ fn required(fields: &mut BTreeMap<String, String>, name: &str) -> Result<String,
     fields.remove(name).ok_or_else(|| format!("missing {name}"))
 }
 
+fn purpose(fields: &mut BTreeMap<String, String>) -> Result<String, String> {
+    let purpose = required(fields, "--purpose")?;
+    if !matches!(purpose.as_str(), "analysis" | "review" | "decision-support") {
+        return Err(
+            "--purpose must be analysis, review or decision-support (no personal data)".to_string(),
+        );
+    }
+    Ok(purpose)
+}
+
 fn scaled(
     fields: &mut BTreeMap<String, String>,
     name: &str,
@@ -165,6 +185,22 @@ fn output_format(text: &str) -> Result<OutputFormat, String> {
 pub(crate) fn parse(
     args: &[String],
     root: &Path,
+) -> Result<(Command, OutputFormat, PathBuf), String> {
+    parse_operation(args, root, false)
+}
+
+/// An explicit assurance export shares the issuance parser and authority boundary.
+pub(crate) fn parse_export(
+    args: &[String],
+    root: &Path,
+) -> Result<(Command, OutputFormat, PathBuf), String> {
+    parse_operation(args, root, true)
+}
+
+fn parse_operation(
+    args: &[String],
+    root: &Path,
+    assurance_export: bool,
 ) -> Result<(Command, OutputFormat, PathBuf), String> {
     let mut fields = BTreeMap::new();
     let mut words = Vec::new();
@@ -198,11 +234,17 @@ pub(crate) fn parse(
         }
         i += 1;
     }
-    let ["reliance", verb] = words.as_slice() else {
-        return Err(
-            "expected reliance init|issue|check|reuse|withdraw|supersede|refresh|recall"
-                .to_string(),
-        );
+    let verb = match words.as_slice() {
+        ["reliance", verb] if !assurance_export => *verb,
+        ["assure", "public"] if assurance_export => "issue",
+        _ => {
+            return Err(if assurance_export {
+                "expected assure public with --output and issuance options".to_string()
+            } else {
+                "expected reliance init|issue|check|reuse|reissue|withdraw|supersede|refresh|recall"
+                    .to_string()
+            });
+        }
     };
     let format = output_format(
         &fields
@@ -218,7 +260,7 @@ pub(crate) fn parse(
     let journal = PathBuf::from(required(&mut fields, "--journal")?);
     let head = fields.remove("--head").map(|s| digest(&s)).transpose()?;
     let trust_host_clock = fields.remove("--trust-host-clock").is_some();
-    let operation = match *verb {
+    let operation = match verb {
         "init" => Operation::Init {
             key: PathBuf::from(required(&mut fields, "--release-key")?),
             role: role(
@@ -248,13 +290,7 @@ pub(crate) fn parse(
             {
                 return Err("--through must be YYYYQ1..YYYYQ4".to_string());
             }
-            let purpose = required(&mut fields, "--purpose")?;
-            if !matches!(purpose.as_str(), "analysis" | "review" | "decision-support") {
-                return Err(
-                    "--purpose must be analysis, review or decision-support (no personal data)"
-                        .to_string(),
-                );
-            }
+            let purpose = purpose(&mut fields)?;
             Operation::Issue {
                 key: PathBuf::from(required(&mut fields, "--release-key")?),
                 output: PathBuf::from(required(&mut fields, "--output")?),
@@ -263,11 +299,15 @@ pub(crate) fn parse(
                 purpose,
                 recipient: role(&required(&mut fields, "--recipient-role")?)?,
                 revision: revision(required(&mut fields, "--code-revision")?)?,
-                artifact_format: output_format(
-                    &fields
-                        .remove("--artifact-format")
-                        .unwrap_or_else(|| "json".to_string()),
-                )?,
+                artifact_format: if assurance_export {
+                    format
+                } else {
+                    output_format(
+                        &fields
+                            .remove("--artifact-format")
+                            .unwrap_or_else(|| "json".to_string()),
+                    )?
+                },
             }
         }
         "check" => {
@@ -294,6 +334,14 @@ pub(crate) fn parse(
         "reuse" => Operation::Reuse {
             artifact: PathBuf::from(required(&mut fields, "--artifact")?),
             output: PathBuf::from(required(&mut fields, "--output")?),
+        },
+        "reissue" => Operation::Reissue {
+            key: PathBuf::from(required(&mut fields, "--release-key")?),
+            artifact: PathBuf::from(required(&mut fields, "--artifact")?),
+            output: PathBuf::from(required(&mut fields, "--output")?),
+            source_issuance: digest(&required(&mut fields, "--source-issuance")?)?,
+            recipient: role(&required(&mut fields, "--recipient-role")?)?,
+            purpose: purpose(&mut fields)?,
         },
         "withdraw" => {
             let all_claims = fields.remove("--all-claims").is_some();
@@ -365,6 +413,7 @@ pub(crate) fn parse(
     if matches!(
         operation,
         Operation::Issue { .. }
+            | Operation::Reissue { .. }
             | Operation::Withdraw { .. }
             | Operation::Supersede { .. }
             | Operation::Refresh { .. }
@@ -409,6 +458,13 @@ fn trusted_time(access: &Access, header: &Header, now: i64) -> Option<TrustedTim
 
 fn text(value: &str) -> String {
     format!("\"{}\"", escape_json(value))
+}
+
+fn unconfirmed_artifact(mut refusal: Refusal) -> Refusal {
+    refusal.what.push_str(
+        "; no confirmed new issuance receipt was produced; retain any destination artifact and resolve the journal before treating this export as registered",
+    );
+    refusal
 }
 
 fn hash_file(path: &Path) -> Result<Digest32, Refusal> {
@@ -462,6 +518,7 @@ fn operation_name(operation: &Operation) -> &'static str {
         Operation::Issue { .. } => "issue",
         Operation::Check { .. } => "check",
         Operation::Reuse { .. } => "reuse",
+        Operation::Reissue { .. } => "reissue",
         Operation::Withdraw { .. } => "withdraw",
         Operation::Supersede { .. } => "supersede",
         Operation::Refresh { .. } => "refresh",
@@ -469,19 +526,21 @@ fn operation_name(operation: &Operation) -> &'static str {
     }
 }
 
-fn issue_json(issue: &IssuanceRecord) -> String {
+fn issue_json(issue: &IssuanceRecord) -> Result<String, Refusal> {
     let claims = issue
         .output_claims
         .iter()
         .map(|id| text(&id.to_string()))
         .collect::<Vec<_>>()
         .join(",");
-    format!(
-        "{{\"output_digest\":{},\"output_digest_algorithm\":\"blake3\",\"output_claims\":[{claims}],\
+    Ok(format!(
+        "{{\"issuance_id\":{},\"issuance_id_algorithm\":\"blake3_canonical_issuance_frame\",\
+         \"output_digest\":{},\"output_digest_algorithm\":\"blake3\",\"output_claims\":[{claims}],\
          \"anchor_id\":{},\"state_root\":{},\"code_revision\":{},\"code_revision_evidence\":\"recorded\",\
          \"binary_digest\":{},\"binary_digest_algorithm\":\"blake3\",\"input_manifest_root\":{},\
          \"lane\":{},\"confidentiality\":\"public\",\"public_taint\":{},\"recipient_role\":{},\
          \"purpose\":{},\"issued_at_ns\":{}}}",
+        text(&issue.digest()?.to_hex()),
         text(&issue.output_digest.to_hex()),
         text(&issue.anchor.anchor_id().to_string()),
         text(&issue.anchor.state_root.to_hex()),
@@ -493,7 +552,7 @@ fn issue_json(issue: &IssuanceRecord) -> String {
         text(&issue.recipient_role.to_string()),
         text(&issue.purpose),
         issue.issued_at_ns,
-    )
+    ))
 }
 
 fn check_json(check: &RelianceCheck) -> String {
@@ -701,7 +760,7 @@ fn execute_with(
             let copies = records
                 .iter()
                 .map(|i| issue_json(i))
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, _>>()?
                 .join(",");
             Ok(receipt(
                 "recall",
@@ -726,6 +785,7 @@ fn execute_mutation(
     let access = &command.access;
     let key_path = match &command.operation {
         Operation::Issue { key, .. }
+        | Operation::Reissue { key, .. }
         | Operation::Withdraw { key, .. }
         | Operation::Supersede { key, .. }
         | Operation::Refresh { key } => key,
@@ -739,6 +799,48 @@ fn execute_mutation(
         )
     })?;
     let mut journal = Journal::open_write(&absolute(root, &access.journal), head)?;
+    if let Operation::Reissue {
+        artifact,
+        output,
+        source_issuance,
+        recipient,
+        purpose,
+        ..
+    } = &command.operation
+    {
+        let time = trusted_time(access, journal.ledger().header(), clock()?).ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::NotObservable202,
+                "host clock bound was not explicitly trusted",
+            )
+        })?;
+        let record = journal
+            .reissue_current(
+                &absolute(root, artifact),
+                &absolute(root, output),
+                ReissueRequest {
+                    source_issuance: *source_issuance,
+                    recipient_role: recipient.clone(),
+                    purpose: purpose.clone(),
+                },
+                &key,
+                time,
+            )
+            .map_err(unconfirmed_artifact)?;
+        let Entry::Issued(issuance) = record.entry else {
+            return Err(io_error("recipient export returned no issuance record"));
+        };
+        return Ok(receipt(
+            "reissue",
+            &journal,
+            &format!(
+                "\"source_issuance_id\":{},\"issuance\":{},\"output\":{},\"delivery_confirmed\":false",
+                text(&source_issuance.to_hex()),
+                issue_json(&issuance)?,
+                text(&output.to_string_lossy()),
+            ),
+        ));
+    }
     let by_role = journal.ledger().header().release_role.clone();
     let mut artifact = None;
     let entry = match &command.operation {
@@ -827,12 +929,14 @@ fn execute_mutation(
         let Entry::Issued(issue) = &entry else {
             return Err(io_error("artifact does not belong to an issuance"));
         };
-        journal.issue_bytes(&path, &bytes, issue.clone(), &key, time)?;
+        journal
+            .issue_bytes(&path, &bytes, issue.clone(), &key, time)
+            .map_err(unconfirmed_artifact)?;
     } else {
         journal.append(entry.clone(), &key, time)?;
     }
     let fields = match &entry {
-        Entry::Issued(issue) => format!("\"issuance\":{}", issue_json(issue)),
+        Entry::Issued(issue) => format!("\"issuance\":{}", issue_json(issue)?),
         _ => "\"status_event_recorded\":true".to_string(),
     };
     Ok(receipt(
@@ -960,6 +1064,179 @@ mod tests {
             ],
             at,
         )
+    }
+
+    #[test]
+    fn forwarding_selects_producer_record_and_cannot_refresh_a_stale_cut() {
+        let root = fixture();
+        issue(
+            &root,
+            "first.json",
+            "sponsor",
+            "json",
+            REVISION,
+            "release.key",
+            START + 1,
+        )
+        .unwrap();
+        issue(
+            &root,
+            "second.json",
+            "sponsor",
+            "json",
+            OTHER_REVISION,
+            "release.key",
+            START + 2,
+        )
+        .unwrap();
+        let source = {
+            let journal = Journal::open_read(&root.join("journal.log"), None).unwrap();
+            let records = journal.ledger().issuances();
+            assert_eq!(records[0].output_digest, records[1].output_digest);
+            assert_ne!(records[0].digest().unwrap(), records[1].digest().unwrap());
+            (*records[1]).clone()
+        };
+        let forward = |destination: &str, key: &str, at: i64| {
+            call(
+                &root,
+                &[
+                    "reissue",
+                    "--head",
+                    &head(&root),
+                    "--release-key",
+                    key,
+                    "--trust-host-clock",
+                    "--artifact",
+                    "first.json",
+                    "--output",
+                    destination,
+                    "--source-issuance",
+                    &source.digest().unwrap().to_hex(),
+                    "--recipient-role",
+                    "reviewer-pool-8",
+                    "--purpose",
+                    "analysis",
+                ],
+                at,
+            )
+        };
+        let before = head(&root);
+        assert!(forward("unauthorized.json", "wrong.key", START + 3).is_err());
+        assert!(!root.join("unauthorized.json").exists());
+        assert_eq!(head(&root), before);
+        let stale = forward("stale.json", "release.key", START + 301_000_000_003).unwrap_err();
+        assert_eq!(stale.code, "FMINE-REF-202");
+        assert!(!root.join("stale.json").exists());
+        assert_eq!(
+            head(&root),
+            before,
+            "forwarding cannot refresh the cut before checking it"
+        );
+        let receipt = forward("copy.json", "release.key", START + 3).unwrap();
+        assert!(receipt.contains(OTHER_REVISION));
+        assert!(!receipt.contains(REVISION));
+        let journal = Journal::open_read(&root.join("journal.log"), None).unwrap();
+        assert_eq!(journal.ledger().recall_revision(REVISION).len(), 1);
+        let selected = journal.ledger().recall_revision(OTHER_REVISION);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[1].binary_digest, source.binary_digest);
+        assert_eq!(selected[1].input_manifest_root, source.input_manifest_root);
+        assert_eq!(selected[1].recipient_role, RoleId::ReviewerPool(8));
+        assert!(receipt.contains(&selected[1].digest().unwrap().to_hex()));
+    }
+
+    #[test]
+    fn assurance_export_format_and_forwarding_options_are_strict() {
+        let root = fixture();
+        let common = [
+            "--output",
+            "report.md",
+            "assure",
+            "public",
+            "--synthetic",
+            "--journal",
+            "journal.log",
+            "--head",
+            &head(&root),
+            "--release-key",
+            "release.key",
+            "--trust-host-clock",
+            "--recipient-role",
+            "reviewer-pool-1",
+            "--purpose",
+            "review",
+            "--code-revision",
+            REVISION,
+            "--format",
+            "markdown",
+        ]
+        .map(str::to_string);
+        let (parsed, format, workspace) = crate::parse_args(&common, &root).unwrap();
+        let crate::CliCommand::AssureExport(command) = parsed else {
+            panic!("expected authority export");
+        };
+        assert_eq!(format, OutputFormat::Markdown);
+        let receipt = execute_with(
+            &command,
+            &workspace,
+            &|| Ok(START + 1),
+            &root.join("runtime-image"),
+        )
+        .unwrap();
+        let artifact = std::fs::read_to_string(root.join("report.md")).unwrap();
+        assert!(artifact.starts_with("# fmine `assure public` (ok)\n"));
+        assert!(artifact.ends_with('\n'));
+        assert!(receipt.contains(&blake3_hash(artifact.as_bytes()).to_hex()));
+        for extra in [
+            vec!["--artifact-format", "json"],
+            vec!["--source-issuance", "00"],
+            vec!["--json"],
+        ] {
+            let mut invalid = common.to_vec();
+            invalid.extend(extra.into_iter().map(str::to_string));
+            assert!(crate::parse_args(&invalid, &root).is_err());
+        }
+        for missing in [
+            "--release-key",
+            "--head",
+            "--recipient-role",
+            "--purpose",
+            "--code-revision",
+        ] {
+            let mut invalid = common.to_vec();
+            let i = invalid.iter().position(|v| v == missing).unwrap();
+            invalid.drain(i..i + 2);
+            assert!(crate::parse_args(&invalid, &root).is_err(), "{missing}");
+        }
+        let mut unknown_producer = [
+            "reliance",
+            "reissue",
+            "--journal",
+            "journal.log",
+            "--head",
+            &head(&root),
+            "--release-key",
+            "release.key",
+            "--trust-host-clock",
+            "--artifact",
+            "report.md",
+            "--output",
+            "copy.md",
+            "--source-issuance",
+            &"0".repeat(64),
+            "--recipient-role",
+            "sponsor",
+            "--purpose",
+            "review",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        unknown_producer.extend(["--code-revision".to_string(), OTHER_REVISION.to_string()]);
+        assert!(
+            crate::parse_args(&unknown_producer, &root).is_err(),
+            "forwarding cannot relabel producer metadata"
+        );
+        assert!(!root.join("copy.md").exists());
     }
 
     #[test]

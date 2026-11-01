@@ -5,8 +5,8 @@ schema_version = 1
 [[verb]]
 path = "assure public"
 subsystem = "Bullion"
-mutates_authority = false
-description = "Run M0 Public Guidance & Reserve Assurance over issuer filings and Mine Stats workbooks"
+mutates_authority = true
+description = "Run M0 Public Guidance & Reserve Assurance; --output records an authorized issuance of the exact report"
 
 [[verb]]
 path = "assure challenges"
@@ -91,6 +91,12 @@ path = "reliance issue"
 subsystem = "Adit"
 mutates_authority = true
 description = "Generate and record an assurance artifact with exact bytes, Claims, inputs, runtime binary and recipient role"
+
+[[verb]]
+path = "reliance reissue"
+subsystem = "Adit"
+mutates_authority = true
+description = "Register another recipient copy after checking current reliance, preserving the selected issuance's producer metadata"
 
 [[verb]]
 path = "reliance check"

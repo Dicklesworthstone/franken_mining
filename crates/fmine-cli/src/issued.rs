@@ -270,8 +270,9 @@ fn execute_payload(command: &Command, workspace: &Path) -> Result<String, Refusa
             let digest = issuance.output_digest;
             let issuance_digest = issuance.digest()?;
             let result = format!(
-                "{{\"schema\":\"fmine.reliance.issue.v1\",\"output_digest\":{},\"issuance_digest\":{},\"output_claims\":[{}],\"anchor_id\":{},\"state_root\":{},\"input_manifest_root\":{},\"code_revision\":{},\"code_revision_evidence\":\"build_time\",\"binary_digest\":{},\"binary_digest_algorithm\":\"blake3\",\"lane\":{},\"public_taint\":{},\"recipient_role\":{},\"purpose\":{},\"issued_at_ns\":{}",
+                "{{\"schema\":\"fmine.reliance.issue.v1\",\"output_digest\":{},\"issuance_digest\":{},\"issuance_id\":{},\"output_claims\":[{}],\"anchor_id\":{},\"state_root\":{},\"input_manifest_root\":{},\"code_revision\":{},\"code_revision_evidence\":\"build_time\",\"binary_digest\":{},\"binary_digest_algorithm\":\"blake3\",\"lane\":{},\"public_taint\":{},\"recipient_role\":{},\"purpose\":{},\"issued_at_ns\":{}",
                 js(&digest.to_hex()),
+                js(&issuance_digest.to_hex()),
                 js(&issuance_digest.to_hex()),
                 issuance
                     .output_claims

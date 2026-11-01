@@ -398,8 +398,9 @@ fmine recall --journal reliance.log --revision "$BUILD_REVISION"
 DESIGN: withdrawal blocks current reuse while historical bytes still verify. `reliance supersede` links an
 issued digest to an existing issued replacement; the replacement's own status must be checked separately.
 `reliance refresh` appends an owner-authorized freshness cut. Both require the same key, expected head and
-bounded-time arguments as withdrawal. `reliance export` retrieves an existing issuance; issuing a copy to a
-new role or purpose uses `assure issue` with another output path. Only recorded copies are recallable.
+bounded-time arguments as withdrawal. `reliance export` retrieves an existing issuance. Use `assure issue`
+for a freshly generated report, or the host-clock `reliance reissue` below to register another recipient
+while preserving one selected issuance's producer metadata. Only recorded issuances are recallable.
 Recipient roles are `release-owner`, `sponsor`, `reviewer-pool-N` or `agent-session:<hex>`; no personal contact
 fields are stored. Build revision is captured at compilation, with `+dirty` when applicable, and the executable
 itself is hashed. An unavailable build revision refuses issuance. `robot-docs` lists the complete grammar.
@@ -435,18 +436,25 @@ Supply that trusted value below; reading a head from the journal being checked c
 
 ```bash
 FMINE_HEAD=REPLACE_WITH_INDEPENDENTLY_TRUSTED_INIT_HEAD
-cargo run -p fmine-cli -- reliance issue --journal runs/reliance-demo/journal \
+cargo run -p fmine-cli -- assure public --synthetic --journal runs/reliance-demo/journal \
   --release-key runs/reliance-demo/release.key --head "$FMINE_HEAD" --trust-host-clock \
-  --synthetic --recipient-role reviewer-pool-1 --purpose review --code-revision "$FMINE_REVISION" \
+  --recipient-role reviewer-pool-1 --purpose review --code-revision "$FMINE_REVISION" \
   --output runs/reliance-demo/report.json
 
 FMINE_HEAD=REPLACE_WITH_INDEPENDENTLY_TRUSTED_POST_ISSUE_HEAD
 FMINE_DIGEST=REPLACE_WITH_RETURNED_ISSUANCE_OUTPUT_DIGEST
+FMINE_ISSUANCE=REPLACE_WITH_RETURNED_ISSUANCE_ID
 cargo run -p fmine-cli -- reliance check --journal runs/reliance-demo/journal \
   --head "$FMINE_HEAD" --trust-host-clock --digest "$FMINE_DIGEST" --artifact runs/reliance-demo/report.json
+cargo run -p fmine-cli -- reliance reissue --journal runs/reliance-demo/journal \
+  --release-key runs/reliance-demo/release.key --head "$FMINE_HEAD" --trust-host-clock \
+  --artifact runs/reliance-demo/report.json --output runs/reliance-demo/sponsor-copy.json \
+  --source-issuance "$FMINE_ISSUANCE" --recipient-role sponsor --purpose review
+
+FMINE_HEAD=REPLACE_WITH_INDEPENDENTLY_TRUSTED_POST_REISSUE_HEAD
 cargo run -p fmine-cli -- reliance reuse --journal runs/reliance-demo/journal \
   --head "$FMINE_HEAD" --trust-host-clock --artifact runs/reliance-demo/report.json \
-  --output runs/reliance-demo/reviewer-copy.json
+  --output runs/reliance-demo/working-copy.json
 cargo run -p fmine-cli -- reliance withdraw --journal runs/reliance-demo/journal \
   --release-key runs/reliance-demo/release.key --head "$FMINE_HEAD" --trust-host-clock \
   --digest "$FMINE_DIGEST" --defect code-defect --all-claims \
@@ -457,9 +465,23 @@ cargo run -p fmine-cli -- reliance recall --journal runs/reliance-demo/journal \
   --head "$FMINE_HEAD" --code-revision "$FMINE_REVISION"
 ```
 
-Replace each head/digest placeholder with its full 64-character lowercase hexadecimal value. The revision is
+Replace each head/digest/issuance placeholder with its full 64-character lowercase hexadecimal value. The revision is
 a full 40-character Git SHA declared by the caller. Use `--issuer barrick` instead of `--synthetic` to issue a
 registered public report. Relative paths use `--workspace`; all new artifact paths must be unused.
+
+With `assure public --output`, `--format json|markdown` controls both the saved artifact and the separate stdout
+receipt, defaulting to JSON. `reliance issue` remains available; only that command accepts `--artifact-format`
+to select the stored format independently. The explicit-time `assure issue` always stores the JSON report;
+its `--format` selects only the receipt rendering. Each issuance and recall entry exposes `issuance_id`, the
+BLAKE3 digest of the canonical issuance record; explicit-time entries also retain the equal `issuance_digest`
+field. This identifies one producer/recipient record; `output_digest` identifies the exact report bytes, and
+`journal_head` identifies the status history to pin independently.
+
+`reissue` checks the selected issuance's exact artifact and current status before creating another recipient
+copy or appending its record. It preserves the original code revision, executable digest, input manifest,
+Claims, anchor, lane and taint; only recipient, purpose and issuance time change. Its new issuance appears in
+recall. A wrong key, missing or stale trust, withdrawn/superseded output or unknown issuance refuses before
+creating the destination. It does not rerun the report or attest a new build identity.
 
 The default freshness window is 300 seconds with a declared clock-skew bound of 1,000 ms, configurable at
 `init`. An authorized `refresh` appends a fresh status cut using the same key/head/clock options; withdrawals
@@ -474,8 +496,11 @@ reporting reliance as unknown. Special files and symlinks are refused before ope
 create private files and sync their parent directories as well as their contents.
 Withdrawal requires `--claims clm_…,clm_…` or an explicit `--all-claims` declaration when every statement is affected.
 `reuse` makes a gated local copy without recording a new issuance. `recall --claim clm_…` or the revision query
-lists recorded issuances only: external copies and recipients are not tracked or contacted. If artifact creation
-succeeds but the journal append fails, the artifact is unconfirmed and must not be reused until the journal is resolved.
+lists recorded issuances only; no command claims delivery or contacts recipients. Ordinary stdout emissions,
+including shell redirection, and other report families remain unregistered. External copies are not tracked.
+If artifact creation succeeds but the final journal append fails, no confirmed new issuance receipt or recipient
+registration exists. Retain any destination artifact and resolve the journal before using that copy; an earlier
+issuance of the same digest may still be current.
 
 ### Export evidence challenges
 

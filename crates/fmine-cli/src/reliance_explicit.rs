@@ -382,9 +382,11 @@ fn ids_json(ids: &[ObjectId]) -> String {
 }
 
 fn copy_json(copy: &IssuanceRecord) -> Result<String, Refusal> {
+    let issuance_digest = copy.digest()?.to_hex();
     Ok(format!(
-        "{{\"issuance_digest\":{},\"output_digest\":{},\"output_claims\":{},\"anchor_id\":{},\"state_root\":{},\"code_revision\":{},\"binary_digest\":{},\"input_manifest_root\":{},\"lane\":{},\"public_taint\":{},\"recipient_role\":{},\"purpose\":{},\"issued_at_ns\":{}}}",
-        js(&copy.digest()?.to_hex()),
+        "{{\"issuance_digest\":{},\"issuance_id\":{},\"output_digest\":{},\"output_claims\":{},\"anchor_id\":{},\"state_root\":{},\"code_revision\":{},\"binary_digest\":{},\"input_manifest_root\":{},\"lane\":{},\"public_taint\":{},\"recipient_role\":{},\"purpose\":{},\"issued_at_ns\":{}}}",
+        js(&issuance_digest),
+        js(&issuance_digest),
         js(&copy.output_digest.to_hex()),
         ids_json(&copy.output_claims),
         js(&copy.anchor.anchor_id().to_string()),
