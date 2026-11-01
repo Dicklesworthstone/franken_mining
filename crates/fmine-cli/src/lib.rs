@@ -73,6 +73,8 @@ pub enum CliCommand {
         /// `None` selects the explicitly requested synthetic lane.
         issuer: Option<String>,
         through: Option<String>,
+        /// Search the selected snapshot for uncited, fully specified equalities (BD-345.S3).
+        discover: bool,
     },
     /// Replay a forecast transcript and assess its frozen cohort without dropping missing outcomes (BD-343).
     ForecastAssess {
@@ -390,6 +392,7 @@ pub fn parse_args(
     let mut ledger = None;
     let mut cohort = None;
     let mut selector = None;
+    let mut discover = false;
     let mut provenance = None;
 
     let mut i = 0;
@@ -428,6 +431,7 @@ pub fn parse_args(
                 through = Some(val.clone());
             }
             "--synthetic" => synthetic = true,
+            "--discover" => discover = true,
             "--site" => {
                 i += 1;
                 site = Some(args.get(i).ok_or("missing value for --site")?.clone());
@@ -511,6 +515,9 @@ pub fn parse_args(
         return Err(
             "--ledger, --cohort, --selector and --provenance require 'forecast assess'".to_string(),
         );
+    }
+    if discover && positional[0] != "lint" {
+        return Err("--discover requires 'lint'".to_string());
     }
 
     let cmd = match positional[0].as_str() {
@@ -659,6 +666,7 @@ pub fn parse_args(
                 draft: PathBuf::from(draft),
                 issuer,
                 through,
+                discover,
             }
         }
         "forecast" => {
@@ -1003,7 +1011,14 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             draft,
             issuer,
             through,
-        } => lint::execute(draft, issuer.as_deref(), through.as_deref(), workspace_root),
+            discover,
+        } => lint::execute(
+            draft,
+            issuer.as_deref(),
+            through.as_deref(),
+            *discover,
+            workspace_root,
+        ),
         CliCommand::ForecastAssess {
             ledger,
             cohort,
@@ -1194,9 +1209,44 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 .map(|i| format!("\"{}\"", escape_json(i)))
                 .collect();
             let payload = format!(
-                "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{ENVELOPE_FIELDS},\"verbs\":[\"assure public --issuer <issuer> [--through YYYYQn]\",\"assure public --synthetic\",\"assure challenges --issuer <issuer> [--through YYYYQn]\",\"assure challenges --synthetic\",\"guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD\",\"guidance completion --synthetic\",\"track-record --issuer <issuer> [--site <subject>] [--through YYYYQn]\",\"track-record --synthetic\",\"recovery gap --issuer <issuer> [--through YYYYQn]\",\"recovery gap --synthetic\",\"lint <draft> --issuer <issuer> [--through YYYYQn]\",\"lint <draft> --synthetic\",\"forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ [--selector first-published|latest-as-of] [--provenance <path>]\",\"doctor\",\"claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"claim trace <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"robot-docs\"],\"issuers\":[{}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",\"exit_codes\":{{\"0\":\"ok; lint verdicts and track-record misses are data\",\"2\":\"usage error (unknown verb, flag, issuer or selection); the envelope still prints\"}},\"claim_inspection\":{{\"lookup\":\"Exact canonical IDs from the synthetic run or hash-verified registered sources; explicit selectors bind the ledger snapshot and claims digest\",\"why\":\"Recorded evidence, interpretation, computed color and Claim admission guards; absent assessments remain absent\",\"trace\":\"Available source anchors and registered provenance; unresolved parents are explicit\"}},\"lint\":{{\"mode\":\"cited equality\",\"link\":\"[printed number and unit](fmine:clm_ID)\",\"predicate\":\"One explicit subject, reporting period, ownership basis, supported metric, unit and equality per sentence or line; other prose is unchecked\",\"scope\":\"Selected registered source snapshot; no publication-time or disclosure-permission verdict\"}},\"forecast_assessment\":{{\"mode\":\"read_only_replay\",\"input\":\"Ordered forecast, cohort, outcome and assessment TOML rows\",\"default_selector\":\"first-published\",\"provenance\":{{\"schema\":\"fmine.forecast-provenance.v1\",\"tables\":[\"node\",\"anchor\",\"binding\"],\"cut\":\"Each frozen forecast registered_at, not the assessment date\",\"coverage\":\"Every cohort member, including unresolved outcomes\",\"without_bundle\":\"not_checked\",\"generator_replay\":\"not_performed\",\"example\":\"tests/forecasts/provenance_synthetic.toml\"}},\"times_and_citations\":\"Supplied records, not external time proof or independently verified sources\"}},\"track_record\":{{\"mode\":\"retrospective_descriptive\",\"input\":\"Hash-verified registered workbooks and agreed document transcriptions\",\"outcome_selector\":\"Original annual release when registered; comparative-only outcomes remain separately labelled\",\"scope\":\"Missing members retained; no forecast registration, inferred probability, ranking or price adjustment\"}},\"refusals\":[{}]}}",
-                issuers.join(","),
-                refusals.join(",")
+                concat!(
+                    "{{\"binary\":\"fmine\",\"envelope\":\"FMT-ENV-1\",\"envelope_fields\":{envelope_fields},\"verbs\":[",
+                    "\"assure public --issuer <issuer> [--through YYYYQn]\",\"assure public --synthetic\",",
+                    "\"assure challenges --issuer <issuer> [--through YYYYQn]\",\"assure challenges --synthetic\",",
+                    "\"guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD\",\"guidance completion --synthetic\",",
+                    "\"track-record --issuer <issuer> [--site <subject>] [--through YYYYQn]\",\"track-record --synthetic [--json]\",",
+                    "\"recovery gap --issuer <issuer> [--through YYYYQn]\",\"recovery gap --synthetic\",",
+                    "\"lint <draft> --issuer <issuer> [--through YYYYQn] [--discover]\",\"lint <draft> --synthetic [--discover]\",",
+                    "\"forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ [--selector first-published|latest-as-of] [--provenance <path>]\",",
+                    "\"doctor\",\"claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",",
+                    "\"claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",",
+                    "\"claim trace <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]\",\"robot-docs\"],",
+                    "\"issuers\":[{issuers}],\"issuer_registry\":\"registries/sources/<issuer>.toml\",",
+                    "\"exit_codes\":{{\"0\":\"ok; lint verdicts and track-record misses are data\",\"2\":\"usage error (unknown verb, flag, issuer or selection); the envelope still prints\"}},",
+                    "\"claim_inspection\":{{\"lookup\":\"Exact canonical IDs from the synthetic run or hash-verified registered sources; explicit selectors bind the ledger snapshot and claims digest\",",
+                    "\"why\":\"Recorded evidence, interpretation, computed color and Claim admission guards; absent assessments remain absent\",",
+                    "\"trace\":\"Available source anchors and registered provenance; unresolved parents are explicit\"}},",
+                    "\"lint\":{{\"mode\":\"cited equality by default; --discover searches uncited equalities\",",
+                    "\"link\":\"[printed number and unit](fmine:clm_ID)\",",
+                    "\"predicate\":\"One explicit subject, reporting period, ownership basis, supported metric, unit and equality per sentence or line; other prose is unchecked\",",
+                    "\"discovery\":\"All semantic candidates remain visible; multiple matches stay ambiguous and the amount never selects a vintage\",",
+                    "\"scope\":\"Selected registered source snapshot; no publication-time or disclosure-permission verdict\"}},",
+                    "\"forecast_assessment\":{{\"mode\":\"read_only_replay\",\"input\":\"Ordered forecast, cohort, outcome and assessment TOML rows\",",
+                    "\"default_selector\":\"first-published\",",
+                    "\"provenance\":{{\"schema\":\"fmine.forecast-provenance.v1\",\"tables\":[\"node\",\"anchor\",\"binding\"],",
+                    "\"cut\":\"Each frozen forecast registered_at, not the assessment date\",",
+                    "\"coverage\":\"Every cohort member, including unresolved outcomes\",\"without_bundle\":\"not_checked\",",
+                    "\"generator_replay\":\"not_performed\",\"example\":\"tests/forecasts/provenance_synthetic.toml\"}},",
+                    "\"times_and_citations\":\"Supplied records, not external time proof or independently verified sources\"}},",
+                    "\"track_record\":{{\"mode\":\"retrospective_descriptive\",",
+                    "\"input\":\"Hash-verified registered workbooks and agreed document transcriptions\",",
+                    "\"outcome_selector\":\"Original annual release when registered; comparative-only outcomes remain separately labelled\",",
+                    "\"scope\":\"Missing members retained; no forecast registration, inferred probability, ranking or price adjustment\"}},",
+                    "\"refusals\":[{refusals}]}}"
+                ),
+                envelope_fields = ENVELOPE_FIELDS,
+                issuers = issuers.join(","),
+                refusals = refusals.join(",")
             );
             Envelope::ok(
                 "robot-docs",

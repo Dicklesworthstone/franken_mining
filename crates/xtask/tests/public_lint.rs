@@ -8,7 +8,7 @@ use fmine_public::key::{
     KeyedCell, LineKey, NilReason, OwnershipBasis, Period, PeriodKind, PublicKey, PublicValue,
     Scope, ShareSource, Vintage, classify, public_claim,
 };
-use fmine_public::lint::{Verdict, lint_cited};
+use fmine_public::lint::{LintMode, Verdict, lint_cited, lint_discover};
 
 #[allow(clippy::expect_used)] // A malformed invented fixture must fail its test immediately.
 fn observation(value: &str, edit: impl FnOnce(&mut PublicKey)) -> KeyedCell {
@@ -190,6 +190,14 @@ fn distinct_credit_and_production_bases_have_positive_known_answers() {
         verdict(&draft, std::slice::from_ref(&co)),
         Verdict::Verified
     );
+    let discovered = draft.replace(
+        &format!("[$1,100/oz](fmine:{})", co.claim.claim_id),
+        "$1,100/oz",
+    );
+    assert_eq!(
+        lint_discover(&discovered, std::slice::from_ref(&co)).findings[0].verdict,
+        Verdict::Verified
+    );
     assert_eq!(
         verdict(
             &draft.replace("co-product", "by-product"),
@@ -227,6 +235,11 @@ fn distinct_credit_and_production_bases_have_positive_known_answers() {
             c.claim.claim_id
         );
         assert_eq!(verdict(&draft, std::slice::from_ref(&c)), Verdict::Verified);
+        let discovered = draft.replace(&format!("[35 koz](fmine:{})", c.claim.claim_id), "35 koz");
+        assert_eq!(
+            lint_discover(&discovered, std::slice::from_ref(&c)).findings[0].verdict,
+            Verdict::Verified
+        );
         assert_eq!(
             verdict(&draft.replace("35 koz", "0.035 Moz"), &[c]),
             Verdict::BasisMismatch,
@@ -392,6 +405,129 @@ fn report_binds_inputs_findings_and_exact_spans_without_copying_prose() {
         lint_cited(&(draft.clone() + "\n"), &[c]).digest(),
         report.digest()
     );
+}
+
+fn unlinked(c: &KeyedCell, amount: &str) -> String {
+    sentence(c, amount).replace(&format!("[{amount}](fmine:{})", c.claim.claim_id), amount)
+}
+
+#[test]
+fn discovery_unique_claim_runs_the_same_exact_checks_and_preserves_spans() {
+    let c = observation("1637", |_| {});
+    for (amount, expected) in [
+        ("$1,637/oz", Verdict::Verified),
+        ("US$1,637/oz", Verdict::Verified),
+        ("$1.6 thousand/oz", Verdict::Verified),
+        ("$1,640/oz", Verdict::ValueMismatch),
+        ("$1,637.0/oz", Verdict::RoundingBeyondTolerance),
+    ] {
+        let draft = unlinked(&c, amount);
+        let report = lint_discover(&draft, std::slice::from_ref(&c));
+        assert_eq!(report.mode, LintMode::Discovered);
+        assert_eq!(report.findings.len(), 1);
+        let f = &report.findings[0];
+        assert_eq!((f.mode, f.verdict), (LintMode::Discovered, expected));
+        assert_eq!(f.source.as_ref(), Some(&c));
+        assert_eq!(
+            f.claim_id.as_deref(),
+            Some(c.claim.claim_id.to_string().as_str())
+        );
+        assert_eq!(&draft[f.span.0..f.span.1], f.raw);
+        assert!(report.to_json().contains("\"mode\":\"discovered\""));
+        let markdown = report.to_markdown();
+        assert!(markdown.contains("| discovered |"));
+        assert!(markdown.contains(&c.claim.claim_id.to_string()));
+        assert!(markdown.contains(&c.locator));
+        assert!(
+            report
+                .to_json()
+                .contains("General-prose discovery precision has not been measured")
+        );
+        assert_eq!(
+            lint_cited(&draft, std::slice::from_ref(&c)).findings[0].verdict,
+            Verdict::Uncited
+        );
+    }
+}
+
+#[test]
+fn discovery_never_breaks_a_semantic_tie_by_value_vintage_or_source_order() {
+    let first = observation("1637", |_| {});
+    let wrong_value = observation("900", |_| {});
+    let later = observation("1638", |k| k.reporting_vintage.release = "2031Q1".into());
+    let draft = unlinked(&first, "$1,637/oz");
+    for competitor in [wrong_value, later, first.clone()] {
+        let mut claims = vec![first.clone(), competitor];
+        let report = lint_discover(&draft, &claims);
+        let f = &report.findings[0];
+        assert_eq!(f.verdict, Verdict::Ambiguous);
+        assert_eq!(f.candidates.len(), 2);
+        assert!(f.source.is_none());
+        assert!(f.claim_id.is_none());
+        let markdown = report.to_markdown();
+        for candidate in &f.candidates {
+            assert!(markdown.contains(&candidate.claim.claim_id.to_string()));
+            assert!(markdown.contains(&candidate.locator));
+        }
+        claims.reverse();
+        assert_eq!(report.to_json(), lint_discover(&draft, &claims).to_json());
+    }
+    let mut stale = first.clone();
+    stale.claim.stale = true;
+    assert_eq!(
+        lint_discover(&draft, &[stale]).findings[0].verdict,
+        Verdict::Stale
+    );
+    let mut missing = first;
+    missing.claim.value = PublicValue::Missing;
+    assert_eq!(
+        lint_discover(&draft, &[missing]).findings[0].verdict,
+        Verdict::Unchecked
+    );
+}
+
+#[test]
+fn discovery_requires_every_semantic_key_and_never_repairs_explicit_citations() {
+    let a = observation("1637", |_| {});
+    let b = observation("1637", |k| k.subject = "Site B".into());
+    let claims = [a.clone(), b.clone()];
+    let valid = unlinked(&a, "$1,637/oz");
+    for (from, to, expected) in [
+        ("Site A", "Site A Site B", Verdict::Ambiguous),
+        ("Site A", "Unregistered Mine", Verdict::Unchecked),
+        ("AISC", "AISC TCC", Verdict::Unchecked),
+        ("AISC", "recovery", Verdict::Unchecked),
+        ("AISC", "cost of sales", Verdict::Unchecked),
+        ("AISC", "sales", Verdict::Unchecked),
+        ("Q1 2030", "Q2 2030", Verdict::Uncited),
+        ("Q1 2030", "", Verdict::Ambiguous),
+        ("ownership basis unprinted", "", Verdict::Ambiguous),
+        ("ownership basis unprinted", "100% basis", Verdict::Uncited),
+        ("per ounce sold", "", Verdict::Ambiguous),
+        ("per ounce sold", "per ounce produced", Verdict::Uncited),
+        ("$1,637/oz", "$1,637/lb", Verdict::Uncited),
+        (" is ", " is not ", Verdict::Unchecked),
+    ] {
+        let report = lint_discover(&valid.replace(from, to), &claims);
+        assert_eq!(report.findings.len(), 1, "{from} -> {to}");
+        assert_eq!(report.findings[0].verdict, expected, "{from} -> {to}");
+    }
+    let wrong_link = sentence(&a, "$1,637/oz")
+        .replace(&a.claim.claim_id.to_string(), &b.claim.claim_id.to_string());
+    let report = lint_discover(&wrong_link, &claims);
+    assert_eq!(report.findings[0].mode, LintMode::Cited);
+    assert_eq!(report.findings[0].verdict, Verdict::BasisMismatch);
+    let malformed = sentence(&a, "$1,637/oz").replace(&a.claim.claim_id.to_string(), "not-a-claim");
+    assert_ne!(
+        lint_discover(&malformed, &claims).findings[0].verdict,
+        Verdict::Verified
+    );
+    let private = format!("PRIVATE_DRAFT_PROSE.\n{valid}");
+    let report = lint_discover(&private, &claims);
+    assert_eq!(report.findings[0].verdict, Verdict::Verified);
+    assert!(!report.to_json().contains("PRIVATE_DRAFT_PROSE"));
+    assert!(!report.to_markdown().contains("PRIVATE_DRAFT_PROSE"));
+    assert_eq!(report.unchecked_spans.len(), 1);
 }
 
 #[test]

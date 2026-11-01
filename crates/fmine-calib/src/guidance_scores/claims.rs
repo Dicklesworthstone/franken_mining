@@ -6,7 +6,7 @@
 //! independent, identically distributed hits; dependence, effective sample size and bias uncertainty
 //! remain unestimated. The public adapter owns publication selection and source-byte authentication.
 //! All score and summary arithmetic delegates to the parent module's existing numerical primitives.
-//! Determinism: DeterministicPerIsa (exact scores; the IID binomial interval uses the parent kernel).
+//! Determinism: Exact (scores and certified binomial bounds; floats exactly project the dyadic endpoints).
 
 use std::collections::BTreeSet;
 
@@ -410,7 +410,10 @@ pub struct GuidanceSummary {
     pub rounding_aware_hit_rate_bounds: Interval,
     /// Equal-tailed interval under an IID binomial model for resolved printed-point hits only.
     /// This is not dependence-adjusted or a confidence interval for the whole cohort.
+    /// Each float exactly represents the corresponding certified dyadic endpoint.
     pub binomial_90: Option<(f64, f64)>,
+    /// Canonical outward rational enclosure of the same IID binomial reference interval.
+    pub binomial_90_exact: Option<Interval>,
     pub z_members: usize,
     /// Only resolved proper-range members enter these descriptive position summaries.
     pub mean_z: Option<Rat>,
@@ -425,7 +428,7 @@ pub struct GuidanceSummary {
 impl GuidanceSummary {
     #[must_use]
     pub fn canonical_tag(&self) -> String {
-        let mut e = Encoder::new_frame(*b"GDA1", 1);
+        let mut e = Encoder::new_frame(*b"GDA1", 2);
         e.put_str(&self.metric);
         e.put_str(&self.unit);
         e.put_u16(self.year);
@@ -465,6 +468,7 @@ impl GuidanceSummary {
             e.put_u64(lo.to_bits());
             e.put_u64(hi.to_bits());
         }
+        optional_interval(&mut e, self.binomial_90_exact);
         e.put_u8(self.flag as u8);
         blake3_hash(&e.finish()).to_hex()
     }
@@ -548,6 +552,7 @@ pub fn summarize(members: &[MemberInput]) -> Result<Claim<GuidanceSummary>> {
         whole_cohort_hit_rate_bounds: require_bound(raw.whole_cohort_hit_bounds)?,
         rounding_aware_hit_rate_bounds: require_bound(raw.rounding_aware_hit_bounds)?,
         binomial_90: raw.iid_reference_interval_90,
+        binomial_90_exact: raw.iid_reference_interval_90_exact,
         z_members: raw.n_ranges,
         mean_z: raw.mean_z,
         mean_z_rounding: raw.mean_z_rounding_interval,
@@ -838,9 +843,10 @@ mod tests {
             (
                 all_missing.observed_hit_rate,
                 all_missing.binomial_90,
+                all_missing.binomial_90_exact,
                 all_missing.mean_z
             ),
-            (None, None, None)
+            (None, None, None, None)
         );
         assert_eq!(
             all_missing.whole_cohort_hit_rate_bounds,
@@ -891,6 +897,69 @@ mod tests {
             summarize(&many).expect("summary").value.flag,
             CalibrationFlag::Descriptive
         );
+    }
+
+    #[test]
+    fn certified_binomial_bounds_survive_canonical_claim_and_provenance() {
+        let hit = input(
+            "invented-hit",
+            range(),
+            rat(110, 1),
+            bounds(rat(110, 1), rat(110, 1)),
+        );
+        let miss = input(
+            "invented-miss",
+            range(),
+            rat(125, 1),
+            bounds(rat(125, 1), rat(125, 1)),
+        );
+        let mut missing = input(
+            "invented-unresolved",
+            range(),
+            rat(125, 1),
+            bounds(rat(125, 1), rat(125, 1)),
+        );
+        missing.outcome = None;
+        let members = [hit, miss, missing];
+        let summary = summarize(&members).expect("summary");
+        let certified = summary.value.binomial_90_exact.expect("rational bounds");
+        assert_eq!(
+            certified,
+            super::super::clopper_pearson_90_exact(1, 2).expect("primitive bounds")
+        );
+        assert_eq!(
+            summary.value.binomial_90,
+            Some((
+                certified.lo.num() as f64 / certified.lo.den() as f64,
+                certified.hi.num() as f64 / certified.hi.den() as f64,
+            ))
+        );
+        assert_eq!(summary.value.resolved, 2);
+        assert_eq!(summary.value.unresolved, 1);
+        assert_eq!(summary.evidence, EvidenceClass::Assumed);
+        assert_eq!(summary.state, KnowledgeState::Estimated);
+        for member in &members {
+            assert!(summary.parents.contains(&member.guidance.claim_id));
+            if let Some(outcome) = &member.outcome {
+                assert!(summary.parents.contains(&outcome.claim_id));
+            }
+        }
+        let tag = summary.value.canonical_tag();
+        ready(&summary, &tag).expect("canonical summary");
+
+        // Editing the certified payload alone must not preserve the source-backed Claim identity.
+        let mut forged = summary.clone();
+        forged.value.binomial_90_exact = Some(bounds(ZERO, certified.hi));
+        let forged_tag = forged.value.canonical_tag();
+        assert_ne!(tag, forged_tag);
+        assert_eq!(
+            ready(&forged, &forged_tag)
+                .expect_err("changed exact bound")
+                .code,
+            "FMINE-REF-507"
+        );
+        forged.value.binomial_90_exact = None;
+        assert_ne!(tag, forged.value.canonical_tag());
     }
 
     #[test]

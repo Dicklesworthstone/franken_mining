@@ -132,6 +132,7 @@ source files refuse instead of returning a stale cached Claim.
 ```bash
 cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2
 cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2 --format markdown
+cargo run -p fmine-cli -- lint draft.md --issuer barrick --through 2026Q2 --discover
 ```
 
 DESIGN (BD-345): cited mode checks explicit equalities against canonical Claims from one hash-verified source
@@ -148,6 +149,12 @@ predicates; negations, comparisons and other prose remain `unchecked`. A matchin
 a wrong site, period, metric or basis. `verified` means agreement with the cited source assertion, not that the
 issuer assertion is true or that disclosure is permitted. Publication-time/publicness checks are not part of
 this slice; `--through` selects registered vintages, not an information-availability date.
+
+DESIGN (BD-345.S3): `--discover` also searches for source Claims when a supported equality has no Claim link.
+The subject, metric, reporting period, ownership basis and unit must still be stated explicitly. A unique
+candidate goes through the same value, rounding and staleness checks as a cited Claim. Multiple matching
+Claims remain ambiguous, with their source evidence retained; the draft's amount never selects a preferred
+vintage. Existing links keep their cited-mode checks. This bounded grammar does not interpret arbitrary prose.
 
 The command reads the draft locally, writes no files, and emits number spans and verdicts rather than whole
 sentences. JSON includes the draft and Claim-population digests and the source snapshot root. Findings are data:
