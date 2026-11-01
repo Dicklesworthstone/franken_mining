@@ -45,6 +45,42 @@ mutates_authority = false
 description = "Replay a frozen forecast cohort, retain missing outcomes, and optionally check all declared ancestry at registration with --provenance"
 
 [[verb]]
+path = "forecast journal init"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Create an append-only forecast journal with a cell identity and declared host-clock uncertainty bound"
+
+[[verb]]
+path = "forecast journal register"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Register a forecast before its outcome deadline using runtime-assigned admission time under the journal writer lock"
+
+[[verb]]
+path = "forecast journal freeze"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Freeze cohort membership, eligible outcome sources and scoring policy before any member is due"
+
+[[verb]]
+path = "forecast journal outcome"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Append a published outcome, explicit missing status or cited restatement without replacing a forecast"
+
+[[verb]]
+path = "forecast journal assess"
+subsystem = "Plumb"
+mutates_authority = true
+description = "Persist an immutable assessment and its closed information cut while retaining every frozen cohort member"
+
+[[verb]]
+path = "forecast journal inspect"
+subsystem = "Plumb"
+mutates_authority = false
+description = "Replay and inspect a forecast journal, optionally checking an independently retained final-head digest"
+
+[[verb]]
 path = "reliance init"
 subsystem = "Adit"
 mutates_authority = true

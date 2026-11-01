@@ -1,0 +1,11 @@
+# SYNTHETIC: an invented unitless interval, not an issuer forecast or a calibrated probability.
+# The distant deadline allows exercising live admission without fabricating an earlier registration time.
+# The journal supplies registered_at; callers may not put it in this request.
+[[forecast]]
+id = "synthetic-live-example"
+model_key = "synthetic/unitless-interval"
+outcome_due = "2099-01-01T00:00:00Z"
+kind = "interval"
+lo = "40"
+hi = "50"
+nominal = "0.8"

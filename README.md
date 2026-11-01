@@ -294,6 +294,62 @@ DecisionCard API requires this replay certificate and checks that it binds the a
 cut and exact rendered/numeric output. Legacy action, CVaR, flip-margin and VOI fields still lack their own
 Claim provenance, so that wrapper explicitly limits its historical evidence claim to expected NPV.
 
+### Register forecasts with a live durable journal
+
+DESIGN (BD-047, BD-343): `forecast journal` records live admissions, freezes cohort membership, appends
+outcomes and restatements, and persists immutable assessments. Every mutation reads the runtime clock while
+holding the journal's exclusive lock. Request files cannot choose `registered_at`, `frozen_at` or `recorded_at`.
+The complete operation, assigned nanosecond time, sequence and previous head are hash-bound and synchronized
+before the command reports success.
+
+The following example uses an **invented unitless forecast** with a distant deadline. Use an unused journal path:
+
+```bash
+mkdir -p runs/forecast-demo
+cargo run -p fmine-cli -- forecast journal init \
+  --journal runs/forecast-demo/history --cell synthetic-forecast-demo \
+  --max-clock-skew-ms 1000 --trust-host-clock
+```
+
+Retain the returned `payload.head` independently of the journal. Supply the latest successful head to each
+mutation; a stale head refuses before writing. The placeholders below stand for those complete hex digests:
+
+```bash
+cargo run -p fmine-cli -- forecast journal register \
+  --journal runs/forecast-demo/history --head HEAD_FROM_INIT \
+  --request tests/forecasts/journal_registration_synthetic.toml --trust-host-clock
+cargo run -p fmine-cli -- forecast journal freeze \
+  --journal runs/forecast-demo/history --head HEAD_FROM_REGISTRATION \
+  --request tests/forecasts/journal_cohort_synthetic.toml --trust-host-clock
+cargo run -p fmine-cli -- forecast journal inspect \
+  --journal runs/forecast-demo/history --head HEAD_FROM_FREEZE
+```
+
+For an actual forecast, the registration request contains one `[[forecast]]` table with `id`, `model_key`,
+`outcome_due`, `kind` and that kind's distribution fields. A freeze request contains one `[[cohort]]` table
+using the membership, resolution-source and scoring-policy fields shown in the committed example. Each request
+has no top-level fields. Decimal values are quoted strings. The latest possible time under the declared
+clock bound must be **strictly before** every affected outcome deadline, including on an empty or quiet journal.
+
+After the outcome becomes available, `forecast journal outcome` accepts one `[[outcome]]` table with the same
+published, missing or restated vocabulary as the replay example above, omitting `recorded_at`. Its
+`available_at` must be at or before the earliest possible current time. Restatements append to the original
+history, and missing members remain in the frozen denominator.
+
+`forecast journal assess --journal <path> --head <latest-head> --cohort <name>
+--as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock` computes and persists an assessment and its closed information
+cut. `--selector first-published` is the default; `latest-as-of` selects eligible restatements. An optional
+`--expected-digest <hex>` refuses a mismatching result without appending. The cut must already be in the past
+under the declared clock bound. Reopening restores these seals and earlier assessment digests. `inspect`
+replays recorded operations without writing; omitting its optional head pin leaves rollback authenticity unchecked.
+
+The response schema is `fmine.forecast-journal.v1`; assessment responses contain the familiar report under
+`payload.report`. `--trust-host-clock` acknowledges an operator-declared clock bound, fixed at initialization;
+it supplies no independent timestamp proof. Source citations remain supplied evidence. This local workflow
+does not issue the FY2026 forecast set or replace the existing external timestamp verification. Clock rollback,
+corrupt or truncated bytes, and stale heads refuse. A failed write retains its bytes for inspection and never
+silently repairs or truncates history.
+
 ### Issue reports with explicit time and build identity
 
 DESIGN (BD-347): `assure issue` produces the same verified JSON envelope as `assure public`, including its

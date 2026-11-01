@@ -44,6 +44,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     [--selector first-published|latest-as-of] [--provenance <path>]`: read-only ordered transcript replay and
     cohort assessment through `fmine-calib`; first-published is the default (BD-343). An optional provenance
     bundle checks all declared ancestors at each frozen forecast's registration cut (BD-344);
+  - `forecast journal init|register|freeze|outcome|assess|inspect --journal <path>`: durable forecast admission,
+    cohort freezing, append-only resolution and persisted assessment seals with runtime-assigned times (BD-047);
   - `reliance init|issue|check|reuse|withdraw|supersede|refresh|recall --journal <path>`: local issued-output
     status and exact artifact reuse, with capability-authorized mutations and generic recipient roles (BD-347);
   - `doctor`: per registered issuer, `sources_registered`, `sources_present`, `sources_verified` and one row
@@ -57,6 +59,27 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 All three Claim commands accept `--issuer <issuer> [--through YYYYQn]` or `--synthetic` to select the same
 verified source snapshot as assurance. Without a selector they search the current canonical projections.
 `--json` is an alias for `--format json`.
+
+### Durable forecast registration (BD-047)
+
+DESIGN: `forecast journal init` binds a cell id and operator-declared clock uncertainty to a new journal.
+`register`, `freeze`, `outcome` and `assess` require an exact predecessor `--head`; all mutations require
+`--trust-host-clock`. The runtime clock is sampled under the journal's exclusive lock. The captured nanoseconds
+reach `ForecastLedger` directly; a caller cannot supply registration, freeze or recording time. A registration
+or cohort freeze must precede every affected deadline even at the clock's upper bound. Outcome availability
+and assessment cuts must be at or before its lower bound. Clock rollback is refused, never clamped.
+
+Requests contain one permitted TOML table with no top-level fields. `FJR1` version one operations use the frozen
+`fmine.forecast-ledger.v1` row grammar, with the three assigned-time fields prohibited. Semantic replay uses the
+existing calibration kernel. Assessment operations are persisted, retaining their optional expected digest,
+global seals, frozen membership, missing outcomes and original/restated selection across reopening.
+
+The `fmine.forecast-journal.v1` payload reports the cell, exact head, clock bounds, operation schema, inventories
+and checkpoints. An assessment adds `report` with mode `durable_journal`. `inspect` is read-only and can verify
+an independently retained head; an unpinned read establishes internal consistency only. Source citations remain
+unverified, external time proof is not verified, and envelope authority anchors/certificates remain null.
+Malformed inputs, stale heads and semantic refusal cannot append. A failed write/sync poisons the writer and
+retains unconfirmed bytes for inspection. No command repairs, truncates or deletes journal history.
 
 ### Issued-output reliance (BD-347)
 
@@ -125,6 +148,8 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
 ## 4. Public API Surface
 - `OutputFormat`, `CliCommand`, `Envelope`, `NextAction`
 - `run` (what `fmine` prints, and its exit code), `invoke`, `parse_args`, `execute_command`
+- `forecast_journal::{Command, execute, execute_with_clock}`: the actual host-clock adapter or an explicitly
+  injected clock capability for callers/tests. Trust in an injected clock belongs to its caller, not request data.
 - `packet::{packets_from_report, ChallengePacket}`; immutable packet accessors, `validate`, `to_json`,
   `to_markdown`. The existing assurance engine computes the states; this module packages their evidence.
 
