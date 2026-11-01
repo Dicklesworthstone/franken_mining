@@ -300,8 +300,7 @@ fn saved_reports_reopen_without_clock_or_mutation() {
             for fragment in [
                 "\"report_origin\":\"persisted_assessment\"".to_string(),
                 "\"mode\":\"persisted_assessment_replay\"".to_string(),
-                "\"record_time_basis\":\"observed_host_clock_with_declared_uncertainty\""
-                    .to_string(),
+                "\"record_time_basis\":\"clock_upper_bound_with_declared_uncertainty\"".to_string(),
                 "\"read_only\":true".to_string(),
                 "\"n_assessments\":2".to_string(),
                 format!("\"expected_head_checked\":{}", pin.is_some()),

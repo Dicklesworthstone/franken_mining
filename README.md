@@ -601,18 +601,27 @@ For an actual forecast, the registration request contains one `[[forecast]]` tab
 using the membership, resolution-source and scoring-policy fields shown in the committed example. Each request
 has no top-level fields. Decimal values are quoted strings. The latest possible time under the declared
 clock bound must be **strictly before** every affected outcome deadline, including on an empty or quiet journal.
+For new operations, the writer internally adds `schema = "fmine.forecast-operation.v2"`; callers must not
+include this marker in their request files. The frame retains the sampled `observed_ns`, while registration,
+cohort freeze and outcome recording times use the clock's upper bound (`observed_ns + clock_skew_ns`).
 
 After the outcome becomes available, `forecast journal outcome` accepts one `[[outcome]]` table with the same
 published, missing or restated vocabulary as the replay example above, omitting `recorded_at`. Its
 `available_at` must be at or before the earliest possible current time. Restatements append to the original
 history, and missing members remain in the frozen denominator.
 
+For example, an outcome available at `12:00:00Z` and recorded at an observed `12:00:01.500Z` with a one-second
+uncertainty has a recording upper bound of `12:00:02.500Z`. A later assessment cut at `12:00:02Z` leaves that
+outcome unresolved; a cut at `12:00:03Z` can include it. This prevents a recording from entering a historical
+information cut while its declared uncertainty still crosses that cut.
+
 `forecast journal assess --journal <path> --head <latest-head> --cohort <name>
 --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock` computes and persists an assessment and its closed information
 cut. `--selector first-published` is the default; `latest-as-of` selects eligible restatements. An optional
 `--expected-digest <hex>` refuses a mismatching result without appending. Every new assessment also stores its
 actual result digest in the operation, including when the caller omits that option. Replay checks that binding
-and refuses a different result. The cut must already be in the past under the declared clock bound.
+and refuses a different result; a v2 assessment without its stored digest is invalid. The cut must already
+be in the past under the declared clock bound.
 Reopening restores these seals and earlier assessment digests. `inspect`
 replays recorded operations without writing; omitting its optional head pin leaves rollback authenticity unchecked.
 
@@ -631,8 +640,15 @@ head refuses; the command never substitutes another assessment. JSON retains the
 under `payload.report.assessment`, while the surrounding journal head and checkpoint inventory describe the
 currently opened history. Omitting `--head` permits an unpinned read with that limitation disclosed.
 Older checkpoints without a stored result digest remain readable; `result_digest_binding` distinguishes their
-caller-requested digest check from a result digest bound into the journal. Recording times remain observed
-host-clock times under the journal's declared uncertainty policy.
+caller-requested digest check from a result digest bound into the journal. Legacy operations without an internal
+schema marker retain their observed recording times, existing identities and results. New v2 operations can
+follow them in the same journal; replay applies each operation's original time policy.
+
+`payload.operation_version_counts` reports `legacy_v1` and `v2` counts, excluding genesis.
+`payload.record_time_policy` is `none`, `legacy_observed`, `clock_upper_bound` or `mixed`. The nested report
+describes the operation prefix through that assessment's first saved checkpoint, so later appends do not
+change its time-policy labels. A v2 assessment over legacy history remains explicitly mixed; adding a result
+digest does not upgrade the earlier clock evidence.
 
 The response schema is `fmine.forecast-journal.v1`; assessment responses contain the familiar report under
 `payload.report`. `--trust-host-clock` acknowledges an operator-declared clock bound, fixed at initialization;

@@ -9,9 +9,15 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fmine_calib::record::{parse_hex32, parse_utc};
+use fmine_calib::{
+    AssessmentPolicy, CohortSpec, ForecastLedger, ForecastPayload, OutcomeCitation, OutcomeKind,
+    OutcomeSelector,
+};
+use fmine_claim::forecast_journal::{Entry, Record, validate_chain};
 use fmine_cli::Envelope;
 use fmine_cli::forecast_journal::{Command, execute_with_clock};
 use fmine_core::hash::Digest32;
+use fmine_io::forecast::Journal as DurableJournal;
 use fmine_runtime::{ClockError, WallClock};
 
 const SECOND: i64 = 1_000_000_000;
@@ -218,6 +224,22 @@ fn one_member(skew: u64) -> Journal {
     journal
 }
 
+/// Encode explicitly constructed legacy or negative fixture records; the production replay still checks them.
+fn write_fixture(path: &std::path::Path, records: &mut [Record]) -> Digest32 {
+    let mut previous = Digest32::default();
+    for record in records.iter_mut() {
+        record.previous = previous;
+        previous = record.chain_head().expect("canonical fixture head");
+    }
+    validate_chain(records).expect("structurally valid synthetic chain");
+    let bytes: Vec<_> = records
+        .iter()
+        .flat_map(|record| record.to_line().expect("fixture line"))
+        .collect();
+    fs::write(path, bytes).expect("write synthetic fixture");
+    previous
+}
+
 #[test]
 fn restarted_journal_scores_original_and_restatement_without_losing_missing_members() {
     let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
@@ -348,8 +370,297 @@ fn clock_uncertainty_is_checked_at_each_admission_boundary_including_equality() 
     journal.refuse(&assess, ns(CUT), "FMINE-REF-206");
     let scored = journal.ok(assess, ns(CUT) + SECOND);
     assert!(scored.contains("\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0,"));
-    assert!(scored.contains("\"registered_at\":\"2030-12-30T23:59:58Z\""));
-    assert!(scored.contains("\"frozen_at\":\"2030-12-30T23:59:58.999999999Z\""));
+    assert!(scored.contains("\"registered_at\":\"2030-12-30T23:59:59Z\""));
+    assert!(scored.contains("\"frozen_at\":\"2030-12-30T23:59:59.999999999Z\""));
+}
+
+#[test]
+fn v2_outcomes_cross_historical_cuts_only_at_their_upper_bound_and_keep_checked_results() {
+    let mut journal = one_member(SECOND as u64);
+    let base = ns("2031-01-02T00:00:00Z");
+    journal.append(
+        &outcome("f1", 52, "2031-01-02T00:00:00Z", false),
+        base + SECOND + SECOND / 2,
+    );
+    journal.append(
+        &outcome("f1", 54, "2031-01-02T00:00:01Z", true),
+        base + 2 * SECOND,
+    );
+    // Observed at B+1.5s is not definitely recorded by B+2s: its upper bound is B+2.5s.
+    let before = journal.assess(
+        "2031-01-02T00:00:02Z",
+        "latest-as-of",
+        None,
+        base + 5 * SECOND,
+    );
+    assert!(
+        before.contains("\"n_members\":1,\"n_resolved\":0,\"n_unresolved\":1,"),
+        "{before}"
+    );
+    assert!(
+        before.contains("\"unresolved_by_reason\":{\"overdue\":1}"),
+        "{before}"
+    );
+    let before_digest = assessment_digest(&before);
+    // The restatement's upper bound is exactly B+3s; the inclusive as-of boundary must admit it.
+    let exact = journal.assess(
+        "2031-01-02T00:00:03Z",
+        "latest-as-of",
+        None,
+        base + 6 * SECOND,
+    );
+    assert!(
+        exact.contains("\"n_members\":1,\"n_resolved\":1,\"n_unresolved\":0,"),
+        "{exact}"
+    );
+    assert!(
+        exact.contains("\"recorded_at\":\"2031-01-02T00:00:03Z\""),
+        "{exact}"
+    );
+    assert!(
+        exact.contains("\"interval_score\":{\"n_scored\":1,\"observed_mean\":50,"),
+        "{exact}"
+    );
+    let first = journal.assess(
+        "2031-01-02T00:00:03Z",
+        "first-published",
+        None,
+        base + 7 * SECOND,
+    );
+    assert!(
+        first.contains("\"recorded_at\":\"2031-01-02T00:00:02.500000000Z\""),
+        "{first}"
+    );
+    assert!(
+        first.contains("\"interval_score\":{\"n_scored\":1,\"observed_mean\":30,"),
+        "{first}"
+    );
+
+    let bytes = fs::read(&journal.path).expect("committed v2 history");
+    for saved in [&before, &exact, &first] {
+        let report = journal.run(
+            &Command::Report {
+                journal: journal.path.clone(),
+                head: Some(journal.head),
+                assessment: assessment_digest(saved),
+            },
+            0,
+        );
+        assert_eq!(report.exit_code, 0, "{report:?}");
+        assert_eq!(assessment(&report.payload_json), assessment(saved));
+        assert_eq!(
+            string_field(&report.payload_json, "record_time_policy"),
+            "clock_upper_bound"
+        );
+        assert_eq!(fs::read(&journal.path).expect("read-only report"), bytes);
+    }
+    // Corrupt only the stored result binding, then rebuild the canonical chain. Semantic replay must refuse.
+    let snapshot =
+        DurableJournal::open_read(&journal.path, Some(journal.head)).expect("v2 fixture");
+    let records = snapshot.records().to_vec();
+    drop(snapshot);
+    for (name, missing, code) in [
+        ("missing-pin", true, "FMINE-REF-107"),
+        ("wrong-pin", false, "FMINE-REF-505"),
+    ] {
+        let mut changed = records.clone();
+        let mut found = false;
+        for record in &mut changed {
+            if let Entry::Operation(request) = &mut record.entry
+                && request.contains(&before_digest.to_hex())
+            {
+                assert!(request.starts_with("schema = \"fmine.forecast-operation.v2\"\n"));
+                *request = if missing {
+                    request
+                        .lines()
+                        .filter(|line| !line.starts_with("expected_digest ="))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        + "\n"
+                } else {
+                    request.replace(&before_digest.to_hex(), &Digest32::default().to_hex())
+                };
+                found = true;
+            }
+        }
+        assert!(
+            found,
+            "the negative control must change a persisted v2 checkpoint"
+        );
+        let path = journal.root.join(name);
+        let pin = write_fixture(&path, &mut changed);
+        let bad_bytes = fs::read(&path).expect("negative fixture bytes");
+        let refused = journal.run(
+            &Command::Report {
+                journal: path.clone(),
+                head: Some(pin),
+                assessment: before_digest,
+            },
+            0,
+        );
+        assert_refused(&refused, code);
+        assert_eq!(
+            fs::read(path).expect("negative evidence retained"),
+            bad_bytes
+        );
+    }
+}
+
+#[test]
+fn legacy_observed_ids_and_assessment_digest_survive_v2_appends_with_mixed_labels() {
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), SECOND as u64);
+    let registered = ns("2030-01-02T00:00:00Z") + 123_456_789;
+    let frozen = ns("2030-01-03T00:00:00Z");
+    let published = ns("2031-01-03T00:00:00Z");
+    // This independent kernel construction pins the legacy observed-time interpretation, not the v2 adapter.
+    let mut expected = ForecastLedger::new();
+    let forecast_id = expected
+        .register_payload(
+            "synthetic:f1",
+            registered,
+            ns(DUE),
+            ForecastPayload::Interval {
+                lo: 40.0,
+                hi: 50.0,
+                nominal: Some(0.8),
+            },
+        )
+        .expect("legacy forecast");
+    let cohort_id = expected
+        .freeze_cohort(CohortSpec {
+            name: "three-sites".into(),
+            frozen_at_ns: frozen,
+            members: vec![forecast_id],
+            resolution_rule: "Synthetic annual output on a fixed basis".into(),
+            eligible_sources: vec!["synthetic:issuer".into()],
+            policy: AssessmentPolicy {
+                outcome_bounds: Some((0.0, 100.0)),
+                ..AssessmentPolicy::default()
+            },
+        })
+        .expect("legacy cohort");
+    expected
+        .append_outcome(
+            forecast_id,
+            ns("2031-01-02T00:00:00Z"),
+            published,
+            OutcomeKind::Published {
+                value: 52.0,
+                citation: OutcomeCitation {
+                    source: "synthetic:issuer".into(),
+                    vintage: "synthetic-published".into(),
+                    locator: "Invented!A1".into(),
+                    sha256: [0x11; 32],
+                },
+            },
+        )
+        .expect("legacy publication");
+    let digest = expected
+        .assess(cohort_id, ns(CUT), OutcomeSelector::FirstPublished)
+        .expect("legacy score")
+        .digest;
+
+    let snapshot = DurableJournal::open_read(&journal.path, Some(journal.head)).expect("genesis");
+    let mut records = snapshot.records().to_vec();
+    drop(snapshot);
+    // Old writers stored no top-level schema. Construct those exact old rows explicitly, never through a v2 writer.
+    for (observed_ns, request) in [
+        (registered, forecast("f1", 40, 50, DUE)),
+        (frozen, cohort("f1")),
+        (published, outcome("f1", 52, "2031-01-02T00:00:00Z", false)),
+        (
+            ns(CUT) + SECOND,
+            format!(
+                "[[assessment]]\ncohort = \"three-sites\"\nas_of = \"{CUT}\"\nselector = \"first-published\"\nexpected_digest = \"{digest}\"\n"
+            ),
+        ),
+    ] {
+        records.push(Record {
+            sequence: records.len() as u64,
+            previous: Digest32::default(),
+            observed_ns,
+            entry: Entry::Operation(request),
+        });
+    }
+    journal.head = write_fixture(&journal.path, &mut records);
+    let legacy = journal.run(
+        &Command::Report {
+            journal: journal.path.clone(),
+            head: Some(journal.head),
+            assessment: digest,
+        },
+        0,
+    );
+    assert_eq!(legacy.exit_code, 0, "{legacy:?}");
+    assert!(
+        legacy
+            .payload_json
+            .contains(&format!("\"forecast_id\":\"{forecast_id}\""))
+    );
+    assert!(
+        legacy
+            .payload_json
+            .contains(&format!("\"registered_ns\":{registered}"))
+    );
+    assert_eq!(assessment_digest(&legacy.payload_json), digest);
+    assert_eq!(
+        string_field(&legacy.payload_json, "record_time_policy"),
+        "legacy_observed"
+    );
+    assert!(
+        legacy
+            .payload_json
+            .contains("\"operation_version_counts\":{\"legacy_v1\":4,\"v2\":0}")
+    );
+
+    let mixed = journal.append(
+        &forecast("f2", 20, 24, "2032-01-01T00:00:00Z"),
+        ns("2031-01-11T00:00:00Z"),
+    );
+    assert_eq!(string_field(&mixed, "record_time_policy"), "mixed");
+    assert!(
+        mixed.contains("\"operation_version_counts\":{\"legacy_v1\":4,\"v2\":1}"),
+        "{mixed}"
+    );
+    assert!(
+        mixed.contains(&format!(
+            "\"registered_ns\":{}",
+            ns("2031-01-11T00:00:00Z") + SECOND
+        )),
+        "{mixed}"
+    );
+    let before = fs::read(&journal.path).expect("mixed history");
+    let old = journal.run(
+        &Command::Report {
+            journal: journal.path.clone(),
+            head: Some(journal.head),
+            assessment: digest,
+        },
+        0,
+    );
+    assert_eq!(old.exit_code, 0, "{old:?}");
+    assert_eq!(
+        assessment(&old.payload_json),
+        assessment(&legacy.payload_json)
+    );
+    assert_eq!(
+        string_field(&old.payload_json, "record_time_policy"),
+        "mixed"
+    );
+    let report = old
+        .payload_json
+        .split_once("\"report\":")
+        .expect("historical report")
+        .1;
+    assert_eq!(
+        string_field(report, "record_time_policy"),
+        "legacy_observed"
+    );
+    assert!(report.contains("\"operation_version_counts\":{\"legacy_v1\":4,\"v2\":0}"));
+    assert_eq!(
+        fs::read(&journal.path).expect("report writes nothing"),
+        before
+    );
 }
 
 #[test]

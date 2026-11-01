@@ -93,31 +93,51 @@ verified source snapshot as assurance. Without a selector they search the curren
 DESIGN: `forecast journal init` binds a cell id and operator-declared clock uncertainty to a new journal.
 `register`, `freeze`, `outcome` and `assess` require an exact predecessor `--head`; all mutations require
 `--trust-host-clock`. The runtime clock is sampled under the journal's exclusive lock. The captured nanoseconds
-reach `ForecastLedger` directly; a caller cannot supply registration, freeze or recording time. A registration
-or cohort freeze must precede every affected deadline even at the clock's upper bound. Outcome availability
-and assessment cuts must be at or before its lower bound. Clock rollback is refused, never clamped.
+remain in the journal frame's `observed_ns`; new admissions assign `ForecastLedger` registration, freeze and
+recording times to the upper bound, `observed_ns + clock_skew_ns`. A caller cannot supply those times.
+A registration or cohort freeze must precede every affected deadline even at that upper bound. Outcome
+availability and assessment cuts must be at or before the lower bound. Clock rollback is refused, never clamped.
 
-Requests contain one permitted TOML table with no top-level fields. `FJR1` version one operations use the frozen
-`fmine.forecast-ledger.v1` row grammar, with the three assigned-time fields prohibited. Semantic replay uses the
-existing calibration kernel. Every new assessment operation binds the actual computed result in its existing
-`expected_digest` field, even when the caller supplies no expectation. The digest is computed under the writer
-lock; a caller's conflicting expectation refuses, and the append callback still checks clock bounds and
-replays the complete semantic transition before any write. Reopening verifies each bound result, global seals,
-frozen membership, missing outcomes and original/restated selection. Legacy unbound checkpoints remain readable
-and retain their explicit weaker binding status; existing frame bytes and semantic identities do not change.
+Requests still contain one permitted TOML table with no top-level fields, using the frozen
+`fmine.forecast-ledger.v1` row grammar with the three assigned-time fields prohibited. The writer validates
+that request, then adds only `schema = "fmine.forecast-operation.v2"` to the stored operation. The `FJR1`
+frame format is unchanged. Replay dispatches per operation: legacy rows without top-level fields retain
+their original observed-time semantics and identities; v2 rows use the upper bound. Unknown schemas or extra
+top-level fields refuse. Mixed journals preserve both policies without rewriting earlier operations.
+
+The existing calibration kernel requires an outcome's availability and recording time to be at or before the
+assessment cut. For example, an observed recording at `12:00:01.500Z` with a one-second skew bound is assigned
+`12:00:02.500Z`; an otherwise eligible outcome remains unresolved at a later assessment's `12:00:02Z` cut.
+This closes the interval in which an outcome's recording uncertainty could cross its historical information cut.
+
+Every new assessment operation binds the actual computed result in its existing `expected_digest` field,
+even when the caller supplies no expectation; that field is mandatory for v2 replay. The digest is computed
+under the writer lock; a caller's conflicting expectation refuses, and the append callback still checks clock
+bounds and replays the complete semantic transition before any write. Reopening verifies each bound result,
+global seals, frozen membership, missing outcomes and original/restated selection. Legacy unbound checkpoints
+remain readable and retain their explicit weaker binding status; existing frame bytes and semantic identities
+do not change.
 
 The `fmine.forecast-journal.v1` payload reports the cell, exact head, clock bounds, operation schema, inventories
-and checkpoints. An assessment adds `report` with mode `durable_journal`. `inspect` is read-only and can verify
-an independently retained head; an unpinned read establishes internal consistency only.
+and checkpoints. `operation_schema` continues to identify the row grammar. `operation_version_counts` contains
+`legacy_v1` and `v2` counts excluding genesis; their sum is `n_operations`. `record_time_policy` is `none`,
+`legacy_observed`, `clock_upper_bound` or `mixed`. An assessment adds `report` with mode `durable_journal`;
+its version counts and time policy describe the prefix through its first persisted checkpoint. A v2 checkpoint
+over legacy operations remains mixed and does not upgrade the earlier time evidence. `inspect` is read-only
+and can verify an independently retained head; an unpinned read establishes internal consistency only.
 `report --assessment <digest> [--head <hex>]` retrieves one existing persisted assessment under the journal's
 shared lock. It accepts no new cohort/cut/selector and samples no clock. The saved tuple selects the existing
 kernel result, whose digest must match; missing assessments refuse `FMINE-REF-201`, wrong head pins retain
 `FMINE-REF-502`, and digest mismatches retain `FMINE-REF-505`. It appends nothing and creates no new persistent
-seal. The payload identifies `persisted_assessment` retrieval, the selected digest, read-only status, observed
-host-clock time basis and `result_digest_binding` (`persisted_checkpoint` or `caller_requested_digest_only`).
+seal. The payload identifies `persisted_assessment` retrieval, the selected digest, read-only status and
+`result_digest_binding` (`persisted_checkpoint` or `caller_requested_digest_only`). Its `record_time_basis`
+is `observed_host_clock_with_declared_uncertainty`, `clock_upper_bound_with_declared_uncertainty` or
+`mixed_versioned_record_times`, according to the selected checkpoint's prefix.
 The nested report's mode is `persisted_assessment_replay`; its assessment content is unchanged while its
-surrounding head and checkpoint inventory reflect the opened journal. Source citations remain
-unverified, external time proof is not verified, and envelope authority anchors/certificates remain null.
+surrounding head and checkpoint inventory reflect the opened journal. Its time-policy labels retain the
+selected checkpoint's prefix rather than later appended operations. Source citations remain unverified;
+`--trust-host-clock` declares an operator's bound and provides no independent timestamp proof. External time
+proof is not verified, and envelope authority anchors/certificates remain null.
 Malformed inputs, stale heads and semantic refusal cannot append. A failed write/sync poisons the writer and
 retains unconfirmed bytes for inspection. No command repairs, truncates or deletes journal history.
 

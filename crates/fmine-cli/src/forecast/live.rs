@@ -10,6 +10,7 @@ use fmine_claim::forecast_journal::{Entry, Header, MAX_OPERATION_BYTES, Record};
 use fmine_core::hash::Digest32;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_io::forecast::Journal;
+use fmine_registry::toml_subset::{TomlDoc, TomlValue};
 use fmine_runtime::{HostWallClock, WallClock};
 
 use super::{
@@ -19,9 +20,45 @@ use super::{
 use crate::{DOCTOR_WHY, Envelope, NextAction};
 
 pub const NO_CLAIM: &str = "Local append-only forecast history under an operator-declared host-clock bound. Journal heads identify local history; they are not signatures or external timestamp proofs. Supplied outcomes and citations are not independently verified.";
-// FJR1 version 1 binds this exact row grammar, with writer-assigned record times. A later transcript
-// grammar must introduce an explicit journal-version migration, never reinterpret these opaque bytes.
+// Legacy no-top-level operations retain observed-time semantics and their original IDs. The writer's
+// explicit v2 marker changes authority times to the clock upper bound without rewriting old records.
 const OPERATION_SCHEMA: &str = "fmine.forecast-ledger.v1";
+const V2_SCHEMA: &str = "fmine.forecast-operation.v2";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperationVersion {
+    LegacyV1,
+    V2,
+}
+
+fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
+    if doc.top.is_empty() {
+        Ok(OperationVersion::LegacyV1)
+    } else if doc.top.len() == 1
+        && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V2_SCHEMA)
+    {
+        Ok(OperationVersion::V2)
+    } else {
+        Err(invalid("unknown stored forecast operation schema"))
+    }
+}
+
+/// The writer chooses the version; clients retain the existing no-top-level request grammar.
+fn version_request(request: &str, expected_table: &str) -> Result<String, Refusal> {
+    let doc = parse_subset(request).map_err(|e| invalid(e.to_string()))?;
+    if !doc.top.is_empty() || doc.rows.len() != 1 || doc.rows[0].table != expected_table {
+        return Err(invalid(format!(
+            "a {expected_table} request needs exactly its one table and no top-level fields"
+        )));
+    }
+    let versioned = format!("schema = \"{V2_SCHEMA}\"\n{request}");
+    if versioned.len() > MAX_OPERATION_BYTES {
+        return Err(invalid(
+            "versioned forecast request exceeds the operation byte limit",
+        ));
+    }
+    Ok(versioned)
+}
 
 /// Mutating variants require explicit acceptance of the host-clock policy at the command-line boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,6 +223,7 @@ fn perform(
         }
         _ => return Err(invalid("this operation has no request")),
     };
+    let request = version_request(&request, table)?;
     let mut assessment = None;
     journal.append(&request, clock, |record, header| {
         assessment = apply(&mut state, record, header, Some(table))?;
@@ -311,10 +349,9 @@ fn apply(
         return Err(invalid("only operation records have forecast semantics"));
     };
     let doc = parse_subset(request).map_err(|e| invalid(e.to_string()))?;
-    if !doc.top.is_empty() || doc.rows.len() != 1 {
-        return Err(invalid(
-            "a live request needs exactly one table and no top-level fields",
-        ));
+    let version = operation_version(&doc)?;
+    if doc.rows.len() != 1 {
+        return Err(invalid("a stored live request needs exactly one table"));
     }
     let row = &doc.rows[0];
     if expected_table.is_some_and(|expected| row.table != expected) {
@@ -327,11 +364,15 @@ fn apply(
     for key in ["registered_at", "frozen_at", "recorded_at"] {
         if row.get(key).is_some() {
             return Err(invalid(format!(
-                "live journal requests cannot supply {key}; the writer assigns its observed clock time"
+                "live journal requests cannot supply {key}; the stored operation version assigns its clock time"
             )));
         }
     }
     let (lower, upper) = record.time_bounds(header)?;
+    let authority_ns = match version {
+        OperationVersion::LegacyV1 => record.observed_ns,
+        OperationVersion::V2 => upper,
+    };
     let row = Row(row);
     match row.0.table.as_str() {
         "forecast" => {
@@ -340,7 +381,7 @@ fn apply(
                     "registration's latest possible clock time must precede the outcome deadline",
                 ));
             }
-            state.forecast_at(row, Some(record.observed_ns))?;
+            state.forecast_at(row, Some(authority_ns))?;
         }
         "cohort" => {
             toml_string(row.string("name")?)?;
@@ -356,7 +397,7 @@ fn apply(
                     )));
                 }
             }
-            state.cohort_at(row, Some(record.observed_ns))?;
+            state.cohort_at(row, Some(authority_ns))?;
         }
         "outcome" => {
             if row.time("available_at")? > lower {
@@ -364,9 +405,12 @@ fn apply(
                     "outcome availability exceeds the writer's earliest possible clock time",
                 ));
             }
-            state.outcome_at(row, Some(record.observed_ns))?;
+            state.outcome_at(row, Some(authority_ns))?;
         }
         "assessment" => {
+            if version == OperationVersion::V2 {
+                row.string("expected_digest")?;
+            }
             if row.time("as_of")? > lower {
                 return Err(late(
                     "assessment cut exceeds the writer's earliest possible clock time",
@@ -377,6 +421,80 @@ fn apply(
         other => return Err(invalid(format!("unknown live forecast table {other:?}"))),
     }
     Ok(None)
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct VersionCounts {
+    legacy_v1: usize,
+    v2: usize,
+}
+
+impl VersionCounts {
+    fn policy(self) -> &'static str {
+        match (self.legacy_v1, self.v2) {
+            (0, 0) => "none",
+            (_, 0) => "legacy_observed",
+            (0, _) => "clock_upper_bound",
+            _ => "mixed",
+        }
+    }
+
+    fn basis(self) -> &'static str {
+        match self.policy() {
+            "legacy_observed" => "observed_host_clock_with_declared_uncertainty",
+            "clock_upper_bound" => "clock_upper_bound_with_declared_uncertainty",
+            "mixed" => "mixed_versioned_record_times",
+            _ => "no_operations",
+        }
+    }
+
+    fn fields(self) -> String {
+        format!(
+            "\"operation_version_counts\":{{\"legacy_v1\":{},\"v2\":{}}},\"record_time_policy\":{}",
+            self.legacy_v1,
+            self.v2,
+            js(self.policy())
+        )
+    }
+}
+
+/// A report's policy describes its original prefix, never operations appended after that checkpoint.
+fn version_counts(
+    records: &[Record],
+    state: &Replay,
+    selected: Option<Digest32>,
+) -> Result<(VersionCounts, Option<VersionCounts>), Refusal> {
+    let mut counts = VersionCounts::default();
+    let mut report_counts = None;
+    let mut checkpoint_index = 0;
+    for record in records {
+        let Entry::Operation(request) = &record.entry else {
+            continue;
+        };
+        let doc = parse_subset(request).map_err(|e| invalid(e.to_string()))?;
+        match operation_version(&doc)? {
+            OperationVersion::LegacyV1 => counts.legacy_v1 += 1,
+            OperationVersion::V2 => counts.v2 += 1,
+        }
+        if doc
+            .rows
+            .first()
+            .is_some_and(|row| row.table == "assessment")
+        {
+            let checkpoint = state
+                .checkpoints
+                .get(checkpoint_index)
+                .ok_or_else(|| absent("replayed checkpoint metadata missing"))?;
+            if report_counts.is_none() && selected == Some(checkpoint.digest) {
+                report_counts = Some(counts);
+            }
+            checkpoint_index += 1;
+        }
+    }
+    if selected.is_some() && report_counts.is_none() {
+        return Err(absent("selected assessment has no stored operation prefix"));
+    }
+    Ok((counts, report_counts))
 }
 
 fn presentation(
@@ -391,6 +509,8 @@ fn presentation(
         .last()
         .ok_or_else(|| absent("journal genesis missing"))?;
     let (earliest, latest) = last.time_bounds(journal.header())?;
+    let (versions, report_versions) =
+        version_counts(journal.records(), state, assessment.map(|a| a.digest))?;
     let outcomes: usize = state
         .forecasts
         .values()
@@ -433,8 +553,8 @@ fn presentation(
         .collect::<Vec<_>>()
         .join(",");
     let report = assessment
-        .map(|a| {
-            state.render_origin(
+        .map(|a| -> Result<String, Refusal> {
+            let report = state.render_origin(
                 a,
                 journal.head(),
                 "journal_head",
@@ -444,26 +564,35 @@ fn presentation(
                     "durable_journal"
                 },
                 "operator_declared_bounded_host_clock",
-            )
+            )?;
+            let prefix = report
+                .strip_suffix('}')
+                .ok_or_else(|| invalid("invalid rendered forecast report"))?;
+            let versions =
+                report_versions.ok_or_else(|| absent("report version metadata missing"))?;
+            Ok(format!("{prefix},{}}}", versions.fields()))
         })
         .transpose()?
         .unwrap_or_else(|| "null".into());
     let retrieval = if operation == "report" {
         let selected = assessment.ok_or_else(|| absent("persisted assessment report missing"))?;
         format!(
-            ",\"report_origin\":\"persisted_assessment\",\"selected_assessment_digest\":{},\"result_digest_binding\":{},\"read_only\":true,\"record_time_basis\":\"observed_host_clock_with_declared_uncertainty\"",
+            ",\"report_origin\":\"persisted_assessment\",\"selected_assessment_digest\":{},\"result_digest_binding\":{},\"read_only\":true,\"record_time_basis\":{}",
             js(&selected.digest.to_hex()),
             js(if digest_is_bound(state, selected.digest) {
                 "persisted_checkpoint"
             } else {
                 "caller_requested_digest_only"
             }),
+            js(report_versions
+                .ok_or_else(|| absent("report time policy missing"))?
+                .basis()),
         )
     } else {
         String::new()
     };
     let payload = format!(
-        "{{\"schema\":\"fmine.forecast-journal.v1\",\"operation_schema\":\"{OPERATION_SCHEMA}\",\"operation\":{},\"head\":{},\"expected_head_checked\":{pinned},\"cell_id\":{},\"clock_skew_ns\":{},\"sequence\":{},\"observed_ns\":{},\"observed_at\":{},\"clock_bounds\":{{\"earliest_ns\":{earliest},\"latest_ns\":{latest}}},\"n_operations\":{},\"n_forecasts\":{},\"n_cohorts\":{},\"n_outcomes\":{outcomes},\"n_assessments\":{},\"clock_basis\":\"operator_declared_bounded_host_clock\",\"external_time_proof\":\"not_verified\",\"source_citations\":\"supplied_not_verified\",\"forecasts\":[{forecasts}],\"cohorts\":[{cohorts}],\"assessments\":[{checkpoints}]{retrieval},\"report\":{report}}}",
+        "{{\"schema\":\"fmine.forecast-journal.v1\",\"operation_schema\":\"{OPERATION_SCHEMA}\",\"operation\":{},\"head\":{},\"expected_head_checked\":{pinned},\"cell_id\":{},\"clock_skew_ns\":{},\"sequence\":{},\"observed_ns\":{},\"observed_at\":{},\"clock_bounds\":{{\"earliest_ns\":{earliest},\"latest_ns\":{latest}}},\"n_operations\":{},\"n_forecasts\":{},\"n_cohorts\":{},\"n_outcomes\":{outcomes},\"n_assessments\":{},{},\"clock_basis\":\"operator_declared_bounded_host_clock\",\"external_time_proof\":\"not_verified\",\"source_citations\":\"supplied_not_verified\",\"forecasts\":[{forecasts}],\"cohorts\":[{cohorts}],\"assessments\":[{checkpoints}]{retrieval},\"report\":{report}}}",
         js(operation),
         js(&journal.head().to_hex()),
         js(&journal.header().cell_id),
@@ -475,10 +604,18 @@ fn presentation(
         state.forecasts.len(),
         state.cohorts.len(),
         state.checkpoints.len(),
+        versions.fields(),
     );
     Ok((
         payload,
-        markdown(journal, state, operation, assessment, outcomes),
+        markdown(
+            journal,
+            state,
+            operation,
+            assessment,
+            outcomes,
+            report_versions.unwrap_or(versions),
+        ),
     ))
 }
 
@@ -488,6 +625,7 @@ fn markdown(
     operation: &str,
     assessment: Option<&Assessment>,
     outcomes: usize,
+    versions: VersionCounts,
 ) -> String {
     use crate::guidance::text;
     let mut out = format!(
@@ -503,8 +641,9 @@ fn markdown(
         if operation == "report" {
             let _ = writeln!(
                 out,
-                "\nRetrieved persisted assessment `{}` read-only. Its recording instants remain observed host-clock times under the declared uncertainty bound.",
+                "\nRetrieved persisted assessment `{}` read-only. Record-time policy: {}.",
                 report.digest,
+                versions.policy(),
             );
             let binding = if digest_is_bound(state, report.digest) {
                 "The persisted checkpoint binds this result digest."
@@ -557,6 +696,196 @@ fn markdown(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const REGISTER: &str = "[[forecast]]\nid = \"one\"\nmodel_key = \"synthetic\"\noutcome_due = \"2030-01-02T00:00:00Z\"\nkind = \"interval\"\nlo = \"40\"\nhi = \"50\"\nnominal = \"0.8\"\n";
+    const FREEZE: &str = "[[cohort]]\nname = \"test\"\nmembers = \"one\"\nresolution_rule = \"Invented source value\"\neligible_sources = \"synthetic:issuer\"\n";
+
+    fn semantic_record(request: String, observed_ns: i64) -> Record {
+        Record {
+            sequence: 1,
+            previous: Digest32::default(),
+            observed_ns,
+            entry: Entry::Operation(request),
+        }
+    }
+
+    #[test]
+    fn writer_adds_v2_but_clients_cannot_select_a_stored_version() {
+        let stored = version_request(REGISTER, "forecast").expect("writer v2 marker");
+        assert_eq!(stored, format!("schema = \"{V2_SCHEMA}\"\n{REGISTER}"));
+        assert_eq!(
+            operation_version(&parse_subset(&stored).expect("v2 doc")).expect("v2"),
+            OperationVersion::V2
+        );
+        assert_eq!(
+            operation_version(&parse_subset(REGISTER).expect("legacy doc")).expect("v1"),
+            OperationVersion::LegacyV1
+        );
+        for request in [
+            stored,
+            format!("schema = \"unknown\"\n{REGISTER}"),
+            format!("{REGISTER}\n{FREEZE}"),
+            FREEZE.to_string(),
+        ] {
+            assert_eq!(
+                version_request(&request, "forecast")
+                    .expect_err("client grammar")
+                    .code,
+                "FMINE-REF-107"
+            );
+        }
+        let unknown = parse_subset(&format!("schema = \"unknown\"\n{REGISTER}"))
+            .expect("unknown schema syntax");
+        assert_eq!(
+            operation_version(&unknown)
+                .expect_err("unknown stored policy")
+                .code,
+            "FMINE-REF-107"
+        );
+        let oversized = format!(
+            "{REGISTER}#{}",
+            "x".repeat(MAX_OPERATION_BYTES - REGISTER.len() - 1)
+        );
+        assert_eq!(oversized.len(), MAX_OPERATION_BYTES);
+        assert_eq!(
+            version_request(&oversized, "forecast")
+                .expect_err("header also counts")
+                .code,
+            "FMINE-REF-107"
+        );
+    }
+
+    #[test]
+    fn versioned_authority_times_change_ids_without_reinterpreting_legacy_records() {
+        let now = time("2030-01-01T00:00:00Z").expect("date") + 123;
+        let header = Header {
+            cell_id: "synthetic".into(),
+            clock_skew_ns: 7,
+        };
+        let mut ids = Vec::new();
+        for v2 in [false, true] {
+            let mut state = Replay::default();
+            let request = if v2 {
+                version_request(REGISTER, "forecast").expect("v2")
+            } else {
+                REGISTER.into()
+            };
+            apply(
+                &mut state,
+                &semantic_record(request, now),
+                &header,
+                Some("forecast"),
+            )
+            .expect("registration");
+            let id = state.forecast_id("one").expect("id");
+            let authority = now + if v2 { 7 } else { 0 };
+            assert_eq!(
+                state.ledger.forecast(id).expect("forecast").registered_ns,
+                authority
+            );
+            ids.push(id);
+            let request = if v2 {
+                version_request(FREEZE, "cohort").expect("v2")
+            } else {
+                FREEZE.into()
+            };
+            apply(
+                &mut state,
+                &semantic_record(request, now + 20),
+                &header,
+                Some("cohort"),
+            )
+            .expect("freeze");
+            let cohort = state.cohorts["test"];
+            assert_eq!(
+                state
+                    .ledger
+                    .cohort(cohort)
+                    .expect("cohort")
+                    .spec
+                    .frozen_at_ns,
+                authority + 20
+            );
+        }
+        assert_ne!(ids[0], ids[1]);
+        let mut legacy = Replay::default();
+        apply(
+            &mut legacy,
+            &semantic_record(REGISTER.into(), now),
+            &header,
+            None,
+        )
+        .expect("legacy reread");
+        assert_eq!(
+            legacy.forecast_id("one").expect("unchanged legacy id"),
+            ids[0]
+        );
+    }
+
+    #[test]
+    fn v2_assessments_require_a_checked_digest_and_legacy_unbound_history_stays_readable() {
+        let header = Header {
+            cell_id: "synthetic".into(),
+            clock_skew_ns: 7,
+        };
+        let start = time("2030-01-01T00:00:00Z").expect("date");
+        let cut = time("2030-01-03T00:00:00Z").expect("cut");
+        let mut state = Replay::default();
+        apply(
+            &mut state,
+            &semantic_record(REGISTER.into(), start),
+            &header,
+            None,
+        )
+        .expect("legacy forecast");
+        apply(
+            &mut state,
+            &semantic_record(FREEZE.into(), start + 20),
+            &header,
+            None,
+        )
+        .expect("legacy cohort");
+        let request = "[[assessment]]\ncohort = \"test\"\nas_of = \"2030-01-03T00:00:00Z\"\nselector = \"first-published\"\n";
+        let missing = version_request(request, "assessment").expect("v2 request");
+        assert_eq!(
+            apply(
+                &mut state,
+                &semantic_record(missing, cut + 7),
+                &header,
+                None
+            )
+            .expect_err("v2 must pin")
+            .code,
+            "FMINE-REF-107"
+        );
+        assert!(state.checkpoints.is_empty());
+        let report = apply(
+            &mut state,
+            &semantic_record(request.into(), cut + 7),
+            &header,
+            None,
+        )
+        .expect("legacy checkpoint")
+        .expect("assessment");
+        assert!(state.checkpoints[0].expected.is_none());
+        let bound = format!(
+            "{request}expected_digest = {}\n",
+            js(&report.digest.to_hex())
+        );
+        let bound = version_request(&bound, "assessment").expect("v2 pin");
+        let replayed = apply(&mut state, &semantic_record(bound, cut + 8), &header, None)
+            .expect("v2 checked checkpoint")
+            .expect("assessment");
+        assert_eq!(replayed.digest, report.digest);
+        let wrong = format!("{request}expected_digest = \"{}\"\n", "00".repeat(32));
+        let wrong = version_request(&wrong, "assessment").expect("v2 wrong pin syntax");
+        assert_eq!(
+            apply(&mut state, &semantic_record(wrong, cut + 9), &header, None)
+                .expect_err("wrong pin")
+                .code,
+            "FMINE-REF-505"
+        );
+    }
 
     #[test]
     fn generated_assessment_values_preserve_names_without_interpreting_toml() {
