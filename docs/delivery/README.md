@@ -8,6 +8,8 @@ This directory holds machine- and human-verifiable admission records (`INT-*`), 
 
 ## Gate records
 - [`GATE-LAYERS-00.md`](./GATE-LAYERS-00.md) — every xtask check wired (`BD-015`): PASS measured locally at `2f87dfd`; CI pending.
+- [`GATE-BM-01.md`](./GATE-BM-01.md) — lifted `VdbGrid` at 10⁸ active cells (`BD-191`): PASS measured locally at `ef49fcf` (ratio 1.352 ≤ 2.5); self-verified; the test is ignored in CI.
+- [`GATE-PUSH-PIT1.md`](./GATE-PUSH-PIT1.md) — MineLib UPIT exact with verified closure (`BD-250`): PASS measured locally at `ef49fcf` on all 11 instances; self-verified; MineLib's files are not committed, so CI cannot run it.
 
 ## Decisions
 - [`DECISION-BD-012-direct-push-blocking.md`](./DECISION-BD-012-direct-push-blocking.md) — what "CI blocks merges" (§28.4.4) means when every change is pushed straight to `main` (`BD-012`).
