@@ -21,6 +21,8 @@ use fmine_public::sources::{IssuerProfile, SourceKind};
 
 use super::{Res, exact_text, fail, load, parse_utc, verify_loaded};
 
+mod benchmarks;
+
 fn js(s: &str) -> String {
     let mut out = String::from("\"");
     for c in s.chars() {
@@ -157,12 +159,12 @@ fn original<'a>(
 /// Status classification and stored precision remain in those Claims. The frozen rule scores displayed numbers, including
 /// numeric zero, while a zero formatted as a dash is still a published placeholder.
 #[derive(Debug, Clone)]
-struct ReportedNumber {
+pub(super) struct ReportedNumber {
     stored: String,
     displayed: Result<Option<Rat>, String>,
 }
 
-type ReportedNumbers = BTreeMap<(String, String), ReportedNumber>;
+pub(super) type ReportedNumbers = BTreeMap<(String, String), ReportedNumber>;
 
 fn reported_numbers(sources: &[LoadedSource]) -> ReportedNumbers {
     let mut out = BTreeMap::new();
@@ -210,7 +212,7 @@ fn reported_numbers(sources: &[LoadedSource]) -> ReportedNumbers {
     out
 }
 
-fn numeric(cell: &KeyedCell, reported: &ReportedNumbers) -> Res<Option<Rat>> {
+pub(super) fn numeric(cell: &KeyedCell, reported: &ReportedNumbers) -> Res<Option<Rat>> {
     let stored = match &cell.claim.value {
         PublicValue::Number { stored, .. } => stored,
         PublicValue::Nil {
@@ -395,9 +397,39 @@ fn load_observation_sources(profile: &IssuerProfile, root: &Path) -> Res<Vec<Loa
     }
 }
 
+/// Load one explicitly selected set of original-release workbooks and retain their exact displayed numbers.
+/// Callers decide whether a refusal is fatal outcome evidence or an unavailable optional comparator.
+pub(super) fn observations(
+    profile: &IssuerProfile,
+    root: &Path,
+) -> Res<(fmine_public::key::mine_stats::KeyedClaims, ReportedNumbers)> {
+    let sources = load_observation_sources(profile, root)?;
+    let vocabulary: BTreeSet<_> = profile.mine_stats_labels.iter().cloned().collect();
+    let mut reads = Vec::new();
+    for source in &sources {
+        let read = fmine_public::mine_stats::read_mine_stats(
+            &source.workbook,
+            &source.quarter,
+            (!vocabulary.is_empty()).then_some(&vocabulary),
+        )
+        .map_err(|e| vec![e.to_string()])?;
+        reads.push((source.file_name.clone(), read));
+    }
+    let keyed = fmine_public::key::mine_stats::build_claims(profile, &sources, &reads);
+    let reported = reported_numbers(&sources);
+    if !keyed.refusals.is_empty() {
+        return Err(keyed
+            .refusals
+            .iter()
+            .map(|r| format!("{}: source read refused: {}", r.locator, r.reason))
+            .collect());
+    }
+    Ok((keyed, reported))
+}
+
 /// Assess a verified record against byte-verified registered original releases. Source bodies are loaded only
 /// after the record and prior rules timestamp have authenticated the complete frozen forecast universe.
-/// This command never creates forecasts, registrations, timestamps, outcomes or baseline values.
+/// This command never creates forecasts, registrations, timestamps or invented observations.
 pub fn record_score(root: &Path, dir: &Path) -> Res<Vec<String>> {
     let loaded = load(root, dir)?;
     let (verification, proof) = verify_loaded(root, dir, &loaded)?;
@@ -410,8 +442,9 @@ pub fn record_score(root: &Path, dir: &Path) -> Res<Vec<String>> {
     for target in &loaded.rules.targets {
         expected_unit(target)?;
     }
-    let mut profile = fmine_public::load_issuer_profile(root, &loaded.rules.issuer)
+    let full_profile = fmine_public::load_issuer_profile(root, &loaded.rules.issuer)
         .map_err(|e| vec![e.to_string()])?;
+    let mut profile = full_profile.clone();
     let reference_is_frozen = profile.sources.iter().any(|s| {
         s.kind == SourceKind::MineStats
             && s.quarter == format!("{year}Q2")
@@ -430,27 +463,7 @@ pub fn record_score(root: &Path, dir: &Path) -> Res<Vec<String>> {
                 || s.quarter == format!("{year}Q4")
                 || (reference_is_frozen && s.quarter == format!("{year}Q2")))
     });
-    let sources = load_observation_sources(&profile, root)?;
-    let vocabulary: BTreeSet<_> = profile.mine_stats_labels.iter().cloned().collect();
-    let mut reads = Vec::new();
-    for source in &sources {
-        let read = fmine_public::mine_stats::read_mine_stats(
-            &source.workbook,
-            &source.quarter,
-            (!vocabulary.is_empty()).then_some(&vocabulary),
-        )
-        .map_err(|e| vec![e.to_string()])?;
-        reads.push((source.file_name.clone(), read));
-    }
-    let keyed = fmine_public::key::mine_stats::build_claims(&profile, &sources, &reads);
-    let reported = reported_numbers(&sources);
-    if !keyed.refusals.is_empty() {
-        return Err(keyed
-            .refusals
-            .iter()
-            .map(|r| format!("{}: source read refused: {}", r.locator, r.reason))
-            .collect());
-    }
+    let (keyed, reported) = observations(&profile, root)?;
     let mut bound = Vec::new();
     let mut outcomes = Vec::new();
     for target in &loaded.rules.targets {
@@ -503,6 +516,17 @@ pub fn record_score(root: &Path, dir: &Path) -> Res<Vec<String>> {
     }
     let scores = scoring::assess(&loaded.rules, &loaded.forecasts, &outcomes)
         .map_err(|e| vec![e.to_string()])?;
+    let (benchmarks, benchmark_status) =
+        match benchmarks::assess(root, &loaded, &full_profile, &outcomes, &keyed, &reported) {
+            Ok(report) => (report, "see_benchmark_assessment"),
+            Err(errors) => (
+                format!(
+                    "{{\"status\":\"refused\",\"errors\":{},\"comparisons\":[]}}",
+                    names(&errors)
+                ),
+                "refused",
+            ),
+        };
     let mut rows = Vec::new();
     for (row, score) in bound.iter().zip(&scores.members) {
         let forecast = loaded
@@ -541,9 +565,10 @@ pub fn record_score(root: &Path, dir: &Path) -> Res<Vec<String>> {
         .iter()
         .map(|b| {
             format!(
-                "{{\"id\":{},\"target\":{},\"status\":\"not_assessed\"}}",
+                "{{\"id\":{},\"target\":{},\"status\":{}}}",
                 js(&b.id),
-                js(&b.target)
+                js(&b.target),
+                js(benchmark_status)
             )
         })
         .collect::<Vec<_>>()
@@ -552,10 +577,11 @@ pub fn record_score(root: &Path, dir: &Path) -> Res<Vec<String>> {
         "{{\"schema\":\"fmine.forecast-record-assessment.v1\",\"record_id\":{},\"issuer\":{},\
          \"label\":{},\"record_sha256\":{},\"rules_sha256\":{},\"source_claims_digest\":{},\
          \"proof_lower_utc\":{},\"proof_upper_utc\":{},\"verification\":{},\
+         \"verification_scope\":\"authenticated frozen record and rules, external proof ordering, declared input metadata and registered digest checks; consumed evidence bodies verified separately; forecast generation and input use are not replayed\",\
          \"outcome_vintage\":\"first_published\",\"numeric_basis\":\"source_workbook_displayed_decimal\",\
          \"alpha\":{},\"coverage_level\":{},\"rho_range\":[{},{}],\"uncalibrated\":true,\
          \"calibration_claim\":false,\"rows\":[{}],\"targets\":[{}],\"registered_baselines\":[{}],\
-         \"registered_three_way_comparison\":\"not_assessed\"}}",
+         \"registered_three_way_comparison\":\"{benchmark_status}\",\"benchmark_assessment\":{benchmarks}}}",
         js(&loaded.manifest.record_id),
         js(&loaded.rules.issuer),
         js(loaded.manifest.label.as_str()),

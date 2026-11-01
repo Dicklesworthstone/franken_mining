@@ -144,8 +144,21 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   Every frozen site/target remains visible, with unresolved and not-forecast states. The deterministic JSON
   assessment includes exact losses, observed and full-cohort coverage/loss bounds, the declared iid reference
   interval and rho sensitivity, source Claims/digests/locators, proof bounds and an assessment digest.
-  It creates no forecast or timestamp and claims no calibration. Registered benchmark comparisons remain
-  explicitly `not_assessed`; this adapter does not infer missing issuer guidance or a three-way result.
+  It creates no forecast or timestamp and claims no calibration.
+  `forecast::scoring::benchmarks` supplies the frozen issuer-guidance and persistence comparators to
+  `fmine_calib::record::scoring::compare`. Guidance uses the latest agreed pre-cut document; same-day
+  publication metadata needs exact manifest-bound bytes and an earlier declared retrieval, whose declared
+  status is retained. No older guidance substitutes for an uncertain latest candidate. Original nine-month
+  displayed production supplies the signed annual-guidance remainder; cost rates are never subtracted.
+  The fixed original Q3 point and consecutive-quarter persistence pool are separate registered benchmark
+  information sets, with manifest membership disclosed. Missing/unreadable required history refuses the
+  comparator rather than shortening its pool. Printed zero and signed points remain valid; only historical
+  ratio pairs carry the frozen positive-number restriction. Source Claims retain stored and displayed values.
+  All three means and both differences use one identical complete member set, retaining every exclusion.
+  Per-target arithmetic refusal retains that population and the other target; the final optional adapter
+  boundary preserves unconditional forecast/outcome scores. `benchmark_assessment` serializes statuses,
+  exact results, source/timing evidence and pool exclusions. Issuer guidance has no inferred nominal
+  probability, and no same-information-set, skill or calibration claim is made.
 - `forecast::persistence_baselines` (command `forecast-baseline`): each `run_rate_persistence` baseline of the
   FY2026 rules from the registered Mine Stats workbooks (read through `fmine-public` under the registered
   vocabulary; a workbook with a refused cell refuses): the pool's size, the pairs left out, the two ratio

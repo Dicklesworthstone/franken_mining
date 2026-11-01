@@ -467,9 +467,30 @@ even when registry corrections make the effective ownership fractions equal.
 Every frozen site/target remains in the report, with unresolved and not-forecast members listed separately.
 The deterministic JSON includes exact interval losses, observed and whole-cohort coverage/loss bounds, the
 declared iid coverage reference and correlation sensitivity, source hashes/cell citations, proof bounds and
-an assessment digest. It remains explicitly uncalibrated. Registered benchmark comparisons and the three-way
-comparison are `not_assessed` in this scoring path. This command creates no forecasts, registrations or time
-proofs; an absent or incomplete FY2026 record refuses.
+an assessment digest. It remains explicitly uncalibrated.
+
+The same assessment computes both preregistered comparators. Issuer guidance must be strictly before the
+frozen information cutoff; date-only metadata on the cutoff day remains unresolved unless the exact document
+is in the frozen manifest with an earlier declared retrieval. The report names that declaration and does not
+present it as independent proof of publication time. Production guidance is converted to the 100% basis and
+reduced by the original nine-month displayed total; the AISC range is used directly. Signed remainders and
+point ranges remain unchanged, and issuer guidance is assigned no nominal probability.
+
+Persistence uses the frozen original Q3 observation and original consecutive-quarter ratio pool, with
+displayed numbers, source Claims, pool exclusions and manifest membership retained. Those fixed benchmark
+observations can follow the forecast cutoff; the report makes no claim that the methods had the same
+information. Missing or unreadable required historical sources refuse the comparator instead of silently
+shortening its pool. Printed zero is a valid persistence point.
+
+For each target, all three interval-score means and both forecast-minus-comparator differences use exactly
+the same eligible sites. Every excluded site lists all missing inputs. A negative difference favors the
+forecast under this loss, without establishing skill or calibration. Optional comparator failures, including
+arithmetic overflow, preserve the verified forecast/outcome scores and appear as explicit unavailable or
+refused comparisons. The `benchmark_assessment` object carries the detailed statuses, evidence and results.
+
+The timestamp authenticates the frozen record and its declarations. Consumed source bodies are separately
+verified; actual input use and forecast generation are not replayed. This command creates no forecasts,
+registrations or time proofs; an absent or incomplete FY2026 record refuses.
 
 ### Register forecasts with a live durable journal
 
