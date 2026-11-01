@@ -127,6 +127,75 @@ cargo run -p fmine-cli -- claim show clm_REPLACE_WITH_THE_EMITTED_ID --issuer ba
 The response includes both the assurance root and the keyed Claim projection digest. Missing ids and altered
 source files refuse instead of returning a stale cached Claim.
 
+### Check table identities and reserve roll-forwards
+
+DESIGN (BD-340.S5/S8): inspect the existing workbook identities with their source citations and ledger
+certificate, or supply explicit definitions for tables transcribed from registered PDFs:
+
+```bash
+cargo run -p fmine-cli -- check tables --synthetic --format markdown
+cargo run -p fmine-cli -- check tables --issuer barrick --through 2026Q2 --json
+cargo run -p fmine-cli -- check tables --issuer demo --definitions local/reserve_tables.toml --format markdown
+```
+
+The definitions mode reads only its named documents and quantities. Each document must be registered under
+the selected issuer and match its registered SHA-256 and size, even when no reading has yet been entered.
+Values come from the existing two-reader transcription registry. Definitions contain membership and rules;
+they contain no source values. This invented example declares closing reserves as opening reserves plus a
+signed net change minus a positively printed depletion:
+
+```toml
+schema = "fmine.table-identities.v1"
+issuer = "demo"
+
+[[identity]]
+id = "gold_reserves_2025"
+doc = "Synthetic_Reserves.pdf"
+family = "gold_reserve_rollforward"
+kind = "roll_forward"
+total = "closing_reserves_2025"
+total_period = "2025FY"
+unit = "koz"
+basis = "100%"
+construction = "rounded_once"
+convention = "closed"
+
+[[term]]
+identity = "gold_reserves_2025"
+quantity = "closing_reserves_2024"
+period = "2024FY"
+sign = 1
+role = "opening"
+
+[[term]]
+identity = "gold_reserves_2025"
+quantity = "depletion_2025"
+period = "2025FY"
+sign = -1
+role = "move"
+
+[[term]]
+identity = "gold_reserves_2025"
+quantity = "net_change_2025"
+period = "2025FY"
+sign = 1
+role = "move"
+```
+
+The coefficient applies to the signed printed token: a depletion already printed in parentheses normally
+uses `sign = 1`. A `kind = "sum"` identity uses `role = "member"` terms and explicitly declares each member's
+period, including multi-year totals. One rounding construction applies to a family, and one tie convention
+applies to a document. The parser rejects competing declarations. Shared cells are solved jointly; every
+connected component reports a checked witness, a checked conflict certificate, or an explicit indeterminate
+result. Conflict reports retain correction sets and implied intervals without selecting a corrected value.
+Missing agreed operands remain listed identities. A mathematical conflict is a finding with exit zero;
+unreadable/changed source files and reader disagreements preserve their typed refusals.
+
+DESIGN boundary: these are arithmetic checks on issuer assertions. Different filing/deck vintages remain
+separate documents. The command does not determine which vintage is true, classify reserves or establish
+GATE-HALL-01. Its PDF report digest binds the declarations, readings and results; it is not a ledger anchor or
+external timestamp. Authentic historical PDF readings and the full reserve-vintage store remain open.
+
 ### Check cited numbers in a draft
 
 ```bash
@@ -346,6 +415,34 @@ reads through that view; the caller must rebuild the result and supply the same 
 DecisionCard API requires this replay certificate and checks that it binds the actual expected-NPV Claim,
 cut and exact rendered/numeric output. Legacy action, CVaR, flip-margin and VOI fields still lack their own
 Claim provenance, so that wrapper explicitly limits its historical evidence claim to expected NPV.
+
+### Compute the frozen issuer-guidance baseline
+
+DESIGN (BD-334): the forecast record fixes two comparators. The existing `forecast-baseline` command computes
+persistence; an explicit publication-date cut also evaluates issuer guidance from the registered files:
+
+```bash
+cargo run -p xtask -- forecast-baseline --as-of 2026-11-01
+```
+
+The command retains every site and target in the frozen rules. Production guidance is divided by the share
+printed with that guidance, then the original Q3 release's nine-month production on the 100% basis is
+subtracted. AISC guidance remains its published per-sold-ounce interval: unit costs are not subtracted across
+periods. For example, synthetic attributable guidance `[240, 300]` at a 60% share and nine-month production
+of `300` gives an exact Q4 comparator of `[100, 200]`. The calculation uses the displayed workbook number,
+while its citation retains both stored and displayed values. Negative remainders are reported unchanged.
+
+The latest agreed guidance on or before the cut is selected. Competing values on its latest publication date,
+newer pending readings, missing original actuals, or unsupported labels remain explicit unavailable rows.
+Excluded sites remain named `not_published` members. Before the Q3 workbook is registered, production
+comparators remain unavailable; their guidance evidence is still shown. AISC comparators can be available
+independently. The report binds exact endpoints, rules, document hashes, reader roles, and canonical actual
+Claims. It is followed by the existing persistence output.
+
+This baseline uses the latest registered workbook retrieval date as a conservative availability bound and
+refuses earlier cuts, including when individual source publication metadata is present. Retrieval is not a
+publication date. This is a source calculation, not an externally timestamped forecast or a calibration claim.
+It does not choose a model for FrankenMining's own forecasts or generate the final FY2026 forecast record.
 
 ### Score an externally timestamped public forecast record
 

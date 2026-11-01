@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued"]`
+- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -484,6 +484,18 @@ None: every failure is a usage error or a typed refusal.
   `fmine-metrics`.
 
 ## 10. Non-Goals & Scope Boundary
+- DESIGN (BD-340.S5/S8): `check tables` exposes the existing workbook identity ledger, or checks a strict
+  `--definitions` registry of PDF sums and reserve roll-forwards. The PDF mode verifies every declared
+  document's bytes, even when its values have no readings, and selects only the declared quantities while
+  retaining all readers at their locators. It delegates exact arithmetic, joint consistency, checked
+  certificates and correction sets to `fmine-metrics::roll_forward`; it selects no corrected value.
+  Infeasibility is a reported finding with exit zero. Missing or altered source bytes and disagreeing readers
+  retain their typed refusals. Missing agreed operands remain explicit unresolved identities, including
+  their available evidence. PDF report digests bind definitions, readings, results and pending readers;
+  they are not authority-ledger anchors or external timestamps. Workbook mode retains its existing ledger
+  anchor and certificate. All authority flags remain false. JSON and Markdown retain signed source tokens,
+  period, unit, basis, document vintage and citations. This slice does not classify reserves, infer table
+  membership, establish filing/deck precedence or complete the real-PDF acceptance population.
 - DESIGN (BD-341): `track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]` is a read-only
   adapter over agreed PDF transcriptions, canonical annual Mine Stats Claims and `fmine-calib::guidance_scores`.
   `--synthetic` uses invented inputs through the same adapter. JSON is the default (`--json` is an explicit

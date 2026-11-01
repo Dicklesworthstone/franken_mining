@@ -154,8 +154,8 @@ The `forecast-*` commands are the exception: they write a record's digest files 
   subtracting the original Q3-release nine-month Claim; AISC retains its per-sold-ounce interval unchanged.
   All frozen sites and targets remain visible, including excluded sites and missing originals. Negative
   remainders are retained. The report binds rules, exact intervals, source Claims, PDF locators/digests/readers
-  and availability evidence. Workbook retrieval is the conservative availability bound because per-workbook
-  publication dates are not registered; unsupported earlier cuts refuse. No forecast, time proof or calibration
+  and availability evidence. This baseline uses workbook retrieval as its conservative availability bound,
+  including when per-workbook publication dates are registered; earlier cuts refuse. No forecast, time proof or calibration
   claim is created. Actual registered-file integration controls are `tests/forecast_guidance_baseline.rs`.
   `scripts/forecast_record_e2e.sh` checks synthetic digest/mutation failures and verifies that a throwaway
   local TSA (`test_tsa`) cannot authenticate a public record. The committed rules proof is independently

@@ -953,6 +953,9 @@ The public lane of M0 (`fmine assure public`).
   their implementations. The integration groups preserve the original fixtures, assertions and ignore rules.
 
 ## 10. Non-Goals & Scope Boundary
+- DESIGN (BD-340.S5): `transcribe::check_docs` exposes the existing byte/digest verification for explicitly
+  declared PDF tables. A consumer can require a document even when it has no transcription rows, so missing
+  evidence cannot hide a missing or changed file. The consumer still owns identity definitions and arithmetic.
 - Operates only on public disclosures (`Confidentiality::public()`).
 - Makes no reserve, resource, geotechnical, regulatory or investment claim.
 - Implies no issuer affiliation.

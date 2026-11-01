@@ -10,6 +10,7 @@ pub mod packet;
 pub mod reliance;
 mod reliance_binding;
 pub mod reliance_explicit;
+mod tables;
 mod track_record;
 mod track_record_as_of;
 pub mod track_record_binding;
@@ -58,6 +59,14 @@ pub enum CliCommand {
         /// `None` selects the explicitly requested synthetic lane.
         issuer: Option<String>,
         through: Option<String>,
+    },
+    /// Inspect workbook identities, or explicitly declared PDF sums and reserve roll-forwards.
+    CheckTables {
+        /// `None` selects the invented workbook known answers.
+        issuer: Option<String>,
+        through: Option<String>,
+        /// A strict identity registry selects only its cited PDF documents and quantities.
+        definitions: Option<PathBuf>,
     },
     /// Necessary conditions for completing cited annual guidance under historical sales persistence (BD-342).
     GuidanceCompletion {
@@ -395,6 +404,7 @@ fn verb_hint(args: &[String]) -> &'static str {
             | "--cohort"
             | "--selector"
             | "--provenance"
+            | "--definitions"
             | "--capacity-document"
             | "--output"
             | "--journal"
@@ -429,6 +439,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                 };
             }
             "guidance" => return "guidance completion",
+            "check" => return "check tables",
             "track-record" => return "track-record",
             "recovery" => return "recovery gap",
             "lint" => return "lint",
@@ -670,6 +681,7 @@ pub fn parse_args(
     let mut capacity_document = None;
     let mut discover = false;
     let mut provenance = None;
+    let mut definitions = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -769,6 +781,15 @@ pub fn parse_args(
                     args.get(i).ok_or("missing value for --provenance")?,
                 ));
             }
+            "--definitions" => {
+                i += 1;
+                if definitions.is_some() {
+                    return Err("--definitions may be supplied only once".to_string());
+                }
+                definitions = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --definitions")?,
+                ));
+            }
             flag if flag.starts_with("--") => return Err(format!("unknown flag '{flag}'")),
             arg => positional.push(arg.to_string()),
         }
@@ -785,7 +806,7 @@ pub fn parse_args(
     // The words each verb takes, the verb included. A surplus word or a flag the verb does not take is a usage
     // error, never ignored, so every next action that parses means what it says.
     let words = match positional[0].as_str() {
-        "assure" | "guidance" | "recovery" | "forecast" | "lint" => 2,
+        "assure" | "check" | "guidance" | "recovery" | "forecast" | "lint" => 2,
         "claim" => 3,
         "doctor" | "robot-docs" | "track-record" => 1,
         other => return Err(format!("unknown verb '{other}'")),
@@ -798,7 +819,7 @@ pub fn parse_args(
     }
     if !matches!(
         positional[0].as_str(),
-        "assure" | "claim" | "guidance" | "recovery" | "lint" | "track-record"
+        "assure" | "check" | "claim" | "guidance" | "recovery" | "lint" | "track-record"
     ) && (issuer.is_some() || synthetic || through.is_some())
     {
         return Err(
@@ -837,8 +858,42 @@ pub fn parse_args(
     if discover && positional[0] != "lint" {
         return Err("--discover requires 'lint'".to_string());
     }
+    if definitions.is_some() && positional[0] != "check" {
+        return Err("--definitions requires 'check tables'".to_string());
+    }
 
     let cmd = match positional[0].as_str() {
+        "check" => {
+            if positional.get(1).map(String::as_str) != Some("tables") {
+                return Err("expected 'fmine check tables'".to_string());
+            }
+            if synthetic {
+                if issuer.is_some() || through.is_some() || definitions.is_some() {
+                    return Err(
+                        "--synthetic is exclusive with --issuer, --through and --definitions"
+                            .into(),
+                    );
+                }
+            } else {
+                let name = issuer
+                    .as_deref()
+                    .ok_or("check tables needs --issuer <issuer> or --synthetic")?;
+                if !is_issuer_name(name) || !registry_path(&workspace, name).is_file() {
+                    return Err(format!("unknown issuer '{name}'"));
+                }
+                if definitions.is_some() && through.is_some() {
+                    return Err(
+                        "--definitions selects PDF identities; --through selects workbook releases"
+                            .into(),
+                    );
+                }
+            }
+            CliCommand::CheckTables {
+                issuer,
+                through,
+                definitions,
+            }
+        }
         "assure" => {
             let challenges = positional.get(1).map(String::as_str) == Some("challenges");
             if !challenges && positional.get(1).map(String::as_str) != Some("public") {
@@ -1451,6 +1506,16 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             envelope
         }
         CliCommand::ForecastJournal(command) => forecast_journal::execute(command, workspace_root),
+        CliCommand::CheckTables {
+            issuer,
+            through,
+            definitions,
+        } => tables::execute(
+            workspace_root,
+            issuer.as_deref(),
+            through.as_deref(),
+            definitions.as_deref(),
+        ),
         CliCommand::AssurePublic { issuer, through } => {
             if !is_issuer_name(issuer) || !registry_path(workspace_root, issuer).is_file() {
                 return Envelope::usage_error(
@@ -1792,6 +1857,9 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "assure public --synthetic",
                 "assure challenges --issuer <issuer> [--through YYYYQn]",
                 "assure challenges --synthetic",
+                "check tables --issuer <issuer> [--through YYYYQn]",
+                "check tables --issuer <issuer> --definitions <path>",
+                "check tables --synthetic",
                 "assure issue (--issuer <issuer> [--through YYYYQn] | --synthetic) --output <path> --journal <path> --expected-head <hex> --key <path> --role <generic-role> --purpose <text> --now <UTC> --uncertainty-ns <n>",
                 "reliance init --journal <path> --key <path> --now <UTC> --uncertainty-ns <n> --max-age-ns <n> --max-skew-ns <n>",
                 "reliance check <digest|file> --journal <path> [--head <hex>] [--now <UTC> --uncertainty-ns <n>] [--as-of <UTC>]",
@@ -1850,7 +1918,13 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             );
             payload.pop();
             payload.push_str(concat!(
-                ",\"reliance_explicit\":{\"clock\":\"Caller-supplied --now UTC and --uncertainty-ns; no host clock inference\",",
+                ",\"table_checks\":{\"schema\":\"fmine.table-check.v1\",",
+                "\"workbooks\":\"Existing assurance identities, source citations and ledger certificate\",",
+                "\"definitions\":\"fmine.table-identities.v1; explicit document, member periods and signs, construction per family and convention per document\",",
+                "\"pdf_inputs\":\"Every declared document must match its registered bytes; each operand needs agreeing independent reader roles\",",
+                "\"findings\":\"Joint exact feasibility, checked conflict certificates, correction sets and implied ranges; no selected correction\",",
+                "\"exit\":\"Infeasible identities are findings with exit zero; unreadable or altered bytes and reader disagreements retain typed refusals\"},",
+                "\"reliance_explicit\":{\"clock\":\"Caller-supplied --now UTC and --uncertainty-ns; no host clock inference\",",
                 "\"trust\":\"Independent final head required for current reuse; historical --as-of never authorizes reuse\",",
                 "\"identity\":\"assure issue binds the build-time revision, dirty marker and BLAKE3 of the running Linux executable\",",
                 "\"compatibility\":\"Shares the report metadata and journal with reliance issue; grammars cannot be mixed\",",

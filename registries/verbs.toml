@@ -15,6 +15,12 @@ mutates_authority = false
 description = "Prepare cited internal-review evidence challenge packets from visible assurance exceptions"
 
 [[verb]]
+path = "check tables"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Inspect cited workbook identities or declared PDF sums and reserve roll-forwards under exact rounding rules"
+
+[[verb]]
 path = "guidance completion"
 subsystem = "Bullion"
 mutates_authority = false

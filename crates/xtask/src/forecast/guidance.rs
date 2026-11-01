@@ -167,7 +167,7 @@ fn availability(profile: &IssuerProfile, as_of: &str) -> Res<String> {
         .ok_or_else(|| vec!["workbooks have no dated availability evidence".into()])?;
     if date > as_of {
         return fail(format!(
-            "workbook publication dates are unregistered; verified retrieval {date} cannot support evidence cut {as_of}"
+            "this baseline requires verified retrieval {date}, which cannot support evidence cut {as_of}"
         ));
     }
     // Every registered workbook belongs to a completed quarter; a future quarter cannot enter persistence.
@@ -380,7 +380,12 @@ pub fn run(root: &Path, as_of: &str) -> Res<BaselineReport> {
     original
         .sources
         .retain(|s| s.kind == SourceKind::MineStats && s.quarter == original_release);
-    let claims = key::mine_stats::load_claims(&original, root).map_err(|e| vec![e.to_string()])?;
+    let claims = if original.sources.is_empty() {
+        // The frozen population remains reportable before its original Q3 release is registered.
+        key::mine_stats::build_claims(&original, &[], &[])
+    } else {
+        key::mine_stats::load_claims(&original, root).map_err(|e| vec![e.to_string()])?
+    };
     if !claims.refusals.is_empty() {
         return Err(claims
             .refusals

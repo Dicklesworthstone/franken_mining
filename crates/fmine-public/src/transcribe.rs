@@ -61,7 +61,7 @@ pub struct TranscriptionReport {
 }
 
 /// Checks the cited documents' bytes, refusing with every missing or altered file named.
-fn check_documents(cited: &[&DocumentRow], root: &Path) -> Result<Vec<CheckedDocument>, Refusal> {
+pub fn check_docs(cited: &[&DocumentRow], root: &Path) -> Result<Vec<CheckedDocument>, Refusal> {
     let (mut missing, mut altered, mut checked) = (Vec::new(), Vec::new(), Vec::new());
     for d in cited {
         let bytes = match std::fs::read(root.join(&d.dir).join(&d.file)) {
@@ -336,7 +336,7 @@ fn load_report(
         .iter()
         .filter(|d| reg.entries.iter().any(|e| e.locator.doc == d.file))
         .collect();
-    let documents = check_documents(&cited, root)?;
+    let documents = check_docs(&cited, root)?;
     let agreement = agree(&reg);
     if !agreement.is_consistent()
         && !(guidance_only && agreement.is_complete_for_prefix("guidance_"))
