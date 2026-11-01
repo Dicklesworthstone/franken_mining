@@ -96,6 +96,11 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-CAL-1`: Expected Gaussian CRPS is uniquely minimized at the true data-generating $(\mu_0, \sigma_0)$.
 - `PO-CAL-2`: Retroactive forecast registration (`t_registered >= t_outcome_avail`) is refused with `FMINE-REF-206`.
+- BD-048: `gaussian_crps` and `gaussian_log_score` match eight known answers to 1e-12 relative. The CRPS values are
+  integrated from the definition (`scripts/oracle/score_known_answers.py`), not taken from the closed form.
+- BD-049: `apply_calibration_gate` per flag (only Overconfident and Biased mark a failure; every flag but Calibrated
+  drops `ModelledCalibrated`), and over a run of flags it only lowers: a later Calibrated flag neither clears a
+  failure nor gives the class back.
 - BD-343: exhaustive binary completions through 12 members verify coverage and Brier bounds; the E474 test uses
   independently captured source cells and registered hashes beside a synthetic forecast; delayed record times,
   restatement replay, source eligibility, frozen membership, interval bounds and minimum-effective-n gates have

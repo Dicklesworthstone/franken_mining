@@ -685,6 +685,72 @@ mod tests {
         assert!((w_out - 12.0).abs() < 1e-12);
     }
 
+    /// BD-048 known answers, from `scripts/oracle/score_known_answers.py`: CRPS integrated from its definition
+    /// (Simpson, CPython `erfc`), not from the closed form used here, and the log score from CPython's `log`. Rows are
+    /// `(mean, std_dev, y, crps, log_score)`; N(0, 1) at 0 gives (√2 − 1)/√π and ln(2π)/2.
+    #[test]
+    fn test_crps_and_log_score_known_answers() {
+        let rows = [
+            (
+                0.0,
+                1.0,
+                0.0,
+                0.233_694_977_255_099_83,
+                0.918_938_533_204_672_7,
+            ),
+            (
+                0.0,
+                1.0,
+                1.0,
+                0.602_441_357_627_615_1,
+                1.418_938_533_204_672_7,
+            ),
+            (
+                0.0,
+                1.0,
+                -2.5,
+                1.939_818_690_810_345_6,
+                4.043_938_533_204_672,
+            ),
+            (
+                2.0,
+                0.5,
+                2.0,
+                0.116_847_488_627_549_93,
+                0.225_791_352_644_727_38,
+            ),
+            (4.0, 0.5, 2.0, 1.717_912_353_484_474, 8.225_791_352_644_727),
+            (
+                100.0,
+                25.0,
+                160.0,
+                46.031_282_615_096_73,
+                7.017_814_358_072_873,
+            ),
+            (
+                -3.0,
+                0.01,
+                -2.97,
+                0.024_365_747_250_863_2,
+                0.813_768_347_216_523_1,
+            ),
+            (1.0, 3.0, 9.0, 6.314_521_076_418_091, 5.573_106_377_428_338),
+        ];
+        let close = |got: f64, want: f64| (got - want).abs() <= 1e-12 * want.abs();
+        for (mean, sd, y, crps, log) in rows {
+            let got = gaussian_crps(mean, sd, y).expect("valid");
+            assert!(
+                close(got, crps),
+                "CRPS N({mean}, {sd}) at {y}: {got} vs {crps}"
+            );
+            let got = gaussian_log_score(mean, sd, y).expect("valid");
+            assert!(
+                close(got, log),
+                "log score N({mean}, {sd}) at {y}: {got} vs {log}"
+            );
+        }
+    }
+
     /// Regression for the 2026-10-29 finding (bd-8wrk): alpha used to be clamped to [1e-6, 1 − 1e-6], an inverted
     /// interval became width 0, and a non-positive std_dev was floored to 1e-12. Each now refuses.
     #[test]
@@ -840,6 +906,74 @@ mod tests {
         assumed.evidence = EvidenceClass::Assumed;
         apply_calibration_gate(&mut assumed, CalibrationFlag::Calibrated);
         assert_eq!(assumed.evidence, EvidenceClass::Assumed);
+    }
+
+    /// BD-049: what each of the five flags does to a calibrated Claim, and that a run of flags only ever lowers it.
+    /// A later Calibrated flag neither clears a failure nor gives the class back (NL-4, NL-8).
+    #[test]
+    fn test_calibration_gate_per_flag_and_over_a_run_of_flags() {
+        let calibrated = Claim::new(
+            "grade_forecast",
+            1.2,
+            "1.2",
+            Representation::Gaussian {
+                mean: 1.2,
+                std_dev: 0.1,
+            },
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::IntensiveWeighted,
+            EvidenceClass::ModelledCalibrated,
+            EpistemicStatus::KnownUnknown(KuKind::Parametric),
+            KnowledgeState::Estimated,
+            Confidentiality::public(),
+            vec![],
+            vec![],
+            vec![SourceAnchor::new("model_card.md", [0; 32], "s.1")],
+        );
+        use CalibrationFlag::*;
+        for (flag, failed, evidence) in [
+            (Calibrated, false, EvidenceClass::ModelledCalibrated),
+            (Overconfident, true, EvidenceClass::ModelledUncalibrated),
+            (Biased, true, EvidenceClass::ModelledUncalibrated),
+            (Unscored, false, EvidenceClass::ModelledUncalibrated),
+            (Descriptive, false, EvidenceClass::ModelledUncalibrated),
+        ] {
+            let mut claim = calibrated.clone();
+            apply_calibration_gate(&mut claim, flag);
+            assert_eq!(
+                (claim.calibration_failed, claim.evidence),
+                (failed, evidence),
+                "{flag:?}"
+            );
+            let mut again = claim.clone();
+            apply_calibration_gate(&mut again, flag);
+            assert_eq!(again, claim, "{flag:?} applied twice");
+        }
+
+        let mut claim = calibrated.clone();
+        let mut trace = Vec::new();
+        for flag in [
+            Calibrated,
+            Descriptive,
+            Calibrated,
+            Overconfident,
+            Unscored,
+            Calibrated,
+            Biased,
+            Descriptive,
+        ] {
+            apply_calibration_gate(&mut claim, flag);
+            trace.push((claim.calibration_failed, claim.evidence));
+        }
+        let (ok, lost, failed) = (
+            (false, EvidenceClass::ModelledCalibrated),
+            (false, EvidenceClass::ModelledUncalibrated),
+            (true, EvidenceClass::ModelledUncalibrated),
+        );
+        assert_eq!(
+            trace,
+            [ok, lost, lost, failed, failed, failed, failed, failed]
+        );
     }
 
     /// bd-8wrk: the monitor's constructor used to floor nugget and sill at 1e-6, range at 1 m, and clamp the
