@@ -68,6 +68,7 @@ mod tests {
         }
     }
 
+    #[cfg(test)]
     fn install_sources(root: &Path, original: &[u8], later: &[u8]) {
         let mut registry = String::from(
             "schema = \"fmine.sources.v1\"\nissuer = \"synthetic\"\ncorpus_dir = \"corpus\"\n\
@@ -98,6 +99,7 @@ mod tests {
         std::fs::write(registry_path(root, "synthetic"), registry).unwrap();
     }
 
+    #[cfg(test)]
     fn install_readings(root: &Path, production_basis: &str, disagree: bool, one_reader: bool) {
         let mut readings =
             String::from("schema = \"fmine.transcriptions.v1\"\nissuer = \"synthetic\"\n");
@@ -139,6 +141,7 @@ mod tests {
         std::fs::write(transcriptions_path(root, "synthetic"), readings).unwrap();
     }
 
+    #[cfg(test)]
     fn workspace(tag: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
             "fmine-track-record-{tag}-{}-{}",
@@ -181,6 +184,7 @@ mod tests {
         result
     }
 
+    #[cfg(test)]
     fn row<'a>(payload: &'a str, metric: &str, year: u16) -> &'a str {
         let key = format!("\"site\":\"Site A\",\"metric\":\"{metric}\",\"year\":{year},");
         let key_at = payload.find(&key).expect("requested row exists");
@@ -209,6 +213,7 @@ mod tests {
         panic!("requested row has no closing object");
     }
 
+    #[cfg(test)]
     fn selected(row: &str) -> &str {
         row.split_once("\"outcome\":")
             .unwrap()
@@ -218,6 +223,7 @@ mod tests {
             .0
     }
 
+    #[cfg(test)]
     fn assert_refused(root: &Path, code: &str, exit: u8) {
         let result = invoke(root, &[]);
         assert_eq!(result.exit_code, exit, "{}", result.to_json());

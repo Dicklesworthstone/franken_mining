@@ -68,6 +68,7 @@ pub struct TrackRecordRow {
 pub struct TrackRecordSummary {
     pub published_at: String,
     pub selector: String,
+    pub basis: String,
     pub summary: Claim<GuidanceSummary>,
 }
 
@@ -252,13 +253,21 @@ fn field(metric: &str, full: bool) -> (&'static str, String) {
     }
 }
 
-fn actual_basis(c: &KeyedCell, metric: &str) -> String {
+fn actual_basis(c: &KeyedCell, metric: &str) -> Result<String> {
     let ownership = match c.key.ownership_basis {
         OwnershipBasis::Consolidated100 => "100%".into(),
-        OwnershipBasis::Attributable { num, den, .. } => format!("attributable:{num}/{den}"),
-        OwnershipBasis::Unprinted => "unprinted".into(),
+        OwnershipBasis::Attributable { num, den, .. } if num > 0 && den > 0 && num <= den => {
+            let share = exact(Rat::new(i128::from(num), i128::from(den)))?;
+            format!("attributable:{}/{}", share.num(), share.den())
+        }
+        _ => {
+            return Err(refusal(
+                RefusalCode::BasisMismatch105,
+                "outcome ownership is unprinted or invalid",
+            ));
+        }
     };
-    format!("{ownership}{}", definition(metric).unwrap_or(""))
+    Ok(format!("{ownership}{}", definition(metric).unwrap_or("")))
 }
 
 fn additive(metric: &str) -> AdditivityClass {
@@ -472,7 +481,7 @@ fn actual(c: &KeyedCell, expected: &SeriesKey) -> Result<Claim<OutcomeValue>> {
             subject: c.key.subject.clone(),
             metric: expected.metric.clone(),
             unit: c.key.unit.clone(),
-            basis: actual_basis(c, &expected.metric),
+            basis: actual_basis(c, &expected.metric)?,
             year: c.key.valid_period.year,
         },
         point,
@@ -796,11 +805,26 @@ pub fn assess(input: TrackRecordInput<'_>) -> Result<TrackRecordReport> {
                 &b.guidance_source.locator,
             ))
     });
-    let mut previous: BTreeMap<(String, u16, String), GuidanceValue> = BTreeMap::new();
-    let mut cohorts: BTreeMap<(String, u16, String, String), Vec<MemberInput>> = BTreeMap::new();
+    type Family = (String, u16, String, String, String);
+    type Cohort = (String, u16, String, String, String);
+    let mut previous: BTreeMap<Family, GuidanceValue> = BTreeMap::new();
+    let mut unique = BTreeSet::new();
+    let mut cohorts: BTreeMap<Cohort, Vec<MemberInput>> = BTreeMap::new();
     let mut resolved_sites: BTreeMap<u16, BTreeSet<String>> = BTreeMap::new();
     for row in &mut rows {
-        let key = (row.site.clone(), row.year, row.metric.clone());
+        let key = (
+            row.site.clone(),
+            row.year,
+            row.metric.clone(),
+            row.unit.clone(),
+            row.basis.clone(),
+        );
+        if !unique.insert((key.clone(), row.published_at.clone())) {
+            return Err(refusal(
+                RefusalCode::NonIdentifiableAttribution104,
+                "multiple guidance rows share one site, metric, unit, ownership/definition basis, year and publication date",
+            ));
+        }
         row.vintage_kind = match previous.insert(key, row.guidance.value.clone()) {
             None => "initial_registered",
             Some(old) if old == row.guidance.value => "reaffirmed",
@@ -819,6 +843,7 @@ pub fn assess(input: TrackRecordInput<'_>) -> Result<TrackRecordReport> {
                 row.year,
                 row.unit.clone(),
                 row.published_at.clone(),
+                row.basis.clone(),
             ))
             .or_default()
             .push(MemberInput {
@@ -827,10 +852,11 @@ pub fn assess(input: TrackRecordInput<'_>) -> Result<TrackRecordReport> {
             });
     }
     let mut summaries = Vec::new();
-    for ((_, _, _, published_at), members) in cohorts {
+    for ((_, _, _, published_at, basis), members) in cohorts {
         summaries.push(TrackRecordSummary {
             published_at,
             selector: "first_published".into(),
+            basis,
             summary: scores::summarize(&members)?,
         });
     }
@@ -1046,12 +1072,13 @@ fn summary_json(s: &TrackRecordSummary) -> String {
         claim_fields(&s.summary)
     );
     format!(
-        "{{{},\"rule\":\"guidance.descriptive_summary\",\"rules_version\":{},\"metric\":{},\"year\":{},\"unit\":{},\"published_at\":{},\"selector\":{},\"members\":{},\"resolved\":{},\"unresolved\":{},\"printed_hits\":{},\"certain_hits\":{},\"certain_misses\":{},\"boundary\":{},\"below\":{},\"above\":{},\"observed_hit_rate\":{},\"whole_cohort_hit_rate_bounds\":{},\"rounding_aware_hit_rate_bounds\":{},\"binomial_90\":{},\"z_members\":{},\"mean_z\":{},\"mean_z_rounding\":{},\"above_midpoint\":{},\"share_above_midpoint\":{},\"effective_sample_size\":null,\"bias_confidence_interval\":null,\"flag\":{}}}",
+        "{{{},\"rule\":\"guidance.descriptive_summary\",\"rules_version\":{},\"metric\":{},\"year\":{},\"unit\":{},\"basis\":{},\"published_at\":{},\"selector\":{},\"members\":{},\"resolved\":{},\"unresolved\":{},\"printed_hits\":{},\"certain_hits\":{},\"certain_misses\":{},\"boundary\":{},\"below\":{},\"above\":{},\"observed_hit_rate\":{},\"whole_cohort_hit_rate_bounds\":{},\"rounding_aware_hit_rate_bounds\":{},\"binomial_90\":{},\"z_members\":{},\"mean_z\":{},\"mean_z_rounding\":{},\"above_midpoint\":{},\"share_above_midpoint\":{},\"effective_sample_size\":null,\"bias_confidence_interval\":null,\"flag\":{}}}",
         fields,
         js(VERSION),
         js(&v.metric),
         year,
         js(&v.unit),
+        js(&s.basis),
         js(&s.published_at),
         js(&s.selector),
         v.members,

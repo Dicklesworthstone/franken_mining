@@ -10,6 +10,7 @@ pub mod reliance;
 mod reliance_binding;
 pub mod reliance_explicit;
 mod track_record;
+mod track_record_as_of;
 pub mod track_record_binding;
 mod track_record_data;
 mod track_record_price;
@@ -86,6 +87,15 @@ pub enum CliCommand {
         /// Explicit commodity-price subject, evaluated only against evidence available at the cut.
         price_subject: Option<String>,
     },
+    /// Separate publication cohorts with original outcomes at an explicit evidence-availability date.
+    TrackRecordCohortAsOf {
+        issuer: String,
+        site: Option<String>,
+        through: Option<String>,
+        as_of: String,
+    },
+    /// Invented guidance, missing outcomes and restatements through the same cohort adapter.
+    TrackRecordCohortAsOfSynthetic { as_of: String },
     /// Descriptive recovery comparison against an agreed historical grade/tails relation.
     RecoveryGap {
         issuer: String,
@@ -376,6 +386,7 @@ fn verb_hint(args: &[String]) -> &'static str {
             | "--through"
             | "--site"
             | "--as-of"
+            | "--cohort-as-of"
             | "--price-subject"
             | "--ledger"
             | "--cohort"
@@ -440,6 +451,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                         | "--through"
                         | "--site"
                         | "--as-of"
+                        | "--cohort-as-of"
                         | "--price-subject"
                         | "--capacity-document" => i += 2,
                         flag if flag.starts_with("--") => i += 1,
@@ -648,6 +660,7 @@ pub fn parse_args(
     let mut site = None;
     let mut price_subject = None;
     let mut as_of = None;
+    let mut cohort_as_of = None;
     let mut ledger = None;
     let mut cohort = None;
     let mut selector = None;
@@ -716,6 +729,14 @@ pub fn parse_args(
                     return Err("--as-of must be YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ".to_string());
                 }
                 as_of = Some(value.clone());
+            }
+            "--cohort-as-of" => {
+                i += 1;
+                let value = args.get(i).ok_or("missing value for --cohort-as-of")?;
+                if !fmine_registry::sources::is_date(value) {
+                    return Err("--cohort-as-of requires YYYY-MM-DD".to_string());
+                }
+                cohort_as_of = Some(value.clone());
             }
             "--ledger" => {
                 i += 1;
@@ -786,6 +807,9 @@ pub fn parse_args(
     }
     if positional[0] != "track-record" && price_subject.is_some() {
         return Err("--price-subject requires 'track-record'".to_string());
+    }
+    if positional[0] != "track-record" && cohort_as_of.is_some() {
+        return Err("--cohort-as-of requires 'track-record'".to_string());
     }
     if !matches!(
         positional[0].as_str(),
@@ -901,8 +925,14 @@ pub fn parse_args(
             }
         }
         "track-record" => {
+            if as_of.is_some() && cohort_as_of.is_some() {
+                return Err("track-record selects either --as-of or --cohort-as-of".to_string());
+            }
             if through.is_some() && as_of.is_some() {
                 return Err("track-record selects either --through or --as-of".to_string());
+            }
+            if cohort_as_of.is_some() && price_subject.is_some() {
+                return Err("track-record --cohort-as-of cannot be combined with --price-subject; price sensitivity is available in retrospective or --as-of mode".to_string());
             }
             if synthetic {
                 if issuer.is_some()
@@ -916,11 +946,14 @@ pub fn parse_args(
                             .to_string(),
                     );
                 }
-                CliCommand::TrackRecord {
-                    issuer: None,
-                    site: None,
-                    through: None,
-                    price_subject: None,
+                match cohort_as_of {
+                    Some(as_of) => CliCommand::TrackRecordCohortAsOfSynthetic { as_of },
+                    None => CliCommand::TrackRecord {
+                        issuer: None,
+                        site: None,
+                        through: None,
+                        price_subject: None,
+                    },
                 }
             } else {
                 let issuer = issuer.ok_or("track-record requires --issuer or --synthetic")?;
@@ -939,6 +972,13 @@ pub fn parse_args(
                         site,
                         as_of,
                         price_subject,
+                    }
+                } else if let Some(as_of) = cohort_as_of {
+                    CliCommand::TrackRecordCohortAsOf {
+                        issuer,
+                        site,
+                        through,
+                        as_of,
                     }
                 } else {
                     CliCommand::TrackRecord {
@@ -1512,6 +1552,21 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             price_subject.as_deref(),
             workspace_root,
         ),
+        CliCommand::TrackRecordCohortAsOf {
+            issuer,
+            site,
+            through,
+            as_of,
+        } => track_record_as_of::envelope(track_record_binding::run(
+            workspace_root,
+            issuer,
+            site.as_deref(),
+            through.as_deref(),
+            as_of,
+        )),
+        CliCommand::TrackRecordCohortAsOfSynthetic { as_of } => {
+            track_record_as_of::envelope(track_record_binding::synthetic_as_of(as_of))
+        }
         CliCommand::RecoveryGap { issuer, through } => recovery_envelope(
             fmine_public::recovery::run_public(workspace_root, issuer, through.as_deref()),
         ),
@@ -1734,6 +1789,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "guidance completion --synthetic",
                 "track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]",
                 "track-record --issuer <issuer> [--site <site>] --as-of YYYY-MM-DD [--price-subject <subject>]",
+                "track-record --issuer <issuer> --cohort-as-of YYYY-MM-DD [--site <site>] [--through YYYYQn]",
+                "track-record --synthetic --cohort-as-of YYYY-MM-DD",
                 "track-record --synthetic [--json]",
                 "recovery gap --issuer <issuer> [--through YYYYQn]",
                 "recovery gap --synthetic",
@@ -1764,6 +1821,11 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "\"price_sensitivity\":\"Separate paired price sensitivities for first-published and latest registered outcomes; prices and completed quarterly history are bounded by the evidence cut\",",
                 "\"population\":\"Earliest registered agreed guidance per subject, metric, fiscal year and ownership basis; revisions remain visible\",",
                 "\"outcomes\":\"First-published and latest registered assessments retain missing members\"},",
+                "\"cohort_as_of\":{\"mode\":\"publication_cohorts\",\"schema\":\"fmine.guidance.track_record.v1\",",
+                "\"cut\":\"Explicit --cohort-as-of YYYY-MM-DD; optional --through bounds releases; exclusive with --as-of and --price-subject\",",
+                "\"population\":\"Each guidance publication has a separate metric/year cohort through the shared Claim-checked source binder\",",
+                "\"outcomes\":\"Original annual outcomes only; later comparatives remain separate\",",
+                "\"missing\":\"Every admitted guidance member remains in its denominator\"},",
                 "\"scope\":\"Registered transcription population; no completeness, historical forecast registration, ranking or calibration verdict\"}"
             );
             let mut payload = format!(

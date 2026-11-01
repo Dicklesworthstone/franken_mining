@@ -210,10 +210,46 @@ documents. These transcriptions and source documents remain outside git. Quantit
 `production_kt`, `aisc_usd_per_oz`, `aisc_usd_per_lb`, `tcc_usd_per_oz` and `c1_usd_per_lb`.
 Production basis is `100%` or `attributable:n/d`. Cost basis also declares its definition, for example
 `attributable:4/5;aisc=issuer-reported-per-sold-oz`; the analogous per-sold-lb, `tcc` and `c1` definitions are
-explicit. Unknown guidance quantities, missing agreed readings and changed source bytes refuse. The synthetic
-command is an invented known-answer demonstration through the same binding and scoring code.
+explicit. Registered runs require complete two-reader agreement across the selected guidance namespace.
+The retrospective command also refuses unsupported guidance quantities; the dated comparison modes retain
+them as diagnostics. The pure source-binding API can retain pending guidance readings alongside admitted rows.
+Missing or changed source bytes refuse. The synthetic command is an invented known-answer demonstration
+through the same binding and scoring code.
 
-Both report modes select guidance, price-assumption and realized-price inputs before checking document
+#### Restrict original-outcome cohorts to an evidence date
+
+```bash
+cargo run -p fmine-cli -- track-record --issuer barrick --cohort-as-of 2026-10-31 --site north-mara
+cargo run -p fmine-cli -- track-record --issuer barrick --cohort-as-of 2026-10-31 --through 2026Q2 --format markdown
+cargo run -p fmine-cli -- track-record --synthetic --cohort-as-of 2032-12-31 --format markdown
+```
+
+The optional `--cohort-as-of` selects a dated projection through the same checked source binder. It uses registered
+document publication dates and conservative workbook-retrieval availability. The retrospective command above
+does not claim an information-availability date. Neither mode authenticates an external timestamp or registers
+a forecast. Units, ownership bases, canonical Claim identities, and metric definitions are checked in both.
+An unprinted ownership basis is never inferred to mean full ownership.
+
+Dated summaries group sites by metric, annual period, canonical basis and guidance publication date. They retain every admitted
+member, including missing original outcomes. Later comparative appearances have separate scores and never fill
+the original cohort. Revisions remain separate; an unchanged range on a changed ownership basis is a revision.
+The retrospective view retains its per-site history summaries across years and separate comparative populations.
+The separate `--as-of` mode selects the earliest registered guidance and compares first-published and latest
+outcomes at its evidence cut. `--cohort-as-of` preserves each guidance publication as its own cohort; the two
+date selectors cannot be combined.
+
+For a guidance range `[L, U]`, the exact normalized position is `(outcome - midpoint) / half_width`.
+The dated synthetic example has three sites with `[100, 120]` guidance: an original outcome of `125` gives exactly
+`3/2`; another sits on a rounding boundary, and the third lacks an original outcome. Missing members remain in
+whole-cohort completion bounds. Rounding-aware bounds additionally preserve boundary ambiguity. Point guidance
+has no normalized range position. Exact rational IID reference bounds are retained alongside display projections;
+they do not estimate dependence, effective sample size, bias confidence intervals or forecasting skill.
+
+Historical guidance transcriptions and the full M0/BD-341 data, dependence and coverage gates remain open.
+This cohort mode keeps unconditional scores; the paired sensitivities below require their own cited price
+and royalty evidence. JSON is the default (`--json` also selects it); Markdown includes comparisons and citations.
+
+Track-record source loading selects guidance, price-assumption and realized-price inputs before checking document
 bytes and reader agreement. Adding incomplete or unusable optional
 technical readings does not invalidate these reports. Unsupported guidance keys and every reader at a
 selected locator remain in scope; the complete registry still needs valid syntax and registered identities.
@@ -247,6 +283,7 @@ existing refusals. Unrelated technical sources do not block either track-record 
 The explicit `--as-of` report also supports price sensitivity. It bounds both the price documents and
 completed quarterly history by the requested evidence cut, and assesses first-published and latest registered
 outcomes separately.
+`--cohort-as-of` keeps unconditional scores and cannot be combined with `--price-subject`.
 
 ### Assess a frozen forecast cohort
 
