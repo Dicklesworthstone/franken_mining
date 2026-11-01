@@ -1,304 +1,205 @@
 # CONTRACT.md — `fmine-metrics`
 
-## 1. Charter & Layer
+## 1. Purpose
+The public-lane metric kernels. Each one takes supplied numbers and computes a mining metric or a check on one:
+- AISC and AIC per ounce under a definition read from `registries/metrics.toml` (`definitions`);
+- the published cut-off grades recomputed from their printed inputs (`cutoff`);
+- an AISC accounting waterfall, as a legacy float LMDI and as a typed exact kernel with an additive fallback (`lmdi`, `lmdi::waterfall`);
+- the production and AISC a year still needs to meet guidance, and whether the site's own history reaches it (`guidance`, `guidance::quarters`);
+- an optimistic production ceiling from stated feed, grade and recovery (`capacity`);
+- a grade-normalised recovery comparison (`recovery`);
+- at the crate root: an AISC consolidation check, GEO under a price deck, reserve replacement and a float cut-off solver.
+
+The results are descriptive arithmetic. None identifies an operational cause, forecasts, or proves physical feasibility. The crate does no I/O at run time.
+
 - **Crate:** `fmine-metrics`
-- **Layer:** `E` (Enterprise & Decision)
-- **Subsystem:** `Enterprise`
-- **LOC Budget:** `16k planned / 18k ceiling` (`registries/loc_budget.toml`)
+- **Layer:** E
+- **Subsystem:** Bullion
+- **LOC budget:** 18,000 planned / 21,000 ceiling
 - **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery"]`
 
-## 2. Mathematical & Domain Formulation
-Implements `SiteAiscRow` and `AiscConsolidationBridge` (`L_corp`, `L_JV`, `G-BULL-3`), versioned `PriceDeck` (Barrick reserve decks 2023–2025 as printed in the 2026 Circular, E606; no silver price is stated, so none is carried) and `compute_geo` (`GB-27`), `ReserveReplacementBridge` on one stated basis (the Circular's 190% and 504% differ by metal basis, E603–E604), a spend-based Logarithmic Mean Divisia Index (`lmdi`, `GB-26`, BD-333.S1), and fixed-point marginal cut-off grade solver (`solve_cutoff_grade`; synthetic known answer only, the published cut-offs E182–E184 are not yet reproduced).
+## 2. Inputs
+- **Crate root.** Bare `f64` values: site AISC rows and bridge totals, gold koz and copper Mlb with a `PriceDeck`, reserve movements in Moz, and a cost, net price, starting grade and recovery closure for `solve_cutoff_grade`.
+- **`definitions`.** A `MetricRegistry`, a definition id, `CostLine { item, usd: ExactQty }` rows, ounces sold, and a gold share for a co-product definition. `is_non_sustaining` takes the registry's `ProjectTest` and a `Project`. `bundled_registry` parses `registries/metrics.toml`, which `include_str!` embeds at compile time.
+- **`cutoff`.** The text or bytes of `registries/published_cutoffs.toml`: schema `fmine.published_cutoffs.v1`, a top-level `issuer`, and `[[cutoff]]` rows of printed decimal tokens. The caller reads the file.
+- **`lmdi`.** Two `LmdiState` periods of bare `f64`, or two `WaterfallPeriod`s. A `WaterfallPeriod` holds `PrintedQty { value, half_step, at }` cells (an exact value, half its last printed digit, and a source locator), `Factor::Value` or `Factor::NotPublished`, and a `BasisTag`.
+- **`guidance`.** `CompletionInputs`: six `Claim<Quantity>`, for the production and AISC guidance, the YTD production, sales and AISC, and a separately declared remaining-sales scenario. `compare_history` takes `HistoricalContinuation`s; `quarters::compare_quarters` takes `QuarterlyHistory` windows.
+- **`capacity`.** A signed remaining-production `Claim<Quantity>`, and `CapacityLimits`: three `Claim<PhysicalLimit>` for dry feed, head grade and recovery.
+- **`recovery`.** `TrainingRow`s and an `OperatingRow` of `Claim<recovery::Quantity>`, in percent and kt units.
+- **Every `Quantity`** carries exact rational bounds, a subject, a calendar-month `Period`, an `Ownership` and a kind. Units are fixed by the kind, never inferred from magnitudes.
 
-The LMDI bridge recomputes each endpoint as `A = supplied total_aisc_spend / oz_sold`. Its six bars are
-`L(A1,A0)·Δln(C)` and `−L(A1,A0)·Δln(X)` for `X` in tonnes, grade, recovery, metal balance
-`B = produced/(tonnes·grade·recovery)` and sales timing `S = sold/produced`. The printed rates never set the
-weight or a bar. Each printed-minus-recomputed endpoint gap is retained, including when the two gaps are
-equal, and `printed_rate_gap = (P1−P0)−(A1−A0)` is a separate reconciliation item. The measured floating-point
-closure residual is retained rather than forced to zero or allocated to a factor.
+## 3. Outputs
+- **`AiscConsolidationBridge::verify_rollup`** gives `Ok(())` or a `Refusal`.
+- **`compute_geo`** gives `GeoBreakdown`. Copper GEO koz is copper Mlb × 1,000 × the copper price ÷ the gold price.
+- **`ReserveReplacementBridge::compute`** gives organic and headline replacement as percentages of depletion, or `None`.
+- **`solve_cutoff_grade`** gives `CutoffSolution { grade, iterations, residual }` or a `CutoffError`.
+- **`all_in_cost_per_oz`** gives `AllInCost { definition, superseded_by, usd_per_oz, counted, left_out }`, or a `MetricFailure`.
+- **`cutoff::reproduce`** gives a `CutoffReport`: the exact grade at the printed inputs, its low and high over their rounding, a `CutoffState`, the solver's iterations for a grade-dependent recovery, and a metric-rounding flag. `CutoffReport::to_json` prints six places, rounded half up from the exact value.
+- **`cutoff::section`** gives `CutoffSection { issuer, json }`. The JSON holds the registry path, its SHA-256, the count in each state and every row in registry order. `fmine-cli` carries it as the published cut-offs of an `assure public` issuer run, and in `reliance_binding`.
+- **`decompose_aisc_lmdi`** gives `LmdiWaterfall`: recomputed and printed endpoints, each endpoint gap, the gap change, six effects and the measured closure residual.
+- **`decompose_aisc_waterfall`** gives `Bridge::Lmdi { bars, gap, closure_residual }` or `Bridge::AdditiveFallback { reason, bars, gap }`. Each `Bar` names its rule and source locators, and has a midpoint, an outward enclosure and a `sign_not_determined` flag. The `RateReconciliation` is exact. `fmine-public`'s `waterfall.rs` is the caller.
+- **`guidance::complete`** gives a `CompletionReport` of derived `Claim<Quantity>`: remaining production, YTD spend, remaining spend and rate, a frontier at both guidance limits, and the sign of the spending requirement. `fmine-public`'s `guidance.rs` calls it.
+- **`compare_history` and `quarters::compare_quarters`** give an `EnvelopeTier` (`T1` or `T3`), a `HistoryVerdict` (`WithinEnvelope`, `ExceedsEnvelope` or `Indeterminate`) and one check per history. A positive check carries a witness Claim. A quarterly exclusion carries checked `exact_feas` certificates. `fmine-public`'s `guidance/history.rs` calls the quarterly path.
+- **`capacity::compare_production`** gives a `CapacityReport`: two derived Claims (the ceiling and the grade needed at maximum feed and recovery) and a `CapacityVerdict`. `fmine-cli`'s `guidance_capacity.rs` calls it.
+- **`recovery::fit` and `recovery::project`** give `Claim<Fit>` and a `Projection` of two model Claims, `ConstantTails` and `GradeDependentTails`. `fmine-public`'s `recovery.rs` calls them.
 
-The typed public kernel (`lmdi::waterfall`) uses exact displayed rationals with source locators and rounding
-half-steps. Its units are fixed: cost in USD millions, sold/produced in koz, ore in thousand reported tonnes, grade
-in g/t and recovery as a fraction. It computes `A = 1000·C/Q` exactly. The dimensionless absolute metal-balance
-factor would be `B = produced·31.1034768/(tonnes·grade·recovery)` with the exact statutory troy conversion;
-only its temporal logarithmic change is evaluated, where that constant cancels. No absolute B is emitted.
-For physical inputs whose rounding boxes are not wholly in the positive domain, it supplies the exact signed
-additive fallback: line `j` is `1000·Δc_j·mean(1/Q)`, and volume is `1000·mean(C)·Δ(1/Q)`. The supplied named lines
-must sum exactly to supplied C in both periods. A rounded midpoint footing discrepancy is not a balancing line.
+## 4. Invariants
+- **Refuse, never clamp.**
+  - `solve_cutoff_grade`: `test_cutoff_refuses_out_of_domain_inputs` and `test_cutoff_refuses_non_convergence`.
+  - Cut-off reproduction: `test_no_positive_net_is_refused_not_clamped`.
+  - Signed results stay signed: `signed_derived_requirements_are_never_clamped`, `signed_requirements_and_closed_ceiling_boundaries_are_preserved`, `negative_gaps_and_extrapolated_recovery_are_not_clamped` and `test_signed_nonpositive_cost_is_not_forced_into_a_logarithm`.
+- **Exact arithmetic that overflows refuses with 207, and no partial result is returned.** `exact_overflow_is_a_numerical_refusal`, `exact_arithmetic_overflow_is_a_typed_refusal`, `zero_denominators_invalid_domains_and_overflow_refuse` and `test_invalid_precision_source_and_overflow_refuse`.
+- **A printed rate never moves a waterfall bar.** The factors close on supplied spend ÷ ounces sold, and the printed-rate gap is a separate item. `test_supplied_cost_drives_factors_and_printed_rate_only_drives_gaps`, `test_printed_gaps_never_change_bars_and_equal_gaps_survive` and `test_equal_endpoint_gaps_remain_visible_when_gap_change_is_zero`.
+- **The legacy LMDI closes or refuses.** A non-finite effect, an unrepresentable rate, or a closure residual above 1e-9 USD/oz refuses with 207. `test_synthetic_two_period_exact_lmdi`, `test_unrepresentable_rates_refuse_instead_of_returning_nan`, `test_invalid_inputs_name_the_period_and_field` and `test_log_space_avoids_product_overflow_and_subnormal_ratio_rounding`.
+- **The typed waterfall.**
+  - The additive fallback closes exactly, and no rounding difference becomes a plug line: `test_property_fallback_exact_random_lines_with_negatives` (10,000 seeded line sets) and `test_fallback_never_invents_missing_lines_or_duplicate_identities`.
+  - A missing or non-positive physical factor selects the fallback: `test_recovery_na_exact_signed_fallback_known_answer` and `test_straddling_bar_flagged_and_nonpositive_physical_box_falls_back`.
+  - Enclosures hold every input corner: `test_lmdi_rounding_enclosures_contain_all_4096_input_corners` and `test_additive_rounding_enclosures_contain_all_64_input_corners`.
+  - The bars do not depend on evaluation order: `test_property_lmdi_order_independent_and_enclosure_contains_point`.
+  - A grade change moves between grade and metal balance without naming a cause: `test_grade_change_reallocates_into_balance_without_identifying_a_cause` and `test_north_mara_grade_control_is_non_identifying`.
+- **The logarithmic mean** takes its logarithms from `fmine_core::det`. It lies in [min, max], gives the same bits for `L(a, b)` and `L(b, a)`, and is continuous at the series switch. `test_logarithmic_mean_between_min_and_max`, `test_logarithmic_mean_symmetric`, `test_logarithmic_mean_continuous_at_series_switch`, `test_logarithmic_mean_scale_invariance_for_widely_separated_rates` and `test_logarithmic_mean_high_precision_tiny_and_large_known_answers`.
+- **A cut-off's state is exact.** The grade is monotone in every input, so the low and high corners bound it exactly. A printed figure outside its inputs' rounding is a `Conflict` result, not a failure.
+  - `test_reaches_respects_the_half_open_rounding_interval` and `test_range_holds_the_printed_inputs_value`.
+  - Planted errors flip the state: `test_planted_published_figure_conflicts_both_ways`, `test_planted_tonne_for_short_ton_conflicts_on_every_cortez_row` and `test_planted_ab495_moves_a_cortez_row`.
+  - A section never shows fewer rows than are registered, and one bad row fails it: `test_section_counts_every_row_by_state` and `test_registry_refusals`.
+- **A cost definition counts only its registered lines.** An unregistered line refuses, and excluded lines are named in `left_out`. `test_aisc_counts_its_lines_and_names_what_it_left_out`, `test_non_sustaining_capital_is_in_aic_and_refused_in_aisc`, `test_co_product_needs_a_share_and_drops_credits` and `test_a_definition_change_moves_the_result_and_is_named`.
+- **Guidance never substitutes production for sales, and never averages quarterly rates.** `sold_and_produced_are_separate_and_rates_are_not_averaged`, `correlated_sales_and_numerator_do_not_create_false_uncertainty` and `rounding_extrema_enclose_every_small_interior_combination`.
+- **A history check needs one joint witness.** Separate production and cost successes do not count, and every witness is re-checked against its sources.
+  - `separate_marginal_successes_are_not_a_joint_history_witness`, `fractional_history_witness_hits_a_boundary_exactly` and `historical_verdict_matches_exhaustive_discrete_continuations`.
+  - Quarterly: `quarter_witness_reaches_both_targets_and_checks_every_original_source`, `aggregate_sales_rate_boxes_cannot_manufacture_a_quarterly_witness`, `separate_production_and_cost_successes_do_not_make_one_joint_history` and `small_point_histories_match_independent_integer_inequalities`.
+  - No history, or a solver cap, gives `Indeterminate`: `missing_history_and_solver_caps_remain_indeterminate`.
+- **The capacity ceiling scales production by the attributable share, never grade or recovery.** `ownership_scales_production_not_the_physical_limits` and `rounding_uses_upper_physical_bounds_and_never_averages_rates`.
+- **The two recovery variances keep their denominators apart** (`SSE/(n−1)` and `SSE/(n−2)`): `residual_sample_sd_and_regression_error_use_distinct_denominators`. Wider input boxes never narrow an output: `widening_rounding_never_narrows_model_outputs`.
+- **Derived Claims keep their provenance and never gain strength.** `derived_claims_preserve_provenance_and_never_upgrade_evidence`, `derived_claims_keep_uncertainty_confidentiality_and_source_identity`, `ordering_is_deterministic_and_evidence_cannot_be_strengthened` and `fit_and_both_models_preserve_every_registered_venture_and_wall`.
 
-DESIGN (BD-342): `guidance` computes exact remaining production and the conditional AISC frontier. Annual AISC
-is `(r_ytd * sold_ytd + numerator_remaining) / (sold_ytd + sold_remaining)`. The remaining sales interval is a
-separate, cited scenario; production never substitutes for sales. Requirements use exact closed intervals and
-retain the common YTD-sales variable when enclosing the numerator and rate. Negative computed requirements
-remain signed. These are necessary arithmetic conditions, not forecasts or probabilities.
+## 5. Refusals
+`lmdi`, `lmdi::waterfall`, `guidance`, `guidance::quarters`, `capacity` and `recovery` refuse with these codes:
+- **`FMINE-REF-102`** (support mismatch; exit 3): a non-aggregate or invalid month support, or periods that do not line up. From `guidance`, `quarters`, `capacity` and `recovery`.
+- **`FMINE-REF-103`** (non-additive average; exit 3): additivity that does not match the quantity. From `guidance`, `capacity` and `recovery`.
+- **`FMINE-REF-104`** (non-identifiable attribution; exit 3). From the waterfall: a sold-ounce box that touches zero, unmatched or ambiguous line identities, or lines that do not sum to the cost. From `recovery`: a denominator box that touches zero, fewer than three annual observations, or a duplicate year. The zero-denominator and too-few-rows cases use the nearest code.
+- **`FMINE-REF-105`** (basis mismatch; exit 3): a kind, unit, subject, ownership or AISC-definition mismatch, or repeated history ids. From every Claim kernel, and from the waterfall for unequal bases. `guidance` also uses it for an attributable share outside (0, 1].
+- **`FMINE-REF-107`** (undeclared unit, basis or time zone; exit 3): an undeclared subject or definition, or an unprinted waterfall basis. From `guidance`, `capacity`, `recovery` and the waterfall.
+- **`FMINE-REF-108`** (assay lookahead; exit 3), used for time order: a history at or after the guidance year, or a quarter that does not follow every training year. From `guidance`, `quarters` and `recovery`.
+- **`FMINE-REF-109`** (outside physical domain; proposed, exit 3). From the legacy LMDI: a non-positive or non-finite input, or recovery above one. From the waterfall: a negative half-step, or a share outside (0, 1]. From the Claim kernels: reversed bounds, or a value outside its domain.
+- **`FMINE-REF-201`** (no claim in domain; exit 3): a missing source locator or digest, or a history with no id or no quarters. From the waterfall, `guidance`, `quarters`, `capacity` and `recovery`.
+- **`FMINE-REF-202`** (not observable; exit 3): an input whose state is neither `Known` nor `Estimated`. From `guidance`, `capacity` and `recovery`.
+- **`FMINE-REF-203`** (outside AOA; exit 3).
+  - From `guidance`, `capacity` and `recovery`, for an open interval bound. The kernels need closed rounding bounds. This is the nearest code.
+  - From `AiscConsolidationBridge::verify_rollup`, when the numerator gap exceeds 0.5 $M (Validity domain).
+- **`FMINE-REF-205`** (calibration required; exit 3): an input that failed calibration. From `guidance`, `capacity` and `recovery`.
+- **`FMINE-REF-207`** (numerical certificate failed; proposed, exit 3): exact overflow, a failed witness or certificate, an invalid enclosure, or a failed closure. From every Claim kernel, both LMDI paths and `quarters`.
+- **`FMINE-REF-208`** (source cell unusable; proposed, exit 3): a placeholder input. From `guidance`, `capacity` and `recovery`.
+- **`FMINE-REF-502`** (stale anchor; exit 6): a stale input. From `guidance`, `capacity` and `recovery`.
 
-DESIGN (BD-342, COD-01): `capacity` bounds remaining gold production from cited maximum dry feed in million
-metric tonnes, gold head grade in g/t and recovery as a fraction. Their product is converted with the exact
-troy-ounce constant `31.1034768` g/oz and scaled only by an explicit attributable share. The product of maxima
-is an optimistic upper ceiling even when those maxima cannot occur together; it is not a feasible plan.
+The other modules have local errors with no refusal code:
+- **`CutoffError`**: `NonPositiveCost`, `NonPositivePrice`, `NonPositiveGuess`, `RecoveryOutOfDomain` and `NotConverged`.
+- **`MetricFailure`**: `UnknownDefinition`, `NotACostDefinition`, `UnregisteredItem`, `NonPositiveOunces`, `AllocationRequired`, `AllocationNotApplicable` and `Exact`.
+- **`CutoffFailure`**: `Registry`, `Row`, `Exact`, `NoPositiveNet`, `NoPositiveRecovery` and `Solver`. `fmine-cli` maps it to `FMINE-REF-506`.
+- **`ReserveReplacementBridge::compute`** returns `None` for a depletion that is not positive and finite.
 
-DESIGN (bd-srqc, W4 §3.3): `recovery` fits exactly two descriptive annual relations and applies them to later
-quarters. Head grade `h` and recovery `R` are explicitly in percent, and implied tails grade is
-`t = h·(1−R/100)`. M-a uses mean tails; M-b is OLS `t = a+b·h`. Pairwise sums of squared head-grade
-differences and head/tails cross-products form the slope, avoiding cancellation in the design denominator.
-Quarterly M-b projection uses the equivalent centred form `mean(t)+b·(h−mean(h))`, retaining the shared fit
-centering when propagating rounding. All displayed-input estimates are exact rationals; closed enclosures
-cover the supplied rounding boxes, not statistical confidence or prediction intervals.
+## 6. Determinism class
+**DeterministicPerIsa** for the crate, the weakest of its files' `//! Determinism:` headers:
+- **Exact:** `capacity.rs`, `guidance.rs` and `guidance/quarters.rs`. These use checked rational arithmetic, canonical input tags and sorted identities.
+- **BitwisePortable:** `lmdi.rs`. Its two golden digests, `golden_digest_logarithmic_mean_10k` and `golden_digest_decompose_aisc_lmdi_10k`, agreed on x86_64-linux and aarch64-macos in CI run 41237993223 at 84f32ac (bd-hp2j.3). `test_golden_digest_logarithmic_mean_10k` and `test_golden_digest_decompose_aisc_lmdi_10k` pin them.
+- **DeterministicPerIsa:**
+  - `lib.rs` has no cross-host digest test (plan §29.2, bd-hp2j.1);
+  - `cutoff.rs` grades are exact, but its solver cross-check uses floats;
+  - `definitions.rs` is exact, but `PriceDeck` hands floats to `compute_geo`;
+  - `lmdi/waterfall.rs` has exact rates and additive bars, with portable-log LMDI enclosures;
+  - `recovery.rs` has no cross-host test of its whole output, which includes square-root summaries.
+- **The test files** `lmdi/waterfall/tests.rs` and `recovery/tests.rs` declare DeterministicPerIsa.
 
-## 3. Authority, Epistemics & Representation
-Pure `E`-layer metric kernel (`L-3`): enforces `G-BULL-3` (`FMINE-REF-203` when `L_corp` is omitted) and checks
-the multiplicative-to-additive LMDI accounting identity (`GB-26`). Its public-data interpretation is descriptive;
-arithmetic closure does not establish causation or identify an operational explanation (plan §21.6, E699).
+## 7. Evidence class of outputs
+- **`guidance` and `capacity`** give `Derived`, met with every parent's class. So a result is never stronger than its weakest input. An issuer `Assertion` stays an `Assertion`. Epistemic status and state take the weaker of their parents'. Confidentiality is joined, and anchors, parent ids and UU terms are kept. The exact set lives in the value, so the representation is `Deterministic`.
+- **`recovery`** starts from `ModelledUncalibrated`, `KnownUnknown(Parametric)` and `Estimated`, then meets its sources'. A model output is never calibrated here (NL-4). It adds one model UU term, named by `RULES_VERSION` and `MODEL_CAVEAT`.
+- **The other outputs carry no Claim and no evidence class.** These are the root items, `definitions`, `cutoff` and both LMDI paths. `WATERFALL_NO_CLAIM`, `WATERFALL_RULES_VERSION` and `recovery::NO_CLAIM` state the descriptive reading. A `Conflict` or `Reproduced` cut-off state speaks to the printed inputs only, not to whether they suit the mine.
 
-## 4. Public API Surface
-- `SiteAiscRow`, `AiscConsolidationBridge`
-- `PriceDeck` (`barrick_reserve(year)`), `GeoBreakdown`, `compute_geo`
-- `ReserveReplacementBridge`
-- `solve_cutoff_grade` → `Result<CutoffSolution, CutoffError>`
-- `definitions::{all_in_cost_per_oz, is_non_sustaining, bundled_registry, AllInCost, CostLine, MetricFailure, Project}`
-  (BD-060): AISC and AIC from `registries/metrics.toml`. A line the definition neither counts nor excludes is refused,
-  and every result names its definition and any successor.
-- `cutoff::{parse_cases, reproduce, CutoffCase, CutoffReport, CutoffState, Printed, Recovery}` (BD-274): the
-  published cut-offs in `registries/published_cutoffs.toml`, recomputed on exact rationals from the printed inputs.
-  Each comes back `Reproduced`, `WithinInputRounding` or `Conflict`; `CutoffReport::to_json` prints exact results to
-  six places, never through a float.
-- `cutoff::{section, CutoffSection, CUTOFFS_REGISTRY}`: every row reproduced, as the JSON object an issuer run of
-  `fmine assure public` carries as `published_cutoffs`: the registry's sha256, the count in each state and the rows in
-  registry order, with the registry's `issuer`. A row that cannot be computed fails the whole section.
-- `lmdi::{LmdiState, LmdiWaterfall, decompose_aisc_lmdi, logarithmic_mean}`
-  - `LmdiState` keeps the existing floating-point API. Monetary spend and sold ounces must have compatible
-    scales so their quotient is USD/oz: USD/oz or thousand USD/koz. `$M`/`koz` inputs require the explicit
-    factor 1,000 on spend before this call. Each variable's unit and ownership basis must agree across periods;
-    this legacy input does not encode or infer them.
-  - `LmdiWaterfall::{aisc_0, aisc_1, total_delta}` now describe the recomputed rates. `printed_aisc_0/1` retain
-    the observed endpoints; `printed_rate_gap_0/1` retain each discrepancy; `printed_rate_gap` reconciles the
-    changes. `closure_residual = total_delta − sum_of_factors()` is measured and checked to at most 1e-9
-    USD/oz. `sum_of_factors()` includes only the six factor bars.
-  - Physical product/ratio changes are evaluated in log space. A temporal quotient that underflows,
-    overflows or is subnormal uses the difference of portable logarithms; a rounded subnormal quotient can
-    otherwise invent a material closure discrepancy. No input is clamped.
-- `lmdi::{PrintedQty, Factor, BasisTag, WaterfallPeriod, BarPoint, Bar, RateReconciliation, Bridge,
-  decompose_aisc_waterfall}` (also in `lmdi::waterfall`):
-  - `PrintedQty` carries exact `value`, non-negative `half_step` and source `at`. A `Factor::NotPublished`
-    retains its token and source, including `n/a`; it is never converted to zero. `BasisTag` distinguishes
-    consolidated 100% from an explicit attributable fraction, including attributable 100%. The caller must
-    authenticate one common basis within each period; the pure kernel checks that both period tags agree.
-  - `Bridge::Lmdi` has six bars (`cost`, `tonnes`, `grade`, `recovery`, `balance`, `sales_timing`) and a measured
-    midpoint closure residual. `Bridge::AdditiveFallback` records every physical/domain reason, sorted named
-    signed line bars and a `volume` bar. Its points and their closure are exact rationals. Missing line
-    identities are not implicitly zero; duplicate/empty identities and a cost/line-sum mismatch refuse.
-  - Both variants have an exact `RateReconciliation` with recomputed and printed endpoints, recomputed
-    change, both endpoint gaps and the gap change. The gap is never a bar. Each bar names its rule and all
-    direct source dependencies, including the C/Q cells that set an LMDI weight. The adapter retains the
-    corresponding source Claim identities and evidence; this kernel does not authenticate workbook bytes.
-  - Every bar exposes a midpoint and an outward rounding enclosure. Integer-to-float conversion is
-    bracketed before division, elementary operations round outwards, and portable-log endpoints widen by
-    four ulps. Monotonicity bounds L using the lower/lower and upper/upper rate endpoints. Each endpoint L
-    is enclosed by interval evaluation of its definition, intersected with the proven `[min,max]` bound;
-    cancellation or an overflowing quotient retains that proven bound. No guessed ulp margin on an
-    approximate logarithmic mean narrows an enclosure. Shared dependencies remain an explicit conservative
-    over-enclosure. A box containing zero sets `sign_not_determined`, while its midpoint remains visible.
-  - `WATERFALL_RULES_VERSION = "m0-waterfall/1"` and `WATERFALL_NO_CLAIM` state the descriptive interpretation.
-    The corrected legacy API remains available; its deterministic regression digests are unchanged by this API.
-- `lmdi::{golden_digest_logarithmic_mean_10k, golden_digest_decompose_aisc_lmdi_10k}` (bd-hp2j.3): BLAKE3 over the
-  output bits on 10,000 inputs from `LMDI_DIGEST_KEY` (series branch, both branches, ratios to e^300, magnitudes
-  near the subnormals; seeded positive state pairs). The v2 decomposition draws independently supplied spend
-  and binds all recomputed/printed endpoints, gaps, measured residual and six effects. The corrected
-  logarithmic-mean branch is relative at every positive scale, so its tiny-wide-ratio digest changes too.
-  These intentional mathematical/semantic changes invalidate the v1 snapshots; independent high-precision
-  known answers establish correctness, while the v2 bit snapshots remain regression and host-agreement
-  checks. `lmdi.rs` declares `BitwisePortable`: both digests agreed on ubuntu-latest (x86_64) and macos-15
-  (aarch64) in CI run 41237993223 at 84f32ac (bd-hp2j.3). `lib.rs` and the other modules stay `DeterministicPerIsa`.
-- `guidance::{Quantity, QuantityKind, Ownership, Period, CompletionInputs, complete}` (BD-342): all physical and
-  monetary inputs/outputs are `Claim<Quantity>`, with exact rational bounds, subject, month support, ownership,
-  quantity/unit, and a named AISC definition. `Quantity::canonical_tag` binds every interpretation field.
-  `CompletionReport` carries remaining production, YTD spending, remaining spending/rate, and the frontier at
-  both annual AISC guidance limits. The exact set lives in the Claim value; `Representation::Deterministic`
-  describes the calculation, not a probability distribution. Derived evidence is no stronger than the weakest
-  parent and at most `Derived`; all source anchors, parent ids and confidentiality are preserved.
-- `guidance::{HistoricalContinuation, compare_history, check_witness}`: T1 is the finite union of supplied
-  same-period historical rounding boxes. Production, sales and AISC must come from the same earlier year and
-  remaining-month span, on the same basis. Each box is intersected with the explicitly declared remaining-sales
-  scenario. `WithinEnvelope` needs a single exact witness satisfying both guidance targets; separate marginal
-  successes across different periods do not suffice. `ExceedsEnvelope` excludes only this named envelope, not
-  physical capacity. No history is T3/`Indeterminate`. The witness checker re-evaluates source membership and
-  both production and annual-cost equations independently of witness construction.
-- `guidance::quarters::{QuarterlyHistory, compare_quarters, aggregate_quarters, check_quarter_witness}`:
-  T1 also accepts complete contiguous original quarters whose count equals the remaining duration, including
-  cross-year windows. Source support remains distinct from hypothetical replay support. Exact Sum/Ratio
-  constraints retain each quarter's sales/rate/numerator relationship and the common YTD-sales variable.
-  Aggregate rate/sales intervals are marginal display projections, never independent boxes used to decide
-  joint feasibility. Positive witnesses are checked against every original quarter and both annual targets;
-  exclusions carry independently checked exact-feas certificates bound to input Claim ids and value tags.
-  Missing history is T3; solver caps and unresolved numerical checks remain indeterminate.
-- `capacity::{PhysicalKind, PhysicalLimit, CapacityLimits, CapacityVerdict, CapacityReport,
-  compare_production}` (BD-342, COD-01): accepts a signed remaining-production Claim and three cited physical
-  limit Claims over the same subject and remaining months. Physical inputs must be full-mine quantities;
-  attributable scaling applies to the resulting production ceiling, never to grade or recovery. The output
-  includes the exact ceiling, the signed grade required at maximum feed/recovery, and one of
-  `ExceedsStatedProductionCeiling`, `NotExcluded` or `AlreadySatisfied`. `NotExcluded` supplies neither a
-  physical feasibility witness nor a joint production-cost witness. Source anchors, parent identities,
-  evidence, epistemics, confidentiality and UU terms propagate into both derived Claims.
-- `recovery::{Quantity, QuantityKind, TrainingRow, OperatingRow, Estimate, Fit, Model, ModelProjection,
-  Projection, SquareRoot, fit, project}` (bd-srqc): every input is `Claim<Quantity>`, with subject, calendar
-  period, full-mine ownership, explicit percent/kt unit, exact printed point and closed rounding interval.
-  `fit` returns `Claim<Fit>` from distinct complete annual observations. It retains mean head grade, mean
-  tails, intercept and slope with rounding enclosures. `project` returns separate model Claims with expected
-  recovery in percent, expected-minus-reported recovery in percentage points, signed copper difference in
-  kt (`processed_kt·head_percent·gap_pp/10000`) and that difference divided by reported copper production.
-  Production is the reported denominator, never a modelled substitute. Neither gaps nor extrapolated
-  recoveries are clamped; the kernel does not annualize, monetize or attribute the differences.
-  - `residual_sample_variance_at_printed` uses `SSE/(n−1)`, reproducing W4's descriptive sample spread.
-    `regression_error_variance_at_printed` uses `SSE/(n−2)`, the conventional fitted-line error estimate.
-    The corresponding explicitly named `SquareRoot` summaries enclose numerical conversion and the
-    portable square root of each exact printed-input variance. They do not enclose historical input
-    rounding or describe a confidence interval. The two denominator conventions are never conflated.
-  - Derived evidence is no stronger than its weakest source and at most `ModelledUncalibrated`; issuer
-    assertions therefore remain assertions. Outputs retain the sources' anchors, immediate parent Claim
-    identities, weaker epistemics, confidentiality and existing UU terms. Their model UU explicitly names
-    omitted ore type, grind, throughput effects, concentrate mass pull and annual-versus-quarterly support.
-    Its zero monetary field is explicitly unquantified, not an estimated zero downside.
-  - `RULES_VERSION = "m0-recovery/1"`, `NO_CLAIM` and `MODEL_CAVEAT` identify a descriptive model comparison.
-    `Quantity::canonical_tag`, `Fit::canonical_tag` and `ModelProjection::canonical_tag` bind the exact
-    calculation, interpretation and support. Sorting annual observations leaves the result unchanged.
+## 8. Validity domain
+- **The root items are bare `f64`.** Four L-6 rows in `registries/l6_allow.toml` cover them. Three are debt: `compute_geo`, `ReserveReplacementBridge::compute` and `solve_cutoff_grade`. One is generic: `logarithmic_mean`.
+- **`verify_rollup` checks the numerator only, to a fixed 0.5 $M.**
+  - It compares the caller's site sum, plus L_corp if asked, with the caller's consolidated numerator. Either mode refuses on an absolute gap above 0.5 $M. The tolerance is fixed, not taken from a declared rounding construction.
+  - It does not re-add the site rows, and does not check the L_JV sales, the consolidated sales, either AISC or the rounding bridge.
+- **`compute_geo` checks nothing.** A zero or non-finite price gives an infinity or a NaN.
+- **`ReserveReplacementBridge::compute` checks only depletion.** Non-finite additions pass into the percentages. The basis is whatever the caller supplies.
+- **`solve_cutoff_grade`** stops when the undamped step falls below 1e-10 in grade units, within 100 iterations. It reports the residual and does not bound it. `cutoff` holds it to the exact fixed point within 1e-6 g/t.
+- **`definitions` takes the amounts as given.** The registry says what counts, not that an amount is right.
+- **The legacy LMDI** is float. Its spend and sold ounces must share a scale. It encodes no units or basis, and its closure tolerance is 1e-9 USD/oz absolute.
+- **The typed waterfall** fixes its units: $M, koz, thousand tonnes, g/t and a fraction. It checks that both periods carry the same basis tag, but cannot authenticate that basis. Its enclosures treat inputs as independent, so they over-enclose shared ones.
+- **Guidance** works on closed intervals, with sales and AISC strictly positive and production at least zero. Its results are necessary arithmetic conditions, not forecasts or probabilities. `T1` is the supplied history only. `ExceedsEnvelope` says nothing about physical capacity.
+- **Capacity** multiplies the three maxima. That gives an optimistic ceiling, not a plan. `NotExcluded` is not a feasibility witness.
+- **Recovery** fits two descriptive annual models and applies them to quarters. Its enclosures cover input rounding, not sampling error. An extrapolated recovery outside 0–100% is kept as computed.
 
-## 5. Guards & Typed Refusals
-- `FMINE-REF-203` (`ConsolidationBridgeMissing`, `G-BULL-3`)
-- `FMINE-REF-109` (outside physical domain, proposed; exit 3) on non-positive or non-finite LMDI state inputs,
-  or recovery above one, naming the period and field.
-- `FMINE-REF-207` (numerical certificate failed, proposed; exit 3) on an unrepresentable recomputed rate,
-  a non-finite effect or reconciliation, or a measured closure residual above 1e-9 USD/oz. It supplies no
-  forced closure. The bare logarithmic-mean helper returns NaN outside finite positive arguments; the
-  decomposition checks its domain and result before returning a waterfall.
-- The typed waterfall additionally uses `FMINE-REF-104` for a sold-quantity rounding box touching or crossing
-  zero, unmatched/ambiguous signed line identities, or a fallback line sum that differs from supplied cost;
-  `105` for unequal ownership bases; `107` for unprinted basis; `201` for a missing input source locator;
-  `109` for negative half-steps or an attributable share outside `(0,1]`; and `207` for checked-rational
-  overflow, invalid/non-finite numerical enclosures, a midpoint outside its enclosure, or failed closure.
-  Missing, non-positive or recovery-above-one physical boxes select the labelled fallback rather than a forced
-  logarithm. A non-positive total cost likewise selects the signed fallback. Its Q interval must still be positive.
-- `CutoffError` (non-positive cost, price or guess; recovery outside (0, 1]; no convergence in 100 iterations): no input is clamped (bd-8wrk).
-- `guidance` refuses unknown/conflicted inputs (`FMINE-REF-202`), stale anchors (`502`), missing citations (`201`),
-  incompatible support (`102`), additivity (`103`), unit/metal-stage/ownership/definition mismatches (`105`), and
-  undeclared subjects/definitions (`107`). Production inputs may be zero but not negative; this first slice needs
-  strictly positive sales and AISC throughout each input interval (`109`). Open-ended intervals are outside the
-  declared closed-rounding construction (`203`); arithmetic overflow or a failed witness is `207`. A historical
-  period at or after the guidance year refuses (`108`). Failed-calibration claims refuse (`205`).
-- `capacity` additionally requires explicit full-mine dry-metric-tonne/gold/fraction units, matching subject,
-  calendar support and additivity. It refuses absent citations (`201`), placeholders (`208`), stale inputs
-  (`502`), failed calibration (`205`), unknown states (`202`), mismatched basis (`105`), support (`102`) or
-  additivity (`103`), open bounds (`203`), invalid physical domains (`109`) and exact overflow (`207`). Zero
-  maximum feed or recovery refuses because required grade is undefined; zero grade remains a valid zero ceiling.
-- `recovery` requires a positive head-grade box, a recovery box within `[0,100]`, nonnegative processed mass
-  and strictly positive reported production. It refuses missing source anchors (`201`), stale Claims (`502`),
-  failed calibration (`205`), unknown/conflicted inputs (`202`), placeholders (`208`), unit/full-mine/subject
-  mismatches (`105`), support mismatches (`102`), additivity mismatches (`103`), open bounds (`203`), invalid
-  domains or a printed point outside its bounds (`109`), duplicate/insufficient annual observations or a
-  design-variance enclosure touching zero (`104`), and a quarter at or before the last training year (`108`).
-  Exact-rational overflow and invalid numerical square-root enclosures refuse with `207`; no fallback fit,
-  substituted point precision or fabricated zero gap is emitted.
-- `cutoff::CutoffFailure`: a malformed registry row, a non-positive net value or recovery, or a float solver that
-  disagrees with the exact fixed point. A printed figure beyond its inputs' rounding is a result (`Conflict`), not a
-  failure.
+## 9. Oracles
+- **Exact hand known answers**, all synthetic:
+  - `synthetic_completion_known_answers_are_exact`;
+  - `cod_01_ceiling_and_required_grade_are_exact`;
+  - `independent_exact_fit_and_two_model_known_answers`;
+  - `test_recovery_na_exact_signed_fallback_known_answer`;
+  - `test_fixed_point_cutoff_grade_solver`.
+- **Exhaustive and independent checks.**
+  - Integer enumerations: `historical_verdict_matches_exhaustive_discrete_continuations` and `small_point_histories_match_independent_integer_inequalities`.
+  - Corner sweeps: `rounding_enclosures_contain_every_synthetic_training_and_operating_corner` and the two waterfall corner tests.
+- **High-precision known answers** for the logarithmic mean: `test_logarithmic_mean_high_precision_tiny_and_large_known_answers` and `test_logarithmic_mean_enclosure_known_answers_near_equality_and_tiny_scale`.
+- **Seeded populations** from Philox streams: `test_cutoff_property_seeded`, `test_property_fallback_exact_random_lines_with_negatives`, `test_property_lmdi_order_independent_and_enclosure_contains_point` and the two golden digests.
+- **The registries.**
+  - `test_seven_corpus_cutoffs_e182_e184` runs every row of `registries/published_cutoffs.toml` and pins each row's state (E182–E184).
+  - The `definitions` tests read `registries/metrics.toml`, including `test_price_decks_read_from_the_registry`.
+- **`repro/barrick/waterfall_census.py` and `repro/barrick/recovery_census.py`** are independent readers for hand-entered public cells. No workflow runs them.
+- **No fixture** under `fixtures/`.
 
-## 6. Proof Obligations (`PO-*`)
-- `PO-MET-1`: `LmdiWaterfall::sum_of_factors() == total_delta` to `< 1e-10` in the synthetic two-period case
-  (`+$1,285/oz`; its numbers were once mislabelled as Barrick's, R7-C054). Its independently calculated sales
-  timing bar is −536.9148672729303 USD/oz, and its printed gaps are zero because the supplied cost/quantity
-  endpoints reconcile. Every accepted waterfall exposes its actual closure residual, at most 1e-9 USD/oz.
-- `PO-MET-3`: `ReserveReplacementBridge::compute` returns `None` for non-positive or non-finite depletion; it never clamps the denominator.
-- `PO-MET-2`: `AiscConsolidationBridge::verify_rollup(false)` refuses with `FMINE-REF-203` when `L_corp != 0`.
-- `PO-MET-4` (bd-hp2j.2): `logarithmic_mean` takes its logarithm from `fmine_core::det`, never the platform libm. On
-  10,000 Philox-seeded pairs each, it lies in [min, max], `L(a, b)` and `L(b, a)` are the same bits, and its series and
-  logarithm branches agree to < 1e-12 relative at the switch (1.1e-14 measured; the old 1e-7 switch on `ln a − ln b`
-  jumped 1.1e-8).
-  - A relative near-equality test replaces the incorrect `mean.max(1e-15)` branch selector. Independent
-    80-digit Decimal answers cover `L(1e-18,1e-21) = 1.4462006247378286e-19`, the same ratio at 1e-300,
-    a subnormal result, and near-maximum positive endpoints. Scale invariance holds across 1e-300 to 1e300;
-    equal smallest-subnormal and largest-finite inputs return themselves. An overflowing `a+b` uses a safe
-    half-sum while ordinary finite-sum arithmetic retains its previous evaluation order.
-- `PO-MET-5` (BD-333.S1 correctness slice, `lmdi::tests`):
-  - Hand identities isolate a cost-only +100 USD/oz change and a throughput-only −50 change. Altering only
-    printed rates changes no factor bits; changing supplied spend with unchanged printed rates changes the
-    cost bar. Two nonzero endpoint gaps survive even when the gap change is zero.
-  - The North Mara rate-reconciliation inputs quoted in BD-333.S1 (64 $M/50 koz/1,292 and
-    93 $M/37 koz/2,577) give recomputed delta `45640/37` and printed gap `1905/37`, within 1e-12 in this
-    floating-point API; bars plus gap give 1,285. That test uses explicitly invented physical factors and
-    establishes only endpoint reconciliation, not a real-site operational attribution.
-  - A grade-only change reallocates between grade and B without changing total cost per ounce. All seven
-    input fields in both periods refuse zero, negatives, NaN and infinities by name; recovery above one,
-    rate underflow/overflow and non-finite factor effects refuse. Log-space tests cover overflowing physical
-    products and temporal subnormal ratios whose rounded logarithms would create a false residual.
-- `PO-MET-6` (BD-333.S1, `lmdi::waterfall::tests`):
-  - The historical invented GB-26 case gives +1,285 and sales timing −536.9148672729303 with exact zero gap.
-    A hand-computable signed-line case gives bars +675, −225, −112.5 and +537.5, summing exactly to +875;
-    endpoint gaps 3 and 5 give a separate +2 gap change. Negative total costs also produce exact signed bars.
-  - Hand-entered North Mara published C/Q/P and physical inputs are checked against an independent
-    80-digit Decimal oracle (`repro/barrick/waterfall_census.py`, calculated before the new Rust was read).
-    The exact change is `45640/37`, gap is `1905/37`, and bars plus gap give +1,285. A counterfactual grade
-    1.80→1.98 moves 174.21850713853705 USD/oz between grade and B without changing the total or gap.
-    This demonstrates non-identification. The pure test does not stand in for source/vintage/basis verification.
-  - 10,000 Philox-seeded signed line sets close exactly and match separate closed-form rational answers;
-    reordering input lines gives the same result. Seeded LMDI bar permutations close within 1e-9 USD/oz.
-    All 4,096 corners of a twelve-input LMDI rounding box and all 64 corners of a six-input additive box lie
-    within their original bar enclosures. Independent known answers cover the logarithmic-mean bound near
-    equality and at tiny scales. Straddling intervals flag the sign, with positive midpoint still shown.
-  - Mutating only printed endpoints cannot move a bar. Equal nonzero endpoint gaps remain visible.
-    Invalid basis, precision, source, Q interval, missing/duplicate lines and arithmetic overflow refuse;
-    an interval-feasible but unequal rounded line sum cannot become a plug in the additive fallback.
-- `PO-MET-6` (BD-342, `guidance::tests`, synthetic known answers):
-  - The target 200–230 minus 68 yields exactly 132–162. The bead-shaped cost example uses explicitly synthetic
-    sold ounces; sold quantities differing from production produce the independently calculated weighted rate.
-  - Equal annual and YTD AISC cancel their shared uncertain YTD sales exactly; separately enclosing the numerator
-    and denominator would introduce spurious width. Exhaustive small interior values lie within the computed
-    frontier and attain each extremum. Signed negative remainders and budgets are preserved.
-  - Three hundred discrete historical continuations agree with direct integer production/cost inequalities.
-    Separate production and cost successes cannot produce a joint witness. An interior rational witness reaches
-    an exact guidance boundary; corrupting it fails the independent checker.
-  - Domain, zero-denominator, ownership, definition, support, missing/stale/evidence, and overflow refusals are
-    checked. Historical ordering leaves the report identical and every output retains its input provenance.
-- FACT (BD-342, `guidance::quarters::tests`): eight focused regressions cover exact source-quarter witnesses,
-  cross-year ordering, one/two/three-quarter remainders, source/witness corruption and explicit solver caps.
-  A 144-case integer oracle checks joint verdicts. The sales/rate counterexample uses quarters with sales
-  `[1,2]` and rates 10 and 100: marginal weighted rates span `[40,70]`, but total sales 2 forces rate 55.
-  The quarterly model correctly excludes the false witness admitted by independent aggregate boxes.
-- `PO-MET-7` (BD-342, COD-01, `capacity::tests`): the independently calculated 600 koz remaining requirement
-  against 10 Mt, 2 g/t and 90% recovery exceeds the exact ceiling `3750000000/6479891` koz and requires
-  `6479891/3125000` g/t at maximum feed/recovery. Eight focused tests also cover attributable scaling, signed
-  already-delivered requirements, equality at the ceiling, rounded physical limits, zero/invalid denominators,
-  unit/support/ownership refusals, exact overflow and complete source/uncertainty propagation.
-- `PO-MET-8` (bd-srqc, `recovery::tests`): independent synthetic annual heads `[1,2,4]` and tails
-  `[1/5,3/10,1/2]` give mean tails `1/3`, intercept `1/10` and slope `1/10`. A quarter with head `2%`,
-  recovery `82%`, processed `1000 kt` and produced `82/5 kt` gives M-a gap `4/3` pp, difference `4/15 kt`
-  and output fraction `2/123`; M-b gives `3` pp, `3/5 kt` and `3/82`. A separate nonzero-residual case
-  distinguishes the `n−1` and `n−2` variances. All 1,024 combinations of six training and four operating
-  input-box corners are enclosed; widening the boxes cannot narrow the model outputs. Signed negative
-  gaps, unclamped extrapolation, deterministic input ordering, source mutation, weaker evidence,
-  confidentiality/UU propagation and the admission/domain/overflow refusals have direct tests. No historical
-  issuer training rows are embedded in these synthetic fixtures.
+## 10. Known gaps
+- **The old contract had the wrong registry lines.** It said Subsystem Enterprise and 16k/18k. The registry says Bullion and 18,000/21,000.
+- **The old dependency list was wrong.** It omitted `fmine-registry`, which `cutoff` and `definitions` use. It listed `fmine-time`, which `Cargo.toml` declares but no source file uses.
+- **The old contract named PO-MET-1 to PO-MET-8**, with PO-MET-6 used twice. The plan has none of them. The plan's rows are in Proof obligations.
+- **The old contract said `verify_rollup(false)` refuses when L_corp ≠ 0. That is false.** It refuses on the gap between the site sum and the consolidated numerator, whatever L_corp holds. An L_corp of 0.5 $M or less never refuses. The doc comment on `verify_rollup` says the same false thing.
+- **The old contract labelled 203 `ConsolidationBridgeMissing`.** No such key exists. The catalogue's 203 is `outside_aoa`, used here as the nearest code.
+- **The old contract said the published cut-offs were not yet reproduced.** `cutoff` reproduces them, and its own API list said so.
+- **The old refusal lists were incomplete.** `guidance` also refuses 208, and `capacity` and `recovery` also refuse 107.
+- **G-BULL-3 is only partly enforced.** `verify_rollup` checks one numerator layer, with the limits in Validity domain, and nothing calls it.
+- **Made-up values.**
+  - The rollup's 0.5 $M absolute tolerance.
+  - `recovery`'s UU term sets `downside_exposure_usd_m` to 0.0 to mean "unquantified". The field is a bare `f64` in `fmine-claim`, so a consumer that sums downsides reads it as zero. Only the trigger text says otherwise.
+  - `logarithmic_mean` returns NaN for a non-positive or non-finite input, rather than an error.
+- **Silent `None`s.** `PriceDeck::barrick_reserve` turns a registry load failure into `None`, the same answer as an unregistered year. `ReserveReplacementBridge::compute` returns `None`, not a typed refusal.
+- **No unit types at the root.** Three L-6 debt rows (Validity domain).
+- **The module docs in `lib.rs` carry shifted BD ids.** In the plan:
+  - L_corp and L_JV aggregation is BD-273, not BD-060–BD-062 or BD-272 (BD-272 is the GATE-BULL-01 scoring rule);
+  - GEO is BD-062, not BD-063 or BD-273;
+  - reserve replacement is BD-063, not BD-064 (BD-064 is the LMDI waterfall);
+  - cut-off reproduction is BD-274, not BD-275 (BD-275 is the discrepancy fixtures).
+- **Most of plan §21.6 is absent.** There is no C1 and no ROCE, though the registry charter lists both. There is no single `aisc(rules_version, inputs)` function for plan and actual. There are no definition flags (by-product credit location, inventory adjustments, per-ounce denominator) and no `CostDriverCard`.
+- **Code with no caller outside this crate's tests:**
+  - `AiscConsolidationBridge`, `PriceDeck`, `compute_geo` and `ReserveReplacementBridge`;
+  - the whole `definitions` module;
+  - the legacy `LmdiState` and `decompose_aisc_lmdi`;
+  - the single-period `compare_history` and `check_witness`.
+  - `solve_cutoff_grade` runs only inside `cutoff`'s cross-check.
+- **Codes are not used the same way.** An attributable share outside (0, 1] gives 105 in `guidance` but 109 in the waterfall.
+- **No cross-host digest** for `lib.rs`, `cutoff`, the typed waterfall or `recovery`.
 
-## 7. Failure Modes & Deterministic Fallbacks
-The legacy floating API refuses non-positive physical inputs. The typed public API attempts the exact signed
-additive fallback when physical factor boxes cannot support logarithms; if the supplied lines cannot justify
-that fallback it refuses explicitly. Missing consolidation adjustments and numerical failures refuse. Neither
-path uses a printed-rate discrepancy as a balancing factor.
+## 11. Public API
+- **Root:** `SiteAiscRow`, `AiscConsolidationBridge::verify_rollup`, `PriceDeck` with `barrick_reserve(year)`, `GeoBreakdown`, `compute_geo`, `ReserveReplacementBridge::compute`, `CUTOFF_MAX_ITER`, `CUTOFF_TOL`, `CutoffSolution`, `CutoffError` and `solve_cutoff_grade`. The root re-exports `LmdiState`, `LmdiWaterfall`, `decompose_aisc_lmdi` and `logarithmic_mean`.
+- **`definitions`:** `bundled_registry`, `CostLine`, `MetricFailure`, `AllInCost`, `all_in_cost_per_oz`, `Project` and `is_non_sustaining`.
+- **`cutoff`:** `CUTOFFS_SCHEMA`, `CUTOFFS_REGISTRY`, `CutoffFailure`, `Printed`, `GradeUnit`, `Recovery`, `CutoffCase`, `CutoffState`, `CutoffReport` with `to_json`, `reproduce`, `parse_cases`, `CutoffSection` and `section`.
+- **`lmdi`:**
+  - `LmdiState`, `LmdiWaterfall` with `sum_of_factors`, `logarithmic_mean` and `decompose_aisc_lmdi`;
+  - `LMDI_DIGEST_KEY`, `logarithmic_mean_digest_inputs`, `digest_logarithmic_mean`, `golden_digest_logarithmic_mean_10k`, `digest_decompose_aisc_lmdi` and `golden_digest_decompose_aisc_lmdi_10k`;
+  - from `waterfall`: `PrintedQty`, `Factor`, `BasisTag`, `WaterfallPeriod`, `BarPoint`, `Bar`, `RateReconciliation`, `Bridge` with `bars` and `gap`, `decompose_aisc_waterfall`, `WATERFALL_RULES_VERSION` and `WATERFALL_NO_CLAIM`.
+- **`guidance`:**
+  - `Ownership`, `Period`, `QuantityKind`, `Quantity` with `canonical_tag`, `CompletionInputs`, `FrontierPoint`, `SpendingRequirement`, `CompletionReport` and `complete`;
+  - `HistoricalContinuation`, `CompletionWitness`, `ContinuationCheck`, `EnvelopeTier`, `HistoryVerdict`, `HistoryReport`, `check_witness` and `compare_history`;
+  - `quarters`: `QuarterlyHistory`, `WindowTotals`, `QuarterWitness`, `QuarterlyWitness`, `CheckedCertificate`, `QuarterlyCheck`, `QuarterlyHistoryReport`, `aggregate_quarters`, `check_quarter_witness` and `compare_quarters`.
+- **`capacity`:** `PhysicalKind`, `PhysicalLimit` with `canonical_tag`, `CapacityLimits`, `CapacityVerdict`, `CapacityReport` and `compare_production`.
+- **`recovery`:** `RULES_VERSION`, `NO_CLAIM`, `MODEL_CAVEAT`, `QuantityKind`, `Quantity`, `TrainingRow`, `OperatingRow`, `Estimate`, `SquareRoot`, `Fit`, `Model`, `ModelProjection`, `Projection`, `fit` and `project`. It re-exports `Ownership` and `Period` from `guidance`.
 
-## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
-- `GATE-BULL-01`
+## 12. Proof obligations
+The plan defines no `PO-MET-*`. The old contract's PO-MET-1 to PO-MET-8 were local labels, and their properties are tested here (Invariants). The plan's §21.8 rows that touch this crate:
+- **PO-PUSH-9** (plan and actual AISC use one `aisc()` and `rules_version`): not discharged. No such function exists.
+- **PO-PUSH-10** (the plan-to-actual bridge sums exactly, and LMDI effects are order-independent): the LMDI half has property tests, `test_property_lmdi_order_independent_and_enclosure_contains_point` and `test_property_fallback_exact_random_lines_with_negatives`. There is no plan-to-actual bridge.
+- **PO-BULL-1 to PO-BULL-4** belong to the FrankenAccounting bridge and GATE-BULL-02. None is discharged here.
 
-## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`.
-
-## 10. Non-Goals & Scope Boundary
-Pure metric kernel in layer `E`; workbook parsing, first-vintage pairing, per-period basis authentication,
-source Claim bindings and public rendering live in `fmine-io` / `fmine-public` (`V`, BD-333.S2/S3). The typed
-kernel supplies the numerical and provenance-locator contract, not real-file eligibility counts or causal claims.
-
-BD-342's kernel is exact arithmetic on supplied, cited gold/koz and USD/oz quantities, with a declared positive
-cost domain. It does not acquire or transcribe guidance, register future forecasts, infer missing inputs, equate
-sales with production, estimate probabilities, authenticate T2 technical-report capacity evidence, or infer
-dependence inside a historical rounding box. The capacity kernel checks supplied cited limits; a registered
-technical-report adapter must establish their public eligibility before a report can claim T2. Source selection
-and historical-box construction belong to the public adapter.
-Real North Mara parity and the full bead require independently read guidance and actual-source cells; synthetic
-known answers establish only the arithmetic and refusal behavior.
+Guards and gates:
+- **G-BULL-3** is partly met by `verify_rollup` (Known gaps).
+- **G-BULL-6** (no metric without `rules_version` and basis) is not enforced here. Rendering happens in `fmine-public`.
+- **GATE-BULL-01** has no scorer in this crate. The crate supplies kernels only.
+- **GATE-BULL-02 and GATE-BULL-03** need the FrankenAccounting book and a site pilot. Neither exists here.
