@@ -14,8 +14,12 @@ The public lane of M0 (`fmine assure public`).
   source assertions. It indexes Claim IDs and latest series once, then compares the named subject, supported
   metric, period, ownership, denominator and unit. Exact rational half-step intervals decide containment,
   disjoint values and excessive precision; no floating-point tolerance or implicit unit conversion is used.
-  AISC, total cash costs, cost of sales, gold production, gold sales, processed/head grade and whole-site
-  recovery are supported. Co-product TCC stays distinct from by-product TCC. Grade requires explicit `g/t`
+  AISC, total cash costs, copper C1, cost of sales, gold/copper production, gold sales, processed/head grade
+  and whole-site recovery are supported. Co-product TCC stays distinct from by-product TCC. Canonical copper
+  C1 summary/site rows require explicit `$/lb` or `US$/lb` and per-pound-sold denominators; by/co-product,
+  gold-ounce and produced-denominator assertions are not inferred from C1. Copper production requires an
+  explicit copper metric and canonical `kt`; historical millions-of-pounds site rows stay unchecked.
+  Grade requires explicit `g/t`
   (or `grams per tonne`) or percent units; recovery requires percent. Percent-formatted source fractions
   retain their stored values and use their explicitly displayed percentage-point rounding intervals;
   `mass_fraction` without a percent display stays unchecked. Bare/mined grade and circuit recovery are
@@ -28,14 +32,14 @@ The public lane of M0 (`fmine assure public`).
   Claims without copying entire draft sentences. It does not decide publication availability, disclosure
   permission, qualitative truth or calibration of source numbers.
 - DESIGN (BD-345.S3): `lint::lint_discover(draft, claims)` accepts the same bounded equality grammar for
-  AISC, gold TCC, gold production, processed/head grade and whole-site recovery. Exact subject, dated period,
+  AISC, gold TCC, copper C1, gold/copper production, processed/head grade and whole-site recovery. Exact subject, dated period,
   ownership, denominator, definition and unit select candidates before any numeric comparison. One candidate
   receives the cited-mode checks; multiple
   candidates, including repeated vintages or conflicting source assertions, stay ambiguous and are listed.
   Values never break ties. Explicit citations keep cited-mode checking, and every finding records its mode.
   The source snapshot remains the caller's responsibility; discovery does not infer publication dates.
-  This executable slice has synthetic known-answer and adversarial checks. Copper C1, reserve replacement
-  and the independent labelled-set precision/recall assessment remain open; no general-prose accuracy is claimed.
+  This executable slice has synthetic known-answer and adversarial checks. Reserve replacement and the
+  independent labelled-set precision/recall assessment remain open; no general-prose accuracy is claimed.
 - `sources`: the source registry (`BD-055`, `BD-322`, bd-s9j3.1), read at run time from
   `<workspace>/registries/sources/<issuer>.toml` (schema `fmine.sources.v1`, checked by `fmine_registry::sources`
   and by `xtask registry-check`). It pins each public workbook by file name, URL, byte size and SHA-256 (Barrick:

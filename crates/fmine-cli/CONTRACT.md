@@ -321,7 +321,9 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   Both modes include processed/head grade (`g/t`, `grams per tonne` or percent) and whole-site recovery
   (percent), with explicit subject, dated period and ownership. Percent-format fractions use the source's
   displayed percentage-point interval while retaining the stored fraction. Bare/mined grade, circuit recovery,
-  copper C1 and reserve replacement remain outside the discovery grammar.
+  and reserve replacement remain outside the discovery grammar. Copper C1 requires explicit per-pound-sold
+  and `US$/lb` or `$/lb` tokens; copper production requires `kt`. C1 does not inherit gold TCC's credit
+  convention, and historical site production in millions of pounds remains unchecked.
 - DESIGN (BD-343): forecast assessment replays transcript rows in their supplied order using the existing
   calibration kernel. No alternate scoring formula, default time proof or hidden denominator is introduced.
   Saved assessment rows enforce the kernel's sealed-cut rules across replay. Both envelope authority fields

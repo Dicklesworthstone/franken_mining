@@ -327,6 +327,336 @@ fn physical_discovery_keeps_supports_units_and_competing_sources_distinct() {
     assert_eq!(report.findings[0].verdict, Verdict::Unchecked);
 }
 
+#[allow(clippy::expect_used)]
+fn copper_claims(cost_section: &str, production_label: &str) -> Vec<KeyedCell> {
+    let text = |s: &str| MinimalCell::Text(s.into());
+    let number = |raw: &str, xf| MinimalCell::Styled {
+        raw: raw.into(),
+        xf,
+    };
+    let bytes = build_minimal_xlsx_styled(
+        &[
+            MinimalSheet {
+                name: "QTD".into(),
+                hidden: false,
+                cells: vec![
+                    ("A1".into(), text("Summary of Operations")),
+                    ("A3".into(), text("For the three months ended March 31,")),
+                    ("B3".into(), MinimalCell::Number(2030.0)),
+                    (
+                        "B4".into(),
+                        text("Copper produced (thousands of tonnes 100%)"),
+                    ),
+                    (
+                        "C4".into(),
+                        text("Copper produced (thousands of tonnes attributable)"),
+                    ),
+                    ("D4".into(), text("C1 Cash Costs ($/lb)4")),
+                    ("A5".into(), text("Site A (50%)")),
+                    ("B5".into(), number("50.0", 2)),
+                    ("C5".into(), number("25.0", 2)),
+                    ("D5".into(), number("1.25", 1)),
+                ],
+            },
+            MinimalSheet {
+                name: "Minestats4".into(),
+                hidden: false,
+                cells: vec![
+                    ("A1".into(), text("Mine Statistics (Copper)")),
+                    ("B2".into(), text("Site A (50%)")),
+                    ("A3".into(), text("For the three months ended March 31,")),
+                    ("B3".into(), MinimalCell::Number(2030.0)),
+                    ("A4".into(), text(cost_section)),
+                    ("A5".into(), text("C1 Cash Costs1")),
+                    ("B5".into(), number("1.25", 1)),
+                    ("A6".into(), text(production_label)),
+                    ("B6".into(), number("25.0", 2)),
+                ],
+            },
+        ],
+        Some(&MinimalStyles {
+            num_fmts: vec![(164, "0.00".into()), (165, "0.0".into())],
+            xfs: vec![0, 164, 165],
+        }),
+    );
+    let book = Workbook::from_bytes("synthetic-copper.xlsx", &bytes).expect("copper workbook");
+    let read = read_mine_stats(&book, "2030Q1", None).expect("copper source read");
+    assert!(read.refusals.is_empty(), "{:?}", read.refusals);
+    let profile = synthetic_profile();
+    let claims: Vec<_> = read
+        .values
+        .iter()
+        .map(|v| from_mine_stats(&profile, &book, "2030Q1", v).expect("canonical copper Claim"))
+        .collect();
+    assert_eq!(claims.len(), 5);
+    claims
+}
+
+#[test]
+fn copper_equalities_read_summary_and_site_keys_with_exact_units() {
+    for section in ["Costs per pound", "Costs per pound ($/lb)"] {
+        let claims = copper_claims(section, "Production (Thousands of tonnes)");
+        for claim in &claims {
+            let c1 = claim.key.line.label.contains("c1");
+            let (basis, amount) = match claim.key.ownership_basis {
+                OwnershipBasis::Consolidated100 => ("100% basis", "50.0 kt"),
+                OwnershipBasis::Attributable { .. } => {
+                    ("attributable", if c1 { "US$1.25/lb" } else { "25.0 kt" })
+                }
+                other => panic!("unexpected canonical copper basis: {other:?}"),
+            };
+            assert_eq!(claim.key.unit, if c1 { "usd_per_lb" } else { "kt" });
+            let metrics: &[&str] = if c1 {
+                &[
+                    "C1",
+                    "copper C1",
+                    "C1 cash costs",
+                    "non-GAAP copper C1 cash costs",
+                ]
+            } else {
+                &["copper production", "copper produced"]
+            };
+            for metric in metrics {
+                let denominator = if c1 { "per pound sold" } else { "" };
+                let draft = format!("Site A Q1 2030 {basis} {metric} {denominator} is {amount}.");
+                let cited = draft.replace(
+                    amount,
+                    &format!("[{amount}](fmine:{})", claim.claim.claim_id),
+                );
+                assert_eq!(
+                    verdict(&cited, std::slice::from_ref(claim)),
+                    Verdict::Verified,
+                    "{cited}"
+                );
+                let report = lint_discover(&draft, std::slice::from_ref(claim));
+                assert_eq!(report.findings.len(), 1, "{}", report.to_json());
+                assert_eq!(report.findings[0].verdict, Verdict::Verified, "{draft}");
+                assert_eq!(
+                    report.findings[0].claim_id.as_deref(),
+                    Some(claim.claim.claim_id.to_string().as_str())
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn copper_c1_rejects_wrong_denominators_definitions_units_and_precision() {
+    let claims = copper_claims("Costs per pound", "Production (Thousands of tonnes)");
+    let claim = claims
+        .iter()
+        .find(|c| c.key.line.label == "summary:c1_usd_per_lb")
+        .unwrap();
+    let draft = "Site A Q1 2030 attributable copper C1 cash costs per pound sold is $1.25/lb.";
+    let cited = draft.replace(
+        "$1.25/lb",
+        &format!("[$1.25/lb](fmine:{})", claim.claim.claim_id),
+    );
+    for (from, to, cited_verdict, discovered_verdict) in [
+        (
+            "per pound sold",
+            "per lb sold",
+            Verdict::Verified,
+            Verdict::Verified,
+        ),
+        ("per pound sold", "", Verdict::Ambiguous, Verdict::Ambiguous),
+        (
+            "per pound sold",
+            "per pound produced",
+            Verdict::BasisMismatch,
+            Verdict::Uncited,
+        ),
+        (
+            "per pound sold",
+            "per ounce sold",
+            Verdict::BasisMismatch,
+            Verdict::Uncited,
+        ),
+        (
+            "per pound sold",
+            "per oz produced",
+            Verdict::BasisMismatch,
+            Verdict::Uncited,
+        ),
+        (
+            "per pound sold",
+            "per lb sold per ounce sold",
+            Verdict::BasisMismatch,
+            Verdict::Uncited,
+        ),
+        ("attributable", "", Verdict::Ambiguous, Verdict::Ambiguous),
+        (
+            "attributable",
+            "100% basis",
+            Verdict::BasisMismatch,
+            Verdict::Uncited,
+        ),
+        (
+            "attributable",
+            "attributable by-product",
+            Verdict::BasisMismatch,
+            Verdict::Uncited,
+        ),
+        (
+            "attributable",
+            "attributable co-product",
+            Verdict::BasisMismatch,
+            Verdict::Uncited,
+        ),
+        (
+            "attributable",
+            "attributable gold ounces",
+            Verdict::BasisMismatch,
+            Verdict::Uncited,
+        ),
+        (
+            "attributable",
+            "attributable API scorecard",
+            Verdict::BasisMismatch,
+            Verdict::Uncited,
+        ),
+        (
+            "$1.25/lb",
+            "$1.25/oz",
+            Verdict::BasisMismatch,
+            Verdict::Uncited,
+        ),
+        (
+            "$1.25/lb",
+            "C$1.25/lb",
+            Verdict::Unchecked,
+            Verdict::Unchecked,
+        ),
+        (
+            "$1.25/lb",
+            "$1.30/lb",
+            Verdict::ValueMismatch,
+            Verdict::ValueMismatch,
+        ),
+        (
+            "$1.25/lb",
+            "$1.250/lb",
+            Verdict::RoundingBeyondTolerance,
+            Verdict::RoundingBeyondTolerance,
+        ),
+        (
+            "copper C1 cash costs",
+            "TCC",
+            Verdict::BasisMismatch,
+            Verdict::Ambiguous,
+        ),
+        (" is ", " is not ", Verdict::Unchecked, Verdict::Unchecked),
+    ] {
+        assert_eq!(
+            verdict(&cited.replace(from, to), std::slice::from_ref(claim)),
+            cited_verdict,
+            "{from} -> {to}"
+        );
+        let report = lint_discover(&draft.replace(from, to), std::slice::from_ref(claim));
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "{from} -> {to}: {}",
+            report.to_json()
+        );
+        assert_eq!(
+            report.findings[0].verdict,
+            discovered_verdict,
+            "{from} -> {to}: {}",
+            report.to_json()
+        );
+    }
+}
+
+#[test]
+fn copper_discovery_keeps_metals_vintages_and_source_units_distinct() {
+    let claims = copper_claims("Costs per pound", "Production (Thousands of tonnes)");
+    for draft in [
+        "Site A Q1 2030 attributable copper C1 per pound sold is $1.25/lb.",
+        "Site A Q1 2030 attributable copper production is 25.0 kt.",
+    ] {
+        let report = lint_discover(draft, &claims);
+        assert_eq!(report.findings[0].verdict, Verdict::Ambiguous);
+        assert_eq!(
+            report.findings[0].candidates.len(),
+            2,
+            "summary and site are distinct source assertions"
+        );
+        assert!(report.findings[0].source.is_none());
+    }
+    let prod = claims
+        .iter()
+        .find(|c| c.key.line.label == "summary:cu_prod_attr_kt")
+        .unwrap();
+    let draft = "Site A Q1 2030 attributable copper production is 25.0 kt.";
+    let cited = draft.replace(
+        "25.0 kt",
+        &format!("[25.0 kt](fmine:{})", prod.claim.claim_id),
+    );
+    for (from, to) in [
+        ("copper production", "gold production"),
+        ("copper production", "production"),
+        ("copper production", "copper production per pound sold"),
+        ("copper production", "copper production gold ounces"),
+        ("25.0 kt", "25.0 koz"),
+        ("25.0 kt", "25.0 tonnes"),
+        ("25.0 kt", "US$25.0 kt"),
+    ] {
+        assert_eq!(
+            verdict(&cited.replace(from, to), std::slice::from_ref(prod)),
+            Verdict::BasisMismatch,
+            "{from} -> {to}"
+        );
+        assert_eq!(
+            lint_discover(&draft.replace(from, to), std::slice::from_ref(prod)).findings[0].verdict,
+            Verdict::Uncited,
+            "{from} -> {to}"
+        );
+    }
+    let historical = copper_claims("Costs per pound", "Production (Millions of pounds)");
+    let source = historical
+        .iter()
+        .find(|c| c.key.line.label == "site::production (millions of pounds)")
+        .unwrap();
+    assert_ne!(source.key.unit, "kt");
+    let wrongly_converted = draft.replace(
+        "25.0 kt",
+        &format!("[25.0 kt](fmine:{})", source.claim.claim_id),
+    );
+    assert_eq!(
+        verdict(&wrongly_converted, std::slice::from_ref(source)),
+        Verdict::Unchecked
+    );
+    assert_eq!(
+        lint_discover(draft, std::slice::from_ref(source)).findings[0].verdict,
+        Verdict::Uncited
+    );
+
+    let gold = observation("25.0", |k| {
+        k.line.label = "summary:au_prod_attr_koz".into();
+        k.unit = "koz".into();
+        k.ownership_basis = prod.key.ownership_basis;
+    });
+    assert_eq!(
+        lint_discover(draft, &[gold]).findings[0].verdict,
+        Verdict::Uncited
+    );
+    let later = observation("99.0", |k| {
+        k.line.label = prod.key.line.label.clone();
+        k.unit = prod.key.unit.clone();
+        k.ownership_basis = prod.key.ownership_basis;
+        k.reporting_vintage.release = "2030Q2".into();
+    });
+    let report = lint_discover(draft, &[prod.clone(), later.clone()]);
+    assert_eq!(report.findings[0].verdict, Verdict::Ambiguous);
+    assert_eq!(
+        report.findings[0].candidates.len(),
+        2,
+        "value and vintage must not break a semantic tie"
+    );
+    assert_eq!(verdict(&cited, &[prod.clone(), later]), Verdict::Stale);
+}
+
 #[test]
 fn printed_intervals_are_contained_exactly_without_inventing_precision() {
     let c = observation("1637", |_| {});

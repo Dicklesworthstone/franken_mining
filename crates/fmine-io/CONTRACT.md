@@ -72,7 +72,9 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   A range keeps both endpoint precisions. The token span includes its prefix and suffix.
   `$` alone remains an unspecified dollar currency; `US$` explicitly names USD.
 - Basis and period tokens are finite lexical matches, not a sentence interpretation. Explicit ownership,
-  per-ounce denominator, credit convention and definition words stay separate. Only `ownership basis unprinted`
+  per-ounce/per-pound sold or produced denominators, credit convention and definition words stay separate.
+  `BasisTok` classifies ownership, denominator and credit tokens lexically without supplying a missing basis.
+  Only `ownership basis unprinted`
   or `unprinted ownership` supplies the unprinted marker. Quarter/half tokens without a year keep `None`;
   no current year is supplied. Explicit period and ownership metadata do not become extra numerical amounts.
 - `reliance::{Journal, ReleaseKey, ReissueRequest, MAX_JOURNAL_BYTES, MAX_JOURNAL_RECORDS}`. `Journal::create` uses

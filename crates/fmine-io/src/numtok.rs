@@ -63,12 +63,34 @@ pub enum BasisTok {
     Unprinted,
     PerOzSold,
     PerOzProduced,
+    PerLbSold,
+    PerLbProduced,
     ByProduct,
     CoProduct,
     GoldOunces,
     Geo,
     NonGaap,
     Scorecard,
+}
+
+impl BasisTok {
+    #[must_use]
+    pub const fn is_ownership(self) -> bool {
+        matches!(self, Self::Attributable | Self::Hundred | Self::Unprinted)
+    }
+
+    #[must_use]
+    pub const fn is_denominator(self) -> bool {
+        matches!(
+            self,
+            Self::PerOzSold | Self::PerOzProduced | Self::PerLbSold | Self::PerLbProduced
+        )
+    }
+
+    #[must_use]
+    pub const fn is_credit(self) -> bool {
+        matches!(self, Self::ByProduct | Self::CoProduct)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +218,10 @@ fn basis(text: &str, at: usize) -> Option<(usize, BasisTok)> {
         ("per oz produced", B::PerOzProduced),
         ("per ounce sold", B::PerOzSold),
         ("per oz sold", B::PerOzSold),
+        ("per pound produced", B::PerLbProduced),
+        ("per lb produced", B::PerLbProduced),
+        ("per pound sold", B::PerLbSold),
+        ("per lb sold", B::PerLbSold),
         ("gold equivalent", B::Geo),
         ("gold-equivalent", B::Geo),
         ("geo", B::Geo),
@@ -777,6 +803,9 @@ mod tests {
         let unspecified = one("$1,637/oz");
         assert_eq!(unspecified.currency, Some(Currency::Dollar));
         assert_eq!(unspecified.unit, Some(UnitTok::DollarPerOz));
+        assert_eq!(one("US$1.25/lb").unit, Some(UnitTok::UsdPerLb));
+        assert_eq!(one("$1.25/lb").unit, Some(UnitTok::DollarPerLb));
+        assert_eq!(one("C1 cash costs are US$1.25/lb").value, dec(125, 2));
         let n = one("1.6 koz");
         assert_eq!(
             (n.value, n.step, n.unit),
@@ -839,6 +868,10 @@ mod tests {
             ("consolidated", BasisTok::Hundred),
             ("per ounce sold", BasisTok::PerOzSold),
             ("per oz produced", BasisTok::PerOzProduced),
+            ("per pound sold", BasisTok::PerLbSold),
+            ("per lb sold", BasisTok::PerLbSold),
+            ("per pound produced", BasisTok::PerLbProduced),
+            ("per lb produced", BasisTok::PerLbProduced),
             ("by-product", BasisTok::ByProduct),
             ("co-product", BasisTok::CoProduct),
             ("gold ounces", BasisTok::GoldOunces),
