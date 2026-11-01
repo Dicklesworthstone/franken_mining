@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Coverage-guided fuzzing of every decoder (plan §32.4, PO-PORT-1; BD-017, BD-197). The targets are in fuzz/.
+# Coverage-guided fuzzing of every decoder and of whole `fmine` invocations (plan §32.4, PO-PORT-1, PO-ADIT-4;
+# BD-017, BD-197, BD-112). The targets are in fuzz/.
 #
 # Usage: scripts/fuzz.sh [seconds-per-target] [target ...]   (default 60 seconds, every target)
 #
@@ -20,7 +21,7 @@ root="$(cd "$here/.." && pwd)"
 secs="${1:-60}"
 shift $(($# > 0 ? 1 : 0))
 targets=("$@")
-[ "${#targets[@]}" -gt 0 ] || targets=(codec anchor journal xlsx numfmt registry record html cli)
+[ "${#targets[@]}" -gt 0 ] || targets=(codec anchor journal xlsx numfmt registry record html cli cli_run)
 
 base="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}"
 target_dir="$base/rch_target_fmine_fuzz"

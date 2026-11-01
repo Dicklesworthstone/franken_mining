@@ -1496,7 +1496,7 @@ planning/research/                                      research R1–R8 and pri
 planning/brenner/                                       hypothesis passes B1–B6
 planning/mor/audits/                                    AUDIT_1–AUDIT_5
 crates/                                                 the fmine-* workspace crates (scaffold in progress)
-fuzz/                                                   coverage-guided fuzz targets, one per decoder (scripts/fuzz.sh)
+fuzz/                                                   coverage-guided fuzz targets: decoders, CLI (scripts/fuzz.sh)
 registries/                                             verbs, units, CRS, calendars, refusals, lifts, budgets, topology
 docs/                                                   ADRs, delivery notes, CONTRACT template
 .beads/                                                 the work graph (JSONL is truth)

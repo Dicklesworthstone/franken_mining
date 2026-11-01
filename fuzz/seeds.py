@@ -100,7 +100,7 @@ def main() -> None:
     root, out = Path(sys.argv[1]), Path(sys.argv[2])
     seeds: dict[str, list[bytes]] = {t: [] for t in
                                      ("codec", "anchor", "journal", "xlsx", "numfmt", "registry", "record", "html",
-                                      "cli")}
+                                      "cli", "cli_run")}
 
     # codec: mode, script length, script (one read per byte), payload. A script byte's kind is its value mod 11 and
     # its bound its high nibble: every kind once, then bytes, strings and sequences under small, mid and no bounds.
@@ -180,7 +180,7 @@ def main() -> None:
 
     # cli: selector 0 and NUL-separated arguments, one seed per registered verb, plain and with common options;
     # selector 1 and NUL-separated envelope fields.
-    verbs = re.findall(rb'^path = "([^"]+)"', (reg / "verbs.toml").read_bytes(), re.M)
+    verbs = re.findall(rb'^path = "([^"]+)"', (reg / "verbs.toml").read_bytes(), re.MULTILINE)
     options = [b"--issuer", b"barrick", b"--through", b"2026Q2", b"--format", b"markdown", b"--workspace", b"w"]
     for v in verbs:
         words = v.split(b" ")
@@ -189,6 +189,72 @@ def main() -> None:
     seeds["cli"].append(b"\x00" + b"\x00".join([b"assure", b"public", b"--issuer", b"barrick", b"--output", b"o"]))
     seeds["cli"].append(b"\x01" + b"\x00".join(
         [b"assure public", b"what \"quoted\"", b"fmine robot-docs", b"why\tnow", b"w1", b"anc_x", b"00ff"]))
+
+    # cli_run: one byte per vocabulary entry, in the order fuzz_targets/cli_run.rs builds it (verb paths, then its
+    # FLAGS, PAIRS and VALUES). Each verb alone, with a selector, with options, and as a full mutation command. A
+    # tuple names a pair.
+    source = (root / "fuzz" / "fuzz_targets" / "cli_run.rs").read_text()
+    def block(name: str) -> str:
+        found = re.search(r"const " + name + r": &\[[^\n]*\] = &\[(.*?)\n\];", source, re.DOTALL)
+        return found.group(1) if found else ""
+    lit = r'"((?:[^"\\]|\\.)*)"'
+    flags, values = re.findall(lit, block("FLAGS")), re.findall(lit, block("VALUES"))
+    pairs = re.findall(r"\(\s*" + lit + r",\s*" + lit + r",?\s*\)", block("PAIRS"))
+    vocab = [v.decode() for v in verbs] + flags + pairs + values
+    assert len(vocab) <= 256 and len(flags) > 50 and len(pairs) > 40 and len(values) > 40
+    def run(*words) -> bytes:
+        return bytes(vocab.index(w) for w in words)
+    for v in verbs:
+        p = v.decode()
+        seeds["cli_run"] += [run(p), run(p, "--synthetic"), run(p, ("--format", "markdown")),
+                             run(p, ("--issuer", "barrick"), ("--through", "2025Q2"), "--as-of", "2026-01-15",
+                                 "--workspace", "--json")]
+    # Commands each parser accepts, so the fuzzer starts at the verbs behind them. The reliance verbs come in both
+    # forms: host clock (--trust-host-clock) and explicit trust inputs (--key, --now, --uncertainty-ns).
+    zero = "0" * 64
+    jr, hd, tr = ("--journal", "journal"), ("--head", zero), "--trust-host-clock"
+    now, unc = ("--now", "2026-11-01T00:00:00Z"), ("--uncertainty-ns", "0")
+    auth = (jr, ("--expected-head", zero), ("--key", "key"), now, unc)
+    seeds["cli_run"] += [
+        run("forecast journal init", jr, ("--cell", "demo"), ("--max-clock-skew-ms", "1"), tr),
+        *(run(v, jr, tr, hd, ("--request", "request.toml"))
+          for v in ("forecast journal register", "forecast journal freeze", "forecast journal outcome")),
+        run("forecast journal assess", jr, tr, hd, ("--cohort", "demo"), ("--as-of", "2026-10-31T00:00:00Z"),
+            ("--selector", "latest-as-of"), ("--expected-digest", zero)),
+        run("forecast journal inspect", jr, hd),
+        run("forecast journal report", jr, hd, ("--assessment", zero), ("--provenance", "provenance.toml")),
+        run("reliance init", jr, ("--release-key", "release.key"), ("--max-age-seconds", "300"),
+            ("--max-clock-skew-ms", "1")),
+        run("reliance init", jr, ("--key", "key"), now, unc, ("--max-age-ns", "10000000000"),
+            ("--max-skew-ns", "0")),
+        run("reliance issue", jr, hd, tr, "--synthetic", ("--release-key", "release.key"),
+            ("--output", "report.md"), ("--purpose", "review"), ("--recipient-role", "sponsor"),
+            ("--code-revision", "0123456789abcdef0123456789abcdef01234567"), ("--artifact-format", "json")),
+        run("reliance reuse", jr, hd, tr, ("--artifact", "report.json"), ("--output", "report.md")),
+        run("reliance reissue", jr, hd, tr, ("--release-key", "release.key"), ("--artifact", "report.json"),
+            ("--output", "report.md"), ("--source-issuance", zero), ("--recipient-role", "sponsor"),
+            ("--purpose", "review")),
+        run("reliance withdraw", jr, hd, tr, "--all-claims", ("--reason", "seeded-code-defect"),
+            ("--release-key", "release.key"), ("--digest", zero), ("--defect", "code-defect")),
+        run("reliance withdraw", zero, *auth, ("--reason", "seeded-code-defect"), ("--defect", "code-defect"),
+            ("--claim", "clm_00112233445566778899aabbccddeeff")),
+        run("reliance supersede", jr, hd, tr, ("--release-key", "release.key"), ("--digest", zero),
+            ("--replacement", zero)),
+        run("reliance supersede", zero, *auth, ("--replacement", zero)),
+        run("reliance refresh", jr, hd, tr, ("--release-key", "release.key")),
+        run("reliance refresh", *auth),
+        run("reliance recall", jr, ("--code-revision", "0123456789abcdef0123456789abcdef01234567")),
+        run("reliance check", zero, jr, hd, now, unc, ("--as-of", "2026-10-31T00:00:00Z")),
+        run("reliance check", jr, ("--digest", zero)),
+        run("recall", jr, ("--revision", "0123456789abcdef0123456789abcdef01234567")),
+        run("recall", jr, ("--claim", "clm_00112233445566778899aabbccddeeff")),
+        run("assure issue", "--synthetic", ("--output", "report.md"), *auth, ("--role", "sponsor"),
+            ("--purpose", "review")),
+        run("reliance export", "report", ("--output", "report.md"), jr, hd, now, unc),
+        run("forecast record score", ("--record", "record"), ("--as-of", "2026-10-31T00:00:00Z"),
+            ("--tsa-roots", "trusted.pem")),
+        run("lint", "draft.md", "--synthetic"),
+    ]
 
     for target, items in seeds.items():
         d = out / target

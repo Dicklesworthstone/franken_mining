@@ -89,3 +89,10 @@ path = "fuzz_targets/cli.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "cli_run"
+path = "fuzz_targets/cli_run.rs"
+test = false
+doc = false
+bench = false

@@ -592,10 +592,20 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   seeded discrepancy witnesses, joint-only conflicts and immutable review restrictions. The ignored real-corpus
   packet test retains the known Kibali and Porgera findings across both registered vintages.
 - `PO-ADIT-4` (BD-112, `tests/exit_codes.rs`): 400 seeded argument lists (Philox; half are edits of a
-  well-formed command for each verb) and every verb in both formats exit 0 or 2–9, with the envelope's
-  `exit_code` and `status` matching. The generator must reach ok, usage, exit-3 and other refusals. The built
-  binary, given a closed stdout, exits 5 with a line on stderr. This is a seeded generative test, not a
-  coverage-guided fuzzer, and no registry is present, so issuer runs past file loading are not reached.
+  well-formed command) and each skeleton in both formats exit 0 or 2–9, with the envelope's `exit_code` and
+  `status` matching. The skeletons cover nine verbs (assure public and challenges, guidance completion,
+  track-record, doctor, robot-docs, claim show, why and trace), not the forecast, reliance, mirror, check,
+  recovery or lint verbs. The generator must reach ok, usage, exit-3 and other refusals. The built binary, given
+  a closed stdout, exits 5 with a line on stderr. This is a seeded generative test, not a coverage-guided fuzzer,
+  and no registry is present, so issuer runs past file loading are not reached.
+- `PO-ADIT-4` under coverage-guided fuzzing (BD-112, `fuzz/fuzz_targets/cli_run.rs`, run by
+  `scripts/fuzz.sh`): `invoke` (parse, then execute) on argument lists drawn from a fixed vocabulary of every
+  path in `registries/verbs.toml`, every option, option–value pairs and junk values. Each must exit 0 or 2–9
+  with one line of JSON whose schema, `exit_code` and `status` agree. The workspace is always a missing
+  directory and no vocabulary entry holds a `/`, so every file a verb opens is missing and nothing is written
+  (every writer joins its path to the workspace). The seeds include a command each parser accepts for the forecast-journal, reliance, assure-issue,
+  record-score and lint verbs. Three registered paths (`repair plan`, `repair apply`, `robot schema`) have no
+  implementation and exit 2. No CI run has executed the target; it has run locally for minutes (see BD-112).
 - `PO-CLI-RECOVERY` (bd-srqc): the synthetic command must return both cited model outputs with deterministic
   JSON, false authority flags and null ledger anchor/certificate. Invalid selector combinations are usage
   errors. The registered command preserves missing-input and altered-source refusals and the explicit
