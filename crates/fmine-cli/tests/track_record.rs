@@ -19,6 +19,8 @@ mod tests {
 
     const DOCUMENT: &[u8] = b"%PDF-1.7 explicitly synthetic 2023 guidance, never parsed";
     const DOCUMENT_2024: &[u8] = b"%PDF-1.7 explicitly synthetic 2024 guidance, never parsed";
+    const TECHNICAL: &[u8] = b"%PDF-1.7 invented optional technical inputs, never parsed";
+    const TRACK_MODES: [&[&str]; 2] = [&[], &["--as-of", "2026-02-02"]];
     const ORIGINAL: &str = "Synthetic_2024Q4.xlsx";
     const LATER: &str = "Synthetic_2025Q4.xlsx";
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -339,6 +341,31 @@ mod tests {
         );
     }
 
+    fn dated_workspace(tag: &str) -> PathBuf {
+        let root = workspace(tag);
+        let path = registry_path(&root, "synthetic");
+        let registry = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            path,
+            registry.replace(
+                "retrieved_utc = \"synthetic\"",
+                "retrieved_utc = \"2026-02-01T00:00:00Z\"",
+            ),
+        )
+        .unwrap();
+        root
+    }
+
+    fn technical_entry(reader: &str, token: &str) -> String {
+        format!(
+            "\n[[entry]]\ndoc = \"Technical.pdf\"\ndoc_sha256 = \"{}\"\npage = 1\n\
+         table = \"Invented technical inputs\"\nrow = \"Site A\"\ncol = \"Dry feed\"\n\
+         token = \"{token}\"\nquantity = \"technical_site_a_remaining_dry_feed_mt\"\n\
+         unit = \"dry_mt\"\nbasis = \"100%;scenario=plan\"\nperiod = \"2024H2\"\nreader = \"{reader}\"\n",
+            sha256(TECHNICAL).to_hex(),
+        )
+    }
+
     #[test]
     fn cutoff_and_source_reload_preserve_snapshot_identity() {
         let root = workspace("reload");
@@ -615,6 +642,26 @@ mod tests {
         assert!(price.contains("Guidance2023.pdf:p1:Invented price sensitivity"));
         assert!(price.contains("Prices.pdf:p1:Invented price sensitivity"));
         assert_eq!(result, successful(&root, &["--through", "2024Q2"]));
+        // Prefix scoping keeps both price families while excluding an unrelated pending/conflicted
+        // technical locator on the very same guidance document.
+        let path = transcriptions_path(&root, "synthetic");
+        let readings = std::fs::read_to_string(&path).unwrap();
+        let optional = |reader, token| {
+            technical_entry(reader, token)
+                .replace("Technical.pdf", "Guidance2023.pdf")
+                .replace(&sha256(TECHNICAL).to_hex(), &sha256(DOCUMENT).to_hex())
+        };
+        for extra in [
+            optional("optional-a", "10"),
+            format!(
+                "{}{}",
+                optional("optional-a", "10"),
+                optional("optional-b", "11")
+            ),
+        ] {
+            std::fs::write(&path, format!("{readings}{extra}")).unwrap();
+            assert_eq!(result, successful(&root, &["--through", "2024Q2"]));
+        }
         let unbounded = successful(&root, &[]);
         let annual = row(&unbounded.payload_json, "aisc_usd_per_oz", 2023);
         let price = annual.split_once("\"price_sensitivity\":").unwrap().1;
@@ -720,6 +767,137 @@ mod tests {
                     "Guidance2023.pdf:p1:Invented price sensitivity:{source_row}/2023FY"
                 )),
                 "{price}"
+            );
+        }
+    }
+
+    #[test]
+    fn optional_technical_failures_do_not_block_either_track_record_path() {
+        let root = dated_workspace("optional-technical");
+        let before: Vec<_> = TRACK_MODES
+            .iter()
+            .map(|extra| successful(&root, extra))
+            .collect();
+        let source_path = registry_path(&root, "synthetic");
+        let mut registry = std::fs::read_to_string(&source_path).unwrap();
+        write!(registry,
+        "\n[[document]]\nfile = \"Technical.pdf\"\ndir = \"documents\"\nkind = \"technical_report\"\n\
+         url = \"https://example.invalid/Technical.pdf\"\nurl_basis = \"W1 table\"\n\
+         published_at = \"2024-01-01\"\npublished_at_basis = \"FACT: invented technical fixture\"\n\
+         pages = 1\nbytes = {}\nsha256 = \"{}\"\n",TECHNICAL.len(),sha256(TECHNICAL).to_hex()).unwrap();
+        std::fs::write(source_path, registry).unwrap();
+        let path = transcriptions_path(&root, "synthetic");
+        let base = std::fs::read_to_string(&path).unwrap();
+        let agreed = format!(
+            "{base}{}{}",
+            technical_entry("reader_a", "10"),
+            technical_entry("reader_b", "10")
+        );
+        std::fs::write(&path, &agreed).unwrap();
+        let unchanged = || {
+            for (extra, expected) in TRACK_MODES.iter().zip(&before) {
+                assert_eq!(&successful(&root, extra), expected, "mode {extra:?}");
+            }
+        };
+        unchanged(); // Missing optional bytes are outside both track-record populations.
+        std::fs::write(
+            root.join("documents/Technical.pdf"),
+            b"altered optional bytes",
+        )
+        .unwrap();
+        unchanged();
+        std::fs::write(root.join("documents/Technical.pdf"), TECHNICAL).unwrap();
+        std::fs::write(
+            &path,
+            format!("{base}{}", technical_entry("reader_a", "10")),
+        )
+        .unwrap();
+        unchanged(); // Pending optional reader.
+        std::fs::write(
+            &path,
+            format!(
+                "{base}{}{}",
+                technical_entry("reader_a", "10"),
+                technical_entry("reader_b", "11")
+            ),
+        )
+        .unwrap();
+        unchanged(); // Disagreeing optional readers.
+        // Selection never bypasses structural registry/document-identity validation.
+        std::fs::write(
+            &path,
+            agreed.replace(&sha256(TECHNICAL).to_hex(), &"0".repeat(64)),
+        )
+        .unwrap();
+        for extra in TRACK_MODES {
+            let result = invoke(&root, extra);
+            assert_eq!(result.exit_code, 5);
+            assert_eq!(result.refusal.as_ref().unwrap().code, "FMINE-REF-506");
+        }
+    }
+
+    #[test]
+    fn prefix_selection_retains_conflicting_guidance_readers_and_unsupported_keys() {
+        let root = dated_workspace("guidance-prefix");
+        let path = transcriptions_path(&root, "synthetic");
+        let base = std::fs::read_to_string(&path).unwrap();
+        let entry = |reader: &str, row: &str, quantity: &str| {
+            format!(
+                "\n[[entry]]\ndoc = \"Guidance2024.pdf\"\ndoc_sha256 = \"{}\"\npage = 1\n\
+         table = \"Invented guidance\"\nrow = \"{row}\"\ncol = \"2024\"\n\
+         token = \"90 - 110\"\nquantity = \"{quantity}\"\nunit = \"koz\"\n\
+         basis = \"attributable:3/4\"\nperiod = \"2024FY\"\nreader = \"{reader}\"\n",
+                sha256(DOCUMENT_2024).to_hex(),
+            )
+        };
+        // Two readers select this locator; a third's non-guidance key must not be filtered away.
+        std::fs::write(
+            &path,
+            format!(
+                "{base}{}",
+                entry(
+                    "reader_c",
+                    "Site A production_koz",
+                    "technical_site_a_another_interpretation"
+                )
+            ),
+        )
+        .unwrap();
+        for extra in TRACK_MODES {
+            let result = invoke(&root, extra);
+            assert_eq!(result.refusal.as_ref().unwrap().code, "FMINE-REF-202");
+        }
+        let unsupported = "guidance_site_a_unsupported_output";
+        std::fs::write(
+            &path,
+            format!(
+                "{base}{}{}",
+                entry("reader_a", "Site A unsupported output", unsupported),
+                entry("reader_b", "Site A unsupported output", unsupported),
+            ),
+        )
+        .unwrap();
+        let public = successful(&root, TRACK_MODES[1]);
+        assert!(public.payload_json.contains("\"unsupported_guidance\":[{\"at\":\"Guidance2024.pdf:p1:Invented guidance:Site A unsupported output/2024\""));
+        assert!(
+            public
+                .payload_json
+                .contains(&format!("\"quantity\":\"{unsupported}\""))
+        );
+        // Legacy mode's existing explicit unsupported-metric refusal is preserved, not silently omitted.
+        assert_refused(&root, "FMINE-REF-201", 3);
+        std::fs::write(
+            &path,
+            format!(
+                "{base}{}",
+                entry("reader_a", "Site A unsupported output", unsupported)
+            ),
+        )
+        .unwrap();
+        for extra in TRACK_MODES {
+            assert_eq!(
+                invoke(&root, extra).refusal.as_ref().unwrap().code,
+                "FMINE-REF-202"
             );
         }
     }

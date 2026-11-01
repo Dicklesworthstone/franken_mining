@@ -210,6 +210,11 @@ Production basis is `100%` or `attributable:n/d`. Cost basis also declares its d
 explicit. Unknown guidance quantities, missing agreed readings and changed source bytes refuse. The synthetic
 command is an invented known-answer demonstration through the same binding and scoring code.
 
+Both report modes select guidance before checking document bytes and reader agreement; the retrospective
+mode also selects its price-assumption and realized-price inputs. Adding incomplete or unusable optional
+technical readings does not invalidate these reports. Unsupported guidance keys and every reader at a
+selected locator remain in scope; the complete registry still needs valid syntax and registered identities.
+
 For AISC, the report can show a cited price sensitivity beside the unconditional score:
 `p = royalty * (1 - assumed_price / realized_price)`. It requires every declared original quarter from
 2024Q1 through 2026Q2 (or the earlier explicit `--through` bound) to admit a common royalty/price coefficient.
@@ -233,7 +238,8 @@ or controllability conclusion.
 Incomplete optional price transcriptions leave the unconditional track record available. The price result
 stays unsplit and names pending or conflicting locators, reader roles, quantity identities and checked
 document hashes. Guidance must still have complete two-reader agreement, including when readers disagree
-about whether a row is guidance. Missing or altered cited document bytes retain their existing refusals.
+about whether a row is guidance. Missing or altered selected guidance/price document bytes retain their
+existing refusals. Unrelated technical sources do not block either track-record mode.
 Price sensitivity belongs to the retrospective report; `--price-subject` cannot be combined with `--as-of`.
 
 ### Assess a frozen forecast cohort
@@ -472,13 +478,40 @@ The **T1 historical comparison** keeps each quarter's sales and costs coupled. S
 and cost ranges cannot establish a feasible result. A positive result includes an independently checked exact
 replay; an exclusion includes checked certificates and applies only to those historical windows under the
 declared sales assumption. Missing or incompatible windows have explicit reasons, and no usable history stays
-**T3: necessary arithmetic conditions only**. Solver limits remain indeterminate.
+**T3 for the historical comparison**. Solver limits remain indeterminate.
+
+A separate **T2 technical production comparison** binds the remaining requirement to a registered
+`technical_report` PDF and three agreed, page-cited inputs. Use these quantity keys and units, with site
+hyphens written as underscores:
+
+| Quantity key | Unit | Meaning |
+|---|---|---|
+| `technical_<site>_remaining_dry_feed_mt` | `dry_mt` | Million dry metric tonnes over the remaining months |
+| `technical_<site>_head_grade_g_per_t` | `g_per_dry_t` | Gold head grade per dry metric tonne |
+| `technical_<site>_recovery_percent` | `percent` | Gold recovery in explicit percent units |
+
+All three rows must come from the same latest eligible document and declare the same basis:
+`100%;scenario=declared_upper_bound`, `100%;scenario=plan`, or `100%;scenario=nameplate`.
+Their period must be the exact remaining support: `YYYYQ2-Q4` after Q1, `YYYYH2` after Q2, or `YYYYQ4`
+after Q3. Full-mine inputs are converted exactly; the guidance ownership share scales production only.
+No annual rate, average grade or life-of-mine figure is silently converted into a remaining-period bound.
+Declared upper boundaries are exact; printed plan/nameplate points retain their rounding intervals.
+The output includes the scenario production ceiling and optimistic required grade with exact Claims and
+citations. Plan/nameplate comparisons remain conditional, and no T2 result supplies a joint production/AISC
+witness. Missing, altered, disputed or inapplicable optional technical evidence gives a named **T3 technical
+result** while preserving the arithmetic requirements and historical comparison. Newer incomplete inputs
+cannot silently fall back to an older complete report. The synthetic command exercises the positive T2 path.
 
 The report includes the guidance vintage, as-of selection and all source hashes. Workbook availability uses its
 verified retrieval date conservatively where no publication date is registered. JSON preserves exact Claims,
 source-quarter witnesses and certificates; Markdown presents requirements, comparison results and citations.
-Its content digest creates no forecast registration or ledger certificate, and neither historical tier gives a
-probability or mine-capacity conclusion.
+Its content digest creates no forecast registration or ledger certificate, and neither comparison gives a
+probability or physical-impossibility conclusion. A real issuer's T2 result still needs applicable registered
+technical-report evidence; this implementation does not bundle or invent those inputs. Prospective forecast
+registration and the remaining BD-342/M0 acceptance gates stay open.
+
+For a separately selected explicit upper-limit document, use `--capacity-document` and the schema below.
+Its result appears alongside the automatic registered scenario; each retains its own input interpretation.
 
 #### Add an explicit physical production ceiling
 

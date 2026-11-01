@@ -395,7 +395,7 @@ mod tests {
                 72,
                 "Additions",
                 "1.2",
-                "additions"
+                "guidance_site_a_production_koz"
             ),
             entry(
                 "reader_b",
@@ -403,7 +403,7 @@ mod tests {
                 72,
                 "Additions",
                 "1.3",
-                "additions"
+                "guidance_site_a_production_koz"
             ),
         );
         std::fs::write(&transcript_path, future_rows).unwrap();
@@ -458,7 +458,7 @@ mod tests {
                 72,
                 "Additions",
                 "1.2",
-                "additions"
+                "guidance_site_a_production_koz"
             ),
             entry(
                 "reader_b",
@@ -466,7 +466,7 @@ mod tests {
                 72,
                 "Additions",
                 "1.2",
-                "additions"
+                "guidance_site_a_production_koz"
             ),
         );
         std::fs::write(&transcript_path, agreed).unwrap();

@@ -10,7 +10,9 @@
 //! The sales scenario repeats the preceding year's FY-minus-YTD sales, with both cited vintages retained.
 //! It is an assumption, not a forecast. T1 jointly replays complete original-vintage rolling windows,
 //! preserving each source quarter and its sales/rate dependence. No usable history is T3. Neither tier
-//! supplies a probability or a physical-capacity verdict.
+//! supplies a probability or a physical-capacity verdict. A separate optional T2 production comparison
+//! binds same-period technical-report limits or declared plan/nameplate scenarios. Its absence or failure
+//! remains T3/indeterminate and never substitutes for a joint production-cost witness.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -34,13 +36,16 @@ use fmine_units::UnitsError;
 use crate::js;
 use crate::key::{KeyedCell, OwnershipBasis, PublicValue, Scope};
 use crate::sources::{IssuerProfile, load_issuer_profile};
-use crate::transcribe::{CheckedDocument, TranscriptionReport, load_transcription_report_as_of};
+use crate::transcribe::{
+    CheckedDocument, TranscriptionReport, load_transcription_quantities_as_of,
+};
 
+pub mod capacity;
 pub mod history;
 pub mod track_record;
 
 const COST_BASIS: &str = "issuer-reported-per-sold-oz";
-pub const NO_CLAIM: &str = "Arithmetic and finite historical-window comparisons under a declared sales assumption; no forecast, probability of meeting guidance, physical-capacity verdict or regulatory claim.";
+pub const NO_CLAIM: &str = "Arithmetic and finite historical-window comparisons under a declared sales assumption; no forecast, probability of meeting guidance, mine-wide physical-capacity conclusion or regulatory claim.";
 
 type Result<T> = std::result::Result<T, Refusal>;
 
@@ -51,6 +56,7 @@ pub struct GuidanceCompletionReport {
     pub history: kernel::quarters::QuarterlyHistoryReport,
     pub history_exclusions: Vec<history::HistoryExclusion>,
     pub history_sources: Vec<history::HistorySourceWindow>,
+    pub technical: capacity::TechnicalAssessment,
     /// Digest of the deterministic report body, including the requested cut and every selected source.
     pub digest: Digest32,
     body: String,
@@ -220,17 +226,21 @@ fn site_key(subject: &str) -> String {
         .join("-")
 }
 
+fn guidance_quantities(site: &str) -> [String; 2] {
+    let stem = format!("guidance_{}", site.replace('-', "_"));
+    [
+        format!("{stem}_production_koz"),
+        format!("{stem}_aisc_usd_per_oz"),
+    ]
+}
+
 fn guidance_rows<'a>(
     report: &'a TranscriptionReport,
     site: &str,
     year: u16,
     as_of: &str,
 ) -> Result<([&'a Accepted; 2], &'a CheckedDocument)> {
-    let stem = format!("guidance_{}", site.replace('-', "_"));
-    let keys = [
-        format!("{stem}_production_koz"),
-        format!("{stem}_aisc_usd_per_oz"),
-    ];
+    let keys = guidance_quantities(site);
     let period = format!("{year}FY");
     if !report.agreement.is_consistent() {
         return Err(refuse(
@@ -328,7 +338,10 @@ fn sha_bytes(hex: &str) -> Result<[u8; 32]> {
     Ok(out)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "source quantity plus its explicit Claim metadata"
+)]
 fn quantity_claim(
     metric: &str,
     value: Quantity,
@@ -581,7 +594,10 @@ fn period_code(year: u16, months: u8) -> String {
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "requested evidence cut, required sources and independently scoped optional technical evidence"
+)]
 fn assemble(
     issuer: &str,
     site: &str,
@@ -590,6 +606,7 @@ fn assemble(
     availability: &str,
     transcripts: &TranscriptionReport,
     cells: &[KeyedCell],
+    technical_source: Result<Option<&TranscriptionReport>>,
     synthetic: bool,
 ) -> Result<GuidanceCompletionReport> {
     let (year, months) = request(through, as_of)?;
@@ -702,6 +719,13 @@ fn assemble(
     };
     let completion = kernel::complete(&inputs)?;
     let historical = history::compare(&inputs, cells)?;
+    let technical = capacity::assess(
+        &completion.remaining_production,
+        technical_source,
+        site,
+        as_of,
+        synthetic,
+    );
     let selected = [production, sold, aisc, historic_fy, historic_ytd];
     let sources = selected
         .iter()
@@ -723,7 +747,7 @@ fn assemble(
         .collect::<Vec<_>>()
         .join(",");
     let body = format!(
-        "\"schema\":\"fmine.guidance.completion.v1\",\"lane\":{},\"gate_eligible\":false,\"issuer\":{},\"site\":{},\"through\":{},\"as_of\":{},\"workbooks_available_by\":{},\"availability_basis\":\"verified registry retrieval; workbook publication dates unregistered\",\"guidance_published_at\":{},\"guidance_published_at_basis\":{},\"envelope_tier\":{},\"verdict\":{},\"sales_scenario\":\"ASSUMPTION: repeat preceding-year FY-minus-YTD sold ounces, using that year's corresponding registered releases; not a forecast\",\"seasonality\":\"Same-season rolling windows are marked as calendar context only; all equal-duration windows enter the historical comparison.\",\"inputs\":{{\"production_guidance\":{},\"aisc_guidance\":{},\"ytd_production\":{},\"ytd_sold\":{},\"ytd_aisc\":{},\"remaining_sold\":{}}},\"requirements\":{{\"remaining_production\":{},\"ytd_aisc_spend\":{},\"remaining_aisc_spend\":{},\"remaining_aisc_rate\":{}}},\"frontier\":[{}],\"spending_requirement\":{},\"guidance_sources\":[{}],\"source_claims\":[{}],\"historical_sales\":[{},{}],\"history\":{},\"warnings\":[\"Historical remaining sales subtract two published vintages; restatements and future inventory changes are not predicted.\",\"AISC comparisons require the two-reader assertion of the same issuer-reported definition; adjusted guidance is not supported.\",\"Historical exclusion concerns only the supplied finite windows under the declared sales scenario; no technical-report capacity envelope has been supplied.\"],\"no_claim\":{}",
+        "\"schema\":\"fmine.guidance.completion.v1\",\"lane\":{},\"gate_eligible\":false,\"issuer\":{},\"site\":{},\"through\":{},\"as_of\":{},\"workbooks_available_by\":{},\"availability_basis\":\"verified registry retrieval; workbook publication dates unregistered\",\"guidance_published_at\":{},\"guidance_published_at_basis\":{},\"envelope_tier\":{},\"verdict\":{},\"sales_scenario\":\"ASSUMPTION: repeat preceding-year FY-minus-YTD sold ounces, using that year's corresponding registered releases; not a forecast\",\"seasonality\":\"Same-season rolling windows are marked as calendar context only; all equal-duration windows enter the historical comparison.\",\"inputs\":{{\"production_guidance\":{},\"aisc_guidance\":{},\"ytd_production\":{},\"ytd_sold\":{},\"ytd_aisc\":{},\"remaining_sold\":{}}},\"requirements\":{{\"remaining_production\":{},\"ytd_aisc_spend\":{},\"remaining_aisc_rate\":{},\"remaining_aisc_spend\":{}}},\"frontier\":[{}],\"spending_requirement\":{},\"guidance_sources\":[{}],\"source_claims\":[{}],\"historical_sales\":[{},{}],\"history\":{},\"technical\":{},\"warnings\":[\"Historical remaining sales subtract two published vintages; restatements and future inventory changes are not predicted.\",\"AISC comparisons require the two-reader assertion of the same issuer-reported definition; adjusted guidance is not supported.\",\"Historical joint tests and technical production comparisons retain separate tiers and assumptions; no technical input supplies a joint production-cost witness.\"],\"no_claim\":{}",
         js(if synthetic { "synthetic" } else { "public" }),
         js(issuer),
         js(site),
@@ -742,8 +766,8 @@ fn assemble(
         quantity_json(&inputs.remaining_sold),
         quantity_json(&completion.remaining_production),
         quantity_json(&completion.ytd_aisc_spend),
-        quantity_json(&completion.remaining_aisc_spend),
         quantity_json(&completion.remaining_aisc_rate),
+        quantity_json(&completion.remaining_aisc_spend),
         frontier,
         js(match completion.spending_requirement {
             kernel::SpendingRequirement::Nonnegative => "nonnegative",
@@ -755,6 +779,7 @@ fn assemble(
         quantity_json(&fy),
         quantity_json(&hytd),
         history::to_json(&historical),
+        capacity::to_json(&technical),
         js(NO_CLAIM)
     );
     Ok(GuidanceCompletionReport {
@@ -763,6 +788,7 @@ fn assemble(
         history: historical.comparison,
         history_exclusions: historical.exclusions,
         history_sources: historical.sources,
+        technical,
         digest: blake3_hash(body.as_bytes()),
         body,
     })
@@ -849,7 +875,14 @@ pub fn run_public(
     }
     let profile = load_issuer_profile(root, issuer)?.through(through)?;
     let availability = available_by(&profile, as_of)?;
-    let transcripts = load_transcription_report_as_of(&profile, root, as_of)?.ok_or_else(|| refuse(RefusalCode::NoClaimInDomain201, format!("registries/transcriptions/{issuer}.toml is absent; two readers must transcribe the guidance with registered document hashes and publication dates")))?;
+    let transcripts = load_transcription_quantities_as_of(&profile, root, as_of, &guidance_quantities(site), None)?.ok_or_else(|| refuse(RefusalCode::NoClaimInDomain201, format!("registries/transcriptions/{issuer}.toml is absent; two readers must transcribe the guidance with registered document hashes and publication dates")))?;
+    let technical = load_transcription_quantities_as_of(
+        &profile,
+        root,
+        as_of,
+        &capacity::quantities(site),
+        None,
+    );
     let claims = crate::key::mine_stats::load_claims(&profile, root)?;
     assemble(
         issuer,
@@ -859,6 +892,7 @@ pub fn run_public(
         &availability,
         &transcripts,
         &claims.claims,
+        technical.as_ref().map(Option::as_ref).map_err(Clone::clone),
         false,
     )
 }
@@ -866,6 +900,7 @@ pub fn run_public(
 /// A deterministic invented example through the same source-selection and completion path, never gate evidence.
 pub fn run_synthetic() -> Result<GuidanceCompletionReport> {
     let (transcripts, cells) = synthetic_evidence()?;
+    let technical = capacity::synthetic_report()?;
     assemble(
         "synthetic",
         "example-mine",
@@ -874,6 +909,7 @@ pub fn run_synthetic() -> Result<GuidanceCompletionReport> {
         "2030-07-31",
         &transcripts,
         &cells,
+        Ok(Some(&technical)),
         true,
     )
 }
@@ -1017,6 +1053,7 @@ mod tests {
             "2030-07-31",
             t,
             cells,
+            Ok(None),
             true,
         )
     }

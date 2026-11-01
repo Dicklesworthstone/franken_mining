@@ -5,8 +5,10 @@ use std::fmt::Write as _;
 
 use fmine_claim::Claim;
 use fmine_core::Digest32;
+use fmine_metrics::capacity::{CapacityVerdict, PhysicalLimit};
 use fmine_metrics::guidance::{EnvelopeTier, HistoryVerdict, Ownership, Period, Quantity};
 use fmine_numerics::exact_feas::{Interval, Rat};
+use fmine_public::guidance::capacity::{TechnicalAssessment, TechnicalScenarioKind};
 use fmine_public::guidance::{GuidanceCompletionReport, NO_CLAIM};
 
 pub(super) fn text(value: &str) -> String {
@@ -83,6 +85,99 @@ fn row(out: &mut String, name: &str, claim: &Claim<Quantity>, unit: &str) {
     );
 }
 
+fn physical_row(out: &mut String, name: &str, claim: &Claim<PhysicalLimit>, unit: &str) {
+    let _ = writeln!(
+        out,
+        "| {name} | {} {unit} | {} | `{}` |",
+        interval(claim.value.interval),
+        text(&format!("{:?}", claim.evidence)),
+        claim.claim_id
+    );
+}
+
+fn technical(out: &mut String, assessment: &TechnicalAssessment) {
+    out.push_str("## Automatic technical-report scenario\n\n");
+    let TechnicalAssessment::Compared(comparison) = assessment else {
+        if let TechnicalAssessment::Indeterminate { reason } = assessment {
+            let _ = writeln!(
+                out,
+                "**T3 — technical comparison indeterminate.** {}: {}\n",
+                reason.code,
+                text(&reason.what)
+            );
+        }
+        out.push_str("The arithmetic requirements and any historical-window comparison remain available. This automatic selection supplies no production ceiling; an explicitly selected document is assessed separately.\n\n");
+        return;
+    };
+    let scenario = match comparison.kind {
+        TechnicalScenarioKind::DeclaredUpperBound => "declared upper bounds",
+        TechnicalScenarioKind::Plan => "stated plan scenario",
+        TechnicalScenarioKind::Nameplate => "stated nameplate scenario",
+    };
+    let verdict = match comparison.result.verdict {
+        CapacityVerdict::ExceedsStatedProductionCeiling => {
+            "The remaining production requirement exceeds the result of this stated scenario."
+        }
+        CapacityVerdict::NotExcluded => {
+            "The stated scenario does not exclude the remaining production requirement. This does not establish feasibility."
+        }
+        CapacityVerdict::AlreadySatisfied => {
+            "The production requirement is already satisfied across the supplied bounds."
+        }
+    };
+    let _ = writeln!(
+        out,
+        "**T2 — {scenario}.** {verdict}\n\nSource: {}; published {}; date basis: {}.\n\n\
+         This comparison concerns production only. It does not supply a joint production/AISC witness or establish mine capacity. \
+         Plan and nameplate values remain conditional scenarios. No annual rate is prorated and no grade average becomes an upper bound.\n\n\
+         | Quantity | Exact bounds | Evidence | Claim |\n|---|---|---|---|",
+        text(&comparison.document.file),
+        text(&comparison.document.published_at),
+        text(&comparison.document.published_at_basis)
+    );
+    for (name, claim, unit) in [
+        (
+            "Remaining dry feed, 100% mine basis",
+            &comparison.limits.feed,
+            "Mt",
+        ),
+        (
+            "Feed head grade",
+            &comparison.limits.grade,
+            "g per dry tonne",
+        ),
+        ("Recovery", &comparison.limits.recovery, "fraction"),
+    ] {
+        physical_row(out, name, claim, unit);
+    }
+    row(
+        out,
+        "Maximum production under supplied limits",
+        &comparison.result.maximum_production,
+        "koz, on the guidance ownership basis",
+    );
+    physical_row(
+        out,
+        "Optimistic required head grade",
+        &comparison.result.optimistic_required_grade,
+        "g per dry tonne",
+    );
+    out.push_str("\nThe required grade uses the highest supplied dry-feed and recovery bounds. A signed requirement is retained; the separate AISC frontier and historical tests still apply.\n\n\
+                  | Page citation | Printed token | Unit | Basis | Period |\n|---|---|---|---|---|\n");
+    for source in &comparison.sources {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} |",
+            text(&source.locator.to_string()),
+            text(&source.token),
+            text(&source.unit),
+            text(&source.basis),
+            text(&source.period)
+        );
+    }
+    out.push('\n');
+}
+
 pub(crate) fn render(report: &GuidanceCompletionReport, selection: &str) -> String {
     render_inner(report, selection, None)
 }
@@ -108,7 +203,7 @@ fn render_inner(
     let inputs = &report.inputs;
     let tier = match report.history.tier {
         EnvelopeTier::T1 => "T1 — finite historical windows",
-        EnvelopeTier::T3 => "T3 — necessary arithmetic conditions only",
+        EnvelopeTier::T3 => "T3 — historical joint comparison unavailable",
     };
     let verdict = match report.history.verdict {
         HistoryVerdict::WithinEnvelope => {
@@ -165,7 +260,9 @@ fn render_inner(
     ] {
         row(&mut out, name, claim, unit);
     }
-    out.push_str("\nClosed bounds retain printed rounding uncertainty. Approximate decimal displays are marked ≈; the accompanying fractions remain exact. Signed requirements are retained. The Evidence column preserves the weakest input evidence; it does not mean the issuer asserted the computed requirement or the replay assumption.\n\n## Historical joint comparison\n\nA marginal production success and a marginal cost success do not establish joint feasibility. Only a checked joint witness does. Exclusion is limited to the supplied finite historical windows; it is not a mine-capacity conclusion or a forecast.\n\n");
+    out.push_str("\nClosed bounds retain printed rounding uncertainty. Approximate decimal displays are marked ≈; the accompanying fractions remain exact. Signed requirements are retained. The Evidence column preserves the weakest input evidence; it does not mean the issuer asserted the computed requirement or the replay assumption.\n\n");
+    technical(&mut out, &report.technical);
+    out.push_str("## Historical joint comparison\n\nA marginal production success and a marginal cost success do not establish joint feasibility. Only a checked joint witness does. Exclusion is limited to the supplied finite historical windows; it is not a mine-capacity conclusion or a forecast.\n\n");
     if report.history.checks.is_empty() {
         out.push_str("No complete admissible historical window was supplied.\n\n");
     } else {
@@ -258,6 +355,15 @@ fn render_inner(
             anchors.extend(source.claim.anchors.iter());
         }
     }
+    if let TechnicalAssessment::Compared(comparison) = &report.technical {
+        for claim in [
+            &comparison.limits.feed,
+            &comparison.limits.grade,
+            &comparison.limits.recovery,
+        ] {
+            anchors.extend(claim.anchors.iter());
+        }
+    }
     out.push_str("\n## Source citations\n\n| Source | Locator | SHA-256 |\n|---|---|---|\n");
     for anchor in anchors {
         let _ = writeln!(
@@ -268,11 +374,10 @@ fn render_inner(
             Digest32(anchor.artifact_sha256).to_hex()
         );
     }
+    out.push_str("\nAll four INV-002 authority flags remain false. Historical seasonality is context only. Technical comparisons are conditional on their cited scenarios and do not establish a probability of meeting guidance.\n");
     if let Some(capacity) = capacity_markdown {
-        out.push_str("\nAll four INV-002 authority flags remain false. Historical seasonality remains context only; the explicit physical limits below supply a separate production-only exclusion test.\n\n");
+        out.push_str("\nThe explicitly selected physical limits below supply a separate production-only exclusion test. They do not replace the automatic scenario or historical joint comparison.\n\n");
         out.push_str(capacity);
-    } else {
-        out.push_str("\nAll four INV-002 authority flags remain false. Historical seasonality is context only; no probability of meeting guidance or technical-report capacity claim is made.\n");
     }
     out
 }
@@ -298,6 +403,44 @@ mod tests {
         assert!(rendered.contains("Original support"));
         assert!(rendered.contains("Hypothetical replay"));
         assert_eq!(rendered, render(&report, "<script>|[link](bad)\n# forged"));
+    }
+
+    #[test]
+    fn technical_scenario_retains_its_evidence_and_production_only_boundary() {
+        let mut report = fmine_public::guidance::run_synthetic().unwrap();
+        let rendered = render(&report, "Synthetic scenario");
+        assert!(rendered.contains("**T2 —"));
+        assert!(rendered.contains("Optimistic required head grade"));
+        assert!(rendered.contains("does not supply a joint production/AISC witness"));
+        assert!(rendered.contains("Maximum production under supplied limits"));
+        let TechnicalAssessment::Compared(comparison) = &mut report.technical else {
+            panic!("the synthetic example must exercise the technical adapter")
+        };
+        for source in &comparison.sources {
+            assert!(rendered.contains(&text(&source.locator.to_string())));
+            assert!(rendered.contains(&source.doc_sha256));
+        }
+        comparison.document.file = "<script>|[source](bad)\n# forged".into();
+        let escaped = render(&report, "Synthetic scenario");
+        assert!(!escaped.contains("<script>"));
+        assert!(!escaped.contains("\n# forged"));
+    }
+
+    #[test]
+    fn missing_technical_inputs_do_not_hide_the_requirements_or_history() {
+        let mut report = fmine_public::guidance::run_synthetic().unwrap();
+        report.technical = TechnicalAssessment::Indeterminate {
+            reason: fmine_evidence::Refusal::new(
+                fmine_evidence::RefusalCode::NoClaimInDomain201,
+                "No agreed technical inputs",
+            ),
+        };
+        let rendered = render(&report, "Synthetic scenario");
+        assert!(rendered.contains("T3 — technical comparison indeterminate"));
+        assert!(rendered.contains("FMINE-REF-201"));
+        assert!(rendered.contains("Remaining production"));
+        assert!(rendered.contains("Historical joint comparison"));
+        assert!(!rendered.contains("Maximum production under supplied limits"));
     }
 
     #[test]
@@ -387,12 +530,17 @@ mod tests {
         assert!(with_capacity.contains("Historical joint comparison"));
         assert!(with_capacity.contains("T2 production ceiling"));
         assert!(with_capacity.contains("Not excluded."));
-        assert!(with_capacity.contains("explicit physical limits"));
+        assert!(with_capacity.contains("explicitly selected physical limits"));
+        assert!(with_capacity.contains("Automatic technical-report scenario"));
+        assert!(with_capacity.contains("Maximum production under supplied limits"));
         assert!(!with_capacity.contains(
             "no probability of meeting guidance or technical-report capacity claim is made"
         ));
-        assert!(ordinary.contains(
+        assert!(!ordinary.contains(
             "no probability of meeting guidance or technical-report capacity claim is made"
         ));
+        assert!(
+            ordinary.contains("Technical comparisons are conditional on their cited scenarios")
+        );
     }
 }

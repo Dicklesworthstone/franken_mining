@@ -19,7 +19,7 @@ use fmine_registry::transcriptions::{Accepted, Token, parse_token};
 
 use crate::key::{self, KeyedCell, PeriodKind, PublicValue, Scope};
 use crate::sources::{IssuerProfile, SourceKind, load_issuer_profile};
-use crate::transcribe::{CheckedDocument, TranscriptionReport, load_guidance_transcription_report};
+use crate::transcribe::{CheckedDocument, TranscriptionReport, load_transcription_prefixes};
 use crate::{js, mine_ledger::rat_text};
 
 pub const NO_CLAIM: &str = "Descriptive comparison of registered issuer guidance and reported outcomes; no forecast, calibration verdict, site ranking or proof of historical forecast registration. From public filings; no affiliation implied.";
@@ -683,7 +683,7 @@ pub fn run(
     let profile = load_issuer_profile(workspace, issuer)?;
     super::available_by(&profile, as_of)?;
     let cells = key::mine_stats::load_claims(&profile, workspace)?;
-    let transcripts = load_guidance_transcription_report(&profile, workspace, Some(as_of))?.ok_or_else(||
+    let transcripts = load_transcription_prefixes(&profile, workspace, &["guidance_"], Some(as_of))?.ok_or_else(||
         refuse(RefusalCode::NoClaimInDomain201, format!("registries/transcriptions/{issuer}.toml is absent; register two independent readings of the guidance")))?;
     assess(&profile, &transcripts, &cells.claims, site, as_of)
 }

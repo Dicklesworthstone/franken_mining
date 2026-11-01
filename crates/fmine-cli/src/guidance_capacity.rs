@@ -19,7 +19,7 @@ use fmine_metrics::guidance::{Ownership, Period, Quantity};
 use fmine_numerics::exact_feas::{Interval, Rat};
 use fmine_public::guidance::GuidanceCompletionReport;
 use fmine_public::sources::{DocumentRow, load_issuer_profile};
-use fmine_public::transcribe::load_transcription_report_as_of;
+use fmine_public::transcribe::load_transcription_quantities_as_of;
 use fmine_registry::sources::{is_date, is_quarter};
 use fmine_registry::transcriptions::{Accepted, Token};
 
@@ -326,7 +326,20 @@ pub(crate) fn assess(
         })?
         .clone();
     document_admitted(&document, as_of)?;
-    let transcript = load_transcription_report_as_of(&profile, root, as_of)?.ok_or_else(|| {
+    let quantities = [
+        "remaining_dry_feed_mt",
+        "head_grade_g_per_t",
+        "recovery_fraction",
+    ]
+    .map(|role| format!("capacity_{}_{role}", site.replace('-', "_")));
+    let transcript = load_transcription_quantities_as_of(
+        &profile,
+        root,
+        as_of,
+        &quantities,
+        Some(&document.file),
+    )?
+    .ok_or_else(|| {
         refuse(
             RefusalCode::NotObservable202,
             "two-reader limit transcriptions are absent",
@@ -585,6 +598,32 @@ mod tests {
         .collect()
     }
 
+    fn readings(rows: &[Accepted]) -> String {
+        let mut transcript =
+            "schema = \"fmine.transcriptions.v1\"\nissuer = \"synthetic\"\n".to_string();
+        for row in rows {
+            for reader in &row.readers {
+                let _ = write!(
+                    transcript,
+                    "\n[[entry]]\ndoc = {}\ndoc_sha256 = {}\npage = 1\ntable = {}\nrow = {}\ncol = {}\n\
+                     token = {}\nquantity = {}\nunit = {}\nbasis = {}\nperiod = {}\nreader = {}\n",
+                    j(&row.locator.doc),
+                    j(&row.doc_sha256),
+                    j(&row.locator.table),
+                    j(&row.locator.row),
+                    j(&row.locator.col),
+                    j(&row.token),
+                    j(&row.quantity),
+                    j(&row.unit),
+                    j(&row.basis),
+                    j(&row.period),
+                    j(reader),
+                );
+            }
+        }
+        transcript
+    }
+
     fn required() -> Claim<Quantity> {
         let base = fmine_public::guidance::run_synthetic().unwrap();
         let mut value = base.completion.remaining_production.value.clone();
@@ -716,34 +755,9 @@ mod tests {
             doc.sha256,
         ));
         std::fs::write(&registry, text).unwrap();
-        let mut transcript =
-            "schema = \"fmine.transcriptions.v1\"\nissuer = \"synthetic\"\n".to_string();
-        for row in rows() {
-            for reader in &row.readers {
-                let _ = write!(
-                    transcript,
-                    "\n[[entry]]\ndoc = {}\ndoc_sha256 = {}\npage = 1\ntable = {}\nrow = {}\ncol = {}\n\
-                     token = {}\nquantity = {}\nunit = {}\nbasis = {}\nperiod = {}\nreader = {}\n",
-                    j(&row.locator.doc),
-                    j(&row.doc_sha256),
-                    j(&row.locator.table),
-                    j(&row.locator.row),
-                    j(&row.locator.col),
-                    j(&row.token),
-                    j(&row.quantity),
-                    j(&row.unit),
-                    j(&row.basis),
-                    j(&row.period),
-                    j(reader),
-                );
-            }
-        }
         std::fs::create_dir_all(root.join("registries/transcriptions")).unwrap();
-        std::fs::write(
-            root.join("registries/transcriptions/synthetic.toml"),
-            transcript,
-        )
-        .unwrap();
+        let transcription_path = root.join("registries/transcriptions/synthetic.toml");
+        std::fs::write(&transcription_path, readings(&rows())).unwrap();
         let base = fmine_public::guidance::run_synthetic().unwrap();
         let report = assess(
             &root,
@@ -813,6 +827,79 @@ mod tests {
             crate::guidance_capacity_envelope(&base, &report, "Invented synthetic evidence.")
                 .to_json()
         );
+        // The explicit document and role selection precedes optional byte/agreement checks.
+        const OTHER: &[u8] = b"SYNTHETIC different technical-report bytes; not issuer data.";
+        let mut sources = std::fs::read_to_string(&registry).unwrap();
+        write!(
+            sources,
+            "\n[[document]]\nfile = \"OtherBounds.pdf\"\nkind = \"technical_report\"\n\
+             url = \"https://example.invalid/OtherBounds.pdf\"\nurl_basis = \"W1 table\"\n\
+             published_at = \"2030-07-01\"\npublished_at_basis = \"FACT: synthetic date\"\n\
+             pages = 1\nbytes = {}\nsha256 = \"{}\"\n",
+            OTHER.len(),
+            sha256(OTHER).to_hex()
+        )
+        .unwrap();
+        std::fs::write(&registry, sources).unwrap();
+        let mut other = rows()[0].clone();
+        other.locator.doc = "OtherBounds.pdf".into();
+        other.doc_sha256 = sha256(OTHER).to_hex();
+        let mut optional = rows()[0].clone();
+        optional.locator.row = "Optional annual plan".into();
+        optional.quantity = "technical_example_mine_remaining_dry_feed_mt".into();
+        optional.readers = vec!["optional-a".into()];
+        let selected_rows = rows();
+        let mut extra_rows = selected_rows.clone();
+        extra_rows.extend([other.clone(), optional.clone()]);
+        std::fs::write(&transcription_path, readings(&extra_rows)).unwrap();
+        let selected = || {
+            assess(
+                &root,
+                "synthetic",
+                "example-mine",
+                "2030Q2",
+                "2030-07-31",
+                "Bounds.pdf",
+                &base,
+            )
+        };
+        assert_eq!(selected().unwrap().to_json(), report.to_json()); // Missing other document.
+        std::fs::write(
+            root.join("corpus/OtherBounds.pdf"),
+            b"altered optional bytes",
+        )
+        .unwrap();
+        assert_eq!(selected().unwrap().to_json(), report.to_json());
+        std::fs::write(root.join("corpus/OtherBounds.pdf"), OTHER).unwrap();
+        other.readers = vec!["other-c".into()];
+        other.token = "11".into();
+        optional.readers = vec!["optional-b".into()];
+        optional.token = "11".into();
+        extra_rows.extend([other, optional]);
+        std::fs::write(&transcription_path, readings(&extra_rows)).unwrap();
+        assert_eq!(selected().unwrap().to_json(), report.to_json()); // Both optional locators disagree.
+        // A different key at a selected locator must still participate in its reader check.
+        let mut third = selected_rows[0].clone();
+        third.readers = vec!["selected-c".into()];
+        third.quantity = "technical_example_mine_another_interpretation".into();
+        extra_rows.push(third);
+        std::fs::write(&transcription_path, readings(&extra_rows)).unwrap();
+        assert_eq!(
+            selected().unwrap_err().code,
+            RefusalCode::NotObservable202.spec().code
+        );
+        // Optional source identity metadata remains validated globally, even when bytes are unselected.
+        let valid = readings(&extra_rows[..extra_rows.len() - 1]);
+        std::fs::write(
+            &transcription_path,
+            valid.replace(&sha256(OTHER).to_hex(), &"0".repeat(64)),
+        )
+        .unwrap();
+        assert_eq!(
+            selected().unwrap_err().code,
+            RefusalCode::InputMissingOrUnreadable506.spec().code
+        );
+        std::fs::write(&transcription_path, readings(&selected_rows)).unwrap();
         std::fs::write(root.join("corpus/Bounds.pdf"), b"SYNTHETIC changed bytes").unwrap();
         assert_eq!(
             assess(

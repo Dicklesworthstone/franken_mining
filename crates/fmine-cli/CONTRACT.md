@@ -229,9 +229,17 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   T1 output retains exact source-quarter/replay-quarter points and checked exclusion certificates under the
   separately declared sales scenario. No usable historical window remains T3. Markdown retains exact fractions
   when a decimal would round, labels display approximations and escapes source text; it never adds authority.
+  The independent `technical` section renders a T2 production-only comparison when registered, agreed
+  same-period technical inputs exist; otherwise it retains a typed T3 reason without hiding the requirements
+  or history. Declared upper bounds, plan and nameplate scenarios remain distinct. Exact input limits,
+  scenario production ceiling, optimistic required grade, evidence classes and page citations survive both
+  JSON and Markdown. The historical tier is labelled separately; neither technical non-exclusion nor a
+  historical witness establishes joint technical production/cost feasibility.
   Optional `--capacity-document` binds a selected registered `technical_report` through
   `guidance_capacity`: verified bytes, publication at/before the cut and two agreeing readings for the same
-  mine and remaining months. The full-mine gold limits must explicitly state maximum remaining dry feed,
+  mine and remaining months. Source checks select its three capacity roles within the named document while
+  retaining every reader at each selected locator; unrelated technical inputs cannot block that comparison.
+  The full-mine gold limits must explicitly state maximum remaining dry feed,
   grade and recovery, with exact units and `100%;bound=explicit-upper;metal=gold` basis; ordinary averages or
   annual nameplate values do not qualify. The adapter delegates ceiling and required-grade arithmetic to
   `fmine_metrics::capacity`. The T2 result is a production-only exclusion test; NotExcluded supplies no
@@ -347,6 +355,11 @@ None: every failure is a usage error or a typed refusal.
   Source-byte failures preserve their typed refusals. The payload digest binds the selected source inventory
   and report; it is not a ledger anchor, forecast registration or external timestamp. All authority flags stay
   false. Unsupported guidance metrics and incomplete guidance agreement refuse instead of disappearing from the report.
+  Both retrospective and explicit-as-of entry paths load the `guidance_` population before source-byte and
+  reader checks. Retrospective selection also retains `aisc_price_assumption_` and `realized_price_` for its
+  paired price sensitivity. Missing, altered, pending or disputed optional technical rows do not change a valid
+  guidance report. Conflicting guidance readers, unsupported guidance and invalid registered identities remain visible
+  or refused according to each mode's existing rules; quantity selection never discards a reader at a selected locator.
   Unresolved outcomes retain every selected canonical source Claim, including simultaneous conflicting cells,
   so refusal does not erase its reported token, interpretation, locator or source hash. Later appearances stay
   separate. JSON and Markdown both expose that rejected evidence without scoring it or dropping its member.
@@ -385,7 +398,7 @@ None: every failure is a usage error or a typed refusal.
   `incomplete_transcription_agreement` with pending/conflicting locators, reader roles, quantity identities
   and checked source hashes. The complete report digest binds these diagnostics. Guidance completeness
   remains mandatory; mixed guidance/price identity disagreements and unknown rejection identities refuse.
-  Missing or altered cited document bytes still refuse before either report can be produced.
+  Missing or altered selected guidance/price document bytes still refuse before either report can be produced.
 - Computes nothing itself: all calculation is delegated to the `V`/`E`/`K`/`S0` crates.
 - Writes only explicitly requested local reliance journals and artifact files; never sends messages or writes
   to an external system. Recall covers recorded copies; local retrieval does not prove remote delivery or
@@ -393,9 +406,10 @@ None: every failure is a usage error or a typed refusal.
 - Challenge packets do not cover hidden or not-published instances. Human review and external-release
   sequencing remain open for every packet, including PDF transcription conflicts.
 - Guidance completion supplies a T1 finite historical comparison when usable original-quarter evidence exists,
-  otherwise T3 necessary arithmetic, under a declared sales scenario. An explicitly selected technical report
-  can add a T2 production-only ceiling from three cited limits. It supplies no probability of meeting guidance,
-  joint production-cost feasibility, general mine-capacity assessment or completed M0 gate.
+  otherwise historical T3, under a declared sales scenario. Its independent T2 technical comparison is
+  conditional on cited dry-feed, head-grade and recovery inputs for the exact remaining months. It supplies
+  no probability of meeting guidance, physical-impossibility conclusion, joint technical production/AISC
+  witness or completed M0 gate.
 - Recovery outputs describe model differences with an annual historical relation. They make no causal,
   recoverable-production or forecast claim, emit no dollar sensitivity, and do not turn comparative-only
   observations into first-published outcomes. Input-rounding bounds are not confidence or prediction intervals.

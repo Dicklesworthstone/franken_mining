@@ -2310,4 +2310,659 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&ws);
     }
+
+    /// Public live-dependency proofs; private mutation primitives stay in fmine-public's unit tests.
+    mod live_dependency {
+        use std::path::{Path, PathBuf};
+
+        use fmine_core::hash::sha256;
+        use fmine_evidence::{Refusal, RefusalCode};
+        use fmine_public::aisc::{IdentityInstance, IdentityState, OperandRole, rate_holds};
+        use fmine_public::live::{
+            CheckKind, LabelCheck, LeafCheck, LiveCheck, LiveReport, Perturbation, leaf_summary,
+            one_leaf_per_instance, prove_files, prove_labels, prove_leaves, prove_leaves_in,
+            rate_flip_down, rate_flip_up,
+        };
+        use fmine_public::sources::{IssuerProfile, load_issuer_profile};
+        use fmine_public::{
+            Lane, LoadedSource, MineStatsMemo, PublicAssuranceReport, load_registered_sources,
+            run_public_assurance, synthetic,
+        };
+
+        /// A fresh synthetic registered workspace (three files, issuer `synthetic`) and its profile.
+        fn workspace(tag: &str) -> (PathBuf, IssuerProfile) {
+            let ws = std::env::temp_dir().join(format!("fmine-live-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&ws);
+            synthetic::write_issuer_workspace(&ws).expect("write workspace");
+            let profile = load_issuer_profile(&ws, "synthetic").expect("generated registry loads");
+            (ws, profile)
+        }
+
+        fn log(tag: &str, profile: &IssuerProfile, ws: &Path, checks: &[LiveCheck]) {
+            let anchor = run_public_assurance(profile, ws)
+                .expect("intact")
+                .ledger_anchor
+                .anchor_id()
+                .to_string();
+            let report = LiveReport {
+                anchor: anchor.clone(),
+                checks: checks.to_vec(),
+            };
+            let dir = std::env::temp_dir().join("live_dependency");
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(dir.join(format!("{anchor}-{tag}.jsonl")), report.to_jsonl());
+            print!("{}", report.to_jsonl());
+        }
+
+        #[test]
+        fn test_synthetic_registered_profile_digests_match_written_bytes() {
+            let (ws, profile) = workspace("digests");
+            assert_eq!(profile.sources.len(), 3);
+            for s in &profile.sources {
+                let bytes = std::fs::read(ws.join(&profile.corpus_dir).join(&s.file_name))
+                    .expect("written");
+                assert_eq!(bytes.len() as u64, s.bytes, "{}", s.file_name);
+                assert_eq!(sha256(&bytes).to_hex(), s.sha256_hex, "{}", s.file_name);
+            }
+            let _ = std::fs::remove_dir_all(&ws);
+        }
+
+        #[test]
+        fn test_synthetic_registered_profile_runs_as_synthetic_lane() {
+            let (ws, profile) = workspace("lane");
+            let r = run_public_assurance(&profile, &ws).expect("intact");
+            assert_eq!(r.lane, Lane::Synthetic);
+            assert!(!r.gate_eligible());
+            let json = r.to_json();
+            assert!(!json.contains("\"lane\":\"public\""), "{json}");
+            assert!(!json.contains("\"gate_eligible\":true"), "{json}");
+            let _ = std::fs::remove_dir_all(&ws);
+        }
+
+        /// Positive control: 3 files × {absent, 0 bytes, foreign xlsx} = 9 checks, every one refused as required.
+        #[test]
+        fn test_live_files_synthetic_all_refuse() {
+            let (ws, profile) = workspace("all");
+            let checks = prove_files(&profile, &ws, &ws.join("scratch"), &load_registered_sources)
+                .expect("scratch workspaces");
+            log("all", &profile, &ws, &checks);
+            assert_eq!(checks.len(), 9);
+            for c in &checks {
+                assert!(c.pass(), "{}", c.to_json());
+                let want = match c.kind {
+                    CheckKind::FileDeleted => ("FMINE-REF-506", 5),
+                    CheckKind::FileZeroBytes | CheckKind::FileForeign => ("FMINE-REF-505", 8),
+                };
+                assert_eq!(c.observed, Some(want), "{}", c.to_json());
+                assert!(c.names_only_this_file);
+            }
+            let _ = std::fs::remove_dir_all(&ws);
+        }
+
+        #[test]
+        fn test_live_files_refusal_names_only_the_removed_file() {
+            let (ws, profile) = workspace("names");
+            let checks = prove_files(&profile, &ws, &ws.join("scratch"), &load_registered_sources)
+                .expect("scratch workspaces");
+            let c = checks
+                .iter()
+                .find(|c| {
+                    c.kind == CheckKind::FileDeleted && c.file == synthetic::SYNTHETIC_AISC_FILE
+                })
+                .expect("check");
+            assert!(c.pass() && c.names_only_this_file, "{}", c.to_json());
+            // The same refusal, read directly: the counted prefix and the label, and no other file name.
+            let scratch = ws.join("scratch").join("1-file_deleted");
+            let r = load_registered_sources(&profile, &scratch).expect_err("refuses");
+            assert!(r.what.contains("1 of 3 registered"), "{}", r.what);
+            assert!(
+                r.what.contains("missing: Synthetic_AISC.xlsx ("),
+                "{}",
+                r.what
+            );
+            for other in [
+                synthetic::SYNTHETIC_STATS_FILE,
+                synthetic::SYNTHETIC_LATER_STATS_FILE,
+            ] {
+                assert!(!r.what.contains(other), "{}", r.what);
+            }
+            let _ = std::fs::remove_dir_all(&ws);
+        }
+
+        /// M3, silent fallback: a loader that answers a refusal by putting the intact bytes back is caught for every
+        /// file, by name.
+        #[test]
+        fn test_live_files_mutant_m3_silent_fallback_is_caught() {
+            let (ws, profile) = workspace("m3");
+            let intact = ws.join(&profile.corpus_dir);
+            let fallback = |p: &IssuerProfile, root: &Path| match load_registered_sources(p, root) {
+                Ok(v) => Ok(v),
+                Err(_) => {
+                    for s in &p.sources {
+                        let _ = std::fs::copy(
+                            intact.join(&s.file_name),
+                            root.join(&p.corpus_dir).join(&s.file_name),
+                        );
+                    }
+                    load_registered_sources(p, root)
+                }
+            };
+            let checks = prove_files(&profile, &ws, &ws.join("scratch"), &fallback)
+                .expect("scratch workspaces");
+            log("m3", &profile, &ws, &checks);
+            assert!(checks.iter().all(|c| !c.pass()));
+            let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
+            for file in [
+                synthetic::SYNTHETIC_AISC_FILE,
+                synthetic::SYNTHETIC_STATS_FILE,
+                synthetic::SYNTHETIC_LATER_STATS_FILE,
+            ] {
+                assert!(
+                    failures.contains(&format!("file deletion did not refuse: {file}").as_str()),
+                    "{failures:?}"
+                );
+            }
+            let _ = std::fs::remove_dir_all(&ws);
+        }
+
+        /// M4, wrong code. A code the catalogue lacks can no longer be raised: `Refusal::new` takes a `RefusalCode`
+        /// (the compile_fail doctests on `fmine_evidence::Refusal`). Re-raising under another registered code is
+        /// caught by exit where the exits differ and by code where they agree.
+        #[test]
+        fn test_live_files_mutant_m4_wrong_code_is_caught() {
+            let (ws, profile) = workspace("m4");
+            let reraise = |p: &IssuerProfile, root: &Path| {
+                load_registered_sources(p, root)
+                    .map_err(|r| Refusal::new(RefusalCode::FaRefusalRelayed501, r.what))
+            };
+            let checks = prove_files(&profile, &ws, &ws.join("scratch"), &reraise)
+                .expect("scratch workspaces");
+            log("m4", &profile, &ws, &checks);
+            assert_eq!(checks.len(), 9);
+            for c in &checks {
+                let want = match c.kind {
+                    CheckKind::FileDeleted => "refusal exit 8 is not 5",
+                    CheckKind::FileZeroBytes | CheckKind::FileForeign => {
+                        "refusal code FMINE-REF-501 is not FMINE-REF-505"
+                    }
+                };
+                assert_eq!(c.failure.as_deref(), Some(want), "{}", c.to_json());
+                assert_eq!(c.observed, Some(("FMINE-REF-501", 8)));
+            }
+            let _ = std::fs::remove_dir_all(&ws);
+        }
+
+        /// An unreadable file is named. Today the loader files a read error under "missing" (`lib.rs`), and this
+        /// test records that label.
+        #[cfg(unix)]
+        #[test]
+        fn test_live_files_unreadable_file_is_named() {
+            use std::os::unix::fs::PermissionsExt as _;
+            let (ws, profile) = workspace("unreadable");
+            let path = ws
+                .join(&profile.corpus_dir)
+                .join(synthetic::SYNTHETIC_AISC_FILE);
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+            if std::fs::read(&path).is_ok() {
+                // Running as root: permissions do not stop the read, so there is nothing to observe. Say so.
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+                    .expect("chmod");
+                let _ = std::fs::remove_dir_all(&ws);
+                println!(
+                    "{{\"test\":\"unreadable_file_is_named\",\"skipped\":\"chmod 000 file still readable (root)\"}}"
+                );
+                return;
+            }
+            let r = load_registered_sources(&profile, &ws).expect_err("refuses");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+            assert_eq!((r.code, r.exit_code), ("FMINE-REF-506", 5));
+            assert!(r.what.contains("1 of 3 registered"), "{}", r.what);
+            assert!(
+                r.what.contains("missing: Synthetic_AISC.xlsx ("),
+                "{}",
+                r.what
+            );
+            let _ = std::fs::remove_dir_all(&ws);
+        }
+
+        // S2: leaves. Every expected value below is read from the seeded answers in `synthetic.rs`, never from a run.
+
+        fn synthetic_sources() -> Vec<LoadedSource> {
+            super::load_synthetic(synthetic::synthetic_workbooks(&[]))
+                .expect("synthetic workbooks parse")
+        }
+
+        fn assess_synthetic(sources: Vec<LoadedSource>) -> PublicAssuranceReport {
+            fmine_public::assess(&synthetic::synthetic_profile(), Lane::Synthetic, sources)
+        }
+
+        fn aisc(cell: &str) -> String {
+            format!(
+                "{}:{}!{cell}",
+                synthetic::SYNTHETIC_AISC_FILE,
+                synthetic::SYNTHETIC_TABLE_SHEET
+            )
+        }
+
+        fn write_leaf_log(tag: &str, checks: &[LeafCheck], elapsed_ms: u128) -> String {
+            let mut log: String = checks.iter().map(|c| c.to_json() + "\n").collect();
+            log.push_str(&leaf_summary(checks, elapsed_ms));
+            log.push('\n');
+            let dir = std::env::temp_dir().join("live_dependency");
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(dir.join(format!("synthetic-leaves-{tag}.jsonl")), &log);
+            log
+        }
+
+        /// (79, 1, 68) spans [1145.985, 1177.778]: 1146 and 1178 hold, 1145 and 1179 do not.
+        #[test]
+        fn test_flip_margin_rate_known_answer() {
+            let holds = |r| rate_holds(79, 1, 68, r, (1, 1)).expect("decided");
+            assert!(holds(1146) && holds(1178));
+            assert!(!holds(1145) && !holds(1179));
+            assert_eq!(rate_flip_up(79, 1, 68, 1162), Ok(Some(1179)));
+            assert_eq!(rate_flip_down(79, 1, 68, 1162), Ok(Some(1145)));
+            // From an excluded rate the next one out is the neighbour; past the search bound there is none.
+            assert_eq!(rate_flip_up(79, 1, 68, 1100), Ok(Some(1101)));
+            assert_eq!(rate_flip_down(79, 1, 68, 1200), Ok(Some(1199)));
+            assert_eq!(rate_flip_up(79, 1, 68, 1200), Ok(Some(1201)));
+            // (10⁶, 1, 1) admits up to 2,000,001,000: more than 10⁶ above 10⁹.
+            assert_eq!(rate_flip_up(1_000_000, 1, 1, 1_000_000_000), Ok(None));
+        }
+
+        /// Positive control: every cited leaf of every visible synthetic instance moves what it should. Skips are
+        /// only where the seeded answers put a state before any arithmetic:
+        /// - Site F's unrounded column (G), all five instances;
+        /// - Site D's cost of sales per ounce (E14), refused by the share rule: its rate, ounces and numerator. Its
+        ///   NCI line and footnote are checked.
+        #[test]
+        fn test_live_leaves_synthetic_all_pass() {
+            let start = std::time::Instant::now();
+            let checks = prove_leaves(&synthetic_sources(), &assess_synthetic);
+            let log = write_leaf_log("all", &checks, start.elapsed().as_millis());
+            print!("{log}");
+            let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
+            assert!(failures.is_empty(), "{failures:#?}");
+            let mut skipped: Vec<String> = checks
+                .iter()
+                .filter(|c| c.skipped.is_some())
+                .map(|c| {
+                    c.instance
+                        .rsplit_once(' ')
+                        .map_or("", |(at, _)| at)
+                        .to_string()
+                })
+                .collect();
+            skipped.sort();
+            skipped.dedup();
+            // Column N's N6 (General non-integer) and N13 (a date) have no whole displayed value (bd-jg43.3).
+            let mut want: Vec<String> = ["N8", "N11", "N14", "N15", "N16", "E14"]
+                .iter()
+                .map(|c| aisc(c))
+                .collect();
+            want.sort();
+            assert_eq!(skipped, want);
+            let e14: Vec<(&str, Option<&str>)> = checks
+                .iter()
+                .filter(|c| c.instance.starts_with(&aisc("E14")))
+                .map(|c| (c.role.as_str(), c.skipped))
+                .collect();
+            assert_eq!(
+                e14,
+                [
+                    ("rate", Some("refused_by_share_rule")),
+                    ("ounces", Some("refused_by_share_rule")),
+                    ("numerator", Some("refused_by_share_rule")),
+                    ("nci_line", None),
+                    ("label_check", None),
+                ]
+            );
+            // 55 instances, each with a leaf record; column N's four refusals have only skipped leaves (bd-jg43.3).
+            let instances: Vec<&str> = checks.iter().map(|c| c.instance.as_str()).collect();
+            let mut distinct = instances.clone();
+            distinct.dedup();
+            assert_eq!(distinct.len(), 55);
+            assert!(checks.iter().filter(|c| c.pass()).count() > 250);
+        }
+
+        /// A counted line is perturbed by token, not by value. B15 is 1000·400/400 with k = 3 (B5, B6, B7). With B6 as
+        /// "-", k = 2, so the range [996.25, 1003.76] narrows but still holds 1000: only k and the range move.
+        #[test]
+        fn test_live_leaves_count_operand_perturbed_by_token() {
+            let checks = prove_leaves(&synthetic_sources(), &assess_synthetic);
+            let Some(c) = checks.iter().find(|c| {
+                c.instance == format!("{} tcc_per_oz", aisc("B15")) && c.leaf == aisc("B6")
+            }) else {
+                panic!("no check for B6 under B15");
+            };
+            assert_eq!(c.role, OperandRole::Counted);
+            assert_eq!(c.perturbation, Some(Perturbation::ToPlaceholder));
+            assert_eq!(c.moved, ["k", "range"]);
+            assert_eq!((c.state_before, c.state_after), ("i", Some("i")));
+            assert!(c.pass(), "{}", c.to_json());
+        }
+
+        fn barrick() -> (IssuerProfile, Vec<LoadedSource>) {
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..");
+            let profile = load_issuer_profile(&root, "barrick")
+                .and_then(|p| p.through("2026Q2"))
+                .expect("registry");
+            let sources = load_registered_sources(&profile, &root)
+                .expect("registered files present and unaltered");
+            (profile, sources)
+        }
+
+        /// BD-338.S3, leaves, on the real lane: frame `one_leaf_per_instance`, so 2,595 leaves, one per instance.
+        /// Prints the summary and any failure. Both carry locators, codes and counts, never cell values (RISK-31).
+        #[test]
+        #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+        fn barrick_live_leaves_one_per_instance() {
+            let (profile, sources) = barrick();
+            // Most leaves are AISC cells, so the Mine Stats section is reused (bd-r7lp). A leaf in a Mine Stats file
+            // (a printed share label) recomputes it.
+            let memo = MineStatsMemo::default();
+            let run =
+                |s: Vec<LoadedSource>| fmine_public::assess_memo(&profile, Lane::Public, s, &memo);
+            let start = std::time::Instant::now();
+            let checks = prove_leaves_in(&sources, &run, &one_leaf_per_instance);
+            let summary = leaf_summary(&checks, start.elapsed().as_millis());
+            let stats_files: Vec<String> = sources
+                .iter()
+                .filter(|s| s.kind == fmine_public::sources::SourceKind::MineStats)
+                .map(|s| format!("{}:", s.file_name))
+                .collect();
+            let stats_runs = checks
+                .iter()
+                .filter(|c| {
+                    c.perturbation.is_some() && stats_files.iter().any(|f| c.leaf.starts_with(f))
+                })
+                .count();
+            println!(
+                "{{\"frame\":\"one_leaf_per_instance\",\"summary\":{summary},\
+                 \"mine_stats_memo\":{{\"hits\":{},\"misses\":{},\"mine_stats_leaf_runs\":{stats_runs}}}}}",
+                memo.hits(),
+                memo.misses()
+            );
+            let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
+            for f in &failures {
+                println!("{f}");
+            }
+            assert_eq!(checks.len(), 2595);
+            assert!(failures.is_empty(), "{} failures", failures.len());
+            // The base run and each Mine Stats leaf compute the section; every other run reuses it.
+            assert_eq!(memo.misses(), 1 + stats_runs as u64);
+        }
+
+        /// BD-338.S3, files, on the real lane: 18 registered workbooks × {absent, zero bytes, foreign xlsx} = 54
+        /// checks, each refusing with its kind's code (an absent file `FMINE-REF-506`, exit 5; a changed one
+        /// `FMINE-REF-505`, exit 8), "1 of 18 registered", naming only that file.
+        #[test]
+        #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+        fn barrick_live_files_all_refuse() {
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..");
+            let profile = load_issuer_profile(&root, "barrick")
+                .and_then(|p| p.through("2026Q2"))
+                .expect("registry");
+            assert_eq!(profile.sources.len(), 18);
+            let scratch =
+                std::env::temp_dir().join(format!("fmine-live-barrick-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&scratch);
+            let checks = prove_files(&profile, &root, &scratch, &load_registered_sources)
+                .expect("scratch workspaces");
+            let _ = std::fs::remove_dir_all(&scratch);
+            for c in &checks {
+                println!("{}", c.to_json());
+            }
+            assert_eq!(checks.len(), 54);
+            let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
+            assert!(failures.is_empty(), "{failures:?}");
+        }
+
+        /// BD-338.S3, labels, on the real lane: the seven anchor labels of the current-quarter table in each of the 8
+        /// AISC workbooks (`'Q2 2026'` in `Barrick_Q2_2026_AISC.xlsx`, and so on): 56 runs, none without effect.
+        #[test]
+        #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+        fn barrick_live_label_sample_never_no_effect() {
+            let (profile, sources) = barrick();
+            let tables: Vec<(String, String)> = sources
+                .iter()
+                .filter(|s| s.kind == fmine_public::sources::SourceKind::AiscReconciliation)
+                .filter_map(|s| {
+                    let (year, q) = s.quarter.split_once('Q')?;
+                    Some((s.file_name.clone(), format!("Q{q} {year}")))
+                })
+                .collect();
+            assert_eq!(tables.len(), 8);
+            let memo = MineStatsMemo::default();
+            let run =
+                |s: Vec<LoadedSource>| fmine_public::assess_memo(&profile, Lane::Public, s, &memo);
+            let checks = prove_labels(&sources, &run, &profile.subjects, &tables);
+            for c in &checks {
+                println!("{}", c.to_json());
+            }
+            assert_eq!(checks.len(), 56);
+            // Each table is on its release's own quarter sheet, so every broken anchor refuses it by name, the
+            // cost-of-sales label included.
+            let other: Vec<String> = checks
+                .iter()
+                .filter(|c| c.effect != "table_refusal")
+                .map(LabelCheck::to_json)
+                .collect();
+            assert!(other.is_empty(), "{other:#?}");
+        }
+
+        /// The real M1 (B7 H-P3-6): Kibali's `'Q2 2024'!O11` in `Barrick_Q3_2024_AISC.xlsx` kept at its literal value,
+        /// 70 (E822). The literal equals the cell, so only perturbing the cell rejects it.
+        #[test]
+        #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+        fn barrick_live_leaves_mutant_m1_literal_is_caught() {
+            let (profile, sources) = barrick();
+            let memo = MineStatsMemo::default();
+            let is_o11 = |i: &IdentityInstance| {
+                i.file == "Barrick_Q3_2024_AISC.xlsx" && i.sheet == "Q2 2024" && i.cell == "O11"
+            };
+            let literal = |s: Vec<LoadedSource>| {
+                let mut r = fmine_public::assess_memo(&profile, Lane::Public, s, &memo);
+                for i in &mut r.instances {
+                    if let (true, IdentityState::IssuerDiscrepancy(c)) = (is_o11(i), &mut i.state) {
+                        c.printed = 70;
+                    }
+                }
+                r
+            };
+            let base = fmine_public::assess_memo(&profile, Lane::Public, sources.clone(), &memo);
+            let Some(at) = base.instances.iter().position(is_o11) else {
+                panic!("no instance at O11");
+            };
+            assert_eq!(base.instances[at].state.code(), "iii");
+            let checks = prove_leaves_in(&sources, &literal, &|i, _, _| i == at);
+            let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
+            assert_eq!(
+                failures,
+                ["value did not move: Barrick_Q3_2024_AISC.xlsx:Q2 2024!O11"]
+            );
+            // Without the mutant, every leaf of O11 passes.
+            let honest = prove_leaves_in(
+                &sources,
+                &|s| fmine_public::assess_memo(&profile, Lane::Public, s, &memo),
+                &|i, _, _| i == at,
+            );
+            assert!(honest.iter().all(LeafCheck::pass), "{}", honest.len());
+        }
+
+        /// M1: C8's certificate keeps the literal 350, its real value, so only a perturbation can tell.
+        #[test]
+        fn test_live_leaves_mutant_m1_literal_is_caught() {
+            let literal = |sources: Vec<LoadedSource>| {
+                let mut r = assess_synthetic(sources);
+                for i in &mut r.instances {
+                    if let (true, IdentityState::IssuerDiscrepancy(c)) =
+                        (i.cell == "C8", &mut i.state)
+                    {
+                        c.printed = 350;
+                    }
+                }
+                r
+            };
+            let checks = prove_leaves(&synthetic_sources(), &literal);
+            let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
+            assert_eq!(failures, [format!("value did not move: {}", aisc("C8"))]);
+        }
+
+        /// M2: B8 also cites P5, read honestly but used by nothing.
+        #[test]
+        fn test_live_leaves_mutant_m2_dead_ancestor_is_caught() {
+            let extra = |sources: Vec<LoadedSource>| {
+                let p5 = sources
+                    .iter()
+                    .find(|s| s.file_name == synthetic::SYNTHETIC_AISC_FILE)
+                    .and_then(|s| {
+                        s.workbook
+                            .sheets
+                            .iter()
+                            .find(|w| w.name == synthetic::SYNTHETIC_TABLE_SHEET)
+                    })
+                    .map(|w| {
+                        fmine_public::aisc::operand_at(
+                            synthetic::SYNTHETIC_AISC_FILE,
+                            w,
+                            5,
+                            16,
+                            OperandRole::Line,
+                        )
+                    });
+                let mut r = assess_synthetic(sources);
+                if let (Some(p5), Some(b8)) = (p5, r.instances.iter_mut().find(|i| i.cell == "B8"))
+                {
+                    b8.operands.push(p5);
+                }
+                r
+            };
+            let checks = prove_leaves(&synthetic_sources(), &extra);
+            let failures: Vec<&str> = checks.iter().filter_map(|c| c.failure.as_deref()).collect();
+            assert_eq!(
+                failures,
+                [format!(
+                    "dead ancestor: {} → {} tcc_footing",
+                    aisc("P5"),
+                    aisc("B8")
+                )]
+            );
+        }
+    }
+
+    /// Public AISC parsing, basis and report checks, exercised across the crate boundary.
+    mod aisc_public {
+        use fmine_io::xlsx::Sheet;
+        use fmine_public::aisc::{
+            feasible_share, feasible_share_text, find_share_footnote, match_subject, rate_holds,
+        };
+
+        /// [`rate_holds`] at a share, decided.
+        fn holds_at(n: i64, k: i64, q: i64, r: i64, share: (i64, i64)) -> bool {
+            rate_holds(n, k, q, r, share).expect("the kernel decides")
+        }
+
+        /// [`rate_holds`] at 100%, decided.
+        fn holds(n: i64, k: i64, q: i64, r: i64) -> bool {
+            holds_at(n, k, q, r, (1, 1))
+        }
+
+        fn sheet_of(name: &str, cells: Vec<(String, fmine_io::xlsx::MinimalCell)>) -> Sheet {
+            use fmine_io::xlsx::{MinimalSheet, Workbook, build_minimal_xlsx};
+            let bytes = build_minimal_xlsx(&[MinimalSheet {
+                name: name.to_string(),
+                hidden: false,
+                cells,
+            }]);
+            let wb = Workbook::from_bytes("t.xlsx", &bytes).expect("parses");
+            wb.sheet(name).expect("sheet").clone()
+        }
+
+        fn text(cell: &str, s: &str) -> (String, fmine_io::xlsx::MinimalCell) {
+            (
+                cell.to_string(),
+                fmine_io::xlsx::MinimalCell::Text(s.to_string()),
+            )
+        }
+
+        #[test]
+        fn subject_matching_takes_one_footnote_letter_only() {
+            let subjects = ["Kibali", "North Mara", "North America"];
+            assert_eq!(match_subject("Kibali", &subjects), Some("Kibali"));
+            assert_eq!(match_subject("Kibalia", &subjects), Some("Kibali"));
+            assert_eq!(match_subject("KibaliA", &subjects), None);
+            assert_eq!(match_subject("Kibaliab", &subjects), None);
+            assert_eq!(match_subject("North Marab", &subjects), Some("North Mara"));
+            assert_eq!(match_subject("Kibali (45%)", &subjects), None);
+        }
+
+        /// BD-331.S3 known answer: North Mara, `Barrick_Q2_2026_AISC.xlsx` 'Q2 2026', (n, q, r) = (117, 37, 2736).
+        #[test]
+        fn test_scaled_rate_north_mara_q2_2026_misses() {
+            assert!(!holds_at(117, 1, 37, 2736, (21, 25)));
+            // s ∈ [5471·73/(2000·235), 5473·75/(2000·233)] = [0.849751…, 0.880847…].
+            assert_eq!(
+                feasible_share(117, 1, 37, 2736),
+                Some(((399_383, 470_000), (410_475, 466_000)))
+            );
+            // Rounded outward; the bead's [0.8498, 0.8808] is the same exact interval rounded to nearest.
+            assert_eq!(
+                feasible_share_text(117, 1, 37, 2736).as_deref(),
+                Some("[0.8497, 0.8809]")
+            );
+            assert!(holds_at(117, 1, 37, 2736, (85, 100)));
+            assert!(holds_at(117, 1, 37, 2736, (88, 100)));
+            assert!(!holds_at(117, 1, 37, 2736, (89, 100)));
+        }
+
+        #[test]
+        fn test_scaled_rate_fit_synthetic() {
+            // Synthetic Site H: 1000·¾·400/150 = 2000 fits; 2200 does not.
+            assert!(holds_at(400, 1, 150, 2000, (3, 4)));
+            assert!(!holds_at(400, 1, 150, 2200, (3, 4)));
+            // 4399·299/(2000·801) = 0.821037…, 4401·301/(2000·799) = 0.828974…
+            assert_eq!(
+                feasible_share_text(400, 1, 150, 2200).as_deref(),
+                Some("[0.8210, 0.8290]")
+            );
+            // At s = 1 the scaled test is the unscaled one.
+            for (n, k, q, r) in [(79, 1, 68, 1162), (79, 1, 68, 1141), (200, 5, 100, 2400)] {
+                assert_eq!(holds_at(n, k, q, r, (2, 2)), holds(n, k, q, r));
+            }
+            // Non-positive inputs have no share interval (the run refuses them).
+            assert_eq!(feasible_share(0, 1, 37, 2736), None);
+            assert_eq!(feasible_share(117, 1, 0, 2736), None);
+            assert_eq!(feasible_share(117, 1, 37, -5), None);
+        }
+
+        #[test]
+        fn test_share_footnote_found_by_text() {
+            let s = sheet_of(
+                "Q2 2026",
+                vec![
+                    text("A30", "f.  Other footnote."),
+                    text(
+                        "A32",
+                        "g.  COS/oz - Gold COS/oz is calculated as cost of sales across our gold operations \
+                         (excluding sites in closure or care and maintenance) divided by ounces sold (both on an \
+                         attributable basis using Barrick's ownership share). ",
+                    ),
+                ],
+            );
+            assert_eq!(find_share_footnote(&s).as_deref(), Some("A32"));
+            let none = sheet_of(
+                "Q2 2026",
+                vec![text(
+                    "A32",
+                    "g.  Gold COS/oz is calculated as cost of sales divided by ounces sold.",
+                )],
+            );
+            assert_eq!(find_share_footnote(&none), None);
+        }
+    }
 }

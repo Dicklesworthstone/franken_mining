@@ -144,6 +144,17 @@ The public lane of M0 (`fmine assure public`).
   scenario before making a joint comparison. Checked witnesses preserve original and hypothetical supports;
   checked exclusion certificates apply only to the supplied finite windows. No usable window stays T3, and
   solver caps remain indeterminate.
+  `guidance::capacity` independently selects the latest eligible registered `technical_report` with agreed
+  `technical_<site>_remaining_dry_feed_mt`, `technical_<site>_head_grade_g_per_t` and
+  `technical_<site>_recovery_percent` rows. Units must be `dry_mt` (million dry metric tonnes),
+  `g_per_dry_t` and `percent`; common full-mine basis must declare
+  `100%;scenario=declared_upper_bound`, `100%;scenario=plan` or `100%;scenario=nameplate`.
+  Support must exactly match the remaining months (`YYYYQ2-Q4`, `YYYYH2` or `YYYYQ4`). Recovery divides
+  by 100 exactly; ownership scales the output only. Declared boundaries are exact, while plan/nameplate
+  points preserve half-last-place rounding and remain conditional scenarios. No annual proration or
+  implicit wet/dry, grade-average or ownership conversion is allowed. Missing, changed, disputed, pending or
+  inapplicable optional technical evidence becomes a typed technical T3 without discarding the requirements
+  or historical assessment. Selection never falls back over a newer incomplete or inapplicable document.
 - `guidance::track_record` (BD-341): `run(workspace, issuer, site, as_of)` verifies the source registry,
   workbook bytes and two-reader document transcriptions before comparing registered annual guidance with
   same-site, same-year Mine Stats full-year outcomes. `assess` accepts already authenticated projections;
@@ -152,6 +163,10 @@ The public lane of M0 (`fmine assure public`).
   digest. The digest binds a descriptive report, not a forecast ledger or historical timestamp proof.
   The explicit information-cut mode emits `fmine.guidance.track-record.as-of.v1`, distinct from the CLI's
   retrospective `fmine.guidance.track-record.v1` payload and its workbook-release `--through` selection.
+  Both entry paths select all `guidance_` quantities before checking document bytes and reader agreement.
+  Unsupported guidance keys remain in scope; optional technical readings cannot block the guidance report.
+  Every reader at a selected locator remains, including a conflicting quantity key. Registry syntax and
+  document identity validation remain global.
   - Supported transcription quantities are `guidance_<site>_production_koz`, `production_kt`,
     `aisc_usd_per_oz`, `aisc_usd_per_lb`, `tcc_usd_per_oz` and `c1_usd_per_lb`. Each requires an explicit
     full calendar year and matching unit/ownership basis. Cost bases additionally name
@@ -273,9 +288,12 @@ The public lane of M0 (`fmine assure public`).
 - `guidance::{run_public, run_synthetic, GuidanceCompletionReport, NO_CLAIM}` (BD-342). The report carries exact
   input/output Claims, source and intermediate historical Claims, accepted guidance rows, source hashes,
   explicit sales assumption and a content digest. It exposes `history`, `history_sources` and
-  `history_exclusions`, with T1 when usable original-quarter windows exist and T3 otherwise. The digest is not
-  a forecast registration or ledger root, and this report supplies no gate-eligibility claim. Source epistemics
-  and unknown-unknown terms survive quantity conversion.
+  `history_exclusions`, with T1 when usable original-quarter windows exist and T3 otherwise. Its independent
+  `technical: capacity::TechnicalAssessment` is `Compared(Box<TechnicalComparison>)` (T2) or
+  `Indeterminate { reason }` (T3). A comparison retains `TechnicalScenarioKind`, checked document, accepted
+  source rows, `CapacityLimits` and the exact production/required-grade `CapacityReport`. Both JSON sections
+  and their source metadata bind the content digest. This is not a forecast registration or ledger root and
+  supplies no gate-eligibility claim. Source epistemics and unknown-unknown terms survive quantity conversion.
 - `recovery::{assess, run_public, run_synthetic, RecoveryReport, QuarterReport, RULES_VERSION}` and
   `PublicAssuranceReport::recovery` (bd-srqc). `RecoveryReport::{digest, to_json}` emits
   `fmine.recovery.gap.v1`, binding the accepted source rows, fit, selected quarterly source Claims, results
@@ -324,7 +342,8 @@ The public lane of M0 (`fmine assure public`).
   value, both as displayed (`mine_ledger::displayed_number`). Units kt and Mlb (1 Mlb = 45,359,237/10⁸ kt,
   from `AVDP_LB_TO_GRAMS_NUM`) are tried on those numbers alone, apart from the registered alias. The section
   holds counts only and is not in the state root.
-- `transcribe::{load_transcription_report, load_transcription_report_as_of, load_guidance_transcription_report,
+- `transcribe::{load_transcription_report, load_transcription_report_as_of, load_transcription_quantities_as_of,
+  load_transcription_prefixes, load_guidance_transcription_report,
   transcription_json, TranscriptionReport, CheckedDocument,
   TieOutcome}`, `sources::{DocumentRow, transcriptions_path}`, `IssuerProfile::documents` and
   `PublicAssuranceReport::transcriptions` (bd-plx1, bd-4wvl.4 part 2). When
@@ -342,10 +361,21 @@ The public lane of M0 (`fmine assure public`).
   - The guidance-specific as-of loader filters future documents before byte checks, reader agreement and tie
     analysis; it still validates registry syntax and document identities. General assurance checks all cited
     documents as before.
+  - `load_transcription_quantities_as_of` further scopes source verification to requested quantities and an
+    optional selected document, retaining every reader at each selected locator, including a conflicting
+    quantity assignment. Guidance and optional technical inputs use separate scopes so an unrelated or
+    unusable optional quantity cannot erase valid required guidance. Explicit capacity selection binds only
+    its three requested roles within the named document. Registry structure and document identity validation
+    remain global.
+  - `load_transcription_prefixes` uses the same single-parse selection, with an optional as-of date. Explicit-cut
+    track record selects `guidance_`. Unsupported guidance remains visible while unrelated technical sources
+    are excluded before byte checks and agreement. Every reader at each selected locator remains.
   - DESIGN (BD-341.S5): `load_guidance_transcription_report` explicitly scopes the agreement gate to
-    guidance. Rejected optional readings remain in the returned report and cannot be used for a price split.
+    guidance, selecting the union of `guidance_`, `aisc_price_assumption_` and `realized_price_` quantities
+    for retrospective track record. Rejected optional price readings remain in the returned report and cannot
+    be used for a price split. Unrelated technical sources are excluded; all selected-locator readers remain.
     The optional evidence cut is validated before any absent-registry return and applied before agreement;
-    all in-cut document byte/hash checks remain mandatory. Mixed guidance/optional identities or unknown
+    all selected in-cut document byte/hash checks remain mandatory. Mixed guidance/optional identities or unknown
     rejection identities refuse. Both general loaders retain their stricter disagreement behavior.
   - The dedicated recovery loader deliberately uses the current verified historical documents even with a
     workbook `through` bound, and states that retrospective interpretation in its payload. It does not change
@@ -693,7 +723,8 @@ The public lane of M0 (`fmine assure public`).
   - **Synthetic:** M16 is a stated (ii), and a changed or empty quote keeps it (iv). The hidden `Q4 2029` table's
     (iii) is reported and never counted. A changed hidden cell moves the root and no visible state. Hidden sheets
     leave the census and its digest unchanged.
-- `PO-PUB-8` (live dependency, files; BD-338.S1; default suite, `live::tests`):
+- `PO-PUB-8` (live dependency, files; BD-338.S1; default suite,
+  `xtask/tests/public_report_contract.rs::tests::live_dependency`):
   - **Positive control:** on the three-file synthetic registry, 3 files × 3 cases give 9 checks, and every
     one refuses as required.
   - **Mutants:**
@@ -704,7 +735,8 @@ The public lane of M0 (`fmine assure public`).
   - **Unreadable file:** a chmod 000 file is named under "missing" (`FMINE-REF-506`, exit 5). As root, the test
     says it skipped.
   - **Lane:** the synthetic registry never reports the public lane or gate eligibility.
-- `PO-PUB-9` (live dependency, leaves; BD-338.S2; default suite, `live::tests`):
+- `PO-PUB-9` (live dependency, leaves; BD-338.S2; default suite,
+  `xtask/tests/public_report_contract.rs::tests::live_dependency`):
   - **Positive control:** every leaf of the 50 synthetic instances passes or is skipped with a reason. Skips
     fall only on Site F's unrounded column and on E14's three non-cause leaves (hand-read from
     `synthetic.rs`).
@@ -865,6 +897,11 @@ The public lane of M0 (`fmine assure public`).
   synthetic T1 path, rolling and cross-year windows, original-vintage-only selection, missing history, guidance-year
   cutoffs, incompatible source Claims and a separately restricted sales scenario. Every emitted source-quarter
   witness is checked against its original source intervals; missing history cannot produce a positive verdict.
+- FACT (BD-342, `xtask/tests/public_guidance_capacity.rs`): eight end-to-end regressions exercise the complete
+  registered synthetic workbook/PDF/transcription path, exact ownership and percent conversion, conditional
+  plan/nameplate rounding, latest-vintage and as-of selection, altered or missing documents, reader conflicts
+  (including conflicting quantity keys), inapplicable support and preservation of T1 when technical inputs
+  fail. Independent rational answers pin the scenario ceiling and optimistic required-grade endpoints.
 - FACT (BD-341, `xtask/tests/public_track_record.rs`): source-selector controls cover original versus later
   outcomes, comparative-only history, missing members, stale and incompatible Claims, retained revisions,
   normalized equivalent shares, ambiguous earliest guidance, duplicate outcomes, mutated bindings,
@@ -900,6 +937,11 @@ The public lane of M0 (`fmine assure public`).
 - Public inventory, vintage-comparison and transcription integration tests also live in
   `crates/xtask/tests/public_mine_stats_inventory.rs`, `public_mine_stats_vintages.rs` and
   `public_transcriptions.rs`, preserving the crate's existing LOC ceiling.
+- Thirteen existing public-API mine-ledger integration tests live unchanged in
+  `crates/xtask/tests/public_mine_ledger.rs`; the two private numerical tests remain beside their kernels.
+- Public live-dependency and AISC reader integration tests live in
+  `crates/xtask/tests/public_report_contract.rs`; private leaf-mutation and AISC unit tests remain beside
+  their implementations. The integration groups preserve the original fixtures, assertions and ignore rules.
 
 ## 10. Non-Goals & Scope Boundary
 - Operates only on public disclosures (`Confidentiality::public()`).
@@ -907,9 +949,12 @@ The public lane of M0 (`fmine assure public`).
 - Implies no issuer affiliation.
 - Guidance uses only the registered evidence population, not an assertion that no later issuer guidance
   exists. Historical sales persistence is an assumption, not a production/sales equality or a capacity bound.
-  The T1 result excludes or admits only supplied historical windows under that assumption. Optional T2 binding
-  of explicit technical-report physical limits lives in `fmine-cli::guidance_capacity` and calls the separate
-  exact production-ceiling kernel. No historical exclusion establishes that a mine cannot meet guidance.
+  The T1 result excludes or admits only supplied historical windows under that assumption. T2 compares
+  production only under its cited technical scenario; it neither proves physical impossibility nor supplies
+  a joint production/cost witness. An issuer's T2 result requires actual applicable registered evidence, and
+  no historical exclusion establishes that a mine cannot meet guidance.
+  The separately selected explicit-limit interface lives in `fmine-cli::guidance_capacity` and delegates to
+  the same exact production-ceiling kernel; it retains its distinct input schema and report.
 - The guidance track record does not establish a complete historical population, authentic prior forecast
   registration, calibrated coverage, independence, effective sample size, a bias confidence interval or a
   site ranking. Cost scores are unconditional; gold-price adjustments and attribution to controllable

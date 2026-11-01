@@ -7,7 +7,7 @@
 # {"stage":"offline_root",...}. It stops at the first failed stage with exit 1. Under GitHub Actions the root is also
 # written to $GITHUB_OUTPUT as root=<hex>.
 # BD-338.S3's live-dependency proof runs in two places:
-# - its file checks and the real M1, inside test_public;
+# - its file checks and the real M1, inside test_public_integration;
 # - its leaf sample (one leaf per instance, about 2,600 reruns of the pipeline), as the release-mode stage
 #   live_leaves. The reruns reuse the Mine Stats section unless a leaf is in a Mine Stats file, and run on
 #   every core (bd-r7lp). Release, 2026-10-30: 55 s on 36 cores, 751 s on one thread.
@@ -61,16 +61,20 @@ offline() {
 
 stage fetch repro/barrick/fetch.sh
 stage test_public cargo test -p fmine-public -- --ignored --skip barrick_live_leaves_one_per_instance
-# Two ignored tests need the local two-reader transcriptions, which are never in git, so this lane leaves them
-# out: public_recovery's, and fmine-cli's test_real_recovery_is_embedded_in_assurance_with_separate_digest.
+# Recovery and PDF-conflict checks need local two-reader transcriptions, which are never in git. This workbook
+# lane excludes public_recovery and the CLI recovery/PDF-conflict checks; they run with the supplied local inputs.
 stage test_public_integration cargo test -p xtask \
   --test public_corpus --test public_exact_feas_blame --test public_laap_2023 \
   --test public_keys_aisc --test public_keys_mine_stats --test public_mine_stats_inventory \
   --test public_mine_stats_vintages --test public_transcriptions \
-  --test public_consistency --test public_waterfall --test public_manifest --test public_lint -- --ignored
-stage live_leaves cargo test --release -p fmine-public --lib -- --ignored --exact \
-  live::tests::barrick_live_leaves_one_per_instance --nocapture
-stage test_cli cargo test -p fmine-cli -- --ignored --skip test_real_recovery_is_embedded_in_assurance_with_separate_digest
+  --test public_consistency --test public_waterfall --test public_manifest --test public_lint \
+  --test public_report_contract --test public_workbook_reading \
+  -- --ignored --skip barrick_live_leaves_one_per_instance
+stage live_leaves cargo test --release -p xtask --test public_report_contract -- --ignored --exact \
+  tests::live_dependency::barrick_live_leaves_one_per_instance --nocapture
+stage test_cli cargo test -p fmine-cli -- --ignored \
+  --skip test_real_recovery_is_embedded_in_assurance_with_separate_digest \
+  --skip barrick_pdf_packets_cover_registered_conflicts
 stage root root
 stage xlsx_guard xlsx_guard
 stage offline offline

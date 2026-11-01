@@ -2400,6 +2400,12 @@ mod tests {
         // No dir: the registry's corpus_dir. No documents at all is a valid registry.
         let reg = parse_sources_registry(&minimal("", &document(&[("dir", None)]))).expect("valid");
         assert_eq!(reg.documents[0].dir, "corpus/demo");
+        let technical = parse_sources_registry(&minimal(
+            "",
+            &document(&[("kind", Some("\"technical_report\""))]),
+        ))
+        .expect("registered technical-report kind");
+        assert_eq!(technical.documents[0].kind, "technical_report");
         assert!(
             parse_sources_registry(&minimal("", ""))
                 .expect("valid")

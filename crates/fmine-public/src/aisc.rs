@@ -2969,6 +2969,8 @@ pub fn footing_discovery(
 mod tests {
     use super::*;
 
+    // Public AISC integration checks live in xtask/tests/public_report_contract.rs.
+
     /// Column K of a one-sheet workbook: `(row, stored text, number format id)`, formats listed as `custom`.
     fn styled_column(cells: &[(u32, &str, u32)], custom: &[(u32, &str)]) -> Sheet {
         use fmine_io::xlsx::{
@@ -3176,56 +3178,6 @@ mod tests {
         assert!(holds(100, 0, 100, 1005));
         assert!(!holds(100, 0, 100, 1006));
         assert!(holds(100, 1, 100, 1006));
-    }
-
-    #[test]
-    fn subject_matching_takes_one_footnote_letter_only() {
-        let subjects = ["Kibali", "North Mara", "North America"];
-        assert_eq!(match_subject("Kibali", &subjects), Some("Kibali"));
-        assert_eq!(match_subject("Kibalia", &subjects), Some("Kibali"));
-        assert_eq!(match_subject("KibaliA", &subjects), None);
-        assert_eq!(match_subject("Kibaliab", &subjects), None);
-        assert_eq!(match_subject("North Marab", &subjects), Some("North Mara"));
-        assert_eq!(match_subject("Kibali (45%)", &subjects), None);
-    }
-
-    /// BD-331.S3 known answer: North Mara, `Barrick_Q2_2026_AISC.xlsx` 'Q2 2026', (n, q, r) = (117, 37, 2736).
-    #[test]
-    fn test_scaled_rate_north_mara_q2_2026_misses() {
-        assert!(!holds_at(117, 1, 37, 2736, (21, 25)));
-        // s ∈ [5471·73/(2000·235), 5473·75/(2000·233)] = [0.849751…, 0.880847…].
-        assert_eq!(
-            feasible_share(117, 1, 37, 2736),
-            Some(((399_383, 470_000), (410_475, 466_000)))
-        );
-        // Rounded outward; the bead's [0.8498, 0.8808] is the same exact interval rounded to nearest.
-        assert_eq!(
-            feasible_share_text(117, 1, 37, 2736).as_deref(),
-            Some("[0.8497, 0.8809]")
-        );
-        assert!(holds_at(117, 1, 37, 2736, (85, 100)));
-        assert!(holds_at(117, 1, 37, 2736, (88, 100)));
-        assert!(!holds_at(117, 1, 37, 2736, (89, 100)));
-    }
-
-    #[test]
-    fn test_scaled_rate_fit_synthetic() {
-        // Synthetic Site H: 1000·¾·400/150 = 2000 fits; 2200 does not.
-        assert!(holds_at(400, 1, 150, 2000, (3, 4)));
-        assert!(!holds_at(400, 1, 150, 2200, (3, 4)));
-        // 4399·299/(2000·801) = 0.821037…, 4401·301/(2000·799) = 0.828974…
-        assert_eq!(
-            feasible_share_text(400, 1, 150, 2200).as_deref(),
-            Some("[0.8210, 0.8290]")
-        );
-        // At s = 1 the scaled test is the unscaled one.
-        for (n, k, q, r) in [(79, 1, 68, 1162), (79, 1, 68, 1141), (200, 5, 100, 2400)] {
-            assert_eq!(holds_at(n, k, q, r, (2, 2)), holds(n, k, q, r));
-        }
-        // Non-positive inputs have no share interval (the run refuses them).
-        assert_eq!(feasible_share(0, 1, 37, 2736), None);
-        assert_eq!(feasible_share(117, 1, 0, 2736), None);
-        assert_eq!(feasible_share(117, 1, 37, -5), None);
     }
 
     /// For a (iii) footing: BD-340.S3's conflict sets for the footing as the ledger poses it (from its cited
@@ -3673,30 +3625,5 @@ mod tests {
         for bad in ["", ".5", "8.4.1", "61.55555", "-5", "x"] {
             assert_eq!(decimal_fraction(bad), None, "{bad}");
         }
-    }
-
-    #[test]
-    fn test_share_footnote_found_by_text() {
-        let s = sheet_of(
-            "Q2 2026",
-            vec![
-                text("A30", "f.  Other footnote."),
-                text(
-                    "A32",
-                    "g.  COS/oz - Gold COS/oz is calculated as cost of sales across our gold operations \
-                     (excluding sites in closure or care and maintenance) divided by ounces sold (both on an \
-                     attributable basis using Barrick's ownership share). ",
-                ),
-            ],
-        );
-        assert_eq!(find_share_footnote(&s).as_deref(), Some("A32"));
-        let none = sheet_of(
-            "Q2 2026",
-            vec![text(
-                "A32",
-                "g.  Gold COS/oz is calculated as cost of sales divided by ounces sold.",
-            )],
-        );
-        assert_eq!(find_share_footnote(&none), None);
     }
 }
