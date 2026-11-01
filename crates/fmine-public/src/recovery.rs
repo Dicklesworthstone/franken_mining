@@ -34,6 +34,8 @@ pub struct QuarterReport {
     pub release: String,
     /// Original source Claims, including their unchanged ownership keys and interpretation evidence.
     pub inputs: Vec<KeyedCell>,
+    /// The exact interpreted inputs passed to the model, retained even when the kernel refuses them.
+    pub operating: Option<OperatingRow>,
     pub outcome: Result<Projection>,
 }
 
@@ -194,13 +196,27 @@ fn anchor(a: &Accepted) -> Result<SourceAnchor> {
 
 fn ownership_claim(a: &Accepted, synthetic: bool) -> Result<Claim<Rat>> {
     let token = point_token(&a.token)?;
+    let expected = if synthetic {
+        (1, TRAINING_TABLE, "Lumwana (100%)", "Interest (%)")
+    } else {
+        (
+            38,
+            "Copper Mineral Reserves",
+            "Lumwana surface (100%)",
+            "Based on attributable tonnes",
+        )
+    };
     if a.unit != "percent"
         || a.basis != "100%"
         || a.period != "2025FY"
         || token.mantissa != 100
         || token.scale != 0
-        || !a.locator.row.contains("Lumwana")
-        || !a.locator.row.contains("(100%)")
+        || (
+            a.locator.page,
+            a.locator.table.as_str(),
+            a.locator.row.as_str(),
+            a.locator.col.as_str(),
+        ) != expected
     {
         return Err(refuse(
             RefusalCode::UndeclaredUnitBasisOrTz107,
@@ -493,6 +509,7 @@ fn quarter(
         .map(|c| (*c).clone())
         .collect();
     inputs.sort_by(|a, b| (&a.key, &a.locator).cmp(&(&b.key, &b.locator)));
+    let mut operating = None;
     let outcome = (|| {
         if release < period.code() {
             return Err(refuse(
@@ -529,12 +546,15 @@ fn quarter(
             processed: read(QuantityKind::ProcessedKt)?,
             produced: read(QuantityKind::CopperProducedKt)?,
         };
-        kernel::project(fit, &row)
+        let result = kernel::project(fit, &row);
+        operating = Some(row);
+        result
     })();
     QuarterReport {
         period,
         release,
         inputs,
+        operating,
         outcome,
     }
 }
@@ -567,6 +587,7 @@ pub fn assess(
     if !active {
         return Ok(None);
     }
+    validate_through(profile.through.as_deref())?;
     if !report.agreement.is_consistent() {
         return Err(refuse(
             RefusalCode::NotObservable202,
@@ -675,6 +696,7 @@ pub fn assess(
 /// A retrospective public computation: `through` filters workbook releases only. Current verified
 /// historical documents supply the model; this command is not an as-of forecast or hindcast.
 pub fn run_public(root: &Path, issuer: &str, through: Option<&str>) -> Result<RecoveryReport> {
+    validate_through(through)?;
     let profile = crate::sources::load_issuer_profile(root, issuer)?;
     let profile = match through {
         Some(bound) => profile.through(bound)?,
@@ -694,6 +716,16 @@ pub fn run_public(root: &Path, issuer: &str, through: Option<&str>) -> Result<Re
             "no registered two-reader recovery historical inputs",
         )
     })
+}
+
+fn validate_through(through: Option<&str>) -> Result<()> {
+    if through.is_some_and(|bound| !crate::sources::is_through_bound(bound)) {
+        return Err(refuse(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            "workbook through must be YYYYQ1 through YYYYQ4",
+        ));
+    }
+    Ok(())
 }
 
 fn locations<T>(claim: &Claim<T>) -> Vec<String> {
@@ -741,7 +773,12 @@ fn sqrt_json(s: SquareRoot, rule: &str, inputs: &[String]) -> String {
     )
 }
 
-fn claim_fields<T>(c: &Claim<T>) -> String {
+fn claim_fields<T>(c: &Claim<T>, calibration: &str) -> String {
+    let confidentiality = if c.confidentiality.is_public() {
+        "public".into()
+    } else {
+        c.confidentiality.to_string()
+    };
     let anchors = c
         .anchors
         .iter()
@@ -760,17 +797,66 @@ fn claim_fields<T>(c: &Claim<T>) -> String {
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    let uu = c.uu_terms.iter().map(|u| format!("{{\"scenario_id\":{},\"description\":{},\"trigger_indicator\":{},\"monetary_downside\":\"unquantified\"}}",
-        js(&u.scenario_id), js(&u.description), js(&u.trigger_indicator))).collect::<Vec<_>>().join(",");
+    let inputs = locations(c);
+    let uu = c.uu_terms.iter().map(|u| {
+        let downside = if u.downside_exposure_usd_m.is_finite() && u.downside_exposure_usd_m != 0.0 {
+            format!("\"monetary_downside\":\"source_estimate\",\"downside_exposure_usd_m\":{{\"v\":{},\"rule\":\"recovery.inherited_uu\",\"rules_version\":{},\"in\":[{}]}}", u.downside_exposure_usd_m, js(RULES_VERSION), strings(&inputs))
+        } else {
+            "\"monetary_downside\":\"unquantified\"".into()
+        };
+        format!("{{\"scenario_id\":{},\"description\":{},\"trigger_indicator\":{},{downside}}}", js(&u.scenario_id), js(&u.description), js(&u.trigger_indicator))
+    }).collect::<Vec<_>>().join(",");
     format!(
         "\"claim_id\":{},\"metric\":{},\"evidence\":{},\"epistemic\":{},\"knowledge\":{},\"support\":\"period_aggregate\",\
-        \"confidentiality\":\"public\",\"calibration\":\"uncalibrated_descriptive_model\",\"parents\":[{}],\"anchors\":[{anchors}],\"uu_terms\":[{uu}]",
+        \"confidentiality\":{},\"calibration\":{},\"parents\":[{}],\"anchors\":[{anchors}],\"uu_terms\":[{uu}]",
         js(&c.claim_id.to_string()),
         js(&c.metric_key),
         js(&format!("{:?}", c.evidence)),
         js(&format!("{:?}", c.epistemic)),
         js(&format!("{:?}", c.state)),
+        js(&confidentiality),
+        js(calibration),
         strings(&parents)
+    )
+}
+
+fn ownership_json(ownership: Ownership, inputs: &[String]) -> String {
+    match ownership {
+        Ownership::Full => "{\"kind\":\"full\"}".into(),
+        Ownership::Attributable { share } => format!(
+            "{{\"kind\":\"attributable\",\"share\":{}}}",
+            rational(share, "recovery.ownership_interpretation", inputs)
+        ),
+    }
+}
+
+fn quantity_json(c: &Claim<Quantity>) -> String {
+    let q = &c.value;
+    let (kind, unit) = match q.kind {
+        QuantityKind::HeadGradePercent => ("head_grade_percent", "wt_pct"),
+        QuantityKind::RecoveryPercent => ("recovery_percent", "percent"),
+        QuantityKind::ProcessedKt => ("processed_kt", "kt"),
+        QuantityKind::CopperProducedKt => ("copper_produced_kt", "kt"),
+    };
+    let inputs = locations(c);
+    let ownership = ownership_json(q.ownership, &inputs);
+    format!(
+        "{{{},\"subject\":{},\"period\":{{\"year\":{},\"first_month\":{},\"last_month\":{}}},\"quantity_kind\":{},\"unit\":{},\"ownership_basis\":{ownership},\"value\":{}}}",
+        claim_fields(c, "source_interpretation"),
+        js(&q.subject),
+        js(&q.period.year.to_string()),
+        js(&q.period.first_month.to_string()),
+        js(&q.period.last_month.to_string()),
+        js(kind),
+        js(unit),
+        estimate_json(
+            Estimate {
+                point: q.point,
+                interval: q.interval
+            },
+            "recovery.printed_quantity",
+            &inputs
+        )
     )
 }
 
@@ -792,8 +878,9 @@ fn projection_json(c: &Claim<ModelProjection>) -> String {
     let p = &c.value;
     let inputs = locations(c);
     format!(
-        "{{{},\"expected_recovery_percent\":{},\"gap_pp\":{},\"copper_difference_kt\":{},\"fraction_of_reported_output\":{}}}",
-        claim_fields(c),
+        "{{{},\"ownership_basis\":{},\"expected_recovery_percent\":{},\"gap_pp\":{},\"copper_difference_kt\":{},\"fraction_of_reported_output\":{}}}",
+        claim_fields(c, "uncalibrated_descriptive_model"),
+        ownership_json(p.ownership, &inputs),
         estimate_json(
             p.expected_recovery_percent,
             "recovery.expected_recovery",
@@ -872,10 +959,11 @@ impl RecoveryReport {
         let f = &self.fit.value;
         let inputs = locations(&self.fit);
         let fit = format!(
-            "{{{},\"training_years\":[{}],\"mean_head_percent\":{},\"constant_tails_percent\":{},\"intercept_percent\":{},\"slope\":{},\
+            "{{{},\"ownership_basis\":{},\"training_years\":[{}],\"mean_head_percent\":{},\"constant_tails_percent\":{},\"intercept_percent\":{},\"slope\":{},\
             \"residual_sample_variance_at_printed\":{},\"residual_sample_sd_at_printed\":{},\"residual_sample_divisor\":{},\
             \"regression_error_variance_at_printed\":{},\"regression_error_sd_at_printed\":{},\"regression_error_divisor\":{}}}",
-            claim_fields(&self.fit),
+            claim_fields(&self.fit, "uncalibrated_descriptive_model"),
+            ownership_json(f.ownership, &inputs),
             strings(
                 &f.training_years
                     .iter()
@@ -919,12 +1007,13 @@ impl RecoveryReport {
         );
         let quarters = self.quarters.iter().map(|q| {
             let source_claims = q.inputs.iter().map(KeyedCell::to_json).collect::<Vec<_>>().join(",");
+            let operating_claims = q.operating.as_ref().map(|row| [&row.head, &row.recovery, &row.processed, &row.produced].into_iter().map(quantity_json).collect::<Vec<_>>().join(",")).unwrap_or_default();
             let outcome = match &q.outcome {
                 Ok(p) => format!("\"status\":\"ok\",\"constant_tails\":{},\"grade_dependent_tails\":{}",
                     projection_json(&p.constant_tails), projection_json(&p.grade_dependent_tails)),
                 Err(r) => format!("\"status\":\"refused\",\"refusal\":{{\"code\":{},\"what\":{},\"fix\":{}}}", js(r.code), js(&r.what), js(r.fix)),
             };
-            format!("{{\"quarter\":{},\"first_registered_release\":{},\"comparative_at_first_registration\":{},\"ownership_interpretation\":\"100% full site, independently cited; source keys preserved\",\"source_claims\":[{source_claims}],{outcome}}}",
+            format!("{{\"quarter\":{},\"first_registered_release\":{},\"comparative_at_first_registration\":{},\"ownership_interpretation\":\"100% full site, independently cited; source keys preserved\",\"source_claims\":[{source_claims}],\"operating_claims\":[{operating_claims}],{outcome}}}",
                 js(&q.period.code()), js(&q.release), q.release != q.period.code())
         }).collect::<Vec<_>>().join(",");
         let rows = self
@@ -933,6 +1022,22 @@ impl RecoveryReport {
             .map(transcription_json)
             .collect::<Vec<_>>()
             .join(",");
+        let training_claims = self
+            .training
+            .iter()
+            .flat_map(|row| [&row.head, &row.recovery])
+            .map(quantity_json)
+            .collect::<Vec<_>>()
+            .join(",");
+        let ownership_claim = format!(
+            "{{{},\"unit\":\"percent\",\"interpretation\":\"exact full-site ownership context, not a rounded operating measurement\",\"value\":{}}}",
+            claim_fields(&self.ownership, "source_assertion"),
+            rational(
+                self.ownership.value,
+                "recovery.ownership_interpretation",
+                &locations(&self.ownership)
+            )
+        );
         let documents = self
             .documents
             .iter()
@@ -963,7 +1068,7 @@ impl RecoveryReport {
             \"vintage_policy\":\"earliest registered visible site-quarter release; later comparative values never repair an unusable first appearance\",\
             \"intervals\":\"conservative input-rounding enclosures, not confidence or prediction intervals\",\
             \"counts\":{{\"quarters\":{},\"computed\":{},\"refused\":{}}},\"ownership_source\":{},\"ownership_claim_id\":{},\
-            \"documents\":[{documents}],\"training_inputs\":[{rows}],\"fit\":{fit},\"quarters\":[{quarters}]}}",
+            \"ownership_claim\":{ownership_claim},\"documents\":[{documents}],\"training_inputs\":[{rows}],\"training_claims\":[{training_claims}],\"fit\":{fit},\"quarters\":[{quarters}]}}",
             js(RULES_VERSION),
             js(&self.digest().to_hex()),
             js(&self.issuer),

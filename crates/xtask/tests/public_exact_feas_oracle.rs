@@ -18,15 +18,131 @@
 mod oracle {
     use fmine_core::{PhiloxStream, RngKey};
     use fmine_numerics::exact_feas::{
-        Cell, Certificate, Closure, Construction, Convention, Identity, IdentityKind, ImpliedError,
-        Interval, Outcome, Rat, Rules, Scope, implied_interval, solve,
+        self as xf, Cell, Certificate, Closure, Construction, Convention, Identity, IdentityKind,
+        ImpliedError, Interval, Outcome, Rat, Rules, Scope, implied_interval, solve,
     };
     use fmine_public::aisc::{
         Calc, IdentityFamily, IdentityInstance, IdentityState, OperandRole, OperandValue,
-        rate_holds, rate_range,
+        feasible_share, implied_ounces, rate_holds, rate_range,
     };
     use fmine_public::run_synthetic_assurance;
     use fmine_public::synthetic::SYNTHETIC_SHARES;
+
+    /// The closed form against the kernel's share interval (bd-4wvl.4 part 3), which derives it from each
+    /// factor's rounding box: r and q at step 1, N = n at step k (k summed lines), 1/1000 the constant.
+    #[test]
+    fn test_feasible_share_matches_kernel_share_interval() {
+        use xf::discover::{Factor, share_interval};
+        let at = |v: i64, step: i64| Factor {
+            printed: Rat::from_integer(i128::from(v)),
+            step: Rat::from_integer(i128::from(step)),
+        };
+        let mut compared = 0;
+        for n in 1..=40 {
+            for k in 0..=3 {
+                for q in 1..=20 {
+                    for r in [1, 7, 950, 1501, 2736] {
+                        let Some(((ln, ld), (hn, hd))) = feasible_share(n, k, q, r) else {
+                            continue;
+                        };
+                        let s = share_interval(
+                            Rat::new(1, 1000).expect("1/1000"),
+                            &[at(r, 1), at(q, 1)],
+                            &[at(n, k)],
+                            xf::Convention::Closed,
+                        )
+                        .expect("kernel interval");
+                        let ends = (
+                            s.lo.map(|e| (e.at, e.strict)),
+                            s.hi.map(|e| (e.at, e.strict)),
+                        );
+                        let want = (
+                            Some((Rat::new(ln, ld).expect("lo"), false)),
+                            Some((Rat::new(hn, hd).expect("hi"), false)),
+                        );
+                        assert_eq!(ends, want, "n {n} k {k} q {q} r {r}");
+                        compared += 1;
+                    }
+                }
+            }
+        }
+        // 40·4·20·5 = 16,000 points, less (n, k) = (1, 2) and (1, 3) at 100 each, which have 2n − k < 1.
+        assert_eq!(compared, 15_800, "every grid point with 2n − k ≥ 1");
+    }
+
+    /// [`rate_holds`] at a share, decided.
+    fn holds_at(n: i64, k: i64, q: i64, r: i64, share: (i64, i64)) -> bool {
+        rate_holds(n, k, q, r, share).expect("the kernel decides")
+    }
+
+    /// [`rate_holds`] at 100%, decided.
+    fn holds(n: i64, k: i64, q: i64, r: i64) -> bool {
+        holds_at(n, k, q, r, (1, 1))
+    }
+
+    /// bd-prmn.8: the one-cell check and its implied ounces on hand-computed columns.
+    #[test]
+    fn one_cell_implied_ounces_known_answers() {
+        // n = 100, q = 50, r = 2000: 1000·100/50 = 2000 exactly, inside.
+        assert!(holds(100, 1, 50, 2000));
+        // The implied ounces at 100%: [1000·199/4001, 1000·201/3999] = [49.7375…, 50.2625…], which holds 50.
+        assert_eq!(
+            implied_ounces(100, 2000, 1, 1),
+            ("49.737".to_string(), "50.263".to_string())
+        );
+        // r = 2100: [1000·199/4201, 1000·201/4199] = [47.3696…, 47.8685…] misses [49.5, 50.5], so it fails.
+        assert!(!holds(100, 1, 50, 2100));
+        assert_eq!(
+            implied_ounces(100, 2100, 1, 1),
+            ("47.369".to_string(), "47.869".to_string())
+        );
+        // At s = 3/4 the implied ounces scale by 3/4: [1000·3·199/(4·4201), 1000·3·201/(4·4199)]
+        // = [35.5272…, 35.9014…]; q = 36 lies in [35.5, 36.5] and meets it, so the scaled check passes.
+        assert_eq!(
+            implied_ounces(100, 2100, 3, 4),
+            ("35.527".to_string(), "35.902".to_string())
+        );
+        assert!(holds_at(100, 1, 36, 2100, (3, 4)));
+        assert!(!holds_at(100, 1, 34, 2100, (3, 4)));
+    }
+
+    /// The corner test and the feasible interval are the same rule: s fits iff lo ≤ s ≤ hi, end points included.
+    #[test]
+    fn test_corner_test_agrees_with_feasible_interval() {
+        let shares = [
+            (21, 25),
+            (123, 200),
+            (3, 5),
+            (4, 5),
+            (897, 1000),
+            (3, 4),
+            (1, 1),
+        ];
+        let mut fits = 0;
+        for n in [1, 2, 7, 117, 400] {
+            for q in [1, 3, 37, 150] {
+                for r in [1, 500, 2000, 2736, 9000] {
+                    let Some(((ln, ld), (hn, hd))) = feasible_share(n, 1, q, r) else {
+                        panic!("positive inputs have an interval")
+                    };
+                    let (lo, hi) = (Rat::new(ln, ld).expect("lo"), Rat::new(hn, hd).expect("hi"));
+                    for (a, b) in shares {
+                        let s = Rat::new(i128::from(a), i128::from(b)).expect("share");
+                        let inside = s.checked_cmp(lo).expect("cmp").is_ge()
+                            && s.checked_cmp(hi).expect("cmp").is_le();
+                        assert_eq!(
+                            holds_at(n, 1, q, r, (a, b)),
+                            inside,
+                            "n={n} q={q} r={r} s={a}/{b}"
+                        );
+                        fits += usize::from(inside);
+                    }
+                }
+            }
+        }
+        // Both outcomes occur, so the agreement is not vacuous.
+        assert!(fits > 0 && fits < 5 * 4 * 5 * shares.len(), "{fits}");
+    }
 
     fn int(n: i64) -> Rat {
         Rat::from_integer(i128::from(n))

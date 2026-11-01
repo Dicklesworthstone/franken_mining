@@ -388,7 +388,7 @@ pub fn compare_production(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fmine_claim::{Confidentiality, UuTerm};
+    use fmine_claim::{Confidentiality, LabelRegistry, UuTerm};
     use fmine_core::anchor::SourceAnchor;
     use fmine_evidence::EpistemicStatus;
 
@@ -730,7 +730,9 @@ mod tests {
         required.evidence = EvidenceClass::Assumed;
         l.feed.epistemic = EpistemicStatus::UnmodelledBudget;
         l.grade.state = KnowledgeState::Estimated;
-        l.recovery.confidentiality = Confidentiality::internal();
+        let labels = LabelRegistry::new([], ["W-capacity-test"]).unwrap();
+        let wall = Confidentiality::mnpi(labels.wall("W-capacity-test").unwrap());
+        l.recovery.confidentiality = wall.clone();
         let term = UuTerm {
             scenario_id: "feed-disruption".into(),
             description: "synthetic risk".into(),
@@ -747,7 +749,7 @@ mod tests {
         );
         assert_eq!(c.epistemic, EpistemicStatus::UnmodelledBudget);
         assert_eq!(c.state, KnowledgeState::Estimated);
-        assert_eq!(c.confidentiality, Confidentiality::internal());
+        assert_eq!(c.confidentiality, wall);
         assert_eq!(c.uu_terms, vec![term]);
         assert_eq!(c.anchors.len(), 4);
         assert_eq!(c.parents.len(), 4);

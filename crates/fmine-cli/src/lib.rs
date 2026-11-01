@@ -1627,6 +1627,34 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires verified Barrick workbooks, PDFs and local two-reader recovery inputs"]
+    fn test_real_recovery_is_embedded_in_assurance_with_separate_digest() {
+        let root = workspace_root();
+        let recovery = fmine_public::recovery::run_public(&root, "barrick", None)
+            .expect("registered recovery evidence");
+        assert_eq!(recovery.quarters.len(), 14);
+        assert!(recovery.quarters.iter().all(|q| q.outcome.is_ok()));
+        let (env, _) = invoke(&args(&["assure", "public", "--issuer", "barrick"]), &root);
+        assert_eq!((env.status, env.exit_code), ("ok", 0), "{:?}", env.refusal);
+        assert!(
+            env.payload_json
+                .contains(&format!("\"recovery\":{}", recovery.to_json()))
+        );
+        let roots = fmine_public::sources::load_expected_roots(
+            &fmine_public::sources::expected_roots_path(&root, "barrick"),
+        )
+        .expect("existing identity/waterfall roots");
+        let expected = roots.last().expect("current registered root");
+        assert_eq!(
+            env.certificate.as_deref(),
+            Some(expected.state_root.as_str())
+        );
+        assert_eq!(env.anchor_id.as_deref(), Some(expected.anchor_id.as_str()));
+        assert_ne!(recovery.digest().to_hex(), expected.state_root);
+        assert!(env.to_json().contains(FLAGS));
+    }
+
+    #[test]
     fn test_new_commands_refuse_missing_evidence_and_reject_mixed_selectors() {
         let ws = no_corpus_workspace("new-commands-no-corpus");
         let (env, _) = invoke(&args(&["assure", "challenges", "--issuer", "barrick"]), &ws);

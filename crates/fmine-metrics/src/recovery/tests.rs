@@ -2,6 +2,7 @@
 //! Determinism: DeterministicPerIsa (the complete output includes square-root summaries).
 
 use super::*;
+use fmine_claim::LabelRegistry;
 use fmine_core::anchor::SourceAnchor;
 
 fn q(n: i128, d: i128) -> Rat {
@@ -43,6 +44,25 @@ fn source(kind: QuantityKind, year: u16, point: Rat, half: Rat, annual: bool) ->
             [7; 32],
             format!("{year}:{kind:?}"),
         )],
+    )
+}
+
+/// Construct a label-specific fixture with a coherent body and id, without editing a hashed field.
+fn labelled(source: &Claim<Quantity>, label: Confidentiality) -> Claim<Quantity> {
+    Claim::new(
+        source.metric_key.clone(),
+        source.value.clone(),
+        &source.value.canonical_tag(),
+        source.representation.clone(),
+        source.support,
+        source.additivity,
+        source.evidence,
+        source.epistemic,
+        source.state,
+        label,
+        source.uu_terms.clone(),
+        source.parents.clone(),
+        source.anchors.clone(),
     )
 }
 
@@ -321,8 +341,10 @@ fn negative_gaps_and_extrapolated_recovery_are_not_clamped() {
 #[test]
 fn ordering_is_deterministic_and_evidence_cannot_be_strengthened() {
     let mut rows = training(ZERO, ZERO);
-    rows[0].head.evidence = EvidenceClass::ISSUER;
-    rows[1].head.confidentiality = Confidentiality::internal();
+    let registry = LabelRegistry::new(["synthetic_venture"], []).unwrap();
+    let venture = Confidentiality::venture(registry.venture("synthetic_venture").unwrap());
+    rows[0].head = rows[0].head.downgraded(EvidenceClass::ISSUER);
+    rows[1].head = labelled(&rows[1].head, venture.clone());
     let f = fit(&rows).unwrap();
     rows.reverse();
     assert_eq!(fit(&rows).unwrap(), f);
@@ -330,7 +352,9 @@ fn ordering_is_deterministic_and_evidence_cannot_be_strengthened() {
     assert_eq!(f.evidence, EvidenceClass::ISSUER);
     assert_eq!(p.evidence, EvidenceClass::ISSUER);
     assert_eq!(p.state, KnowledgeState::Estimated);
-    assert_eq!(p.confidentiality, Confidentiality::internal());
+    assert_eq!(p.confidentiality, venture);
+    assert_eq!(f.check_id(), Ok(()));
+    assert_eq!(p.check_id(), Ok(()));
     assert_eq!(f.anchors.len(), 6);
     assert_eq!(p.anchors.len(), 10);
     assert_eq!(p.parents.len(), 5);
@@ -350,6 +374,69 @@ fn ordering_is_deterministic_and_evidence_cannot_be_strengthened() {
             .claim_id,
         p.claim_id
     );
+}
+
+#[test]
+fn fit_and_both_models_preserve_every_registered_venture_and_wall() {
+    let registry =
+        LabelRegistry::new(["venture_a", "venture_b"], ["W-training", "W-quarter"]).unwrap();
+    let a = Confidentiality::venture(registry.venture("venture_a").unwrap());
+    let b = Confidentiality::venture(registry.venture("venture_b").unwrap());
+    let training_wall = Confidentiality::mnpi(registry.wall("W-training").unwrap());
+    let quarter_wall = Confidentiality::mnpi(registry.wall("W-quarter").unwrap());
+    let expected_fit = a.join(&b).join(&training_wall);
+    let expected_projection = expected_fit.join(&quarter_wall);
+    let mut rows = training(ZERO, ZERO);
+    let public_fit = fit(&rows).unwrap();
+    rows[0].head = labelled(&rows[0].head, a.join(&training_wall));
+    rows[1].recovery = labelled(&rows[1].recovery, b.clone());
+    let fitted = fit(&rows).unwrap();
+    assert_eq!(fitted.confidentiality, expected_fit);
+    assert_eq!(fitted.value, public_fit.value);
+    assert_eq!(fitted.check_id(), Ok(()));
+    for c in rows.iter().flat_map(|r| [&r.head, &r.recovery]) {
+        assert_eq!(c.check_id(), Ok(()));
+        assert!(c.confidentiality.leq(&fitted.confidentiality));
+    }
+    let mut row = operating();
+    let public_projection = project(&public_fit, &row).unwrap();
+    row.recovery = labelled(&row.recovery, quarter_wall.clone());
+    row.processed = labelled(&row.processed, a.clone());
+    let projected = project(&fitted, &row).unwrap();
+    for (c, public) in [
+        (&projected.constant_tails, &public_projection.constant_tails),
+        (
+            &projected.grade_dependent_tails,
+            &public_projection.grade_dependent_tails,
+        ),
+    ] {
+        assert_eq!(c.value, public.value);
+        assert_eq!(c.confidentiality, expected_projection);
+        assert_eq!(c.check_id(), Ok(()));
+        assert!(fitted.confidentiality.leq(&c.confidentiality));
+        for input in [&row.head, &row.recovery, &row.processed, &row.produced] {
+            assert_eq!(input.check_id(), Ok(()));
+            assert!(input.confidentiality.leq(&c.confidentiality));
+        }
+        assert_eq!(c.verify_export_clearance(&expected_projection), Ok(()));
+        assert_eq!(
+            c.verify_export_clearance(&expected_fit).unwrap_err().code,
+            "FMINE-REF-301"
+        );
+        let missing_venture = a.join(&training_wall).join(&quarter_wall);
+        assert_eq!(
+            c.verify_export_clearance(&missing_venture)
+                .unwrap_err()
+                .code,
+            "FMINE-REF-302"
+        );
+        assert_eq!(
+            c.verify_export_clearance(&Confidentiality::public())
+                .unwrap_err()
+                .code,
+            "FMINE-REF-301"
+        );
+    }
 }
 
 #[test]
