@@ -64,6 +64,13 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   adjusts for common year/site shocks, selective missingness or outcome rounding. Numeric JSON renderers
   keep exact rational numerators/denominators and open interval ends; effective sample size and bias confidence
   intervals remain null. Outputs are always Descriptive or Unscored.
+- DESIGN (BD-341.S5): `guidance_scores::price` checks whether the supplied cited quarterly royalty/price
+  rounding intervals admit one common proportionality coefficient. It returns the exact feasible interval
+  or two conflicting quarters. Only supported gold/copper AISC ranges with a stated price assumption and
+  a passing gate receive the signed adjustment `royalty * (1 - assumed_price / realized_price)`.
+  Exact rounding enclosures, source identities, unit/basis checks and an explicit company-price proxy are
+  retained. The immutable conditional report always includes the unconditional score and binds both to its
+  inputs. It makes no causal claim and does not establish that the supplied history is complete.
 - DESIGN: `guidance_scores::clopper_pearson_90_exact` returns an outward enclosure of the iid Bernoulli model's
   two-sided confidence interval. It bisects a dyadic probability grid with spacing `2^-40`, using outward
   integer evaluation of the exact binomial survival polynomial on a `2^-80` probability scale. Each endpoint
@@ -153,6 +160,10 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 - The Claim wrapper's tests in `guidance_scores::claims::tests` check canonical tampering, basis and duplicate
   member refusals, evidence retention, source parents for unresolved members, stable Claim identities, and
   faithful conversion of exact scores and rounding/completion bounds through the numerical API.
+
+- FACT (BD-341.S5, `guidance_scores::price::tests`): independent exact examples exercise a price contribution
+  of twenty-five, unchanged prices, supported and refuted proportionality, open interval endpoints, missing
+  assumptions, unsupported metrics, explicit proxies, altered paired reports, scaling and arithmetic overflow.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Miscalibrated spatial fronts trip `BettingEProcess` at `E_t >= 20.0` (`alpha = 0.05`) and downgrade downstream claims.

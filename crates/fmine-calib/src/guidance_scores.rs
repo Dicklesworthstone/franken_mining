@@ -17,6 +17,7 @@ use crate::CalibrationFlag;
 
 /// Canonical Claim validation and provenance around the exact numerical primitives.
 pub mod claims;
+pub mod price;
 
 mod certified;
 pub use certified::{
