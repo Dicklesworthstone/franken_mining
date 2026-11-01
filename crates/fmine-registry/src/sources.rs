@@ -31,9 +31,15 @@ pub const IDENTITY_FAMILIES: [&str; 5] = [
     "aisc_per_oz",
 ];
 
-/// Registered document kinds (`fmine_public::sources::DocumentKind::as_str`, bd-plx1): PDF filings whose values
+/// Registered document kinds (bd-plx1, BD-342): PDF filings whose values
 /// enter only as transcription rows, since the repository has no PDF reader.
-pub const DOCUMENT_KINDS: [&str; 4] = ["mda", "aif", "investor_deck", "partner_filing"];
+pub const DOCUMENT_KINDS: [&str; 5] = [
+    "mda",
+    "aif",
+    "investor_deck",
+    "partner_filing",
+    "technical_report",
+];
 /// The prefixes a document's `published_at_basis` starts with: what the date rests on, then the citation.
 pub const PUBLISHED_AT_BASES: [&str; 2] = ["FACT: ", "INFERENCE: "];
 

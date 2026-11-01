@@ -895,8 +895,9 @@ The public lane of M0 (`fmine assure public`).
 - Implies no issuer affiliation.
 - Guidance uses only the registered evidence population, not an assertion that no later issuer guidance
   exists. Historical sales persistence is an assumption, not a production/sales equality or a capacity bound.
-  The T1 result excludes or admits only supplied historical windows under that assumption. Public technical-report
-  T2 evidence binding remains open; no historical exclusion establishes that a mine cannot meet guidance.
+  The T1 result excludes or admits only supplied historical windows under that assumption. Optional T2 binding
+  of explicit technical-report physical limits lives in `fmine-cli::guidance_capacity` and calls the separate
+  exact production-ceiling kernel. No historical exclusion establishes that a mine cannot meet guidance.
 - The guidance track record does not establish a complete historical population, authentic prior forecast
   registration, calibrated coverage, independence, effective sample size, a bias confidence interval or a
   site ranking. Cost scores are unconditional; gold-price adjustments and attribution to controllable

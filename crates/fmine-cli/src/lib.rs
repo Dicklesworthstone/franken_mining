@@ -2,6 +2,7 @@
 
 mod forecast;
 mod guidance;
+mod guidance_capacity;
 mod lint;
 pub mod packet;
 pub mod reliance;
@@ -50,6 +51,8 @@ pub enum CliCommand {
         site: String,
         through: String,
         as_of: String,
+        /// Optional registered technical report with three explicit physical upper limits.
+        capacity_document: Option<String>,
     },
     /// Invented evidence exercising the same guidance completion adapter and exact kernel.
     GuidanceSynthetic,
@@ -349,8 +352,17 @@ fn verb_hint(args: &[String]) -> &'static str {
     let mut i = 0;
     while let Some(arg) = args.get(i) {
         match arg.as_str() {
-            "--format" | "--workspace" | "--issuer" | "--through" | "--site" | "--as-of"
-            | "--ledger" | "--cohort" | "--selector" | "--provenance" => i += 2,
+            "--format"
+            | "--workspace"
+            | "--issuer"
+            | "--through"
+            | "--site"
+            | "--as-of"
+            | "--ledger"
+            | "--cohort"
+            | "--selector"
+            | "--provenance"
+            | "--capacity-document" => i += 2,
             flag if flag.starts_with("--") => i += 1,
             "assure" => {
                 return if args.get(i + 1).map(String::as_str) == Some("challenges") {
@@ -407,6 +419,7 @@ pub fn parse_args(
     let mut ledger = None;
     let mut cohort = None;
     let mut selector = None;
+    let mut capacity_document = None;
     let mut discover = false;
     let mut provenance = None;
 
@@ -475,6 +488,14 @@ pub fn parse_args(
                 i += 1;
                 selector = Some(args.get(i).ok_or("missing value for --selector")?.clone());
             }
+            "--capacity-document" => {
+                i += 1;
+                let document = args.get(i).ok_or("missing value for --capacity-document")?;
+                if document.trim().is_empty() {
+                    return Err("--capacity-document requires a registered filename".to_string());
+                }
+                capacity_document = Some(document.clone());
+            }
             "--provenance" => {
                 i += 1;
                 provenance = Some(PathBuf::from(
@@ -529,6 +550,9 @@ pub fn parse_args(
             "--as-of requires 'guidance completion', 'track-record' or 'forecast assess'"
                 .to_string(),
         );
+    }
+    if positional[0] != "guidance" && capacity_document.is_some() {
+        return Err("--capacity-document requires 'guidance completion'".to_string());
     }
     if positional[0] != "forecast"
         && (ledger.is_some() || cohort.is_some() || selector.is_some() || provenance.is_some())
@@ -595,9 +619,14 @@ pub fn parse_args(
                 return Err("expected 'fmine guidance completion'".to_string());
             }
             if synthetic {
-                if issuer.is_some() || site.is_some() || through.is_some() || as_of.is_some() {
+                if issuer.is_some()
+                    || site.is_some()
+                    || through.is_some()
+                    || as_of.is_some()
+                    || capacity_document.is_some()
+                {
                     return Err(
-                        "guidance --synthetic takes no issuer, site, through or as-of selection"
+                        "guidance --synthetic takes no issuer, site, through, as-of or capacity-document selection"
                             .to_string(),
                     );
                 }
@@ -621,6 +650,7 @@ pub fn parse_args(
                         .ok_or("guidance completion requires --site")?,
                     through: through.ok_or("guidance completion requires --through YYYYQn")?,
                     as_of: as_of.ok_or("guidance completion requires --as-of YYYY-MM-DD")?,
+                    capacity_document,
                 }
             }
         }
@@ -946,6 +976,32 @@ fn guidance_envelope(
     }
 }
 
+fn guidance_capacity_envelope(
+    report: &fmine_public::guidance::GuidanceCompletionReport,
+    capacity: &guidance_capacity::GuidanceCapacityReport,
+    selection: &str,
+) -> Envelope {
+    let body = format!(
+        "\"schema\":\"fmine.guidance.capacity-completion.v1\",\"guidance\":{},\"capacity\":{}",
+        report.to_json(),
+        capacity.to_json()
+    );
+    let digest = fmine_core::hash::blake3_hash(body.as_bytes()).to_hex();
+    let payload = format!("{{\"digest\":\"{digest}\",{body}}}");
+    let mut env = Envelope::ok(
+        "guidance completion",
+        payload,
+        vec![NextAction::new("fmine doctor", DOCTOR_WHY)],
+    );
+    env.no_claim = Some(
+        "Arithmetic requirements, finite historical comparisons and a production-only ceiling from explicitly stated limits. No forecast, probability of meeting guidance, joint production-cost feasibility or regulatory claim.",
+    );
+    let mut markdown = guidance::render_with_capacity(report, selection, &capacity.to_markdown());
+    markdown.push_str(&format!("\nComposite report BLAKE3: `{digest}`.\n"));
+    env.rendered_markdown = Some(markdown);
+    env
+}
+
 fn recovery_envelope(result: Result<fmine_public::recovery::RecoveryReport, Refusal>) -> Envelope {
     let actions = vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
     match result {
@@ -1041,10 +1097,33 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             site,
             through,
             as_of,
-        } => guidance_envelope(
-            fmine_public::guidance::run_public(workspace_root, issuer, site, through, as_of),
-            &format!("Issuer: {issuer}; actuals through {through}; evidence as of {as_of}."),
-        ),
+            capacity_document,
+        } => {
+            let result =
+                fmine_public::guidance::run_public(workspace_root, issuer, site, through, as_of);
+            let selection =
+                format!("Issuer: {issuer}; actuals through {through}; evidence as of {as_of}.");
+            match capacity_document {
+                None => guidance_envelope(result, &selection),
+                Some(document) => match result.and_then(|report| {
+                    guidance_capacity::assess(
+                        workspace_root,
+                        issuer,
+                        site,
+                        through,
+                        as_of,
+                        document,
+                        &report,
+                    )
+                    .map(|capacity| (report, capacity))
+                }) {
+                    Ok((report, capacity)) => {
+                        guidance_capacity_envelope(&report, &capacity, &selection)
+                    }
+                    Err(refusal) => Envelope::refused("guidance completion", refusal, to_doctor()),
+                },
+            }
+        }
         CliCommand::GuidanceSynthetic => guidance_envelope(
             fmine_public::guidance::run_synthetic(),
             "Invented synthetic evidence; this example is not an issuer finding.",
@@ -1279,7 +1358,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "assure public --synthetic",
                 "assure challenges --issuer <issuer> [--through YYYYQn]",
                 "assure challenges --synthetic",
-                "guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD",
+                "guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD [--capacity-document <registered file>]",
                 "guidance completion --synthetic",
                 "track-record --issuer <issuer> [--site <subject>] [--through YYYYQn]",
                 "track-record --issuer <issuer> [--site <site>] --as-of YYYY-MM-DD",

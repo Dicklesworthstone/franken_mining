@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "track_record", "track_record_data", "lint", "forecast", "reliance", "reliance_binding"]`
+- **Allowed Module Families:** `["cli", "envelope", "packet", "guidance", "guidance_capacity", "track_record", "track_record_data", "lint", "forecast", "reliance", "reliance_binding"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -17,7 +17,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `assure public --synthetic`: the known-answer run, never gate-eligible;
   - `assure challenges --issuer <issuer> [--through YYYYQn]` or `--synthetic`: content-addressed internal-review
     packets from visible assurance exceptions, with JSON or readable `--format markdown` output (BD-349);
-  - `guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD` or `--synthetic`:
+  - `guidance completion --issuer <issuer> --site <site> --through YYYYQn --as-of YYYY-MM-DD`
+    with optional `--capacity-document <registered file>`, or `--synthetic`:
     cited remaining-production and AISC requirements plus joint historical-window comparisons under an explicit
     historical-sales scenario, in JSON or readable `--format markdown` (BD-342);
   - `track-record --issuer <issuer> [--site <site>] [--through YYYYQn | --as-of YYYY-MM-DD]` or `--synthetic`: cited issuer
@@ -186,6 +187,14 @@ after artifact creation leaves issuance durability unconfirmed: retain the file 
   T1 output retains exact source-quarter/replay-quarter points and checked exclusion certificates under the
   separately declared sales scenario. No usable historical window remains T3. Markdown retains exact fractions
   when a decimal would round, labels display approximations and escapes source text; it never adds authority.
+  Optional `--capacity-document` binds a selected registered `technical_report` through
+  `guidance_capacity`: verified bytes, publication at/before the cut and two agreeing readings for the same
+  mine and remaining months. The full-mine gold limits must explicitly state maximum remaining dry feed,
+  grade and recovery, with exact units and `100%;bound=explicit-upper;metal=gold` basis; ordinary averages or
+  annual nameplate values do not qualify. The adapter delegates ceiling and required-grade arithmetic to
+  `fmine_metrics::capacity`. The T2 result is a production-only exclusion test; NotExcluded supplies no
+  feasibility witness or probability. Its Claims retain source anchors and interpretation. A composite digest
+  binds both the arithmetic/history and capacity reports; the envelope still has no authority certificate.
 - DESIGN (bd-srqc): recovery delegates source acquisition and selection to `fmine_public::recovery` and
   fitting/projection to `fmine_metrics::recovery`. The public path needs registered, byte-verified PDFs,
   agreed local historical/ownership transcriptions and verified workbook Claims. Missing model inputs
@@ -305,8 +314,9 @@ None: every failure is a usage error or a typed refusal.
 - Challenge packets do not cover hidden or not-published instances. Human review and external-release
   sequencing remain open for every packet, including PDF transcription conflicts.
 - Guidance completion supplies a T1 finite historical comparison when usable original-quarter evidence exists,
-  otherwise T3 necessary arithmetic, under a declared sales scenario. It supplies no probability of meeting
-  guidance, public technical capacity envelope or completed M0 gate.
+  otherwise T3 necessary arithmetic, under a declared sales scenario. An explicitly selected technical report
+  can add a T2 production-only ceiling from three cited limits. It supplies no probability of meeting guidance,
+  joint production-cost feasibility, general mine-capacity assessment or completed M0 gate.
 - Recovery outputs describe model differences with an annual historical relation. They make no causal,
   recoverable-production or forecast claim, emit no dollar sensitivity, and do not turn comparative-only
   observations into first-published outcomes. Input-rounding bounds are not confidence or prediction intervals.

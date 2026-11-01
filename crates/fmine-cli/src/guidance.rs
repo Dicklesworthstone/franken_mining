@@ -84,6 +84,27 @@ fn row(out: &mut String, name: &str, claim: &Claim<Quantity>, unit: &str) {
 }
 
 pub(crate) fn render(report: &GuidanceCompletionReport, selection: &str) -> String {
+    render_inner(report, selection, None)
+}
+
+pub(crate) fn render_with_capacity(
+    report: &GuidanceCompletionReport,
+    selection: &str,
+    capacity_markdown: &str,
+) -> String {
+    render_inner(report, selection, Some(capacity_markdown))
+}
+
+fn render_inner(
+    report: &GuidanceCompletionReport,
+    selection: &str,
+    capacity_markdown: Option<&str>,
+) -> String {
+    let no_claim = if capacity_markdown.is_some() {
+        "Arithmetic and finite historical-window comparisons under a declared sales assumption. The separately requested production-ceiling comparison follows below. No forecast, probability of meeting guidance, joint production-cost feasibility or regulatory claim."
+    } else {
+        NO_CLAIM
+    };
     let inputs = &report.inputs;
     let tier = match report.history.tier {
         EnvelopeTier::T1 => "T1 — finite historical windows",
@@ -114,7 +135,7 @@ pub(crate) fn render(report: &GuidanceCompletionReport, selection: &str) -> Stri
          ## Requirements\n\n| Quantity | Exact bounds | Evidence | Claim |\n|---|---|---|---|\n",
         text(&inputs.production_guidance.value.subject),
         text(selection),
-        text(NO_CLAIM),
+        text(no_claim),
         ownership,
         period(inputs.remaining_sold.value.period),
         report.digest.to_hex()
@@ -247,7 +268,12 @@ pub(crate) fn render(report: &GuidanceCompletionReport, selection: &str) -> Stri
             Digest32(anchor.artifact_sha256).to_hex()
         );
     }
-    out.push_str("\nAll four INV-002 authority flags remain false. Historical seasonality is context only; no probability of meeting guidance or technical-report capacity claim is made.\n");
+    if let Some(capacity) = capacity_markdown {
+        out.push_str("\nAll four INV-002 authority flags remain false. Historical seasonality remains context only; the explicit physical limits below supply a separate production-only exclusion test.\n\n");
+        out.push_str(capacity);
+    } else {
+        out.push_str("\nAll four INV-002 authority flags remain false. Historical seasonality is context only; no probability of meeting guidance or technical-report capacity claim is made.\n");
+    }
     out
 }
 
@@ -272,5 +298,101 @@ mod tests {
         assert!(rendered.contains("Original support"));
         assert!(rendered.contains("Hypothetical replay"));
         assert_eq!(rendered, render(&report, "<script>|[link](bad)\n# forged"));
+    }
+
+    #[test]
+    fn explicit_capacity_selection_is_scoped_and_documented() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("workspace");
+        let args = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_string())
+                .collect::<Vec<_>>()
+        };
+        let base = [
+            "guidance",
+            "completion",
+            "--issuer",
+            "barrick",
+            "--site",
+            "north-mara",
+            "--through",
+            "2026Q2",
+            "--as-of",
+            "2026-10-31",
+        ];
+        let mut selected = args(&base);
+        selected.extend(args(&["--capacity-document", "Mine-technical-report.pdf"]));
+        let (command, _, _) = crate::parse_args(&selected, root).expect("capacity selection");
+        assert!(matches!(command, crate::CliCommand::GuidanceCompletion {
+            capacity_document: Some(ref document), ..
+        } if document == "Mine-technical-report.pdf"));
+        let (command, _, _) = crate::parse_args(&args(&base), root).expect("ordinary guidance");
+        assert!(matches!(
+            command,
+            crate::CliCommand::GuidanceCompletion {
+                capacity_document: None,
+                ..
+            }
+        ));
+        for invalid in [
+            args(&["doctor", "--capacity-document", "Report.pdf"]),
+            args(&[
+                "track-record",
+                "--synthetic",
+                "--capacity-document",
+                "Report.pdf",
+            ]),
+            args(&[
+                "guidance",
+                "completion",
+                "--synthetic",
+                "--capacity-document",
+                "Report.pdf",
+            ]),
+            {
+                let mut invalid = args(&base);
+                invalid.push("--capacity-document".into());
+                invalid
+            },
+            {
+                let mut invalid = args(&base);
+                invalid.extend(args(&["--capacity-document", " "]));
+                invalid
+            },
+        ] {
+            let (envelope, _) = crate::invoke(&invalid, root);
+            assert_eq!(envelope.exit_code, 2, "{invalid:?}");
+            assert_eq!(envelope.status, "usage_error");
+        }
+        let docs = crate::execute_command(&crate::CliCommand::RobotDocs, root);
+        assert!(
+            docs.payload_json
+                .contains("--capacity-document <registered file>")
+        );
+    }
+
+    #[test]
+    fn capacity_section_keeps_the_historical_comparison_and_scopes_its_boundary() {
+        let report = fmine_public::guidance::run_synthetic().expect("fixture");
+        let ordinary = render(&report, "Synthetic");
+        let with_capacity = render_with_capacity(
+            &report,
+            "Synthetic",
+            "## T2 production ceiling\n\nNot excluded.",
+        );
+        assert!(with_capacity.contains("Historical joint comparison"));
+        assert!(with_capacity.contains("T2 production ceiling"));
+        assert!(with_capacity.contains("Not excluded."));
+        assert!(with_capacity.contains("explicit physical limits"));
+        assert!(!with_capacity.contains(
+            "no probability of meeting guidance or technical-report capacity claim is made"
+        ));
+        assert!(ordinary.contains(
+            "no probability of meeting guidance or technical-report capacity claim is made"
+        ));
     }
 }

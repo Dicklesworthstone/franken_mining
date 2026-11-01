@@ -43,7 +43,7 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
 - `sources::{DocumentRow, DOCUMENT_KINDS, PUBLISHED_AT_BASES}`, `SourcesRegistry::documents`, `sources::is_date`
   (bd-plx1): optional `[[document]]` rows, one PDF each: a bare `file` and a sha256 unique across workbooks and
   documents, optional `dir` (a plain relative path; default `corpus_dir`), `kind` (`mda`, `aif`,
-  `investor_deck` or `partner_filing`), an `https://` `url` naming a file, a registered `url_basis`,
+  `investor_deck`, `partner_filing` or `technical_report`), an `https://` `url` naming a file, a registered `url_basis`,
   `published_at` (a calendar date) with `published_at_basis` starting `"FACT: "` or `"INFERENCE: "` and citing
   its source, positive `pages` and `bytes`. No value is ever read from a document.
 - `transcriptions::{parse_transcriptions, load_transcriptions, TranscriptionRegistry, EntryRow, Locator, Token,

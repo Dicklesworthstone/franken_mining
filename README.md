@@ -366,9 +366,41 @@ declared sales assumption. Missing or incompatible windows have explicit reasons
 The report includes the guidance vintage, as-of selection and all source hashes. Workbook availability uses its
 verified retrieval date conservatively where no publication date is registered. JSON preserves exact Claims,
 source-quarter witnesses and certificates; Markdown presents requirements, comparison results and citations.
-Its content digest creates no forecast registration or ledger certificate, and neither tier gives a probability
-or mine-capacity conclusion. The metrics library separately provides an exact feed/grade/recovery ceiling
-kernel for cited physical limits. Public technical-report binding and the remaining BD-342/M0 gates stay open.
+Its content digest creates no forecast registration or ledger certificate, and neither historical tier gives a
+probability or mine-capacity conclusion.
+
+#### Add an explicit physical production ceiling
+
+```bash
+cargo run -p fmine-cli -- guidance completion --issuer barrick --site north-mara --through 2026Q2 --as-of 2026-10-31 --capacity-document Mine-technical-report.pdf --format markdown
+```
+
+DESIGN (BD-342): the optional `--capacity-document` selects a registered `kind = "technical_report"`
+document. The filename above is illustrative; no new issuer facts or document values are bundled. Its bytes
+and SHA-256, publication date at or before `--as-of`, and two agreeing readers are checked before use.
+All three quantities must appear in that same document, for the selected mine and exactly the remaining
+calendar-month period (for example `2026-07/2026-12`):
+
+| Quantity key suffix after `capacity_<site_key_with_underscores>_` | Unit | Meaning |
+|---|---|---|
+| `remaining_dry_feed_mt` | `dry_mt` | Maximum remaining dry feed, in million metric tonnes |
+| `head_grade_g_per_t` | `g_per_dry_t` | Upper gold head grade, grams per dry metric tonne |
+| `recovery_fraction` | `fraction` | Upper gold recovery, greater than zero and at most one |
+
+Each row requires basis `100%;bound=explicit-upper;metal=gold`, a single explicitly stated upper value,
+and a printed locator label identifying a maximum, upper limit or at-most bound. Ordinary forecasts,
+average grades, percent values, wet tonnes and annual nameplate values are not silently converted into
+remaining-period physical limits. Missing, conflicting, incompatible or late evidence refuses the requested
+capacity comparison.
+
+The **T2 production-ceiling comparison** multiplies the explicit full-mine limits, uses the exact statutory
+troy-ounce conversion and applies the guidance's stated attributable share when needed. It reports the
+optimistic maximum production and required head-grade interval, with canonical Claims and citations.
+A requirement above that optimistic ceiling is excluded by the stated limits. **Not excluded** establishes
+neither simultaneous attainability of the maxima nor production-cost feasibility. Already delivered
+requirements stay separately labelled. No probability, mine valuation or technical-report certification is
+inferred. JSON binds the unchanged arithmetic/history report and the capacity report in one composite digest;
+Markdown presents both sections. Full BD-342/M0 empirical and acceptance gates remain open.
 
 ### Assess guidance at an explicit evidence cut
 
