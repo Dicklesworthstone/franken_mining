@@ -14,6 +14,8 @@ fmine-claim = { path = "../fmine-claim" }
 fmine-numerics = { path = "../fmine-numerics" }
 fmine-calib = { path = "../fmine-calib" }
 fmine-time = { path = "../fmine-time" }
+fmine-units = { path = "../fmine-units" }
+fmine-registry = { path = "../fmine-registry" }
 
 [lints]
 workspace = true

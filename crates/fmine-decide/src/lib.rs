@@ -10,6 +10,8 @@ use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::{Color, Refusal, RefusalCode};
 use fmine_numerics::voi::{VoiProblem, VoiSummary};
 
+pub mod card;
+
 /// Parameter perturbation threshold that flips the optimal action (`BD-227`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlipMargin {

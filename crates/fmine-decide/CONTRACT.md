@@ -24,6 +24,27 @@ The projection is an internal versioned replay input, not a new durable `FMT-CAR
 Enforces `INV-002` (`authoritative: false`, `may_actuate: false`, `is_safe_certification: false`, `is_signing_basis: false`) and `INV-015` (non-empty `uu_register`, `FMINE-REF-204`) on every `DecisionCard`.
 
 ## 4. Public API Surface
+- DESIGN (BD-225): `card::{WeightSet, ActionRole, ActionPayoffs, DecisionInputs, evaluate, EvaluatedCard}`
+  computes a complete finite-scenario draft comparison from exact monetary Claims. Strictly positive named
+  state weights sum exactly to one; at least two alternatives, exactly one explicit do-nothing role, complete
+  identical state populations and one model/currency/valuation basis are required. `canonical_tag` and the
+  Claim identity are both checked; stale, unusable, uncited, unsupported or unbudgeted inputs refuse the
+  entire comparison. No action or state is dropped and no weight is normalized implicitly.
+  The exact weighted mean, inverse-CDF P10/P50/P90 and fractional-mass CVaR95 of signed loss `-NPV` are computed
+  for every action. Regret is each state's best-in-hindsight payoff minus that action's payoff over the same
+  full matrix. Mean and maximum regret, expected-value and minimax rankings, and every exact co-winner remain
+  visible. Action-id ordering breaks presentation ties only. Negative tail loss is retained for all-gain cases.
+  `EvaluatedCard` has immutable input/output accessors and JSON/Markdown renderers. Its output Claim meets the
+  evidence of all inputs and retains every parent, source anchor, confidentiality label and consistent UU
+  definition. The derived Claim value tag and versioned report digest additionally bind metadata omitted by generic Claim identities,
+  including support, representation, UU values, supersession, current flags and computed input colours.
+  Arithmetic is Exact; inherited floating UU/colour metadata is retained by its exact bits, not used as payoff
+  inputs. This draft comparison supplies no calibrated probabilities, VOI, retrospective evidence proof,
+  physical feasibility, sign-off or authorization, and is not a durable decision-ledger entry.
+- `card::model::parse` admits the strict `fmine.decision-model.v1` TOML subset with explicit `state`, `action`,
+  `payoff` and `uu` rows. It checks the supplied source SHA-256 against the actual text, exact rational weights,
+  at most four decimal money places, complete action/state membership and explicit positive finite UU exposure.
+  All parsed Claims remain internal, Assumed and uncalibrated. Unknown fields cannot upgrade those labels.
 - `FlipMargin`, `DecisionCard` (`build`, `build_as_of`, `temporal_replay_bytes`)
 - `RetrospectiveDecisionCard`: immutable `card`, `cone` and `replay` accessors; scoped Markdown renderer
 - `VoiCampaign`, `VoiRankedItem`, `rank_voi_campaigns`
@@ -56,7 +77,8 @@ Invalid or unanchored decision inputs fail closed with typed `Refusal`.
 - `GATE-HELM-03`
 
 ## 9. Lifted Code & Foundation Dependencies
-- Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`, `fmine-calib`.
+- Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-evidence`, `fmine-claim`, `fmine-numerics`,
+  `fmine-calib` and the pure `fmine-registry` TOML parser.
 
 ## 10. Non-Goals & Scope Boundary
 Never actuates physical equipment (`INV-002`) or performs file/network I/O (`L-3`).
