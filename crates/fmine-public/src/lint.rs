@@ -17,7 +17,7 @@ use crate::key::{
     SeriesOwnershipBasis, canonical_value_tag, claims_digest,
 };
 
-pub const RULES_VERSION: &str = "cited-equality/3";
+pub const RULES_VERSION: &str = "cited-equality/4";
 pub const NO_CLAIM: &str = "Checks supported numeric equalities against cited public Claims in the selected source snapshot. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure.";
 pub const DISCOVERY_NO_CLAIM: &str = "Matches supported numeric equalities to public Claims in the selected source snapshot only when their stated semantic keys identify exactly one candidate. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure. General-prose discovery precision has not been measured.";
 
@@ -322,7 +322,10 @@ fn metric(c: &KeyedCell) -> Option<Metric> {
         "summary:aisc_usd_per_oz"
         | "all-in sustaining costs per ounce"
         | "site:costs per ounce:all-in sustaining costs"
-        | "site:costs per ounce ($/oz):all-in sustaining costs" => Metric::Aisc,
+        | "site:costs per ounce ($/oz):all-in sustaining costs"
+        | "summary:aisc_usd_per_lb"
+        | "site:costs per pound:all-in sustaining costs"
+        | "site:costs per pound ($/lb):all-in sustaining costs" => Metric::Aisc,
         "summary:tcc_usd_per_oz"
         | "total cash costs per ounce"
         | "total cash costs per ounce (on a co-product basis)"
@@ -334,7 +337,10 @@ fn metric(c: &KeyedCell) -> Option<Metric> {
         "summary:cos_usd_per_oz"
         | "cost of sales per ounce"
         | "site:costs per ounce:cost of sales"
-        | "site:costs per ounce ($/oz):cost of sales" => Metric::CostOfSales,
+        | "site:costs per ounce ($/oz):cost of sales"
+        | "summary:cos_usd_per_lb"
+        | "site:costs per pound:cost of sales"
+        | "site:costs per pound ($/lb):cost of sales" => Metric::CostOfSales,
         "summary:au_prod_100_koz" | "summary:au_prod_attr_koz" => Metric::Production,
         "summary:cu_prod_100_kt"
         | "summary:cu_prod_attr_kt"
@@ -681,7 +687,7 @@ fn unit_matches(unit: UnitTok, key: &str, metric: Metric) -> bool {
             "usd_per_oz"
         ) | (Metric::Production | Metric::Sales, UnitTok::Koz, "koz")
             | (
-                Metric::C1,
+                Metric::Aisc | Metric::C1 | Metric::CostOfSales,
                 UnitTok::UsdPerLb | UnitTok::DollarPerLb,
                 "usd_per_lb"
             )
@@ -783,7 +789,7 @@ fn basis_findings(c: &Context, claim: &KeyedCell, metric: Metric) -> Vec<(Verdic
     {
         failures.push((Verdict::BasisMismatch, "ownership"));
     }
-    let sold = if metric == Metric::C1 {
+    let sold = if claim.key.unit == "usd_per_lb" {
         B::PerLbSold
     } else {
         B::PerOzSold
@@ -800,7 +806,7 @@ fn basis_findings(c: &Context, claim: &KeyedCell, metric: Metric) -> Vec<(Verdic
         B::ByProduct => co_product || !matches!(metric, Metric::Aisc | Metric::Tcc),
         B::Geo | B::Scorecard => true,
         B::NonGaap => !matches!(metric, Metric::Aisc | Metric::Tcc | Metric::C1),
-        B::GoldOunces => matches!(metric, Metric::C1 | Metric::CopperProduction),
+        B::GoldOunces => claim.key.unit == "usd_per_lb" || metric == Metric::CopperProduction,
         _ => false,
     }) {
         failures.push((Verdict::BasisMismatch, "metric_definition"));

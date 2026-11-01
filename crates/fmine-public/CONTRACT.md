@@ -15,7 +15,10 @@ The public lane of M0 (`fmine assure public`).
   metric, period, ownership, denominator and unit. Exact rational half-step intervals decide containment,
   disjoint values and excessive precision; no floating-point tolerance or implicit unit conversion is used.
   AISC, total cash costs, copper C1, cost of sales, gold/copper production, gold sales, processed/head grade
-  and whole-site recovery are supported. Co-product TCC stays distinct from by-product TCC. Canonical copper
+  and whole-site recovery are supported. AISC and cost of sales include canonical copper summary/site
+  rows with explicit pound-sold denominators and `usd_per_lb` units; their rounding, source identity and
+  ownership checks are the same as for gold, with no ounce/pound conversion. Cost-of-sales discovery
+  remains outside the supported grammar. Co-product TCC stays distinct from by-product TCC. Canonical copper
   C1 summary/site rows require explicit `$/lb` or `US$/lb` and per-pound-sold denominators; by/co-product,
   gold-ounce and produced-denominator assertions are not inferred from C1. Copper production requires an
   explicit copper metric and canonical `kt`; historical millions-of-pounds site rows stay unchecked.

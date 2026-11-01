@@ -76,6 +76,191 @@ fn verdict(text: &str, claims: &[KeyedCell]) -> Verdict {
 }
 
 #[allow(clippy::expect_used)]
+fn copper_cost_claims(release: &str, site_table: bool) -> Vec<KeyedCell> {
+    let text = |s: &str| MinimalCell::Text(s.into());
+    let number = |s: &str| MinimalCell::Styled {
+        raw: s.into(),
+        xf: 1,
+    };
+    let sheet = if site_table {
+        MinimalSheet {
+            name: "Minestats1".into(),
+            hidden: false,
+            cells: vec![
+                ("B2".into(), text("Site A")),
+                ("A3".into(), text("For the three months ended March 31,")),
+                ("B3".into(), MinimalCell::Number(2030.0)),
+                ("A4".into(), text("Costs per pound ($/lb)")),
+                ("A5".into(), text("C1 cash costs")),
+                ("B5".into(), number("3.40")),
+                ("A6".into(), text("All-in sustaining costs")),
+                ("B6".into(), number("3.75")),
+                ("A7".into(), text("Cost of sales")),
+                ("B7".into(), number("3.90")),
+            ],
+        }
+    } else {
+        MinimalSheet {
+            name: "QTD".into(),
+            hidden: false,
+            cells: vec![
+                ("A1".into(), text("For the three months ended March 31,")),
+                ("B1".into(), MinimalCell::Number(2030.0)),
+                ("B2".into(), text("C1 Cash Costs ($/lb)")),
+                ("C2".into(), text("All-in sustaining costs ($/lb)")),
+                ("D2".into(), text("Cost of sales ($/lb)")),
+                ("A3".into(), text("Site A")),
+                ("B3".into(), number("3.40")),
+                ("C3".into(), number("3.75")),
+                ("D3".into(), number("3.90")),
+            ],
+        }
+    };
+    let bytes = build_minimal_xlsx_styled(
+        &[sheet],
+        Some(&MinimalStyles {
+            num_fmts: vec![(164, "0.00".into())],
+            xfs: vec![0, 164],
+        }),
+    );
+    let book = Workbook::from_bytes(format!("copper-{release}.xlsx"), &bytes)
+        .expect("invented copper source workbook");
+    let vocabulary = ["C1 cash costs", "All-in sustaining costs", "Cost of sales"]
+        .into_iter()
+        .map(|label| (Some("Costs per pound ($/lb)".into()), label.into()))
+        .collect();
+    let read = read_mine_stats(&book, release, Some(&vocabulary)).expect("copper workbook read");
+    assert!(read.refusals.is_empty(), "{:?}", read.refusals);
+    let profile = synthetic_profile();
+    let claims: Vec<_> = read
+        .values
+        .iter()
+        .map(|value| {
+            from_mine_stats(&profile, &book, release, value).expect("canonical copper Claim")
+        })
+        .collect();
+    assert_eq!(claims.len(), 3, "{:?}", read.values);
+    assert!(claims.iter().all(|c| c.key.unit == "usd_per_lb"));
+    claims
+}
+
+#[test]
+fn copper_aisc_and_cost_of_sales_follow_registered_pound_denominators() {
+    for site_table in [false, true] {
+        let claims = copper_cost_claims("2030Q1", site_table);
+        for (index, metric, amount, discoverable) in [
+            (1, "AISC", "$3.75/lb", true),
+            (2, "cost of sales", "$3.90/lb", false),
+        ] {
+            let text = format!(
+                "Site A Q1 2030 ownership basis unprinted {metric} per pound sold is {amount}."
+            );
+            let source = &claims[index];
+            let cited = text.replace(
+                amount,
+                &format!("[{amount}](fmine:{})", source.claim.claim_id),
+            );
+            assert_eq!(verdict(&cited, &claims), Verdict::Verified, "{cited}");
+            for (from, to, expected) in [
+                ("per pound sold", "per ounce sold", Verdict::BasisMismatch),
+                (
+                    "per pound sold",
+                    "per pound produced",
+                    Verdict::BasisMismatch,
+                ),
+                ("per pound sold", "per lb sold", Verdict::Verified),
+                ("per pound sold", "", Verdict::Ambiguous),
+                ("Q1 2030", "Q2 2030", Verdict::PeriodMismatch),
+                (
+                    "ownership basis unprinted",
+                    "100% basis",
+                    Verdict::BasisMismatch,
+                ),
+                (
+                    "ownership basis unprinted",
+                    "ownership basis unprinted gold ounces",
+                    Verdict::BasisMismatch,
+                ),
+                ("/lb", "/oz", Verdict::BasisMismatch),
+            ] {
+                assert_eq!(
+                    verdict(&cited.replace(from, to), &claims),
+                    expected,
+                    "{cited}: {from} -> {to}"
+                );
+            }
+            let precise = amount.replace("/lb", "0/lb");
+            assert_eq!(
+                verdict(&cited.replace(amount, &precise), &claims),
+                Verdict::RoundingBeyondTolerance
+            );
+            assert_eq!(
+                verdict(&cited.replace(amount, "$4.50/lb"), &claims),
+                Verdict::ValueMismatch
+            );
+            if discoverable {
+                let report = lint_discover(&text, &claims);
+                assert_eq!(report.findings.len(), 1, "{}", report.to_json());
+                assert_eq!(
+                    report.findings[0].verdict,
+                    Verdict::Verified,
+                    "{}",
+                    report.to_json()
+                );
+                assert_eq!(
+                    report.findings[0].source.as_ref().map(KeyedCell::to_json),
+                    Some(source.to_json())
+                );
+                for changed in [
+                    text.replace("per pound sold", "per ounce sold"),
+                    text.replace("/lb", "/oz"),
+                    text.replace("per pound sold", "per pound produced"),
+                ] {
+                    assert_eq!(
+                        lint_discover(&changed, &claims).findings[0].verdict,
+                        Verdict::Uncited,
+                        "{changed}"
+                    );
+                }
+            } else {
+                assert_eq!(
+                    lint_discover(&text, &claims).findings[0].verdict,
+                    Verdict::Unchecked
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn copper_aisc_keeps_competing_vintages_and_source_identity_checks() {
+    let original = copper_cost_claims("2030Q1", false);
+    let mut later = copper_cost_claims("2031Q1", false);
+    let draft = "Site A Q1 2030 ownership basis unprinted AISC per pound sold is $3.75/lb.";
+    let cited = draft.replace(
+        "$3.75/lb",
+        &format!("[$3.75/lb](fmine:{})", original[1].claim.claim_id),
+    );
+    later.extend(original.clone());
+    let report = lint_discover(draft, &later);
+    assert_eq!(report.findings[0].verdict, Verdict::Ambiguous);
+    assert_eq!(report.findings[0].candidates.len(), 2);
+    assert!(report.findings[0].source.is_none());
+    assert_eq!(verdict(&cited, &later), Verdict::Stale);
+    later.reverse();
+    assert_eq!(lint_discover(draft, &later).to_json(), report.to_json());
+    let mut changed = original;
+    if let PublicValue::Number { displayed, .. } = &mut changed[1].claim.value {
+        *displayed = Ok("4.50".into());
+    } else {
+        panic!("expected numeric AISC source");
+    }
+    let report = lint_discover(draft, &changed);
+    assert_eq!(report.findings[0].verdict, Verdict::Unchecked);
+    assert_eq!(report.findings[0].reason, "source_claim_identity_mismatch");
+}
+
+#[allow(clippy::expect_used)]
 fn physical_claims(
     (section, grade, grade_format): (&str, &str, &str),
     (recovery, recovery_format): (&str, &str),

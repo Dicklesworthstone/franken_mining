@@ -320,4 +320,73 @@ mod tests {
             );
         }
     }
+
+    fn sheet_of(
+        name: &str,
+        cells: Vec<(String, fmine_io::xlsx::MinimalCell)>,
+    ) -> fmine_io::xlsx::Sheet {
+        use fmine_io::xlsx::{MinimalSheet, Workbook, build_minimal_xlsx};
+        let bytes = build_minimal_xlsx(&[MinimalSheet {
+            name: name.to_string(),
+            hidden: false,
+            cells,
+        }]);
+        let wb = Workbook::from_bytes("t.xlsx", &bytes).expect("parses");
+        wb.sheet(name).expect("sheet").clone()
+    }
+
+    fn text(cell: &str, s: &str) -> (String, fmine_io::xlsx::MinimalCell) {
+        (
+            cell.to_string(),
+            fmine_io::xlsx::MinimalCell::Text(s.to_string()),
+        )
+    }
+
+    #[test]
+    fn test_share_label_confirmation() {
+        use fmine_public::aisc::confirm_share_label;
+
+        let qtd = sheet_of(
+            "QTD",
+            vec![
+                text("A5", "Carlin (61.5%)"),
+                text("A9", "Nevada Gold Mines LLC (61.5%)2"),
+                text("A10", "Cortez Hills (61.5%)"),
+                text("A19", "North Mara (84%)"),
+                text("B19", "North Mara (85%)"),
+            ],
+        );
+        assert_eq!(
+            confirm_share_label(&qtd, "Carlin", 123, 200).as_deref(),
+            Ok("A5")
+        );
+        // Trailing footnote digits are stripped; the registered label carries the "LLC".
+        assert_eq!(
+            confirm_share_label(&qtd, "Nevada Gold Mines LLC", 123, 200).as_deref(),
+            Ok("A9")
+        );
+        assert!(confirm_share_label(&qtd, "Nevada Gold Mines", 123, 200).is_err());
+        // Only column A is read, and the printed share must equal the registered one exactly.
+        assert_eq!(
+            confirm_share_label(&qtd, "North Mara", 21, 25).as_deref(),
+            Ok("A19")
+        );
+        assert_eq!(
+            confirm_share_label(&qtd, "North Mara", 17, 20),
+            Err("QTD!A19 prints 84%, registered 17/20".to_string())
+        );
+        // "Cortez" is not a prefix match for "Cortez Hills".
+        assert_eq!(
+            confirm_share_label(&qtd, "Cortez", 123, 200),
+            Err("no column-A label 'Cortez (x%)' on QTD".to_string())
+        );
+        let twice = sheet_of(
+            "QTD",
+            vec![text("A5", "Tongon (89.7%)"), text("A30", "Tongon (89.7%)6")],
+        );
+        assert_eq!(
+            confirm_share_label(&twice, "Tongon", 897, 1000),
+            Err("label 'Tongon' repeats on QTD at A5, A30".to_string())
+        );
+    }
 }
