@@ -12,6 +12,7 @@ use fmine_claim::forecast_journal::Entry;
 use fmine_cli::forecast_journal::{Command, execute_with_clock};
 use fmine_cli::{CliCommand, Envelope, parse_args};
 use fmine_core::hash::{Digest32, sha256};
+use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_io::forecast::Journal as DurableJournal;
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
 use fmine_public::key::KeyedCell;
@@ -1148,4 +1149,195 @@ fn restate_cli_accepts_only_a_registered_release_and_never_a_caller_value_or_pre
         .cloned()
         .collect();
     assert!(parse_args(&no_trust, &fixture.root).is_err());
+}
+
+#[test]
+fn replay_requires_v4_for_explicit_vintage_freezes_and_rejects_unrelated_v4_rows() {
+    let fixture = revision_fixture(Some("registered_comparatives"));
+    let original =
+        DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).unwrap();
+    let header = original.header();
+
+    for variant in ["intact", "legacy", "v2", "v3", "unrelated_v4"] {
+        let path = fixture.root.join(format!("version-{variant}.journal"));
+        let mut writer = DurableJournal::create(
+            &path,
+            &header.cell_id,
+            header.clock_skew_ns,
+            &FixedClock(original.records()[0].observed_ns),
+        )
+        .unwrap();
+        for record in original.records() {
+            let Entry::Operation(request) = &record.entry else {
+                continue;
+            };
+            let freeze = request.contains("[[cohort]]");
+            if freeze {
+                assert!(request.starts_with("schema = \"fmine.forecast-operation.v4\"\n"));
+                assert!(request.contains("public_vintages = \"registered_comparatives\""));
+            }
+            let operation = match variant {
+                "legacy" if freeze => request
+                    .strip_prefix("schema = \"fmine.forecast-operation.v4\"\n")
+                    .unwrap()
+                    .to_string(),
+                "v2" | "v3" if freeze => request.replacen(
+                    "fmine.forecast-operation.v4",
+                    &format!("fmine.forecast-operation.{variant}"),
+                    1,
+                ),
+                "unrelated_v4" if request.contains("[[forecast]]") => request.replacen(
+                    "fmine.forecast-operation.v2",
+                    "fmine.forecast-operation.v4",
+                    1,
+                ),
+                _ => request.clone(),
+            };
+            writer
+                .append(&operation, &FixedClock(record.observed_ns), |_, _| Ok(()))
+                .unwrap();
+        }
+        let head = writer.head();
+        drop(writer);
+        assert!(DurableJournal::open_read(&path, Some(head)).is_ok());
+        let before = fs::read(&path).unwrap();
+        let result = execute_with_clock(
+            &Command::Inspect {
+                journal: path.clone(),
+                head: Some(head),
+            },
+            &fixture.root,
+            &NeverClock,
+        );
+        if variant == "intact" {
+            assert_eq!(head, fixture.head);
+            assert_eq!(result.exit_code, 0, "{result:?}");
+            assert!(
+                result
+                    .payload_json
+                    .contains("\"operation_version_counts\":{\"legacy_v1\":0,\"v2\":1,\"v4\":1}")
+            );
+        } else {
+            assert_ne!(result.exit_code, 0, "{variant}: {result:?}");
+            assert_eq!(result.refusal.unwrap().code, "FMINE-REF-107", "{variant}");
+        }
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "{variant} changed replay bytes"
+        );
+    }
+}
+
+#[test]
+fn replay_rechecks_restatement_values_claim_bodies_and_operation_versions() {
+    let mut original = revision_fixture(Some("registered_comparatives"));
+    original.ok(original.resolve(), ns(AVAILABLE));
+    registered_cost(
+        &original,
+        "2031Q1",
+        "2031-05-15",
+        "1474.4",
+        "60",
+        "All-in sustaining costs ($/oz)",
+    );
+    let recorded = ns("2031-05-16T00:00:00Z");
+    original.ok(restate(&original, "2031Q1"), recorded);
+    let journal =
+        DurableJournal::open_read(&original.root.join(JOURNAL), Some(original.head)).unwrap();
+    let receipt = journal
+        .records()
+        .iter()
+        .find_map(|record| match &record.entry {
+            Entry::Operation(text) if text.contains("[[registered_restatement]]") => {
+                Some(text.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    drop(journal);
+    assert!(receipt.starts_with("schema = \"fmine.forecast-operation.v4\"\n"));
+
+    let mut changed_value = receipt.clone();
+    for field in ["value", "numerator"] {
+        let from = format!("{field} = \"1474\"");
+        assert_eq!(changed_value.matches(&from).count(), 1);
+        changed_value = changed_value.replace(&from, &format!("{field} = \"1475\""));
+    }
+
+    let hex = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let mut claim = original.source_claim("2031Q1.xlsx:YTD!D5").claim;
+    let original_id = claim.claim_id;
+    let original_body = hex(&claim.canonical_body());
+    assert!(receipt.contains(&format!("claim_id = \"{original_id}\"")));
+    assert!(receipt.contains(&format!("claim_body = \"{original_body}\"")));
+    claim.metric_key.push_str(":tampered");
+    let body = claim.canonical_body();
+    claim.claim_id = ObjectId::from_canonical_bytes(PrefixKind::Claim, &body);
+    claim.check_id().unwrap();
+    assert_ne!(claim.claim_id, original_id);
+    let changed_claim = receipt
+        .replace(
+            &format!("claim_id = \"{original_id}\""),
+            &format!("claim_id = \"{}\"", claim.claim_id),
+        )
+        .replace(
+            &format!("claim_body = \"{original_body}\""),
+            &format!("claim_body = \"{}\"", hex(&body)),
+        );
+    let downgraded = receipt.replacen(
+        "fmine.forecast-operation.v4",
+        "fmine.forecast-operation.v3",
+        1,
+    );
+
+    for (variant, operation, expected_refusal) in [
+        ("intact", receipt, None),
+        ("value", changed_value, Some("FMINE-REF-507")),
+        ("claim", changed_claim, Some("FMINE-REF-507")),
+        ("v3", downgraded, Some("FMINE-REF-107")),
+    ] {
+        let mut recipient = revision_fixture(Some("registered_comparatives"));
+        recipient.ok(recipient.resolve(), ns(AVAILABLE));
+        let mut writer =
+            DurableJournal::open_write(&recipient.root.join(JOURNAL), recipient.head).unwrap();
+        writer
+            .append(&operation, &FixedClock(recorded), |_, _| Ok(()))
+            .unwrap();
+        recipient.head = writer.head();
+        drop(writer);
+        assert!(
+            DurableJournal::open_read(&recipient.root.join(JOURNAL), Some(recipient.head))
+                .is_ok()
+        );
+        let before = recipient.bytes();
+        let result = execute_with_clock(
+            &Command::Inspect {
+                journal: JOURNAL.into(),
+                head: Some(recipient.head),
+            },
+            &recipient.root,
+            &NeverClock,
+        );
+        if let Some(code) = expected_refusal {
+            assert_ne!(result.exit_code, 0, "{variant}: {result:?}");
+            let refusal = result.refusal.expect("changed receipt must refuse");
+            assert_eq!(refusal.code, code, "{variant}: {refusal:?}");
+            if code == "FMINE-REF-507" {
+                assert!(
+                    refusal.what.contains("source Claim does not bind"),
+                    "{variant}: {refusal:?}"
+                );
+            }
+        } else {
+            assert_eq!(result.exit_code, 0, "{result:?}");
+            assert!(result.payload_json.contains("\"n_outcomes\":2"));
+        }
+        assert_eq!(recipient.bytes(), before, "{variant} changed replay bytes");
+    }
 }
