@@ -115,6 +115,50 @@ pub(super) fn candidate_json(c: &CapitalCandidate) -> String {
     )
 }
 
+pub(super) fn equity_json(equity: &EquityBasis) -> String {
+    let mut baseline: Vec<_> = equity.baseline_nav.iter().collect();
+    baseline.sort_by(|a, b| a.0.cmp(&b.0));
+    let baseline = baseline
+        .iter()
+        .map(|(id, value)| {
+            format!(
+                "{{\"state_id\":{},\"value\":{},\"currency\":{}}}",
+                js(id),
+                mq(*value),
+                currency(value.ccy)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut changes: Vec<_> = equity.share_changes.iter().collect();
+    changes.sort_by(|a, b| (&a.candidate_id, &a.state_id).cmp(&(&b.candidate_id, &b.state_id)));
+    let changes = changes
+        .iter()
+        .map(|change| {
+            format!(
+                "{{\"candidate_id\":{},\"state_id\":{},\"units\":{}}}",
+                js(&change.candidate_id),
+                js(&change.state_id),
+                rq(change.units)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"model_key\":{},\"currency\":{},\"valuation_basis\":{},\"entity\":{},\"share_class\":{},\"shares_per_unit\":{},\"initial_share_units\":{},\"baseline_nav\":[{baseline}],\"share_changes\":[{changes}],\"max_tail_loss_per_share\":{}}}",
+        js(&equity.model_key),
+        currency(equity.currency),
+        js(&equity.valuation_basis),
+        js(&equity.entity),
+        js(&equity.share_class),
+        rq(equity.shares_per_unit),
+        rq(equity.initial_share_units),
+        equity
+            .max_tail_loss_per_share
+            .map_or_else(|| "null".into(), rq)
+    )
+}
+
 pub(super) fn funding_json(funding: &ProgramFunding) -> String {
     let mut available = funding.available_cash.clone();
     available.sort_by(|a, b| a.0.cmp(&b.0));
@@ -405,8 +449,14 @@ pub(super) fn inputs_json(inputs: &ProgramInputs) -> String {
                 claim_json(claim, &funding_schedule_json(&claim.value))
             )
         });
+    let equity = inputs.equity.as_ref().map_or_else(String::new, |claim| {
+        format!(
+            ",\"equity\":{}",
+            claim_json(claim, &equity_json(&claim.value))
+        )
+    });
     format!(
-        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}{schedule}}}",
+        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}{schedule}{equity}}}",
         claim_json(&inputs.policy, &policy_json(&inputs.policy.value)),
         claim_json(&inputs.weights, &weights_json(&inputs.weights.value)),
         inputs.funding.as_ref().map_or_else(
@@ -428,6 +478,32 @@ fn statistics_json(s: &AlternativeStats) -> String {
         rq(s.mean_regret.major),
         rq(s.max_regret.major)
     )
+}
+
+fn per_share_statistics_json(s: &PerShareStats) -> String {
+    let states = s.states.iter().map(|r| format!("{{\"state_id\":{},\"weight\":{},\"payoff\":{},\"best_in_hindsight\":{},\"regret\":{}}}", js(&r.state_id), rq(r.weight), rq(r.payoff.major), rq(r.best_in_hindsight.major), rq(r.regret.major))).collect::<Vec<_>>().join(",");
+    format!(
+        "{{\"mean\":{},\"p10\":{},\"p50\":{},\"p90\":{},\"cvar95_loss\":{},\"mean_regret\":{},\"max_regret\":{},\"states\":[{states}]}}",
+        rq(s.mean.major),
+        rq(s.p10_p50_p90[0].major),
+        rq(s.p10_p50_p90[1].major),
+        rq(s.p10_p50_p90[2].major),
+        rq(s.cvar95_loss.major),
+        rq(s.mean_regret.major),
+        rq(s.max_regret.major)
+    )
+}
+
+fn equity_assessment_json(equity: &EquityAssessment) -> String {
+    let states = equity.states.iter().map(|s| format!(
+        "{{\"state_id\":{},\"baseline_nav\":{},\"nav_change\":{},\"ending_nav\":{},\"baseline_shares\":{},\"share_change\":{},\"ending_shares\":{},\"baseline_nav_per_share\":{},\"ending_nav_per_share\":{},\"delta_nav_per_share\":{}}}",
+        js(&s.state_id), rq(s.baseline_nav.major), rq(s.nav_change.major), rq(s.ending_nav.major),
+        rq(s.baseline_shares), rq(s.share_change), rq(s.ending_shares),
+        rq(s.baseline_nav_per_share.major),
+        s.ending_nav_per_share.map_or_else(|| "null".into(), |v| rq(v.major)),
+        s.delta_nav_per_share.map_or_else(|| "null".into(), |v| rq(v.major))
+    )).collect::<Vec<_>>().join(",");
+    format!("{{\"states\":[{states}]}}")
 }
 
 fn rejection_json(r: &StructuralRejection) -> String {
@@ -466,6 +542,11 @@ fn rejection_json(r: &StructuralRejection) -> String {
             js(state_id),
             rq(shortfall.major)
         ),
+        StructuralRejection::NonpositiveShareCount { state_id, shares } => format!(
+            "{{\"kind\":\"nonpositive_share_count\",\"state_id\":{},\"shares\":{}}}",
+            js(state_id),
+            rq(*shares)
+        ),
     }
 }
 
@@ -499,7 +580,15 @@ pub(super) fn summary_json(s: &ProgramSummary) -> String {
         let schedule = r.funding_schedule.as_ref().map_or_else(String::new, |funding| {
             format!(",\"funding_schedule\":{}", funding_schedule_assessment_json(funding))
         });
-        format!("{{\"bundle_id\":{},\"selected\":{},\"spend\":{},\"budget_slack\":{},\"funding\":{}{schedule},\"structural_rejections\":[{}],\"risk_rejected\":{},\"tail_loss\":{},\"statistics\":{}}}", js(&r.bundle_id), ids(&r.selected), rq(r.spend.major), rq(r.budget_slack.major), r.funding.as_ref().map_or_else(|| "null".into(), funding_assessment_json), r.structural_rejections.iter().map(rejection_json).collect::<Vec<_>>().join(","), r.risk_rejected, r.tail_loss.map_or_else(|| "null".into(), |v| rq(v.major)), r.statistics.as_ref().map_or_else(|| "null".into(), statistics_json))
+        let equity = r.equity.as_ref().map_or_else(String::new, |equity| {
+            format!(
+                ",\"equity\":{},\"per_share_statistics\":{},\"per_share_tail_loss\":{}",
+                equity_assessment_json(equity),
+                r.per_share_statistics.as_ref().map_or_else(|| "null".into(), per_share_statistics_json),
+                r.per_share_tail_loss.map_or_else(|| "null".into(), |v| rq(v.major))
+            )
+        });
+        format!("{{\"bundle_id\":{},\"selected\":{},\"spend\":{},\"budget_slack\":{},\"funding\":{}{schedule}{equity},\"structural_rejections\":[{}],\"risk_rejected\":{},\"tail_loss\":{},\"statistics\":{}}}", js(&r.bundle_id), ids(&r.selected), rq(r.spend.major), rq(r.budget_slack.major), r.funding.as_ref().map_or_else(|| "null".into(), funding_assessment_json), r.structural_rejections.iter().map(rejection_json).collect::<Vec<_>>().join(","), r.risk_rejected, r.tail_loss.map_or_else(|| "null".into(), |v| rq(v.major)), r.statistics.as_ref().map_or_else(|| "null".into(), statistics_json))
     }).collect::<Vec<_>>().join(",");
     let schedule = s
         .funding_schedule
@@ -507,8 +596,15 @@ pub(super) fn summary_json(s: &ProgramSummary) -> String {
         .map_or_else(String::new, |funding| {
             format!(",\"funding_schedule\":{}", funding_schedule_json(funding))
         });
+    let equity = s.equity.as_ref().map_or_else(String::new, |equity| {
+        format!(
+            ",\"equity\":{},\"objective\":\"expected_change_in_equity_nav_per_share\",\"objective_unit\":\"USD/share\",\"statistics_unit\":\"USD\",\"per_share_statistics_unit\":\"USD/share\",\"tail_loss_unit\":\"USD\",\"per_share_tail_loss_unit\":\"USD/share\",\"expected_per_share_cost_of_risk_limit\":{}",
+            equity_json(equity),
+            s.expected_per_share_cost_of_risk_limit.map_or_else(|| "null".into(), |v| rq(v.major))
+        )
+    });
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":null,\"selection_frequency_status\":\"unavailable_static_declared_model\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"}}",
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule}{equity},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":null,\"selection_frequency_status\":\"unavailable_static_declared_model\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"}}",
         js(&s.model_key),
         js(&s.question),
         currency(s.policy.currency),
@@ -543,6 +639,10 @@ fn shown(value: Option<ExactMoney>) -> String {
     value.map_or_else(|| "unavailable".into(), |v| ratio(v.major))
 }
 
+fn per_share_shown(value: Option<ExactPerShare>) -> String {
+    value.map_or_else(|| "unavailable".into(), |v| ratio(v.major))
+}
+
 impl EvaluatedProgram {
     #[must_use]
     pub fn to_json(&self) -> String {
@@ -559,8 +659,34 @@ impl EvaluatedProgram {
     #[must_use]
     pub fn to_markdown(&self) -> String {
         let s = self.summary();
+        let (tail_limit, risk_unit, risk_cost, measurement_note, comparison_table) = if let Some(
+            equity,
+        ) =
+            &s.equity
+        {
+            (
+                equity
+                    .max_tail_loss_per_share
+                    .map_or_else(|| "unbounded".into(), ratio),
+                "USD/share",
+                per_share_shown(s.expected_per_share_cost_of_risk_limit),
+                "Spending, budget, cash and total NAV figures are exact rational USD. The selection objective, risk limit, per-share statistics and cost of the risk limit are exact rational USD/share. Total-USD statistics remain separate reporting values.",
+                "## Every declared subset: total equity NAV in USD\n\nSelection and the risk-limit status use the per-share results below. This table retains total-USD economics.\n\n| Bundle | Candidates | Spend | Budget slack | Mean net delta-NAV | Tail loss | CVaR95 loss | Mean regret | Max regret | Status |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n",
+            )
+        } else {
+            (
+                s.policy.max_tail_loss.map_or_else(
+                    || "unbounded".into(),
+                    |v| mq(v).trim_matches('"').to_string(),
+                ),
+                "USD",
+                shown(s.expected_value_cost_of_risk_limit),
+                "All monetary values below are exact rational major USD.",
+                "## Every declared subset\n\n| Bundle | Candidates | Spend | Budget slack | Mean net delta-NAV | Tail loss | CVaR95 loss | Mean regret | Max regret | Status |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n",
+            )
+        };
         let mut out = format!(
-            "# Static capital program comparison\n\n{}\n\n**Declared model:** `{}`. **Evidence:** {}. **Confidentiality:** {}. **Digest:** `{}`.\n\n{}\n\n**Valuation basis:** {}. **Reference-class basis:** {}.\n\nBudget: {} USD. Upper loss tail mass: {}. Maximum tail loss: {} USD. Candidate net delta-NAV already includes spending; the cost column constrains the budget only.\n\n**Expected-value co-winners before risk limit:** {}. **Risk-feasible co-winners:** {}. **Expected-value cost of the risk limit:** {} USD.\n\nSelection frequency is unavailable for this declared static model. Regret compares every structurally feasible subset before the tail-loss limit. All monetary values below are exact rational major USD.\n\n## Every declared subset\n\n| Bundle | Candidates | Spend | Budget slack | Mean net delta-NAV | Tail loss | CVaR95 loss | Mean regret | Max regret | Status |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n",
+            "# Static capital program comparison\n\n{}\n\n**Declared model:** `{}`. **Evidence:** {}. **Confidentiality:** {}. **Digest:** `{}`.\n\n{}\n\n**Valuation basis:** {}. **Reference-class basis:** {}.\n\nBudget: {} USD. Upper loss tail mass: {}. Maximum tail loss: {tail_limit} {risk_unit}. Candidate net delta-NAV already includes spending; the cost column constrains the budget only.\n\n**Expected-value co-winners before risk limit:** {}. **Risk-feasible co-winners:** {}. **Expected-value cost of the risk limit:** {risk_cost} {risk_unit}.\n\nSelection frequency is unavailable for this declared static model. Regret compares every structurally feasible subset before the tail-loss limit. {measurement_note}\n\n{comparison_table}",
             md(&s.question),
             md(&s.model_key),
             evidence(self.claim.evidence),
@@ -571,10 +697,6 @@ impl EvaluatedProgram {
             md(&s.policy.reference_class_basis),
             mq(s.policy.budget).trim_matches('"'),
             ratio(s.policy.tail_mass),
-            s.policy.max_tail_loss.map_or_else(
-                || "unbounded".into(),
-                |v| mq(v).trim_matches('"').to_string()
-            ),
             if s.unconstrained_winners.is_empty() {
                 "none: no structurally feasible program".into()
             } else {
@@ -586,8 +708,7 @@ impl EvaluatedProgram {
                 "none: no risk-feasible program".into()
             } else {
                 md(&s.feasible_winners.join(", "))
-            },
-            shown(s.expected_value_cost_of_risk_limit)
+            }
         );
         for row in &s.choices {
             let status = if !row.structural_rejections.is_empty() {
@@ -621,6 +742,12 @@ impl EvaluatedProgram {
                             period_id.as_deref().unwrap_or("opening"),
                             ratio(shortfall.major)
                         ),
+                        StructuralRejection::NonpositiveShareCount { state_id, shares } => {
+                            format!(
+                                "nonpositive ending shares in {state_id}: {} shares",
+                                ratio(*shares)
+                            )
+                        }
                     })
                     .collect::<Vec<String>>()
                     .join("; ")
@@ -648,6 +775,9 @@ impl EvaluatedProgram {
                 shown(stats.as_ref().map(|v| v.max_regret)),
                 md(&status)
             );
+        }
+        if let Some(equity) = &self.inputs.equity {
+            equity_markdown(&mut out, equity, &s.choices);
         }
         if let Some(funding) = &self.inputs.funding {
             let f = &funding.value;
@@ -729,6 +859,90 @@ impl EvaluatedProgram {
         }
         out.push_str("\nAll four authority flags are false: reserve disclosure, execution authorization, geotechnical sign-off and regulatory compliance.\n");
         out
+    }
+}
+
+fn equity_markdown(out: &mut String, equity: &Claim<EquityBasis>, choices: &[ProgramChoice]) {
+    let e = &equity.value;
+    let _ = writeln!(
+        out,
+        "\n## Per-share objective and ownership\n\n**Entity:** {}. **Share class:** {}. **Valuation basis:** {}. **Shares per declared unit:** {}. **Initial declared share units:** {}.\n\nFor each shared state, the program adds its candidates' total equity NAV changes and share-unit changes to the declared baseline. Actual shares equal declared share units times shares per unit. The objective is ending equity NAV / ending actual shares minus baseline equity NAV / baseline actual shares, evaluated before averaging across states. Positive share changes issue shares; negative changes retire shares. Candidate NAV assumptions already include financing and buyback economics.\n\nA nonpositive ending share count rejects that bundle in the affected state. Undefined ending and delta NAV/share values remain unavailable; no finite replacement is inserted. Existing total-USD risk limits are not used for the per-share objective.\n\n**Maximum upper-tail loss:** {} USD/share. All statistics in the following table are exact rational USD/share.\n\n| Bundle | Mean delta NAV/share | P10 | P50 | P90 | Tail loss | CVaR95 loss | Mean regret | Max regret | Status |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        md(&e.entity),
+        md(&e.share_class),
+        md(&e.valuation_basis),
+        ratio(e.shares_per_unit),
+        ratio(e.initial_share_units),
+        e.max_tail_loss_per_share
+            .map_or_else(|| "unbounded".into(), ratio)
+    );
+    for choice in choices {
+        let stats = choice.per_share_statistics.as_ref();
+        let _ = writeln!(
+            out,
+            "| `{}` | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            md(&choice.bundle_id),
+            per_share_shown(stats.map(|s| s.mean)),
+            per_share_shown(stats.map(|s| s.p10_p50_p90[0])),
+            per_share_shown(stats.map(|s| s.p10_p50_p90[1])),
+            per_share_shown(stats.map(|s| s.p10_p50_p90[2])),
+            per_share_shown(choice.per_share_tail_loss),
+            per_share_shown(stats.map(|s| s.cvar95_loss)),
+            per_share_shown(stats.map(|s| s.mean_regret)),
+            per_share_shown(stats.map(|s| s.max_regret)),
+            if !choice.structural_rejections.is_empty() {
+                "structurally rejected; reasons above"
+            } else if choice.risk_rejected {
+                "per-share risk limit exceeded"
+            } else {
+                "feasible"
+            }
+        );
+    }
+    claim_markdown(out, equity);
+    let mut baseline: Vec<_> = e.baseline_nav.iter().collect();
+    baseline.sort_by(|a, b| a.0.cmp(&b.0));
+    out.push_str(
+        "\n### Declared baseline equity NAV\n\n| State | Equity NAV (USD) |\n|---|---:|\n",
+    );
+    for (state, value) in baseline {
+        let _ = writeln!(out, "| {} | {} |", md(state), mq(*value).trim_matches('"'));
+    }
+    let mut changes: Vec<_> = e.share_changes.iter().collect();
+    changes.sort_by(|a, b| (&a.candidate_id, &a.state_id).cmp(&(&b.candidate_id, &b.state_id)));
+    out.push_str("\n### Declared candidate share changes\n\nEvery candidate remains visible, including losing candidates and explicit zero changes. Values in this input table are declared share units. The bundle ledgers below normalize them to actual shares.\n\n| Candidate | State | Share-unit change |\n|---|---|---:|\n");
+    for change in changes {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} |",
+            md(&change.candidate_id),
+            md(&change.state_id),
+            ratio(change.units)
+        );
+    }
+    for choice in choices {
+        if let Some(result) = &choice.equity {
+            let _ = writeln!(
+                out,
+                "\n### Equity and shares for `{}`\n\nShare-count columns are actual shares. NAV/share columns are exact rational USD/share.\n\n| State | Baseline NAV (USD) | NAV change (USD) | Ending NAV (USD) | Baseline shares | Share change | Ending shares | Baseline NAV/share | Ending NAV/share | Delta NAV/share |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+                md(&choice.bundle_id)
+            );
+            for state in &result.states {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                    md(&state.state_id),
+                    ratio(state.baseline_nav.major),
+                    ratio(state.nav_change.major),
+                    ratio(state.ending_nav.major),
+                    ratio(state.baseline_shares),
+                    ratio(state.share_change),
+                    ratio(state.ending_shares),
+                    ratio(state.baseline_nav_per_share.major),
+                    per_share_shown(state.ending_nav_per_share),
+                    per_share_shown(state.delta_nav_per_share)
+                );
+            }
+        }
     }
 }
 

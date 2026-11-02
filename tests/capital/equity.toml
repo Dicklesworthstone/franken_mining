@@ -1,0 +1,150 @@
+# Invented one-entity equity and funding example; no issuer data or calibrated probabilities.
+# Baseline NAV is USD 1000 over 100 actual ordinary shares: USD 10/share.
+# Buyback spends USD 80 and retires 10 shares: 920/90 - 10 = 2/9 USD/share.
+# Issuance adds USD 160 net proceeds and 20 shares: 1160/120 - 10 = -1/3 USD/share.
+# The project adds USD 100 of already-net NAV but needs USD 100 of construction cash.
+# Opening cash 100 and a 20 floor make the project infeasible alone.
+# Issue + project is funded and wins: ending NAV 1260 / 120 shares - 10 = 1/2 USD/share.
+# Cash flows constrain funding; they are not added to or subtracted from NAV a second time.
+schema = "fmine.capital-program.v1"
+model_key = "invented_equity_and_funding"
+question = "Which funded capital program creates the most NAV per actual ordinary share?"
+currency = "USD"
+valuation_basis = "Invented decision-date total equity NAV; ordinary project payoffs already net of costs, issuance includes net proceeds, buyback includes cash paid"
+budget = "100"
+tail_mass = "1/5"
+payoff_convention = "additive_equity_nav_with_share_changes"
+reference_class_basis = "Invented exact accounting assumptions; no empirical adjustment or market calibration"
+
+[[state]]
+id = "base"
+weight = "1/1"
+
+[[candidate]]
+id = "buyback"
+label = "Invented fixed buyback"
+cost = "80"
+reference_class_basis = "Declared USD 80 cash payment for 10 retired shares; no transaction fees assumed"
+
+[[candidate]]
+id = "issue"
+label = "Invented equity issuance"
+cost = "0"
+reference_class_basis = "Declared 20 new shares for USD 160 net proceeds; no inferred execution model"
+
+[[candidate]]
+id = "project"
+label = "Invented project"
+cost = "100"
+reference_class_basis = "Declared USD 100 net equity NAV addition after project costs"
+
+[[payoff]]
+candidate = "buyback"
+state = "base"
+value = "-80"
+
+[[payoff]]
+candidate = "issue"
+state = "base"
+value = "160"
+
+[[payoff]]
+candidate = "project"
+state = "base"
+value = "100"
+
+[[equity_basis]]
+entity = "Invented parent company"
+share_class = "Invented ordinary shares"
+shares_per_unit = "1/1"
+initial_share_units = "100/1"
+max_tail_loss_per_share = "1/4"
+
+[[baseline_equity_nav]]
+state = "base"
+value = "1000"
+
+[[candidate_share_change]]
+candidate = "buyback"
+state = "base"
+value = "-10/1"
+
+[[candidate_share_change]]
+candidate = "issue"
+state = "base"
+value = "20/1"
+
+[[candidate_share_change]]
+candidate = "project"
+state = "base"
+value = "0/1"
+
+[[funding_schedule]]
+cash_basis = "Invented nominal USD cash for the same parent; positive receipts and negative expenditures"
+opening_date = "2030-01-01"
+
+[[cash_period]]
+id = "construction"
+cash_period = "2030-01-01/2030-06-30"
+minimum_cash = "20"
+
+[[cash_period]]
+id = "operation"
+cash_period = "2030-07-01/2030-12-31"
+minimum_cash = "20"
+
+[[opening_cash]]
+state = "base"
+value = "100"
+
+[[baseline_cash_flow]]
+period = "construction"
+state = "base"
+value = "0"
+
+[[baseline_cash_flow]]
+period = "operation"
+state = "base"
+value = "0"
+
+[[candidate_cash_flow]]
+period = "construction"
+candidate = "buyback"
+state = "base"
+value = "-80"
+
+[[candidate_cash_flow]]
+period = "construction"
+candidate = "issue"
+state = "base"
+value = "160"
+
+[[candidate_cash_flow]]
+period = "construction"
+candidate = "project"
+state = "base"
+value = "-100"
+
+[[candidate_cash_flow]]
+period = "operation"
+candidate = "buyback"
+state = "base"
+value = "0"
+
+[[candidate_cash_flow]]
+period = "operation"
+candidate = "issue"
+state = "base"
+value = "0"
+
+[[candidate_cash_flow]]
+period = "operation"
+candidate = "project"
+state = "base"
+value = "0"
+
+[[uu]]
+id = "execution_and_intra_period_timing"
+description = "Execution prices, transaction quantities and within-period cash ordering may differ from these fixed assumptions"
+trigger = "The declared equity transaction cannot execute or a payment precedes its funding receipt inside a period"
+downside_usd_m = "0.001"

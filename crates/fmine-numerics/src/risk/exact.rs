@@ -31,48 +31,48 @@ fn arithmetic<T>(result: std::result::Result<T, UnitsError>) -> Result<T> {
     })
 }
 
-fn compare(a: Rat, b: Rat) -> Result<Ordering> {
+/// Orders any two representable rational values without overflowing intermediate cross products.
+/// The caller owns their common unit; comparison never converts or rounds either value.
+#[must_use]
+pub fn compare(a: Rat, b: Rat) -> Ordering {
     // Equal denominators need no cross product, including large exact integer payoffs.
     if a.den() == b.den() {
-        Ok(a.num().cmp(&b.num()))
+        a.num().cmp(&b.num())
     } else if a.signum() != b.signum() {
-        Ok(a.signum().cmp(&b.signum()))
+        a.signum().cmp(&b.signum())
+    } else if let Ok(order) = a.checked_cmp(b) {
+        order
     } else {
-        arithmetic(a.checked_cmp(b))
-    }
-}
-
-fn before(a: (Rat, Rat), b: (Rat, Rat)) -> Result<bool> {
-    let order = compare(a.0, b.0)?;
-    // Weight order only canonicalizes ties in payoff; its numeric order has no economic meaning.
-    Ok(order.is_lt() || order.is_eq() && (a.1.num(), a.1.den()) <= (b.1.num(), b.1.den()))
-}
-
-// Fallible bottom-up merge sort: O(n log n) comparisons and two bounded buffers. Comparison overflow
-// returns a refusal rather than substituting an order into an infallible sorting comparator.
-fn sorted(values: &[(Rat, Rat)]) -> Result<Vec<(Rat, Rat)>> {
-    let mut source = values.to_vec();
-    let mut target = source.clone();
-    let mut width = 1;
-    while width < source.len() {
-        for start in (0..source.len()).step_by(2 * width) {
-            let middle = (start + width).min(source.len());
-            let end = (start + 2 * width).min(source.len());
-            let (mut left, mut right) = (start, middle);
-            for slot in &mut target[start..end] {
-                if left < middle && (right == end || before(source[left], source[right])?) {
-                    *slot = source[left];
-                    left += 1;
-                } else {
-                    *slot = source[right];
-                    right += 1;
-                }
+        // Euclidean continued fractions compare integer parts, then reciprocals of the remainders.
+        // Each reciprocal reverses the order. Unsigned magnitudes also admit i128::MIN exactly.
+        let (mut an, mut ad) = (a.num().unsigned_abs(), a.den().unsigned_abs());
+        let (mut bn, mut bd) = (b.num().unsigned_abs(), b.den().unsigned_abs());
+        let mut reverse = a.signum() < 0;
+        loop {
+            let order = (an / ad).cmp(&(bn / bd));
+            if !order.is_eq() {
+                return if reverse { order.reverse() } else { order };
             }
+            let (ar, br) = (an % ad, bn % bd);
+            if ar == 0 || br == 0 {
+                let order = ar.cmp(&br);
+                return if reverse { order.reverse() } else { order };
+            }
+            (an, ad) = (ad, ar);
+            (bn, bd) = (bd, br);
+            reverse = !reverse;
         }
-        std::mem::swap(&mut source, &mut target);
-        width *= 2;
     }
-    Ok(source)
+}
+
+fn sorted(values: &[(Rat, Rat)]) -> Vec<(Rat, Rat)> {
+    let mut values = values.to_vec();
+    // The exact comparator permits the standard allocation-free O(n log n) sort. Weight order only
+    // canonicalizes payoff ties; its numeric order has no economic meaning in this marginal law.
+    values.sort_unstable_by(|a, b| {
+        compare(a.0, b.0).then_with(|| (a.1.num(), a.1.den()).cmp(&(b.1.num(), b.1.den())))
+    });
+    values
 }
 
 /// An immutable complete finite payoff law with exact strictly positive unit-sum weights.
@@ -96,7 +96,7 @@ impl ExactDistribution {
         if values.iter().any(|(_, weight)| weight.signum() <= 0) {
             return Err(invalid("weights must be strictly positive"));
         }
-        let values = sorted(values)?;
+        let values = sorted(values);
         let mut mass = ZERO;
         for (_, weight) in &values {
             mass = arithmetic(mass.checked_add(*weight))?;
@@ -132,13 +132,13 @@ impl ExactDistribution {
 
     /// Weighted inverse CDF: the first payoff whose cumulative mass reaches `probability` in `(0,1]`.
     pub fn quantile(&self, probability: Rat) -> Result<Rat> {
-        if probability.signum() <= 0 || compare(probability, ONE)?.is_gt() {
+        if probability.signum() <= 0 || compare(probability, ONE).is_gt() {
             return Err(invalid("quantile probability must lie in (0,1]"));
         }
         let mut mass = ZERO;
         for (payoff, weight) in &self.values {
             mass = arithmetic(mass.checked_add(*weight))?;
-            if !compare(mass, probability)?.is_lt() {
+            if !compare(mass, probability).is_lt() {
                 return Ok(*payoff);
             }
         }
@@ -150,7 +150,7 @@ impl ExactDistribution {
     /// Mean signed loss in the worst `tail_mass` of payoff outcomes, with exact fractional boundary mass.
     /// `tail_mass = 1/20` gives CVaR95; a full-population tail gives the negative mean payoff.
     pub fn tail_loss(&self, tail_mass: Rat) -> Result<Rat> {
-        if tail_mass.signum() <= 0 || compare(tail_mass, ONE)?.is_gt() {
+        if tail_mass.signum() <= 0 || compare(tail_mass, ONE).is_gt() {
             return Err(invalid("tail mass must lie in (0,1]"));
         }
         let (mut remaining, mut integral) = (tail_mass, ZERO);
@@ -158,7 +158,7 @@ impl ExactDistribution {
             if remaining == ZERO {
                 break;
             }
-            let take = if compare(*weight, remaining)?.is_gt() {
+            let take = if compare(*weight, remaining).is_gt() {
                 remaining
             } else {
                 *weight
@@ -308,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn unrepresentable_comparisons_means_and_losses_refuse_exactly() {
+    fn unrepresentable_means_and_losses_refuse_exactly() {
         let large = r(i128::MAX, 2);
         assert_eq!(
             ExactDistribution::new(&[(large, r(1, 2)), (r(i128::MAX - 1, 3), r(1, 2))])
@@ -327,5 +327,46 @@ mod tests {
         // Equal-denominator ordering avoids a needless cross product for representable large inputs.
         let d = ExactDistribution::new(&[(large, r(1, 2)), (large, r(1, 2))]).unwrap();
         assert_eq!(d.mean(), large);
+    }
+
+    #[test]
+    fn exact_comparison_handles_large_denominators_and_signed_extremes() {
+        let m = i128::MAX;
+        let a = r(m - 1, m);
+        let b = r(m - 2, m - 1);
+        assert!(a.checked_cmp(b).is_err());
+        assert_eq!(compare(a, b), Ordering::Greater);
+        assert_eq!(compare(b, a), Ordering::Less);
+        assert_eq!(compare(a, a), Ordering::Equal);
+        assert_eq!(
+            compare(a.checked_neg().unwrap(), b.checked_neg().unwrap()),
+            Ordering::Less
+        );
+        assert_eq!(compare(r(i128::MIN, m), r(-m, m - 1)), Ordering::Greater);
+        assert_eq!(compare(r(i128::MIN, 1), r(-m, 2)), Ordering::Less);
+        assert_eq!(compare(r(i128::MIN, 1), r(m, 1)), Ordering::Less);
+
+        // Both fractions are realizable NAV/share deltas with billions of actual shares.
+        let delta = r(6_000_000_142_009_998_129, 297_000_001_293_000_001_400);
+        let better = r(2_571_428_717_575_712_683, 127_285_714_797_000_000_500);
+        assert!(delta.checked_cmp(delta).is_err());
+        assert_eq!(compare(delta, delta), Ordering::Equal);
+        assert!(delta.checked_cmp(better).is_err());
+        assert_eq!(compare(delta, better), Ordering::Less);
+        assert_eq!(compare(better, delta), Ordering::Greater);
+        assert_eq!(
+            compare(delta.checked_neg().unwrap(), better.checked_neg().unwrap()),
+            Ordering::Greater
+        );
+        for an in -12..=12 {
+            for ad in 1..=17 {
+                for bn in -12..=12 {
+                    for bd in 1..=17 {
+                        let (a, b) = (r(an, ad), r(bn, bd));
+                        assert_eq!(compare(a, b), a.checked_cmp(b).unwrap());
+                    }
+                }
+            }
+        }
     }
 }

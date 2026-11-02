@@ -102,8 +102,20 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     net payoffs. Every bundle and rejection remains visible; risk is computed from the joint scenario sums.
     JSON and Markdown report exact co-winners, budget slack and the expected-value cost of the risk limit,
     with complete source-bound Claims and explicit reference-class adjustment bases. This is a conditional
-    static comparison; staged recourse, entity waterfalls, variable share counts, empirical selection
+    static comparison; staged recourse, entity waterfalls, empirical selection
     frequencies and execution authority are not supplied.
+    Optional equity mode requires `payoff_convention = "additive_equity_nav_with_share_changes"`, one
+    `equity_basis` (entity, share class, positive initial share units and actual shares per unit), complete
+    `baseline_equity_nav` state rows and complete `candidate_share_change` candidate/state rows. It values
+    each whole bundle as ending equity NAV per actual share minus baseline NAV per actual share in that
+    same state. Buybacks declare negative total-NAV and share changes; issuance declares net proceeds and
+    new shares. Already-computed standalone accretion must not be reused as a total-NAV change. Shares,
+    scale and the optional signed `max_tail_loss_per_share` use exact quoted `n/d` strings. The old USD
+    `max_tail_loss` is forbidden in equity mode. Co-winners and risk use exact USD/share statistics;
+    total-USD NAV statistics and cash constraints remain separate. Nonpositive ending shares reject the
+    bundle with explicit undefined ratios. JSON and Markdown retain every bundle's state-level equity
+    ledger, input Claim and source binding. `tests/capital/equity.toml` combines this mode with dated cash
+    constraints: issuance plus project wins at 1/2 USD per share while the project alone breaches its floor.
     An optional complete funding Claim adds a declared cash window/basis, minimum cash, every state's
     available cash and every candidate-by-state cash requirement. Each subset retains exact cash used,
     remaining cash and slack, including rejected subsets. Any state shortfall excludes a subset before

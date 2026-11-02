@@ -129,3 +129,46 @@ fn capital_program_cash_schedule_renders_every_bundle_timeline_in_library_and_bi
         "| low | operation | 2030-12-31 | 20/1 | 80/1 | -48/1 | 52/1 | 20/1 | 32/1 | floor met |"
     ));
 }
+
+#[test]
+fn capital_program_equity_renders_exact_per_share_objective_and_total_nav_separately() {
+    let envelope = assert_render_parity("--equity-fixture-only");
+    for field in [
+        "\"feasible_winners\":[\"bundle_05\"]",
+        "\"objective_unit\":\"USD/share\"",
+        "\"statistics_unit\":\"USD\"",
+        "\"per_share_statistics_unit\":\"USD/share\"",
+        "\"expected_value_cost_of_risk_limit\":null",
+    ] {
+        assert!(envelope.payload_json.contains(field), "missing {field}");
+    }
+    let markdown = envelope.rendered_markdown.expect("equity Markdown");
+    for section in [
+        "## Per-share objective and ownership",
+        "### Declared baseline equity NAV",
+        "### Declared candidate share changes",
+        "| Baseline NAV (USD) | NAV change (USD) | Ending NAV (USD) |",
+    ] {
+        assert!(markdown.contains(section), "missing {section}");
+    }
+    assert_eq!(markdown.matches("### Equity and shares for `").count(), 8);
+    assert!(markdown.contains("| project | low | 0/1 |"));
+    // Buyback: 920 / 90 - 1000 / 100 = 2/9, while total equity NAV falls by 80.
+    assert!(
+        markdown.contains(
+            "| low | 1000/1 | -80/1 | 920/1 | 100/1 | -10/1 | 90/1 | 10/1 | 92/9 | 2/9 |"
+        )
+    );
+    // Add the project before dividing: 1020 / 90 - 10 = 4/3.
+    assert!(
+        markdown.contains(
+            "| low | 1000/1 | 20/1 | 1020/1 | 100/1 | -10/1 | 90/1 | 10/1 | 34/3 | 4/3 |"
+        )
+    );
+    // Issuance raises total NAV by 160 but dilutes each existing share by 1/3.
+    assert!(
+        markdown.contains(
+            "| low | 1000/1 | 160/1 | 1160/1 | 100/1 | 20/1 | 120/1 | 10/1 | 29/3 | -1/3 |"
+        )
+    );
+}
