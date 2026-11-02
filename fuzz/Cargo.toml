@@ -104,3 +104,10 @@ path = "fuzz_targets/pit.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "cpit"
+path = "fuzz_targets/cpit.rs"
+test = false
+doc = false
+bench = false

@@ -11,7 +11,10 @@
 //! Values are decimals scaled to `i64` at a declared number of places. A value with more non-zero places is refused,
 //! unless the caller asks for rounding: it is then rounded half away from zero and counted. Each rounding moves a
 //! pit's value by at most half a unit in the last kept place, so the rounded problem's optimum lies within half the
-//! count of such units of the file's.
+//! count of such units of the file's. `Ceiling` and `Floor` round toward +∞ and −∞ instead, a step of under one unit
+//! each.
+//!
+//! The `.prec` reader and the decimal scaling are shared with MineLib's CPIT reader, `toposort::cpit`.
 
 use fmine_evidence::{Refusal, RefusalCode};
 
@@ -25,6 +28,10 @@ pub const MAX_DECIMALS: u32 = 9;
 pub enum Rounding {
     Refuse,
     HalfAwayFromZero,
+    /// Toward +∞: a resource use is never read smaller than the file's.
+    Ceiling,
+    /// Toward −∞: a capacity is never read larger than the file's.
+    Floor,
 }
 
 /// A parsed UPIT pair.
@@ -38,15 +45,15 @@ pub struct UpitModel {
     pub rounded: usize,
 }
 
-fn bad(detail: String) -> Refusal {
+pub(crate) fn bad(detail: String) -> Refusal {
     Refusal::new(
         RefusalCode::InputMissingOrUnreadable506,
-        format!("MineLib UPIT: {detail}"),
+        format!("MineLib: {detail}"),
     )
 }
 
 /// The meaningful lines: trimmed, without blanks and `%` comments, with 1-based line numbers.
-fn lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
+pub(crate) fn lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
     text.lines()
         .enumerate()
         .map(|(i, l)| (i + 1, l.trim()))
@@ -95,12 +102,18 @@ pub fn scaled(token: &str, decimals: u32, rounding: Rounding) -> Result<(i64, bo
     }
     let rounded = dropped.bytes().any(|b| b != b'0');
     if rounded {
-        if rounding == Rounding::Refuse {
-            return Err(bad(format!(
-                "value {token:?} has non-zero places past {decimals}; raise the places or ask for rounding"
-            )));
-        }
-        if dropped.bytes().next().is_some_and(|b| b >= b'5') {
+        // `magnitude` is the value's absolute value truncated, so a step of one moves it away from zero.
+        let away = match rounding {
+            Rounding::Refuse => {
+                return Err(bad(format!(
+                    "value {token:?} has non-zero places past {decimals}; raise the places or ask for rounding"
+                )));
+            }
+            Rounding::HalfAwayFromZero => dropped.bytes().next().is_some_and(|b| b >= b'5'),
+            Rounding::Ceiling => !neg,
+            Rounding::Floor => neg,
+        };
+        if away {
             magnitude = magnitude.checked_add(1).ok_or_else(overflow)?;
         }
     }
@@ -108,7 +121,7 @@ pub fn scaled(token: &str, decimals: u32, rounding: Rounding) -> Result<(i64, bo
 }
 
 /// One integer token.
-fn number(token: &str, what: &str, line: usize) -> Result<usize, Refusal> {
+pub(crate) fn number(token: &str, what: &str, line: usize) -> Result<usize, Refusal> {
     if token.is_empty() || !token.bytes().all(|b| b.is_ascii_digit()) {
         return Err(bad(format!(
             "line {line}: {what} {token:?} is not a non-negative integer"
@@ -193,7 +206,7 @@ fn parse_upit(
 }
 
 /// One list of required blocks per block, from a `.prec` text over `n` blocks.
-fn parse_prec(text: &str, n: usize) -> Result<Vec<Vec<u32>>, Refusal> {
+pub(crate) fn parse_prec(text: &str, n: usize) -> Result<Vec<Vec<u32>>, Refusal> {
     let mut requires: Vec<Option<Vec<u32>>> = vec![None; n];
     for (line, l) in lines(text) {
         let mut tokens = l.split_whitespace();
@@ -298,6 +311,12 @@ mod tests {
         assert_eq!(scaled("-1.2345675", 6, h).ok(), Some((-1_234_568, true)));
         assert_eq!(scaled("-1.2345674", 6, h).ok(), Some((-1_234_567, true)));
         assert_eq!(scaled("0.0000005", 6, h).ok(), Some((1, true)));
+        let (up, down) = (Rounding::Ceiling, Rounding::Floor);
+        assert_eq!(scaled("1.2345671", 6, up).ok(), Some((1_234_568, true)));
+        assert_eq!(scaled("-1.2345679", 6, up).ok(), Some((-1_234_567, true)));
+        assert_eq!(scaled("1.2345679", 6, down).ok(), Some((1_234_567, true)));
+        assert_eq!(scaled("-1.2345671", 6, down).ok(), Some((-1_234_568, true)));
+        assert_eq!(scaled("1.2340000", 3, up).ok(), Some((1_234, false)));
         assert_eq!(
             scaled("9223372036854775807", 0, Rounding::Refuse).ok(),
             Some((i64::MAX, false))

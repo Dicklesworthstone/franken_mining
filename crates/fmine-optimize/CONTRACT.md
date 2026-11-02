@@ -1,7 +1,7 @@
 # CONTRACT.md — `fmine-optimize`
 
 ## 1. Purpose
-The Pushback optimisation crate. Three solver slices so far, and two readers that feed them:
+The Pushback optimisation crate. Four solver slices so far, and three readers that feed them:
 - `pitflow` (`BD-250`, plan §15.4): the ultimate pit as a maximum-weight closure, by Hochbaum's pseudoflow (lowest-label variant, gap termination) on an `i64` CSR precedence graph. Each pit comes with its pseudoflow certificate, which `verify` checks without the solver.
 - `pitflow::shells` (`bd-nzwd`, plan §15.4 and PO-PUSH-3): nested pit shells across an increasing list of exact revenue factors. These are the pit-by-pit sequence from which pushbacks are chosen.
   - Shell `k` is the union of the pit solved at factor `k` and shell `k − 1`.
@@ -18,14 +18,20 @@ The Pushback optimisation crate. Three solver slices so far, and two readers tha
   - `parse_ids` reads whitespace-separated ids with `%` comments.
   - `check` counts every unmet requirement (block in, required block out; per arc), keeps the first `WITNESSES` (10), and sums the exact value.
   - Nothing the candidate claims about itself is read. Its gap to the optimum comes from `solve`'s certified value, not from the candidate.
+- `toposort` (`bd-kcpj`, plan §15.4 row `fmine-optimize::toposort` and PO-PUSH-5): multi-period schedules on a precedence graph, with per-period upper limits on resources.
+  - `check` is PO-PUSH-5's feasibility check. Every mined block's required blocks must be mined in the same period or earlier, and no resource may go over its limit in any period. It returns each period's exact value sum, and every broken requirement and limit.
+  - `greedy` is TopoSort (Chicoisne, Espinoza, Goycoolea, Moreno and Rubio, Operations Research 2012). It takes Kahn's topological order with the caller's rank breaking ties, then puts each block in the earliest period with room. It runs `check` on its schedule and refuses one that fails.
+- `toposort::cpit` (`bd-kcpj`): MineLib's CPIT text pair (`.cpit` periods, limits, values, uses and discount rate; `.prec` as for UPIT) read into a `ScheduleProblem`. No I/O.
+  - Values are scaled as UPIT values are. Uses are rounded up (`Rounding::Ceiling`) and limits down (`Rounding::Floor`) when places are dropped, and both are counted.
+  - Only `L` (upper) limits are read; `G` and `I` are refused. At most `MAX_RESOURCES` (64) resources.
 
-`fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. Shells and slope arcs have no caller yet. Bienstock–Zuckerberg, Lagrangian, TopoSort and the stochastic layer are later slices.
+`fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. Shells, slope arcs and `toposort` have no caller outside tests yet. Bienstock–Zuckerberg, Lagrangian, local search and the stochastic layer are later slices.
 
 - **Crate:** `fmine-optimize`
 - **Layer:** E
 - **Subsystem:** Pushback
 - **LOC budget:** 36,000 planned / 41,000 ceiling
-- **Allowed Module Families:** `["pitflow"]`
+- **Allowed Module Families:** `["pitflow", "toposort"]`
 
 ## 2. Inputs
 - One `i64` value per block, in a caller-chosen integer money unit; the caller scales and rounds, never this crate. The one exception is `pitflow::minelib`, which scales a UPIT file's decimals at the places the caller declares and rounds only when the caller asks.
@@ -38,6 +44,10 @@ The Pushback optimisation crate. Three solver slices so far, and two readers tha
   - one `u16` domain per block, and K, the number of layers a cone spans.
 
   Block `(i, j, k)` is `(k·ny + j)·nx + i`, with `k = 0` at the top. The slope that applies is the lower block's, for the direction from it to the upper block. No angle in degrees or float crosses the API: the caller turns an angle into a tangent.
+- For `toposort` (`ScheduleProblem::new`): a `ClosureProblem` (values and requirements, as above), a period count, and per resource one non-negative `i64` use per block and one non-negative `i64` upper limit per period.
+  - A schedule is one `Option<u32>` per block: its period, or `None` for unmined.
+  - `greedy` takes one `Option<i64>` rank per block, lower first, or `None` to leave the block out.
+- For `toposort::cpit`: the two files' text, the value places and `Rounding`, and the use places.
 
 ## 3. Outputs
 - `PitSolution`: `in_pit` (one flag per block), `value` (the pit's total, the maximum over all closed sets), `pit_size`, `arc_flow` (the certificate, one flow per arc in CSR order) and `stats` (`PitStats`: mergers, splits, relabels, largest label).
@@ -50,6 +60,9 @@ The Pushback optimisation crate. Three solver slices so far, and two readers tha
   - CSR `offsets` and `targets`, ready for `ClosureProblem::new`;
   - `arc_count`, and `full_cone_arcs`, the count with every cone block required directly;
   - `boundary_blocks`, the blocks near a side of the grid or a domain contact whose arcs were reduced one by one.
+- `ScheduleCheck`: `mined`, `period_values` (exact and undiscounted, `i128`), `used[r][t]`, `unmet` with the first `WITNESSES` (10) `(block, required)` pairs, `over_limit` (every `(resource, period)` over its limit), `feasible()` and `value()`.
+- `greedy`: one `Option<u32>` period per block, a schedule that has passed `check`.
+- `CpitModel`: `name`, `problem`, `discount_rate` (times `RATE_SCALE`, 10⁹), `rounded_values`, `rounded_uses` and `rounded_limits`. Discounting is the caller's.
 
 None is a Claim.
 
@@ -77,6 +90,13 @@ None is a Claim.
   - levels past the bottom of the grid change nothing.
 - At scale (`tests/scale_pit.rs`, ignored, run by hand), three synthetic block models of about 10⁶ arcs, 10⁷ arcs and 10⁷ blocks each yield a certified, non-empty pit. The smallest also equals Dinic, and the largest must solve within KILL-PUSH-PIT's 600 s. `model_has_the_planned_arc_count_and_shape` checks the generator. `slope_arc_pits_at_scale` solves the same ore model on slope arcs, at 2·10⁶ and 10⁷ blocks (§8).
 - GATE-PUSH-PIT1 (`tests/minelib_upit.rs`, ignored by default, run by hand): MineLib UPIT instances integer-scaled at 10⁶ are solved with the certificate verified, equal Dinic exactly, and fall within one whole unit of MineLib's published optimum, a band widened by the bound for any values rounded at read time.
+- Schedules (`toposort`):
+  - `check` agrees with feasibility written out from the definition on every schedule of 60 random problems, and its value equals the direct sum (`check_agrees_with_the_definition_on_every_schedule`). The problems have up to 6 blocks, 3 periods and 2 resources, and every schedule means each block unmined or in any period.
+  - `greedy`'s schedule is feasible under any ranking on 400 random problems (`greedy_is_feasible_under_any_ranking_and_mines_whatever_fits`). There, a ranked block left unmined although its required blocks were mined fits no period from theirs on.
+  - With room for everything and the ultimate pit ranked, `greedy` mines exactly the pit in period 0, at `solve`'s value (`with_room_to_spare_the_ultimate_pit_is_mined_in_period_zero`, 100 random problems).
+  - Known answers: `greedy_follows_rank_within_precedence_and_capacity`, `a_precedence_cycle_stays_unmined`, `check_counts_late_and_missing_requirements_and_overfull_periods`, and `cpit::tests::tiny_pair_reads_exactly_and_schedules`.
+  - Planted on 2026-11-02, each run once and reverted. A `check` that accepts a required block mined one period late failed 2 tests. A `greedy` that ignores limits was refused by its own `check` in 3 tests.
+  - On MineLib's CPIT instances, see §9.
 
 ## 5. Refusals
 Every public function returns `Result<_, Refusal>`; none panics on bad input.
@@ -120,11 +140,26 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input.
   Tests: `minelib::tests::every_malformed_pair_refuses`, one row each, and `crates/xtask/tests/plan_pit.rs` through the CLI.
 - `FMINE-REF-506` (proposed), from `candidate::parse_ids`: a token that is not a non-negative integer, an id that is not a block, or an id given twice. Test: `candidate::tests::ids_parse_to_membership_and_bad_ids_refuse`.
 - `FMINE-REF-207` (proposed), from `candidate::check`: a membership list whose length is not the block count. Test: `candidate::tests::closure_witnesses_and_value_are_exact`.
+- `FMINE-REF-207` (proposed), from `toposort`:
+  - `ScheduleProblem::new`: no periods or more than `MAX_PERIODS` (65,536); resources without one use per block and one limit per period; a negative use or limit;
+  - `check`: a schedule whose length is not the block count, or a period past the last;
+  - `greedy`: ranks whose length is not the block count, or a schedule that fails `check`, which would be a defect.
+
+  Tests: `malformed_problems_refuse`, `check_counts_late_and_missing_requirements_and_overfull_periods`, `greedy_follows_rank_within_precedence_and_capacity`.
+- `FMINE-REF-506` (proposed), from `toposort::cpit::parse`:
+  - a missing, repeated or unknown header or section, a `TYPE` other than `CPIT`, `NPERIODS` of 0 or above `MAX_PERIODS`, a negative `DISCOUNT_RATE`, more than `MAX_RESOURCES` resources;
+  - a limit line count other than resources × periods, a limit kind other than `L`, a resource or period out of range or given twice;
+  - an objective line count other than `NBLOCKS`, a block out of range or given twice;
+  - a use for a block or resource out of range or given twice, or a negative use or limit;
+  - a line that fits no section, or data before the first section;
+  - the `.prec` and decimal refusals of `minelib`.
+
+  Test: `cpit::tests::every_malformed_pair_refuses`, one row each.
 
 No value is clamped, rescaled or perturbed to make a problem fit.
 
 ## 6. Determinism class
-`BitwisePortable`, declared on every file and checked by `xtask check-det`. Integer arithmetic only (`i64`, with `i128` sums in `new` and `verify`, and `i128` and `u128` in `slope`'s angle and cone tests); no floating point, hashing, threads or platform-dependent iteration order.
+`BitwisePortable`, declared on every file and checked by `xtask check-det`. Integer arithmetic only (`i64`, with `i128` sums in `new`, `verify` and `toposort`, and `i128` and `u128` in `slope`'s angle and cone tests); no floating point, hashing, threads or platform-dependent iteration order. `greedy`'s ready set is a binary heap keyed by `(rank, block id)`, a total order.
 
 ## 7. Evidence class of outputs
 Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState` is assigned.
@@ -140,6 +175,11 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   - With one slope everywhere, no closure leaves the true cone. Where sectors or domains differ, chains can reach blocks outside a block's own cone: 3,441 of 109,782 closure blocks within K layers, 3.1%, in `slope_oracles`' random cases.
   - Near sides and domain contacts, each implied arc is tested against at most `WITNESSES` (8) shorter ones, so a few arcs a full search would drop are kept: 59,083 against 58,279 in those cases, 1.4% more. The closure is unchanged.
 - Memory is linear in blocks and arcs. Each arc costs 24 bytes: a target, a tail and two incidence entries (`u32`), and a flow (`i64`). Each block costs two 8-byte and eight 4-byte fields of solver state, on top of its value and offset. The GATE-PUSH-PIT1 process for mclaughlin, Dinic and parsing included, peaked at 7.3 GB RSS.
+- Schedules:
+  - Limits are upper limits only, and a block on a precedence cycle is never mined by `greedy`.
+  - At most `MAX_PERIODS` (65,536) periods. `check` and `greedy` keep a sum per period, so the bound also caps their memory when there are no resources. The `cpit` fuzz target's first crash was 4.4×10¹⁸ periods with no resources, which allocated before any check.
+  - `greedy` is a heuristic. It claims feasibility, not optimality; its distance from the optimum is measured against an LP bound from outside this crate (§9).
+  - CPIT uses are rounded up and limits down, so a schedule within the scaled limits is within the file's. Values are rounded as UPIT values are.
 - Wall times measured on one machine (aarch64-macos, release, 2026-11-01). They are local runs, not a benchmark suite.
 
   | Instance | Blocks | Arcs | Solve | Peak RSS |
@@ -186,10 +226,33 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   Every value read rounds to its published figure. On 2026-11-02 `fmine plan pit`, reading the files with `minelib` instead of the test's own parser, gave the same eleven values, rounded counts and pit sizes (`minelib_instances_match_gate_push_pit1_through_the_verb`, ignored, run by hand on one machine).
 - Seven of the eleven files are read exactly at 10⁶. zuck_small (30 values), zuck_medium (88) and zuck_large (34) print float noise such as `4362.94593000001`, and marvin (4,874 values) carries ten to twelve decimals. Those values are rounded to 10⁻⁶ at read time, and the test widens its band by the resulting bound.
 - MineFlow (Deutsch et al.) is not run.
+- Schedules (`bd-kcpj`): brute force over every schedule of the unit tests' small problems for `check`, and MineLib's own CPIT schedules (`sols/<name>_cpit_gmunoz120723.sol` in the mirror) for `check` and the NPV convention. All ten that were run check feasible, and each NPV recomputes to within one unit of its published best-known value, with the discount counted from period 0. The LP bounds come from `fmine-lp`'s PDLP, whose dual bound is certified. PDLP is a sibling crate, not an external solver.
+
+  `minelib_cpit_schedules_pass_the_checker_under_the_certified_bound` run of 2026-11-02 (ignored, run by hand; aarch64-macos, release, PDLP tolerance 10⁻⁴, 1,363.7 s for the ten instances). Ranks come from each block's LP period weights, and blocks below a final weight of 10⁻⁶, 0.5 or 0.9 are left out. `greedy` runs once per threshold, and the best NPV is kept. Every schedule passed `check` and stayed under both its certified bound and MineLib's published LP bound. The gap is (certified bound − NPV) / certified bound.
+
+  | Instance | Blocks | Periods | LP solve | NPV | Certified bound | Gap | Of best known |
+  |---|---|---|---|---|---|---|---|
+  | newman1 | 1,060 | 6 | 0.1 s | 23,863,335 | 24,489,274 | 2.56% | 1.016 |
+  | kd | 14,153 | 12 | 4.2 s | 372,132,947 | 413,354,914 | 9.97% | 0.938 |
+  | zuck_small | 9,400 | 20 | 62.6 s | 730,614,526 | 854,193,026 | 14.5% | 0.926 |
+  | p4hd | 40,947 | 10 | 37.4 s | 241,054,573 | 247,419,299 | 2.57% | 0.979 |
+  | w23 | 74,260 | 12 | 37.2 s | 374,482,241 | 400,666,427 | 6.54% | 0.955 |
+  | sm2 | 99,014 | 30 | 112.7 s | 1,622,531,548 | 1,648,501,297 | 1.58% | 0.986 |
+  | marvin | 53,271 | 20 | 141.3 s | 745,899,525 | 863,937,582 | 13.7% | 0.909 |
+  | zuck_medium | 29,277 | 15 | 221.7 s | 494,176,101 | 710,656,274 | 30.5% | 0.803 |
+  | zuck_large | 96,821 | 30 | 568.9 s | 51,137,752 | 57,391,118 | 10.9% | 0.901 |
+  | mclaughlin_limit | 112,687 | 15 | 155.3 s | 1,061,128,685 | 1,079,070,887 | 1.66% | 0.989 |
+
+  Every certified bound but kd's is within 0.03% of MineLib's published LP bound. kd's is 0.94% above it, so against the published bound kd's gap is 9.12%. newman1's schedule is worth 1.6% more than MineLib's 2013 best-known file; later published values were not checked. mclaughlin (2,140,342 blocks) was not run. On zuck_large `greedy` mines every block. On eight of the ten, the mined count moves by under 0.1% between thresholds 10⁻⁶ and 0.9 (sm2's by 0.8%, kd's by 10%). How much of each gap comes from timing and how much from block choice was not measured. The count suggests timing, which local search after `greedy` would work on (§10).
 
 ## 10. Known gaps
 - `bd-nzwd` and `bd-t75z`: no caller in the workspace yet. `BD-250`'s one caller is `fmine plan pit`, on MineLib UPIT pairs only; no block model or price deck feeds it.
-- `minelib` reads the UPIT pair only, not MineLib's CPIT or PCPSP files (capacities, periods, destinations).
+- MineLib's PCPSP files (destinations) are not read. UPIT pairs are read by `minelib`, and CPIT pairs by `toposort::cpit`.
+- Schedules:
+  - There is no local search or repair after `greedy`, which plan §15.4 pairs with TopoSort.
+  - `check` lives in this crate beside `greedy`, not in the separate `fmine-verify` crate plan §15.4 names. It shares no code with `greedy` beyond the problem type.
+  - No API joins the LP and the schedule: the ranks come from PDLP only inside `crates/xtask/tests/cpit_schedule.rs`.
+  - No `fmine` verb schedules: `fmine-cli` is at its planned LOC budget, and BUDGET-AMEND-002 awaits the owner.
 - `candidate` reads a plain id list only. Which vendor formats (Whittle, Deswik, COMET) should be read is OPEN-PUSH-4. The candidate check was built ahead of the owner's answer to OPEN-PUSH-1, on its recommended answer (data files only, no linked code); it is removed if the owner rules otherwise.
 - Slope arcs have no external gate. MineLib's UPIT files come with their arcs already made, and the workspace holds no geotechnical slope data. The slopes in the tests are invented.
 - Slope arcs cover regular grids only: no sub-blocks, rotated grids, or slopes that vary with depth inside a domain.
@@ -221,10 +284,16 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `pitflow::slope::SlopeArcs` (`offsets`, `targets`, `arc_count`, `full_cone_arcs`, `boundary_blocks`, `into_csr`)
 - `pitflow::slope::slope_arcs`
 - `pitflow::slope::MAX_PATTERN`, `MAX_SCAN`, `WITNESSES`
+- `pitflow::minelib::Rounding` (`Refuse`, `HalfAwayFromZero`, `Ceiling`, `Floor`)
+- `toposort::ScheduleProblem` (`new`, `blocks`, `periods`, `resources`, `usage`, `limits`)
+- `toposort::ScheduleCheck` (`mined`, `period_values`, `used`, `unmet`, `first_unmet`, `over_limit`, `feasible`, `value`), `toposort::WITNESSES`, `toposort::MAX_PERIODS`
+- `toposort::check`, `toposort::greedy`
+- `toposort::cpit::parse`, `toposort::cpit::CpitModel` (`name`, `problem`, `discount_rate`, `rounded_values`, `rounded_uses`, `rounded_limits`), `toposort::cpit::MAX_RESOURCES`, `toposort::cpit::RATE_SCALE`
 
 ## 12. Proof obligations
 - PO-PUSH-3 (nested shells are monotone in λ when block values are monotone in λ; plan §15.9 names its discharge "property test"):
   - discharged by `tests/shells_oracles.rs`, under §4's conditions;
   - the union lemma in `pitflow::shells`' documentation is the argument for why it holds. It is not machine-checked.
+- PO-PUSH-5 (the schedule is feasible: precedence across periods, capacities; "Independent checker"): `toposort::check`, tested against the definition (§4), and run by `greedy` on every schedule it returns. It is independent of `greedy` in code only, not in crate or author (§10).
 - No PO-* covers slope arcs. That dropping implied arcs keeps every closure is argued by induction in `pitflow::slope`'s documentation, not machine-checked; `tests/slope_oracles.rs` checks it on random cases.
 - No other PO-* is discharged here. That the certificate conditions imply optimality is the max-flow/min-cut theorem applied to the closure network (Picard 1976), stated in the module documentation and not machine-checked. That pseudoflow terminates with such a certificate is Hochbaum's (2008) result. The tests check values against oracles and do not prove either.

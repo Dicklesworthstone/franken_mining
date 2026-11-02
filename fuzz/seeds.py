@@ -100,7 +100,7 @@ def main() -> None:
     root, out = Path(sys.argv[1]), Path(sys.argv[2])
     seeds: dict[str, list[bytes]] = {t: [] for t in
                                      ("codec", "anchor", "journal", "xlsx", "numfmt", "registry", "record", "html",
-                                      "cli", "cli_run", "pit")}
+                                      "cli", "cli_run", "pit", "cpit")}
 
     # codec: mode, script length, script (one read per byte), payload. A script byte's kind is its value mod 11 and
     # its bound its high nibble: every kind once, then bytes, strings and sequences under small, mid and no bounds.
@@ -197,6 +197,16 @@ def main() -> None:
     prec = "0 0\n1 0\n2 0\n3 3 0 1 2\n4 1 3\n"
     for selector, pick in ((2, "0 1 2 3"), (0x12, "% candidate\n3 4"), (6, ""), (1, "0 1 2 3 4")):
         seeds["pit"].append(bytes([selector]) + f"{upit}\0{prec}\0{pick}".encode())
+
+    # cpit: a selector (value places mod 10 in the low nibble; bit 4 asks for rounding; use places in the top three
+    # bits), then the .cpit text, NUL, the .prec text, NUL, and rank bytes (255 leaves a block out). One invented
+    # three-block pair with one resource over two periods.
+    cpit = ("NAME: tiny\nTYPE: CPIT\nNBLOCKS: 3\nNPERIODS: 2\nNRESOURCE_SIDE_CONSTRAINTS: 1\nDISCOUNT_RATE: 0.08\n"
+            "RESOURCE_CONSTRAINT_LIMITS:\n0 0 L 2\n0 1 L 2\nOBJECTIVE_FUNCTION:\n0 -1.5\n1 -2\n2 9.25\n"
+            "RESOURCE_CONSTRAINT_COEFFICIENTS:\n0 0 1\n1 0 1\n2 0 1.5\nEOF\n")
+    cprec = "0 0\n1 0\n2 2 0 1\n"
+    for selector, ranks in ((0x22, b""), (0x22, bytes([0, 1, 255])), (0x31, bytes([2, 1, 0])), (0x00, b"")):
+        seeds["cpit"].append(bytes([selector]) + f"{cpit}\0{cprec}\0".encode() + ranks)
 
     # cli_run: one byte per vocabulary entry, in the order fuzz_targets/cli_run.rs builds it (verb paths, then its
     # FLAGS, PAIRS and VALUES). Each verb alone, with a selector, with options, and as a full mutation command. A
