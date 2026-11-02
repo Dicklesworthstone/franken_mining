@@ -49,6 +49,8 @@ The public lane of M0 (`fmine assure public`).
   source assertions. It indexes Claim IDs and latest series once, then compares the named subject, supported
   metric, period, ownership, denominator and unit. Exact rational half-step intervals decide containment,
   disjoint values and excessive precision; no floating-point tolerance or implicit unit conversion is used.
+  Dated nine-month cumulative equalities use the existing canonical `NineMonths` period in cited checks,
+  discovery and publicness queries. They stay distinct from H1, Q3 and FY; no year is supplied for undated prose.
   AISC, total cash costs, copper C1, cost of sales, gold/copper production, gold sales, processed/head grade
   and whole-site recovery are supported. AISC and cost of sales include canonical copper summary/site
   rows with explicit pound-sold denominators and `usd_per_lb` units; their rounding, source identity and

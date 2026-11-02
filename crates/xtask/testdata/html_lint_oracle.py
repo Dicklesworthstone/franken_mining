@@ -83,7 +83,7 @@ class HtmlLint(unittest.TestCase):
         envelope = fixture.lint(draft)
         payload = success(envelope)
         self.assertEqual([f["verdict"] for f in findings(payload)], ["verified"] * 3)
-        self.assertEqual(payload["lint"]["rules_version"], "cited-equality/5")
+        self.assertEqual(payload["lint"]["rules_version"], "cited-equality/6")
         self.assertEqual(payload["html_projection"], projection)
         self.assertEqual(payload["lint"]["claims_digest"], projection["claims_digest"])
         self.assertEqual(findings(payload)[0]["source_claim"]["claim_id"], claim_id(rows["large"]))

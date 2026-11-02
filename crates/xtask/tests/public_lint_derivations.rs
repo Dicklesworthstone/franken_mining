@@ -913,6 +913,7 @@ fn sum_source(
 fn complete_half_and_year_sums_keep_exact_enclosures_and_canonical_parent_chains() {
     for (n, period, amount, lower, upper) in [
         (2, "H1 2030", "300", (2999, 10), (3001, 10)),
+        (3, "9M 2030", "600", (11997, 20), (12003, 20)),
         (4, "FY2030", "1000", (4999, 5), (5001, 5)),
     ] {
         let root = derivation_workspace();
@@ -1004,6 +1005,139 @@ fn complete_half_and_year_sums_keep_exact_enclosures_and_canonical_parent_chains
         ] {
             assert!(markdown.contains(expected), "{markdown}");
         }
+    }
+}
+
+#[test]
+fn nine_month_published_equality_obeys_the_exact_source_and_publication_cut() {
+    let root = derivation_workspace();
+    let hash = source(
+        &root,
+        "NineMonths.xlsx",
+        "2030Q3",
+        Some("2030-11-01"),
+        "0.0",
+        &[summary(
+            "9M",
+            "Example Mine (60%)",
+            PRODUCTION,
+            number("600.04"),
+        )],
+    );
+    for period in ["9M 2030", "20309M", "nine months of 2030"] {
+        let draft = format!("Example Mine {period} 100% basis gold production is 600 koz.");
+        let before = assess(&root, &draft, "2030-10-31");
+        let after = assess(&root, &draft, "2030-11-01");
+        for report in [&before, &after] {
+            assert!(report.payload_json.contains("\"numbers\":\"1\""));
+            assert!(report.payload_json.contains("\"verdict\":\"verified\""));
+            assert!(report.payload_json.contains(&hash));
+            assert!(report.payload_json.contains("20309M"));
+        }
+        assert!(
+            before
+                .payload_json
+                .contains("\"status\":\"not_in_public_record\"")
+        );
+        assert!(before.payload_json.contains("\"admission\":\"after_cut\""));
+        assert!(after.payload_json.contains("\"status\":\"disclosed\""));
+        assert!(after.payload_json.contains("2030-11-01"));
+    }
+    let too_precise = assess(
+        &root,
+        "Example Mine 9M 2030 100% basis gold production is 600.00 koz.",
+        "2030-11-01",
+    );
+    assert!(
+        too_precise
+            .payload_json
+            .contains("\"verdict\":\"rounding_beyond_tolerance\"")
+    );
+    assert!(
+        !too_precise
+            .payload_json
+            .contains("\"status\":\"disclosed\"")
+    );
+}
+
+#[test]
+fn nine_month_sum_requires_q3_and_preserves_competing_or_different_period_sources() {
+    let root = derivation_workspace();
+    for q in 1..=2 {
+        sum_source(
+            &root,
+            q,
+            "Example Mine (60%)",
+            PRODUCTION,
+            number("100"),
+            "0.0",
+            Some("2030-08-01"),
+        );
+    }
+    let draft = "Example Mine 9M 2030 100% basis gold production is 300 koz.";
+    let missing = assess(&root, draft, "2030-10-31");
+    assert_eq!(
+        string_field(quarter_sum_report(&missing), "status"),
+        "not_available"
+    );
+    sum_source(
+        &root,
+        3,
+        "Example Mine (60%)",
+        PRODUCTION,
+        number("100"),
+        "0.0",
+        Some("2030-11-01"),
+    );
+    let future = assess(&root, draft, "2030-10-31");
+    assert_eq!(
+        string_field(quarter_sum_report(&future), "status"),
+        "not_available"
+    );
+    assert!(quarter_sum_report(&future).contains("\"admission\":\"after_cut\""));
+    let complete = assess(&root, draft, "2030-11-01");
+    assert_eq!(
+        string_field(quarter_sum_report(&complete), "status"),
+        "derived"
+    );
+    let fy = assess(&root, &draft.replace("9M 2030", "FY2030"), "2030-11-01");
+    assert_eq!(
+        string_field(quarter_sum_report(&fy), "status"),
+        "not_available"
+    );
+    source(
+        &root,
+        "LaterQ3.xlsx",
+        "2031Q3",
+        Some("2031-11-01"),
+        "0.0",
+        &[summary(
+            "Q3",
+            "Example Mine (60%)",
+            PRODUCTION,
+            number("200"),
+        )],
+    );
+    // The registered summary layout carries a prior-year Q3 in a later Q3 release. A Q4
+    // release's three-month column is Q4, so it would not be a competing Q3 observation.
+    let profile = load_issuer_profile(&root, DERIVATION_ISSUER).unwrap();
+    let snapshot = fmine_public::run_public_assurance(&profile, &root).unwrap();
+    assert_eq!(
+        snapshot.public_claims.cells["LaterQ3.xlsx:QTD!B3"]
+            .key
+            .valid_period
+            .code(),
+        "2030Q3"
+    );
+    for amount in ["300", "400"] {
+        let report = assess(&root, &draft.replace("300", amount), "2031-11-01");
+        assert_eq!(
+            string_field(quarter_sum_report(&report), "status"),
+            "ambiguous"
+        );
+        assert!(quarter_sum_report(&report).contains("Quarter3.xlsx"));
+        assert!(quarter_sum_report(&report).contains("LaterQ3.xlsx"));
+        assert!(!report.payload_json.contains("\"status\":\"derivable\""));
     }
 }
 
