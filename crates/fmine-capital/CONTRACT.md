@@ -54,11 +54,46 @@ Blocked or capped cash remains with its entity. A parent's onward distribution i
 through deterministic child-first ordering. All amounts and carry balances remain rational, including
 sub-minor-unit ownership splits; no cash is rounded through fixed-decimal `Money`.
 
-Every period proves modeled closing cash plus external distributions equals modeled opening cash plus
+Without modeled debt, every period proves closing cash plus external distributions equals opening cash plus
 native external flows. Internal transfers and parent receipts cancel exactly. A conservation failure
 refuses the comparison. Source-bound NAV remains attributable to `objective_entity`; cash movements do
 not create another NAV gain or deduction. When equity is declared, its entity must equal that objective
-entity. The model does not derive another entity's NAV or infer dilution, taxes, debt covenants or gates.
+entity. The model does not derive another entity's NAV or infer dilution, taxes or actual lending terms.
+
+DESIGN (BD-314, §23.2): optional `EntityDebtFunding` derives debt service, coverage locks and principal
+sweeps for one external senior facility per debtor entity. The explicit `native_excludes_modeled_debt`
+cash convention separates native receipts/expenditures from modeled draws, interest, principal service
+and sweeps. CFADS is a separately declared covenant metric with its own basis; it is never another cash
+receipt. Opening principal, baseline debt flows and selected-candidate debt increments require complete
+facility/state, facility/period/state and facility/period/candidate/state matrices, including zeroes.
+
+For opening principal `B`, current draw `D`, declared full-period rate `r`, and principal-payment cap `A`,
+interest is `(B+D)*r`, scheduled principal is `min(A,B+D)`, and scheduled service is their sum. This is an
+explicit draw-before-interest convention; no annual rate, accrual calendar or day-count rule is inferred.
+The full scheduled service leaves the debtor's cash even when its balance becomes negative. The ordinary
+entity floor checks retain that planned funding failure; service is not reduced to affordable cash and
+the calculation does not invent arrears, default remedies or emergency finance.
+
+For positive scheduled service, DSCR is declared baseline plus selected-candidate CFADS divided by that
+service. The discretionary sweep is excluded from its denominator. Exact equality with the declared
+positive minimum DSCR passes. When service is zero, the ratio is absent and the result explicitly says
+`NoServiceDue`; the facility's `allow_distributions_without_service` declaration controls eligibility.
+A coverage failure locks an ownership distribution but is not itself a cash-floor or default rejection.
+The original distribution permission and cap remain binding alongside the calculated coverage gate.
+
+Timing is explicit. All native flows, fixed transfers, loan draws and mandatory service precede every
+entity's pre-distribution floor check. The graph then visits all entities child first, including roots.
+Immediately before an entity's own dividend, its facility sweeps
+`min(remaining principal, sweep_fraction * max(0,current cash - floor))`. Current child dividends are
+therefore included in their parent's sweep base, even when that parent has no outgoing ownership edge.
+They cannot erase the earlier mandatory-service/floor failure. Sweeps preserve the cash floor; closing
+checks follow the complete graph traversal. Debt after the sweep carries into the next period's interest.
+
+Both conservation equations must be exactly zero: closing principal plus scheduled principal and sweep
+minus opening principal and draw; and modeled closing cash plus outside dividends, interest, scheduled
+principal and sweeps minus modeled opening cash, native flows and loan draws. Every facility/period row
+is retained on every state and rejected path. Loan draws, repayments, coverage and sweeps constrain cash;
+they do not add to or deduct from separately supplied already-net objective NAV again.
 
 DESIGN (BD-229, PO-CAP-2): optional `EquityBasis` switches to the explicit
 `additive_equity_nav_with_share_changes` convention. Candidate payoffs then represent changes in **total
@@ -142,6 +177,10 @@ partition/date/basis and the full static result. Its source assumptions remain u
 not infer signal accuracy, information rights, approval or a calendar of economic NAV realization.
 Entity funding adds its complete graph, matrices, fixed-transfer activation, ownership, gate and cap Claim
 to the same evidence and digest binding. Losing candidates and closed distribution gates remain bound.
+Optional debt inputs remain inside that same entity Claim: every facility, cash/CFADS basis, opening
+principal, rate, draw, payment cap, CFADS increment, coverage threshold, sweep fraction and explicit
+zero-service permission is bound, including terms for losing candidates. Debt-specific scope text is
+selected only when debt is declared; models without debt retain their existing receipts and report bytes.
 
 ## 4. Public API Surface
 
@@ -161,6 +200,16 @@ to the same evidence and digest binding. Losing candidates and closed distributi
   `E*(2P+1) + T + D*P + P`. All subsets times states times this work must fit 65,536 ledger rows.
   For recourse the bound covers static subsets plus complete policies. These bounds precede canonical
   admission/enumeration; output is never pruned to fit them.
+- `entity::debt::{EntityDebtFunding, DebtFacility, DebtOpeningPrincipal, DebtBaselineFlow,
+  DebtCandidateFlow}`: optional declared external senior debt, with at most one facility per entity and
+  four facilities total. Full-period rates and minimum DSCR are exact ratios; CFADS may be signed;
+  draws, principal and payment caps are nonnegative, and sweep fractions lie in `[0,1]`.
+  `DebtServiceResult` retains the full principal/service/coverage/sweep calculation.
+  `DebtCoverageStatus` distinguishes covered, below minimum and no service due, with no fabricated ratio.
+  `DebtCashFlows` supplies optional checkpoint and conservation components; `DebtDistributionGate`
+  preserves the declared permission beside the calculated effective gate. `EntityFundingState.debt`
+  retains every facility/period result in canonical period/facility order. Debt adds `facilities*periods`
+  rows per state to the same 65,536 total-work bound before canonical tagging or enumeration.
 - `evaluate(&ProgramInputs) -> Result<EvaluatedProgram, Refusal>`: exact exhaustive comparison, bounded to
   1–8 candidates and 1–256 shared states (at most 256 subsets). Schedules admit 1–16 periods and at most
   65,536 checkpoints across all subsets: `2^candidates × states × (periods + 1)`. Bounds apply before schedule
@@ -187,6 +236,10 @@ to the same evidence and digest binding. Losing candidates and closed distributi
   flows and candidate-triggered transfers must be zero before observation. The information gate must incur
   negative net native external cash across the entities in every state before observation; an internal
   transfer alone does not buy information. Initial obligations remain in every realized entity path.
+  Debt-funded recourse additionally requires every pre-observation candidate debt draw, scheduled-principal
+  cap increment and CFADS increment to be individually zero. Offsetting increments cannot hide an early
+  decision. The catalog copies the selected subset's same-state debt ledger, retaining future obligations
+  from initial commitments even after abandonment.
 - `model::parse(text, SourceAnchor)`: verifies SHA-256 against actual bytes, then reads the strict
   static-only `fmine.capital-program.v1` TOML subset; staged tables refuse. Top-level strings are `schema`,
   `model_key`, `question`, `currency`,
@@ -218,6 +271,15 @@ to the same evidence and digest binding. Losing candidates and closed distributi
   declarations are mutually exclusive. The separate entity Claim retains the original source hash,
   line anchors and UU metadata; unknown, duplicate and orphan entity rows refuse. Matrix/output bounds
   are checked before canonical tagging, and finalization invokes the same typed core admission rules.
+  Optional `[[entity_debt]]` requires `cash_flow_convention = "native_excludes_modeled_debt"` within entity
+  funding. `[[debt_facility]]` requires `id`, `entity`, `basis`, `cfads_basis`, `minimum_dscr`,
+  `sweep_fraction`, `allow_distributions_without_service`; the ratios are quoted `n/d` and the last field
+  is exactly quoted `"true"` or `"false"`. `[[debt_opening_principal]]` requires `facility`, `state`,
+  `value`; `[[debt_service]]` requires `facility`, `period`, `state`, `interest_rate`, `draw`,
+  `principal_payment_cap`, `cfads`; `[[candidate_debt_service]]` requires `facility`, `period`,
+  `candidate`, `state`, `draw`, `principal_payment_cap`, `cfads`. All matrices are complete, including
+  explicit zeroes. Debt rows require both entity/debt declarations and retain their original line anchors
+  in the existing entity Claim; unknown, duplicate, orphan and malformed rows refuse.
   Optional `[[equity_basis]]` requires `entity`, `share_class`, `shares_per_unit`, `initial_share_units` and
   accepts `max_tail_loss_per_share`. `[[baseline_equity_nav]]` requires `state`, `value` for every state;
   `[[candidate_share_change]]` requires `candidate`, `state`, `value` for every candidate/state pair,
@@ -254,6 +316,10 @@ Entity funding refuses incomplete/duplicate/foreign matrices, missing or mismatc
 invalid periods and currencies, negative opening balances/floors/transfer amounts/distribution caps,
 unknown/self/cyclic distribution edges, ownership outside [0,1], absent transfer/distribution bases,
 unknown activation candidates and gates without a distribution rule. It excludes both legacy funding modes.
+Debt additionally refuses an unrecognized cash convention, more than one facility per debtor entity,
+incomplete/duplicate/foreign facility matrices, negative opening principal/draws/payment caps/rates,
+nonpositive coverage thresholds, sweep fractions outside `[0,1]`, currency mismatch or absent loan/CFADS
+bases. Recourse debt draws, principal caps and CFADS increments must each be zero before observation.
 Recourse additionally refuses incomplete/duplicate/foreign stage and observation mappings, an unknown or
 noninitial information candidate, a missing paid gate, absent or mistimed cash schedules, pre-observation
 recourse cash flows, and initial prerequisites that depend on a later decision. It admits at least one
@@ -284,7 +350,12 @@ dropped to obtain a plausible result. Input/source errors use the existing refus
 - The static feasible set embeds in the policy set, so every available net adaptive value is nonnegative.
 - Cash cannot move between entities except through declared transfers and distributions. Parent ownership
   never changes funding obligations or credits outside shareholders' cash to the parent.
-- Every period conserves native external cash after explicitly accounting for outside distributions.
+- Every period conserves native external cash after explicitly accounting for outside distributions and,
+  when declared, external loan draws, interest, scheduled principal and sweeps. Principal conserves exactly.
+- Coverage uses the declared same-state CFADS and scheduled service; cash reserves, sweeps and loan draws
+  do not silently change that numerator or denominator. Zero service has no numerical ratio.
+- Each entity's sweep consumes eligible child receipts before its own dividend, including roots with no
+  outgoing ownership edge. Mandatory service/floor failures remain after subsequent child receipts.
 - Entity floor failures and their phases remain on the realized policy state; another state's failure
   cannot reject an otherwise feasible adaptive continuation.
 
@@ -332,12 +403,27 @@ multilevel child-first payouts and retained pre-distribution failures. The three
 study, receives a conditional JV distribution, then builds only after Good: mean NAV 45, tail loss 5 and
 adaptive value 45, with parent cash 30/20. Direct guards cover matrix completeness, cycles, units, source and
 losing-input identity, permutation, overflow, pre-observation transfers and combined ledger-row bounds.
+Debt known answers cover exact principal carry and falling interest after sweeps, coverage equality and
+locked-cash carry, mandatory-service shortfalls, draw-before-interest and independent CFADS, final payoff
+caps, explicit zero-service permissions, and nested intermediary/root sweeps of child receipts. The
+two-period loan starts at 100: interest is 10 then 7, sweeps are 10 then 23/2, final principal is 77/2,
+and Parent cash is 329/10. A coverage lock reverses the selected investment despite surplus group cash.
+Static and adaptive comparisons retain full same-state debt paths; initial future principal/CFADS effects
+persist after abandonment. Direct guards cover source/losing-input identity, all matrix fields, early
+recourse debt effects, exact overflow and debt-inclusive static/combined output bounds.
 An independent Python Fraction entity oracle checks 11 scenarios through the actual binary. It derives
 native balances and fixed transfers directly from declared inputs and recursively solves each ownership
 waterfall, comparing every checkpoint, transfer, distribution, conservation row, rejection and complete
 static/policy statistic. CLI integrations compare full JSON and Markdown with the library and verify the
 checked-in `tests/capital/entity_funding.toml` example's original source hash. That example combines the
 three-period policy with 100 Parent shares: mean/adaptive value 9/20 USD/share and tail loss 1/20 USD/share.
+The independent Python Fraction debt oracle derives principal/service recurrences and recursively solves
+child receipts, sweeps and distributions from the inputs. It compares every debt field, checkpoint,
+coverage gate, principal/cash residual, structural rejection and static/adaptive statistic. The complete
+`tests/capital/debt_funding.toml` example observes Good/Bad, pays JV service, sweeps 50/0 and distributes
+30/0 to Parent. The selected policy builds only after Good and retains initial final principal obligations
+in both states: mean/adaptive value 9/20 USD/share, tail loss 1/20 USD/share, Parent cash 30/20, debt 29/79.
+Library/binary integrations retain identical JSON/Markdown and the example's unchanged complete source bytes.
 This bounded slice does not claim the full GATE-CAP-01/03/04 scale, selection-frequency or historical evidence.
 
 ## 9. Lifted Code & Foundation Dependencies
@@ -352,7 +438,7 @@ Static declared net-NAV comparison with optional aggregate or dated-checkpoint f
 per-share optimization, entity-specific cash/ownership distributions, and bounded two-stage policies with
 purchased declared information. No additional
 decision stages, undeclared project interactions, inferred observation likelihoods, price/fiscal model,
-reference-class fitting, automatic capital-call dilution, changing ownership, inferred debt-service gates,
+reference-class fitting, automatic capital-call dilution, changing ownership, inferred loan agreements,
 simultaneous parent/carve-out NAV objectives, portfolio safety, calibrated probabilities or
 physical authorization is supplied. Reference-class bases must be explicitly declared, including an honest
 unadjusted basis; the system does not apply an unnamed adjustment. Selection frequency is explicitly

@@ -10,6 +10,8 @@ use crate::entity::{
     MAX_ENTITIES, MAX_TRANSFERS,
 };
 
+mod debt;
+
 struct Header {
     cash_basis: String,
     opening_date: String,
@@ -29,6 +31,7 @@ pub(super) struct EntityRows {
     transfer_amounts: BTreeMap<(String, String), Money>,
     distributions: BTreeMap<String, EntityDistribution>,
     gates: BTreeMap<(String, String, String), EntityDistributionGate>,
+    debt: debt::DebtRows,
     anchors: Vec<SourceAnchor>,
 }
 
@@ -56,7 +59,7 @@ pub(super) fn handles_table(table: &str) -> bool {
             | "entity_transfer_amount"
             | "entity_distribution"
             | "entity_distribution_gate"
-    )
+    ) || debt::handles_table(table)
 }
 
 fn entity_fields<'a>(row: &'a TomlRow, required: &[&str], optional: &[&str]) -> Result<Fields<'a>> {
@@ -353,6 +356,7 @@ impl EntityRows {
                 }
                 format!("entity distribution gate {entity}/{period}/{state}")
             }
+            other if debt::handles_table(other) => self.debt.push(row)?,
             other => {
                 return Err(input(
                     row.line,
@@ -424,6 +428,7 @@ impl EntityRows {
             transfers: transfers.into_values().collect(),
             distributions: self.distributions.into_values().collect(),
             gates: self.gates.into_values().collect(),
+            debt: self.debt.finish()?,
         };
         crate::entity::validate_bounds(&funding, context.states.len(), context.candidates.len())?;
         crate::entity::canonicalize(&mut funding);

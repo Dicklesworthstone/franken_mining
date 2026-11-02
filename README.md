@@ -521,8 +521,8 @@ conservation equation, while outside distributions explicitly reduce group cash:
 
 Capital calls and ownership are separate declarations. Record an external partner's contribution as a
 native receipt and a parent's call as an internal transfer; do not also record that transfer as native
-cash. No contribution, top-up, dilution or debt-service permission is inferred. Gate permissions and caps
-are assumptions supplied by the model, not computed covenant tests. Candidate NAV remains separately
+cash. No contribution, top-up, dilution or actual lending terms are inferred. Declared gate permissions and
+caps remain assumptions; optional debt terms below add calculated coverage conditions. Candidate NAV remains separately
 declared and already net of costs; cash is not added to or deducted from those values again.
 
 The same entity model works for static portfolios and two-stage policies. Before observation, recourse
@@ -532,9 +532,89 @@ Each policy reuses only the ledger for its realized subset and state.
 
 The bounded model admits at most four entities, 64 transfers and 16 periods. With `E` entities, `P` periods,
 `T` transfers and `D` distribution edges, each state requires `E × (2P + 1) + T + D × P + P` ledger rows.
+Optional debt adds one result per facility/period, so `F` facilities add `F × P` rows per state.
 Across every static subset and, when present, every policy, the total may not exceed 65,536. This includes
 all checkpoints, inactive transfers, blocked distributions and conservation rows; oversized models refuse
 before enumeration. The complete source, including losing inputs and original line anchors, binds the receipt.
+
+#### Calculate debt service, coverage locks and cash sweeps
+
+DESIGN (BD-314, plan section 23.2): entity funding can include one external senior debt facility per debtor
+entity. The engine carries principal, calculates interest and scheduled repayments, derives debt-service
+coverage, and applies excess-cash sweeps before ownership distributions. Run the complete invented example:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/debt_funding.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/debt_funding.toml --json
+```
+
+The example starts with Parent cash of USD 25, JV cash of USD 20 and JV debt of USD 100. Both cash floors
+are USD 20. Parent pays USD 5 for a study before Good or Bad is observed. In the next period, the JV owes
+USD 10 interest and USD 20 scheduled principal. Its declared coverage threshold is 3/2 and it sweeps half
+of cash above its floor toward outstanding principal before paying any dividend.
+
+| Observation | JV cash receipt and CFADS | Debt-service coverage | Principal sweep | Dividend received by Parent | Parent continuation |
+|---|---:|---:|---:|---:|---|
+| Good | USD 130 | 13/3 | USD 50 | USD 30 | Build the USD 20 project |
+| Bad | USD 30 | 1/1 | USD 0 | USD 0 | Abandon construction |
+
+The Bad-state coverage lock leaves the JV's cash available for its own obligations. It does not itself
+declare a default or reject the program. The selected policy has net NAV changes of USD 95 and USD -5,
+giving **USD 45 expected improvement and USD 5 tail loss**, or **9/20 and 1/20 USD/share** with 100 Parent
+shares. Parent closes with USD 30 after Good and USD 20 after Bad. The best feasible fixed program is hold.
+
+Debt commitments continue after the observation: the study also commits a final USD 1 principal payment
+in both states. Interest in that final period is USD 3 after Good and USD 8 after Bad, reflecting the earlier
+sweep. Both paths pay their remaining scheduled service, including the abandoned path, and close with debt
+of USD 29 and USD 79 respectively. The report retains all six policies and four static portfolios.
+
+Add these tables to a complete `entity_funding` model:
+
+| Table | Required fields |
+|---|---|
+| `[[entity_debt]]` | `cash_flow_convention = "native_excludes_modeled_debt"` |
+| `[[debt_facility]]` | `id`, `entity`, `basis`, `cfads_basis`, `minimum_dscr`, `sweep_fraction`, `allow_distributions_without_service` |
+| `[[debt_opening_principal]]` | `facility`, `state`, `value` |
+| `[[debt_service]]` | `facility`, `period`, `state`, `interest_rate`, `draw`, `principal_payment_cap`, `cfads` |
+| `[[candidate_debt_service]]` | `facility`, `period`, `candidate`, `state`, `draw`, `principal_payment_cap`, `cfads` |
+
+Opening principal is complete for every facility/state. Baseline service is complete for every
+facility/period/state, and candidate increments for every facility/period/candidate/state, including zeroes.
+Monetary values use the existing quoted USD format. Rates, minimum coverage and sweep fractions use exact
+quoted `n/d`; the zero-service permission is explicitly `"true"` or `"false"`. All loan rows remain bound to
+the original source file and the entity funding Claim, including terms for candidates that never win.
+
+The period rate applies to **opening principal plus the current draw**. Scheduled principal is the smaller
+of the outstanding amount and the declared payment cap. The engine debits full mandatory interest and
+principal before checking cash floors. An unaffordable payment creates a retained cash shortfall; it is
+never reduced to the amount available, and a later receipt cannot erase it.
+
+CFADS means the separately declared **cash available for debt service** metric for the covenant. It is not
+another cash receipt. Coverage is CFADS divided by mandatory interest plus scheduled principal, excluding
+the sweep; equality with the threshold passes. Loan draws, reserves and internal funding do not silently
+increase CFADS. When no service is due, the ratio is absent and the explicit zero-service permission applies.
+
+After those mandatory-service checks, the graph processes entities child first. Each debtor first sweeps
+the smaller of its remaining principal and `sweep_fraction × max(0, current cash - floor)`, then applies its
+ownership distribution. That cash includes dividends just received from children. Root entities also sweep
+their receipts, even when they have no outgoing ownership edge. A dividend requires both the original
+permission/cap and the calculated coverage permission. Blocked cash carries forward.
+
+The reports retain every loan input, principal balance, service component, coverage result, sweep and
+effective gate, including rejected paths. They prove two exact identities each period:
+
+```text
+closing principal + scheduled principal + sweep = opening principal + draw
+closing cash + outside dividends + interest + scheduled principal + sweep
+    = opening cash + native cash flows + draw
+```
+
+Native cash rows must exclude those modeled debt movements, and CFADS must not be booked as an extra
+receipt. Declared candidate NAV remains already net of its financing economics; this funding calculation
+does not add proceeds to NAV or charge service again. Loan rates and covenant terms are explicit inputs,
+with no inferred annualization, market pricing, waivers, arrears, default remedies or lender priorities.
+Recourse debt draws, principal-cap increments and CFADS increments must each be zero before observation.
+This mode shares the existing bounded static/adaptive evaluator and does not add an entity valuation objective.
 
 #### Compare buybacks, issuance and projects on NAV per share
 
