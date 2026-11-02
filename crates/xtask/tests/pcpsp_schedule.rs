@@ -35,8 +35,8 @@
 //! bound or MineLib's LP bound (each allowing one unit for rounding). The gate's verdict is printed, not asserted:
 //! the plan says to report the honest gap.
 //!
-//! `FMINE_PCPSP_LP_CACHE` keeps each LP solution and bound (`<name>-<tol>.pit.pcpsp-lp`, little-endian `f64`s), so later
-//! runs skip PDLP. `FMINE_PCPSP_SOLUTION_OUT` names a directory for each instance's best schedule in MineLib's format
+//! `FMINE_PCPSP_LP_CACHE` keeps each LP solution and bound (`<name>-<tol>.pit.pcpsp-lp`, or `.all.` for an LP over
+//! every block; little-endian `f64`s), so later runs skip PDLP. `FMINE_PCPSP_SOLUTION_OUT` names a directory for each instance's best schedule in MineLib's format
 //! (`<name>_pcpsp_fmine.sol`), which `crates/xtask/testdata/minelib_pcpsp_oracle.py` checks from the files alone. With
 //! `FMINE_MINELIB_SOLS`, MineLib's own PCPSP schedule (`<name>_pcpsp_*.sol`, blocks split between destinations to six
 //! places) is valued here in `f64` and reported beside its published value.
