@@ -204,6 +204,20 @@ to the same evidence and digest binding. Losing candidates and closed distributi
   Every opening state, period/state baseline and period/candidate/state flow is explicit, including zeros.
   Periods start at `opening_date` and continue without date gaps or overlaps. Rows may be supplied in any
   order; canonical ordering follows chronological period, then candidate and state identifiers.
+  Alternatively, `[[entity_funding]]` requires `cash_basis`, `opening_date`, `objective_entity`.
+  `[[entity]]` requires `id`, `label`; `[[entity_period]]` requires `id`, `cash_period`;
+  `[[entity_floor]]` requires `entity`, `period`, `value`; `[[entity_opening_cash]]` requires `entity`,
+  `state`, `value`; `[[entity_baseline_cash_flow]]` requires `entity`, `period`, `state`, `value`;
+  `[[entity_candidate_cash_flow]]` requires `entity`, `period`, `candidate`, `state`, `value`.
+  `[[entity_transfer]]` requires `id`, `from_entity`, `to_entity`, `period`, `basis`, with optional
+  activating `candidate`; `[[entity_transfer_amount]]` requires `transfer`, `state`, `value` for every
+  transfer/state. `[[entity_distribution]]` requires `entity`, `parent_entity`, `parent_share`, `basis`;
+  the ownership share is an exact quoted `n/d` in `[0,1]`. `[[entity_distribution_gate]]` requires
+  `entity`, `period`, `state`, quoted `allowed = "true" | "false"`, `maximum_distribution` for every
+  distributing entity/period/state. All entity cash matrices include explicit zeros. The three funding
+  declarations are mutually exclusive. The separate entity Claim retains the original source hash,
+  line anchors and UU metadata; unknown, duplicate and orphan entity rows refuse. Matrix/output bounds
+  are checked before canonical tagging, and finalization invokes the same typed core admission rules.
   Optional `[[equity_basis]]` requires `entity`, `share_class`, `shares_per_unit`, `initial_share_units` and
   accepts `max_tail_loss_per_share`. `[[baseline_equity_nav]]` requires `state`, `value` for every state;
   `[[candidate_share_change]]` requires `candidate`, `state`, `value` for every candidate/state pair,
@@ -318,6 +332,12 @@ multilevel child-first payouts and retained pre-distribution failures. The three
 study, receives a conditional JV distribution, then builds only after Good: mean NAV 45, tail loss 5 and
 adaptive value 45, with parent cash 30/20. Direct guards cover matrix completeness, cycles, units, source and
 losing-input identity, permutation, overflow, pre-observation transfers and combined ledger-row bounds.
+An independent Python Fraction entity oracle checks 11 scenarios through the actual binary. It derives
+native balances and fixed transfers directly from declared inputs and recursively solves each ownership
+waterfall, comparing every checkpoint, transfer, distribution, conservation row, rejection and complete
+static/policy statistic. CLI integrations compare full JSON and Markdown with the library and verify the
+checked-in `tests/capital/entity_funding.toml` example's original source hash. That example combines the
+three-period policy with 100 Parent shares: mean/adaptive value 9/20 USD/share and tail loss 1/20 USD/share.
 This bounded slice does not claim the full GATE-CAP-01/03/04 scale, selection-frequency or historical evidence.
 
 ## 9. Lifted Code & Foundation Dependencies

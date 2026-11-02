@@ -1,0 +1,487 @@
+# Invented entity funding and paid-information example; no issuer evidence or legal permission is inferred.
+# Parent begins with USD 25, JV with USD 20, and each entity has its own USD 20 cash floor.
+# The initial study costs USD 5 before Good/Bad is observed at the second period's opening.
+# Good brings USD 100 into the JV. Its declared distribution pays USD 60 to Parent and USD 40 outside.
+# Parent can fund the USD 50 project in the third period only after Good; after Bad it abandons.
+# Good/Bad NAV changes are 95/-5, averaging USD 45. With 100 shares, the mean is 9/20 USD/share.
+# The upper-tail loss is USD 5, or 1/20 USD/share, exactly the declared limit.
+# Parent closes at USD 30/20. Constant study+project fails Bad's parent cash floor by USD 50.
+# Best feasible static action is hold, making net adaptive value 9/20 USD/share.
+schema = "fmine.capital-program.v1"
+model_key = "invented_entity_funding_and_recourse"
+question = "Which funded policy creates value for Parent while respecting the JV cash perimeter?"
+currency = "USD"
+valuation_basis = "Invented Parent equity NAV including its JV interest; candidate values already net of project and study costs"
+budget = "55"
+tail_mass = "1/5"
+payoff_convention = "additive_equity_nav_with_share_changes"
+reference_class_basis = "Invented exact parameters and uncalibrated shared-state probabilities"
+
+[[state]]
+id = "good"
+weight = "1/2"
+
+[[state]]
+id = "bad"
+weight = "1/2"
+
+[[candidate]]
+id = "study"
+label = "Invented paid study"
+cost = "5"
+reference_class_basis = "Declared USD 5 sunk study cost and a paid Good/Bad observation"
+
+[[candidate]]
+id = "project"
+label = "Invented parent project"
+cost = "50"
+reference_class_basis = "Declared USD 50 third-period cash need and scenario-specific already-net Parent NAV"
+
+[[payoff]]
+candidate = "study"
+state = "good"
+value = "-5"
+
+[[payoff]]
+candidate = "study"
+state = "bad"
+value = "-5"
+
+[[payoff]]
+candidate = "project"
+state = "good"
+value = "100"
+
+[[payoff]]
+candidate = "project"
+state = "bad"
+value = "-20"
+
+[[requires]]
+candidate = "project"
+prerequisite = "study"
+
+[[equity_basis]]
+entity = "parent"
+share_class = "Invented ordinary shares"
+shares_per_unit = "1/1"
+initial_share_units = "100/1"
+max_tail_loss_per_share = "1/20"
+
+[[baseline_equity_nav]]
+state = "good"
+value = "1000"
+
+[[baseline_equity_nav]]
+state = "bad"
+value = "1000"
+
+[[candidate_share_change]]
+candidate = "study"
+state = "good"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "study"
+state = "bad"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "project"
+state = "good"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "project"
+state = "bad"
+value = "0/1"
+
+[[entity_funding]]
+cash_basis = "Invented nominal USD cash by legal entity; native flows precede declared fixed transfers and child-first distributions; no implicit top-up"
+opening_date = "2030-01-01"
+objective_entity = "parent"
+
+[[entity]]
+id = "parent"
+label = "Invented Parent"
+
+[[entity]]
+id = "jv"
+label = "Invented jointly owned project entity"
+
+[[entity_period]]
+id = "first"
+cash_period = "2030-01-01/2030-04-30"
+
+[[entity_period]]
+id = "second"
+cash_period = "2030-05-01/2030-08-31"
+
+[[entity_period]]
+id = "third"
+cash_period = "2030-09-01/2030-12-31"
+
+[[entity_floor]]
+entity = "parent"
+period = "first"
+value = "20"
+
+[[entity_floor]]
+entity = "jv"
+period = "first"
+value = "20"
+
+[[entity_floor]]
+entity = "parent"
+period = "second"
+value = "20"
+
+[[entity_floor]]
+entity = "jv"
+period = "second"
+value = "20"
+
+[[entity_floor]]
+entity = "parent"
+period = "third"
+value = "20"
+
+[[entity_floor]]
+entity = "jv"
+period = "third"
+value = "20"
+
+[[entity_opening_cash]]
+entity = "parent"
+state = "good"
+value = "25"
+
+[[entity_opening_cash]]
+entity = "parent"
+state = "bad"
+value = "25"
+
+[[entity_opening_cash]]
+entity = "jv"
+state = "good"
+value = "20"
+
+[[entity_opening_cash]]
+entity = "jv"
+state = "bad"
+value = "20"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "first"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "first"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "jv"
+period = "first"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "jv"
+period = "first"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "second"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "second"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "jv"
+period = "second"
+state = "good"
+value = "100"
+
+[[entity_baseline_cash_flow]]
+entity = "jv"
+period = "second"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "third"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "third"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "jv"
+period = "third"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "jv"
+period = "third"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "study"
+state = "good"
+value = "-5"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "study"
+state = "bad"
+value = "-5"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "project"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "project"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "first"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "first"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "first"
+candidate = "project"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "first"
+candidate = "project"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "project"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "project"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "second"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "second"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "second"
+candidate = "project"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "second"
+candidate = "project"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "project"
+state = "good"
+value = "-50"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "project"
+state = "bad"
+value = "-50"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "third"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "third"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "third"
+candidate = "project"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "third"
+candidate = "project"
+state = "bad"
+value = "0"
+
+[[entity_distribution]]
+entity = "jv"
+parent_entity = "parent"
+parent_share = "3/5"
+basis = "Invented 60 percent Parent distribution interest; the remaining 40 percent leaves the modeled graph"
+
+[[entity_distribution_gate]]
+entity = "jv"
+period = "first"
+state = "good"
+allowed = "true"
+maximum_distribution = "1000"
+
+[[entity_distribution_gate]]
+entity = "jv"
+period = "first"
+state = "bad"
+allowed = "true"
+maximum_distribution = "1000"
+
+[[entity_distribution_gate]]
+entity = "jv"
+period = "second"
+state = "good"
+allowed = "true"
+maximum_distribution = "1000"
+
+[[entity_distribution_gate]]
+entity = "jv"
+period = "second"
+state = "bad"
+allowed = "true"
+maximum_distribution = "1000"
+
+[[entity_distribution_gate]]
+entity = "jv"
+period = "third"
+state = "good"
+allowed = "true"
+maximum_distribution = "1000"
+
+[[entity_distribution_gate]]
+entity = "jv"
+period = "third"
+state = "bad"
+allowed = "true"
+maximum_distribution = "1000"
+
+[[recourse]]
+information_candidate = "study"
+observation_date = "2030-05-01"
+information_basis = "Invented study reveals Good or Bad before the second-period JV receipt and third-period project commitment"
+
+[[candidate_stage]]
+candidate = "study"
+stage = "initial"
+
+[[candidate_stage]]
+candidate = "project"
+stage = "recourse"
+
+[[state_observation]]
+state = "good"
+observation = "good"
+
+[[state_observation]]
+state = "bad"
+observation = "bad"
+
+[[uu]]
+id = "unmodeled_jv_and_study_terms"
+description = "Information quality, partner behavior, legal distribution permissions and cash timing may differ from the fixed declared assumptions"
+trigger = "A study outcome, funding event or distribution permission falls outside the declared state and entity model"
+downside_usd_m = "0.001"

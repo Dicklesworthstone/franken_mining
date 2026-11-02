@@ -12,6 +12,7 @@ use crate::recourse::{
     StateObservation,
 };
 
+mod entity;
 #[cfg(test)]
 mod tests;
 
@@ -213,6 +214,8 @@ fn assumed<T>(
 /// declare signed cash flows at a complete sequence of dated checkpoints.
 /// Optional equity_basis/baseline_equity_nav/candidate_share_change rows declare exact equity ownership
 /// for the additive_equity_nav_with_share_changes convention and a separate USD/share risk limit.
+/// An explicit entity_funding declaration instead supplies separate entity periods, cash matrices,
+/// floors, fixed transfers and gated ownership distributions; it excludes both other funding modes.
 /// A candidate requires id/label/cost/reference_class_basis and may name one exclusion_group.
 /// Costs constrain spending only; candidate payoff values are already net delta-NAV in major USD.
 pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
@@ -361,6 +364,7 @@ fn parse_model(
     let mut candidate_stages = BTreeMap::new();
     let mut observations = BTreeMap::new();
     let mut information_anchors = Vec::new();
+    let mut entity_rows = entity::EntityRows::default();
     for row in &doc.rows {
         match row.table.as_str() {
             "state" => {
@@ -446,10 +450,10 @@ fn parse_model(
                     &[],
                     row.line,
                 )?;
-                if funding.is_some() || funding_schedule.is_some() {
+                if funding.is_some() || funding_schedule.is_some() || entity_rows.is_declared() {
                     return Err(input(
                         row.line,
-                        "only one funding or funding_schedule declaration is allowed",
+                        "only one funding, funding_schedule or entity_funding declaration is allowed",
                     ));
                 }
                 funding = Some(ProgramFunding {
@@ -506,10 +510,10 @@ fn parse_model(
             }
             "funding_schedule" => {
                 let f = fields(&row.fields, &["cash_basis", "opening_date"], &[], row.line)?;
-                if funding.is_some() || funding_schedule.is_some() {
+                if funding.is_some() || funding_schedule.is_some() || entity_rows.is_declared() {
                     return Err(input(
                         row.line,
-                        "only one funding or funding_schedule declaration is allowed",
+                        "only one funding, funding_schedule or entity_funding declaration is allowed",
                     ));
                 }
                 funding_schedule = Some(FundingSchedule {
@@ -778,6 +782,15 @@ fn parse_model(
                 }
                 uu_anchors.push(located(&source, row.line, &format!("UU {id}")));
             }
+            other if entity::handles_table(other) => {
+                if other == "entity_funding" && (funding.is_some() || funding_schedule.is_some()) {
+                    return Err(input(
+                        row.line,
+                        "only one funding, funding_schedule or entity_funding declaration is allowed",
+                    ));
+                }
+                entity_rows.push(row, &source)?;
+            }
             other => return Err(input(row.line, format!("unknown table {other}"))),
         }
     }
@@ -817,6 +830,15 @@ fn parse_model(
             .push(required);
     }
     let unknowns: Vec<_> = unknowns.into_values().collect();
+    let entity_funding = entity_rows.finish(entity::EntityContext {
+        policy: &policy,
+        states: &states,
+        candidates: &candidates,
+        unknowns: &unknowns,
+        uu_anchors: &uu_anchors,
+        top: &doc.top,
+        source: &source,
+    })?;
     let funding = if let Some(mut declaration) = funding {
         declaration.available_cash = available_cash.into_iter().collect();
         declaration.requirements = cash_requirements
@@ -1059,7 +1081,7 @@ fn parse_model(
         candidates: claims,
         funding,
         funding_schedule,
-        entity_funding: None,
+        entity_funding,
         equity,
     };
     validate(&inputs)?;
