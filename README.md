@@ -143,6 +143,28 @@ their envelope has no identity-ledger certificate or issuance anchor. The source
 separately and does not certify the model. Missing IDs and altered source files refuse instead of returning
 a stale cached Claim. Recovery results remain descriptive and uncalibrated.
 
+### Read the public assurance report
+
+Use the same public-lane selection with `--format markdown` to produce a readable report:
+
+```bash
+cargo run -p fmine-cli -- assure public --issuer barrick --through 2026Q2 --format markdown > assurance.md
+cargo run -p fmine-cli -- assure public --synthetic --format markdown > synthetic-assurance.md
+```
+
+The report presents exact printed values and all selected publication vintages by subject, reporting
+period, scope and ownership basis. It retains the five identity states, with not-published instances
+listed separately, and includes evidence-challenge packets with their operands, certificates and the
+documents needed to resolve each visible exception. Consistency histories show original and comparative
+filings, later corrections, verified disclosure notes and explicit comparability exclusions.
+
+Source cells, document hashes and Claim IDs remain available in the report. Hidden/template scope has a
+separate appendix. PDF transcriptions, recovery-model outputs and any published-cutoff reference
+calculations carry their own evidence boundaries; they do not enlarge the identity-ledger certificate.
+The JSON envelope and state root are the same for either presentation. A synthetic report remains
+ineligible for a public-lane gate, and a readable report does not turn the current implementation into
+a complete M0 gate pass.
+
 ### Calculate a cost metric under an explicit definition
 
 `metrics cost` evaluates a declared cost worksheet under a selected AISC or AIC definition from
@@ -368,6 +390,33 @@ Spending constrains the budget; it is **not deducted again** from already-net pa
 from summed payoffs within each shared state, including fractional tail-boundary mass, so dependence remains
 in the calculation. Full input/output Claims, source bytes, constraints and adjustment bases bind the receipt,
 including candidates that never win.
+
+#### Check whether the program can be funded in every declared scenario
+
+The optional funding clause constrains cash separately from net NAV:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/liquidity.toml --format markdown
+```
+
+This invented example has a USD 80M planned budget, USD 110M available cash in each state and an explicit
+USD 20M minimum cash balance. Expansion and maintenance each have USD 40M planned costs. Together their
+declared expected net NAV is USD 108M, but expansion's cash requirement rises to USD 100M in the overrun
+state. Expansion alone leaves USD 10M, below the floor; both projects leave minus USD 30M. Maintenance
+alone remains fundable and has USD 40M expected net NAV. The report keeps the rejected choices and their
+exact state-specific shortfalls alongside the fundable result.
+
+Supply one `[[funding]]` row with `cash_period = "2027-01-01/2027-12-31"`, an explicit `cash_basis` and
+`minimum_cash`, then complete `[[available_cash]]` rows (`state`, `value`) and `[[cash_requirement]]`
+rows (`candidate`, `state`, `value`). Every state and every candidate/state pair must appear, including
+explicit zeroes; cash values use the same exact USD input convention. Funding evidence and all rows bind
+the result, including funding for candidates that cannot otherwise be selected. A scenario shortfall is
+a structural rejection before risk ranking. If every subset fails, the result explicitly reports
+`no_structurally_feasible_program`, with no invented winners or risk statistics.
+
+The calculation tests the stated cash window. Payment timing within that window, staged financing and
+intermediate cash balances require additional inputs and are not established by this comparison. Declared
+net-NAV payoffs already include their costs; enforcing the cash constraint does not charge them again.
 
 These are conditional static comparisons of declared assumptions. The example applies no fitted
 reference-class correction, and the output supplies no empirical selection frequency, staged recourse,
@@ -1344,9 +1393,13 @@ target, locator or date. The receipt retains the source Claim, exact printed val
 publication basis. The registered publication date must fall after the complete target period; retrieval
 never supplies a missing publication date. Date-only availability conservatively begins at midnight after
 the publication day. The stated FACT/INFERENCE basis is retained metadata, not independent proof of that time.
-Missing original releases, altered bytes, placeholders, ambiguous cells and ownership mismatches refuse
-without changing the journal. Caller-supplied `outcome` requests cannot bypass a frozen public binding.
-Historical reports reconstruct the recorded source Claim without requiring the workbook to remain on disk.
+Missing original-release files, altered bytes, ambiguous cells and ownership mismatches refuse without changing
+the journal. When the authenticated original cell itself prints a source-native dash, `resolve` instead records a
+source-verified `not_published` missing event. The dash token, canonical source Claim, workbook hash and publication
+evidence remain attached, and the member stays in every cohort denominator. Status-derived placeholders and
+`n/a` still refuse rather than guessing their meaning. Caller-supplied `outcome` requests cannot bypass a frozen
+public binding. Historical reports reconstruct the recorded source Claim without requiring the workbook to remain
+on disk.
 
 To retain later comparative revisions as separately scored outcomes, include this field in the cohort
 request **before freezing it**:
@@ -1375,7 +1428,8 @@ superseded event under lock; callers supply neither its sequence nor an outcome 
 continues to score the original, while `latest-as-of` uses a restatement only once both its availability
 and recording time fall within the assessment cut. Each event retains its own source Claim and publication
 evidence. Previously saved reports retain their original result, journal prefix and source admission after
-later revisions. Automatic missing-status events remain future work.
+later revisions. An original source-native dash is already a durable `not_published` event and cannot be backfilled
+by a comparative; automatic inference of other missing reasons remains outside this source-bound protocol.
 
 For example, an outcome available at `12:00:00Z` and recorded at an observed `12:00:01.500Z` with a one-second
 uncertainty has a recording upper bound of `12:00:02.500Z`. A later assessment cut at `12:00:02Z` leaves that

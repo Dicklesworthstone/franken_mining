@@ -3,6 +3,7 @@
 Inputs are declared assumptions. GB-30 uses the plan's displayed buyback payoffs,
 whose exact mean is USD 61.18 million. Expected subsets, joint-state payoffs,
 weighted tails and regret are computed with Python Fraction, without Rust output.
+Optional funding is checked on every joint state, independently of net-NAV payoffs.
 """
 
 import argparse
@@ -22,6 +23,7 @@ FILE = "capital-program.toml"
 QUESTION = 'Compare invented capital choices "jointly" \\ Ω'
 BASIS = "Invented 2030 real USD net delta NAV, full project ownership"
 REFERENCE = "Declared reference-class widening; illustrative and uncalibrated"
+CASH_BASIS = 'Invented nominal USD cash at 100% ownership, "available" before spending \\ Ω'
 UNKNOWN = {
     "id": "outside_scenarios", "description": 'Unmodelled "permit" delay \\ Ω',
     "trigger": "A permitting delay outside the declared states occurs", "downside_usd_m": "5.0",
@@ -68,6 +70,26 @@ def gb30(stream=False):
     )
 
 
+def with_funding(spec, available, requirements, minimum="20"):
+    states = [name for name, _ in spec["states"]]
+    spec["funding"] = {
+        "cash_period": "2030-01-01/2030-12-31", "cash_basis": CASH_BASIS,
+        "minimum_cash": str(minimum),
+        "available_cash": dict(zip(states, map(str, available), strict=True)),
+        "requirements": {name: dict(zip(states, map(str, values), strict=True))
+                         for name, values in requirements.items()},
+    }
+    return spec
+
+
+def funded_example():
+    return with_funding(
+        specification({"a": ["30", "30"], "b": ["20", "20"]},
+                      costs={"a": "9", "b": "7"}, budget="16"),
+        ["120", "120"], {"a": ["60", "40"], "b": ["40", "60"]},
+    )
+
+
 def fields(values):
     return "".join(f"{key} = {json.dumps(value, ensure_ascii=False)}\n" for key, value in values.items())
 
@@ -92,6 +114,12 @@ def model(spec, *, reverse=False, include_uu=True):
              for name, values in spec["payoffs"].items() for state, value in values.items()]
     rows += [block("requires", {"candidate": name, "prerequisite": prerequisite})
              for name, prerequisite in spec["requires"]]
+    if funding := spec.get("funding"):
+        rows.append(block("funding", {key: funding[key] for key in ("cash_period", "cash_basis", "minimum_cash")}))
+        rows += [block("available_cash", {"state": state, "value": value})
+                 for state, value in funding["available_cash"].items()]
+        rows += [block("cash_requirement", {"candidate": name, "state": state, "value": value})
+                 for name, values in funding["requirements"].items() for state, value in values.items()]
     if include_uu:
         rows.append(block("uu", UNKNOWN))
     return fields(top) + "".join(reversed(rows) if reverse else rows)
@@ -100,7 +128,7 @@ def model(spec, *, reverse=False, include_uu=True):
 def fixture(text=None):
     # Retain all invented inputs for diagnosis; the oracle deletes no files.
     root = Path(tempfile.mkdtemp(prefix="fmine-capital-program-"))
-    (root / FILE).write_text(model(gb30()) if text is None else text, encoding="utf-8")
+    (root / FILE).write_text(model(funded_example()) if text is None else text, encoding="utf-8")
     return root
 
 
@@ -145,6 +173,18 @@ def enumerate_expected(spec):
             if any(name in selected and prerequisite not in selected for name, prerequisite in spec["requires"]):
                 reasons.add("missing_prerequisite")
             choice = {"spend": spend, "budget_slack": budget - spend, "reasons": reasons}
+            if funding := spec.get("funding"):
+                cash = {}
+                for state in weights:
+                    available = Fraction(funding["available_cash"][state])
+                    required = sum((Fraction(funding["requirements"][name][state]) for name in selected), Fraction(0))
+                    minimum = Fraction(funding["minimum_cash"])
+                    cash[state] = {"available_cash": available, "cash_required": required,
+                                   "remaining_cash": available - required, "minimum_cash": minimum,
+                                   "slack": available - required - minimum}
+                choice["funding"] = cash
+                if any(row["slack"] < 0 for row in cash.values()):
+                    reasons.add("liquidity_shortfall")
             if not reasons:
                 values = {state: sum((Fraction(spec["payoffs"][name][state]) for name in selected), Fraction(0))
                           for state in weights}
@@ -159,7 +199,7 @@ def enumerate_expected(spec):
                 choice["risk_rejected"] = cap is not None and choice["tail_loss"] > cap
             choices[selected] = choice
     structural = {key: row for key, row in choices.items() if not row["reasons"]}
-    hindsight = {state: max(row["values"][state] for row in structural.values()) for state in weights}
+    hindsight = {state: max(row["values"][state] for row in structural.values()) for state in weights} if structural else {}
     for row in structural.values():
         regrets = {state: hindsight[state] - value for state, value in row["values"].items()}
         row["mean_regret"] = sum(weights[state] * value for state, value in regrets.items())
@@ -231,6 +271,21 @@ class CapitalProgramScenarios(unittest.TestCase):
             for field in ("spend", "budget_slack"):
                 self.assertEqual(Fraction(row[field]), known[field], (selected, field))
             self.assertEqual({reason["kind"] for reason in row["structural_rejections"]}, known["reasons"], selected)
+            shortfalls = [reason for reason in row["structural_rejections"] if reason["kind"] == "liquidity_shortfall"]
+            if "funding" in known:
+                actual = row["funding"]
+                cash = known["funding"]
+                self.assertEqual([state["state_id"] for state in actual["states"]], sorted(weights))
+                for state in actual["states"]:
+                    for field, value in cash[state["state_id"]].items():
+                        self.assertEqual(Fraction(state[field]), value, (selected, state["state_id"], field))
+                self.assertEqual(Fraction(actual["minimum_slack"]), min(state["slack"] for state in cash.values()))
+                expected_shortfalls = {name: -state["slack"] for name, state in cash.items() if state["slack"] < 0}
+                self.assertEqual(len(shortfalls), len(expected_shortfalls))
+                self.assertEqual({reason["state_id"]: Fraction(reason["shortfall"]) for reason in shortfalls}, expected_shortfalls)
+            else:
+                self.assertIsNone(row["funding"])
+                self.assertEqual(shortfalls, [])
             if known["reasons"]:
                 self.assertIsNone(row["statistics"])
                 self.assertIsNone(row["tail_loss"])
@@ -255,11 +310,40 @@ class CapitalProgramScenarios(unittest.TestCase):
             self.assertEqual({membership[name] for name in summary[field]}, winners)
         actual_price = summary["expected_value_cost_of_risk_limit"]
         self.assertEqual(None if actual_price is None else Fraction(actual_price), price)
-        self.assertEqual(summary["status"], "ok" if feasible else "no_risk_feasible_program")
+        status = "ok" if feasible else "no_risk_feasible_program" if unconstrained else "no_structurally_feasible_program"
+        self.assertEqual(summary["status"], status)
 
     def check_evidence(self, report, spec, source):
         inputs = report["inputs"]
         claims = [inputs["policy"], inputs["weights"], *inputs["candidates"]]
+        if funding := spec.get("funding"):
+            claim = inputs["funding"]
+            claims.append(claim)
+            value = claim["value"]
+            self.assertEqual(value, report["summary"]["funding"])
+            self.assertEqual(value["model_key"], inputs["policy"]["value"]["model_key"])
+            self.assertEqual(value["currency"], "USD")
+            self.assertEqual(value["minimum_cash_currency"], "USD")
+            self.assertEqual(Fraction(value["minimum_cash"]), Fraction(funding["minimum_cash"]))
+            for field in ("cash_period", "cash_basis"):
+                self.assertEqual(value[field], funding[field])
+            self.assertEqual(len(value["available_cash"]), len(funding["available_cash"]))
+            self.assertEqual({row["state_id"]: Fraction(row["value"]) for row in value["available_cash"]},
+                             {name: Fraction(amount) for name, amount in funding["available_cash"].items()})
+            requirements = {(name, state): Fraction(amount) for name, states in funding["requirements"].items()
+                            for state, amount in states.items()}
+            self.assertEqual(len(value["requirements"]), len(requirements))
+            self.assertEqual({(row["candidate_id"], row["state_id"]): Fraction(row["value"])
+                              for row in value["requirements"]}, requirements)
+            self.assertTrue(all(row["currency"] == "USD" for row in value["available_cash"] + value["requirements"]))
+            locators = [anchor["locator"] for anchor in claim["anchors"]]
+            for section in (["funding cash window, basis and minimum cash"]
+                            + [f"available cash {state}" for state in funding["available_cash"]]
+                            + [f"cash requirement {name}/{state}" for name, state in requirements]):
+                self.assertTrue(any(locator.endswith(": " + section) for locator in locators), section)
+        else:
+            self.assertIsNone(inputs["funding"])
+            self.assertIsNone(report["summary"]["funding"])
         result = report["claim"]
         self.assertEqual(result["value"], report["summary"])
         self.assertEqual(set(result["parents"]), {claim["id"] for claim in claims})
@@ -476,6 +560,124 @@ class CapitalProgramScenarios(unittest.TestCase):
         self.refused(model(specification({f"c{i}": [str(i)] for i in range(9)}, states=[("only", "1/1")], budget="4")))
         states = [(f"s{i:03}", "1/257") for i in range(257)]
         self.refused(model(specification({"a": ["1"] * 257}, states=states)))
+
+    def test_joint_cash_boundary_and_one_state_overrun_change_the_winner(self):
+        spec = funded_example()
+        first = self.program(spec)
+        joint = self.rows(first)[("a", "b")]
+        self.assertEqual(first["summary"]["feasible_winners"], [joint["bundle_id"]])
+        self.assertEqual(Fraction(joint["funding"]["minimum_slack"]), 0)
+        self.assertEqual(Fraction(joint["spend"]), 16)
+        self.assertEqual(Fraction(joint["statistics"]["mean"]), 50)
+        self.assertTrue(all(Fraction(row["cash_required"]) == 100 for row in joint["funding"]["states"]))
+        spec["funding"]["requirements"]["b"]["high"] = "60.0001"
+        overrun = self.program(spec)
+        self.assertEqual(Fraction(self.rows(overrun)[("a", "b")]["funding"]["minimum_slack"]), Fraction(-1, 10000))
+        self.assertEqual(overrun["summary"]["feasible_winners"], [self.rows(overrun)[("a",)]["bundle_id"]])
+        with_funding(spec, ["120", "120"], {"a": ["80", "20"], "b": ["80", "20"]})
+        correlated = self.program(spec)
+        spec["funding"]["requirements"]["b"] = {"low": "20", "high": "80"}
+        offsetting = self.program(spec)
+        self.assertEqual(Fraction(self.rows(correlated)[("a", "b")]["funding"]["minimum_slack"]), -60)
+        self.assertEqual(Fraction(self.rows(offsetting)[("a", "b")]["funding"]["minimum_slack"]), 0)
+        self.assertNotEqual(correlated["summary"]["feasible_winners"], offsetting["summary"]["feasible_winners"])
+
+    def test_cash_floor_can_reject_hold_without_fabricating_risk_statistics(self):
+        spec = with_funding(
+            specification({"a": ["-10", "20"], "never": ["100", "100"]},
+                          costs={"a": "1", "never": "100"}, budget="1", cap="-1"),
+            ["19.9999", "19.9998"], {"a": ["0", "0"], "never": ["0", "0"]},
+        )
+        report = self.program(spec)
+        self.assertEqual(report["summary"]["status"], "no_structurally_feasible_program")
+        reasons = self.rows(report)[("never",)]["structural_rejections"]
+        self.assertEqual({row["kind"] for row in reasons}, {"budget_exceeded", "liquidity_shortfall"})
+        self.assertEqual(len([row for row in reasons if row["kind"] == "liquidity_shortfall"]), 2)
+        spec["funding"]["available_cash"] = {"low": "20", "high": "20"}
+        report = self.program(spec)
+        self.assertEqual(report["summary"]["status"], "no_risk_feasible_program")
+        self.assertIsNotNone(self.rows(report)[()]["statistics"])
+
+    def test_funding_matrix_admits_every_candidate_and_refuses_missing_foreign_or_duplicate_rows(self):
+        spec = with_funding(
+            specification({"a": ["2", "3"], "never": ["100", "100"]},
+                          costs={"a": "1", "never": "100"}, budget="1"),
+            ["22", "22"], {"a": ["1", "1"], "never": ["0", "0"]},
+        )
+        self.program(spec)
+        text = model(spec)
+        declaration = block("funding", {key: spec["funding"][key] for key in ("cash_period", "cash_basis", "minimum_cash")})
+        available = block("available_cash", {"state": "high", "value": "22"})
+        zero = block("cash_requirement", {"candidate": "never", "state": "high", "value": "0"})
+        for bad in (
+            text.replace(zero, ""), text.replace(available, ""),
+            text + zero, text + available, text + declaration,
+            text.replace(declaration, ""),
+            text.replace(available, block("available_cash", {"state": "absent", "value": "22"})),
+            text.replace(zero, block("cash_requirement", {"candidate": "absent", "state": "high", "value": "0"})),
+            text.replace(zero, block("cash_requirement", {"candidate": "never", "state": "absent", "value": "0"})),
+        ):
+            with self.subTest(input_tail=bad[-200:]):
+                self.refused(bad)
+
+    def test_funding_dates_basis_exact_nonnegative_money_and_sum_overflow_are_enforced(self):
+        spec = funded_example()
+        text = model(spec)
+        declaration = {key: spec["funding"][key] for key in ("cash_period", "cash_basis", "minimum_cash")}
+        for section, row, amount_key in (
+            ("funding", declaration, "minimum_cash"),
+            ("available_cash", {"state": "low", "value": "120"}, "value"),
+            ("cash_requirement", {"candidate": "a", "state": "low", "value": "60"}, "value"),
+        ):
+            for amount in ("-0.0001", "0.00001"):
+                with self.subTest(section=section, amount=amount):
+                    self.refused(text.replace(block(section, row), block(section, {**row, amount_key: amount})))
+        for field, value in (("cash_basis", ""), ("cash_period", "2030-02-30/2030-12-31"),
+                             ("cash_period", "2031-01-01/2030-12-31")):
+            with self.subTest(field=field, value=value):
+                self.refused(text.replace(block("funding", declaration), block("funding", {**declaration, field: value})))
+        large = "17014118346046923173168730371588410.5727"
+        spec["funding"]["requirements"]["a"]["high"] = large
+        spec["funding"]["requirements"]["b"]["high"] = large
+        self.refused(model(spec), "207")
+
+    def test_funding_identity_binds_all_inputs_without_changing_legacy_economics(self):
+        spec = funded_example()
+        funding = spec.pop("funding")
+        legacy = self.program(spec)
+        funding["available_cash"] = {"low": "1000", "high": "1000"}
+        spec["funding"] = funding
+        root = fixture(model(spec))
+        first = self.program(spec, root)
+        for selected, row in self.rows(first).items():
+            for field in ("spend", "budget_slack", "statistics", "tail_loss", "risk_rejected", "structural_rejections"):
+                self.assertEqual(row[field], self.rows(legacy)[selected][field])
+        self.assertEqual(first["summary"]["feasible_winners"], legacy["summary"]["feasible_winners"])
+        for text in (model(spec) + "\n# Source-only funding attribution edit\n", model(spec, reverse=True)):
+            (root / FILE).write_text(text, encoding="utf-8")
+            changed = self.program(spec, root)
+            self.assertEqual(first["summary"], changed["summary"])
+            self.assertNotEqual(first["digest"], changed["digest"])
+            self.assertNotEqual(first["inputs"]["funding"]["id"], changed["inputs"]["funding"]["id"])
+            self.assertEqual(first["inputs"]["funding"]["value_tag"], changed["inputs"]["funding"]["value_tag"])
+        for container, field, value in (
+            (funding, "cash_basis", CASH_BASIS + "; amended"),
+            (funding, "cash_period", "2030-01-01/2031-12-31"),
+            (funding, "minimum_cash", "21"),
+            (funding["available_cash"], "high", "1001"),
+            (funding["requirements"]["b"], "high", "60.0001"),
+        ):
+            with self.subTest(field=field, value=value):
+                previous = container[field]
+                container[field] = value
+                (root / FILE).write_text(model(spec), encoding="utf-8")
+                changed = self.program(spec, root)
+                self.assertNotEqual(first["digest"], changed["digest"])
+                self.assertNotEqual(first["claim"]["id"], changed["claim"]["id"])
+                self.assertNotEqual(first["inputs"]["funding"]["value_tag"], changed["inputs"]["funding"]["value_tag"])
+                self.assertEqual(first["summary"]["feasible_winners"], changed["summary"]["feasible_winners"])
+                self.assertEqual(self.rows(first)[("a", "b")]["statistics"], self.rows(changed)[("a", "b")]["statistics"])
+                container[field] = previous
 
 
 if __name__ == "__main__":

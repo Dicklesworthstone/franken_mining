@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "cost", "geo", "pit", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "cost", "geo", "pit", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -104,6 +104,12 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     with complete source-bound Claims and explicit reference-class adjustment bases. This is a conditional
     static comparison; staged recourse, entity waterfalls, variable share counts, empirical selection
     frequencies and execution authority are not supplied.
+    An optional complete funding Claim adds a declared cash window/basis, minimum cash, every state's
+    available cash and every candidate-by-state cash requirement. Each subset retains exact cash used,
+    remaining cash and slack, including rejected subsets. Any state shortfall excludes a subset before
+    risk ranking. If even hold-cash breaches the floor, the report explicitly has no structurally feasible
+    program. Cash requirements constrain financing without changing declared net NAV. This tests the
+    declared cash window only; it does not establish every intra-period balance or a staged schedule.
   - `lint <draft> --issuer <issuer> --html-definitions <mapping.toml> [--discover] [--as-of YYYY-MM-DD]`
     (BD-059/BD-345): checks only the mapped, registered HTML Claims through the existing exact equality
     kernel. The receipt retains full value, label, mapping and registry evidence. A separate source-publication
@@ -114,6 +120,13 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `assure public --issuer <issuer> [--through YYYYQn]`: the gate-eligible run over the filings in
     `registries/sources/<issuer>.toml`, optionally only those at or before a quarter;
   - `assure public --synthetic`: the known-answer run, never gate-eligible;
+  - either assurance selector with `--format markdown`: a human-readable report from the same typed
+    assurance result (BD-072), retaining all selected Claim vintages and exact printed tokens, all five
+    identity states, visible evidence-challenge packets, consistency findings and source hashes.
+    Hidden/template scope has its own appendix. PDF, recovery and optional published-cutoff results
+    retain their separate evidence boundaries and do not enlarge the identity-ledger certificate.
+    Packet-integrity failures refuse the report rather than presenting an unsupported challenge.
+    JSON payloads, source state roots and Claim identities remain unchanged by presentation;
   - either assurance selector with `--output <new-path>` and the host-clock issuance options below: save and
     register the exact report artifact, returning a separate issuance receipt;
   - `assure issue`: owner-authorized issuance of a freshly verified public or explicitly synthetic assurance
@@ -223,11 +236,16 @@ Under the exclusive writer lock it loads the original registered Mine Stats rele
 bytes and the canonical Claim, and matches the exact frozen issuer, subject, period, metric, unit, scope
 and ownership. It uses the displayed decimal, retaining the stored value and exact rational separately;
 the existing score kernel receives that rational's deterministic floating-point projection.
-Ambiguous, missing, placeholder, status-marked, stale, altered and incompatible sources refuse without
-appending. Candidate cardinality is checked before canonical-key projection, and a reader refusal on either
-QTD/YTD summary sheet blocks admission: an unusable competing row cannot disappear and leave a false singleton.
-Unrelated detailed-sheet refusals do not replace the target. A later comparative cannot fill a missing original.
-An unmarked printed zero remains valid. Cross-crate forecast replay controls retain their CLI harness and all
+Ambiguous, absent-file, status-derived, stale, altered and incompatible sources refuse without appending.
+A source-native dash (`NilReason::Unknown`) at the exact frozen target in the authenticated original release is
+different: `resolve` appends a source-verified `NotPublished` missing event, retaining the dash token, canonical
+source Claim, workbook hash and publication evidence. It remains in the cohort denominator and cannot later be
+reinterpreted as a numeric original. `n/a`, withheld/disposed interpretations and other status-derived placeholders
+still refuse because their additional interpretation evidence is not yet frozen by this protocol. Candidate
+cardinality is checked before canonical-key projection, and a reader refusal on either QTD/YTD summary sheet blocks
+admission: an unusable competing row cannot disappear and leave a false singleton. Unrelated detailed-sheet
+refusals do not replace the target. A later comparative cannot fill a missing original. An unmarked printed zero
+remains valid. Cross-crate forecast replay controls retain their CLI harness and all
 assertions in `crates/xtask/testdata/forecast_replay_controls.rs`.
 The six cross-crate forecast-record source fixture tests likewise retain their CLI harness and unchanged
 assertions in `crates/xtask/testdata/forecast_record_sources.rs`.
@@ -236,13 +254,15 @@ complete target period. Retrieval never substitutes for a missing publication da
 is retained metadata rather than independent proof of publication time. Conservative availability is
 midnight after that date, checked against the sampled clock's lower bound before admission.
 
-Public-bound freezes and generated `registered_outcome` operations use
+Public-bound freezes and generated `registered_outcome` / `registered_missing` operations use
 `schema = "fmine.forecast-operation.v3"`; their authority time uses the same upper-bound policy as v2.
 The raw `outcome` route refuses every public-bound member, including members shared with other cohorts.
-The generated operation retains the frozen cohort digest, source Claim ID and canonical body, exact and
-displayed values, ownership provenance, source anchor and publication evidence. Replay reconstructs the
-original issuer Claim from the frozen policy and retained evidence, checking its complete canonical body
-and identity before restoring the event. This prevents value, subject, period, basis or anchor substitution.
+A numeric generated operation retains the frozen cohort digest, source Claim ID and canonical body, exact and
+displayed values, ownership provenance, source anchor and publication evidence. A registered missing operation
+retains the same frozen/source bindings plus the exact dash token and its `not_published` reason, never an invented
+numeric value. Replay reconstructs the original source Claim from the frozen policy and retained evidence,
+checking its complete canonical body and identity before restoring either event. This prevents value, placeholder,
+subject, period, basis or anchor substitution.
 `source_admissions` and each selected member's `source_admission` distinguish recorded source verification
 from unverified supplied outcomes. Replay does not re-read source files or assert present file availability.
 The journal head binds admission evidence; the existing assessment digest binds the cohort, numeric event
@@ -790,12 +810,10 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   seeded discrepancy witnesses, joint-only conflicts and immutable review restrictions. The ignored real-corpus
   packet test retains the known Kibali and Porgera findings across both registered vintages.
 - `PO-ADIT-4` (BD-112, `tests/exit_codes.rs`): 400 seeded argument lists (Philox; half are edits of a
-  well-formed command) and each skeleton in both formats exit 0 or 2–9, with the envelope's `exit_code` and
-  `status` matching. The skeletons cover nine verbs (assure public and challenges, guidance completion,
-  track-record, doctor, robot-docs, claim show, why and trace), not the forecast, reliance, mirror, check,
-  recovery or lint verbs. The generator must reach ok, usage, exit-3 and other refusals. The built binary, given
-  a closed stdout, exits 5 with a line on stderr. This is a seeded generative test, not a coverage-guided fuzzer,
-  and no registry is present, so issuer runs past file loading are not reached.
+  well-formed command for each verb) and every verb in both formats exit 0 or 2–9, with the envelope's
+  `exit_code` and `status` matching. The generator must reach ok, usage, exit-3 and other refusals. The built
+  binary, given a closed stdout, exits 5 with a line on stderr. This is a seeded generative test, not a
+  coverage-guided fuzzer, and no registry is present, so issuer runs past file loading are not reached.
 - `PO-ADIT-4` under coverage-guided fuzzing (BD-112, `fuzz/fuzz_targets/cli_run.rs`, run by
   `scripts/fuzz.sh`): `invoke` (parse, then execute) on argument lists drawn from a fixed vocabulary of every
   path in `registries/verbs.toml`, every option, option–value pairs and junk values. Each must exit 0 or 2–9

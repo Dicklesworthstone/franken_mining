@@ -175,6 +175,7 @@ fn assumed<T>(
 /// Parses a complete source-bound static program; the source names assumptions, not calibrated evidence.
 /// Top-level fields: schema/model_key/question/currency/valuation_basis/budget/tail_mass/payoff_convention/
 /// reference_class_basis, plus optional max_tail_loss. Rows: state, candidate, payoff, requires and uu.
+/// Optional funding/available_cash/cash_requirement rows declare a separate complete cash-window model.
 /// A candidate requires id/label/cost/reference_class_basis and may name one exclusion_group.
 /// Costs constrain spending only; candidate payoff values are already net delta-NAV in major USD.
 pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
@@ -191,8 +192,8 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
         ));
     }
     let doc = parse_subset(text).map_err(|e| input(e.line, e.reason))?;
-    if doc.rows.len() > 4096 {
-        return Err(input(1, "model exceeds 4096 source rows"));
+    if doc.rows.len() > 8192 {
+        return Err(input(1, "model exceeds 8192 source rows"));
     }
     let top = fields(
         &doc.top,
@@ -242,6 +243,10 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
     let mut weight_anchors = Vec::new();
     let mut candidate_anchors: BTreeMap<String, Vec<SourceAnchor>> = BTreeMap::new();
     let mut uu_anchors = Vec::new();
+    let mut funding: Option<ProgramFunding> = None;
+    let mut available_cash = BTreeMap::new();
+    let mut cash_requirements = BTreeMap::new();
+    let mut funding_anchors = Vec::new();
     for row in &doc.rows {
         match row.table.as_str() {
             "state" => {
@@ -320,6 +325,68 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
                         &format!("prerequisite {id}/{required}"),
                     ));
             }
+            "funding" => {
+                let f = fields(
+                    &row.fields,
+                    &["cash_period", "cash_basis", "minimum_cash"],
+                    &[],
+                    row.line,
+                )?;
+                if funding.is_some() {
+                    return Err(input(row.line, "only one funding declaration is allowed"));
+                }
+                funding = Some(ProgramFunding {
+                    model_key: model_key.into(),
+                    currency: Currency::USD,
+                    cash_period: get(&f, "cash_period")?.into(),
+                    cash_basis: get(&f, "cash_basis")?.into(),
+                    minimum_cash: money(get(&f, "minimum_cash")?, row.line)?,
+                    available_cash: Vec::new(),
+                    requirements: Vec::new(),
+                });
+                funding_anchors.push(located(
+                    &source,
+                    row.line,
+                    "funding cash window, basis and minimum cash",
+                ));
+            }
+            "available_cash" => {
+                let f = fields(&row.fields, &["state", "value"], &[], row.line)?;
+                let state = get(&f, "state")?;
+                if available_cash
+                    .insert(state.to_string(), money(get(&f, "value")?, row.line)?)
+                    .is_some()
+                {
+                    return Err(input(row.line, "duplicate available-cash state"));
+                }
+                funding_anchors.push(located(
+                    &source,
+                    row.line,
+                    &format!("available cash {state}"),
+                ));
+            }
+            "cash_requirement" => {
+                let f = fields(&row.fields, &["candidate", "state", "value"], &[], row.line)?;
+                let candidate = get(&f, "candidate")?;
+                let state = get(&f, "state")?;
+                if cash_requirements
+                    .insert(
+                        (candidate.to_string(), state.to_string()),
+                        money(get(&f, "value")?, row.line)?,
+                    )
+                    .is_some()
+                {
+                    return Err(input(
+                        row.line,
+                        "duplicate candidate/state cash requirement",
+                    ));
+                }
+                funding_anchors.push(located(
+                    &source,
+                    row.line,
+                    &format!("cash requirement {candidate}/{state}"),
+                ));
+            }
             "uu" => {
                 let f = fields(
                     &row.fields,
@@ -390,6 +457,41 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
             .push(required);
     }
     let unknowns: Vec<_> = unknowns.into_values().collect();
+    let funding = if let Some(mut declaration) = funding {
+        declaration.available_cash = available_cash.into_iter().collect();
+        declaration.requirements = cash_requirements
+            .into_iter()
+            .map(|((candidate_id, state_id), value)| CashRequirement {
+                candidate_id,
+                state_id,
+                value,
+            })
+            .collect();
+        let tag = declaration.canonical_tag();
+        funding_anchors.extend(uu_anchors.iter().cloned());
+        funding_anchors.extend(
+            doc.top
+                .iter()
+                .filter(|f| matches!(f.key.as_str(), "model_key" | "currency"))
+                .map(|f| located(&source, f.line, &f.key)),
+        );
+        Some(assumed(
+            format!("capital.{model_key}.funding"),
+            declaration,
+            &tag,
+            AdditivityClass::NonAdditive,
+            &unknowns,
+            funding_anchors,
+        ))
+    } else {
+        if !available_cash.is_empty() || !cash_requirements.is_empty() {
+            return Err(input(
+                1,
+                "cash rows require an explicit funding declaration with period, basis and minimum cash",
+            ));
+        }
+        None
+    };
     let mut policy_anchors: Vec<_> = doc
         .top
         .iter()
@@ -440,6 +542,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
         policy,
         weights,
         candidates: claims,
+        funding,
     };
     validate(&inputs)?;
     Ok(inputs)

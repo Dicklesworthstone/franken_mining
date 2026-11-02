@@ -124,3 +124,21 @@ fn flip_margins_pass_independent_exact_witness_and_boundary_checks() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn information_policy_tail_risk_frontier_passes_independent_fraction_checks() {
+    let script =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/decision_policy_risk_oracle.py");
+    let output = Command::new("python3")
+        .arg("-I")
+        .arg(script)
+        .arg(binary())
+        .output()
+        .expect("execute exact information-policy risk scenarios");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

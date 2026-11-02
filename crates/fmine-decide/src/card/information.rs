@@ -8,7 +8,9 @@
 use super::*;
 
 mod policy_risk;
+pub(super) mod ranking;
 pub use policy_risk::{POLICY_RULE, PolicyPayoffMass, PolicyRisk, RISK_SCOPE};
+pub use ranking::{RiskChoice, RiskComparison};
 
 pub const MAX_INFORMATION_OPTIONS: usize = 64;
 pub const MAX_SIGNALS: usize = 256;
@@ -173,6 +175,8 @@ pub struct InformationSummary {
     pub option_winners: Vec<String>,
     pub overall_order: Vec<ExpectedChoice>,
     pub overall_winners: Vec<ExpectedChoice>,
+    /// Tail-risk ordering and exact expected-value/CVaR95 frontier across act-now and one-test policies.
+    pub risk_comparison: RiskComparison,
 }
 
 pub(super) fn check_work(inputs: &DecisionInputs) -> Result<()> {
@@ -550,6 +554,7 @@ pub(super) fn assess(
         expected_value: a.mean,
     }));
     let (overall_order, overall_winners) = rank(combined)?;
+    let risk_comparison = ranking::compare(base, &stats)?;
     let money = |major| ExactMoney {
         currency: base.currency,
         major,
@@ -566,6 +571,7 @@ pub(super) fn assess(
             option_winners: option_winners.into_iter().map(|c| c.id).collect(),
             overall_order,
             overall_winners,
+            risk_comparison,
         }),
         weakest,
     ))

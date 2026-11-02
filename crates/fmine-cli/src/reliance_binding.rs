@@ -206,6 +206,10 @@ fn finish(
     cutoffs: Option<&str>,
 ) -> Result<Prepared, Refusal> {
     let (claim_ids, taint) = claims(&report)?;
+    let envelope = crate::report_envelope(&report, cutoffs);
+    if let Some(refusal) = &envelope.refusal {
+        return Err(refusal.clone());
+    }
     let mut manifest = Encoder::new_frame(*b"RINP", 1);
     manifest.put_str(report.lane.as_str());
     manifest.put_str(&report.issuer);
@@ -219,7 +223,7 @@ fn finish(
         }
     }
     Ok(Prepared {
-        envelope: crate::report_envelope(&report, cutoffs),
+        envelope,
         claim_ids,
         input_manifest_root: blake3_hash(&manifest.finish()),
         anchor: report.ledger_anchor,
@@ -362,6 +366,29 @@ mod tests {
         assert_ne!(second.input_manifest_root, third.input_manifest_root);
         assert_eq!(second.anchor, third.anchor);
         assert!(third.envelope.payload_json.contains("published_cutoffs"));
+        for (format, name) in [
+            (crate::OutputFormat::Json, "json"),
+            (crate::OutputFormat::Markdown, "markdown"),
+        ] {
+            let args = [
+                "assure",
+                "public",
+                "--issuer",
+                "synthetic",
+                "--format",
+                name,
+            ]
+            .map(str::to_string);
+            let (preview, exit) = crate::run(&args, &root);
+            assert_eq!(exit, 0);
+            assert_eq!(third.envelope.render(format), preview);
+        }
+        assert!(
+            third
+                .envelope
+                .render(crate::OutputFormat::Markdown)
+                .contains("## Published cut-offs: reference-input arithmetic")
+        );
         std::fs::write(root.join("corpus/Synthetic_AISC.xlsx"), b"altered")
             .expect("source mutation");
         assert_eq!(
@@ -373,6 +400,25 @@ mod tests {
         let mut inputs = Inputs::new();
         bind(&mut inputs, "same-file".into(), None).expect("absent input");
         assert!(bind(&mut inputs, "same-file".into(), Some(sha256(b"later"))).is_err());
+    }
+
+    #[test]
+    fn refused_report_rendering_cannot_be_prepared_for_issuance() {
+        let mut report = fmine_public::run_synthetic_assurance(&[]).expect("synthetic report");
+        let instance = report
+            .instances
+            .iter_mut()
+            .find(|i| {
+                i.subject == "Site B" && i.family == fmine_public::aisc::IdentityFamily::TccFooting
+            })
+            .expect("discrepant source identity");
+        instance.operands[0].value = fmine_public::aisc::OperandValue::Int(999);
+        assert_eq!(
+            finish(report, Inputs::new(), None)
+                .expect_err("source packet integrity refusal must block issuance")
+                .code,
+            "FMINE-REF-208"
+        );
     }
 
     #[test]

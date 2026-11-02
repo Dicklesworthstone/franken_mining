@@ -12,17 +12,21 @@ use crate::{Envelope, NextAction, escape_json};
 const MAX_MODEL_BYTES: u64 = 4 * 1024 * 1024;
 pub(super) const USAGE: &str = "decide program <model-file>";
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
-    "{\"schema\":\"fmine.capital-program.v1\",\"mode\":\"declared_static_capital_comparison\",",
+    "{",
+    "\"schema\":\"fmine.capital-program.v1\",",
+    "\"mode\":\"declared_static_capital_comparison\",",
     "\"input\":\"Regular UTF-8 TOML file, at most 4 MiB; actual bytes are SHA-256 bound\",",
     "\"fields\":[\"schema\",\"model_key\",\"question\",\"currency\",\"valuation_basis\",\"budget\",\"tail_mass\",\"payoff_convention\",\"reference_class_basis\",\"max_tail_loss (optional)\"],",
-    "\"tables\":{\"state\":[\"id\",\"weight\"],\"candidate\":[\"id\",\"label\",\"cost\",\"reference_class_basis\",\"exclusion_group (optional)\"],",
-    "\"payoff\":[\"candidate\",\"state\",\"value\"],\"requires\":[\"candidate\",\"prerequisite\"],\"uu\":[\"id\",\"description\",\"trigger\",\"downside_usd_m\"]},",
+    "\"tables\":{\"state\":[\"id\",\"weight\"],\"candidate\":[\"id\",\"label\",\"cost\",\"reference_class_basis\",\"exclusion_group (optional)\"],\"payoff\":[\"candidate\",\"state\",\"value\"],\"requires\":[\"candidate\",\"prerequisite\"],\"uu\":[\"id\",\"description\",\"trigger\",\"downside_usd_m\"],\"funding (optional)\":[\"cash_period\",\"cash_basis\",\"minimum_cash\"],\"available_cash\":[\"state\",\"value\"],\"cash_requirement\":[\"candidate\",\"state\",\"value\"]},",
     "\"scope\":\"At most eight candidates and 256 shared states; every subset is examined\",",
     "\"payoffs\":\"Explicit additive_net_delta_nav convention: costs constrain spending and are not deducted again\",",
     "\"risk\":\"Exact signed-loss CVaR over the declared tail mass of the summed joint-scenario payoffs; never marginal CVaR addition\",",
     "\"selection\":\"Conditional exact co-winners, rejected bundles, hold-cash, budget slack and the cost of the declared tail-loss limit\",",
     "\"evidence\":\"Declared assumptions remain Assumed, Internal and uncalibrated; no fitted reference-class adjustment, selection-frequency estimate or execution authority\",",
-    "\"example\":\"tests/capital/gb30.toml\"}"
+    "\"example\":\"tests/capital/gb30.toml\",",
+    "\"liquidity\":\"Optional complete shared-state cash matrix enforces an explicit minimum cash balance for one declared YYYY-MM-DD/YYYY-MM-DD window; no missing zeroes or intra-period cash path are inferred\",",
+    "\"liquidity_example\":\"tests/capital/liquidity.toml\"",
+    "}",
 );
 
 pub(super) fn execute(model: &Path, root: &Path) -> Envelope {

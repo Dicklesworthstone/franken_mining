@@ -89,7 +89,11 @@ fn reseal(cell: &mut KeyedCell) {
 fn original_displayed_number_and_source_identity_survive_the_receipt() {
     for metric in [ProductionKoz, AiscUsdPerOz, ProductionKt] {
         let (policy, id, source, cell) = example(metric);
-        let result = bind(&source, &policy, id, std::slice::from_ref(&cell)).expect("binding");
+        let ResolvedOriginalOutcome::Published(result) =
+            bind(&source, &policy, id, std::slice::from_ref(&cell)).expect("binding")
+        else {
+            panic!("numeric source must resolve as a published outcome");
+        };
         assert_eq!(result.value, Rat::from_integer(400));
         assert_eq!(result.stored, "400.4");
         assert_eq!(result.source.claim.claim_id, cell.claim.claim_id);
@@ -243,12 +247,13 @@ fn full_production_column_does_not_adopt_the_site_rows_attributable_share() {
         },
     ] {
         cell.printed_basis = printed;
-        assert_eq!(
+        let ResolvedOriginalOutcome::Published(result) =
             bind(&source, &policy, id, std::slice::from_ref(&cell))
                 .expect("explicit 100% production column")
-                .value,
-            Rat::from_integer(400)
-        );
+        else {
+            panic!("numeric production must resolve as a published outcome");
+        };
+        assert_eq!(result.value, Rat::from_integer(400));
     }
 }
 
@@ -259,8 +264,12 @@ fn wholly_owned_attributable_production_still_binds_the_attributable_column() {
     assert!(bind(&source, &policy, id, std::slice::from_ref(&cell)).is_err());
     cell.key.line.label = policy.metric.field(policy.ownership).into();
     reseal(&mut cell);
-    let out = bind(&source, &policy, id, std::slice::from_ref(&cell))
-        .expect("explicit attributable column at a wholly owned site");
+    let ResolvedOriginalOutcome::Published(out) =
+        bind(&source, &policy, id, std::slice::from_ref(&cell))
+            .expect("explicit attributable column at a wholly owned site")
+    else {
+        panic!("numeric attributable production must resolve as a published outcome");
+    };
     assert_eq!(out.ownership_source, "full");
     assert_eq!(out.source.claim.claim_id, cell.claim.claim_id);
     assert_eq!(out.value, Rat::from_integer(400));
@@ -276,12 +285,12 @@ fn numeric_zero_is_preserved_and_unknown_or_status_values_refuse() {
         under_status: None,
     };
     reseal(&mut zero);
-    assert_eq!(
-        bind(&source, &policy, id, &[zero])
-            .expect("printed zero")
-            .value,
-        Rat::from_integer(0)
-    );
+    let ResolvedOriginalOutcome::Published(result) =
+        bind(&source, &policy, id, &[zero]).expect("printed zero")
+    else {
+        panic!("printed numeric zero must not become a missing outcome");
+    };
+    assert_eq!(result.value, Rat::from_integer(0));
     for value in [
         PublicValue::Number {
             stored: "0".into(),
@@ -315,7 +324,11 @@ fn availability_requires_registered_publication_after_period_end() {
         changed.published_at = date.map(str::to_string);
         assert!(bind(&changed, &policy, id, std::slice::from_ref(&cell)).is_err());
     }
-    let result = bind(&source, &policy, id, &[cell]).expect("valid publication");
+    let ResolvedOriginalOutcome::Published(result) =
+        bind(&source, &policy, id, &[cell]).expect("valid publication")
+    else {
+        panic!("numeric publication must resolve as a published outcome");
+    };
     let mut citation = result.citation.clone();
     citation.locator = "Different.xlsx:YTD!B5".into();
     assert!(
