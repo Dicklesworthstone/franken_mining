@@ -408,6 +408,13 @@ fn original_registered_cells_resolve_exact_printed_values_and_reopen_their_asses
         ] {
             assert!(json.contains(&expected), "missing {expected}: {json}");
         }
+        assert!(
+            envelope
+                .rendered_markdown
+                .as_deref()
+                .unwrap()
+                .contains(&format!("| one | {printed}/1 |"))
+        );
         let persisted =
             DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).unwrap();
         let operation = persisted
@@ -627,6 +634,19 @@ fn original_registered_dash_becomes_durable_not_published_without_denominator_le
 
     let admitted = fixture.ok(fixture.resolve(), ns(AVAILABLE));
     assert!(admitted.payload_json.contains("\"n_outcomes\":1"));
+    assert!(
+        admitted
+            .payload_json
+            .contains("\"exact_value\":null,\"displayed\":null")
+    );
+    let missing_row = r"| one | missing: not\_published (nil\_unknown; token —) |";
+    assert!(
+        admitted
+            .rendered_markdown
+            .as_deref()
+            .unwrap()
+            .contains(missing_row)
+    );
     let persisted =
         DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).unwrap();
     let operation = persisted
@@ -711,6 +731,13 @@ fn original_registered_dash_becomes_durable_not_published_without_denominator_le
     );
     assert_eq!(reopened.exit_code, 0, "{reopened:?}");
     assert_eq!(assessment(&reopened.payload_json), expected);
+    assert!(
+        reopened
+            .rendered_markdown
+            .as_deref()
+            .unwrap()
+            .contains(missing_row)
+    );
     assert_eq!(fixture.bytes(), before);
 
     let _ = workbook(&fixture.root, "2031Q1", Some("2031-05-15"));

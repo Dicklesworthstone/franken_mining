@@ -1483,12 +1483,26 @@ fn markdown(
                 continue;
             }
             let alias = state.aliases.get(id).map_or("unknown", String::as_str);
+            let value = match &source.value {
+                SourceAdmissionValue::Numeric { exact, .. } => {
+                    format!("{}/{}", exact.num(), exact.den())
+                }
+                SourceAdmissionValue::Missing {
+                    value_kind,
+                    token,
+                    reason,
+                } => format!(
+                    "missing: {} ({}; token {})",
+                    missing_name(*reason),
+                    value_kind,
+                    token
+                ),
+            };
             let _ = writeln!(
                 out,
-                "| {} | {}/{} | `{}` | {}; {} |",
+                "| {} | {} | `{}` | {}; {} |",
                 text(alias),
-                source.exact.num(),
-                source.exact.den(),
+                text(&value),
                 source.claim,
                 text(&source.published_at),
                 text(&source.published_at_basis)

@@ -41,7 +41,11 @@ fn row(out: &mut String, values: &[String]) {
     let _ = writeln!(
         out,
         "| {} |",
-        values.iter().map(|s| text(s)).collect::<Vec<_>>().join(" | ")
+        values
+            .iter()
+            .map(|s| text(s))
+            .collect::<Vec<_>>()
+            .join(" | ")
     );
 }
 
@@ -125,9 +129,13 @@ fn counts<F: ConsistencyFamily>(out: &mut String, heading: &str, values: &Family
     table(out, &["Family", "i", "ii", "iii", "iv", "v", "np"]);
     for &family in F::ALL {
         let mut values_row = vec![family.as_str().into()];
-        values_row.extend(
-            STATES.map(|state| values.get(&(family, state)).copied().unwrap_or(0).to_string()),
-        );
+        values_row.extend(STATES.map(|state| {
+            values
+                .get(&(family, state))
+                .copied()
+                .unwrap_or(0)
+                .to_string()
+        }));
         row(out, &values_row);
     }
 }
@@ -194,7 +202,9 @@ fn ledger(out: &mut String, report: &PublicAssuranceReport) {
             _ => format!(
                 "group {}; share {}; joint component {}",
                 instance.group.as_str(),
-                instance.share.map_or_else(|| "not supplied".into(), rat_text),
+                instance
+                    .share
+                    .map_or_else(|| "not supplied".into(), rat_text),
                 instance.component.as_deref().unwrap_or("none")
             ),
         };
@@ -267,22 +277,21 @@ fn metrics(out: &mut String, report: &PublicAssuranceReport) {
             ],
         );
         for cell in &cells {
-            row(
+            let _ = writeln!(
                 out,
-                &[
-                    cell.key.reporting_vintage.release.clone(),
-                    format!(
-                        "{} / {}",
-                        cell.label_as_printed
-                            .as_deref()
-                            .unwrap_or(&cell.key.line.label),
-                        cell.key.line.occurrence
-                    ),
-                    shown(cell),
-                    cell.key.unit.clone(),
-                    cell.claim.claim_id.to_string(),
-                    cell.locator.clone(),
-                ],
+                "| {} | {} | {} | {} | `{}` | {} |",
+                text(&cell.key.reporting_vintage.release),
+                text(&format!(
+                    "{} / {}",
+                    cell.label_as_printed
+                        .as_deref()
+                        .unwrap_or(&cell.key.line.label),
+                    cell.key.line.occurrence
+                )),
+                text(&shown(cell)),
+                text(&cell.key.unit),
+                cell.claim.claim_id,
+                text(&cell.locator),
             );
         }
         // Interpretation notes follow the complete table, so later rows keep their column headings.
@@ -306,17 +315,17 @@ fn metrics(out: &mut String, report: &PublicAssuranceReport) {
     }
 }
 
-fn identity_history<F: ConsistencyFamily>(
-    out: &mut String,
-    title: &str,
-    value: &Consistency<F>,
-) {
+fn identity_history<F: ConsistencyFamily>(out: &mut String, title: &str, value: &Consistency<F>) {
     let _ = writeln!(
         out,
         "\n### {title}\n\n{}\n",
         fmine_public::consistency::FIRST_REGISTERED_CAVEAT
     );
-    counts(out, "Earliest registered identities", &value.first_registered);
+    counts(
+        out,
+        "Earliest registered identities",
+        &value.first_registered,
+    );
     table(
         out,
         &[
@@ -566,7 +575,12 @@ fn derived_sections(out: &mut String, report: &PublicAssuranceReport) {
         row(
             out,
             &[
-                format!("{} / {} to {}", pair.subject, pair.from.code(), pair.to.code()),
+                format!(
+                    "{} / {} to {}",
+                    pair.subject,
+                    pair.from.code(),
+                    pair.to.code()
+                ),
                 pair.kind().into(),
                 delta,
                 gap,
@@ -589,7 +603,12 @@ fn derived_sections(out: &mut String, report: &PublicAssuranceReport) {
         );
         table(
             out,
-            &["Document", "Publication date", "Publication basis", "SHA-256"],
+            &[
+                "Document",
+                "Publication date",
+                "Publication basis",
+                "SHA-256",
+            ],
         );
         for document in &transcriptions.documents {
             row(
@@ -604,7 +623,13 @@ fn derived_sections(out: &mut String, report: &PublicAssuranceReport) {
         }
         table(
             out,
-            &["Quantity / period", "Printed token", "Unit / basis", "Source", "SHA-256"],
+            &[
+                "Quantity / period",
+                "Printed token",
+                "Unit / basis",
+                "Source",
+                "SHA-256",
+            ],
         );
         for accepted in &agreement.accepted {
             row(
@@ -707,7 +732,11 @@ pub(super) fn markdown(report: &PublicAssuranceReport) -> Result<String, Refusal
     ledger(&mut out, report);
     metrics(&mut out, report);
     out.push_str("\n## Issuer consistency and changes across vintages\n\nA changed value does not identify a true vintage. A silent classification means no applicable verified note in registered documents, not absence of disclosure everywhere. An incomplete disclosure registry leaves that question unassessed.\n");
-    identity_history(&mut out, "AISC identity history", &report.issuer_consistency);
+    identity_history(
+        &mut out,
+        "AISC identity history",
+        &report.issuer_consistency,
+    );
     identity_history(
         &mut out,
         "Mine Stats identity history",
@@ -729,7 +758,9 @@ pub(super) fn markdown(report: &PublicAssuranceReport) -> Result<String, Refusal
     out.push_str("\n## Hidden-sheet appendix — excluded from public counts\n\nThese sheets were not displayed to readers. Their identities are bound in a separate ledger section, never merged into the visible population or GATE-BULL-01 denominator.\n");
     let mut hidden = FamilyCounts::<IdentityFamily>::new();
     for instance in &report.hidden_scope.instances {
-        *hidden.entry((instance.family, instance.state.code())).or_insert(0) += 1;
+        *hidden
+            .entry((instance.family, instance.state.code()))
+            .or_insert(0) += 1;
     }
     counts(&mut out, "Hidden AISC identities", &hidden);
     aisc_instances(&mut out, &report.hidden_scope.instances);

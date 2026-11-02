@@ -17,13 +17,7 @@ use fmine_public::{
 #[path = "../../fmine-cli/src/assure_report.rs"]
 mod assure_report;
 
-fn source(
-    file: &str,
-    release: &str,
-    tcc: i64,
-    raw_rate: Option<&str>,
-    url: &str,
-) -> LoadedSource {
+fn source(file: &str, release: &str, tcc: i64, raw_rate: Option<&str>, url: &str) -> LoadedSource {
     let mut cells = vec![("B2".into(), MinimalCell::Text("Site A".into()))];
     for (row, label, value) in [
         (5, "Cost of sales applicable to gold production", 100),
@@ -145,7 +139,11 @@ fn readable_report_retains_all_states_source_claims_and_exact_packets() {
     table_blocks_have_headers(&markdown);
     assert!(markdown.contains(&report.ledger_anchor.state_root.to_hex()));
     assert!(markdown.contains(&report.ledger_anchor.anchor_id().to_string()));
-    assert_eq!(before, report.to_json(), "rendering must not modify evidence");
+    assert_eq!(
+        before,
+        report.to_json(),
+        "rendering must not modify evidence"
+    );
     assert_eq!(markdown, assure_report::markdown(&report).unwrap());
 }
 
@@ -206,9 +204,7 @@ fn source_precision_above_binary_float_integer_range_is_not_reformatted() {
         "synthetic",
     )]);
     let cell = &report.public_claims.cells["Exact.xlsx:Q1 2030!B11"];
-    assert!(
-        matches!(&cell.claim.value, PublicValue::Number { stored, .. } if stored == original)
-    );
+    assert!(matches!(&cell.claim.value, PublicValue::Number { stored, .. } if stored == original));
     let markdown = assure_report::markdown(&report).unwrap();
     assert!(metrics_section(&markdown).contains(original));
     assert!(metrics_section(&markdown).contains(&cell.claim.claim_id.to_string()));
@@ -216,14 +212,9 @@ fn source_precision_above_binary_float_integer_range_is_not_reformatted() {
 
 #[test]
 fn source_metadata_cannot_create_markdown_structure_or_html() {
-    let hostile = "https://example.invalid/<script>oops</script>|[fake](javascript:alert(1))\n# New heading";
-    let report = report(vec![source(
-        "Escaped.xlsx",
-        "2030Q1",
-        120,
-        None,
-        hostile,
-    )]);
+    let hostile =
+        "https://example.invalid/<script>oops</script>|[fake](javascript:alert(1))\n# New heading";
+    let report = report(vec![source("Escaped.xlsx", "2030Q1", 120, None, hostile)]);
     let markdown = assure_report::markdown(&report).unwrap();
     let inventory = markdown.split("## Identity accounting").next().unwrap();
     assert!(inventory.contains("&lt;script&gt;"));
