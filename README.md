@@ -458,10 +458,88 @@ bundle's timeline, source Claims and receipt. Unscheduled models keep their exis
 These checks establish opening and period-end balances only. If a payment must precede a receipt within one
 period, declare separate periods to expose that timing; the engine does not infer an intra-period cash path.
 
+#### Respect parent and joint-venture cash boundaries
+
+DESIGN (BD-314, plan section 23.2): `entity_funding` gives each declared entity its own cash balance and
+liquidity floor. It combines explicit funding calls with distributions governed by declared ownership,
+permission and caps. A surplus in the JV cannot pay a parent obligation until the declared cash transfer
+or distribution reaches the parent. Run the complete invented example:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/entity_funding.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/entity_funding.toml --json
+```
+
+Parent opens with USD 25, the JV with USD 20, and both have USD 20 cash floors. A USD 5 study reveals Good
+or Bad, each with declared weight 1/2. Good brings USD 100 into the JV in the second period. The declared
+distribution pays 3/5 to Parent and 2/5 to outside shareholders. Parent can then spend USD 50 on a project
+in the third period; Bad receives no JV cash and abandons that project.
+
+| Observation | JV receipt | Paid to Parent | Paid outside the graph | Parent project | Parent closing cash | Parent NAV change |
+|---|---:|---:|---:|---|---:|---:|
+| Good | USD 100 | USD 60 | USD 40 | Build for USD 50 | USD 30 | USD 95 |
+| Bad | USD 0 | USD 0 | USD 0 | Abandon | USD 20 | USD -5 |
+
+The JV retains its USD 20 floor in both states. With 100 unchanged Parent shares, the winning policy has
+exactly **9/20 USD/share expected improvement** and **1/20 USD/share tail loss**: USD 45 and USD 5 in total.
+The best feasible fixed program is hold, so the net adaptive value is also 9/20 USD/share. Committing to
+study plus construction in both states fails Parent's Bad-state floor by USD 50. Every alternative and its
+complete entity ledger remain in the report.
+
+Choose exactly one of `funding`, `funding_schedule` or `entity_funding`. The entity schema is:
+
+| Table | Required fields | Complete population |
+|---|---|---|
+| `[[entity_funding]]` | `cash_basis`, `opening_date`, `objective_entity` | One declaration |
+| `[[entity]]` | `id`, `label` | Every modeled entity |
+| `[[entity_period]]` | `id`, `cash_period` | Contiguous inclusive date ranges from `opening_date` |
+| `[[entity_floor]]` | `entity`, `period`, `value` | Every entity/period |
+| `[[entity_opening_cash]]` | `entity`, `state`, `value` | Every entity/state |
+| `[[entity_baseline_cash_flow]]` | `entity`, `period`, `state`, `value` | Every entity/period/state |
+| `[[entity_candidate_cash_flow]]` | `entity`, `period`, `candidate`, `state`, `value` | Every entity/period/candidate/state |
+| `[[entity_transfer]]` | `id`, `from_entity`, `to_entity`, `period`, `basis` | Each fixed internal transfer; optional `candidate` activates it only when selected |
+| `[[entity_transfer_amount]]` | `transfer`, `state`, `value` | Every declared transfer/state, with nonnegative amounts |
+| `[[entity_distribution]]` | `entity`, `parent_entity`, `parent_share`, `basis` | One declared parent per distributing entity; no cycles |
+| `[[entity_distribution_gate]]` | `entity`, `period`, `state`, `allowed`, `maximum_distribution` | Every distributing entity/period/state |
+
+All cash cells, including zeroes, are explicit quoted USD amounts. Ownership uses an exact quoted fraction
+in `[0,1]`, such as `"3/5"`; permission is the quoted string `"true"` or `"false"`. `objective_entity` names
+the entity whose declared NAV is being compared. If equity is present, `equity_basis.entity` must equal
+that identifier. The other entities supply funding constraints, not additional NAV/share objectives.
+
+Each period first applies native external cash flows and fixed internal transfers, then checks every
+entity's floor. Distributions run from the deepest subsidiary toward its ancestors. An allowed distribution
+is the smaller of its cap and cash above that entity's floor; a blocked one is zero. Parent receives its
+exact ownership fraction, and the complement leaves the modeled graph. The engine checks closing floors
+and carries cash forward, preserving even ownership receipts smaller than one monetary input unit.
+
+Opening floors and every pre-distribution breach also remain binding. A dividend later in the same period
+cannot erase an earlier shortfall; place that dividend in an earlier period if it must finance a subsequent
+payment. Fixed transfers are never clipped to available cash. Internal movements cancel in each period's
+conservation equation, while outside distributions explicitly reduce group cash:
+`closing cash + outside distributions = opening cash + native external flows`.
+
+Capital calls and ownership are separate declarations. Record an external partner's contribution as a
+native receipt and a parent's call as an internal transfer; do not also record that transfer as native
+cash. No contribution, top-up, dilution or debt-service permission is inferred. Gate permissions and caps
+are assumptions supplied by the model, not computed covenant tests. Candidate NAV remains separately
+declared and already net of costs; cash is not added to or deducted from those values again.
+
+The same entity model works for static portfolios and two-stage policies. Before observation, recourse
+candidate flows and their activated transfers must explicitly be zero. The paid study must consume net
+native external cash across the entities in every state; moving cash internally does not pay for information.
+Each policy reuses only the ledger for its realized subset and state.
+
+The bounded model admits at most four entities, 64 transfers and 16 periods. With `E` entities, `P` periods,
+`T` transfers and `D` distribution edges, each state requires `E × (2P + 1) + T + D × P + P` ledger rows.
+Across every static subset and, when present, every policy, the total may not exceed 65,536. This includes
+all checkpoints, inactive transfers, blocked distributions and conservation rows; oversized models refuse
+before enumeration. The complete source, including losing inputs and original line anchors, binds the receipt.
+
 #### Compare buybacks, issuance and projects on NAV per share
 
 DESIGN (BD-229, PO-CAP-2): the optional equity mode evaluates each complete bundle using its resulting equity
-NAV and share count. It can be combined with either funding model. Run the complete invented example:
+NAV and share count. It can be combined with any declared funding model. Run the complete invented example:
 
 ```bash
 cargo run -p fmine-cli -- decide program tests/capital/equity.toml --format markdown
@@ -558,7 +636,7 @@ recalculating those ledgers for every policy, and sorts exact distributions with
 
 These are conditional comparisons of declared assumptions. The examples apply no fitted reference-class
 correction, and the output supplies no calibrated signal probabilities, empirical selection frequency,
-additional decision stages, entity cash-flow waterfall, project feasibility approval or execution authority.
+additional decision stages, automatic ownership dilution, project feasibility approval or execution authority.
 The wider CapitalProgram and its M4 gates remain open.
 
 ### Compare explicit decision alternatives

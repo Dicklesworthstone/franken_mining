@@ -455,8 +455,17 @@ pub(super) fn inputs_json(inputs: &ProgramInputs) -> String {
             claim_json(claim, &equity_json(&claim.value))
         )
     });
+    let entity = inputs
+        .entity_funding
+        .as_ref()
+        .map_or_else(String::new, |claim| {
+            format!(
+                ",\"entity_funding\":{}",
+                claim_json(claim, &crate::entity::render::funding_json(&claim.value))
+            )
+        });
     format!(
-        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}{schedule}{equity}}}",
+        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}{schedule}{equity}{entity}}}",
         claim_json(&inputs.policy, &policy_json(&inputs.policy.value)),
         claim_json(&inputs.weights, &weights_json(&inputs.weights.value)),
         inputs.funding.as_ref().map_or_else(
@@ -547,6 +556,22 @@ pub(super) fn rejection_json(r: &StructuralRejection) -> String {
             js(state_id),
             rq(*shares)
         ),
+        StructuralRejection::EntityCashShortfall {
+            entity_id,
+            state_id,
+            period_id,
+            checkpoint_date,
+            phase,
+            shortfall,
+        } => format!(
+            "{{\"kind\":\"entity_cash_shortfall\",\"entity_id\":{},\"state_id\":{},\"period_id\":{},\"checkpoint_date\":{},\"phase\":{},\"shortfall\":{}}}",
+            js(entity_id),
+            js(state_id),
+            period_id.as_deref().map_or_else(|| "null".into(), js),
+            js(checkpoint_date),
+            js(crate::entity::render::phase_name(phase)),
+            rq(shortfall.major)
+        ),
     }
 }
 
@@ -588,7 +613,10 @@ pub(super) fn summary_json(s: &ProgramSummary) -> String {
                 r.per_share_tail_loss.map_or_else(|| "null".into(), |v| rq(v.major))
             )
         });
-        format!("{{\"bundle_id\":{},\"selected\":{},\"spend\":{},\"budget_slack\":{},\"funding\":{}{schedule}{equity},\"structural_rejections\":[{}],\"risk_rejected\":{},\"tail_loss\":{},\"statistics\":{}}}", js(&r.bundle_id), ids(&r.selected), rq(r.spend.major), rq(r.budget_slack.major), r.funding.as_ref().map_or_else(|| "null".into(), funding_assessment_json), r.structural_rejections.iter().map(rejection_json).collect::<Vec<_>>().join(","), r.risk_rejected, r.tail_loss.map_or_else(|| "null".into(), |v| rq(v.major)), r.statistics.as_ref().map_or_else(|| "null".into(), statistics_json))
+        let entity = r.entity_funding.as_ref().map_or_else(String::new, |funding| {
+            format!(",\"entity_funding\":{}", crate::entity::render::assessment_json(funding))
+        });
+        format!("{{\"bundle_id\":{},\"selected\":{},\"spend\":{},\"budget_slack\":{},\"funding\":{}{schedule}{equity}{entity},\"structural_rejections\":[{}],\"risk_rejected\":{},\"tail_loss\":{},\"statistics\":{}}}", js(&r.bundle_id), ids(&r.selected), rq(r.spend.major), rq(r.budget_slack.major), r.funding.as_ref().map_or_else(|| "null".into(), funding_assessment_json), r.structural_rejections.iter().map(rejection_json).collect::<Vec<_>>().join(","), r.risk_rejected, r.tail_loss.map_or_else(|| "null".into(), |v| rq(v.major)), r.statistics.as_ref().map_or_else(|| "null".into(), statistics_json))
     }).collect::<Vec<_>>().join(",");
     let schedule = s
         .funding_schedule
@@ -603,8 +631,17 @@ pub(super) fn summary_json(s: &ProgramSummary) -> String {
             s.expected_per_share_cost_of_risk_limit.map_or_else(|| "null".into(), |v| rq(v.major))
         )
     });
+    let entity = s
+        .entity_funding
+        .as_ref()
+        .map_or_else(String::new, |funding| {
+            format!(
+                ",\"entity_funding\":{}",
+                crate::entity::render::funding_json(funding)
+            )
+        });
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule}{equity},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":null,\"selection_frequency_status\":\"unavailable_static_declared_model\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"}}",
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule}{equity}{entity},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":null,\"selection_frequency_status\":\"unavailable_static_declared_model\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"}}",
         js(&s.model_key),
         js(&s.question),
         currency(s.policy.currency),
@@ -748,6 +785,19 @@ impl EvaluatedProgram {
                                 ratio(*shares)
                             )
                         }
+                        StructuralRejection::EntityCashShortfall {
+                            entity_id,
+                            state_id,
+                            period_id,
+                            checkpoint_date,
+                            phase,
+                            shortfall,
+                        } => format!(
+                            "entity cash-floor shortfall for {entity_id} in {state_id} at {} ({checkpoint_date}, {}): {} USD",
+                            period_id.as_deref().unwrap_or("opening"),
+                            crate::entity::render::phase_label(phase),
+                            ratio(shortfall.major)
+                        ),
                     })
                     .collect::<Vec<String>>()
                     .join("; ")
@@ -807,11 +857,23 @@ impl EvaluatedProgram {
                     }
                 }
             }
-        } else if self.inputs.funding_schedule.is_none() {
+        } else if self.inputs.funding_schedule.is_none() && self.inputs.entity_funding.is_none() {
             out.push_str("\nScenario funding: not declared.\n");
         }
         if let Some(funding) = &self.inputs.funding_schedule {
             funding_schedule_markdown(&mut out, funding, &s.choices);
+        }
+        if let Some(funding) = &self.inputs.entity_funding {
+            crate::entity::render::inputs_markdown(&mut out, funding);
+            for choice in &s.choices {
+                if let Some(assessment) = &choice.entity_funding {
+                    crate::entity::render::assessment_markdown(
+                        &mut out,
+                        &format!("Bundle {}", choice.bundle_id),
+                        assessment,
+                    );
+                }
+            }
         }
         out.push_str("\n## Candidate assumptions and source Claims\n\nEvery candidate remains an input, including candidates absent from all winning subsets.\n\n");
         for candidate in &self.inputs.candidates {

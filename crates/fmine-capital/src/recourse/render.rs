@@ -92,13 +92,25 @@ fn policy_json(policy: &PolicyChoice) -> String {
         })
         .collect::<Vec<_>>()
         .join(",");
+    let entity = policy
+        .entity_funding
+        .as_ref()
+        .map_or_else(String::new, |funding| {
+            format!(
+                ",\"entity_funding\":{}",
+                crate::entity::render::assessment_json(funding)
+            )
+        });
     format!(
-        "{{\"policy_id\":{},\"initial_selected\":{},\"initial_spend\":{},\"information_acquired\":{},\"branches\":[{branches}],\"states\":[{states}],\"structural_rejections\":[{rejections}],\"funding_schedule\":{},\"equity\":{},\"statistics\":{},\"tail_loss\":{},\"per_share_statistics\":{},\"per_share_tail_loss\":{},\"risk_rejected\":{}}}",
+        "{{\"policy_id\":{},\"initial_selected\":{},\"initial_spend\":{},\"information_acquired\":{},\"branches\":[{branches}],\"states\":[{states}],\"structural_rejections\":[{rejections}],\"funding_schedule\":{}{entity},\"equity\":{},\"statistics\":{},\"tail_loss\":{},\"per_share_statistics\":{},\"per_share_tail_loss\":{},\"risk_rejected\":{}}}",
         js(&policy.policy_id),
         ids(&policy.initial_selected),
         rq(policy.initial_spend.major),
         policy.information_acquired,
-        funding_schedule_assessment_json(&policy.funding_schedule),
+        policy
+            .funding_schedule
+            .as_ref()
+            .map_or_else(|| "null".into(), funding_schedule_assessment_json),
         policy
             .equity
             .as_ref()
@@ -257,6 +269,19 @@ fn rejection_text(reason: &StructuralRejection) -> String {
                 ratio(*shares)
             )
         }
+        StructuralRejection::EntityCashShortfall {
+            entity_id,
+            state_id,
+            period_id,
+            checkpoint_date,
+            phase,
+            shortfall,
+        } => format!(
+            "entity cash-floor shortfall for {entity_id} in {state_id} at {} ({checkpoint_date}, {}): {} USD",
+            period_id.as_deref().unwrap_or("opening"),
+            crate::entity::render::phase_label(phase),
+            ratio(shortfall.major)
+        ),
     }
 }
 
@@ -467,37 +492,46 @@ fn policy_markdown(out: &mut String, policy: &PolicyChoice) {
             );
         }
     }
-    let _ = writeln!(
-        out,
-        "\n### Cash at every declared checkpoint\n\nMinimum cash-floor slack across all states and checkpoints: {} USD. All cash columns are USD. Positive flows are receipts; negative flows are expenditures.\n\n| State | Period | Checkpoint date | Opening cash | Baseline net | Program net | Closing cash | Floor | Slack | Checkpoint result |\n|---|---|---|---:|---:|---:|---:|---:|---:|---|",
-        ratio(policy.funding_schedule.minimum_slack.major)
-    );
-    let mut checkpoints: Vec<_> = policy.funding_schedule.checkpoints.iter().collect();
-    checkpoints.sort_by(|a, b| {
-        (&a.state_id, &a.checkpoint_date, &a.period_id).cmp(&(
-            &b.state_id,
-            &b.checkpoint_date,
-            &b.period_id,
-        ))
-    });
-    for c in checkpoints {
+    if let Some(funding) = &policy.funding_schedule {
         let _ = writeln!(
             out,
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-            md(&c.state_id),
-            c.period_id.as_deref().map_or_else(|| "Opening".into(), md),
-            md(&c.checkpoint_date),
-            ratio(c.opening_cash.major),
-            ratio(c.baseline_cash_flow.major),
-            ratio(c.candidate_cash_flow.major),
-            ratio(c.closing_cash.major),
-            ratio(c.minimum_cash.major),
-            ratio(c.slack.major),
-            if c.slack.major.num() < 0 {
-                "floor breach"
-            } else {
-                "floor met"
-            }
+            "\n### Cash at every declared checkpoint\n\nMinimum cash-floor slack across all states and checkpoints: {} USD. All cash columns are USD. Positive flows are receipts; negative flows are expenditures.\n\n| State | Period | Checkpoint date | Opening cash | Baseline net | Program net | Closing cash | Floor | Slack | Checkpoint result |\n|---|---|---|---:|---:|---:|---:|---:|---:|---|",
+            ratio(funding.minimum_slack.major)
+        );
+        let mut checkpoints: Vec<_> = funding.checkpoints.iter().collect();
+        checkpoints.sort_by(|a, b| {
+            (&a.state_id, &a.checkpoint_date, &a.period_id).cmp(&(
+                &b.state_id,
+                &b.checkpoint_date,
+                &b.period_id,
+            ))
+        });
+        for c in checkpoints {
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                md(&c.state_id),
+                c.period_id.as_deref().map_or_else(|| "Opening".into(), md),
+                md(&c.checkpoint_date),
+                ratio(c.opening_cash.major),
+                ratio(c.baseline_cash_flow.major),
+                ratio(c.candidate_cash_flow.major),
+                ratio(c.closing_cash.major),
+                ratio(c.minimum_cash.major),
+                ratio(c.slack.major),
+                if c.slack.major.num() < 0 {
+                    "floor breach"
+                } else {
+                    "floor met"
+                }
+            );
+        }
+    }
+    if let Some(funding) = &policy.entity_funding {
+        crate::entity::render::assessment_markdown(
+            out,
+            &format!("Policy {}", policy.policy_id),
+            funding,
         );
     }
     if let Some(equity) = &policy.equity {
