@@ -225,6 +225,13 @@ On the eleven MineLib UPIT instances, the verb's values equal the GATE-PUSH-PIT1
 optimum. The values and arcs are taken as given: no price, cost, recovery or slope is derived or checked, and
 the pit is not a reserve, a schedule or a mine plan.
 
+`--candidate <file>` checks a pit from another tool, such as Whittle, Deswik or a MIP solver, against the
+certified optimum. The file lists the candidate's block ids. The verb recomputes the candidate's value itself,
+counts every unmet precedence requirement (and names the first ten), and reports the exact gap to the optimum
+with a verdict: `not_closed`, `optimal` or `suboptimal`. Nothing the candidate says about itself is read. On
+MineLib's kd, for example, the optimal pit without its highest-numbered block is `suboptimal` by 132,781.5934, and
+with block 0 removed it is `not_closed`, because eight pit blocks require block 0.
+
 ### Turn registered HTML tables into cited Claims
 
 `html claims` reads local, registered HTML filings and explicit label mappings into canonical public Claims:

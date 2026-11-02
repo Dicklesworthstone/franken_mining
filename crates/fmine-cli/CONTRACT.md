@@ -41,7 +41,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     population. Differences describe price-ratio effects on unchanged physical production and supply no
     source audit, reserve classification or disclosure authority. The invented example at
     `crates/xtask/testdata/production_geo.toml` yields 3,860,000 and 3,640,000 GEO oz, a −220,000 oz difference.
-  - `plan pit --upit <file.upit> --prec <file.prec> [--decimals N] [--round] [--list-blocks]` (bd-ip99, BD-250):
+  - `plan pit --upit <file.upit> --prec <file.prec> [--decimals N] [--round] [--list-blocks] [--candidate <file>]`
+    (bd-ip99, bd-nq06, BD-250):
     reads both files as regular UTF-8 files bounded to 1 GiB each and binds their SHA-256 hashes.
     `fmine-optimize::pitflow::minelib` scales values at `--decimals` places (default 6, at most 9). Extra
     non-zero places refuse unless `--round`, which rounds half away from zero, counts the values rounded and
@@ -52,6 +53,14 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     recovery or slope is derived, and the pit is not a reserve, schedule or mine plan.
     `crates/xtask/tests/plan_pit.rs` checks the value against brute force over all closed sets on forty
     generated pairs.
+    `--candidate <file>` (plan §15.4 `UntrustedCandidate`) reads an external pit as whitespace-separated block
+    ids (`%` comments; 1 GiB bound, SHA-256 bound) and adds `candidate`: its size, exact value, count of unmet
+    requirements with up to ten `[block, required]` witnesses, `gap_to_optimum` against the certified value
+    (null when not closed), and `verdict` `not_closed`, `optimal` or `suboptimal`. A closed candidate worth more
+    than the certified optimum refuses `FMINE-REF-207`; a bad, out-of-range or repeated id refuses
+    `FMINE-REF-506`. Any value or bound the candidate claims is ignored. The test compares every verdict, value,
+    gap and witness list with brute force on 120 candidates (each pair's brute-force optimum, a random closed
+    set and a random set).
   - `metrics cost --input <worksheet.toml> --definition <registered-id>` (BD-061): reads the actual
     worksheet and workspace metric-registry bytes from regular UTF-8 files bounded to 4 MiB, binds their
     SHA-256 hashes, and evaluates `fmine-metrics::definitions::worksheet`. The explicit registered AISC/AIC

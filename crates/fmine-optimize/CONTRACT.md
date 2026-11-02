@@ -1,7 +1,7 @@
 # CONTRACT.md — `fmine-optimize`
 
 ## 1. Purpose
-The Pushback optimisation crate. Three slices so far:
+The Pushback optimisation crate. Three solver slices so far, and two readers that feed them:
 - `pitflow` (`BD-250`, plan §15.4): the ultimate pit as a maximum-weight closure, by Hochbaum's pseudoflow (lowest-label variant, gap termination) on an `i64` CSR precedence graph. Each pit comes with its pseudoflow certificate, which `verify` checks without the solver.
 - `pitflow::shells` (`bd-nzwd`, plan §15.4 and PO-PUSH-3): nested pit shells across an increasing list of exact revenue factors. These are the pit-by-pit sequence from which pushbacks are chosen.
   - Shell `k` is the union of the pit solved at factor `k` and shell `k − 1`.
@@ -14,8 +14,12 @@ The Pushback optimisation crate. Three slices so far:
   - Values are plain decimals scaled to `i64` at a declared number of places, at most `MAX_DECIMALS` (9).
   - A value with more non-zero places is refused unless the caller passes `Rounding::HalfAwayFromZero`; each rounded value is counted in `UpitModel::rounded`.
   - Every block must appear exactly once in each file. Headers, counts, ids and duplicates are checked; nothing is defaulted.
+- `pitflow::candidate` (`bd-nq06`, plan §15.4 `UntrustedCandidate`): an external pit, given as block ids, checked on a `ClosureProblem`. No I/O.
+  - `parse_ids` reads whitespace-separated ids with `%` comments.
+  - `check` counts every unmet requirement (block in, required block out; per arc), keeps the first `WITNESSES` (10), and sums the exact value.
+  - Nothing the candidate claims about itself is read. Its gap to the optimum comes from `solve`'s certified value, not from the candidate.
 
-`fmine plan pit` (`fmine-cli`, `bd-ip99`) calls `minelib::parse`, `solve` and `verify`. Shells and slope arcs have no caller yet. Bienstock–Zuckerberg, Lagrangian, TopoSort and the stochastic layer are later slices.
+`fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. Shells and slope arcs have no caller yet. Bienstock–Zuckerberg, Lagrangian, TopoSort and the stochastic layer are later slices.
 
 - **Crate:** `fmine-optimize`
 - **Layer:** E
@@ -114,6 +118,8 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input.
   - a precedence line whose count differs from its list, that requires itself, an out-of-range block or one block twice, or a block with no precedence line or two.
 
   Tests: `minelib::tests::every_malformed_pair_refuses`, one row each, and `crates/xtask/tests/plan_pit.rs` through the CLI.
+- `FMINE-REF-506` (proposed), from `candidate::parse_ids`: a token that is not a non-negative integer, an id that is not a block, or an id given twice. Test: `candidate::tests::ids_parse_to_membership_and_bad_ids_refuse`.
+- `FMINE-REF-207` (proposed), from `candidate::check`: a membership list whose length is not the block count. Test: `candidate::tests::closure_witnesses_and_value_are_exact`.
 
 No value is clamped, rescaled or perturbed to make a problem fit.
 
@@ -184,6 +190,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 ## 10. Known gaps
 - `bd-nzwd` and `bd-t75z`: no caller in the workspace yet. `BD-250`'s one caller is `fmine plan pit`, on MineLib UPIT pairs only; no block model or price deck feeds it.
 - `minelib` reads the UPIT pair only, not MineLib's CPIT or PCPSP files (capacities, periods, destinations).
+- `candidate` reads a plain id list only. Which vendor formats (Whittle, Deswik, COMET) should be read is OPEN-PUSH-4. The candidate check was built ahead of the owner's answer to OPEN-PUSH-1, on its recommended answer (data files only, no linked code); it is removed if the owner rules otherwise.
 - Slope arcs have no external gate. MineLib's UPIT files come with their arcs already made, and the workspace holds no geotechnical slope data. The slopes in the tests are invented.
 - Slope arcs cover regular grids only: no sub-blocks, rotated grids, or slopes that vary with depth inside a domain.
 - With more than one domain, the prefix sums cost 4 bytes per block on top of the arcs.
@@ -202,6 +209,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `pitflow::PitStats` (`mergers`, `splits`, `relabels`, `max_label`)
 - `pitflow::solve`, `pitflow::verify`
 - `pitflow::ABS_VALUE_SUM_LIMIT`
+- `pitflow::candidate::parse_ids`, `pitflow::candidate::check`, `pitflow::candidate::CandidateCheck` (`blocks`, `value`, `unmet`, `first_unmet`, `closed`), `pitflow::candidate::WITNESSES`
 - `pitflow::minelib::parse`, `pitflow::minelib::scaled`, `pitflow::minelib::UpitModel` (`name`, `problem`, `rounded`), `pitflow::minelib::Rounding`, `pitflow::minelib::MAX_DECIMALS`
 - `pitflow::shells::RevenueFactor` (`new`, `num`, `den`)
 - `pitflow::shells::ShellModel` (`new`, `from_requirements`, `block_count`, `values_at`)
