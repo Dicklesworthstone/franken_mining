@@ -291,7 +291,9 @@ fn header<'a>(
 /// `FMINE-REF-506` (proposed) for any malformed, missing, duplicate or out-of-range header, section, limit, value,
 /// use or precedence line; a limit kind other than `L`; general side constraints; a negative use or limit; more than
 /// [`MAX_RESOURCES`] resources or [`MAX_DESTINATIONS`] destinations; and a value that needs rounding under
-/// [`Rounding::Refuse`]. `FMINE-REF-207` (proposed) when the precedences fail [`ClosureProblem::new`]'s size guard.
+/// [`Rounding::Refuse`]. `FMINE-REF-207` (proposed) when the precedences fail [`ClosureProblem::new`]'s size guard,
+/// or when the blocks' values largest in magnitude, one per block, sum to [`crate::pitflow::ABS_VALUE_SUM_LIMIT`]
+/// or more, so that some choice of destinations could not be scheduled.
 pub fn parse(
     pcpsp: &str,
     prec: &str,
@@ -463,8 +465,14 @@ pub fn parse(
         *slot = q;
     }
     let requires = parse_prec(prec, n)?;
-    // The arcs' shape and size, once; `with_destinations` builds the problem for each choice of destinations.
-    ClosureProblem::from_requirements(vec![0; n], &requires)?;
+    // The arcs' shape and size, once, with each block at its value largest in magnitude. `with_destinations` builds
+    // the problem for each choice of destinations, and no choice can then pass pitflow's limit on the sum of absolute
+    // values. `saturating_abs` differs from `abs` only at `i64::MIN`, which is far past that limit either way.
+    let largest: Vec<i64> = values
+        .chunks(dn)
+        .map(|v| v.iter().map(|x| x.saturating_abs()).max().unwrap_or(0))
+        .collect();
+    ClosureProblem::from_requirements(largest, &requires)?;
     Ok(PcpspModel {
         name: head.name,
         periods,
@@ -909,6 +917,28 @@ mod tests {
             0,
         ));
         assert!(e.contains("past 1"), "{e}");
+        // Found by the pcpsp fuzz target: the mill value alone passes pitflow's limit on absolute values. With the
+        // dump chosen the problem was built, and the search's move to the mill was then refused. Now parse refuses.
+        // At one place the other blocks' largest magnitudes are 30 and 95, so block 0's mill value at 10 times
+        // 461168601842738777 leaves the sum 9 below 2^62, and at 10 times 461168601842738779 it is 11 above.
+        for (value, within) in [
+            ("777777777777777773", false),
+            ("461168601842738779", false),
+            ("-461168601842738779", false),
+            ("461168601842738777", true),
+        ] {
+            let text = PCPSP.replace("0 -1 -3", &format!("0 -1 {value}"));
+            match parse(&text, PREC, 1, r, 0) {
+                Ok(m) => assert!(within, "{value}: read, {m:?}"),
+                Err(e) => {
+                    let e = format!("{} {}", e.code, e.what);
+                    assert!(
+                        !within && e.starts_with("FMINE-REF-207 ") && e.contains("not below 2^62"),
+                        "{value}: {e}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

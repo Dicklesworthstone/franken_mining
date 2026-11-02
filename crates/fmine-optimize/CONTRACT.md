@@ -119,7 +119,7 @@ None is a Claim.
     - a second call makes no move.
     - On the 2026-11-02 run it raised 253 of the 300 and brought those at the exhaustive optimum from 32 to 237.
   - Each destination move on a known case, no move where the discount factor is 0: `pcpsp::tests::switches_and_exchanges_on_known_cases`.
-  - Planted negatives on 2026-11-02, each run once and reverted. A destination limit test that always passes was refused by `destinations`' final check (infeasible), and a switch to a less valuable destination by its value test. Each failed 2 of the 5 `pcpsp` tests.
+  - Planted negatives on 2026-11-02, each run once and reverted. A destination limit test that always passes was refused by `destinations`' final check (infeasible), and a switch to a less valuable destination by its value test. Each failed 2 of the 5 `pcpsp` tests. A `parse` that checks the arcs with zero values again, as before the fuzz finding in §8, read the case that must be refused and failed `every_malformed_pair_refuses`.
   - On MineLib's CPIT instances, see §9.
 
 ## 5. Refusals
@@ -183,7 +183,7 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input.
 
   Test: `cpit::tests::every_malformed_pair_refuses`, one row each.
 - `FMINE-REF-506` (proposed), from `toposort::pcpsp::parse`: as for `cpit::parse`, with a `TYPE` other than `PCPSP`, `NDESTINATIONS` of 0 or above `MAX_DESTINATIONS` (16), any general side constraint, an objective line without one value per destination, a use for a destination out of range, and any negative use. Test: `pcpsp::tests::every_malformed_pair_refuses`, one row each.
-- `FMINE-REF-207` (proposed), from `toposort::pcpsp`: `with_destinations` given the wrong count or a destination past the last; `destinations` and `improve` given a schedule and destinations that fail `check`, or factors of the wrong length (`improve` also refuses negative or rising ones); and, as defects, a result that fails `check` or is worth less than the input. Test: `pcpsp::tests::bad_inputs_refuse`.
+- `FMINE-REF-207` (proposed), from `toposort::pcpsp`: `parse` when each block's value largest in magnitude, summed over the blocks, reaches `ABS_VALUE_SUM_LIMIT` (2⁶²) (test: `pcpsp::tests::every_malformed_pair_refuses`, at the limit's edge); `with_destinations` given the wrong count or a destination past the last; `destinations` and `improve` given a schedule and destinations that fail `check`, or factors of the wrong length (`improve` also refuses negative or rising ones); and, as defects, a result that fails `check` or is worth less than the input. Test: `pcpsp::tests::bad_inputs_refuse`.
 
 No value is clamped, rescaled or perturbed to make a problem fit.
 
@@ -207,6 +207,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - Schedules:
   - Limits are upper limits only, and a block on a precedence cycle is never mined by `greedy`.
   - At most `MAX_PERIODS` (65,536) periods. `check` and `greedy` keep a sum per period, so the bound also caps their memory when there are no resources. The `cpit` fuzz target's first crash was 4.4×10¹⁸ periods with no resources, which allocated before any check.
+  - PCPSP values: one per block, the largest in magnitude over its destinations, must sum below 2⁶², so that every choice of destinations can be scheduled. The `pcpsp` fuzz target's first crash (2026-11-02) was a mill value of 7.8×10¹⁸ scaled units. The dump was chosen at first, so the problem was built; the search's move of that block to the mill was then refused. `parse` checked the arcs with zero values. It now checks them with these values.
   - `greedy` is a heuristic. It claims feasibility, not optimality; its distance from the optimum is measured against an LP bound from outside this crate (§9).
   - CPIT uses are rounded up and limits down, so a schedule within the scaled limits is within the file's. Values are rounded as UPIT values are.
 - Wall times measured on one machine (aarch64-macos, release, 2026-11-01). They are local runs, not a benchmark suite.
@@ -290,13 +291,44 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   | mclaughlin_limit | 1,061,128,685 | 1,076,149,599 | 0.27% | 1.003 | 0.79 s |
 
   The gap is still to the certified bound. Search time is the total over the three thresholds. Nine of the ten are within 3% of MineLib's best-known value and all ten within 5%; against the certified bound, six are within 3% and nine within 5%. zuck_medium is the outlier. Of the moves in the ten best schedules, 124,722 were "later" moves (a block of negative value put off to a period with a smaller factor), 5,306 swaps, 1,090 "earlier" moves, 65 dropped (all on kd) and none added. zuck_large's cached LP comes from a run PDLP stopped at its 600 s limit. Its certified bound is the same 57,391,118, and `greedy` on its ranks gives 51,185,071, not the 51,137,752 above.
+- PCPSP schedules (`bd-2rne`): MineLib's own PCPSP schedules (`sols/<name>_pcpsp_gmunoz120723.sol` in the mirror; nine, none for w23), and `crates/xtask/testdata/minelib_pcpsp_oracle.py`. That script reads only the MineLib pair and a schedule, splits included, and sums in exact fractions.
+
+  `minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo` (`crates/xtask/tests/pcpsp_schedule.rs`, ignored, run by hand) on 2026-11-02: aarch64-macos, release, PDLP tolerance 10⁻⁴ with at most 600 s per LP. The test:
+  - takes the ultimate pit under each block's most valuable destination (`pitflow::solve`, certificate checked by `pitflow::verify`); only its blocks enter the LP. That leaves the LP's optimum and the schedule problem's unchanged; the argument is in the test's doc comment;
+  - solves the LP relaxation with PDLP, splits included, for a certified bound;
+  - sends each block whole to the destination the LP sends most of it to;
+  - ranks blocks by LP expected period as for CPIT, then runs `greedy` and `pcpsp::improve` (at most 1,000 rounds) at each of the three thresholds and keeps the best.
+
+  Every schedule passed `check`, no search lowered an NPV, and every NPV stayed under both bounds. A second run from the LP cache, with the `parse` fix of §8 built in, gave the same values and byte-identical schedules. Each best schedule passed the exact oracle, with NPVs equal to the test's to 10⁻³.
+
+  | Instance | Blocks | In the pit | LP solve | Greedy | Searched | Certified bound | Gap | Of best known |
+  |---|---|---|---|---|---|---|---|---|
+  | newman1 | 1,060 | 1,059 | 4.0 s | 23,932,689 | 23,952,698 | 24,496,143 | 2.22% | 1.012 |
+  | kd | 14,153 | 12,154 | 64.3 s | 377,751,049 | 408,065,484 | 411,334,938 | 0.79% | 1.003 |
+  | zuck_small | 9,400 | 9,399 | 168.2 s | 787,518,026 | 882,225,135 | 913,089,333 | 3.38% | 1.011 |
+  | zuck_medium | 29,277 | 27,387 | 137.9 s | 630,984,945 | 705,508,967 | 760,479,523 | 7.23% | 1.044 |
+  | w23 | 74,260 | — | — | refused | — | — | — | — |
+  | marvin | 53,271 | 8,516 | 206.6 s | 834,859,361 | 895,736,905 | 917,322,920 | 2.35% | 1.011 |
+  | mclaughlin_limit | 112,687 | 110,768 | 215.7 s | 1,302,674,542 | 1,323,446,242 | 1,325,368,622 | 0.15% | 1.001 |
+  | sm2 | 99,014 | 18,388 | 277.9 s | 1,633,664,616 | 1,633,667,336 | 1,653,131,545 | 1.18% | 0.990 |
+  | zuck_large | 96,821 | 96,821 | 316.9 s | 52,110,126 | 57,735,942 | 58,039,350 | 0.52% | 1.007 |
+  | mclaughlin | 2,140,342 | 180,749 | 587.3 s | 1,466,257,554 | 1,511,671,347 | 1,513,152,607 | 0.10% | 1.001 |
+
+  GATE-PUSH-TOPO (plan §16: within 3% of the best-known value on at least 80% of the instances, within 5% on all) is not met, because of w23 alone. `parse` refuses it for its negative uses (blending rows), so it gets no schedule. MineLib publishes no feasible PCPSP schedule for it either: its best-known value is 0. The other nine are all within 3%: eight at or above their best-known value, and sm2 1.0% below it. Against the certified bound, seven of the nine are within 3% and eight within 5%; zuck_medium is at 7.2%. The best-known values are from MineLib's 2013 Results page; newer published values were not checked.
+
+  - Each certified bound is 0.01% (mclaughlin) to 1.33% (zuck_medium) above MineLib's published LP bound, so the gaps against the published bounds are smaller.
+  - On newman1, kd, zuck_small and zuck_medium the LP was also solved over every block. The certified bounds agree with the pit's within 0.36%, which fits one optimum under PDLP's certification slack.
+  - The schedules depend more on the LP point PDLP returns. From the full LP's ranks, zuck_medium's best was 672,633,956 (0.995 of best known), kd's 408,816,605 and zuck_small's 889,990,164. How widely this varies was not measured further.
+  - Rounding: values were rounded at 10⁻⁶, each by at most 5×10⁻⁷: zuck_small 31, zuck_medium 88, zuck_large 34, marvin 6,564, mclaughlin_limit 10,853 and mclaughlin 2,292,503 values. The search took at most 0.9 s per instance, and 14.2 s on mclaughlin.
+  - MineLib's nine schedules, valued by the test and by the oracle, come to their published values within 9 units; marvin's is 885,968,061.5 against 885,968,070. Their fractions are printed to six places. Some single fractions read 1.000001, a block's fractions sum to 1 within 10⁻⁴, and limits are exceeded by at most 1.1×10⁻⁸ of the limit. Those are the only problems the exact oracle finds (none on newman1, 2 to 518 elsewhere), so they are infeasible by rounding only: no precedence is unmet and no block is in two periods. `check`, which takes whole blocks, does not read them.
 
 ## 10. Known gaps
 - `bd-nzwd` and `bd-t75z`: no caller in the workspace yet. `BD-250`'s one caller is `fmine plan pit`, on MineLib UPIT pairs only; no block model or price deck feeds it.
 - PCPSP (`toposort::pcpsp`):
   - Blocks are not split between destinations, so a schedule can be worth less than PCPSP's best. The LP relaxation splits them.
-  - General side constraints, lower limits and negative uses are not read. MineLib's w23 is refused for its negative uses.
+  - General side constraints, lower limits and negative uses are not read. MineLib's w23 is refused for its negative uses, so GATE-PUSH-TOPO is not met (§9).
   - Destination moves stay within a period; a block never changes period and destination in one move.
+  - MineLib's own split schedules are valued only in `f64` (the xtask test) and by the exact oracle script; nothing in this crate reads a split schedule.
 - Schedules:
   - `search::improve` moves one block or trades two at a time. It never moves a block together with what it requires, which a waste block and the ore under it would need to go earlier as a pair. It has no "repair" of infeasible schedules; it only takes feasible ones. Its moves are monotone, so it stops at the first local optimum, with no perturbation or restart.
   - The discount factors are rounded down period by period, so `improve`'s value can differ from the exact NPV in the last of about 12 significant digits. Every move it makes also raises the exact NPV, since each one's sign is that of a difference of factors.
