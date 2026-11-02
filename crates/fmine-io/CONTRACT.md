@@ -10,7 +10,7 @@
 ## 2. Mathematical & Domain Formulation
 Pure-Rust ZIP and RFC 1951 DEFLATE (`zip_inflate`); `.xlsx` workbook, shared-string and worksheet extraction
 (`xlsx`); `G-BULL-1` quarantine of formula errors and hidden sheets; `G-BULL-2` placeholder preservation (`"-"`,
-`"N/A"` become `CellValue::Placeholder`, never `0.0`); HTML table extraction (`extract_html_tables`).
+`"N/A"` become `CellValue::Placeholder`, never `0.0`); byte-bound HTML table extraction (`HtmlDocument`).
 
 `Workbook::cell_census` counts cells by kind over visible sheets and computes the numeric-cell digest: SHA-256 over
 `"{sheet}\t{cell_ref}\t{value}\n"` for every numeric cell, sheets in workbook order, cells in `(row, col)` order,
@@ -55,6 +55,13 @@ definitions, absence of selected outcomes in the prefix, and all applicable dead
 Every workbook carries the SHA-256 of its bytes; `Workbook::make_anchor` gives a `SourceAnchor`
 (`artifact_path`, sha256, `sheet!cell`).
 
+DESIGN (BD-057, BD-059): `HtmlDocument::from_bytes` binds the complete original UTF-8 byte snapshot to its
+SHA-256 and artifact path. Immutable tables retain each source cell once, its original inner HTML and byte
+range, decoded text, exact numeric token and printed step when supported, and its row/column span. Logical
+covered slots refer to the same origin instead of creating repeated observations. `make_anchor` uses
+`Table1!B3`-style locators and returns that origin's anchor even when queried through a covered slot.
+Table indices are zero-based in the API; row and column coordinates are one-based.
+
 A reliance journal's header registers a release role and SHA-256 commitment to a private, raw 32-byte key.
 The key is never written to the journal or exposed by Debug. Possession is a local release capability, not
 proof of a human identity, signature, notification or attestation. Every append checks the capability and
@@ -64,6 +71,15 @@ for current reuse; an unpinned replay establishes only internal consistency of t
 
 ## 4. Public API Surface
 - `IoError`, `HtmlTable`, `extract_html_tables`
+- `HtmlDocument::{from_bytes, artifact_path, bytes, sha256, tables, make_anchor}`;
+  `HtmlSourceTable::{table_index, rows, columns, cells, cell}`;
+  `HtmlSourceCell::{row, column, row_span, column_span, byte_range, raw_html, text, value, number}`.
+  The rich types expose no mutable fields or mutable cell access. A numeric cell retains `numtok::NumberToken`
+  with its exact `Dec`, printed precision and lexeme; `CellValue::Number` remains only a floating-point
+  compatibility projection. Only a single full-cell bare number is promoted; explicit currencies, units,
+  percentages, scale words, annotations and split text runs remain text for a semantic adapter. Token spans index decoded cell text; `byte_range` indexes the original document.
+  `HTML_MAX_BYTES` (8 MiB), `HTML_MAX_CELLS` (100,000 origins) and `HTML_MAX_SLOTS` (1,000,000 expanded grid slots)
+  bound document ingestion. The slot budget is global and includes padding.
 - `zip_inflate::{read_zip_entries, inflate_raw, write_stored_zip, ZipError, MAX_ENTRY_BYTES, MAX_ARCHIVE_BYTES}`
 - `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, FormatCount, MinimalCell,
   MinimalSheet, MinimalStyles, build_minimal_xlsx, build_minimal_xlsx_styled, col_index_to_letters,
@@ -187,6 +203,17 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   names the non-directory file, preventing an ambient hashed trust directory. No network store is selected.
   Both the original and resolved root paths are fingerprinted again before a verified result is returned.
 
+- HTML requires an explicit, well-formed table subset. Malformed, ambiguous or unsupported table structure
+  returns a typed refusal without returning partial numeric tables. Row and column spans retain their origins;
+  overlapping spans, spans crossing row groups, and expansion beyond the bounded grid refuse. Comments and
+  script content cannot create tables, and attribute quotes are respected while scanning tags.
+- HTML numeric recognition never removes arbitrary separators or joins adjacent text runs into a new number.
+  Footnote-marked or unsupported tokens remain text. Placeholders retain their printed text and never become
+  zero. Entity decoding occurs once; decoded text is never reparsed as markup.
+- The legacy `extract_html_tables` projection retains its original signature, emits each merged origin once,
+  and leaves covered positions empty. On a refused document it returns an empty vector; consumers requiring
+  diagnostics and source evidence must use the fallible `HtmlDocument::from_bytes` API.
+
 ## 6. Proof Obligations (`PO-*`)
 - `PO-IO-1`: on the 18 registered Barrick workbooks, the per-workbook census (visible and hidden sheets; numeric,
   placeholder, error and text cells) and numeric digest equal an independent reader's (MOR_CASE E820; asserted in
@@ -219,6 +246,10 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   unrelated FreeTSA root, including when the correct root is supplied only as an untrusted certificate.
   It is an offline integration test, not evidence that caller-chosen roots are trusted.
 
+- HTML synthetic controls cover merged origins and anchors, exact decimals and UTF-8 byte ranges, one-pass
+  entity decoding, fake tables in comments/raw-text contexts, ambiguous numeric markup, malformed spans and
+  row groups, hidden content, invalid encodings and global expansion including rectangular padding.
+
 ## 7. Failure Modes & Deterministic Fallbacks
 Missing files, corrupt ZIP or DEFLATE streams and malformed workbooks fail closed with `IoError`. No fallbacks.
 Reliance failures return registered `Refusal`s. A caller issuing a new artifact holds the writer lock, validates
@@ -241,6 +272,10 @@ would permit a concurrent withdrawal race.
 ## 10. Non-Goals & Scope Boundary
 Reads cells and adapts the reliance model to local files; does not interpret tables (`fmine-public`) or compute
 metrics (`fmine-metrics`).
+The bounded HTML reader is not a browser or DOM repair engine. It does not execute scripts, resolve CSS,
+interpret inline XBRL transformations, or establish issuer, metric, period or ownership semantics. Its source
+anchor records the inspected bytes and location, not the financial meaning, publisher authenticity or independent
+publication time.
 The draft tokenizer recognises a bounded ASCII-number and lexical-context grammar, not arbitrary mathematical
 notation or prose semantics. It makes no publicness, calibration or legal conclusion. The two-reader issuer
 sentence corpus and its precision/recall study remain separate work; synthetic lexer tests do not stand in for it.

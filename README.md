@@ -1700,6 +1700,38 @@ card (§34.5).
 
 ---
 
+## Read HTML filing tables with source provenance
+
+The I/O layer provides a bounded HTML table reader for explicitly closed filing tables, including
+`rowspan` and `colspan` headers. It retains the complete source hash, original cell markup and byte
+locations, exact decoded numeric tokens, and merged-cell origins:
+
+```rust
+use fmine_io::HtmlDocument;
+
+let bytes = br#"<table><tr><th>Production</th><td>1,250.50</td></tr></table>"#;
+let document = HtmlDocument::from_bytes("filing.html", bytes)?;
+let table = &document.tables()[0];
+let cell = table.cell(1, 2).expect("the declared second cell");
+let number = cell.number().expect("one supported exact number");
+assert_eq!(number.value.mantissa, 125050);
+assert_eq!(number.value.scale, 2);
+let anchor = document.make_anchor(0, 1, 2).expect("source origin");
+```
+
+Covered positions in a merged cell resolve to one source origin and anchor. They do not create additional
+numeric observations. The reader preserves placeholders and refuses malformed or overlapping spans and
+excessive grid expansion. It does not concatenate footnote digits, separate text runs or malformed grouping
+into a different quantity. Table indices are zero-based; cell coordinates are one-based.
+
+This API records a cell's source bytes and location. Interpreting its metric, period, ownership, units and
+disclosure basis remains the public-source adapter's responsibility. Only a single full-cell bare number is
+promoted; explicit currencies, units, ranges and annotated values remain text. It supports a documented subset of HTML rather
+than browser layout, CSS or inline XBRL transformations. Existing callers of `extract_html_tables`
+receive a compatibility projection; use the fallible API for source evidence and refusal diagnostics.
+
+---
+
 ## Workspace and budget
 
 The crate map has 59 crates in 7 layers, each with a LOC budget (`registries/loc_budget.toml`; ceiling 1.15× plan).
