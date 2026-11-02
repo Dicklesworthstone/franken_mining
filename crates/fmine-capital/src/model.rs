@@ -140,6 +140,29 @@ fn fraction(value: &str, line: usize) -> Result<Rat> {
     Rat::new(n, d).map_err(|_| fail())
 }
 
+fn share_fraction(value: &str, line: usize) -> Result<Rat> {
+    let fail = || {
+        input(
+            line,
+            "share quantities and per-share limits must be exact signed n/d fractions with a positive denominator fitting i128",
+        )
+    };
+    let (n, d) = value.split_once('/').ok_or_else(fail)?;
+    let digits = n.strip_prefix('-').unwrap_or(n);
+    if digits.is_empty()
+        || d.is_empty()
+        || !digits.bytes().chain(d.bytes()).all(|b| b.is_ascii_digit())
+    {
+        return Err(fail());
+    }
+    let n: i128 = n.parse().map_err(|_| fail())?;
+    let d: i128 = d.parse().map_err(|_| fail())?;
+    if d <= 0 {
+        return Err(fail());
+    }
+    Rat::new(n, d).map_err(|_| fail())
+}
+
 fn located(source: &SourceAnchor, line: usize, section: &str) -> SourceAnchor {
     SourceAnchor::new(
         &source.artifact_path,
@@ -179,6 +202,8 @@ fn assumed<T>(
 /// Optional funding/available_cash/cash_requirement rows declare a separate complete cash-window model.
 /// Alternatively, funding_schedule/cash_period/opening_cash/baseline_cash_flow/candidate_cash_flow rows
 /// declare signed cash flows at a complete sequence of dated checkpoints.
+/// Optional equity_basis/baseline_equity_nav/candidate_share_change rows declare exact equity ownership
+/// for the additive_equity_nav_with_share_changes convention and a separate USD/share risk limit.
 /// A candidate requires id/label/cost/reference_class_basis and may name one exclusion_group.
 /// Costs constrain spending only; candidate payoff values are already net delta-NAV in major USD.
 pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
@@ -256,6 +281,10 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
     let mut baseline_flows = BTreeMap::new();
     let mut candidate_flows = BTreeMap::new();
     let mut schedule_anchors = Vec::new();
+    let mut equity: Option<EquityBasis> = None;
+    let mut baseline_nav = BTreeMap::new();
+    let mut share_changes = BTreeMap::new();
+    let mut equity_anchors = Vec::new();
     for row in &doc.rows {
         match row.table.as_str() {
             "state" => {
@@ -499,6 +528,79 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
                     &format!("candidate cash flow {period}/{candidate}/{state}"),
                 ));
             }
+            "equity_basis" => {
+                let f = fields(
+                    &row.fields,
+                    &[
+                        "entity",
+                        "share_class",
+                        "shares_per_unit",
+                        "initial_share_units",
+                    ],
+                    &["max_tail_loss_per_share"],
+                    row.line,
+                )?;
+                if equity.is_some() {
+                    return Err(input(
+                        row.line,
+                        "only one equity_basis declaration is allowed",
+                    ));
+                }
+                equity = Some(EquityBasis {
+                    model_key: model_key.into(),
+                    currency: Currency::USD,
+                    valuation_basis: basis.into(),
+                    entity: get(&f, "entity")?.into(),
+                    share_class: get(&f, "share_class")?.into(),
+                    shares_per_unit: share_fraction(get(&f, "shares_per_unit")?, row.line)?,
+                    initial_share_units: share_fraction(get(&f, "initial_share_units")?, row.line)?,
+                    baseline_nav: Vec::new(),
+                    share_changes: Vec::new(),
+                    max_tail_loss_per_share: f
+                        .get("max_tail_loss_per_share")
+                        .map(|(value, line)| share_fraction(value, *line))
+                        .transpose()?,
+                });
+                equity_anchors.push(located(
+                    &source,
+                    row.line,
+                    "equity basis and per-share risk limit",
+                ));
+            }
+            "baseline_equity_nav" => {
+                let f = fields(&row.fields, &["state", "value"], &[], row.line)?;
+                let state = get(&f, "state")?;
+                if baseline_nav
+                    .insert(state.to_string(), money(get(&f, "value")?, row.line)?)
+                    .is_some()
+                {
+                    return Err(input(row.line, "duplicate baseline equity NAV state"));
+                }
+                equity_anchors.push(located(
+                    &source,
+                    row.line,
+                    &format!("baseline equity NAV {state}"),
+                ));
+            }
+            "candidate_share_change" => {
+                let f = fields(&row.fields, &["candidate", "state", "value"], &[], row.line)?;
+                let candidate = get(&f, "candidate")?;
+                let state = get(&f, "state")?;
+                if share_changes
+                    .insert(
+                        (candidate.to_string(), state.to_string()),
+                        share_fraction(get(&f, "value")?, row.line)?,
+                    )
+                    .is_some()
+                {
+                    return Err(input(row.line, "duplicate candidate/state share change"));
+                }
+                equity_anchors.push(located(
+                    &source,
+                    row.line,
+                    &format!("candidate share change {candidate}/{state}"),
+                ));
+            }
             "uu" => {
                 let f = fields(
                     &row.fields,
@@ -663,6 +765,47 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
         }
         None
     };
+    let equity = if let Some(mut declaration) = equity {
+        declaration.baseline_nav = baseline_nav.into_iter().collect();
+        declaration.share_changes = share_changes
+            .into_iter()
+            .map(|((candidate_id, state_id), units)| CandidateShareChange {
+                candidate_id,
+                state_id,
+                units,
+            })
+            .collect();
+        validate_equity_bounds(&declaration, states.len(), candidates.len())?;
+        let tag = declaration.canonical_tag();
+        equity_anchors.extend(uu_anchors.iter().cloned());
+        equity_anchors.extend(
+            doc.top
+                .iter()
+                .filter(|f| {
+                    matches!(
+                        f.key.as_str(),
+                        "model_key" | "currency" | "valuation_basis" | "payoff_convention"
+                    )
+                })
+                .map(|f| located(&source, f.line, &f.key)),
+        );
+        Some(assumed(
+            format!("capital.{model_key}.equity"),
+            declaration,
+            &tag,
+            AdditivityClass::NonAdditive,
+            &unknowns,
+            equity_anchors,
+        ))
+    } else {
+        if !baseline_nav.is_empty() || !share_changes.is_empty() {
+            return Err(input(
+                1,
+                "equity rows require an explicit equity_basis with entity, share class, share scale and initial share units",
+            ));
+        }
+        None
+    };
     let mut policy_anchors: Vec<_> = doc
         .top
         .iter()
@@ -715,6 +858,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
         candidates: claims,
         funding,
         funding_schedule,
+        equity,
     };
     validate(&inputs)?;
     Ok(inputs)

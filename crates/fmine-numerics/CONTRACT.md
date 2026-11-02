@@ -185,19 +185,21 @@ No fixture under `fixtures/` (§33.2).
   - `McEvsi { prior_best_action, evsi, se, n_samples, net_voi, status, changes_choice }`, and `VoiStatus::{Positive, Negative, Indeterminate { se }}` with `at_two_se(net, se)`.
   - `VoiError::is_numerical_failure`.
 - **`risk::{TailRiskSummary, RiskError}`**, with `compute_cvar(losses, alpha) -> Result<TailRiskSummary, RiskError>` and `max_drawdown(trajectory) -> Result<f64, RiskError>`.
-- **`risk::exact::{ExactDistribution, MAX_OUTCOMES}`** (BD-229, PO-CAP-2): exact rational payoff laws for
+- **`risk::exact::{ExactDistribution, compare, MAX_OUTCOMES}`** (BD-229, PO-CAP-2): exact rational payoff laws for
   per-share objectives and other scalar quantities whose precision cannot be reduced to fixed-decimal money.
   `new(&[(payoff, weight)])` admits 1–4096 outcomes with strictly positive weights summing exactly to one.
   `mean()` returns the exact mean; `quantile(p)` is the weighted inverse CDF for `p` in `(0,1]`;
   `tail_loss(mass)` integrates the worst `mass` of signed loss `-payoff`, including a fractional boundary.
   Both query methods retain the original payoff unit. All-gain populations keep negative tail loss.
-  One canonical fallible merge sort uses O(n log n) comparisons and O(n) storage; repeated queries reuse
-  that immutable order. Equal payoff atoms combine their exact mass before arithmetic; callers retain
+  `compare(a, b) -> Ordering` exactly orders all representable rationals, using a continued-fraction fallback
+  when cross multiplication would overflow. No arithmetic result is rounded or widened implicitly.
+  One canonical standard in-place sort uses O(n log n) comparisons; repeated queries reuse that immutable
+  order. Equal payoff atoms combine their exact mass before arithmetic; callers retain
   the original scenario rows. No probability normalization, sampling, floating conversion or monetary rounding
   occurs. Invalid declarations refuse; unrepresentable exact arithmetic refuses with `FMINE-REF-207`.
   Callers own units, complete state identity, feasibility, Claim admission and calibration boundaries.
   Known fractional answers, permutation/mass-splitting invariance, an independent equal-mass expansion,
-  singleton cases, bounds and overflow controls verify this kernel.
+  singleton cases, bounds, signed comparison extremes and arithmetic overflow controls verify this kernel.
 - **`tropical::{PrecedenceArc { from, to, min_lag }, TropicalDag, TropicalError, RELAXATION_TOLERANCE}`**, with `new`, `add_arc` (checked when a pass runs), `earliest_starts() -> Result<Vec<f64>, TropicalError>` and `latest_starts(deadline) -> Result<Vec<f64>, TropicalError>`.
 - **`sparse`** (BD-145):
   - **`Coo::{new, push, staged, assemble}`.** Duplicates accumulate in insertion order after a stable (row, col) sort.

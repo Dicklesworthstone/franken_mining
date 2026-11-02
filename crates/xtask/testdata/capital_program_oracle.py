@@ -6,6 +6,8 @@ weighted tails and regret are computed with Python Fraction, without Rust output
 Optional funding is checked on every joint state, independently of net-NAV payoffs.
 Timed funding carries exact signed cash flows between declared checkpoints; later
 receipts never erase an earlier breach, and a financing action may rescue hold.
+Equity models compare the change in whole-bundle NAV per actual share, keeping
+total-dollar NAV and share-normalized statistics as separate accounting columns.
 """
 
 import argparse
@@ -136,6 +138,35 @@ def scheduled_example():
     )
 
 
+def ratio(value):
+    value = Fraction(value)
+    return f"{value.numerator}/{value.denominator}"
+
+
+def with_equity(spec, baseline, changes, *, initial="100/1", scale="1/1", cap=None):
+    states = [name for name, _ in spec["states"]]
+    spec["payoff_convention"] = "additive_equity_nav_with_share_changes"
+    spec["equity"] = {
+        "entity": 'Invented parent "equity" \\ Ω', "share_class": "Invented ordinary shares",
+        "shares_per_unit": ratio(scale), "initial_share_units": ratio(initial),
+        "max_tail_loss_per_share": None if cap is None else ratio(cap),
+        "baseline_nav": dict(zip(states, map(str, baseline), strict=True)),
+        "share_changes": {
+            row["id"]: dict(zip(states, map(ratio, changes.get(row["id"], ["0/1"] * len(states))), strict=True))
+            for row in spec["candidates"]
+        },
+    }
+    return spec
+
+
+def equity_example():
+    return with_equity(
+        specification({"buyback": ["-80", "-80"], "project": ["100", "100"], "issue": ["160", "160"]},
+                      costs={"buyback": "80", "project": "100", "issue": "0"}, budget="180"),
+        ["1000", "1000"], {"buyback": ["-10", "-10"], "issue": ["20", "20"]},
+    )
+
+
 def fields(values):
     return "".join(f"{key} = {json.dumps(value, ensure_ascii=False)}\n" for key, value in values.items())
 
@@ -149,7 +180,7 @@ def model(spec, *, reverse=False, include_uu=True):
         "schema": "fmine.capital-program.v1", "model_key": "invented_capital_program",
         "question": QUESTION, "currency": "USD", "valuation_basis": BASIS,
         "budget": spec["budget"], "tail_mass": spec["tail"],
-        "payoff_convention": "additive_net_delta_nav",
+        "payoff_convention": spec.get("payoff_convention", "additive_net_delta_nav"),
         "reference_class_basis": spec["reference_class_basis"],
     }
     if spec["cap"] is not None:
@@ -160,6 +191,15 @@ def model(spec, *, reverse=False, include_uu=True):
              for name, values in spec["payoffs"].items() for state, value in values.items()]
     rows += [block("requires", {"candidate": name, "prerequisite": prerequisite})
              for name, prerequisite in spec["requires"]]
+    if equity := spec.get("equity"):
+        declaration = {key: equity[key] for key in ("entity", "share_class", "shares_per_unit", "initial_share_units")}
+        if equity["max_tail_loss_per_share"] is not None:
+            declaration["max_tail_loss_per_share"] = equity["max_tail_loss_per_share"]
+        rows.append(block("equity_basis", declaration))
+        rows += [block("baseline_equity_nav", {"state": state, "value": value})
+                 for state, value in equity["baseline_nav"].items()]
+        rows += [block("candidate_share_change", {"candidate": name, "state": state, "value": value})
+                 for name, values in equity["share_changes"].items() for state, value in values.items()]
     if funding := spec.get("funding"):
         rows.append(block("funding", {key: funding[key] for key in ("cash_period", "cash_basis", "minimum_cash")}))
         rows += [block("available_cash", {"state": state, "value": value})
@@ -239,12 +279,47 @@ def scheduled_checkpoints(schedule, selected, states):
     return checkpoints
 
 
+def equity_states(spec, selected, states):
+    equity = spec["equity"]
+    scale = Fraction(equity["shares_per_unit"])
+    baseline_shares = Fraction(equity["initial_share_units"]) * scale
+    rows = []
+    for state in sorted(states):
+        baseline_nav = Fraction(equity["baseline_nav"][state])
+        nav_change = sum((Fraction(spec["payoffs"][name][state]) for name in selected), Fraction(0))
+        share_change = sum((Fraction(equity["share_changes"][name][state]) for name in selected), Fraction(0)) * scale
+        ending_nav, ending_shares = baseline_nav + nav_change, baseline_shares + share_change
+        baseline_per_share = baseline_nav / baseline_shares
+        ending_per_share = ending_nav / ending_shares if ending_shares > 0 else None
+        rows.append({
+            "state_id": state, "baseline_nav": baseline_nav, "nav_change": nav_change,
+            "ending_nav": ending_nav, "baseline_shares": baseline_shares, "share_change": share_change,
+            "ending_shares": ending_shares, "baseline_nav_per_share": baseline_per_share,
+            "ending_nav_per_share": ending_per_share,
+            "delta_nav_per_share": None if ending_per_share is None else ending_per_share - baseline_per_share,
+        })
+    return rows
+
+
+def payoff_statistics(values, weights, mass):
+    return {
+        "values": values, "mean": sum(weights[state] * value for state, value in values.items()),
+        "tail_loss": weighted_tail_loss(values, weights, mass),
+        "cvar95_loss": weighted_tail_loss(values, weights, Fraction(1, 20)),
+        "p10": quantile(values, weights, Fraction(1, 10)),
+        "p50": quantile(values, weights, Fraction(1, 2)),
+        "p90": quantile(values, weights, Fraction(9, 10)),
+    }
+
+
 def enumerate_expected(spec):
     candidates = {row["id"]: row for row in spec["candidates"]}
     weights = {name: Fraction(weight) for name, weight in spec["states"]}
     assert sum(weights.values()) == 1
     budget, mass = Fraction(spec["budget"]), Fraction(spec["tail"])
-    cap = None if spec["cap"] is None else Fraction(spec["cap"])
+    equity = spec.get("equity")
+    cap_value = equity["max_tail_loss_per_share"] if equity else spec["cap"]
+    cap = None if cap_value is None else Fraction(cap_value)
     choices = {}
     names = sorted(candidates)
     for count in range(len(names) + 1):
@@ -277,35 +352,44 @@ def enumerate_expected(spec):
                 choice["funding_schedule"] = checkpoints
                 if any(row["slack"] < 0 for row in checkpoints):
                     reasons.add("cash_schedule_shortfall")
+            if equity:
+                positions = equity_states(spec, selected, weights)
+                choice["equity"] = positions
+                if any(row["ending_shares"] <= 0 for row in positions):
+                    reasons.add("nonpositive_share_count")
             if not reasons:
                 values = {state: sum((Fraction(spec["payoffs"][name][state]) for name in selected), Fraction(0))
                           for state in weights}
-                choice.update({
-                    "values": values, "mean": sum(weights[state] * value for state, value in values.items()),
-                    "tail_loss": weighted_tail_loss(values, weights, mass),
-                    "cvar95_loss": weighted_tail_loss(values, weights, Fraction(1, 20)),
-                    "p10": quantile(values, weights, Fraction(1, 10)),
-                    "p50": quantile(values, weights, Fraction(1, 2)),
-                    "p90": quantile(values, weights, Fraction(9, 10)),
-                })
-                choice["risk_rejected"] = cap is not None and choice["tail_loss"] > cap
+                choice.update(payoff_statistics(values, weights, mass))
+                if equity:
+                    per_share_values = {row["state_id"]: row["delta_nav_per_share"] for row in positions}
+                    choice["per_share"] = payoff_statistics(per_share_values, weights, mass)
+                risk = choice["per_share"] if equity else choice
+                choice["risk_rejected"] = cap is not None and risk["tail_loss"] > cap
             choices[selected] = choice
     structural = {key: row for key, row in choices.items() if not row["reasons"]}
-    hindsight = {state: max(row["values"][state] for row in structural.values()) for state in weights} if structural else {}
-    for row in structural.values():
-        regrets = {state: hindsight[state] - value for state, value in row["values"].items()}
-        row["mean_regret"] = sum(weights[state] * value for state, value in regrets.items())
-        row["max_regret"] = max(regrets.values())
-        row["hindsight"], row["regrets"] = hindsight, regrets
+    populations = [list(structural.values())]
+    if equity:
+        populations.append([row["per_share"] for row in structural.values()])
+    for population in populations:
+        hindsight = {state: max(row["values"][state] for row in population) for state in weights} if population else {}
+        for row in population:
+            regrets = {state: hindsight[state] - value for state, value in row["values"].items()}
+            row["mean_regret"] = sum(weights[state] * value for state, value in regrets.items())
+            row["max_regret"] = max(regrets.values())
+            row["hindsight"], row["regrets"] = hindsight, regrets
     risk_feasible = {key: row for key, row in structural.items() if not row["risk_rejected"]}
+
+    def objective(row):
+        return row["per_share"]["mean"] if equity else row["mean"]
 
     def winners(population):
         if not population:
             return set()
-        best = max(row["mean"] for row in population.values())
-        return {key for key, row in population.items() if row["mean"] == best}
+        best = max(objective(row) for row in population.values())
+        return {key for key, row in population.items() if objective(row) == best}
 
-    price = (max(row["mean"] for row in structural.values()) - max(row["mean"] for row in risk_feasible.values())
+    price = (max(objective(row) for row in structural.values()) - max(objective(row) for row in risk_feasible.values())
              if risk_feasible else None)
     return choices, weights, winners(structural), winners(risk_feasible), price
 
@@ -402,32 +486,72 @@ class CapitalProgramScenarios(unittest.TestCase):
             else:
                 self.assertNotIn("funding_schedule", row)
                 self.assertEqual(dated_shortfalls, [])
+            share_rejections = [reason for reason in row["structural_rejections"]
+                                if reason["kind"] == "nonpositive_share_count"]
+            if "equity" in known:
+                positions = row["equity"]["states"]
+                self.assertEqual(len(positions), len(known["equity"]))
+                for observed, declared in zip(positions, known["equity"], strict=True):
+                    self.assertEqual(observed["state_id"], declared["state_id"])
+                    for field, expected_value in declared.items():
+                        if field == "state_id":
+                            continue
+                        actual_value = None if observed[field] is None else Fraction(observed[field])
+                        self.assertEqual(actual_value, expected_value, (selected, declared["state_id"], field))
+                invalid = {state["state_id"]: state["ending_shares"] for state in known["equity"]
+                           if state["ending_shares"] <= 0}
+                self.assertEqual(len(share_rejections), len(invalid))
+                self.assertEqual({reason["state_id"]: Fraction(reason["shares"]) for reason in share_rejections}, invalid)
+            else:
+                for field in ("equity", "per_share_statistics", "per_share_tail_loss"):
+                    self.assertNotIn(field, row)
+                self.assertEqual(share_rejections, [])
             if known["reasons"]:
                 self.assertIsNone(row["statistics"])
                 self.assertIsNone(row["tail_loss"])
+                if "equity" in known:
+                    self.assertIsNone(row["per_share_statistics"])
+                    self.assertIsNone(row["per_share_tail_loss"])
                 self.assertFalse(row["risk_rejected"])
                 continue
             self.assertEqual(Fraction(row["tail_loss"]), known["tail_loss"], selected)
             self.assertEqual(row["risk_rejected"], known["risk_rejected"], selected)
-            for field in ("mean", "p10", "p50", "p90", "cvar95_loss", "mean_regret", "max_regret"):
-                self.assertEqual(Fraction(row["statistics"][field]), known[field], (selected, field))
-            state_rows = row["statistics"]["states"]
-            self.assertEqual([state["state_id"] for state in state_rows], sorted(weights))
-            for state in state_rows:
-                name = state["state_id"]
-                self.assertEqual(Fraction(state["weight"]), weights[name])
-                self.assertEqual(Fraction(state["payoff"]), known["values"][name])
-                self.assertEqual(Fraction(state["best_in_hindsight"]), known["hindsight"][name])
-                self.assertEqual(Fraction(state["regret"]), known["regrets"][name])
+            self.check_statistics(row["statistics"], known, weights, (selected, "USD"))
+            if "equity" in known:
+                self.assertEqual(Fraction(row["per_share_tail_loss"]), known["per_share"]["tail_loss"], selected)
+                self.check_statistics(row["per_share_statistics"], known["per_share"], weights, (selected, "USD/share"))
         membership = {row["bundle_id"]: selected for selected, row in rows.items()}
         self.assertEqual(len(membership), len(rows))
         for field, winners in (("unconstrained_winners", unconstrained), ("feasible_winners", feasible)):
             self.assertEqual(len(summary[field]), len(set(summary[field])))
             self.assertEqual({membership[name] for name in summary[field]}, winners)
-        actual_price = summary["expected_value_cost_of_risk_limit"]
+        if "equity" in spec:
+            self.assertEqual(summary["objective"], "expected_change_in_equity_nav_per_share")
+            for field in ("objective_unit", "per_share_statistics_unit", "per_share_tail_loss_unit"):
+                self.assertEqual(summary[field], "USD/share")
+            for field in ("statistics_unit", "tail_loss_unit"):
+                self.assertEqual(summary[field], "USD")
+            self.assertIsNone(summary["expected_value_cost_of_risk_limit"])
+            actual_price = summary["expected_per_share_cost_of_risk_limit"]
+        else:
+            for field in ("objective", "objective_unit", "statistics_unit", "per_share_statistics_unit",
+                          "tail_loss_unit", "per_share_tail_loss_unit", "expected_per_share_cost_of_risk_limit"):
+                self.assertNotIn(field, summary)
+            actual_price = summary["expected_value_cost_of_risk_limit"]
         self.assertEqual(None if actual_price is None else Fraction(actual_price), price)
         status = "ok" if feasible else "no_risk_feasible_program" if unconstrained else "no_structurally_feasible_program"
         self.assertEqual(summary["status"], status)
+
+    def check_statistics(self, observed, known, weights, context):
+        for field in ("mean", "p10", "p50", "p90", "cvar95_loss", "mean_regret", "max_regret"):
+            self.assertEqual(Fraction(observed[field]), known[field], (context, field))
+        self.assertEqual([state["state_id"] for state in observed["states"]], sorted(weights))
+        for state in observed["states"]:
+            name = state["state_id"]
+            self.assertEqual(Fraction(state["weight"]), weights[name])
+            self.assertEqual(Fraction(state["payoff"]), known["values"][name])
+            self.assertEqual(Fraction(state["best_in_hindsight"]), known["hindsight"][name])
+            self.assertEqual(Fraction(state["regret"]), known["regrets"][name])
 
     def check_evidence(self, report, spec, source):
         inputs = report["inputs"]
@@ -504,6 +628,35 @@ class CapitalProgramScenarios(unittest.TestCase):
         else:
             self.assertNotIn("funding_schedule", inputs)
             self.assertNotIn("funding_schedule", report["summary"])
+        if equity := spec.get("equity"):
+            claim = inputs["equity"]
+            claims.append(claim)
+            value = claim["value"]
+            self.assertEqual(value, report["summary"]["equity"])
+            self.assertEqual(value["model_key"], inputs["policy"]["value"]["model_key"])
+            self.assertEqual(value["currency"], "USD")
+            self.assertEqual(value["valuation_basis"], BASIS)
+            for field in ("entity", "share_class"):
+                self.assertEqual(value[field], equity[field])
+            for field in ("shares_per_unit", "initial_share_units", "max_tail_loss_per_share"):
+                self.assertEqual(None if value[field] is None else Fraction(value[field]),
+                                 None if equity[field] is None else Fraction(equity[field]))
+            self.assertEqual([(row["state_id"], Fraction(row["value"])) for row in value["baseline_nav"]],
+                             [(state, Fraction(amount)) for state, amount in sorted(equity["baseline_nav"].items())])
+            self.assertTrue(all(row["currency"] == "USD" for row in value["baseline_nav"]))
+            changes = [(name, state, Fraction(units)) for name, states in sorted(equity["share_changes"].items())
+                       for state, units in sorted(states.items())]
+            self.assertEqual([(row["candidate_id"], row["state_id"], Fraction(row["units"]))
+                              for row in value["share_changes"]], changes)
+            locators = [anchor["locator"] for anchor in claim["anchors"]]
+            sections = (["equity basis and per-share risk limit"]
+                        + [f"baseline equity NAV {state}" for state in equity["baseline_nav"]]
+                        + [f"candidate share change {name}/{state}" for name, state, _ in changes])
+            for section in sections:
+                self.assertTrue(any(locator.endswith(": " + section) for locator in locators), section)
+        else:
+            self.assertNotIn("equity", inputs)
+            self.assertNotIn("equity", report["summary"])
         result = report["claim"]
         self.assertEqual(result["value"], report["summary"])
         self.assertEqual(set(result["parents"]), {claim["id"] for claim in claims})
@@ -514,7 +667,7 @@ class CapitalProgramScenarios(unittest.TestCase):
             self.assertEqual(Fraction(policy[name]), Fraction(expected))
         self.assertEqual(None if policy["max_tail_loss"] is None else Fraction(policy["max_tail_loss"]),
                          None if spec["cap"] is None else Fraction(spec["cap"]))
-        self.assertEqual(policy["payoff_convention"], "additive_net_delta_nav")
+        self.assertEqual(policy["payoff_convention"], spec.get("payoff_convention", "additive_net_delta_nav"))
         self.assertEqual(policy["reference_class_basis"], spec["reference_class_basis"])
         self.assertEqual(policy["valuation_basis"], BASIS)
         self.assertEqual(policy["currency"], "USD")
@@ -1142,14 +1295,285 @@ class CapitalProgramScenarios(unittest.TestCase):
         self.assertEqual(first["summary"]["feasible_winners"], changed["summary"]["feasible_winners"])
 
 
+    def test_equity_buyback_issuance_and_project_interaction_match_hand_accounting(self):
+        report = self.program(equity_example())
+        rows = self.rows(report)
+        for selected, expected in (((), 0), (("buyback",), Fraction(2, 9)),
+                                   (("project",), 1), (("buyback", "project"), Fraction(4, 3)),
+                                   (("issue",), Fraction(-1, 3)), (("issue", "project"), Fraction(1, 2))):
+            self.assertEqual(Fraction(rows[selected]["per_share_statistics"]["mean"]), expected)
+        self.assertEqual(Fraction(rows[("buyback",)]["statistics"]["mean"]), -80)
+        self.assertEqual(Fraction(rows[("issue",)]["statistics"]["mean"]), 160)
+        combined = rows[("buyback", "project")]
+        self.assertEqual(Fraction(combined["statistics"]["mean"]), 20)
+        self.assertNotEqual(Fraction(combined["per_share_statistics"]["mean"]),
+                            Fraction(rows[("buyback",)]["per_share_statistics"]["mean"])
+                            + Fraction(rows[("project",)]["per_share_statistics"]["mean"]))
+        self.assertEqual(report["summary"]["feasible_winners"], [combined["bundle_id"]])
+        self.assertEqual(Fraction(rows[("buyback",)]["statistics"]["mean_regret"]), 340)
+        self.assertEqual(Fraction(rows[("buyback",)]["per_share_statistics"]["mean_regret"]), Fraction(10, 9))
+        for baseline in ("0", "-1000"):
+            with self.subTest(signed_equity_nav=baseline):
+                spec = with_equity(specification({"project": ["100", "100"]}), [baseline, baseline], {})
+                self.assertEqual(Fraction(self.rows(self.program(spec))[("project",)]["per_share_statistics"]["mean"]), 1)
+
+    def test_equity_objective_reverses_total_nav_ranking(self):
+        spec = specification({"buyback": ["-80", "-80"], "project": ["20", "20"]},
+                             costs={"buyback": "80", "project": "80"}, budget="80")
+        legacy = self.program(spec)
+        self.assertEqual(legacy["summary"]["feasible_winners"], [self.rows(legacy)[("project",)]["bundle_id"]])
+        with_equity(spec, ["1000", "1000"], {"buyback": ["-10", "-10"]})
+        report = self.program(spec)
+        rows = self.rows(report)
+        self.assertEqual(Fraction(rows[("buyback",)]["per_share_statistics"]["mean"]), Fraction(2, 9))
+        self.assertEqual(Fraction(rows[("project",)]["per_share_statistics"]["mean"]), Fraction(1, 5))
+        self.assertEqual(report["summary"]["feasible_winners"], [rows[("buyback",)]["bundle_id"]])
+        for selected, row in rows.items():
+            self.assertEqual(row["statistics"], self.rows(legacy)[selected]["statistics"])
+            self.assertEqual(row["tail_loss"], self.rows(legacy)[selected]["tail_loss"])
+
+    def test_equity_share_unit_normalization_preserves_actual_positions_and_exact_objective(self):
+        original = equity_example()
+        first = self.program(original)
+        for scale in (Fraction(1_000_000), Fraction(3, 2)):
+            spec = equity_example()
+            equity = spec["equity"]
+            equity["shares_per_unit"] = ratio(scale)
+            equity["initial_share_units"] = ratio(Fraction(100) / scale)
+            equity["share_changes"] = {
+                name: {state: ratio(Fraction(units) / scale) for state, units in states.items()}
+                for name, states in original["equity"]["share_changes"].items()
+            }
+            with self.subTest(shares_per_unit=scale):
+                normalized = self.program(spec)
+                self.assertEqual(first["summary"]["feasible_winners"], normalized["summary"]["feasible_winners"])
+                self.assertNotEqual(first["inputs"]["equity"]["value_tag"], normalized["inputs"]["equity"]["value_tag"])
+                for selected, row in self.rows(normalized).items():
+                    for field in ("equity", "statistics", "per_share_statistics", "tail_loss", "per_share_tail_loss"):
+                        self.assertEqual(row[field], self.rows(first)[selected][field], (scale, selected, field))
+
+    def test_equity_fractional_tail_limit_changes_winner_without_reinterpreting_total_usd_risk(self):
+        spec = with_equity(
+            specification({"buyback": ["-80", "-80", "-80"]},
+                          states=[("crash", "1/10"), ("weak", "1/5"), ("gain", "7/10")]),
+            ["500", "650", "1000"], {"buyback": ["-10", "-10", "-10"]}, cap="1/4",
+        )
+        report = self.program(spec)
+        row = self.rows(report)[("buyback",)]
+        self.assertEqual(Fraction(row["per_share_statistics"]["mean"]), Fraction(4, 45))
+        self.assertEqual(Fraction(row["per_share_tail_loss"]), Fraction(1, 4))
+        self.assertEqual(Fraction(row["per_share_statistics"]["cvar95_loss"]), Fraction(1, 3))
+        self.assertEqual(Fraction(row["tail_loss"]), 80)
+        self.assertFalse(row["risk_rejected"])
+        self.assertEqual(report["summary"]["feasible_winners"], [row["bundle_id"]])
+        spec["equity"]["max_tail_loss_per_share"] = "2499/10000"
+        limited = self.program(spec)
+        self.assertTrue(self.rows(limited)[("buyback",)]["risk_rejected"])
+        self.assertEqual(limited["summary"]["feasible_winners"], [self.rows(limited)[()]["bundle_id"]])
+        self.assertEqual(Fraction(limited["summary"]["expected_per_share_cost_of_risk_limit"]), Fraction(4, 45))
+        self.assertIsNone(limited["summary"]["expected_value_cost_of_risk_limit"])
+        spec["equity"]["max_tail_loss_per_share"] = "-1/100"
+        self.assertEqual(self.program(spec)["summary"]["status"], "no_risk_feasible_program")
+
+    def test_equity_joint_state_pairing_changes_dilution_risk_and_selection(self):
+        spec = with_equity(specification({"issue": ["200", "200"]}),
+                           ["500", "1500"], {"issue": ["10", "30"]})
+        correlated = self.program(spec)
+        self.assertEqual(Fraction(self.rows(correlated)[("issue",)]["per_share_statistics"]["mean"]), Fraction(-40, 143))
+        self.assertEqual(correlated["summary"]["feasible_winners"], [self.rows(correlated)[()]["bundle_id"]])
+        spec["equity"]["share_changes"]["issue"] = {"low": "30/1", "high": "10/1"}
+        paired = self.program(spec)
+        self.assertEqual(Fraction(self.rows(paired)[("issue",)]["per_share_statistics"]["mean"]), Fraction(60, 143))
+        self.assertEqual(paired["summary"]["feasible_winners"], [self.rows(paired)[("issue",)]["bundle_id"]])
+        self.assertEqual(self.rows(correlated)[("issue",)]["statistics"], self.rows(paired)[("issue",)]["statistics"])
+
+    def test_equity_nonpositive_ending_shares_reject_whole_bundles_and_retain_all_state_ledgers(self):
+        spec = with_equity(
+            specification({"a": ["-40", "-40"], "b": ["-40", "-40"]}, budget="1"),
+            ["1000", "1000"], {"a": ["-60", "-10"], "b": ["-50", "-90"]},
+        )
+        report = self.program(spec)
+        rejected = self.rows(report)[("a", "b")]
+        self.assertEqual({reason["kind"] for reason in rejected["structural_rejections"]},
+                         {"budget_exceeded", "nonpositive_share_count"})
+        self.assertEqual(len(rejected["structural_rejections"]), 3)
+        self.assertIsNone(rejected["statistics"])
+        self.assertIsNone(rejected["per_share_statistics"])
+        for state in rejected["equity"]["states"]:
+            self.assertEqual(Fraction(state["ending_nav"]), 920)
+            self.assertEqual(Fraction(state["ending_shares"]), {"low": -10, "high": 0}[state["state_id"]])
+            self.assertIsNone(state["ending_nav_per_share"])
+            self.assertIsNone(state["delta_nav_per_share"])
+        # One invalid scenario rejects the alternative, without suppressing the other state's calculation.
+        spec["equity"]["share_changes"]["a"] = {"low": "-100/1", "high": "-10/1"}
+        rejected = self.rows(self.program(spec))[("a",)]
+        self.assertIsNone(rejected["per_share_statistics"])
+        states = {row["state_id"]: row for row in rejected["equity"]["states"]}
+        self.assertIsNone(states["low"]["delta_nav_per_share"])
+        self.assertEqual(Fraction(states["high"]["delta_nav_per_share"]), Fraction(2, 3))
+
+    def test_equity_issuance_funds_a_project_without_charging_cash_or_proceeds_twice(self):
+        spec = equity_example()
+        spec["budget"] = "100"
+        without_cash = self.program(spec)
+        self.assertEqual(without_cash["summary"]["feasible_winners"], [self.rows(without_cash)[("project",)]["bundle_id"]])
+        with_schedule(spec, ["100", "100"], {},
+                      {"construction": {"buyback": ["-80", "-80"], "project": ["-100", "-100"], "issue": ["160", "160"]}})
+        report = self.program(spec)
+        rows = self.rows(report)
+        self.assertIsNone(rows[("project",)]["per_share_statistics"])
+        financed = rows[("issue", "project")]
+        self.assertEqual(Fraction(financed["statistics"]["mean"]), 260)
+        self.assertEqual(Fraction(financed["per_share_statistics"]["mean"]), Fraction(1, 2))
+        self.assertEqual(report["summary"]["feasible_winners"], [financed["bundle_id"]])
+        self.assertEqual(Fraction(rows[("buyback",)]["funding_schedule"]["minimum_slack"]), 0)
+        for state in financed["equity"]["states"]:
+            self.assertEqual(Fraction(state["ending_nav"]), 1260)
+            self.assertEqual(Fraction(state["ending_shares"]), 120)
+        self.assertTrue(all(Fraction(row["closing_cash"]) == 160
+                            for row in financed["funding_schedule"]["checkpoints"] if row["period_id"] is not None))
+
+    def test_equity_sole_feasible_dilutive_issuance_retains_negative_objective_and_zero_regret(self):
+        spec = with_equity(specification({"issue": ["160", "160"]}),
+                           ["1000", "1000"], {"issue": ["20", "20"]}, cap="1/3")
+        with_schedule(spec, ["30", "30"], {"construction": ["-20", "-20"]},
+                      {"construction": {"issue": ["160", "160"]}})
+        report = self.program(spec)
+        row = self.rows(report)[("issue",)]
+        self.assertIsNone(self.rows(report)[()]["per_share_statistics"])
+        self.assertEqual(Fraction(row["statistics"]["mean"]), 160)
+        self.assertEqual(Fraction(row["per_share_statistics"]["mean"]), Fraction(-1, 3))
+        self.assertEqual(Fraction(row["per_share_statistics"]["mean_regret"]), 0)
+        self.assertEqual(Fraction(row["per_share_tail_loss"]), Fraction(1, 3))
+        self.assertTrue(all(Fraction(state["best_in_hindsight"]) == Fraction(-1, 3)
+                            for state in row["per_share_statistics"]["states"]))
+        self.assertEqual(report["summary"]["feasible_winners"], [row["bundle_id"]])
+        spec["equity"]["max_tail_loss_per_share"] = "3333/10000"
+        self.assertEqual(self.program(spec)["summary"]["status"], "no_risk_feasible_program")
+
+    def test_equity_one_actual_share_and_zero_changes_reproduce_legacy_statistics(self):
+        spec = specification({"a": ["-10", "20"], "b": ["30", "-5"]}, tail="3/4")
+        legacy = self.program(spec)
+        with_equity(spec, ["1200", "800"], {}, initial="1/1")
+        report = self.program(spec)
+        for selected, row in self.rows(report).items():
+            old = self.rows(legacy)[selected]
+            self.assertEqual(row["statistics"], old["statistics"])
+            self.assertEqual(row["per_share_statistics"], old["statistics"])
+            self.assertEqual(row["per_share_tail_loss"], old["tail_loss"])
+        self.assertEqual(report["summary"]["feasible_winners"], legacy["summary"]["feasible_winners"])
+
+    def test_equity_complete_unique_matrices_and_explicit_convention_are_required(self):
+        spec = with_equity(
+            specification({"project": ["100", "100"], "never": ["0", "0"]},
+                          costs={"project": "1", "never": "100"}, budget="1"),
+            ["1000", "1000"], {},
+        )
+        self.program(spec)
+        text = model(spec)
+        basis = {key: spec["equity"][key] for key in ("entity", "share_class", "shares_per_unit", "initial_share_units")}
+        rows = [block("equity_basis", basis), block("baseline_equity_nav", {"state": "high", "value": "1000"}),
+                block("candidate_share_change", {"candidate": "never", "state": "high", "value": "0/1"})]
+        for row in rows:
+            for bad in (text.replace(row, ""), text + row):
+                with self.subTest(matrix_row=row):
+                    self.refused(bad)
+        for section, row in (
+            ("baseline_equity_nav", {"state": "absent", "value": "1000"}),
+            ("candidate_share_change", {"candidate": "absent", "state": "high", "value": "0/1"}),
+            ("candidate_share_change", {"candidate": "never", "state": "absent", "value": "0/1"}),
+        ):
+            with self.subTest(orphan=section, row=row):
+                self.refused(text + block(section, row))
+        self.refused(text.replace('payoff_convention = "additive_equity_nav_with_share_changes"',
+                                 'payoff_convention = "additive_net_delta_nav"'))
+        self.refused(text.replace(rows[0], block("equity_basis", {**basis, "assume_nondilutive": "true"})))
+        self.refused('max_tail_loss = "10"\n' + text)
+        without_equity = specification({"a": ["1", "1"]})
+        without_equity["payoff_convention"] = "additive_equity_nav_with_share_changes"
+        self.refused(model(without_equity))
+
+    def test_equity_invalid_initial_shares_units_ratios_and_normalization_overflow_refuse(self):
+        spec = equity_example()
+        text = model(spec)
+        basis = {key: spec["equity"][key] for key in ("entity", "share_class", "shares_per_unit", "initial_share_units")}
+        for field in ("initial_share_units", "shares_per_unit"):
+            for value in ("0/1", "-1/1", "1/0", "1.0", "NaN"):
+                with self.subTest(field=field, value=value):
+                    self.refused(text.replace(block("equity_basis", basis), block("equity_basis", {**basis, field: value})))
+        for field in ("entity", "share_class"):
+            self.refused(text.replace(block("equity_basis", basis), block("equity_basis", {**basis, field: ""})))
+        change = {"candidate": "project", "state": "high", "value": "0/1"}
+        for value in ("1/0", "0.1", "NaN"):
+            with self.subTest(share_change=value):
+                self.refused(text.replace(block("candidate_share_change", change),
+                                         block("candidate_share_change", {**change, "value": value})))
+        for value in ("1/0", "0.25", "NaN"):
+            with self.subTest(per_share_cap=value):
+                self.refused(text.replace(block("equity_basis", basis),
+                                         block("equity_basis", {**basis, "max_tail_loss_per_share": value})))
+        baseline = {"state": "high", "value": "1000"}
+        self.refused(text.replace(block("baseline_equity_nav", baseline),
+                                 block("baseline_equity_nav", {**baseline, "value": "0.00001"})))
+        spec["equity"]["shares_per_unit"] = "2/1"
+        spec["equity"]["initial_share_units"] = "170141183460469231731687303715884105727/1"
+        self.refused(model(spec), "207")
+
+    def test_equity_identity_binds_every_input_and_is_source_sensitive_but_order_invariant(self):
+        spec = with_equity(
+            specification({"project": ["100", "100"], "never": ["0", "0"]},
+                          costs={"project": "1", "never": "100"}, budget="1"),
+            ["1000", "1000"], {}, cap="10/1",
+        )
+        equity = spec["equity"]
+        root = fixture(model(spec))
+        first = self.program(spec, root)
+        self.assertEqual(first, self.program(spec, root))
+        for text in (model(spec, reverse=True), model(spec) + "\n# Source-only equity basis amendment\n"):
+            (root / FILE).write_text(text, encoding="utf-8")
+            changed = self.program(spec, root)
+            self.assertEqual(first["summary"], changed["summary"])
+            self.assertNotEqual(first["digest"], changed["digest"])
+            self.assertNotEqual(first["claim"]["id"], changed["claim"]["id"])
+            self.assertNotEqual(first["inputs"]["equity"]["id"], changed["inputs"]["equity"]["id"])
+            self.assertEqual(first["inputs"]["equity"]["value_tag"], changed["inputs"]["equity"]["value_tag"])
+        for container, field, value in (
+            (equity, "entity", equity["entity"] + "; amended perimeter"),
+            (equity, "share_class", "Invented amended ordinary share class"),
+            (equity, "max_tail_loss_per_share", "11/1"),
+            (equity["baseline_nav"], "high", "1001"),
+            (equity["share_changes"]["never"], "high", "1/10000"),
+        ):
+            with self.subTest(field=field, value=value):
+                previous = container[field]
+                container[field] = value
+                (root / FILE).write_text(model(spec), encoding="utf-8")
+                changed = self.program(spec, root)
+                self.assertNotEqual(first["digest"], changed["digest"])
+                self.assertNotEqual(first["claim"]["id"], changed["claim"]["id"])
+                self.assertNotEqual(first["inputs"]["equity"]["value_tag"], changed["inputs"]["equity"]["value_tag"])
+                self.assertEqual(first["summary"]["feasible_winners"], changed["summary"]["feasible_winners"])
+                self.assertEqual(self.rows(first)[("project",)]["per_share_statistics"],
+                                 self.rows(changed)[("project",)]["per_share_statistics"])
+                container[field] = previous
+        equity["initial_share_units"] = "200/1"
+        (root / FILE).write_text(model(spec), encoding="utf-8")
+        changed = self.program(spec, root)
+        self.assertNotEqual(first["inputs"]["equity"]["value_tag"], changed["inputs"]["equity"]["value_tag"])
+        self.assertEqual(Fraction(self.rows(changed)[("project",)]["per_share_statistics"]["mean"]), Fraction(1, 2))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("binary", type=Path)
     parser.add_argument("--fixture-only", action="store_true")
     parser.add_argument("--schedule-fixture-only", action="store_true")
+    parser.add_argument("--equity-fixture-only", action="store_true")
     options = parser.parse_args()
     BINARY = options.binary.resolve()
-    if options.schedule_fixture_only:
+    if options.equity_fixture_only:
+        print(fixture(model(equity_example())))
+    elif options.schedule_fixture_only:
         print(fixture(model(scheduled_example())))
     elif options.fixture_only:
         print(fixture())

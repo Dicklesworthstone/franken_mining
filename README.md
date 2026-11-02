@@ -458,9 +458,54 @@ bundle's timeline, source Claims and receipt. Unscheduled models keep their exis
 These checks establish opening and period-end balances only. If a payment must precede a receipt within one
 period, declare separate periods to expose that timing; the engine does not infer an intra-period cash path.
 
+#### Compare buybacks, issuance and projects on NAV per share
+
+DESIGN (BD-229, PO-CAP-2): the optional equity mode evaluates each complete bundle using its resulting equity
+NAV and share count. It can be combined with either funding model. Run the complete invented example:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/equity.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/equity.toml --json
+```
+
+Set `payoff_convention = "additive_equity_nav_with_share_changes"` and declare:
+
+- One `[[equity_basis]]` with `entity`, `share_class`, positive `shares_per_unit`, positive
+  `initial_share_units`, and optional `max_tail_loss_per_share`.
+- `[[baseline_equity_nav]]` with `state` and `value` for every shared state.
+- `[[candidate_share_change]]` with `candidate`, `state` and signed `value` for every candidate/state pair,
+  including explicit zeroes. Negative changes retire shares; positive changes issue shares.
+
+Share counts, their unit scale and the per-share risk limit use exact quoted fractions such as `"100/1"`,
+`"1000000/1"` and `"1/4"`. Baseline NAV and candidate payoffs use the existing exact USD decimal format.
+For baseline NAV `N`, initial share units `u`, shares per unit `s`, and selected changes `dN` and `du`, the
+state payoff in USD per actual share is `(N + dN) / ((u + du) * s) - N / (u * s)`.
+The evaluator computes this once for the whole bundle in each shared state. It never sums standalone
+per-share benefits or substitutes a ratio of expected NAV to expected shares.
+
+Candidate payoffs in this mode must be **changes in total equity NAV**. A buyback records the cash paid,
+including fees, as a negative NAV change and the retired shares as a negative share change. Issuance records
+net proceeds and new shares. Ordinary projects declare already-net equity NAV changes. An existing
+standalone buyback-accretion score cannot be reused as the NAV change: that would count its benefit twice.
+Debt proceeds alone are not an equity NAV gain. Funding constraints consume the separate cash-flow inputs;
+they do not deduct costs from declared net NAV again.
+
+The synthetic fixture starts at USD 1,000 NAV and 100 actual shares. A USD 80 buyback retiring ten shares
+adds exactly **2/9 USD per share**. Issuing twenty shares for USD 160 loses **1/3 USD per share** and fails
+the declared **1/4 USD per share** tail-loss ceiling. The project cannot meet the cash floor alone, but
+**issuance plus project wins at 1/2 USD per share**, with USD 1,260 ending NAV, 120 shares and USD 160 cash.
+All eight subsets remain in the report, including the rejected combinations and their state-level ledgers.
+
+Expected value, quantiles, same-state regret and tail loss remain exact rational values in USD/share.
+Total-USD NAV statistics are reported separately; the old USD `max_tail_loss` is forbidden in equity mode.
+Nonpositive ending shares reject the affected bundle and leave its undefined ratios explicit. Missing
+matrix entries or arithmetic overflow refuse the whole comparison. The entity, share class, unit scale,
+baseline NAV, share changes, risk limit, sources and unknown-risk terms all bind the result's receipt.
+Models without an equity declaration retain their existing economics and receipts.
+
 These are conditional static comparisons of declared assumptions. The example applies no fitted
 reference-class correction, and the output supplies no empirical selection frequency, staged recourse,
-entity cash-flow waterfall, changing share denominator, project feasibility approval or execution authority.
+entity cash-flow waterfall, project feasibility approval or execution authority.
 The wider CapitalProgram and its M4 gates remain open.
 
 ### Compare explicit decision alternatives

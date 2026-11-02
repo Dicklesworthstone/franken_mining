@@ -19,6 +19,7 @@ use fmine_decide::card::{
 use fmine_evidence::color::validate_color_payload;
 use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode};
 use fmine_numerics::exact_feas::Rat;
+use fmine_numerics::risk::exact::{ExactDistribution, compare as exact_compare};
 use fmine_units::{Currency, Money, UnitsError};
 
 pub mod model;
@@ -32,8 +33,11 @@ pub const MAX_CASH_CHECKPOINTS: usize = 65_536;
 pub const MAX_TEXT_BYTES: usize = 4096;
 pub const MAX_IDENTIFIER_BYTES: usize = 128;
 pub const PAYOFF_CONVENTION: &str = "additive_net_delta_nav";
+pub const EQUITY_PAYOFF_CONVENTION: &str = "additive_equity_nav_with_share_changes";
 pub const NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, additive net delta-NAV payoffs, spending constraints and reference-class adjustment bases. Optional funding checks cover only the explicitly declared cash window and basis; they do not guarantee every intra-period balance or a feasible staged schedule. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No project interactions, staged recourse, entity waterfalls, variable share counts, physical feasibility, retrospective evidence, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and scenario cash requirements constrain funding and are not deducted again from net delta-NAV.";
 pub const CASH_SCHEDULE_NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, additive net delta-NAV payoffs, spending constraints and reference-class adjustment bases. Cash checks cover the opening and period-end checkpoints of the declared cash schedule and basis; they do not guarantee intra-period balances or adaptive staged decisions. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No project interactions, staged recourse, entity waterfalls, variable share counts, physical feasibility, retrospective evidence, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and declared cash flows constrain funding and are not charged to net delta-NAV again.";
+pub const EQUITY_NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, true additive equity-NAV changes, signed share changes, spending constraints and reference-class adjustment bases. Selection uses the change in NAV per actual share for the named entity and share class; total-USD NAV statistics remain separate reporting columns. Optional funding checks cover only the explicitly declared cash window and basis, without guaranteeing intra-period balances. Share units are normalized exactly; no repurchase price, issuance proceeds or future share changes are inferred. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No staged recourse, entity waterfalls, calibration, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and declared cash requirements constrain funding and are not charged to equity NAV again.";
+pub const EQUITY_CASH_SCHEDULE_NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, true additive equity-NAV changes, signed share changes, spending constraints and reference-class adjustment bases. Selection uses the change in NAV per actual share for the named entity and share class; total-USD NAV statistics remain separate reporting columns. Cash checks cover opening and period-end checkpoints of the declared schedule and basis; they do not guarantee intra-period balances or adaptive staged decisions. Share units are normalized exactly; no repurchase price, issuance proceeds or future share changes are inferred. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No staged recourse, entity waterfalls, calibration, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and declared cash flows constrain funding and are not charged to equity NAV again.";
 const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);
 type Result<T> = std::result::Result<T, Refusal>;
@@ -141,6 +145,85 @@ impl FundingSchedule {
     }
 }
 
+/// Signed change in declared share units: positive issuance, negative retirement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateShareChange {
+    pub candidate_id: String,
+    pub state_id: String,
+    pub units: Rat,
+}
+
+/// Equity NAV and share counts refer to one explicit entity, share class and valuation basis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EquityBasis {
+    pub model_key: String,
+    pub currency: Currency,
+    pub valuation_basis: String,
+    pub entity: String,
+    pub share_class: String,
+    pub shares_per_unit: Rat,
+    pub initial_share_units: Rat,
+    pub baseline_nav: Vec<(String, Money)>,
+    pub share_changes: Vec<CandidateShareChange>,
+    /// Signed upper-tail loss in major currency per actual share, independently of total-USD limits.
+    pub max_tail_loss_per_share: Option<Rat>,
+}
+
+impl EquityBasis {
+    #[must_use]
+    pub fn canonical_tag(&self) -> String {
+        render::value_tag("capital-equity/v1", &render::equity_json(self))
+    }
+}
+
+/// Exact major currency per actual share; this quantity is distinct from total money.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExactPerShare {
+    pub currency: Currency,
+    pub major: Rat,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PerShareStateResult {
+    pub state_id: String,
+    pub weight: Rat,
+    pub payoff: ExactPerShare,
+    pub best_in_hindsight: ExactPerShare,
+    pub regret: ExactPerShare,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PerShareStats {
+    pub action_id: String,
+    pub label: String,
+    pub role: ActionRole,
+    pub mean: ExactPerShare,
+    pub p10_p50_p90: [ExactPerShare; 3],
+    pub cvar95_loss: ExactPerShare,
+    pub mean_regret: ExactPerShare,
+    pub max_regret: ExactPerShare,
+    pub states: Vec<PerShareStateResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EquityState {
+    pub state_id: String,
+    pub baseline_nav: ExactMoney,
+    pub nav_change: ExactMoney,
+    pub ending_nav: ExactMoney,
+    pub baseline_shares: Rat,
+    pub share_change: Rat,
+    pub ending_shares: Rat,
+    pub baseline_nav_per_share: ExactPerShare,
+    pub ending_nav_per_share: Option<ExactPerShare>,
+    pub delta_nav_per_share: Option<ExactPerShare>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EquityAssessment {
+    pub states: Vec<EquityState>,
+}
+
 impl ProgramPolicy {
     #[must_use]
     pub fn canonical_tag(&self) -> String {
@@ -161,13 +244,15 @@ pub struct ProgramInputs {
     pub candidates: Vec<Claim<CapitalCandidate>>,
     pub funding: Option<Claim<ProgramFunding>>,
     pub funding_schedule: Option<Claim<FundingSchedule>>,
+    pub equity: Option<Claim<EquityBasis>>,
 }
 
 fn no_claim_for(inputs: &ProgramInputs) -> &'static str {
-    if inputs.funding_schedule.is_some() {
-        CASH_SCHEDULE_NO_CLAIM
-    } else {
-        NO_CLAIM
+    match (inputs.equity.is_some(), inputs.funding_schedule.is_some()) {
+        (false, false) => NO_CLAIM,
+        (false, true) => CASH_SCHEDULE_NO_CLAIM,
+        (true, false) => EQUITY_NO_CLAIM,
+        (true, true) => EQUITY_CASH_SCHEDULE_NO_CLAIM,
     }
 }
 
@@ -192,6 +277,10 @@ pub enum StructuralRejection {
         checkpoint_date: String,
         state_id: String,
         shortfall: ExactMoney,
+    },
+    NonpositiveShareCount {
+        state_id: String,
+        shares: Rat,
     },
 }
 
@@ -241,10 +330,13 @@ pub struct ProgramChoice {
     pub funding: Option<FundingAssessment>,
     /// Complete checkpoint results, also retained for structurally rejected subsets.
     pub funding_schedule: Option<FundingScheduleAssessment>,
+    pub equity: Option<EquityAssessment>,
     pub structural_rejections: Vec<StructuralRejection>,
     /// None for a structurally rejected subset; no rejected subset is silently removed.
     pub statistics: Option<AlternativeStats>,
     pub tail_loss: Option<ExactMoney>,
+    pub per_share_statistics: Option<PerShareStats>,
+    pub per_share_tail_loss: Option<ExactPerShare>,
     pub risk_rejected: bool,
 }
 
@@ -255,12 +347,14 @@ pub struct ProgramSummary {
     pub policy: ProgramPolicy,
     pub funding: Option<ProgramFunding>,
     pub funding_schedule: Option<FundingSchedule>,
+    pub equity: Option<EquityBasis>,
     pub choices: Vec<ProgramChoice>,
     /// Budget, prerequisites, exclusions and declared funding applied, before the optional tail-loss limit.
     pub unconstrained_winners: Vec<String>,
     pub feasible_winners: Vec<String>,
     /// Absent when no structurally/risk-feasible subset exists; negative values cannot occur.
     pub expected_value_cost_of_risk_limit: Option<ExactMoney>,
+    pub expected_per_share_cost_of_risk_limit: Option<ExactPerShare>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -733,6 +827,79 @@ fn validate_schedule(
     )
 }
 
+fn validate_equity_bounds(
+    equity: &EquityBasis,
+    state_count: usize,
+    candidate_count: usize,
+) -> Result<()> {
+    if equity.baseline_nav.len() != state_count
+        || equity.share_changes.len() != state_count * candidate_count
+    {
+        return Err(bad(
+            RefusalCode::NoClaimInDomain201,
+            "equity requires every baseline-NAV state and every candidate/state share change, including zeroes",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_equity(
+    claim: &Claim<EquityBasis>,
+    policy: &ProgramPolicy,
+    states: &BTreeSet<&str>,
+    candidates: &BTreeMap<&str, usize>,
+) -> Result<()> {
+    let equity = &claim.value;
+    if equity.model_key != policy.model_key
+        || equity.currency != policy.currency
+        || equity.valuation_basis != policy.valuation_basis
+        || !named(&equity.entity)
+        || !named(&equity.share_class)
+        || policy.max_tail_loss.is_some()
+    {
+        return Err(bad(
+            RefusalCode::BasisMismatch105,
+            "equity requires the policy model/currency/valuation basis, a named entity/share class, and no total-USD tail-loss cap",
+        ));
+    }
+    if equity.shares_per_unit.signum() <= 0 || equity.initial_share_units.signum() <= 0 {
+        return Err(bad(
+            RefusalCode::OutsidePhysicalDomain109,
+            "share-unit scale and initial share units must be strictly positive",
+        ));
+    }
+    arithmetic(
+        equity
+            .initial_share_units
+            .checked_mul(equity.shares_per_unit),
+    )?;
+    let mut present = BTreeSet::new();
+    for (state, value) in &equity.baseline_nav {
+        if !states.contains(state.as_str())
+            || !present.insert(state.as_str())
+            || value.ccy != policy.currency
+        {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "baseline equity NAV requires each shared state once in the policy currency",
+            ));
+        }
+    }
+    let mut pairs = BTreeSet::new();
+    for change in &equity.share_changes {
+        if !candidates.contains_key(change.candidate_id.as_str())
+            || !states.contains(change.state_id.as_str())
+            || !pairs.insert((change.candidate_id.as_str(), change.state_id.as_str()))
+        {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "share changes require each known candidate/shared-state pair once",
+            ));
+        }
+    }
+    admit(claim, &equity.canonical_tag(), AdditivityClass::NonAdditive)
+}
+
 fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
     if !(1..=MAX_CANDIDATES).contains(&inputs.candidates.len())
         || !(1..=MAX_STATES).contains(&inputs.weights.value.states.len())
@@ -745,6 +912,13 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
     if let Some(schedule) = &inputs.funding_schedule {
         validate_schedule_bounds(
             &schedule.value,
+            inputs.weights.value.states.len(),
+            inputs.candidates.len(),
+        )?;
+    }
+    if let Some(equity) = &inputs.equity {
+        validate_equity_bounds(
+            &equity.value,
             inputs.weights.value.states.len(),
             inputs.candidates.len(),
         )?;
@@ -765,11 +939,16 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
         || !named(&inputs.weights.value.question)
         || !named(&policy.valuation_basis)
         || !named(&policy.reference_class_basis)
-        || policy.payoff_convention != PAYOFF_CONVENTION
+        || policy.payoff_convention
+            != if inputs.equity.is_some() {
+                EQUITY_PAYOFF_CONVENTION
+            } else {
+                PAYOFF_CONVENTION
+            }
     {
         return Err(bad(
             RefusalCode::BasisMismatch105,
-            "a common named model, valuation basis, reference-class basis and additive_net_delta_nav convention are required",
+            "a common named model, valuation basis, reference-class basis and the explicit payoff convention for the declared objective are required",
         ));
     }
     if policy.currency != Currency::USD
@@ -909,6 +1088,10 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
     if let Some(schedule) = &inputs.funding_schedule {
         validate_schedule(schedule, policy, &states, &candidates)?;
         metadata.include(schedule)?;
+    }
+    if let Some(equity) = &inputs.equity {
+        validate_equity(equity, policy, &states, &candidates)?;
+        metadata.include(equity)?;
     }
     Ok(metadata)
 }
@@ -1092,6 +1275,216 @@ impl FundingScheduleIndex<'_> {
     }
 }
 
+struct EquityIndex<'a> {
+    declaration: &'a EquityBasis,
+    candidates: &'a [Claim<CapitalCandidate>],
+    baseline_shares: Rat,
+    baseline_per_share: Vec<Rat>,
+}
+
+impl<'a> EquityIndex<'a> {
+    fn new(
+        declaration: &'a EquityBasis,
+        candidates: &'a [Claim<CapitalCandidate>],
+    ) -> Result<Self> {
+        let baseline_shares = arithmetic(
+            declaration
+                .initial_share_units
+                .checked_mul(declaration.shares_per_unit),
+        )?;
+        let baseline_per_share = declaration
+            .baseline_nav
+            .iter()
+            .map(|(_, nav)| arithmetic(amount(*nav)?.checked_div(baseline_shares)))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            declaration,
+            candidates,
+            baseline_shares,
+            baseline_per_share,
+        })
+    }
+
+    fn assess(&self, selected_mask: usize) -> Result<EquityAssessment> {
+        let equity = self.declaration;
+        let money = |major| ExactMoney {
+            currency: equity.currency,
+            major,
+        };
+        let per_share = |major| ExactPerShare {
+            currency: equity.currency,
+            major,
+        };
+        let baseline_shares = self.baseline_shares;
+        let state_count = equity.baseline_nav.len();
+        let missing = || {
+            bad(
+                RefusalCode::NumericalCertificateFailed207,
+                "admitted equity matrix lost a candidate/state entry",
+            )
+        };
+        let mut states = Vec::with_capacity(state_count);
+        for (state_index, (state_id, baseline)) in equity.baseline_nav.iter().enumerate() {
+            let mut nav_change_minor = 0_i128;
+            let mut changed_units = ZERO;
+            for (candidate_index, candidate) in self.candidates.iter().enumerate() {
+                if selected_mask & (1 << candidate_index) == 0 {
+                    continue;
+                }
+                let (_, payoff) = candidate
+                    .value
+                    .payoffs
+                    .get(state_index)
+                    .ok_or_else(missing)?;
+                nav_change_minor = checked_minor_add(nav_change_minor, payoff.minor)?;
+                let change = equity
+                    .share_changes
+                    .get(candidate_index * state_count + state_index)
+                    .ok_or_else(missing)?;
+                changed_units = arithmetic(changed_units.checked_add(change.units))?;
+            }
+            let baseline_nav = amount(*baseline)?;
+            let nav_change = amount(Money::from_minor(equity.currency, nav_change_minor))?;
+            let ending_nav = amount(Money::from_minor(
+                equity.currency,
+                checked_minor_add(baseline.minor, nav_change_minor)?,
+            ))?;
+            let share_change = arithmetic(changed_units.checked_mul(equity.shares_per_unit))?;
+            let ending_units = arithmetic(equity.initial_share_units.checked_add(changed_units))?;
+            let ending_shares = arithmetic(ending_units.checked_mul(equity.shares_per_unit))?;
+            let baseline_nav_per_share = *self
+                .baseline_per_share
+                .get(state_index)
+                .ok_or_else(missing)?;
+            let (ending_nav_per_share, delta_nav_per_share) = if ending_shares.signum() > 0 {
+                let ending = arithmetic(ending_nav.checked_div(ending_shares))?;
+                let delta = arithmetic(ending.checked_sub(baseline_nav_per_share))?;
+                (Some(per_share(ending)), Some(per_share(delta)))
+            } else {
+                (None, None)
+            };
+            states.push(EquityState {
+                state_id: state_id.clone(),
+                baseline_nav: money(baseline_nav),
+                nav_change: money(nav_change),
+                ending_nav: money(ending_nav),
+                baseline_shares,
+                share_change,
+                ending_shares,
+                baseline_nav_per_share: per_share(baseline_nav_per_share),
+                ending_nav_per_share,
+                delta_nav_per_share,
+            });
+        }
+        Ok(EquityAssessment { states })
+    }
+}
+
+/// Per-share regret compares only subsets that satisfy every structural constraint in every state.
+fn per_share_statistics(
+    choices: &mut [ProgramChoice],
+    weights: &WeightSet,
+    equity: &EquityBasis,
+    tail_mass: Rat,
+) -> Result<()> {
+    let missing = || {
+        bad(
+            RefusalCode::NumericalCertificateFailed207,
+            "structurally feasible equity program lost a defined shared-state objective",
+        )
+    };
+    let mut best = vec![None; weights.states.len()];
+    for choice in choices
+        .iter()
+        .filter(|c| c.structural_rejections.is_empty())
+    {
+        for (index, state) in choice
+            .equity
+            .as_ref()
+            .ok_or_else(missing)?
+            .states
+            .iter()
+            .enumerate()
+        {
+            let value = state.delta_nav_per_share.ok_or_else(missing)?.major;
+            let old = best.get_mut(index).ok_or_else(missing)?;
+            if match *old {
+                None => true,
+                Some(previous) => exact_compare(value, previous).is_gt(),
+            } {
+                *old = Some(value);
+            }
+        }
+    }
+    let per_share = |major| ExactPerShare {
+        currency: equity.currency,
+        major,
+    };
+    for choice in choices
+        .iter_mut()
+        .filter(|c| c.structural_rejections.is_empty())
+    {
+        let assessment = choice.equity.as_ref().ok_or_else(missing)?;
+        let mut values = Vec::with_capacity(weights.states.len());
+        let mut states = Vec::with_capacity(weights.states.len());
+        let mut mean_regret = ZERO;
+        let mut max_regret = ZERO;
+        for (index, state) in assessment.states.iter().enumerate() {
+            let (state_id, weight) = weights.states.get(index).ok_or_else(missing)?;
+            if state_id != &state.state_id {
+                return Err(missing());
+            }
+            let value = state.delta_nav_per_share.ok_or_else(missing)?.major;
+            let optimum = best.get(index).copied().flatten().ok_or_else(missing)?;
+            let regret = arithmetic(optimum.checked_sub(value))?;
+            mean_regret =
+                arithmetic(mean_regret.checked_add(arithmetic(regret.checked_mul(*weight))?))?;
+            if exact_compare(regret, max_regret).is_gt() {
+                max_regret = regret;
+            }
+            values.push((value, *weight));
+            states.push(PerShareStateResult {
+                state_id: state_id.clone(),
+                weight: *weight,
+                payoff: per_share(value),
+                best_in_hindsight: per_share(optimum),
+                regret: per_share(regret),
+            });
+        }
+        let distribution = ExactDistribution::new(&values)?;
+        let tail = distribution.tail_loss(tail_mass)?;
+        choice.per_share_statistics = Some(PerShareStats {
+            action_id: choice.bundle_id.clone(),
+            label: if choice.selected.is_empty() {
+                "Do nothing".into()
+            } else {
+                choice.selected.join(" + ")
+            },
+            role: if choice.selected.is_empty() {
+                ActionRole::DoNothing
+            } else {
+                ActionRole::Action
+            },
+            mean: per_share(distribution.mean()),
+            p10_p50_p90: [
+                per_share(distribution.quantile(arithmetic(Rat::new(1, 10))?)?),
+                per_share(distribution.quantile(arithmetic(Rat::new(1, 2))?)?),
+                per_share(distribution.quantile(arithmetic(Rat::new(9, 10))?)?),
+            ],
+            cvar95_loss: per_share(distribution.tail_loss(arithmetic(Rat::new(1, 20))?)?),
+            mean_regret: per_share(mean_regret),
+            max_regret: per_share(max_regret),
+            states,
+        });
+        choice.per_share_tail_loss = Some(per_share(tail));
+        choice.risk_rejected = match equity.max_tail_loss_per_share {
+            Some(limit) => exact_compare(tail, limit).is_gt(),
+            None => false,
+        };
+    }
+    Ok(())
+}
+
 /// Exact upper-tail signed loss from the complete joint payoff vector, including fractional boundary mass.
 fn tail_loss(action: &ActionPayoffs, weights: &WeightSet, tail: Rat) -> Result<Rat> {
     let weights: BTreeMap<_, _> = weights
@@ -1129,22 +1522,34 @@ fn tail_loss(action: &ActionPayoffs, weights: &WeightSet, tail: Rat) -> Result<R
     arithmetic(arithmetic(sum.checked_div(tail))?.checked_neg())
 }
 
-fn winners(choices: &[ProgramChoice], risk: bool) -> Result<(Vec<String>, Option<Rat>)> {
+fn winners(
+    choices: &[ProgramChoice],
+    risk: bool,
+    per_share: bool,
+) -> Result<(Vec<String>, Option<Rat>)> {
     let mut best = None;
     let mut ids = Vec::new();
     for row in choices {
         if risk && row.risk_rejected {
             continue;
         }
-        let Some(stats) = &row.statistics else {
+        let mean = if per_share {
+            row.per_share_statistics
+                .as_ref()
+                .map(|stats| stats.mean.major)
+        } else {
+            row.statistics.as_ref().map(|stats| stats.mean.major)
+        };
+        let Some(mean) = mean else {
             continue;
         };
         let cmp = match best {
             None => std::cmp::Ordering::Greater,
-            Some(old) => arithmetic(stats.mean.major.checked_cmp(old))?,
+            Some(old) if per_share => exact_compare(mean, old),
+            Some(old) => arithmetic(mean.checked_cmp(old))?,
         };
         if cmp.is_gt() {
-            best = Some(stats.mean.major);
+            best = Some(mean);
             ids.clear();
         }
         if !cmp.is_lt() {
@@ -1202,6 +1607,13 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
                 ))
         });
     }
+    if let Some(claim) = &mut inputs.equity {
+        claim.value.baseline_nav.sort_by(|a, b| a.0.cmp(&b.0));
+        claim
+            .value
+            .share_changes
+            .sort_by(|a, b| (&a.candidate_id, &a.state_id).cmp(&(&b.candidate_id, &b.state_id)));
+    }
     let funding_index = inputs
         .funding
         .as_ref()
@@ -1213,6 +1625,11 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
             declaration: &claim.value,
             candidate_count: inputs.candidates.len(),
         });
+    let equity_index = inputs
+        .equity
+        .as_ref()
+        .map(|claim| EquityIndex::new(&claim.value, &inputs.candidates))
+        .transpose()?;
     let policy = &inputs.policy.value;
     let money = |major| ExactMoney {
         currency: policy.currency,
@@ -1291,6 +1708,20 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
                 }
             }
         }
+        let equity = equity_index
+            .as_ref()
+            .map(|index| index.assess(mask))
+            .transpose()?;
+        if let Some(equity) = &equity {
+            for state in &equity.states {
+                if state.ending_shares.signum() <= 0 {
+                    rejected.push(StructuralRejection::NonpositiveShareCount {
+                        state_id: state.state_id.clone(),
+                        shares: state.ending_shares,
+                    });
+                }
+            }
+        }
         let bundle_id = format!("bundle_{mask:02x}");
         if rejected.is_empty() {
             let values = inputs
@@ -1340,9 +1771,12 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
             budget_slack: money(arithmetic(amount(policy.budget)?.checked_sub(spend))?),
             funding,
             funding_schedule,
+            equity,
             structural_rejections: rejected,
             statistics: None,
             tail_loss: None,
+            per_share_statistics: None,
+            per_share_tail_loss: None,
             risk_rejected: false,
         });
     }
@@ -1386,11 +1820,33 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
             row.statistics = Some(stats);
         }
     }
-    let (unconstrained_winners, before) = winners(&choices, false)?;
-    let (feasible_winners, after) = winners(&choices, true)?;
-    let risk_cost = match (before, after) {
-        (Some(a), Some(b)) => Some(money(arithmetic(a.checked_sub(b))?)),
-        _ => None,
+    if let Some(equity) = &inputs.equity {
+        per_share_statistics(
+            &mut choices,
+            &inputs.weights.value,
+            &equity.value,
+            policy.tail_mass,
+        )?;
+    }
+    let per_share_mode = inputs.equity.is_some();
+    let (unconstrained_winners, before) = winners(&choices, false, per_share_mode)?;
+    let (feasible_winners, after) = winners(&choices, true, per_share_mode)?;
+    let (risk_cost, per_share_risk_cost) = match (before, after) {
+        (Some(a), Some(b)) => {
+            let difference = arithmetic(a.checked_sub(b))?;
+            if per_share_mode {
+                (
+                    None,
+                    Some(ExactPerShare {
+                        currency: policy.currency,
+                        major: difference,
+                    }),
+                )
+            } else {
+                (Some(money(difference)), None)
+            }
+        }
+        _ => (None, None),
     };
     let summary = ProgramSummary {
         model_key: policy.model_key.clone(),
@@ -1401,10 +1857,12 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
             .funding_schedule
             .as_ref()
             .map(|claim| claim.value.clone()),
+        equity: inputs.equity.as_ref().map(|claim| claim.value.clone()),
         choices,
         unconstrained_winners,
         feasible_winners,
         expected_value_cost_of_risk_limit: risk_cost,
+        expected_per_share_cost_of_risk_limit: per_share_risk_cost,
     };
     let mut binding = Encoder::new_frame(*b"CAPP", 1);
     binding.put_str(&render::inputs_json(&inputs));

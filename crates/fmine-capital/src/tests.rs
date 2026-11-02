@@ -135,6 +135,67 @@ fn set_baseline_flow(schedule: &mut FundingSchedule, period: &str, state: &str, 
         .unwrap()
         .value = usd(value);
 }
+fn equity_claim(value: EquityBasis) -> Claim<EquityBasis> {
+    let tag = value.canonical_tag();
+    claim("capital.equity", value, &tag, AdditivityClass::NonAdditive)
+}
+fn with_equity(
+    mut inputs: ProgramInputs,
+    baseline_nav: &[i128],
+    initial_shares: Rat,
+) -> ProgramInputs {
+    let mut policy = inputs.policy.value.clone();
+    policy.payoff_convention = EQUITY_PAYOFF_CONVENTION.into();
+    inputs.policy = policy_claim(policy);
+    let mut share_changes = Vec::new();
+    for candidate in &inputs.candidates {
+        for (state, _) in &inputs.weights.value.states {
+            share_changes.push(CandidateShareChange {
+                candidate_id: candidate.value.candidate_id.clone(),
+                state_id: state.clone(),
+                units: ZERO,
+            });
+        }
+    }
+    inputs.equity = Some(equity_claim(EquityBasis {
+        model_key: inputs.policy.value.model_key.clone(),
+        currency: Currency::USD,
+        valuation_basis: inputs.policy.value.valuation_basis.clone(),
+        entity: "synthetic-parent".into(),
+        share_class: "ordinary".into(),
+        shares_per_unit: ONE,
+        initial_share_units: initial_shares,
+        baseline_nav: inputs
+            .weights
+            .value
+            .states
+            .iter()
+            .zip(baseline_nav)
+            .map(|((state, _), value)| (state.clone(), usd(*value)))
+            .collect(),
+        share_changes,
+        max_tail_loss_per_share: None,
+    }));
+    inputs
+}
+fn set_share_change(equity: &mut EquityBasis, candidate: &str, state: &str, units: Rat) {
+    equity
+        .share_changes
+        .iter_mut()
+        .find(|change| change.candidate_id == candidate && change.state_id == state)
+        .unwrap()
+        .units = units;
+}
+fn equity_state<'a>(choice: &'a ProgramChoice, state: &str) -> &'a EquityState {
+    choice
+        .equity
+        .as_ref()
+        .unwrap()
+        .states
+        .iter()
+        .find(|row| row.state_id == state)
+        .unwrap()
+}
 fn with_funding(
     mut i: ProgramInputs,
     available: &[i128],
@@ -231,6 +292,7 @@ fn inputs(
         candidates,
         funding: None,
         funding_schedule: None,
+        equity: None,
     }
 }
 fn row<'a>(report: &'a EvaluatedProgram, members: &[&str]) -> &'a ProgramChoice {
@@ -1526,4 +1588,666 @@ fn combined_cash_checkpoint_bound_is_admitted_exactly_without_truncation() {
             assert_eq!(evaluate(&i).unwrap_err().code, "FMINE-REF-201");
         }
     }
+}
+
+#[test]
+fn buyback_accretion_can_win_over_a_project_despite_negative_total_nav_change() {
+    let mut i = with_equity(
+        inputs(
+            &[("buyback", 100, &[-100]), ("project", 100, &[100])],
+            &[ONE],
+            100,
+            ONE,
+            None,
+        ),
+        &[1000],
+        r(100, 1),
+    );
+    let mut equity = i.equity.as_ref().unwrap().value.clone();
+    // Synthetic hand answer: retire C/P = 100/5 = 20 shares, and remove the $100 cash from NAV.
+    set_share_change(&mut equity, "buyback", "s0", r(-20, 1));
+    i.equity = Some(equity_claim(equity));
+    let report = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["buyback"]]);
+    let buyback = row(&report, &["buyback"]);
+    let state = equity_state(buyback, "s0");
+    assert_eq!(state.baseline_nav.major, r(1000, 1));
+    assert_eq!(state.nav_change.major, r(-100, 1));
+    assert_eq!(state.ending_nav.major, r(900, 1));
+    assert_eq!(state.baseline_shares, r(100, 1));
+    assert_eq!(state.share_change, r(-20, 1));
+    assert_eq!(state.ending_shares, r(80, 1));
+    assert_eq!(state.baseline_nav_per_share.major, r(10, 1));
+    assert_eq!(state.ending_nav_per_share.unwrap().major, r(45, 4));
+    assert_eq!(state.delta_nav_per_share.unwrap().major, r(5, 4));
+    assert_eq!(buyback.statistics.as_ref().unwrap().mean.major, r(-100, 1));
+    assert_eq!(buyback.tail_loss.unwrap().major, r(100, 1));
+    assert_eq!(
+        buyback.per_share_statistics.as_ref().unwrap().mean.major,
+        r(5, 4)
+    );
+    assert_eq!(buyback.per_share_tail_loss.unwrap().major, r(-5, 4));
+    let project = row(&report, &["project"]);
+    assert_eq!(project.statistics.as_ref().unwrap().mean.major, r(100, 1));
+    assert_eq!(
+        project.per_share_statistics.as_ref().unwrap().mean.major,
+        ONE
+    );
+    assert_eq!(
+        project
+            .per_share_statistics
+            .as_ref()
+            .unwrap()
+            .mean_regret
+            .major,
+        r(1, 4)
+    );
+    let both = row(&report, &["buyback", "project"]);
+    assert!(
+        both.structural_rejections
+            .contains(&StructuralRejection::BudgetExceeded)
+    );
+    assert_eq!(
+        equity_state(both, "s0").delta_nav_per_share.unwrap().major,
+        r(5, 2)
+    );
+    assert!(both.statistics.is_none() && both.per_share_statistics.is_none());
+    assert!(report.summary().expected_value_cost_of_risk_limit.is_none());
+    assert_eq!(
+        report
+            .summary()
+            .expected_per_share_cost_of_risk_limit
+            .unwrap()
+            .major,
+        ZERO
+    );
+    assert_eq!(report.no_claim(), EQUITY_NO_CLAIM);
+}
+
+#[test]
+fn issuance_values_the_dilution_of_existing_equity_and_keeps_negative_nav_valid() {
+    let mut i = with_equity(
+        inputs(&[("issue", 0, &[200])], &[ONE], 0, ONE, None),
+        &[1000],
+        r(100, 1),
+    );
+    let mut equity = i.equity.as_ref().unwrap().value.clone();
+    set_share_change(&mut equity, "issue", "s0", r(100, 1));
+    i.equity = Some(equity_claim(equity.clone()));
+    let report = evaluate(&i).unwrap();
+    let issue = row(&report, &["issue"]);
+    assert_eq!(selected_winners(&report), vec![Vec::<String>::new()]);
+    assert_eq!(issue.statistics.as_ref().unwrap().mean.major, r(200, 1));
+    assert_eq!(
+        issue.per_share_statistics.as_ref().unwrap().mean.major,
+        r(-4, 1)
+    );
+    assert_eq!(
+        equity_state(issue, "s0")
+            .ending_nav_per_share
+            .unwrap()
+            .major,
+        r(6, 1)
+    );
+
+    let mut candidate = i.candidates[0].value.clone();
+    candidate.payoffs[0].1 = usd(1200);
+    i.candidates[0] = candidate_claim(candidate);
+    let report = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["issue"]]);
+    assert_eq!(
+        row(&report, &["issue"])
+            .per_share_statistics
+            .as_ref()
+            .unwrap()
+            .mean
+            .major,
+        ONE
+    );
+
+    equity.baseline_nav[0].1 = usd(-1000);
+    i.equity = Some(equity_claim(equity));
+    let report = evaluate(&i).unwrap();
+    assert_eq!(
+        equity_state(row(&report, &[]), "s0")
+            .baseline_nav_per_share
+            .major,
+        r(-10, 1)
+    );
+    assert_eq!(
+        row(&report, &["issue"])
+            .per_share_statistics
+            .as_ref()
+            .unwrap()
+            .mean
+            .major,
+        r(11, 1)
+    );
+}
+
+#[test]
+fn per_share_values_remain_rational_and_invariant_to_declared_share_units() {
+    let mut i = with_equity(
+        inputs(&[("A", 1, &[1, -1])], &[r(1, 3), r(2, 3)], 1, r(1, 2), None),
+        &[7, 11],
+        r(3, 1),
+    );
+    let mut equity = i.equity.as_ref().unwrap().value.clone();
+    set_share_change(&mut equity, "A", "s0", r(-1, 1));
+    set_share_change(&mut equity, "A", "s1", ONE);
+    equity.max_tail_loss_per_share = Some(r(7, 6));
+    i.equity = Some(equity_claim(equity.clone()));
+    let report = evaluate(&i).unwrap();
+    let a = row(&report, &["A"]);
+    assert_eq!(
+        equity_state(a, "s0").delta_nav_per_share.unwrap().major,
+        r(5, 3)
+    );
+    assert_eq!(
+        equity_state(a, "s1").delta_nav_per_share.unwrap().major,
+        r(-7, 6)
+    );
+    assert_eq!(
+        a.per_share_statistics.as_ref().unwrap().mean.major,
+        r(-2, 9)
+    );
+    assert_eq!(a.per_share_tail_loss.unwrap().major, r(7, 6));
+    assert!(!a.risk_rejected);
+    equity.shares_per_unit = r(1_000_000, 1);
+    equity.initial_share_units = r(3, 1_000_000);
+    set_share_change(&mut equity, "A", "s0", r(-1, 1_000_000));
+    set_share_change(&mut equity, "A", "s1", r(1, 1_000_000));
+    let mut millions = i.clone();
+    millions.equity = Some(equity_claim(equity.clone()));
+    let normalized = evaluate(&millions).unwrap();
+    assert_eq!(report.summary().choices, normalized.summary().choices);
+    assert_eq!(
+        report.summary().feasible_winners,
+        normalized.summary().feasible_winners
+    );
+    assert_ne!(report.digest(), normalized.digest());
+    equity.max_tail_loss_per_share = Some(r(7, 6).checked_sub(r(1, 1_000_000)).unwrap());
+    millions.equity = Some(equity_claim(equity));
+    assert!(row(&evaluate(&millions).unwrap(), &["A"]).risk_rejected);
+}
+
+#[test]
+fn per_share_tail_limit_uses_joint_fractional_mass_and_reports_its_own_risk_cost() {
+    let mut i = with_equity(
+        inputs(
+            &[("risky", 1, &[-4, 8]), ("safe", 1, &[3, 3])],
+            &[r(1, 4), r(3, 4)],
+            1,
+            r(1, 2),
+            None,
+        ),
+        &[100, 100],
+        r(10, 1),
+    );
+    let mut equity = i.equity.as_ref().unwrap().value.clone();
+    equity.max_tail_loss_per_share = Some(r(-1, 4));
+    i.equity = Some(equity_claim(equity));
+    let report = evaluate(&i).unwrap();
+    let risky = row(&report, &["risky"]);
+    let safe = row(&report, &["safe"]);
+    assert_eq!(
+        report.summary().unconstrained_winners,
+        vec![risky.bundle_id.clone()]
+    );
+    assert_eq!(selected_winners(&report), vec![vec!["safe"]]);
+    let stats = risky.per_share_statistics.as_ref().unwrap();
+    assert_eq!(stats.mean.major, r(1, 2));
+    assert_eq!(
+        stats.p10_p50_p90.map(|m| m.major),
+        [r(-2, 5), r(4, 5), r(4, 5)]
+    );
+    assert_eq!(stats.cvar95_loss.major, r(2, 5));
+    assert_eq!(stats.mean_regret.major, r(7, 40));
+    assert_eq!(
+        safe.per_share_statistics
+            .as_ref()
+            .unwrap()
+            .mean_regret
+            .major,
+        r(3, 8)
+    );
+    assert_eq!(risky.per_share_tail_loss.unwrap().major, r(-1, 5));
+    assert_eq!(safe.per_share_tail_loss.unwrap().major, r(-3, 10));
+    assert_eq!(risky.tail_loss.unwrap().major, r(-2, 1));
+    assert_eq!(safe.tail_loss.unwrap().major, r(-3, 1));
+    assert!(risky.risk_rejected && row(&report, &[]).risk_rejected);
+    assert!(!safe.risk_rejected);
+    assert!(report.summary().expected_value_cost_of_risk_limit.is_none());
+    assert_eq!(
+        report
+            .summary()
+            .expected_per_share_cost_of_risk_limit
+            .unwrap()
+            .major,
+        r(1, 5)
+    );
+}
+
+#[test]
+fn nonpositive_ending_shares_reject_each_bad_state_without_dropping_the_bundle() {
+    let mut i = with_equity(
+        inputs(
+            &[("good", 1, &[10, 10]), ("retire", 1, &[10000, 10000])],
+            &[r(1, 2); 2],
+            1,
+            ONE,
+            None,
+        ),
+        &[1000, 1000],
+        r(100, 1),
+    );
+    let mut equity = i.equity.as_ref().unwrap().value.clone();
+    set_share_change(&mut equity, "retire", "s0", r(-100, 1));
+    set_share_change(&mut equity, "retire", "s1", r(-110, 1));
+    i.equity = Some(equity_claim(equity));
+    let report = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["good"]]);
+    assert_eq!(report.summary().choices.len(), 4);
+    for members in [&["retire"][..], &["good", "retire"][..]] {
+        let choice = row(&report, members);
+        assert!(choice.statistics.is_none() && choice.per_share_statistics.is_none());
+        assert!(choice.tail_loss.is_none() && choice.per_share_tail_loss.is_none());
+        for (state, shares) in [("s0", ZERO), ("s1", r(-10, 1))] {
+            let cell = equity_state(choice, state);
+            assert_eq!(cell.ending_shares, shares);
+            assert!(cell.ending_nav_per_share.is_none() && cell.delta_nav_per_share.is_none());
+            assert!(choice.structural_rejections.contains(
+                &StructuralRejection::NonpositiveShareCount {
+                    state_id: state.into(),
+                    shares,
+                }
+            ));
+        }
+    }
+    assert_eq!(
+        row(&report, &["good"])
+            .per_share_statistics
+            .as_ref()
+            .unwrap()
+            .max_regret
+            .major,
+        ZERO
+    );
+}
+
+#[test]
+fn scheduled_issuance_can_be_the_only_feasible_choice_despite_per_share_dilution() {
+    let mut i = with_equity(
+        with_schedule(inputs(&[("issue", 0, &[10])], &[ONE], 0, ONE, None)),
+        &[100],
+        r(10, 1),
+    );
+    let mut schedule = i.funding_schedule.as_ref().unwrap().value.clone();
+    set_baseline_flow(&mut schedule, "start", "s0", -120);
+    set_candidate_flow(&mut schedule, "start", "issue", "s0", 50);
+    i.funding_schedule = Some(schedule_claim(schedule));
+    let mut equity = i.equity.as_ref().unwrap().value.clone();
+    set_share_change(&mut equity, "issue", "s0", r(10, 1));
+    i.equity = Some(equity_claim(equity.clone()));
+    let report = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["issue"]]);
+    assert!(row(&report, &[]).per_share_statistics.is_none());
+    let issue = row(&report, &["issue"]);
+    assert_eq!(issue.statistics.as_ref().unwrap().mean.major, r(10, 1));
+    let stats = issue.per_share_statistics.as_ref().unwrap();
+    assert_eq!(stats.mean.major, r(-9, 2));
+    assert_eq!(stats.states[0].best_in_hindsight.major, r(-9, 2));
+    assert_eq!(stats.mean_regret.major, ZERO);
+    assert_eq!(stats.max_regret.major, ZERO);
+    assert_eq!(
+        checkpoint(issue, Some("finish"), "s0").closing_cash.major,
+        r(30, 1)
+    );
+    assert_eq!(report.no_claim(), EQUITY_CASH_SCHEDULE_NO_CLAIM);
+    equity.max_tail_loss_per_share = Some(r(4, 1));
+    i.equity = Some(equity_claim(equity));
+    let report = evaluate(&i).unwrap();
+    assert_eq!(report.summary().unconstrained_winners.len(), 1);
+    assert!(report.summary().feasible_winners.is_empty());
+    assert!(
+        report
+            .summary()
+            .expected_per_share_cost_of_risk_limit
+            .is_none()
+    );
+}
+
+#[test]
+fn equity_shared_state_results_are_canonical_and_all_evidence_binds() {
+    let mut i = with_equity(
+        with_schedule(inputs(
+            &[("A", 1, &[10, 20]), ("loser", 10, &[-10, -20])],
+            &[r(1, 3), r(2, 3)],
+            1,
+            ONE,
+            None,
+        )),
+        &[100, 200],
+        r(10, 1),
+    );
+    let mut equity = i.equity.as_ref().unwrap().value.clone();
+    set_share_change(&mut equity, "A", "s0", r(-1, 1));
+    set_share_change(&mut equity, "A", "s1", ONE);
+    i.equity = Some(equity_claim(equity));
+    let report = evaluate(&i).unwrap();
+    let input_claim = i.equity.as_ref().unwrap();
+    assert!(report.claim().parents.contains(&input_claim.claim_id));
+    assert!(
+        input_claim
+            .anchors
+            .iter()
+            .all(|a| report.claim().anchors.contains(a))
+    );
+    let mut reordered = i.clone();
+    reordered.candidates.reverse();
+    reordered.weights.value.states.reverse();
+    for candidate in &mut reordered.candidates {
+        candidate.value.payoffs.reverse();
+    }
+    let equity = &mut reordered.equity.as_mut().unwrap().value;
+    equity.baseline_nav.reverse();
+    equity.share_changes.reverse();
+    let schedule = &mut reordered.funding_schedule.as_mut().unwrap().value;
+    schedule.opening_cash.reverse();
+    schedule.periods.reverse();
+    schedule.baseline_flows.reverse();
+    schedule.candidate_flows.reverse();
+    assert_eq!(evaluate(&reordered).unwrap(), report);
+    let mut changed = i.clone();
+    let mut equity = changed.equity.as_ref().unwrap().value.clone();
+    set_share_change(&mut equity, "loser", "s0", r(2, 1));
+    changed.equity = Some(equity_claim(equity));
+    let next = evaluate(&changed).unwrap();
+    assert_eq!(selected_winners(&next), selected_winners(&report));
+    assert_ne!(next.digest(), report.digest());
+    let mut changed = i;
+    changed.equity.as_mut().unwrap().supersedes = Some(changed.policy.claim_id);
+    let next = evaluate(&changed).unwrap();
+    assert_eq!(next.summary(), report.summary());
+    assert_ne!(next.digest(), report.digest());
+}
+
+#[test]
+fn equity_requires_complete_matrices_explicit_units_and_matching_claims() {
+    let i = with_equity(
+        inputs(
+            &[("A", 1, &[10, 10]), ("loser", 10, &[-10, -10])],
+            &[r(1, 2); 2],
+            1,
+            ONE,
+            None,
+        ),
+        &[100, 100],
+        r(10, 1),
+    );
+    for case in 0..17 {
+        let mut changed = i.clone();
+        let mut equity = changed.equity.as_ref().unwrap().value.clone();
+        let expected = match case {
+            0 => {
+                equity.baseline_nav.pop();
+                "FMINE-REF-201"
+            }
+            1 => {
+                equity.share_changes.retain(|c| c.candidate_id != "loser");
+                "FMINE-REF-201"
+            }
+            2 => {
+                equity.baseline_nav[1] = equity.baseline_nav[0].clone();
+                "FMINE-REF-105"
+            }
+            3 => {
+                equity.share_changes[1] = equity.share_changes[0].clone();
+                "FMINE-REF-105"
+            }
+            4 => {
+                equity.baseline_nav[0].0 = "foreign".into();
+                "FMINE-REF-105"
+            }
+            5 => {
+                equity.share_changes[0].state_id = "foreign".into();
+                "FMINE-REF-105"
+            }
+            6 => {
+                equity.share_changes[0].candidate_id = "foreign".into();
+                "FMINE-REF-105"
+            }
+            7 => {
+                equity.baseline_nav[0].1.ccy = Currency::CAD;
+                "FMINE-REF-105"
+            }
+            8 => {
+                equity.currency = Currency::CAD;
+                "FMINE-REF-105"
+            }
+            9 => {
+                equity.model_key = "foreign".into();
+                "FMINE-REF-105"
+            }
+            10 => {
+                equity.valuation_basis = "foreign".into();
+                "FMINE-REF-105"
+            }
+            11 => {
+                equity.entity.clear();
+                "FMINE-REF-105"
+            }
+            12 => {
+                equity.share_class.clear();
+                "FMINE-REF-105"
+            }
+            13 => {
+                equity.initial_share_units = ZERO;
+                "FMINE-REF-109"
+            }
+            14 => {
+                equity.initial_share_units = r(-1, 1);
+                "FMINE-REF-109"
+            }
+            15 => {
+                equity.shares_per_unit = ZERO;
+                "FMINE-REF-109"
+            }
+            16 => {
+                equity.shares_per_unit = r(-1, 1);
+                "FMINE-REF-109"
+            }
+            _ => unreachable!(),
+        };
+        changed.equity = Some(equity_claim(equity));
+        assert_eq!(
+            evaluate(&changed).unwrap_err().code,
+            expected,
+            "equity case {case}"
+        );
+    }
+    let mut changed = i.clone();
+    changed.equity.as_mut().unwrap().stale = true;
+    assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-502");
+    let mut changed = i.clone();
+    changed.equity.as_mut().unwrap().uu_terms.clear();
+    assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-204");
+    let mut changed = i.clone();
+    changed.equity.as_mut().unwrap().value.initial_share_units = r(11, 1);
+    assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-507");
+    for legacy_cap in [false, true] {
+        let mut changed = i.clone();
+        let mut policy = changed.policy.value.clone();
+        if legacy_cap {
+            policy.max_tail_loss = Some(usd(0));
+        } else {
+            policy.payoff_convention = PAYOFF_CONVENTION.into();
+        }
+        changed.policy = policy_claim(policy);
+        assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-105");
+    }
+    let mut changed = i;
+    changed.equity = None;
+    assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-105");
+}
+
+#[test]
+fn equity_overflow_refuses_even_when_other_constraints_reject_the_bundle() {
+    let i = with_equity(
+        inputs(&[("A", 1, &[0]), ("B", 1, &[0])], &[ONE], 1, ONE, None),
+        &[0],
+        ONE,
+    );
+    for case in 0..4 {
+        let mut changed = i.clone();
+        let mut equity = changed.equity.as_ref().unwrap().value.clone();
+        match case {
+            0 => {
+                equity.initial_share_units = r(i128::MAX, 1);
+                equity.shares_per_unit = r(2, 1);
+            }
+            1 => {
+                for flow in &mut equity.share_changes {
+                    flow.units = r(i128::MAX - 1, 1);
+                }
+            }
+            2 => {
+                equity.baseline_nav[0].1.minor = i128::MAX;
+                let mut candidate = changed.candidates[0].value.clone();
+                candidate.cost = usd(2);
+                candidate.payoffs[0].1 = usd(1);
+                changed.candidates[0] = candidate_claim(candidate);
+            }
+            3 => {
+                equity.baseline_nav[0].1 = usd(1);
+                equity.initial_share_units = r(1, i128::MAX);
+                let mut candidate = changed.candidates[0].value.clone();
+                candidate.cost = usd(2);
+                candidate.payoffs[0].1 = usd(1);
+                changed.candidates[0] = candidate_claim(candidate);
+            }
+            _ => unreachable!(),
+        }
+        changed.equity = Some(equity_claim(equity));
+        assert_eq!(
+            evaluate(&changed).unwrap_err().code,
+            "FMINE-REF-207",
+            "equity overflow case {case}"
+        );
+    }
+}
+
+#[test]
+fn large_equity_counts_compare_exactly_without_cross_product_overflow() {
+    let mut i = with_equity(
+        inputs(
+            &[("buyback", 240_000_009, &[-240_000_008, -240_000_008])],
+            &[r(1, 2); 2],
+            300_000_000,
+            r(1, 5),
+            None,
+        ),
+        &[30_000_000_000; 2],
+        r(3_000_000_007, 1),
+    );
+    let mut candidate = i.candidates[0].value.clone();
+    for (_, payoff) in &mut candidate.payoffs {
+        *payoff = Money::from_minor(Currency::USD, -2_400_000_080_200);
+    }
+    i.candidates[0] = candidate_claim(candidate.clone());
+    let mut equity = i.equity.as_ref().unwrap().value.clone();
+    for (_, nav) in &mut equity.baseline_nav {
+        *nav = Money::from_minor(Currency::USD, 300_000_000_000_100);
+    }
+    for change in &mut equity.share_changes {
+        change.units = r(-30_000_001, 1);
+    }
+    i.equity = Some(equity_claim(equity.clone()));
+    let delta = r(6_000_000_142_009_998_129, 297_000_001_293_000_001_400);
+    // All actual results fit; the unnecessary numerator-by-denominator comparison does not.
+    assert!(delta.checked_cmp(delta).is_err());
+    let report = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["buyback"]]);
+    let buyback = row(&report, &["buyback"]);
+    let stats = buyback.per_share_statistics.as_ref().unwrap();
+    assert_eq!(stats.mean.major, delta);
+    assert_eq!(stats.p10_p50_p90.map(|m| m.major), [delta; 3]);
+    assert_eq!(stats.cvar95_loss.major, delta.checked_neg().unwrap());
+    assert_eq!(
+        buyback.per_share_tail_loss.unwrap().major,
+        delta.checked_neg().unwrap()
+    );
+    assert_eq!(stats.mean_regret.major, ZERO);
+    assert_eq!(stats.max_regret.major, ZERO);
+    for state in &buyback.equity.as_ref().unwrap().states {
+        assert_eq!(state.ending_shares, r(2_970_000_006, 1));
+        assert_eq!(state.ending_nav.major, r(2_975_999_999_199, 100));
+        assert_eq!(
+            state.baseline_nav_per_share.major,
+            r(3_000_000_000_001, 300_000_000_700)
+        );
+        assert_eq!(
+            state.ending_nav_per_share.unwrap().major,
+            r(991_999_999_733, 99_000_000_200)
+        );
+        assert_eq!(state.delta_nav_per_share.unwrap().major, delta);
+    }
+    let hold = row(&report, &[]).per_share_statistics.as_ref().unwrap();
+    assert_eq!(hold.mean_regret.major, delta);
+    assert_eq!(hold.max_regret.major, delta);
+
+    // A distinct share retirement creates a distinct large denominator. It must still rank exactly.
+    candidate.candidate_id = "buyback_b".into();
+    candidate.label = "Second buyback".into();
+    candidate.cost = usd(240_000_017);
+    for (_, payoff) in &mut candidate.payoffs {
+        *payoff = Money::from_minor(Currency::USD, -2_400_000_160_300);
+    }
+    i.candidates.push(candidate_claim(candidate));
+    for state in ["s0", "s1"] {
+        equity.share_changes.push(CandidateShareChange {
+            candidate_id: "buyback_b".into(),
+            state_id: state.into(),
+            units: r(-30_000_002, 1),
+        });
+    }
+    let delta_b = r(2_571_428_717_575_712_683, 127_285_714_797_000_000_500);
+    let improvement = r(28_429_999_733, 42_004_285_869_857_143_000);
+    assert!(delta.checked_cmp(delta_b).is_err());
+    assert_eq!(delta_b.checked_sub(delta).unwrap(), improvement);
+    equity.max_tail_loss_per_share = Some(delta_b.checked_neg().unwrap());
+    i.equity = Some(equity_claim(equity));
+    let report = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["buyback_b"]]);
+    let first = row(&report, &["buyback"]);
+    let second = row(&report, &["buyback_b"]);
+    assert_eq!(
+        second.per_share_statistics.as_ref().unwrap().mean.major,
+        delta_b
+    );
+    assert_eq!(
+        first
+            .per_share_statistics
+            .as_ref()
+            .unwrap()
+            .mean_regret
+            .major,
+        improvement
+    );
+    assert_eq!(
+        first
+            .per_share_statistics
+            .as_ref()
+            .unwrap()
+            .max_regret
+            .major,
+        improvement
+    );
+    assert!(first.risk_rejected && row(&report, &[]).risk_rejected);
+    assert!(!second.risk_rejected);
+    assert!(
+        row(&report, &["buyback", "buyback_b"])
+            .structural_rejections
+            .contains(&StructuralRejection::BudgetExceeded)
+    );
 }
