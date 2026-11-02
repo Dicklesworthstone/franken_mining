@@ -273,9 +273,38 @@ pub fn greedy(
     problem: &ScheduleProblem,
     rank: &[Option<i64>],
 ) -> Result<Vec<Option<u32>>, Refusal> {
+    greedy_from(problem, rank, &vec![0; problem.blocks.node_count()])
+}
+
+/// [`greedy`] with a release period per block: block `b` is mined in period `release[b]` or later, and otherwise as
+/// [`greedy`] places it. A release keeps a block from taking room in an earlier period that the blocks ranked after it
+/// would use better, such as a period the caller's LP fills with a blend.
+///
+/// # Errors
+/// As [`greedy`], and `FMINE-REF-207` (proposed) when `release` does not have one entry per block or names a period
+/// past the last.
+pub fn greedy_from(
+    problem: &ScheduleProblem,
+    rank: &[Option<i64>],
+    release: &[u32],
+) -> Result<Vec<Option<u32>>, Refusal> {
     let periods = problem.periods;
+    let n = problem.blocks.node_count();
+    if release.len() != n {
+        return Err(refuse(format!(
+            "toposort: {} release periods for {n} blocks",
+            release.len()
+        )));
+    }
+    if let Some(b) = release.iter().position(|&t| t as usize >= periods) {
+        return Err(refuse(format!(
+            "toposort: block {b}'s release period {} is past the last of {periods}",
+            release[b]
+        )));
+    }
     let mut used = vec![vec![0_i128; periods]; problem.usage.len()];
     let schedule = kahn(&problem.blocks, rank, |b, from| {
+        let from = from.max(release[b] as usize);
         let fits = |t: usize| {
             used.iter()
                 .zip(&problem.usage)
@@ -435,6 +464,44 @@ mod tests {
         let c = check(&p, &[Some(0), None]).unwrap();
         assert_eq!((c.used, c.over_limit), (vec![vec![1]], vec![(0, 0)]));
         assert!(check(&p, &[Some(0), Some(0)]).unwrap().feasible());
+    }
+
+    #[test]
+    fn a_release_keeps_a_blend_partner_for_a_later_period() {
+        // Resource 0 takes two blocks a period; resource 1 is a blend with limit 0. Blocks 0 and 1 are below the
+        // target (−1, worth 1), blocks 2 and 3 above it (+1, worth 4).
+        let blocks = ClosureProblem::from_requirements(vec![1, 1, 4, 4], &vec![vec![]; 4]).unwrap();
+        let p = ScheduleProblem::new(
+            blocks,
+            2,
+            vec![vec![1, 1, 1, 1], vec![-1, -1, 1, 1]],
+            vec![vec![2, 2], vec![0, 0]],
+        )
+        .unwrap();
+        let rank = [Some(0), Some(1), Some(2), Some(3)];
+        // Earliest first, blocks 0 and 1 fill period 0; blocks 2 and 3 then find period 0 full and nothing to blend
+        // with in period 1.
+        assert_eq!(
+            greedy(&p, &rank).unwrap(),
+            vec![Some(0), Some(0), None, None]
+        );
+        // Released to period 1, block 1 waits there for block 3, and every block is mined.
+        let s = greedy_from(&p, &rank, &[0, 1, 0, 1]).unwrap();
+        assert_eq!(s, vec![Some(0), Some(1), Some(0), Some(1)]);
+        let c = check(&p, &s).unwrap();
+        assert!(c.feasible());
+        assert_eq!(
+            (c.period_values, c.used),
+            (vec![5, 5], vec![vec![2, 2], vec![0, 0]])
+        );
+        assert_eq!(
+            greedy_from(&p, &rank, &[0, 1, 0]).unwrap_err().code,
+            "FMINE-REF-207"
+        );
+        assert_eq!(
+            greedy_from(&p, &rank, &[0, 1, 0, 2]).unwrap_err().code,
+            "FMINE-REF-207"
+        );
     }
 
     #[test]
@@ -651,6 +718,38 @@ mod tests {
             blended += usize::from((0..n).any(|b| s[b].is_some() && p.usage(last).unwrap()[b] < 0));
         }
         assert!(mined_some > 300 && blended > 100, "{mined_some} {blended}");
+    }
+
+    /// [`greedy_from`] under random releases, with and without a signed resource: feasible by the definition, no
+    /// block mined before its release, and with every release 0 the same as [`greedy`].
+    #[test]
+    fn released_greedy_is_feasible_and_mines_nothing_before_its_release() {
+        let mut moved = 0;
+        for seed in 0..400 {
+            for p in [random_problem(seed), random_signed_problem(seed)] {
+                let n = p.blocks().node_count();
+                let mut r = lcg(seed ^ 0x7e1e);
+                let rank: Vec<Option<i64>> =
+                    (0..n).map(|_| (r(5) > 0).then(|| r(10) as i64)).collect();
+                let release: Vec<u32> = (0..n).map(|_| r(p.periods() as u64) as u32).collect();
+                let s = greedy_from(&p, &rank, &release).unwrap();
+                assert!(feasible_by_definition(&p, &s), "seed {seed}: {s:?}");
+                for b in 0..n {
+                    assert!(
+                        s[b].is_none_or(|t| t >= release[b]),
+                        "seed {seed}: block {b} mined before its release"
+                    );
+                }
+                let plain = greedy(&p, &rank).unwrap();
+                assert_eq!(
+                    greedy_from(&p, &rank, &vec![0; n]).unwrap(),
+                    plain,
+                    "seed {seed}"
+                );
+                moved += usize::from(s != plain);
+            }
+        }
+        assert!(moved > 100, "{moved}");
     }
 
     #[test]

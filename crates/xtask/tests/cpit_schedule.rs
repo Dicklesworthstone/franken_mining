@@ -13,8 +13,9 @@
 //! 2. The LP is KILL-PUSH-PDLP's, in "by" variables `w[b][t]`, built here from the parsed integers, with the discount
 //!    counted from period 0 (`crates/fmine-lp/tests/minelib_cpit.rs` explains why).
 //! 3. Block `b`'s expected number of periods before it is mined is `Σ_t (1 − w[b][t])`. That ranks it. A block the
-//!    LP mines less than a threshold of by the last period is left out. Three thresholds are tried, and each schedule
-//!    must pass the checker; the best NPV is reported, with all three.
+//!    LP mines less than a threshold of by the last period is left out. Three thresholds are tried. Each gives two
+//!    schedules: `greedy`'s, and `greedy_from`'s with each block released at its LP median period, the first by which
+//!    the LP has mined half of it (bd-wife). Each schedule must pass the checker; the best NPV is reported, with all six.
 //! 4. `toposort::search::improve` (`bd-5lxu`) runs on each schedule, with `discount_factors` from the file's rate and
 //!    at most `FMINE_SEARCH_ROUNDS` rounds (default 1,000), and its result must pass the checker too.
 //! 5. NPV is `Σ_t V_t / (1 + rate)^t` in `f64`, from the checker's exact per-period sums.
@@ -44,7 +45,7 @@ use fmine_lp::pdlp::{LpProblem, PdlpOptions, solve_observed};
 use fmine_numerics::sparse::Coo;
 use fmine_optimize::pitflow::minelib::Rounding;
 use fmine_optimize::toposort::search::{discount_factors, improve};
-use fmine_optimize::toposort::{ScheduleProblem, check, cpit, greedy};
+use fmine_optimize::toposort::{ScheduleProblem, check, cpit, greedy, greedy_from};
 
 /// MineLib's Results page (Results.xhtml, mirrored at github.com/borelian/minelib, read 2026-11-01): the CPIT LP
 /// upper bound and the best-known feasible schedule's value, in whole units.
@@ -260,14 +261,39 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
         let mut improved = Vec::new();
         let mut moves = Vec::new();
         let mut search_s = 0.0;
+        // Each block's LP median period: the first by which the LP has mined half of the block, or the last period if
+        // it never has. The LP mines a required block at least as fast as the block itself, so no block's median comes
+        // before that of a block it requires.
+        let median: Vec<u32> = (0..n)
+            .map(|b| {
+                (0..periods)
+                    .find(|&t| w(b, t) >= 0.5)
+                    .unwrap_or(periods - 1) as u32
+            })
+            .collect();
         let mut best_schedule: Option<(f64, Vec<Option<u32>>)> = None;
-        for threshold in THRESHOLDS {
+        for (threshold, release) in THRESHOLDS
+            .into_iter()
+            .flat_map(|th| [(th, None), (th, Some(&median))])
+        {
             let rank: Vec<Option<i64>> = (0..n)
                 .map(|b| {
                     (w(b, periods - 1) >= threshold).then(|| (expected[b] * 1e9).round() as i64)
                 })
                 .collect();
-            let schedule = greedy(p, &rank).unwrap();
+            let threshold = format!(
+                "{threshold}{}",
+                if release.is_some() {
+                    ", LP release"
+                } else {
+                    ""
+                }
+            );
+            let schedule = match release {
+                None => greedy(p, &rank),
+                Some(release) => greedy_from(p, &rank, release),
+            }
+            .unwrap();
             let c = check(p, &schedule).unwrap();
             if !c.feasible() {
                 failures.push(format!(
@@ -362,7 +388,7 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
             .collect::<Vec<_>>()
             .join(",");
         println!(
-            "{{\"bead\":\"bd-5lxu\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"resources\":{},\"rounded\":[{},{},{}],\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"npv\":[{}],\"mined\":{mined:?},\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"greedy_best\":{greedy_best:.3},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{:.4},\"best_known_rechecked\":{}}}",
+            "{{\"bead\":\"bd-5lxu\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"resources\":{},\"rounded\":[{},{},{}],\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"per_threshold\":[\"earliest\",\"lp_release\"],\"npv\":[{}],\"mined\":{mined:?},\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"greedy_best\":{greedy_best:.3},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{:.4},\"best_known_rechecked\":{}}}",
             p.resources(),
             model.rounded_values,
             model.rounded_uses,
