@@ -549,11 +549,41 @@ pub fn greedy(
     rank: &[Option<i64>],
     destination: &[u32],
 ) -> Result<(Vec<Option<u32>>, Vec<u32>), Refusal> {
+    greedy_from(model, rank, destination, &vec![0; model.blocks()])
+}
+
+/// [`greedy`] with a release period per block: block `b` is mined in period `release[b]` or later, and otherwise as
+/// [`greedy`] places it. A release keeps a block from taking room in an earlier period that the blocks ranked after it
+/// would use better, such as a period the caller's LP fills with a blend.
+///
+/// # Errors
+/// As [`greedy`], and `FMINE-REF-207` (proposed) when `release` does not have one entry per block or names a period
+/// past the last.
+pub fn greedy_from(
+    model: &PcpspModel,
+    rank: &[Option<i64>],
+    destination: &[u32],
+    release: &[u32],
+) -> Result<(Vec<Option<u32>>, Vec<u32>), Refusal> {
     let start = model.with_destinations(destination)?;
     let (periods, dn) = (model.periods, model.destinations);
+    if release.len() != model.blocks() {
+        return Err(refuse(format!(
+            "pcpsp greedy: {} release periods for {} blocks",
+            release.len(),
+            model.blocks()
+        )));
+    }
+    if let Some(b) = release.iter().position(|&t| t as usize >= periods) {
+        return Err(refuse(format!(
+            "pcpsp greedy: block {b}'s release period {} is past the last of {periods}",
+            release[b]
+        )));
+    }
     let mut dest = destination.to_vec();
     let mut used = vec![vec![0_i128; periods]; model.resources()];
     let schedule = super::kahn(start.blocks(), rank, |b, from| {
+        let from = from.max(release[b] as usize);
         let fits = |d: usize, t: usize| {
             used.iter()
                 .zip(&model.uses)
@@ -1302,6 +1332,76 @@ mod tests {
         );
     }
 
+    /// [`greedy_from`] on random models, with and without a signed resource, under random releases: feasible by the
+    /// definition, no block mined before its release, a destination changed only for a block it mined, and with every
+    /// release 0 the same as [`super::greedy`].
+    #[test]
+    fn released_greedy_is_feasible_and_mines_nothing_before_its_release() {
+        let mut moved = 0;
+        for seed in 0..300 {
+            for m in [random_model(seed), random_signed_model(seed)] {
+                let mut r = lcg(seed ^ 0x7e1e);
+                let n = m.blocks();
+                let d: Vec<u32> = (0..n).map(|_| r(m.destinations() as u64) as u32).collect();
+                let rank: Vec<Option<i64>> =
+                    (0..n).map(|_| (r(5) > 0).then(|| r(10) as i64)).collect();
+                let release: Vec<u32> = (0..n).map(|_| r(m.periods() as u64) as u32).collect();
+                let (s, dest) = super::greedy_from(&m, &rank, &d, &release).unwrap();
+                let f = factors(m.periods());
+                assert!(
+                    worth(&m, &s, &dest, &f).is_some(),
+                    "seed {seed}: {s:?} {dest:?}"
+                );
+                for b in 0..n {
+                    assert!(
+                        s[b].is_none_or(|t| t >= release[b]),
+                        "seed {seed}: block {b} mined before its release"
+                    );
+                    assert!(dest[b] == d[b] || s[b].is_some(), "seed {seed}: block {b}");
+                }
+                let plain = super::greedy(&m, &rank, &d).unwrap();
+                assert_eq!(
+                    super::greedy_from(&m, &rank, &d, &vec![0; n]).unwrap(),
+                    plain,
+                    "seed {seed}"
+                );
+                moved += usize::from(s != plain.0);
+            }
+        }
+        assert!(moved > 50, "{moved}");
+    }
+
+    #[test]
+    fn a_release_keeps_a_blend_partner_for_a_later_period() {
+        // Destination 1 is the mill: two blocks a period (resource 0), and a blend with limit 0 (resource 1). Blocks 0
+        // and 1 are below the target (−1, worth 1), blocks 2 and 3 above it (+1, worth 4). The dump takes anything.
+        let blend = "NAME: release\nTYPE: PCPSP\nNBLOCKS: 4\nNPERIODS: 2\nNDESTINATIONS: 2\nNRESOURCE_SIDE_CONSTRAINTS: 2\nNGENERAL_SIDE_CONSTRAINTS: 0\nDISCOUNT_RATE: 0\nRESOURCE_CONSTRAINT_LIMITS:\n0 0 L 2\n0 1 L 2\n1 0 L 0\n1 1 L 0\nOBJECTIVE_FUNCTION:\n0 -1 1\n1 -1 1\n2 -1 4\n3 -1 4\nRESOURCE_CONSTRAINT_COEFFICIENTS:\n0 1 0 1\n0 1 1 -1\n1 1 0 1\n1 1 1 -1\n2 1 0 1\n2 1 1 1\n3 1 0 1\n3 1 1 1\nEOF\n";
+        let m = parse(blend, "0 0\n1 0\n2 0\n3 0\n", 0, Rounding::Refuse, 0).unwrap();
+        let rank = [Some(0), Some(1), Some(2), Some(3)];
+        let d = [1, 1, 1, 1];
+        // Earliest first, both blocks below the target fill period 0's mill; the blocks above it then find the mill
+        // full in period 0 and nothing to blend with in period 1, so both go to the dump.
+        let (s, dest) = super::greedy(&m, &rank, &d).unwrap();
+        assert_eq!(
+            (s.clone(), dest.clone()),
+            (vec![Some(0); 4], vec![1, 1, 0, 0])
+        );
+        let c = check(&m.with_destinations(&dest).unwrap(), &s).unwrap();
+        assert_eq!(c.period_values, vec![0, 0]);
+        // Released to period 1, block 1 waits there for block 3, and every block is milled.
+        let (s, dest) = super::greedy_from(&m, &rank, &d, &[0, 1, 0, 1]).unwrap();
+        assert_eq!(
+            (s.clone(), dest.clone()),
+            (vec![Some(0), Some(1), Some(0), Some(1)], vec![1; 4])
+        );
+        let c = check(&m.with_destinations(&dest).unwrap(), &s).unwrap();
+        assert!(c.feasible());
+        assert_eq!(
+            (c.period_values, c.used),
+            (vec![5, 5], vec![vec![2, 2], vec![0, 0]])
+        );
+    }
+
     /// The same with one more resource whose uses may be negative.
     #[test]
     fn improve_keeps_every_limit_with_signed_uses() {
@@ -1333,5 +1433,9 @@ mod tests {
         assert!(destinations(&m, &s, &mut d, &f[..1]).is_err());
         let i = improve(&m, &s, &[0, 0, 0], &f, 0).unwrap();
         assert_eq!((i.cycles, i.before, i.after), (0, i.before, i.before));
+        let rank = [Some(0), Some(1), Some(2)];
+        assert!(super::greedy_from(&m, &rank, &[0, 0, 1], &[0, 0]).is_err());
+        assert!(super::greedy_from(&m, &rank, &[0, 0, 1], &[0, 2, 0]).is_err());
+        assert!(super::greedy_from(&m, &rank, &[0, 0, 1], &[0, 1, 1]).is_ok());
     }
 }

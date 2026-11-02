@@ -9,6 +9,8 @@
 //!   feasibility written out here from the model;
 //! - `pcpsp::greedy` (the fallback to other destinations) does not refuse, its schedule passes both under the
 //!   destinations it returns, and those differ from the choices only for blocks it mined;
+//! - `pcpsp::greedy_from`, with each block's rank nibble mod the period count as its release, does not refuse, passes
+//!   both, and mines no block before its release;
 //! - `pcpsp::improve` takes that schedule; its result passes both, its value is the sum written out here, and it is
 //!   worth no less than `pcpsp::greedy`'s;
 //! - with at most 3 blocks, 2 periods and 2 destinations, it is worth no more than the best of every schedule and
@@ -101,6 +103,12 @@ fuzz_target!(|data: &[u8]| {
     let c = check(&m.with_destinations(&start).expect("destinations in range"), &schedule).expect("one entry per block");
     assert!(c.feasible() && feasible(&m, &schedule, &start), "{c:?}");
     assert!((0..n).all(|b| start[b] == dest[b] || schedule[b].is_some()), "{start:?} {dest:?}");
+    let release: Vec<u32> = (0..n).map(|b| u32::from(choice(b) >> 4) % periods as u32).collect();
+    let (released, at) =
+        pcpsp::greedy_from(&m, &rank, &dest, &release).expect("pcpsp::greedy_from does not refuse a parsed model");
+    let c = check(&m.with_destinations(&at).expect("destinations in range"), &released).expect("one entry per block");
+    assert!(c.feasible() && feasible(&m, &released, &at), "{c:?}");
+    assert!((0..n).all(|b| released[b].is_none_or(|t| t >= release[b])), "{released:?} {release:?}");
     let dest = start;
     let i = pcpsp::improve(&m, &schedule, &dest, &factors, 16).expect("improve takes greedy's feasible schedule");
     let after = check(&m.with_destinations(&i.destination).expect("destinations in range"), &i.schedule)

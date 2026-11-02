@@ -27,8 +27,11 @@
 //!    certified.
 //! 4. Each block goes whole to the destination the LP sends most of it to (its most valuable one if the LP mines
 //!    none of it). Blocks are ranked by their LP expected period, as for CPIT, and left out below a final weight of
-//!    10⁻⁶, 0.5 or 0.9. Each threshold gives a schedule: `pcpsp::greedy`, which sends a block that fits nowhere at
-//!    its destination to another one rather than leave it and every block under it unmined, then `pcpsp::improve`.
+//!    10⁻⁶, 0.5 or 0.9. Each threshold gives two schedules, each searched by `pcpsp::improve`. One is from
+//!    `pcpsp::greedy`, which sends a block that fits nowhere at its destination to another one rather than leave it,
+//!    and every block under it, unmined. The other is from `pcpsp::greedy_from`, with each block released at its LP
+//!    median period, the first by which the LP has mined half of it (bd-tll7). Earliest-first placement uses up
+//!    w23's blocks below its blend targets early and leaves the ones above with nothing to blend with.
 //! 5. NPV is `Σ_t V_t / (1 + rate)^t` in `f64`, from `check`'s exact per-period sums under the final destinations.
 //!
 //! Asserted: every schedule passes `check`, `pcpsp::improve` never lowers an NPV, and no NPV exceeds PDLP's certified
@@ -428,19 +431,42 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
         let mut improved = Vec::new();
         let mut moves = Vec::new();
         let mut search_s = 0.0;
+        // Each block's LP median period: the first by which the LP has mined half of the block, or the last period if
+        // it never has. The LP mines a required block at least as fast as the block itself, so no block's median comes
+        // before that of a block it requires.
+        let median: Vec<u32> = (0..n)
+            .map(|b| {
+                (0..periods)
+                    .find(|&t| w(b, t) >= 0.5)
+                    .unwrap_or(periods - 1) as u32
+            })
+            .collect();
         let mut best_schedule: Option<(f64, Vec<Option<u32>>, Vec<u32>)> = None;
-        for threshold in THRESHOLDS {
+        for (threshold, release) in THRESHOLDS
+            .into_iter()
+            .flat_map(|th| [(th, None), (th, Some(&median))])
+        {
+            let at = format!(
+                "threshold {threshold}{}",
+                if release.is_some() {
+                    ", LP release"
+                } else {
+                    ""
+                }
+            );
             let rank: Vec<Option<i64>> = (0..n)
                 .map(|b| {
                     (w(b, periods - 1) >= threshold).then(|| (expected[b] * 1e9).round() as i64)
                 })
                 .collect();
-            let (schedule, start) = pcpsp::greedy(&model, &rank, &destination).unwrap();
+            let (schedule, start) = match release {
+                None => pcpsp::greedy(&model, &rank, &destination),
+                Some(release) => pcpsp::greedy_from(&model, &rank, &destination, release),
+            }
+            .unwrap();
             let c = check(&model.with_destinations(&start).unwrap(), &schedule).unwrap();
             if !c.feasible() {
-                failures.push(format!(
-                    "{name}: threshold {threshold}: greedy's schedule fails check"
-                ));
+                failures.push(format!("{name}: {at}: greedy's schedule fails check"));
             }
             let before = npv(&c.period_values, rate);
             npvs.push(before);
@@ -453,14 +479,12 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
             )
             .unwrap();
             if !c.feasible() {
-                failures.push(format!(
-                    "{name}: threshold {threshold}: the searched schedule fails check"
-                ));
+                failures.push(format!("{name}: {at}: the searched schedule fails check"));
             }
             let after = npv(&c.period_values, rate);
             if after < before - 1e-9 * before.abs().max(1.0) {
                 failures.push(format!(
-                    "{name}: threshold {threshold}: the search lowered NPV from {before} to {after}"
+                    "{name}: {at}: the search lowered NPV from {before} to {after}"
                 ));
             }
             improved.push(after);
@@ -521,7 +545,7 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
         };
         gate.push((name.to_string(), gap, best_known == 0.0));
         println!(
-            "{{\"bead\":\"bd-2rne\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"destinations\":{dn},\"resources\":{},\"rounded\":[{},{},{}],\"pit_blocks\":{pit_blocks},\"lp_blocks\":{},\"pit_value\":{:.3},\"pit_s\":{pit_s:.2},\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"npv\":[{}],\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{},\"known\":{}}}",
+            "{{\"bead\":\"bd-2rne\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"destinations\":{dn},\"resources\":{},\"rounded\":[{},{},{}],\"pit_blocks\":{pit_blocks},\"lp_blocks\":{},\"pit_value\":{:.3},\"pit_s\":{pit_s:.2},\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"per_threshold\":[\"earliest\",\"lp_release\"],\"npv\":[{}],\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{},\"known\":{}}}",
             model.resources(),
             model.rounded_values,
             model.rounded_uses,
