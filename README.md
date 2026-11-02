@@ -1519,6 +1519,13 @@ operands, certificates and source Claims for both appearances, and request the e
 explains the transition. Ambiguous earliest releases retain every assertion with no selected first assertion.
 Transition classifications and chronology are rechecked against the canonical identity ledger before export.
 
+`assure challenges --issuer barrick --through 2026Q2` also exports `mine_stats_identity_transition` packets
+for corrected, broken and reclassified Mine Stats calculations. Each retains the earliest registered sources,
+previous bound identity and current identity, plus competing assertions from intervening ambiguous releases.
+Recorded missing inputs and original refused or unresolved states keep their typed reasons. The exporter
+rechecks the complete history, registered subject-label interpretation and cited source operands. These
+findings supply review questions, with no issuer pass score or selection of a true vintage.
+
 PDF transcription conflicts also render as packets when the local two-reader transcription registry is present.
 Run `assure challenges --issuer barrick` without `--through` to include that document evidence; the existing
 quarter-bounded assurance snapshot excludes PDF transcriptions. Each packet retains the agreed printed tokens,

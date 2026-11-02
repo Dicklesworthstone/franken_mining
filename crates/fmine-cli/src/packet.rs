@@ -2,6 +2,7 @@
 //! A packet requests an evidence check, never a financial decision. These immutable drafts carry no human
 //! check or external-use permission. Rendering does not change a ledger state or its established root.
 
+mod mine_consistency;
 mod transcription;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -48,6 +49,7 @@ pub enum PacketKind {
     VintageConflict,
     IdentityTransition,
     TranscriptionConflict,
+    MineStatsIdentityTransition,
 }
 
 impl PacketKind {
@@ -65,6 +67,7 @@ impl PacketKind {
             Self::VintageConflict => "vintage_conflict",
             Self::IdentityTransition => "identity_transition",
             Self::TranscriptionConflict => "transcription_conflict",
+            Self::MineStatsIdentityTransition => "mine_stats_identity_transition",
         }
     }
 
@@ -97,14 +100,18 @@ impl PacketKind {
             Self::TranscriptionConflict => {
                 "The registered PDF transcriptions require reconciliation of their printed assertions or quantity context. No assertion is selected as true."
             }
+            Self::MineStatsIdentityTransition => {
+                "The Mine Statistics identity has an exceptional transition between registered appearances. Original states, source operands and declared rounding and ownership assumptions are retained; no true assertion or issuer admission is inferred."
+            }
         }
     }
 
     const fn owner(self) -> &'static str {
         match self {
-            Self::InputRefused | Self::IdentityTransition | Self::TranscriptionConflict => {
-                "project:source-curator"
-            }
+            Self::InputRefused
+            | Self::IdentityTransition
+            | Self::TranscriptionConflict
+            | Self::MineStatsIdentityTransition => "project:source-curator",
             Self::ReconstructionUnstated | Self::ExplanationStated => "issuer:investor-relations",
             _ => "issuer:corporate-controller",
         }
@@ -481,6 +488,8 @@ impl ChallengePacket {
             out.push_str("\n## Transcription comparisons\n\nA numeric conflict means that no supported rounding assignment reconciles the agreed point assertions under their registered quantity key. Incompatible unit, basis or period labels instead leave arithmetic comparability unestablished. Transcription and quantity-key corrections remain alternatives; no issuer admission or disclosure status is inferred. Reader agreement is not an independent human review of this packet.\n\n");
         } else if self.kind == PacketKind::IdentityTransition {
             out.push_str("\n## AISC identity transitions\n\nThe earliest registered, immediately previous and current identity records retain their source Claims, original states and arithmetic certificates. A corrected or broken classification describes arithmetic under the declared construction, not an issuer admission. Disclosure classifications belong to the separate source-value comparisons; this transition does not invent one. The earliest registered release need not be the issuer's first publication.\n\n");
+        } else if self.kind == PacketKind::MineStatsIdentityTransition {
+            out.push_str("\n## Mine Statistics identity transitions\n\nThe earliest registered, immediately previous and current identity records retain their source Claims, original states, ownership assumptions and printed precision. A corrected or broken classification describes arithmetic under the declared construction, not an issuer admission. Source-value disclosure classifications remain separate. The earliest registered release need not be the issuer's first publication.\n\n");
         } else if matches!(
             self.kind,
             PacketKind::VintageChange | PacketKind::VintageConflict
@@ -686,7 +695,7 @@ fn add_operand(packet: &mut ChallengePacket, operand: PacketOperand) -> Result<(
 }
 
 /// Produce complete internal-review drafts from all visible AISC `ii`/`iii`/`iv`/`v` instances, Mine Stats
-/// `iii`/`iv`/`v` instances, jointly infeasible components, exceptional AISC identity transitions and unresolved
+/// `iii`/`iv`/`v` instances, jointly infeasible components, exceptional identity transitions and unresolved
 /// cross-vintage changes/conflicts. Persisted and single-vintage identity histories add no packets.
 /// Accepted PDF transcription conflicts are separately bound to their verified document metadata and
 /// accepted-row digest; they are report-only and never enter the source ledger root.
@@ -716,6 +725,7 @@ pub fn packets_from_report(
     for history in &report.issuer_consistency.histories {
         add_identity_transitions(&mut groups, report, history)?;
     }
+    mine_consistency::add_packets(&mut groups, report)?;
     for (vintages, scope, kind) in [
         (
             &report.mine_stats_vintages,

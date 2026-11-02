@@ -538,6 +538,14 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
     release has `first_registered: null` and every `earliest_registered_assertions` entry is retained. Closing
     requests name both compared locators and the missing rule or evidence; the transition itself assigns no
     disclosure classification. Persisted and single-vintage histories add no transition packet.
+  - `mine_stats_identity_transition` packets cover exceptional Mine Stats identity histories through the same
+    `assure challenges` command. The builder recomputes the complete projection from canonical Claims and the
+    original ledger, including counts, bindings and registered subject labels. Findings retain earliest sources,
+    the previous bound identity, current identity and all intervening ambiguous source assertions. Ambiguity
+    before or at the earliest bound appearance leaves `first_registered` null; ambiguity between appearances
+    prevents a persistence or correction conclusion. Recorded missing inputs and typed refused/unresolved
+    states remain visible; absent source bytes or altered operands refuse export. The transition supplies no
+    issuer pass score or disclosure classification.
   - `transcription_conflict` packets preserve agreed PDF assertions with page/table/row/column locators,
     raw tokens, exact decimals, units, basis, period, reader roles and checked document metadata. The exporter
     recomputes the registered rounding-convention comparison and checks the retained conflict population.
