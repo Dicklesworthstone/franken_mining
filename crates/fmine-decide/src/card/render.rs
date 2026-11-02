@@ -10,6 +10,8 @@ use fmine_evidence::{AoaStatus, AssertionSource, Color, EvidenceClass};
 
 use super::*;
 
+mod sensitivity;
+
 fn js(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {
@@ -330,7 +332,7 @@ pub(super) fn summary_json(s: &DecisionSummary) -> String {
         format!("{{\"action_id\":{},\"label\":{},\"role\":{},\"mean\":{},\"p10_p50_p90\":[{},{},{}],\"cvar95_loss\":{},\"mean_regret\":{},\"max_regret\":{},\"states\":[{states}]}}", js(&a.action_id), js(&a.label), js(a.role.as_str()), rq(a.mean.major), rq(a.p10_p50_p90[0].major), rq(a.p10_p50_p90[1].major), rq(a.p10_p50_p90[2].major), rq(a.cvar95_loss.major), rq(a.mean_regret.major), rq(a.max_regret.major))
     }).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"valuation_basis\":{},\"monetary_scale\":\"major_currency_units\",\"expected_value_order\":{},\"expected_value_winners\":{},\"expected_value_primary\":{},\"runner_up\":{},\"minimax_regret_order\":{},\"minimax_regret_winners\":{},\"minimax_regret_primary\":{},\"alternatives\":[{alternatives}],\"information\":{}}}",
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"valuation_basis\":{},\"monetary_scale\":\"major_currency_units\",\"expected_value_order\":{},\"expected_value_winners\":{},\"expected_value_primary\":{},\"runner_up\":{},\"minimax_regret_order\":{},\"minimax_regret_winners\":{},\"minimax_regret_primary\":{},\"alternatives\":[{alternatives}],\"information\":{},\"sensitivity\":{}}}",
         js(&s.model_key),
         js(&s.question),
         js(currency_name(s.currency)),
@@ -344,7 +346,8 @@ pub(super) fn summary_json(s: &DecisionSummary) -> String {
         js(&s.minimax_regret_primary),
         s.information
             .as_ref()
-            .map_or_else(|| "null".into(), information_json)
+            .map_or_else(|| "null".into(), information_json),
+        sensitivity::json(s)
     )
 }
 
