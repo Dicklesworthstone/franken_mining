@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "decision", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "decision", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -737,6 +737,21 @@ None: every failure is a usage error or a typed refusal.
   `fmine-metrics`.
 
 ## 10. Non-Goals & Scope Boundary
+- DESIGN (BD-063): `reserve replacement --issuer <issuer> --bindings <path> [--as-of YYYY-MM-DD]`
+  authenticates explicitly selected PDF operands and delegates complete annual-window arithmetic to
+  `fmine-metrics::reserve_replacement`. Exact ratios of sums retain independently printed aggregate points,
+  joint closed rounding bounds, separately qualified headlines and each GEO year's registered deck.
+  Approximate language supplies no tolerance. The command verifies the full declared document population
+  before loading readings, rejects post-cut documents before file IO, and refuses accepted quantities with
+  competing pending locators. Missing operands leave the declared series visible with a nonzero202 result;
+  other complete series remain present. Incompatible rounded headlines are findings, not loader failures.
+  JSON and Markdown retain signed tokens, definition metadata, source hashes/locators, publication evidence
+  and reader roles. The wrapper digest also binds exact binding/rule-file bytes, the cut and pending readings.
+  No workbook population or implicit source/basis conversion is needed. The report uses current rules,
+  carries no ledger certificate, remains public and `gate_eligible:false`, and leaves all authority flags false.
+  An explicit date checks selected document availability, not full hindcast closure. The committed Barrick
+  bindings contain no values; PDF bytes and real transcription inputs remain ignored pending OPEN-R7-1.
+  Source-bound arithmetic and AI reading checks do not close the authentic independently reviewed data gate.
 - The mirror supports produced and sold gold in koz and sustaining, project or total capital in USD millions
   from explicitly selected, agreed document assertions. It neither selects a correct reporter nor establishes
   physical truth or disclosure permission. Actual NGM, Pueblo Viejo and Kibali filing coverage, resolved NGM

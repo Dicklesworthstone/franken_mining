@@ -275,6 +275,40 @@ separate documents. The command does not determine which vintage is true, classi
 GATE-HALL-01. Its PDF report digest binds the declarations, readings and results; it is not a ledger anchor or
 external timestamp. Authentic historical PDF readings and complete historical coverage remain open.
 
+#### Report a complete annual reserve-replacement window
+
+DESIGN (BD-063): the standalone command calculates a declared annual population, including when no
+percentage headline is available. It preserves the annual printed sums, any separately printed aggregate
+totals, and a separately qualified headline. Every year in the registered window must have both net-change
+and depletion readings; a missing member cannot silently reduce the denominator.
+
+```bash
+fmine reserve replacement --issuer barrick \
+  --bindings registries/reserve_replacement/barrick.toml --format markdown
+fmine reserve replacement --issuer barrick \
+  --bindings registries/reserve_replacement/barrick.toml --as-of 2026-11-01 --format json
+```
+
+The committed bindings contain selectors only. The command needs the registered PDF bytes and agreeing
+readings in the local `registries/transcriptions/barrick.toml`; those inputs remain outside Git. Annual periods
+use `YYYY`, aggregate/headline periods use `YYYY-YYYY`, and source strings must match the declared unit and
+basis exactly. The Barrick report uses `Moz`, `attributable_gold_ex_ad` and `attributable_geo_ex_ad`. These are
+explicit report-rule bindings; the table-checking command's `moz` and semicolon-separated basis grammar
+is separate. Neither command silently relabels admitted readings from the other.
+
+The calculation is the ratio of cumulative net changes to cumulative positive depletion, using the explicit
+source sign convention. Exact rational results retain closed half-last-digit rounding bounds. Independently
+printed aggregate constraints intersect the annual bounds without replacing either printed point. GEO keeps
+its named annual reserve-price decks and already-converted amounts. A rounded headline is checked for
+interval compatibility; an approximate headline supplies no numerical tolerance and stays unassessed.
+
+JSON and Markdown retain definitions, every source token and locator, document hashes, publication evidence,
+reader roles, deck dependencies and refused series. An unusable series returns `FMINE-REF-202` with the complete
+report; an incompatible rounded headline is a cited finding. Source-byte changes and reader disagreements
+retain their existing typed refusals. `--as-of` rejects every selected post-cut document before opening PDFs;
+it uses current registered rules and does not establish a complete historical information set. The report
+is retrospective, is not gate-eligible and conveys no reserve classification or disclosure authority.
+
 #### Keep reserve filing vintages and their price decks separate
 
 DESIGN (BD-335): optional `[[reserve_row]]` declarations add an issuer-reserve register projection to the same

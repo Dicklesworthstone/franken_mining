@@ -27,6 +27,12 @@ mutates_authority = false
 description = "Inspect cited workbook identities or declared PDF sums, reserve/GEO checks and cut-offs under exact rounding rules, optionally at an explicit evidence date"
 
 [[verb]]
+path = "reserve replacement"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Recompute complete annual gold and GEO reserve-replacement windows, retaining separate aggregate and headline results"
+
+[[verb]]
 path = "guidance completion"
 subsystem = "Bullion"
 mutates_authority = false

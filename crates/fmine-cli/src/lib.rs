@@ -14,6 +14,7 @@ pub mod packet;
 pub mod reliance;
 mod reliance_binding;
 pub mod reliance_explicit;
+pub mod reserve;
 mod tables;
 mod track_record;
 mod track_record_as_of;
@@ -45,6 +46,8 @@ pub enum OutputFormat {
 /// Parsed CLI command (`BD-111`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
+    /// Compute complete registered reserve-replacement windows from explicitly selected PDF assertions.
+    ReserveReplacement(reserve::Command),
     /// Compare explicit monetary alternatives on one declared finite scenario set (BD-225).
     DecideCard { model: PathBuf },
     /// Compare explicitly selected public JV production/sales assertions on a common dated perimeter.
@@ -422,6 +425,7 @@ fn verb_hint(args: &[String]) -> &'static str {
             | "--timestamp-roots"
             | "--timestamp-intermediates"
             | "--definitions"
+            | "--bindings"
             | "--capacity-document"
             | "--output"
             | "--journal"
@@ -458,6 +462,7 @@ fn verb_hint(args: &[String]) -> &'static str {
             "guidance" => return "guidance completion",
             "decide" => return "decide card",
             "mirror" => return "mirror",
+            "reserve" => return "reserve replacement",
             "check" => return "check tables",
             "track-record" => return "track-record",
             "recovery" => return "recovery gap",
@@ -745,6 +750,11 @@ pub fn parse_args(
     args: &[String],
     default_root: &Path,
 ) -> Result<(CliCommand, OutputFormat, PathBuf), String> {
+    if verb_hint(args) == "reserve replacement" {
+        return reserve::parse(args, default_root).map(|(command, format, root)| {
+            (CliCommand::ReserveReplacement(command), format, root)
+        });
+    }
     if verb_hint(args) == "assure public" && args.iter().any(|arg| arg == "--output") {
         return reliance::parse_export(args, default_root)
             .map(|(command, format, root)| (CliCommand::AssureExport(command), format, root));
@@ -1548,6 +1558,7 @@ fn track_record_envelope(
 pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     let to_doctor = || vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
     match cmd {
+        CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
         CliCommand::DecideCard { model } => decision::execute(model, workspace_root),
         CliCommand::Mirror(command) => mirror::execute(command, workspace_root),
         CliCommand::RelianceExplicit(command) => {
@@ -1950,6 +1961,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <trusted-pem>",
                 "forecast journal report --journal <path> --assessment <digest> [--head <hex>] [--provenance <path>] [--timestamp-head <hex> --timestamp-receipt <path> --timestamp-roots <pem> [--timestamp-intermediates <pem>]]",
                 "doctor",
+                reserve::VERB_USAGE,
                 "claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
                 "claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
                 "claim trace <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
@@ -1995,6 +2007,10 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "\"compatibility\":\"Shares the report metadata and journal with reliance issue; grammars cannot be mixed\",",
                 "\"recall\":\"Known issuances and generic roles only; retrieval registers no new recipient and sends no messages\"}}"
             ));
+            payload.pop();
+            payload.push_str(",\"reserve_replacement\":");
+            payload.push_str(reserve::ROBOT_DOCS_JSON);
+            payload.push('}');
             Envelope::ok(
                 "robot-docs",
                 payload,

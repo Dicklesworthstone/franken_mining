@@ -166,8 +166,8 @@ impl HtmlDocument {
         {
             return Err(html_refusal("artifact path must be nonempty and bounded"));
         }
-        let text = std::str::from_utf8(bytes)
-            .map_err(|_| html_refusal("document must be valid UTF-8"))?;
+        let text =
+            std::str::from_utf8(bytes).map_err(|_| html_refusal("document must be valid UTF-8"))?;
         Ok(Self {
             artifact_path,
             sha256: fmine_core::hash::sha256(bytes).0,
@@ -316,9 +316,7 @@ impl HtmlBuilder {
     }
 
     fn boundary(&self) -> HtmlResult<()> {
-        if self.row.is_some()
-            || self.cell.is_some()
-            || self.table.slots.len() > self.declared_rows
+        if self.row.is_some() || self.cell.is_some() || self.table.slots.len() > self.declared_rows
         {
             Err(html_refusal(
                 "unclosed row/cell or rowspan crossing a row-group boundary",
@@ -502,7 +500,8 @@ fn html_tag(html: &str, start: usize) -> HtmlResult<HtmlTag> {
             if first == b'"' || first == b'\'' {
                 let end = tail[1..]
                     .find(char::from(first))
-                    .ok_or_else(|| html_refusal("unterminated attribute"))? + 1;
+                    .ok_or_else(|| html_refusal("unterminated attribute"))?
+                    + 1;
                 raw = &tail[1..end];
                 tail = &tail[end + 1..];
                 if !tail.is_empty() && !tail.starts_with(html_space) {
@@ -1195,9 +1194,16 @@ mod tests {
         let document = HtmlDocument::from_bytes("filing.html", html.as_bytes()).expect("table");
         assert_eq!(document.bytes(), html.as_bytes());
         let table = &document.tables()[0];
-        assert_eq!((table.rows(), table.columns(), table.cells().len()), (3, 3, 6));
         assert_eq!(
-            table.cells().iter().filter(|c| c.number().is_some()).count(),
+            (table.rows(), table.columns(), table.cells().len()),
+            (3, 3, 6)
+        );
+        assert_eq!(
+            table
+                .cells()
+                .iter()
+                .filter(|c| c.number().is_some())
+                .count(),
             1
         );
         assert!(std::ptr::eq(
@@ -1271,7 +1277,10 @@ mod tests {
         assert_ne!(document.sha256(), changed.sha256());
         assert_eq!(
             cell.number(),
-            changed.tables()[0].cell(1, 1).expect("same number").number()
+            changed.tables()[0]
+                .cell(1, 1)
+                .expect("same number")
+                .number()
         );
     }
 
@@ -1369,15 +1378,12 @@ mod tests {
             );
         }
         assert!(HtmlDocument::from_bytes("filing.html", &[0xff]).is_err());
-        assert!(
-            HtmlDocument::from_bytes("filing.html", &vec![b'x'; HTML_MAX_BYTES + 1]).is_err()
-        );
+        assert!(HtmlDocument::from_bytes("filing.html", &vec![b'x'; HTML_MAX_BYTES + 1]).is_err());
     }
 
     #[test]
     fn html_expansion_budget_counts_padding_globally() {
-        let mut table =
-            String::from("<table><tr><td rowspan=\"200\" colspan=\"3000\">1</td></tr>");
+        let mut table = String::from("<table><tr><td rowspan=\"200\" colspan=\"3000\">1</td></tr>");
         for _ in 1..200 {
             table.push_str("<tr></tr>");
         }
@@ -1398,5 +1404,4 @@ mod tests {
         sparse.push_str("<tr><td colspan=\"4096\">2</td></tr></table>");
         assert!(HtmlDocument::from_bytes("filing.html", sparse.as_bytes()).is_err());
     }
-
 }

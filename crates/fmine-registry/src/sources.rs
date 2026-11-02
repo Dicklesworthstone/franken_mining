@@ -33,12 +33,13 @@ pub const IDENTITY_FAMILIES: [&str; 5] = [
 
 /// Registered document kinds (bd-plx1, BD-342): PDF filings whose values
 /// enter only as transcription rows, since the repository has no PDF reader.
-pub const DOCUMENT_KINDS: [&str; 5] = [
+pub const DOCUMENT_KINDS: [&str; 6] = [
     "mda",
     "aif",
     "investor_deck",
     "partner_filing",
     "technical_report",
+    "information_circular",
 ];
 /// The prefixes a document's `published_at_basis` starts with: what the date rests on, then the citation.
 pub const PUBLISHED_AT_BASES: [&str; 2] = ["FACT: ", "INFERENCE: "];
@@ -2497,6 +2498,22 @@ mod tests {
         assert!(workbook.documents.is_empty());
         let mixed = parse_sources_registry(&minimal("", &document(&[]))).expect("mixed profile");
         assert_eq!(workbook.sources, mixed.sources);
+    }
+
+    #[test]
+    fn information_circular_keeps_its_document_kind_and_publication_requirements() {
+        let row = document(&[("kind", Some("\"information_circular\""))]);
+        let parsed = parse_sources_registry(&format!("{DOCUMENT_ONLY_HEAD}{row}"))
+            .expect("a circular is an explicitly registered PDF source");
+        assert_eq!(parsed.documents[0].kind, "information_circular");
+        assert_eq!(parsed.documents[0].published_at, "2030-01-15");
+        let missing_date_basis = document(&[
+            ("kind", Some("\"information_circular\"")),
+            ("published_at_basis", None),
+        ]);
+        assert!(
+            parse_sources_registry(&format!("{DOCUMENT_ONLY_HEAD}{missing_date_basis}")).is_err()
+        );
     }
 
     #[test]

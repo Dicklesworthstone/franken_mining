@@ -257,6 +257,20 @@ pages = 163
 bytes = 14_180_626
 sha256 = "d8bc75c700aa88920a39436c171e5b40eae31f6bf35052bcf65db4140d8c004d"
 
+# Complete annual reserve-replacement selectors use this document's table and qualified headlines
+# (E603-E606, BD-063). The evidence cut conservatively binds the exact retrieved bytes.
+[[document]]
+file = "Barrick_InformationCircular_2026.pdf"
+dir = "corpus_of_input_docs/downloaded"
+kind = "information_circular"
+url = "https://s25.q4cdn.com/322814910/files/doc_downloads/agm/2026/Barrick_InformationCircular_2026.pdf"
+url_basis = "fetched and verified 2026-11-01"
+published_at = "2026-11-01"
+published_at_basis = "FACT: exact bytes fetched and SHA-256 verified on 2026-11-01 UTC; issuer release and SEC 6-K 0001193125-26-148005 establish public filing of the Circular on 2026-04-08, but earlier availability of this exact PDF revision is not established here"
+pages = 116
+bytes = 8_862_910
+sha256 = "bcb57d4210a02791f30c0e98a51415b6771adceef1aacca935d89512295256bf"
+
 # Reporting subjects as printed in the AISC table headers, before the issuer's one-letter footnote suffix
 # (FACT: every header of the 34 visible AISC tables matches exactly one).
 
