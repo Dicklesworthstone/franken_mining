@@ -33,6 +33,12 @@ mutates_authority = false
 description = "Calculate exact AISC or AIC from a declared cost worksheet under an explicit registered definition, retaining treatment and Claim evidence"
 
 [[verb]]
+path = "metrics geo"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Compare exact production GEO across named versioned price decks on one declared physical population, retaining contributions and source-bound Claims"
+
+[[verb]]
 path = "html claims"
 subsystem = "Bullion"
 mutates_authority = false

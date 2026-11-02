@@ -170,6 +170,39 @@ The worksheet's cost classification and completeness remain **Assumed, Internal 
 a complete population is not independent evidence that omitted costs are zero. This command calculates the
 chosen rule; it does not verify issuer filings or close the broader metric-reproduction work.
 
+### Compare production GEO across named price decks
+
+`metrics geo` applies each versioned price deck to the same declared production quantities, showing each
+metal's contribution and the exact change from the named reference. Run the included invented example:
+
+```bash
+cargo run -p fmine-cli -- metrics geo --input crates/xtask/testdata/production_geo.toml --format markdown
+cargo run -p fmine-cli -- metrics geo --input crates/xtask/testdata/production_geo.toml --json
+```
+
+The [GB-27 example worksheet](crates/xtask/testdata/production_geo.toml) holds gold production at 3,200,000 oz
+and copper production at 440,000,000 lb. Both decks price copper at USD 4.50/lb:
+
+| Deck / version | Gold price, USD/oz | Copper contribution, GEO oz | Total GEO oz | Difference from reference, oz |
+|---|---:|---:|---:|---:|
+| budget / example-v1 | 3,000 | 660,000 | 3,860,000 | 0 |
+| comparison / example-v1 | 4,500 | 440,000 | 3,640,000 | −220,000 |
+
+Schema `fmine.geo-worksheet.v1` requires explicit issuer, subject, period, ownership, physical basis,
+population, currency, included metals and reference deck/version. Each `[[quantity]]` declares `metal`,
+`unit` and `amount`; each `[[deck]]` declares `id`, `version`, `basis`, `currency` and `gold_price_per_oz`,
+with `copper_price_per_lb` and `silver_price_per_oz` required when those metals are included. Values are
+quoted strings; amounts are exact decimals or fractions. Gold and silver use oz, copper uses lb, and
+prices are positive major currency units per stated metal unit. Two to sixty-four distinct deck/version
+pairs must share the declared currency. Unknown, duplicate or missing fields refuse. Input files are
+bounded to 1 MiB; no mass, ownership or FX conversion is implicit.
+
+The receipt retains complete input/output Claims, the submitted file's SHA-256, field locators and a
+deterministic digest. Imported inputs remain **Assumed, Internal and uncalibrated**. Omitted metals are
+outside the declared population, not independently verified zero. The differences above measure price-ratio
+effects on unchanged physical quantities; they establish neither physical production change nor source
+accuracy, reserve classification or disclosure authority.
+
 ### Turn registered HTML tables into cited Claims
 
 `html claims` reads local, registered HTML filings and explicit label mappings into canonical public Claims:

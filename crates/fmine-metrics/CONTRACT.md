@@ -78,6 +78,19 @@ the multiplicative-to-additive LMDI accounting identity (`GB-26`). Its public-da
 arithmetic closure does not establish causation or identify an operational explanation (plan §21.6, E699).
 
 ## 4. Public API Surface
+- `definitions::geo::{evaluate, GeoReceipt}` and `definitions::geo::worksheet::{evaluate, SCHEMA}`
+  (BD-062, GB-27) calculate exact production GEO under two to sixty-four named/versioned price decks,
+  including an explicit reference. One physical population shares issuer, subject, calendar period,
+  ownership, basis and currency. Gold/silver quantities use oz and copper uses lb; positive deck prices
+  use major currency units per corresponding metal unit. Every included metal needs one quantity and a
+  price in every deck; gold price is always required as the numeraire. No unit, ownership or FX conversion
+  is implicit. Exact contributions, totals and signed reference differences use unchanged quantities.
+  The strict `fmine.geo-worksheet.v1` parser bounds input to 1 MiB and refuses unknown, duplicate or
+  missing fields. Its Claims remain Assumed, Internal and uncalibrated. Immutable JSON/Markdown receipts
+  bind full canonical inputs, source SHA-256/field locators, metadata, ancestry and results. Omitted metals
+  remain outside the declared population. Price-ratio differences establish no physical production change,
+  source accuracy, reserve classification or disclosure authority. The invented GB-27 fixture yields
+  3,860,000 and 3,640,000 GEO oz, with a −220,000 oz difference from its reference.
 - `definitions::worksheet::{evaluate, SCHEMA}` (BD-061) parses strict declared cost worksheets against
   the supplied, SHA-256-checked metric-registry bytes. Costs are USD fixed-point amounts with at most four
   fractional digits; sold ounces and ownership/allocation shares are exact decimals or rationals. The caller

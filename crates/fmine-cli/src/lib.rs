@@ -5,6 +5,7 @@ mod claim_inspection;
 pub mod cost;
 mod decision;
 mod forecast;
+pub mod geo;
 mod guidance;
 mod guidance_capacity;
 pub mod html;
@@ -25,6 +26,7 @@ mod track_record_as_of;
 pub mod track_record_binding;
 mod track_record_data;
 mod track_record_price;
+mod worksheet_input;
 
 pub use forecast::live as forecast_journal;
 pub use forecast::record_score as forecast_record;
@@ -52,6 +54,8 @@ pub enum OutputFormat {
 pub enum CliCommand {
     /// Calculate a declared complete cost population under an explicitly selected AISC/AIC definition.
     MetricsCost(cost::Command),
+    /// Compare unchanged production quantities under explicit named and versioned price decks.
+    MetricsGeo(geo::Command),
     /// Project exact registered HTML cells with source-verified semantic labels into canonical Claims.
     HtmlClaims(html::Command),
     /// Compute complete registered reserve-replacement windows from explicitly selected PDF assertions.
@@ -493,7 +497,18 @@ fn verb_hint(args: &[String]) -> &'static str {
                 }
                 return "decide card";
             }
-            "metrics" => return "metrics cost",
+            "metrics" => {
+                let mut next = i + 1;
+                while let Some(word) = args.get(next) {
+                    match word.as_str() {
+                        "--format" | "--workspace" => next += 2,
+                        "--json" => next += 1,
+                        "geo" => return "metrics geo",
+                        _ => return "metrics cost",
+                    }
+                }
+                return "metrics cost";
+            }
             "html" => return "html claims",
             "mirror" => return "mirror",
             "reserve" => return "reserve replacement",
@@ -830,12 +845,12 @@ pub fn parse_args(
     default_root: &Path,
 ) -> Result<(CliCommand, OutputFormat, PathBuf), String> {
     let verb = verb_hint(args);
-    if matches!(verb, "metrics cost" | "html claims") {
+    if matches!(verb, "metrics cost" | "metrics geo" | "html claims") {
         let (words, format, root) = common_options(args, default_root)?;
-        let command = if verb == "metrics cost" {
-            CliCommand::MetricsCost(cost::parse(&words)?)
-        } else {
-            CliCommand::HtmlClaims(html::parse(&words)?)
+        let command = match verb {
+            "metrics cost" => CliCommand::MetricsCost(cost::parse(&words)?),
+            "metrics geo" => CliCommand::MetricsGeo(geo::parse(&words)?),
+            _ => CliCommand::HtmlClaims(html::parse(&words)?),
         };
         return Ok((command, format, root));
     }
@@ -1690,6 +1705,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     let to_doctor = || vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
     match cmd {
         CliCommand::MetricsCost(command) => cost::execute(command, workspace_root),
+        CliCommand::MetricsGeo(command) => geo::execute(command, workspace_root),
         CliCommand::HtmlClaims(command) => html::execute(command, workspace_root),
         CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
         CliCommand::DecideCard { model } => decision::execute(model, workspace_root),
@@ -2071,6 +2087,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 .collect();
             let verbs = [
                 cost::USAGE,
+                geo::USAGE,
                 html::USAGE,
                 "decide card <model-file>",
                 capital::USAGE,
@@ -2164,6 +2181,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(reserve::ROBOT_DOCS_JSON);
             payload.push_str(",\"cost_worksheet\":");
             payload.push_str(cost::ROBOT_DOCS_JSON);
+            payload.push_str(",\"production_geo\":");
+            payload.push_str(geo::ROBOT_DOCS_JSON);
             payload.push_str(",\"html_claims\":");
             payload.push_str(html::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_distributions\":");

@@ -190,4 +190,5 @@ dependencies = [
  "fmine-registry",
  "fmine-runtime",
  "fmine-time",
+ "fmine-units",
 ]

@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "cost", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "cost", "geo", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -29,6 +29,18 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Negative production is unusable. A degenerate printed range is interpreted as a point target.
 - **Envelope:** `FMT-ENV-1` (`schema_version: "fmine.env.v1"`).
 - **Verbs:**
+  - `metrics geo --input <worksheet.toml>` (BD-062, GB-27): reads a regular UTF-8 file bounded to 1 MiB,
+    hashes the actual bytes and evaluates `fmine-metrics::definitions::geo::worksheet`. Schema
+    `fmine.geo-worksheet.v1` requires explicit physical scope, included metals and reference deck/version;
+    unknown, duplicate or missing fields refuse. Two to sixty-four named/versioned decks compare the
+    same quantities, with gold/silver in oz, copper in lb and positive prices in matching major currency
+    units per metal unit. Every included metal needs its price in every deck; no mass, ownership or FX
+    conversion is implicit. JSON/Markdown retain exact contributions, totals and signed reference
+    differences, complete input/output Claims, source hashes, field locators and a deterministic digest.
+    Worksheet Claims remain Assumed, Internal and uncalibrated; omitted metals are outside the declared
+    population. Differences describe price-ratio effects on unchanged physical production and supply no
+    source audit, reserve classification or disclosure authority. The invented example at
+    `crates/xtask/testdata/production_geo.toml` yields 3,860,000 and 3,640,000 GEO oz, a −220,000 oz difference.
   - `metrics cost --input <worksheet.toml> --definition <registered-id>` (BD-061): reads the actual
     worksheet and workspace metric-registry bytes from regular UTF-8 files bounded to 4 MiB, binds their
     SHA-256 hashes, and evaluates `fmine-metrics::definitions::worksheet`. The explicit registered AISC/AIC

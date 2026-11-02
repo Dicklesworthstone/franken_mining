@@ -12,6 +12,7 @@ use fmine_registry::metrics::{CreditBasis, LineKind, MetricFamily, MetricRegistr
 use fmine_units::{ExactQty, UnitsError};
 
 pub mod claims;
+pub mod geo;
 pub mod worksheet;
 
 /// The registry as committed.

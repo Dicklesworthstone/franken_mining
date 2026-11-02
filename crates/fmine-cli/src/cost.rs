@@ -2,14 +2,13 @@
 //! Determinism: Exact
 
 use std::collections::BTreeMap;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use fmine_core::{anchor::SourceAnchor, hash::sha256};
-use fmine_evidence::{Refusal, RefusalCode};
+use fmine_core::anchor::SourceAnchor;
+use fmine_evidence::Refusal;
 use fmine_metrics::definitions::{claims, worksheet};
 
-use crate::{Envelope, NextAction, escape_json};
+use crate::{Envelope, NextAction, escape_json, worksheet_input};
 
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 pub const USAGE: &str = "metrics cost --input <worksheet.toml> --definition <registered-id>";
@@ -59,36 +58,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
 }
 
 fn read(path: &Path) -> Result<(String, SourceAnchor), Refusal> {
-    let fail = |why: String| {
-        Refusal::new(
-            RefusalCode::InputMissingOrUnreadable506,
-            format!("cost worksheet input {}: {why}", path.display()),
-        )
-    };
-    let name = path
-        .to_str()
-        .ok_or_else(|| fail("path must be UTF-8".into()))?;
-    let metadata = std::fs::metadata(path).map_err(|e| fail(e.to_string()))?;
-    if !metadata.is_file() || metadata.len() > MAX_BYTES {
-        return Err(fail(
-            "expected a regular UTF-8 file of at most 4 MiB".into(),
-        ));
-    }
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .map_err(|e| fail(e.to_string()))?
-        .take(MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| fail(e.to_string()))?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err(fail("input exceeds 4 MiB".into()));
-    }
-    let digest = sha256(&bytes);
-    let text = String::from_utf8(bytes).map_err(|e| fail(e.to_string()))?;
-    Ok((
-        text,
-        SourceAnchor::new(name, digest.0, "declared cost worksheet source"),
-    ))
+    worksheet_input::read(path, "cost worksheet", MAX_BYTES)
 }
 
 pub fn execute(command: &Command, root: &Path) -> Envelope {
