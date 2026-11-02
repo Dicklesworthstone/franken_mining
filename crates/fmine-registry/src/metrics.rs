@@ -8,6 +8,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::RegistryError;
+use crate::sources::Fields;
 use crate::toml_subset::{TomlRow, TomlValue, parse_subset};
 
 /// Schema id `registries/metrics.toml` must declare.
@@ -78,12 +79,42 @@ pub struct GeoDeck {
     pub copper_usd_per_lb: String,
 }
 
+/// The metal coverage of a reserve-replacement definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReserveMetal {
+    Gold,
+    GoldEquivalent,
+}
+
+impl ReserveMetal {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Gold => "gold",
+            Self::GoldEquivalent => "gold_equivalent",
+        }
+    }
+}
+
+/// Explicit calculation semantics; the rule contains no issuer numeric inputs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReserveReplacementRule {
+    pub definition: String,
+    pub metal: ReserveMetal,
+    pub window_years: u16,
+    pub amount_unit: String,
+    pub basis: String,
+    pub excludes_acquisitions_divestments: bool,
+    pub geo_definition: Option<String>,
+}
+
 /// The parsed, cross-checked registry.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MetricRegistry {
     pub definitions: Vec<MetricDefinition>,
     pub project_tests: Vec<ProjectTest>,
     pub geo_decks: Vec<GeoDeck>,
+    pub reserve_replacements: Vec<ReserveReplacementRule>,
     lines: BTreeMap<String, Vec<MetricLine>>,
     excluded: BTreeMap<String, Vec<String>>,
 }
@@ -178,10 +209,102 @@ fn definition_from(row: &TomlRow) -> Result<MetricDefinition, RegistryError> {
     })
 }
 
+fn reserve_replacement_from(
+    row: &TomlRow,
+    registry: &MetricRegistry,
+) -> Result<ReserveReplacementRule, RegistryError> {
+    Fields::of_row(row)
+        .only(&[
+            "definition",
+            "metal",
+            "window_years",
+            "amount_unit",
+            "basis",
+            "excludes_acquisitions_divestments",
+            "geo_definition",
+        ])
+        .map_err(|e| schema_err(e.to_string()))?;
+    let definition = text(row, "definition")?;
+    let declared = registry.definition(definition).ok_or_else(|| {
+        schema_err(format!(
+            "line {}: unregistered definition {definition}",
+            row.line
+        ))
+    })?;
+    if declared.family != MetricFamily::ReserveReplacement {
+        return Err(schema_err(format!(
+            "{definition}: reserve_replacement rule requires the reserve_replacement family"
+        )));
+    }
+    let metal = match text(row, "metal")? {
+        "gold" => ReserveMetal::Gold,
+        "gold_equivalent" => ReserveMetal::GoldEquivalent,
+        other => return Err(schema_err(format!("{definition}: unknown metal {other}"))),
+    };
+    let window_years = u16::try_from(int(row, "window_years")?)
+        .ok()
+        .filter(|n| (1..=100).contains(n))
+        .ok_or_else(|| schema_err(format!("{definition}: window_years must be 1..=100")))?;
+    let amount_unit = text(row, "amount_unit")?;
+    if !matches!(amount_unit, "oz" | "koz" | "Moz") {
+        return Err(schema_err(format!(
+            "{definition}: amount_unit must be oz, koz or Moz"
+        )));
+    }
+    let excludes_acquisitions_divestments = match text(row, "excludes_acquisitions_divestments")? {
+        "true" => true,
+        "false" => false,
+        _ => {
+            return Err(schema_err(format!(
+                "{definition}: excludes_acquisitions_divestments must be the string true or false"
+            )));
+        }
+    };
+    let geo_definition = match row.get("geo_definition") {
+        None => None,
+        Some(_) => Some(text(row, "geo_definition")?.to_string()),
+    };
+    match (metal, geo_definition.as_deref()) {
+        (ReserveMetal::Gold, Some(_)) => {
+            return Err(schema_err(format!(
+                "{definition}: gold forbids geo_definition"
+            )));
+        }
+        (ReserveMetal::GoldEquivalent, None) => {
+            return Err(schema_err(format!(
+                "{definition}: gold_equivalent requires geo_definition"
+            )));
+        }
+        (ReserveMetal::GoldEquivalent, Some(id)) => match registry.definition(id) {
+            None => {
+                return Err(schema_err(format!(
+                    "{definition}: unregistered geo_definition {id}"
+                )));
+            }
+            Some(def) if def.family != MetricFamily::Geo => {
+                return Err(schema_err(format!(
+                    "{definition}: geo_definition {id} must belong to the geo family"
+                )));
+            }
+            Some(_) => {}
+        },
+        (ReserveMetal::Gold, None) => {}
+    }
+    Ok(ReserveReplacementRule {
+        definition: definition.to_string(),
+        metal,
+        window_years,
+        amount_unit: amount_unit.to_string(),
+        basis: text(row, "basis")?.to_string(),
+        excludes_acquisitions_divestments,
+        geo_definition,
+    })
+}
+
 impl MetricRegistry {
     /// Parses the registry and checks it: schema, one row per id, parents and superseded ids registered with no
     /// cycle, every line and exclusion on a registered definition, and no item both counted and excluded on one
-    /// definition.
+    /// definition. Explicit reserve-replacement rules also check their family, metal, window, units and GEO link.
     pub fn parse(toml: &str) -> Result<Self, RegistryError> {
         let doc = parse_subset(toml).map_err(|e| schema_err(e.to_string()))?;
         match doc.top_get("schema").map(|f| &f.value) {
@@ -257,6 +380,17 @@ impl MetricRegistry {
                 copper_usd_per_lb: decimal(row, "copper_usd_per_lb")?,
             });
         }
+        let mut replacement_ids = BTreeSet::new();
+        for row in doc.rows_of("reserve_replacement") {
+            let rule = reserve_replacement_from(row, &reg)?;
+            if !replacement_ids.insert(rule.definition.clone()) {
+                return Err(schema_err(format!(
+                    "duplicate reserve_replacement rule for {}",
+                    rule.definition
+                )));
+            }
+            reg.reserve_replacements.push(rule);
+        }
         reg.check_links(&ids)?;
         Ok(reg)
     }
@@ -324,6 +458,14 @@ impl MetricRegistry {
         self.definitions.iter().find(|d| d.id == id)
     }
 
+    /// The explicit reserve-replacement rule for this definition, if registered.
+    #[must_use]
+    pub fn reserve_replacement(&self, id: &str) -> Option<&ReserveReplacementRule> {
+        self.reserve_replacements
+            .iter()
+            .find(|rule| rule.definition == id)
+    }
+
     /// The definition that replaces `id`, if one does: a Claim on `id` is then stale (`INV-013`).
     #[must_use]
     pub fn superseded_by(&self, id: &str) -> Option<&str> {
@@ -382,6 +524,9 @@ mod tests {
     const AISC_2018: &str = "aisc@wgc-2018";
     const AIC_2013: &str = "aic@wgc-2013";
     const AIC_2018: &str = "aic@wgc-2018";
+    const RR_GOLD: &str = "reserve_replacement.gold_oz@barrick-fy2025";
+    const RR_GEO: &str = "reserve_replacement.geo@barrick-2026-circular";
+    const GEO: &str = "geo.reserve_deck@barrick-2026-circular";
 
     fn registry() -> MetricRegistry {
         MetricRegistry::parse(REGISTRY).expect("registry parses")
@@ -442,6 +587,35 @@ mod tests {
         assert_eq!(reg.superseded_by(AISC_2018), None);
     }
 
+    #[test]
+    fn reserve_replacement_rules_keep_metal_window_and_named_bases_distinct() {
+        let reg = registry();
+        assert_eq!(reg.reserve_replacements.len(), 2);
+        let gold = reg.reserve_replacement(RR_GOLD).expect("gold rule");
+        assert_eq!(gold.definition, RR_GOLD);
+        assert_eq!(gold.metal, ReserveMetal::Gold);
+        assert_eq!(gold.metal.as_str(), "gold");
+        assert_eq!(gold.basis, "attributable_gold_ex_ad");
+        assert_eq!(gold.geo_definition, None);
+        let geo = reg.reserve_replacement(RR_GEO).expect("GEO rule");
+        assert_eq!(geo.definition, RR_GEO);
+        assert_eq!(geo.metal, ReserveMetal::GoldEquivalent);
+        assert_eq!(geo.metal.as_str(), "gold_equivalent");
+        assert_eq!(geo.basis, "attributable_geo_ex_ad");
+        assert_eq!(geo.geo_definition.as_deref(), Some(GEO));
+        assert_eq!(
+            reg.definition(GEO).expect("GEO definition").family,
+            MetricFamily::Geo
+        );
+        for rule in [gold, geo] {
+            assert_eq!(rule.window_years, 3);
+            assert_eq!(rule.amount_unit, "Moz");
+            assert!(rule.excludes_acquisitions_divestments);
+        }
+        assert!(reg.reserve_replacement(AISC_2018).is_none());
+        assert!(reg.reserve_replacement("missing@1").is_none());
+    }
+
     fn with(extra: &str) -> Result<MetricRegistry, RegistryError> {
         MetricRegistry::parse(&format!("{REGISTRY}\n{extra}"))
     }
@@ -457,6 +631,174 @@ mod tests {
 
     const ROW: &str = "[[definition]]\nid = \"x@1\"\nfamily = \"geo\"\nunit = \"oz\"\nformula = \"f\"\n\
                        source = \"s\"\nevidence = \"E1\"\n";
+
+    const RR_RULE: &str = "[[reserve_replacement]]\n\
+        definition = \"x@1\"\n\
+        metal = \"gold\"\n\
+        window_years = 3\n\
+        amount_unit = \"Moz\"\n\
+        basis = \"synthetic_attributable_gold\"\n\
+        excludes_acquisitions_divestments = \"true\"\n";
+
+    fn reserve_definition() -> String {
+        ROW.replace("family = \"geo\"", "family = \"reserve_replacement\"")
+            .replace("unit = \"oz\"", "unit = \"percent\"")
+    }
+
+    fn with_reserve_rule(rule: &str) -> Result<MetricRegistry, RegistryError> {
+        with(&format!("{}{rule}", reserve_definition()))
+    }
+
+    #[test]
+    fn reserve_rules_are_optional_and_never_inferred_for_ad_hoc_definitions() {
+        let reg = MetricRegistry::parse(&format!(
+            "schema = \"{METRICS_SCHEMA}\"\n{}",
+            reserve_definition()
+        ))
+        .expect("a definition does not invent a rule");
+        assert_eq!(
+            reg.definition("x@1").expect("definition").family,
+            MetricFamily::ReserveReplacement
+        );
+        assert!(reg.reserve_replacements.is_empty());
+        assert!(reg.reserve_replacement("x@1").is_none());
+    }
+
+    #[test]
+    fn reserve_rules_preserve_explicit_units_window_boundaries_and_false() {
+        for amount_unit in ["oz", "koz", "Moz"] {
+            for window in [1, 100] {
+                let row = RR_RULE
+                    .replace(
+                        "amount_unit = \"Moz\"",
+                        &format!("amount_unit = \"{amount_unit}\""),
+                    )
+                    .replace("window_years = 3", &format!("window_years = {window}"))
+                    .replace("= \"true\"", "= \"false\"");
+                let reg = with_reserve_rule(&row).expect("valid explicit rule");
+                let rule = reg.reserve_replacement("x@1").expect("rule");
+                assert_eq!(rule.amount_unit, amount_unit);
+                assert_eq!(rule.window_years, window);
+                assert_eq!(rule.basis, "synthetic_attributable_gold");
+                assert!(!rule.excludes_acquisitions_divestments);
+            }
+        }
+    }
+
+    #[test]
+    fn reserve_rules_refuse_unknown_missing_mistyped_and_invalid_fields() {
+        violation(
+            with_reserve_rule(&format!("{RR_RULE}guess = \"yes\"\n")),
+            "unknown key",
+        );
+        for key in [
+            "definition",
+            "metal",
+            "window_years",
+            "amount_unit",
+            "basis",
+            "excludes_acquisitions_divestments",
+        ] {
+            let missing = RR_RULE
+                .lines()
+                .filter(|line| !line.starts_with(key))
+                .collect::<Vec<_>>()
+                .join("\n");
+            violation(with_reserve_rule(&missing), key);
+            let mistyped = RR_RULE
+                .lines()
+                .map(|line| {
+                    if line.starts_with(key) {
+                        if key == "window_years" {
+                            format!("{key} = \"3\"")
+                        } else {
+                            format!("{key} = 1")
+                        }
+                    } else {
+                        line.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            violation(with_reserve_rule(&mistyped), key);
+        }
+        for window in [-1, 0, 101, 65_536, i64::MAX] {
+            violation(
+                with_reserve_rule(
+                    &RR_RULE.replace("window_years = 3", &format!("window_years = {window}")),
+                ),
+                "window_years",
+            );
+        }
+        for (from, to, needle) in [
+            ("metal = \"gold\"", "metal = \"silver\"", "unknown metal"),
+            (
+                "amount_unit = \"Moz\"",
+                "amount_unit = \"MOZ\"",
+                "amount_unit",
+            ),
+            (
+                "basis = \"synthetic_attributable_gold\"",
+                "basis = \"   \"",
+                "basis",
+            ),
+            (
+                "= \"true\"",
+                "= \"TRUE\"",
+                "excludes_acquisitions_divestments",
+            ),
+        ] {
+            violation(with_reserve_rule(&RR_RULE.replace(from, to)), needle);
+        }
+        assert!(with_reserve_rule(&RR_RULE.replace("= \"true\"", "= true")).is_err());
+    }
+
+    #[test]
+    fn reserve_rules_refuse_duplicate_or_wrong_family_and_metal_links() {
+        violation(
+            with_reserve_rule(&format!("{RR_RULE}{RR_RULE}")),
+            "duplicate reserve_replacement",
+        );
+        violation(
+            with_reserve_rule(&RR_RULE.replace("\"x@1\"", "\"missing@1\"")),
+            "unregistered definition",
+        );
+        violation(
+            with_reserve_rule(&RR_RULE.replace("\"x@1\"", &format!("\"{AISC_2018}\""))),
+            "reserve_replacement family",
+        );
+        violation(
+            with_reserve_rule(&format!("{RR_RULE}geo_definition = \"{GEO}\"\n")),
+            "gold forbids geo_definition",
+        );
+        let geo = RR_RULE.replace("metal = \"gold\"", "metal = \"gold_equivalent\"");
+        violation(with_reserve_rule(&geo), "requires geo_definition");
+        violation(
+            with_reserve_rule(&format!("{geo}geo_definition = 1\n")),
+            "geo_definition",
+        );
+        violation(
+            with_reserve_rule(&format!("{geo}geo_definition = \"\"\n")),
+            "geo_definition",
+        );
+        violation(
+            with_reserve_rule(&format!("{geo}geo_definition = \"missing@1\"\n")),
+            "unregistered geo_definition",
+        );
+        violation(
+            with_reserve_rule(&format!("{geo}geo_definition = \"{AISC_2018}\"\n")),
+            "must belong to the geo family",
+        );
+        let reg = with_reserve_rule(&format!("{geo}geo_definition = \"{GEO}\"\n"))
+            .expect("registered GEO definition");
+        assert_eq!(
+            reg.reserve_replacement("x@1")
+                .expect("rule")
+                .geo_definition
+                .as_deref(),
+            Some(GEO)
+        );
+    }
 
     #[test]
     fn test_registry_refusals() {

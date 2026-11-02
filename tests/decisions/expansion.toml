@@ -1,0 +1,65 @@
+# Invented decision exercise. These are declared assumptions, not a real mine valuation.
+schema = "fmine.decision-model.v1"
+model_key = "invented-expansion"
+question = "Which invented expansion alternative leads under expected value and minimax regret?"
+currency = "USD"
+valuation_basis = "Invented incremental NPV at 2026-01-01; real 2026 USD; 100% ownership; all cash flows already discounted"
+
+[[state]]
+id = "high"
+weight = "3/5"
+
+[[state]]
+id = "low"
+weight = "2/5"
+
+[[action]]
+id = "build"
+label = "Build the expansion"
+role = "action"
+
+[[action]]
+id = "smaller"
+label = "Smaller fixed-return option"
+role = "action"
+
+[[action]]
+id = "hold"
+label = "Do nothing"
+role = "do_nothing"
+
+[[payoff]]
+action = "build"
+state = "high"
+value = "300000000.0000"
+
+[[payoff]]
+action = "build"
+state = "low"
+value = "-200000000.0000"
+
+[[payoff]]
+action = "smaller"
+state = "high"
+value = "55000000.0000"
+
+[[payoff]]
+action = "smaller"
+state = "low"
+value = "55000000.0000"
+
+[[payoff]]
+action = "hold"
+state = "high"
+value = "0.0000"
+
+[[payoff]]
+action = "hold"
+state = "low"
+value = "0.0000"
+
+[[uu]]
+id = "UU-invented-permit-delay"
+description = "An omitted permit delay could reduce either expansion's NPV beyond the declared states"
+trigger = "The assumed permit milestone is missed"
+downside_usd_m = "35.0"

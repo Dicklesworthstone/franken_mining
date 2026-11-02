@@ -1,0 +1,20 @@
+[package]
+name = "fmine-capital"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Exact source-bound static capital program comparison over shared scenarios."
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-units = { path = "../fmine-units" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-claim = { path = "../fmine-claim" }
+fmine-numerics = { path = "../fmine-numerics" }
+fmine-registry = { path = "../fmine-registry" }
+fmine-decide = { path = "../fmine-decide" }
+
+[lints]
+workspace = true

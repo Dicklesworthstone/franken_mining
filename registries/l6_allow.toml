@@ -57,6 +57,22 @@ reason = "dimensionless miscoverage level in (0, 1)"
 
 [[allow]]
 crate = "fmine-calib"
+file = "src/scoring.rs"
+fn = "empirical_crps"
+params = "outcome"
+kind = "generic"
+reason = "proper scoring rule over empirical samples and a realization, all in one caller-chosen unit"
+
+[[allow]]
+crate = "fmine-calib"
+file = "src/scoring.rs"
+fn = "empirical_interval"
+params = "alpha"
+kind = "generic"
+reason = "dimensionless miscoverage level in (0, 1)"
+
+[[allow]]
+crate = "fmine-calib"
 file = "src/lib.rs"
 fn = "blend"
 params = "base_mean, base_std"

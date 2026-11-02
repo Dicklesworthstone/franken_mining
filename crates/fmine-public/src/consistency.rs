@@ -2,13 +2,30 @@
 //! Comparatives share the total's semantic key, never its spreadsheet coordinates. These are findings about
 //! registered public assertions, not a claim that the earliest registered file was the first publication.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::aisc::{AiscClaimIndex, IdentityFamily, IdentityInstance, OperandRole, OperandValue};
 use crate::key::{KeyedCell, SeriesKey};
 
+pub mod mine_stats;
+
 pub const FIRST_REGISTERED_CAVEAT: &str = "Earliest registered vintage, not necessarily the issuer's first publication. Hidden sheets are excluded.";
-pub type FamilyCounts = BTreeMap<(IdentityFamily, &'static str), usize>;
+pub type FamilyCounts<F = IdentityFamily> = BTreeMap<(F, &'static str), usize>;
+
+/// The existing AISC and Mine Stats ledgers keep distinct families and output schemas.
+pub trait ConsistencyFamily: Copy + Ord + 'static {
+    const ALL: &'static [Self];
+    const SCHEMA: &'static str;
+    fn as_str(self) -> &'static str;
+}
+
+impl ConsistencyFamily for IdentityFamily {
+    const ALL: &'static [Self] = &IdentityFamily::ALL;
+    const SCHEMA: &'static str = "fmine.issuer_consistency.aisc.v1";
+    fn as_str(self) -> &'static str {
+        self.as_str()
+    }
+}
 
 /// The state at one cited total or rate, with its registered release and source digest.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,9 +69,9 @@ pub struct Transition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IdentityHistory {
+pub struct IdentityHistory<F = IdentityFamily> {
     pub series: SeriesKey,
-    pub family: IdentityFamily,
+    pub family: F,
     pub sequence: Vec<Appearance>,
     pub transitions: Vec<Transition>,
     /// Multiple different assertions in one registered release are kept, not arbitrarily selected.
@@ -62,22 +79,35 @@ pub struct IdentityHistory {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnkeyedIdentity {
+pub struct UnkeyedIdentity<F = IdentityFamily> {
     pub at: String,
-    pub family: IdentityFamily,
+    pub family: F,
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AiscConsistency {
-    pub first_registered: FamilyCounts,
-    pub all_files: FamilyCounts,
-    pub histories: Vec<IdentityHistory>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Consistency<F = IdentityFamily> {
+    pub first_registered: FamilyCounts<F>,
+    pub all_files: FamilyCounts<F>,
+    pub histories: Vec<IdentityHistory<F>>,
     /// Included in `all_files`, excluded from the first-registered denominator, and named individually.
-    pub unkeyed: Vec<UnkeyedIdentity>,
+    pub unkeyed: Vec<UnkeyedIdentity<F>>,
 }
 
-impl AiscConsistency {
+pub type AiscConsistency = Consistency<IdentityFamily>;
+
+impl<F> Default for Consistency<F> {
+    fn default() -> Self {
+        Self {
+            first_registered: BTreeMap::new(),
+            all_files: BTreeMap::new(),
+            histories: Vec::new(),
+            unkeyed: Vec::new(),
+        }
+    }
+}
+
+impl<F: ConsistencyFamily> Consistency<F> {
     /// Stable diagnostic output. Counts are per identity family, with `np` explicitly inside the denominator.
     /// The binomial intervals describe those counts; they are neither a forecast-calibration claim nor a gate.
     #[must_use]
@@ -88,7 +118,7 @@ impl AiscConsistency {
             let first = h.sequence.first();
             let total = first.map_or_else(|| "null".to_string(), |a| format!(
                 "{{\"at\":{},\"sha256\":{}}}", js(&a.at), js(&a.sha256)));
-            let first_registered = first.filter(|a| !h.ambiguous_vintages.contains(&a.release))
+            let first_registered = first.filter(|a| h.ambiguous_vintages.iter().all(|v| v > &a.release))
                 .map_or_else(|| "null".to_string(), appearance_json);
             let steps = h.transitions.iter().map(|t| format!(
                 "{{\"from\":{},\"to\":{},\"kind\":{},\"operands_changed\":{}}}",
@@ -117,10 +147,11 @@ impl AiscConsistency {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "{{\"schema\":\"fmine.issuer_consistency.aisc.v1\",\"caveat\":{},\
+            "{{\"schema\":{},\"caveat\":{},\
              \"within_vintage\":{{\"denominator\":\"family total including not-published (np); first_registered excludes unkeyed totals and ambiguous earliest releases\",\
              \"interval_method\":\"equal-tailed 95% Clopper-Pearson, descriptive binomial interval; null for an empty family or more than 100000 trials\",\
              \"first_registered\":{},\"all_files\":{}}},\"transitions\":[{}],\"unkeyed\":[{}]}}",
+            js(F::SCHEMA),
             js(FIRST_REGISTERED_CAVEAT),
             family_counts_json(&self.first_registered),
             family_counts_json(&self.all_files),
@@ -141,9 +172,10 @@ fn appearance_json(a: &Appearance) -> String {
     )
 }
 
-fn family_counts_json(counts: &FamilyCounts) -> String {
-    let families = IdentityFamily::ALL
-        .into_iter()
+fn family_counts_json<F: ConsistencyFamily>(counts: &FamilyCounts<F>) -> String {
+    let families = F::ALL
+        .iter()
+        .copied()
         .map(|family| {
             let total = counts
                 .iter()
@@ -207,13 +239,35 @@ pub fn aisc_consistency(index: &AiscClaimIndex, instances: &[IdentityInstance]) 
     report
         .unkeyed
         .sort_by(|a, b| (&a.at, a.family).cmp(&(&b.at, b.family)));
+    finish_histories(
+        groups,
+        &mut report,
+        |i| i.state.code(),
+        |a, b| {
+            a.state.code() == b.state.code()
+                && a.state.label() == b.state.label()
+                && a.state.reason_code() == b.state.reason_code()
+        },
+        |i| operand_signature(index, i),
+        &BTreeSet::new(),
+    );
+    report
+}
+
+/// Shared grouping policy: an ambiguous release can never prove persistence or a correction.
+fn finish_histories<T: PartialEq + std::fmt::Debug, F: ConsistencyFamily, S: Eq>(
+    groups: BTreeMap<(SeriesKey, F), Vec<(&T, &KeyedCell)>>,
+    report: &mut Consistency<F>,
+    code: impl Fn(&T) -> &'static str,
+    same_state: impl Fn(&T, &T) -> bool,
+    signature: impl Fn(&T) -> Option<S>,
+    source_ambiguity: &BTreeSet<(SeriesKey, String)>,
+) {
     for ((series, family), mut instances) in groups {
         instances.sort_by(|(a, ka), (b, kb)| {
-            (&ka.key.reporting_vintage, &ka.locator, a.state.code()).cmp(&(
-                &kb.key.reporting_vintage,
-                &kb.locator,
-                b.state.code(),
-            ))
+            (&ka.key.reporting_vintage, &ka.locator, code(a))
+                .cmp(&(&kb.key.reporting_vintage, &kb.locator, code(b)))
+                .then_with(|| format!("{a:?}").cmp(&format!("{b:?}")))
         });
         instances.dedup_by(|(a, ka), (b, kb)| ka.locator == kb.locator && a == b);
         let mut counts = BTreeMap::new();
@@ -226,14 +280,25 @@ pub fn aisc_consistency(index: &AiscClaimIndex, instances: &[IdentityInstance]) 
             .into_iter()
             .filter(|(_, n)| *n > 1)
             .map(|(v, _)| v)
+            .chain(
+                source_ambiguity
+                    .iter()
+                    .filter(|(key, _)| key == &series)
+                    .map(|(_, release)| release.clone()),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect();
         let Some((first, total)) = instances.first() else {
             continue;
         };
-        if !ambiguous_vintages.contains(&total.key.reporting_vintage.release) {
+        if ambiguous_vintages
+            .iter()
+            .all(|v| v > &total.key.reporting_vintage.release)
+        {
             *report
                 .first_registered
-                .entry((family, first.state.code()))
+                .entry((family, code(first)))
                 .or_default() += 1;
         }
         let sequence = instances
@@ -242,13 +307,10 @@ pub fn aisc_consistency(index: &AiscClaimIndex, instances: &[IdentityInstance]) 
                 release: total.key.reporting_vintage.release.clone(),
                 at: total.locator.clone(),
                 sha256: total.key.reporting_vintage.file_sha256.clone(),
-                state: i.state.code(),
+                state: code(i),
             })
             .collect();
-        let signatures: Vec<_> = instances
-            .iter()
-            .map(|(i, _)| operand_signature(index, i))
-            .collect();
+        let signatures: Vec<_> = instances.iter().map(|(i, _)| signature(i)).collect();
         let mut transitions = Vec::new();
         for (from, pair) in instances.windows(2).enumerate() {
             let (a, ka) = pair[0];
@@ -260,22 +322,16 @@ pub fn aisc_consistency(index: &AiscClaimIndex, instances: &[IdentityInstance]) 
             let a_release = &ka.key.reporting_vintage.release;
             let b_release = &kb.key.reporting_vintage.release;
             let ambiguous = a_release == b_release
-                || ambiguous_vintages.contains(a_release)
-                || ambiguous_vintages.contains(b_release);
+                || ambiguous_vintages
+                    .iter()
+                    .any(|release| a_release <= release && release <= b_release);
             let kind = if ambiguous {
                 TransitionKind::Reclassified
-            } else if a.state.code() == b.state.code()
-                && a.state.label() == b.state.label()
-                && a.state.reason_code() == b.state.reason_code()
-                && changed == Some(false)
-            {
+            } else if same_state(a, b) && changed == Some(false) {
                 TransitionKind::Persisted
-            } else if a.state.code() == "iii"
-                && matches!(b.state.code(), "i" | "ii")
-                && changed == Some(true)
-            {
+            } else if code(a) == "iii" && matches!(code(b), "i" | "ii") && changed == Some(true) {
                 TransitionKind::Corrected
-            } else if a.state.code() == "i" && b.state.code() == "iii" {
+            } else if code(a) == "i" && code(b) == "iii" {
                 TransitionKind::Broken
             } else {
                 TransitionKind::Reclassified
@@ -303,7 +359,6 @@ pub fn aisc_consistency(index: &AiscClaimIndex, instances: &[IdentityInstance]) 
             ambiguous_vintages,
         });
     }
-    report
 }
 
 // DESIGN: role and semantic key preserve which input changed, including repeated labels and regional members.

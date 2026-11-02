@@ -24,6 +24,7 @@ fmine-array = { path = "../fmine-array" }
 fmine-numerics = { path = "../fmine-numerics" }
 fmine-calib = { path = "../fmine-calib" }
 fmine-decide = { path = "../fmine-decide" }
+fmine-capital = { path = "../fmine-capital" }
 fmine-io = { path = "../fmine-io" }
 fmine-public = { path = "../fmine-public" }
 fmine-metrics = { path = "../fmine-metrics" }

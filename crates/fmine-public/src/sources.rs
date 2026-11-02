@@ -14,8 +14,8 @@ use fmine_registry::sources::{
     BasisRow, SourcesRegistry, SubjectStatusRow, is_quarter, load_sources_registry,
 };
 pub use fmine_registry::sources::{
-    DocumentRow, MineStatsLabelAlias, PrintedShareCorrection, RegionMemberRow, RestatementNoteRow,
-    RestatementScopeRow,
+    DocumentRow, HtmlSourceRow, MineStatsLabelAlias, PrintedShareCorrection, RegionMemberRow,
+    RestatementNoteRow, RestatementScopeRow,
 };
 
 use crate::aisc::{ExplanationBasis, IdentityFamily};
@@ -133,6 +133,8 @@ pub struct IssuerProfile {
     /// Registered PDF documents (bd-plx1). A run reads none of their values; it checks the bytes of those its
     /// transcription registry cites ([`crate::transcribe`]).
     pub documents: Vec<DocumentRow>,
+    /// Registered HTML filings read directly by the label-bound canonical Claim adapter.
+    pub html_sources: Vec<HtmlSourceRow>,
     /// Explicit, source-bound disclosure notes and their exact semantic coverage. Runtime verification
     /// re-reads each quote before a comparison can classify a change as disclosed.
     pub restatement_notes: Vec<RestatementNoteRow>,
@@ -246,6 +248,7 @@ impl IssuerProfile {
             printed_share_corrections: reg.printed_share_corrections,
             mine_stats_label_aliases: reg.mine_stats_label_aliases,
             documents: reg.documents,
+            html_sources: reg.html_sources,
             restatement_notes: reg.restatement_notes,
             restatement_scopes: reg.restatement_scopes,
             through: None,

@@ -154,6 +154,7 @@ pub fn synthetic_profile() -> IssuerProfile {
         printed_share_corrections: Vec::new(),
         mine_stats_label_aliases: Vec::new(),
         documents: Vec::new(),
+        html_sources: Vec::new(),
         restatement_notes: Vec::new(),
         restatement_scopes: Vec::new(),
         through: None,

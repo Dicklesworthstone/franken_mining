@@ -73,10 +73,16 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 38
+[verbs] 45
+decide card
+decide program
 assure public
 assure challenges
+metrics cost
+metrics geo
+html claims
 check tables
+reserve replacement
 guidance completion
 mirror
 track-record
@@ -89,6 +95,7 @@ forecast journal register
 forecast journal freeze
 forecast journal outcome
 forecast journal resolve
+forecast journal restate
 forecast journal assess
 forecast journal inspect
 forecast journal report

@@ -1,0 +1,98 @@
+# DESIGN (BD-063): explicit selectors for a complete annual replacement report. These declarations
+# contain no source values. The command requires the registered PDFs and agreeing local readings in
+# registries/transcriptions/barrick.toml (ignored pending OPEN-R7-1). Amounts already stated as GEO
+# retain the registered annual reserve-price decks; they are not converted a second time.
+# FACT: gold amounts are printed in the FY2025 MD&A, p71, endnote15; the 2026 Circular prints the
+# GEO table on printed p86 (PDF92). The headlines are on printed pp41–42 (PDF47–48).
+# Gold's "close to" language is approximate and supplies no numerical tolerance.
+
+schema = "fmine.reserve-replacement.v1"
+issuer = "barrick"
+
+[[series]]
+id = "gold_2023_2025"
+definition = "reserve_replacement.gold_oz@barrick-fy2025"
+start_year = 2023
+end_year = 2025
+unit = "Moz"
+basis = "attributable_gold_ex_ad"
+depletion_sign = "negative"
+
+[[year]]
+series = "gold_2023_2025"
+year = 2023
+doc = "Barrick_Q4_2025_MD-A.pdf"
+net_change = "rr_gold_net_2023"
+depletion = "rr_gold_depletion_2023"
+
+[[year]]
+series = "gold_2023_2025"
+year = 2024
+doc = "Barrick_Q4_2025_MD-A.pdf"
+net_change = "rr_gold_net_2024"
+depletion = "rr_gold_depletion_2024"
+
+[[year]]
+series = "gold_2023_2025"
+year = 2025
+doc = "Barrick_Q4_2025_MD-A.pdf"
+net_change = "rr_gold_net_2025"
+depletion = "rr_gold_depletion_2025"
+
+[[aggregate]]
+series = "gold_2023_2025"
+doc = "Barrick_Q4_2025_MD-A.pdf"
+net_change = "rr_gold_net_total"
+depletion = "rr_gold_depletion_total"
+period = "2023-2025"
+
+[[headline]]
+series = "gold_2023_2025"
+doc = "Barrick_InformationCircular_2026.pdf"
+quantity = "rr_gold_headline"
+period = "2023-2025"
+kind = "approximate"
+
+[[series]]
+id = "geo_2023_2025"
+definition = "reserve_replacement.geo@barrick-2026-circular"
+start_year = 2023
+end_year = 2025
+unit = "Moz"
+basis = "attributable_geo_ex_ad"
+depletion_sign = "negative"
+
+[[year]]
+series = "geo_2023_2025"
+year = 2023
+doc = "Barrick_InformationCircular_2026.pdf"
+net_change = "rr_geo_net_2023"
+depletion = "rr_geo_depletion_2023"
+
+[[year]]
+series = "geo_2023_2025"
+year = 2024
+doc = "Barrick_InformationCircular_2026.pdf"
+net_change = "rr_geo_net_2024"
+depletion = "rr_geo_depletion_2024"
+
+[[year]]
+series = "geo_2023_2025"
+year = 2025
+doc = "Barrick_InformationCircular_2026.pdf"
+net_change = "rr_geo_net_2025"
+depletion = "rr_geo_depletion_2025"
+
+[[aggregate]]
+series = "geo_2023_2025"
+doc = "Barrick_InformationCircular_2026.pdf"
+net_change = "rr_geo_net_total"
+depletion = "rr_geo_depletion_total"
+period = "2023-2025"
+
+[[headline]]
+series = "geo_2023_2025"
+doc = "Barrick_InformationCircular_2026.pdf"
+quantity = "rr_geo_headline"
+period = "2023-2025"
+kind = "rounded"

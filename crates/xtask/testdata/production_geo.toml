@@ -1,0 +1,38 @@
+# Invented GB-27 arithmetic example. These are declared assumptions, not issuer production or prices.
+schema = "fmine.geo-worksheet.v1"
+issuer = "invented"
+subject = "Example operation"
+period = "2030FY"
+ownership = "full"
+basis = "produced metal; no payable-metal adjustment"
+population = "explicitly declared gold and copper production"
+currency = "USD"
+metals = "gold,copper"
+reference_deck = "budget"
+reference_version = "example-v1"
+
+[[quantity]]
+metal = "gold"
+unit = "oz"
+amount = "3200000"
+
+[[quantity]]
+metal = "copper"
+unit = "lb"
+amount = "440000000"
+
+[[deck]]
+id = "budget"
+version = "example-v1"
+basis = "invented budget prices"
+currency = "USD"
+gold_price_per_oz = "3000"
+copper_price_per_lb = "4.50"
+
+[[deck]]
+id = "comparison"
+version = "example-v1"
+basis = "invented higher-gold-price scenario"
+currency = "USD"
+gold_price_per_oz = "4500"
+copper_price_per_lb = "4.50"

@@ -5,7 +5,7 @@
 - **Layer:** `S0` (Substrate)
 - **Subsystem:** `Bedrock`
 - **LOC Budget:** `10k planned / 12k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["calendars", "catalog", "metrics", "parser", "sources", "table_identities", "toml_subset", "transcriptions"]`
+- **Allowed Module Families:** `["calendars", "catalog", "metrics", "parser", "reserve_replacement", "sources", "table_identities", "toml_subset", "transcriptions"]`
 
 ## 2. Mathematical & Domain Formulation
 Parses and validates the 8 canonical TOML registries in `registries/` (`loc_budget`, `workspace_topology`, `lifts`, `units`, `crs`, `calendars`, `refusals`, `verbs`) and verifies 1:1 alignment between `registries/refusals.toml` and `fmine_evidence::CATALOG` (generated from that file; `xtask check-refusals` checks the generation).
@@ -14,6 +14,29 @@ Parses and validates the 8 canonical TOML registries in `registries/` (`loc_budg
 Serves as the schema and registry catalog authority for `fmine doctor` and `xtask`.
 
 ## 4. Public API Surface
+- `sources::HtmlSourceRow`, `SourcesRegistry::html_sources` (BD-057/BD-059): optional `[[html]]` rows
+  register HTML filings separately from workbook and PDF sources. Required fields are a bare `.html` or
+  `.htm` `file`, `release` (`YYYYQn`), HTTPS `url`, registered `url_basis`, calendar `published_at`, cited
+  `published_at_basis` (`FACT: ` or `INFERENCE: `), positive `bytes` and lowercase SHA-256. Optional `dir`
+  defaults to `corpus_dir` and must be a plain relative path. No PDF page count or workbook kind is accepted.
+  Filenames and digests are unique across all three source formats. HTML-only issuer profiles are valid;
+  existing workbook and PDF rows retain their previous meanings. Registration identifies source bytes
+  and stated publication evidence; runtime extraction independently verifies those bytes and label mappings.
+- `metrics::{ReserveMetal, ReserveReplacementRule}`, `MetricRegistry::reserve_replacements`, and
+  `MetricRegistry::reserve_replacement` (BD-063): optional strict `[[reserve_replacement]]` rows attach one
+  explicit rule to a registered reserve-replacement definition. Metal is `gold` or `gold_equivalent`, the
+  window is 1–100 years, the amount unit is `oz`, `koz`, or `Moz`, and the basis is nonempty. The
+  `excludes_acquisitions_divestments` field accepts only the strings `"true"` and `"false"` and exposes a bool;
+  the shared TOML subset is unchanged. Gold forbids `geo_definition`; GEO requires a registered definition
+  in the GEO family. Duplicate rules, unknown fields, missing or mistyped fields, invalid windows/units,
+  and wrong-family references refuse. Rules are not inferred or inherited for unconfigured definitions.
+  The two existing Barrick definitions explicitly use three years, Moz, and exclusion of acquisitions and
+  divestments, with their distinct attributable metal bases. No issuer numeric inputs are registered here.
+- `reserve_replacement::{parse_replacement_registry, ReplacementRegistry}`, `ReplacementRegistry::validate`
+  (BD-063): strict value-free `[[series]]` declarations link `[[year]]` rows and optional `[[aggregate]]` and
+  `[[headline]]` rows. Each annual window is complete and contiguous, depletion sign is explicit, and rows
+  are canonically sorted. Quantity, document, period, and basis fields are selectors, not numeric inputs.
+  An approximate headline never supplies an invented tolerance.
 - `table_identities::{parse_table_identities, load_table_identities, TableIdentityRegistry, TableIdentity,
   Term, Replacement, IdentityKind, TermRole}` (BD-340.S5, BD-063): strict `fmine.table-identities.v1` declarations for source-bound
   PDF arithmetic, without source values. Every identity names its registered document, family, sum or
@@ -36,6 +59,20 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   deck cannot carry price fields. Duplicate row ids, document/quantity aliases, incompatible units/periods,
   invalid ownership fractions and inconsistent document conventions refuse. `quantities_by_document` selects
   the sorted union of arithmetic operands, reserve assertions and price readings; reserve-only definitions run.
+  DESIGN (BD-340.S4, BD-070): `GeoCheckDeclaration` binds `[[geo_check]]` gold/copper/GEO reserve-row ids
+  and optional linked `[[geo_candidate]]` price-deck row ids. Amounts share one document, subject, reserve
+  item/year, period, normalized ownership, support and convention, with gold/GEO in Moz and copper in Mlb.
+  The GEO row supplies the primary quoted deck; every explicit candidate also declares both price readings.
+  Duplicate/orphan candidates, implicit rescaling and mixed economic/source interpretations refuse.
+- DESIGN (BD-274): `table_identities::cutoff::{CutoffDeclaration, CutoffInput, InputRole, RecoveryModel, Unit}`
+  adds `[[cutoff]]` and linked `[[cutoff_input]]` declarations to `TableIdentityRegistry.cutoffs`. Each names
+  one registered document, subject, period, physical/model basis, separate price basis, output unit and
+  recovery model; numerical values come only from agreed source readings. Explicit roles require one
+  published grade, one gold price, at least one cost and exactly the chosen recovery model's parameters.
+  Optional deductions and an oz/short-ton row's metric equivalent remain separately named. Unknown fields,
+  orphan inputs, duplicate quantity keys and incompatible roles/units refuse. `quantities_by_document`
+  includes every required reading. Parsing, validation and ordering are Exact; document eligibility,
+  point-value binding and numerical-domain checks belong to the metrics source adapter.
 - `RegistryCatalog`, `RegistryError`
 - `toml_subset::{parse_subset, TomlDoc, TomlRow, TomlField, TomlValue, SubsetError}`: a strict TOML subset (`[[table]]` rows, basic strings, integers, comments); anything else refuses naming the line (bd-s9j3.1)
 - `sources::{parse_sources_registry, load_sources_registry, SourcesRegistry, SourceRow, ReconstructionRow, BasisRow, MissingFactRow, MineStatsLabelRow, ShareRow, RegionMemberRow, SourcesError, is_quarter, is_url_basis, URL_BASES, URL_BASIS_FETCHED}`, `SourcesRegistry::members_of`, `RegionMemberRow::holds_for`: issuer source registries (each `url_basis` is `"W1 table"`, `"W1 naming rule"` or `"fetched and verified YYYY-MM-DD"` with a calendar date, BD-339.S3; each `[[reconstruction]]` declares `basis = "reconstructed"`, or `"stated"` with `quote_doc` (a registered file), `quote_locator` (`sheet!cell`) and `quote_prefix`, BD-331.S2; optional `[[missing_fact]]` rows, BD-331.S2: `subject`, `family`, `text` (prose with no digits), `evidence`, optional `closing_document`, once per subject and family; optional `[[mine_stats_label]]` rows: `label`, optional `section`, duplicates refused; optional `kind = "site" | "region"` on `[[subject]]`; optional `[[share]]` rows, BD-331.S3: `subject` (a registered non-region subject, once), positive `num` ≤ `den`, `evidence`, optional Mine Stats `label`; optional `[[region_member]]` rows, BD-331.S4: `region` (a registered region), `member` (a registered non-region subject), release quarter `first` and optional `last` ≥ `first`, no two rows of one member over overlapping releases) `registries/sources/<issuer>.toml` (`fmine.sources.v1`), checked on load
@@ -69,7 +106,7 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
 - `sources::{DocumentRow, DOCUMENT_KINDS, PUBLISHED_AT_BASES}`, `SourcesRegistry::documents`, `sources::is_date`
   (bd-plx1): optional `[[document]]` rows, one PDF each: a bare `file` and a sha256 unique across workbooks and
   documents, optional `dir` (a plain relative path; default `corpus_dir`), `kind` (`mda`, `aif`,
-  `investor_deck`, `partner_filing` or `technical_report`), an `https://` `url` naming a file, a registered `url_basis`,
+  `investor_deck`, `partner_filing`, `technical_report` or `information_circular`), an `https://` `url` naming a file, a registered `url_basis`,
   `published_at` (a calendar date) with `published_at_basis` starting `"FACT: "` or `"INFERENCE: "` and citing
   its source, positive `pages` and `bytes`. A profile requires at least one validated `[[source]]` or
   `[[document]]`; document-only partner profiles use the same schema and still require `[[subject]]` rows.

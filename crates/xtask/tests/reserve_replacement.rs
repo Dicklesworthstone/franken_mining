@@ -238,6 +238,8 @@ fn ratio_and_cumulative_sum_are_checked_jointly_without_reusing_a_rate() {
             issuer: declared.issuer.clone(),
             identities: vec![identity.clone()],
             reserve_rows: Vec::new(),
+            geo_checks: Vec::new(),
+            cutoffs: Vec::new(),
         };
         let report = assess(&single, &data);
         assert!(report.refused.is_empty());

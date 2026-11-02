@@ -15,6 +15,9 @@ use crate::{LoadedSource, js};
 pub struct KeyedClaims {
     pub claims: Vec<KeyedCell>,
     pub refusals: Vec<CellRefusal>,
+    /// Exact registered printed labels and their canonical subjects, using the adapter's first match.
+    /// These are interpretation inputs; no unregistered spelling or suffix is normalized.
+    pub subject_labels: BTreeMap<String, String>,
     /// The canonical digest of the successful keyed projection; refusals remain explicit in the inventory.
     pub digest: Digest32,
 }
@@ -90,9 +93,16 @@ pub fn build_claims(
     claims.sort_by(|a, b| (&a.key, &a.locator).cmp(&(&b.key, &b.locator)));
     refusals.sort_by(|a, b| (&a.locator, &a.reason).cmp(&(&b.locator, &b.reason)));
     let digest = claims_digest(&claims);
+    let mut subject_labels = BTreeMap::new();
+    for share in &profile.shares {
+        subject_labels
+            .entry(share.label.clone())
+            .or_insert_with(|| share.subject.clone());
+    }
     KeyedClaims {
         claims,
         refusals,
+        subject_labels,
         digest,
     }
 }

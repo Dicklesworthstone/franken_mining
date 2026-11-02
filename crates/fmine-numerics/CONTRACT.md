@@ -37,7 +37,7 @@ None is a Claim; callers wrap results.
   - `cholesky_solve` gives `Result<Vec<f64>, Refusal>`, and `brent_root` gives `Result<Root, RootError>`.
   - `norm_cdf` and `norm_inv` give an `f64`.
   - `BettingEProcess` gives its wealth and `rejected_null`, or an `EProcError`. `ScoreBettingEProcess` gives its log wealth, its next stake and `rejected_null`, or an `EProcError`.
-  - `voi` gives `VoiSummary`, or `McEvsi` (an estimate, its standard error and a `VoiStatus`), or a `VoiError`.
+  - `voi` gives `VoiSummary`; `VoiAnalysis`, which adds the prior action values, every tied optimal action and, per signal, its probability, posterior, action values, tied optimal actions and EVSI contribution; `McEvsi`, an estimate with its standard error and a `VoiStatus`; or a `VoiError`.
   - `risk` gives `TailRiskSummary` and a drawdown, or a `RiskError`.
   - `TropicalDag` gives start-time vectors, or a `TropicalError`.
 - **`sparse`.** `Csr`, `SymbolicLdlt`, `LdltFactor` (solve, `Inertia`, `FactorStats`), `Ilu0` and `PcgSolution`, or a typed error.
@@ -58,14 +58,15 @@ None is a Claim; callers wrap results.
 - **No clamped or made-up answer from the original kernels (bd-a482).** Out-of-domain input refuses and leaves the state as it was:
   - `test_eproc_refuses_out_of_domain_parameters_and_observations`: parameters stand as given, and a refused observation changes nothing;
   - `test_score_eproc_refuses_out_of_domain_parameters_and_scores`: the same for `ScoreBettingEProcess`, whose range endpoints are scores, not errors;
-  - `test_voi_refuses_bad_shapes_probabilities_and_costs`: an EVSI inside the row-sum tolerance is reported below 0 as computed, not clamped;
+  - `malformed_models_and_experiments_refuse_without_a_zero_score`: bad priors, payoffs, likelihoods and costs, and a malformed likelihood row for a zero-prior state, all refuse;
   - `test_risk_refuses_empty_non_finite_and_alpha_out_of_domain`: an `alpha` of 1 − 2⁻⁵³ over 49 losses gives the largest loss;
   - `test_tropical_refuses_bad_arcs_cycles_and_deadlines`: a positive cycle refuses, and a zero-lag cycle is feasible.
+- **The finite VOI evaluator matches exhaustive enumeration.** `every_small_discrete_policy_matches_an_independent_exhaustive_oracle` checks EVSI, net VOI and the reported policy against all 27 deterministic policies on each of 729 two-state, three-action payoff matrices, with dyadic probabilities so that the oracle's arithmetic is exact. Known answers also cover uninformative and perfect signals and refinement (`test_evpi_non_negative_and_evsi_monotone`), large common offsets and cancellation (`no_signal_cannot_create_value_from_large_common_offsets_or_cancellation`, `common_payoff_offsets_preserve_decision_value`), and a fully revealing signal split in pieces (`splitting_a_fully_revealing_signal_preserves_perfect_information`).
 - **The Monte Carlo EVSI recovers the closed form (GATE-HELM-02, bd-227).** `test_mc_evsi_recovers_closed_form_chi2` runs K = 12 problems: GB-29, its two flips, a three-action variant and eight seeded problems. Each gets 100 seeds of 2,000 draws.
   - The χ² statistic of the seed means' standardised deviations is 5.87, with upper tail 0.92. The test is two-sided at α = 0.01, so the tail must lie in [0.005, 0.995].
   - The deviations are standardised by the estimator's own reported SEs, so the test checks the SE as well as the mean.
   - Three planted negatives on the same seeds fail it: a bias of half a reported SE, an SE understated 3× and an SE overstated 3×.
-  - With no signal that changes the choice, the estimate is exactly 0 and nothing is sampled: `test_mc_evsi_without_a_flip_is_exactly_zero_and_unsampled`.
+  - With no signal that changes the choice, the estimate is exactly 0 and nothing is sampled: `test_mc_evsi_without_a_flip_is_exactly_zero_and_unsampled`. A signal on which the prior action ties for best keeps it, so an exact tie is not sampled as a change (same test).
   - A key fixes the result bitwise: `test_mc_evsi_is_a_pure_function_of_its_key`.
 - **`sparse` is deterministic and never perturbs.**
   - The matrix is bitwise independent of push order: `test_assembly_is_stream_order_invariant_bitwise`.
@@ -99,10 +100,10 @@ None is a Claim; callers wrap results.
   - `ImpliedError::{Refused, Infeasible, Unbounded, Indeterminate}`, `TieRefusal`, `ShareRefusal::{NotPositive, NegativeStep, Interval}`, `GenError`, `PowerError` and `IntervalError`;
   - the original kernels' errors (bd-a482), each reached by its module's refusal test (Invariants):
     - `EProcError::{NullMeanOutOfDomain, AlphaOutOfDomain, ObservationOutOfDomain, ScoreRangeOutOfDomain, PriorSecondMomentOutOfDomain, TruncationOutOfDomain, ScoreOutOfRange}`;
-    - `VoiError::{Empty, Shape, NonFinite, CostOutOfDomain, ProbabilityOutOfDomain, NotNormalised, TooFewSamples}`. `TooFewSamples` is a Monte Carlo request for fewer than two draws: `test_mc_evsi_refuses_what_the_closed_form_refuses`;
+    - `VoiError::{EmptyStates, EmptyActions, Shape, Probability, ProbabilityMass, Payoff, InvalidCost, Arithmetic, InformationBound, TooFewSamples}`. `is_numerical_failure` is true for `Arithmetic` and `InformationBound`, so a caller can tell a numerical refusal from a domain one without parsing text. `TooFewSamples` is a Monte Carlo request for fewer than two draws: `test_mc_evsi_refuses_what_the_closed_form_refuses`;
     - `RiskError::{Empty, NonFinite { index, value }, AlphaOutOfDomain}`;
     - `TropicalError::{ArcOutOfRange, NonFiniteLag, PositiveCycle, NonFiniteDeadline}`.
-- **Callers map them.** `fmine_decide::rank_voi_campaigns` returns the `VoiError`. `fmine_calib::SpatialFrontPitMonitor::new` maps an `EProcError` to `ScoreError::AlphaOutOfDomain`, and `observe_sample` refuses a non-finite sample with `FMINE-REF-109` before either e-process moves. Its two `ScoreBettingEProcess`es are updated together or not at all.
+- **Callers map them.** `fmine_decide::rank_voi_campaigns` maps a `VoiError` to `FMINE-REF-207` when `is_numerical_failure`, else to `FMINE-REF-109`. `fmine_calib::SpatialFrontPitMonitor::new` maps an `EProcError` to `ScoreError::AlphaOutOfDomain`, and `observe_sample` refuses a non-finite sample with `FMINE-REF-109` before either e-process moves. Its two `ScoreBettingEProcess`es are updated together or not at all.
 
 ## 6. Determinism class
 Each file's `//! Determinism:` header:
@@ -120,8 +121,9 @@ Not applicable: no Claims are emitted. A caller that wraps a result in a Claim d
 - **`brent_root`** needs a sign change on `[a, b]` and a finite `f` at every point it evaluates.
 - **`eproc`: `ScoreBettingEProcess`** tests a score's conditional null mean of 0. Its stake is aGRAPA-type (Waudby-Smith and Ramdas 2024): the running sum of scores over the prior second moment plus the running sum of squares, so one pseudo-observation at the null. It reads only earlier scores (`test_score_eproc_stake_is_predictable_and_bounded`). It is held to `[-c/hi, c/|lo|]`, so every factor is at least `1 - c`. Wealth is kept as a logarithm, so a long null run cannot underflow to 0. An alarm is the running maximum crossing `1/α` and is never withdrawn (`test_score_eproc_alarm_persists`). `test_score_eproc_ville_bound_and_uncentred_negative` runs 4,000 null runs of 600 location scores `tanh(z/2)` at α = 0.025 and asserts a false-alarm rate ≤ α (0.0185). Its planted negative, the dispersion score left uncentred (null mean about −0.075), alarms in 0.80 of runs. Validity needs the caller's score to have conditional mean exactly 0 under its null; the e-process cannot check that.
 - **`eproc`: `BettingEProcess`.** `BettingEProcess::new` refuses a `null_mean` or `alpha` outside (0, 1), and `observe` refuses `u` outside [0, 1]; neither clamps (bd-a482). The bet fraction is held to ±0.75 by design, so every factor is at least 0.25. The null is two-sided, `E[U_t | U_<t] = μ0`. `test_ville_inequality_type1_error_bound` checks the false-alarm rate against α + 0.02 over 500 seeded runs, plus one alternative.
-- **`voi`.** A problem must have states and actions, `payoffs` one row per state of one length, finite payoffs, and a prior that is a probability vector. Each likelihood row must be a probability vector over the same signals, and the cost finite and ≥ 0. Probability sums may be off by `PROBABILITY_SUM_TOLERANCE` = 1e-9, which can move EVSI by that times the largest payoff. EVPI and EVSI are not clamped. `test_evpi_non_negative_and_evsi_monotone` covers one two-state problem.
-  - The Monte Carlo estimate is unbiased because its decision rule is the exact Bayes action, which needs finite states and signals. A problem with continuous states or a simulated payoff, where the posterior must itself be estimated, is not covered.
+- **`voi`.** A problem must have states and actions, `payoffs` one row per state of one length, finite payoffs, and a prior that is a probability vector. Each likelihood row, a zero-prior state's included, must be a probability vector over the same signals, and the cost finite and ≥ 0. Probability sums may be off by `PROBABILITY_MASS_TOLERANCE` = 1e-12. Accepted probabilities are used as given, never renormalised. EVPI and EVSI are not clamped.
+  - Actions are compared by compensated weighted payoff differences, with the product residuals, so a large common payoff does not hide which action is better. EVSI is the direct gain near 0 and EVPI minus the residual regret near EVPI. The two must agree within the mass tolerance plus a floating-point allowance scaled by the information values, and `0 ≤ EVSI ≤ EVPI` must hold, or the evaluation refuses. These are finite-model results in `f64`, not exact arithmetic or calibration evidence.
+  - The Monte Carlo estimate is unbiased because its decision rule is the exact Bayes action, which needs finite states and signals. It takes that action from `evaluate`'s per-signal optimal actions, keeping the prior action on a tie. A problem with continuous states or a simulated payoff, where the posterior must itself be estimated, is not covered.
   - The sampler gives a row's shortfall below 1, within the tolerance, to its last positive entry.
   - The gate's power is limited (noncentral χ², scipy). A bias of two SEs of the 100-seed mean in every problem is caught with probability 0.99; that is a fifth of one seed's SE at 2,000 draws. One SE in every problem is caught with probability 0.28. Five SEs in one problem alone is caught with probability 0.77. A smaller bias can pass.
 - **`risk`.** It needs at least one value, every one finite, and `alpha` in (0, 1). The tail bounds are `i / n`, so the largest loss always has weight. `test_cvar_coherent_subadditivity_and_monotonicity` covers one pair of eight-point samples.
@@ -145,6 +147,7 @@ No fixture under `fixtures/` (§33.2).
   - `test_clopper_pearson_known_answers`.
   - `test_gb29_closed_form_known_answers`: plan §22.8's hand computation of GB-29. EV(build) is $100M, EVPI $80M and EVSI $41.0M; the 73% accuracy flip gives $9.8M and the 0.78 prior $2.3M.
   - `test_chi_square_sf_known_answers`: scipy's χ² upper tails, which `scripts/oracle/chi_square_known_answers.py` cross-checks by Simpson integration on CPython's libm. The χ² function is test-only, for GATE-HELM-02.
+- **Exhaustive enumeration.** `every_small_discrete_policy_matches_an_independent_exhaustive_oracle` scores all 27 policies by direct sums in the test, sharing no code with `evaluate`.
 - **Published-document known answers.** These use values transcribed from issuer documents, and so rest on those transcriptions:
   - `test_e114_turquoise_ridge_certificate` and `test_certificate_digest_golden_e114`;
   - `test_e691_veladero_implied_q`;
@@ -153,7 +156,7 @@ No fixture under `fixtures/` (§33.2).
   The cross-crate AISC tables are checked in `crates/xtask/tests/public_exact_feas_oracle.rs` and `public_exact_feas_blame.rs`.
 
 ## 10. Known gaps
-- **The four original kernels are not lifts.** Beyond its refusal test, each has one example test of its statistics or algebra (Ville, EVSI monotone, CVaR coherence, duality). `voi` also has GB-29's known answers and GATE-HELM-02, and `eproc` the score e-process's Ville test with its planted negative. The refusals make bad input visible; they do not make the kernels correct in general. A real lift waits on bd-022.
+- **The four original kernels are not lifts.** Beyond its refusal test, each has one example test of its statistics or algebra (Ville, EVSI monotone, CVaR coherence, duality). `voi` also has GB-29's known answers, the exhaustive policy check and GATE-HELM-02, and `eproc` the score e-process's Ville test with its planted negative. The refusals make bad input visible; they do not make the kernels correct in general. A real lift waits on bd-022.
 - **GATE-HELM-02 passes locally only, and bd-227 stays open.**
   - CI has not run it.
   - There is no gate record in `docs/delivery/`.
@@ -176,9 +179,11 @@ No fixture under `fixtures/` (§33.2).
   - `NUMERICS_DIGEST_KEY`, `normal_digest_inputs`, `digest_norm_cdf_inv`, `golden_digest_norm_cdf_inv_10k`, `digest_cholesky_brent` and `golden_digest_cholesky_brent_10k` (bd-hp2j.3).
 - **`eproc::{BettingEProcess, EProcError}`.** `new(null_mean, alpha) -> Result<Self, EProcError>`, `threshold` (1/α), `observe(u) -> Result<f64, EProcError>` (the wealth) and `rejected_null` (the running maximum wealth ≥ 1/α).
 - **`eproc::ScoreBettingEProcess`.** `new(lo, hi, prior_second_moment, truncation, alpha) -> Result<Self, EProcError>`, `stake`, `observe(score) -> Result<f64, EProcError>` (the log wealth), `log_wealth`, `max_log_wealth`, `n_steps`, `log_threshold` (−ln α) and `rejected_null`. Its caller is `fmine_calib::SpatialFrontPitMonitor` (bd-311).
-- **`voi::{VoiProblem { state_probs, payoffs }, VoiSummary, VoiError, PROBABILITY_SUM_TOLERANCE}`**, with `compute_evpi() -> Result<(best_action, prior_ev, evpi), VoiError>` and `compute_evsi(likelihood, cost) -> Result<VoiSummary, VoiError>`.
-  - `estimate_evsi_mc(likelihood, cost, n_samples, key) -> Result<McEvsi, VoiError>`, with `McEvsi { prior_best_action, evsi, se, n_samples, net_voi, status, changes_choice }`.
-  - `VoiStatus::{Positive, Negative, Indeterminate { se }}`, with `at_two_se(net, se)`.
+- **`voi::{VoiProblem { state_probs, payoffs }, VoiExperiment { likelihood, cost }, ValidatedVoiProblem, VoiAnalysis, VoiSignalPolicy, VoiSummary, VoiError, PROBABILITY_MASS_TOLERANCE}`**.
+  - `VoiProblem`: `validate() -> Result<ValidatedVoiProblem, VoiError>`, `compute_evpi() -> Result<(best_action, prior_ev, evpi), VoiError>`, `compute_evsi(likelihood, cost) -> Result<VoiSummary, VoiError>`, `evaluate(experiment) -> Result<VoiAnalysis, VoiError>` and `estimate_evsi_mc(likelihood, cost, n_samples, key) -> Result<McEvsi, VoiError>`.
+  - `ValidatedVoiProblem` borrows the problem immutably and checks it once for many experiments: `evaluate(experiment)` and `estimate_evsi_mc(experiment, n_samples, key)`.
+  - `McEvsi { prior_best_action, evsi, se, n_samples, net_voi, status, changes_choice }`, and `VoiStatus::{Positive, Negative, Indeterminate { se }}` with `at_two_se(net, se)`.
+  - `VoiError::is_numerical_failure`.
 - **`risk::{TailRiskSummary, RiskError}`**, with `compute_cvar(losses, alpha) -> Result<TailRiskSummary, RiskError>` and `max_drawdown(trajectory) -> Result<f64, RiskError>`.
 - **`tropical::{PrecedenceArc { from, to, min_lag }, TropicalDag, TropicalError, RELAXATION_TOLERANCE}`**, with `new`, `add_arc` (checked when a pass runs), `earliest_starts() -> Result<Vec<f64>, TropicalError>` and `latest_starts(deadline) -> Result<Vec<f64>, TropicalError>`.
 - **`sparse`** (BD-145):
@@ -211,6 +216,7 @@ No fixture under `fixtures/` (§33.2).
   - **`share_interval(c, numerators, denominators, convention) -> Result<Bound, ShareRefusal>`**, over each `Factor { printed, step }`.
   - **`discover_unit(pairs, candidates, convention) -> Result<UnitDiscovery, ShareRefusal>`**, with `UnitPair` and `UnitFinding`.
   - **`discover_deck(&[GeoRelation], &[Deck]) -> Result<DeckDiscovery, ShareRefusal>`**, with `DeckFit` and `DeckFinding::{Found, Ambiguous, NoFit}`. Here geo = gold + copper · (copper price / gold price), in Moz and Mlb. A found deck is not registered.
+  - **`evaluate_geo(relation, deck, convention) -> Result<GeoEvaluation, ShareRefusal>`** gives the same exact conversion bounds for a stated deck and convention, `Closed` included. It keeps the converted and reported intervals, strict endpoints and the proper, point-only or empty fit, and chooses no deck.
 - **`exact_feas::generator`** (BD-340.S7).
   - **`generate(key, &GenSpec)` and `generate_vintage(key, spec, vintage)`** give a `Generated` or a `GenError`. There is one `Block::{Sum, HalfYear, Breakdowns, Share, Ratio, Reprint, WeightedMean}` per table, with `SUM_FAMILY`, `SHARES` and `MAX_TREE_CELLS`.
   - **`round(x, step, rule)`.** `Closed` is refused.
@@ -228,5 +234,5 @@ No fixture under `fixtures/` (§33.2).
   - the CI run recorded in bd-hp2j.3.
 - **PO-NUM-2** (no std transcendental in a BitwisePortable module). `xtask check-det` checks it over `lib.rs` in `check-all`.
 - **PO-NUM-3** (a determinism class and a thread-count test for each kernel on a certified path) is not discharged (Known gaps).
-- **PO-HELM-1** (VOI ≥ 0 in expectation; the estimator is unbiased on conjugate toys; known-answer tests). Partly here, for finite problems only: `test_gb29_closed_form_known_answers`, and GATE-HELM-02's check of the Monte Carlo mean and SE. No conjugate continuous toy is tested.
+- **PO-HELM-1** (VOI ≥ 0 in expectation; the estimator is unbiased on conjugate toys; known-answer tests). Partly here, for finite problems only: `test_gb29_closed_form_known_answers`, the exhaustive policy check (`every_small_discrete_policy_matches_an_independent_exhaustive_oracle`), and GATE-HELM-02's check of the Monte Carlo mean and SE. No conjugate continuous toy is tested.
 - **Mislabelled in the old contract.** It used PO-NUM-1 for `0 ≤ EVSI ≤ EVPI`, PO-NUM-3 for Ville and CVaR subadditivity, and PO-NUM-4 for tropical duality. The plan's PO-NUM-1 and PO-NUM-3 say something else, and it has no PO-NUM-4. Those properties are tested by `test_evpi_non_negative_and_evsi_monotone`, `test_ville_inequality_type1_error_bound`, `test_cvar_coherent_subadditivity_and_monotonicity` and `test_min_plus_longest_path_duality` (Validity domain).

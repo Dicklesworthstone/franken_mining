@@ -20,6 +20,8 @@ use fmine_units::{ExactQty, TROY_OZ_TO_GRAMS_DEN, TROY_OZ_TO_GRAMS_NUM, UnitsErr
 
 use crate::solve_cutoff_grade;
 
+pub mod source;
+
 /// Schema id `registries/published_cutoffs.toml` must declare.
 pub const CUTOFFS_SCHEMA: &str = "fmine.published_cutoffs.v1";
 
@@ -541,8 +543,9 @@ pub struct CutoffSection {
     pub json: String,
 }
 
-/// Reproduces every row of the registry's bytes. A row that cannot be computed fails the whole section, so a
-/// report never shows fewer cut-offs than are registered.
+/// Reproduces every row of the reference registry's bytes. These tokens are not authenticated readings of
+/// report bytes; `source::assess` supplies that distinct binding through the table-check adapter. A row that
+/// cannot be computed fails this whole section, so no registered reference case silently disappears.
 pub fn section(registry: &[u8]) -> Result<CutoffSection, CutoffFailure> {
     let text = std::str::from_utf8(registry)
         .map_err(|e| CutoffFailure::Registry(format!("not UTF-8: {e}")))?;
@@ -567,7 +570,9 @@ pub fn section(registry: &[u8]) -> Result<CutoffSection, CutoffFailure> {
     }
     let json = format!(
         "{{\"registry\":\"{CUTOFFS_REGISTRY}\",\"sha256\":\"{}\",\"cases\":{},\"reproduced\":{},\
-         \"within_input_rounding\":{},\"conflict\":{},\"rows\":[{}]}}",
+         \"within_input_rounding\":{},\"conflict\":{},\"rows\":[{}],\
+         \"mode\":\"reference_input_arithmetic\",\"source_verified\":false,\"gate_eligible\":false,\
+         \"no_claim\":\"Arithmetic on registered reference tokens; source report bytes and independent reader agreement were not checked.\"}}",
         sha256(registry).to_hex(),
         rows.len(),
         counts[0],
@@ -759,6 +764,7 @@ mod tests {
     fn test_section_counts_every_row_by_state() {
         let s = section(REGISTRY.as_bytes()).expect("section");
         assert_eq!(s.issuer, "barrick");
+        assert!(s.json.contains("\"mode\":\"reference_input_arithmetic\",\"source_verified\":false,\"gate_eligible\":false"));
         assert!(
             s.json.starts_with(&format!(
                 "{{\"registry\":\"registries/published_cutoffs.toml\",\"sha256\":\"{}\",\"cases\":7,\

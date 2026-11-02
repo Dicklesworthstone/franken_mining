@@ -29,6 +29,7 @@ pub const NO_CLAIM: &str = "Local append-only forecast history under an operator
 const OPERATION_SCHEMA: &str = "fmine.forecast-ledger.v1";
 const V2_SCHEMA: &str = "fmine.forecast-operation.v2";
 const V3_SCHEMA: &str = "fmine.forecast-operation.v3";
+const V4_SCHEMA: &str = "fmine.forecast-operation.v4";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +45,7 @@ enum OperationVersion {
     LegacyV1,
     V2,
     V3,
+    V4,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -57,6 +59,10 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
         && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V3_SCHEMA)
     {
         Ok(OperationVersion::V3)
+    } else if doc.top.len() == 1
+        && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V4_SCHEMA)
+    {
+        Ok(OperationVersion::V4)
     } else {
         Err(invalid("unknown stored forecast operation schema"))
     }
@@ -70,7 +76,11 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
             "a {expected_table} request needs exactly its one table and no top-level fields"
         )));
     }
-    let schema = if expected_table == "registered_outcome"
+    let schema = if expected_table == "registered_restatement"
+        || doc.rows[0].get("public_vintages").is_some()
+    {
+        V4_SCHEMA
+    } else if expected_table == "registered_outcome"
         || doc.rows[0]
             .fields
             .iter()
@@ -119,6 +129,14 @@ pub enum Command {
         cohort: String,
         forecast: String,
     },
+    /// Append a permitted later registered comparative without replacing the original outcome.
+    Restate {
+        journal: PathBuf,
+        head: Digest32,
+        cohort: String,
+        forecast: String,
+        release: String,
+    },
     Assess {
         journal: PathBuf,
         head: Digest32,
@@ -149,6 +167,7 @@ impl Command {
             Self::Freeze { .. } => "freeze",
             Self::Outcome { .. } => "outcome",
             Self::Resolve { .. } => "resolve",
+            Self::Restate { .. } => "restate",
             Self::Assess { .. } => "assess",
             Self::Inspect { .. } => "inspect",
             Self::Report { .. } => "report",
@@ -250,6 +269,7 @@ fn perform(
         | Command::Freeze { journal, head, .. }
         | Command::Outcome { journal, head, .. }
         | Command::Resolve { journal, head, .. }
+        | Command::Restate { journal, head, .. }
         | Command::Assess { journal, head, .. } => (journal, *head),
         _ => return Err(invalid("this operation needs a writer").into()),
     };
@@ -266,8 +286,24 @@ fn perform(
             let policy = state.public_policy(cohort, id)?;
             let resolved = super::source::resolve(root, &policy, id)?;
             (
-                source_request(&state, cohort, forecast, &resolved)?,
+                source_request(&state, cohort, forecast, &resolved, None)?,
                 "registered_outcome",
+                None,
+            )
+        }
+        Command::Restate {
+            cohort,
+            forecast,
+            release,
+            ..
+        } => {
+            let id = state.forecast_id(forecast)?;
+            let policy = state.public_policy(cohort, id)?;
+            let predecessor = restatement_predecessor(&state, cohort, forecast, release)?;
+            let resolved = super::source::resolve_release(root, &policy, id, release)?;
+            (
+                source_request(&state, cohort, forecast, &resolved, Some(predecessor))?,
+                "registered_restatement",
                 None,
             )
         }
@@ -312,12 +348,13 @@ fn perform(
     let mut response = None;
     journal.append(&request, clock, |record, header| {
         let assessment = apply(&mut state, record, header, Some(table))?;
-        // Public bindings and admitted receipts carry v3; ordinary operations retain v2 semantics.
+        // Comparative policies and receipts carry v4; prior operation versions retain their meaning.
         let mut versions = previous.versions;
         match version {
             OperationVersion::LegacyV1 => versions.legacy_v1 += 1,
             OperationVersion::V2 => versions.v2 += 1,
             OperationVersion::V3 => versions.v3 += 1,
+            OperationVersion::V4 => versions.v4 += 1,
         }
         let report_origin = match (previous.report_origin, assessment.as_ref()) {
             (Some(origin), _) => Some(origin),
@@ -470,11 +507,57 @@ fn claim_body(hex: &str) -> Result<Vec<u8>, Refusal> {
         .collect()
 }
 
+/// Select under the writer lock, and recheck during replay. A comparative cannot stand in for a
+/// missing original, skip the numeric predecessor, or import an outcome admitted without source evidence.
+fn restatement_predecessor(
+    state: &Replay,
+    cohort: &str,
+    forecast: &str,
+    release: &str,
+) -> Result<u64, Refusal> {
+    use fmine_calib::OutcomeKind;
+
+    let id = state.forecast_id(forecast)?;
+    let (policy, vintages) = state.public_policy_with_vintages(cohort, id)?;
+    vintages.validate_release(policy.period, release, true)?;
+    let events = state.ledger.outcomes(id);
+    if !events.iter().any(|event| {
+        matches!(&event.kind, OutcomeKind::Published { citation, .. }
+            if citation.source == policy.issuer
+                && citation.vintage == policy.period.original_release()
+                && state.source_admissions.contains_key(&(id, event.seq)))
+    }) {
+        return Err(invalid(
+            "registered restatement requires its source-verified original outcome first",
+        ));
+    }
+    let (event, citation) = events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.kind {
+            OutcomeKind::Published { citation, .. } | OutcomeKind::Restated { citation, .. } => {
+                Some((event, citation))
+            }
+            OutcomeKind::Missing { .. } => None,
+        })
+        .ok_or_else(|| invalid("registered restatement has no numeric predecessor"))?;
+    if !state.source_admissions.contains_key(&(id, event.seq))
+        || citation.source != policy.issuer
+        || citation.vintage.as_str() >= release
+    {
+        return Err(invalid(
+            "registered restatement requires a later release than its source-verified predecessor",
+        ));
+    }
+    Ok(event.seq)
+}
+
 fn source_request(
     state: &Replay,
     cohort: &str,
     forecast: &str,
     resolved: &super::source::ResolvedPublicOutcome,
+    supersedes: Option<u64>,
 ) -> Result<String, Refusal> {
     let id = state
         .cohorts
@@ -486,7 +569,14 @@ fn source_request(
         .anchors
         .first()
         .ok_or_else(|| absent("source Claim anchor missing"))?;
-    let mut request = String::from("[[registered_outcome]]\n");
+    let mut request = if supersedes.is_some() {
+        String::from("[[registered_restatement]]\n")
+    } else {
+        String::from("[[registered_outcome]]\n")
+    };
+    if let Some(sequence) = supersedes {
+        let _ = writeln!(request, "supersedes = {sequence}");
+    }
     for (key, value) in [
         ("forecast", forecast.to_string()),
         ("cohort", cohort.to_string()),
@@ -518,7 +608,12 @@ fn source_request(
     Ok(request)
 }
 
-fn apply_source(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> Result<(), Refusal> {
+fn apply_source(
+    state: &mut Replay,
+    row: Row<'_>,
+    recorded_ns: i64,
+    restatement: bool,
+) -> Result<(), Refusal> {
     row.allowed(
         &[
             "forecast",
@@ -540,18 +635,32 @@ fn apply_source(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> Result<()
             "ownership_source",
             "anchor_path",
         ],
-        &[],
+        if restatement { &["supersedes"] } else { &[] },
     )?;
     let forecast = state.forecast_id(row.string("forecast")?)?;
     let cohort = row.string("cohort")?;
-    let policy = state.public_policy(cohort, forecast)?;
+    let (policy, vintages) = state.public_policy_with_vintages(cohort, forecast)?;
+    let release = row.string("vintage")?;
+    vintages.validate_release(policy.period, release, restatement)?;
+    let supersedes = if restatement {
+        let expected = restatement_predecessor(state, cohort, row.string("forecast")?, release)?;
+        if row
+            .optional_integer("supersedes")?
+            .and_then(|n| u64::try_from(n).ok())
+            != Some(expected)
+        {
+            return Err(invalid(
+                "registered restatement must name its latest numeric predecessor",
+            ));
+        }
+        Some(expected)
+    } else {
+        None
+    };
     let cohort_digest = super::hex(row.string("cohort_digest")?)?;
-    if state.cohorts.get(cohort) != Some(&cohort_digest)
-        || row.string("source")? != policy.issuer
-        || row.string("vintage")? != policy.period.original_release()
-    {
+    if state.cohorts.get(cohort) != Some(&cohort_digest) || row.string("source")? != policy.issuer {
         return Err(invalid(
-            "source admission differs from the frozen cohort, issuer or original release",
+            "source admission differs from the frozen cohort or issuer",
         ));
     }
     let integer = |key| {
@@ -593,14 +702,16 @@ fn apply_source(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> Result<()
             "publication basis needs FACT: or INFERENCE: followed by its evidence",
         ));
     }
-    if policy.metric == fmine_calib::ledger::binding::PublicMetric::ProductionKoz && exact.num() < 0
-    {
+    if policy.metric.is_production() && exact.num() < 0 {
         return Err(invalid("production cannot be negative"));
     }
     let available_ns = publication_start
         .checked_add(86_400_000_000_000)
         .ok_or_else(|| invalid("publication availability overflows"))?;
-    if available_ns != row.time("available_at")? || publication_start < policy.period.end_ns()? {
+    if available_ns != row.time("available_at")?
+        || publication_start < policy.period.end_ns()?
+        || publication_start < super::PublicPeriod::parse(release)?.end_ns()?
+    {
         return Err(invalid(
             "source availability must be after the target period and conservatively follow its publication day",
         ));
@@ -622,7 +733,12 @@ fn apply_source(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> Result<()
         locator: row.string("locator")?.to_string(),
         sha256: super::hex(row.string("sha256")?)?.0,
     };
-    let expected_body = super::source::receipt_claim_body(
+    let reconstruct = if restatement {
+        super::source::receipt_claim_body_at_vintage
+    } else {
+        super::source::receipt_claim_body
+    };
+    let expected_body = reconstruct(
         &policy,
         forecast,
         &citation,
@@ -638,12 +754,17 @@ fn apply_source(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> Result<()
         ));
     }
     let value = exact.num() as f64 / exact.den() as f64;
-    let event = state.ledger.append_outcome(
-        forecast,
-        available_ns,
-        recorded_ns,
-        fmine_calib::OutcomeKind::Published { value, citation },
-    )?;
+    let kind = match supersedes {
+        Some(supersedes) => fmine_calib::OutcomeKind::Restated {
+            value,
+            citation,
+            supersedes,
+        },
+        None => fmine_calib::OutcomeKind::Published { value, citation },
+    };
+    let event = state
+        .ledger
+        .append_outcome(forecast, available_ns, recorded_ns, kind)?;
     state.source_admissions.insert(
         (forecast, event),
         SourceAdmission {
@@ -708,6 +829,17 @@ fn apply(
         return Err(invalid("a stored live request needs exactly one table"));
     }
     let row = &doc.rows[0];
+    let vintage_freeze = row.table == "cohort" && row.get("public_vintages").is_some();
+    if row.get("public_vintages").is_some() && version != OperationVersion::V4 {
+        return Err(invalid(
+            "public vintage policy requires operation version four",
+        ));
+    }
+    if version == OperationVersion::V4 && row.table != "registered_restatement" && !vintage_freeze {
+        return Err(invalid(
+            "operation version four requires a public-vintage freeze or registered restatement",
+        ));
+    }
     if expected_table.is_some_and(|expected| row.table != expected) {
         return Err(invalid(format!(
             "{} request cannot contain [[{}]]",
@@ -725,7 +857,7 @@ fn apply(
     let (lower, upper) = record.time_bounds(header)?;
     let authority_ns = match version {
         OperationVersion::LegacyV1 => record.observed_ns,
-        OperationVersion::V2 | OperationVersion::V3 => upper,
+        OperationVersion::V2 | OperationVersion::V3 | OperationVersion::V4 => upper,
     };
     let row = Row(row);
     match row.0.table.as_str() {
@@ -772,7 +904,20 @@ fn apply(
                     "registered publication availability exceeds the writer's earliest possible clock time",
                 ));
             }
-            apply_source(state, row, authority_ns)?;
+            apply_source(state, row, authority_ns, false)?;
+        }
+        "registered_restatement" => {
+            if version != OperationVersion::V4 {
+                return Err(invalid(
+                    "registered restatements require operation version four",
+                ));
+            }
+            if row.time("available_at")? > lower {
+                return Err(late(
+                    "registered comparative availability exceeds the writer's earliest possible clock time",
+                ));
+            }
+            apply_source(state, row, authority_ns, true)?;
         }
         "assessment" => {
             if version != OperationVersion::LegacyV1 {
@@ -795,11 +940,12 @@ struct VersionCounts {
     legacy_v1: usize,
     v2: usize,
     v3: usize,
+    v4: usize,
 }
 
 impl VersionCounts {
     fn policy(self) -> &'static str {
-        match (self.legacy_v1, self.v2 + self.v3) {
+        match (self.legacy_v1, self.v2 + self.v3 + self.v4) {
             (0, 0) => "none",
             (_, 0) => "legacy_observed",
             (0, _) => "clock_upper_bound",
@@ -822,8 +968,13 @@ impl VersionCounts {
         } else {
             format!(",\"v3\":{}", self.v3)
         };
+        let v4 = if self.v4 == 0 {
+            String::new()
+        } else {
+            format!(",\"v4\":{}", self.v4)
+        };
         format!(
-            "\"operation_version_counts\":{{\"legacy_v1\":{},\"v2\":{}{v3}}},\"record_time_policy\":{}",
+            "\"operation_version_counts\":{{\"legacy_v1\":{},\"v2\":{}{v3}{v4}}},\"record_time_policy\":{}",
             self.legacy_v1,
             self.v2,
             js(self.policy())
@@ -863,6 +1014,7 @@ fn version_counts(
             OperationVersion::LegacyV1 => counts.legacy_v1 += 1,
             OperationVersion::V2 => counts.v2 += 1,
             OperationVersion::V3 => counts.v3 += 1,
+            OperationVersion::V4 => counts.v4 += 1,
         }
         if doc
             .rows
@@ -1174,244 +1326,5 @@ fn markdown(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const REGISTER: &str = "[[forecast]]\nid = \"one\"\nmodel_key = \"synthetic\"\noutcome_due = \"2030-01-02T00:00:00Z\"\nkind = \"interval\"\nlo = \"40\"\nhi = \"50\"\nnominal = \"0.8\"\n";
-    const FREEZE: &str = "[[cohort]]\nname = \"test\"\nmembers = \"one\"\nresolution_rule = \"Invented source value\"\neligible_sources = \"synthetic:issuer\"\n";
-
-    fn semantic_record(request: String, observed_ns: i64) -> Record {
-        Record {
-            sequence: 1,
-            previous: Digest32::default(),
-            observed_ns,
-            entry: Entry::Operation(request),
-        }
-    }
-
-    #[test]
-    fn writer_adds_v2_but_clients_cannot_select_a_stored_version() {
-        let stored = version_request(REGISTER, "forecast").expect("writer v2 marker");
-        assert_eq!(stored, format!("schema = \"{V2_SCHEMA}\"\n{REGISTER}"));
-        assert_eq!(
-            operation_version(&parse_subset(&stored).expect("v2 doc")).expect("v2"),
-            OperationVersion::V2
-        );
-        assert_eq!(
-            operation_version(&parse_subset(REGISTER).expect("legacy doc")).expect("v1"),
-            OperationVersion::LegacyV1
-        );
-        for request in [
-            stored,
-            format!("schema = \"unknown\"\n{REGISTER}"),
-            format!("{REGISTER}\n{FREEZE}"),
-            FREEZE.to_string(),
-        ] {
-            assert_eq!(
-                version_request(&request, "forecast")
-                    .expect_err("client grammar")
-                    .code,
-                "FMINE-REF-107"
-            );
-        }
-        let unknown = parse_subset(&format!("schema = \"unknown\"\n{REGISTER}"))
-            .expect("unknown schema syntax");
-        assert_eq!(
-            operation_version(&unknown)
-                .expect_err("unknown stored policy")
-                .code,
-            "FMINE-REF-107"
-        );
-        let oversized = format!(
-            "{REGISTER}#{}",
-            "x".repeat(MAX_OPERATION_BYTES - REGISTER.len() - 1)
-        );
-        assert_eq!(oversized.len(), MAX_OPERATION_BYTES);
-        assert_eq!(
-            version_request(&oversized, "forecast")
-                .expect_err("header also counts")
-                .code,
-            "FMINE-REF-107"
-        );
-    }
-
-    #[test]
-    fn versioned_authority_times_change_ids_without_reinterpreting_legacy_records() {
-        let now = time("2030-01-01T00:00:00Z").expect("date") + 123;
-        let header = Header {
-            cell_id: "synthetic".into(),
-            clock_skew_ns: 7,
-        };
-        let mut ids = Vec::new();
-        for v2 in [false, true] {
-            let mut state = Replay::default();
-            let request = if v2 {
-                version_request(REGISTER, "forecast").expect("v2")
-            } else {
-                REGISTER.into()
-            };
-            apply(
-                &mut state,
-                &semantic_record(request, now),
-                &header,
-                Some("forecast"),
-            )
-            .expect("registration");
-            let id = state.forecast_id("one").expect("id");
-            let authority = now + if v2 { 7 } else { 0 };
-            assert_eq!(
-                state.ledger.forecast(id).expect("forecast").registered_ns,
-                authority
-            );
-            ids.push(id);
-            let request = if v2 {
-                version_request(FREEZE, "cohort").expect("v2")
-            } else {
-                FREEZE.into()
-            };
-            apply(
-                &mut state,
-                &semantic_record(request, now + 20),
-                &header,
-                Some("cohort"),
-            )
-            .expect("freeze");
-            let cohort = state.cohorts["test"];
-            assert_eq!(
-                state
-                    .ledger
-                    .cohort(cohort)
-                    .expect("cohort")
-                    .spec
-                    .frozen_at_ns,
-                authority + 20
-            );
-        }
-        assert_ne!(ids[0], ids[1]);
-        let mut legacy = Replay::default();
-        apply(
-            &mut legacy,
-            &semantic_record(REGISTER.into(), now),
-            &header,
-            None,
-        )
-        .expect("legacy reread");
-        assert_eq!(
-            legacy.forecast_id("one").expect("unchanged legacy id"),
-            ids[0]
-        );
-    }
-
-    #[test]
-    fn v2_assessments_require_a_checked_digest_and_legacy_unbound_history_stays_readable() {
-        let header = Header {
-            cell_id: "synthetic".into(),
-            clock_skew_ns: 7,
-        };
-        let start = time("2030-01-01T00:00:00Z").expect("date");
-        let cut = time("2030-01-03T00:00:00Z").expect("cut");
-        let mut state = Replay::default();
-        apply(
-            &mut state,
-            &semantic_record(REGISTER.into(), start),
-            &header,
-            None,
-        )
-        .expect("legacy forecast");
-        apply(
-            &mut state,
-            &semantic_record(FREEZE.into(), start + 20),
-            &header,
-            None,
-        )
-        .expect("legacy cohort");
-        let request = "[[assessment]]\ncohort = \"test\"\nas_of = \"2030-01-03T00:00:00Z\"\nselector = \"first-published\"\n";
-        let missing = version_request(request, "assessment").expect("v2 request");
-        assert_eq!(
-            apply(
-                &mut state,
-                &semantic_record(missing, cut + 7),
-                &header,
-                None
-            )
-            .expect_err("v2 must pin")
-            .code,
-            "FMINE-REF-107"
-        );
-        assert!(state.checkpoints.is_empty());
-        let report = apply(
-            &mut state,
-            &semantic_record(request.into(), cut + 7),
-            &header,
-            None,
-        )
-        .expect("legacy checkpoint")
-        .expect("assessment");
-        assert!(state.checkpoints[0].expected.is_none());
-        let bound = format!(
-            "{request}expected_digest = {}\n",
-            js(&report.digest.to_hex())
-        );
-        let bound = version_request(&bound, "assessment").expect("v2 pin");
-        let replayed = apply(&mut state, &semantic_record(bound, cut + 8), &header, None)
-            .expect("v2 checked checkpoint")
-            .expect("assessment");
-        assert_eq!(replayed.digest, report.digest);
-        let wrong = format!("{request}expected_digest = \"{}\"\n", "00".repeat(32));
-        let wrong = version_request(&wrong, "assessment").expect("v2 wrong pin syntax");
-        assert_eq!(
-            apply(&mut state, &semantic_record(wrong, cut + 9), &header, None)
-                .expect_err("wrong pin")
-                .code,
-            "FMINE-REF-505"
-        );
-    }
-
-    #[test]
-    fn generated_assessment_values_preserve_names_without_interpreting_toml() {
-        let name = "cohort \\\"first\\\" \\ desk #1";
-        let request = format!(
-            "[[assessment]]\ncohort = {}\n",
-            toml_string(name).expect("safe name")
-        );
-        let doc = parse_subset(&request).expect("one assessment table");
-        assert!(doc.top.is_empty());
-        assert_eq!(doc.rows.len(), 1);
-        assert_eq!(Row(&doc.rows[0]).string("cohort").expect("cohort"), name);
-        for value in [
-            "name\n[[forecast]]",
-            "name\rnext",
-            "name\tpart",
-            "name\0tail",
-        ] {
-            assert_eq!(
-                toml_string(value).expect_err("control character").code,
-                "FMINE-REF-107"
-            );
-        }
-    }
-
-    #[test]
-    fn observed_registration_nanoseconds_are_preserved_without_timestamp_reparsing() {
-        let observed_ns = time("2030-01-02T00:00:00Z").expect("date") + 123_456_789;
-        let mut state = Replay::default();
-        let header = Header {
-            cell_id: "synthetic".into(),
-            clock_skew_ns: 0,
-        };
-        let record = Record {
-            sequence: 1,
-            previous: Digest32::default(),
-            observed_ns,
-            entry: Entry::Operation("[[forecast]]\nid = \"one\"\nmodel_key = \"synthetic\"\noutcome_due = \"2031-01-01T00:00:00Z\"\nkind = \"bernoulli\"\nprobability = \"0.5\"\n".into()),
-        };
-        apply(&mut state, &record, &header, Some("forecast")).expect("live registration");
-        let id = state.forecast_id("one").expect("registered id");
-        let registered = state.ledger.forecast(id).expect("registered forecast");
-        assert_eq!(registered.registered_ns, observed_ns);
-        assert_eq!(
-            utc(registered.registered_ns),
-            "\"2030-01-02T00:00:00.123456789Z\""
-        );
-    }
-}
+#[path = "../../../xtask/testdata/forecast_live_controls.rs"]
+mod tests;

@@ -1,24 +1,32 @@
 //! FrankenMining CLI (`fmine`) implementation (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+mod capital;
 mod claim_inspection;
+pub mod cost;
+mod decision;
 mod forecast;
+pub mod geo;
 mod guidance;
 mod guidance_capacity;
+pub mod html;
 pub mod issued;
 mod lint;
 mod lint_guidance;
+mod lint_html;
 mod lint_publicness;
 pub mod mirror;
 pub mod packet;
 pub mod reliance;
 mod reliance_binding;
 pub mod reliance_explicit;
+pub mod reserve;
 mod tables;
 mod track_record;
 mod track_record_as_of;
 pub mod track_record_binding;
 mod track_record_data;
 mod track_record_price;
+mod worksheet_input;
 
 pub use forecast::live as forecast_journal;
 pub use forecast::record_score as forecast_record;
@@ -44,6 +52,18 @@ pub enum OutputFormat {
 /// Parsed CLI command (`BD-111`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
+    /// Calculate a declared complete cost population under an explicitly selected AISC/AIC definition.
+    MetricsCost(cost::Command),
+    /// Compare unchanged production quantities under explicit named and versioned price decks.
+    MetricsGeo(geo::Command),
+    /// Project exact registered HTML cells with source-verified semantic labels into canonical Claims.
+    HtmlClaims(html::Command),
+    /// Compute complete registered reserve-replacement windows from explicitly selected PDF assertions.
+    ReserveReplacement(reserve::Command),
+    /// Compare explicit monetary alternatives on one declared finite scenario set (BD-225).
+    DecideCard { model: PathBuf },
+    /// Construct affordable static project bundles on shared declared scenarios (BD-229).
+    CapitalProgram { model: PathBuf },
     /// Compare explicitly selected public JV production/sales assertions on a common dated perimeter.
     Mirror(mirror::Command),
     /// Local issuance status, recall and owner-authorized journal events (BD-347).
@@ -73,6 +93,8 @@ pub enum CliCommand {
         through: Option<String>,
         /// A strict identity registry selects only its cited PDF documents and quantities.
         definitions: Option<PathBuf>,
+        /// Every declared PDF must have been publicly available by this date; no members are dropped.
+        as_of: Option<String>,
     },
     /// Necessary conditions for completing cited annual guidance under historical sales persistence (BD-342).
     GuidanceCompletion {
@@ -129,6 +151,14 @@ pub enum CliCommand {
         /// Search the selected snapshot for uncited, fully specified equalities (BD-345.S3).
         discover: bool,
         /// Assess dated publication evidence independently of numeric equality (BD-345.S4).
+        as_of: Option<String>,
+    },
+    /// Check a disclosure draft against explicitly mapped, registered HTML source Claims.
+    LintHtml {
+        draft: PathBuf,
+        issuer: String,
+        definitions: PathBuf,
+        discover: bool,
         as_of: Option<String>,
     },
     /// Replay a forecast transcript and assess its frozen cohort without dropping missing outcomes (BD-343).
@@ -417,6 +447,10 @@ fn verb_hint(args: &[String]) -> &'static str {
             | "--timestamp-roots"
             | "--timestamp-intermediates"
             | "--definitions"
+            | "--html-definitions"
+            | "--definition"
+            | "--input"
+            | "--bindings"
             | "--capacity-document"
             | "--output"
             | "--journal"
@@ -451,7 +485,33 @@ fn verb_hint(args: &[String]) -> &'static str {
                 };
             }
             "guidance" => return "guidance completion",
+            "decide" => {
+                let mut next = i + 1;
+                while let Some(word) = args.get(next) {
+                    match word.as_str() {
+                        "--format" | "--workspace" => next += 2,
+                        "--json" => next += 1,
+                        "program" => return "decide program",
+                        _ => return "decide card",
+                    }
+                }
+                return "decide card";
+            }
+            "metrics" => {
+                let mut next = i + 1;
+                while let Some(word) = args.get(next) {
+                    match word.as_str() {
+                        "--format" | "--workspace" => next += 2,
+                        "--json" => next += 1,
+                        "geo" => return "metrics geo",
+                        _ => return "metrics cost",
+                    }
+                }
+                return "metrics cost";
+            }
+            "html" => return "html claims",
             "mirror" => return "mirror",
+            "reserve" => return "reserve replacement",
             "check" => return "check tables",
             "track-record" => return "track-record",
             "recovery" => return "recovery gap",
@@ -555,7 +615,7 @@ fn parse_forecast_journal(
     }
     let ["forecast", "journal", verb] = words.as_slice() else {
         return Err(
-            "expected forecast journal init|register|freeze|outcome|resolve|assess|inspect|report"
+            "expected forecast journal init|register|freeze|outcome|resolve|restate|assess|inspect|report"
                 .to_string(),
         );
     };
@@ -630,6 +690,21 @@ fn parse_forecast_journal(
             cohort: take(&mut fields, "--cohort")?,
             forecast: take(&mut fields, "--forecast")?,
         },
+        "restate" => {
+            let release = take(&mut fields, "--release")?;
+            if !fmine_registry::sources::is_quarter(&release) {
+                return Err(
+                    "--release requires a canonical YYYYQ1..4 reporting quarter".to_string()
+                );
+            }
+            Command::Restate {
+                journal,
+                head: digest(&take(&mut fields, "--head")?)?,
+                cohort: take(&mut fields, "--cohort")?,
+                forecast: take(&mut fields, "--forecast")?,
+                release,
+            }
+        }
         "assess" => {
             let head = digest(&take(&mut fields, "--head")?)?;
             let cohort = take(&mut fields, "--cohort")?;
@@ -719,11 +794,71 @@ fn parse_forecast_journal(
     Ok((command, format, workspace))
 }
 
+/// Remove shared output/workspace options before a strict command-specific parser runs.
+fn common_options(
+    args: &[String],
+    default_root: &Path,
+) -> Result<(Vec<String>, OutputFormat, PathBuf), String> {
+    let mut words = Vec::new();
+    let mut format = None;
+    let mut workspace = None;
+    let mut i = 0;
+    while i < args.len() {
+        let flag = args[i].as_str();
+        if flag == "--json" {
+            if format.replace(OutputFormat::Json).is_some() {
+                return Err("output format may be supplied only once".into());
+            }
+        } else if matches!(flag, "--format" | "--workspace") {
+            i += 1;
+            let value = args
+                .get(i)
+                .filter(|v| !v.trim().is_empty() && !v.starts_with("--"))
+                .ok_or_else(|| format!("missing {flag} value"))?;
+            if flag == "--format" {
+                let selected = match value.as_str() {
+                    "json" => OutputFormat::Json,
+                    "markdown" | "md" => OutputFormat::Markdown,
+                    _ => return Err("--format requires json or markdown".into()),
+                };
+                if format.replace(selected).is_some() {
+                    return Err("output format may be supplied only once".into());
+                }
+            } else if workspace.replace(PathBuf::from(value)).is_some() {
+                return Err("--workspace may be supplied only once".into());
+            }
+        } else {
+            words.push(args[i].clone());
+        }
+        i += 1;
+    }
+    Ok((
+        words,
+        format.unwrap_or(OutputFormat::Json),
+        workspace.unwrap_or_else(|| default_root.to_path_buf()),
+    ))
+}
+
 /// Parses command-line arguments into `(CliCommand, OutputFormat, PathBuf)`.
 pub fn parse_args(
     args: &[String],
     default_root: &Path,
 ) -> Result<(CliCommand, OutputFormat, PathBuf), String> {
+    let verb = verb_hint(args);
+    if matches!(verb, "metrics cost" | "metrics geo" | "html claims") {
+        let (words, format, root) = common_options(args, default_root)?;
+        let command = match verb {
+            "metrics cost" => CliCommand::MetricsCost(cost::parse(&words)?),
+            "metrics geo" => CliCommand::MetricsGeo(geo::parse(&words)?),
+            _ => CliCommand::HtmlClaims(html::parse(&words)?),
+        };
+        return Ok((command, format, root));
+    }
+    if verb_hint(args) == "reserve replacement" {
+        return reserve::parse(args, default_root).map(|(command, format, root)| {
+            (CliCommand::ReserveReplacement(command), format, root)
+        });
+    }
     if verb_hint(args) == "assure public" && args.iter().any(|arg| arg == "--output") {
         return reliance::parse_export(args, default_root)
             .map(|(command, format, root)| (CliCommand::AssureExport(command), format, root));
@@ -756,6 +891,7 @@ pub fn parse_args(
     let mut discover = false;
     let mut provenance = None;
     let mut definitions = None;
+    let mut html_definitions = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -864,6 +1000,16 @@ pub fn parse_args(
                     args.get(i).ok_or("missing value for --definitions")?,
                 ));
             }
+            "--html-definitions" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    .ok_or("missing value for --html-definitions")?;
+                if html_definitions.replace(PathBuf::from(value)).is_some() {
+                    return Err("--html-definitions may be supplied only once".into());
+                }
+            }
             flag if flag.starts_with("--") => return Err(format!("unknown flag '{flag}'")),
             arg => positional.push(arg.to_string()),
         }
@@ -881,7 +1027,7 @@ pub fn parse_args(
     // error, never ignored, so every next action that parses means what it says.
     let words = match positional[0].as_str() {
         "assure" | "check" | "guidance" | "recovery" | "forecast" | "lint" => 2,
-        "claim" => 3,
+        "claim" | "decide" => 3,
         "doctor" | "robot-docs" | "track-record" => 1,
         other => return Err(format!("unknown verb '{other}'")),
     };
@@ -911,11 +1057,11 @@ pub fn parse_args(
     }
     if !matches!(
         positional[0].as_str(),
-        "guidance" | "forecast" | "track-record" | "lint"
+        "guidance" | "forecast" | "track-record" | "lint" | "check"
     ) && as_of.is_some()
     {
         return Err(
-            "--as-of requires 'guidance completion', 'track-record', 'forecast assess' or 'lint'"
+            "--as-of requires 'guidance completion', 'track-record', 'forecast assess', 'lint' or PDF 'check tables'"
                 .to_string(),
         );
     }
@@ -935,11 +1081,36 @@ pub fn parse_args(
     if definitions.is_some() && positional[0] != "check" {
         return Err("--definitions requires 'check tables'".to_string());
     }
+    if html_definitions.is_some() && positional[0] != "lint" {
+        return Err("--html-definitions requires 'lint'".into());
+    }
 
     let cmd = match positional[0].as_str() {
+        "decide" => {
+            let [_, subcommand, model] = positional.as_slice() else {
+                return Err("expected 'fmine decide card|program <model-file>'".into());
+            };
+            if model.trim().is_empty() {
+                return Err("expected 'fmine decide card|program <model-file>'".into());
+            }
+            match subcommand.as_str() {
+                "card" => CliCommand::DecideCard {
+                    model: PathBuf::from(model),
+                },
+                "program" => CliCommand::CapitalProgram {
+                    model: PathBuf::from(model),
+                },
+                _ => return Err("expected 'fmine decide card|program <model-file>'".into()),
+            }
+        }
         "check" => {
             if positional.get(1).map(String::as_str) != Some("tables") {
                 return Err("expected 'fmine check tables'".to_string());
+            }
+            if let Some(cut) = &as_of
+                && (definitions.is_none() || !fmine_registry::sources::is_date(cut))
+            {
+                return Err("check tables --as-of requires --definitions and YYYY-MM-DD".into());
             }
             if synthetic {
                 if issuer.is_some() || through.is_some() || definitions.is_some() {
@@ -966,6 +1137,7 @@ pub fn parse_args(
                 issuer,
                 through,
                 definitions,
+                as_of,
             }
         }
         "assure" => {
@@ -1145,6 +1317,18 @@ pub fn parse_args(
             let draft = positional
                 .get(1)
                 .ok_or("lint requires a local draft path")?;
+            if html_definitions.is_some() {
+                if synthetic || through.is_some() {
+                    return Err(
+                        "--html-definitions is exclusive with --synthetic and --through".into(),
+                    );
+                }
+                for flag in ["--issuer", "--as-of", "--discover"] {
+                    if args.iter().filter(|arg| arg.as_str() == flag).count() > 1 {
+                        return Err(format!("{flag} may be supplied only once"));
+                    }
+                }
+            }
             if issuer.is_some() && synthetic || issuer.is_none() && !synthetic {
                 return Err("lint requires --issuer <issuer> or --synthetic".to_string());
             }
@@ -1165,12 +1349,22 @@ pub fn parse_args(
             {
                 return Err("lint --as-of requires YYYY-MM-DD".to_string());
             }
-            CliCommand::Lint {
-                draft: PathBuf::from(draft),
-                issuer,
-                through,
-                discover,
-                as_of,
+            if let Some(definitions) = html_definitions {
+                CliCommand::LintHtml {
+                    draft: PathBuf::from(draft),
+                    issuer: issuer.ok_or("HTML lint requires --issuer")?,
+                    definitions,
+                    discover,
+                    as_of,
+                }
+            } else {
+                CliCommand::Lint {
+                    draft: PathBuf::from(draft),
+                    issuer,
+                    through,
+                    discover,
+                    as_of,
+                }
             }
         }
         "forecast" => {
@@ -1510,6 +1704,12 @@ fn track_record_envelope(
 pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
     let to_doctor = || vec![NextAction::new("fmine doctor", DOCTOR_WHY)];
     match cmd {
+        CliCommand::MetricsCost(command) => cost::execute(command, workspace_root),
+        CliCommand::MetricsGeo(command) => geo::execute(command, workspace_root),
+        CliCommand::HtmlClaims(command) => html::execute(command, workspace_root),
+        CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
+        CliCommand::DecideCard { model } => decision::execute(model, workspace_root),
+        CliCommand::CapitalProgram { model } => capital::execute(model, workspace_root),
         CliCommand::Mirror(command) => mirror::execute(command, workspace_root),
         CliCommand::RelianceExplicit(command) => {
             reliance_explicit::execute(command, workspace_root)
@@ -1527,11 +1727,13 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             issuer,
             through,
             definitions,
+            as_of,
         } => tables::execute(
             workspace_root,
             issuer.as_deref(),
             through.as_deref(),
             definitions.as_deref(),
+            as_of.as_deref(),
         ),
         CliCommand::AssurePublic { issuer, through } => {
             if !is_issuer_name(issuer) || !registry_path(workspace_root, issuer).is_file() {
@@ -1666,6 +1868,20 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             fmine_public::recovery::run_public(workspace_root, issuer, through.as_deref()),
         ),
         CliCommand::RecoverySynthetic => recovery_envelope(fmine_public::recovery::run_synthetic()),
+        CliCommand::LintHtml {
+            draft,
+            issuer,
+            definitions,
+            discover,
+            as_of,
+        } => lint_html::execute(
+            draft,
+            issuer,
+            definitions,
+            *discover,
+            as_of.as_deref(),
+            workspace_root,
+        ),
         CliCommand::Lint {
             draft,
             issuer,
@@ -1870,12 +2086,17 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 .map(|i| format!("\"{}\"", escape_json(i)))
                 .collect();
             let verbs = [
+                cost::USAGE,
+                geo::USAGE,
+                html::USAGE,
+                "decide card <model-file>",
+                capital::USAGE,
                 "assure public --issuer <issuer> [--through YYYYQn]",
                 "assure public --synthetic",
                 "assure challenges --issuer <issuer> [--through YYYYQn]",
                 "assure challenges --synthetic",
                 "check tables --issuer <issuer> [--through YYYYQn]",
-                "check tables --issuer <issuer> --definitions <path>",
+                "check tables --issuer <issuer> --definitions <path> [--as-of YYYY-MM-DD]",
                 "check tables --synthetic",
                 "assure issue (--issuer <issuer> [--through YYYYQn] | --synthetic) --output <path> --journal <path> --expected-head <hex> --key <path> --role <generic-role> --purpose <text> --now <UTC> --uncertainty-ns <n>",
                 "reliance init --journal <path> --key <path> --now <UTC> --uncertainty-ns <n> --max-age-ns <n> --max-skew-ns <n>",
@@ -1895,6 +2116,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "recovery gap --issuer <issuer> [--through YYYYQn]",
                 "recovery gap --synthetic",
                 "lint <draft> --issuer <issuer> [--through YYYYQn] [--discover] [--as-of YYYY-MM-DD]",
+                "lint <draft> --issuer <issuer> --html-definitions <mapping.toml> [--discover] [--as-of YYYY-MM-DD]",
                 "lint <draft> --synthetic [--discover]",
                 "forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ [--selector first-published|latest-as-of] [--provenance <path>]",
                 "forecast journal init --journal <new-path> --cell <cell-id> --trust-host-clock [--max-clock-skew-ms <bound>]",
@@ -1902,11 +2124,13 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "forecast journal freeze --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal outcome --journal <path> --head <hex> --request <path> --trust-host-clock",
                 "forecast journal resolve --journal <path> --head <hex> --cohort <name> --forecast <alias> --trust-host-clock",
+                "forecast journal restate --journal <path> --head <hex> --cohort <name> --forecast <alias> --release YYYYQn --trust-host-clock",
                 "forecast journal assess --journal <path> --head <hex> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ --trust-host-clock [--selector first-published|latest-as-of] [--expected-digest <hex>]",
                 "forecast journal inspect --journal <path> [--head <hex>]",
                 "forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <trusted-pem>",
                 "forecast journal report --journal <path> --assessment <digest> [--head <hex>] [--provenance <path>] [--timestamp-head <hex> --timestamp-receipt <path> --timestamp-roots <pem> [--timestamp-intermediates <pem>]]",
                 "doctor",
+                reserve::VERB_USAGE,
                 "claim show <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
                 "claim why <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
                 "claim trace <id> [--issuer <issuer> [--through YYYYQn] | --synthetic]",
@@ -1937,6 +2161,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 refusals.join(",")
             );
             payload.pop();
+            payload.push_str(",\"decision\":");
+            payload.push_str(decision::ROBOT_DOCS_JSON);
             payload.push_str(concat!(
                 ",\"table_checks\":{\"schema\":\"fmine.table-check.v1\",",
                 "\"workbooks\":\"Existing assurance identities, source citations and ledger certificate\",",
@@ -1950,6 +2176,26 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "\"compatibility\":\"Shares the report metadata and journal with reliance issue; grammars cannot be mixed\",",
                 "\"recall\":\"Known issuances and generic roles only; retrieval registers no new recipient and sends no messages\"}}"
             ));
+            payload.pop();
+            payload.push_str(",\"reserve_replacement\":");
+            payload.push_str(reserve::ROBOT_DOCS_JSON);
+            payload.push_str(",\"cost_worksheet\":");
+            payload.push_str(cost::ROBOT_DOCS_JSON);
+            payload.push_str(",\"production_geo\":");
+            payload.push_str(geo::ROBOT_DOCS_JSON);
+            payload.push_str(",\"html_claims\":");
+            payload.push_str(html::ROBOT_DOCS_JSON);
+            payload.push_str(",\"forecast_distributions\":");
+            payload.push_str(forecast::DISTRIBUTIONS_JSON);
+            payload.push_str(",\"capital_program\":");
+            payload.push_str(capital::ROBOT_DOCS_JSON);
+            payload.push_str(concat!(
+                ",\"html_lint\":{\"selection\":\"Explicit --html-definitions selects only mapped registered HTML Claims\",",
+                "\"equality\":\"Exact existing equality, precision, vintage and ambiguity checks; printed credit treatment is not inferred\",",
+                "\"publication\":\"Optional --as-of filters future source bytes before reads; registered dates are reported separately from equality\",",
+                "\"mapping_history\":\"Current mapping and registry bytes are bound; historical mapping availability is not established\"}"
+            ));
+            payload.push('}');
             Envelope::ok(
                 "robot-docs",
                 payload,
@@ -2130,165 +2376,4 @@ fn escape_json(s: &str) -> String {
     out
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn workspace_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|p| p.parent())
-            .expect("workspace root")
-            .to_path_buf()
-    }
-
-    fn args(a: &[&str]) -> Vec<String> {
-        a.iter().map(|s| (*s).to_string()).collect()
-    }
-
-    #[test]
-    fn test_track_record_as_of_envelope_preserves_original_outcomes_and_missing_members() {
-        let report = fmine_public::guidance::track_record::synthetic;
-        let env = track_record_envelope(report());
-        assert_eq!((env.status, env.exit_code), ("ok", 0), "{}", env.to_json());
-        assert_eq!(env.verb, "track-record");
-        for required in [
-            "\"schema\":\"fmine.guidance.track-record.as-of.v1\"",
-            "\"lane\":\"synthetic\"",
-            "\"gate_eligible\":false",
-            "\"n_members\":2,\"n_scored\":1,\"n_unresolved\":1,\"n_inside\":0",
-            "\"n_members\":2,\"n_scored\":1,\"n_unresolved\":1,\"n_inside\":1",
-            "\"z\":\"3/2\"",
-            "\"z\":\"1/2\"",
-            "\"cp90_iid\":{",
-            "\"whole_cohort_bounds\":{\"lo\":\"0\",\"hi\":\"1/2\"",
-            "Synthetic_2030Q4.xlsx:YTD!C4",
-            "Synthetic_2031Q4.xlsx:YTD!C4",
-            "historical completeness unassessed",
-            "Cost scores are unconditional",
-        ] {
-            assert!(
-                env.payload_json.contains(required),
-                "missing {required}: {}",
-                env.payload_json
-            );
-        }
-        assert!(env.anchor_id.is_none());
-        assert!(env.certificate.is_none());
-        assert_eq!(
-            env.no_claim,
-            Some(fmine_public::guidance::track_record::NO_CLAIM)
-        );
-        assert!(env.to_json().contains(FLAGS));
-        assert_eq!(track_record_envelope(report()), env);
-        let markdown = env
-            .rendered_markdown
-            .as_deref()
-            .expect("readable as-of report");
-        assert!(markdown.starts_with("# Guidance track record"));
-        assert!(markdown.contains("125; above; z 3/2"));
-        assert!(markdown.contains("115; inside; z 1/2"));
-        assert!(markdown.contains("1 unresolved of 2 members"));
-        assert!(markdown.contains("## Sources"));
-        assert!(markdown.contains("Synthetic invented evidence"));
-    }
-
-    /// BD-274 over the real workbooks: the gate-eligible run's payload ends with the seven published cut-offs.
-    #[test]
-    #[ignore = "needs the registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded_docs"]
-    fn test_assure_public_issuer_run_carries_the_published_cutoffs() {
-        let env = envelope_for(&[
-            "assure",
-            "public",
-            "--issuer",
-            "barrick",
-            "--through",
-            "2026Q2",
-        ]);
-        assert_eq!(env.exit_code, 0, "{}", env.to_json());
-        let section = published_cutoffs(&workspace_root(), "barrick")
-            .expect("reads")
-            .expect("barrick rows");
-        let head = &section[..section.find(",\"rows\"").expect("rows")];
-        println!("{head}}}");
-        assert!(
-            env.payload_json
-                .ends_with(&format!(",\"published_cutoffs\":{section}}}")),
-            "{head}"
-        );
-        assert_eq!(section.matches("{\"id\":").count(), 7);
-    }
-
-    /// BD-274: an issuer run carries the workspace's published cut-offs for the registry's own issuer only. No
-    /// registry is no section; a registry that does not read refuses (506) rather than dropping rows.
-    #[test]
-    fn test_published_cutoffs_for_the_registry_issuer_only() {
-        let root = workspace_root();
-        let section = published_cutoffs(&root, "barrick")
-            .expect("reads")
-            .expect("barrick rows");
-        assert!(
-            section.contains(
-                "\"cases\":7,\"reproduced\":6,\"within_input_rounding\":1,\"conflict\":0,"
-            ),
-            "{section}"
-        );
-        assert_eq!(published_cutoffs(&root, "newmont").expect("reads"), None);
-
-        let ws = std::env::temp_dir().join(format!("fmine-cli-cutoffs-{}", std::process::id()));
-        let reg = ws.join(cutoff::CUTOFFS_REGISTRY);
-        std::fs::create_dir_all(reg.parent().expect("dir")).expect("registry dir");
-        assert_eq!(
-            published_cutoffs(&ws, "barrick").expect("no registry"),
-            None
-        );
-        let text = std::fs::read_to_string(root.join(cutoff::CUTOFFS_REGISTRY)).expect("registry");
-        std::fs::write(
-            &reg,
-            text.replacen("published = \"5.66\"", "published = 5.66", 1),
-        )
-        .expect("write");
-        let refusal = published_cutoffs(&ws, "barrick").expect_err("malformed row");
-        assert_eq!(refusal.code, "FMINE-REF-506");
-        assert!(
-            refusal.what.contains("published_cutoffs.toml"),
-            "{}",
-            refusal.what
-        );
-        let _ = std::fs::remove_dir_all(&ws);
-    }
-
-    /// The section is the payload's last field and leaves the anchor and certificate alone: it is not in the root.
-    /// The synthetic lane never carries it.
-    #[test]
-    fn test_published_cutoffs_join_the_payload_outside_the_state_root() {
-        let report = run_synthetic_assurance(&[]).expect("synthetic");
-        let section = published_cutoffs(&workspace_root(), "barrick")
-            .expect("reads")
-            .expect("barrick rows");
-        let (bare, with) = (
-            report_envelope(&report, None),
-            report_envelope(&report, Some(&section)),
-        );
-        assert_eq!(
-            (&bare.anchor_id, &bare.certificate),
-            (&with.anchor_id, &with.certificate)
-        );
-        let body = bare.payload_json.strip_suffix('}').expect("object");
-        assert_eq!(
-            with.payload_json,
-            format!("{body},\"published_cutoffs\":{section}}}")
-        );
-        let synthetic = envelope_for(&["assure", "public", "--synthetic"]);
-        assert_eq!(synthetic.exit_code, 0);
-        assert!(!synthetic.payload_json.contains("published_cutoffs"));
-    }
-
-    /// The four INV-002 flags, all false, written by hand from BD-329.S3 (not taken from `FLAGS_JSON`).
-    const FLAGS: &str = "{\"reserve_disclosure_claim\":false,\"execution_authorized\":false,\
-                         \"geotechnical_signoff\":false,\"regulatory_compliance_claim\":false}";
-
-    fn envelope_for(a: &[&str]) -> Envelope {
-        invoke(&args(a), &workspace_root()).0
-    }
-}
+include!("../../xtask/testdata/cli_routing_unit_tests.rs");

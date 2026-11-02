@@ -83,6 +83,25 @@ formula = "three-year net change in attributable gold equivalent ounces / deplet
 source = "Barrick 2026 Circular pp.41-42 and the Reserve Replacement table, p.86"
 evidence = "E604"
 
+# These rules name calculation semantics, never stand-in reserve or depletion inputs.
+# The strict registry subset encodes this boolean-like field as "true" or "false".
+[[reserve_replacement]]
+definition = "reserve_replacement.gold_oz@barrick-fy2025"
+metal = "gold"
+window_years = 3
+amount_unit = "Moz"
+basis = "attributable_gold_ex_ad"
+excludes_acquisitions_divestments = "true"
+
+[[reserve_replacement]]
+definition = "reserve_replacement.geo@barrick-2026-circular"
+metal = "gold_equivalent"
+window_years = 3
+amount_unit = "Moz"
+basis = "attributable_geo_ex_ad"
+excludes_acquisitions_divestments = "true"
+geo_definition = "geo.reserve_deck@barrick-2026-circular"
+
 [[project_test]]
 definition = "aisc@wgc-2018"
 material_uplift_percent = "10"

@@ -97,6 +97,16 @@ The same engine compares the AISC workbooks under `issuer_consistency.aisc_vinta
 5,819 series and 3,722 later comparisons, all unchanged in the registered corpus. This includes 359 explicitly
 labelled co-product cash-cost rates, kept distinct from the by-product rates used by the identity ledger.
 
+**DESIGN (BD-504e):** `issuer_consistency.mine_stats_identities` also follows the seven Mine Stats
+arithmetic identity families across releases. It shows state counts at each identity's earliest registered
+appearance beside the all-file counts, then reports whether each later appearance persisted, was corrected,
+became broken or was reclassified. The comparison follows semantic keys through moved spreadsheet cells;
+ownership, units and region-map versions remain separate. Missing or ambiguous source keys stay listed and
+cannot prove persistence or correction. Counts retain not-published and refused instances. Each report
+carries its own digest and cited source Claims; the existing assurance root still binds the underlying
+identity ledger and registered workbook bytes. Earliest registered evidence does not establish first
+publication, and these findings do not supply an issuer pass score.
+
 Disclosure coverage comes from explicit `restatement_note` and `restatement_scope` registry rows. Each run
 checks the source digest and complete quoted cell text, then matches exact subjects, lines, occurrences and
 whole reporting periods. A future note cannot explain an earlier release. Missing, altered or unusable note
@@ -133,7 +143,301 @@ their envelope has no identity-ledger certificate or issuance anchor. The source
 separately and does not certify the model. Missing IDs and altered source files refuse instead of returning
 a stale cached Claim. Recovery results remain descriptive and uncalibrated.
 
-### Check table identities, reserve roll-forwards and replacement ratios
+### Calculate a cost metric under an explicit definition
+
+`metrics cost` evaluates a declared cost worksheet under a selected AISC or AIC definition from
+[`registries/metrics.toml`](registries/metrics.toml). Run the included invented example:
+
+```bash
+cargo run -p fmine-cli -- metrics cost --input tests/costs/declared_aisc.toml --definition aisc@wgc-2018 --format markdown
+cargo run -p fmine-cli -- metrics cost --input tests/costs/declared_aisc.toml --definition aisc@wgc-2018 --json
+```
+
+The [example worksheet](tests/costs/declared_aisc.toml) declares USD 800.01 of mining costs, 300 of corporate
+costs, 100 of lease payments and 200 of by-product credits, with 100 gold ounces sold. The selected definition
+produces a **USD 1,000.01 numerator and USD 10.0001 per ounce sold**. Its USD 999 income-tax line remains
+visible as excluded. Each input receives its inclusion, exclusion or credit treatment from the selected
+definition; the receipt also retains inherited rules and any registered successor.
+
+The worksheet uses schema `fmine.cost-worksheet.v1`, explicit issuer, subject, period, ownership, basis and
+currency, `complete = "true"`, and `ounces_sold`. Each `[[cost]]` names a registered `item` and quoted `usd`
+amount; `[[uu]]` rows retain named unknown-risk scenarios, their triggers and downside amounts. Monetary
+inputs use major USD units with at most four decimal places. Quantities and shares are exact decimals or
+fractions. The calculation does not pass through floating point, and JSON retains exact rational results
+and complete canonical input/output Claims, bound to the actual worksheet and metric-registry hashes.
+
+The worksheet's cost classification and completeness remain **Assumed, Internal and uncalibrated**. Declaring
+a complete population is not independent evidence that omitted costs are zero. This command calculates the
+chosen rule; it does not verify issuer filings or close the broader metric-reproduction work.
+
+### Compare production GEO across named price decks
+
+`metrics geo` applies each versioned price deck to the same declared production quantities, showing each
+metal's contribution and the exact change from the named reference. Run the included invented example:
+
+```bash
+cargo run -p fmine-cli -- metrics geo --input crates/xtask/testdata/production_geo.toml --format markdown
+cargo run -p fmine-cli -- metrics geo --input crates/xtask/testdata/production_geo.toml --json
+```
+
+The [GB-27 example worksheet](crates/xtask/testdata/production_geo.toml) holds gold production at 3,200,000 oz
+and copper production at 440,000,000 lb. Both decks price copper at USD 4.50/lb:
+
+| Deck / version | Gold price, USD/oz | Copper contribution, GEO oz | Total GEO oz | Difference from reference, oz |
+|---|---:|---:|---:|---:|
+| budget / example-v1 | 3,000 | 660,000 | 3,860,000 | 0 |
+| comparison / example-v1 | 4,500 | 440,000 | 3,640,000 | −220,000 |
+
+Schema `fmine.geo-worksheet.v1` requires explicit issuer, subject, period, ownership, physical basis,
+population, currency, included metals and reference deck/version. Each `[[quantity]]` declares `metal`,
+`unit` and `amount`; each `[[deck]]` declares `id`, `version`, `basis`, `currency` and `gold_price_per_oz`,
+with `copper_price_per_lb` and `silver_price_per_oz` required when those metals are included. Values are
+quoted strings; amounts are exact decimals or fractions. Gold and silver use oz, copper uses lb, and
+prices are positive major currency units per stated metal unit. Two to sixty-four distinct deck/version
+pairs must share the declared currency. Unknown, duplicate or missing fields refuse. Input files are
+bounded to 1 MiB; no mass, ownership or FX conversion is implicit.
+
+The receipt retains complete input/output Claims, the submitted file's SHA-256, field locators and a
+deterministic digest. Imported inputs remain **Assumed, Internal and uncalibrated**. Omitted metals are
+outside the declared population, not independently verified zero. The differences above measure price-ratio
+effects on unchanged physical quantities; they establish neither physical production change nor source
+accuracy, reserve classification or disclosure authority.
+
+### Turn registered HTML tables into cited Claims
+
+`html claims` reads local, registered HTML filings and explicit label mappings into canonical public Claims:
+
+```bash
+cargo run -p fmine-cli -- html claims --issuer example --definitions local/html-claims.toml --format markdown
+cargo run -p fmine-cli -- html claims --issuer example --definitions local/html-claims.toml --as-of 2025-05-01 --json
+```
+
+The current supported population is site-level AISC, TCC, gold-equivalent production, processed/head grade
+and recovery. It preserves printed numbers exactly, including large decimals and accounting parentheses.
+Each result contains its full Claim receipt, period and publication vintage, ownership, unit, printed token,
+exact decimal value and step, original table/cell anchor and byte range. Label citations and both the mapping
+and source-registry hashes explain how the source became that Claim. Dashes, `n/a`, empty cells and numeric
+zero remain distinct; an applicable registered disposal or withholding rule remains visible.
+
+Register a filing in `registries/sources/<issuer>.toml` with a separate `[[html]]` row. This template shows the
+required grammar; replace the example metadata, byte count and digest with the actual source evidence:
+
+```toml
+schema = "fmine.sources.v1"
+issuer = "example"
+corpus_dir = "local/filings"
+retrieved_utc = "2025-05-01T12:00:00Z"
+url_prefix = "https://example.invalid/"
+
+[[subject]]
+name = "Site A"
+
+[[html]]
+file = "filing.html"
+release = "2025Q1"
+url = "https://example.invalid/filing.html"
+url_basis = "fetched and verified 2025-05-01"
+published_at = "2025-05-01"
+published_at_basis = "FACT: <citation establishing this publication date>"
+bytes = 1234 # Replace with the actual file length.
+sha256 = "<64 lowercase hexadecimal characters for the actual file bytes>"
+```
+
+An optional `dir` on `[[html]]` overrides `corpus_dir`. HTML registrations require no PDF page count. The
+mapping names a data cell and the five labels establishing its interpretation; it never supplies an amount.
+For a table whose rows are `Site A | 100%`, `AISC | 2025Q1`, and `US$/oz sold | 10.00`, the mapping is:
+
+```toml
+schema = "fmine.html-claims.v1"
+issuer = "example"
+
+[[claim]]
+id = "site_a_aisc_q1"
+file = "filing.html"
+table = 1
+cell = "B3"
+subject_cell = "A1"
+subject_label = "Site A"
+period_cell = "B2"
+period_label = "2025Q1"
+metric_cell = "A2"
+metric_label = "AISC"
+unit_cell = "A3"
+unit_label = "US$/oz sold"
+ownership_cell = "B1"
+ownership_label = "100%"
+```
+
+Table numbers start at one. Labels must match the decoded cell text exactly and satisfy the supported
+grammar: for example `AISC` / `All-in sustaining costs`, `TCC` / `Total cash costs`, `Gold-equivalent
+production`, `Head grade`, or `Recovery`. Cost units explicitly state USD per ounce sold; GEO uses `koz`,
+grade uses `g/t` or `%`, and recovery uses `%`. Ownership is `100%`, `100% basis`, or an explicit
+`Attributable (60%)`-style percentage. Subjects must be registered sites; regions and company totals are
+outside this adapter. Merged label cells retain their original anchors, and one merged numeric origin
+cannot be imported as multiple observations.
+
+The optional publication cut excludes later mapped sources **before opening their files** and lists those
+exclusions. Earlier releases and later comparatives keep separate Claims. These dates are the cited registry
+dates, not independently authenticated timestamps. Inputs stay inside the selected workspace; HTML files
+are bounded to 8 MiB and mapping files to 1 MiB. Extraction is offline and uses no browser, unit conversion
+or inferred table layout. HTML metric keys remain separate from workbook definitions, so importing a TCC or
+GEO figure does not establish its credit treatment or price-deck equivalence.
+
+No live HTML filing is registered in the repository yet. The executable path is exercised with invented
+filings; it does not establish real issuer coverage or completion of the broader BD-057/BD-059 acceptance
+population. Full Claim receipts are returned directly by `html claims`.
+
+### Check a disclosure draft against registered HTML evidence
+
+The same HTML mapping can supply the Claims checked by disclosure lint:
+
+```bash
+cargo run -p fmine-cli -- lint draft.md --issuer example \
+  --html-definitions local/html-claims.toml --format markdown
+cargo run -p fmine-cli -- lint draft.md --issuer example \
+  --html-definitions local/html-claims.toml --discover --as-of 2025-05-01 --json
+```
+
+Use actual registered sources and mappings as described above. A cited equality links the printed number
+to its canonical Claim ID with `[10.00 USD/oz sold](fmine:clm_ID)` and states the subject, period, ownership
+basis and metric. `--discover` searches the selected semantic population for an uncited equality; the
+amount never chooses among competing vintages. The existing checker retains mismatches, excess precision,
+stale citations and ambiguity. Current HTML cost mappings do not establish by-product or co-product credit
+treatment, so a draft asserting either treatment remains unchecked rather than borrowing a workbook rule.
+
+The report includes the full HTML value and label citations, source hashes, mapping and registry evidence.
+An optional date filters future filings before their bytes are read and reports source publication separately
+from numeric agreement. It does not prove that the current mapping or registry existed on that date.
+This selector reads only the mapped HTML population and cannot be combined with `--through` or `--synthetic`.
+
+### Select affordable capital bundles under shared scenario risk
+
+DESIGN (BD-229, plan section 23): `decide program` constructs and compares static combinations of declared
+capital candidates. Run the invented GB-30 exercise:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/gb30.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/gb30.toml --json
+```
+
+The example has an USD 800M budget and three USD 400M packages: brownfield A, greenfield E and buyback D.
+Every package supplies net delta-NAV under the **same five named scenarios**. Without the risk limit, A+E
+has the highest mean at USD 372M. Its worst-20% signed loss is USD 210M. A USD 150M tail-loss ceiling selects
+**A+D**, whose mean is USD 241.18M and tail loss USD 130.6M. The expected-value cost of that constraint is
+USD 130.82M. These exact answers use the plan's displayed rounded buyback inputs; they reproduce its
+one-decimal presentation of 241.2M and 130.8M without treating those rounded figures as exact inputs.
+
+The strict `fmine.capital-program.v1` model declares `budget`, `tail_mass`, optional `max_tail_loss`, a common
+USD valuation basis, the `additive_net_delta_nav` convention and explicit reference-class adjustment bases.
+It contains `[[state]]`, `[[candidate]]`, complete `[[payoff]]` rows, optional `[[requires]]` edges and named
+`[[uu]]` risks. Candidates sharing an `exclusion_group` cannot appear together. Monetary values are quoted
+major USD amounts with at most four decimal places; weights and tail mass are exact rational strings.
+
+The evaluator examines every subset of at most eight candidates on at most 256 states. It keeps every
+structurally rejected bundle and reason, all risk-rejected comparisons, hold-cash and every exact co-winner.
+Spending constrains the budget; it is **not deducted again** from already-net payoffs. Portfolio CVaR comes
+from summed payoffs within each shared state, including fractional tail-boundary mass, so dependence remains
+in the calculation. Full input/output Claims, source bytes, constraints and adjustment bases bind the receipt,
+including candidates that never win.
+
+These are conditional static comparisons of declared assumptions. The example applies no fitted
+reference-class correction, and the output supplies no empirical selection frequency, staged recourse,
+entity cash-flow waterfall, changing share denominator, project feasibility approval or execution authority.
+The wider CapitalProgram and its M4 gates remain open.
+
+### Compare explicit decision alternatives
+
+DESIGN (BD-225, plan §22): `decide card` evaluates an explicitly declared finite scenario model and renders a
+draft DecisionCard. Run the invented expansion exercise supplied in the repository:
+
+```bash
+cargo run -p fmine-cli -- decide card tests/decisions/expansion.toml --format markdown
+cargo run -p fmine-cli -- decide card tests/decisions/expansion.toml --json
+```
+
+The model declares named states with exact rational probabilities, monetary payoffs for every action in every
+state, one explicit do-nothing action, a common currency and valuation basis, and a named unknown-risk scenario
+with its trigger and downside exposure. `payoff.value` is in **major currency units**, with at most four decimal
+places. `uu.downside_usd_m` is explicitly in USD millions. Weights must be strictly positive and sum exactly to
+one. Missing or duplicate states, incompatible currencies, missing unknown-risk terms and unsupported fields
+refuse the comparison; the engine does not repair the model or drop alternatives.
+
+The exercise has a 60% high state and a 40% low state. These are invented input assumptions. The computed results,
+in USD millions, are:
+
+| Alternative | Expected NPV | CVaR95 of loss | Mean regret | Maximum regret |
+|---|---:|---:|---:|---:|
+| Build the expansion | 100 | 200 | 102 | 255 |
+| Smaller fixed-return option | 55 | −55 | 147 | 245 |
+| Do nothing | 0 | 0 | 202 | 300 |
+
+Expected value ranks the expansion first; minimax regret ranks the smaller option first. Regret compares each
+action with the best payoff in the **same named state**. CVaR95 integrates exactly the worst 5% of signed loss
+`-NPV`, including only the needed fraction of a boundary state's probability. An all-gain alternative can
+therefore have negative tail loss. The card also reports weighted inverse-CDF P10/P50/P90, complete per-state
+payoffs and regret, both rankings and every tied winner. All calculations use checked exact arithmetic; JSON
+monetary results are rational strings in major currency units.
+
+The command hashes the actual model bytes and retains the complete input Claims, source anchors, evidence
+labels, confidentiality and unknown-risk terms in its output. The output Claim and report digest bind that full
+input metadata as well as the computed statistics. Editing an assumption changes the identity even when it
+leaves the numerical ranking unchanged. Model-file inputs remain **Assumed, internal and uncalibrated**; supplied
+probabilities do not become calibrated by passing arithmetic checks. The explicit unknown-risk terms remain
+outside the priced scenario matrix. This comparison supplies no feasibility approval, calibrated selection
+frequency, historical replay proof or durable decision-ledger entry. It does not pass the full
+BD-225 or Helm acceptance gates.
+
+### Evaluate whether testwork is worth buying
+
+DESIGN (BD-227, plan §22.4): the same command evaluates an optional information-gathering step before choosing
+an action. The model supplies explicit test and delay costs, named signals, and the exact likelihood of each
+signal in each state. Run the invented GB-29 exercise:
+
+```bash
+cargo run -p fmine-cli -- decide card tests/decisions/metallurgical_test.toml --format markdown
+cargo run -p fmine-cli -- decide card tests/decisions/metallurgical_test.toml --json
+```
+
+The example assumes a 60% high state, build payoffs of +$300M or −$200M, and an 85%-accurate test in each state.
+The do-nothing payoff is zero. The exact calculation gives:
+
+| Quantity | Result |
+|---|---:|
+| Best expected value before testwork | $100M |
+| Expected value of perfect information (EVPI) | $80M |
+| Expected payoff from the optimal action after each test result | $141M |
+| Gross expected value of sample information (EVSI) | $41M |
+| Test cost | $6M |
+| Declared monetary cost of delay | $3.8M |
+| Net information value | $31.2M |
+| Expected value after test and delay costs | $131.2M |
+
+A high test result has probability `57/100` and raises the high-state posterior to `17/19`; build is then
+optimal. A low result has probability `43/100` and lowers that posterior to `9/43`; do nothing is then optimal.
+The output retains all posterior action ties, every named signal, and the complete posterior state weights.
+A signal with zero marginal probability is shown as unreachable, with no invented posterior or action.
+
+Each `information_option` declares `test_cost`, `delay_cost` and integer `delay_days`. Costs are nonnegative
+amounts in the model's major currency units and valuation basis; duration does not imply a discount rate.
+Both monetary costs are charged once for the chosen option, regardless of its result. The declared action
+payoffs supply all other economics; the evaluator does not infer further effects from waiting.
+`signal` rows name that option's possible results. Its `likelihood` rows must explicitly cover every state and
+signal, including zero entries, with each state's probabilities summing exactly to one. The card refuses
+missing cells, unknown references and malformed probability rows instead of filling or normalizing them.
+
+The engine enumerates the finite model exactly and checks `0 ≤ EVSI ≤ EVPI`. It reports the calculation method
+and exact net-value status; Monte Carlo standard error is explicitly not applicable. This is arithmetic
+conditional on the supplied assumptions, not a calibration result. An uninformative test has zero EVSI; a
+costly test can have negative net information value. At the GB-29 prior boundary `P(high) = 34/43`, the low-result
+actions tie and EVSI is zero: no test result forces a change from the current optimal action.
+
+Options are compared by expected net value against acting now. This is a choice of at most one test followed
+by one action. The ordinary action CVaR and same-state regret remain separate: the model supplies no joint
+signal distribution for counterfactual comparisons across different tests. Every option's source Claims,
+assumptions and unknown-risk terms remain in the card's evidence and identity, including losing options.
+This slice does not implement sequential testing or pass BD-227's Monte Carlo estimator acceptance gate.
+
+### Check cited tables, reserve calculations and cutoffs
 
 DESIGN (BD-340.S5/S8): inspect the existing workbook identities with their source citations and ledger
 certificate, or supply explicit definitions for tables transcribed from registered PDFs:
@@ -142,12 +446,17 @@ certificate, or supply explicit definitions for tables transcribed from register
 cargo run -p fmine-cli -- check tables --synthetic --format markdown
 cargo run -p fmine-cli -- check tables --issuer barrick --through 2026Q2 --json
 cargo run -p fmine-cli -- check tables --issuer demo --definitions local/reserve_tables.toml --format markdown
+cargo run -p fmine-cli -- check tables --issuer demo --definitions local/reserve_tables.toml --as-of 2025-03-01 --json
 ```
 
 The definitions mode reads only its named documents and quantities. Each document must be registered under
 the selected issuer and match its registered SHA-256 and size, even when no reading has yet been entered.
 Values come from the existing two-reader transcription registry. Definitions contain membership and rules;
-they contain no source values. This invented example declares closing reserves as opening reserves plus a
+they contain no source values. Optional `--as-of YYYY-MM-DD` requires every declared document's registered
+publication date to be on or before the cut. An unavailable document refuses the run; it does not disappear
+from the declared population. Without the option, inspection is retrospective. JSON retains the cut, checked
+document hashes and publication-date evidence; these dates do not authenticate an external timestamp or
+prove when a transcription was entered. This invented example declares closing reserves as opening reserves plus a
 signed net change minus a positively printed depletion:
 
 ```toml
@@ -228,6 +537,40 @@ separate documents. The command does not determine which vintage is true, classi
 GATE-HALL-01. Its PDF report digest binds the declarations, readings and results; it is not a ledger anchor or
 external timestamp. Authentic historical PDF readings and complete historical coverage remain open.
 
+#### Report a complete annual reserve-replacement window
+
+DESIGN (BD-063): the standalone command calculates a declared annual population, including when no
+percentage headline is available. It preserves the annual printed sums, any separately printed aggregate
+totals, and a separately qualified headline. Every year in the registered window must have both net-change
+and depletion readings; a missing member cannot silently reduce the denominator.
+
+```bash
+fmine reserve replacement --issuer barrick \
+  --bindings registries/reserve_replacement/barrick.toml --format markdown
+fmine reserve replacement --issuer barrick \
+  --bindings registries/reserve_replacement/barrick.toml --as-of 2026-11-01 --format json
+```
+
+The committed bindings contain selectors only. The command needs the registered PDF bytes and agreeing
+readings in the local `registries/transcriptions/barrick.toml`; those inputs remain outside Git. Annual periods
+use `YYYY`, aggregate/headline periods use `YYYY-YYYY`, and source strings must match the declared unit and
+basis exactly. The Barrick report uses `Moz`, `attributable_gold_ex_ad` and `attributable_geo_ex_ad`. These are
+explicit report-rule bindings; the table-checking command's `moz` and semicolon-separated basis grammar
+is separate. Neither command silently relabels admitted readings from the other.
+
+The calculation is the ratio of cumulative net changes to cumulative positive depletion, using the explicit
+source sign convention. Exact rational results retain closed half-last-digit rounding bounds. Independently
+printed aggregate constraints intersect the annual bounds without replacing either printed point. GEO keeps
+its named annual reserve-price decks and already-converted amounts. A rounded headline is checked for
+interval compatibility; an approximate headline supplies no numerical tolerance and stays unassessed.
+
+JSON and Markdown retain definitions, every source token and locator, document hashes, publication evidence,
+reader roles, deck dependencies and refused series. An unusable series returns `FMINE-REF-202` with the complete
+report; an incompatible rounded headline is a cited finding. Source-byte changes and reader disagreements
+retain their existing typed refusals. `--as-of` rejects every selected post-cut document before opening PDFs;
+it uses current registered rules and does not establish a complete historical information set. The report
+is retrospective, is not gate-eligible and conveys no reserve classification or disclosure authority.
+
 #### Keep reserve filing vintages and their price decks separate
 
 DESIGN (BD-335): optional `[[reserve_row]]` declarations add an issuer-reserve register projection to the same
@@ -278,6 +621,107 @@ are reported separately from amount comparisons, and the latest filing still car
 quantities on different units, ownership bases or contained/recoverable supports are never silently combined.
 The projection retains the supplied declared population; it does not prove complete filing coverage, establish
 an append-only history, normalize a changed price deck or create an `EstimateStatement` or reserve classification.
+
+#### Check GEO against its printed price deck
+
+DESIGN (BD-340.S4, BD-070): `[[geo_check]]` checks **GEO = gold + copper × (copper price / gold price)**
+using the existing reserve rows and their cited prices. This invented addition assumes that `gold_net_2030`,
+`copper_net_2030` and `geo_net_2030` have already been declared as reserve rows, with gold/GEO in `moz` and
+copper in `mlb`. They must share their document, subject, item, year, period, ownership, support and convention.
+The GEO row must declare `deck = "quoted"` and both `gold_price_quantity` and `copper_price_quantity`.
+
+```toml
+[[geo_check]]
+id = "geo_conversion_2030"
+gold_row = "gold_net_2030"
+copper_row = "copper_net_2030"
+geo_row = "geo_net_2030"
+
+# Optional: another declared reserve row supplying both quoted price readings.
+[[geo_candidate]]
+check = "geo_conversion_2030"
+row = "geo_net_2031"
+```
+
+The primary deck always comes from `geo_net_2030`. An optional candidate supplies a separate price hypothesis;
+its unrelated reserve amount need not be available. Every price still requires agreed readings with its source
+hash, locator, unit, period and basis. For an invented known answer, 10.0 Moz gold and 1,000 Mlb copper at
+$1,500/oz and $3.00/lb give 12.0 Moz GEO. Those numbers belong in the source readings, never in these definitions.
+
+`payload.issuer_reserves.geo_checks` retains the exact converted and reported intervals. A completed check has
+`status = "checked"`; its `declared.fit` is `proper`, `points` for boundary-only contact, or `empty` for an
+arithmetic mismatch. Alternative-deck discovery separately reports `found`, `ambiguous` or `no_fit` across the
+explicit candidates and strict conventions. It never replaces the printed deck or the declared convention.
+Distinct decks with the same price ratio remain ambiguous. Missing or unusable evidence gives `unavailable`;
+a missing candidate price blocks discovery while retaining any usable primary-deck calculation.
+
+#### Reproduce a technical report's cutoff from its cited assumptions
+
+DESIGN (BD-274): the same command accepts `[[cutoff]]` declarations whose inputs come from one registered
+`technical_report`. This complete, invented definition file selects four agreed quantities; it contains no
+numerical assumptions:
+
+```toml
+schema = "fmine.table-identities.v1"
+issuer = "demo"
+
+[[cutoff]]
+id = "example_cutoff"
+doc = "Synthetic_Technical_Report.pdf"
+subject = "Example Mine"
+period = "effective_2030_12_31"
+basis = "full;resource"
+price_basis = "resource_price"
+unit = "g_per_t"
+recovery = "constant_percent"
+
+[[cutoff_input]]
+cutoff = "example_cutoff"
+role = "published"
+quantity = "reported_cutoff"
+
+[[cutoff_input]]
+cutoff = "example_cutoff"
+role = "gold_price"
+quantity = "resource_gold_price"
+
+[[cutoff_input]]
+cutoff = "example_cutoff"
+role = "cost"
+quantity = "processing_cost"
+
+[[cutoff_input]]
+cutoff = "example_cutoff"
+role = "recovery"
+quantity = "metallurgical_recovery"
+```
+
+Run it with `fmine check tables --issuer demo --definitions local/cutoffs.toml --format markdown`. The published
+cutoff uses `g_per_t`, costs use `usd_per_t`, recovery uses `percent`, and the gold price uses `usd_per_oz`.
+Every input must match the declared period. The gold price uses `price_basis`; the other inputs use `basis`.
+Multiple `cost` rows explicitly add their separate costs. Optional `revenue_deduction` and `ounce_deduction`
+inputs use `percent` and `usd_per_oz`, respectively.
+
+The gold price is an exact quoted parameter; the other inputs retain their displayed rounding bounds.
+For example, invented readings of $100.0/t cost, 50.0% recovery and $3,110.34768/oz gold reproduce 2.00 g/t.
+`recovery = "tcm_over_gold"` instead requires `recovery_intercept` (`percent`), `recovery_slope` (`g_per_t`)
+and `tcm` (`percent`) inputs. The alternative output unit is `oz_per_short_ton`; an optional `published_metric`
+input checks its printed `g_per_t` equivalent. Cost inputs remain USD per metric tonne.
+
+Results appear under `payload.checks.cutoffs.rows`: `reproduced`, `within_input_rounding`, or `conflict` for a
+completed arithmetic comparison; `refused` with its reason when evidence or assumptions are unusable. JSON
+and Markdown retain exact results, input bounds, citations and source hashes. A conflict remains a finding
+with exit zero. Missing/altered document bytes and disagreeing readers retain the command's typed refusal.
+Each successful case also carries `claims.inputs` and `claims.derived`. The derived Claim names every input
+Claim as a parent; the JSON receipts include canonical bodies, value tags and source anchors. Original
+tokens, precision, reader identities and declared semantics participate in those identities even when two
+inputs have the same numerical value. The public Rust API `SourceRow::check_claims` reconstructs the complete
+typed Claim chain, detecting changed values, ancestry or envelope fields. These Claims remain issuer
+assertions. Refused cases retain available evidence and emit `claims: null`.
+The result reproduces declared assumptions; it does not choose an operating cutoff or classify a reserve.
+The existing seven `assure public` reference calculations remain explicitly `source_verified:false` until
+their real documents and agreed readings are supplied. This command does not establish physical truth from
+arithmetic agreement.
 
 ### Check cited numbers in a draft
 
@@ -491,11 +935,12 @@ completed quarterly history by the requested evidence cut, and assesses first-pu
 outcomes separately.
 `--cohort-as-of` keeps unconditional scores and cannot be combined with `--price-subject`.
 
-### Mirror two reporters' gold production or sales
+### Mirror two reporters' gold quantities and capital expenditure
 
 ```bash
 cargo run -p fmine-cli -- mirror --synthetic
 cargo run -p fmine-cli -- mirror --synthetic --format markdown
+cargo run -p fmine-cli -- mirror --synthetic --metric capex --format markdown
 ```
 
 DESIGN (BD-346): the mirror checks whether two reporters' printed gold quantities admit a common 100%
@@ -511,7 +956,9 @@ cargo run -p fmine-cli -- mirror --asset example-jv --period 2025 --as-of 2026-0
 
 `--metric production` is the default; `--metric sold` checks ounces sold separately. Periods are calendar
 years (`2025` or `2025FY`), quarters (`2025Q1` through `2025Q4`) or halves (`2025H1`, `2025H2`).
-`--synthetic` is exclusive with source selectors. JSON is the default; `--workspace` selects the local root.
+Capital selections are `capex-sustaining`, `capex-project`, `capex-total`, or `capex` for all three scopes
+and their joint footing check. `--synthetic` is exclusive with source selectors; the capex demo accepts
+`--synthetic --metric capex`. JSON is the default; `--workspace` selects the local root.
 
 Each issuer uses the existing `registries/sources/<issuer>.toml` and ignored
 `registries/transcriptions/<issuer>.toml`. A sources registry can contain only validated `[[document]]`
@@ -560,9 +1007,44 @@ retain both reporters, tokens, ownership and scope citations, source hashes and 
 All authority flags remain false, with no issuance anchor or authority certificate. Agreement does not
 establish physical truth, select a correct reporter or authorize disclosure.
 
+**Capital expenditure (BD-346.S4).** Use the same explicit source selection with `--metric capex` to
+check sustaining, project and total capital together. The three single-scope selections work when only
+that line is available. Capital amounts use `USD_m`; no currency conversion is inferred. For example:
+
+| Quantity key | Unit | Basis prefix |
+| --- | --- | --- |
+| `mirror_example_jv_2025fy_capex_sustaining_100_usd_m` | `USD_m` | `100%` |
+| `mirror_example_jv_2025fy_capex_sustaining_attr_usd_m` | `USD_m` | `attributable` |
+| `mirror_example_jv_2025fy_capex_project_attr_usd_m` | `USD_m` | `attributable` |
+| `mirror_example_jv_2025fy_capex_total_attr_usd_m` | `USD_m` | `attributable` |
+
+All scopes accept both `_100_usd_m` and `_attr_usd_m`. The separate ownership row uses the same key and
+grammar as the gold mirror. Each capital amount appends explicit timing and lease treatment plus the
+same-document page and labels supporting that definition. This remains an invented grammar example:
+
+```toml
+basis = "attributable;perimeter=group;members=mine-a+mine-b;valid=2025-01-01/2025-12-31;scope_page=2;scope_table=Scope;scope_row=Operations;scope_col=2025;timing=cash;leases=excluded;definition_page=2;definition_table=Capital policy;definition_row=Cash capital excluding leases;definition_col=2025"
+```
+
+Timing must be `cash` or `accrual`; leases must be `included` or `excluded`. Missing or unstated bases,
+uncited definitions, and unequal bases refuse with the missing parameter identified. No cash/accrual,
+lease, purchase-accounting or asset-to-asset adjustment is manufactured. Signed capital corrections retain
+their sign and source rounding; they do not inherit gold's nonnegative physical constraint.
+
+The all-capex result keeps `scope_checks` and `joint` separate. Scope checks compare each printed amount's
+own half-last-place interval. The declared joint **component-sum** check requires displayed
+`total = sustaining + project` on each complete reporting basis, then derives the total's interval from
+those components while checking all ownership identities together. An individually plausible set of
+capital lines can therefore have a conflicting joint footing. A missing complete triple leaves the joint
+assessment explicitly unavailable. JSON retains each exact witness or exclusion certificate and the
+definition citations; Markdown explains both constructions. Arithmetic conflicts are findings with exit
+zero; unusable sources or incompatible bases retain their nonzero refusal exits.
+
 Real partner-filing coverage for NGM, Pueblo Viejo and Kibali remains open, including independently read
-ownership and dated perimeter evidence. The unresolved NGM vend-in dates and shares are not supplied by
-defaults. Capex, cost-definition and accounting bridges, and full BD-346 acceptance, remain open.
+ownership, capital definitions and dated perimeter evidence. The unresolved NGM vend-in dates and shares
+are not supplied by defaults. The current capex adapter reads agreed registered document transcriptions;
+automatic workbook-to-partner pairing, cited definition bridges, cost/accounting bridges and full BD-346
+acceptance remain open.
 
 ### Assess a frozen forecast cohort
 
@@ -583,6 +1065,21 @@ The committed example is explicitly synthetic. Transcript times and citations ar
 independently verified time proofs or source documents. This command neither issues the FY2026 forecast set
 nor replaces `xtask forecast-record-verify`; it makes the cohort and scoring kernel usable while retaining those
 boundaries. Relative transcript paths are resolved against the selected workspace.
+
+Empirical forecasts preserve a supplied skewed or multimodal distribution without fitting a Gaussian.
+Use `kind = "empirical"` and, for example, `samples = "350,350,450,650"` in a forecast row. Each sample has
+equal probability; repeats retain their mass. The engine scores the complete distribution with CRPS and
+uses inverse-ECDF central intervals without interpolation. A cohort containing Gaussian and empirical
+forecasts gets one CRPS denominator, including unresolved members. The sample limit is 4096; live journal
+operations also retain their 64 KiB byte limit. Sample order is frozen into the record identity, while
+reordering has no effect on distribution scores. This is a univariate forecast, not a joint scenario model.
+
+The following invented example has an observed CRPS of 37.5 and retains an uncalibrated, descriptive result:
+
+```bash
+cargo run -p fmine-cli -- forecast assess --ledger tests/forecasts/empirical_synthetic.toml \
+  --cohort empirical-demo --as-of 2031-02-17T00:00:00Z
+```
 
 Check every member's evidence ancestry at its own registration time with a provenance bundle:
 
@@ -800,8 +1297,10 @@ public_members = "north-mara-production=North Mara"
 ```
 
 The frozen digest binds the exact issuer, subject, period, metric/unit and ownership basis for every member.
-Supported metrics are gold production (`production_koz`) and issuer-reported AISC per sold gold ounce
-(`aisc_usd_per_oz`), at site level over a calendar year (`YYYYFY`) or individual calendar quarter.
+Supported metrics are gold production (`production_koz`), copper production (`production_kt`) and
+issuer-reported AISC per sold gold ounce (`aisc_usd_per_oz`), at site level over a calendar year (`YYYYFY`)
+or individual calendar quarter. Copper retains the printed kilotonnes and the declared full or attributable
+ownership basis; resolution performs no implicit pounds conversion or ownership scaling.
 A declared deadline after the target period ends
 refuses. When the original workbook has been published and registered with its digest and dated evidence:
 
@@ -817,10 +1316,37 @@ publication basis. The registered publication date must fall after the complete 
 never supplies a missing publication date. Date-only availability conservatively begins at midnight after
 the publication day. The stated FACT/INFERENCE basis is retained metadata, not independent proof of that time.
 Missing original releases, altered bytes, placeholders, ambiguous cells and ownership mismatches refuse
-without changing the journal; later comparatives are never substituted. Caller-supplied `outcome` requests
-cannot bypass a frozen public binding. Historical reports reconstruct the recorded source Claim without
-requiring the workbook to remain on disk. This first source-bound route resolves original outcomes;
-source-bound restatements and automatic missing-status events remain future work.
+without changing the journal. Caller-supplied `outcome` requests cannot bypass a frozen public binding.
+Historical reports reconstruct the recorded source Claim without requiring the workbook to remain on disk.
+
+To retain later comparative revisions as separately scored outcomes, include this field in the cohort
+request **before freezing it**:
+
+```toml
+public_vintages = "registered_comparatives"
+```
+
+DESIGN: the default `original_only` policy retains its existing canonical bytes and meaning. Opting in
+freezes a distinct version-two public resolution policy; another cohort cannot change this permission
+for a shared forecast ID. First admit the original release with `resolve`. Then, after registering a later
+workbook and its publication evidence, append the comparative with:
+
+```bash
+cargo run -p fmine-cli -- forecast journal restate \
+  --journal runs/forecast-demo/history --head LATEST_RETAINED_HEAD \
+  --cohort fy2027-production --forecast north-mara-production \
+  --release 2028Q1 --trust-host-clock
+```
+
+The writer verifies the later workbook's exact bytes and the same frozen subject, physical period,
+metric, unit and ownership. A changed cost denominator or ownership basis refuses. The reporting quarter
+must follow the original and every admitted numeric vintage; publication must follow both the target period
+and that reporting quarter. A later comparative cannot fill a missing original. The writer selects the
+superseded event under lock; callers supply neither its sequence nor an outcome value. `first-published`
+continues to score the original, while `latest-as-of` uses a restatement only once both its availability
+and recording time fall within the assessment cut. Each event retains its own source Claim and publication
+evidence. Previously saved reports retain their original result, journal prefix and source admission after
+later revisions. Automatic missing-status events remain future work.
 
 For example, an outcome available at `12:00:00Z` and recorded at an observed `12:00:01.500Z` with a one-second
 uncertainty has a recording upper bound of `12:00:02.500Z`. A later assessment cut at `12:00:02Z` leaves that
@@ -862,8 +1388,9 @@ the same result cannot upgrade that original binding. Legacy operations without 
 retain their observed recording times, existing identities and results. New v2 operations can follow them in
 the same journal; replay applies each operation's original time policy.
 
-`payload.operation_version_counts` reports `legacy_v1` and `v2` counts, plus `v3` when present, excluding genesis.
-Version three stores public-bound freezes and generated source admissions with the same bounded-clock policy.
+`payload.operation_version_counts` reports `legacy_v1` and `v2` counts, plus `v3` and `v4` when present,
+excluding genesis. Version three stores original public-bound freezes and source admissions. Version four
+stores explicit vintage policies and generated comparative restatements, with the same bounded-clock policy.
 `payload.record_time_policy` is `none`, `legacy_observed`, `clock_upper_bound` or `mixed`. The nested report
 describes the operation prefix through that assessment's first saved checkpoint, so later appends do not
 change its time-policy labels. A v2 assessment over legacy history remains explicitly mixed; adding a result
@@ -1097,6 +1624,13 @@ releases, including a change in classification with identical printed values. Th
 operands, certificates and source Claims for both appearances, and request the evidence or inclusion rule that
 explains the transition. Ambiguous earliest releases retain every assertion with no selected first assertion.
 Transition classifications and chronology are rechecked against the canonical identity ledger before export.
+
+`assure challenges --issuer barrick --through 2026Q2` also exports `mine_stats_identity_transition` packets
+for corrected, broken and reclassified Mine Stats calculations. Each retains the earliest registered sources,
+previous bound identity and current identity, plus competing assertions from intervening ambiguous releases.
+Recorded missing inputs and original refused or unresolved states keep their typed reasons. The exporter
+rechecks the complete history, registered subject-label interpretation and cited source operands. These
+findings supply review questions, with no issuer pass score or selection of a true vintage.
 
 PDF transcription conflicts also render as packets when the local two-reader transcription registry is present.
 Run `assure challenges --issuer barrick` without `--through` to include that document evidence; the existing
@@ -1483,6 +2017,38 @@ grade and recovery by site (plan §37.1).
 
 The program gate at month 12 re-scopes everything if no executive meeting has cited a FrankenMining number or
 card (§34.5).
+
+---
+
+## Read HTML filing tables with source provenance
+
+The I/O layer provides a bounded HTML table reader for explicitly closed filing tables, including
+`rowspan` and `colspan` headers. It retains the complete source hash, original cell markup and byte
+locations, exact decoded numeric tokens, and merged-cell origins:
+
+```rust
+use fmine_io::HtmlDocument;
+
+let bytes = br#"<table><tr><th>Production</th><td>1,250.50</td></tr></table>"#;
+let document = HtmlDocument::from_bytes("filing.html", bytes)?;
+let table = &document.tables()[0];
+let cell = table.cell(1, 2).expect("the declared second cell");
+let number = cell.number().expect("one supported exact number");
+assert_eq!(number.value.mantissa, 125050);
+assert_eq!(number.value.scale, 2);
+let anchor = document.make_anchor(0, 1, 2).expect("source origin");
+```
+
+Covered positions in a merged cell resolve to one source origin and anchor. They do not create additional
+numeric observations. The reader preserves placeholders and refuses malformed or overlapping spans and
+excessive grid expansion. It does not concatenate footnote digits, separate text runs or malformed grouping
+into a different quantity. Table indices are zero-based; cell coordinates are one-based.
+
+This API records a cell's source bytes and location. Interpreting its metric, period, ownership, units and
+disclosure basis remains the public-source adapter's responsibility. Only a single full-cell bare number is
+promoted; explicit currencies, units, ranges and annotated values remain text. It supports a documented subset of HTML rather
+than browser layout, CSS or inline XBRL transformations. Existing callers of `extract_html_tables`
+receive a compatibility projection; use the fallible API for source evidence and refusal diagnostics.
 
 ---
 

@@ -2,6 +2,7 @@
 
 pub mod calendars;
 pub mod metrics;
+pub mod reserve_replacement;
 pub mod sources;
 pub mod table_identities;
 pub mod toml_subset;

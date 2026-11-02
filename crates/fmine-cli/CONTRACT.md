@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "cost", "geo", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -29,6 +29,68 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Negative production is unusable. A degenerate printed range is interpreted as a point target.
 - **Envelope:** `FMT-ENV-1` (`schema_version: "fmine.env.v1"`).
 - **Verbs:**
+  - `metrics geo --input <worksheet.toml>` (BD-062, GB-27): reads a regular UTF-8 file bounded to 1 MiB,
+    hashes the actual bytes and evaluates `fmine-metrics::definitions::geo::worksheet`. Schema
+    `fmine.geo-worksheet.v1` requires explicit physical scope, included metals and reference deck/version;
+    unknown, duplicate or missing fields refuse. Two to sixty-four named/versioned decks compare the
+    same quantities, with gold/silver in oz, copper in lb and positive prices in matching major currency
+    units per metal unit. Every included metal needs its price in every deck; no mass, ownership or FX
+    conversion is implicit. JSON/Markdown retain exact contributions, totals and signed reference
+    differences, complete input/output Claims, source hashes, field locators and a deterministic digest.
+    Worksheet Claims remain Assumed, Internal and uncalibrated; omitted metals are outside the declared
+    population. Differences describe price-ratio effects on unchanged physical production and supply no
+    source audit, reserve classification or disclosure authority. The invented example at
+    `crates/xtask/testdata/production_geo.toml` yields 3,860,000 and 3,640,000 GEO oz, a −220,000 oz difference.
+  - `metrics cost --input <worksheet.toml> --definition <registered-id>` (BD-061): reads the actual
+    worksheet and workspace metric-registry bytes from regular UTF-8 files bounded to 4 MiB, binds their
+    SHA-256 hashes, and evaluates `fmine-metrics::definitions::worksheet`. The explicit registered AISC/AIC
+    rule determines each line's inclusion, exclusion or credit, including inherited rules. JSON schema
+    `fmine.cost-worksheet.v1` retains exact numerator, sold ounces, USD/oz result, complete canonical Claim
+    receipts, source metadata and definition successor; Markdown renders the same calculation. Imported
+    values, cost classifications and completeness stay Assumed, Internal and uncalibrated. The adapter
+    creates no ledger anchor or issuance certificate. The supplied `tests/costs/declared_aisc.toml` is an
+    invented worksheet, not an issuer filing or independently verified complete cost population.
+  - `html claims --issuer <registered> --definitions <mapping.toml> [--as-of YYYY-MM-DD]` (BD-057/BD-059):
+    delegates to `fmine-public::html::run` to load registered HTML bytes and strict, value-free label mappings.
+    The `fmine.html_claims.v1` payload returns full canonical Claim bodies and their semantic keys, exact
+    decimal tokens/steps, value and label citations with original byte ranges and merged origins, mapping
+    and registry hashes, selected source metadata and a separate Claims digest. Markdown renders the same
+    values and evidence. The input mapping schema is `fmine.html-claims.v1`; it requires `id`, `file`,
+    1-based `table`, A1 `cell` and the five `*_cell` / `*_label` pairs for subject, period, metric, unit and
+    ownership. Unsupported semantic labels, missing or changed source bytes, duplicate numeric origins and
+    duplicate semantic keys refuse. The optional inclusive publication cut is applied before any HTML
+    source read; later mapped sources remain in `excluded_sources`, without fallback. No identity-ledger
+    anchor, certificate, calibrated measurement or publication-timestamp authentication is created. HTML
+    output is not gate-eligible, uses separate `html:` metric keys, and currently has synthetic test coverage
+    rather than a registered live HTML corpus. Existing standalone Claim lookup selectors are unchanged;
+    these Claim bodies and source interpretations are available directly in this command's receipt.
+  - `decide card <model-file>`: a conditional monetary comparison on declared finite scenarios (BD-225).
+    The adapter reads at most 4 MiB of UTF-8 from a regular file, hashes the actual bytes, and delegates parsing
+    and exact evaluation to `fmine-decide::card`. The model supplies all weights, actions, payoffs and UU terms;
+    every imported Claim remains Assumed and internal. JSON includes the source path/hash, complete core card,
+    exact rankings, risk and regret. Optional information options add exact preposterior EVSI, EVPI, net value
+    after declared test and delay costs, and every signal's posterior action ties (BD-227). Each option needs
+    a complete state-by-signal likelihood matrix. Impossible signals remain explicit; no joint signal model
+    or multi-test policy is inferred. All option evidence contributes to the card, including losing options.
+    Exact enumeration reports Monte Carlo error as not applicable and supplies no Monte Carlo gate result.
+    Markdown renders the same result and evidence. No issuance certificate,
+    historical cut, calibration verdict, operational feasibility or execution authority is manufactured.
+  - `decide program <model-file>` (BD-229): constructs all subsets of at most eight declared candidates
+    on at most 256 shared states through `fmine-capital`. The bounded local model supplies exact USD costs,
+    complete additive net delta-NAV payoffs, budget, prerequisites, exclusion groups, an exact tail mass
+    and an optional signed-loss CVaR ceiling. Costs constrain spending without being subtracted again from
+    net payoffs. Every bundle and rejection remains visible; risk is computed from the joint scenario sums.
+    JSON and Markdown report exact co-winners, budget slack and the expected-value cost of the risk limit,
+    with complete source-bound Claims and explicit reference-class adjustment bases. This is a conditional
+    static comparison; staged recourse, entity waterfalls, variable share counts, empirical selection
+    frequencies and execution authority are not supplied.
+  - `lint <draft> --issuer <issuer> --html-definitions <mapping.toml> [--discover] [--as-of YYYY-MM-DD]`
+    (BD-059/BD-345): checks only the mapped, registered HTML Claims through the existing exact equality
+    kernel. The receipt retains full value, label, mapping and registry evidence. A separate source-publication
+    assessment reports the registered dates; it does not establish historical availability of the current
+    mapping. Future source bytes are excluded before reads. HTML cost-credit treatment is unstated, so an
+    explicit by-product or co-product assertion remains unchecked. This source selector is exclusive with
+    `--synthetic` and `--through`; ordinary workbook lint remains available through its existing selector.
   - `assure public --issuer <issuer> [--through YYYYQn]`: the gate-eligible run over the filings in
     `registries/sources/<issuer>.toml`, optionally only those at or before a quarter;
   - `assure public --synthetic`: the known-answer run, never gate-eligible;
@@ -72,7 +134,7 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     [--selector first-published|latest-as-of] [--provenance <path>]`: read-only ordered transcript replay and
     cohort assessment through `fmine-calib`; first-published is the default (BD-343). An optional provenance
     bundle checks all declared ancestors at each frozen forecast's registration cut (BD-344);
-  - `forecast journal init|register|freeze|outcome|assess|inspect|report --journal <path>`: durable forecast admission,
+  - `forecast journal init|register|freeze|outcome|resolve|restate|assess|inspect|report --journal <path>`: durable forecast admission,
     cohort freezing, append-only resolution and persisted assessment seals with runtime-assigned times (BD-047);
   - `forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <pem>`:
     authenticated frozen-record assessment and common-population baseline comparison in JSON or Markdown (BD-076);
@@ -102,7 +164,7 @@ Workbook Claim reads retain their established payload and identity-ledger certif
 ### Durable forecast registration (BD-047)
 
 DESIGN: `forecast journal init` binds a cell id and operator-declared clock uncertainty to a new journal.
-`register`, `freeze`, `outcome`, `resolve` and `assess` require an exact predecessor `--head`; all mutations require
+`register`, `freeze`, `outcome`, `resolve`, `restate` and `assess` require an exact predecessor `--head`; all mutations require
 `--trust-host-clock`. The runtime clock is sampled under the journal's exclusive lock. The captured nanoseconds
 remain in the journal frame's `observed_ns`; new admissions assign `ForecastLedger` registration, freeze and
 recording times to the upper bound, `observed_ns + clock_skew_ns`. A caller cannot supply those times.
@@ -112,10 +174,13 @@ availability and assessment cuts must be at or before the lower bound. Clock rol
 Requests still contain one permitted TOML table with no top-level fields, using the frozen
 `fmine.forecast-ledger.v1` row grammar with the three assigned-time fields prohibited. The writer validates
 an ordinary request, then adds `schema = "fmine.forecast-operation.v2"` to the stored operation; the public-bound
-freeze and resolution operations described below use v3. The `FJR1`
+freeze and resolution operations described below use v3, and explicit vintage policies and comparative
+restatements use v4. The `FJR1`
 frame format is unchanged. Replay dispatches per operation: legacy rows without top-level fields retain
 their original observed-time semantics and identities; v2 rows use the upper bound. Unknown schemas or extra
-top-level fields refuse. Mixed journals preserve both policies without rewriting earlier operations.
+top-level fields refuse.
+Replay also requires v4 for explicit `public_vintages` freezes; v4 admits only that freeze grammar or a
+`registered_restatement`. Relabeling an ordinary operation or downgrading a new permission field refuses. Mixed journals preserve both policies without rewriting earlier operations.
 
 DESIGN: a public-bound freeze adds `public_issuer`, `public_metric`, `public_period`, `public_ownership`
 and `public_members` to the cohort request, with `resolution_rule = "registered-public-cell"`.
@@ -123,10 +188,14 @@ The member string maps existing aliases to exact source subjects (`alias=Subject
 The adapter converts aliases to immutable forecast IDs and embeds the canonical
 `fmine_calib::ledger::binding::PublicResolutionPolicy` in the cohort's hashed resolution rule.
 The complete member set, sole eligible issuer, metric/unit, original FY/quarter release and ownership
-basis are fixed before any outcome. Supported metrics are site-level `production_koz` and `aisc_usd_per_oz`,
-over calendar years (`YYYYFY`) or individual calendar quarters;
+basis are fixed before any outcome. Supported metrics are site-level gold `production_koz`, copper
+`production_kt` and gold `aisc_usd_per_oz`, over calendar years (`YYYYFY`) or individual calendar quarters;
 ownership is `100%` or `attributable:n/d`. AISC means the issuer's reported per-sold-ounce cost,
 with no subtraction of annual and year-to-date rates or implicit ownership conversion.
+Copper production retains the printed kilotonnes and the same exact source-Claim, original-release and
+ownership checks. Gold figures, pounds, and unsupported copper cost definitions never substitute for that
+target. Both production metrics refuse negative values during admission and semantic replay; an unmarked
+printed zero remains valid. Copper adds no durable encoding change for existing gold targets or receipts.
 
 `forecast journal resolve --journal <path> --head <hex> --cohort <name> --forecast <alias>
 --trust-host-clock` takes no outcome value, target override, source locator or availability timestamp.
@@ -135,7 +204,13 @@ bytes and the canonical Claim, and matches the exact frozen issuer, subject, per
 and ownership. It uses the displayed decimal, retaining the stored value and exact rational separately;
 the existing score kernel receives that rational's deterministic floating-point projection.
 Ambiguous, missing, placeholder, status-marked, stale, altered and incompatible sources refuse without
-appending. A later comparative cannot fill a missing original. An unmarked printed zero remains valid.
+appending. Candidate cardinality is checked before canonical-key projection, and a reader refusal on either
+QTD/YTD summary sheet blocks admission: an unusable competing row cannot disappear and leave a false singleton.
+Unrelated detailed-sheet refusals do not replace the target. A later comparative cannot fill a missing original.
+An unmarked printed zero remains valid. Cross-crate forecast replay controls retain their CLI harness and all
+assertions in `crates/xtask/testdata/forecast_replay_controls.rs`.
+The six cross-crate forecast-record source fixture tests likewise retain their CLI harness and unchanged
+assertions in `crates/xtask/testdata/forecast_record_sources.rs`.
 Publication date and its registered FACT/INFERENCE basis are mandatory; that date must fall after the
 complete target period. Retrieval never substitutes for a missing publication date, and the stated basis
 is retained metadata rather than independent proof of publication time. Conservative availability is
@@ -151,8 +226,30 @@ and identity before restoring the event. This prevents value, subject, period, b
 `source_admissions` and each selected member's `source_admission` distinguish recorded source verification
 from unverified supplied outcomes. Replay does not re-read source files or assert present file availability.
 The journal head binds admission evidence; the existing assessment digest binds the cohort, numeric event
-and citations. This slice resolves original releases; source-bound restatements and automatic status events
-remain outside its supported domain. Refused resolutions leave members unresolved in the frozen denominator.
+and citations. Refused resolutions leave members unresolved in the frozen denominator.
+
+DESIGN (BD-343): `public_vintages = "registered_comparatives"` is an optional pre-freeze permission for
+source-bound restatements. Omission or `original_only` retains the existing version-one policy bytes;
+opting in uses the canonical version-two policy. A shared forecast ID cannot acquire different vintage
+permissions through another cohort. `forecast journal restate --journal <path> --head <hex>
+--cohort <name> --forecast <alias> --release YYYYQn --trust-host-clock` requires an already admitted,
+source-verified original outcome. Under the writer lock it selects the latest numeric predecessor and
+resolves a strictly later registered reporting quarter against the same physical target, subject, metric,
+unit, ownership and sold-ounce cost definition. The registered publication day must follow both the target
+period and selected reporting quarter; availability remains midnight after that day. Neither the numeric
+value, source Claim, publication evidence nor superseded sequence is accepted from the caller.
+
+Explicit `public_vintages` fields require a v4 cohort operation during both admission and replay; an older
+operation version cannot acquire the newer policy grammar. Omitting the field preserves existing v3 freezes.
+The generated `registered_restatement` operation uses `fmine.forecast-operation.v4` and retains the
+predecessor sequence alongside the same complete source evidence as an original admission. Replay checks
+the frozen permission, original admission, chronological predecessor and reconstructed canonical source
+Claim before appending `OutcomeKind::Restated`. The kernel retains the original event for `first-published`
+and selects a later event for `latest-as-of` only within both its availability and recording cuts. Saved
+reports retain their first checkpoint's prefix, operation-version counts and selected source admission.
+No source files are re-read during report replay. Unknown versions, repeated or earlier releases, changed
+ownership/denominators, missing originals and altered source bytes refuse without a journal append.
+Automatic status events remain outside the supported domain.
 
 The existing calibration kernel requires an outcome's availability and recording time to be at or before the
 assessment cut. For example, an observed recording at `12:00:01.500Z` with a one-second skew bound is assigned
@@ -170,7 +267,7 @@ retain their explicit weaker binding status; existing frame bytes and semantic i
 
 The `fmine.forecast-journal.v1` payload reports the cell, exact head, clock bounds, operation schema, inventories
 and checkpoints. `operation_schema` continues to identify the row grammar. `operation_version_counts` contains
-`legacy_v1` and `v2` counts excluding genesis, plus `v3` when present; their sum is `n_operations`. `record_time_policy` is `none`,
+`legacy_v1` and `v2` counts excluding genesis, plus `v3` and `v4` when present; their sum is `n_operations`. `record_time_policy` is `none`,
 `legacy_observed`, `clock_upper_bound` or `mixed`. An assessment adds `report` with mode `durable_journal`;
 its version counts and time policy describe the prefix through its first persisted checkpoint. A v2 checkpoint
 over legacy operations remains mixed and does not upgrade the earlier time evidence. `inspect` is read-only
@@ -469,6 +566,14 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
     release has `first_registered: null` and every `earliest_registered_assertions` entry is retained. Closing
     requests name both compared locators and the missing rule or evidence; the transition itself assigns no
     disclosure classification. Persisted and single-vintage histories add no transition packet.
+  - `mine_stats_identity_transition` packets cover exceptional Mine Stats identity histories through the same
+    `assure challenges` command. The builder recomputes the complete projection from canonical Claims and the
+    original ledger, including counts, bindings and registered subject labels. Findings retain earliest sources,
+    the previous bound identity, current identity and all intervening ambiguous source assertions. Ambiguity
+    before or at the earliest bound appearance leaves `first_registered` null; ambiguity between appearances
+    prevents a persistence or correction conclusion. Recorded missing inputs and typed refused/unresolved
+    states remain visible; absent source bytes or altered operands refuse export. The transition supplies no
+    issuer pass score or disclosure classification.
   - `transcription_conflict` packets preserve agreed PDF assertions with page/table/row/column locators,
     raw tokens, exact decimals, units, basis, period, reader roles and checked document metadata. The exporter
     recomputes the registered rounding-convention comparison and checks the retained conflict population.
@@ -573,6 +678,14 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   Saved assessment rows enforce the kernel's sealed-cut rules across replay. Both envelope authority fields
   remain null: transcript and assessment digests identify content, not a durable authority ledger or an
   external timestamp. The adapter does not verify supplied source citations or issue a forecast.
+- DESIGN (BD-047/BD-048): transcript and live journal registration also accept `kind = "empirical"` with
+  `samples` as a quoted comma-separated list of one through 4096 finite numbers. Samples have uniform
+  weights, repeated values retain their mass, and original order remains in the frozen identity. JSON retains
+  every sample and names the inverse-ECDF quantile convention. CRPS, central interval scores and missing-member
+  completion bounds come from the calibration kernel; no Gaussian fit or interpolation is introduced.
+  Registered gold/copper source resolution and immutable assessment retrieval use the existing target and
+  receipt checks unchanged. The 64 KiB live operation limit applies independently of the sample-count limit.
+  This representation is univariate and supplies neither joint-realization semantics nor calibration evidence.
 - DESIGN (BD-076): `forecast record score` binds the manifest, forecast CSV and rules to their exact framed
   SHA-256 digests and verifies both timestamp signatures through `fmine_io::forecast::timestamp`. Complete
   proof intervals enforce rules-before-record, the frozen registration deadline, the scored-year boundary
@@ -710,10 +823,38 @@ None: every failure is a usage error or a typed refusal.
   `fmine-metrics`.
 
 ## 10. Non-Goals & Scope Boundary
-- The mirror currently supports produced and sold gold in koz from explicitly selected, agreed document
-  assertions. It neither selects a correct reporter nor establishes physical truth or disclosure permission.
-  Actual NGM, Pueblo Viejo and Kibali filing coverage, resolved NGM vend-in boundaries, capex and cost/accounting
-  bridges remain open; synthetic/source-adapter checks do not close full BD-346 acceptance.
+- DESIGN (BD-063): `reserve replacement --issuer <issuer> --bindings <path> [--as-of YYYY-MM-DD]`
+  authenticates explicitly selected PDF operands and delegates complete annual-window arithmetic to
+  `fmine-metrics::reserve_replacement`. Exact ratios of sums retain independently printed aggregate points,
+  joint closed rounding bounds, separately qualified headlines and each GEO year's registered deck.
+  Approximate language supplies no tolerance. The command verifies the full declared document population
+  before loading readings, rejects post-cut documents before file IO, and refuses accepted quantities with
+  competing pending locators. Missing operands leave the declared series visible with a nonzero202 result;
+  other complete series remain present. Incompatible rounded headlines are findings, not loader failures.
+  JSON and Markdown retain signed tokens, definition metadata, source hashes/locators, publication evidence
+  and reader roles. The wrapper digest also binds exact binding/rule-file bytes, the cut and pending readings.
+  No workbook population or implicit source/basis conversion is needed. The report uses current rules,
+  carries no ledger certificate, remains public and `gate_eligible:false`, and leaves all authority flags false.
+  An explicit date checks selected document availability, not full hindcast closure. The committed Barrick
+  bindings contain no values; PDF bytes and real transcription inputs remain ignored pending OPEN-R7-1.
+  Source-bound arithmetic and AI reading checks do not close the authentic independently reviewed data gate.
+- The mirror supports produced and sold gold in koz and sustaining, project or total capital in USD millions
+  from explicitly selected, agreed document assertions. It neither selects a correct reporter nor establishes
+  physical truth or disclosure permission. Actual NGM, Pueblo Viejo and Kibali filing coverage, resolved NGM
+  vend-in boundaries and definition/cost/accounting bridges remain open; synthetic/source-adapter checks do
+  not close full BD-346 acceptance.
+- DESIGN (BD-346.S4): `mirror --metric capex-sustaining|capex-project|capex-total` binds each monetary row's
+  explicit cash/accrual timing, included/excluded lease treatment and separately cited definition locator.
+  Missing, unstated or unequal bases refuse instead of applying an inferred bridge. `--metric capex` requires
+  all three scopes from both selected reporters and reports their independent rounding-box comparisons beside
+  the joint component-sum assessment. Joint totals must foot exactly from printed components; their underlying
+  bounds then come from those components. Every supplied complete ownership-basis triple participates, and an
+  absent unambiguous triple keeps the joint result unavailable. Signed monetary values retain their sign;
+  neither a physical nonnegativity clamp nor a currency conversion is applied. JSON `interval_usd_m` fields
+  remain distinct from physical `interval_koz`, and definition citations survive into source and derived Claims.
+  An explicit `--synthetic --metric capex` demonstration uses invented, Assumed evidence. Integration tests
+  exercise the executable with generated source bytes and independently calculated rational expectations;
+  it proves the adapter, not authentic issuer filing coverage or the full BD-346 gate.
 - DESIGN (BD-340.S5/S8): `check tables` exposes the existing workbook identity ledger, or checks a strict
   `--definitions` registry of PDF sums, reserve roll-forwards and named reserve-replacement ratios. The PDF mode verifies every declared
   document's bytes, even when its values have no readings, and selects only the declared quantities while
@@ -736,7 +877,32 @@ None: every failure is a usage error or a typed refusal.
   definition metadata into the report. Gold/GEO metal, attributable contained basis, ex-A&D scope, three-year
   window, operand units, signs and price-deck key are explicit. Signed depletion must remain strictly positive
   throughout its rounding interval. Shared amounts are checked jointly; shared quoted-rate reuse refuses as
-  unsupported. No GEO conversion is performed, and no complete real reserve-replacement gate is asserted.
+  unsupported. Replacement ratios consume already-converted GEO amounts; they do not perform a conversion
+  or establish the complete real reserve-replacement gate.
+- DESIGN (BD-340.S4, BD-070): the same definitions path accepts `geo_check` and linked `geo_candidate`
+  declarations over existing reserve rows. `payload.issuer_reserves.geo_checks` retains the exact stated-deck
+  calculation under the declared convention, its proper/point-only/empty fit, and a separate strict-convention
+  comparison across explicit candidate decks. Candidate prices are verified independently of their unrelated
+  reserve amounts. An unusable candidate prevents discovery instead of disappearing from the population;
+  any usable stated-deck result stays visible. Equal-ratio distinct decks remain ambiguous, and identical
+  economic parameters retain every source provider. `checked` and `unavailable` are separate from arithmetic
+  fit. No finding replaces an issuer value, registered deck, current filing or document convention.
+- DESIGN (BD-274): `cutoff` and linked `cutoff_input` declarations use the same verified document/reader
+  loader and delegate to `fmine-metrics::cutoff::source`. Every input comes from the declared technical report,
+  with matching period, explicit role units, physical/model basis and separate gold-price basis. Constant
+  recovery and TCM-over-gold recovery use the existing reproduction kernel; the gold price is an exact quoted
+  parameter and other inputs retain displayed rounding bounds. `payload.checks.cutoffs.rows` distinguishes
+  `reproduced`, `within_input_rounding` and `conflict` from `refused` inputs. Markdown renders the same evidence,
+  exact results and bounds. Arithmetic conflicts are inspection findings with exit zero; source failures keep
+  their typed refusals. This does not select an operating cutoff or classify a resource or reserve.
+  `--as-of YYYY-MM-DD` is optional only with `--issuer` and `--definitions`. Every declared document must
+  have a registered publication date at or before that cut; a later document refuses the command rather
+  than silently reducing the declared population. Default inspection remains retrospective. The outer
+  digest binds the selected cut, verified-document inventory and publication-date evidence as well as the
+  arithmetic reports. These are current registered metadata, not external time proofs or a reconstruction
+  of historical transcription entry dates. Pending second readings remain visible and leave their cases
+  refused; source-byte failures and reader disagreements retain the existing command-level refusals.
+  The seven reference-only `assure public` cases are not promoted to source-verified evidence.
 - DESIGN (BD-341): `track-record --issuer <issuer> [--site <subject>] [--through YYYYQn] [--price-subject <subject>]` is a read-only
   adapter over agreed PDF transcriptions, canonical annual Mine Stats Claims and `fmine-calib::guidance_scores`.
   `--synthetic` uses invented inputs through the same adapter. JSON is the default (`--json` is an explicit
