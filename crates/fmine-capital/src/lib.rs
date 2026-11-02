@@ -30,7 +30,7 @@ pub const MAX_STATES: usize = 256;
 pub const MAX_TEXT_BYTES: usize = 4096;
 pub const MAX_IDENTIFIER_BYTES: usize = 128;
 pub const PAYOFF_CONVENTION: &str = "additive_net_delta_nav";
-pub const NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, additive net delta-NAV payoffs, spending constraints and reference-class adjustment bases. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No project interactions, staged recourse, entity waterfalls, variable share counts, physical feasibility, retrospective evidence, selection-frequency estimate, regulatory claim or execution authorization is supplied. Costs constrain spending and are not deducted again from net delta-NAV.";
+pub const NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, additive net delta-NAV payoffs, spending constraints and reference-class adjustment bases. Optional funding checks cover only the explicitly declared cash window and basis; they do not guarantee every intra-period balance or a feasible staged schedule. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No project interactions, staged recourse, entity waterfalls, variable share counts, physical feasibility, retrospective evidence, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and scenario cash requirements constrain funding and are not deducted again from net delta-NAV.";
 const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);
 type Result<T> = std::result::Result<T, Refusal>;
@@ -62,6 +62,35 @@ pub struct CapitalCandidate {
     pub reference_class_basis: String,
 }
 
+/// Cash required in one declared window, independently of the candidate's net-NAV valuation basis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CashRequirement {
+    pub candidate_id: String,
+    pub state_id: String,
+    pub value: Money,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramFunding {
+    pub model_key: String,
+    pub currency: Currency,
+    /// Inclusive canonical date range YYYY-MM-DD/YYYY-MM-DD; no calendar is inferred.
+    pub cash_period: String,
+    pub cash_basis: String,
+    pub minimum_cash: Money,
+    /// Cash available before this program's declared requirements, one explicit amount per shared state.
+    pub available_cash: Vec<(String, Money)>,
+    /// Complete candidate-by-state cash requirements, including explicit zeroes.
+    pub requirements: Vec<CashRequirement>,
+}
+
+impl ProgramFunding {
+    #[must_use]
+    pub fn canonical_tag(&self) -> String {
+        render::value_tag("capital-funding/v1", &render::funding_json(self))
+    }
+}
+
 impl ProgramPolicy {
     #[must_use]
     pub fn canonical_tag(&self) -> String {
@@ -80,6 +109,7 @@ pub struct ProgramInputs {
     pub policy: Claim<ProgramPolicy>,
     pub weights: Claim<WeightSet>,
     pub candidates: Vec<Claim<CapitalCandidate>>,
+    pub funding: Option<Claim<ProgramFunding>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,6 +123,26 @@ pub enum StructuralRejection {
         group: String,
         candidates: Vec<String>,
     },
+    LiquidityShortfall {
+        state_id: String,
+        shortfall: ExactMoney,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FundingState {
+    pub state_id: String,
+    pub available_cash: ExactMoney,
+    pub cash_required: ExactMoney,
+    pub remaining_cash: ExactMoney,
+    pub minimum_cash: ExactMoney,
+    pub slack: ExactMoney,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FundingAssessment {
+    pub states: Vec<FundingState>,
+    pub minimum_slack: ExactMoney,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +151,8 @@ pub struct ProgramChoice {
     pub selected: Vec<String>,
     pub spend: ExactMoney,
     pub budget_slack: ExactMoney,
+    /// Present for every subset when funding is declared, including structurally rejected subsets.
+    pub funding: Option<FundingAssessment>,
     pub structural_rejections: Vec<StructuralRejection>,
     /// None for a structurally rejected subset; no rejected subset is silently removed.
     pub statistics: Option<AlternativeStats>,
@@ -113,11 +165,12 @@ pub struct ProgramSummary {
     pub model_key: String,
     pub question: String,
     pub policy: ProgramPolicy,
+    pub funding: Option<ProgramFunding>,
     pub choices: Vec<ProgramChoice>,
-    /// Budget, prerequisites and exclusions applied, before the optional tail-loss limit.
+    /// Budget, prerequisites, exclusions and declared funding applied, before the optional tail-loss limit.
     pub unconstrained_winners: Vec<String>,
     pub feasible_winners: Vec<String>,
-    /// Absent when no subset meets the risk limit; negative values cannot occur.
+    /// Absent when no structurally/risk-feasible subset exists; negative values cannot occur.
     pub expected_value_cost_of_risk_limit: Option<ExactMoney>,
 }
 
@@ -322,6 +375,84 @@ impl Metadata {
     }
 }
 
+fn validate_funding(
+    claim: &Claim<ProgramFunding>,
+    policy: &ProgramPolicy,
+    states: &BTreeSet<&str>,
+    candidates: &BTreeMap<&str, usize>,
+) -> Result<()> {
+    let funding = &claim.value;
+    if funding.available_cash.len() != states.len()
+        || funding.requirements.len() != candidates.len() * states.len()
+    {
+        return Err(bad(
+            RefusalCode::NoClaimInDomain201,
+            "funding requires every shared state's available cash and every candidate/state cash requirement, including zeroes",
+        ));
+    }
+    admit(
+        claim,
+        &funding.canonical_tag(),
+        AdditivityClass::NonAdditive,
+    )?;
+    if funding.model_key != policy.model_key
+        || funding.currency != policy.currency
+        || !named(&funding.cash_basis)
+    {
+        return Err(bad(
+            RefusalCode::BasisMismatch105,
+            "funding must name the same model/currency and a separate explicit cash basis",
+        ));
+    }
+    let period_ok = funding
+        .cash_period
+        .split_once('/')
+        .is_some_and(|(start, end)| {
+            fmine_registry::sources::is_date(start)
+                && fmine_registry::sources::is_date(end)
+                && start <= end
+        });
+    if !period_ok {
+        return Err(bad(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            "cash_period must be an ordered inclusive YYYY-MM-DD/YYYY-MM-DD range of valid dates",
+        ));
+    }
+    let valid_money = |value: Money| value.ccy == policy.currency && value.minor >= 0;
+    if !valid_money(funding.minimum_cash) {
+        return Err(bad(
+            RefusalCode::BasisMismatch105,
+            "minimum cash must be nonnegative USD",
+        ));
+    }
+    let mut present = BTreeSet::new();
+    for (state, cash) in &funding.available_cash {
+        if !states.contains(state.as_str())
+            || !present.insert(state.as_str())
+            || !valid_money(*cash)
+        {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "available cash needs each shared state once, with nonnegative USD amounts",
+            ));
+        }
+    }
+    let mut pairs = BTreeSet::new();
+    for required in &funding.requirements {
+        if !candidates.contains_key(required.candidate_id.as_str())
+            || !states.contains(required.state_id.as_str())
+            || !pairs.insert((required.candidate_id.as_str(), required.state_id.as_str()))
+            || !valid_money(required.value)
+        {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "cash requirements need each known candidate/shared-state pair once, with nonnegative USD amounts",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
     if !(1..=MAX_CANDIDATES).contains(&inputs.candidates.len())
         || !(1..=MAX_STATES).contains(&inputs.weights.value.states.len())
@@ -478,7 +609,83 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
             "prerequisite graph contains a cycle",
         ));
     }
+    if let Some(funding) = &inputs.funding {
+        validate_funding(funding, policy, &states, &candidates)?;
+        metadata.include(funding)?;
+    }
     Ok(metadata)
+}
+
+struct FundingIndex<'a> {
+    declaration: &'a ProgramFunding,
+    requirements: BTreeMap<(&'a str, &'a str), Money>,
+}
+
+impl<'a> FundingIndex<'a> {
+    fn new(declaration: &'a ProgramFunding) -> Self {
+        Self {
+            declaration,
+            requirements: declaration
+                .requirements
+                .iter()
+                .map(|r| ((r.candidate_id.as_str(), r.state_id.as_str()), r.value))
+                .collect(),
+        }
+    }
+
+    fn assess(&self, selected: &[String]) -> Result<FundingAssessment> {
+        let money = |major| ExactMoney {
+            currency: self.declaration.currency,
+            major,
+        };
+        let minimum_cash = amount(self.declaration.minimum_cash)?;
+        let mut minimum_slack = None;
+        let mut states = Vec::with_capacity(self.declaration.available_cash.len());
+        for (state, available) in &self.declaration.available_cash {
+            let mut required = 0_i128;
+            for candidate in selected {
+                let value = self
+                    .requirements
+                    .get(&(candidate.as_str(), state.as_str()))
+                    .ok_or_else(|| {
+                        bad(
+                            RefusalCode::NumericalCertificateFailed207,
+                            "admitted funding matrix lost a candidate/state entry",
+                        )
+                    })?;
+                required = checked_minor_add(required, value.minor)?;
+            }
+            let cash_required = arithmetic(Rat::new(required, Money::SCALE))?;
+            let available_cash = amount(*available)?;
+            let remaining_cash = arithmetic(available_cash.checked_sub(cash_required))?;
+            let slack = arithmetic(remaining_cash.checked_sub(minimum_cash))?;
+            let improves = match minimum_slack {
+                None => true,
+                Some(old) => arithmetic(slack.checked_cmp(old))?.is_lt(),
+            };
+            if improves {
+                minimum_slack = Some(slack);
+            }
+            states.push(FundingState {
+                state_id: state.clone(),
+                available_cash: money(available_cash),
+                cash_required: money(cash_required),
+                remaining_cash: money(remaining_cash),
+                minimum_cash: money(minimum_cash),
+                slack: money(slack),
+            });
+        }
+        let minimum_slack = minimum_slack.ok_or_else(|| {
+            bad(
+                RefusalCode::NumericalCertificateFailed207,
+                "admitted funding has no shared states",
+            )
+        })?;
+        Ok(FundingAssessment {
+            states,
+            minimum_slack: money(minimum_slack),
+        })
+    }
 }
 
 /// Exact upper-tail signed loss from the complete joint payoff vector, including fractional boundary mass.
@@ -583,6 +790,17 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
         candidate.value.payoffs.sort_by(|a, b| a.0.cmp(&b.0));
         candidate.value.requires.sort();
     }
+    if let Some(funding) = &mut inputs.funding {
+        funding.value.available_cash.sort_by(|a, b| a.0.cmp(&b.0));
+        funding
+            .value
+            .requirements
+            .sort_by(|a, b| (&a.candidate_id, &a.state_id).cmp(&(&b.candidate_id, &b.state_id)));
+    }
+    let funding_index = inputs
+        .funding
+        .as_ref()
+        .map(|claim| FundingIndex::new(&claim.value));
     let policy = &inputs.policy.value;
     let money = |major| ExactMoney {
         currency: policy.currency,
@@ -629,6 +847,20 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
                     group: group.into(),
                     candidates,
                 });
+            }
+        }
+        let funding = funding_index
+            .as_ref()
+            .map(|index| index.assess(&ids))
+            .transpose()?;
+        if let Some(funding) = &funding {
+            for state in &funding.states {
+                if state.slack.major.signum() < 0 {
+                    rejected.push(StructuralRejection::LiquidityShortfall {
+                        state_id: state.state_id.clone(),
+                        shortfall: money(arithmetic(state.slack.major.checked_neg())?),
+                    });
+                }
             }
         }
         let bundle_id = format!("bundle_{mask:02x}");
@@ -678,13 +910,18 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
             selected: ids,
             spend: money(spend),
             budget_slack: money(arithmetic(amount(policy.budget)?.checked_sub(spend))?),
+            funding,
             structural_rejections: rejected,
             statistics: None,
             tail_loss: None,
             risk_rejected: false,
         });
     }
-    let stats = if actions.len() == 1 {
+    let stats = if actions.is_empty() {
+        // Nonnegative cash requirements cannot repair a shortfall already present in the empty subset.
+        // No admitted choice means no invented hold-cash statistics or counterfactual regret baseline.
+        Vec::new()
+    } else if actions.len() == 1 {
         vec![zero_statistics(&actions[0].value, &inputs.weights.value)]
     } else {
         card::evaluate(&DecisionInputs {
@@ -733,6 +970,7 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
         model_key: policy.model_key.clone(),
         question: inputs.weights.value.question.clone(),
         policy: policy.clone(),
+        funding: inputs.funding.as_ref().map(|claim| claim.value.clone()),
         choices,
         unconstrained_winners,
         feasible_winners,

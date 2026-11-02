@@ -14,6 +14,15 @@ of selected candidates' **net** payoffs at the same named state. Costs constrain
 deducted from those payoffs again. Prerequisites, exclusive groups and budget limits are applied before risk.
 Every binary subset remains visible, including structurally rejected subsets with named rejection reasons.
 
+Optional funding declares an inclusive cash window and separate cash basis, available cash in every shared
+state, a nonnegative minimum cash floor, and the complete candidate-by-state matrix of nonnegative cash
+requirements (including explicit zeroes). Each subset sums requirements within the same shared state, then
+reports remaining cash and slack to the floor. Every negative slack produces a named liquidity shortfall
+before risk ranking. Requirements and planned costs are not deducted again from already-net delta-NAV.
+Cash results remain visible even for subsets rejected by budget, prerequisites or exclusions. This is
+aggregate fundability for the declared window, not a guarantee of every intra-period cash balance or a
+staged funding schedule.
+
 Structurally feasible subsets use `fmine-decide::card` for expected value, inverse-CDF P10/P50/P90,
 CVaR95 of signed loss `-delta-NAV`, and same-state regret against all structurally feasible subsets. A
 configurable exact positive tail mass additionally integrates the lowest-payoff states, including fractional
@@ -23,12 +32,17 @@ the difference of their maximum means is the expected-value cost of the risk lim
 
 The empty subset has zero spending and payoffs. If it is the sole structurally feasible subset, its exact
 zero statistics are returned. A negative loss limit may exclude it; no risk-feasible program is an explicit
-result with empty constrained winners and no invented opportunity cost.
+result with empty constrained winners and no invented opportunity cost. Declared cash below the floor can
+reject even the empty subset. If no subset is structurally feasible, both winner sets are empty, statistics
+and tail losses are absent, and no risk cost or hindsight baseline is invented. This is distinct from
+having structurally feasible choices that all violate the risk limit.
 
 ## 3. Authority, Epistemics & Representation
 
 All imported values remain Assumed, Internal, Estimated and parametrically uncertain. A complete input
-snapshot includes separate policy, shared-weight and candidate Claims, including every losing candidate.
+snapshot includes separate policy, shared-weight and candidate Claims, including every losing candidate,
+plus the complete funding Claim when declared. Funding values, cash basis/window, source anchors and full
+metadata participate in the same parent, uncertainty and receipt binding.
 The output meets evidence, epistemic and knowledge states, joins confidentiality, and retains all input
 parents, source locators and consistent UU definitions. Generic Claim metadata omitted from its standard
 identity (UU exact bits, computed colours, support, representation, supersession and current flags) is bound
@@ -37,7 +51,8 @@ acquires a stronger validated regime. Every authority flag remains false.
 
 ## 4. Public API Surface
 
-- `ProgramPolicy`, `CapitalCandidate`, `ProgramInputs`: typed monetary declarations wrapped in Claims.
+- `ProgramPolicy`, `CapitalCandidate`, `ProgramFunding`, `ProgramInputs`: typed monetary declarations
+  wrapped in Claims; funding is optional and explicit.
 - `evaluate(&ProgramInputs) -> Result<EvaluatedProgram, Refusal>`: exact exhaustive comparison, bounded to
   1–8 candidates and 1–256 shared states (at most 256 subsets).
 - `EvaluatedProgram::{inputs, summary, claim, digest, to_json, to_markdown}`: immutable input/result access
@@ -48,8 +63,12 @@ acquires a stronger validated regime. Every authority flag remains false.
   `max_tail_loss`. Candidate rows require `id`, `label`, `cost`, `reference_class_basis` and optionally
   `exclusion_group`; separate `requires` rows name candidate/prerequisite pairs. State rows name id/weight;
   payoff rows name candidate/state/value; UU rows name id/description/trigger/downside_usd_m.
+  Optional `[[funding]]` requires `cash_period`, `cash_basis`, `minimum_cash`; `[[available_cash]]` requires
+  `state`, `value`; `[[cash_requirement]]` requires `candidate`, `state`, `value`. At most one funding
+  declaration is allowed. `cash_period` is an ordered valid `YYYY-MM-DD/YYYY-MM-DD` range, without an
+  inferred calendar. Cash amounts and their basis apply to that window independently of NAV valuation.
   Money uses quoted major USD decimals with at most four fractional digits, weights and tail mass exact
-  positive `n/d`. The parser bounds text to 4 MiB, rows to 4096 and UU terms to 64. Core admission and
+  positive `n/d`. The parser bounds text to 4 MiB, rows to 8192 and UU terms to 64. Core admission and
   parsing bound identifiers to 128 bytes and descriptions, bases, source paths and locators to 4096 bytes,
   preventing one large identifier from expanding into every enumerated subset's state statistics.
 
@@ -58,7 +77,10 @@ acquires a stronger validated regime. Every authority flag remains false.
 Every candidate is admitted before enumeration, including candidates that cannot be selected. Missing or
 duplicate states, incomplete payoffs, foreign references, prerequisite cycles, duplicate prerequisites,
 currency/basis mismatch, negative costs/budgets, nonpositive or non-unit-sum weights, and invalid tail mass
-refuse. Stale, altered, unobservable, uncited, unsupported, calibration-failed or unbudgeted Claims refuse.
+refuse. Funding additionally refuses partial/duplicate/foreign state matrices, negative cash amounts,
+currency mismatch, invalid or reversed cash dates, absent bases, and orphan cash rows without a complete
+funding declaration. Even never-selectable candidates require their complete explicit cash requirements.
+Stale, altered, unobservable, uncited, unsupported, calibration-failed or unbudgeted Claims refuse.
 Conflicting UU definitions refuse. Exact arithmetic overflow returns `FMINE-REF-207`; no alternative is
 dropped to obtain a plausible result. Input/source errors use the existing refusal catalog, including
 `FMINE-REF-505` for source SHA mismatch and `FMINE-REF-507` for altered typed Claims.
@@ -67,7 +89,9 @@ dropped to obtain a plausible result. Input/source errors use the existing refus
 
 - Exhaustive output contains exactly `2^n` subsets; constraint rejection never edits the input population.
 - Joint risk uses the shared scenario index, never marginal risk sums.
-- Every feasible winner satisfies exact budget, dependency, exclusion and optional tail-loss constraints.
+- Every feasible winner satisfies exact budget, dependency, exclusion, declared state-specific liquidity
+  and optional tail-loss constraints. Equality with the cash floor remains feasible.
+- Funding requirements are combined jointly by state, never averaged across states or charged to NAV again.
 - All ties survive, and arithmetic risk cost is nonnegative whenever constrained winners exist.
 - Source, losing candidate, constraint, adjustment-basis and evidence metadata changes affect identity.
 
@@ -83,7 +107,10 @@ quadratic duplication of source metadata; the public result retains every origin
 Direct GB-30 known answers use the plan's explicitly illustrative, displayed inputs: A+D mean $241.18M
 and risk cost $130.82M before adding streamed E, without treating rounded plan prose as an exact oracle.
 Tests also cover fractional tail mass, dependence, exact boundaries, prerequisite and exclusion constraints,
-do-nothing, infeasible risk, metadata and source identity, input permutation and overflow.
+do-nothing, infeasible risk, metadata and source identity, input permutation and overflow. Funding tests cover
+shared-state demand dependence, cost overruns changing the selected subset, exact cash-floor boundaries,
+preexisting cash shortfalls rejecting do-nothing, complete matrices, independent cash basis, unchanged legacy
+economics, losing-candidate requirements and complete funding metadata binding.
 This bounded slice does not claim the full GATE-CAP-01/03/04 scale, selection-frequency or historical evidence.
 
 ## 9. Lifted Code & Foundation Dependencies
@@ -93,7 +120,7 @@ evidence Claim types, and `fmine-decide::card` statistics. No IO, spawning or ti
 
 ## 10. Non-Goals & Scope Boundary
 
-Static additive declared net-NAV comparison only. No staged recourse, interactions, price/fiscal model,
+Static additive declared net-NAV comparison with optional explicitly scoped cash-window feasibility. No staged recourse, interactions, price/fiscal model,
 reference-class fitting, entity waterfalls, variable shares, portfolio safety, calibrated probabilities or
 physical authorization is supplied. Reference-class bases must be explicitly declared, including an honest
 unadjusted basis; the system does not apply an unnamed adjustment. Selection frequency is explicitly

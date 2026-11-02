@@ -115,6 +115,48 @@ pub(super) fn candidate_json(c: &CapitalCandidate) -> String {
     )
 }
 
+pub(super) fn funding_json(funding: &ProgramFunding) -> String {
+    let mut available = funding.available_cash.clone();
+    available.sort_by(|a, b| a.0.cmp(&b.0));
+    let available = available
+        .iter()
+        .map(|(id, value)| {
+            format!(
+                "{{\"state_id\":{},\"value\":{},\"currency\":{}}}",
+                js(id),
+                mq(*value),
+                currency(value.ccy)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut requirements = funding.requirements.clone();
+    requirements
+        .sort_by(|a, b| (&a.candidate_id, &a.state_id).cmp(&(&b.candidate_id, &b.state_id)));
+    let requirements = requirements
+        .iter()
+        .map(|r| {
+            format!(
+                "{{\"candidate_id\":{},\"state_id\":{},\"value\":{},\"currency\":{}}}",
+                js(&r.candidate_id),
+                js(&r.state_id),
+                mq(r.value),
+                currency(r.value.ccy)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"model_key\":{},\"currency\":{},\"cash_period\":{},\"cash_basis\":{},\"minimum_cash\":{},\"minimum_cash_currency\":{},\"available_cash\":[{available}],\"requirements\":[{requirements}]}}",
+        js(&funding.model_key),
+        currency(funding.currency),
+        js(&funding.cash_period),
+        js(&funding.cash_basis),
+        mq(funding.minimum_cash),
+        currency(funding.minimum_cash.ccy)
+    )
+}
+
 fn weights_json(w: &WeightSet) -> String {
     let mut states = w.states.clone();
     states.sort_by(|a, b| a.0.cmp(&b.0));
@@ -260,9 +302,13 @@ pub(super) fn inputs_json(inputs: &ProgramInputs) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}]}}",
+        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}}}",
         claim_json(&inputs.policy, &policy_json(&inputs.policy.value)),
-        claim_json(&inputs.weights, &weights_json(&inputs.weights.value))
+        claim_json(&inputs.weights, &weights_json(&inputs.weights.value)),
+        inputs.funding.as_ref().map_or_else(
+            || "null".into(),
+            |claim| claim_json(claim, &funding_json(&claim.value))
+        )
     )
 }
 
@@ -296,22 +342,46 @@ fn rejection_json(r: &StructuralRejection) -> String {
             js(group),
             ids(candidates)
         ),
+        StructuralRejection::LiquidityShortfall {
+            state_id,
+            shortfall,
+        } => format!(
+            "{{\"kind\":\"liquidity_shortfall\",\"state_id\":{},\"shortfall\":{}}}",
+            js(state_id),
+            rq(shortfall.major)
+        ),
     }
 }
 
-pub(super) fn summary_json(s: &ProgramSummary) -> String {
-    let choices = s.choices.iter().map(|r| format!("{{\"bundle_id\":{},\"selected\":{},\"spend\":{},\"budget_slack\":{},\"structural_rejections\":[{}],\"risk_rejected\":{},\"tail_loss\":{},\"statistics\":{}}}", js(&r.bundle_id), ids(&r.selected), rq(r.spend.major), rq(r.budget_slack.major), r.structural_rejections.iter().map(rejection_json).collect::<Vec<_>>().join(","), r.risk_rejected, r.tail_loss.map_or_else(|| "null".into(), |v| rq(v.major)), r.statistics.as_ref().map_or_else(|| "null".into(), statistics_json))).collect::<Vec<_>>().join(",");
+fn funding_assessment_json(funding: &FundingAssessment) -> String {
+    let states = funding.states.iter().map(|s| format!(
+        "{{\"state_id\":{},\"available_cash\":{},\"cash_required\":{},\"remaining_cash\":{},\"minimum_cash\":{},\"slack\":{}}}",
+        js(&s.state_id), rq(s.available_cash.major), rq(s.cash_required.major), rq(s.remaining_cash.major), rq(s.minimum_cash.major), rq(s.slack.major)
+    )).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":null,\"selection_frequency_status\":\"unavailable_static_declared_model\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"}}",
+        "{{\"states\":[{states}],\"minimum_slack\":{}}}",
+        rq(funding.minimum_slack.major)
+    )
+}
+
+pub(super) fn summary_json(s: &ProgramSummary) -> String {
+    let choices = s.choices.iter().map(|r| format!("{{\"bundle_id\":{},\"selected\":{},\"spend\":{},\"budget_slack\":{},\"funding\":{},\"structural_rejections\":[{}],\"risk_rejected\":{},\"tail_loss\":{},\"statistics\":{}}}", js(&r.bundle_id), ids(&r.selected), rq(r.spend.major), rq(r.budget_slack.major), r.funding.as_ref().map_or_else(|| "null".into(), funding_assessment_json), r.structural_rejections.iter().map(rejection_json).collect::<Vec<_>>().join(","), r.risk_rejected, r.tail_loss.map_or_else(|| "null".into(), |v| rq(v.major)), r.statistics.as_ref().map_or_else(|| "null".into(), statistics_json))).collect::<Vec<_>>().join(",");
+    format!(
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":null,\"selection_frequency_status\":\"unavailable_static_declared_model\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"}}",
         js(&s.model_key),
         js(&s.question),
         currency(s.policy.currency),
-        js(if s.feasible_winners.is_empty() {
+        js(if s.unconstrained_winners.is_empty() {
+            "no_structurally_feasible_program"
+        } else if s.feasible_winners.is_empty() {
             "no_risk_feasible_program"
         } else {
             "ok"
         }),
         policy_json(&s.policy),
+        s.funding
+            .as_ref()
+            .map_or_else(|| "null".into(), funding_json),
         ids(&s.unconstrained_winners),
         ids(&s.feasible_winners),
         s.expected_value_cost_of_risk_limit
@@ -364,8 +434,14 @@ impl EvaluatedProgram {
                 || "unbounded".into(),
                 |v| mq(v).trim_matches('"').to_string()
             ),
-            md(&s.unconstrained_winners.join(", ")),
-            if s.feasible_winners.is_empty() {
+            if s.unconstrained_winners.is_empty() {
+                "none: no structurally feasible program".into()
+            } else {
+                md(&s.unconstrained_winners.join(", "))
+            },
+            if s.unconstrained_winners.is_empty() {
+                "none: no structurally feasible program".into()
+            } else if s.feasible_winners.is_empty() {
                 "none: no risk-feasible program".into()
             } else {
                 md(&s.feasible_winners.join(", "))
@@ -384,6 +460,15 @@ impl EvaluatedProgram {
                         } => format!("{candidate} requires {prerequisite}"),
                         StructuralRejection::MutualExclusion { group, candidates } => {
                             format!("group {group}: {} are exclusive", candidates.join(", "))
+                        }
+                        StructuralRejection::LiquidityShortfall {
+                            state_id,
+                            shortfall,
+                        } => {
+                            format!(
+                                "cash-floor shortfall in {state_id}: {} USD",
+                                ratio(shortfall.major)
+                            )
                         }
                     })
                     .collect::<Vec<String>>()
@@ -412,6 +497,37 @@ impl EvaluatedProgram {
                 shown(stats.as_ref().map(|v| v.max_regret)),
                 md(&status)
             );
+        }
+        if let Some(funding) = &self.inputs.funding {
+            let f = &funding.value;
+            let _ = writeln!(
+                out,
+                "\n## Funding over the declared cash window\n\n**Cash period:** {}. **Cash basis:** {}. **Minimum cash:** {} USD.\n\nEvery shared state must retain the declared floor after the program's cash requirements. This covers aggregate cash over the declared window; it does not establish every intra-period balance or a staged funding schedule. Cash requirements do not alter the supplied net delta-NAV payoffs.\n",
+                md(&f.cash_period),
+                md(&f.cash_basis),
+                mq(f.minimum_cash).trim_matches('"')
+            );
+            claim_markdown(&mut out, funding);
+            out.push_str("\n| Bundle | State | Available before program | Cash required | Cash remaining | Minimum cash | Slack |\n|---|---|---:|---:|---:|---:|---:|\n");
+            for choice in &s.choices {
+                if let Some(result) = &choice.funding {
+                    for state in &result.states {
+                        let _ = writeln!(
+                            out,
+                            "| `{}` | {} | {} | {} | {} | {} | {} |",
+                            choice.bundle_id,
+                            md(&state.state_id),
+                            ratio(state.available_cash.major),
+                            ratio(state.cash_required.major),
+                            ratio(state.remaining_cash.major),
+                            ratio(state.minimum_cash.major),
+                            ratio(state.slack.major)
+                        );
+                    }
+                }
+            }
+        } else {
+            out.push_str("\nScenario funding: not declared.\n");
         }
         out.push_str("\n## Candidate assumptions and source Claims\n\nEvery candidate remains an input, including candidates absent from all winning subsets.\n\n");
         for candidate in &self.inputs.candidates {

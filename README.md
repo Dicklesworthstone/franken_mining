@@ -340,6 +340,33 @@ from summed payoffs within each shared state, including fractional tail-boundary
 in the calculation. Full input/output Claims, source bytes, constraints and adjustment bases bind the receipt,
 including candidates that never win.
 
+#### Check whether the program can be funded in every declared scenario
+
+The optional funding clause constrains cash separately from net NAV:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/liquidity.toml --format markdown
+```
+
+This invented example has a USD 80M planned budget, USD 110M available cash in each state and an explicit
+USD 20M minimum cash balance. Expansion and maintenance each have USD 40M planned costs. Together their
+declared expected net NAV is USD 108M, but expansion's cash requirement rises to USD 100M in the overrun
+state. Expansion alone leaves USD 10M, below the floor; both projects leave minus USD 30M. Maintenance
+alone remains fundable and has USD 40M expected net NAV. The report keeps the rejected choices and their
+exact state-specific shortfalls alongside the fundable result.
+
+Supply one `[[funding]]` row with `cash_period = "2027-01-01/2027-12-31"`, an explicit `cash_basis` and
+`minimum_cash`, then complete `[[available_cash]]` rows (`state`, `value`) and `[[cash_requirement]]`
+rows (`candidate`, `state`, `value`). Every state and every candidate/state pair must appear, including
+explicit zeroes; cash values use the same exact USD input convention. Funding evidence and all rows bind
+the result, including funding for candidates that cannot otherwise be selected. A scenario shortfall is
+a structural rejection before risk ranking. If every subset fails, the result explicitly reports
+`no_structurally_feasible_program`, with no invented winners or risk statistics.
+
+The calculation tests the stated cash window. Payment timing within that window, staged financing and
+intermediate cash balances require additional inputs and are not established by this comparison. Declared
+net-NAV payoffs already include their costs; enforcing the cash constraint does not charge them again.
+
 These are conditional static comparisons of declared assumptions. The example applies no fitted
 reference-class correction, and the output supplies no empirical selection frequency, staged recourse,
 entity cash-flow waterfall, changing share denominator, project feasibility approval or execution authority.

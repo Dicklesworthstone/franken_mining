@@ -1,0 +1,92 @@
+# Invented funding example; no issuer data or calibrated probabilities.
+# Expected net NAV before the cash constraint: expansion 68M + maintenance 40M = 108M.
+# Expansion's overrun-state cash call breaches the declared 20M floor even alone.
+# Maintenance alone remains fundable. All project payoffs already include their costs.
+schema = "fmine.capital-program.v1"
+model_key = "invented_joint_cash_requirements"
+question = "Which declared project bundle stays above the cash floor in both scenarios?"
+currency = "USD"
+valuation_basis = "Invented decision-date net project NAV; capital already included; fixed shares"
+budget = "80000000"
+tail_mass = "1/5"
+payoff_convention = "additive_net_delta_nav"
+reference_class_basis = "Illustrative unadjusted declared assumptions; no empirical correction fitted"
+
+[[state]]
+id = "base"
+weight = "4/5"
+
+[[state]]
+id = "overrun"
+weight = "1/5"
+
+[[candidate]]
+id = "expansion"
+label = "Invented expansion"
+cost = "40000000"
+reference_class_basis = "Unadjusted invented expansion; overrun payoff and cash requirement explicitly declared"
+
+[[candidate]]
+id = "maintenance"
+label = "Invented maintenance alternative"
+cost = "40000000"
+reference_class_basis = "Unadjusted invented maintenance; no inferred hazard calibration"
+
+[[payoff]]
+candidate = "expansion"
+state = "base"
+value = "80000000"
+
+[[payoff]]
+candidate = "expansion"
+state = "overrun"
+value = "20000000"
+
+[[payoff]]
+candidate = "maintenance"
+state = "base"
+value = "40000000"
+
+[[payoff]]
+candidate = "maintenance"
+state = "overrun"
+value = "40000000"
+
+[[funding]]
+cash_period = "2027-01-01/2027-12-31"
+cash_basis = "Invented end-of-window cash envelope before chosen projects; same entity and nominal USD basis"
+minimum_cash = "20000000"
+
+[[available_cash]]
+state = "base"
+value = "110000000"
+
+[[available_cash]]
+state = "overrun"
+value = "110000000"
+
+[[cash_requirement]]
+candidate = "expansion"
+state = "base"
+value = "40000000"
+
+[[cash_requirement]]
+candidate = "expansion"
+state = "overrun"
+value = "100000000"
+
+[[cash_requirement]]
+candidate = "maintenance"
+state = "base"
+value = "40000000"
+
+[[cash_requirement]]
+candidate = "maintenance"
+state = "overrun"
+value = "40000000"
+
+[[uu]]
+id = "unmodelled_cash_timing"
+description = "Cash timing inside the declared window is not modelled"
+trigger = "A required payment precedes the cash inflow that would fund it"
+downside_usd_m = "10"

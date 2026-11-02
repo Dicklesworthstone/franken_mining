@@ -50,6 +50,46 @@ fn candidate_claim(value: CapitalCandidate) -> Claim<CapitalCandidate> {
         AdditivityClass::ExtensiveAdditive,
     )
 }
+fn funding_claim(value: ProgramFunding) -> Claim<ProgramFunding> {
+    let tag = value.canonical_tag();
+    claim("capital.funding", value, &tag, AdditivityClass::NonAdditive)
+}
+fn with_funding(
+    mut i: ProgramInputs,
+    available: &[i128],
+    required: &[(&str, &[i128])],
+    minimum: i128,
+) -> ProgramInputs {
+    let states = &i.weights.value.states;
+    let funding = ProgramFunding {
+        model_key: i.policy.value.model_key.clone(),
+        currency: Currency::USD,
+        cash_period: "2030-01-01/2030-12-31".into(),
+        cash_basis: "Nominal USD, full project ownership; available cash before this program"
+            .into(),
+        minimum_cash: usd(minimum),
+        available_cash: states
+            .iter()
+            .zip(available)
+            .map(|((id, _), value)| (id.clone(), usd(*value)))
+            .collect(),
+        requirements: required
+            .iter()
+            .flat_map(|(candidate, values)| {
+                states
+                    .iter()
+                    .zip(*values)
+                    .map(move |((id, _), value)| CashRequirement {
+                        candidate_id: (*candidate).into(),
+                        state_id: id.clone(),
+                        value: usd(*value),
+                    })
+            })
+            .collect(),
+    };
+    i.funding = Some(funding_claim(funding));
+    i
+}
 fn inputs(
     rows: &[(&str, i128, &[i128])],
     weights: &[Rat],
@@ -108,6 +148,7 @@ fn inputs(
             AdditivityClass::NonAdditive,
         ),
         candidates,
+        funding: None,
     }
 }
 fn row<'a>(report: &'a EvaluatedProgram, members: &[&str]) -> &'a ProgramChoice {
@@ -513,4 +554,292 @@ fn oversized_identifiers_text_and_anchors_refuse_before_enumeration() {
             "FMINE-REF-506"
         );
     }
+}
+
+#[test]
+fn scenario_overrun_changes_the_fundable_choice_without_charging_nav_twice() {
+    let i = inputs(
+        &[("A", 100, &[50, 100]), ("B", 100, &[30, 35])],
+        &[r(1, 2), r(1, 2)],
+        100,
+        r(1, 5),
+        None,
+    );
+    assert_eq!(selected_winners(&evaluate(&i).unwrap()), vec![vec!["A"]]);
+    let funded = with_funding(
+        i,
+        &[150, 150],
+        &[("A", &[100, 150]), ("B", &[100, 100])],
+        50,
+    );
+    let report = evaluate(&funded).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["B"]]);
+    assert!(row(&report, &["A"]).statistics.is_none());
+    let b = row(&report, &["B"]);
+    assert_eq!(b.statistics.as_ref().unwrap().mean.major, r(65, 2));
+    assert_eq!(b.funding.as_ref().unwrap().minimum_slack.major, ZERO);
+    let both = row(&report, &["A", "B"]);
+    assert!(
+        both.structural_rejections
+            .iter()
+            .any(|r| matches!(r, StructuralRejection::BudgetExceeded))
+    );
+    assert!(both.structural_rejections.iter().any(|r| matches!(r, StructuralRejection::LiquidityShortfall { state_id, shortfall } if state_id == "s1" && shortfall.major == Rat::from_integer(150))));
+    let adverse = &both.funding.as_ref().unwrap().states[1];
+    assert_eq!(adverse.cash_required.major, Rat::from_integer(250));
+    assert_eq!(adverse.remaining_cash.major, Rat::from_integer(-100));
+    assert_eq!(adverse.slack.major, Rat::from_integer(-150));
+    assert_eq!(report.claim().parents.len(), 5);
+    assert!(
+        report
+            .claim()
+            .parents
+            .contains(&funded.funding.as_ref().unwrap().claim_id)
+    );
+    assert!(
+        report
+            .to_markdown()
+            .contains("Funding over the declared cash window")
+    );
+    assert!(report.to_markdown().contains("cash-floor shortfall in s1"));
+}
+
+#[test]
+fn cash_demands_follow_shared_states_and_never_average_away_a_shortfall() {
+    let i = inputs(
+        &[("A", 1, &[5, 5]), ("B", 1, &[7, 7])],
+        &[r(1, 100), r(99, 100)],
+        2,
+        ONE,
+        None,
+    );
+    let offset = with_funding(
+        i.clone(),
+        &[150, 150],
+        &[("A", &[100, 0]), ("B", &[0, 100])],
+        50,
+    );
+    let offset_report = evaluate(&offset).unwrap();
+    assert_eq!(selected_winners(&offset_report), vec![vec!["A", "B"]]);
+    assert_eq!(
+        row(&offset_report, &["A", "B"])
+            .funding
+            .as_ref()
+            .unwrap()
+            .minimum_slack
+            .major,
+        ZERO
+    );
+    let correlated = with_funding(i, &[150, 150], &[("A", &[100, 0]), ("B", &[100, 0])], 50);
+    let report = evaluate(&correlated).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["B"]]);
+    let both = row(&report, &["A", "B"]);
+    assert!(both.structural_rejections.iter().any(|r| matches!(r, StructuralRejection::LiquidityShortfall { state_id, shortfall } if state_id == "s0" && shortfall.major == Rat::from_integer(100))));
+    let mut reordered = correlated;
+    reordered.candidates.reverse();
+    reordered.weights.value.states.reverse();
+    let funding = &mut reordered.funding.as_mut().unwrap().value;
+    funding.available_cash.reverse();
+    funding.requirements.reverse();
+    assert_eq!(evaluate(&reordered).unwrap(), report);
+}
+
+#[test]
+fn hold_cannot_be_forced_feasible_when_preexisting_cash_is_below_the_floor() {
+    let i = with_funding(
+        inputs(&[("A", 1, &[100, 100])], &[r(1, 2), r(1, 2)], 1, ONE, None),
+        &[40, 100],
+        &[("A", &[0, 10])],
+        50,
+    );
+    let report = evaluate(&i).unwrap();
+    assert!(report.summary().unconstrained_winners.is_empty());
+    assert!(report.summary().feasible_winners.is_empty());
+    assert!(report.summary().expected_value_cost_of_risk_limit.is_none());
+    for choice in &report.summary().choices {
+        assert!(choice.statistics.is_none());
+        assert!(choice.tail_loss.is_none());
+        assert!(!choice.risk_rejected);
+        assert_eq!(
+            choice.funding.as_ref().unwrap().minimum_slack.major,
+            Rat::from_integer(-10)
+        );
+        assert!(choice.structural_rejections.iter().any(|r| matches!(r, StructuralRejection::LiquidityShortfall { state_id, shortfall } if state_id == "s0" && shortfall.major == Rat::from_integer(10))));
+    }
+    assert_eq!(
+        row(&report, &[]).funding.as_ref().unwrap().states[0]
+            .remaining_cash
+            .major,
+        Rat::from_integer(40)
+    );
+    assert!(
+        report
+            .to_json()
+            .contains("\"status\":\"no_structurally_feasible_program\"")
+    );
+    assert!(
+        report
+            .to_markdown()
+            .contains("none: no structurally feasible program")
+    );
+}
+
+#[test]
+fn complete_funding_values_and_unhashed_metadata_bind_even_without_a_selection_change() {
+    let i = inputs(
+        &[("A", 1, &[10]), ("loser", 10, &[-10])],
+        &[ONE],
+        1,
+        ONE,
+        None,
+    );
+    let legacy = evaluate(&i).unwrap();
+    let funded = with_funding(i, &[100], &[("A", &[1]), ("loser", &[2])], 10);
+    let report = evaluate(&funded).unwrap();
+    assert_eq!(selected_winners(&report), selected_winners(&legacy));
+    for before in &legacy.summary().choices {
+        let after = report
+            .summary()
+            .choices
+            .iter()
+            .find(|r| r.selected == before.selected)
+            .unwrap();
+        assert_eq!(after.statistics, before.statistics);
+        assert_eq!(after.tail_loss, before.tail_loss);
+    }
+    let mut changed = funded.clone();
+    let mut f = changed.funding.as_ref().unwrap().value.clone();
+    f.requirements
+        .iter_mut()
+        .find(|r| r.candidate_id == "loser")
+        .unwrap()
+        .value = usd(3);
+    changed.funding = Some(funding_claim(f));
+    let next = evaluate(&changed).unwrap();
+    assert_eq!(selected_winners(&next), selected_winners(&report));
+    assert_ne!(next.digest(), report.digest());
+
+    let mut changed = funded.clone();
+    changed.funding.as_mut().unwrap().supersedes = Some(changed.policy.claim_id);
+    assert_eq!(
+        changed.funding.as_ref().unwrap().claim_id,
+        funded.funding.as_ref().unwrap().claim_id
+    );
+    let next = evaluate(&changed).unwrap();
+    assert_eq!(next.summary(), report.summary());
+    assert_ne!(next.digest(), report.digest());
+    let mut changed = funded;
+    changed.funding.as_mut().unwrap().value.minimum_cash = usd(11);
+    assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-507");
+}
+
+#[test]
+fn incomplete_foreign_invalid_period_currency_and_overflowing_funding_refuse() {
+    let i = with_funding(
+        inputs(&[("A", 1, &[10]), ("B", 1, &[20])], &[ONE], 2, ONE, None),
+        &[100],
+        &[("A", &[10]), ("B", &[20])],
+        5,
+    );
+    for case in 0..12 {
+        let mut changed = i.clone();
+        let mut f = changed.funding.as_ref().unwrap().value.clone();
+        match case {
+            0 => {
+                f.requirements.pop();
+            }
+            1 => f.requirements[1] = f.requirements[0].clone(),
+            2 => f.requirements[0].candidate_id = "foreign".into(),
+            3 => f.available_cash[0].0 = "foreign".into(),
+            4 => f.minimum_cash = usd(-1),
+            5 => f.available_cash[0].1 = usd(-1),
+            6 => f.requirements[0].value = usd(-1),
+            7 => f.requirements[0].value.ccy = Currency::CAD,
+            8 => f.cash_period = "2030-02-29/2030-12-31".into(),
+            9 => f.cash_period = "2030-12-31/2030-01-01".into(),
+            10 => f.cash_basis.clear(),
+            11 => f.available_cash[0].1.ccy = Currency::CAD,
+            _ => unreachable!(),
+        }
+        changed.funding = Some(funding_claim(f));
+        assert!(
+            evaluate(&changed).is_err(),
+            "funding case {case} was admitted"
+        );
+    }
+    let mut changed = i.clone();
+    changed.funding.as_mut().unwrap().stale = true;
+    assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-502");
+    let mut changed = i.clone();
+    changed.funding.as_mut().unwrap().uu_terms.clear();
+    assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-204");
+    let mut changed = i;
+    let mut f = changed.funding.as_ref().unwrap().value.clone();
+    f.minimum_cash = usd(0);
+    f.available_cash[0].1.minor = i128::MAX;
+    for required in &mut f.requirements {
+        required.value.minor = i128::MAX;
+    }
+    changed.funding = Some(funding_claim(f));
+    assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-207");
+}
+
+const FUNDING: &str = r#"[[funding]]
+cash_period = "2030-01-01/2030-12-31"
+cash_basis = "Nominal USD cash over the stated window, full ownership"
+minimum_cash = "1"
+[[available_cash]]
+state = "s"
+value = "3.0001"
+[[cash_requirement]]
+candidate = "A"
+state = "s"
+value = "2.0001"
+"#;
+
+#[test]
+fn funding_parser_keeps_exact_cash_scope_and_refuses_partial_declarations() {
+    let text = format!("{MODEL}{FUNDING}");
+    let report = evaluate(&parse(&text).unwrap()).unwrap();
+    let chosen = row(&report, &["A"]);
+    let cash = &chosen.funding.as_ref().unwrap().states[0];
+    assert_eq!(cash.cash_required.major, r(20001, 10000));
+    assert_eq!(cash.remaining_cash.major, ONE);
+    assert_eq!(cash.slack.major, ZERO);
+    assert_eq!(
+        chosen.statistics.as_ref().unwrap().mean.major,
+        r(20001, 10000)
+    );
+    assert!(
+        report
+            .to_json()
+            .contains("\"minimum_cash_currency\":\"USD\"")
+    );
+    for bad in [
+        text.replace("3.0001", "3.00001"),
+        text.replace(
+            "[[available_cash]]\nstate = \"s\"\nvalue = \"3.0001\"\n",
+            "",
+        ),
+        text.replace(
+            "[[cash_requirement]]\ncandidate = \"A\"\nstate = \"s\"\nvalue = \"2.0001\"\n",
+            "",
+        ),
+        format!("{text}[[available_cash]]\nstate = \"s\"\nvalue = \"0\"\n"),
+        format!("{text}{FUNDING}"),
+        format!("{MODEL}[[available_cash]]\nstate = \"s\"\nvalue = \"1\"\n"),
+        text.replace(
+            "minimum_cash = \"1\"",
+            "minimum_cash = \"1\"\nexecution_authorized = \"true\"",
+        ),
+    ] {
+        assert!(
+            parse(&bad).is_err(),
+            "partial or altered funding declaration was admitted"
+        );
+    }
+    let changed_basis = text.replace("full ownership", "attributable ownership");
+    let next = evaluate(&parse(&changed_basis).unwrap()).unwrap();
+    assert_eq!(selected_winners(&next), selected_winners(&report));
+    assert_ne!(next.digest(), report.digest());
 }

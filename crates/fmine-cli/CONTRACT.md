@@ -84,6 +84,12 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     with complete source-bound Claims and explicit reference-class adjustment bases. This is a conditional
     static comparison; staged recourse, entity waterfalls, variable share counts, empirical selection
     frequencies and execution authority are not supplied.
+    An optional complete funding Claim adds a declared cash window/basis, minimum cash, every state's
+    available cash and every candidate-by-state cash requirement. Each subset retains exact cash used,
+    remaining cash and slack, including rejected subsets. Any state shortfall excludes a subset before
+    risk ranking. If even hold-cash breaches the floor, the report explicitly has no structurally feasible
+    program. Cash requirements constrain financing without changing declared net NAV. This tests the
+    declared cash window only; it does not establish every intra-period balance or a staged schedule.
   - `lint <draft> --issuer <issuer> --html-definitions <mapping.toml> [--discover] [--as-of YYYY-MM-DD]`
     (BD-059/BD-345): checks only the mapped, registered HTML Claims through the existing exact equality
     kernel. The receipt retains full value, label, mapping and registry evidence. A separate source-publication
