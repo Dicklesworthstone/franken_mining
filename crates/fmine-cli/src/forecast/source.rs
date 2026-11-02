@@ -600,7 +600,7 @@ pub(super) fn receipt_claim_body_at_vintage(
         &tag,
         Representation::Deterministic,
         SpatialSupport::PeriodAggregate,
-        if policy.metric == PublicMetric::ProductionKoz {
+        if policy.metric.is_production() {
             AdditivityClass::ExtensiveAdditive
         } else {
             AdditivityClass::IntensiveWeighted
@@ -705,8 +705,7 @@ fn bind_release(
         || cell.key.line.occurrence != 0
         || cell.key.unit != policy.metric.unit()
         || !same_ownership(cell.key.ownership_basis, policy.ownership)
-        || (!(policy.metric == PublicMetric::ProductionKoz
-            && policy.ownership == PublicOwnership::Full)
+        || (!(policy.metric.is_production() && policy.ownership == PublicOwnership::Full)
             && !same_ownership(cell.printed_basis, policy.ownership))
         || cell.claim.support != SpatialSupport::PeriodAggregate
     {
@@ -765,7 +764,7 @@ fn bind_release(
             format!("displayed outcome is not an exact decimal: {error}"),
         )
     })?;
-    if policy.metric == PublicMetric::ProductionKoz && value.num() < 0 {
+    if policy.metric.is_production() && value.num() < 0 {
         return Err(refusal(
             RefusalCode::SourceCellUnusable208,
             "production cannot be negative",

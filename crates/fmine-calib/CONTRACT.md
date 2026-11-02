@@ -49,8 +49,12 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   existing `CohortSpec.resolution_rule` string. Its reserved `fmine.public-resolution.v1:` prefix contains a
   canonical `PRP1`/v1 frame encoded as lowercase hexadecimal. It binds issuer, metric, explicit unit and source
   field, calendar FY/quarter, original release, exact ownership fraction and every forecast-id-to-subject mapping.
-  The initial metrics are gold production in koz and issuer-reported AISC per sold gold ounce in USD/oz;
-  full production and attributable production remain distinct even at an attributable fraction of one.
+  Metrics are gold production (`production_koz`, koz), copper production (`production_kt`, kt), and
+  issuer-reported AISC per sold gold ounce in USD/oz. Copper binds the printed `cu_prod_100_kt` or
+  `cu_prod_attr_kt` source field without any conversion to pounds. `PublicMetric::is_production` identifies
+  both extensive, nonnegative production quantities for admission and replay. Full production and
+  attributable production remain distinct even at an attributable fraction of one. Adding copper preserves
+  the existing gold policy bytes and does not change original-only or comparative-vintage permissions.
   `validate`, `to_resolution_rule`, `parse_resolution_rule`, period and ownership helpers perform no I/O.
   `PublicVintagePolicy::OriginalOnly` keeps those exact v1 bytes and permissions. An opt-in
   `RegisteredComparatives` policy is encoded by `to_resolution_rule_with_vintages` as a

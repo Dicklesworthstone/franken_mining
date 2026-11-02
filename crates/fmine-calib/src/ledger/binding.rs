@@ -72,6 +72,7 @@ impl PublicVintagePolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublicMetric {
     ProductionKoz,
+    ProductionKt,
     AiscUsdPerOz,
 }
 
@@ -79,6 +80,7 @@ impl PublicMetric {
     pub fn parse(value: &str) -> Result<Self, Refusal> {
         match value {
             "production_koz" => Ok(Self::ProductionKoz),
+            "production_kt" => Ok(Self::ProductionKt),
             "aisc_usd_per_oz" => Ok(Self::AiscUsdPerOz),
             _ => Err(domain("unsupported public-resolution metric")),
         }
@@ -87,6 +89,7 @@ impl PublicMetric {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ProductionKoz => "production_koz",
+            Self::ProductionKt => "production_kt",
             Self::AiscUsdPerOz => "aisc_usd_per_oz",
         }
     }
@@ -94,8 +97,14 @@ impl PublicMetric {
     pub const fn unit(self) -> &'static str {
         match self {
             Self::ProductionKoz => "koz",
+            Self::ProductionKt => "kt",
             Self::AiscUsdPerOz => "usd_per_oz",
         }
+    }
+
+    /// Both production quantities are extensive and nonnegative; the source unit never converts.
+    pub const fn is_production(self) -> bool {
+        matches!(self, Self::ProductionKoz | Self::ProductionKt)
     }
 
     /// Exact original-release line label; AISC means issuer-reported cost per sold gold ounce.
@@ -105,6 +114,8 @@ impl PublicMetric {
             (Self::ProductionKoz, PublicOwnership::Attributable { .. }) => {
                 "summary:au_prod_attr_koz"
             }
+            (Self::ProductionKt, PublicOwnership::Full) => "summary:cu_prod_100_kt",
+            (Self::ProductionKt, PublicOwnership::Attributable { .. }) => "summary:cu_prod_attr_kt",
             (Self::AiscUsdPerOz, _) => "summary:aisc_usd_per_oz",
         }
     }
@@ -920,6 +931,56 @@ mod tests {
     }
 
     #[test]
+    fn copper_targets_bind_printed_kilotonnes_without_changing_vintage_permission() {
+        let mut copper = policy(&[ObjectId::from_raw(PrefixKind::Forecast, [1; 16])]);
+        let gold = copper.to_resolution_rule().unwrap();
+        copper.metric = PublicMetric::parse("production_kt").unwrap();
+        assert_eq!(copper.metric.unit(), "kt");
+        assert!(copper.metric.is_production());
+        assert!(PublicMetric::ProductionKoz.is_production());
+        assert!(!PublicMetric::AiscUsdPerOz.is_production());
+        for (ownership, field) in [
+            (PublicOwnership::Full, "summary:cu_prod_100_kt"),
+            (
+                PublicOwnership::Attributable { num: 1, den: 1 },
+                "summary:cu_prod_attr_kt",
+            ),
+            (
+                PublicOwnership::Attributable { num: 3, den: 5 },
+                "summary:cu_prod_attr_kt",
+            ),
+        ] {
+            copper.ownership = ownership;
+            assert_eq!(copper.metric.field(ownership), field);
+            for vintages in [
+                PublicVintagePolicy::OriginalOnly,
+                PublicVintagePolicy::RegisteredComparatives,
+            ] {
+                let rule = copper.to_resolution_rule_with_vintages(vintages).unwrap();
+                assert_ne!(rule, gold);
+                assert_eq!(
+                    PublicResolutionPolicy::parse_resolution_rule_with_vintages(&rule).unwrap(),
+                    Some((copper.clone(), vintages))
+                );
+                assert_eq!(
+                    vintages
+                        .validate_release(copper.period, "1971Q1", true)
+                        .is_ok(),
+                    vintages == PublicVintagePolicy::RegisteredComparatives
+                );
+            }
+        }
+        for unsupported in [
+            "production_mlb",
+            "production_t",
+            "c1_usd_per_lb",
+            "aisc_usd_per_lb",
+        ] {
+            assert!(PublicMetric::parse(unsupported).is_err(), "{unsupported}");
+        }
+    }
+
+    #[test]
     fn reserved_syntax_crc_and_forged_unit_refuse_without_affecting_legacy() {
         let id = ObjectId::from_raw(PrefixKind::Forecast, [1; 16]);
         let rule = policy(&[id]).to_resolution_rule().unwrap();
@@ -1118,13 +1179,14 @@ mod tests {
         let (mut ledger, ids) = forecasts(PublicPeriod::Year(1970).end_ns().unwrap());
         let first = policy(&ids[..1]);
         let digest = ledger.freeze_cohort(spec(&first, "first", 2)).unwrap();
-        for mutation in 0..5 {
+        for mutation in 0..6 {
             let mut changed = first.clone();
             match mutation {
                 0 => changed.issuer = "another_issuer".into(),
                 1 => changed.metric = PublicMetric::AiscUsdPerOz,
                 2 => changed.period = PublicPeriod::Year(1971),
                 3 => changed.ownership = PublicOwnership::Attributable { num: 1, den: 1 },
+                4 => changed.metric = PublicMetric::ProductionKt,
                 _ => {
                     changed.members.insert(ids[0], "another_site".into());
                 }

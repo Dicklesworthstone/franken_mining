@@ -1,6 +1,7 @@
 use super::*;
 use std::collections::BTreeMap;
 
+use fmine_calib::ledger::binding::PublicMetric::{AiscUsdPerOz, ProductionKoz, ProductionKt};
 use fmine_core::id::PrefixKind;
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, Workbook, build_minimal_xlsx};
 use fmine_public::key::public_claim;
@@ -86,7 +87,7 @@ fn reseal(cell: &mut KeyedCell) {
 
 #[test]
 fn original_displayed_number_and_source_identity_survive_the_receipt() {
-    for metric in [PublicMetric::ProductionKoz, PublicMetric::AiscUsdPerOz] {
+    for metric in [ProductionKoz, AiscUsdPerOz, ProductionKt] {
         let (policy, id, source, cell) = example(metric);
         let result = bind(&source, &policy, id, std::slice::from_ref(&cell)).expect("binding");
         assert_eq!(result.value, Rat::from_integer(400));
@@ -376,7 +377,7 @@ fn comparative(metric: PublicMetric) -> (PublicResolutionPolicy, ObjectId, Sourc
 
 #[test]
 fn explicit_comparative_retains_frozen_target_and_reconstructs_exact_source_claim() {
-    for metric in [PublicMetric::ProductionKoz, PublicMetric::AiscUsdPerOz] {
+    for metric in [ProductionKoz, AiscUsdPerOz, ProductionKt] {
         let (policy, id, registered, cell) = comparative(metric);
         let result = bind_release(
             &registered,

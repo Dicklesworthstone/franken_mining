@@ -702,8 +702,7 @@ fn apply_source(
             "publication basis needs FACT: or INFERENCE: followed by its evidence",
         ));
     }
-    if policy.metric == fmine_calib::ledger::binding::PublicMetric::ProductionKoz && exact.num() < 0
-    {
+    if policy.metric.is_production() && exact.num() < 0 {
         return Err(invalid("production cannot be negative"));
     }
     let available_ns = publication_start
