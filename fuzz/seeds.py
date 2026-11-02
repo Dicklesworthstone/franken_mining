@@ -100,7 +100,7 @@ def main() -> None:
     root, out = Path(sys.argv[1]), Path(sys.argv[2])
     seeds: dict[str, list[bytes]] = {t: [] for t in
                                      ("codec", "anchor", "journal", "xlsx", "numfmt", "registry", "record", "html",
-                                      "cli", "cli_run", "pit", "cpit")}
+                                      "cli", "cli_run", "pit", "cpit", "pcpsp")}
 
     # codec: mode, script length, script (one read per byte), payload. A script byte's kind is its value mod 11 and
     # its bound its high nibble: every kind once, then bytes, strings and sequences under small, mid and no bounds.
@@ -207,6 +207,17 @@ def main() -> None:
     cprec = "0 0\n1 0\n2 2 0 1\n"
     for selector, ranks in ((0x22, b""), (0x22, bytes([0, 1, 255])), (0x31, bytes([2, 1, 0])), (0x00, b"")):
         seeds["cpit"].append(bytes([selector]) + f"{cpit}\0{cprec}\0".encode() + ranks)
+
+    # pcpsp: the selector as for cpit, then the .pcpsp text, NUL, the .prec text, NUL, and choice bytes (low nibble:
+    # destination; high nibble: rank, 15 leaves the block out). The unit tests' three-block pair: two destinations
+    # (dump, mill), a mining resource both use and a mill resource only the mill uses.
+    pcpsp = ("NAME: tiny\nTYPE: PCPSP\nNBLOCKS: 3\nNPERIODS: 2\nNDESTINATIONS: 2\nNRESOURCE_SIDE_CONSTRAINTS: 2\n"
+             "NGENERAL_SIDE_CONSTRAINTS: 0\nDISCOUNT_RATE: 0.1\nRESOURCE_CONSTRAINT_LIMITS:\n0 0 L 2\n0 1 L 2\n1 0 L 1\n"
+             "1 1 L 1\nOBJECTIVE_FUNCTION:\n% dump, mill\n0 -1 -3\n1 -1 -3\n2 -2 9.5\nRESOURCE_CONSTRAINT_COEFFICIENTS:\n"
+             "0 0 0 1\n0 1 0 1\n0 1 1 1\n1 0 0 1\n1 1 0 1\n1 1 1 1\n2 0 0 1\n2 1 0 1\n2 1 1 1\nEOF\n")
+    for selector, choices in ((0x01, b""), (0x01, bytes([0x00, 0x00, 0x01])), (0x21, bytes([0x10, 0x20, 0x01])),
+                              (0x11, bytes([0xF0, 0x01, 0x11])), (0x00, b"")):
+        seeds["pcpsp"].append(bytes([selector]) + f"{pcpsp}\0{cprec}\0".encode() + choices)
 
     # cli_run: one byte per vocabulary entry, in the order fuzz_targets/cli_run.rs builds it (verb paths, then its
     # FLAGS, PAIRS and VALUES). Each verb alone, with a selector, with options, and as a full mutation command. A

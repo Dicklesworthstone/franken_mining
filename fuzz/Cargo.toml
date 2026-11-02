@@ -111,3 +111,10 @@ path = "fuzz_targets/cpit.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "pcpsp"
+path = "fuzz_targets/pcpsp.rs"
+test = false
+doc = false
+bench = false
