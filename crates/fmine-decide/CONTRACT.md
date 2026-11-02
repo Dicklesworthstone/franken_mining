@@ -114,6 +114,8 @@ The projection is an internal versioned replay input (version 2), not a new dura
     `METHOD`, `STANDARD_ERROR_NOTE` and `SCOPE`.
 - `card` result types: `ExactMoney`, `StateResult`, `AlternativeStats` and `DecisionSummary`, under
   `EvaluatedCard`; constants `MAX_STATES` (4,096), `MAX_ACTIONS` (256), `NO_CLAIM` and `TIE_RULE`.
+  `EvaluatedCard` has `inputs`, `claim`, `summary`, `weakest_input_color`, `to_json` and `to_markdown`.
+  `ActionRole`, `NetStatus` and `ChoiceKind` have `as_str`.
 - `card::model::parse` admits the strict `fmine.decision-model.v1` TOML subset with explicit `state`, `action`,
   `payoff` and `uu` rows plus optional `information_option`, `signal` and `likelihood` rows. It checks the
   supplied source SHA-256 against the actual text, exact rational weights and likelihoods,
