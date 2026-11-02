@@ -97,6 +97,16 @@ The same engine compares the AISC workbooks under `issuer_consistency.aisc_vinta
 5,819 series and 3,722 later comparisons, all unchanged in the registered corpus. This includes 359 explicitly
 labelled co-product cash-cost rates, kept distinct from the by-product rates used by the identity ledger.
 
+**DESIGN (BD-504e):** `issuer_consistency.mine_stats_identities` also follows the seven Mine Stats
+arithmetic identity families across releases. It shows state counts at each identity's earliest registered
+appearance beside the all-file counts, then reports whether each later appearance persisted, was corrected,
+became broken or was reclassified. The comparison follows semantic keys through moved spreadsheet cells;
+ownership, units and region-map versions remain separate. Missing or ambiguous source keys stay listed and
+cannot prove persistence or correction. Counts retain not-published and refused instances. Each report
+carries its own digest and cited source Claims; the existing assurance root still binds the underlying
+identity ledger and registered workbook bytes. Earliest registered evidence does not establish first
+publication, and these findings do not supply an issuer pass score.
+
 Disclosure coverage comes from explicit `restatement_note` and `restatement_scope` registry rows. Each run
 checks the source digest and complete quoted cell text, then matches exact subjects, lines, occurrences and
 whole reporting periods. A future note cannot explain an earlier release. Missing, altered or unusable note

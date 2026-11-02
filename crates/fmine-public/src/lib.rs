@@ -267,6 +267,9 @@ pub struct PublicAssuranceReport {
     pub public_claims: aisc::AiscClaimIndex,
     /// Earliest registered AISC identities and cited changes across all visible registered vintages.
     pub issuer_consistency: consistency::AiscConsistency,
+    /// Mine Stats family counts and identity histories over the same source-bound ledger. The projection
+    /// has its own digest; its underlying instances and source bytes remain bound in the assurance root.
+    pub mine_stats_consistency: consistency::mine_stats::MineStatsConsistency,
     /// A census of Mine Stats Claims using the same canonical keys and IDs as `public_claims`.
     pub mine_stats_claims: key::mine_stats::KeyedClaims,
     /// Exact displayed values and typed tokens across Mine Stats releases, with registered disclosure
@@ -991,10 +994,11 @@ impl PublicAssuranceReport {
         let _ = write!(
             o,
             "\"issuer_consistency\":{consistency},\"mine_stats_vintages\":{},\"aisc_vintages\":{},\
-             \"disclosures\":{}}},\"mine_stats_claims\":{},",
+             \"disclosures\":{},\"mine_stats_identities\":{}}},\"mine_stats_claims\":{},",
             self.mine_stats_vintages.to_json(),
             self.aisc_vintages.to_json(),
             self.disclosures.to_json(),
+            self.mine_stats_consistency.to_json(),
             self.mine_stats_claims.summary_json()
         );
         let _ = write!(o, "\"waterfall\":{},", self.waterfall.to_json());
@@ -1846,6 +1850,7 @@ fn assess_inner(
         Some(&disclosures),
     );
     let issuer_consistency = consistency::aisc_consistency(&public_claims, &instances);
+    let mine_stats_consistency = consistency::mine_stats::assess(&mine_stats_claims, &mine_ledger);
     let waterfall = waterfall::pair_sites(
         profile,
         &sources,
@@ -1954,6 +1959,7 @@ fn assess_inner(
         mine_stats,
         public_claims,
         issuer_consistency,
+        mine_stats_consistency,
         mine_stats_claims,
         mine_stats_vintages,
         aisc_vintages,

@@ -194,6 +194,53 @@ mod tests {
         (mine_ledger(&files, rules), refusals)
     }
 
+    /// The same invented XLSX fixtures through the complete public source-to-Claim projection.
+    fn keyed_report(
+        books: Vec<(String, Vec<MinimalSheet>)>,
+        members: Vec<RegionMemberRow>,
+    ) -> fmine_public::PublicAssuranceReport {
+        let styles = MinimalStyles {
+            num_fmts: vec![(164, "0.0".to_string())],
+            xfs: vec![0, 164, 2],
+        };
+        let sources = books
+            .into_iter()
+            .map(|(quarter, sheets)| {
+                let file_name = format!("invented_{quarter}.xlsx");
+                let bytes = build_minimal_xlsx_styled(&sheets, Some(&styles));
+                let workbook = Workbook::from_bytes(&file_name, &bytes).expect("invented XLSX");
+                fmine_public::LoadedSource {
+                    file_name,
+                    kind: fmine_public::sources::SourceKind::MineStats,
+                    quarter,
+                    url: "https://example.invalid/invented.xlsx".into(),
+                    url_basis: "synthetic".into(),
+                    bytes: bytes.len() as u64,
+                    census: workbook.cell_census(),
+                    workbook,
+                }
+            })
+            .collect();
+        let mut profile = fmine_public::synthetic::synthetic_profile();
+        profile.shares.clear();
+        profile.reconstructions.clear();
+        profile.subject_statuses.clear();
+        profile.region_members = members;
+        let report = fmine_public::assess(&profile, fmine_public::Lane::Synthetic, sources);
+        assert!(
+            report
+                .mine_stats
+                .iter()
+                .all(|(_, read)| read.refusals.is_empty())
+        );
+        assert!(
+            report.mine_stats_claims.refusals.is_empty(),
+            "{:?}",
+            report.mine_stats_claims.refusals
+        );
+        report
+    }
+
     /// Release `2030Q1`: a `QTD` sheet of `metal` headers and `rows`, beside the given `Minestats*` sheets.
     fn site_ledger(
         metal: [&str; 3],
@@ -627,6 +674,102 @@ mod tests {
     const HEMLO: [&str; 6] = ["100", "100", "100", "1500", "1200", "1700"];
 
     #[test]
+    fn weighted_region_histories_bind_real_claims_and_preserve_member_rate_roles() {
+        use fmine_public::consistency::TransitionKind;
+
+        let evaluate = |changed: bool| {
+            let block = |later: bool| {
+                let a = [
+                    "200",
+                    "100",
+                    "100",
+                    if later && changed { "900" } else { "1000" },
+                    "800",
+                    "1300",
+                ];
+                let b = [
+                    "200",
+                    "100",
+                    "100",
+                    if later && changed { "1600" } else { "1500" },
+                    "1200",
+                    "1700",
+                ];
+                let total = ["400", "200", "200", "1250", "1000", "1500"];
+                let mut rows = vec![
+                    ("Site A (50%)", a.as_slice()),
+                    ("Site B (50%)", b.as_slice()),
+                ];
+                if later {
+                    rows.swap(0, 1);
+                }
+                rows.push(("Region North", total.as_slice()));
+                summary_cols("QTD", "three", &GOLD_RATES, &rows)
+            };
+            keyed_report(
+                vec![
+                    ("2030Q1".into(), vec![block(false)]),
+                    ("2031Q1".into(), vec![block(true)]),
+                ],
+                vec![
+                    member("Region North", "Site A", "2030Q1"),
+                    member("Region North", "Site B", "2030Q1"),
+                ],
+            )
+        };
+        let report = evaluate(false);
+        let projection = &report.mine_stats_consistency;
+        assert!(projection.unkeyed.is_empty(), "{:?}", projection.unkeyed);
+        assert_eq!(
+            projection.first_registered[&(Family::SoldWeightedRate, "i")],
+            3
+        );
+        assert_eq!(projection.all_files[&(Family::SoldWeightedRate, "i")], 6);
+        for history in projection
+            .histories
+            .iter()
+            .filter(|h| h.family == Family::SoldWeightedRate)
+        {
+            assert_eq!(history.sequence.len(), 2);
+            assert_eq!(history.transitions[0].kind, TransitionKind::Persisted);
+            assert_eq!(history.transitions[0].operands_changed, Some(false));
+        }
+        let cos = projection
+            .bindings
+            .iter()
+            .find(|b| {
+                b.instance.family == Family::SoldWeightedRate
+                    && b.instance.anchor == "2031Q1:QTD!E7"
+            })
+            .expect("weighted total binds its actual source Claim");
+        assert_eq!(cos.source.key.line.label, "summary:cos_usd_per_oz");
+        assert_eq!(cos.source.locator, "invented_2031Q1.xlsx:QTD!E7");
+        assert_eq!(cos.instance.group, Group::Prior);
+        assert_eq!(
+            cos.instance.cells,
+            ["E5", "D5", "E6", "D6", "E7"].map(|c| Some(format!("2031Q1:QTD!{c}")))
+        );
+        // Swapping the two sites' rows preserves the signature. Altering their individual rates while
+        // preserving the same 1,250 weighted mean must still be a changed-input reclassification.
+        let changed = evaluate(true);
+        let history = changed
+            .mine_stats_consistency
+            .histories
+            .iter()
+            .find(|h| {
+                h.family == Family::SoldWeightedRate
+                    && h.series.line.label == "summary:cos_usd_per_oz"
+            })
+            .expect("cost of sales history");
+        assert_eq!(
+            history.sequence.iter().map(|a| a.state).collect::<Vec<_>>(),
+            ["i", "i"]
+        );
+        assert_eq!(history.transitions[0].kind, TransitionKind::Reclassified);
+        assert_eq!(history.transitions[0].operands_changed, Some(true));
+    }
+
+    #[test]
     fn test_region_rate_is_its_members_sold_weighted_mean() {
         let regions = ["North America".to_string()];
         let members = [
@@ -892,6 +1035,118 @@ mod tests {
 
     fn loc(release: u8, cell: &str) -> Option<String> {
         Some(format!("2030Q{release}:Minestats1!{cell}"))
+    }
+
+    #[test]
+    fn site_quarter_histories_bind_main_and_section_rows_across_comparative_columns() {
+        use fmine_public::consistency::TransitionKind;
+
+        let sheet = |blocks: &[SiteBlock<'_>], later: bool| {
+            let mut sheet = site_blocks("Minestats1", AU, &["Site A (50%)"], blocks);
+            if later {
+                for (_, cell) in &mut sheet.cells {
+                    if let MinimalCell::Styled { raw, .. } = cell {
+                        match raw.as_str() {
+                            "2030" => *raw = "2031".into(),
+                            "2029" => *raw = "2030".into(),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            sheet
+        };
+        let rows = |current, prior, ore| {
+            vec![
+                ("Tonnes mined (thousands)", vec![current, prior]),
+                ("Open Pit Ore", vec![ore, ore]),
+            ]
+        };
+        let mut books = Vec::new();
+        for later in [false, true] {
+            let year = if later { 2031 } else { 2030 };
+            books.push((
+                format!("{year}Q1"),
+                vec![sheet(
+                    &[(
+                        "three",
+                        rows("100", if later { "120" } else { "100" }, "60"),
+                    )],
+                    later,
+                )],
+            ));
+            books.push((
+                format!("{year}Q2"),
+                vec![sheet(
+                    &[
+                        (
+                            "three",
+                            rows("120", if later { "100" } else { "120" }, "70"),
+                        ),
+                        ("six", rows("220", "220", "130")),
+                    ],
+                    later,
+                )],
+            ));
+        }
+        let report = keyed_report(books, vec![]);
+        let projection = &report.mine_stats_consistency;
+        assert!(projection.unkeyed.is_empty(), "{:?}", projection.unkeyed);
+        assert_eq!(projection.all_files[&(Family::SiteQuarterSum, "i")], 8);
+        assert_eq!(
+            projection.first_registered[&(Family::SiteQuarterSum, "i")],
+            6
+        );
+        for (cell, field, label, kind, changed) in [
+            (
+                "C8",
+                "au_tonnes_mined_kt",
+                "site::tonnes mined (thousands)",
+                TransitionKind::Reclassified,
+                true,
+            ),
+            (
+                "C9",
+                "au_tonnes_mined_open_pit_ore_kt",
+                "site:tonnes mined (thousands):open pit ore",
+                TransitionKind::Persisted,
+                false,
+            ),
+        ] {
+            let binding = projection
+                .bindings
+                .iter()
+                .find(|b| b.instance.anchor == format!("2031Q2:Minestats1!{cell}"))
+                .expect("actual site Claim binds");
+            assert_eq!(binding.instance.field, field);
+            assert_eq!(binding.instance.group, Group::Prior);
+            assert_eq!(binding.source.key.line.label, label);
+            assert_eq!(
+                binding.source.locator,
+                format!("invented_2031Q2.xlsx:Minestats1!{cell}")
+            );
+            let history = projection
+                .histories
+                .iter()
+                .find(|h| {
+                    h.family == Family::SiteQuarterSum
+                        && h.series.valid_period.code() == "2030H1"
+                        && h.series.line.label == label
+                })
+                .expect("same valid half-year across releases");
+            assert_eq!(history.sequence.len(), 2);
+            assert_eq!(history.transitions[0].kind, kind);
+            assert_eq!(history.transitions[0].operands_changed, Some(changed));
+            for at in binding.instance.cells.iter().flatten() {
+                let (release, position) = at.split_once(':').expect("raw locator");
+                assert!(
+                    projection
+                        .source_claims
+                        .iter()
+                        .any(|c| c.locator == format!("invented_{release}.xlsx:{position}"))
+                );
+            }
+        }
     }
 
     /// BD-331.S4 family 2 on the site sheets: H1 = Q1 + Q2 across the Q1 and Q2 releases, and 9M = H1 + Q3, on the

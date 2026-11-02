@@ -268,6 +268,14 @@ The public lane of M0 (`fmine assure public`).
   Unknown keys and ambiguous earliest releases are named and excluded from the first-registered denominator.
   This implements the AISC diagnostics for part 3a and adjacent histories for part 3c; it does not implement
   part 3b's full restatement classification or a composite issuer-consistency pass score.
+- DESIGN (BD-504e): `consistency::mine_stats` applies the same state-count and transition rules to all seven
+  Mine Stats identity families. It resolves the ledger's release-relative locators against the complete
+  Mine Stats Claim population before grouping by semantic anchor key and family. Current and comparative
+  columns can join one history; distinct ownership, units and region-map versions cannot. Multiple source
+  candidates remain unresolved, and missing operands cannot establish persistence or correction.
+  Printed subject labels use only the exact registered share-label mapping already used by the Claim
+  adapter. The projection retains raw subjects and binds that mapping in its digest; unregistered label
+  differences remain unkeyed.
 - `lib`:
   - `load_registered_sources` verifies every registered file;
   - `assess` builds the ledger and the state root;
@@ -645,6 +653,16 @@ The public lane of M0 (`fmine assure public`).
   - This is the earliest **registered** appearance, not necessarily the issuer's first publication. Value
     comparisons and registered-note classification are reported separately under `mine_stats_vintages`
     and `aisc_vintages`; a composite issuer-consistency gate result remains open.
+- `consistency::mine_stats::{assess, MineStatsConsistency}` and
+  `PublicAssuranceReport::mine_stats_consistency`: JSON under `issuer_consistency.mine_stats_identities`,
+  schema `fmine.issuer_consistency.mine-stats.v1`, with first-registered and all-file family counts,
+  cited adjacent histories, unkeyed instances and a digest of the complete projection. The existing
+  assurance root binds the underlying ledger and source bytes; this derived report adds no new authority.
+  Displayed arithmetic values and precision, operand roles, ownership shares and nil-token rules determine
+  whether the operands changed. Hidden sheets are excluded; `np`, undecidable and refused rows stay in the
+  all-file denominator. The synthetic source-to-report contracts in
+  `crates/xtask/tests/public_mine_consistency.rs` exercise the actual XLSX reader and identity engine;
+  they do not establish an independent census of the registered issuer corpus.
 
 - `waterfall::{pair_sites, WaterfallReport}` (BD-333): the existing assurance payload includes same-quarter
   year-on-year AISC bridges, with first-published sources only. A missing first-release reconciliation is
@@ -968,8 +986,8 @@ The public lane of M0 (`fmine assure public`).
 - Neither stops the run, and neither is ever guessed.
 
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
-- `GATE-BULL-01`: parts 1 and 2 retain their existing numerical ledger. Part 3a reports AISC first-registered
-  within-vintage counts, and part 3c reports adjacent histories. Part 3b compares keyed AISC and Mine Stats
+- `GATE-BULL-01`: parts 1 and 2 retain their existing numerical ledger. Part 3a reports AISC and Mine Stats
+  first-registered within-vintage counts, and part 3c reports adjacent histories for both. Part 3b compares keyed AISC and Mine Stats
   values with verified registered-note coverage. The Mine Stats population reproduces T16 and all nine
   known changes, with 30 region-map exclusions citing E461. A complete issuer-consistency gate record remains
   outstanding; these projections alone do not establish a full M0 gate pass.
