@@ -7,8 +7,10 @@
 //! block to destination 0 at rank 0). Whatever parses must hold up:
 //! - `with_destinations` takes the choices, `greedy` does not refuse, and its schedule passes `check` and the
 //!   feasibility written out here from the model;
+//! - `pcpsp::greedy` (the fallback to other destinations) does not refuse, its schedule passes both under the
+//!   destinations it returns, and those differ from the choices only for blocks it mined;
 //! - `pcpsp::improve` takes that schedule; its result passes both, its value is the sum written out here, and it is
-//!   worth no less than `greedy`'s;
+//!   worth no less than `pcpsp::greedy`'s;
 //! - with at most 3 blocks, 2 periods and 2 destinations, it is worth no more than the best of every schedule and
 //!   destination choice.
 #![no_main]
@@ -95,6 +97,11 @@ fuzz_target!(|data: &[u8]| {
     let Ok(factors) = discount_factors(m.discount_rate, cpit::RATE_SCALE, periods) else {
         return;
     };
+    let (schedule, start) = pcpsp::greedy(&m, &rank, &dest).expect("pcpsp::greedy does not refuse a parsed model");
+    let c = check(&m.with_destinations(&start).expect("destinations in range"), &schedule).expect("one entry per block");
+    assert!(c.feasible() && feasible(&m, &schedule, &start), "{c:?}");
+    assert!((0..n).all(|b| start[b] == dest[b] || schedule[b].is_some()), "{start:?} {dest:?}");
+    let dest = start;
     let i = pcpsp::improve(&m, &schedule, &dest, &factors, 16).expect("improve takes greedy's feasible schedule");
     let after = check(&m.with_destinations(&i.destination).expect("destinations in range"), &i.schedule)
         .expect("one entry per block");
