@@ -11,6 +11,12 @@ This directory holds machine- and human-verifiable admission records (`INT-*`), 
 - [`GATE-BM-01.md`](./GATE-BM-01.md) — lifted `VdbGrid` at 10⁸ active cells (`BD-191`): PASS measured locally at `ef49fcf` (ratio 1.352 ≤ 2.5); self-verified; the test is ignored in CI.
 - [`GATE-PUSH-PIT1.md`](./GATE-PUSH-PIT1.md) — MineLib UPIT exact with verified closure (`BD-250`): PASS measured locally at `ef49fcf` on all 11 instances; self-verified; MineLib's files are not committed, so CI cannot run it.
 
+## Kill-gate records
+- [`KILL-PUSH-PDLP.md`](./KILL-PUSH-PDLP.md) — PDLP to a 1e-4 certified gap on real-size non-closure LPs (`BD-251`). PASS, so the kill does not fire, measured locally at `9b9fe28`:
+  - all 10 MineLib CPIT LP relaxations, up to 9.5×10⁷ nonzeros, at ε = 1e-6 within 30 minutes;
+  - at the default 1e-4, 5 of 10 miss;
+  - self-verified, and CI cannot run it.
+
 ## Decisions
 - [`DECISION-BD-012-direct-push-blocking.md`](./DECISION-BD-012-direct-push-blocking.md) — what "CI blocks merges" (§28.4.4) means when every change is pushed straight to `main` (`BD-012`).
 

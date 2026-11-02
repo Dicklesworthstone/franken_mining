@@ -114,28 +114,35 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   - about 48 bytes per nonzero, because `A` and `Aᵀ`, as a `u32` index and an `f64` value, are held by `LpProblem` and again, scaled, by the solver;
   - about 14 `f64` vectors of column length and 12 of row length;
   - the caller's own `Csr`.
-- **Wall times.** These are local runs of `tests/minelib_cpit.rs`, not a benchmark suite: aarch64-macos, 36 cores, release, 16 threads, 2026-11-01, on a host at load 56 to 109 from other work. "Gap" is the certified bound's relative distance above MineLib's published CPIT LP optimum.
+- **Wall times.** These are local runs of `tests/minelib_cpit.rs` built at `9b9fe28`, not a benchmark suite: aarch64-macos, 36 cores, release, 16 threads, 2026-11-02, on a host loaded by other work.
+  - "Gap" is the certified bound's relative distance above MineLib's published CPIT LP optimum, `(bound − published) / published`. Every bound lay above the published optimum.
+  - "Dual within 1e-4" is when the unrounded dual objective first came within 1e-4 of the published optimum. It is diagnostic only, since it needs the answer.
 
-  | Instance | Rows | Columns | Nonzeros | ε = 1e-4: steps, solve, gap | ε = 1e-6: steps, solve, gap |
-  |---|---|---|---|---|---|
-  | newman1 | 28,844 | 6,360 | 75,616 | 256, 0.1 s, 2.8e-4 | 2,112, 0.7 s, 2.8e-7 |
-  | kd | 2,793,031 | 169,836 | 5,722,451 | 704, 3.2 s, 1.05e-2 | 38,528, 364.8 s, 3.2e-5 |
-  | zuck_small | 3,091,440 | 188,000 | 6,738,901 | 9,664, 49.6 s, 2.1e-5 | 27,776, 278.7 s, 9.3e-6 |
-  | sm2 | 5,770,726 | 2,970,420 | 18,047,203 | 8,896, 88.9 s, 3.8e-4 | 81,024, 1,387.4 s, 5.8e-6 |
-  | p4hd | 7,754,633 | 409,470 | 16,712,572 | 3,520, 32.0 s, 1.8e-5 | 16,896, 214.7 s, 1.3e-5 |
-  | w23 | 9,994,328 | 891,120 | 22,183,244 | 2,432, 26.8 s, 1.9e-4 | 10,240, 181.3 s, 1.7e-5 |
-  | marvin | 14,024,809 | 1,065,420 | 30,317,388 | 7,040, 96.8 s, 4.7e-5 | 31,680, 678.5 s, 2.1e-5 |
-  | zuck_medium | 19,478,013 | 439,155 | 40,139,050 | 9,536, 232.1 s, 1.3e-5 | stopped at 30 min: 65,088, 1,801.3 s, 3.0e-6 |
-  | zuck_large | 34,401,019 | 2,904,630 | 77,728,028 | 6,016, 222.8 s, 7.1e-5 | stopped at 30 min: 47,744, 1,801.6 s, 3.3e-5 |
-  | mclaughlin_limit | 47,109,878 | 1,690,305 | 95,145,725 | 2,560, 149.2 s, 1.1e-4 | stopped at 30 min: 34,752, 1,802.2 s, 7.8e-6 |
+  | Instance | Rows | Columns | Nonzeros | ε = 1e-4: steps, solve, gap | ε = 1e-6: end, steps, solve, gap | Dual within 1e-4 (ε = 1e-6) |
+  |---|---|---|---|---|---|---|
+  | newman1 | 28,844 | 6,360 | 75,616 | 256, 0.1 s, 2.8e-4 | rule, 2,112, 0.6 s, 2.8e-7 | 0.1 s |
+  | kd | 2,793,031 | 169,836 | 5,722,451 | 704, 5.4 s, 1.05e-2 | rule, 38,528, 307.4 s, 3.2e-5 | 117.4 s |
+  | zuck_small | 3,091,440 | 188,000 | 6,738,901 | 9,664, 82.8 s, 2.1e-5 | rule, 27,776, 190.1 s, 9.3e-6 | 29.4 s |
+  | sm2 | 5,770,726 | 2,970,420 | 18,047,203 | 8,896, 126.2 s, 3.8e-4 | rule, 81,024, 1,161.8 s, 5.8e-6 | 182.2 s |
+  | p4hd | 7,754,633 | 409,470 | 16,712,572 | 3,520, 46.5 s, 1.8e-5 | rule, 16,896, 274.3 s, 1.3e-5 | 11.8 s |
+  | w23 | 9,994,328 | 891,120 | 22,183,244 | 2,432, 42.6 s, 1.9e-4 | rule, 10,240, 184.7 s, 1.7e-5 | 37.8 s |
+  | marvin | 14,024,809 | 1,065,420 | 30,317,388 | 7,040, 150.3 s, 4.7e-5 | rule, 31,680, 828.1 s, 2.1e-5 | 67.9 s |
+  | zuck_medium | 19,478,013 | 439,155 | 40,139,050 | 9,536, 325.7 s, 1.3e-5 | limit, 69,120, 1,801.2 s, 3.0e-6 | 271.5 s |
+  | zuck_large | 34,401,019 | 2,904,630 | 77,728,028 | 6,016, 355.5 s, 7.1e-5 | limit, 47,936, 1,803.1 s, 3.4e-5 | 175.6 s |
+  | mclaughlin_limit | 47,109,878 | 1,690,305 | 95,145,725 | 2,560, 171.6 s, 1.1e-4 | limit, 32,768, 1,801.8 s, 7.8e-6 | 110.9 s |
 
-  Gap is `(bound − published) / published`, and every bound lay above the published optimum.
-  - At ε = 1e-4 every run reached the stopping rule (`Optimal`), and five of ten bounds are within KILL-PUSH-PDLP's 1e-4.
-  - At ε = 1e-6 seven runs reached the stopping rule and three were stopped by the 30-minute limit. All ten bounds are within 1e-4: the largest gap is 3.3e-5.
-  - kd at 1e-6 ran on its own, alongside the 1e-4 run. The other 1e-6 rows are one process, `tests/minelib_cpit.rs` built from `f920f73`.
-  - The returned `x` broke some row by up to 1.7×10⁴ units at 1e-4 (w23), and by 5.3 (newman1) to 269 units (zuck_small) at 1e-6.
+  - **At ε = 1e-4** every run reached the stopping rule, and five of ten bounds are within KILL-PUSH-PDLP's 1e-4.
+  - **At ε = 1e-6** seven runs reached the rule and three were stopped by the 30-minute limit. All ten bounds are within 1e-4; the largest gap is 3.4e-5.
+  - **Reproducible.** Earlier runs at `f920f73` gave the same steps and bounds on every run that ended at the rule, at both ε. That includes kd at 1e-6 run with 8 threads against 16 here. Runs stopped by the limit end at a step count that depends on speed.
+  - **Primal violation.** The returned `x` broke some row by up to 1.7×10⁴ units at 1e-4 (w23), and by up to 671 at 1e-6 (zuck_large).
+  - **The best bound is not kept.** On w23 at 1e-4 the dual objective came within 1e-4 at 32 s, but the bound returned at the end was 1.9e-4 off. Each evaluation's multipliers give a valid bound, and only the last one is returned.
 
-  Plan §15.4's scale TARGET is 10⁷ nonzeros to a 1e-4 relative gap within 30 minutes, with a bound. At ε = 1e-6 the certified bound meets it on all seven instances above 10⁷ nonzeros (1.7×10⁷ to 9.5×10⁷). At ε = 1e-4 the solver's own stopping rule is met on all seven in under four minutes each, but the certified bound misses 1e-4 on three of them: sm2, w23 and mclaughlin_limit. ε = 1e-6 was chosen after the 1e-4 run, on the same instances; there is no held-out set. `docs/delivery/KILL-PUSH-PDLP.md` records the decision.
+  Plan §15.4's scale TARGET is 10⁷ nonzeros to a 1e-4 relative gap within 30 minutes, with a bound.
+  - At ε = 1e-6 the certified bound meets it on all seven instances above 10⁷ nonzeros (1.7×10⁷ to 9.5×10⁷).
+  - At ε = 1e-4 the solver's own stopping rule is met on all seven in under six minutes each. The certified bound misses 1e-4 on three of them: sm2, w23 and mclaughlin_limit.
+  - ε = 1e-6 was chosen after the 1e-4 run, on the same instances, so there is no held-out set.
+
+  `docs/delivery/KILL-PUSH-PDLP.md` records the decision.
 - MineLib's CPIT LPs are one family: 0–1 boxes, precedence and monotonicity rows, and one to three capacity rows per period. Blend networks, SAA extensive forms and CVaR LPs, the uses plan §15.4 names, are not tested at scale.
 
 ## 9. Oracles
@@ -152,6 +159,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - No implied-bound repair, so unbounded columns rarely certify (§8).
 - At the default ε = 1e-4, the certified bound misses KILL-PUSH-PDLP's 1e-4 on five of ten MineLib instances (§8). The default is cuPDLP's and is kept, and the MineLib test runs at 1e-6.
 - At 1e-6 the three largest MineLib instances do not meet the stopping rule within 30 minutes. Their bounds were within 1e-4, but the solver cannot tell that without an outside optimum or a feasible point.
+- Only the last evaluation's multipliers are certified. Keeping the evaluation with the best dual objective, and certifying it as well, would have tightened w23's bound at 1e-4 (§8). It is not built.
 - No MPS I/O, QP, MILP or decomposition (the crate's other planned slices).
 - MineLib's files are not in the repository, because their licence is not recorded. KILL-PUSH-PDLP is an ignored test, run by hand with `FMINE_MINELIB_DIR`, and CI does not run it.
 - MineLib's mclaughlin (2.1 million blocks, 73 million arcs, 20 periods) is not run. It has about 2.9×10⁹ nonzeros in this formulation: about 140 GB at §8's rate for this crate alone, plus the test's own COO and CSR copies. It was not attempted on this shared 256 GB host.
