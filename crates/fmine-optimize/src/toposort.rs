@@ -25,6 +25,7 @@
 //! crate, so it is not the separate `fmine-verify` checker that plan §15.4 names.
 
 pub mod cpit;
+pub mod pcpsp;
 pub mod search;
 
 use std::cmp::Reverse;

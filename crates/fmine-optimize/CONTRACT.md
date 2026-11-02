@@ -1,7 +1,7 @@
 # CONTRACT.md — `fmine-optimize`
 
 ## 1. Purpose
-The Pushback optimisation crate. Five solver slices so far, and three readers that feed them:
+The Pushback optimisation crate. Five solver slices and four readers so far; `toposort::pcpsp` is both a reader and a search:
 - `pitflow` (`BD-250`, plan §15.4): the ultimate pit as a maximum-weight closure, by Hochbaum's pseudoflow (lowest-label variant, gap termination) on an `i64` CSR precedence graph. Each pit comes with its pseudoflow certificate, which `verify` checks without the solver.
 - `pitflow::shells` (`bd-nzwd`, plan §15.4 and PO-PUSH-3): nested pit shells across an increasing list of exact revenue factors. These are the pit-by-pit sequence from which pushbacks are chosen.
   - Shell `k` is the union of the pit solved at factor `k` and shell `k − 1`.
@@ -27,6 +27,10 @@ The Pushback optimisation crate. Five solver slices so far, and three readers th
 - `toposort::cpit` (`bd-kcpj`): MineLib's CPIT text pair (`.cpit` periods, limits, values, uses and discount rate; `.prec` as for UPIT) read into a `ScheduleProblem`. No I/O.
   - Values are scaled as UPIT values are. Uses are rounded up (`Rounding::Ceiling`) and limits down (`Rounding::Floor`) when places are dropped, and both are counted.
   - Only `L` (upper) limits are read; `G` and `I` are refused. At most `MAX_RESOURCES` (64) resources.
+- `toposort::pcpsp` (`bd-2rne`): MineLib's PCPSP text pair (destinations, with one value per block and destination and uses per block, destination and resource) read into a `PcpspModel`. No I/O.
+  - Scaling and rounding are as for CPIT. General side constraints, `G` and `I` limits and negative uses are refused, since `ScheduleProblem` holds none of them. MineLib's w23 has negative uses (blending rows) and is refused.
+  - Each mined block goes whole to one destination; PCPSP's split blocks are not represented. `with_destinations` turns one destination per block into a `ScheduleProblem`, so `check`, `greedy` and `search::improve` apply unchanged.
+  - `destinations` moves blocks between destinations within their period: a switch to a more valuable destination that fits, or an exchange in which one block makes room for another that gains more. It also gives each unmined block its most valuable destination, which changes no value. `improve` alternates `search::improve` and `destinations` until neither moves. Every move strictly raises the discounted value, and both end with `check`.
 
 `fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. Shells, slope arcs and `toposort` have no caller outside tests yet. Bienstock–Zuckerberg, Lagrangian and the stochastic layer are later slices.
 
@@ -52,6 +56,7 @@ The Pushback optimisation crate. Five solver slices so far, and three readers th
   - `greedy` takes one `Option<i64>` rank per block, lower first, or `None` to leave the block out.
 - For `toposort::cpit`: the two files' text, the value places and `Rounding`, and the use places.
 - For `toposort::search::improve`: a `ScheduleProblem`, a schedule that passes `check`, one non-negative `i64` discount factor per period that never rises, and a round limit. `discount_factors` takes a non-negative rate over a positive scale (`CpitModel::discount_rate` over `cpit::RATE_SCALE` fits) and a period count.
+- For `toposort::pcpsp`: `parse` as `cpit::parse`; `with_destinations` one destination per block; `destinations` and `improve` a schedule and destinations that pass `check` together, one discount factor per period (non-negative and never rising for `improve`), and a cycle limit for `improve`.
 
 ## 3. Outputs
 - `PitSolution`: `in_pit` (one flag per block), `value` (the pit's total, the maximum over all closed sets), `pit_size`, `arc_flow` (the certificate, one flow per arc in CSR order) and `stats` (`PitStats`: mergers, splits, relabels, largest label).
@@ -67,6 +72,7 @@ The Pushback optimisation crate. Five solver slices so far, and three readers th
 - `ScheduleCheck`: `mined`, `period_values` (exact and undiscounted, `i128`), `used[r][t]`, `unmet` with the first `WITNESSES` (10) `(block, required)` pairs, `over_limit` (every `(resource, period)` over its limit), `feasible()` and `value()`.
 - `greedy`: one `Option<u32>` period per block, a schedule that has passed `check`.
 - `search::Improvement`: the improved schedule (it has passed `check`), its discounted value `after` and the input's `before` (exact `i128`, `after ≥ before`), the rounds run, and `Moves` (counts of earlier, swaps, added, later and dropped). `discounted_value` gives `Σ value · factor[t]` exactly.
+- `pcpsp::PcpspModel`: `name`, `discount_rate`, the rounding counts, and `blocks`, `periods`, `destinations`, `resources`, `value(b, d)`, `uses(r, b, d)`, `limits(r)`, `requires(b)`. `pcpsp::DestinationMoves` counts switches, exchanges and unmined blocks given a destination. `pcpsp::PcpspImprovement` holds the improved schedule and destinations (they pass `check` together), `before` and `after` (exact `i128`, `after ≥ before`), the cycles run, and both kinds of move counts.
 - `CpitModel`: `name`, `problem`, `discount_rate` (times `RATE_SCALE`, 10⁹), `rounded_values`, `rounded_uses` and `rounded_limits`. Discounting is the caller's.
 
 None is a Claim.
@@ -107,6 +113,13 @@ None is a Claim.
   - Each move on a known case, `Earlier` before `Later` included: `each_move_on_a_known_case`. Discount factors to the unit: `discount_factors_fall_by_the_rate_rounding_down`.
   - Planted negatives, each run once and reverted: a capacity test that always passes, and a drop of positive blocks. `improve`'s final check or value test refused both.
   - Planted on 2026-11-02, each run once and reverted. A `check` that accepts a required block mined one period late failed 2 tests. A `greedy` that ignores limits was refused by its own `check` in 3 tests.
+  - `pcpsp::improve`, from greedy's schedules under random destinations and rankings on 300 random problems with 2 to 5 blocks, 2 or 3 destinations and up to 2 resources (`pcpsp::tests::improve_is_feasible_monotone_and_bounded_by_the_exhaustive_optimum`):
+    - the result is feasible and valued exactly by a check written from the model, not from `with_destinations`;
+    - it is worth at least its input and never more than the best over every period and destination;
+    - a second call makes no move.
+    - On the 2026-11-02 run it raised 253 of the 300 and brought those at the exhaustive optimum from 32 to 237.
+  - Each destination move on a known case, no move where the discount factor is 0: `pcpsp::tests::switches_and_exchanges_on_known_cases`.
+  - Planted negatives on 2026-11-02, each run once and reverted. A destination limit test that always passes was refused by `destinations`' final check (infeasible), and a switch to a less valuable destination by its value test. Each failed 2 of the 5 `pcpsp` tests.
   - On MineLib's CPIT instances, see §9.
 
 ## 5. Refusals
@@ -169,6 +182,8 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input.
   - the `.prec` and decimal refusals of `minelib`.
 
   Test: `cpit::tests::every_malformed_pair_refuses`, one row each.
+- `FMINE-REF-506` (proposed), from `toposort::pcpsp::parse`: as for `cpit::parse`, with a `TYPE` other than `PCPSP`, `NDESTINATIONS` of 0 or above `MAX_DESTINATIONS` (16), any general side constraint, an objective line without one value per destination, a use for a destination out of range, and any negative use. Test: `pcpsp::tests::every_malformed_pair_refuses`, one row each.
+- `FMINE-REF-207` (proposed), from `toposort::pcpsp`: `with_destinations` given the wrong count or a destination past the last; `destinations` and `improve` given a schedule and destinations that fail `check`, or factors of the wrong length (`improve` also refuses negative or rising ones); and, as defects, a result that fails `check` or is worth less than the input. Test: `pcpsp::tests::bad_inputs_refuse`.
 
 No value is clamped, rescaled or perturbed to make a problem fit.
 
@@ -261,7 +276,10 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 
 ## 10. Known gaps
 - `bd-nzwd` and `bd-t75z`: no caller in the workspace yet. `BD-250`'s one caller is `fmine plan pit`, on MineLib UPIT pairs only; no block model or price deck feeds it.
-- MineLib's PCPSP files (destinations) are not read. UPIT pairs are read by `minelib`, and CPIT pairs by `toposort::cpit`.
+- PCPSP (`toposort::pcpsp`):
+  - Blocks are not split between destinations, so a schedule can be worth less than PCPSP's best. The LP relaxation splits them.
+  - General side constraints, lower limits and negative uses are not read. MineLib's w23 is refused for its negative uses.
+  - Destination moves stay within a period; a block never changes period and destination in one move.
 - Schedules:
   - `search::improve` moves one block or trades two at a time. It never moves a block together with what it requires, which a waste block and the ore under it would need to go earlier as a pair. It has no "repair" of infeasible schedules; it only takes feasible ones. Its moves are monotone, so it stops at the first local optimum, with no perturbation or restart.
   - The discount factors are rounded down period by period, so `improve`'s value can differ from the exact NPV in the last of about 12 significant digits. Every move it makes also raises the exact NPV, since each one's sign is that of a difference of factors.
@@ -305,6 +323,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `toposort::search::improve`, `toposort::search::Improvement` (`schedule`, `before`, `after`, `rounds`, `moves`), `toposort::search::Moves` (`later`, `earlier`, `swaps`, `added`, `dropped`), `toposort::search::discount_factors`, `toposort::search::discounted_value`, `toposort::search::DISCOUNT_SCALE`, `toposort::search::SWAP_SCAN`
 - `toposort::check`, `toposort::greedy`
 - `toposort::cpit::parse`, `toposort::cpit::CpitModel` (`name`, `problem`, `discount_rate`, `rounded_values`, `rounded_uses`, `rounded_limits`), `toposort::cpit::MAX_RESOURCES`, `toposort::cpit::RATE_SCALE`
+- `toposort::pcpsp::parse`, `toposort::pcpsp::PcpspModel` (`name`, `discount_rate`, `rounded_values`, `rounded_uses`, `rounded_limits`, `blocks`, `periods`, `destinations`, `resources`, `value`, `uses`, `limits`, `requires`, `with_destinations`), `toposort::pcpsp::destinations`, `toposort::pcpsp::DestinationMoves` (`switches`, `exchanges`, `unmined`), `toposort::pcpsp::improve`, `toposort::pcpsp::PcpspImprovement` (`schedule`, `destination`, `before`, `after`, `cycles`, `moves`, `destination_moves`), `toposort::pcpsp::MAX_DESTINATIONS`
 
 ## 12. Proof obligations
 - PO-PUSH-3 (nested shells are monotone in λ when block values are monotone in λ; plan §15.9 names its discharge "property test"):
