@@ -1,0 +1,38 @@
+# Invented declared cost population, not an issuer filing or a published WGC example.
+# 2018 AISC = (800.01 + 300 + 100 - 200) / 100 = 10.0001 USD/oz sold.
+# Run: fmine metrics cost --input tests/costs/declared_aisc.toml --definition aisc@wgc-2018
+schema = "fmine.cost-worksheet.v1"
+issuer = "invented"
+subject = "Example Mine"
+period = "2030FY"
+ownership = "full"
+basis = "Invented nominal USD costs on a complete sold-ounce population"
+currency = "USD"
+complete = "true"
+ounces_sold = "100"
+
+[[cost]]
+item = "on_site_mining_costs"
+usd = "800.01"
+
+[[cost]]
+item = "corporate_general_and_administrative"
+usd = "300"
+
+[[cost]]
+item = "lease_payments"
+usd = "100"
+
+[[cost]]
+item = "by_product_credits"
+usd = "200"
+
+[[cost]]
+item = "income_tax"
+usd = "999"
+
+[[uu]]
+id = "UU-example-omitted-cost"
+description = "Invented cost category omitted from the declared population"
+trigger = "Reconciliation finds an unclassified cost account"
+downside_usd_m = "0.001"

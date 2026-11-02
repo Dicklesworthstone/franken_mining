@@ -133,6 +133,117 @@ their envelope has no identity-ledger certificate or issuance anchor. The source
 separately and does not certify the model. Missing IDs and altered source files refuse instead of returning
 a stale cached Claim. Recovery results remain descriptive and uncalibrated.
 
+### Calculate a cost metric under an explicit definition
+
+`metrics cost` evaluates a declared cost worksheet under a selected AISC or AIC definition from
+[`registries/metrics.toml`](registries/metrics.toml). Run the included invented example:
+
+```bash
+cargo run -p fmine-cli -- metrics cost --input tests/costs/declared_aisc.toml --definition aisc@wgc-2018 --format markdown
+cargo run -p fmine-cli -- metrics cost --input tests/costs/declared_aisc.toml --definition aisc@wgc-2018 --json
+```
+
+The [example worksheet](tests/costs/declared_aisc.toml) declares USD 800.01 of mining costs, 300 of corporate
+costs, 100 of lease payments and 200 of by-product credits, with 100 gold ounces sold. The selected definition
+produces a **USD 1,000.01 numerator and USD 10.0001 per ounce sold**. Its USD 999 income-tax line remains
+visible as excluded. Each input receives its inclusion, exclusion or credit treatment from the selected
+definition; the receipt also retains inherited rules and any registered successor.
+
+The worksheet uses schema `fmine.cost-worksheet.v1`, explicit issuer, subject, period, ownership, basis and
+currency, `complete = "true"`, and `ounces_sold`. Each `[[cost]]` names a registered `item` and quoted `usd`
+amount; `[[uu]]` rows retain named unknown-risk scenarios, their triggers and downside amounts. Monetary
+inputs use major USD units with at most four decimal places. Quantities and shares are exact decimals or
+fractions. The calculation does not pass through floating point, and JSON retains exact rational results
+and complete canonical input/output Claims, bound to the actual worksheet and metric-registry hashes.
+
+The worksheet's cost classification and completeness remain **Assumed, Internal and uncalibrated**. Declaring
+a complete population is not independent evidence that omitted costs are zero. This command calculates the
+chosen rule; it does not verify issuer filings or close the broader metric-reproduction work.
+
+### Turn registered HTML tables into cited Claims
+
+`html claims` reads local, registered HTML filings and explicit label mappings into canonical public Claims:
+
+```bash
+cargo run -p fmine-cli -- html claims --issuer example --definitions local/html-claims.toml --format markdown
+cargo run -p fmine-cli -- html claims --issuer example --definitions local/html-claims.toml --as-of 2025-05-01 --json
+```
+
+The current supported population is site-level AISC, TCC, gold-equivalent production, processed/head grade
+and recovery. It preserves printed numbers exactly, including large decimals and accounting parentheses.
+Each result contains its full Claim receipt, period and publication vintage, ownership, unit, printed token,
+exact decimal value and step, original table/cell anchor and byte range. Label citations and both the mapping
+and source-registry hashes explain how the source became that Claim. Dashes, `n/a`, empty cells and numeric
+zero remain distinct; an applicable registered disposal or withholding rule remains visible.
+
+Register a filing in `registries/sources/<issuer>.toml` with a separate `[[html]]` row. This template shows the
+required grammar; replace the example metadata, byte count and digest with the actual source evidence:
+
+```toml
+schema = "fmine.sources.v1"
+issuer = "example"
+corpus_dir = "local/filings"
+retrieved_utc = "2025-05-01T12:00:00Z"
+url_prefix = "https://example.invalid/"
+
+[[subject]]
+name = "Site A"
+
+[[html]]
+file = "filing.html"
+release = "2025Q1"
+url = "https://example.invalid/filing.html"
+url_basis = "fetched and verified 2025-05-01"
+published_at = "2025-05-01"
+published_at_basis = "FACT: <citation establishing this publication date>"
+bytes = 1234 # Replace with the actual file length.
+sha256 = "<64 lowercase hexadecimal characters for the actual file bytes>"
+```
+
+An optional `dir` on `[[html]]` overrides `corpus_dir`. HTML registrations require no PDF page count. The
+mapping names a data cell and the five labels establishing its interpretation; it never supplies an amount.
+For a table whose rows are `Site A | 100%`, `AISC | 2025Q1`, and `US$/oz sold | 10.00`, the mapping is:
+
+```toml
+schema = "fmine.html-claims.v1"
+issuer = "example"
+
+[[claim]]
+id = "site_a_aisc_q1"
+file = "filing.html"
+table = 1
+cell = "B3"
+subject_cell = "A1"
+subject_label = "Site A"
+period_cell = "B2"
+period_label = "2025Q1"
+metric_cell = "A2"
+metric_label = "AISC"
+unit_cell = "A3"
+unit_label = "US$/oz sold"
+ownership_cell = "B1"
+ownership_label = "100%"
+```
+
+Table numbers start at one. Labels must match the decoded cell text exactly and satisfy the supported
+grammar: for example `AISC` / `All-in sustaining costs`, `TCC` / `Total cash costs`, `Gold-equivalent
+production`, `Head grade`, or `Recovery`. Cost units explicitly state USD per ounce sold; GEO uses `koz`,
+grade uses `g/t` or `%`, and recovery uses `%`. Ownership is `100%`, `100% basis`, or an explicit
+`Attributable (60%)`-style percentage. Subjects must be registered sites; regions and company totals are
+outside this adapter. Merged label cells retain their original anchors, and one merged numeric origin
+cannot be imported as multiple observations.
+
+The optional publication cut excludes later mapped sources **before opening their files** and lists those
+exclusions. Earlier releases and later comparatives keep separate Claims. These dates are the cited registry
+dates, not independently authenticated timestamps. Inputs stay inside the selected workspace; HTML files
+are bounded to 8 MiB and mapping files to 1 MiB. Extraction is offline and uses no browser, unit conversion
+or inferred table layout. HTML metric keys remain separate from workbook definitions, so importing a TCC or
+GEO figure does not establish its credit treatment or price-deck equivalence.
+
+No live HTML filing is registered in the repository yet. The executable path is exercised with invented
+filings; it does not establish real issuer coverage or completion of the broader BD-057/BD-059 acceptance
+population. Full Claim receipts are returned directly by `html claims`.
+
 ### Compare explicit decision alternatives
 
 DESIGN (BD-225, plan §22): `decide card` evaluates an explicitly declared finite scenario model and renders a

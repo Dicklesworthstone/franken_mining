@@ -78,6 +78,14 @@ the multiplicative-to-additive LMDI accounting identity (`GB-26`). Its public-da
 arithmetic closure does not establish causation or identify an operational explanation (plan §21.6, E699).
 
 ## 4. Public API Surface
+- `definitions::worksheet::{evaluate, SCHEMA}` (BD-061) parses strict declared cost worksheets against
+  the supplied, SHA-256-checked metric-registry bytes. Costs are USD fixed-point amounts with at most four
+  fractional digits; sold ounces and ownership/allocation shares are exact decimals or rationals. The caller
+  explicitly declares calendar support, accounting basis and complete cost population. Imported Claims remain
+  Assumed and Internal. Supplied ownership labels do not rescale already-declared amounts; co-product
+  allocation is a separate explicit parameter. The immutable `CostReceipt` renders complete canonical
+  inputs, signed/excluded contributions, exact numerator and USD/oz, rule/source hashes, computed colour
+  metadata and named UU terms in JSON, with a readable Markdown reconciliation and source trace.
 - `reserve_replacement::{assess, ReplacementReport, SeriesAssessment}` (BD-063): binds the complete declared
   annual window to agreed PDF point readings and a versioned metric rule. It computes the ratio of cumulative
   net changes to depletion using exact rationals; negative net changes remain signed, and depletion follows the

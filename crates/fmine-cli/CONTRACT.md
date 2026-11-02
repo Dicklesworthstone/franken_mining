@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "decision", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "cost", "html", "decision", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -29,6 +29,29 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Negative production is unusable. A degenerate printed range is interpreted as a point target.
 - **Envelope:** `FMT-ENV-1` (`schema_version: "fmine.env.v1"`).
 - **Verbs:**
+  - `metrics cost --input <worksheet.toml> --definition <registered-id>` (BD-061): reads the actual
+    worksheet and workspace metric-registry bytes from regular UTF-8 files bounded to 4 MiB, binds their
+    SHA-256 hashes, and evaluates `fmine-metrics::definitions::worksheet`. The explicit registered AISC/AIC
+    rule determines each line's inclusion, exclusion or credit, including inherited rules. JSON schema
+    `fmine.cost-worksheet.v1` retains exact numerator, sold ounces, USD/oz result, complete canonical Claim
+    receipts, source metadata and definition successor; Markdown renders the same calculation. Imported
+    values, cost classifications and completeness stay Assumed, Internal and uncalibrated. The adapter
+    creates no ledger anchor or issuance certificate. The supplied `tests/costs/declared_aisc.toml` is an
+    invented worksheet, not an issuer filing or independently verified complete cost population.
+  - `html claims --issuer <registered> --definitions <mapping.toml> [--as-of YYYY-MM-DD]` (BD-057/BD-059):
+    delegates to `fmine-public::html::run` to load registered HTML bytes and strict, value-free label mappings.
+    The `fmine.html_claims.v1` payload returns full canonical Claim bodies and their semantic keys, exact
+    decimal tokens/steps, value and label citations with original byte ranges and merged origins, mapping
+    and registry hashes, selected source metadata and a separate Claims digest. Markdown renders the same
+    values and evidence. The input mapping schema is `fmine.html-claims.v1`; it requires `id`, `file`,
+    1-based `table`, A1 `cell` and the five `*_cell` / `*_label` pairs for subject, period, metric, unit and
+    ownership. Unsupported semantic labels, missing or changed source bytes, duplicate numeric origins and
+    duplicate semantic keys refuse. The optional inclusive publication cut is applied before any HTML
+    source read; later mapped sources remain in `excluded_sources`, without fallback. No identity-ledger
+    anchor, certificate, calibrated measurement or publication-timestamp authentication is created. HTML
+    output is not gate-eligible, uses separate `html:` metric keys, and currently has synthetic test coverage
+    rather than a registered live HTML corpus. Existing standalone Claim lookup selectors are unchanged;
+    these Claim bodies and source interpretations are available directly in this command's receipt.
   - `decide card <model-file>`: a conditional monetary comparison on declared finite scenarios (BD-225).
     The adapter reads at most 4 MiB of UTF-8 from a regular file, hashes the actual bytes, and delegates parsing
     and exact evaluation to `fmine-decide::card`. The model supplies all weights, actions, payoffs and UU terms;

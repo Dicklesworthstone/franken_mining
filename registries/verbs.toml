@@ -21,6 +21,18 @@ mutates_authority = false
 description = "Prepare cited internal-review evidence challenge packets from visible assurance exceptions"
 
 [[verb]]
+path = "metrics cost"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Calculate exact AISC or AIC from a declared cost worksheet under an explicit registered definition, retaining treatment and Claim evidence"
+
+[[verb]]
+path = "html claims"
+subsystem = "Bullion"
+mutates_authority = false
+description = "Project registered HTML tables into exact source-bound public Claims using explicit label mappings and an optional publication cut"
+
+[[verb]]
 path = "check tables"
 subsystem = "Bullion"
 mutates_authority = false

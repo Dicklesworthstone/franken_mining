@@ -1,5 +1,8 @@
 //! Invented, source-bound filings. These tests establish extraction behavior, not issuer corpus coverage.
 
+#![cfg(test)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
