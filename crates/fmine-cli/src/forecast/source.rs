@@ -364,7 +364,28 @@ fn numeric_footnote(text: &str) -> &str {
         .trim_start()
 }
 
-fn sold_ounce_aisc(header: Option<&str>) -> bool {
+/// The registered Mine Stats cost conventions are per attributable unit sold (plan Appendix I.9).
+/// Only the exact supported name, unit, numeric footnotes and an optional matching sold-unit suffix
+/// are admitted. Produced-unit, adjusted, co-product and mixed-denominator labels need another policy.
+fn sold_unit_cost(metric: PublicMetric, header: Option<&str>) -> bool {
+    let (name, unit, sold) = match metric {
+        PublicMetric::AiscUsdPerOz => (
+            "all-in sustaining costs",
+            "($/oz)",
+            ["per sold ounce", "per ounce sold"],
+        ),
+        PublicMetric::TccUsdPerOz => (
+            "total cash costs",
+            "($/oz)",
+            ["per sold ounce", "per ounce sold"],
+        ),
+        PublicMetric::C1UsdPerLb => (
+            "c1 cash costs",
+            "($/lb)",
+            ["per sold pound", "per pound sold"],
+        ),
+        PublicMetric::ProductionKoz | PublicMetric::ProductionKt => return true,
+    };
     let Some(header) = header else {
         return false;
     };
@@ -373,19 +394,17 @@ fn sold_ounce_aisc(header: Option<&str>) -> bool {
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase();
-    let Some(rest) = header.strip_prefix("all-in sustaining costs") else {
+    let Some(rest) = header.strip_prefix(name) else {
         return false;
     };
-    let Some(rest) = numeric_footnote(rest).strip_prefix("($/oz)") else {
+    let Some(rest) = numeric_footnote(rest).strip_prefix(unit) else {
         return false;
     };
     let rest = numeric_footnote(rest);
-    ["", "per sold ounce", "per ounce sold"]
-        .iter()
-        .any(|suffix| {
-            rest.strip_prefix(suffix)
-                .is_some_and(|tail| numeric_footnote(tail).is_empty())
-        })
+    ["", sold[0], sold[1]].iter().any(|suffix| {
+        rest.strip_prefix(suffix)
+            .is_some_and(|tail| numeric_footnote(tail).is_empty())
+    })
 }
 
 fn publication(
@@ -861,12 +880,10 @@ fn bind_value(
             "outcome source is not public",
         ));
     }
-    if policy.metric == PublicMetric::AiscUsdPerOz
-        && !sold_ounce_aisc(cell.label_as_printed.as_deref())
-    {
+    if !sold_unit_cost(policy.metric, cell.label_as_printed.as_deref()) {
         return Err(refusal(
             RefusalCode::BasisMismatch105,
-            "source header does not state the supported issuer AISC definition per sold gold ounce",
+            "source header does not state the frozen issuer cost definition and sold-unit denominator",
         ));
     }
     if cell.key.scope != Scope::Site

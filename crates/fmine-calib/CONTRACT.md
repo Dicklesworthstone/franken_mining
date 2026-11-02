@@ -51,9 +51,12 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   canonical `PRP1`/v1 frame encoded as lowercase hexadecimal. It binds issuer, metric, explicit unit and source
   field, calendar FY/quarter, original release, exact ownership fraction and every forecast-id-to-subject mapping.
   Metrics are gold production (`production_koz`, koz), copper production (`production_kt`, kt), and
-  issuer-reported AISC per sold gold ounce in USD/oz. Copper binds the printed `cu_prod_100_kt` or
+  issuer-reported AISC and total cash cost per sold gold ounce in USD/oz, and C1 cash cost per sold copper
+  pound in USD/lb. `aisc_usd_per_oz`, `tcc_usd_per_oz` and `c1_usd_per_lb` freeze distinct metric/field
+  identities; their costs remain intensive and may be signed. Copper production binds the printed `cu_prod_100_kt` or
   `cu_prod_attr_kt` source field without any conversion to pounds. `PublicMetric::is_production` identifies
-  both extensive, nonnegative production quantities for admission and replay. Full production and
+  both extensive, nonnegative production quantities for admission and replay. Adding the cash-cost targets
+  leaves prior target encodings and original/comparative permissions unchanged. Full production and
   attributable production remain distinct even at an attributable fraction of one. Adding copper preserves
   the existing gold policy bytes and does not change original-only or comparative-vintage permissions.
   `validate`, `to_resolution_rule`, `parse_resolution_rule`, period and ownership helpers perform no I/O.

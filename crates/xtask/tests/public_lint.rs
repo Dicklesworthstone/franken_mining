@@ -76,6 +76,85 @@ fn verdict(text: &str, claims: &[KeyedCell]) -> Verdict {
 }
 
 #[test]
+fn nine_month_equalities_keep_cumulative_periods_and_amounts_distinct() {
+    let source = observation("600.0", |key| {
+        key.valid_period.kind = PeriodKind::NineMonths;
+        key.reporting_vintage.release = "2030Q3".into();
+        key.unit = "koz".into();
+        key.line.label = "summary:au_prod_100_koz".into();
+        key.ownership_basis = OwnershipBasis::Consolidated100;
+    });
+    for period in [
+        "9M 2030",
+        "9M2030",
+        "20309M",
+        "2030 9M",
+        "nine months of 2030",
+        "first nine months of 2030",
+    ] {
+        let plain = format!("Site A {period} 100% basis gold production is 600 koz.");
+        let cited = plain.replace(
+            "600 koz",
+            &format!("[600 koz](fmine:{})", source.claim.claim_id),
+        );
+        for report in [
+            lint_cited(&cited, std::slice::from_ref(&source)),
+            lint_discover(&plain, std::slice::from_ref(&source)),
+        ] {
+            assert_eq!(report.findings.len(), 1, "{}", report.to_json());
+            assert_eq!(report.findings[0].verdict, Verdict::Verified, "{period}");
+            assert_eq!(report.findings[0].raw, "600 koz");
+            assert_eq!(
+                report.findings[0].source.as_ref().unwrap().claim.claim_id,
+                source.claim.claim_id
+            );
+        }
+        let at = plain.find("600 koz").unwrap();
+        let target = equality_target(&plain, (at, at + 7), &source).unwrap();
+        assert_eq!(target.period, source.key.valid_period);
+    }
+    for period in ["H1 2030", "Q3 2030", "FY2030", "9M 2031"] {
+        let text = format!(
+            "Site A {period} 100% basis gold production is [600 koz](fmine:{}).",
+            source.claim.claim_id
+        );
+        assert_eq!(
+            verdict(&text, std::slice::from_ref(&source)),
+            Verdict::PeriodMismatch
+        );
+    }
+    for period in ["nine months", "9M", "9M 2030 FY2030", "Q3 2030 9M 2030"] {
+        let text = format!("Site A {period} 100% basis gold production is 600 koz.");
+        let report = lint_discover(&text, std::slice::from_ref(&source));
+        assert!(!report.findings.is_empty());
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.verdict != Verdict::Verified),
+            "{text}"
+        );
+    }
+    let competing = observation("600.0", |key| {
+        key.valid_period.kind = PeriodKind::NineMonths;
+        key.reporting_vintage.release = "2030Q4".into();
+        key.unit = "koz".into();
+        key.line.label = "summary:au_prod_100_koz".into();
+        key.ownership_basis = OwnershipBasis::Consolidated100;
+    });
+    let plain = "Site A 9M 2030 100% basis gold production is 600 koz.";
+    let cited = plain.replace(
+        "600 koz",
+        &format!("[600 koz](fmine:{})", source.claim.claim_id),
+    );
+    let claims = [source, competing];
+    let discovered = lint_discover(plain, &claims);
+    assert_eq!(discovered.findings[0].verdict, Verdict::Ambiguous);
+    assert_eq!(discovered.findings[0].candidates.len(), 2);
+    assert_eq!(verdict(&cited, &claims), Verdict::Stale);
+}
+
+#[test]
 fn equality_target_parses_a_different_period_without_inventing_source_evidence() {
     let prototype = observation("999", |key| {
         key.unit = "koz".into();

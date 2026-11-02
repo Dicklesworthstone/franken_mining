@@ -110,6 +110,15 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     risk ranking. If even hold-cash breaches the floor, the report explicitly has no structurally feasible
     program. Cash requirements constrain financing without changing declared net NAV. This tests the
     declared cash window only; it does not establish every intra-period balance or a staged schedule.
+    Alternatively, `funding_schedule` declares contiguous dated periods, state-specific opening cash and
+    complete signed baseline and candidate cash flows, with positive receipts and negative expenditures.
+    Each period carries its balance forward and checks its closing floor; the first floor also applies at
+    initial opening. Every scenario/checkpoint shortfall remains visible, even after later recovery.
+    Financing may leave a nonempty feasible set while hold is rejected; exact returns, risk and regret use
+    the actual feasible alternatives. The report renders every bundle's cash timeline. At most 16 periods
+    and 65,536 total checkpoints across all subsets are admitted; aggregate and scheduled funding cannot
+    be combined. Both modes bind the complete source Claims without charging cash flows to net NAV again.
+    Cash timing inside a declared period and adaptive staged recourse remain outside this comparison.
   - `lint <draft> --issuer <issuer> --html-definitions <mapping.toml> [--discover] [--as-of YYYY-MM-DD]`
     (BD-059/BD-345): checks only the mapped, registered HTML Claims through the existing exact equality
     kernel. The receipt retains full value, label, mapping and registry evidence. A separate source-publication
@@ -222,13 +231,19 @@ The adapter converts aliases to immutable forecast IDs and embeds the canonical
 `fmine_calib::ledger::binding::PublicResolutionPolicy` in the cohort's hashed resolution rule.
 The complete member set, sole eligible issuer, metric/unit, original FY/quarter release and ownership
 basis are fixed before any outcome. Supported metrics are site-level gold `production_koz`, copper
-`production_kt` and gold `aisc_usd_per_oz`, over calendar years (`YYYYFY`) or individual calendar quarters;
-ownership is `100%` or `attributable:n/d`. AISC means the issuer's reported per-sold-ounce cost,
-with no subtraction of annual and year-to-date rates or implicit ownership conversion.
+`production_kt`, gold `aisc_usd_per_oz` and `tcc_usd_per_oz`, and copper `c1_usd_per_lb`, over calendar years
+(`YYYYFY`) or individual calendar quarters; ownership is `100%` or `attributable:n/d`. The three cost metrics
+retain separate issuer-reported definitions per sold gold ounce or sold copper pound, with no subtraction
+of annual and year-to-date rates or implicit ownership conversion. Admission requires the exact cost name
+and dollar unit; numeric footnotes and an explicit matching sold-unit suffix are accepted. Adjusted,
+co-product, produced-unit and mixed-denominator labels refuse. Explicit sold-unit cost headers remain rates
+in the Mine Stats reader, which preserves the printed definition for this check.
 Copper production retains the printed kilotonnes and the same exact source-Claim, original-release and
 ownership checks. Gold figures, pounds, and unsupported copper cost definitions never substitute for that
 target. Both production metrics refuse negative values during admission and semantic replay; an unmarked
-printed zero remains valid. Copper adds no durable encoding change for existing gold targets or receipts.
+printed zero remains valid. TCC and C1 retain signed cost values and displayed decimal precision through
+original admission, permitted comparative restatement, scoring and offline report replay. Existing target
+and receipt encodings remain unchanged.
 
 `forecast journal resolve --journal <path> --head <hex> --cohort <name> --forecast <alias>
 --trust-host-clock` takes no outcome value, target override, source locator or availability timestamp.
@@ -275,7 +290,7 @@ permissions through another cohort. `forecast journal restate --journal <path> -
 --cohort <name> --forecast <alias> --release YYYYQn --trust-host-clock` requires an already admitted,
 source-verified original outcome. Under the writer lock it selects the latest numeric predecessor and
 resolves a strictly later registered reporting quarter against the same physical target, subject, metric,
-unit, ownership and sold-ounce cost definition. The registered publication day must follow both the target
+unit, ownership and sold-unit cost definition. The registered publication day must follow both the target
 period and selected reporting quarter; availability remains midnight after that day. Neither the numeric
 value, source Claim, publication evidence nor superseded sequence is accepted from the caller.
 
@@ -685,7 +700,8 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   The `derivation` object retains every pair and exact enclosure, input evidence and the new-information
   warning. `derivable` never overrides a direct disclosed or contradictory assertion. Derived values
   remain arithmetic assessments rather than new issuer Claims, forecasts, calibration or disclosure authority.
-  `lint_publicness::sums` additionally binds complete Q1/Q2 sums for H1 and Q1/Q2/Q3/Q4 sums for FY
+  `lint_publicness::sums` additionally binds complete Q1/Q2 sums for H1, Q1/Q2/Q3 sums for nine months,
+  and Q1/Q2/Q3/Q4 sums for FY
   to `fmine_metrics::public_derivation`. The same extensive quantity, source-admission and dated-cut
   constraints apply. Exactly one eligible source is required per quarter; competing vintages stay
   ambiguous without selecting by their amounts. Unusable operands with unknown publication dates
@@ -871,6 +887,11 @@ None: every failure is a usage error or a typed refusal.
   other complete series remain present. Incompatible rounded headlines are findings, not loader failures.
   JSON and Markdown retain signed tokens, definition metadata, source hashes/locators, publication evidence
   and reader roles. The wrapper digest also binds exact binding/rule-file bytes, the cut and pending readings.
+  Computed series expose canonical source and result Claims after source-bound recomputation; JSON retains
+  exact typed values, parents, anchors and canonical bodies, while Markdown names the same Claim IDs.
+  Synthetic library callers must select `ClaimBasis::Synthetic`; the registered public command retains
+  issuer-assertion evidence. The existing numeric check report and its digest remain unchanged; the wrapper
+  digest also binds the Claims. Refused series remain in `checks` and receive no numeric Claim.
   No workbook population or implicit source/basis conversion is needed. The report uses current rules,
   carries no ledger certificate, remains public and `gate_eligible:false`, and leaves all authority flags false.
   An explicit date checks selected document availability, not full hindcast closure. The committed Barrick

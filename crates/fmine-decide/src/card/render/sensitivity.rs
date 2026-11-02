@@ -370,6 +370,12 @@ fn boundary_json(value: &WeightBoundary) -> String {
 
 pub(super) fn json(summary: &DecisionSummary) -> String {
     use super::{ids, js, rq};
+    if summary.alternatives.len() == 1 {
+        return format!(
+            "{{\"status\":\"unavailable\",\"reason\":\"one_alternative\",\"comparisons\":[],\"no_claim\":{}}}",
+            js(NO_CLAIM)
+        );
+    }
     match assess(&summary.alternatives, &summary.expected_value_primary) {
         Err(error) => format!(
             "{{\"status\":\"refused\",\"code\":{},\"what\":{},\"fix\":{},\"no_claim\":{}}}",
@@ -408,6 +414,10 @@ pub(super) fn markdown(summary: &DecisionSummary) -> String {
     use super::{md, ratio};
 
     let mut out = format!("\n## Expected-value flip margins\n\n{NO_CLAIM}\n\n");
+    if summary.alternatives.len() == 1 {
+        out.push_str("**Sensitivity unavailable:** only one alternative was admitted. There is no challenger or decision-flip threshold within this supplied set.\n");
+        return out;
+    }
     let result = match assess(&summary.alternatives, &summary.expected_value_primary) {
         Ok(result) => result,
         Err(error) => {

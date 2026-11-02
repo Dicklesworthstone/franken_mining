@@ -2,7 +2,7 @@
 //! Determinism: Exact
 //!
 //! DESIGN: closed rational intervals propagate the printed precision of source assertions. They are
-//! neither forecasts nor confidence intervals. Only Q1 + Q2 = H1 and Q1 + Q2 + Q3 + Q4 = FY
+//! neither forecasts nor confidence intervals. Only Q1 + Q2 = H1, Q1 + Q2 + Q3 = 9M and Q1 + Q2 + Q3 + Q4 = FY
 //! are admitted here. Publication admission belongs to the source adapter; cumulative differences
 //! use the existing `roll_forward::quarter` identity.
 
@@ -207,7 +207,7 @@ pub fn derive(rule: Rule, inputs: &[Claim<Amount>]) -> Result<Claim<Amount>> {
     let mut result = a.clone();
     match rule {
         Rule::QuarterSum => {
-            if !matches!(ordered.len(), 2 | 4)
+            if !matches!(ordered.len(), 2..=4)
                 || ordered.iter().enumerate().any(|(i, c)| {
                     usize::from(c.value.period.first_month) != i * 3 + 1
                         || usize::from(c.value.period.last_month) != i * 3 + 3
@@ -215,11 +215,15 @@ pub fn derive(rule: Rule, inputs: &[Claim<Amount>]) -> Result<Claim<Amount>> {
             {
                 return Err(refusal(
                     RefusalCode::SupportMismatch102,
-                    "quarter sum requires exactly Q1/Q2 or Q1/Q2/Q3/Q4",
+                    "quarter sum requires exactly Q1/Q2, Q1/Q2/Q3 or Q1/Q2/Q3/Q4",
                 ));
             }
             result.period.first_month = 1;
-            result.period.last_month = if ordered.len() == 2 { 6 } else { 12 };
+            result.period.last_month = match ordered.len() {
+                2 => 6,
+                3 => 9,
+                _ => 12,
+            };
             result.interval.lo = Rat::from_integer(0);
             result.interval.hi = Rat::from_integer(0);
             for c in &ordered {
@@ -487,10 +491,27 @@ mod tests {
             fy.claim_id,
             derive(Rule::QuarterSum, &reverse).unwrap().claim_id
         );
-        for invalid in [&qs[..1], &qs[..3], &qs[1..3]] {
+        let nine = derive(Rule::QuarterSum, &qs[..3]).unwrap();
+        assert_eq!(nine.value.period.first_month, 1);
+        assert_eq!(nine.value.period.last_month, 9);
+        assert_eq!(nine.value.interval.lo, Rat::new(597, 2).unwrap());
+        assert_eq!(nine.value.interval.hi, Rat::new(603, 2).unwrap());
+        assert_eq!(nine.parents.len(), 3);
+        assert_ne!(nine.claim_id, fy.claim_id);
+        assert_eq!(
+            nine.claim_id,
+            derive(Rule::QuarterSum, &reverse[1..]).unwrap().claim_id
+        );
+        for invalid in [&qs[..1], &qs[1..], &qs[1..3]] {
             assert!(derive(Rule::QuarterSum, invalid).is_err());
         }
         assert!(derive(Rule::QuarterSum, &[qs[0].clone(), qs[0].clone()]).is_err());
+        for invalid in [
+            vec![qs[0].clone(), qs[0].clone(), qs[2].clone()],
+            vec![qs[0].clone(), qs[1].clone(), qs[3].clone()],
+        ] {
+            assert!(derive(Rule::QuarterSum, &invalid).is_err());
+        }
     }
 
     #[test]

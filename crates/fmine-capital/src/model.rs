@@ -43,6 +43,7 @@ fn fields<'a>(
             "id",
             "candidate",
             "state",
+            "period",
             "prerequisite",
             "exclusion_group",
         ]
@@ -176,6 +177,8 @@ fn assumed<T>(
 /// Top-level fields: schema/model_key/question/currency/valuation_basis/budget/tail_mass/payoff_convention/
 /// reference_class_basis, plus optional max_tail_loss. Rows: state, candidate, payoff, requires and uu.
 /// Optional funding/available_cash/cash_requirement rows declare a separate complete cash-window model.
+/// Alternatively, funding_schedule/cash_period/opening_cash/baseline_cash_flow/candidate_cash_flow rows
+/// declare signed cash flows at a complete sequence of dated checkpoints.
 /// A candidate requires id/label/cost/reference_class_basis and may name one exclusion_group.
 /// Costs constrain spending only; candidate payoff values are already net delta-NAV in major USD.
 pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
@@ -192,8 +195,8 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
         ));
     }
     let doc = parse_subset(text).map_err(|e| input(e.line, e.reason))?;
-    if doc.rows.len() > 8192 {
-        return Err(input(1, "model exceeds 8192 source rows"));
+    if doc.rows.len() > 45_056 {
+        return Err(input(1, "model exceeds 45056 source rows"));
     }
     let top = fields(
         &doc.top,
@@ -247,6 +250,12 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
     let mut available_cash = BTreeMap::new();
     let mut cash_requirements = BTreeMap::new();
     let mut funding_anchors = Vec::new();
+    let mut funding_schedule: Option<FundingSchedule> = None;
+    let mut cash_periods = BTreeMap::new();
+    let mut opening_cash = BTreeMap::new();
+    let mut baseline_flows = BTreeMap::new();
+    let mut candidate_flows = BTreeMap::new();
+    let mut schedule_anchors = Vec::new();
     for row in &doc.rows {
         match row.table.as_str() {
             "state" => {
@@ -332,8 +341,11 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
                     &[],
                     row.line,
                 )?;
-                if funding.is_some() {
-                    return Err(input(row.line, "only one funding declaration is allowed"));
+                if funding.is_some() || funding_schedule.is_some() {
+                    return Err(input(
+                        row.line,
+                        "only one funding or funding_schedule declaration is allowed",
+                    ));
                 }
                 funding = Some(ProgramFunding {
                     model_key: model_key.into(),
@@ -387,6 +399,106 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
                     &format!("cash requirement {candidate}/{state}"),
                 ));
             }
+            "funding_schedule" => {
+                let f = fields(&row.fields, &["cash_basis", "opening_date"], &[], row.line)?;
+                if funding.is_some() || funding_schedule.is_some() {
+                    return Err(input(
+                        row.line,
+                        "only one funding or funding_schedule declaration is allowed",
+                    ));
+                }
+                funding_schedule = Some(FundingSchedule {
+                    model_key: model_key.into(),
+                    currency: Currency::USD,
+                    cash_basis: get(&f, "cash_basis")?.into(),
+                    opening_date: get(&f, "opening_date")?.into(),
+                    opening_cash: Vec::new(),
+                    periods: Vec::new(),
+                    baseline_flows: Vec::new(),
+                    candidate_flows: Vec::new(),
+                });
+                schedule_anchors.push(located(
+                    &source,
+                    row.line,
+                    "funding schedule opening date and cash basis",
+                ));
+            }
+            "cash_period" => {
+                let f = fields(
+                    &row.fields,
+                    &["id", "cash_period", "minimum_cash"],
+                    &[],
+                    row.line,
+                )?;
+                let id = get(&f, "id")?;
+                let period = CashPeriod {
+                    id: id.into(),
+                    cash_period: get(&f, "cash_period")?.into(),
+                    minimum_cash: money(get(&f, "minimum_cash")?, row.line)?,
+                };
+                if cash_periods.insert(id.to_string(), period).is_some() {
+                    return Err(input(row.line, "duplicate cash period"));
+                }
+                schedule_anchors.push(located(&source, row.line, &format!("cash period {id}")));
+            }
+            "opening_cash" => {
+                let f = fields(&row.fields, &["state", "value"], &[], row.line)?;
+                let state = get(&f, "state")?;
+                if opening_cash
+                    .insert(state.to_string(), money(get(&f, "value")?, row.line)?)
+                    .is_some()
+                {
+                    return Err(input(row.line, "duplicate opening-cash state"));
+                }
+                schedule_anchors.push(located(&source, row.line, &format!("opening cash {state}")));
+            }
+            "baseline_cash_flow" => {
+                let f = fields(&row.fields, &["period", "state", "value"], &[], row.line)?;
+                let period = get(&f, "period")?;
+                let state = get(&f, "state")?;
+                if baseline_flows
+                    .insert(
+                        (period.to_string(), state.to_string()),
+                        money(get(&f, "value")?, row.line)?,
+                    )
+                    .is_some()
+                {
+                    return Err(input(row.line, "duplicate period/state baseline cash flow"));
+                }
+                schedule_anchors.push(located(
+                    &source,
+                    row.line,
+                    &format!("baseline cash flow {period}/{state}"),
+                ));
+            }
+            "candidate_cash_flow" => {
+                let f = fields(
+                    &row.fields,
+                    &["period", "candidate", "state", "value"],
+                    &[],
+                    row.line,
+                )?;
+                let period = get(&f, "period")?;
+                let candidate = get(&f, "candidate")?;
+                let state = get(&f, "state")?;
+                if candidate_flows
+                    .insert(
+                        (period.to_string(), candidate.to_string(), state.to_string()),
+                        money(get(&f, "value")?, row.line)?,
+                    )
+                    .is_some()
+                {
+                    return Err(input(
+                        row.line,
+                        "duplicate period/candidate/state cash flow",
+                    ));
+                }
+                schedule_anchors.push(located(
+                    &source,
+                    row.line,
+                    &format!("candidate cash flow {period}/{candidate}/{state}"),
+                ));
+            }
             "uu" => {
                 let f = fields(
                     &row.fields,
@@ -425,10 +537,14 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
             other => return Err(input(row.line, format!("unknown table {other}"))),
         }
     }
-    if candidates.len() > MAX_CANDIDATES || states.len() > MAX_STATES || unknowns.len() > 64 {
+    if candidates.len() > MAX_CANDIDATES
+        || states.len() > MAX_STATES
+        || unknowns.len() > 64
+        || cash_periods.len() > MAX_CASH_PERIODS
+    {
         return Err(input(
             1,
-            "exceeds 8 candidates, 256 states or 64 UU scenarios",
+            "exceeds 8 candidates, 256 states, 16 cash periods or 64 UU scenarios",
         ));
     }
     for ((id, state), payoff) in payoffs {
@@ -492,6 +608,61 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
         }
         None
     };
+    let funding_schedule = if let Some(mut declaration) = funding_schedule {
+        declaration.opening_cash = opening_cash.into_iter().collect();
+        declaration.periods = cash_periods.into_values().collect();
+        declaration
+            .periods
+            .sort_by(|a, b| (&a.cash_period, &a.id).cmp(&(&b.cash_period, &b.id)));
+        declaration.baseline_flows = baseline_flows
+            .into_iter()
+            .map(|((period_id, state_id), value)| StateCashFlow {
+                period_id,
+                state_id,
+                value,
+            })
+            .collect();
+        declaration.candidate_flows = candidate_flows
+            .into_iter()
+            .map(
+                |((period_id, candidate_id, state_id), value)| CandidateCashFlow {
+                    period_id,
+                    candidate_id,
+                    state_id,
+                    value,
+                },
+            )
+            .collect();
+        validate_schedule_bounds(&declaration, states.len(), candidates.len())?;
+        let tag = declaration.canonical_tag();
+        schedule_anchors.extend(uu_anchors.iter().cloned());
+        schedule_anchors.extend(
+            doc.top
+                .iter()
+                .filter(|f| matches!(f.key.as_str(), "model_key" | "currency"))
+                .map(|f| located(&source, f.line, &f.key)),
+        );
+        Some(assumed(
+            format!("capital.{model_key}.funding_schedule"),
+            declaration,
+            &tag,
+            AdditivityClass::NonAdditive,
+            &unknowns,
+            schedule_anchors,
+        ))
+    } else {
+        if !cash_periods.is_empty()
+            || !opening_cash.is_empty()
+            || !baseline_flows.is_empty()
+            || !candidate_flows.is_empty()
+        {
+            return Err(input(
+                1,
+                "dated cash rows require an explicit funding_schedule with opening date and cash basis",
+            ));
+        }
+        None
+    };
     let mut policy_anchors: Vec<_> = doc
         .top
         .iter()
@@ -543,6 +714,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
         weights,
         candidates: claims,
         funding,
+        funding_schedule,
     };
     validate(&inputs)?;
     Ok(inputs)

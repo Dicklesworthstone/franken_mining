@@ -76,6 +76,35 @@ mod tests {
             field("All-in sustaining costs ($/lb)").as_deref(),
             Some("aisc_usd_per_lb")
         );
+        for (header, expected) in [
+            ("Total cash costs ($/oz) per ounce sold", "tcc_usd_per_oz"),
+            ("C1 cash costs ($/lb) per sold pound", "c1_usd_per_lb"),
+            (
+                "All-in sustaining costs ($/oz) per ounce sold",
+                "aisc_usd_per_oz",
+            ),
+            (
+                "Total cash costs1 ($/oz)2 per ounce sold3",
+                "tcc_usd_per_oz",
+            ),
+            (
+                "C1 cash costs (1) ($/lb) (2) per sold pound (3)",
+                "c1_usd_per_lb",
+            ),
+        ] {
+            assert_eq!(field(header).as_deref(), Some(expected), "{header}");
+        }
+        for header in [
+            "Total cash costs ($/oz) per ounce produced",
+            "C1 cash costs ($/lb) per pound sold or produced",
+            "Total cash costs ($/oz) per ounce sold on a co-product basis",
+            "All-in sustaining costs ($/oz) per ounce sold adjusted",
+            "Adjusted C1 cash costs ($/lb) per sold pound",
+            "C1 cash costs ($/lb) per ounce sold",
+            "Total cash costs ($/oz) per pound sold",
+        ] {
+            assert!(summary_field(header).is_err(), "{header}");
+        }
         assert_eq!(field("Site"), None);
         assert!(
             summary_field("Total cash costs").is_err(),

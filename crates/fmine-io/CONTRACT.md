@@ -113,8 +113,11 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   per-ounce/per-pound sold or produced denominators, credit convention and definition words stay separate.
   `BasisTok` classifies ownership, denominator and credit tokens lexically without supplying a missing basis.
   Only `ownership basis unprinted`
-  or `unprinted ownership` supplies the unprinted marker. Quarter/half tokens without a year keep `None`;
+  or `unprinted ownership` supplies the unprinted marker. Quarter/half and spelled nine-month tokens without a year keep `None`;
   no current year is supplied. Explicit period and ownership metadata do not become extra numerical amounts.
+  Nine-month abbreviations require an explicit year (`9M 2030`, `9M2030` or `20309M`); an undated `9M`
+  retains its existing meaning as the numeric amount nine million. `nine months of 2030` and
+  `first nine months of 2030` identify the same cumulative calendar support, never Q3 or a full year.
 - `reliance::{Journal, ReleaseKey, ReissueRequest, MAX_JOURNAL_BYTES, MAX_JOURNAL_RECORDS}`. `Journal::create` uses
   `create_new`, validates genesis, writes and syncs it, and on Unix syncs its existing parent directory.
   `open_read(path, optional_pin)` retains a shared OS file lock; `open_write(path, expected_head)` retains

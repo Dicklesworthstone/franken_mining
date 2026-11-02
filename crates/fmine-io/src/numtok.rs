@@ -99,6 +99,7 @@ impl BasisTok {
 pub enum PeriodTok {
     Quarter { q: u8, year: Option<u16> },
     Half { h: u8, year: Option<u16> },
+    NineMonths { year: Option<u16> },
     Fy { year: u16 },
     YearRange { from: u16, to: u16 },
     ThreeYear,
@@ -281,6 +282,23 @@ fn period(text: &str, at: usize) -> Option<(usize, PeriodTok)> {
             return Some((end, PeriodTok::Half { h, year }));
         }
     }
+    for p in ["first nine months", "nine months"] {
+        if let Some(end) = phrase(text, at, p) {
+            let (end, year) = following_year(text, end);
+            return Some((end, PeriodTok::NineMonths { year }));
+        }
+    }
+    // An undated `9M` remains the existing numeric nine-million token. Only an explicit year
+    // disambiguates this abbreviation from the amount/scale grammar.
+    if let Some(end) = prefix(text, at, "9M") {
+        if let Some((end, year)) = four_year(text, end).filter(|(end, _)| !after_word(text, *end)) {
+            return Some((end, PeriodTok::NineMonths { year: Some(year) }));
+        }
+        let (end, year) = following_year(text, end);
+        if year.is_some() {
+            return Some((end, PeriodTok::NineMonths { year }));
+        }
+    }
     if let Some(end) = prefix(text, at, "FY")
         && let Some((end, year)) =
             four_year(text, spaces(text, end)).filter(|(end, _)| !after_word(text, *end))
@@ -301,6 +319,9 @@ fn period(text: &str, at: usize) -> Option<(usize, PeriodTok)> {
     }
     let (end, year) = four_year(text, at)?;
     let next = spaces(text, end);
+    if let Some(end) = phrase(text, next, "9M") {
+        return Some((end, PeriodTok::NineMonths { year: Some(year) }));
+    }
     for q in 1..=4 {
         if let Some(end) = phrase(text, next, &format!("Q{q}")) {
             return Some((
@@ -932,6 +953,19 @@ mod tests {
             ),
             ("FY2025", PeriodTok::Fy { year: 2025 }),
             ("2025FY", PeriodTok::Fy { year: 2025 }),
+            ("9M 2026", PeriodTok::NineMonths { year: Some(2026) }),
+            ("9M2026", PeriodTok::NineMonths { year: Some(2026) }),
+            ("20269M", PeriodTok::NineMonths { year: Some(2026) }),
+            ("2026 9M", PeriodTok::NineMonths { year: Some(2026) }),
+            (
+                "nine months of 2026",
+                PeriodTok::NineMonths { year: Some(2026) },
+            ),
+            (
+                "first nine months 2026",
+                PeriodTok::NineMonths { year: Some(2026) },
+            ),
+            ("nine months", PeriodTok::NineMonths { year: None }),
             (
                 "2023–25",
                 PeriodTok::YearRange {
@@ -947,6 +981,41 @@ mod tests {
                     span: (0, text.len()),
                     kind: expected
                 }]
+            );
+        }
+    }
+
+    #[test]
+    fn nine_month_periods_preserve_numeric_millions_and_reject_word_prefixes() {
+        for text in ["9M", "9m USD", "$9M", "9 million"] {
+            let n = one(text);
+            assert_eq!(n.value, dec(9_000_000, 0), "{text}");
+            assert_eq!(n.scale_word, Some(ScaleWord::Million));
+        }
+        for text in ["$9M 2030 budget", "US$9M 2030 budget"] {
+            let tokens = tokenize(text);
+            let [Token::Number(amount), Token::Number(year)] = tokens.as_slice() else {
+                panic!("currency-qualified amount cannot become a period: {tokens:?}");
+            };
+            assert_eq!(amount.value, dec(9_000_000, 0));
+            assert_eq!(year.value, dec(2030, 0));
+        }
+        for text in [
+            "9M20300",
+            "9M2030x",
+            "20309Mx",
+            "20309Months",
+            "nine monthsx",
+        ] {
+            assert!(
+                !tokenize(text).iter().any(|t| matches!(
+                    t,
+                    Token::Period {
+                        kind: PeriodTok::NineMonths { .. },
+                        ..
+                    }
+                )),
+                "{text}"
             );
         }
     }

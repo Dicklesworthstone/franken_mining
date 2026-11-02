@@ -262,6 +262,10 @@ fn field<'a>(json: &'a str, name: &str) -> &'a str {
 }
 
 fn series<'a>(json: &'a str, id: &str) -> &'a str {
+    // Canonical Claims follow the check report and may contain other series' annual values.
+    let json = json
+        .split_once(",\"claims\":[")
+        .map_or(json, |(checks, _)| checks);
     let at = json
         .find(&format!("\"selection\":{{\"id\":\"{id}\""))
         .expect("retained series");
@@ -457,6 +461,43 @@ fn exact_binding_and_metric_rule_bytes_are_part_of_the_report_identity() {
         field(&changed_binding.payload_json, "rules_sha256"),
         field(&changed_rule.payload_json, "rules_sha256")
     );
+}
+
+#[test]
+fn reserve_report_exposes_exact_source_claims_and_the_same_ids_in_markdown() {
+    let fixture = Fixture::new("canonical-claims", true);
+    let envelope = fixture.invoke(&[]);
+    ok(&envelope);
+    let json = &envelope.payload_json;
+    assert_eq!(
+        json.matches("\"metric_key\":\"reserve_replacement.cumulative\"")
+            .count(),
+        2
+    );
+    assert_eq!(
+        json.matches("\"metric_key\":\"reserve_replacement.source_input\"")
+            .count(),
+        18
+    );
+    let claims = json.split_once("\"claims\":[").unwrap().1;
+    for expected in [
+        "\"evidence\":\"issuer_assertion\"",
+        "\"canonical_body\":",
+        "\"parents\":[\"clm_",
+        "\"role\":\"annual_depletion\"",
+        "\"role\":\"aggregate_net_change\"",
+        "\"role\":\"headline\"",
+        "\"calibration_claim\":false",
+        "\"artifact_sha256\":",
+    ] {
+        assert!(claims.contains(expected), "{expected}");
+    }
+    let markdown = envelope.rendered_markdown.as_ref().unwrap();
+    for after in claims.split("\"claim_id\":\"").skip(1) {
+        let id = after.split('"').next().unwrap();
+        assert!(markdown.contains(id), "missing canonical Claim {id}");
+    }
+    assert_eq!(fixture.invoke(&[]).payload_json, *json);
 }
 
 #[test]
@@ -705,6 +746,9 @@ fn agreed_but_wrong_unit_basis_or_period_remains_a_series_refusal() {
             "{gold}"
         );
         assert!(!gold.contains("\"annual\":"));
+        let claims = envelope.payload_json.split_once(",\"claims\":[").unwrap().1;
+        assert!(!claims.contains("\"series_id\":\"gold\""));
+        assert!(claims.contains("\"series_id\":\"geo\""));
         assert!(
             envelope
                 .payload_json

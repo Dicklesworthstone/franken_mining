@@ -1,7 +1,7 @@
 //! Canonical source-complete capital reports. No render-time arithmetic changes a selection.
 //! Determinism: Exact (colour and UU metadata use their stored IEEE bits).
 
-use std::fmt::Write as _;
+use std::{collections::BTreeMap, fmt::Write as _};
 
 use fmine_evidence::{AoaStatus, AssertionSource, Color};
 
@@ -157,6 +157,101 @@ pub(super) fn funding_json(funding: &ProgramFunding) -> String {
     )
 }
 
+pub(super) fn funding_schedule_json(funding: &FundingSchedule) -> String {
+    let mut periods: Vec<_> = funding.periods.iter().collect();
+    periods.sort_by(|a, b| (&a.cash_period, &a.id).cmp(&(&b.cash_period, &b.id)));
+    let period_order: BTreeMap<_, _> = periods
+        .iter()
+        .enumerate()
+        .map(|(index, period)| (period.id.as_str(), index))
+        .collect();
+    let position = |id: &str| period_order.get(id).copied().unwrap_or(usize::MAX);
+    let periods = periods
+        .iter()
+        .map(|p| {
+            format!(
+                "{{\"id\":{},\"cash_period\":{},\"minimum_cash\":{},\"minimum_cash_currency\":{}}}",
+                js(&p.id),
+                js(&p.cash_period),
+                mq(p.minimum_cash),
+                currency(p.minimum_cash.ccy)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut opening: Vec<_> = funding.opening_cash.iter().collect();
+    opening.sort_by(|a, b| a.0.cmp(&b.0));
+    let opening = opening
+        .iter()
+        .map(|(id, value)| {
+            format!(
+                "{{\"state_id\":{},\"value\":{},\"currency\":{}}}",
+                js(id),
+                mq(*value),
+                currency(value.ccy)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut baseline: Vec<_> = funding.baseline_flows.iter().collect();
+    baseline.sort_by(|a, b| {
+        (position(&a.period_id), &a.period_id, &a.state_id).cmp(&(
+            position(&b.period_id),
+            &b.period_id,
+            &b.state_id,
+        ))
+    });
+    let baseline = baseline
+        .iter()
+        .map(|f| {
+            format!(
+                "{{\"period_id\":{},\"state_id\":{},\"value\":{},\"currency\":{}}}",
+                js(&f.period_id),
+                js(&f.state_id),
+                mq(f.value),
+                currency(f.value.ccy)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut candidates: Vec<_> = funding.candidate_flows.iter().collect();
+    candidates.sort_by(|a, b| {
+        (
+            position(&a.period_id),
+            &a.period_id,
+            &a.candidate_id,
+            &a.state_id,
+        )
+            .cmp(&(
+                position(&b.period_id),
+                &b.period_id,
+                &b.candidate_id,
+                &b.state_id,
+            ))
+    });
+    let candidates = candidates
+        .iter()
+        .map(|f| {
+            format!(
+                "{{\"period_id\":{},\"candidate_id\":{},\"state_id\":{},\"value\":{},\"currency\":{}}}",
+                js(&f.period_id),
+                js(&f.candidate_id),
+                js(&f.state_id),
+                mq(f.value),
+                currency(f.value.ccy)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"model_key\":{},\"currency\":{},\"cash_basis\":{},\"opening_date\":{},\"opening_cash\":[{opening}],\"periods\":[{periods}],\"baseline_flows\":[{baseline}],\"candidate_flows\":[{candidates}]}}",
+        js(&funding.model_key),
+        currency(funding.currency),
+        js(&funding.cash_basis),
+        js(&funding.opening_date)
+    )
+}
+
 fn weights_json(w: &WeightSet) -> String {
     let mut states = w.states.clone();
     states.sort_by(|a, b| a.0.cmp(&b.0));
@@ -301,8 +396,17 @@ pub(super) fn inputs_json(inputs: &ProgramInputs) -> String {
         .map(|c| claim_json(c, &candidate_json(&c.value)))
         .collect::<Vec<_>>()
         .join(",");
+    let schedule = inputs
+        .funding_schedule
+        .as_ref()
+        .map_or_else(String::new, |claim| {
+            format!(
+                ",\"funding_schedule\":{}",
+                claim_json(claim, &funding_schedule_json(&claim.value))
+            )
+        });
     format!(
-        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}}}",
+        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}{schedule}}}",
         claim_json(&inputs.policy, &policy_json(&inputs.policy.value)),
         claim_json(&inputs.weights, &weights_json(&inputs.weights.value)),
         inputs.funding.as_ref().map_or_else(
@@ -350,6 +454,18 @@ fn rejection_json(r: &StructuralRejection) -> String {
             js(state_id),
             rq(shortfall.major)
         ),
+        StructuralRejection::CashScheduleShortfall {
+            period_id,
+            checkpoint_date,
+            state_id,
+            shortfall,
+        } => format!(
+            "{{\"kind\":\"cash_schedule_shortfall\",\"period_id\":{},\"checkpoint_date\":{},\"state_id\":{},\"shortfall\":{}}}",
+            period_id.as_deref().map_or_else(|| "null".into(), js),
+            js(checkpoint_date),
+            js(state_id),
+            rq(shortfall.major)
+        ),
     }
 }
 
@@ -364,10 +480,35 @@ fn funding_assessment_json(funding: &FundingAssessment) -> String {
     )
 }
 
-pub(super) fn summary_json(s: &ProgramSummary) -> String {
-    let choices = s.choices.iter().map(|r| format!("{{\"bundle_id\":{},\"selected\":{},\"spend\":{},\"budget_slack\":{},\"funding\":{},\"structural_rejections\":[{}],\"risk_rejected\":{},\"tail_loss\":{},\"statistics\":{}}}", js(&r.bundle_id), ids(&r.selected), rq(r.spend.major), rq(r.budget_slack.major), r.funding.as_ref().map_or_else(|| "null".into(), funding_assessment_json), r.structural_rejections.iter().map(rejection_json).collect::<Vec<_>>().join(","), r.risk_rejected, r.tail_loss.map_or_else(|| "null".into(), |v| rq(v.major)), r.statistics.as_ref().map_or_else(|| "null".into(), statistics_json))).collect::<Vec<_>>().join(",");
+fn funding_schedule_assessment_json(funding: &FundingScheduleAssessment) -> String {
+    let checkpoints = funding.checkpoints.iter().map(|c| format!(
+        "{{\"period_id\":{},\"checkpoint_date\":{},\"state_id\":{},\"opening_cash\":{},\"baseline_cash_flow\":{},\"candidate_cash_flow\":{},\"closing_cash\":{},\"minimum_cash\":{},\"slack\":{}}}",
+        c.period_id.as_deref().map_or_else(|| "null".into(), js),
+        js(&c.checkpoint_date), js(&c.state_id), rq(c.opening_cash.major),
+        rq(c.baseline_cash_flow.major), rq(c.candidate_cash_flow.major),
+        rq(c.closing_cash.major), rq(c.minimum_cash.major), rq(c.slack.major)
+    )).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":null,\"selection_frequency_status\":\"unavailable_static_declared_model\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"}}",
+        "{{\"checkpoints\":[{checkpoints}],\"minimum_slack\":{}}}",
+        rq(funding.minimum_slack.major)
+    )
+}
+
+pub(super) fn summary_json(s: &ProgramSummary) -> String {
+    let choices = s.choices.iter().map(|r| {
+        let schedule = r.funding_schedule.as_ref().map_or_else(String::new, |funding| {
+            format!(",\"funding_schedule\":{}", funding_schedule_assessment_json(funding))
+        });
+        format!("{{\"bundle_id\":{},\"selected\":{},\"spend\":{},\"budget_slack\":{},\"funding\":{}{schedule},\"structural_rejections\":[{}],\"risk_rejected\":{},\"tail_loss\":{},\"statistics\":{}}}", js(&r.bundle_id), ids(&r.selected), rq(r.spend.major), rq(r.budget_slack.major), r.funding.as_ref().map_or_else(|| "null".into(), funding_assessment_json), r.structural_rejections.iter().map(rejection_json).collect::<Vec<_>>().join(","), r.risk_rejected, r.tail_loss.map_or_else(|| "null".into(), |v| rq(v.major)), r.statistics.as_ref().map_or_else(|| "null".into(), statistics_json))
+    }).collect::<Vec<_>>().join(",");
+    let schedule = s
+        .funding_schedule
+        .as_ref()
+        .map_or_else(String::new, |funding| {
+            format!(",\"funding_schedule\":{}", funding_schedule_json(funding))
+        });
+    format!(
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":null,\"selection_frequency_status\":\"unavailable_static_declared_model\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"}}",
         js(&s.model_key),
         js(&s.question),
         currency(s.policy.currency),
@@ -411,7 +552,7 @@ impl EvaluatedProgram {
             js(&self.digest),
             claim_json(&self.claim, &summary),
             inputs_json(&self.inputs),
-            js(NO_CLAIM)
+            js(self.no_claim())
         )
     }
 
@@ -425,7 +566,7 @@ impl EvaluatedProgram {
             evidence(self.claim.evidence),
             md(&self.claim.confidentiality.to_string()),
             self.digest,
-            NO_CLAIM,
+            self.no_claim(),
             md(&s.policy.valuation_basis),
             md(&s.policy.reference_class_basis),
             mq(s.policy.budget).trim_matches('"'),
@@ -470,6 +611,16 @@ impl EvaluatedProgram {
                                 ratio(shortfall.major)
                             )
                         }
+                        StructuralRejection::CashScheduleShortfall {
+                            period_id,
+                            checkpoint_date,
+                            state_id,
+                            shortfall,
+                        } => format!(
+                            "cash-floor shortfall in {state_id} at {} ({checkpoint_date}): {} USD",
+                            period_id.as_deref().unwrap_or("opening"),
+                            ratio(shortfall.major)
+                        ),
                     })
                     .collect::<Vec<String>>()
                     .join("; ")
@@ -526,8 +677,11 @@ impl EvaluatedProgram {
                     }
                 }
             }
-        } else {
+        } else if self.inputs.funding_schedule.is_none() {
             out.push_str("\nScenario funding: not declared.\n");
+        }
+        if let Some(funding) = &self.inputs.funding_schedule {
+            funding_schedule_markdown(&mut out, funding, &s.choices);
         }
         out.push_str("\n## Candidate assumptions and source Claims\n\nEvery candidate remains an input, including candidates absent from all winning subsets.\n\n");
         for candidate in &self.inputs.candidates {
@@ -575,6 +729,127 @@ impl EvaluatedProgram {
         }
         out.push_str("\nAll four authority flags are false: reserve disclosure, execution authorization, geotechnical sign-off and regulatory compliance.\n");
         out
+    }
+}
+
+fn funding_schedule_markdown(
+    out: &mut String,
+    funding: &Claim<FundingSchedule>,
+    choices: &[ProgramChoice],
+) {
+    let f = &funding.value;
+    let _ = writeln!(
+        out,
+        "\n## Funding at declared cash checkpoints\n\n**Opening date:** {}. **Cash basis:** {}.\n\nPositive cash flows are receipts; negative cash flows are expenditures. Each shared state starts with its declared opening cash. Baseline flows and the selected candidates' flows then change that balance period by period. The opening balance must meet the first period's floor, and every period-end balance must meet that period's floor. An earlier breach remains a rejection even when later receipts restore cash.\n\nThese checks cover the declared opening and period-end dates. They do not establish every intra-period balance or a contingent funding strategy. Cash flows do not alter the supplied net delta-NAV payoffs. All monetary values are exact rational major USD.\n",
+        md(&f.opening_date),
+        md(&f.cash_basis)
+    );
+    claim_markdown(out, funding);
+    let mut periods: Vec<_> = f.periods.iter().collect();
+    periods.sort_by(|a, b| (&a.cash_period, &a.id).cmp(&(&b.cash_period, &b.id)));
+    let period_order: BTreeMap<_, _> = periods
+        .iter()
+        .enumerate()
+        .map(|(index, period)| (period.id.as_str(), index))
+        .collect();
+    let position = |id: &str| period_order.get(id).copied().unwrap_or(usize::MAX);
+    out.push_str("\n### Declared cash periods and floors\n\n| Period | Inclusive cash period | Minimum cash (USD) |\n|---|---|---:|\n");
+    for p in &periods {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} |",
+            md(&p.id),
+            md(&p.cash_period),
+            mq(p.minimum_cash).trim_matches('"')
+        );
+    }
+    let mut opening: Vec<_> = f.opening_cash.iter().collect();
+    opening.sort_by(|a, b| a.0.cmp(&b.0));
+    out.push_str("\n### Declared opening cash\n\n| State | Opening cash (USD) |\n|---|---:|\n");
+    for (state, value) in opening {
+        let _ = writeln!(out, "| {} | {} |", md(state), mq(*value).trim_matches('"'));
+    }
+    let mut baseline: Vec<_> = f.baseline_flows.iter().collect();
+    baseline.sort_by(|a, b| {
+        (position(&a.period_id), &a.period_id, &a.state_id).cmp(&(
+            position(&b.period_id),
+            &b.period_id,
+            &b.state_id,
+        ))
+    });
+    out.push_str("\n### Declared baseline cash flows\n\n| Period | State | Net cash flow (USD) |\n|---|---|---:|\n");
+    for flow in baseline {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} |",
+            md(&flow.period_id),
+            md(&flow.state_id),
+            mq(flow.value).trim_matches('"')
+        );
+    }
+    let mut candidates: Vec<_> = f.candidate_flows.iter().collect();
+    candidates.sort_by(|a, b| {
+        (
+            position(&a.period_id),
+            &a.period_id,
+            &a.candidate_id,
+            &a.state_id,
+        )
+            .cmp(&(
+                position(&b.period_id),
+                &b.period_id,
+                &b.candidate_id,
+                &b.state_id,
+            ))
+    });
+    out.push_str("\n### Declared candidate cash flows\n\nEvery candidate's signed flows remain visible, including candidates absent from all winning subsets. Explicit zero rows are retained.\n\n| Period | Candidate | State | Net cash flow (USD) |\n|---|---|---|---:|\n");
+    for flow in candidates {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} |",
+            md(&flow.period_id),
+            md(&flow.candidate_id),
+            md(&flow.state_id),
+            mq(flow.value).trim_matches('"')
+        );
+    }
+    for choice in choices {
+        if let Some(result) = &choice.funding_schedule {
+            let _ = writeln!(
+                out,
+                "\n### Cash timeline for `{}`\n\nMinimum cash-floor slack across every state and checkpoint: {} USD.\n\n| State | Period | Checkpoint date | Opening cash | Baseline net | Program net | Closing cash | Floor | Slack | Checkpoint result |\n|---|---|---|---:|---:|---:|---:|---:|---:|---|",
+                md(&choice.bundle_id),
+                ratio(result.minimum_slack.major)
+            );
+            let mut checkpoints: Vec<_> = result.checkpoints.iter().collect();
+            checkpoints.sort_by(|a, b| {
+                (&a.state_id, &a.checkpoint_date, &a.period_id).cmp(&(
+                    &b.state_id,
+                    &b.checkpoint_date,
+                    &b.period_id,
+                ))
+            });
+            for c in checkpoints {
+                let _ = writeln!(
+                    out,
+                    "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                    md(&c.state_id),
+                    c.period_id.as_deref().map_or_else(|| "Opening".into(), md),
+                    md(&c.checkpoint_date),
+                    ratio(c.opening_cash.major),
+                    ratio(c.baseline_cash_flow.major),
+                    ratio(c.candidate_cash_flow.major),
+                    ratio(c.closing_cash.major),
+                    ratio(c.minimum_cash.major),
+                    ratio(c.slack.major),
+                    if c.slack.major.num() < 0 {
+                        "floor breach"
+                    } else {
+                        "floor met"
+                    }
+                );
+            }
+        }
     }
 }
 

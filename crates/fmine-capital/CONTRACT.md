@@ -23,6 +23,16 @@ Cash results remain visible even for subsets rejected by budget, prerequisites o
 aggregate fundability for the declared window, not a guarantee of every intra-period cash balance or a
 staged funding schedule.
 
+Alternatively, a `FundingSchedule` declares state-specific opening cash and complete signed baseline and
+candidate cash movements over contiguous inclusive calendar periods. Positive movements are receipts;
+negative movements are expenditures. Baseline movements exclude the selected program. At each period,
+closing cash equals opening cash plus baseline flow plus the selected candidates' flows in that same state.
+The closing balance carries forward exactly. The first period's floor applies at initial opening, and every
+period's floor applies at its close. Every negative slack produces a dated structural rejection, including
+earlier breaches followed by later recovery. All checkpoint rows remain visible even for rejected subsets.
+There is no implicit within-period payment ordering, discounting, credit facility or adaptive recourse.
+Aggregate funding and scheduled funding are mutually exclusive; neither changes the already-net NAV input.
+
 Structurally feasible subsets use `fmine-decide::card` for expected value, inverse-CDF P10/P50/P90,
 CVaR95 of signed loss `-delta-NAV`, and same-state regret against all structurally feasible subsets. A
 configurable exact positive tail mass additionally integrates the lowest-payoff states, including fractional
@@ -30,10 +40,14 @@ boundary mass, and negates their mean. An optional signed tail-loss ceiling reta
 subsets retain their numerical outcomes. All expected-value co-winners remain visible before and after risk;
 the difference of their maximum means is the expected-value cost of the risk limit.
 
-The empty subset has zero spending and payoffs. If it is the sole structurally feasible subset, its exact
-zero statistics are returned. A negative loss limit may exclude it; no risk-feasible program is an explicit
+The empty subset has zero spending and payoffs. Any sole structurally feasible subset retains its actual
+payoff statistics, with itself as hindsight benchmark and zero regret. A negative loss limit may exclude
+hold; no risk-feasible program is an explicit
 result with empty constrained winners and no invented opportunity cost. Declared cash below the floor can
-reject even the empty subset. If no subset is structurally feasible, both winner sets are empty, statistics
+reject even the empty subset, while signed financing receipts may make a nonempty subset feasible at later
+checkpoints. An initial opening breach rejects every subset because later flows cannot repair it. Comparison
+uses `card::evaluate_feasible`; no fictitious hold action enters the statistics or regret benchmark.
+If no subset is structurally feasible, both winner sets are empty, statistics
 and tail losses are absent, and no risk cost or hindsight baseline is invented. This is distinct from
 having structurally feasible choices that all violate the risk limit.
 
@@ -41,7 +55,8 @@ having structurally feasible choices that all violate the risk limit.
 
 All imported values remain Assumed, Internal, Estimated and parametrically uncertain. A complete input
 snapshot includes separate policy, shared-weight and candidate Claims, including every losing candidate,
-plus the complete funding Claim when declared. Funding values, cash basis/window, source anchors and full
+plus the complete aggregate funding or scheduled funding Claim when declared. Funding values, cash
+basis/window, opening date, period dates/floors, signed flow matrices, source anchors and full
 metadata participate in the same parent, uncertainty and receipt binding.
 The output meets evidence, epistemic and knowledge states, joins confidentiality, and retains all input
 parents, source locators and consistent UU definitions. Generic Claim metadata omitted from its standard
@@ -51,12 +66,17 @@ acquires a stronger validated regime. Every authority flag remains false.
 
 ## 4. Public API Surface
 
-- `ProgramPolicy`, `CapitalCandidate`, `ProgramFunding`, `ProgramInputs`: typed monetary declarations
-  wrapped in Claims; funding is optional and explicit.
+- `ProgramPolicy`, `CapitalCandidate`, `ProgramFunding`, `FundingSchedule`, `ProgramInputs`: typed monetary
+  declarations wrapped in Claims; funding is optional and explicit. A schedule uses `CashPeriod`,
+  `StateCashFlow` and `CandidateCashFlow`; assessments retain `CashScheduleCheckpoint` rows and minimum slack.
 - `evaluate(&ProgramInputs) -> Result<EvaluatedProgram, Refusal>`: exact exhaustive comparison, bounded to
-  1–8 candidates and 1–256 shared states (at most 256 subsets).
-- `EvaluatedProgram::{inputs, summary, claim, digest, to_json, to_markdown}`: immutable input/result access
+  1–8 candidates and 1–256 shared states (at most 256 subsets). Schedules admit 1–16 periods and at most
+  65,536 checkpoints across all subsets: `2^candidates × states × (periods + 1)`. Bounds apply before schedule
+  canonical serialization and enumeration. Oversized work refuses; no state, period or subset is truncated.
+- `EvaluatedProgram::{inputs, summary, claim, digest, no_claim, to_json, to_markdown}`: immutable input/result access
   and source-complete reports. Monetary output is rational major USD, without implicit rounding.
+  Without a schedule, no new optional JSON keys are inserted and the existing scope text and receipts remain
+  unchanged. Scheduled models bind their explicit checkpoint scope into the same receipt.
 - `model::parse(text, SourceAnchor)`: verifies SHA-256 against actual bytes, then reads the strict
   `fmine.capital-program.v1` TOML subset. Top-level strings are `schema`, `model_key`, `question`, `currency`,
   `valuation_basis`, `budget`, `tail_mass`, `payoff_convention`, `reference_class_basis`, with optional
@@ -67,8 +87,14 @@ acquires a stronger validated regime. Every authority flag remains false.
   `state`, `value`; `[[cash_requirement]]` requires `candidate`, `state`, `value`. At most one funding
   declaration is allowed. `cash_period` is an ordered valid `YYYY-MM-DD/YYYY-MM-DD` range, without an
   inferred calendar. Cash amounts and their basis apply to that window independently of NAV valuation.
+  Instead, `[[funding_schedule]]` requires `cash_basis`, `opening_date`; `[[cash_period]]` requires `id`,
+  `cash_period`, `minimum_cash`; `[[opening_cash]]` requires `state`, `value`; `[[baseline_cash_flow]]` requires
+  `period`, `state`, `value`; `[[candidate_cash_flow]]` requires `period`, `candidate`, `state`, `value`.
+  Every opening state, period/state baseline and period/candidate/state flow is explicit, including zeros.
+  Periods start at `opening_date` and continue without date gaps or overlaps. Rows may be supplied in any
+  order; canonical ordering follows chronological period, then candidate and state identifiers.
   Money uses quoted major USD decimals with at most four fractional digits, weights and tail mass exact
-  positive `n/d`. The parser bounds text to 4 MiB, rows to 8192 and UU terms to 64. Core admission and
+  positive `n/d`. The parser bounds text to 4 MiB, rows to 45,056 and UU terms to 64. Core admission and
   parsing bound identifiers to 128 bytes and descriptions, bases, source paths and locators to 4096 bytes,
   preventing one large identifier from expanding into every enumerated subset's state statistics.
 
@@ -80,6 +106,9 @@ currency/basis mismatch, negative costs/budgets, nonpositive or non-unit-sum wei
 refuse. Funding additionally refuses partial/duplicate/foreign state matrices, negative cash amounts,
 currency mismatch, invalid or reversed cash dates, absent bases, and orphan cash rows without a complete
 funding declaration. Even never-selectable candidates require their complete explicit cash requirements.
+Scheduled funding additionally refuses missing/duplicate/foreign period rows, incomplete signed flow
+matrices, negative opening cash/floors, invalid dates, gaps/overlaps, and conflicts with aggregate funding.
+Every candidate's cash flows remain required even when another constraint prevents its selection.
 Stale, altered, unobservable, uncited, unsupported, calibration-failed or unbudgeted Claims refuse.
 Conflicting UU definitions refuse. Exact arithmetic overflow returns `FMINE-REF-207`; no alternative is
 dropped to obtain a plausible result. Input/source errors use the existing refusal catalog, including
@@ -92,6 +121,9 @@ dropped to obtain a plausible result. Input/source errors use the existing refus
 - Every feasible winner satisfies exact budget, dependency, exclusion, declared state-specific liquidity
   and optional tail-loss constraints. Equality with the cash floor remains feasible.
 - Funding requirements are combined jointly by state, never averaged across states or charged to NAV again.
+- Scheduled cash carries exactly within each same-state trajectory; later recovery never erases an earlier
+  shortfall. Financing and repayment remain signed cash movements distinct from the declared NAV payoff.
+- Feasible-set statistics retain actual negative-NAV survivors, with no invented zero-payoff competitor.
 - All ties survive, and arithmetic risk cost is nonnegative whenever constrained winners exist.
 - Source, losing candidate, constraint, adjustment-basis and evidence metadata changes affect identity.
 
@@ -111,6 +143,12 @@ do-nothing, infeasible risk, metadata and source identity, input permutation and
 shared-state demand dependence, cost overruns changing the selected subset, exact cash-floor boundaries,
 preexisting cash shortfalls rejecting do-nothing, complete matrices, independent cash basis, unchanged legacy
 economics, losing-candidate requirements and complete funding metadata binding.
+Schedule tests cover early shortfalls versus aggregate solvency, carry, financing with hold rejected,
+singleton and multiple negative-NAV survivors, exact minor-unit equality, changing floors, shared-state
+dependence, chronology, complete matrices, source/metadata binding, overflow and combined work limits.
+An independent Python Fraction oracle checks 32 legacy and scheduled models through the actual binary;
+JSON/Markdown integration checks retain every bundle's timeline and library/binary byte parity. The complete
+`tests/capital/cash_schedule.toml` example selects bridge plus plant at USD 62.4M expected net delta-NAV.
 This bounded slice does not claim the full GATE-CAP-01/03/04 scale, selection-frequency or historical evidence.
 
 ## 9. Lifted Code & Foundation Dependencies
@@ -120,7 +158,7 @@ evidence Claim types, and `fmine-decide::card` statistics. No IO, spawning or ti
 
 ## 10. Non-Goals & Scope Boundary
 
-Static additive declared net-NAV comparison with optional explicitly scoped cash-window feasibility. No staged recourse, interactions, price/fiscal model,
+Static additive declared net-NAV comparison with optional aggregate or dated-checkpoint funding. No staged recourse, interactions, price/fiscal model,
 reference-class fitting, entity waterfalls, variable shares, portfolio safety, calibrated probabilities or
 physical authorization is supplied. Reference-class bases must be explicitly declared, including an honest
 unadjusted basis; the system does not apply an unnamed adjustment. Selection frequency is explicitly

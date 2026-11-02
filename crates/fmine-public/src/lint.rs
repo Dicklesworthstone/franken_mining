@@ -18,7 +18,7 @@ use crate::key::{
     SeriesOwnershipBasis, canonical_value_tag, claims_digest,
 };
 
-pub const RULES_VERSION: &str = "cited-equality/5";
+pub const RULES_VERSION: &str = "cited-equality/6";
 pub const NO_CLAIM: &str = "Checks supported numeric equalities against cited public Claims in the selected source snapshot. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure.";
 pub const DISCOVERY_NO_CLAIM: &str = "Matches supported numeric equalities to public Claims in the selected source snapshot only when their stated semantic keys identify exactly one candidate. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure. General-prose discovery precision has not been measured.";
 
@@ -516,6 +516,10 @@ fn period(t: PeriodTok) -> Option<Period> {
         PeriodTok::Fy { year } => Period {
             year,
             kind: PeriodKind::FullYear,
+        },
+        PeriodTok::NineMonths { year: Some(year) } => Period {
+            year,
+            kind: PeriodKind::NineMonths,
         },
         _ => return None,
     })

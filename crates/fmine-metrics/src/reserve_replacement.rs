@@ -20,6 +20,9 @@ use fmine_registry::reserve_replacement::{
 use fmine_registry::sources::{DocumentRow, is_date};
 use fmine_registry::transcriptions::{Accepted, Token, parse_token};
 
+mod claims;
+pub use claims::{ClaimBasis, InputClaim, InputRole, ReplacementClaims, ReplacementValue};
+
 pub const SCHEMA: &str = "fmine.reserve-replacement-report.v1";
 pub const NO_CLAIM: &str = "Exact arithmetic on registered issuer assertions, under closed half-step rounding bounds and the declared annual window, metal, attributable ownership and acquisition/divestment exclusions. It does not verify reserve truth or classification, infer omitted years, select a preferred vintage, reconstruct GEO from metals, or invent a tolerance for approximate language. Document-byte authentication and independent reader agreement remain caller obligations.";
 const OVERFLOW: &str = "exact reserve-replacement arithmetic overflowed";

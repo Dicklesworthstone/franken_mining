@@ -606,19 +606,57 @@ fn typed_cell(sheet: &Sheet, row: u32, col: u32) -> Result<MineStatsCell, String
     }
 }
 
+fn summary_numeric_note(text: &str) -> &str {
+    let text = text.trim_start();
+    if let Some(note) = text.strip_prefix('(')
+        && let Some((digits, rest)) = note.split_once(')')
+        && !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+    {
+        return rest.trim_start();
+    }
+    text.trim_start_matches(|c: char| c.is_ascii_digit())
+        .trim_start()
+}
+
+/// Explicit denominators may only extend the standard sold-unit cost definition, never change its basis.
+fn supported_sold_cost_header(raw: &str, field: &str, metal: &str) -> bool {
+    let names: &[&str] = match field {
+        "cos" => &["total cost of sales", "cost of sales"],
+        "tcc" => &["total cash costs"],
+        "c1" => &["c1 cash costs"],
+        "aisc" => &["all-in sustaining costs"],
+        _ => return false,
+    };
+    let (unit, sold) = if metal == "au" {
+        ("($/oz)", ["per sold ounce", "per ounce sold"])
+    } else {
+        ("($/lb)", ["per sold pound", "per pound sold"])
+    };
+    names.iter().any(|name| {
+        let Some(rest) = raw.strip_prefix(name) else {
+            return false;
+        };
+        let Some(rest) = summary_numeric_note(rest).strip_prefix(unit) else {
+            return false;
+        };
+        let rest = summary_numeric_note(rest);
+        sold.iter().any(|suffix| {
+            rest.strip_prefix(suffix)
+                .is_some_and(|tail| summary_numeric_note(tail).is_empty())
+        })
+    })
+}
+
 /// The summary field id of a column header, or `None` for a column that is not read. A header that names a
 /// field but no metal is refused (`Err`).
 fn summary_field(header: &str) -> Result<Option<String>, String> {
     let raw = collapse(header).to_lowercase();
     let per_100 = raw.contains("100%");
     let n: String = raw.chars().filter(|c| !c.is_ascii_digit()).collect();
-    let field = if n.contains("produced") && per_100 {
-        "prod_100"
-    } else if n.contains("produced") && n.contains("attributable") {
-        "prod_attr"
-    } else if n.contains("sold") {
-        "sold_attr"
-    } else if n.contains("cost of sales") {
+    // A cost header can explicitly name its denominator ("per ounce sold"). It remains a rate,
+    // provided the exact name, unit and denominator retain the field's standard cost definition.
+    let field = if n.contains("cost of sales") {
         "cos"
     } else if n.contains("total cash costs") {
         "tcc"
@@ -626,6 +664,12 @@ fn summary_field(header: &str) -> Result<Option<String>, String> {
         "c1"
     } else if n.contains("all-in sustaining") {
         "aisc"
+    } else if n.contains("produced") && per_100 {
+        "prod_100"
+    } else if n.contains("produced") && n.contains("attributable") {
+        "prod_attr"
+    } else if n.contains("sold") {
+        "sold_attr"
     } else {
         return Ok(None);
     };
@@ -651,6 +695,14 @@ fn summary_field(header: &str) -> Result<Option<String>, String> {
         return Err(format!(
             "summary header {header:?} names field {field} but not its unit {:?}",
             spellings[0].trim_matches(|c| c == '(' || c == ')' || c == ' ')
+        ));
+    }
+    if !quantity
+        && (n.contains("sold") || n.contains("produced"))
+        && !supported_sold_cost_header(&raw, field, metal)
+    {
+        return Err(format!(
+            "summary header {header:?} changes or ambiguously qualifies the sold-unit cost definition"
         ));
     }
     Ok(Some(match (field, metal) {

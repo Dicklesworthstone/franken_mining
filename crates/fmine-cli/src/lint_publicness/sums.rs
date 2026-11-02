@@ -94,17 +94,19 @@ pub(super) fn assess(
         .filter_map(|c| {
             let kind = quantity(c)?;
             let target = equality_target(draft, f.span, c)?;
-            (matches!(target.period.kind, PeriodKind::H1 | PeriodKind::FullYear)
-                && c.key.valid_period.year == target.period.year
+            (matches!(
+                target.period.kind,
+                PeriodKind::H1 | PeriodKind::NineMonths | PeriodKind::FullYear
+            ) && c.key.valid_period.year == target.period.year
                 && c.key.ownership_basis != OwnershipBasis::Unprinted)
                 .then_some((c, target, kind))
         })
         .collect();
     let (_, target, kind) = *prototypes.first()?;
-    let quarters = if target.period.kind == PeriodKind::H1 {
-        2
-    } else {
-        4
+    let quarters = match target.period.kind {
+        PeriodKind::H1 => 2,
+        PeriodKind::NineMonths => 3,
+        _ => 4,
     };
     let mut evidence: Vec<_> = cells.iter().filter(|c| {
         quantity(c) == Some(kind) && c.key.valid_period.year == target.period.year

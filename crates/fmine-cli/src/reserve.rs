@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use fmine_core::hash::sha256;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_metrics::reserve_replacement::{
-    self, Bounds, ReplacementReport, SeriesAssessment, Totals,
+    self, Bounds, ClaimBasis, ReplacementClaims, ReplacementReport, SeriesAssessment, Totals,
 };
 use fmine_public::sources::{
     is_issuer_name, load_issuer_profile, registry_path, transcriptions_path,
@@ -246,6 +246,14 @@ fn execute_inner(command: &Command, root: &Path) -> Result<Envelope, Refusal> {
     accepted.sort_by(|a, b| a.locator.cmp(&b.locator));
     pending.sort();
     let report = reserve_replacement::assess(&bindings, &metrics, &accepted, &profile.documents);
+    let claims = report
+        .claims(ClaimBasis::IssuerAssertions)
+        .map_err(|reason| Refusal::new(RefusalCode::NotObservable202, reason))?;
+    let claims_json = claims
+        .iter()
+        .map(ReplacementClaims::to_json)
+        .collect::<Vec<_>>()
+        .join(",");
     let pending_json = pending
         .iter()
         .map(|(at, reader)| {
@@ -261,7 +269,7 @@ fn execute_inner(command: &Command, root: &Path) -> Result<Envelope, Refusal> {
     let body = format!(
         "{{\"schema\":\"fmine.reserve-replacement.report.v1\",\"lane\":\"public\",\"gate_eligible\":false,\
          \"issuer\":{},\"bindings_sha256\":{},\"rules_sha256\":{},\"as_of\":{as_of},\
-         \"checks\":{},\"pending_readings\":[{pending_json}],\"no_claim\":{}}}",
+         \"checks\":{},\"claims\":[{claims_json}],\"pending_readings\":[{pending_json}],\"no_claim\":{}}}",
         js(&command.issuer),
         js(&sha256(bindings_text.as_bytes()).to_hex()),
         js(&sha256(metrics_text.as_bytes()).to_hex()),
@@ -291,6 +299,7 @@ fn execute_inner(command: &Command, root: &Path) -> Result<Envelope, Refusal> {
     envelope.no_claim = Some(NO_CLAIM);
     envelope.rendered_markdown = Some(markdown(
         &report,
+        &claims,
         &pending,
         command.as_of.as_deref(),
         &digest,
@@ -345,6 +354,7 @@ fn evidence_header(out: &mut String) {
 
 fn markdown(
     report: &ReplacementReport,
+    claims: &[ReplacementClaims],
     pending: &[(Locator, String)],
     as_of: Option<&str>,
     digest: &str,
@@ -410,6 +420,24 @@ fn markdown(
                     text(&value.definition.evidence),
                     text(&value.definition.formula)
                 );
+                if let Some(claims) = claims.iter().find(|c| c.derived().value.series_id == s.id) {
+                    let _ = writeln!(
+                        out,
+                        "Calculation Claim: `{}`. Evidence remains issuer assertion; rounding bounds do not establish calibration.\n",
+                        claims.derived().claim_id
+                    );
+                    out.push_str("| Input role | Period | Source Claim |\n|---|---|---|\n");
+                    for input in claims.inputs() {
+                        let _ = writeln!(
+                            out,
+                            "| {} | {} | `{}` |",
+                            input.value.role.as_str(),
+                            text(&input.value.reading.source.period),
+                            input.claim_id
+                        );
+                    }
+                    out.push('\n');
+                }
                 let _ = writeln!(
                     out,
                     "| View | Net change ({}) | Positive depletion ({}) | Replacement (%) | Closed rounding enclosure (%) |\n|---|---|---|---|---|",
