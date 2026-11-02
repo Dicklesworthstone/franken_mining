@@ -21,6 +21,7 @@ The Pushback optimisation crate. Five solver slices and four readers so far; `to
 - `toposort` (`bd-kcpj`, plan §15.4 row `fmine-optimize::toposort` and PO-PUSH-5): multi-period schedules on a precedence graph, with per-period upper limits on resources. A use may be negative (`bd-ixfw`), as in a blending row, where a block below the target grade makes room for one above it.
   - `check` is PO-PUSH-5's feasibility check. Every mined block's required blocks must be mined in the same period or earlier, and no resource may go over its limit in any period. It returns each period's exact value sum, and every broken requirement and limit.
   - `greedy` is TopoSort (Chicoisne, Espinoza, Goycoolea, Moreno and Rubio, Operations Research 2012). It takes Kahn's topological order with the caller's rank breaking ties, then puts each block in the earliest period with room. It runs `check` on its schedule and refuses one that fails.
+  - `greedy_from` (`bd-wife`) is `greedy` with a release period per block: no block is mined before its release. As with `pcpsp::greedy_from`, a block below a blend target released at its LP median period is not used up in an early period. On MineLib's sm2 it raised the searched schedule by 1.06% (§9).
 - `toposort::search` (`bd-5lxu`, plan §15.4's "plus local search and repair"): `improve` takes a feasible schedule and makes moves that keep it feasible and strictly raise its discounted value. The discount factors are the caller's integers; `discount_factors` gives `(1 + rate)^−t` times 2⁴⁰, rounded down period by period.
   - The moves, in each round's order: a positive block to an earlier period; two blocks traded between adjacent periods, the higher-valued going earlier; a positive block added under mined blocks; a negative block to a later period; and a negative block that no mined block requires dropped.
   - With negative uses, taking a block out of a period can put that period over a limit. The moves that take a block out (earlier, later, drop) check the period left as well as the one entered; a trade checks both periods.
@@ -56,7 +57,7 @@ The Pushback optimisation crate. Five solver slices and four readers so far; `to
   Block `(i, j, k)` is `(k·ny + j)·nx + i`, with `k = 0` at the top. The slope that applies is the lower block's, for the direction from it to the upper block. No angle in degrees or float crosses the API: the caller turns an angle into a tangent.
 - For `toposort` (`ScheduleProblem::new`): a `ClosureProblem` (values and requirements, as above), a period count, and per resource one `i64` use per block, of either sign, and one non-negative `i64` upper limit per period.
   - A schedule is one `Option<u32>` per block: its period, or `None` for unmined.
-  - `greedy` takes one `Option<i64>` rank per block, lower first, or `None` to leave the block out.
+  - `greedy` takes one `Option<i64>` rank per block, lower first, or `None` to leave the block out. `greedy_from` also takes one release period per block, each a period of the problem.
 - For `toposort::cpit`: the two files' text, the value places and `Rounding`, and the use places.
 - For `toposort::search::improve`: a `ScheduleProblem`, a schedule that passes `check`, one non-negative `i64` discount factor per period that never rises, and a round limit. `discount_factors` takes a non-negative rate over a positive scale (`CpitModel::discount_rate` over `cpit::RATE_SCALE` fits) and a period count.
 - For `toposort::pcpsp`: `parse` as `cpit::parse`; `with_destinations` one destination per block; `greedy` one rank and one first destination per block, and `greedy_from` also one release period per block, each a period of the model; `destinations` and `improve` a schedule and destinations that pass `check` together, one discount factor per period (non-negative and never rising for `improve`), and a cycle limit for `improve`.
@@ -73,7 +74,7 @@ The Pushback optimisation crate. Five solver slices and four readers so far; `to
   - `arc_count`, and `full_cone_arcs`, the count with every cone block required directly;
   - `boundary_blocks`, the blocks near a side of the grid or a domain contact whose arcs were reduced one by one.
 - `ScheduleCheck`: `mined`, `period_values` (exact and undiscounted, `i128`), `used[r][t]`, `unmet` with the first `WITNESSES` (10) `(block, required)` pairs, `over_limit` (every `(resource, period)` over its limit), `feasible()` and `value()`.
-- `greedy`: one `Option<u32>` period per block, a schedule that has passed `check`. `pcpsp::greedy`: such a schedule and one destination per block, which have passed `check` together; a destination differs from the one given only for a block that fell back. `pcpsp::greedy_from`: the same, with every mined block at or after its release.
+- `greedy`: one `Option<u32>` period per block, a schedule that has passed `check`. `greedy_from`: the same, with every mined block at or after its release. `pcpsp::greedy`: such a schedule and one destination per block, which have passed `check` together; a destination differs from the one given only for a block that fell back. `pcpsp::greedy_from`: the same, with every mined block at or after its release.
 - `search::Improvement`: the improved schedule (it has passed `check`), its discounted value `after` and the input's `before` (exact `i128`, `after ≥ before`), the rounds run, and `Moves` (counts of earlier, swaps, added, later and dropped). `discounted_value` gives `Σ value · factor[t]` exactly.
 - `pcpsp::PcpspModel`: `name`, `discount_rate`, the rounding counts, and `blocks`, `periods`, `destinations`, `resources`, `value(b, d)`, `uses(r, b, d)`, `limits(r)`, `requires(b)`. `pcpsp::DestinationMoves` counts switches, exchanges and unmined blocks given a destination. `pcpsp::PcpspImprovement` holds the improved schedule and destinations (they pass `check` together), `before` and `after` (exact `i128`, `after ≥ before`), the cycles run, and both kinds of move counts.
 - `CpitModel`: `name`, `problem`, `discount_rate` (times `RATE_SCALE`, 10⁹), `rounded_values`, `rounded_uses` and `rounded_limits`. Discounting is the caller's.
@@ -108,6 +109,8 @@ None is a Claim.
   - `check` agrees with feasibility written out from the definition on every schedule of 60 random problems and of the same 60 with one more resource whose uses run from −3 to 3, and its value equals the direct sum (`check_agrees_with_the_definition_on_every_schedule`). The problems have up to 6 blocks, 3 periods and 3 resources, and every schedule means each block unmined or in any period.
   - `greedy`'s schedule is feasible under any ranking on 400 random problems (`greedy_is_feasible_under_any_ranking_and_mines_whatever_fits`). There, a ranked block left unmined although its required blocks were mined fits no period from theirs on. With signed uses that last property does not hold, since a later block may make room; feasibility is checked on 400 such problems (`greedy_is_feasible_with_signed_uses`), and a known case shows the order mattering (`a_negative_use_makes_room_only_for_blocks_taken_after_it`).
   - With room for everything and the ultimate pit ranked, `greedy` mines exactly the pit in period 0, at `solve`'s value (`with_room_to_spare_the_ultimate_pit_is_mined_in_period_zero`, 100 random problems).
+  - `greedy_from` under random releases on the same 400 random problems and the 400 with a signed resource (`released_greedy_is_feasible_and_mines_nothing_before_its_release`): feasible by the definition, no block mined before its release, and with every release 0 the same schedule as `greedy`. The releases change the schedule on more than 100 of the 800.
+  - On a known blend, `greedy` mines the two blocks below the target in period 0, and the two above it then fit nowhere. Released one of each to period 1, every block is mined, at period values [5, 5] and blend use [0, 0] (`a_release_keeps_a_blend_partner_for_a_later_period`, in `toposort`'s tests; `pcpsp` has its own of that name).
   - Known answers: `greedy_follows_rank_within_precedence_and_capacity`, `a_precedence_cycle_stays_unmined`, `check_counts_late_and_missing_requirements_and_overfull_periods`, and `cpit::tests::tiny_pair_reads_exactly_and_schedules`.
   - `search::improve`, on greedy's schedules for 400 random problems under random rankings (`improve_is_feasible_monotone_and_bounded_by_the_exhaustive_optimum`):
     - the result is feasible by the definition, worth at least its input, and never more than the best of every schedule;
@@ -116,7 +119,7 @@ None is a Claim.
     - The same on 400 problems with a signed resource (`improve_keeps_every_limit_with_signed_uses`): it raised 241 and brought those at the optimum from 130 to 328.
   - Each move on a known case, `Earlier` before `Later` included: `each_move_on_a_known_case`. With a blend, a block below the target stays where its period needs it under earlier, later and drop: `a_block_below_the_blend_stays_where_its_period_needs_it`. Discount factors to the unit: `discount_factors_fall_by_the_rate_rounding_down`.
   - Planted negatives, each run once and reverted: a capacity test that always passes, and a drop of positive blocks. `improve`'s final check or value test refused both.
-  - Planted on 2026-11-02, each run once and reverted. A `check` that accepts a required block mined one period late failed 2 tests. A `greedy` that ignores limits was refused by its own `check` in 3 tests.
+  - Planted on 2026-11-02, each run once and reverted. A `check` that accepts a required block mined one period late failed 2 tests. A `greedy` that ignores limits was refused by its own `check` in 3 tests. For `bd-wife`, a `greedy_from` that ignores the release failed both release tests.
   - `pcpsp::improve`, from greedy's schedules under random destinations and rankings on 300 random problems with 2 to 5 blocks, 2 or 3 destinations and up to 2 resources (`pcpsp::tests::improve_is_feasible_monotone_and_bounded_by_the_exhaustive_optimum`):
     - the result is feasible and valued exactly by a check written from the model, not from `with_destinations`;
     - it is worth at least its input and never more than the best over every period and destination;
@@ -175,12 +178,12 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input.
 - `FMINE-REF-207` (proposed), from `toposort`:
   - `ScheduleProblem::new`: no periods or more than `MAX_PERIODS` (65,536); resources without one use per block and one limit per period; a negative limit;
   - `check`: a schedule whose length is not the block count, or a period past the last;
-  - `greedy`: ranks whose length is not the block count, or a schedule that fails `check`, which would be a defect.
+  - `greedy`: ranks whose length is not the block count, or a schedule that fails `check`, which would be a defect. `greedy_from` also refuses release periods whose length is not the block count, or one past the last period.
   - `search::discount_factors`: a negative rate, a scale that is not positive, or periods outside `1..=MAX_PERIODS`;
   - `search::discounted_value`: a schedule or factor list of the wrong length, or a period past the last;
   - `search::improve`: an input schedule that fails `check`, factors of the wrong length, negative or rising; and, as defects, a result that fails `check` or is worth less than the input.
 
-  Tests: `malformed_problems_refuse`, `check_counts_late_and_missing_requirements_and_overfull_periods`, `greedy_follows_rank_within_precedence_and_capacity`.
+  Tests: `malformed_problems_refuse`, `check_counts_late_and_missing_requirements_and_overfull_periods`, `greedy_follows_rank_within_precedence_and_capacity`, `a_release_keeps_a_blend_partner_for_a_later_period`.
 - `FMINE-REF-506` (proposed), from `toposort::cpit::parse`:
   - a missing, repeated or unknown header or section, a `TYPE` other than `CPIT`, `NPERIODS` of 0 or above `MAX_PERIODS`, a negative `DISCOUNT_RATE`, more than `MAX_RESOURCES` resources;
   - a limit line count other than resources × periods, a limit kind other than `L`, a resource or period out of range or given twice;
@@ -285,20 +288,22 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 
   Local search (`bd-5lxu`): the same test rerun at 2a3e3fa on 2026-11-02 (aarch64-macos, release, each LP read from the cache an earlier run wrote). `search::improve` runs on each threshold's schedule, with `discount_factors` at the file's rate and at most 1,000 rounds, and the best schedule is kept. Every schedule passed `check`, no search lowered an NPV, and every NPV stayed under both bounds. Each best schedule was also written out in MineLib's format and checked by `crates/xtask/testdata/minelib_cpit_oracle.py`. That script reads only the MineLib pair and the schedule and sums in exact fractions. All ten were feasible, with NPVs equal to the test's to 10⁻³.
 
+  Release periods (`bd-wife`): rerun on 2026-11-02 at 36a18de with `greedy_from` added, the same way. Each threshold now also gives a schedule with every block released at its LP median period: the first period by which the LP has mined half of the block, or the last period if it never has. The LP mines a required block at least as fast as the block itself, so no block is released before a block it requires. Six schedules are searched per instance. sm2's best rose 1.06%, from 1,623,480,554 (gap 1.52%, 0.987 of best known) to the value below, from threshold 0.5 released. The other nine kept their searched values and byte-identical schedules. Released, greedy itself did better on p4hd, w23, sm2, zuck_large and mclaughlin_limit, but on those four the search from the earliest-first schedule still came out ahead. sm2's new schedule passed the oracle, feasible, with an NPV equal to the test's to 10⁻³. The table is this run. Greedy is the best of the six greedy schedules and Searched the best of the six searched.
+
   | Instance | Greedy | Searched | Gap | Of best known | Search time |
   |---|---|---|---|---|---|
   | newman1 | 23,863,335 | 23,889,751 | 2.45% | 1.017 | under 0.01 s |
-  | kd | 372,132,947 | 393,795,083 | 4.73% | 0.992 | 0.03 s |
-  | zuck_small | 730,614,526 | 815,774,154 | 4.50% | 1.034 | 0.07 s |
-  | p4hd | 241,054,573 | 247,170,155 | 0.10% | 1.004 | 0.13 s |
-  | w23 | 374,482,241 | 393,871,647 | 1.70% | 1.004 | 0.23 s |
-  | sm2 | 1,622,531,548 | 1,623,480,554 | 1.52% | 0.987 | 0.51 s |
-  | marvin | 745,899,525 | 825,510,852 | 4.45% | 1.006 | 0.17 s |
-  | zuck_medium | 494,176,101 | 594,436,768 | 16.4% | 0.966 | 0.53 s |
-  | zuck_large | 51,185,071 | 57,137,644 | 0.44% | 1.006 | 0.64 s |
-  | mclaughlin_limit | 1,061,128,685 | 1,076,149,599 | 0.27% | 1.003 | 0.79 s |
+  | kd | 372,132,947 | 393,795,083 | 4.73% | 0.992 | 0.06 s |
+  | zuck_small | 730,614,526 | 815,774,154 | 4.50% | 1.034 | 0.10 s |
+  | p4hd | 246,912,627 | 247,170,155 | 0.10% | 1.004 | 0.20 s |
+  | w23 | 390,236,126 | 393,871,647 | 1.70% | 1.004 | 0.41 s |
+  | sm2 | 1,634,277,708 | 1,640,623,307 | 0.48% | 0.997 | 1.08 s |
+  | marvin | 745,899,525 | 825,510,852 | 4.45% | 1.006 | 0.34 s |
+  | zuck_medium | 494,176,101 | 594,436,768 | 16.4% | 0.966 | 0.76 s |
+  | zuck_large | 53,710,027 | 57,137,644 | 0.44% | 1.006 | 1.41 s |
+  | mclaughlin_limit | 1,065,136,537 | 1,076,149,599 | 0.27% | 1.003 | 1.35 s |
 
-  The gap is still to the certified bound. Search time is the total over the three thresholds. Nine of the ten are within 3% of MineLib's best-known value and all ten within 5%; against the certified bound, six are within 3% and nine within 5%. zuck_medium is the outlier. Of the moves in the ten best schedules, 124,722 were "later" moves (a block of negative value put off to a period with a smaller factor), 5,306 swaps, 1,090 "earlier" moves, 65 dropped (all on kd) and none added. zuck_large's cached LP comes from a run PDLP stopped at its 600 s limit. Its certified bound is the same 57,391,118, and `greedy` on its ranks gives 51,185,071, not the 51,137,752 above.
+  The gap is still to the certified bound. Search time is the total over the six schedules. Nine of the ten are within 3% of MineLib's best-known value and all ten within 5%; against the certified bound, six are within 3% and nine within 5%. zuck_medium is the outlier. Of the moves in the ten best schedules, 123,851 were "later" moves (a block of negative value put off to a period with a smaller factor), 6,265 swaps, 1,657 "earlier" moves, 65 dropped (all on kd) and none added. zuck_large's cached LP comes from a run PDLP stopped at its 600 s limit. Its certified bound is the same 57,391,118, and `greedy` on its ranks gives 51,185,071, not the 51,137,752 above (53,710,027 released).
 - PCPSP schedules (`bd-2rne`): MineLib's own PCPSP schedules (`sols/<name>_pcpsp_gmunoz120723.sol` in the mirror; nine, none for w23), and `crates/xtask/testdata/minelib_pcpsp_oracle.py`. That script reads only the MineLib pair and a schedule, splits included, and sums in exact fractions.
 
   `minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo` (`crates/xtask/tests/pcpsp_schedule.rs`, ignored, run by hand) on 2026-11-02: aarch64-macos, release, PDLP tolerance 10⁻⁴ with at most 600 s per LP. The test:
@@ -382,7 +387,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `toposort::ScheduleProblem` (`new`, `blocks`, `periods`, `resources`, `usage`, `limits`)
 - `toposort::ScheduleCheck` (`mined`, `period_values`, `used`, `unmet`, `first_unmet`, `over_limit`, `feasible`, `value`), `toposort::WITNESSES`, `toposort::MAX_PERIODS`
 - `toposort::search::improve`, `toposort::search::Improvement` (`schedule`, `before`, `after`, `rounds`, `moves`), `toposort::search::Moves` (`later`, `earlier`, `swaps`, `added`, `dropped`), `toposort::search::discount_factors`, `toposort::search::discounted_value`, `toposort::search::DISCOUNT_SCALE`, `toposort::search::SWAP_SCAN`
-- `toposort::check`, `toposort::greedy`
+- `toposort::check`, `toposort::greedy`, `toposort::greedy_from`
 - `toposort::cpit::parse`, `toposort::cpit::CpitModel` (`name`, `problem`, `discount_rate`, `rounded_values`, `rounded_uses`, `rounded_limits`), `toposort::cpit::MAX_RESOURCES`, `toposort::cpit::RATE_SCALE`
 - `toposort::pcpsp::parse`, `toposort::pcpsp::PcpspModel` (`name`, `discount_rate`, `rounded_values`, `rounded_uses`, `rounded_limits`, `blocks`, `periods`, `destinations`, `resources`, `value`, `uses`, `limits`, `requires`, `with_destinations`), `toposort::pcpsp::greedy`, `toposort::pcpsp::greedy_from`, `toposort::pcpsp::destinations`, `toposort::pcpsp::DestinationMoves` (`switches`, `exchanges`, `unmined`), `toposort::pcpsp::improve`, `toposort::pcpsp::PcpspImprovement` (`schedule`, `destination`, `before`, `after`, `cycles`, `moves`, `destination_moves`), `toposort::pcpsp::MAX_DESTINATIONS`
 
