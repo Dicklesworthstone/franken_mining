@@ -241,9 +241,33 @@ impl Solver<'_> {
                 .collect();
         (x, y)
     }
+
+    /// Scaled multipliers `y`, unscaled.
+    fn unscale_dual(&self, y: &[f64]) -> Vec<f64> {
+        y.iter().zip(&self.s.dr).map(|(v, d)| v * d).collect()
+    }
 }
 
-type Outcome = (PdlpStatus, Vec<f64>, Vec<f64>, Progress);
+/// The multipliers with the highest dual objective seen at any evaluation, scaled, with that objective. Any
+/// multipliers give a valid bound, so the best ones seen are worth certifying alongside the final ones.
+struct BestDual {
+    y: Vec<f64>,
+    dobj: f64,
+}
+
+impl BestDual {
+    fn offer(&mut self, me: &Measures, pt: &Point<'_>) {
+        if me.dobj > self.dobj {
+            self.dobj = me.dobj;
+            for (b, v) in self.y.iter_mut().zip(pt.y) {
+                *b = v * pt.mult;
+            }
+        }
+    }
+}
+
+/// Status, `x`, `y`, the best-seen multipliers (all unscaled) and the measures at the returned point.
+type Outcome = (PdlpStatus, Vec<f64>, Vec<f64>, Vec<f64>, Progress);
 
 /// Runs PDLP on `p`.
 pub(super) fn run_pdlp(
@@ -310,6 +334,10 @@ pub(super) fn run_pdlp(
         mult: 1.0,
     })?;
     let mut kkt_restart = start.kkt(omega);
+    let mut best = BestDual {
+        y: y.clone(),
+        dobj: start.dobj,
+    };
     let mut prev_candidate = f64::INFINITY;
     let (mut x0, mut y0) = (x.clone(), y.clone());
     let eps = o.tolerance;
@@ -441,13 +469,14 @@ pub(super) fn run_pdlp(
         if iters % EVAL_EVERY != 0 {
             continue;
         }
-        let mc = solver.measure(&Point {
+        let cur = Point {
             x: &x,
             y: &y,
             kx: &kx,
             kty: &kty,
             mult: 1.0,
-        })?;
+        };
+        let mc = solver.measure(&cur)?;
         let avg = Point {
             x: &sx,
             y: &sy,
@@ -461,18 +490,15 @@ pub(super) fn run_pdlp(
                 "the PDHG iterate became non-finite by step {iters}"
             )));
         }
+        best.offer(&mc, &cur);
+        best.offer(&ma, &avg);
         if mc.converged(eps) {
-            let (xo, yo) = solver.unscale(&Point {
-                x: &x,
-                y: &y,
-                kx: &kx,
-                kty: &kty,
-                mult: 1.0,
-            });
+            let (xo, yo) = solver.unscale(&cur);
             return Ok((
                 PdlpStatus::Optimal,
                 xo,
                 yo,
+                solver.unscale_dual(&best.y),
                 progress(&mc, iters, restarts, eta, omega),
             ));
         }
@@ -482,6 +508,7 @@ pub(super) fn run_pdlp(
                 PdlpStatus::Optimal,
                 xo,
                 yo,
+                solver.unscale_dual(&best.y),
                 progress(&ma, iters, restarts, eta, omega),
             ));
         }
@@ -489,21 +516,12 @@ pub(super) fn run_pdlp(
         let use_avg = ka < kc;
         let (cand, cand_kkt) = if use_avg { (ma, ka) } else { (mc, kc) };
         if !observer(&progress(&cand, iters, restarts, eta, omega)) {
-            let (xo, yo) = if use_avg {
-                solver.unscale(&avg)
-            } else {
-                solver.unscale(&Point {
-                    x: &x,
-                    y: &y,
-                    kx: &kx,
-                    kty: &kty,
-                    mult: 1.0,
-                })
-            };
+            let (xo, yo) = solver.unscale(if use_avg { &avg } else { &cur });
             return Ok((
                 PdlpStatus::Stopped,
                 xo,
                 yo,
+                solver.unscale_dual(&best.y),
                 progress(&cand, iters, restarts, eta, omega),
             ));
         }
@@ -564,6 +582,7 @@ pub(super) fn run_pdlp(
         mult: 1.0,
     };
     let mc = solver.measure(&cur)?;
+    best.offer(&mc, &cur);
     if wsum > 0.0 {
         let avg = Point {
             x: &sx,
@@ -573,11 +592,26 @@ pub(super) fn run_pdlp(
             mult: 1.0 / wsum,
         };
         let ma = solver.measure(&avg)?;
+        best.offer(&ma, &avg);
         if ma.kkt(omega) < mc.kkt(omega) {
             let (xo, yo) = solver.unscale(&avg);
-            return Ok((status, xo, yo, progress(&ma, iters, restarts, eta, omega)));
+            let by = solver.unscale_dual(&best.y);
+            return Ok((
+                status,
+                xo,
+                yo,
+                by,
+                progress(&ma, iters, restarts, eta, omega),
+            ));
         }
     }
     let (xo, yo) = solver.unscale(&cur);
-    Ok((status, xo, yo, progress(&mc, iters, restarts, eta, omega)))
+    let by = solver.unscale_dual(&best.y);
+    Ok((
+        status,
+        xo,
+        yo,
+        by,
+        progress(&mc, iters, restarts, eta, omega),
+    ))
 }

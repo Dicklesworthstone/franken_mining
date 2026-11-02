@@ -217,6 +217,84 @@ pub fn random_dense(rng: &mut Rng, open_tops: bool) -> Dense {
     Dense { c, a, lo, hi, l, u }
 }
 
+/// A small open-pit scheduling LP shaped like MineLib's CPIT relaxations, in "by" variables `w[b][t]` (index
+/// `t·n + b`, in `[0, 1]`): a vertical section `width` blocks wide and `depth` deep, where each block below the top
+/// needs the three above it, `periods` periods, and one capacity row per period on the blocks mined in it. Values
+/// are random ore or waste, discounted 10% a period. Returned as a minimisation (negated values).
+pub fn random_cpit(rng: &mut Rng, width: usize, depth: usize, periods: usize) -> LpProblem {
+    let n = width * depth;
+    let value: Vec<f64> = (0..n)
+        .map(|_| {
+            if rng.below(3) == 0 {
+                rng.uniform(5.0, 40.0)
+            } else {
+                -rng.uniform(1.0, 4.0)
+            }
+        })
+        .collect();
+    let cap = (n as f64 / periods as f64 * rng.uniform(0.3, 0.8)).max(1.0);
+    let col = |b: usize, t: usize| t * n + b;
+    let mut rows: Vec<Vec<(usize, f64)>> = Vec::new();
+    let (mut lo, mut hi) = (Vec::new(), Vec::new());
+    for t in 0..periods {
+        for k in 1..depth {
+            for i in 0..width {
+                let b = k * width + i;
+                for di in [-1i64, 0, 1] {
+                    let j = i as i64 + di;
+                    if j >= 0 && (j as usize) < width {
+                        let q = (k - 1) * width + j as usize;
+                        rows.push(vec![(col(b, t), 1.0), (col(q, t), -1.0)]);
+                        lo.push(f64::NEG_INFINITY);
+                        hi.push(0.0);
+                    }
+                }
+            }
+        }
+        if t > 0 {
+            for b in 0..n {
+                rows.push(vec![(col(b, t - 1), 1.0), (col(b, t), -1.0)]);
+                lo.push(f64::NEG_INFINITY);
+                hi.push(0.0);
+            }
+        }
+        let mut cap_row: Vec<(usize, f64)> = (0..n).map(|b| (col(b, t), 1.0)).collect();
+        if t > 0 {
+            cap_row.extend((0..n).map(|b| (col(b, t - 1), -1.0)));
+        }
+        rows.push(cap_row);
+        lo.push(f64::NEG_INFINITY);
+        hi.push(cap);
+    }
+    let mut c = vec![0.0f64; n * periods];
+    for t in 0..periods {
+        let disc = 1.1f64.powi(-(t as i32));
+        for b in 0..n {
+            // Mining b in period t is w[b][t] − w[b][t−1]: its value enters w[b][t] with +disc_t and w[b][t−1]
+            // with −disc_t, negated for the minimisation.
+            c[col(b, t)] -= value[b] * disc;
+            if t > 0 {
+                c[col(b, t - 1)] += value[b] * disc;
+            }
+        }
+    }
+    let mut coo = Coo::new(rows.len(), n * periods).unwrap();
+    for (r, row) in rows.iter().enumerate() {
+        for &(j, v) in row {
+            coo.push(r, j, v).unwrap();
+        }
+    }
+    LpProblem::new(
+        c,
+        &coo.assemble(),
+        lo,
+        hi,
+        vec![0.0; n * periods],
+        vec![1.0; n * periods],
+    )
+    .unwrap()
+}
+
 /// A random closure LP on `n ≤ 12` blocks: minimise `−w·x` subject to `x_u ≤ x_v` for each arc and `0 ≤ x ≤ 1`.
 /// Returns it with the best closure's value (a maximum), found over all subsets.
 pub fn random_closure(rng: &mut Rng) -> (Dense, f64) {

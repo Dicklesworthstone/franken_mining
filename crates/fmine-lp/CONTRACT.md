@@ -30,7 +30,8 @@ Nothing in the workspace calls it yet. MILP, QP, MPS I/O and decomposition are l
   - `x`, one value per column, always within the column bounds;
   - `y`, one multiplier per row;
   - `progress`, the measures at the returned point;
-  - `bound`, the `certified_bound` of `y`.
+  - `bound`, the higher of two `certified_bound`s: that of `y`, and that of the multipliers with the highest dual objective seen at any evaluation (the current point and the average, every 64 steps). The dual objective is not monotone along a run, so the second can be the tighter;
+  - `bound_multipliers`, the multipliers `bound` came from: `certified_bound(problem, bound_multipliers)` gives it again.
 - `Progress`: iterations, restarts, primal and dual objectives, relative primal residual, relative dual residual and relative gap (§4), step size and primal weight.
 - `DualBound`:
   - `value`: no feasible `x` has `c·x` below it;
@@ -64,13 +65,16 @@ None is a Claim.
   - `tiny_lps_match_vertex_enumeration`: 300 random LPs with up to 4 columns and 4 rows of mixed kinds, at ε = 10⁻⁹. Each is `Optimal`, its objective within 10⁻⁶ relative of the vertex optimum, `x` within 10⁻⁶ of feasible, and its bound below the optimum and within 10⁻⁶ of it;
   - `closure_lps_match_the_best_closure`: 150 random closure LPs on up to 12 blocks. The value is within 10⁻⁶ relative of the best closure found over all subsets, and the bound is not below it;
   - `two_variable_known_answer`: a hand-solved LP, whose multipliers match the exact duals.
+- `bound_is_the_best_seen_and_reproducible_from_its_multipliers`: 240 small LPs (dense, closure, and CPIT-shaped from `random_cpit`), each run for 12 evaluations. The bound equals `certified_bound` of `bound_multipliers`, is not below that of the final `y`, and is not below the final `y`'s bound of a run cut at any earlier evaluation, less 10⁻⁹ relative for rounding. The solver is deterministic, so a shorter run's final point is one the longer run evaluated. In 18 of the 240 the final `y` alone certified less than an earlier evaluation, and the test requires at least one such case.
 - `infeasible_problems_never_report_optimal`: an infeasible LP runs to the iteration limit.
 - `any_thread_count_gives_the_same_bits`: a 72,000-column transport LP (144,000 nonzeros) gives the same iterations, `x` and `y`, bit for bit, at 1, 2 and 5 threads.
 - `spmv_matches_the_numerics_csr_bit_for_bit_at_any_piece_count`: the solver's own `u32` CSR product equals `fmine_numerics::sparse::Csr::spmv`.
 - Planted bugs, each caught and then reverted:
   - dropping the dual repair (caught by the unit test and the oracle);
   - taking the wrong row bound in the dual objective (caught by the tiny and closure oracles);
-  - `||` for `&&` in the stopping rule (caught by five tests).
+  - `||` for `&&` in the stopping rule (caught by five tests);
+  - returning the final `y` as `bound_multipliers` when the best-seen bound wins (caught by the reproducibility check);
+  - never updating the best-seen multipliers. The dense and closure LPs alone did not catch it, because their final multipliers were always the best; the CPIT-shaped ones do (case 11).
 - **KILL-PUSH-PDLP** (`tests/minelib_cpit.rs`, ignored, run by hand). It runs the LP relaxations of MineLib's CPIT instances, whose optima MineLib publishes (§9). A run ends at the stopping rule or at the 30-minute limit. It passes when its certified bound then lies within 1e-4 relative of the published optimum, allowing one unit for MineLib's rounding. Whether the stopping rule fired is not judged, since it does not bound that gap (§8). §8 has the results.
 
 ## 5. Refusals
@@ -135,11 +139,22 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   - **At ε = 1e-6** seven runs reached the rule and three were stopped by the 30-minute limit. All ten bounds are within 1e-4; the largest gap is 3.4e-5.
   - **Reproducible.** Earlier runs at `f920f73` gave the same steps and bounds on every run that ended at the rule, at both ε. That includes kd at 1e-6 run with 8 threads against 16 here. Runs stopped by the limit end at a step count that depends on speed.
   - **Primal violation.** The returned `x` broke some row by up to 1.7×10⁴ units at 1e-4 (w23), and by up to 671 at 1e-6 (zuck_large).
-  - **The best bound is not kept.** On w23 at 1e-4 the dual objective came within 1e-4 at 32 s, but the bound returned at the end was 1.9e-4 off. Each evaluation's multipliers give a valid bound, and only the last one is returned.
+  - **The table's bounds are the final `y`'s only.** It predates best-seen tracking (§3). On w23 at 1e-4 the dual objective came within 1e-4 at 32 s, but the final `y` was 1.9e-4 off.
+  - **Best-seen bound.** With tracking added, the five instances that missed 1e-4 at ε = 1e-4 were run again, the same way, on 2026-11-02. Every run took the same steps as in the table:
+
+    | Instance | Gap, final `y` (table) | Gap, best seen |
+    |---|---|---|
+    | newman1 | 2.8e-4 | 1.3e-4 |
+    | kd | 1.05e-2 | 9.5e-3 |
+    | sm2 | 3.8e-4 | 2.7e-4 |
+    | w23 | 1.9e-4 | 4.2e-5 |
+    | mclaughlin_limit | 1.1e-4 | 8.4e-5 |
+
+    The other runs were not repeated. Tracking changes no step, and the returned bound is never below the final `y`'s, so their gaps can only be smaller than the table's. That is by construction, not measured. At ε = 1e-4, seven of ten bounds are therefore within 1e-4. The ε = 1e-6 column was not re-run either, and it can likewise only tighten.
 
   Plan §15.4's scale TARGET is 10⁷ nonzeros to a 1e-4 relative gap within 30 minutes, with a bound.
   - At ε = 1e-6 the certified bound meets it on all seven instances above 10⁷ nonzeros (1.7×10⁷ to 9.5×10⁷).
-  - At ε = 1e-4 the solver's own stopping rule is met on all seven in under six minutes each. The certified bound misses 1e-4 on three of them: sm2, w23 and mclaughlin_limit.
+  - At ε = 1e-4 the solver's own stopping rule is met on all seven in under six minutes each. With the best-seen bound, the certified bound misses 1e-4 on one of them, sm2. With the final `y` alone it missed on three: sm2, w23 and mclaughlin_limit.
   - ε = 1e-6 was chosen after the 1e-4 run, on the same instances, so there is no held-out set.
 
   `docs/delivery/KILL-PUSH-PDLP.md` records the decision.
@@ -157,9 +172,9 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - No presolve, no feasibility polishing and no infeasibility or unboundedness detection. An infeasible or unbounded LP runs to `max_iterations`.
 - The returned `x` is not feasible (§8). Nothing here turns it into a feasible point or a primal bound.
 - No implied-bound repair, so unbounded columns rarely certify (§8).
-- At the default ε = 1e-4, the certified bound misses KILL-PUSH-PDLP's 1e-4 on five of ten MineLib instances (§8). The default is cuPDLP's and is kept, and the MineLib test runs at 1e-6.
+- At the default ε = 1e-4, the certified bound misses KILL-PUSH-PDLP's 1e-4 on three of ten MineLib instances, newman1, kd and sm2, even with the best-seen bound (§8). The default is cuPDLP's and is kept, and the MineLib test runs at 1e-6.
 - At 1e-6 the three largest MineLib instances do not meet the stopping rule within 30 minutes. Their bounds were within 1e-4, but the solver cannot tell that without an outside optimum or a feasible point.
-- Only the last evaluation's multipliers are certified. Keeping the evaluation with the best dual objective, and certifying it as well, would have tightened w23's bound at 1e-4 (§8). It is not built.
+- Best-seen tracking keeps the multipliers with the highest dual objective and certifies only those and the final `y`. Where the certified value departs from the dual objective, as with an unbounded column (§8), another evaluation may have certified more.
 - No MPS I/O, QP, MILP or decomposition (the crate's other planned slices).
 - MineLib's files are not in the repository, because their licence is not recorded. KILL-PUSH-PDLP is an ignored test, run by hand with `FMINE_MINELIB_DIR`, and CI does not run it.
 - MineLib's mclaughlin (2.1 million blocks, 73 million arcs, 20 periods) is not run. It has about 2.9×10⁹ nonzeros in this formulation: about 140 GB at §8's rate for this crate alone, plus the test's own COO and CSR copies. It was not attempted on this shared 256 GB host.
@@ -170,7 +185,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `pdlp::PdlpOptions` (`tolerance`, `max_iterations`, `threads`; `Default`)
 - `pdlp::PdlpStatus` (`Optimal`, `IterationLimit`, `Stopped`)
 - `pdlp::Progress` (public fields)
-- `pdlp::PdlpSolution`: `status`, `x`, `y`, `progress`, `bound`
+- `pdlp::PdlpSolution`: `status`, `x`, `y`, `progress`, `bound`, `bound_multipliers`
 - `pdlp::solve`, `pdlp::solve_observed`
 - `pdlp::DualBound`: `value`, `repaired_rows`
 - `pdlp::certified_bound`

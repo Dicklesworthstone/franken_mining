@@ -19,9 +19,11 @@
 //!   and `|c·x − dual objective| ≤ ε(1 + |c·x| + |dual objective|)`, where `b` holds each row's largest finite
 //!   bound.
 //!
-//! Every returned solution carries [`certified_bound`] of its multipliers, so the optimum is bracketed even when
-//! the iteration limit stops the run. There is no presolve, feasibility polishing or infeasibility detection: an
-//! infeasible or unbounded problem runs to the iteration limit.
+//! Every returned solution carries a [`certified_bound`]: the higher of its final multipliers' and of the
+//! multipliers with the best dual objective seen at any evaluation, with the multipliers it came from. So the
+//! optimum is bounded even when the iteration limit or the observer stops the run. There is no presolve,
+//! feasibility polishing or infeasibility detection: an infeasible or unbounded problem runs to the iteration
+//! limit.
 
 mod bound;
 mod engine;
@@ -226,6 +228,7 @@ pub struct PdlpSolution {
     y: Vec<f64>,
     last: Progress,
     bound: Option<DualBound>,
+    bound_y: Vec<f64>,
 }
 
 impl PdlpSolution {
@@ -252,10 +255,19 @@ impl PdlpSolution {
         &self.last
     }
 
-    /// [`certified_bound`] of `y`: no feasible point is cheaper than it.
+    /// No feasible point is cheaper than this. It is the higher of two [`certified_bound`]s: that of `y`, and that
+    /// of the multipliers with the highest dual objective seen at any evaluation. The dual objective is not
+    /// monotone along the run, so the second can be the tighter.
     #[must_use]
     pub fn bound(&self) -> Option<DualBound> {
         self.bound
+    }
+
+    /// The multipliers [`PdlpSolution::bound`] came from, one per row: `certified_bound(problem,
+    /// bound_multipliers())` gives it again.
+    #[must_use]
+    pub fn bound_multipliers(&self) -> &[f64] {
+        &self.bound_y
     }
 }
 
@@ -286,14 +298,26 @@ pub fn solve_observed(
     if options.max_iterations == 0 {
         return Err(refuse("max_iterations is 0"));
     }
-    let (status, x, y, last) = engine::run_pdlp(problem, options, observer)?;
-    let bound = certified_bound(problem, &y)?;
+    let (status, x, y, best_y, last) = engine::run_pdlp(problem, options, observer)?;
+    let at_end = certified_bound(problem, &y)?;
+    let at_best = certified_bound(problem, &best_y)?;
+    let best_is_higher = match (at_best, at_end) {
+        (Some(b), Some(e)) => b.value() > e.value(),
+        (Some(_), None) => true,
+        (None, _) => false,
+    };
+    let (bound, bound_y) = if best_is_higher {
+        (at_best, best_y)
+    } else {
+        (at_end, y.clone())
+    };
     Ok(PdlpSolution {
         status,
         x,
         y,
         last,
         bound,
+        bound_y,
     })
 }
 

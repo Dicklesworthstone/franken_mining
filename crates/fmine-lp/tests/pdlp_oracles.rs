@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{Dense, Rng, random_closure, random_dense};
+use common::{Dense, Rng, random_closure, random_cpit, random_dense};
 use fmine_lp::pdlp::{PdlpOptions, PdlpStatus, certified_bound, solve};
 
 fn tight() -> PdlpOptions {
@@ -124,6 +124,86 @@ fn certified_bound_is_valid_at_any_multipliers() {
         "{{\"suite\":\"fmine-lp/pdlp\",\"case\":\"bound_validity\",\"bounds\":{bounds},\"none\":{none}}}"
     );
     assert!(bounds > 5_000, "only {bounds} bounds were finite");
+}
+
+/// The returned bound is certified from the multipliers the solution carries, and is the best seen along the run.
+/// The solver is deterministic, so a run of `K` steps passes every evaluation that a run of `k < K` steps
+/// ended on. Its bound must therefore be at least the certified bound of each shorter run's final multipliers, up to
+/// the rounding between a dual objective and its certified value. All columns are boxed here, so the two agree.
+/// The test counts the cases where the final multipliers alone would fail that, because a shorter run had
+/// certified more, and requires some.
+#[test]
+fn bound_is_the_best_seen_and_reproducible_from_its_multipliers() {
+    const STEPS: u64 = 12;
+    let mut rng = Rng(0x5eed_0004);
+    let (mut fell, mut certified) = (0, 0);
+    let run = |p: &fmine_lp::pdlp::LpProblem, evals: u64| {
+        let o = PdlpOptions {
+            tolerance: 1e-12,
+            max_iterations: 64 * evals,
+            threads: 1,
+        };
+        solve(p, &o).unwrap()
+    };
+    for case in 0..240 {
+        // The small CPIT-shaped LPs have no oracle optimum here; their bounds' validity is the other tests' job.
+        let (p, opt) = match case % 3 {
+            0 => {
+                let d = random_dense(&mut rng, false);
+                let opt = d.vertex_optimum().unwrap();
+                (d.problem(), Some(opt))
+            }
+            1 => {
+                let (d, best) = random_closure(&mut rng);
+                (d.problem(), Some(-best))
+            }
+            _ => {
+                let width = 6 + rng.below(10) as usize;
+                let depth = 3 + rng.below(5) as usize;
+                let periods = 2 + rng.below(4) as usize;
+                (random_cpit(&mut rng, width, depth, periods), None)
+            }
+        };
+        let s = run(&p, STEPS);
+        assert_eq!(
+            certified_bound(&p, s.bound_multipliers()).unwrap(),
+            s.bound(),
+            "case {case}: the bound does not come from its multipliers"
+        );
+        let b = s.bound().map_or(f64::NEG_INFINITY, |b| b.value());
+        let end = certified_bound(&p, s.y())
+            .unwrap()
+            .map_or(f64::NEG_INFINITY, |e| e.value());
+        let mut best_shorter = f64::NEG_INFINITY;
+        for k in 1..STEPS {
+            if let Some(e) = certified_bound(&p, run(&p, k).y()).unwrap() {
+                best_shorter = best_shorter.max(e.value());
+            }
+        }
+        let slack = |v: f64| 1e-9 * (1.0 + v.abs());
+        assert!(b >= end, "case {case}: bound {b} below the final {end}");
+        assert!(
+            b >= best_shorter - slack(best_shorter),
+            "case {case}: bound {b} below {best_shorter}, certified by a shorter run"
+        );
+        fell += usize::from(end < best_shorter - slack(best_shorter));
+        if b.is_finite() {
+            certified += 1;
+            if let Some(opt) = opt {
+                assert!(
+                    b <= opt + slack(opt),
+                    "case {case}: bound {b} above the optimum {opt}"
+                );
+            }
+        }
+    }
+    println!(
+        "{{\"suite\":\"fmine-lp/pdlp\",\"case\":\"best_bound\",\"certified\":{certified},\"final_fell_below_earlier\":{fell}}}"
+    );
+    assert!(
+        fell > 0,
+        "no case where the final multipliers certify less than earlier ones: this test cannot see the tracking"
+    );
 }
 
 #[test]
