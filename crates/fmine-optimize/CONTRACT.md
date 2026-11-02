@@ -272,7 +272,24 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   | zuck_large | 96,821 | 30 | 568.9 s | 51,137,752 | 57,391,118 | 10.9% | 0.901 |
   | mclaughlin_limit | 112,687 | 15 | 155.3 s | 1,061,128,685 | 1,079,070,887 | 1.66% | 0.989 |
 
-  Every certified bound but kd's is within 0.03% of MineLib's published LP bound. kd's is 0.94% above it, so against the published bound kd's gap is 9.12%. newman1's schedule is worth 1.6% more than MineLib's 2013 best-known file; later published values were not checked. mclaughlin (2,140,342 blocks) was not run. On zuck_large `greedy` mines every block. On eight of the ten, the mined count moves by under 0.1% between thresholds 10⁻⁶ and 0.9 (sm2's by 0.8%, kd's by 10%). How much of each gap comes from timing and how much from block choice was not measured. The count suggests timing, which local search after `greedy` would work on (§10).
+  Every certified bound but kd's is within 0.03% of MineLib's published LP bound. kd's is 0.94% above it, so against the published bound kd's gap is 9.12%. newman1's schedule is worth 1.6% more than MineLib's 2013 best-known file; later published values were not checked. mclaughlin (2,140,342 blocks) was not run. On zuck_large `greedy` mines every block. On eight of the ten, the mined count moves by under 0.1% between thresholds 10⁻⁶ and 0.9 (sm2's by 0.8%, kd's by 10%). How much of each gap comes from timing and how much from block choice was not measured. The count suggested timing, which the local search below works on.
+
+  Local search (`bd-5lxu`): the same test rerun at 2a3e3fa on 2026-11-02 (aarch64-macos, release, each LP read from the cache an earlier run wrote). `search::improve` runs on each threshold's schedule, with `discount_factors` at the file's rate and at most 1,000 rounds, and the best schedule is kept. Every schedule passed `check`, no search lowered an NPV, and every NPV stayed under both bounds. Each best schedule was also written out in MineLib's format and checked by `crates/xtask/testdata/minelib_cpit_oracle.py`. That script reads only the MineLib pair and the schedule and sums in exact fractions. All ten were feasible, with NPVs equal to the test's to 10⁻³.
+
+  | Instance | Greedy | Searched | Gap | Of best known | Search time |
+  |---|---|---|---|---|---|
+  | newman1 | 23,863,335 | 23,889,751 | 2.45% | 1.017 | under 0.01 s |
+  | kd | 372,132,947 | 393,795,083 | 4.73% | 0.992 | 0.03 s |
+  | zuck_small | 730,614,526 | 815,774,154 | 4.50% | 1.034 | 0.07 s |
+  | p4hd | 241,054,573 | 247,170,155 | 0.10% | 1.004 | 0.13 s |
+  | w23 | 374,482,241 | 393,871,647 | 1.70% | 1.004 | 0.23 s |
+  | sm2 | 1,622,531,548 | 1,623,480,554 | 1.52% | 0.987 | 0.51 s |
+  | marvin | 745,899,525 | 825,510,852 | 4.45% | 1.006 | 0.17 s |
+  | zuck_medium | 494,176,101 | 594,436,768 | 16.4% | 0.966 | 0.53 s |
+  | zuck_large | 51,185,071 | 57,137,644 | 0.44% | 1.006 | 0.64 s |
+  | mclaughlin_limit | 1,061,128,685 | 1,076,149,599 | 0.27% | 1.003 | 0.79 s |
+
+  The gap is still to the certified bound. Search time is the total over the three thresholds. Nine of the ten are within 3% of MineLib's best-known value and all ten within 5%; against the certified bound, six are within 3% and nine within 5%. zuck_medium is the outlier. Of the moves in the ten best schedules, 124,722 were "later" moves (a block of negative value put off to a period with a smaller factor), 5,306 swaps, 1,090 "earlier" moves, 65 dropped (all on kd) and none added. zuck_large's cached LP comes from a run PDLP stopped at its 600 s limit. Its certified bound is the same 57,391,118, and `greedy` on its ranks gives 51,185,071, not the 51,137,752 above.
 
 ## 10. Known gaps
 - `bd-nzwd` and `bd-t75z`: no caller in the workspace yet. `BD-250`'s one caller is `fmine plan pit`, on MineLib UPIT pairs only; no block model or price deck feeds it.
