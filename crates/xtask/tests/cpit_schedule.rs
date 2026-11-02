@@ -15,11 +15,19 @@
 //! 3. Block `b`'s expected number of periods before it is mined is `Σ_t (1 − w[b][t])`. That ranks it. A block the
 //!    LP mines less than a threshold of by the last period is left out. Three thresholds are tried, and each schedule
 //!    must pass the checker; the best NPV is reported, with all three.
-//! 4. NPV is `Σ_t V_t / (1 + rate)^t` in `f64`, from the checker's exact per-period sums.
+//! 4. `toposort::search::improve` (`bd-5lxu`) runs on each schedule, with `discount_factors` from the file's rate and
+//!    at most `FMINE_SEARCH_ROUNDS` rounds (default 1,000), and its result must pass the checker too.
+//! 5. NPV is `Σ_t V_t / (1 + rate)^t` in `f64`, from the checker's exact per-period sums.
 //!
-//! Asserted: every schedule passes `toposort::check`, and no NPV exceeds PDLP's certified bound or MineLib's LP bound
-//! (each allowing one unit for rounding). No gap threshold is asserted. GATE-PUSH-TOPO is set on PCPSP, not CPIT,
-//! and there is no local search yet.
+//! Asserted: every schedule passes `toposort::check`, the search never lowers an NPV, and no NPV exceeds PDLP's
+//! certified bound or MineLib's LP bound (each allowing one unit for rounding). No gap threshold is asserted.
+//! GATE-PUSH-TOPO is set on PCPSP, not CPIT.
+//!
+//! `FMINE_CPIT_LP_CACHE`, if set, names a directory where each instance's LP solution and certified bound are kept
+//! (`<name>-<tol>.lp`, little-endian `f64`s), so later runs skip PDLP. Such a run reports `"lp_status":"cached"`.
+//! `FMINE_CPIT_SOLUTION_OUT`, if set, names a directory for each instance's best schedule in MineLib's solution format
+//! (`<name>_cpit_fmine.sol`), which `crates/xtask/testdata/minelib_cpit_oracle.py` checks from the instance's files
+//! alone.
 //!
 //! With `FMINE_MINELIB_SOLS` pointing at the mirror's `sols/` files, MineLib's best-known schedule
 //! (`<name>_cpit_*.sol`) is read too. It must pass the same checker, and its NPV, computed the same way, must equal
@@ -35,6 +43,7 @@ use std::time::Instant;
 use fmine_lp::pdlp::{LpProblem, PdlpOptions, solve_observed};
 use fmine_numerics::sparse::Coo;
 use fmine_optimize::pitflow::minelib::Rounding;
+use fmine_optimize::toposort::search::{discount_factors, improve};
 use fmine_optimize::toposort::{ScheduleProblem, check, cpit, greedy};
 
 /// MineLib's Results page (Results.xhtml, mirrored at github.com/borelian/minelib, read 2026-11-01): the CPIT LP
@@ -186,20 +195,54 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
         let p = &model.problem;
         let (n, periods) = (p.blocks().node_count(), p.periods());
         let rate = model.discount_rate as f64 / cpit::RATE_SCALE as f64;
-        let lp = relaxation(p, rate);
-        let t0 = Instant::now();
-        let options = PdlpOptions {
-            tolerance: tol,
-            max_iterations: u64::MAX,
-            threads,
+        let cache = std::env::var("FMINE_CPIT_LP_CACHE")
+            .ok()
+            .map(|d| Path::new(&d).join(format!("{name}-{tol}.lp")));
+        let cached = cache
+            .as_ref()
+            .and_then(|path| std::fs::read(path).ok())
+            .map(|bytes| {
+                let f: Vec<f64> = bytes
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|c| f64::from_le_bytes(*c))
+                    .collect();
+                assert_eq!(
+                    f.len(),
+                    2 + n * periods,
+                    "{name}: cached LP of the wrong size"
+                );
+                f
+            });
+        let (x, certified, lp_s, lp_status) = if let Some(f) = cached {
+            let certified = (!f[0].is_nan()).then_some(f[0]);
+            (f[2..].to_vec(), certified, f[1], "cached".to_string())
+        } else {
+            let lp = relaxation(p, rate);
+            let t0 = Instant::now();
+            let options = PdlpOptions {
+                tolerance: tol,
+                max_iterations: u64::MAX,
+                threads,
+            };
+            let s = solve_observed(&lp, &options, &mut |_| {
+                t0.elapsed().as_secs_f64() < max_seconds
+            })
+            .unwrap();
+            let lp_s = t0.elapsed().as_secs_f64();
+            let certified = s.bound().map(|b| -b.value());
+            if let Some(path) = &cache {
+                let head = [certified.unwrap_or(f64::NAN), lp_s];
+                let bytes: Vec<u8> = head
+                    .iter()
+                    .chain(s.x())
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect();
+                std::fs::write(path, bytes).unwrap();
+            }
+            (s.x().to_vec(), certified, lp_s, format!("{:?}", s.status()))
         };
-        let s = solve_observed(&lp, &options, &mut |_| {
-            t0.elapsed().as_secs_f64() < max_seconds
-        })
-        .unwrap();
-        let lp_s = t0.elapsed().as_secs_f64();
-        let certified = s.bound().map(|b| -b.value());
-        let x = s.x();
         let w = |b: usize, t: usize| x[t * n + b].clamp(0.0, 1.0);
         let expected: Vec<f64> = (0..n)
             .map(|b| (0..periods).map(|t| 1.0 - w(b, t)).sum())
@@ -209,9 +252,15 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
             .find(|(k, _, _)| *k == name)
             .map(|&(_, l, b)| (l, b))
             .unwrap_or((f64::NAN, f64::NAN));
+        let factors = discount_factors(model.discount_rate, cpit::RATE_SCALE, periods).unwrap();
+        let rounds: usize = env_or("FMINE_SEARCH_ROUNDS", 1_000);
         let t1 = Instant::now();
         let mut npvs = Vec::new();
         let mut mined = Vec::new();
+        let mut improved = Vec::new();
+        let mut moves = Vec::new();
+        let mut search_s = 0.0;
+        let mut best_schedule: Option<(f64, Vec<Option<u32>>)> = None;
         for threshold in THRESHOLDS {
             let rank: Vec<Option<i64>> = (0..n)
                 .map(|b| {
@@ -226,8 +275,43 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
                     c.unmet, c.over_limit
                 ));
             }
-            npvs.push(npv(&c.period_values, rate));
+            let before = npv(&c.period_values, rate);
+            npvs.push(before);
             mined.push(c.mined);
+            let t2 = Instant::now();
+            let i = improve(p, &schedule, &factors, rounds).unwrap();
+            search_s += t2.elapsed().as_secs_f64();
+            let c = check(p, &i.schedule).unwrap();
+            if !c.feasible() {
+                failures.push(format!(
+                    "{name}: threshold {threshold}, searched: {} unmet, over {:?}",
+                    c.unmet, c.over_limit
+                ));
+            }
+            let after = npv(&c.period_values, rate);
+            // Every move raises the exact value; allow only `f64` summation noise.
+            if after < before - 1e-9 * before.abs().max(1.0) {
+                failures.push(format!(
+                    "{name}: threshold {threshold}: the search lowered NPV from {before} to {after}"
+                ));
+            }
+            improved.push(after);
+            moves.push((i.rounds, i.moves));
+            if best_schedule.as_ref().is_none_or(|(v, _)| after > *v) {
+                best_schedule = Some((after, i.schedule));
+            }
+        }
+        // MineLib's solution format, so the schedule can be checked without this code
+        // (crates/xtask/testdata/minelib_cpit_oracle.py).
+        if let (Ok(dir), Some((_, schedule))) =
+            (std::env::var("FMINE_CPIT_SOLUTION_OUT"), &best_schedule)
+        {
+            let text: String = schedule
+                .iter()
+                .enumerate()
+                .filter_map(|(b, t)| t.map(|t| format!("{b} 0 {t} 1.000000\n")))
+                .collect();
+            std::fs::write(Path::new(&dir).join(format!("{name}_cpit_fmine.sol")), text).unwrap();
         }
         let sols = std::env::var("FMINE_MINELIB_SOLS").ok();
         let known = sols.as_deref().and_then(|d| {
@@ -257,21 +341,35 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
             }
             v
         });
-        let greedy_s = t1.elapsed().as_secs_f64();
-        let best = npvs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let greedy_s = t1.elapsed().as_secs_f64() - search_s;
+        let greedy_best = npvs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let best = improved.iter().copied().fold(greedy_best, f64::max);
         let rel = |bound: f64| (bound - best) / bound;
+        let list = |v: &[f64]| {
+            v.iter()
+                .map(|v| format!("{v:.3}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let moves = moves
+            .iter()
+            .map(|(r, m)| {
+                format!(
+                    "{{\"rounds\":{r},\"earlier\":{},\"swaps\":{},\"added\":{},\"later\":{},\"dropped\":{}}}",
+                    m.earlier, m.swaps, m.added, m.later, m.dropped
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
         println!(
-            "{{\"bead\":\"bd-kcpj\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"resources\":{},\"rounded\":[{},{},{}],\"tol\":{tol},\"lp_status\":\"{:?}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"npv\":[{}],\"mined\":{mined:?},\"greedy_s\":{greedy_s:.2},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{:.4},\"best_known_rechecked\":{}}}",
+            "{{\"bead\":\"bd-5lxu\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"resources\":{},\"rounded\":[{},{},{}],\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"npv\":[{}],\"mined\":{mined:?},\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"greedy_best\":{greedy_best:.3},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{:.4},\"best_known_rechecked\":{}}}",
             p.resources(),
             model.rounded_values,
             model.rounded_uses,
             model.rounded_limits,
-            s.status(),
             certified.map_or("null".to_string(), |u| format!("{u:.3}")),
-            npvs.iter()
-                .map(|v| format!("{v:.3}"))
-                .collect::<Vec<_>>()
-                .join(","),
+            list(&npvs),
+            list(&improved),
             certified.map_or("null".to_string(), |u| format!("{:.4e}", rel(u))),
             rel(published_lp),
             best / best_known,

@@ -25,6 +25,7 @@
 //! crate, so it is not the separate `fmine-verify` checker that plan §15.4 names.
 
 pub mod cpit;
+pub mod search;
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -241,6 +242,29 @@ pub fn check(
     })
 }
 
+/// The blocks that require each block, in CSR form: block `b`'s are `list[start[b]..start[b + 1]]`, in id order.
+fn dependents(blocks: &ClosureProblem) -> Result<(Vec<usize>, Vec<u32>), Refusal> {
+    let n = blocks.node_count();
+    let mut start = vec![0_usize; n + 1];
+    for b in 0..n {
+        for &q in blocks.requires(b).unwrap_or(&[]) {
+            start[q as usize + 1] += 1;
+        }
+    }
+    for i in 0..n {
+        start[i + 1] += start[i];
+    }
+    let mut fill = start.clone();
+    let mut list = vec![0_u32; start[n]];
+    for b in 0..n {
+        for &q in blocks.requires(b).unwrap_or(&[]) {
+            list[fill[q as usize]] = id(b)?;
+            fill[q as usize] += 1;
+        }
+    }
+    Ok((start, list))
+}
+
 /// TopoSort: the feasible schedule this ranking gives (see the module notes). `rank[b]` is block `b`'s rank, lower
 /// first; `None` leaves the block unmined.
 ///
@@ -260,27 +284,11 @@ pub fn greedy(
             rank.len()
         )));
     }
-    // The blocks that require each block, in CSR form, and how many requirements each block still waits on.
-    let mut waiting = vec![0_usize; n];
-    let mut start = vec![0_usize; n + 1];
-    for (b, w) in waiting.iter_mut().enumerate() {
-        let required = blocks.requires(b).unwrap_or(&[]);
-        *w = required.len();
-        for &q in required {
-            start[q as usize + 1] += 1;
-        }
-    }
-    for i in 0..n {
-        start[i + 1] += start[i];
-    }
-    let mut fill = start.clone();
-    let mut dependents = vec![0_u32; start[n]];
-    for b in 0..n {
-        for &q in blocks.requires(b).unwrap_or(&[]) {
-            dependents[fill[q as usize]] = id(b)?;
-            fill[q as usize] += 1;
-        }
-    }
+    // How many requirements each block still waits on.
+    let mut waiting: Vec<usize> = (0..n)
+        .map(|b| blocks.requires(b).map_or(0, <[u32]>::len))
+        .collect();
+    let (start, dependents) = dependents(blocks)?;
     // A block without a rank is never mined, so where it falls in the order does not matter.
     let key = |b: usize| -> Result<Reverse<(i64, u32)>, Refusal> {
         Ok(Reverse((rank[b].unwrap_or(i64::MAX), id(b)?)))
@@ -434,7 +442,7 @@ mod tests {
     }
 
     /// A small deterministic generator, so a failing case can be rebuilt alone.
-    fn lcg(seed: u64) -> impl FnMut(u64) -> u64 {
+    pub(super) fn lcg(seed: u64) -> impl FnMut(u64) -> u64 {
         let mut s = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
         move |m| {
             s = s
@@ -445,7 +453,7 @@ mod tests {
     }
 
     /// A random problem: each block requires some lower-numbered blocks, so the graph is acyclic.
-    fn random_problem(seed: u64) -> ScheduleProblem {
+    pub(super) fn random_problem(seed: u64) -> ScheduleProblem {
         let mut r = lcg(seed);
         let n = 2 + r(5) as usize;
         let periods = 1 + r(3) as usize;
@@ -465,7 +473,7 @@ mod tests {
     }
 
     /// Feasibility written out from the definition, for comparison with [`check`].
-    fn feasible_by_definition(p: &ScheduleProblem, s: &[Option<u32>]) -> bool {
+    pub(super) fn feasible_by_definition(p: &ScheduleProblem, s: &[Option<u32>]) -> bool {
         let n = p.blocks().node_count();
         let precedence = (0..n).all(|b| match s[b] {
             None => true,
@@ -492,7 +500,7 @@ mod tests {
     }
 
     /// Every schedule of `n` blocks over `periods`: each block unmined or in one period.
-    fn every_schedule(n: usize, periods: usize) -> Vec<Vec<Option<u32>>> {
+    pub(super) fn every_schedule(n: usize, periods: usize) -> Vec<Vec<Option<u32>>> {
         let choices = periods + 1;
         (0..choices.pow(n as u32))
             .map(|mut code| {
