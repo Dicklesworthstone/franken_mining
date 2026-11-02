@@ -17,15 +17,15 @@ pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "\"mode\":\"declared_static_capital_comparison\",",
     "\"input\":\"Regular UTF-8 TOML file, at most 4 MiB; actual bytes are SHA-256 bound\",",
     "\"fields\":[\"schema\",\"model_key\",\"question\",\"currency\",\"valuation_basis\",\"budget\",\"tail_mass\",\"payoff_convention\",\"reference_class_basis\",\"max_tail_loss (optional)\"],",
-    "\"tables\":{\"state\":[\"id\",\"weight\"],\"candidate\":[\"id\",\"label\",\"cost\",\"reference_class_basis\",\"exclusion_group (optional)\"],\"payoff\":[\"candidate\",\"state\",\"value\"],\"requires\":[\"candidate\",\"prerequisite\"],\"uu\":[\"id\",\"description\",\"trigger\",\"downside_usd_m\"],\"funding (optional)\":[\"cash_period\",\"cash_basis\",\"minimum_cash\"],\"available_cash\":[\"state\",\"value\"],\"cash_requirement\":[\"candidate\",\"state\",\"value\"]},",
-    "\"scope\":\"At most eight candidates and 256 shared states; every subset is examined\",",
+    "\"tables\":{\"state\":[\"id\",\"weight\"],\"candidate\":[\"id\",\"label\",\"cost\",\"reference_class_basis\",\"exclusion_group (optional)\"],\"payoff\":[\"candidate\",\"state\",\"value\"],\"requires\":[\"candidate\",\"prerequisite\"],\"uu\":[\"id\",\"description\",\"trigger\",\"downside_usd_m\"],\"funding (optional)\":[\"cash_period\",\"cash_basis\",\"minimum_cash\"],\"available_cash\":[\"state\",\"value\"],\"cash_requirement\":[\"candidate\",\"state\",\"value\"],\"funding_schedule (optional, excludes funding)\":[\"cash_basis\",\"opening_date\"],\"cash_period\":[\"id\",\"cash_period\",\"minimum_cash\"],\"opening_cash\":[\"state\",\"value\"],\"baseline_cash_flow\":[\"period\",\"state\",\"value\"],\"candidate_cash_flow\":[\"period\",\"candidate\",\"state\",\"value\"]},",
+    "\"scope\":\"At most eight candidates, 256 shared states and 16 cash periods; every subset is examined. Scheduled funding additionally requires 2^candidates * states * (periods+1) <= 65536 checkpoints\",",
     "\"payoffs\":\"Explicit additive_net_delta_nav convention: costs constrain spending and are not deducted again\",",
     "\"risk\":\"Exact signed-loss CVaR over the declared tail mass of the summed joint-scenario payoffs; never marginal CVaR addition\",",
     "\"selection\":\"Conditional exact co-winners, rejected bundles, hold-cash, budget slack and the cost of the declared tail-loss limit\",",
     "\"evidence\":\"Declared assumptions remain Assumed, Internal and uncalibrated; no fitted reference-class adjustment, selection-frequency estimate or execution authority\",",
     "\"example\":\"tests/capital/gb30.toml\",",
-    "\"liquidity\":\"Optional complete shared-state cash matrix enforces an explicit minimum cash balance for one declared YYYY-MM-DD/YYYY-MM-DD window; no missing zeroes or intra-period cash path are inferred\",",
-    "\"liquidity_example\":\"tests/capital/liquidity.toml\"",
+    "\"liquidity\":\"Declare either aggregate funding or a complete funding_schedule. Scheduled periods are contiguous inclusive YYYY-MM-DD/YYYY-MM-DD ranges starting at opening_date. Opening cash is explicit in every state; signed baseline and candidate flows require all period/state and period/candidate/state rows, including zeros. Positive flows are receipts, negative flows expenditures; baseline excludes the selected program. Balances carry forward exactly. The first floor applies at opening and each period floor at its close. Every breach remains a rejection even after later recovery; financing may make a nonempty program feasible when hold fails. No intra-period balances or adaptive recourse are inferred\",",
+    "\"liquidity_example\":\"tests/capital/liquidity.toml\",\"cash_schedule_example\":\"tests/capital/cash_schedule.toml\"",
     "}",
 );
 
@@ -70,7 +70,7 @@ pub(super) fn execute(model: &Path, root: &Path) -> Envelope {
             evaluated.to_json(),
         );
         let mut envelope = Envelope::ok("decide program", payload, Vec::new());
-        envelope.no_claim = Some(fmine_capital::NO_CLAIM);
+        envelope.no_claim = Some(evaluated.no_claim());
         envelope.rendered_markdown = Some(evaluated.to_markdown());
         Ok(envelope)
     };

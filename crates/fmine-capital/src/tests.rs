@@ -54,6 +54,87 @@ fn funding_claim(value: ProgramFunding) -> Claim<ProgramFunding> {
     let tag = value.canonical_tag();
     claim("capital.funding", value, &tag, AdditivityClass::NonAdditive)
 }
+fn schedule_claim(value: FundingSchedule) -> Claim<FundingSchedule> {
+    let tag = value.canonical_tag();
+    claim(
+        "capital.cash-schedule",
+        value,
+        &tag,
+        AdditivityClass::NonAdditive,
+    )
+}
+fn with_schedule(mut inputs: ProgramInputs) -> ProgramInputs {
+    let states = &inputs.weights.value.states;
+    let periods = vec![
+        CashPeriod {
+            id: "start".into(),
+            cash_period: "2030-01-01/2030-06-30".into(),
+            minimum_cash: usd(20),
+        },
+        CashPeriod {
+            id: "finish".into(),
+            cash_period: "2030-07-01/2030-12-31".into(),
+            minimum_cash: usd(20),
+        },
+    ];
+    let mut baseline_flows = Vec::new();
+    let mut candidate_flows = Vec::new();
+    for period in &periods {
+        for (state, _) in states {
+            baseline_flows.push(StateCashFlow {
+                period_id: period.id.clone(),
+                state_id: state.clone(),
+                value: usd(0),
+            });
+            for candidate in &inputs.candidates {
+                candidate_flows.push(CandidateCashFlow {
+                    period_id: period.id.clone(),
+                    candidate_id: candidate.value.candidate_id.clone(),
+                    state_id: state.clone(),
+                    value: usd(0),
+                });
+            }
+        }
+    }
+    inputs.funding_schedule = Some(schedule_claim(FundingSchedule {
+        model_key: inputs.policy.value.model_key.clone(),
+        currency: Currency::USD,
+        cash_basis: "Synthetic nominal USD cash; full project ownership, signed cash flows".into(),
+        opening_date: "2030-01-01".into(),
+        opening_cash: states
+            .iter()
+            .map(|(state, _)| (state.clone(), usd(100)))
+            .collect(),
+        periods,
+        baseline_flows,
+        candidate_flows,
+    }));
+    inputs
+}
+fn set_candidate_flow(
+    schedule: &mut FundingSchedule,
+    period: &str,
+    candidate: &str,
+    state: &str,
+    value: i128,
+) {
+    schedule
+        .candidate_flows
+        .iter_mut()
+        .find(|flow| {
+            flow.period_id == period && flow.candidate_id == candidate && flow.state_id == state
+        })
+        .unwrap()
+        .value = usd(value);
+}
+fn set_baseline_flow(schedule: &mut FundingSchedule, period: &str, state: &str, value: i128) {
+    schedule
+        .baseline_flows
+        .iter_mut()
+        .find(|flow| flow.period_id == period && flow.state_id == state)
+        .unwrap()
+        .value = usd(value);
+}
 fn with_funding(
     mut i: ProgramInputs,
     available: &[i128],
@@ -149,6 +230,7 @@ fn inputs(
         ),
         candidates,
         funding: None,
+        funding_schedule: None,
     }
 }
 fn row<'a>(report: &'a EvaluatedProgram, members: &[&str]) -> &'a ProgramChoice {
@@ -172,6 +254,20 @@ fn selected_winners(report: &EvaluatedProgram) -> Vec<Vec<String>> {
         .filter(|r| report.summary().feasible_winners.contains(&r.bundle_id))
         .map(|r| r.selected.clone())
         .collect()
+}
+fn checkpoint<'a>(
+    choice: &'a ProgramChoice,
+    period: Option<&str>,
+    state: &str,
+) -> &'a CashScheduleCheckpoint {
+    choice
+        .funding_schedule
+        .as_ref()
+        .unwrap()
+        .checkpoints
+        .iter()
+        .find(|row| row.period_id.as_deref() == period && row.state_id == state)
+        .unwrap()
 }
 
 #[test]
@@ -339,9 +435,29 @@ fn prerequisites_empty_choice_and_infeasible_risk_are_explicit() {
     i.policy = policy_claim(p);
     let report = evaluate(&i).unwrap();
     assert_eq!(selected_winners(&report), vec![Vec::<String>::new()]);
+    let zero = ExactMoney {
+        currency: Currency::USD,
+        major: ZERO,
+    };
     assert_eq!(
-        row(&report, &[]).statistics.as_ref().unwrap().mean.major,
-        ZERO
+        row(&report, &[]).statistics.as_ref().unwrap(),
+        &AlternativeStats {
+            action_id: "bundle_00".into(),
+            label: "Do nothing".into(),
+            role: ActionRole::DoNothing,
+            mean: zero,
+            p10_p50_p90: [zero; 3],
+            cvar95_loss: zero,
+            mean_regret: zero,
+            max_regret: zero,
+            states: vec![fmine_decide::card::StateResult {
+                state_id: "s0".into(),
+                weight: ONE,
+                payoff: zero,
+                best_in_hindsight: zero,
+                regret: zero,
+            }],
+        }
     );
     let mut p = i.policy.value.clone();
     p.max_tail_loss = Some(usd(-1));
@@ -842,4 +958,572 @@ fn funding_parser_keeps_exact_cash_scope_and_refuses_partial_declarations() {
     let next = evaluate(&parse(&changed_basis).unwrap()).unwrap();
     assert_eq!(selected_winners(&next), selected_winners(&report));
     assert_ne!(next.digest(), report.digest());
+}
+
+#[test]
+fn cash_timing_changes_the_winner_without_charging_net_nav_twice() {
+    let i = inputs(&[("A", 1, &[80]), ("B", 1, &[50])], &[ONE], 1, ONE, None);
+    let aggregate = with_funding(i.clone(), &[200], &[("A", &[110]), ("B", &[90])], 20);
+    assert_eq!(
+        selected_winners(&evaluate(&aggregate).unwrap()),
+        vec![vec!["A"]]
+    );
+    let mut timed = with_schedule(i);
+    let mut schedule = timed.funding_schedule.as_ref().unwrap().value.clone();
+    set_baseline_flow(&mut schedule, "finish", "s0", 100);
+    set_candidate_flow(&mut schedule, "start", "A", "s0", -100);
+    set_candidate_flow(&mut schedule, "finish", "A", "s0", -10);
+    set_candidate_flow(&mut schedule, "start", "B", "s0", -70);
+    set_candidate_flow(&mut schedule, "finish", "B", "s0", -20);
+    timed.funding_schedule = Some(schedule_claim(schedule));
+    let report = evaluate(&timed).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["B"]]);
+    assert_eq!(report.summary().choices.len(), 4);
+    let a = row(&report, &["A"]);
+    assert_eq!(checkpoint(a, Some("start"), "s0").closing_cash.major, ZERO);
+    assert_eq!(
+        checkpoint(a, Some("finish"), "s0").closing_cash.major,
+        r(90, 1)
+    );
+    assert_eq!(a.structural_rejections.len(), 1);
+    assert!(
+        matches!(&a.structural_rejections[0], StructuralRejection::CashScheduleShortfall {
+        period_id, checkpoint_date, state_id, shortfall
+    } if period_id.as_deref() == Some("start") && checkpoint_date == "2030-06-30"
+        && state_id == "s0" && shortfall.major == r(20, 1))
+    );
+    let b = row(&report, &["B"]);
+    assert_eq!(
+        checkpoint(b, Some("finish"), "s0").opening_cash.major,
+        r(30, 1)
+    );
+    assert_eq!(
+        checkpoint(b, Some("finish"), "s0").closing_cash.major,
+        r(110, 1)
+    );
+    assert_eq!(b.statistics.as_ref().unwrap().mean.major, r(50, 1));
+    let both = row(&report, &["A", "B"]);
+    assert!(
+        both.structural_rejections
+            .contains(&StructuralRejection::BudgetExceeded)
+    );
+    assert_eq!(both.funding_schedule.as_ref().unwrap().checkpoints.len(), 3);
+    assert_eq!(
+        checkpoint(both, Some("start"), "s0").closing_cash.major,
+        r(-70, 1)
+    );
+    assert_eq!(
+        checkpoint(both, Some("finish"), "s0").closing_cash.major,
+        ZERO
+    );
+    assert_eq!(both.structural_rejections.len(), 3);
+}
+
+#[test]
+fn a_single_financing_candidate_can_survive_when_hold_is_infeasible() {
+    let mut i = with_schedule(inputs(
+        &[("finance", 0, &[-5, -15])],
+        &[r(3, 4), r(1, 4)],
+        0,
+        r(1, 2),
+        None,
+    ));
+    let mut schedule = i.funding_schedule.as_ref().unwrap().value.clone();
+    set_baseline_flow(&mut schedule, "start", "s0", -90);
+    set_baseline_flow(&mut schedule, "start", "s1", -100);
+    set_candidate_flow(&mut schedule, "start", "finance", "s0", 40);
+    set_candidate_flow(&mut schedule, "start", "finance", "s1", 50);
+    i.funding_schedule = Some(schedule_claim(schedule));
+    let report = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["finance"]]);
+    assert!(row(&report, &[]).statistics.is_none());
+    let chosen = row(&report, &["finance"]);
+    let stats = chosen.statistics.as_ref().unwrap();
+    assert_eq!(stats.role, ActionRole::Action);
+    assert_eq!(stats.mean.major, r(-15, 2));
+    assert_eq!(
+        stats.p10_p50_p90.map(|m| m.major),
+        [r(-15, 1), r(-5, 1), r(-5, 1)]
+    );
+    assert_eq!(stats.cvar95_loss.major, r(15, 1));
+    assert_eq!(chosen.tail_loss.unwrap().major, r(10, 1));
+    assert_eq!(stats.mean_regret.major, ZERO);
+    assert_eq!(stats.max_regret.major, ZERO);
+    for state in &stats.states {
+        assert_eq!(state.best_in_hindsight, state.payoff);
+        assert_eq!(state.regret.major, ZERO);
+        assert_eq!(
+            checkpoint(chosen, Some("start"), &state.state_id)
+                .closing_cash
+                .major,
+            r(50, 1)
+        );
+    }
+    let mut policy = i.policy.value.clone();
+    policy.max_tail_loss = Some(usd(9));
+    i.policy = policy_claim(policy);
+    let report = evaluate(&i).unwrap();
+    assert_eq!(report.summary().unconstrained_winners.len(), 1);
+    assert!(report.summary().feasible_winners.is_empty());
+    assert!(report.summary().expected_value_cost_of_risk_limit.is_none());
+    assert!(row(&report, &["finance"]).risk_rejected);
+}
+
+#[test]
+fn financing_alternatives_keep_same_state_regret_and_risk_selection_without_hold() {
+    let mut i = inputs(
+        &[("A", 0, &[10, 100]), ("B", 0, &[30, 30])],
+        &[r(1, 2); 2],
+        0,
+        r(1, 2),
+        Some(-20),
+    );
+    for candidate in &mut i.candidates {
+        let mut value = candidate.value.clone();
+        value.exclusion_group = Some("financing".into());
+        *candidate = candidate_claim(value);
+    }
+    i = with_schedule(i);
+    let mut schedule = i.funding_schedule.as_ref().unwrap().value.clone();
+    for state in ["s0", "s1"] {
+        set_baseline_flow(&mut schedule, "start", state, -100);
+        for candidate in ["A", "B"] {
+            set_candidate_flow(&mut schedule, "start", candidate, state, 50);
+        }
+    }
+    i.funding_schedule = Some(schedule_claim(schedule));
+    let report = evaluate(&i).unwrap();
+    assert!(row(&report, &[]).statistics.is_none());
+    assert!(row(&report, &["A", "B"]).statistics.is_none());
+    let a = row(&report, &["A"]);
+    let b = row(&report, &["B"]);
+    assert_eq!(
+        report.summary().unconstrained_winners,
+        vec![a.bundle_id.clone()]
+    );
+    assert_eq!(selected_winners(&report), vec![vec!["B"]]);
+    assert_eq!(a.statistics.as_ref().unwrap().mean.major, r(55, 1));
+    assert_eq!(a.statistics.as_ref().unwrap().mean_regret.major, r(10, 1));
+    assert_eq!(a.statistics.as_ref().unwrap().max_regret.major, r(20, 1));
+    assert_eq!(b.statistics.as_ref().unwrap().mean_regret.major, r(35, 1));
+    assert_eq!(b.statistics.as_ref().unwrap().max_regret.major, r(70, 1));
+    assert_eq!(a.tail_loss.unwrap().major, r(-10, 1));
+    assert_eq!(b.tail_loss.unwrap().major, r(-30, 1));
+    assert!(a.risk_rejected);
+    assert!(!b.risk_rejected);
+    assert_eq!(
+        report
+            .summary()
+            .expected_value_cost_of_risk_limit
+            .unwrap()
+            .major,
+        r(25, 1)
+    );
+}
+
+#[test]
+fn receipts_carry_forward_but_never_erase_opening_or_earlier_breaches() {
+    let mut i = with_schedule(inputs(&[("A", 1, &[10])], &[ONE], 1, ONE, None));
+    let mut schedule = i.funding_schedule.as_ref().unwrap().value.clone();
+    set_candidate_flow(&mut schedule, "start", "A", "s0", 60);
+    set_candidate_flow(&mut schedule, "finish", "A", "s0", -130);
+    i.funding_schedule = Some(schedule_claim(schedule.clone()));
+    let report = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["A"]]);
+    let a = row(&report, &["A"]);
+    assert_eq!(
+        checkpoint(a, Some("finish"), "s0").opening_cash.major,
+        r(160, 1)
+    );
+    assert_eq!(
+        checkpoint(a, Some("finish"), "s0").closing_cash.major,
+        r(30, 1)
+    );
+
+    set_candidate_flow(&mut schedule, "start", "A", "s0", -90);
+    set_candidate_flow(&mut schedule, "finish", "A", "s0", 130);
+    i.funding_schedule = Some(schedule_claim(schedule.clone()));
+    let report = evaluate(&i).unwrap();
+    let a = row(&report, &["A"]);
+    assert_eq!(a.structural_rejections.len(), 1);
+    assert_eq!(
+        checkpoint(a, Some("finish"), "s0").closing_cash.major,
+        r(140, 1)
+    );
+    assert_eq!(
+        a.funding_schedule.as_ref().unwrap().minimum_slack.major,
+        r(-10, 1)
+    );
+
+    schedule.opening_cash[0].1 = usd(19);
+    set_candidate_flow(&mut schedule, "start", "A", "s0", 1000);
+    i.funding_schedule = Some(schedule_claim(schedule));
+    let report = evaluate(&i).unwrap();
+    assert!(report.summary().feasible_winners.is_empty());
+    for choice in &report.summary().choices {
+        assert!(choice.statistics.is_none());
+        assert!(choice.structural_rejections.iter().any(|rejection| matches!(rejection,
+            StructuralRejection::CashScheduleShortfall { period_id: None, checkpoint_date, shortfall, .. }
+            if checkpoint_date == "2030-01-01" && shortfall.major == ONE)));
+    }
+}
+
+#[test]
+fn cash_floors_keep_minor_units_and_require_every_shared_state_not_average_cash() {
+    let mut i = with_schedule(inputs(
+        &[("A", 1, &[10, 10]), ("B", 1, &[8, 8])],
+        &[r(1, 100), r(99, 100)],
+        2,
+        ONE,
+        None,
+    ));
+    let mut schedule = i.funding_schedule.as_ref().unwrap().value.clone();
+    set_candidate_flow(&mut schedule, "start", "A", "s0", -80);
+    set_candidate_flow(&mut schedule, "start", "B", "s1", -80);
+    i.funding_schedule = Some(schedule_claim(schedule.clone()));
+    let report = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["A", "B"]]);
+    assert_eq!(
+        row(&report, &["A", "B"])
+            .funding_schedule
+            .as_ref()
+            .unwrap()
+            .minimum_slack
+            .major,
+        ZERO
+    );
+    set_candidate_flow(&mut schedule, "start", "B", "s1", 0);
+    set_candidate_flow(&mut schedule, "start", "B", "s0", -80);
+    i.funding_schedule = Some(schedule_claim(schedule.clone()));
+    let report = evaluate(&i).unwrap();
+    assert_eq!(selected_winners(&report), vec![vec!["A"]]);
+    let both = row(&report, &["A", "B"]);
+    assert_eq!(
+        both.funding_schedule.as_ref().unwrap().minimum_slack.major,
+        r(-80, 1)
+    );
+    assert_eq!(both.structural_rejections.len(), 2);
+    assert!(
+        both.structural_rejections
+            .iter()
+            .all(|rejection| matches!(rejection,
+        StructuralRejection::CashScheduleShortfall { state_id, shortfall, .. }
+        if state_id == "s0" && shortfall.major == r(80, 1)))
+    );
+
+    let mut permuted = i.clone();
+    permuted.candidates.reverse();
+    permuted.weights.value.states.reverse();
+    for candidate in &mut permuted.candidates {
+        candidate.value.payoffs.reverse();
+    }
+    let value = &mut permuted.funding_schedule.as_mut().unwrap().value;
+    value.periods.reverse();
+    value.opening_cash.reverse();
+    value.baseline_flows.reverse();
+    value.candidate_flows.reverse();
+    assert_eq!(evaluate(&permuted).unwrap(), report);
+
+    schedule.periods[1].minimum_cash.minor += 1;
+    i.funding_schedule = Some(schedule_claim(schedule));
+    let report = evaluate(&i).unwrap();
+    let a = row(&report, &["A"]);
+    assert!(
+        a.structural_rejections
+            .iter()
+            .any(|rejection| matches!(rejection,
+        StructuralRejection::CashScheduleShortfall { period_id, shortfall, .. }
+        if period_id.as_deref() == Some("finish") && shortfall.major == r(1, Money::SCALE)))
+    );
+    assert_eq!(selected_winners(&report), vec![Vec::<String>::new()]);
+}
+
+#[test]
+fn cash_schedule_admits_only_complete_bound_state_candidate_period_matrices() {
+    let i = with_schedule(inputs(
+        &[("A", 1, &[10, 10]), ("loser", 10, &[-10, -10])],
+        &[r(1, 2); 2],
+        1,
+        ONE,
+        None,
+    ));
+    for case in 0..21 {
+        let mut changed = i.clone();
+        let mut schedule = changed.funding_schedule.as_ref().unwrap().value.clone();
+        let expected = match case {
+            0 => {
+                schedule.opening_cash.pop();
+                "FMINE-REF-201"
+            }
+            1 => {
+                schedule.baseline_flows.pop();
+                "FMINE-REF-201"
+            }
+            2 => {
+                schedule
+                    .candidate_flows
+                    .retain(|f| f.candidate_id != "loser");
+                "FMINE-REF-201"
+            }
+            3 => {
+                schedule.opening_cash[1] = schedule.opening_cash[0].clone();
+                "FMINE-REF-105"
+            }
+            4 => {
+                schedule.baseline_flows[1] = schedule.baseline_flows[0].clone();
+                "FMINE-REF-105"
+            }
+            5 => {
+                schedule.candidate_flows[1] = schedule.candidate_flows[0].clone();
+                "FMINE-REF-105"
+            }
+            6 => {
+                schedule.opening_cash[0].0 = "foreign".into();
+                "FMINE-REF-105"
+            }
+            7 => {
+                schedule.baseline_flows[0].period_id = "foreign".into();
+                "FMINE-REF-105"
+            }
+            8 => {
+                schedule.baseline_flows[0].state_id = "foreign".into();
+                "FMINE-REF-105"
+            }
+            9 => {
+                schedule.candidate_flows[0].period_id = "foreign".into();
+                "FMINE-REF-105"
+            }
+            10 => {
+                schedule.candidate_flows[0].candidate_id = "foreign".into();
+                "FMINE-REF-105"
+            }
+            11 => {
+                schedule.candidate_flows[0].state_id = "foreign".into();
+                "FMINE-REF-105"
+            }
+            12 => {
+                schedule.opening_cash[0].1 = usd(-1);
+                "FMINE-REF-105"
+            }
+            13 => {
+                schedule.periods[0].minimum_cash = usd(-1);
+                "FMINE-REF-105"
+            }
+            14 => {
+                schedule.opening_cash[0].1.ccy = Currency::CAD;
+                "FMINE-REF-105"
+            }
+            15 => {
+                schedule.baseline_flows[0].value.ccy = Currency::CAD;
+                "FMINE-REF-105"
+            }
+            16 => {
+                schedule.candidate_flows[0].value.ccy = Currency::CAD;
+                "FMINE-REF-105"
+            }
+            17 => {
+                schedule.cash_basis.clear();
+                "FMINE-REF-105"
+            }
+            18 => {
+                schedule.model_key = "foreign".into();
+                "FMINE-REF-105"
+            }
+            19 => {
+                schedule.periods[1].id = schedule.periods[0].id.clone();
+                "FMINE-REF-105"
+            }
+            20 => {
+                schedule.periods = vec![schedule.periods[0].clone(); 17];
+                "FMINE-REF-201"
+            }
+            _ => unreachable!(),
+        };
+        changed.funding_schedule = Some(schedule_claim(schedule));
+        assert_eq!(
+            evaluate(&changed).unwrap_err().code,
+            expected,
+            "schedule case {case}"
+        );
+    }
+    let mut changed = i.clone();
+    changed.funding_schedule.as_mut().unwrap().stale = true;
+    assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-502");
+    let mut changed = i.clone();
+    changed.funding_schedule.as_mut().unwrap().uu_terms.clear();
+    assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-204");
+    let mut changed = i.clone();
+    changed
+        .funding_schedule
+        .as_mut()
+        .unwrap()
+        .value
+        .opening_cash[0]
+        .1 = usd(99);
+    assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-507");
+    let changed = with_funding(i, &[100, 100], &[("A", &[0, 0]), ("loser", &[0, 0])], 20);
+    assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-105");
+}
+
+#[test]
+fn cash_schedule_calendar_requires_contiguous_valid_inclusive_dates() {
+    assert_eq!(next_date("2028-02-28").as_deref(), Some("2028-02-29"));
+    assert_eq!(next_date("2028-02-29").as_deref(), Some("2028-03-01"));
+    assert_eq!(next_date("2000-02-28").as_deref(), Some("2000-02-29"));
+    assert_eq!(next_date("2100-02-28").as_deref(), Some("2100-03-01"));
+    assert_eq!(next_date("2030-12-31").as_deref(), Some("2031-01-01"));
+    assert_eq!(next_date("9999-12-31"), None);
+    assert_eq!(next_date("2030-02-29"), None);
+    let i = with_schedule(inputs(&[("A", 1, &[10])], &[ONE], 1, ONE, None));
+    for period in [
+        "2030-01-01/2030-06-29",  // gap before the next period
+        "2030-01-01/2030-07-01",  // overlapping inclusive endpoint
+        "2030-06-30/2030-01-01",  // reversed
+        "2030-02-29/2030-06-30",  // nonexistent date
+        "2030-01-02/2030-06-30",  // missing opening day
+        "2030-01-01/2030-06-30/", // extra date syntax
+    ] {
+        let mut changed = i.clone();
+        let mut schedule = changed.funding_schedule.as_ref().unwrap().value.clone();
+        schedule.periods[0].cash_period = period.into();
+        changed.funding_schedule = Some(schedule_claim(schedule));
+        assert_eq!(
+            evaluate(&changed).unwrap_err().code,
+            "FMINE-REF-107",
+            "{period}"
+        );
+    }
+    let mut changed = i.clone();
+    let mut schedule = changed.funding_schedule.as_ref().unwrap().value.clone();
+    schedule.opening_date = "2030-02-29".into();
+    changed.funding_schedule = Some(schedule_claim(schedule));
+    assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-107");
+    let mut leap = i;
+    let mut schedule = leap.funding_schedule.as_ref().unwrap().value.clone();
+    schedule.opening_date = "2028-02-28".into();
+    schedule.periods[0].cash_period = "2028-02-28/2028-02-29".into();
+    schedule.periods[1].cash_period = "2028-03-01/2028-12-31".into();
+    leap.funding_schedule = Some(schedule_claim(schedule));
+    assert!(evaluate(&leap).is_ok());
+}
+
+#[test]
+fn every_schedule_value_and_claim_metadata_binds_even_when_economics_do_not_change() {
+    let i = inputs(
+        &[("A", 1, &[10]), ("loser", 10, &[-10])],
+        &[ONE],
+        1,
+        ONE,
+        None,
+    );
+    let legacy = evaluate(&i).unwrap();
+    let scheduled = with_schedule(i);
+    let report = evaluate(&scheduled).unwrap();
+    assert_eq!(legacy.no_claim(), NO_CLAIM);
+    assert_eq!(report.no_claim(), CASH_SCHEDULE_NO_CLAIM);
+    assert!(legacy.to_json().contains(NO_CLAIM));
+    assert!(legacy.to_markdown().contains(NO_CLAIM));
+    assert!(report.to_json().contains(CASH_SCHEDULE_NO_CLAIM));
+    assert!(report.to_markdown().contains(CASH_SCHEDULE_NO_CLAIM));
+    assert_eq!(selected_winners(&report), selected_winners(&legacy));
+    for before in &legacy.summary().choices {
+        let after = report
+            .summary()
+            .choices
+            .iter()
+            .find(|r| r.selected == before.selected)
+            .unwrap();
+        assert_eq!(after.statistics, before.statistics);
+        assert_eq!(after.tail_loss, before.tail_loss);
+    }
+    let claim = scheduled.funding_schedule.as_ref().unwrap();
+    assert!(report.claim().parents.contains(&claim.claim_id));
+    assert!(
+        claim
+            .anchors
+            .iter()
+            .all(|a| report.claim().anchors.contains(a))
+    );
+    let mut changed = scheduled.clone();
+    let mut schedule = claim.value.clone();
+    set_candidate_flow(&mut schedule, "finish", "loser", "s0", 1);
+    changed.funding_schedule = Some(schedule_claim(schedule));
+    let next = evaluate(&changed).unwrap();
+    assert_eq!(selected_winners(&next), selected_winners(&report));
+    assert_ne!(next.digest(), report.digest());
+    let mut changed = scheduled;
+    changed.funding_schedule.as_mut().unwrap().supersedes = Some(changed.policy.claim_id);
+    let next = evaluate(&changed).unwrap();
+    assert_eq!(next.summary(), report.summary());
+    assert_ne!(next.digest(), report.digest());
+}
+
+#[test]
+fn cash_schedule_overflow_refuses_even_a_budget_rejected_subset() {
+    let i = with_schedule(inputs(
+        &[("A", 1, &[10]), ("B", 1, &[20])],
+        &[ONE],
+        1,
+        ONE,
+        None,
+    ));
+    for case in 0..3 {
+        let mut changed = i.clone();
+        let mut schedule = changed.funding_schedule.as_ref().unwrap().value.clone();
+        match case {
+            0 => schedule.baseline_flows[0].value.minor = i128::MAX,
+            1 => {
+                schedule.opening_cash[0].1 = usd(0);
+                for period in &mut schedule.periods {
+                    period.minimum_cash = usd(0);
+                }
+                for flow in &mut schedule.candidate_flows {
+                    if flow.period_id == "start" {
+                        flow.value.minor = i128::MAX;
+                    }
+                }
+            }
+            2 => {
+                schedule.opening_cash[0].1 = usd(0);
+                schedule.baseline_flows[0].value.minor = i128::MIN + 1;
+            }
+            _ => unreachable!(),
+        }
+        changed.funding_schedule = Some(schedule_claim(schedule));
+        assert_eq!(
+            evaluate(&changed).unwrap_err().code,
+            "FMINE-REF-207",
+            "overflow case {case}"
+        );
+    }
+}
+
+#[test]
+fn combined_cash_checkpoint_bound_is_admitted_exactly_without_truncation() {
+    let ids = ["A", "B", "C", "D", "E", "F", "G", "H"];
+    for state_count in [128, 129] {
+        let values = vec![1; state_count];
+        let rows: Vec<_> = ids.iter().map(|id| (*id, 1, values.as_slice())).collect();
+        let mut i = with_schedule(inputs(
+            &rows,
+            &vec![r(1, state_count as i128); state_count],
+            8,
+            ONE,
+            None,
+        ));
+        let mut schedule = i.funding_schedule.as_ref().unwrap().value.clone();
+        schedule.periods.pop();
+        schedule.baseline_flows.retain(|f| f.period_id == "start");
+        schedule.candidate_flows.retain(|f| f.period_id == "start");
+        i.funding_schedule = Some(schedule_claim(schedule));
+        assert_eq!(MAX_CASH_CHECKPOINTS, 256 * 128 * 2);
+        if state_count == 128 {
+            assert!(validate(&i).is_ok());
+        } else {
+            // Admission must reject work volume before checking even a tampered schedule Claim.
+            i.funding_schedule.as_mut().unwrap().value.cash_basis =
+                "changed without rehashing".into();
+            assert_eq!(evaluate(&i).unwrap_err().code, "FMINE-REF-201");
+        }
+    }
 }

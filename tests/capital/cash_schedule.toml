@@ -1,0 +1,151 @@
+# Invented timed-funding example; no issuer data or calibrated probabilities.
+# Holding breaches the 20M construction-end floor, despite later operating receipts.
+# A bridge raises 60M before construction ends and repays 65M/68M in operation.
+# Bridge + plant is fundable in both shared states, meeting the delay-state floor exactly.
+# Expected net delta NAV: bridge -5.6M, plant 68M, together 62.4M.
+# All project/financing costs are already reflected in those declared NAV payoffs.
+schema = "fmine.capital-program.v1"
+model_key = "invented_construction_cash_schedule"
+question = "Which capital program meets each dated cash floor in both shared scenarios?"
+currency = "USD"
+valuation_basis = "Invented decision-date net delta NAV; project and financing costs already included; fixed shares"
+budget = "40000000"
+tail_mass = "1/5"
+payoff_convention = "additive_net_delta_nav"
+reference_class_basis = "Illustrative unadjusted declared assumptions; no empirical correction fitted"
+
+[[state]]
+id = "base"
+weight = "4/5"
+
+[[state]]
+id = "delay"
+weight = "1/5"
+
+[[candidate]]
+id = "bridge"
+label = "Invented bridge financing"
+cost = "0"
+reference_class_basis = "Invented financing costs and repayment amounts, not a quoted facility"
+
+[[candidate]]
+id = "plant"
+label = "Invented plant construction"
+cost = "40000000"
+reference_class_basis = "Invented construction delay and operating receipts; no fitted calibration"
+
+[[payoff]]
+candidate = "bridge"
+state = "base"
+value = "-5000000"
+
+[[payoff]]
+candidate = "bridge"
+state = "delay"
+value = "-8000000"
+
+[[payoff]]
+candidate = "plant"
+state = "base"
+value = "80000000"
+
+[[payoff]]
+candidate = "plant"
+state = "delay"
+value = "20000000"
+
+[[funding_schedule]]
+cash_basis = "Invented nominal USD cash for the same entity at full ownership; positive receipts and negative expenditures"
+opening_date = "2030-01-01"
+
+[[cash_period]]
+id = "construction"
+cash_period = "2030-01-01/2030-06-30"
+minimum_cash = "20000000"
+
+[[cash_period]]
+id = "operation"
+cash_period = "2030-07-01/2030-12-31"
+minimum_cash = "20000000"
+
+[[opening_cash]]
+state = "base"
+value = "100000000"
+
+[[opening_cash]]
+state = "delay"
+value = "100000000"
+
+[[baseline_cash_flow]]
+period = "construction"
+state = "base"
+value = "-90000000"
+
+[[baseline_cash_flow]]
+period = "construction"
+state = "delay"
+value = "-90000000"
+
+[[baseline_cash_flow]]
+period = "operation"
+state = "base"
+value = "120000000"
+
+[[baseline_cash_flow]]
+period = "operation"
+state = "delay"
+value = "80000000"
+
+[[candidate_cash_flow]]
+period = "construction"
+candidate = "bridge"
+state = "base"
+value = "60000000"
+
+[[candidate_cash_flow]]
+period = "construction"
+candidate = "bridge"
+state = "delay"
+value = "60000000"
+
+[[candidate_cash_flow]]
+period = "operation"
+candidate = "bridge"
+state = "base"
+value = "-65000000"
+
+[[candidate_cash_flow]]
+period = "operation"
+candidate = "bridge"
+state = "delay"
+value = "-68000000"
+
+[[candidate_cash_flow]]
+period = "construction"
+candidate = "plant"
+state = "base"
+value = "-40000000"
+
+[[candidate_cash_flow]]
+period = "construction"
+candidate = "plant"
+state = "delay"
+value = "-50000000"
+
+[[candidate_cash_flow]]
+period = "operation"
+candidate = "plant"
+state = "base"
+value = "50000000"
+
+[[candidate_cash_flow]]
+period = "operation"
+candidate = "plant"
+state = "delay"
+value = "20000000"
+
+[[uu]]
+id = "intra_period_cash_timing"
+description = "Payments may precede receipts within a declared period; only opening and period-end checkpoints are assessed"
+trigger = "A payment falls due before the receipt that would fund it inside the same period"
+downside_usd_m = "10"

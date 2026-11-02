@@ -42,10 +42,9 @@ fn capital_program_matches_independent_fraction_enumeration() {
     );
 }
 
-#[test]
-fn capital_program_library_and_binary_render_identically() {
+fn assert_render_parity(fixture_argument: &str) -> fmine_cli::Envelope {
     let fixture = oracle()
-        .arg("--fixture-only")
+        .arg(fixture_argument)
         .output()
         .expect("create declared capital-program fixture");
     assert!(
@@ -66,15 +65,12 @@ fn capital_program_library_and_binary_render_identically() {
         envelope.to_json(),
         fmine_cli::invoke(&args, &root).0.to_json()
     );
-    for (format, expected) in [
-        ("json", envelope.to_json()),
-        (
-            "markdown",
-            envelope
-                .rendered_markdown
-                .expect("capital program Markdown"),
-        ),
-    ] {
+    let json = envelope.to_json();
+    let markdown = envelope
+        .rendered_markdown
+        .as_deref()
+        .expect("capital program Markdown");
+    for (format, expected) in [("json", json.as_str()), ("markdown", markdown)] {
         let output = Command::new(binary())
             .args(&args)
             .args(["--format", format, "--workspace"])
@@ -87,4 +83,49 @@ fn capital_program_library_and_binary_render_identically() {
             format!("{expected}\n")
         );
     }
+    envelope
+}
+
+#[test]
+fn capital_program_library_and_binary_render_identically() {
+    let _ = assert_render_parity("--fixture-only");
+}
+
+#[test]
+fn capital_program_cash_schedule_renders_every_bundle_timeline_in_library_and_binary() {
+    let envelope = assert_render_parity("--schedule-fixture-only");
+    assert!(
+        envelope
+            .payload_json
+            .contains("\"feasible_winners\":[\"bundle_03\"]")
+    );
+    let markdown = envelope.rendered_markdown.expect("cash schedule Markdown");
+    for section in [
+        "## Funding at declared cash checkpoints",
+        "### Declared cash periods and floors",
+        "### Declared opening cash",
+        "### Declared baseline cash flows",
+        "### Declared candidate cash flows",
+    ] {
+        assert!(markdown.contains(section), "missing {section}");
+    }
+    assert_eq!(markdown.matches("### Cash timeline for `").count(), 4);
+    assert!(markdown.contains("| operation | bridge | low | -68/1 |"));
+    assert!(
+        markdown.contains("cash-floor shortfall in low at construction (2030-06-30): 10/1 USD")
+    );
+    // Holding later recovers, but its construction-end breach remains visible.
+    assert!(markdown.contains(
+        "| low | construction | 2030-06-30 | 100/1 | -90/1 | 0/1 | 10/1 | 20/1 | -10/1 | floor breach |"
+    ));
+    assert!(markdown.contains(
+        "| low | operation | 2030-12-31 | 10/1 | 80/1 | 0/1 | 90/1 | 20/1 | 70/1 | floor met |"
+    ));
+    // The financed plant carries its exact floor balance into the second period.
+    assert!(markdown.contains(
+        "| low | construction | 2030-06-30 | 100/1 | -90/1 | 10/1 | 20/1 | 20/1 | 0/1 | floor met |"
+    ));
+    assert!(markdown.contains(
+        "| low | operation | 2030-12-31 | 20/1 | 80/1 | -48/1 | 52/1 | 20/1 | 32/1 | floor met |"
+    ));
 }

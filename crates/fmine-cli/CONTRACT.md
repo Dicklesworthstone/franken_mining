@@ -110,6 +110,15 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     risk ranking. If even hold-cash breaches the floor, the report explicitly has no structurally feasible
     program. Cash requirements constrain financing without changing declared net NAV. This tests the
     declared cash window only; it does not establish every intra-period balance or a staged schedule.
+    Alternatively, `funding_schedule` declares contiguous dated periods, state-specific opening cash and
+    complete signed baseline and candidate cash flows, with positive receipts and negative expenditures.
+    Each period carries its balance forward and checks its closing floor; the first floor also applies at
+    initial opening. Every scenario/checkpoint shortfall remains visible, even after later recovery.
+    Financing may leave a nonempty feasible set while hold is rejected; exact returns, risk and regret use
+    the actual feasible alternatives. The report renders every bundle's cash timeline. At most 16 periods
+    and 65,536 total checkpoints across all subsets are admitted; aggregate and scheduled funding cannot
+    be combined. Both modes bind the complete source Claims without charging cash flows to net NAV again.
+    Cash timing inside a declared period and adaptive staged recourse remain outside this comparison.
   - `lint <draft> --issuer <issuer> --html-definitions <mapping.toml> [--discover] [--as-of YYYY-MM-DD]`
     (BD-059/BD-345): checks only the mapped, registered HTML Claims through the existing exact equality
     kernel. The receipt retains full value, label, mapping and registry evidence. A separate source-publication

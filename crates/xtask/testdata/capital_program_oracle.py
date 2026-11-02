@@ -4,9 +4,12 @@ Inputs are declared assumptions. GB-30 uses the plan's displayed buyback payoffs
 whose exact mean is USD 61.18 million. Expected subsets, joint-state payoffs,
 weighted tails and regret are computed with Python Fraction, without Rust output.
 Optional funding is checked on every joint state, independently of net-NAV payoffs.
+Timed funding carries exact signed cash flows between declared checkpoints; later
+receipts never erase an earlier breach, and a financing action may rescue hold.
 """
 
 import argparse
+from datetime import date, timedelta
 from fractions import Fraction
 import hashlib
 import itertools
@@ -24,6 +27,7 @@ QUESTION = 'Compare invented capital choices "jointly" \\ Ω'
 BASIS = "Invented 2030 real USD net delta NAV, full project ownership"
 REFERENCE = "Declared reference-class widening; illustrative and uncalibrated"
 CASH_BASIS = 'Invented nominal USD cash at 100% ownership, "available" before spending \\ Ω'
+SCHEDULE_BASIS = 'Invented nominal USD signed period cash flows, same entity and ownership \\ Ω'
 UNKNOWN = {
     "id": "outside_scenarios", "description": 'Unmodelled "permit" delay \\ Ω',
     "trigger": "A permitting delay outside the declared states occurs", "downside_usd_m": "5.0",
@@ -90,6 +94,48 @@ def funded_example():
     )
 
 
+def with_schedule(spec, opening, baseline, flows, *, periods=None,
+                  opening_date="2030-01-01"):
+    periods = ([
+        ("construction", "2030-01-01/2030-06-30", "20"),
+        ("operation", "2030-07-01/2030-12-31", "20"),
+    ] if periods is None else periods)
+    states = [name for name, _ in spec["states"]]
+    candidates = [row["id"] for row in spec["candidates"]]
+    zeros = ["0"] * len(states)
+    # Omitted events in this fixture helper are emitted as explicit zero rows.
+    # The input format itself must require every matrix cell, including zeroes.
+    spec["funding_schedule"] = {
+        "cash_basis": SCHEDULE_BASIS, "opening_date": opening_date,
+        "periods": [{"id": name, "cash_period": window, "minimum_cash": str(minimum)}
+                    for name, window, minimum in periods],
+        "opening_cash": dict(zip(states, map(str, opening), strict=True)),
+        "baseline_flows": {
+            period: dict(zip(states, map(str, baseline.get(period, zeros)), strict=True))
+            for period, _, _ in periods
+        },
+        "candidate_flows": {
+            period: {
+                name: dict(zip(states, map(str, flows.get(period, {}).get(name, zeros)), strict=True))
+                for name in candidates
+            } for period, _, _ in periods
+        },
+    }
+    return spec
+
+
+def scheduled_example():
+    return with_schedule(
+        specification({"bridge": ["-8", "-5"], "plant": ["20", "80"]},
+                      states=[("low", "1/5"), ("high", "4/5")],
+                      costs={"bridge": "0", "plant": "40"}, budget="40"),
+        ["100", "100"],
+        {"construction": ["-90", "-90"], "operation": ["80", "120"]},
+        {"construction": {"bridge": ["60", "60"], "plant": ["-50", "-40"]},
+         "operation": {"bridge": ["-68", "-65"], "plant": ["20", "50"]}},
+    )
+
+
 def fields(values):
     return "".join(f"{key} = {json.dumps(value, ensure_ascii=False)}\n" for key, value in values.items())
 
@@ -120,6 +166,16 @@ def model(spec, *, reverse=False, include_uu=True):
                  for state, value in funding["available_cash"].items()]
         rows += [block("cash_requirement", {"candidate": name, "state": state, "value": value})
                  for name, values in funding["requirements"].items() for state, value in values.items()]
+    if schedule := spec.get("funding_schedule"):
+        rows.append(block("funding_schedule", {key: schedule[key] for key in ("cash_basis", "opening_date")}))
+        rows += [block("cash_period", row) for row in schedule["periods"]]
+        rows += [block("opening_cash", {"state": state, "value": value})
+                 for state, value in schedule["opening_cash"].items()]
+        rows += [block("baseline_cash_flow", {"period": period, "state": state, "value": value})
+                 for period, values in schedule["baseline_flows"].items() for state, value in values.items()]
+        rows += [block("candidate_cash_flow", {"period": period, "candidate": name, "state": state, "value": value})
+                 for period, candidates in schedule["candidate_flows"].items()
+                 for name, values in candidates.items() for state, value in values.items()]
     if include_uu:
         rows.append(block("uu", UNKNOWN))
     return fields(top) + "".join(reversed(rows) if reverse else rows)
@@ -150,6 +206,37 @@ def quantile(payoffs, weights, probability):
         if cumulative >= probability:
             return payoffs[state]
     raise AssertionError("fixture weights do not cover the requested quantile")
+
+
+def scheduled_checkpoints(schedule, selected, states):
+    periods = sorted(schedule["periods"], key=lambda row: (row["cash_period"], row["id"]))
+    balances = {state: Fraction(schedule["opening_cash"][state]) for state in states}
+    checkpoints = []
+    first_floor = Fraction(periods[0]["minimum_cash"])
+    for state in sorted(states):
+        opening = balances[state]
+        checkpoints.append({
+            "period_id": None, "checkpoint_date": schedule["opening_date"], "state_id": state,
+            "opening_cash": opening, "baseline_cash_flow": Fraction(0), "candidate_cash_flow": Fraction(0),
+            "closing_cash": opening, "minimum_cash": first_floor, "slack": opening - first_floor,
+        })
+    for period in periods:
+        period_id = period["id"]
+        minimum = Fraction(period["minimum_cash"])
+        for state in sorted(states):
+            opening = balances[state]
+            baseline = Fraction(schedule["baseline_flows"][period_id][state])
+            candidate_flow = sum((Fraction(schedule["candidate_flows"][period_id][name][state])
+                                  for name in selected), Fraction(0))
+            closing = opening + baseline + candidate_flow
+            checkpoints.append({
+                "period_id": period_id, "checkpoint_date": period["cash_period"].split("/")[1],
+                "state_id": state, "opening_cash": opening, "baseline_cash_flow": baseline,
+                "candidate_cash_flow": candidate_flow, "closing_cash": closing,
+                "minimum_cash": minimum, "slack": closing - minimum,
+            })
+            balances[state] = closing
+    return checkpoints
 
 
 def enumerate_expected(spec):
@@ -185,6 +272,11 @@ def enumerate_expected(spec):
                 choice["funding"] = cash
                 if any(row["slack"] < 0 for row in cash.values()):
                     reasons.add("liquidity_shortfall")
+            if schedule := spec.get("funding_schedule"):
+                checkpoints = scheduled_checkpoints(schedule, selected, weights)
+                choice["funding_schedule"] = checkpoints
+                if any(row["slack"] < 0 for row in checkpoints):
+                    reasons.add("cash_schedule_shortfall")
             if not reasons:
                 values = {state: sum((Fraction(spec["payoffs"][name][state]) for name in selected), Fraction(0))
                           for state in weights}
@@ -286,6 +378,30 @@ class CapitalProgramScenarios(unittest.TestCase):
             else:
                 self.assertIsNone(row["funding"])
                 self.assertEqual(shortfalls, [])
+            dated_shortfalls = [reason for reason in row["structural_rejections"]
+                                if reason["kind"] == "cash_schedule_shortfall"]
+            if "funding_schedule" in known:
+                actual = row["funding_schedule"]
+                checkpoints = known["funding_schedule"]
+                self.assertEqual(len(actual["checkpoints"]), len(checkpoints))
+                for observed, declared in zip(actual["checkpoints"], checkpoints, strict=True):
+                    for field in ("period_id", "checkpoint_date", "state_id"):
+                        self.assertEqual(observed[field], declared[field], (selected, field))
+                    for field in ("opening_cash", "baseline_cash_flow", "candidate_cash_flow",
+                                  "closing_cash", "minimum_cash", "slack"):
+                        self.assertEqual(Fraction(observed[field]), declared[field],
+                                         (selected, declared["period_id"], declared["state_id"], field))
+                self.assertEqual(Fraction(actual["minimum_slack"]), min(row["slack"] for row in checkpoints))
+                expected_shortfalls = {
+                    (row["period_id"], row["checkpoint_date"], row["state_id"]): -row["slack"]
+                    for row in checkpoints if row["slack"] < 0
+                }
+                self.assertEqual(len(dated_shortfalls), len(expected_shortfalls))
+                self.assertEqual({(row["period_id"], row["checkpoint_date"], row["state_id"]): Fraction(row["shortfall"])
+                                  for row in dated_shortfalls}, expected_shortfalls)
+            else:
+                self.assertNotIn("funding_schedule", row)
+                self.assertEqual(dated_shortfalls, [])
             if known["reasons"]:
                 self.assertIsNone(row["statistics"])
                 self.assertIsNone(row["tail_loss"])
@@ -344,6 +460,50 @@ class CapitalProgramScenarios(unittest.TestCase):
         else:
             self.assertIsNone(inputs["funding"])
             self.assertIsNone(report["summary"]["funding"])
+        if schedule := spec.get("funding_schedule"):
+            claim = inputs["funding_schedule"]
+            claims.append(claim)
+            value = claim["value"]
+            self.assertEqual(value, report["summary"]["funding_schedule"])
+            self.assertEqual(value["model_key"], inputs["policy"]["value"]["model_key"])
+            self.assertEqual(value["currency"], "USD")
+            for field in ("cash_basis", "opening_date"):
+                self.assertEqual(value[field], schedule[field])
+            self.assertEqual([row["state_id"] for row in value["opening_cash"]], sorted(schedule["opening_cash"]))
+            self.assertEqual({row["state_id"]: Fraction(row["value"]) for row in value["opening_cash"]},
+                             {name: Fraction(amount) for name, amount in schedule["opening_cash"].items()})
+            periods = sorted(schedule["periods"], key=lambda row: (row["cash_period"], row["id"]))
+            self.assertEqual([row["id"] for row in value["periods"]], [row["id"] for row in periods])
+            for observed, declared in zip(value["periods"], periods, strict=True):
+                self.assertEqual(observed["cash_period"], declared["cash_period"])
+                self.assertEqual(observed["minimum_cash_currency"], "USD")
+                self.assertEqual(Fraction(observed["minimum_cash"]), Fraction(declared["minimum_cash"]))
+            baseline = [
+                (period["id"], state, Fraction(amount))
+                for period in periods for state, amount in sorted(schedule["baseline_flows"][period["id"]].items())
+            ]
+            candidate_flows = [
+                (period["id"], name, state, Fraction(amount))
+                for period in periods for name, states in sorted(schedule["candidate_flows"][period["id"]].items())
+                for state, amount in sorted(states.items())
+            ]
+            self.assertEqual([(row["period_id"], row["state_id"], Fraction(row["value"]))
+                              for row in value["baseline_flows"]], baseline)
+            self.assertEqual([(row["period_id"], row["candidate_id"], row["state_id"], Fraction(row["value"]))
+                              for row in value["candidate_flows"]], candidate_flows)
+            self.assertTrue(all(row["currency"] == "USD"
+                                for row in value["opening_cash"] + value["baseline_flows"] + value["candidate_flows"]))
+            locators = [anchor["locator"] for anchor in claim["anchors"]]
+            sections = (["funding schedule opening date and cash basis"]
+                        + [f"cash period {period['id']}" for period in periods]
+                        + [f"opening cash {state}" for state in schedule["opening_cash"]]
+                        + [f"baseline cash flow {period}/{state}" for period, state, _ in baseline]
+                        + [f"candidate cash flow {period}/{name}/{state}" for period, name, state, _ in candidate_flows])
+            for section in sections:
+                self.assertTrue(any(locator.endswith(": " + section) for locator in locators), section)
+        else:
+            self.assertNotIn("funding_schedule", inputs)
+            self.assertNotIn("funding_schedule", report["summary"])
         result = report["claim"]
         self.assertEqual(result["value"], report["summary"])
         self.assertEqual(set(result["parents"]), {claim["id"] for claim in claims})
@@ -680,13 +840,318 @@ class CapitalProgramScenarios(unittest.TestCase):
                 container[field] = previous
 
 
+    def test_cash_schedule_early_breaches_survive_surplus_and_financing_can_rescue_hold(self):
+        report = self.program(scheduled_example())
+        rows = self.rows(report)
+        for selected in ((), ("plant",)):
+            row = rows[selected]
+            self.assertIsNone(row["statistics"])
+            self.assertEqual({reason["period_id"] for reason in row["structural_rejections"]}, {"construction"})
+            self.assertEqual(len(row["structural_rejections"]), 2)
+            closing = [checkpoint for checkpoint in row["funding_schedule"]["checkpoints"]
+                       if checkpoint["period_id"] == "operation"]
+            self.assertTrue(all(Fraction(checkpoint["slack"]) > 0 for checkpoint in closing))
+        bridge, funded_plant = rows[("bridge",)], rows[("bridge", "plant")]
+        self.assertEqual(Fraction(bridge["statistics"]["mean"]), Fraction(-28, 5))
+        self.assertEqual(Fraction(bridge["statistics"]["mean_regret"]), 68)
+        self.assertEqual(Fraction(funded_plant["statistics"]["mean"]), Fraction(312, 5))
+        self.assertEqual(Fraction(funded_plant["funding_schedule"]["minimum_slack"]), 0)
+        self.assertEqual(report["summary"]["feasible_winners"], [funded_plant["bundle_id"]])
+
+    def test_cash_schedule_carries_prior_balances_and_applies_period_specific_floors(self):
+        spec = with_schedule(
+            specification({"works": ["10", "10"]}), ["50", "50"], {},
+            {"z_construction": {"works": ["-10", "-10"]}, "a_operation": {"works": ["-15", "-15"]}},
+            periods=[("z_construction", "2030-01-01/2030-06-30", "20"),
+                     ("a_operation", "2030-07-01/2030-12-31", "30")],
+        )
+        rejected = self.rows(self.program(spec))[("works",)]
+        final = [row for row in rejected["funding_schedule"]["checkpoints"] if row["period_id"] == "a_operation"]
+        for row in final:
+            self.assertEqual(Fraction(row["opening_cash"]), 40)
+            self.assertEqual(Fraction(row["closing_cash"]), 25)
+            self.assertEqual(Fraction(row["minimum_cash"]), 30)
+            self.assertEqual(Fraction(row["slack"]), -5)
+        self.assertEqual(len(rejected["structural_rejections"]), 2)
+        spec["funding_schedule"]["candidate_flows"]["a_operation"]["works"] = {"low": "-10", "high": "-10"}
+        admitted = self.rows(self.program(spec))[("works",)]
+        self.assertEqual(admitted["structural_rejections"], [])
+        self.assertEqual(Fraction(admitted["funding_schedule"]["minimum_slack"]), 0)
+        self.assertEqual(Fraction(admitted["statistics"]["mean"]), 10)
+
+    def test_cash_schedule_reports_every_dated_breach_including_unrepairable_opening(self):
+        spec = with_schedule(
+            specification({"financing": ["100", "100"]}), ["19.9999", "20"],
+            {"first": ["0", "-1"], "second": ["5", "0"], "recovery": ["100", "100"]},
+            {"first": {"financing": ["100", "100"]}},
+            periods=[("first", "2030-01-01/2030-01-31", "20"),
+                     ("second", "2030-02-01/2030-02-28", "30"),
+                     ("recovery", "2030-03-01/2030-03-31", "5")],
+        )
+        report = self.program(spec)
+        self.assertEqual(report["summary"]["status"], "no_structurally_feasible_program")
+        rows = self.rows(report)
+        self.assertEqual(len(rows[()]["structural_rejections"]), 5)
+        reasons = rows[("financing",)]["structural_rejections"]
+        self.assertEqual(len(reasons), 1)
+        self.assertIsNone(reasons[0]["period_id"])
+        self.assertEqual(reasons[0]["checkpoint_date"], "2030-01-01")
+        self.assertEqual(reasons[0]["state_id"], "low")
+        self.assertEqual(Fraction(reasons[0]["shortfall"]), Fraction(1, 10000))
+        for row in rows.values():
+            self.assertIsNone(row["statistics"])
+            self.assertTrue(all(Fraction(checkpoint["slack"]) > 0
+                                for checkpoint in row["funding_schedule"]["checkpoints"]
+                                if checkpoint["period_id"] == "recovery"))
+
+    def test_cash_schedule_sole_negative_nav_financing_has_real_statistics_without_hold(self):
+        spec = with_schedule(
+            specification({"facility": ["-7"]}, states=[("only", "1/1")],
+                          costs={"facility": "0"}, budget="0", cap="7"),
+            ["30"], {"construction": ["-20"]}, {"construction": {"facility": ["10"]}},
+        )
+        report = self.program(spec)
+        rows = self.rows(report)
+        self.assertIsNone(rows[()]["statistics"])
+        facility = rows[("facility",)]
+        self.assertEqual(Fraction(facility["statistics"]["mean"]), -7)
+        self.assertEqual(Fraction(facility["statistics"]["states"][0]["best_in_hindsight"]), -7)
+        self.assertEqual(Fraction(facility["statistics"]["mean_regret"]), 0)
+        self.assertEqual(Fraction(facility["tail_loss"]), 7)
+        self.assertEqual(report["summary"]["feasible_winners"], [facility["bundle_id"]])
+        spec["cap"] = "6.9999"
+        rejected = self.program(spec)
+        self.assertEqual(rejected["summary"]["status"], "no_risk_feasible_program")
+        self.assertEqual(rejected["summary"]["unconstrained_winners"], [facility["bundle_id"]])
+        self.assertTrue(self.rows(rejected)[("facility",)]["risk_rejected"])
+
+    def test_cash_schedule_regret_uses_only_feasible_nonempty_financing_choices(self):
+        spec = with_schedule(
+            specification({"left": ["-10", "30"], "right": ["20", "-5"], "never": ["1000", "1000"]},
+                          costs={"left": "1", "right": "1", "never": "100"}, budget="1"),
+            ["30", "30"], {"construction": ["-20", "-20"]},
+            {"construction": {"left": ["10", "10"], "right": ["10", "10"]}},
+        )
+        report = self.program(spec)
+        rows = self.rows(report)
+        self.assertEqual({selected for selected, row in rows.items() if row["statistics"] is not None},
+                         {("left",), ("right",)})
+        self.assertEqual(Fraction(rows[("left",)]["statistics"]["mean_regret"]), 15)
+        self.assertEqual(Fraction(rows[("right",)]["statistics"]["mean_regret"]), Fraction(35, 2))
+        self.assertEqual(Fraction(rows[("left",)]["statistics"]["max_regret"]), 30)
+        self.assertEqual(Fraction(rows[("right",)]["statistics"]["max_regret"]), 35)
+        self.assertEqual(report["summary"]["feasible_winners"], [rows[("left",)]["bundle_id"]])
+
+    def test_cash_schedule_preserves_fractional_tail_mass_when_hold_is_infeasible(self):
+        spec = with_schedule(
+            specification({"facility": ["-100", "-50", "100"]},
+                          states=[("crash", "1/10"), ("bad", "1/5"), ("gain", "7/10")], cap="75"),
+            ["30", "30", "30"], {"construction": ["-20", "-20", "-20"]},
+            {"construction": {"facility": ["10", "10", "10"]}},
+        )
+        report = self.program(spec)
+        facility = self.rows(report)[("facility",)]
+        self.assertEqual(Fraction(facility["statistics"]["mean"]), 50)
+        self.assertEqual(Fraction(facility["tail_loss"]), 75)
+        self.assertEqual(Fraction(facility["statistics"]["cvar95_loss"]), 100)
+        self.assertEqual(Fraction(facility["statistics"]["mean_regret"]), 0)
+        self.assertEqual(report["summary"]["feasible_winners"], [facility["bundle_id"]])
+        spec["cap"] = "74.9999"
+        self.assertEqual(self.program(spec)["summary"]["status"], "no_risk_feasible_program")
+
+    def test_cash_schedule_uses_common_states_without_independent_candidate_resampling(self):
+        spec = with_schedule(
+            specification({"a": ["30", "30"], "b": ["20", "20"]}), ["120", "120"], {},
+            {"construction": {"a": ["-80", "-20"], "b": ["-80", "-20"]}},
+        )
+        correlated = self.program(spec)
+        joint = self.rows(correlated)[("a", "b")]
+        self.assertEqual(Fraction(joint["funding_schedule"]["minimum_slack"]), -60)
+        self.assertEqual(len(joint["structural_rejections"]), 2)
+        spec["funding_schedule"]["candidate_flows"]["construction"]["b"] = {"low": "-20", "high": "-80"}
+        offsetting = self.program(spec)
+        joint = self.rows(offsetting)[("a", "b")]
+        self.assertEqual(Fraction(joint["funding_schedule"]["minimum_slack"]), 0)
+        self.assertEqual(offsetting["summary"]["feasible_winners"], [joint["bundle_id"]])
+        self.assertNotEqual(correlated["summary"]["feasible_winners"], offsetting["summary"]["feasible_winners"])
+
+    def test_cash_schedule_preserves_minor_unit_equality_before_one_unit_shortfall(self):
+        spec = with_schedule(
+            specification({"a": ["0.0001", "0.0001"]}), ["20.0002", "20.0002"],
+            {"construction": ["-0.0001", "-0.0001"], "operation": ["0.0002", "0.0002"]},
+            {"construction": {"a": ["-0.0001", "-0.0001"]}, "operation": {"a": ["-0.0001", "-0.0001"]}},
+        )
+        admitted = self.rows(self.program(spec))[("a",)]
+        self.assertEqual(Fraction(admitted["funding_schedule"]["minimum_slack"]), 0)
+        self.assertEqual(Fraction(admitted["statistics"]["mean"]), Fraction(1, 10000))
+        spec["funding_schedule"]["candidate_flows"]["construction"]["a"]["high"] = "-0.0002"
+        rejected = self.rows(self.program(spec))[("a",)]
+        self.assertEqual(Fraction(rejected["funding_schedule"]["minimum_slack"]), Fraction(-1, 10000))
+        self.assertEqual(len(rejected["structural_rejections"]), 1)
+        self.assertEqual(rejected["structural_rejections"][0]["checkpoint_date"], "2030-06-30")
+
+    def test_cash_schedule_requires_complete_unique_matrices_even_for_losing_candidates(self):
+        spec = with_schedule(
+            specification({"a": ["2", "3"], "never": ["100", "100"]},
+                          costs={"a": "1", "never": "100"}, budget="1"),
+            ["100", "100"], {}, {"construction": {"a": ["-1", "-1"]}},
+        )
+        self.program(spec)
+        text = model(spec)
+        schedule = spec["funding_schedule"]
+        declaration = block("funding_schedule", {key: schedule[key] for key in ("cash_basis", "opening_date")})
+        opening = block("opening_cash", {"state": "high", "value": "100"})
+        baseline = block("baseline_cash_flow", {"period": "operation", "state": "high", "value": "0"})
+        zero = block("candidate_cash_flow", {"period": "operation", "candidate": "never", "state": "high", "value": "0"})
+        period = block("cash_period", schedule["periods"][1])
+        for row in (declaration, opening, baseline, zero, period):
+            for bad in (text.replace(row, ""), text + row):
+                with self.subTest(matrix_row=row):
+                    self.refused(bad)
+        for section, row in (
+            ("opening_cash", {"state": "absent", "value": "100"}),
+            ("baseline_cash_flow", {"period": "absent", "state": "high", "value": "0"}),
+            ("baseline_cash_flow", {"period": "operation", "state": "absent", "value": "0"}),
+            ("candidate_cash_flow", {"period": "absent", "candidate": "never", "state": "high", "value": "0"}),
+            ("candidate_cash_flow", {"period": "operation", "candidate": "absent", "state": "high", "value": "0"}),
+            ("candidate_cash_flow", {"period": "operation", "candidate": "never", "state": "absent", "value": "0"}),
+        ):
+            with self.subTest(section=section, row=row):
+                self.refused(text + block(section, row))
+        for section, row, extra in (
+            ("funding_schedule", {key: schedule[key] for key in ("cash_basis", "opening_date")}, {"assume_funded": "true"}),
+            ("cash_period", schedule["periods"][0], {"ignore_shortfall": "true"}),
+            ("baseline_cash_flow", {"period": "operation", "state": "high", "value": "0"}, {"currency": "EUR"}),
+        ):
+            with self.subTest(undeclared_field=section):
+                self.refused(text.replace(block(section, row), block(section, {**row, **extra})))
+        with_funding(spec, ["100", "100"], {"a": ["1", "1"], "never": ["0", "0"]})
+        self.refused(model(spec))
+
+    def test_cash_schedule_refuses_ambiguous_chronology_and_enforces_sixteen_period_bound(self):
+        spec = scheduled_example()
+        text = model(spec)
+        schedule = spec["funding_schedule"]
+        header = {key: schedule[key] for key in ("cash_basis", "opening_date")}
+        for field, value in (("cash_basis", ""), ("opening_date", "2030-02-30"),
+                             ("opening_date", "2029-12-31"), ("opening_date", "2030-1-1")):
+            with self.subTest(field=field, value=value):
+                self.refused(text.replace(block("funding_schedule", header),
+                                         block("funding_schedule", {**header, field: value})))
+        for index, window in (
+            (0, "2030-01-02/2030-06-30"),
+            (0, "2030-01-01/2030-02-30"),
+            (0, "2030-06-30/2030-01-01"),
+            (1, "2030-06-30/2030-12-31"),
+            (1, "2030-07-02/2030-12-31"),
+            (1, "2030-01-01/2030-12-31"),
+            (1, "2030-07-01"),
+        ):
+            row = schedule["periods"][index]
+            with self.subTest(window=window):
+                self.refused(text.replace(block("cash_period", row), block("cash_period", {**row, "cash_period": window})))
+        opening = date(2032, 2, 28)
+        periods = [(f"p{i:02}", f"{opening + timedelta(days=i)}/{opening + timedelta(days=i)}", "20")
+                   for i in range(17)]
+        for count in (16, 17):
+            bounded = with_schedule(
+                specification({"a": ["1"]}, states=[("only", "1/1")]), ["20"], {}, {},
+                periods=periods[:count], opening_date=str(opening),
+            )
+            if count == 16:
+                report = self.program(bounded)
+                self.assertEqual(len(self.rows(report)[()]["funding_schedule"]["checkpoints"]), 17)
+                self.assertEqual(Fraction(self.rows(report)[()]["funding_schedule"]["minimum_slack"]), 0)
+            else:
+                self.refused(model(bounded))
+
+    def test_cash_schedule_validates_signed_money_and_checked_aggregate_and_carry_arithmetic(self):
+        spec = scheduled_example()
+        text = model(spec)
+        for section, row, key, values in (
+            ("opening_cash", {"state": "low", "value": "100"}, "value", ("-0.0001", "0.00001")),
+            ("cash_period", spec["funding_schedule"]["periods"][0], "minimum_cash", ("-0.0001", "0.00001")),
+            ("baseline_cash_flow", {"period": "construction", "state": "low", "value": "-90"}, "value", ("0.00001", "-0.00001")),
+            ("candidate_cash_flow", {"period": "construction", "candidate": "bridge", "state": "low", "value": "60"}, "value", ("0.00001", "-0.00001")),
+        ):
+            for amount in values:
+                with self.subTest(section=section, amount=amount):
+                    self.refused(text.replace(block(section, row), block(section, {**row, key: amount})))
+        large = "17014118346046923173168730371588410.5727"
+        periods = [("construction", "2030-01-01/2030-06-30", "0"),
+                   ("operation", "2030-07-01/2030-12-31", "0")]
+        summed = with_schedule(
+            specification({"a": ["0"], "b": ["0"]}, states=[("only", "1/1")]), ["0"], {},
+            {"construction": {"a": [large], "b": [large]}}, periods=periods,
+        )
+        self.refused(model(summed), "207")
+        for sign in ("", "-"):
+            carried = with_schedule(
+                specification({"a": ["0"]}, states=[("only", "1/1")]), ["0"],
+                {"construction": [sign + large], "operation": [sign + "1"]}, {}, periods=periods,
+            )
+            with self.subTest(carry_sign=sign):
+                self.refused(model(carried), "207")
+
+    def test_cash_schedule_identity_is_canonical_source_bound_and_preserves_legacy_economics(self):
+        spec = specification({"a": ["30", "30"], "b": ["20", "20"], "never": ["100", "100"]},
+                             costs={"a": "1", "b": "1", "never": "100"}, budget="2")
+        legacy = self.program(spec)
+        with_schedule(spec, ["1000", "1000"], {"construction": ["-10", "-10"], "operation": ["10", "10"]},
+                      {"construction": {"a": ["-10", "-10"], "b": ["-20", "-20"]}})
+        schedule = spec["funding_schedule"]
+        root = fixture(model(spec))
+        first = self.program(spec, root)
+        self.assertEqual(first, self.program(spec, root))
+        for selected, row in self.rows(first).items():
+            for field in ("spend", "budget_slack", "statistics", "tail_loss", "risk_rejected", "structural_rejections"):
+                self.assertEqual(row[field], self.rows(legacy)[selected][field])
+        self.assertEqual(first["summary"]["feasible_winners"], legacy["summary"]["feasible_winners"])
+        for text in (model(spec) + "\n# Source-only checkpoint attribution edit\n", model(spec, reverse=True)):
+            (root / FILE).write_text(text, encoding="utf-8")
+            changed = self.program(spec, root)
+            self.assertEqual(first["summary"], changed["summary"])
+            self.assertNotEqual(first["digest"], changed["digest"])
+            self.assertNotEqual(first["claim"]["id"], changed["claim"]["id"])
+            self.assertNotEqual(first["inputs"]["funding_schedule"]["id"], changed["inputs"]["funding_schedule"]["id"])
+            self.assertEqual(first["inputs"]["funding_schedule"]["value_tag"], changed["inputs"]["funding_schedule"]["value_tag"])
+        for container, field, value in (
+            (schedule, "cash_basis", SCHEDULE_BASIS + "; revised"),
+            (schedule["periods"][1], "cash_period", "2030-07-01/2031-12-31"),
+            (schedule["periods"][0], "minimum_cash", "21"),
+            (schedule["opening_cash"], "high", "1001"),
+            (schedule["baseline_flows"]["construction"], "high", "-10.0001"),
+            (schedule["candidate_flows"]["operation"]["never"], "high", "0.0001"),
+        ):
+            with self.subTest(field=field, value=value):
+                previous = container[field]
+                container[field] = value
+                (root / FILE).write_text(model(spec), encoding="utf-8")
+                changed = self.program(spec, root)
+                self.assertNotEqual(first["digest"], changed["digest"])
+                self.assertNotEqual(first["claim"]["id"], changed["claim"]["id"])
+                self.assertNotEqual(first["inputs"]["funding_schedule"]["value_tag"], changed["inputs"]["funding_schedule"]["value_tag"])
+                self.assertEqual(first["summary"]["feasible_winners"], changed["summary"]["feasible_winners"])
+                self.assertEqual(self.rows(first)[("a", "b")]["statistics"], self.rows(changed)[("a", "b")]["statistics"])
+                container[field] = previous
+        schedule["opening_date"] = "2029-12-31"
+        schedule["periods"][0]["cash_period"] = "2029-12-31/2030-06-30"
+        (root / FILE).write_text(model(spec), encoding="utf-8")
+        changed = self.program(spec, root)
+        self.assertNotEqual(first["inputs"]["funding_schedule"]["value_tag"], changed["inputs"]["funding_schedule"]["value_tag"])
+        self.assertEqual(first["summary"]["feasible_winners"], changed["summary"]["feasible_winners"])
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("binary", type=Path)
     parser.add_argument("--fixture-only", action="store_true")
+    parser.add_argument("--schedule-fixture-only", action="store_true")
     options = parser.parse_args()
     BINARY = options.binary.resolve()
-    if options.fixture_only:
+    if options.schedule_fixture_only:
+        print(fixture(model(scheduled_example())))
+    elif options.fixture_only:
         print(fixture())
     else:
         unittest.main(argv=[__file__])

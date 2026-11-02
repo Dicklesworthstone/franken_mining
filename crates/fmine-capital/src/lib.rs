@@ -14,8 +14,7 @@ use fmine_core::anchor::SourceAnchor;
 use fmine_core::codec::Encoder;
 use fmine_core::hash::sha256;
 use fmine_decide::card::{
-    self, ActionPayoffs, ActionRole, AlternativeStats, DecisionInputs, ExactMoney, StateResult,
-    WeightSet,
+    self, ActionPayoffs, ActionRole, AlternativeStats, DecisionInputs, ExactMoney, WeightSet,
 };
 use fmine_evidence::color::validate_color_payload;
 use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, RefusalCode};
@@ -27,10 +26,14 @@ mod render;
 
 pub const MAX_CANDIDATES: usize = 8;
 pub const MAX_STATES: usize = 256;
+pub const MAX_CASH_PERIODS: usize = 16;
+/// All opening and period-end rows across every declared subset, including rejected subsets.
+pub const MAX_CASH_CHECKPOINTS: usize = 65_536;
 pub const MAX_TEXT_BYTES: usize = 4096;
 pub const MAX_IDENTIFIER_BYTES: usize = 128;
 pub const PAYOFF_CONVENTION: &str = "additive_net_delta_nav";
 pub const NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, additive net delta-NAV payoffs, spending constraints and reference-class adjustment bases. Optional funding checks cover only the explicitly declared cash window and basis; they do not guarantee every intra-period balance or a feasible staged schedule. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No project interactions, staged recourse, entity waterfalls, variable share counts, physical feasibility, retrospective evidence, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and scenario cash requirements constrain funding and are not deducted again from net delta-NAV.";
+pub const CASH_SCHEDULE_NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, additive net delta-NAV payoffs, spending constraints and reference-class adjustment bases. Cash checks cover the opening and period-end checkpoints of the declared cash schedule and basis; they do not guarantee intra-period balances or adaptive staged decisions. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No project interactions, staged recourse, entity waterfalls, variable share counts, physical feasibility, retrospective evidence, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and declared cash flows constrain funding and are not charged to net delta-NAV again.";
 const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);
 type Result<T> = std::result::Result<T, Refusal>;
@@ -91,6 +94,53 @@ impl ProgramFunding {
     }
 }
 
+/// A declared inclusive cash period; floors are checked at its closing date.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CashPeriod {
+    pub id: String,
+    pub cash_period: String,
+    pub minimum_cash: Money,
+}
+
+/// Signed cash movement outside the selected program: positive receipts, negative expenditures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateCashFlow {
+    pub period_id: String,
+    pub state_id: String,
+    pub value: Money,
+}
+
+/// Signed incremental cash movement of a candidate, independently of its already-net NAV payoff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateCashFlow {
+    pub period_id: String,
+    pub candidate_id: String,
+    pub state_id: String,
+    pub value: Money,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FundingSchedule {
+    pub model_key: String,
+    pub currency: Currency,
+    pub cash_basis: String,
+    pub opening_date: String,
+    pub opening_cash: Vec<(String, Money)>,
+    pub periods: Vec<CashPeriod>,
+    pub baseline_flows: Vec<StateCashFlow>,
+    pub candidate_flows: Vec<CandidateCashFlow>,
+}
+
+impl FundingSchedule {
+    #[must_use]
+    pub fn canonical_tag(&self) -> String {
+        render::value_tag(
+            "capital-funding-schedule/v1",
+            &render::funding_schedule_json(self),
+        )
+    }
+}
+
 impl ProgramPolicy {
     #[must_use]
     pub fn canonical_tag(&self) -> String {
@@ -110,6 +160,15 @@ pub struct ProgramInputs {
     pub weights: Claim<WeightSet>,
     pub candidates: Vec<Claim<CapitalCandidate>>,
     pub funding: Option<Claim<ProgramFunding>>,
+    pub funding_schedule: Option<Claim<FundingSchedule>>,
+}
+
+fn no_claim_for(inputs: &ProgramInputs) -> &'static str {
+    if inputs.funding_schedule.is_some() {
+        CASH_SCHEDULE_NO_CLAIM
+    } else {
+        NO_CLAIM
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +183,13 @@ pub enum StructuralRejection {
         candidates: Vec<String>,
     },
     LiquidityShortfall {
+        state_id: String,
+        shortfall: ExactMoney,
+    },
+    CashScheduleShortfall {
+        /// `None` identifies the initial opening checkpoint.
+        period_id: Option<String>,
+        checkpoint_date: String,
         state_id: String,
         shortfall: ExactMoney,
     },
@@ -146,6 +212,26 @@ pub struct FundingAssessment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CashScheduleCheckpoint {
+    /// `None` identifies the initial opening checkpoint, whose two flow values are zero.
+    pub period_id: Option<String>,
+    pub checkpoint_date: String,
+    pub state_id: String,
+    pub opening_cash: ExactMoney,
+    pub baseline_cash_flow: ExactMoney,
+    pub candidate_cash_flow: ExactMoney,
+    pub closing_cash: ExactMoney,
+    pub minimum_cash: ExactMoney,
+    pub slack: ExactMoney,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FundingScheduleAssessment {
+    pub checkpoints: Vec<CashScheduleCheckpoint>,
+    pub minimum_slack: ExactMoney,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramChoice {
     pub bundle_id: String,
     pub selected: Vec<String>,
@@ -153,6 +239,8 @@ pub struct ProgramChoice {
     pub budget_slack: ExactMoney,
     /// Present for every subset when funding is declared, including structurally rejected subsets.
     pub funding: Option<FundingAssessment>,
+    /// Complete checkpoint results, also retained for structurally rejected subsets.
+    pub funding_schedule: Option<FundingScheduleAssessment>,
     pub structural_rejections: Vec<StructuralRejection>,
     /// None for a structurally rejected subset; no rejected subset is silently removed.
     pub statistics: Option<AlternativeStats>,
@@ -166,6 +254,7 @@ pub struct ProgramSummary {
     pub question: String,
     pub policy: ProgramPolicy,
     pub funding: Option<ProgramFunding>,
+    pub funding_schedule: Option<FundingSchedule>,
     pub choices: Vec<ProgramChoice>,
     /// Budget, prerequisites, exclusions and declared funding applied, before the optional tail-loss limit.
     pub unconstrained_winners: Vec<String>,
@@ -196,6 +285,10 @@ impl EvaluatedProgram {
     #[must_use]
     pub fn digest(&self) -> &str {
         &self.digest
+    }
+    #[must_use]
+    pub fn no_claim(&self) -> &'static str {
+        no_claim_for(&self.inputs)
     }
 }
 
@@ -453,6 +546,193 @@ fn validate_funding(
     Ok(())
 }
 
+fn period_dates(period: &str) -> Option<(&str, &str)> {
+    if period.len() != 21 {
+        return None;
+    }
+    let (start, end) = period.split_once('/')?;
+    (fmine_registry::sources::is_date(start)
+        && fmine_registry::sources::is_date(end)
+        && start <= end)
+        .then_some((start, end))
+}
+
+/// The next ISO calendar date, solely for checking contiguous declared periods.
+fn next_date(date: &str) -> Option<String> {
+    if !fmine_registry::sources::is_date(date) {
+        return None;
+    }
+    let mut year: u16 = date.get(..4)?.parse().ok()?;
+    let mut month: u8 = date.get(5..7)?.parse().ok()?;
+    let mut day: u8 = date.get(8..)?.parse().ok()?;
+    let last = match month {
+        2 if year.is_multiple_of(400) || year.is_multiple_of(4) && !year.is_multiple_of(100) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if day < last {
+        day += 1;
+    } else {
+        day = 1;
+        if month < 12 {
+            month += 1;
+        } else {
+            month = 1;
+            year = year.checked_add(1)?;
+            if year > 9999 {
+                return None;
+            }
+        }
+    }
+    Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+fn validate_schedule_bounds(
+    schedule: &FundingSchedule,
+    state_count: usize,
+    candidate_count: usize,
+) -> Result<()> {
+    // Bound typed matrices before canonical serialization or metadata hashing allocates any copies.
+    if !(1..=MAX_CASH_PERIODS).contains(&schedule.periods.len()) {
+        return Err(bad(
+            RefusalCode::NoClaimInDomain201,
+            "cash schedules require 1..=16 declared periods",
+        ));
+    }
+    let checkpoint_count = (1_usize << candidate_count)
+        .checked_mul(state_count)
+        .and_then(|n| n.checked_mul(schedule.periods.len() + 1));
+    if checkpoint_count.is_none_or(|count| count > MAX_CASH_CHECKPOINTS) {
+        return Err(bad(
+            RefusalCode::NoClaimInDomain201,
+            "cash schedules may produce at most 65536 opening and period-end checkpoints across all declared subsets",
+        ));
+    }
+    let state_periods = state_count * schedule.periods.len();
+    if schedule.opening_cash.len() != state_count
+        || schedule.baseline_flows.len() != state_periods
+        || schedule.candidate_flows.len() != state_periods * candidate_count
+    {
+        return Err(bad(
+            RefusalCode::NoClaimInDomain201,
+            "cash schedules require every opening state, period/state baseline flow and period/candidate/state flow, including zeroes",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_schedule(
+    claim: &Claim<FundingSchedule>,
+    policy: &ProgramPolicy,
+    states: &BTreeSet<&str>,
+    candidates: &BTreeMap<&str, usize>,
+) -> Result<()> {
+    let schedule = &claim.value;
+    if schedule.model_key != policy.model_key
+        || schedule.currency != policy.currency
+        || !named(&schedule.cash_basis)
+    {
+        return Err(bad(
+            RefusalCode::BasisMismatch105,
+            "cash schedules require the policy model/currency and an explicit cash basis",
+        ));
+    }
+    if !fmine_registry::sources::is_date(&schedule.opening_date) {
+        return Err(bad(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            "cash schedule opening_date must be a valid YYYY-MM-DD date",
+        ));
+    }
+    let valid_nonnegative = |value: Money| value.ccy == policy.currency && value.minor >= 0;
+    let mut period_ids = BTreeSet::new();
+    let mut ordered = Vec::with_capacity(schedule.periods.len());
+    for period in &schedule.periods {
+        if !key(&period.id)
+            || !period_ids.insert(period.id.as_str())
+            || !valid_nonnegative(period.minimum_cash)
+        {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "cash periods require distinct bounded identifiers and nonnegative USD floors",
+            ));
+        }
+        let (start, end) = period_dates(&period.cash_period).ok_or_else(|| {
+            bad(
+                RefusalCode::UndeclaredUnitBasisOrTz107,
+                "cash periods require ordered inclusive YYYY-MM-DD/YYYY-MM-DD dates",
+            )
+        })?;
+        ordered.push((start, end));
+    }
+    ordered.sort_unstable();
+    let mut expected_start = schedule.opening_date.clone();
+    for (index, (start, end)) in ordered.iter().enumerate() {
+        if *start != expected_start {
+            return Err(bad(
+                RefusalCode::UndeclaredUnitBasisOrTz107,
+                "cash periods must be contiguous from opening_date, without gaps or overlaps",
+            ));
+        }
+        if index + 1 < ordered.len() {
+            expected_start = next_date(end).ok_or_else(|| {
+                bad(
+                    RefusalCode::UndeclaredUnitBasisOrTz107,
+                    "cash period end has no representable next calendar date",
+                )
+            })?;
+        }
+    }
+    let mut opening_states = BTreeSet::new();
+    for (state, cash) in &schedule.opening_cash {
+        if !states.contains(state.as_str())
+            || !opening_states.insert(state.as_str())
+            || !valid_nonnegative(*cash)
+        {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "opening cash requires every shared state once with nonnegative USD amounts",
+            ));
+        }
+    }
+    let mut pairs = BTreeSet::new();
+    for flow in &schedule.baseline_flows {
+        if !period_ids.contains(flow.period_id.as_str())
+            || !states.contains(flow.state_id.as_str())
+            || !pairs.insert((flow.period_id.as_str(), flow.state_id.as_str()))
+            || flow.value.ccy != policy.currency
+        {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "baseline cash flows require each known period/state once in USD",
+            ));
+        }
+    }
+    let mut triples = BTreeSet::new();
+    for flow in &schedule.candidate_flows {
+        if !period_ids.contains(flow.period_id.as_str())
+            || !candidates.contains_key(flow.candidate_id.as_str())
+            || !states.contains(flow.state_id.as_str())
+            || !triples.insert((
+                flow.period_id.as_str(),
+                flow.candidate_id.as_str(),
+                flow.state_id.as_str(),
+            ))
+            || flow.value.ccy != policy.currency
+        {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "candidate cash flows require each known period/candidate/state once in USD",
+            ));
+        }
+    }
+    admit(
+        claim,
+        &schedule.canonical_tag(),
+        AdditivityClass::NonAdditive,
+    )
+}
+
 fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
     if !(1..=MAX_CANDIDATES).contains(&inputs.candidates.len())
         || !(1..=MAX_STATES).contains(&inputs.weights.value.states.len())
@@ -461,6 +741,13 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
             RefusalCode::NoClaimInDomain201,
             "requires 1..=8 candidates and 1..=256 shared states",
         ));
+    }
+    if let Some(schedule) = &inputs.funding_schedule {
+        validate_schedule_bounds(
+            &schedule.value,
+            inputs.weights.value.states.len(),
+            inputs.candidates.len(),
+        )?;
     }
     let policy = &inputs.policy.value;
     admit(
@@ -609,9 +896,19 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
             "prerequisite graph contains a cycle",
         ));
     }
+    if inputs.funding.is_some() && inputs.funding_schedule.is_some() {
+        return Err(bad(
+            RefusalCode::BasisMismatch105,
+            "declare either aggregate funding or a cash schedule, not both",
+        ));
+    }
     if let Some(funding) = &inputs.funding {
         validate_funding(funding, policy, &states, &candidates)?;
         metadata.include(funding)?;
+    }
+    if let Some(schedule) = &inputs.funding_schedule {
+        validate_schedule(schedule, policy, &states, &candidates)?;
+        metadata.include(schedule)?;
     }
     Ok(metadata)
 }
@@ -688,6 +985,113 @@ impl<'a> FundingIndex<'a> {
     }
 }
 
+/// Admission and canonical sorting make these complete matrices dense in period/candidate/state order.
+struct FundingScheduleIndex<'a> {
+    declaration: &'a FundingSchedule,
+    candidate_count: usize,
+}
+
+impl FundingScheduleIndex<'_> {
+    fn assess(&self, selected_mask: usize) -> Result<FundingScheduleAssessment> {
+        let schedule = self.declaration;
+        let money = |minor| -> Result<ExactMoney> {
+            Ok(ExactMoney {
+                currency: schedule.currency,
+                major: amount(Money::from_minor(schedule.currency, minor))?,
+            })
+        };
+        let missing = || {
+            bad(
+                RefusalCode::NumericalCertificateFailed207,
+                "admitted cash schedule lost a complete matrix entry",
+            )
+        };
+        let first = schedule.periods.first().ok_or_else(missing)?;
+        let state_count = schedule.opening_cash.len();
+        let mut balances = Vec::with_capacity(state_count);
+        let mut checkpoints = Vec::with_capacity(state_count * (schedule.periods.len() + 1));
+        let mut minimum_slack: Option<i128> = None;
+        for (state, opening) in &schedule.opening_cash {
+            let slack = opening
+                .minor
+                .checked_sub(first.minimum_cash.minor)
+                .ok_or_else(|| {
+                    bad(
+                        RefusalCode::NumericalCertificateFailed207,
+                        "cash-floor difference overflowed",
+                    )
+                })?;
+            minimum_slack = Some(minimum_slack.map_or(slack, |old| old.min(slack)));
+            balances.push(opening.minor);
+            checkpoints.push(CashScheduleCheckpoint {
+                period_id: None,
+                checkpoint_date: schedule.opening_date.clone(),
+                state_id: state.clone(),
+                opening_cash: money(opening.minor)?,
+                baseline_cash_flow: money(0)?,
+                candidate_cash_flow: money(0)?,
+                closing_cash: money(opening.minor)?,
+                minimum_cash: money(first.minimum_cash.minor)?,
+                slack: money(slack)?,
+            });
+        }
+        for (period_index, period) in schedule.periods.iter().enumerate() {
+            let (_, closing_date) = period_dates(&period.cash_period).ok_or_else(missing)?;
+            for (state_index, ((state, _), balance)) in
+                schedule.opening_cash.iter().zip(&mut balances).enumerate()
+            {
+                let baseline = schedule
+                    .baseline_flows
+                    .get(period_index * state_count + state_index)
+                    .ok_or_else(missing)?
+                    .value
+                    .minor;
+                let mut program = 0_i128;
+                for candidate_index in 0..self.candidate_count {
+                    if selected_mask & (1 << candidate_index) == 0 {
+                        continue;
+                    }
+                    let flow = schedule
+                        .candidate_flows
+                        .get(
+                            (period_index * self.candidate_count + candidate_index) * state_count
+                                + state_index,
+                        )
+                        .ok_or_else(missing)?;
+                    program = checked_minor_add(program, flow.value.minor)?;
+                }
+                let opening = *balance;
+                let closing = checked_minor_add(checked_minor_add(opening, baseline)?, program)?;
+                let slack = closing
+                    .checked_sub(period.minimum_cash.minor)
+                    .ok_or_else(|| {
+                        bad(
+                            RefusalCode::NumericalCertificateFailed207,
+                            "cash-floor difference overflowed",
+                        )
+                    })?;
+                minimum_slack = Some(minimum_slack.map_or(slack, |old| old.min(slack)));
+                checkpoints.push(CashScheduleCheckpoint {
+                    period_id: Some(period.id.clone()),
+                    checkpoint_date: closing_date.into(),
+                    state_id: state.clone(),
+                    opening_cash: money(opening)?,
+                    baseline_cash_flow: money(baseline)?,
+                    candidate_cash_flow: money(program)?,
+                    closing_cash: money(closing)?,
+                    minimum_cash: money(period.minimum_cash.minor)?,
+                    slack: money(slack)?,
+                });
+                *balance = closing;
+            }
+        }
+        Ok(FundingScheduleAssessment {
+            checkpoints,
+            minimum_slack: money(minimum_slack.ok_or_else(missing)?)?,
+        })
+    }
+}
+
 /// Exact upper-tail signed loss from the complete joint payoff vector, including fractional boundary mass.
 fn tail_loss(action: &ActionPayoffs, weights: &WeightSet, tail: Rat) -> Result<Rat> {
     let weights: BTreeMap<_, _> = weights
@@ -723,34 +1127,6 @@ fn tail_loss(action: &ActionPayoffs, weights: &WeightSet, tail: Rat) -> Result<R
         ));
     }
     arithmetic(arithmetic(sum.checked_div(tail))?.checked_neg())
-}
-
-fn zero_statistics(action: &ActionPayoffs, weights: &WeightSet) -> AlternativeStats {
-    let zero = ExactMoney {
-        currency: action.currency,
-        major: ZERO,
-    };
-    AlternativeStats {
-        action_id: action.action_id.clone(),
-        label: action.label.clone(),
-        role: ActionRole::DoNothing,
-        mean: zero,
-        p10_p50_p90: [zero; 3],
-        cvar95_loss: zero,
-        mean_regret: zero,
-        max_regret: zero,
-        states: weights
-            .states
-            .iter()
-            .map(|(id, w)| StateResult {
-                state_id: id.clone(),
-                weight: *w,
-                payoff: zero,
-                best_in_hindsight: zero,
-                regret: zero,
-            })
-            .collect(),
-    }
 }
 
 fn winners(choices: &[ProgramChoice], risk: bool) -> Result<(Vec<String>, Option<Rat>)> {
@@ -797,10 +1173,46 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
             .requirements
             .sort_by(|a, b| (&a.candidate_id, &a.state_id).cmp(&(&b.candidate_id, &b.state_id)));
     }
+    if let Some(claim) = &mut inputs.funding_schedule {
+        let schedule = &mut claim.value;
+        schedule
+            .periods
+            .sort_by(|a, b| (&a.cash_period, &a.id).cmp(&(&b.cash_period, &b.id)));
+        schedule.opening_cash.sort_by(|a, b| a.0.cmp(&b.0));
+        let periods: BTreeMap<_, _> = schedule
+            .periods
+            .iter()
+            .enumerate()
+            .map(|(index, period)| (period.id.as_str(), index))
+            .collect();
+        schedule.baseline_flows.sort_by(|a, b| {
+            (periods.get(a.period_id.as_str()), &a.state_id)
+                .cmp(&(periods.get(b.period_id.as_str()), &b.state_id))
+        });
+        schedule.candidate_flows.sort_by(|a, b| {
+            (
+                periods.get(a.period_id.as_str()),
+                &a.candidate_id,
+                &a.state_id,
+            )
+                .cmp(&(
+                    periods.get(b.period_id.as_str()),
+                    &b.candidate_id,
+                    &b.state_id,
+                ))
+        });
+    }
     let funding_index = inputs
         .funding
         .as_ref()
         .map(|claim| FundingIndex::new(&claim.value));
+    let schedule_index = inputs
+        .funding_schedule
+        .as_ref()
+        .map(|claim| FundingScheduleIndex {
+            declaration: &claim.value,
+            candidate_count: inputs.candidates.len(),
+        });
     let policy = &inputs.policy.value;
     let money = |major| ExactMoney {
         currency: policy.currency,
@@ -863,6 +1275,22 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
                 }
             }
         }
+        let funding_schedule = schedule_index
+            .as_ref()
+            .map(|index| index.assess(mask))
+            .transpose()?;
+        if let Some(schedule) = &funding_schedule {
+            for checkpoint in &schedule.checkpoints {
+                if checkpoint.slack.major.signum() < 0 {
+                    rejected.push(StructuralRejection::CashScheduleShortfall {
+                        period_id: checkpoint.period_id.clone(),
+                        checkpoint_date: checkpoint.checkpoint_date.clone(),
+                        state_id: checkpoint.state_id.clone(),
+                        shortfall: money(arithmetic(checkpoint.slack.major.checked_neg())?),
+                    });
+                }
+            }
+        }
         let bundle_id = format!("bundle_{mask:02x}");
         if rejected.is_empty() {
             let values = inputs
@@ -911,6 +1339,7 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
             spend: money(spend),
             budget_slack: money(arithmetic(amount(policy.budget)?.checked_sub(spend))?),
             funding,
+            funding_schedule,
             structural_rejections: rejected,
             statistics: None,
             tail_loss: None,
@@ -918,13 +1347,10 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
         });
     }
     let stats = if actions.is_empty() {
-        // Nonnegative cash requirements cannot repair a shortfall already present in the empty subset.
         // No admitted choice means no invented hold-cash statistics or counterfactual regret baseline.
         Vec::new()
-    } else if actions.len() == 1 {
-        vec![zero_statistics(&actions[0].value, &inputs.weights.value)]
     } else {
-        card::evaluate(&DecisionInputs {
+        card::evaluate_feasible(&DecisionInputs {
             weights: inputs.weights.clone(),
             actions: actions.clone(),
             information_options: vec![],
@@ -971,6 +1397,10 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
         question: inputs.weights.value.question.clone(),
         policy: policy.clone(),
         funding: inputs.funding.as_ref().map(|claim| claim.value.clone()),
+        funding_schedule: inputs
+            .funding_schedule
+            .as_ref()
+            .map(|claim| claim.value.clone()),
         choices,
         unconstrained_winners,
         feasible_winners,
@@ -979,7 +1409,7 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
     let mut binding = Encoder::new_frame(*b"CAPP", 1);
     binding.put_str(&render::inputs_json(&inputs));
     binding.put_str(&render::summary_json(&summary));
-    binding.put_str(NO_CLAIM);
+    binding.put_str(no_claim_for(&inputs));
     let digest = sha256(&binding.finish()).to_hex();
     let tag = format!("capital-program/v1:{digest}");
     let claim = metadata.claim(

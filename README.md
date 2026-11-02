@@ -414,9 +414,49 @@ the result, including funding for candidates that cannot otherwise be selected. 
 a structural rejection before risk ranking. If every subset fails, the result explicitly reports
 `no_structurally_feasible_program`, with no invented winners or risk statistics.
 
-The calculation tests the stated cash window. Payment timing within that window, staged financing and
-intermediate cash balances require additional inputs and are not established by this comparison. Declared
-net-NAV payoffs already include their costs; enforcing the cash constraint does not charge them again.
+This aggregate calculation tests the stated cash window. For dated financing and spending, supply a cash
+schedule instead. Declared net-NAV payoffs already include their costs; enforcing either cash constraint
+does not charge them again.
+
+#### Fund construction before later operating receipts arrive
+
+`funding_schedule` carries each scenario's cash balance through explicit periods, including signed financing
+receipts and repayments. Run the complete invented bridge-financing example:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/cash_schedule.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/cash_schedule.toml --json
+```
+
+The entity opens with USD 100M and needs USD 90M for baseline construction-period commitments, leaving only
+USD 10M against a USD 20M floor. Holding fails that checkpoint even though operating receipts later restore
+cash. Adding the plant requires a further USD 40M in the base state or USD 50M in the delay state, so it also
+fails without financing. A bridge supplies USD 60M and later repays USD 65M or USD 68M. The bridge plus plant
+holds construction-end cash at USD 30M or exactly USD 20M and produces **USD 62.4M expected net delta-NAV**.
+Its operation-end balances are USD 135M and USD 52M. The report retains every rejected alternative and each
+specific dated shortfall; the later surplus never erases an earlier breach.
+
+Supply one `[[funding_schedule]]` row with an explicit `cash_basis` and `opening_date`, followed by:
+
+- `[[cash_period]]`: `id`, inclusive `cash_period` date range, and nonnegative `minimum_cash` at its close.
+- `[[opening_cash]]`: a nonnegative `value` for every `state`, before any program cash flow.
+- `[[baseline_cash_flow]]`: signed `value` for every `period`/`state`, excluding the selected program.
+- `[[candidate_cash_flow]]`: signed `value` for every `period`/`candidate`/`state`, including explicit zeroes.
+
+Positive cash flows are receipts; negative flows are expenditures. The first period starts on `opening_date`,
+subsequent periods are contiguous, and each closing balance becomes the next opening balance. The first
+period's floor also applies at the initial opening checkpoint. Every scenario must meet every declared floor;
+averaging across scenarios cannot hide a shortfall. A financing candidate can be the only feasible choice,
+including one with negative NAV. Its actual statistics are retained, and regret compares only the feasible set.
+
+Aggregate `funding` and `funding_schedule` are mutually exclusive. Schedules admit at most 16 periods and
+65,536 total opening/period-end checkpoints across all enumerated subsets:
+`2^candidates × states × (periods + 1) ≤ 65,536`. Larger requests refuse explicitly. Inputs remain bounded to
+4 MiB, with exact USD decimals and complete matrices. The JSON and Markdown show all cash inputs and every
+bundle's timeline, source Claims and receipt. Unscheduled models keep their existing receipts unchanged.
+
+These checks establish opening and period-end balances only. If a payment must precede a receipt within one
+period, declare separate periods to expose that timing; the engine does not infer an intra-period cash path.
 
 These are conditional static comparisons of declared assumptions. The example applies no fitted
 reference-class correction, and the output supplies no empirical selection frequency, staged recourse,
