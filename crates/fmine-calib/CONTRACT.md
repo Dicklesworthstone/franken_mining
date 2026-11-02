@@ -4,7 +4,7 @@
 - **Crate:** `fmine-calib`
 - **Layer:** `K0` (Kernel Foundation)
 - **Subsystem:** `Kernels`
-- **LOC Budget:** `14k planned / 16k ceiling` (`registries/loc_budget.toml`)
+- **LOC Budget:** `18k planned / 21k ceiling` (`registries/loc_budget.toml`)
 - **Allowed Module Families:** `["ledger", "scoring", "prior", "pit", "record", "guidance_scores"]`
 
 ## 2. Mathematical & Domain Formulation
@@ -42,7 +42,8 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 - `FrozenForecast`, `ForecastPayload`, `ForecastLedger`
 - BD-343: `freeze_cohort(CohortSpec)` freezes sorted membership, the resolution rule, eligible sources and
   `AssessmentPolicy` before outcomes. The digest binds the complete payload, including exact float bits.
-  Payloads are Gaussian, an interval with a stated or explicitly absent level, quantiles, or an event probability.
+  Payloads are Gaussian, a uniform empirical distribution, an interval with a stated or explicitly absent
+  level, quantiles, or an event probability.
   Forecast registrations, cohort freezes and outcomes share a monotone record-time watermark: an already
   observed miss cannot be excluded by backdating a new cohort containing only other, unresolved members.
 - DESIGN: `ledger::binding::PublicResolutionPolicy` freezes registered-public resolution semantics in the
@@ -87,12 +88,36 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   queries remain permitted and never lower the sealed cut; equal-time mutation batches are allowed only above it.
 - An `AssessmentSummary` carries all denominator counts; observed coverage and whole-cohort coverage bounds;
   observed and whole-cohort score bounds; the effective sample range under the frozen correlation assumptions.
-  Brier bounds are finite. Interval-score upper bounds need a registered physical outcome domain; an unresolved
-  CRPS has no finite upper bound. These are completion bounds, never confidence intervals. Guidance with no
+  Brier bounds are finite. Interval-score upper bounds need a registered physical outcome domain. Unresolved
+  Gaussian CRPS has no finite upper bound; empirical CRPS can use a finite frozen domain as described below.
+  These are completion bounds, never confidence intervals. Guidance with no
   nominal level remains descriptive. A positive calibration flag requires complete resolution and a conservative
   effective sample at least the frozen threshold (minimum 35; stricter thresholds are allowed). The default
   correlation range is [0, 0.5].
 - `gaussian_crps`, `gaussian_log_score`, `winkler_interval_score` → `Result<f64, ScoreError>` (non-finite inputs, non-positive std_dev, alpha outside (0, 1) and inverted intervals refuse; nothing is clamped, bd-8wrk)
+- DESIGN (BD-047/BD-048): `ForecastPayload::Empirical { samples }` freezes a uniform univariate predictive
+  distribution with 1–4,096 finite samples. Repeated values retain their probability mass; supplied sample
+  order and exact bits participate in the forecast and cohort identities. The new payload tag is 4; existing
+  tags, frames and golden identities remain unchanged. Validation precedes canonical-frame allocation.
+  The journal adapter independently enforces its 64 KiB operation-byte limit, so a count-valid long textual
+  request can still exceed that limit.
+- DESIGN: `scoring::{MAX_EMPIRICAL_SAMPLES, empirical_crps, empirical_interval}` supplies the shared empirical
+  arithmetic. A sorted scratch copy gives order-invariant scores and central intervals. CRPS integrates
+  positive squared-ECDF gaps in O(n log n) time and O(n) scratch space, with compensated summation; it does not
+  subtract large absolute-deviation expectations or fit a Gaussian. Unrepresentable positive contributions,
+  sums or results return `ScoreError::Arithmetic`; no score is clamped or replaced with zero.
+  Quantiles select the first sorted value with computed f64 CDF fraction `k/n >= p`, using binary search,
+  including equality at a jump. Central levels are `alpha/2` and `1-alpha/2`; rounding to zero or one selects
+  the minimum or maximum. There is no interpolation or implicit distribution smoothing.
+  The assessment sorts each empirical forecast once for its interval, score and completion bounds. CRPS is
+  reported for all-Gaussian, all-empirical and mixed Gaussian/empirical cohorts, retaining the complete frozen
+  population. A cohort containing interval-only or quantile-only members does not report a partial CRPS mean.
+  An unresolved empirical member contributes its CRPS minimum at a median, or at the minimizing endpoint
+  of a disjoint declared outcome domain. A finite frozen domain also supplies the maximum of its endpoint
+  scores; otherwise the upper bound remains absent. Gaussian unresolved bounds retain their existing behavior.
+  Standardized bias remains Gaussian-only. These are floating-point completion bounds, not confidence
+  intervals, calibrated predictive coverage or shared-realization portfolio semantics. Empirical scoring
+  is `DeterministicPerIsa`; this slice supplies no cross-host empirical-score digest.
 - `golden_digest_gaussian_crps_10k`, `golden_digest_gaussian_log_score_10k` (bd-hp2j.3): BLAKE3 over the score bits
   on 10,000 `SCORE_DIGEST_KEY` triples (|z| up to 12).
 - `golden_digest_calib_rest_10k` (bd-hp2j.3): the rest of `lib.rs`, so one class covers the file: Winkler scores,
@@ -240,6 +265,12 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 - `PO-CAL-2`: Retroactive forecast registration (`t_registered >= t_outcome_avail`) is refused with `FMINE-REF-206`.
 - BD-048: `gaussian_crps` and `gaussian_log_score` match eight known answers to 1e-12 relative. The CRPS values are
   integrated from the definition (`scripts/oracle/score_known_answers.py`), not taken from the closed form.
+- DESIGN (BD-048): empirical scoring controls compare positive-gap integration with an independently expressed
+  quadratic absolute-deviation oracle over 81 four-sample models and five outcomes each. Additional controls
+  cover degenerate samples, exact CDF jumps, permutation and uniform-replication invariance, large offsets,
+  representable wide gaps, arithmetic refusal and declared-domain extrema. Ledger controls retain unresolved
+  members in mixed Gaussian/empirical CRPS, bind supplied draw order independently of scoring order, and prove
+  refused empirical admissions and assessments do not seal authority time.
 - BD-049: `apply_calibration_gate` per flag (only Overconfident and Biased mark a failure; every flag but Calibrated
   drops `ModelledCalibrated`), and over a run of flags it only lowers: a later Calibrated flag neither clears a
   failure nor gives the class back. The class is in the claim's id, so the lowered claim comes from

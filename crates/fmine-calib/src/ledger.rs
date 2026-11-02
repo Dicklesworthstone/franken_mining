@@ -13,6 +13,7 @@ use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_numerics::norm_inv;
 
+use crate::scoring::{MAX_EMPIRICAL_SAMPLES, SortedEmpirical, empirical_interval};
 use crate::{
     CalibrationFlag, CalibrationReport, ScoreError, gaussian_crps, winkler_interval_score,
 };
@@ -41,6 +42,11 @@ pub enum ForecastPayload {
     /// An event probability, needed for bounded Brier-score assessments.
     Bernoulli {
         probability: f64,
+    },
+    /// Uniform univariate predictive draws, retained in supplied order in the frozen identity.
+    /// Repeated values are probability mass, not duplicate records; no joint realization semantics.
+    Empirical {
+        samples: Vec<f64>,
     },
 }
 
@@ -71,6 +77,11 @@ impl ForecastPayload {
             }
             Self::Bernoulli { probability } => {
                 probability.is_finite() && (0.0..=1.0).contains(probability)
+            }
+            Self::Empirical { samples } => {
+                !samples.is_empty()
+                    && samples.len() <= MAX_EMPIRICAL_SAMPLES
+                    && samples.iter().all(|x| x.is_finite())
             }
         };
         if ok {
@@ -114,6 +125,7 @@ impl ForecastPayload {
                 (at(alpha / 2.0)?, at(1.0 - alpha / 2.0)?)
             }
             Self::Bernoulli { .. } => return Ok(None),
+            Self::Empirical { samples } => empirical_interval(samples, alpha)?,
         };
         if pair.0.is_finite() && pair.1.is_finite() && (pair.1 - pair.0).is_finite() {
             Ok(Some(pair))
@@ -143,6 +155,11 @@ impl ForecastPayload {
             Self::Bernoulli { probability } => {
                 enc.put_u8(3);
                 floats(enc, &[*probability]);
+            }
+            Self::Empirical { samples } => {
+                enc.put_u8(4);
+                enc.put_u64(samples.len() as u64);
+                floats(enc, samples);
             }
         }
     }
@@ -436,7 +453,7 @@ pub struct AssessmentSummary {
     pub n_unresolved: usize,
     pub unresolved_by_reason: BTreeMap<MissingReason, usize>,
     pub coverage: Option<CoverageSummary>,
-    /// Available only for an all-Gaussian cohort, never computed on a hidden subset.
+    /// Available only when every member is Gaussian or empirical, never on a hidden subset.
     pub crps: Option<ScoreSummary>,
     pub interval_score: Option<ScoreSummary>,
     /// Available only for an all-Bernoulli cohort.
@@ -507,6 +524,9 @@ impl ForecastLedger {
         if registered_ns >= freeze_time_ns {
             return Err(late("registration must precede the outcome time"));
         }
+        // Bound empirical allocations before building the canonical frame; admission rechecks all
+        // fields before mutating the authority state.
+        payload.validate()?;
         let model_key = model_key.into();
         let mut enc = Encoder::new_frame(*b"FOR2", 1);
         enc.put_str(&model_key);
@@ -1060,6 +1080,13 @@ fn summarize(
         && records
             .iter()
             .all(|r| matches!(r.payload, ForecastPayload::Gaussian { .. }));
+    let all_crps = n > 0
+        && records.iter().all(|r| {
+            matches!(
+                r.payload,
+                ForecastPayload::Gaussian { .. } | ForecastPayload::Empirical { .. }
+            )
+        });
     let events = n > 0
         && records
             .iter()
@@ -1078,7 +1105,17 @@ fn summarize(
                 None
             }
         };
-        if let Some((lo, hi)) = rec.payload.interval(policy.alpha)? {
+        let empirical = if let ForecastPayload::Empirical { samples } = &rec.payload {
+            Some(SortedEmpirical::new(samples)?)
+        } else {
+            None
+        };
+        let forecast_interval = if let Some(empirical) = &empirical {
+            Some(empirical.interval(policy.alpha)?)
+        } else {
+            rec.payload.interval(policy.alpha)?
+        };
+        if let Some((lo, hi)) = forecast_interval {
             let score = y
                 .map(|v| winkler_interval_score(lo, hi, policy.alpha, v))
                 .transpose()?;
@@ -1109,6 +1146,15 @@ fn summarize(
                 z_sum = finite(z_sum + finite((y - mean) / std_dev)?)?;
             }
             crps.add(score, score.map_or((0.0, None), |s| (s, Some(s))))?;
+        }
+        if let Some(empirical) = empirical {
+            let score = y.map(|value| empirical.crps(value)).transpose()?;
+            let bounds = if let Some(score) = score {
+                (score, Some(score))
+            } else {
+                empirical.bounds(policy.outcome_bounds)?
+            };
+            crps.add(score, bounds)?;
         }
         if let ForecastPayload::Bernoulli { probability: p } = rec.payload {
             let loss0 = p * p;
@@ -1168,7 +1214,7 @@ fn summarize(
         n_unresolved,
         unresolved_by_reason: missing,
         coverage,
-        crps: all_gaussian.then(|| crps.finish(n, resolved)),
+        crps: all_crps.then(|| crps.finish(n, resolved)),
         interval_score: (n > 0 && !events).then(|| interval.finish(n, resolved)),
         brier: events.then(|| brier.finish(n, resolved)),
         effective_n,
@@ -2278,6 +2324,154 @@ mod tests {
         ledger
             .freeze_cohort(spec)
             .expect("failed cohort did not move time or reserve the name");
+    }
+
+    #[test]
+    fn empirical_and_gaussian_crps_keep_the_whole_frozen_population() {
+        let (mut ledger, cohort, ids) = make_cohort(
+            vec![
+                ForecastPayload::Gaussian {
+                    mean: 0.0,
+                    std_dev: 1.0,
+                },
+                ForecastPayload::Empirical {
+                    samples: vec![-2.0, 2.0],
+                },
+                ForecastPayload::Empirical {
+                    samples: vec![0.0, 2.0],
+                },
+            ],
+            AssessmentPolicy {
+                outcome_bounds: Some((-3.0, 3.0)),
+                ..AssessmentPolicy::default()
+            },
+        );
+        for id in &ids[..2] {
+            ledger
+                .append_outcome(*id, 101, 101, published(0.0))
+                .unwrap();
+        }
+        let assessment = ledger
+            .assess(cohort, 102, OutcomeSelector::FirstPublished)
+            .unwrap();
+        let summary = &assessment.summary;
+        let crps = summary.crps.expect("both distribution types have CRPS");
+        let gaussian = gaussian_crps(0.0, 1.0, 0.0).unwrap();
+        for (actual, expected) in [
+            (crps.observed_mean.unwrap(), (gaussian + 1.0) / 2.0),
+            (crps.whole_cohort.lower, (gaussian + 1.0 + 0.5) / 3.0),
+            (
+                crps.whole_cohort.upper.unwrap(),
+                (gaussian + 1.0 + 3.5) / 3.0,
+            ),
+        ] {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        assert_eq!(crps.n_scored, 2);
+        assert_eq!(
+            (summary.n_members, summary.n_resolved, summary.n_unresolved),
+            (3, 2, 1)
+        );
+        assert_eq!(summary.coverage.unwrap().whole_cohort, (2.0 / 3.0, 1.0));
+        assert_eq!(summary.mean_standardized_bias, None);
+        assert_eq!(summary.flag, CalibrationFlag::Descriptive);
+
+        let (mut ledger, cohort, _) = make_cohort(
+            vec![
+                ForecastPayload::Empirical {
+                    samples: vec![0.0, 2.0],
+                },
+                interval(),
+            ],
+            AssessmentPolicy::default(),
+        );
+        assert!(
+            ledger
+                .assess(cohort, 102, OutcomeSelector::FirstPublished)
+                .unwrap()
+                .summary
+                .crps
+                .is_none(),
+            "an interval-only member must not disappear from a partial CRPS mean"
+        );
+    }
+
+    #[test]
+    fn empirical_draw_order_is_frozen_while_distribution_scores_are_order_invariant() {
+        let samples = [vec![4.0, -2.0, 1.0], vec![-2.0, 1.0, 4.0]];
+        let mut ids = Vec::new();
+        let mut summaries = Vec::new();
+        let mut digests = Vec::new();
+        for samples in samples {
+            let payload = ForecastPayload::Empirical { samples };
+            let (mut ledger, cohort, members) =
+                make_cohort(vec![payload.clone()], AssessmentPolicy::default());
+            let id = members[0];
+            assert_eq!(ledger.forecast(id).unwrap().payload, payload);
+            ledger.append_outcome(id, 101, 101, published(2.0)).unwrap();
+            let report = ledger
+                .assess(cohort, 102, OutcomeSelector::FirstPublished)
+                .unwrap();
+            ids.push(id);
+            summaries.push(report.summary.clone());
+            digests.push(report.digest);
+        }
+        assert_ne!(
+            ids[0], ids[1],
+            "supplied order participates in the frozen identity"
+        );
+        assert_ne!(digests[0], digests[1]);
+        assert_eq!(summaries[0], summaries[1]);
+    }
+
+    #[test]
+    fn invalid_empirical_inputs_and_unrepresentable_scores_do_not_seal_authority_time() {
+        let mut ledger = ForecastLedger::new();
+        for samples in [
+            vec![],
+            vec![f64::NAN],
+            vec![f64::INFINITY],
+            vec![0.0; MAX_EMPIRICAL_SAMPLES + 1],
+        ] {
+            assert!(
+                ledger
+                    .register_payload("invalid", 200, 300, ForecastPayload::Empirical { samples })
+                    .is_err()
+            );
+        }
+        ledger
+            .register_payload(
+                "valid",
+                1,
+                100,
+                ForecastPayload::Empirical {
+                    samples: vec![0.0; MAX_EMPIRICAL_SAMPLES],
+                },
+            )
+            .unwrap();
+
+        let (mut ledger, cohort, ids) = make_cohort(
+            vec![ForecastPayload::Empirical {
+                samples: vec![-f64::MAX],
+            }],
+            AssessmentPolicy::default(),
+        );
+        ledger
+            .append_outcome(ids[0], 101, 101, published(f64::MAX))
+            .unwrap();
+        assert!(
+            ledger
+                .assess(cohort, 102, OutcomeSelector::FirstPublished)
+                .is_err()
+        );
+        ledger
+            .register_payload(
+                "after refused assessment",
+                102,
+                200,
+                ForecastPayload::Empirical { samples: vec![0.0] },
+            )
+            .expect("refused arithmetic neither seals nor advances the assessment cut");
     }
 
     #[test]

@@ -1,0 +1,31 @@
+# SYNTHETIC: invented samples, outcome, citation and times. No issuer prediction or time proof.
+# CRPS at the invented outcome 400 is 37.5; the central 80% inverse-ECDF interval is [350,650].
+schema = "fmine.forecast-ledger.v1"
+lane = "synthetic"
+
+[[forecast]]
+id = "sampled-production"
+model_key = "synthetic/empirical-production"
+registered_at = "2030-01-01T00:00:00Z"
+outcome_due = "2030-12-31T23:59:59Z"
+kind = "empirical"
+samples = "350,350,450,650"
+
+[[cohort]]
+name = "empirical-demo"
+frozen_at = "2030-01-02T00:00:00Z"
+members = "sampled-production"
+resolution_rule = "Invented full-basis annual production in koz from the named synthetic source."
+eligible_sources = "synthetic:issuer"
+alpha = "0.2"
+
+[[outcome]]
+forecast = "sampled-production"
+kind = "published"
+available_at = "2031-02-15T00:00:00Z"
+recorded_at = "2031-02-16T00:00:00Z"
+value = "400"
+source = "synthetic:issuer"
+vintage = "synthetic-first"
+locator = "Invented!A1"
+sha256 = "1111111111111111111111111111111111111111111111111111111111111111"

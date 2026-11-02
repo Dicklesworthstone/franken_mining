@@ -2166,6 +2166,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(cost::ROBOT_DOCS_JSON);
             payload.push_str(",\"html_claims\":");
             payload.push_str(html::ROBOT_DOCS_JSON);
+            payload.push_str(",\"forecast_distributions\":");
+            payload.push_str(forecast::DISTRIBUTIONS_JSON);
             payload.push_str(",\"capital_program\":");
             payload.push_str(capital::ROBOT_DOCS_JSON);
             payload.push_str(concat!(

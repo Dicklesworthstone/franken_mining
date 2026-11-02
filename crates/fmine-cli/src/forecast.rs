@@ -26,6 +26,7 @@ mod record_sources;
 mod source;
 
 const SCHEMA: &str = "fmine.forecast-ledger.v1";
+pub const DISTRIBUTIONS_JSON: &str = r#"{"kinds":["gaussian","interval","quantiles","bernoulli","empirical"],"empirical":{"samples":"Quoted comma-separated finite numbers, from one through 4096 samples; the live journal also limits each operation to 64 KiB","weights":"Uniform; repeated samples retain their probability mass","quantiles":"Inverse empirical CDF without interpolation","scoring":"CRPS and central interval score; mixed Gaussian/empirical cohorts retain a common CRPS denominator","identity":"Original sample order is frozen; reordering keeps the distribution scores but changes its record identity","scope":"Univariate predictive distribution; no joint realization join or calibration claim","example":"tests/forecasts/empirical_synthetic.toml"}}"#;
 
 #[derive(Debug)]
 pub(super) struct AssessmentFailure {
@@ -137,6 +138,7 @@ impl Replay {
             "interval" => &["lo", "hi", "nominal"],
             "quantiles" => &["levels", "values"],
             "bernoulli" => &["probability"],
+            "empirical" => &["samples"],
             _ => return Err(invalid(format!("unknown forecast kind {kind:?}"))),
         };
         row.allowed(
@@ -166,6 +168,9 @@ impl Replay {
             },
             "bernoulli" => ForecastPayload::Bernoulli {
                 probability: row.number("probability")?,
+            },
+            "empirical" => ForecastPayload::Empirical {
+                samples: row.numbers("samples")?,
             },
             _ => return Err(invalid("unsupported forecast kind")),
         };
@@ -816,6 +821,14 @@ fn payload_json(payload: &ForecastPayload) -> String {
         ForecastPayload::Bernoulli { probability } => {
             format!("{{\"kind\":\"bernoulli\",\"probability\":{probability}}}")
         }
+        ForecastPayload::Empirical { samples } => format!(
+            "{{\"kind\":\"empirical\",\"weight_kind\":\"uniform\",\"quantile_rule\":\"inverse_ecdf\",\"samples\":[{}]}}",
+            samples
+                .iter()
+                .map(f64::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
     }
 }
 

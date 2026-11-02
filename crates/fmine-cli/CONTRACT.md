@@ -666,6 +666,14 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
   Saved assessment rows enforce the kernel's sealed-cut rules across replay. Both envelope authority fields
   remain null: transcript and assessment digests identify content, not a durable authority ledger or an
   external timestamp. The adapter does not verify supplied source citations or issue a forecast.
+- DESIGN (BD-047/BD-048): transcript and live journal registration also accept `kind = "empirical"` with
+  `samples` as a quoted comma-separated list of one through 4096 finite numbers. Samples have uniform
+  weights, repeated values retain their mass, and original order remains in the frozen identity. JSON retains
+  every sample and names the inverse-ECDF quantile convention. CRPS, central interval scores and missing-member
+  completion bounds come from the calibration kernel; no Gaussian fit or interpolation is introduced.
+  Registered gold/copper source resolution and immutable assessment retrieval use the existing target and
+  receipt checks unchanged. The 64 KiB live operation limit applies independently of the sample-count limit.
+  This representation is univariate and supplies neither joint-realization semantics nor calibration evidence.
 - DESIGN (BD-076): `forecast record score` binds the manifest, forecast CSV and rules to their exact framed
   SHA-256 digests and verifies both timestamp signatures through `fmine_io::forecast::timestamp`. Complete
   proof intervals enforce rules-before-record, the frozen registration deadline, the scored-year boundary

@@ -173,6 +173,22 @@ impl Fixture {
         hi: i64,
         vintages: Option<&str>,
     ) -> Self {
+        Self::with_payload(
+            metric,
+            ownership,
+            period,
+            &format!("kind = \"interval\"\nlo = \"{lo}\"\nhi = \"{hi}\"\nnominal = \"0.8\""),
+            vintages,
+        )
+    }
+
+    fn with_payload(
+        metric: &str,
+        ownership: &str,
+        period: &str,
+        payload: &str,
+        vintages: Option<&str>,
+    ) -> Self {
         let root = std::env::temp_dir().join(format!(
             "fmine-registered-outcome-{}-{}",
             std::process::id(),
@@ -198,7 +214,7 @@ impl Fixture {
         let forecast = fixture.request(
             "register.toml",
             &format!(
-                "[[forecast]]\nid = \"one\"\nmodel_key = \"invented-fixed-target\"\noutcome_due = \"2030-12-31T23:59:59Z\"\nkind = \"interval\"\nlo = \"{lo}\"\nhi = \"{hi}\"\nnominal = \"0.8\"\n"
+                "[[forecast]]\nid = \"one\"\nmodel_key = \"invented-fixed-target\"\noutcome_due = \"2030-12-31T23:59:59Z\"\n{payload}\n"
             ),
         );
         fixture.ok(
@@ -478,6 +494,68 @@ fn original_registered_cells_resolve_exact_printed_values_and_reopen_their_asses
                 .to_json()
                 .contains("\"source_bytes_reverified_on_replay\":false")
         );
+    }
+}
+
+#[test]
+fn empirical_distributions_keep_their_samples_through_authenticated_resolution_and_replay() {
+    for (metric, samples, printed, crps) in [
+        ("production_koz", "350,350,450,650", 400, 37.5),
+        ("production_kt", "25,25,45,85", 40, 7.5),
+    ] {
+        let mut fixture = Fixture::with_payload(
+            metric,
+            "100%",
+            "2030FY",
+            &format!("kind = \"empirical\"\nsamples = \"{samples}\""),
+            None,
+        );
+        fixture.ok(fixture.resolve(), ns(AVAILABLE));
+        let assessed = fixture.ok(
+            Command::Assess {
+                journal: JOURNAL.into(),
+                head: fixture.head,
+                cohort: COHORT.into(),
+                as_of: CUT.into(),
+                selector: "first-published".into(),
+                expected_digest: None,
+            },
+            ns(CUT),
+        );
+        let expected = assessment(&assessed.payload_json);
+        for text in [
+            "\"kind\":\"empirical\"".to_string(),
+            format!("\"samples\":[{samples}]"),
+            "\"weight_kind\":\"uniform\"".to_string(),
+            "\"quantile_rule\":\"inverse_ecdf\"".to_string(),
+            format!("\"status\":\"resolved\",\"value\":{printed},"),
+            format!("\"crps\":{{\"n_scored\":1,\"observed_mean\":{crps},"),
+            "\"mean_standardized_bias\":null".to_string(),
+            fixture.source_digest.to_hex(),
+        ] {
+            assert!(expected.contains(&text), "missing {text}: {expected}");
+        }
+        let saved = digest_field(expected, "digest");
+        let before = fixture.bytes();
+        fs::rename(
+            fixture.root.join("corpus/2030Q4.xlsx"),
+            fixture.root.join("corpus/2030Q4.xlsx.saved"),
+        )
+        .unwrap();
+        let reopened = execute_with_clock(
+            &Command::Report {
+                journal: JOURNAL.into(),
+                head: Some(fixture.head),
+                assessment: saved,
+                provenance: None,
+                timestamp: None,
+            },
+            &fixture.root,
+            &NeverClock,
+        );
+        assert_eq!(reopened.exit_code, 0, "{reopened:?}");
+        assert_eq!(assessment(&reopened.payload_json), expected);
+        assert_eq!(fixture.bytes(), before);
     }
 }
 

@@ -1033,6 +1033,21 @@ independently verified time proofs or source documents. This command neither iss
 nor replaces `xtask forecast-record-verify`; it makes the cohort and scoring kernel usable while retaining those
 boundaries. Relative transcript paths are resolved against the selected workspace.
 
+Empirical forecasts preserve a supplied skewed or multimodal distribution without fitting a Gaussian.
+Use `kind = "empirical"` and, for example, `samples = "350,350,450,650"` in a forecast row. Each sample has
+equal probability; repeats retain their mass. The engine scores the complete distribution with CRPS and
+uses inverse-ECDF central intervals without interpolation. A cohort containing Gaussian and empirical
+forecasts gets one CRPS denominator, including unresolved members. The sample limit is 4096; live journal
+operations also retain their 64 KiB byte limit. Sample order is frozen into the record identity, while
+reordering has no effect on distribution scores. This is a univariate forecast, not a joint scenario model.
+
+The following invented example has an observed CRPS of 37.5 and retains an uncalibrated, descriptive result:
+
+```bash
+cargo run -p fmine-cli -- forecast assess --ledger tests/forecasts/empirical_synthetic.toml \
+  --cohort empirical-demo --as-of 2031-02-17T00:00:00Z
+```
+
 Check every member's evidence ancestry at its own registration time with a provenance bundle:
 
 ```bash

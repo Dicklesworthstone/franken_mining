@@ -16,6 +16,7 @@ use fmine_numerics::norm_cdf;
 pub mod guidance_scores;
 pub mod ledger;
 pub mod record;
+pub mod scoring;
 pub use ledger::{
     Assessment, AssessmentPolicy, AssessmentSummary, Cohort, CohortSpec, CoverageSummary,
     EffectiveSampleSize, ForecastLedger, ForecastPayload, FrozenForecast, MemberAssessment,
@@ -275,6 +276,8 @@ pub enum ScoreError {
     InvertedInterval { lo: f64, hi: f64 },
     /// A model parameter is outside its documented domain.
     InvalidParameter { name: &'static str, value: f64 },
+    /// Valid inputs produce a score component that cannot be represented reliably.
+    Arithmetic { quantity: &'static str },
 }
 
 impl std::fmt::Display for ScoreError {
@@ -290,6 +293,9 @@ impl std::fmt::Display for ScoreError {
             }
             Self::InvalidParameter { name, value } => {
                 write!(f, "parameter {name} = {value} is outside its domain")
+            }
+            Self::Arithmetic { quantity } => {
+                write!(f, "score arithmetic cannot represent {quantity}")
             }
         }
     }
