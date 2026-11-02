@@ -203,6 +203,28 @@ outside the declared population, not independently verified zero. The difference
 effects on unchanged physical quantities; they establish neither physical production change nor source
 accuracy, reserve classification or disclosure authority.
 
+### Solve the ultimate pit of a MineLib UPIT pair
+
+`plan pit` reads a block-value file and a precedence file in MineLib's UPIT format, solves the maximum-value
+closed pit by pseudoflow, and checks the solver's certificate again before it answers:
+
+```bash
+cargo run --release -p fmine-cli -- plan pit --upit kd/kd.upit --prec kd/kd.prec --format markdown
+cargo run --release -p fmine-cli -- plan pit --upit marvin/marvin.upit --prec marvin/marvin.prec --round --list-blocks --json
+```
+
+MineLib's files are not in this repository, because their licence is not recorded; download them from MineLib
+and pass their paths. Values are scaled to integers at `--decimals` places (default 6, at most 9), so the
+reported value is exact at those places. A value with more non-zero places refuses unless `--round` is given.
+`--round` rounds half away from zero, counts the values rounded, and reports the bound on the effect: half a
+unit per rounded value. Malformed files refuse with the line at fault; nothing is defaulted. The receipt binds
+both files' SHA-256 hashes.
+
+On the eleven MineLib UPIT instances, the verb's values equal the GATE-PUSH-PIT1 run
+([docs/delivery/GATE-PUSH-PIT1.md](docs/delivery/GATE-PUSH-PIT1.md)), and each rounds to MineLib's published
+optimum. The values and arcs are taken as given: no price, cost, recovery or slope is derived or checked, and
+the pit is not a reserve, a schedule or a mine plan.
+
 ### Turn registered HTML tables into cited Claims
 
 `html claims` reads local, registered HTML filings and explicit label mappings into canonical public Claims:
@@ -2062,7 +2084,7 @@ A crate joins the workspace only with its first real slice. The first slice cove
 - `fmine-geom`, the Strata geometry kernel: exact predicates and the sparse `VdbGrid`, lifted from frankensim;
 - `fmine-optimize`, so far only `pitflow`:
   - a certified ultimate pit by pseudoflow, which matches MineLib's published UPIT optima on the 11 instances
-    tried, up to 2.1M blocks;
+    tried, up to 2.1M blocks, and which `fmine plan pit` runs on a UPIT pair;
   - nested pit shells across revenue factors;
   - precedence arcs from slope angles by azimuth sector and geotechnical domain;
 - the public lane: `fmine-io`, `fmine-public`, `fmine-metrics`;

@@ -26,6 +26,7 @@ const NONE: u32 = u32::MAX;
 /// and excess is then bounded by the total positive value and fits an `i64` with room to spare.
 pub const ABS_VALUE_SUM_LIMIT: i128 = 1 << 62;
 
+pub mod minelib;
 pub mod shells;
 pub mod slope;
 

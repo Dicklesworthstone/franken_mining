@@ -89,6 +89,7 @@ dependencies = [
  "fmine-io",
  "fmine-metrics",
  "fmine-numerics",
+ "fmine-optimize",
  "fmine-public",
  "fmine-registry",
  "fmine-runtime",
@@ -174,6 +175,13 @@ dependencies = [
  "fmine-core",
  "fmine-evidence",
  "fmine-units",
+]
+
+[[package]]
+name = "fmine-optimize"
+version = "0.1.0"
+dependencies = [
+ "fmine-evidence",
 ]
 
 [[package]]

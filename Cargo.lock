@@ -59,6 +59,7 @@ dependencies = [
  "fmine-io",
  "fmine-metrics",
  "fmine-numerics",
+ "fmine-optimize",
  "fmine-public",
  "fmine-registry",
  "fmine-runtime",

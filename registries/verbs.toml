@@ -39,6 +39,12 @@ mutates_authority = false
 description = "Compare exact production GEO across named versioned price decks on one declared physical population, retaining contributions and source-bound Claims"
 
 [[verb]]
+path = "plan pit"
+subsystem = "Pushback"
+mutates_authority = false
+description = "Solve the ultimate pit of a MineLib UPIT block-value and precedence pair by pseudoflow, with exact decimal values and the closure certificate re-verified"
+
+[[verb]]
 path = "html claims"
 subsystem = "Bullion"
 mutates_authority = false

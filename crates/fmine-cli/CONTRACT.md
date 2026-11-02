@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "cost", "geo", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "cost", "geo", "pit", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -41,6 +41,17 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     population. Differences describe price-ratio effects on unchanged physical production and supply no
     source audit, reserve classification or disclosure authority. The invented example at
     `crates/xtask/testdata/production_geo.toml` yields 3,860,000 and 3,640,000 GEO oz, a −220,000 oz difference.
+  - `plan pit --upit <file.upit> --prec <file.prec> [--decimals N] [--round] [--list-blocks]` (bd-ip99, BD-250):
+    reads both files as regular UTF-8 files bounded to 1 GiB each and binds their SHA-256 hashes.
+    `fmine-optimize::pitflow::minelib` scales values at `--decimals` places (default 6, at most 9). Extra
+    non-zero places refuse unless `--round`, which rounds half away from zero, counts the values rounded and
+    reports `value_bound` (count × ½ unit). `pitflow::solve` finds the pit; `pitflow::verify` checks its
+    certificate again here, and a different value refuses `FMINE-REF-207`. Malformed pairs refuse
+    `FMINE-REF-506`. Payload `fmine.plan-pit.v1`: exact decimal value, block, arc and pit counts, solver
+    counters and, with `--list-blocks`, the in-pit ids. Values and arcs are taken as given: no price, cost,
+    recovery or slope is derived, and the pit is not a reserve, schedule or mine plan.
+    `crates/xtask/tests/plan_pit.rs` checks the value against brute force over all closed sets on forty
+    generated pairs.
   - `metrics cost --input <worksheet.toml> --definition <registered-id>` (BD-061): reads the actual
     worksheet and workspace metric-registry bytes from regular UTF-8 files bounded to 4 MiB, binds their
     SHA-256 hashes, and evaluates `fmine-metrics::definitions::worksheet`. The explicit registered AISC/AIC
@@ -820,7 +831,7 @@ None: every failure is a usage error or a typed refusal.
 - Depends on `fmine-core`, `fmine-units`, `fmine-time`, `fmine-crs`, `fmine-evidence`, `fmine-claim`,
   `fmine-runtime` (explicit host-clock boundary),
   `fmine-registry`, `fmine-array`, `fmine-numerics`, `fmine-calib`, `fmine-decide`, `fmine-io`, `fmine-public`,
-  `fmine-metrics`.
+  `fmine-metrics`, `fmine-optimize` (`pitflow`, for `plan pit`).
 
 ## 10. Non-Goals & Scope Boundary
 - DESIGN (BD-063): `reserve replacement --issuer <issuer> --bindings <path> [--as-of YYYY-MM-DD]`

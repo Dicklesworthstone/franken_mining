@@ -10,8 +10,12 @@ The Pushback optimisation crate. Three slices so far:
 - `pitflow::slope` (`bd-t75z`, plan §15.4: "implicit precedence arcs from slope templates (azimuth sector × geotechnical domain from §14.2)"): precedence arcs for a regular block grid, from exact slope tangents per domain and azimuth sector.
   - Each block requires every block whose centre lies in its upward cone, up to K layers above.
   - Arcs implied by shorter ones are dropped, and every block's closure stays the same.
+- `pitflow::minelib` (`bd-ip99`): MineLib's UPIT text pair (`.upit` values, `.prec` precedence) read into a `ClosureProblem`. No I/O.
+  - Values are plain decimals scaled to `i64` at a declared number of places, at most `MAX_DECIMALS` (9).
+  - A value with more non-zero places is refused unless the caller passes `Rounding::HalfAwayFromZero`; each rounded value is counted in `UpitModel::rounded`.
+  - Every block must appear exactly once in each file. Headers, counts, ids and duplicates are checked; nothing is defaulted.
 
-Nothing in the workspace calls it yet. Bienstock–Zuckerberg, Lagrangian, TopoSort and the stochastic layer are later slices.
+`fmine plan pit` (`fmine-cli`, `bd-ip99`) calls `minelib::parse`, `solve` and `verify`. Shells and slope arcs have no caller yet. Bienstock–Zuckerberg, Lagrangian, TopoSort and the stochastic layer are later slices.
 
 - **Crate:** `fmine-optimize`
 - **Layer:** E
@@ -20,7 +24,8 @@ Nothing in the workspace calls it yet. Bienstock–Zuckerberg, Lagrangian, TopoS
 - **Allowed Module Families:** `["pitflow"]`
 
 ## 2. Inputs
-- One `i64` value per block, in a caller-chosen integer money unit; the caller scales and rounds, never this crate.
+- One `i64` value per block, in a caller-chosen integer money unit; the caller scales and rounds, never this crate. The one exception is `pitflow::minelib`, which scales a UPIT file's decimals at the places the caller declares and rounds only when the caller asks.
+- For `pitflow::minelib`: the two files' text, the number of decimal places and a `Rounding`.
 - Precedence arcs `u → v`, read "taking `u` requires taking `v`", either as CSR (`ClosureProblem::new(weights, offsets, targets)`) or as one list per block (`from_requirements`). Duplicate arcs and self-loops are accepted. Cycles are accepted too: a cycle's blocks are taken together or not at all.
 - For shells (`ShellModel`): one non-negative `i64` revenue and one `i64` cost per block, the same arcs, and strictly increasing `RevenueFactor`s `num / den` with both parts positive. At a factor a block is worth `num · revenue − den · cost`. That is its value scaled by `den`, so no fraction or float is formed.
 - For slope arcs, all integers:
@@ -102,6 +107,13 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input.
   - `u32::MAX` or more arcs.
 
   Tests: `slope::tests::bad_input_is_refused`, one row each.
+- `FMINE-REF-506` (proposed), from `minelib::parse` and `minelib::scaled`:
+  - a missing, repeated or unknown header, or a `TYPE` other than `UPIT`;
+  - a value that is not a plain decimal, does not fit `i64` at the places declared, or has non-zero places past them under `Rounding::Refuse`; more than 9 declared places;
+  - an objective line count that differs from `NBLOCKS`, or a block id out of range or given twice;
+  - a precedence line whose count differs from its list, that requires itself, an out-of-range block or one block twice, or a block with no precedence line or two.
+
+  Tests: `minelib::tests::every_malformed_pair_refuses`, one row each, and `crates/xtask/tests/plan_pit.rs` through the CLI.
 
 No value is clamped, rescaled or perturbed to make a problem fit.
 
@@ -112,7 +124,7 @@ No value is clamped, rescaled or perturbed to make a problem fit.
 Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState` is assigned.
 
 ## 8. Validity domain
-- The pit is optimal for the integer values given. Any rounding in converting money to `i64` is the caller's, and its effect on the pit is not bounded here.
+- The pit is optimal for the integer values given. Any rounding in converting money to `i64` is the caller's, and its effect on the pit is not bounded here. `minelib`'s rounding is the exception: each rounded value moves any pit's value by at most half a unit in the last kept place, so the rounded problem's optimum lies within `rounded / 2` such units of the file's.
 - Fewer than `u32::MAX` blocks and arcs, and absolute values summing below 2⁶².
 - When several closed sets tie for the maximum, one of them is returned. Which one is fixed by the input but is not promised to be the smallest or the largest.
 - Shells need non-negative revenue: the union rule rests on it, and the constructor refuses anything else. A sweep costs one full solve per factor, plus O(n + m) for each shell's check.
@@ -165,12 +177,13 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   | mclaughlin_limit | 112,687 | 1,495,726,474 | 1,495,726,474 |
   | mclaughlin | 2,140,342 | 1,495,886,962 | 1,495,886,962 |
 
-  Every value read rounds to its published figure.
+  Every value read rounds to its published figure. On 2026-11-02 `fmine plan pit`, reading the files with `minelib` instead of the test's own parser, gave the same eleven values, rounded counts and pit sizes (`minelib_instances_match_gate_push_pit1_through_the_verb`, ignored, run by hand on one machine).
 - Seven of the eleven files are read exactly at 10⁶. zuck_small (30 values), zuck_medium (88) and zuck_large (34) print float noise such as `4362.94593000001`, and marvin (4,874 values) carries ten to twelve decimals. Those values are rounded to 10⁻⁶ at read time, and the test widens its band by the resulting bound.
 - MineFlow (Deutsch et al.) is not run.
 
 ## 10. Known gaps
-- `BD-250` (bd-250), `bd-nzwd` and `bd-t75z`: no caller in the workspace yet.
+- `bd-nzwd` and `bd-t75z`: no caller in the workspace yet. `BD-250`'s one caller is `fmine plan pit`, on MineLib UPIT pairs only; no block model or price deck feeds it.
+- `minelib` reads the UPIT pair only, not MineLib's CPIT or PCPSP files (capacities, periods, destinations).
 - Slope arcs have no external gate. MineLib's UPIT files come with their arcs already made, and the workspace holds no geotechnical slope data. The slopes in the tests are invented.
 - Slope arcs cover regular grids only: no sub-blocks, rotated grids, or slopes that vary with depth inside a domain.
 - With more than one domain, the prefix sums cost 4 bytes per block on top of the arcs.
@@ -189,6 +202,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `pitflow::PitStats` (`mergers`, `splits`, `relabels`, `max_label`)
 - `pitflow::solve`, `pitflow::verify`
 - `pitflow::ABS_VALUE_SUM_LIMIT`
+- `pitflow::minelib::parse`, `pitflow::minelib::scaled`, `pitflow::minelib::UpitModel` (`name`, `problem`, `rounded`), `pitflow::minelib::Rounding`, `pitflow::minelib::MAX_DECIMALS`
 - `pitflow::shells::RevenueFactor` (`new`, `num`, `den`)
 - `pitflow::shells::ShellModel` (`new`, `from_requirements`, `block_count`, `values_at`)
 - `pitflow::shells::NestedShells` (`first_shell`, `shells`, `contains`)
