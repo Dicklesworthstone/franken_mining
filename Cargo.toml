@@ -14,6 +14,7 @@ members = [
     "crates/fmine-numerics",
     "crates/fmine-calib",
     "crates/fmine-decide",
+    "crates/fmine-capital",
     "crates/fmine-io",
     "crates/fmine-public",
     "crates/fmine-metrics",

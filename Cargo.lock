@@ -22,6 +22,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-capital"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-decide",
+ "fmine-evidence",
+ "fmine-numerics",
+ "fmine-registry",
+ "fmine-units",
+]
+
+[[package]]
 name = "fmine-claim"
 version = "0.1.0"
 dependencies = [
@@ -36,6 +49,7 @@ version = "0.1.0"
 dependencies = [
  "fmine-array",
  "fmine-calib",
+ "fmine-capital",
  "fmine-claim",
  "fmine-core",
  "fmine-crs",
