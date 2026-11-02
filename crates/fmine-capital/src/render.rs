@@ -7,7 +7,7 @@ use fmine_evidence::{AoaStatus, AssertionSource, Color};
 
 use super::*;
 
-fn js(value: &str) -> String {
+pub(super) fn js(value: &str) -> String {
     let mut out = String::from("\"");
     for c in value.chars() {
         match c {
@@ -25,13 +25,13 @@ fn js(value: &str) -> String {
     out.push('"');
     out
 }
-fn ratio(value: Rat) -> String {
+pub(super) fn ratio(value: Rat) -> String {
     format!("{}/{}", value.num(), value.den())
 }
-fn rq(value: Rat) -> String {
+pub(super) fn rq(value: Rat) -> String {
     js(&ratio(value))
 }
-fn mq(value: Money) -> String {
+pub(super) fn mq(value: Money) -> String {
     let (mut a, mut b) = (value.minor.unsigned_abs(), Money::SCALE as u128);
     while b != 0 {
         (a, b) = (b, a % b);
@@ -44,7 +44,7 @@ fn mq(value: Money) -> String {
         Money::SCALE / divisor
     ))
 }
-fn ids(values: &[String]) -> String {
+pub(super) fn ids(values: &[String]) -> String {
     format!(
         "[{}]",
         values.iter().map(|s| js(s)).collect::<Vec<_>>().join(",")
@@ -53,7 +53,7 @@ fn ids(values: &[String]) -> String {
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
-fn currency(value: Currency) -> String {
+pub(super) fn currency(value: Currency) -> String {
     js(&format!("{value:?}"))
 }
 
@@ -311,7 +311,7 @@ fn weights_json(w: &WeightSet) -> String {
     )
 }
 
-fn evidence(value: EvidenceClass) -> &'static str {
+pub(super) fn evidence(value: EvidenceClass) -> &'static str {
     match value {
         EvidenceClass::Measured => "measured",
         EvidenceClass::Derived => "derived",
@@ -380,7 +380,7 @@ fn color_json(value: Color) -> String {
 }
 
 /// Bind/display metadata omitted by generic Claim identity, including the computed colour and exact UU bits.
-fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
+pub(super) fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
     let anchors = claim
         .anchors
         .iter()
@@ -466,7 +466,7 @@ pub(super) fn inputs_json(inputs: &ProgramInputs) -> String {
     )
 }
 
-fn statistics_json(s: &AlternativeStats) -> String {
+pub(super) fn statistics_json(s: &AlternativeStats) -> String {
     let states = s.states.iter().map(|r| format!("{{\"state_id\":{},\"weight\":{},\"payoff\":{},\"best_in_hindsight\":{},\"regret\":{}}}", js(&r.state_id), rq(r.weight), rq(r.payoff.major), rq(r.best_in_hindsight.major), rq(r.regret.major))).collect::<Vec<_>>().join(",");
     format!(
         "{{\"mean\":{},\"p10\":{},\"p50\":{},\"p90\":{},\"cvar95_loss\":{},\"mean_regret\":{},\"max_regret\":{},\"states\":[{states}]}}",
@@ -480,7 +480,7 @@ fn statistics_json(s: &AlternativeStats) -> String {
     )
 }
 
-fn per_share_statistics_json(s: &PerShareStats) -> String {
+pub(super) fn per_share_statistics_json(s: &PerShareStats) -> String {
     let states = s.states.iter().map(|r| format!("{{\"state_id\":{},\"weight\":{},\"payoff\":{},\"best_in_hindsight\":{},\"regret\":{}}}", js(&r.state_id), rq(r.weight), rq(r.payoff.major), rq(r.best_in_hindsight.major), rq(r.regret.major))).collect::<Vec<_>>().join(",");
     format!(
         "{{\"mean\":{},\"p10\":{},\"p50\":{},\"p90\":{},\"cvar95_loss\":{},\"mean_regret\":{},\"max_regret\":{},\"states\":[{states}]}}",
@@ -494,7 +494,7 @@ fn per_share_statistics_json(s: &PerShareStats) -> String {
     )
 }
 
-fn equity_assessment_json(equity: &EquityAssessment) -> String {
+pub(super) fn equity_assessment_json(equity: &EquityAssessment) -> String {
     let states = equity.states.iter().map(|s| format!(
         "{{\"state_id\":{},\"baseline_nav\":{},\"nav_change\":{},\"ending_nav\":{},\"baseline_shares\":{},\"share_change\":{},\"ending_shares\":{},\"baseline_nav_per_share\":{},\"ending_nav_per_share\":{},\"delta_nav_per_share\":{}}}",
         js(&s.state_id), rq(s.baseline_nav.major), rq(s.nav_change.major), rq(s.ending_nav.major),
@@ -506,7 +506,7 @@ fn equity_assessment_json(equity: &EquityAssessment) -> String {
     format!("{{\"states\":[{states}]}}")
 }
 
-fn rejection_json(r: &StructuralRejection) -> String {
+pub(super) fn rejection_json(r: &StructuralRejection) -> String {
     match r {
         StructuralRejection::BudgetExceeded => "{\"kind\":\"budget_exceeded\"}".into(),
         StructuralRejection::MissingPrerequisite {
@@ -561,7 +561,7 @@ fn funding_assessment_json(funding: &FundingAssessment) -> String {
     )
 }
 
-fn funding_schedule_assessment_json(funding: &FundingScheduleAssessment) -> String {
+pub(super) fn funding_schedule_assessment_json(funding: &FundingScheduleAssessment) -> String {
     let checkpoints = funding.checkpoints.iter().map(|c| format!(
         "{{\"period_id\":{},\"checkpoint_date\":{},\"state_id\":{},\"opening_cash\":{},\"baseline_cash_flow\":{},\"candidate_cash_flow\":{},\"closing_cash\":{},\"minimum_cash\":{},\"slack\":{}}}",
         c.period_id.as_deref().map_or_else(|| "null".into(), js),
@@ -626,7 +626,7 @@ pub(super) fn summary_json(s: &ProgramSummary) -> String {
     )
 }
 
-fn md(value: &str) -> String {
+pub(super) fn md(value: &str) -> String {
     value
         .replace('\\', "\\\\")
         .replace('|', "\\|")
@@ -635,11 +635,11 @@ fn md(value: &str) -> String {
         .replace('>', "&gt;")
         .replace(['\n', '\r'], " ")
 }
-fn shown(value: Option<ExactMoney>) -> String {
+pub(super) fn shown(value: Option<ExactMoney>) -> String {
     value.map_or_else(|| "unavailable".into(), |v| ratio(v.major))
 }
 
-fn per_share_shown(value: Option<ExactPerShare>) -> String {
+pub(super) fn per_share_shown(value: Option<ExactPerShare>) -> String {
     value.map_or_else(|| "unavailable".into(), |v| ratio(v.major))
 }
 
@@ -1067,7 +1067,7 @@ fn funding_schedule_markdown(
     }
 }
 
-fn claim_markdown<T>(out: &mut String, claim: &Claim<T>) {
+pub(super) fn claim_markdown<T>(out: &mut String, claim: &Claim<T>) {
     let _ = writeln!(
         out,
         "\nClaim `{}` — {}; evidence {}; confidentiality {}.",

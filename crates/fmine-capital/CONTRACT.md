@@ -2,10 +2,10 @@
 
 ## 1. Charter & Layer
 
-E-layer Helm capital-program comparison, within the planned 20k/23k LOC budget. This first BD-229 slice
-enumerates declared static binary subsets and depends on the permitted `fmine-capital -> fmine-decide` edge.
-- **Allowed Module Families:** `["model", "render"]`
-The capital-program kernel lives in the crate root.
+E-layer Helm capital-program comparison, within the planned 20k/23k LOC budget. These bounded BD-229 slices
+enumerate declared static subsets and two-stage policies, using the permitted `fmine-capital -> fmine-decide` edge.
+- **Allowed Module Families:** `["model", "render", "recourse"]`
+The static kernel lives in the crate root; `recourse` composes its state-level results into complete policies.
 
 ## 2. Mathematical & Domain Formulation
 
@@ -69,6 +69,32 @@ If no subset is structurally feasible, both winner sets are empty, statistics
 and tail losses are absent, and no risk cost or hindsight baseline is invented. This is distinct from
 having structurally feasible choices that all violate the risk limit.
 
+DESIGN (BD-229, §23.1–23.3, G-CAP-D): `recourse::evaluate` adds a separate exact two-stage comparison while
+retaining the complete static result. Every candidate has one declared stage; every terminal state has one
+declared observation. A policy fixes its initial subset before the observation and chooses one continuation
+subset per observed class. If the information candidate is not selected, all states receive the same
+unobserved continuation. Thus terminal states sharing an observation cannot receive different decisions.
+Existing prerequisite links separately express whether an action requires purchase of the gate.
+
+The information candidate must be initial, have positive planned cost and negative declared net NAV in every
+state, and incur negative cumulative cash before the observation in every state. The observation is at the
+start of a noninitial scheduled cash period. Recourse candidates have explicit zero cash flows before it.
+All initial commitments, NAV/share changes and later contractual cash flows persist in every continuation,
+including abandonment. No cash flow, study cost or share effect disappears when the policy changes course.
+
+Every realized path must satisfy budget, prerequisites, exclusions, cash floors and positive ending shares.
+The union of mutually exclusive branch actions is not a realized portfolio and is not charged as one.
+Cash and equity results are reused from the same state's static subset, preserving scenario dependence.
+Risk and regret are calculated over the complete unconditional policy distribution, after structural
+screening. Neither posterior-mean branch selection nor nodewise tail-risk constraints replace global CVaR.
+
+Net adaptive value is the best policy mean minus the best static-subset mean, reported separately before
+and after the same risk limit. This is a global comparison that may change the initial commitment; it is
+not a same-initial-commitment information value. Study costs are already in those means, and the difference
+must never be added to policy NAV again. Every static subset embeds as a constant-continuation policy.
+If either comparison population has no admissible winner, the difference is unavailable, not measured
+against an invented zero. Per-share objectives retain separate USD/share and total-USD quantities.
+
 ## 3. Authority, Epistemics & Representation
 
 All imported values remain Assumed, Internal, Estimated and parametrically uncertain. A complete input
@@ -84,6 +110,9 @@ parents, source locators and consistent UU definitions. Generic Claim metadata o
 identity (UU exact bits, computed colours, support, representation, supersession and current flags) is bound
 into the program digest together with all typed values and constraints. The unanchored derived output never
 acquires a stronger validated regime. Every authority flag remains false.
+The two-stage result additionally binds the complete information Claim, candidate stages, observation
+partition/date/basis and the full static result. Its source assumptions remain uncalibrated; the model does
+not infer signal accuracy, information rights, approval or a calendar of economic NAV realization.
 
 ## 4. Public API Surface
 
@@ -102,6 +131,18 @@ acquires a stronger validated regime. Every authority flag remains false.
   text and receipts remain unchanged. Scheduled and equity models bind their explicit scope into the receipt.
   Equity JSON labels the objective and all total-USD versus USD/share statistics; Markdown shows all equity
   inputs and every bundle/state ledger, including undefined ratios and rejected bundles.
+- `recourse::{RecourseInputs, RecourseBasis, DecisionStage, CandidateStage, StateObservation}`: a source-bound
+  information declaration plus the existing `ProgramInputs`. Static public types and receipt paths remain
+  unchanged. `recourse::evaluate(&RecourseInputs)` returns `EvaluatedRecourseProgram`, with immutable inputs,
+  static comparator, policy summary, Claim, digest, JSON and Markdown.
+- `recourse::{PolicyBranch, PolicyState, PolicyRejection, PolicyChoice, RecourseSummary}`: distinct policy
+  outputs retain initial choices/spending, each observation's probability and continuation, every state's
+  selected candidates/spending/slack/NAV, all cash/equity rows, structural reasons, global risk and co-winners.
+  No public scalar subset selection or cost is repurposed as a union or expectation across branches.
+  At most four observation classes and 256 policies are admitted. With `f` initial candidates, `r` recourse
+  candidates and `k` classes, policy count is `2^(f-1) * (2^r + 2^(r*k))`. The combined static and policy
+  checkpoint count `(2^(f+r) + policies) * states * (periods + 1)` must not exceed 65,536. Bounds precede
+  canonical tagging/enumeration; rejected policies are retained, never pruned to satisfy work limits.
 - `model::parse(text, SourceAnchor)`: verifies SHA-256 against actual bytes, then reads the strict
   `fmine.capital-program.v1` TOML subset. Top-level strings are `schema`, `model_key`, `question`, `currency`,
   `valuation_basis`, `budget`, `tail_mass`, `payoff_convention`, `reference_class_basis`, with optional
@@ -142,6 +183,10 @@ Every candidate's cash flows remain required even when another constraint preven
 Equity additionally refuses missing/duplicate/foreign matrix entries, nonpositive initial shares or unit
 scale, incompatible currency/model/valuation metadata, absent entity/share class, an incompatible payoff
 convention, a legacy total-USD risk ceiling, and orphan equity rows without a complete declaration.
+Recourse additionally refuses incomplete/duplicate/foreign stage and observation mappings, an unknown or
+noninitial information candidate, a missing paid gate, absent or mistimed cash schedules, pre-observation
+recourse cash flows, and initial prerequisites that depend on a later decision. It admits at least one
+initial and one recourse candidate. Information metadata must agree with the program's model/currency/basis.
 Stale, altered, unobservable, uncited, unsupported, calibration-failed or unbudgeted Claims refuse.
 Conflicting UU definitions refuse. Exact arithmetic overflow returns `FMINE-REF-207`; no alternative is
 dropped to obtain a plausible result. Input/source errors use the existing refusal catalog, including
@@ -163,6 +208,9 @@ dropped to obtain a plausible result. Input/source errors use the existing refus
 - Feasible-set statistics retain actual negative-NAV survivors, with no invented zero-payoff competitor.
 - All ties survive, and arithmetic risk cost is nonnegative whenever constrained winners exist.
 - Source, losing candidate, constraint, adjustment-basis and evidence metadata changes affect identity.
+- A continuation is constant within each information set, and all first-stage commitments survive in every state.
+- Policy funding and structural constraints hold on each realized path; global risk uses the original state weights.
+- The static feasible set embeds in the policy set, so every available net adaptive value is nonnegative.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 
@@ -187,6 +235,11 @@ An independent Python Fraction oracle checks 44 legacy, scheduled and equity mod
 JSON/Markdown integration checks retain every bundle's timeline/equity ledger and library/binary byte parity.
 Equity known answers cover buyback accretion, issuance dilution, shared-state pairing, fractional tail mass,
 share-unit invariance, nonpositive ending counts, negative singleton survivors, source identity and overflow.
+Recourse known answers cover paid study/build/abandon decisions, indistinguishable observations, sunk costs,
+global rather than branchwise tail limits, path-specific prerequisites and exclusions, adaptive-only funding,
+and equity issuance chosen by USD/share rather than total NAV. State-specific cash and share-count failures
+remain on the paths that realize them. Admission, exact work limits, input permutation, losing-input and
+metadata binding, and unavailable static comparisons have direct regressions.
 The complete `tests/capital/equity.toml` example selects issuance plus project at exactly 1/2 USD per share;
 its rejected standalone issuance loses 1/3 USD per share and its buyback adds 2/9 USD per share.
 The complete `tests/capital/cash_schedule.toml` example selects bridge plus plant at USD 62.4M expected net delta-NAV.
@@ -201,7 +254,8 @@ kernel in `fmine-numerics::risk::exact` for per-share statistics. No IO, spawnin
 ## 10. Non-Goals & Scope Boundary
 
 Static declared net-NAV comparison with optional aggregate or dated-checkpoint funding and exact equity NAV
-per-share optimization. No staged recourse, undeclared project interactions, price/fiscal model,
+per-share optimization, plus bounded two-stage policies with purchased declared information. No additional
+decision stages, undeclared project interactions, inferred observation likelihoods, price/fiscal model,
 reference-class fitting, entity waterfalls, portfolio safety, calibrated probabilities or
 physical authorization is supplied. Reference-class bases must be explicitly declared, including an honest
 unadjusted basis; the system does not apply an unnamed adjustment. Selection frequency is explicitly

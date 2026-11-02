@@ -5,13 +5,13 @@
 use super::*;
 use fmine_evidence::KuKind;
 
-fn r(n: i128, d: i128) -> Rat {
+pub(crate) fn r(n: i128, d: i128) -> Rat {
     Rat::new(n, d).unwrap()
 }
-fn usd(n: i128) -> Money {
+pub(crate) fn usd(n: i128) -> Money {
     Money::from_minor(Currency::USD, n.checked_mul(Money::SCALE).unwrap())
 }
-fn claim<T>(metric: &str, value: T, tag: &str, add: AdditivityClass) -> Claim<T> {
+pub(crate) fn claim<T>(metric: &str, value: T, tag: &str, add: AdditivityClass) -> Claim<T> {
     Claim::new(
         metric,
         value,
@@ -37,11 +37,11 @@ fn claim<T>(metric: &str, value: T, tag: &str, add: AdditivityClass) -> Claim<T>
         )],
     )
 }
-fn policy_claim(value: ProgramPolicy) -> Claim<ProgramPolicy> {
+pub(crate) fn policy_claim(value: ProgramPolicy) -> Claim<ProgramPolicy> {
     let tag = value.canonical_tag();
     claim("capital.policy", value, &tag, AdditivityClass::NonAdditive)
 }
-fn candidate_claim(value: CapitalCandidate) -> Claim<CapitalCandidate> {
+pub(crate) fn candidate_claim(value: CapitalCandidate) -> Claim<CapitalCandidate> {
     let tag = value.canonical_tag();
     claim(
         &format!("capital.{}", value.candidate_id),
@@ -54,7 +54,7 @@ fn funding_claim(value: ProgramFunding) -> Claim<ProgramFunding> {
     let tag = value.canonical_tag();
     claim("capital.funding", value, &tag, AdditivityClass::NonAdditive)
 }
-fn schedule_claim(value: FundingSchedule) -> Claim<FundingSchedule> {
+pub(crate) fn schedule_claim(value: FundingSchedule) -> Claim<FundingSchedule> {
     let tag = value.canonical_tag();
     claim(
         "capital.cash-schedule",
@@ -63,7 +63,7 @@ fn schedule_claim(value: FundingSchedule) -> Claim<FundingSchedule> {
         AdditivityClass::NonAdditive,
     )
 }
-fn with_schedule(mut inputs: ProgramInputs) -> ProgramInputs {
+pub(crate) fn with_schedule(mut inputs: ProgramInputs) -> ProgramInputs {
     let states = &inputs.weights.value.states;
     let periods = vec![
         CashPeriod {
@@ -111,7 +111,7 @@ fn with_schedule(mut inputs: ProgramInputs) -> ProgramInputs {
     }));
     inputs
 }
-fn set_candidate_flow(
+pub(crate) fn set_candidate_flow(
     schedule: &mut FundingSchedule,
     period: &str,
     candidate: &str,
@@ -127,7 +127,12 @@ fn set_candidate_flow(
         .unwrap()
         .value = usd(value);
 }
-fn set_baseline_flow(schedule: &mut FundingSchedule, period: &str, state: &str, value: i128) {
+pub(crate) fn set_baseline_flow(
+    schedule: &mut FundingSchedule,
+    period: &str,
+    state: &str,
+    value: i128,
+) {
     schedule
         .baseline_flows
         .iter_mut()
@@ -135,11 +140,11 @@ fn set_baseline_flow(schedule: &mut FundingSchedule, period: &str, state: &str, 
         .unwrap()
         .value = usd(value);
 }
-fn equity_claim(value: EquityBasis) -> Claim<EquityBasis> {
+pub(crate) fn equity_claim(value: EquityBasis) -> Claim<EquityBasis> {
     let tag = value.canonical_tag();
     claim("capital.equity", value, &tag, AdditivityClass::NonAdditive)
 }
-fn with_equity(
+pub(crate) fn with_equity(
     mut inputs: ProgramInputs,
     baseline_nav: &[i128],
     initial_shares: Rat,
@@ -178,7 +183,7 @@ fn with_equity(
     }));
     inputs
 }
-fn set_share_change(equity: &mut EquityBasis, candidate: &str, state: &str, units: Rat) {
+pub(crate) fn set_share_change(equity: &mut EquityBasis, candidate: &str, state: &str, units: Rat) {
     equity
         .share_changes
         .iter_mut()
@@ -232,7 +237,7 @@ fn with_funding(
     i.funding = Some(funding_claim(funding));
     i
 }
-fn inputs(
+pub(crate) fn inputs(
     rows: &[(&str, i128, &[i128])],
     weights: &[Rat],
     budget: i128,

@@ -23,6 +23,7 @@ use fmine_numerics::risk::exact::{ExactDistribution, compare as exact_compare};
 use fmine_units::{Currency, Money, UnitsError};
 
 pub mod model;
+pub mod recourse;
 mod render;
 
 pub const MAX_CANDIDATES: usize = 8;
@@ -1559,6 +1560,68 @@ fn winners(
     Ok((ids, best))
 }
 
+/// Shared complete-population statistics for static bundles and nonanticipative policies.
+fn populate_statistics(
+    choices: &mut [ProgramChoice],
+    actions: &[Claim<ActionPayoffs>],
+    inputs: &ProgramInputs,
+) -> Result<()> {
+    let policy = &inputs.policy.value;
+    let money = |major| ExactMoney {
+        currency: policy.currency,
+        major,
+    };
+    let stats = if actions.is_empty() {
+        // No admitted choice means no invented hold-cash statistics or counterfactual regret baseline.
+        Vec::new()
+    } else {
+        card::evaluate_feasible(&DecisionInputs {
+            weights: inputs.weights.clone(),
+            actions: actions.to_vec(),
+            information_options: vec![],
+        })?
+        .summary()
+        .alternatives
+        .clone()
+    };
+    let mut statistics: BTreeMap<_, _> = stats
+        .into_iter()
+        .map(|s| (s.action_id.clone(), s))
+        .collect();
+    let mut tails = BTreeMap::new();
+    for action in actions {
+        tails.insert(
+            action.value.action_id.clone(),
+            tail_loss(&action.value, &inputs.weights.value, policy.tail_mass)?,
+        );
+    }
+    for row in choices.iter_mut() {
+        if let Some(stats) = statistics.remove(&row.bundle_id) {
+            let tail = tails.remove(&row.bundle_id).ok_or_else(|| {
+                bad(
+                    RefusalCode::NumericalCertificateFailed207,
+                    "missing computed tail",
+                )
+            })?;
+            row.risk_rejected = match policy.max_tail_loss {
+                Some(cap) => arithmetic(tail.checked_cmp(amount(cap)?))?.is_gt(),
+                None => false,
+            };
+            row.tail_loss = Some(money(tail));
+            row.statistics = Some(stats);
+        }
+    }
+    if let Some(equity) = &inputs.equity {
+        per_share_statistics(
+            choices,
+            &inputs.weights.value,
+            &equity.value,
+            policy.tail_mass,
+        )?;
+    }
+    Ok(())
+}
+
 /// Enumerates all declared binary subsets; infeasibility remains in the returned population.
 pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
     let metadata = validate(inputs)?;
@@ -1780,54 +1843,7 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
             risk_rejected: false,
         });
     }
-    let stats = if actions.is_empty() {
-        // No admitted choice means no invented hold-cash statistics or counterfactual regret baseline.
-        Vec::new()
-    } else {
-        card::evaluate_feasible(&DecisionInputs {
-            weights: inputs.weights.clone(),
-            actions: actions.clone(),
-            information_options: vec![],
-        })?
-        .summary()
-        .alternatives
-        .clone()
-    };
-    let mut statistics: BTreeMap<_, _> = stats
-        .into_iter()
-        .map(|s| (s.action_id.clone(), s))
-        .collect();
-    let mut tails = BTreeMap::new();
-    for action in &actions {
-        tails.insert(
-            action.value.action_id.clone(),
-            tail_loss(&action.value, &inputs.weights.value, policy.tail_mass)?,
-        );
-    }
-    for row in &mut choices {
-        if let Some(stats) = statistics.remove(&row.bundle_id) {
-            let tail = tails.remove(&row.bundle_id).ok_or_else(|| {
-                bad(
-                    RefusalCode::NumericalCertificateFailed207,
-                    "missing computed tail",
-                )
-            })?;
-            row.risk_rejected = match policy.max_tail_loss {
-                Some(cap) => arithmetic(tail.checked_cmp(amount(cap)?))?.is_gt(),
-                None => false,
-            };
-            row.tail_loss = Some(money(tail));
-            row.statistics = Some(stats);
-        }
-    }
-    if let Some(equity) = &inputs.equity {
-        per_share_statistics(
-            &mut choices,
-            &inputs.weights.value,
-            &equity.value,
-            policy.tail_mass,
-        )?;
-    }
+    populate_statistics(&mut choices, &actions, &inputs)?;
     let per_share_mode = inputs.equity.is_some();
     let (unconstrained_winners, before) = winners(&choices, false, per_share_mode)?;
     let (feasible_winners, after) = winners(&choices, true, per_share_mode)?;
