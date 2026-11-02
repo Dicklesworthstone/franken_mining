@@ -9,10 +9,10 @@
 use std::io::Read as _;
 use std::path::Path;
 
-use fmine_calib::ledger::{MissingReason, OutcomeCitation};
 use fmine_calib::ledger::binding::{
     PublicMetric, PublicOwnership, PublicPeriod, PublicResolutionPolicy,
 };
+use fmine_calib::ledger::{MissingReason, OutcomeCitation};
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
 use fmine_core::ObjectId;
 use fmine_core::anchor::SourceAnchor;
@@ -905,8 +905,14 @@ fn bind_value(
     }
     let ownership_source = match cell.key.ownership_basis {
         OwnershipBasis::Consolidated100 => "full",
-        OwnershipBasis::Attributable { source: ShareSource::Printed, .. } => "printed",
-        OwnershipBasis::Attributable { source: ShareSource::Registry, .. } => "registry",
+        OwnershipBasis::Attributable {
+            source: ShareSource::Printed,
+            ..
+        } => "printed",
+        OwnershipBasis::Attributable {
+            source: ShareSource::Registry,
+            ..
+        } => "registry",
         OwnershipBasis::Unprinted => {
             return Err(refusal(
                 RefusalCode::BasisMismatch105,
@@ -1024,7 +1030,6 @@ fn bind_value(
         ));
     }
     Ok(ResolvedOriginalOutcome::Published(out))
-
 }
 
 #[cfg(test)]

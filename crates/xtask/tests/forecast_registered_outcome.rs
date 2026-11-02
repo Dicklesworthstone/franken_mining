@@ -593,15 +593,32 @@ fn wrong_basis_changed_bytes_and_missing_original_never_append_an_outcome() {
 #[test]
 fn original_registered_dash_becomes_durable_not_published_without_denominator_leak() {
     let mut fixture = Fixture::with_vintages(
-        "production_koz", "100%", "2030FY", 350, 450, Some("registered_comparatives"),
+        "production_koz",
+        "100%",
+        "2030FY",
+        350,
+        450,
+        Some("registered_comparatives"),
     );
     let mut annual = sheet(
-        "YTD", "twelve", "400.4", "All-in sustaining costs ($/oz)", "December 31",
+        "YTD",
+        "twelve",
+        "400.4",
+        "All-in sustaining costs ($/oz)",
+        "December 31",
     );
-    annual.cells.iter_mut().find(|(cell, _)| cell == "B5").unwrap().1 =
-        MinimalCell::Text("—".into());
+    annual
+        .cells
+        .iter_mut()
+        .find(|(cell, _)| cell == "B5")
+        .unwrap()
+        .1 = MinimalCell::Text("—".into());
     let quarterly = sheet(
-        "QTD", "three", "100.4", "All-in sustaining costs ($/oz)", "December 31",
+        "QTD",
+        "three",
+        "100.4",
+        "All-in sustaining costs ($/oz)",
+        "December 31",
     );
     fixture.replace_workbook(&[annual, quarterly]);
     let source = fixture.source_claim("2030Q4.xlsx:YTD!B5");
@@ -610,15 +627,29 @@ fn original_registered_dash_becomes_durable_not_published_without_denominator_le
 
     let admitted = fixture.ok(fixture.resolve(), ns(AVAILABLE));
     assert!(admitted.payload_json.contains("\"n_outcomes\":1"));
-    let persisted = DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).unwrap();
-    let operation = persisted.records().iter().find_map(|record| {
-        if let Entry::Operation(text) = &record.entry {
-            parse_subset(text).unwrap().rows.into_iter().find(|row| row.table == "registered_missing")
-        } else { None }
-    }).unwrap();
+    let persisted =
+        DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).unwrap();
+    let operation = persisted
+        .records()
+        .iter()
+        .find_map(|record| {
+            if let Entry::Operation(text) = &record.entry {
+                parse_subset(text)
+                    .unwrap()
+                    .rows
+                    .into_iter()
+                    .find(|row| row.table == "registered_missing")
+            } else {
+                None
+            }
+        })
+        .unwrap();
     for (field, expected) in [
-        ("reason", "not_published"), ("value_kind", "nil_unknown"), ("token", "—"),
-        ("claim_id", claim_id.as_str()), ("sha256", source_digest.as_str()),
+        ("reason", "not_published"),
+        ("value_kind", "nil_unknown"),
+        ("token", "—"),
+        ("claim_id", claim_id.as_str()),
+        ("sha256", source_digest.as_str()),
         ("available_at", AVAILABLE),
     ] {
         assert_eq!(
@@ -628,11 +659,19 @@ fn original_registered_dash_becomes_durable_not_published_without_denominator_le
     }
     drop(persisted);
 
-    fixture.refuse(&fixture.resolve(), ns("2031-02-18T00:00:00Z"), "FMINE-REF-507");
+    fixture.refuse(
+        &fixture.resolve(),
+        ns("2031-02-18T00:00:00Z"),
+        "FMINE-REF-507",
+    );
     let assessed = fixture.ok(
         Command::Assess {
-            journal: JOURNAL.into(), head: fixture.head, cohort: COHORT.into(),
-            as_of: CUT.into(), selector: "first-published".into(), expected_digest: None,
+            journal: JOURNAL.into(),
+            head: fixture.head,
+            cohort: COHORT.into(),
+            as_of: CUT.into(),
+            selector: "first-published".into(),
+            expected_digest: None,
         },
         ns(CUT),
     );
@@ -647,18 +686,25 @@ fn original_registered_dash_becomes_durable_not_published_without_denominator_le
         "\"missing_reason\":\"not_published\"",
         claim_id.as_str(),
     ] {
-        assert!(expected.contains(fragment), "missing {fragment}: {expected}");
+        assert!(
+            expected.contains(fragment),
+            "missing {fragment}: {expected}"
+        );
     }
     let saved = digest_field(&expected, "digest");
     let before = fixture.bytes();
     fs::rename(
         fixture.root.join("corpus/2030Q4.xlsx"),
         fixture.root.join("corpus/2030Q4.xlsx.saved"),
-    ).unwrap();
+    )
+    .unwrap();
     let reopened = execute_with_clock(
         &Command::Report {
-            journal: JOURNAL.into(), head: Some(fixture.head), assessment: saved,
-            provenance: None, timestamp: None,
+            journal: JOURNAL.into(),
+            head: Some(fixture.head),
+            assessment: saved,
+            provenance: None,
+            timestamp: None,
         },
         &fixture.root,
         &NeverClock,
@@ -669,7 +715,9 @@ fn original_registered_dash_becomes_durable_not_published_without_denominator_le
 
     let _ = workbook(&fixture.root, "2031Q1", Some("2031-05-15"));
     fixture.refuse(
-        &restate(&fixture, "2031Q1"), ns("2031-05-16T00:00:00Z"), "FMINE-REF-107",
+        &restate(&fixture, "2031Q1"),
+        ns("2031-05-16T00:00:00Z"),
+        "FMINE-REF-107",
     );
 }
 

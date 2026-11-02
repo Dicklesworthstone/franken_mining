@@ -465,7 +465,10 @@ fn read_request(path: &Path) -> Result<String, Refusal> {
 /// it does not assert that the current filesystem still contains the admitted source bytes.
 #[derive(Debug)]
 enum SourceAdmissionValue {
-    Numeric { exact: Rat, displayed: String },
+    Numeric {
+        exact: Rat,
+        displayed: String,
+    },
     Missing {
         value_kind: String,
         token: String,
@@ -495,7 +498,11 @@ impl SourceAdmission {
                 js(&self.published_at),
                 js(&self.published_at_basis),
             ),
-            SourceAdmissionValue::Missing { value_kind, token, reason } => format!(
+            SourceAdmissionValue::Missing {
+                value_kind,
+                token,
+                reason,
+            } => format!(
                 "{{\"basis\":\"recorded_registered_source_admission\",\"source_bytes_reverified_on_replay\":false,\"cohort_digest\":{},\"source_claim_id\":{},\"exact_value\":null,\"displayed\":null,\"source_value_kind\":{},\"source_token\":{},\"missing_reason\":{},\"published_at\":{},\"published_at_basis\":{}}}",
                 js(&self.cohort.to_hex()),
                 js(&self.claim.to_string()),
@@ -642,8 +649,16 @@ fn source_missing_request(
     forecast: &str,
     resolved: &super::source::ResolvedPublicMissing,
 ) -> Result<String, Refusal> {
-    let id = state.cohorts.get(cohort).ok_or_else(|| absent("frozen cohort missing"))?;
-    let anchor = resolved.source.claim.anchors.first().ok_or_else(|| absent("source Claim anchor missing"))?;
+    let id = state
+        .cohorts
+        .get(cohort)
+        .ok_or_else(|| absent("frozen cohort missing"))?;
+    let anchor = resolved
+        .source
+        .claim
+        .anchors
+        .first()
+        .ok_or_else(|| absent("source Claim anchor missing"))?;
     let mut request = String::from("[[registered_missing]]\n");
     for (key, value) in [
         ("forecast", forecast.to_string()),
@@ -655,14 +670,20 @@ fn source_missing_request(
         ("locator", resolved.citation.locator.clone()),
         ("sha256", Digest32(resolved.citation.sha256).to_hex()),
         ("claim_id", resolved.source.claim.claim_id.to_string()),
-        ("claim_body", bytes_hex(&resolved.source.claim.canonical_body())),
+        (
+            "claim_body",
+            bytes_hex(&resolved.source.claim.canonical_body()),
+        ),
         ("value_kind", resolved.value_kind.to_string()),
         ("token", resolved.token.clone()),
         ("ownership_source", resolved.ownership_source.to_string()),
         ("anchor_path", anchor.artifact_path.clone()),
         ("published_at", resolved.published_at.clone()),
         ("published_at_basis", resolved.published_at_basis.clone()),
-        ("available_at", fmine_calib::record::format_utc(resolved.available_at_ns / 1_000_000_000)),
+        (
+            "available_at",
+            fmine_calib::record::format_utc(resolved.available_at_ns / 1_000_000_000),
+        ),
     ] {
         let _ = writeln!(request, "{key} = {}", toml_string(&value)?);
     }
@@ -840,20 +861,43 @@ fn apply_source(
 }
 
 fn apply_source_missing(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> Result<(), Refusal> {
-    row.allowed(&[
-        "forecast", "cohort", "cohort_digest", "reason", "source", "vintage", "locator",
-        "sha256", "claim_id", "claim_body", "value_kind", "token", "ownership_source",
-        "anchor_path", "published_at", "published_at_basis", "available_at",
-    ], &[])?;
+    row.allowed(
+        &[
+            "forecast",
+            "cohort",
+            "cohort_digest",
+            "reason",
+            "source",
+            "vintage",
+            "locator",
+            "sha256",
+            "claim_id",
+            "claim_body",
+            "value_kind",
+            "token",
+            "ownership_source",
+            "anchor_path",
+            "published_at",
+            "published_at_basis",
+            "available_at",
+        ],
+        &[],
+    )?;
     let forecast = state.forecast_id(row.string("forecast")?)?;
     let cohort = row.string("cohort")?;
     let policy = state.public_policy(cohort, forecast)?;
-    if row.string("vintage")? != policy.period.original_release() || row.string("source")? != policy.issuer {
-        return Err(invalid("registered missing outcome must bind the frozen issuer's original release"));
+    if row.string("vintage")? != policy.period.original_release()
+        || row.string("source")? != policy.issuer
+    {
+        return Err(invalid(
+            "registered missing outcome must bind the frozen issuer's original release",
+        ));
     }
     let cohort_digest = super::hex(row.string("cohort_digest")?)?;
     if state.cohorts.get(cohort) != Some(&cohort_digest) {
-        return Err(invalid("source missing admission differs from the frozen cohort"));
+        return Err(invalid(
+            "source missing admission differs from the frozen cohort",
+        ));
     }
     if !state.ledger.outcomes(forecast).is_empty() {
         return Err(Refusal::new(
@@ -863,7 +907,9 @@ fn apply_source_missing(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> R
     }
     let reason = missing(row.string("reason")?)?;
     if reason != fmine_calib::MissingReason::NotPublished {
-        return Err(invalid("registered source dashes map only to not_published"));
+        return Err(invalid(
+            "registered source dashes map only to not_published",
+        ));
     }
     let published_at = row.string("published_at")?.to_string();
     if !fmine_registry::sources::is_date(&published_at) {
@@ -871,20 +917,36 @@ fn apply_source_missing(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> R
     }
     let publication_start = time(&format!("{published_at}T00:00:00Z"))?;
     let published_at_basis = row.string("published_at_basis")?;
-    if !fmine_registry::sources::PUBLISHED_AT_BASES.iter().any(|prefix| {
-        published_at_basis.strip_prefix(prefix).is_some_and(|detail| !detail.trim().is_empty())
-    }) {
-        return Err(invalid("publication basis needs FACT: or INFERENCE: followed by its evidence"));
+    if !fmine_registry::sources::PUBLISHED_AT_BASES
+        .iter()
+        .any(|prefix| {
+            published_at_basis
+                .strip_prefix(prefix)
+                .is_some_and(|detail| !detail.trim().is_empty())
+        })
+    {
+        return Err(invalid(
+            "publication basis needs FACT: or INFERENCE: followed by its evidence",
+        ));
     }
-    let available_ns = publication_start.checked_add(86_400_000_000_000)
+    let available_ns = publication_start
+        .checked_add(86_400_000_000_000)
         .ok_or_else(|| invalid("publication availability overflows"))?;
     if available_ns != row.time("available_at")? || publication_start < policy.period.end_ns()? {
-        return Err(invalid("source availability must conservatively follow the complete target and publication day"));
+        return Err(invalid(
+            "source availability must conservatively follow the complete target and publication day",
+        ));
     }
     let body = claim_body(row.string("claim_body")?)?;
-    let claim = row.string("claim_id")?.parse::<ObjectId>().map_err(|e| invalid(e.to_string()))?;
+    let claim = row
+        .string("claim_id")?
+        .parse::<ObjectId>()
+        .map_err(|e| invalid(e.to_string()))?;
     if claim != ObjectId::from_canonical_bytes(PrefixKind::Claim, &body) {
-        return Err(Refusal::new(RefusalCode::FrozenRecordMutation507, "source Claim body differs from its stored identity"));
+        return Err(Refusal::new(
+            RefusalCode::FrozenRecordMutation507,
+            "source Claim body differs from its stored identity",
+        ));
     }
     let citation = fmine_calib::OutcomeCitation {
         source: policy.issuer.clone(),
@@ -893,8 +955,13 @@ fn apply_source_missing(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> R
         sha256: super::hex(row.string("sha256")?)?.0,
     };
     let expected = super::source::receipt_missing_claim_body(
-        &policy, forecast, &citation, row.string("value_kind")?, row.string("token")?,
-        row.string("ownership_source")?, row.string("anchor_path")?,
+        &policy,
+        forecast,
+        &citation,
+        row.string("value_kind")?,
+        row.string("token")?,
+        row.string("ownership_source")?,
+        row.string("anchor_path")?,
     )?;
     if body != expected {
         return Err(Refusal::new(
@@ -903,19 +970,25 @@ fn apply_source_missing(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> R
         ));
     }
     let event = state.ledger.append_outcome(
-        forecast, available_ns, recorded_ns, fmine_calib::OutcomeKind::Missing { reason },
+        forecast,
+        available_ns,
+        recorded_ns,
+        fmine_calib::OutcomeKind::Missing { reason },
     )?;
-    state.source_admissions.insert((forecast, event), SourceAdmission {
-        cohort: cohort_digest,
-        claim,
-        value: SourceAdmissionValue::Missing {
-            value_kind: row.string("value_kind")?.to_string(),
-            token: row.string("token")?.to_string(),
-            reason,
+    state.source_admissions.insert(
+        (forecast, event),
+        SourceAdmission {
+            cohort: cohort_digest,
+            claim,
+            value: SourceAdmissionValue::Missing {
+                value_kind: row.string("value_kind")?.to_string(),
+                token: row.string("token")?.to_string(),
+                reason,
+            },
+            published_at,
+            published_at_basis: published_at_basis.to_string(),
         },
-        published_at,
-        published_at_basis: published_at_basis.to_string(),
-    });
+    );
     Ok(())
 }
 

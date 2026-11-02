@@ -273,7 +273,10 @@ fn risk_comparison_json(r: &information::RiskComparison) -> String {
     let array = |rows: &[information::RiskChoice]| {
         format!(
             "[{}]",
-            rows.iter().map(risk_choice_json).collect::<Vec<_>>().join(",")
+            rows.iter()
+                .map(risk_choice_json)
+                .collect::<Vec<_>>()
+                .join(",")
         )
     };
     format!(
@@ -620,14 +623,16 @@ fn information_markdown(
     let risk_rows = |values: &[information::RiskChoice]| {
         values
             .iter()
-            .map(|c| format!(
-                "{} {} (EV {}, CVaR95 loss {}, P(loss) {})",
-                c.kind.as_str(),
-                md(&c.id),
-                ratio(c.expected_value.major),
-                ratio(c.cvar95_loss.major),
-                ratio(c.loss_probability)
-            ))
+            .map(|c| {
+                format!(
+                    "{} {} (EV {}, CVaR95 loss {}, P(loss) {})",
+                    c.kind.as_str(),
+                    md(&c.id),
+                    ratio(c.expected_value.major),
+                    ratio(c.cvar95_loss.major),
+                    ratio(c.loss_probability)
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ")
     };

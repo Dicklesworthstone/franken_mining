@@ -125,7 +125,6 @@ fn flip_margins_pass_independent_exact_witness_and_boundary_checks() {
     );
 }
 
-
 #[test]
 fn information_policy_tail_risk_frontier_passes_independent_fraction_checks() {
     let script =

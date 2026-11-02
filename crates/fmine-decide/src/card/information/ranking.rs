@@ -42,7 +42,9 @@ fn act_now_loss_probability(summary: &DecisionSummary, action_id: &str) -> Resul
     let mut probability = ZERO;
     for state in &action.states {
         if state.payoff.currency != summary.currency {
-            return Err(failed("risk comparison action currency differs from the card"));
+            return Err(failed(
+                "risk comparison action currency differs from the card",
+            ));
         }
         if state.payoff.major.signum() < 0 {
             probability = arithmetic(probability.checked_add(state.weight))?;
@@ -69,7 +71,10 @@ fn value_cmp(a: &RiskChoice, b: &RiskChoice) -> Result<Ordering> {
     Ok(risk.then_with(|| (a.kind, &a.id).cmp(&(b.kind, &b.id))))
 }
 
-fn insertion_sort(rows: &mut [RiskChoice], cmp: impl Fn(&RiskChoice, &RiskChoice) -> Result<Ordering>) -> Result<()> {
+fn insertion_sort(
+    rows: &mut [RiskChoice],
+    cmp: impl Fn(&RiskChoice, &RiskChoice) -> Result<Ordering>,
+) -> Result<()> {
     for i in 1..rows.len() {
         let mut j = i;
         while j > 0 && cmp(&rows[j], &rows[j - 1])? == Ordering::Less {
@@ -88,8 +93,18 @@ fn frontier(mut choices: Vec<RiskChoice>) -> Result<Vec<RiskChoice>> {
             if i == j {
                 continue;
             }
-            let ev = arithmetic(other.expected_value.major.checked_cmp(candidate.expected_value.major))?;
-            let risk = arithmetic(other.cvar95_loss.major.checked_cmp(candidate.cvar95_loss.major))?;
+            let ev = arithmetic(
+                other
+                    .expected_value
+                    .major
+                    .checked_cmp(candidate.expected_value.major),
+            )?;
+            let risk = arithmetic(
+                other
+                    .cvar95_loss
+                    .major
+                    .checked_cmp(candidate.cvar95_loss.major),
+            )?;
             if ev != Ordering::Less
                 && risk != Ordering::Greater
                 && (ev == Ordering::Greater || risk == Ordering::Less)
@@ -107,7 +122,10 @@ fn frontier(mut choices: Vec<RiskChoice>) -> Result<Vec<RiskChoice>> {
     Ok(keep)
 }
 
-pub(super) fn compare(base: &DecisionSummary, options: &[InformationStats]) -> Result<RiskComparison> {
+pub(super) fn compare(
+    base: &DecisionSummary,
+    options: &[InformationStats],
+) -> Result<RiskComparison> {
     let mut choices = Vec::with_capacity(base.alternatives.len() + options.len());
     for action in &base.alternatives {
         if action.mean.currency != base.currency || action.cvar95_loss.currency != base.currency {
@@ -188,7 +206,10 @@ mod tests {
         ];
         let frontier = frontier(rows).unwrap();
         assert_eq!(
-            frontier.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            frontier
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
             ["test", "build", "safe"]
         );
     }
