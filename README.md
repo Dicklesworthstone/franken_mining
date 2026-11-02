@@ -503,9 +503,62 @@ matrix entries or arithmetic overflow refuse the whole comparison. The entity, s
 baseline NAV, share changes, risk limit, sources and unknown-risk terms all bind the result's receipt.
 Models without an equity declaration retain their existing economics and receipts.
 
-These are conditional static comparisons of declared assumptions. The example applies no fitted
-reference-class correction, and the output supplies no empirical selection frequency, staged recourse,
-entity cash-flow waterfall, project feasibility approval or execution authority.
+#### Fund a study, then choose a response
+
+DESIGN (BD-229, plan section 23): an explicit two-stage model can commit to a paid study, observe its declared
+result, and then choose financing, construction or abandonment. Run the complete invented example:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/recourse.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/recourse.toml --json
+```
+
+Add one `[[recourse]]` table naming `information_candidate`, `observation_date` and `information_basis`.
+Map every candidate through `[[candidate_stage]]` (`candidate`, `stage = "initial"` or `"recourse"`) and
+every shared state through `[[state_observation]]` (`state`, `observation`). The complete fixture shows
+these tables alongside the required dated cash matrix and optional equity inputs.
+
+The information candidate must be an initial commitment with positive planned cost, negative net NAV in
+every state, and negative cumulative cash before the observation. The observation date starts a noninitial
+cash period; every recourse candidate declares zero cash flow before that boundary. Without the study,
+the policy must choose one common continuation across all states. With it, the policy may respond only to
+the observation: states assigned the same observation always receive the same continuation. An explicit
+`requires` relation can additionally make the study a prerequisite for construction or financing.
+
+In the synthetic fixture, the company starts with USD 1,000 NAV, 100 shares and USD 30 cash. The study costs
+USD 10, leaving exactly the USD 20 cash floor. Good and Bad each have declared weight 1/2. The chosen policy is:
+
+| Observation | Continuation | Ending equity NAV | Ending shares | NAV/share change | Closing cash |
+|---|---|---:|---:|---:|---:|
+| Good | Issue 20 shares for USD 160, then fund construction | USD 1,250 | 120 | 5/12 USD/share | USD 80 |
+| Bad | Abandon further investment | USD 990 | 100 | -1/10 USD/share | USD 20 |
+
+The study cost remains in both outcomes. Expected improvement is exactly **19/120 USD/share**, with
+**USD 120 expected total NAV change**. The declared tail-loss ceiling is met at equality, **1/10 USD/share**.
+The best fixed program is hold, so the separately reported net adaptive value is **19/120 USD/share**.
+Issuing in the Bad state would increase total NAV but dilute existing shareholders; the per-share objective
+correctly declines that continuation.
+
+The evaluator checks budget, prerequisites, exclusions, cash and ending shares on each realized path.
+It evaluates CVaR on the complete policy with the original unconditional state weights. A separate risk
+limit at each observation would answer a different question and can discard the correct global winner.
+All initial commitments and their full declared cash, NAV and share effects remain in every continuation.
+
+JSON and Markdown retain every policy, its initial choices, continuations, realized paths, cash checkpoints,
+equity ledgers and rejection reasons, plus the complete static comparison. Net adaptive value is the best
+policy mean minus the best static mean under the same objective and risk rule; it may involve a different
+initial commitment. It is already reflected in policy outcomes and must never be added to NAV again.
+If either population lacks a feasible winner, the comparison is explicitly unavailable.
+
+This exact mode admits at most four observation classes and 256 policies. With `f` initial candidates,
+`r` recourse candidates and `k` classes, the population is `2^(f-1) × (2^r + 2^(r×k))`; all rejected policies
+remain visible. The combined static and policy cash-checkpoint count must be at most 65,536. Larger models
+refuse explicitly. The evaluator reuses each static subset's same-state cash and equity results rather than
+recalculating those ledgers for every policy, and sorts exact distributions without floating-point rounding.
+
+These are conditional comparisons of declared assumptions. The examples apply no fitted reference-class
+correction, and the output supplies no calibrated signal probabilities, empirical selection frequency,
+additional decision stages, entity cash-flow waterfall, project feasibility approval or execution authority.
 The wider CapitalProgram and its M4 gates remain open.
 
 ### Compare explicit decision alternatives

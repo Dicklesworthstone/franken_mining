@@ -1,4 +1,4 @@
-//! Source-bound static capital selection over one complete shared scenario population (BD-229).
+//! Source-bound static and two-stage capital comparison over shared scenarios (BD-229).
 //! Determinism: Exact (bounded model input and checked rational portfolio calculations).
 
 use std::io::Read as _;
@@ -14,18 +14,18 @@ pub(super) const USAGE: &str = "decide program <model-file>";
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "{",
     "\"schema\":\"fmine.capital-program.v1\",",
-    "\"mode\":\"declared_static_capital_comparison\",",
+    "\"modes\":[\"declared_static_capital_comparison\",\"declared_two_stage_capital_comparison\"],",
     "\"input\":\"Regular UTF-8 TOML file, at most 4 MiB; actual bytes are SHA-256 bound\",",
     "\"fields\":[\"schema\",\"model_key\",\"question\",\"currency\",\"valuation_basis\",\"budget\",\"tail_mass\",\"payoff_convention\",\"reference_class_basis\",\"max_tail_loss (optional)\"],",
     "\"tables\":{\"state\":[\"id\",\"weight\"],\"candidate\":[\"id\",\"label\",\"cost\",\"reference_class_basis\",\"exclusion_group (optional)\"],\"payoff\":[\"candidate\",\"state\",\"value\"],\"requires\":[\"candidate\",\"prerequisite\"],\"uu\":[\"id\",\"description\",\"trigger\",\"downside_usd_m\"],\"funding (optional)\":[\"cash_period\",\"cash_basis\",\"minimum_cash\"],\"available_cash\":[\"state\",\"value\"],\"cash_requirement\":[\"candidate\",\"state\",\"value\"],\"funding_schedule (optional, excludes funding)\":[\"cash_basis\",\"opening_date\"],\"cash_period\":[\"id\",\"cash_period\",\"minimum_cash\"],\"opening_cash\":[\"state\",\"value\"],\"baseline_cash_flow\":[\"period\",\"state\",\"value\"],\"candidate_cash_flow\":[\"period\",\"candidate\",\"state\",\"value\"],\"equity_basis (optional)\":[\"entity\",\"share_class\",\"shares_per_unit\",\"initial_share_units\",\"max_tail_loss_per_share (optional)\"],\"baseline_equity_nav\":[\"state\",\"value\"],\"candidate_share_change\":[\"candidate\",\"state\",\"value\"]},",
-    "\"scope\":\"At most eight candidates, 256 shared states and 16 cash periods; every subset is examined. Scheduled funding additionally requires 2^candidates * states * (periods+1) <= 65536 checkpoints\",",
+    "\"scope\":\"At most eight candidates, 256 shared states and 16 cash periods; every subset is examined. Scheduled funding additionally requires 2^candidates * states * (periods+1) <= 65536 checkpoints. Two-stage policies require at least one initial and one recourse candidate, 2..16 cash periods, at most four observation classes and 256 complete policies; combined static and policy checkpoints must not exceed 65536\",",
     "\"payoffs\":\"Use additive_net_delta_nav without equity, or additive_equity_nav_with_share_changes with equity_basis. Equity payoffs are total equity NAV changes: buyback cash paid including fees is negative; issuance adds net proceeds. Do not reuse standalone per-share accretion as NAV. Costs and cash constrain funding and are not deducted again\",",
     "\"risk\":\"Exact signed-loss CVaR over the declared tail mass of whole-bundle shared-state outcomes. Equity mode ranks ending NAV per actual share minus baseline NAV per actual share, with exact USD/share quantiles and regret. Use equity_basis.max_tail_loss_per_share; the USD max_tail_loss is forbidden. Total-USD statistics remain separate\",\"equity\":\"Declare one entity and share class, positive initial_share_units and shares_per_unit, baseline NAV for every state, and signed share changes for every candidate/state including zeros. Share quantities, scale and per-share cap require exact quoted n/d strings. Negative changes retire shares, positive changes issue shares. Compute each whole bundle before dividing; preserve NAV/share-change pairing by state. Nonpositive ending shares reject the bundle with undefined ratios. All equity inputs and rejected ledgers remain source-bound; equity can combine with either funding model\",",
     "\"selection\":\"Conditional exact co-winners, rejected bundles, hold-cash, budget slack and the cost of the declared tail-loss limit\",",
     "\"evidence\":\"Declared assumptions remain Assumed, Internal and uncalibrated; no fitted reference-class adjustment, selection-frequency estimate or execution authority\",",
     "\"example\":\"tests/capital/gb30.toml\",",
     "\"liquidity\":\"Declare either aggregate funding or a complete funding_schedule. Scheduled periods are contiguous inclusive YYYY-MM-DD/YYYY-MM-DD ranges starting at opening_date. Opening cash is explicit in every state; signed baseline and candidate flows require all period/state and period/candidate/state rows, including zeros. Positive flows are receipts, negative flows expenditures; baseline excludes the selected program. Balances carry forward exactly. The first floor applies at opening and each period floor at its close. Every breach remains a rejection even after later recovery; financing may make a nonempty program feasible when hold fails. No intra-period balances or adaptive recourse are inferred\",",
-    "\"liquidity_example\":\"tests/capital/liquidity.toml\",\"cash_schedule_example\":\"tests/capital/cash_schedule.toml\",\"equity_example\":\"tests/capital/equity.toml\"",
+    "\"liquidity_example\":\"tests/capital/liquidity.toml\",\"cash_schedule_example\":\"tests/capital/cash_schedule.toml\",\"equity_example\":\"tests/capital/equity.toml\",\"recourse_example\":\"tests/capital/recourse.toml\",\"recourse_tables\":{\"recourse\":[\"information_candidate\",\"observation_date\",\"information_basis\"],\"candidate_stage\":[\"candidate\",\"stage (initial or recourse)\"],\"state_observation\":[\"state\",\"observation\"]},\"recourse\":\"Optional explicit two-stage mode. Map every candidate and shared state. The initial information candidate must have positive cost, negative net NAV in every state and negative cumulative cash before observation_date, which starts a noninitial cash period. Recourse cash before observation must be explicitly zero. Without the gate one common continuation applies; after purchasing it continuations depend only on observation classes. All initial effects persist, including after abandonment. Budget, prerequisites, exclusions, cash and shares apply on each realized path; CVaR uses the full unconditional policy distribution. The report retains all policies and the static comparison. Net adaptive value is separately the best policy mean minus the best static mean under the same objective/risk rule, with explicit unavailable comparisons; never add it to NAV again\"",
     "}",
 );
 
@@ -57,13 +57,13 @@ pub(super) fn execute(model: &Path, root: &Path) -> Envelope {
         }
         let text = std::str::from_utf8(&bytes).map_err(|e| unreadable(e.to_string()))?;
         let digest = sha256(&bytes);
-        let inputs = fmine_capital::model::parse(
+        let evaluated = fmine_capital::model::evaluate(
             text,
             SourceAnchor::new(source_path, digest.0, "declared static capital program"),
         )?;
-        let evaluated = fmine_capital::evaluate(&inputs)?;
         let payload = format!(
-            "{{\"mode\":\"declared_static_capital_comparison\",\"source\":{{\"path\":\"{}\",\"sha256\":\"{}\",\"bytes\":{}}},\"program\":{}}}",
+            "{{\"mode\":\"{}\",\"source\":{{\"path\":\"{}\",\"sha256\":\"{}\",\"bytes\":{}}},\"program\":{}}}",
+            evaluated.mode(),
             escape_json(source_path),
             digest.to_hex(),
             bytes.len(),

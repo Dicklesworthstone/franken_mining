@@ -101,9 +101,8 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     and an optional signed-loss CVaR ceiling. Costs constrain spending without being subtracted again from
     net payoffs. Every bundle and rejection remains visible; risk is computed from the joint scenario sums.
     JSON and Markdown report exact co-winners, budget slack and the expected-value cost of the risk limit,
-    with complete source-bound Claims and explicit reference-class adjustment bases. This is a conditional
-    static comparison; staged recourse, entity waterfalls, empirical selection
-    frequencies and execution authority are not supplied.
+    with complete source-bound Claims and explicit reference-class adjustment bases. These conditional
+    comparisons supply no entity waterfalls, empirical selection frequencies or execution authority.
     Optional equity mode requires `payoff_convention = "additive_equity_nav_with_share_changes"`, one
     `equity_basis` (entity, share class, positive initial share units and actual shares per unit), complete
     `baseline_equity_nav` state rows and complete `candidate_share_change` candidate/state rows. It values
@@ -130,7 +129,20 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     the actual feasible alternatives. The report renders every bundle's cash timeline. At most 16 periods
     and 65,536 total checkpoints across all subsets are admitted; aggregate and scheduled funding cannot
     be combined. Both modes bind the complete source Claims without charging cash flows to net NAV again.
-    Cash timing inside a declared period and adaptive staged recourse remain outside this comparison.
+    Cash timing inside a declared period remains outside this comparison.
+    Optional `recourse` declares a paid initial information candidate, observation date and information
+    basis, with complete `candidate_stage` and `state_observation` mappings. `model::evaluate` dispatches
+    to static or two-stage evaluation while preserving original source bytes; the old static parser
+    refuses staged tables. Two-stage JSON uses mode `declared_two_stage_capital_comparison` and program
+    schema `fmine.capital-recourse.v1`. It retains every policy's initial commitments, continuations and
+    realized paths, full cash/equity ledgers and all rejections, together with the complete static report.
+    A continuation depends only on its declared observation after the gate is bought; otherwise it is
+    common to all states. Initial effects and sunk costs persist. All path constraints and unconditional
+    global risk apply to the active USD or USD/share objective. Net adaptive value is reported separately,
+    with explicit unavailable comparisons when either population has no eligible winner.
+    At most four observations, 256 policies and 65,536 combined static/policy checkpoints are admitted.
+    `tests/capital/recourse.toml` chooses study followed by issuance and construction only in Good,
+    abandoning in Bad, at exactly 19/120 USD/share expected improvement and USD 120 total expected NAV change.
   - `lint <draft> --issuer <issuer> --html-definitions <mapping.toml> [--discover] [--as-of YYYY-MM-DD]`
     (BD-059/BD-345): checks only the mapped, registered HTML Claims through the existing exact equality
     kernel. The receipt retains full value, label, mapping and registry evidence. A separate source-publication

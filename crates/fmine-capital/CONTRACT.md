@@ -144,7 +144,8 @@ not infer signal accuracy, information rights, approval or a calendar of economi
   checkpoint count `(2^(f+r) + policies) * states * (periods + 1)` must not exceed 65,536. Bounds precede
   canonical tagging/enumeration; rejected policies are retained, never pruned to satisfy work limits.
 - `model::parse(text, SourceAnchor)`: verifies SHA-256 against actual bytes, then reads the strict
-  `fmine.capital-program.v1` TOML subset. Top-level strings are `schema`, `model_key`, `question`, `currency`,
+  static-only `fmine.capital-program.v1` TOML subset; staged tables refuse. Top-level strings are `schema`,
+  `model_key`, `question`, `currency`,
   `valuation_basis`, `budget`, `tail_mass`, `payoff_convention`, `reference_class_basis`, with optional
   `max_tail_loss`. Candidate rows require `id`, `label`, `cost`, `reference_class_basis` and optionally
   `exclusion_group`; separate `requires` rows name candidate/prerequisite pairs. State rows name id/weight;
@@ -168,6 +169,14 @@ not infer signal accuracy, information rights, approval or a calendar of economi
   positive `n/d`. The parser bounds text to 4 MiB, rows to 45,056 and UU terms to 64. Core admission and
   parsing bound identifiers to 128 bytes and descriptions, bases, source paths and locators to 4096 bytes,
   preventing one large identifier from expanding into every enumerated subset's state statistics.
+- `model::evaluate(text, SourceAnchor) -> Result<EvaluatedModel, Refusal>`: source-bound static or two-stage
+  dispatch with `mode`, `no_claim`, `to_json` and `to_markdown` accessors. The same strict schema accepts
+  one optional `[[recourse]]` with `information_candidate`, `observation_date`, `information_basis`;
+  complete `[[candidate_stage]]` rows with `candidate`, `stage` (`initial` or `recourse`); and complete
+  `[[state_observation]]` rows with `state`, `observation`. The information declaration becomes a separate
+  Assumed Claim with its original line anchors and UU. Parsing checks the original complete source bytes,
+  without stripping staged tables or manufacturing another file hash. Unknown, duplicate and orphan rows
+  refuse. Static models retain their existing report bytes. Staged output uses `fmine.capital-recourse.v1`.
 
 ## 5. Guards & Typed Refusals
 
@@ -240,9 +249,16 @@ global rather than branchwise tail limits, path-specific prerequisites and exclu
 and equity issuance chosen by USD/share rather than total NAV. State-specific cash and share-count failures
 remain on the paths that realize them. Admission, exact work limits, input permutation, losing-input and
 metadata binding, and unavailable static comparisons have direct regressions.
+An independent Python Fraction policy oracle exercises 15 two-stage scenarios through the actual binary,
+including deferred initial obligations after abandonment. It computes every realized path directly from
+the inputs and compares both the complete policy population and the static population. Integration tests
+also check library/binary JSON and Markdown parity and execute the checked-in source-bound example.
 The complete `tests/capital/equity.toml` example selects issuance plus project at exactly 1/2 USD per share;
 its rejected standalone issuance loses 1/3 USD per share and its buyback adds 2/9 USD per share.
 The complete `tests/capital/cash_schedule.toml` example selects bridge plus plant at USD 62.4M expected net delta-NAV.
+The complete `tests/capital/recourse.toml` example buys the study, then issues shares and builds only after
+Good, abandoning after Bad. Its exact mean is 19/120 USD/share with USD 120 total expected NAV change;
+closing cash is USD 80 and USD 20 respectively. The best feasible fixed program is hold.
 This bounded slice does not claim the full GATE-CAP-01/03/04 scale, selection-frequency or historical evidence.
 
 ## 9. Lifted Code & Foundation Dependencies

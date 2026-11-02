@@ -1,0 +1,272 @@
+# Invented two-stage equity and cash example; no issuer data or calibrated probabilities.
+# Pay USD 10 for the study before observing Good or Bad. That cost remains on abandonment.
+# Good: issue 20 shares for USD 160 net proceeds, then fund the USD 100 project.
+# Bad: abandon the recourse projects. Do not select the high-USD but dilutive issuance.
+# Good ending NAV/share = 1250/120; Bad = 990/100; baseline = 1000/100.
+# Expected change in NAV/share = ((5/12) + (-1/10))/2 = 19/120 USD/share.
+# Expected total NAV change is USD 120. Good final cash is 80; Bad final cash is 20.
+# The best feasible static program is hold, so net adaptive value is also 19/120 USD/share.
+# The complete bounded population has 4 unobserved uniform policies and 16 adaptive policies.
+schema = "fmine.capital-program.v1"
+model_key = "invented_two_stage_equity_and_cash"
+question = "Which paid-information policy creates the most NAV per ordinary share while meeting every cash floor?"
+currency = "USD"
+valuation_basis = "Invented decision-date total parent equity NAV; project payoffs already net of costs and issuance includes net proceeds"
+budget = "110"
+tail_mass = "1/5"
+payoff_convention = "additive_equity_nav_with_share_changes"
+reference_class_basis = "Invented exact accounting assumptions and uncalibrated shared-state probabilities"
+
+[[state]]
+id = "good"
+weight = "1/2"
+
+[[state]]
+id = "bad"
+weight = "1/2"
+
+[[candidate]]
+id = "study"
+label = "Invented paid feasibility study"
+cost = "10"
+reference_class_basis = "Declared USD 10 sunk cost; the study distinguishes only the named information classes"
+
+[[candidate]]
+id = "issue"
+label = "Invented contingent equity issuance"
+cost = "0"
+reference_class_basis = "Declared 20 additional shares for USD 160 net proceeds after study completion"
+
+[[candidate]]
+id = "project"
+label = "Invented contingent construction project"
+cost = "100"
+reference_class_basis = "Declared USD 100 construction funding; scenario NAV changes already include project costs"
+
+[[payoff]]
+candidate = "study"
+state = "good"
+value = "-10"
+
+[[payoff]]
+candidate = "study"
+state = "bad"
+value = "-10"
+
+[[payoff]]
+candidate = "issue"
+state = "good"
+value = "160"
+
+[[payoff]]
+candidate = "issue"
+state = "bad"
+value = "160"
+
+[[payoff]]
+candidate = "project"
+state = "good"
+value = "100"
+
+[[payoff]]
+candidate = "project"
+state = "bad"
+value = "-100"
+
+[[requires]]
+candidate = "issue"
+prerequisite = "study"
+
+[[requires]]
+candidate = "project"
+prerequisite = "study"
+
+[[equity_basis]]
+entity = "Invented parent company"
+share_class = "Invented ordinary shares"
+shares_per_unit = "1/1"
+initial_share_units = "100/1"
+max_tail_loss_per_share = "1/10"
+
+[[baseline_equity_nav]]
+state = "good"
+value = "1000"
+
+[[baseline_equity_nav]]
+state = "bad"
+value = "1000"
+
+[[candidate_share_change]]
+candidate = "study"
+state = "good"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "study"
+state = "bad"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "issue"
+state = "good"
+value = "20/1"
+
+[[candidate_share_change]]
+candidate = "issue"
+state = "bad"
+value = "20/1"
+
+[[candidate_share_change]]
+candidate = "project"
+state = "good"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "project"
+state = "bad"
+value = "0/1"
+
+[[funding_schedule]]
+cash_basis = "Invented parent nominal USD cash; positive receipts and negative expenditures; no intra-period ordering claim"
+opening_date = "2030-01-01"
+
+[[cash_period]]
+id = "construction"
+cash_period = "2030-01-01/2030-06-30"
+minimum_cash = "20"
+
+[[cash_period]]
+id = "operation"
+cash_period = "2030-07-01/2030-12-31"
+minimum_cash = "20"
+
+[[opening_cash]]
+state = "good"
+value = "30"
+
+[[opening_cash]]
+state = "bad"
+value = "30"
+
+[[baseline_cash_flow]]
+period = "construction"
+state = "good"
+value = "0"
+
+[[baseline_cash_flow]]
+period = "construction"
+state = "bad"
+value = "0"
+
+[[baseline_cash_flow]]
+period = "operation"
+state = "good"
+value = "0"
+
+[[baseline_cash_flow]]
+period = "operation"
+state = "bad"
+value = "0"
+
+[[candidate_cash_flow]]
+period = "construction"
+candidate = "study"
+state = "good"
+value = "-10"
+
+[[candidate_cash_flow]]
+period = "construction"
+candidate = "study"
+state = "bad"
+value = "-10"
+
+[[candidate_cash_flow]]
+period = "construction"
+candidate = "issue"
+state = "good"
+value = "0"
+
+[[candidate_cash_flow]]
+period = "construction"
+candidate = "issue"
+state = "bad"
+value = "0"
+
+[[candidate_cash_flow]]
+period = "construction"
+candidate = "project"
+state = "good"
+value = "0"
+
+[[candidate_cash_flow]]
+period = "construction"
+candidate = "project"
+state = "bad"
+value = "0"
+
+[[candidate_cash_flow]]
+period = "operation"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[candidate_cash_flow]]
+period = "operation"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[candidate_cash_flow]]
+period = "operation"
+candidate = "issue"
+state = "good"
+value = "160"
+
+[[candidate_cash_flow]]
+period = "operation"
+candidate = "issue"
+state = "bad"
+value = "160"
+
+[[candidate_cash_flow]]
+period = "operation"
+candidate = "project"
+state = "good"
+value = "-100"
+
+[[candidate_cash_flow]]
+period = "operation"
+candidate = "project"
+state = "bad"
+value = "-100"
+
+[[recourse]]
+information_candidate = "study"
+observation_date = "2030-07-01"
+information_basis = "Invented study reveals the Good or Bad information class only after its pre-observation cost is paid"
+
+[[candidate_stage]]
+candidate = "study"
+stage = "initial"
+
+[[candidate_stage]]
+candidate = "issue"
+stage = "recourse"
+
+[[candidate_stage]]
+candidate = "project"
+stage = "recourse"
+
+[[state_observation]]
+state = "good"
+observation = "good"
+
+[[state_observation]]
+state = "bad"
+observation = "bad"
+
+[[uu]]
+id = "study_accuracy_and_execution"
+description = "The study may misclassify outcomes, equity may execute on different terms, and cash receipts may follow payments within a period"
+trigger = "An observed operating outcome, transaction term or cash timing falls outside the declared information and funding assumptions"
+downside_usd_m = "0.001"
