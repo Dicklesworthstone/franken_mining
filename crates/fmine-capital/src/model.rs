@@ -7,6 +7,13 @@ use fmine_evidence::KuKind;
 use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
 
 use super::*;
+use crate::recourse::{
+    CandidateStage, DecisionStage, EvaluatedRecourseProgram, RecourseBasis, RecourseInputs,
+    StateObservation,
+};
+
+#[cfg(test)]
+mod tests;
 
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 type Fields<'a> = BTreeMap<&'a str, (&'a str, usize)>;
@@ -44,6 +51,8 @@ fn fields<'a>(
             "candidate",
             "state",
             "period",
+            "information_candidate",
+            "observation",
             "prerequisite",
             "exclusion_group",
         ]
@@ -207,6 +216,69 @@ fn assumed<T>(
 /// A candidate requires id/label/cost/reference_class_basis and may name one exclusion_group.
 /// Costs constrain spending only; candidate payoff values are already net delta-NAV in major USD.
 pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
+    parse_model(text, source, false).map(|(program, _)| program)
+}
+
+/// An evaluated model keeps static and explicitly staged decision objects distinct.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvaluatedModel {
+    Static(Box<EvaluatedProgram>),
+    Recourse(Box<EvaluatedRecourseProgram>),
+}
+
+impl EvaluatedModel {
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        match self {
+            Self::Static(program) => program.to_json(),
+            Self::Recourse(program) => program.to_json(),
+        }
+    }
+
+    #[must_use]
+    pub fn to_markdown(&self) -> String {
+        match self {
+            Self::Static(program) => program.to_markdown(),
+            Self::Recourse(program) => program.to_markdown(),
+        }
+    }
+
+    #[must_use]
+    pub fn no_claim(&self) -> &'static str {
+        match self {
+            Self::Static(program) => program.no_claim(),
+            Self::Recourse(program) => program.no_claim(),
+        }
+    }
+
+    #[must_use]
+    pub fn mode(&self) -> &'static str {
+        match self {
+            Self::Static(_) => "declared_static_capital_comparison",
+            Self::Recourse(_) => "declared_two_stage_capital_comparison",
+        }
+    }
+}
+
+/// Evaluates the exact source bytes, dispatching to recourse only when explicitly declared.
+/// The static-only `parse` entry point continues to reject every recourse table.
+pub fn evaluate(text: &str, source: SourceAnchor) -> Result<EvaluatedModel> {
+    let (program, information) = parse_model(text, source, true)?;
+    match information {
+        Some(information) => crate::recourse::evaluate(&RecourseInputs {
+            program,
+            information,
+        })
+        .map(|program| EvaluatedModel::Recourse(Box::new(program))),
+        None => super::evaluate(&program).map(|program| EvaluatedModel::Static(Box::new(program))),
+    }
+}
+
+fn parse_model(
+    text: &str,
+    source: SourceAnchor,
+    allow_recourse: bool,
+) -> Result<(ProgramInputs, Option<Claim<RecourseBasis>>)> {
     if text.len() > MAX_BYTES {
         return Err(input(1, "model exceeds the 4 MiB parser limit"));
     }
@@ -285,6 +357,10 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
     let mut baseline_nav = BTreeMap::new();
     let mut share_changes = BTreeMap::new();
     let mut equity_anchors = Vec::new();
+    let mut information: Option<RecourseBasis> = None;
+    let mut candidate_stages = BTreeMap::new();
+    let mut observations = BTreeMap::new();
+    let mut information_anchors = Vec::new();
     for row in &doc.rows {
         match row.table.as_str() {
             "state" => {
@@ -601,6 +677,72 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
                     &format!("candidate share change {candidate}/{state}"),
                 ));
             }
+            "recourse" if allow_recourse => {
+                let f = fields(
+                    &row.fields,
+                    &[
+                        "information_candidate",
+                        "observation_date",
+                        "information_basis",
+                    ],
+                    &[],
+                    row.line,
+                )?;
+                if information.is_some() {
+                    return Err(input(row.line, "only one recourse declaration is allowed"));
+                }
+                information = Some(RecourseBasis {
+                    model_key: model_key.into(),
+                    currency: Currency::USD,
+                    valuation_basis: basis.into(),
+                    information_candidate: get(&f, "information_candidate")?.into(),
+                    observation_date: get(&f, "observation_date")?.into(),
+                    information_basis: get(&f, "information_basis")?.into(),
+                    candidate_stages: Vec::new(),
+                    observations: Vec::new(),
+                });
+                information_anchors.push(located(
+                    &source,
+                    row.line,
+                    "recourse information gate, observation date and basis",
+                ));
+            }
+            "candidate_stage" if allow_recourse => {
+                let f = fields(&row.fields, &["candidate", "stage"], &[], row.line)?;
+                let candidate = get(&f, "candidate")?;
+                let stage = match get(&f, "stage")? {
+                    "initial" => DecisionStage::Initial,
+                    "recourse" => DecisionStage::Recourse,
+                    _ => return Err(input(row.line, "stage must be initial or recourse")),
+                };
+                if candidate_stages
+                    .insert(candidate.to_string(), stage)
+                    .is_some()
+                {
+                    return Err(input(row.line, "duplicate candidate stage"));
+                }
+                information_anchors.push(located(
+                    &source,
+                    row.line,
+                    &format!("candidate stage {candidate}"),
+                ));
+            }
+            "state_observation" if allow_recourse => {
+                let f = fields(&row.fields, &["state", "observation"], &[], row.line)?;
+                let state = get(&f, "state")?;
+                let observation = get(&f, "observation")?;
+                if observations
+                    .insert(state.to_string(), observation.to_string())
+                    .is_some()
+                {
+                    return Err(input(row.line, "duplicate state observation"));
+                }
+                information_anchors.push(located(
+                    &source,
+                    row.line,
+                    &format!("state observation {state}/{observation}"),
+                ));
+            }
             "uu" => {
                 let f = fields(
                     &row.fields,
@@ -806,6 +948,65 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
         }
         None
     };
+    let information = if let Some(mut declaration) = information {
+        if candidate_stages.len() != candidates.len() || observations.len() != states.len() {
+            return Err(bad(
+                RefusalCode::NoClaimInDomain201,
+                "recourse requires every candidate stage and every shared-state observation",
+            ));
+        }
+        for candidate in candidate_stages.keys() {
+            if !candidates.contains_key(candidate) {
+                return Err(input(
+                    1,
+                    format!("stage names unknown candidate {candidate}"),
+                ));
+            }
+        }
+        for state in observations.keys() {
+            if !states.contains_key(state) {
+                return Err(input(1, format!("observation names unknown state {state}")));
+            }
+        }
+        declaration.candidate_stages = candidate_stages
+            .into_iter()
+            .map(|(candidate_id, stage)| CandidateStage {
+                candidate_id,
+                stage,
+            })
+            .collect();
+        declaration.observations = observations
+            .into_iter()
+            .map(|(state_id, observation_id)| StateObservation {
+                state_id,
+                observation_id,
+            })
+            .collect();
+        let tag = declaration.canonical_tag();
+        information_anchors.extend(uu_anchors.iter().cloned());
+        information_anchors.extend(
+            doc.top
+                .iter()
+                .filter(|f| matches!(f.key.as_str(), "model_key" | "currency" | "valuation_basis"))
+                .map(|f| located(&source, f.line, &f.key)),
+        );
+        Some(assumed(
+            format!("capital.{model_key}.information"),
+            declaration,
+            &tag,
+            AdditivityClass::NonAdditive,
+            &unknowns,
+            information_anchors,
+        ))
+    } else {
+        if !candidate_stages.is_empty() || !observations.is_empty() {
+            return Err(input(
+                1,
+                "stage and observation rows require an explicit recourse declaration",
+            ));
+        }
+        None
+    };
     let mut policy_anchors: Vec<_> = doc
         .top
         .iter()
@@ -861,5 +1062,5 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<ProgramInputs> {
         equity,
     };
     validate(&inputs)?;
-    Ok(inputs)
+    Ok((inputs, information))
 }
