@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use fmine_claim::{AdditivityClass, Claim, Confidentiality, Representation, SpatialSupport};
+use fmine_core::anchor::SourceAnchor;
 use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, blake3_hash};
 use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, KuKind};
@@ -410,6 +411,18 @@ pub fn public_claim(
     key: PublicKey,
     value: PublicValue,
 ) -> KeyedCell {
+    public_claim_anchored(workbook.make_anchor(sheet, cell_ref), vec![], key, value)
+}
+
+/// Builds the same canonical public Claim from a primary value anchor and explicit interpretation
+/// evidence. The workbook wrapper passes no additional anchors, preserving its existing IDs exactly.
+#[must_use]
+pub fn public_claim_anchored(
+    anchor: SourceAnchor,
+    interpretation_anchors: Vec<SourceAnchor>,
+    key: PublicKey,
+    value: PublicValue,
+) -> KeyedCell {
     let tag = canonical_value_tag(&key, &value);
     let numeric = matches!(value, PublicValue::Number { .. });
     let representation = if numeric {
@@ -439,12 +452,17 @@ pub fn public_claim(
         | "usd_per_t" => AdditivityClass::IntensiveWeighted,
         _ => AdditivityClass::NonAdditive,
     };
-    let anchor = workbook.make_anchor(sheet, cell_ref);
     let file = std::path::Path::new(&anchor.artifact_path)
         .file_name()
         .and_then(|p| p.to_str())
         .unwrap_or(&anchor.artifact_path);
-    let locator = format!("{file}:{sheet}!{cell_ref}");
+    let locator = format!("{file}:{}", anchor.locator);
+    let mut anchors = vec![anchor];
+    for evidence in interpretation_anchors {
+        if !anchors.contains(&evidence) {
+            anchors.push(evidence);
+        }
+    }
     let claim = Claim::new(
         &key.line.label,
         value,
@@ -458,7 +476,7 @@ pub fn public_claim(
         Confidentiality::public(),
         vec![],
         vec![],
-        vec![anchor],
+        anchors,
     );
     KeyedCell {
         locator,

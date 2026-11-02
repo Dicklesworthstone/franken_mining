@@ -14,6 +14,14 @@ Parses and validates the 8 canonical TOML registries in `registries/` (`loc_budg
 Serves as the schema and registry catalog authority for `fmine doctor` and `xtask`.
 
 ## 4. Public API Surface
+- `sources::HtmlSourceRow`, `SourcesRegistry::html_sources` (BD-057/BD-059): optional `[[html]]` rows
+  register HTML filings separately from workbook and PDF sources. Required fields are a bare `.html` or
+  `.htm` `file`, `release` (`YYYYQn`), HTTPS `url`, registered `url_basis`, calendar `published_at`, cited
+  `published_at_basis` (`FACT: ` or `INFERENCE: `), positive `bytes` and lowercase SHA-256. Optional `dir`
+  defaults to `corpus_dir` and must be a plain relative path. No PDF page count or workbook kind is accepted.
+  Filenames and digests are unique across all three source formats. HTML-only issuer profiles are valid;
+  existing workbook and PDF rows retain their previous meanings. Registration identifies source bytes
+  and stated publication evidence; runtime extraction independently verifies those bytes and label mappings.
 - `metrics::{ReserveMetal, ReserveReplacementRule}`, `MetricRegistry::reserve_replacements`, and
   `MetricRegistry::reserve_replacement` (BD-063): optional strict `[[reserve_replacement]]` rows attach one
   explicit rule to a registered reserve-replacement definition. Metal is `gold` or `gold_equivalent`, the

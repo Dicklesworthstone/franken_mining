@@ -5,10 +5,45 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Assurance`
 - **LOC Budget:** `18k planned / 21k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "guidance", "waterfall", "recovery", "lint"]`
+- **Allowed Module Families:** `["sources", "aisc", "mine_stats", "mine_ledger", "synthetic", "live", "citation", "key", "consistency", "transcribe", "guidance", "waterfall", "recovery", "lint", "html"]`
 
 ## 2. Mathematical & Domain Formulation
 The public lane of M0 (`fmine assure public`).
+
+- DESIGN (BD-057/BD-059): `html::run(workspace, issuer, definitions, as_of)` turns registered HTML
+  table cells into canonical public Claims. It parses the exact captured source registry and mapping
+  bytes, verifies selected source lengths and SHA-256 digests, and uses `HtmlDocument`'s exact numeric
+  tokens, decimal values and printed steps. The floating compatibility projection is never an input.
+  A mapping has no amount field. AISC, TCC, gold-equivalent production, processed/head grade and recovery
+  use bounded explicit metric/unit labels, exact source-label equality and a registered non-region site.
+  Ownership must be printed as `100%` / `100% basis` or `Attributable (<percentage>%)`; percentages are
+  reduced exactly. Periods come from canonical period codes or the existing explicit sheet-period forms,
+  never table position. Source registration supplies the issuer and release; original and comparative
+  periods keep that release independently. HTML line keys have their own `html:` namespace: importing a
+  printed metric does not assert equivalence to a workbook definition, resolve a GEO price deck or establish
+  a TCC credit treatment.
+  - Source citations retain the requested slot, merged-cell origin, original UTF-8 byte range, decoded
+    text and spans. The same data origin cannot become two observations; repeated semantic keys within
+    a vintage refuse. Labels may share merged origins. Numeric, nil, not-applicable and empty-cell
+    missing values remain distinct. Registered disposal/withholding makes a printed zero Nil and flags
+    nonzero figures; the exact numeric token remains available alongside that interpretation.
+  - Each Claim binds its value origin, all captured semantic-label origins, the mapping-file SHA and
+    declaration locator, and the captured source-registry SHA. The registry supplies site classification,
+    release/publication metadata and any status rule. These are cited interpretations of issuer assertions,
+    never calibrated measurements or evidence of publisher authenticity. Existing Workbook Claim IDs retain
+    their original single-anchor encoding through `key::public_claim_anchored`.
+  - Optional publication cuts exclude later mapped sources before any file access. Excluded sources remain
+    listed and are never replaced by earlier files. An entirely excluded selection has zero Claims and
+    explicit excluded-source metadata. Mappings/registries are bounded to 1 MiB, declarations to 4096 rows,
+    and HTML files retain the reader's limits; source and mapping paths must remain inside the workspace.
+    No browser, network request, inline-XBRL transform, unit conversion or table-layout heuristic is used.
+  - Mapping schema `fmine.html-claims.v1` requires top-level `schema` and `issuer`; each `[[claim]]` has
+    `id`, registered HTML `file`, 1-based `table`, A1 `cell`, and the five pairs `subject_cell`/`subject_label`,
+    `period_cell`/`period_label`, `metric_cell`/`metric_label`, `unit_cell`/`unit_label`,
+    `ownership_cell`/`ownership_label`. Labels must match decoded source text exactly before their bounded
+    grammar is interpreted. Cost units explicitly name USD per ounce sold; GEO uses koz; grade uses g/t or
+    percentage points; recovery uses percentage points. All supported aliases are checked by the adapter.
+    Synthetic source fixtures cover the executable path; real issuer corpus coverage is not asserted.
 
 - DESIGN (BD-345): `lint::lint_cited(draft, claims)` checks a bounded equality grammar against canonical
   source assertions. It indexes Claim IDs and latest series once, then compares the named subject, supported

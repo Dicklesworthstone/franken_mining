@@ -64,6 +64,21 @@ pub struct DocumentRow {
     pub sha256: String,
 }
 
+/// One registered HTML filing. Its table cells are read directly from hash-verified bytes;
+/// it has a reporting release and publication citation, never an invented PDF page count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HtmlSourceRow {
+    pub file: String,
+    pub dir: String,
+    pub release: String,
+    pub url: String,
+    pub url_basis: String,
+    pub published_at: String,
+    pub published_at_basis: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
 /// One registered workbook.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceRow {
@@ -283,6 +298,8 @@ pub struct SourcesRegistry {
     /// Registered PDF documents (bd-plx1), in file order. Their file names and digests are unique across
     /// workbooks and documents together, since a citation names a file.
     pub documents: Vec<DocumentRow>,
+    /// Registered HTML filings, with file names and digests unique across all source formats.
+    pub html_sources: Vec<HtmlSourceRow>,
     /// Explicit issuer disclosures and their exact scopes, in registry order. Empty for older registries.
     pub restatement_notes: Vec<RestatementNoteRow>,
     pub restatement_scopes: Vec<RestatementScopeRow>,
@@ -718,6 +735,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "printed_share_correction",
             "mine_stats_label_alias",
             "document",
+            "html",
             "restatement_note",
             "restatement_scope",
         ]
@@ -929,8 +947,99 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             sha256,
         });
     }
-    if sources.is_empty() && documents.is_empty() {
-        return fail(0, "no [[source]] or [[document]] rows");
+    let mut html_sources = Vec::new();
+    for row in doc.rows_of("html") {
+        let f = Fields::of_row(row);
+        f.only(&[
+            "file",
+            "dir",
+            "release",
+            "url",
+            "url_basis",
+            "published_at",
+            "published_at_basis",
+            "bytes",
+            "sha256",
+        ])?;
+        let (file, file_line) = f.string("file")?;
+        if file.trim() != file
+            || file.contains('/')
+            || file.contains('\\')
+            || file.starts_with('.')
+            || file.chars().any(char::is_control)
+            || !(file.ends_with(".html") || file.ends_with(".htm"))
+        {
+            return fail(
+                file_line,
+                "HTML file must be a bare .html or .htm file name",
+            );
+        }
+        if !files.insert(file.clone()) {
+            return fail(file_line, format!("duplicate file {file:?}"));
+        }
+        let dir = f
+            .optional_string("dir")?
+            .unwrap_or_else(|| corpus_dir.clone());
+        if !is_plain_relative(&dir) || dir.chars().any(char::is_control) {
+            return fail(row.line, "HTML dir must be a plain relative path");
+        }
+        let (release, release_line) = f.string("release")?;
+        if !is_quarter(&release) {
+            return fail(release_line, "HTML release must be YYYYQ1..YYYYQ4");
+        }
+        let (url, url_line) = f.string("url")?;
+        if !url.starts_with("https://")
+            || url.ends_with('/')
+            || url.chars().any(char::is_whitespace)
+        {
+            return fail(
+                url_line,
+                "HTML url must be an https:// file URL without whitespace",
+            );
+        }
+        let (url_basis, basis_line) = f.string("url_basis")?;
+        if !is_url_basis(&url_basis) {
+            return fail(basis_line, "HTML url_basis is not registered");
+        }
+        let (published_at, date_line) = f.string("published_at")?;
+        if !is_date(&published_at) {
+            return fail(date_line, "HTML published_at must be YYYY-MM-DD");
+        }
+        let (published_at_basis, pub_line) = f.string("published_at_basis")?;
+        if published_at_basis.chars().any(char::is_control)
+            || !PUBLISHED_AT_BASES.iter().any(|prefix| {
+                published_at_basis
+                    .strip_prefix(prefix)
+                    .is_some_and(|citation| !citation.trim().is_empty())
+            })
+        {
+            return fail(
+                pub_line,
+                "HTML published_at_basis must cite a source after FACT: or INFERENCE:",
+            );
+        }
+        let (bytes, _) = f.positive_int("bytes")?;
+        let (sha256, sha_line) = f.string("sha256")?;
+        if !is_lower_hex64(&sha256) {
+            return fail(sha_line, "sha256 must be 64 lowercase hex characters");
+        }
+        if !digests.insert(sha256.clone()) {
+            return fail(sha_line, format!("duplicate sha256 {sha256}"));
+        }
+        html_sources.push(HtmlSourceRow {
+            file,
+            dir,
+            release,
+            url,
+            url_basis,
+            published_at,
+            published_at_basis,
+            bytes,
+            sha256,
+        });
+    }
+    if sources.is_empty() && documents.is_empty() && html_sources.is_empty() {
+        return fail(0, "no [[source]], [[document]] or [[html]] rows");
     }
 
     let mut subjects = Vec::new();
@@ -1425,6 +1534,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         printed_share_corrections,
         mine_stats_label_aliases,
         documents,
+        html_sources,
         restatement_notes,
         restatement_scopes,
     })
@@ -2488,9 +2598,9 @@ mod tests {
     }
 
     #[test]
-    fn test_profile_requires_a_workbook_or_document() {
+    fn test_profile_requires_a_workbook_document_or_html() {
         let e = refusal(DOCUMENT_ONLY_HEAD);
-        assert_eq!(e.reason, "no [[source]] or [[document]] rows");
+        assert_eq!(e.reason, "no [[source]], [[document]] or [[html]] rows");
         let workbook = parse_sources_registry(&minimal("", "")).expect("workbook-only profile");
         assert_eq!(workbook.sources.len(), 1);
         assert_eq!(workbook.sources[0].file, "A.xlsx");
