@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "cost", "geo", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "cost", "geo", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -100,6 +100,13 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   - `assure public --issuer <issuer> [--through YYYYQn]`: the gate-eligible run over the filings in
     `registries/sources/<issuer>.toml`, optionally only those at or before a quarter;
   - `assure public --synthetic`: the known-answer run, never gate-eligible;
+  - either assurance selector with `--format markdown`: a human-readable report from the same typed
+    assurance result (BD-072), retaining all selected Claim vintages and exact printed tokens, all five
+    identity states, visible evidence-challenge packets, consistency findings and source hashes.
+    Hidden/template scope has its own appendix. PDF, recovery and optional published-cutoff results
+    retain their separate evidence boundaries and do not enlarge the identity-ledger certificate.
+    Packet-integrity failures refuse the report rather than presenting an unsupported challenge.
+    JSON payloads, source state roots and Claim identities remain unchanged by presentation;
   - either assurance selector with `--output <new-path>` and the host-clock issuance options below: save and
     register the exact report artifact, returning a separate issuance receipt;
   - `assure issue`: owner-authorized issuance of a freshly verified public or explicitly synthetic assurance

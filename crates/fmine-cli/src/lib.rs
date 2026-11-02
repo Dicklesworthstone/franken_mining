@@ -1,5 +1,6 @@
 //! FrankenMining CLI (`fmine`) implementation (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+mod assure_report;
 mod capital;
 mod claim_inspection;
 pub mod cost;
@@ -1563,6 +1564,15 @@ fn report_envelope(
     report: &fmine_public::PublicAssuranceReport,
     cutoffs: Option<&str>,
 ) -> Envelope {
+    let next_actions = report
+        .next_actions()
+        .into_iter()
+        .map(|(command, why)| NextAction::new(command, why))
+        .collect();
+    let mut markdown = match assure_report::markdown(report) {
+        Ok(markdown) => markdown,
+        Err(refusal) => return Envelope::refused("assure public", refusal, next_actions),
+    };
     let mut payload = report.to_json();
     if let Some(section) = cutoffs
         && payload.ends_with('}')
@@ -1571,18 +1581,25 @@ fn report_envelope(
         payload.push_str(",\"published_cutoffs\":");
         payload.push_str(section);
         payload.push('}');
+        markdown.push_str(
+            "\n## Published cut-offs: reference-input arithmetic\n\n\
+             This separate appendix retains the registered cut-off calculations exactly. \
+             Source report bytes and independent reader agreement were not checked; \
+             these results are outside the identity-ledger certificate and are not gate-eligible.\n\n\
+             ```json\n",
+        );
+        markdown.push_str(section);
+        markdown.push_str("\n```\n");
     }
-    Envelope::report(
+    let mut envelope = Envelope::report(
         "assure public",
         report.ledger_anchor.anchor_id().to_string(),
         report.ledger_anchor.state_root.to_hex(),
         payload,
-        report
-            .next_actions()
-            .into_iter()
-            .map(|(command, why)| NextAction::new(command, why))
-            .collect(),
-    )
+        next_actions,
+    );
+    envelope.rendered_markdown = Some(markdown);
+    envelope
 }
 
 fn challenge_envelope(report: &fmine_public::PublicAssuranceReport) -> Result<Envelope, Refusal> {

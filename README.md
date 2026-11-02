@@ -143,6 +143,28 @@ their envelope has no identity-ledger certificate or issuance anchor. The source
 separately and does not certify the model. Missing IDs and altered source files refuse instead of returning
 a stale cached Claim. Recovery results remain descriptive and uncalibrated.
 
+### Read the public assurance report
+
+Use the same public-lane selection with `--format markdown` to produce a readable report:
+
+```bash
+cargo run -p fmine-cli -- assure public --issuer barrick --through 2026Q2 --format markdown > assurance.md
+cargo run -p fmine-cli -- assure public --synthetic --format markdown > synthetic-assurance.md
+```
+
+The report presents exact printed values and all selected publication vintages by subject, reporting
+period, scope and ownership basis. It retains the five identity states, with not-published instances
+listed separately, and includes evidence-challenge packets with their operands, certificates and the
+documents needed to resolve each visible exception. Consistency histories show original and comparative
+filings, later corrections, verified disclosure notes and explicit comparability exclusions.
+
+Source cells, document hashes and Claim IDs remain available in the report. Hidden/template scope has a
+separate appendix. PDF transcriptions, recovery-model outputs and any published-cutoff reference
+calculations carry their own evidence boundaries; they do not enlarge the identity-ledger certificate.
+The JSON envelope and state root are the same for either presentation. A synthetic report remains
+ineligible for a public-lane gate, and a readable report does not turn the current implementation into
+a complete M0 gate pass.
+
 ### Calculate a cost metric under an explicit definition
 
 `metrics cost` evaluates a declared cost worksheet under a selected AISC or AIC definition from
