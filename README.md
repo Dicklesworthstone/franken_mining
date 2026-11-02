@@ -283,8 +283,58 @@ input metadata as well as the computed statistics. Editing an assumption changes
 leaves the numerical ranking unchanged. Model-file inputs remain **Assumed, internal and uncalibrated**; supplied
 probabilities do not become calibrated by passing arithmetic checks. The explicit unknown-risk terms remain
 outside the priced scenario matrix. This comparison supplies no feasibility approval, calibrated selection
-frequency, VOI calculation, historical replay proof or durable decision-ledger entry. It does not pass the full
+frequency, historical replay proof or durable decision-ledger entry. It does not pass the full
 BD-225 or Helm acceptance gates.
+
+### Evaluate whether testwork is worth buying
+
+DESIGN (BD-227, plan §22.4): the same command evaluates an optional information-gathering step before choosing
+an action. The model supplies explicit test and delay costs, named signals, and the exact likelihood of each
+signal in each state. Run the invented GB-29 exercise:
+
+```bash
+cargo run -p fmine-cli -- decide card tests/decisions/metallurgical_test.toml --format markdown
+cargo run -p fmine-cli -- decide card tests/decisions/metallurgical_test.toml --json
+```
+
+The example assumes a 60% high state, build payoffs of +$300M or −$200M, and an 85%-accurate test in each state.
+The do-nothing payoff is zero. The exact calculation gives:
+
+| Quantity | Result |
+|---|---:|
+| Best expected value before testwork | $100M |
+| Expected value of perfect information (EVPI) | $80M |
+| Expected payoff from the optimal action after each test result | $141M |
+| Gross expected value of sample information (EVSI) | $41M |
+| Test cost | $6M |
+| Declared monetary cost of delay | $3.8M |
+| Net information value | $31.2M |
+| Expected value after test and delay costs | $131.2M |
+
+A high test result has probability `57/100` and raises the high-state posterior to `17/19`; build is then
+optimal. A low result has probability `43/100` and lowers that posterior to `9/43`; do nothing is then optimal.
+The output retains all posterior action ties, every named signal, and the complete posterior state weights.
+A signal with zero marginal probability is shown as unreachable, with no invented posterior or action.
+
+Each `information_option` declares `test_cost`, `delay_cost` and integer `delay_days`. Costs are nonnegative
+amounts in the model's major currency units and valuation basis; duration does not imply a discount rate.
+Both monetary costs are charged once for the chosen option, regardless of its result. The declared action
+payoffs supply all other economics; the evaluator does not infer further effects from waiting.
+`signal` rows name that option's possible results. Its `likelihood` rows must explicitly cover every state and
+signal, including zero entries, with each state's probabilities summing exactly to one. The card refuses
+missing cells, unknown references and malformed probability rows instead of filling or normalizing them.
+
+The engine enumerates the finite model exactly and checks `0 ≤ EVSI ≤ EVPI`. It reports the calculation method
+and exact net-value status; Monte Carlo standard error is explicitly not applicable. This is arithmetic
+conditional on the supplied assumptions, not a calibration result. An uninformative test has zero EVSI; a
+costly test can have negative net information value. At the GB-29 prior boundary `P(high) = 34/43`, the low-result
+actions tie and EVSI is zero: no test result forces a change from the current optimal action.
+
+Options are compared by expected net value against acting now. This is a choice of at most one test followed
+by one action. The ordinary action CVaR and same-state regret remain separate: the model supplies no joint
+signal distribution for counterfactual comparisons across different tests. Every option's source Claims,
+assumptions and unknown-risk terms remain in the card's evidence and identity, including losing options.
+This slice does not implement sequential testing or pass BD-227's Monte Carlo estimator acceptance gate.
 
 ### Check cited tables, reserve calculations and cutoffs
 

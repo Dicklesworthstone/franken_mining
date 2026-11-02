@@ -1,0 +1,89 @@
+# Invented GB-29 exercise from plan section 22.8; not a real mine valuation or calibrated assay model.
+schema = "fmine.decision-model.v1"
+model_key = "invented-metallurgical-test"
+question = "Is metallurgical testwork worth buying before the invented expansion decision?"
+currency = "USD"
+valuation_basis = "Invented incremental NPV at 2026-01-01; real 2026 USD; 100% ownership; all payoffs and costs already discounted"
+
+[[state]]
+id = "high"
+weight = "3/5"
+
+[[state]]
+id = "low"
+weight = "2/5"
+
+[[action]]
+id = "build"
+label = "Build the expansion"
+role = "action"
+
+[[action]]
+id = "hold"
+label = "Do nothing"
+role = "do_nothing"
+
+[[payoff]]
+action = "build"
+state = "high"
+value = "300000000.0000"
+
+[[payoff]]
+action = "build"
+state = "low"
+value = "-200000000.0000"
+
+[[payoff]]
+action = "hold"
+state = "high"
+value = "0.0000"
+
+[[payoff]]
+action = "hold"
+state = "low"
+value = "0.0000"
+
+[[information_option]]
+id = "met_test"
+label = "Metallurgical testwork"
+test_cost = "6000000.0000"
+delay_cost = "3800000.0000"
+delay_days = 180
+
+[[signal]]
+option = "met_test"
+id = "high"
+
+[[signal]]
+option = "met_test"
+id = "low"
+
+[[likelihood]]
+option = "met_test"
+state = "high"
+signal = "high"
+probability = "17/20"
+
+[[likelihood]]
+option = "met_test"
+state = "high"
+signal = "low"
+probability = "3/20"
+
+[[likelihood]]
+option = "met_test"
+state = "low"
+signal = "high"
+probability = "3/20"
+
+[[likelihood]]
+option = "met_test"
+state = "low"
+signal = "low"
+probability = "17/20"
+
+[[uu]]
+id = "UU-unmodelled-ore-variability"
+description = "Unmodelled ore variability could make the declared test response and project payoffs unreliable"
+trigger = "Independent follow-up samples depart from the assumed response model"
+downside_usd_m = "35.0"

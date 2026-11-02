@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-//! BD-225: real-binary finite-decision known answers and library/rendering parity.
+//! BD-225/227: real-binary finite-decision known answers and library/rendering parity.
 //! Fixtures declare invented assumptions; none represents a real investment recommendation.
 
 #![allow(clippy::expect_used)]
@@ -47,9 +47,8 @@ fn finite_decision_known_answers_pass_the_independent_python_oracle() {
     );
 }
 
-#[test]
-fn real_binary_and_library_keep_identical_json_and_markdown() {
-    let fixture = oracle()
+fn rendering_parity(mut oracle: Command) {
+    let fixture = oracle
         .arg("--fixture-only")
         .output()
         .expect("create declared decision fixture");
@@ -94,4 +93,16 @@ fn real_binary_and_library_keep_identical_json_and_markdown() {
             format!("{text}\n")
         );
     }
+}
+
+#[test]
+fn real_binary_and_library_keep_identical_json_and_markdown() {
+    rendering_parity(oracle());
+}
+
+#[test]
+fn information_policy_keeps_identical_library_and_binary_rendering() {
+    let mut oracle = oracle();
+    oracle.arg("--with-information");
+    rendering_parity(oracle);
 }

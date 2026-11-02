@@ -1,4 +1,4 @@
-//! Draft monetary comparisons from explicit, source-bound scenario assumptions (BD-225).
+//! Draft monetary comparisons and information options from explicit scenario assumptions (BD-225/227).
 //! Determinism: Exact (bounded model bytes and the exact finite-scenario evaluator).
 
 use std::io::Read as _;
@@ -18,14 +18,19 @@ pub(crate) const ROBOT_DOCS_JSON: &str = concat!(
     "\"input\":\"Regular UTF-8 TOML file, at most 4 MiB; actual bytes are SHA-256 bound\",",
     "\"fields\":[\"schema\",\"model_key\",\"question\",\"currency\",\"valuation_basis\"],",
     "\"tables\":{\"state\":[\"id\",\"weight\"],\"action\":[\"id\",\"label\",\"role\"],",
-    "\"payoff\":[\"action\",\"state\",\"value\"],\"uu\":[\"id\",\"description\",\"trigger\",\"downside_usd_m\"]},",
+    "\"payoff\":[\"action\",\"state\",\"value\"],\"uu\":[\"id\",\"description\",\"trigger\",\"downside_usd_m\"],",
+    "\"information_option\":[\"id\",\"label\",\"test_cost\",\"delay_cost\",\"delay_days\"],",
+    "\"signal\":[\"option\",\"id\"],\"likelihood\":[\"option\",\"state\",\"signal\",\"probability\"]},",
     "\"weights\":\"Quoted positive rational n/d; exact sum one\",",
     "\"actions\":\"At least two; roles action or do_nothing, exactly one do_nothing; complete common states\",",
     "\"money\":\"Quoted major-currency amounts, at most four decimal places; no implicit FX or discounting\",",
     "\"unknowns\":\"At least one named UU with positive finite USD-million exposure and trigger; outside priced states\",",
     "\"output\":\"Exact weighted mean, P10/P50/P90, signed-loss CVaR95, same-state regret and all co-winners\",",
+    "\"information\":\"Optional single-test policies; exact EVPI, EVSI and net value after explicit nonnegative test/delay costs in model currency; delay_days is an integer duration, not a discount rule\",",
+    "\"likelihoods\":\"Quoted P(signal|state) in [0,1]; explicit complete state-by-signal matrix including zeros; each state sums exactly to one\",",
+    "\"method\":\"Exact finite enumeration; Monte Carlo standard error not applicable; assumed probabilities remain uncalibrated\",",
     "\"evidence\":\"Assumed, Internal, uncalibrated; no execution authority or decision-ledger append\",",
-    "\"example\":\"tests/decisions/expansion.toml\"}"
+    "\"example\":\"tests/decisions/expansion.toml\",\"information_example\":\"tests/decisions/metallurgical_test.toml\"}"
 );
 
 pub(crate) fn execute(model: &Path, root: &Path) -> Envelope {
@@ -71,7 +76,7 @@ pub(crate) fn execute(model: &Path, root: &Path) -> Envelope {
         let mut envelope = Envelope::ok("decide card", payload, Vec::new());
         envelope.no_claim = Some(card::NO_CLAIM);
         envelope.warnings.push(
-            "Declared-model inputs are Assumed; scenario probabilities are uncalibrated.".into(),
+            "Declared-model inputs are Assumed; state probabilities and test likelihoods are uncalibrated.".into(),
         );
         envelope.rendered_markdown = Some(evaluated.to_markdown());
         Ok(envelope)

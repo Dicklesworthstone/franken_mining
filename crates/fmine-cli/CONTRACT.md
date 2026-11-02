@@ -56,7 +56,12 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     The adapter reads at most 4 MiB of UTF-8 from a regular file, hashes the actual bytes, and delegates parsing
     and exact evaluation to `fmine-decide::card`. The model supplies all weights, actions, payoffs and UU terms;
     every imported Claim remains Assumed and internal. JSON includes the source path/hash, complete core card,
-    exact rankings, risk and regret. Markdown renders the same result and evidence. No issuance certificate,
+    exact rankings, risk and regret. Optional information options add exact preposterior EVSI, EVPI, net value
+    after declared test and delay costs, and every signal's posterior action ties (BD-227). Each option needs
+    a complete state-by-signal likelihood matrix. Impossible signals remain explicit; no joint signal model
+    or multi-test policy is inferred. All option evidence contributes to the card, including losing options.
+    Exact enumeration reports Monte Carlo error as not applicable and supplies no Monte Carlo gate result.
+    Markdown renders the same result and evidence. No issuance certificate,
     historical cut, calibration verdict, operational feasibility or execution authority is manufactured.
   - `assure public --issuer <issuer> [--through YYYYQn]`: the gate-eligible run over the filings in
     `registries/sources/<issuer>.toml`, optionally only those at or before a quarter;
