@@ -11,6 +11,8 @@ use fmine_registry::RegistryError;
 use fmine_registry::metrics::{CreditBasis, LineKind, MetricFamily, MetricRegistry, ProjectTest};
 use fmine_units::{ExactQty, UnitsError};
 
+pub mod claims;
+
 /// The registry as committed.
 const METRICS_TOML: &str = include_str!("../../../registries/metrics.toml");
 

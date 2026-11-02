@@ -158,6 +158,22 @@ arithmetic closure does not establish causation or identify an operational expla
 - `definitions::{all_in_cost_per_oz, is_non_sustaining, bundled_registry, AllInCost, CostLine, MetricFailure, Project}`
   (BD-060): AISC and AIC from `registries/metrics.toml`. A line the definition neither counts nor excludes is refused,
   and every result names its definition and any successor.
+- DESIGN (BD-061): `definitions::claims::{definition_tag, evaluate, CostInput, CostValue, Scope, CostReceipt}`
+  evaluates one registered AISC/AIC definition over exact USD `Money`, gold ounces sold and an optional separately
+  stated co-product allocation. Each admitted input is a deterministic period-aggregate Claim on the same issuer,
+  subject, calendar support, ownership and declared accounting basis. A rule Claim must explicitly declare that
+  the supplied lines form the complete cost population; omitted components are not independently verified zeros.
+  Duplicate roles/items, missing sold quantities, unsupported currencies and unregistered cost lines refuse.
+  Credits are nonnegative amounts subtracted once; signed cost reversals and negative resulting rates remain
+  signed. Neither ownership nor FX conversion is implicit. Existing AISC refusals for growth lines remain intact.
+  The immutable receipt retains every input, exact signed/allocated line contribution, excluded item, numerator,
+  USD-per-sold-ounce result, selected effective rule and successor. Its derived Claim inherits the weakest evidence,
+  knowledge state and joined confidentiality, includes all admitted parents and source anchors, and propagates
+  consistent UU definitions. Excluded inputs still affect evidence and identity. The receipt additionally binds
+  representation, support, additivity, supersession, current flags, UU values and computed colour metadata omitted
+  from generic Claim identities; floating metadata uses exact bits and never enters the cost arithmetic. Reordering
+  input rows preserves the result and identity. This is arithmetic over declared inputs, not an authenticated filing
+  read, an independent completeness review, a cost-classification judgment or completion of the WGC real-data gate.
 - `cutoff::{parse_cases, reproduce, CutoffCase, CutoffReport, CutoffState, Printed, Recovery}` (BD-274): the
   reference cut-offs in `registries/published_cutoffs.toml`, recomputed on exact rationals from registered tokens.
   Each comes back `Reproduced`, `WithinInputRounding` or `Conflict`; `CutoffReport::to_json` prints exact results to
