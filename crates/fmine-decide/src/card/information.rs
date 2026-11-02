@@ -427,7 +427,8 @@ fn evaluate_option(
         0 => NetStatus::Zero,
         _ => NetStatus::Negative,
     };
-    let policy_risk = policy_risk::evaluate(option, base, &policies, &likelihoods, total_cost, gross)?;
+    let policy_risk =
+        policy_risk::evaluate(option, base, &policies, &likelihoods, total_cost, gross)?;
     Ok(InformationStats {
         option_id: option.option_id.clone(),
         label: option.label.clone(),

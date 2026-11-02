@@ -7,9 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{InformationOption, SignalPolicy};
-use crate::card::{
-    DecisionSummary, ExactMoney, ONE, Result, ZERO, arithmetic, quantile, refusal,
-};
+use crate::card::{DecisionSummary, ExactMoney, ONE, Result, ZERO, arithmetic, quantile, refusal};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_numerics::exact_feas::Rat;
 use fmine_units::{Currency, Money};
@@ -85,10 +83,10 @@ pub(super) fn evaluate(
                 return Err(failed("an unreachable signal cannot select a risk policy"));
             }
         } else {
-            if chosen.is_none()
-                || policy.selected_action.as_ref() != policy.best_actions.first()
-            {
-                return Err(failed("risk must follow the displayed expected-value tie policy"));
+            if chosen.is_none() || policy.selected_action.as_ref() != policy.best_actions.first() {
+                return Err(failed(
+                    "risk must follow the displayed expected-value tie policy",
+                ));
             }
             if policy.best_actions.len() > 1 {
                 tied.push(policy.signal_id.clone());
@@ -122,7 +120,9 @@ pub(super) fn evaluate(
             *slot = arithmetic(slot.checked_add(mass))?;
         }
         if signal_mass != policy.probability {
-            return Err(failed("risk joint masses disagree with the signal probability"));
+            return Err(failed(
+                "risk joint masses disagree with the signal probability",
+            ));
         }
     }
     tied.sort();
@@ -137,12 +137,13 @@ fn summarize(
     reachable_tie_signals: Vec<String>,
 ) -> Result<PolicyRisk> {
     if masses.is_empty() || cost.signum() < 0 {
-        return Err(failed("risk needs a nonempty law and nonnegative uniform costs"));
+        return Err(failed(
+            "risk needs a nonempty law and nonnegative uniform costs",
+        ));
     }
     let money = |major| ExactMoney { currency, major };
     let mut distribution = Vec::with_capacity(masses.len());
-    let (mut total, mut gross_mean, mut net_mean, mut loss_probability) =
-        (ZERO, ZERO, ZERO, ZERO);
+    let (mut total, mut gross_mean, mut net_mean, mut loss_probability) = (ZERO, ZERO, ZERO, ZERO);
     for (minor, probability) in masses {
         if probability.signum() <= 0 {
             return Err(failed("risk law bins must carry strictly positive mass"));
@@ -198,7 +199,9 @@ fn summarize(
     Ok(PolicyRisk {
         mean: money(net_mean),
         p10_p50_p90: quantiles,
-        cvar95_loss: money(arithmetic(arithmetic(integral.checked_div(tail))?.checked_neg())?),
+        cvar95_loss: money(arithmetic(
+            arithmetic(integral.checked_div(tail))?.checked_neg(),
+        )?),
         loss_probability,
         distribution,
         reachable_tie_signals,
@@ -258,7 +261,10 @@ mod tests {
 
     #[test]
     fn fractional_tail_boundary_and_inverse_cdf_endpoints_are_exact() {
-        let risk = law(&[(-100, r(1, 50)), (-50, r(2, 25)), (10, r(9, 10))], r(3, 1));
+        let risk = law(
+            &[(-100, r(1, 50)), (-50, r(2, 25)), (10, r(9, 10))],
+            r(3, 1),
+        );
         assert_eq!(risk.mean.major, ZERO);
         assert_eq!(risk.cvar95_loss.major, r(73, 1));
         assert_eq!(risk.loss_probability, r(1, 10));
@@ -274,7 +280,10 @@ mod tests {
         let cost = law(&[(10, r(1, 2)), (30, r(1, 2))], r(2, 1));
         assert_eq!(raw.cvar95_loss.major, r(-10, 1));
         assert_eq!(cost.cvar95_loss.major, r(-8, 1));
-        assert_eq!(cost.mean.major, raw.mean.major.checked_sub(r(2, 1)).unwrap());
+        assert_eq!(
+            cost.mean.major,
+            raw.mean.major.checked_sub(r(2, 1)).unwrap()
+        );
         assert_eq!(cost.loss_probability, ZERO);
         let zero = law(&[(0, ONE)], ZERO);
         assert_eq!(zero.loss_probability, ZERO);
@@ -312,20 +321,26 @@ mod tests {
             "schema = \"fmine.decision-model.v1\"\nmodel_key = \"invented-risk\"\nquestion = \"Compare invented policies\"\ncurrency = \"USD\"\nvaluation_basis = \"invented NPV\"\n",
         );
         for state in ["high", "low"] {
-            text.push_str(&format!("\n[[state]]\nid = \"{state}\"\nweight = \"1/2\"\n"));
+            text.push_str(&format!(
+                "\n[[state]]\nid = \"{state}\"\nweight = \"1/2\"\n"
+            ));
         }
         for (action, role, values) in [
             ("a_risky", "action", [10, -10]),
             ("z_nothing", "do_nothing", [0, 0]),
         ] {
-            text.push_str(&format!("\n[[action]]\nid = \"{action}\"\nlabel = \"{action}\"\nrole = \"{role}\"\n"));
+            text.push_str(&format!(
+                "\n[[action]]\nid = \"{action}\"\nlabel = \"{action}\"\nrole = \"{role}\"\n"
+            ));
             for (state, value) in ["high", "low"].into_iter().zip(values) {
                 text.push_str(&format!("\n[[payoff]]\naction = \"{action}\"\nstate = \"{state}\"\nvalue = \"{value}\"\n"));
             }
         }
         text.push_str("\n[[uu]]\nid = \"omission\"\ndescription = \"Invented omitted event\"\ntrigger = \"new event\"\ndownside_usd_m = \"1\"\n\n[[information_option]]\nid = \"test\"\nlabel = \"Invented test\"\ntest_cost = \"1\"\ndelay_cost = \"2\"\ndelay_days = 7\n");
-        for (signal, probability) in [("seen", "1"), ("impossible", "0")] {
-            text.push_str(&format!("\n[[signal]]\noption = \"test\"\nid = \"{signal}\"\n"));
+        for (signal, probability) in [("seen", "1/1"), ("impossible", "0/1")] {
+            text.push_str(&format!(
+                "\n[[signal]]\noption = \"test\"\nid = \"{signal}\"\n"
+            ));
             for state in ["high", "low"] {
                 text.push_str(&format!("\n[[likelihood]]\noption = \"test\"\nstate = \"{state}\"\nsignal = \"{signal}\"\nprobability = \"{probability}\"\n"));
             }
