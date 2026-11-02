@@ -39,10 +39,31 @@ Enforces `INV-002` (`authoritative: false`, `may_actuate: false`, `is_safe_certi
   definition. The derived Claim value tag and versioned report digest additionally bind metadata omitted by generic Claim identities,
   including support, representation, UU values, supersession, current flags and computed input colours.
   Arithmetic is Exact; inherited floating UU/colour metadata is retained by its exact bits, not used as payoff
-  inputs. This draft comparison supplies no calibrated probabilities, VOI, retrospective evidence proof,
+  inputs. This draft comparison supplies no calibrated probabilities, Monte Carlo VOI accuracy, retrospective evidence proof,
   physical feasibility, sign-off or authorization, and is not a durable decision-ledger entry.
+- DESIGN (BD-227, §22.4): optional `DecisionInputs::information_options` contains source-bound
+  `Claim<InformationOption>` values with a complete exact `Likelihood` matrix, explicit signals, nonnegative
+  test and delay costs, and independently declared delay days. All options, including losers, must pass the
+  same canonical identity, citation, evidence, support, state and UU admission as the base inputs. The model,
+  currency and valuation basis must match; each state's conditional signal probabilities lie in [0,1] and
+  sum exactly to one, with every zero supplied explicitly. Missing cells or malformed options refuse the
+  complete comparison. Work is bounded to 64 options, 256 signals per option and 4 million total
+  state/signal/action terms; exact arithmetic overflow refuses rather than approximating or dropping data.
+  `InformationSummary` computes EVPI and each option's exact preposterior EVSI, signal probabilities,
+  posterior state weights, conditional action values and all co-winners. Unreachable signals remain visible
+  with null posterior/policy values. Strict change is relative to the fixed act-now presentation primary;
+  a posterior tie retaining it is not a change. Exact checks require 0 ≤ EVSI ≤ EVPI and zero EVSI iff that
+  baseline stays optimal after every reachable signal. Test and delay costs are charged once per option;
+  net VOI and net policy value remain signed. Delay duration implies no discounting or state transition.
+  Overall expected-value rankings compare acting now with buying at most one option; all exact ties remain
+  visible, with act-now first only for presentation. No joint signal distribution, sequential/batched tests,
+  or test-policy risk/regret is inferred. Existing base action risk/regret remains separate and unchanged.
+  Every option's complete Claim metadata participates in output evidence, parents, sources, UU, value tag
+  and digest. JSON/Markdown report `method=exact_finite_enumeration`, Monte Carlo standard error as null/not
+  applicable, and the uncalibrated-model boundary. Determinism is Exact; this does not pass `GATE-HELM-02`.
 - `card::model::parse` admits the strict `fmine.decision-model.v1` TOML subset with explicit `state`, `action`,
-  `payoff` and `uu` rows. It checks the supplied source SHA-256 against the actual text, exact rational weights,
+  `payoff` and `uu` rows plus optional `information_option`, `signal` and `likelihood` rows. It checks the
+  supplied source SHA-256 against the actual text, exact rational weights and likelihoods,
   at most four decimal money places, complete action/state membership and explicit positive finite UU exposure.
   All parsed Claims remain internal, Assumed and uncalibrated. Unknown fields cannot upgrade those labels.
 - `FlipMargin`, `DecisionCard` (`build`, `build_as_of`, `temporal_replay_bytes`)

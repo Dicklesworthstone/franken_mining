@@ -12,10 +12,10 @@ use fmine_evidence::{
     EpistemicStatus, EvidenceClass, KnowledgeState, KuKind, Refusal, RefusalCode,
 };
 use fmine_numerics::exact_feas::Rat;
-use fmine_registry::toml_subset::{TomlField, TomlValue, parse_subset};
+use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
 use fmine_units::{Currency, Money};
 
-use super::{ActionPayoffs, ActionRole, DecisionInputs, WeightSet};
+use super::{ActionPayoffs, ActionRole, DecisionInputs, InformationOption, Likelihood, WeightSet};
 
 const INPUT: RefusalCode = RefusalCode::InputMissingOrUnreadable506;
 const BASIS: RefusalCode = RefusalCode::BasisMismatch105;
@@ -37,6 +37,10 @@ struct DeclaredAction {
 /// Roles are `action` and `do_nothing`. Every action must name every state exactly once.
 /// Money is expressed in major currency units with at most four fractional digits; it never passes through
 /// floating point. UU exposure is explicitly in USD millions, independently of the payoff currency.
+/// Optional `information_option { id, label, test_cost, delay_cost, delay_days }` rows name tests, with
+/// `signal { option, id }` and `likelihood { option, state, signal, probability }` rows. Costs are quoted
+/// monetary decimals; `delay_days` is an integer. Each conditional state row must explicitly include every
+/// declared signal, including zero probabilities, and sum exactly to one. Costs are never inferred from days.
 ///
 /// The source names these assumptions; its hash does not establish that they are measured or calibrated.
 /// No evidence-upgrade, retrospective, confidentiality-downgrade or authority fields are accepted.
@@ -77,6 +81,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
     let mut actions = BTreeMap::new();
     let mut payoffs = BTreeMap::new();
     let mut unknowns = BTreeMap::new();
+    let mut information = InformationRows::default();
     for row in &doc.rows {
         match row.table.as_str() {
             "state" => {
@@ -124,6 +129,11 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
                     ));
                 }
             }
+            "information_option" => {
+                information.option(row, model_key, currency, valuation_basis)?
+            }
+            "signal" => information.signal(row)?,
+            "likelihood" => information.likelihood(row)?,
             "uu" => {
                 let [id, description, trigger, exposure] = strings(
                     &row.fields,
@@ -232,6 +242,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
             located(&source, &format!("action {id}, line {}", action.line)),
         ));
     }
+    let information_options = information.finish(&states, &unknowns, &source)?;
     let weights = WeightSet {
         model_key: model_key.to_string(),
         question: question.to_string(),
@@ -248,7 +259,224 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
             located(&source, "state rows"),
         ),
         actions: claims,
+        information_options,
     })
+}
+
+#[derive(Default)]
+struct InformationRows {
+    options: BTreeMap<String, (InformationOption, usize)>,
+    signals: BTreeMap<(String, String), usize>,
+    likelihoods: BTreeMap<(String, String, String), (Rat, usize)>,
+}
+
+impl InformationRows {
+    fn option(
+        &mut self,
+        row: &TomlRow,
+        model_key: &str,
+        currency: Currency,
+        valuation_basis: &str,
+    ) -> Result<(), Refusal> {
+        let day_field = row
+            .get("delay_days")
+            .ok_or_else(|| bad(INPUT, row.line, "missing field delay_days"))?;
+        let delay_days = match &day_field.value {
+            TomlValue::Int(days) => u32::try_from(*days).map_err(|_| {
+                bad(
+                    DOMAIN,
+                    day_field.line,
+                    "delay_days must be in 0..=4294967295",
+                )
+            })?,
+            _ => return Err(bad(INPUT, day_field.line, "delay_days must be an integer")),
+        };
+        let string_fields: Vec<_> = row
+            .fields
+            .iter()
+            .filter(|f| f.key != "delay_days")
+            .cloned()
+            .collect();
+        let [id, label, test_cost, delay_cost] = strings(
+            &string_fields,
+            ["id", "label", "test_cost", "delay_cost"],
+            row.line,
+            INPUT,
+        )?;
+        key(id, row.line)?;
+        let test_cost = decimal_money(test_cost, currency, row.line)?;
+        let delay_cost = decimal_money(delay_cost, currency, row.line)?;
+        if test_cost.minor < 0 || delay_cost.minor < 0 {
+            return Err(bad(
+                DOMAIN,
+                row.line,
+                "information-option test and delay costs must be nonnegative",
+            ));
+        }
+        let option = InformationOption {
+            model_key: model_key.to_string(),
+            option_id: id.to_string(),
+            label: label.to_string(),
+            currency,
+            valuation_basis: valuation_basis.to_string(),
+            test_cost,
+            delay_cost,
+            delay_days,
+            signals: Vec::new(),
+            likelihoods: Vec::new(),
+        };
+        if self
+            .options
+            .insert(id.to_string(), (option, row.line))
+            .is_some()
+        {
+            return Err(bad(
+                BASIS,
+                row.line,
+                &format!("duplicate information option {id}"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn signal(&mut self, row: &TomlRow) -> Result<(), Refusal> {
+        let [option, id] = strings(&row.fields, ["option", "id"], row.line, INPUT)?;
+        key(option, row.line)?;
+        key(id, row.line)?;
+        if self
+            .signals
+            .insert((option.to_string(), id.to_string()), row.line)
+            .is_some()
+        {
+            return Err(bad(
+                BASIS,
+                row.line,
+                &format!("duplicate signal {option}/{id}"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn likelihood(&mut self, row: &TomlRow) -> Result<(), Refusal> {
+        let [option, state, signal, value] = strings(
+            &row.fields,
+            ["option", "state", "signal", "probability"],
+            row.line,
+            INPUT,
+        )?;
+        for id in [option, state, signal] {
+            key(id, row.line)?;
+        }
+        let probability = fraction(value, row.line, true)?;
+        if self
+            .likelihoods
+            .insert(
+                (option.to_string(), state.to_string(), signal.to_string()),
+                (probability, row.line),
+            )
+            .is_some()
+        {
+            return Err(bad(
+                BASIS,
+                row.line,
+                &format!("duplicate likelihood {option}/{state}/{signal}"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn finish(
+        self,
+        states: &BTreeMap<String, Rat>,
+        unknowns: &[UuTerm],
+        source: &SourceAnchor,
+    ) -> Result<Vec<Claim<InformationOption>>, Refusal> {
+        if self.options.len() > super::MAX_INFORMATION_OPTIONS {
+            return Err(bad(
+                DOMAIN,
+                1,
+                "information-option count exceeds the evaluator's supported limit",
+            ));
+        }
+        for ((option, signal), line) in &self.signals {
+            if !self.options.contains_key(option) {
+                return Err(bad(
+                    BASIS,
+                    *line,
+                    &format!("signal {signal} names unknown information option {option}"),
+                ));
+            }
+        }
+        for ((option, state, signal), (_, line)) in &self.likelihoods {
+            if !self.options.contains_key(option)
+                || !states.contains_key(state)
+                || !self.signals.contains_key(&(option.clone(), signal.clone()))
+            {
+                return Err(bad(
+                    BASIS,
+                    *line,
+                    &format!(
+                        "likelihood references unknown option/state/signal {option}/{state}/{signal}"
+                    ),
+                ));
+            }
+        }
+        let mut claims = Vec::new();
+        for (id, (mut option, line)) in self.options {
+            option.signals = self
+                .signals
+                .keys()
+                .filter(|(owner, _)| owner == &id)
+                .map(|(_, signal)| signal.clone())
+                .collect();
+            if option.signals.is_empty() {
+                return Err(bad(
+                    BASIS,
+                    line,
+                    &format!("information option {id} needs at least one declared signal"),
+                ));
+            }
+            if option.signals.len() > super::MAX_SIGNALS {
+                return Err(bad(
+                    DOMAIN,
+                    line,
+                    &format!("information option {id} exceeds the supported signal limit"),
+                ));
+            }
+            for state in states.keys() {
+                let mut total = Rat::from_integer(0);
+                for signal in &option.signals {
+                    let (probability, _) = self.likelihoods.get(&(id.clone(), state.clone(), signal.clone()))
+                        .ok_or_else(|| bad(BASIS, line, &format!("missing likelihood {id}/{state}/{signal}; zeros must be explicit")))?;
+                    total = total.checked_add(*probability).map_err(|_| {
+                        bad(DOMAIN, line, "exact conditional likelihood sum overflowed")
+                    })?;
+                    option.likelihoods.push(Likelihood {
+                        state_id: state.clone(),
+                        signal_id: signal.clone(),
+                        probability: *probability,
+                    });
+                }
+                if total != Rat::from_integer(1) {
+                    return Err(bad(
+                        DOMAIN,
+                        line,
+                        &format!("likelihoods for {id}/{state} must sum exactly to one"),
+                    ));
+                }
+            }
+            let tag = option.canonical_tag();
+            claims.push(assumed(
+                format!("decision.{}.information.{id}", option.model_key),
+                option,
+                &tag,
+                AdditivityClass::NonAdditive,
+                unknowns,
+                located(source, &format!("information option {id}, line {line}")),
+            ));
+        }
+        Ok(claims)
+    }
 }
 
 fn assumed<T>(
@@ -341,11 +569,19 @@ fn key(value: &str, line: usize) -> Result<(), Refusal> {
 }
 
 fn probability(value: &str, line: usize) -> Result<Rat, Refusal> {
+    fraction(value, line, false)
+}
+
+fn fraction(value: &str, line: usize, allow_zero: bool) -> Result<Rat, Refusal> {
     let fail = || {
         bad(
             DOMAIN,
             line,
-            "weight must be a positive exact integer fraction such as 1/2",
+            if allow_zero {
+                "likelihood probability must be an exact integer fraction in [0,1], including explicit 0/1"
+            } else {
+                "weight must be a positive exact integer fraction such as 1/2"
+            },
         )
     };
     let (numerator, denominator) = value.split_once('/').ok_or_else(fail)?;
@@ -360,7 +596,7 @@ fn probability(value: &str, line: usize) -> Result<Rat, Refusal> {
     }
     let numerator: i128 = numerator.parse().map_err(|_| fail())?;
     let denominator: i128 = denominator.parse().map_err(|_| fail())?;
-    if numerator <= 0 || denominator <= 0 {
+    if denominator <= 0 || numerator > denominator || (!allow_zero && numerator == 0) {
         return Err(fail());
     }
     Rat::new(numerator, denominator).map_err(|_| fail())
@@ -391,7 +627,7 @@ fn decimal_money(value: &str, currency: Currency, line: usize) -> Result<Money, 
         bad(
             INPUT,
             line,
-            "payoff value must be a plain decimal with at most four fractional digits that fits Money",
+            "monetary value must be a plain decimal with at most four fractional digits that fits Money",
         )
     };
     let (negative, whole, fraction) = decimal_parts(value).ok_or_else(fail)?;
@@ -498,6 +734,41 @@ trigger = "Declared synthetic monitoring threshold"
 downside_usd_m = "0.001"
 "#;
 
+    const INFORMATION: &str = r#"
+[[information_option]]
+id = "assay"
+label = "Invented metallurgical test"
+test_cost = "6000000"
+delay_cost = "3800000.0001"
+delay_days = 180
+[[signal]]
+option = "assay"
+id = "positive"
+[[signal]]
+option = "assay"
+id = "negative"
+[[likelihood]]
+option = "assay"
+state = "high"
+signal = "positive"
+probability = "17/20"
+[[likelihood]]
+option = "assay"
+state = "high"
+signal = "negative"
+probability = "3/20"
+[[likelihood]]
+option = "assay"
+state = "low"
+signal = "positive"
+probability = "3/20"
+[[likelihood]]
+option = "assay"
+state = "low"
+signal = "negative"
+probability = "17/20"
+"#;
+
     fn source(text: &str) -> SourceAnchor {
         SourceAnchor::new(
             "/synthetic/choice.toml",
@@ -513,6 +784,7 @@ downside_usd_m = "0.001"
     #[test]
     fn exact_payoffs_and_source_bound_assumption_claims() {
         let inputs = parse(MODEL, source(MODEL)).expect("complete invented model");
+        assert!(inputs.information_options.is_empty());
         assert_eq!(
             inputs.weights.value.states[0],
             ("high".to_string(), Rat::new(2, 3).unwrap())
@@ -676,5 +948,184 @@ downside_usd_m = "0.001"
         let mut missing_path = source(MODEL);
         missing_path.artifact_path.clear();
         assert_eq!(parse(MODEL, missing_path).unwrap_err().code, INPUT.as_str());
+    }
+
+    #[test]
+    fn information_options_keep_exact_costs_likelihoods_and_source_assumptions() {
+        let text = format!("{MODEL}{INFORMATION}");
+        let inputs = parse(&text, source(&text)).unwrap();
+        let option = &inputs.information_options[0];
+        option.check_id().unwrap();
+        assert_eq!(option.value_tag(), option.value.canonical_tag());
+        assert_eq!(option.evidence, EvidenceClass::Assumed);
+        assert_eq!(option.confidentiality, Confidentiality::internal());
+        assert_eq!(option.additivity, AdditivityClass::NonAdditive);
+        assert_eq!(option.uu_terms, inputs.weights.uu_terms);
+        assert_eq!(option.value.model_key, inputs.weights.value.model_key);
+        assert_eq!(
+            option.value.valuation_basis,
+            inputs.actions[0].value.valuation_basis
+        );
+        assert_eq!(option.value.test_cost.minor, 60_000_000_000);
+        assert_eq!(option.value.delay_cost.minor, 38_000_000_001);
+        assert_eq!(option.value.delay_days, 180);
+        assert_eq!(option.value.signals, ["negative", "positive"]);
+        assert_eq!(option.value.likelihoods.len(), 4);
+        assert_eq!(option.value.likelihoods[0].state_id, "high");
+        assert_eq!(
+            option.value.likelihoods[0].probability,
+            Rat::new(3, 20).unwrap()
+        );
+        assert_eq!(option.anchors[0].artifact_sha256, sha256(text.as_bytes()).0);
+        assert!(
+            option.anchors[0]
+                .locator
+                .starts_with("declared model; information option assay, line ")
+        );
+        // Neither the declared cost nor its effect on NPV is inferred from the duration.
+        let immediate = text.replace("delay_days = 180", "delay_days = 0");
+        let immediate = parse(&immediate, source(&immediate)).unwrap();
+        assert_eq!(
+            immediate.information_options[0].value.delay_cost,
+            option.value.delay_cost
+        );
+    }
+
+    #[test]
+    fn explicit_zero_likelihoods_are_retained_and_never_fill_missing_cells() {
+        let extra = "\n[[signal]]\noption = \"assay\"\nid = \"unreachable\"\n";
+        let zero = |state| {
+            format!(
+                "\n[[likelihood]]\noption = \"assay\"\nstate = \"{state}\"\nsignal = \"unreachable\"\nprobability = \"0/1\"\n"
+            )
+        };
+        let missing = format!("{MODEL}{INFORMATION}{extra}{}", zero("high"));
+        let rejected = refusal(&missing);
+        assert_eq!(rejected.code, BASIS.as_str());
+        assert!(
+            rejected
+                .what
+                .contains("missing likelihood assay/low/unreachable")
+        );
+        let complete = format!("{missing}{}", zero("low"));
+        let inputs = parse(&complete, source(&complete)).unwrap();
+        let option = &inputs.information_options[0].value;
+        assert_eq!(option.signals.len(), 3);
+        assert_eq!(option.likelihoods.len(), 6);
+        assert_eq!(
+            option
+                .likelihoods
+                .iter()
+                .filter(|r| r.probability == Rat::from_integer(0))
+                .count(),
+            2
+        );
+        let zero_state = complete.replace("weight = \"1/3\"", "weight = \"0/1\"");
+        assert_eq!(refusal(&zero_state).code, DOMAIN.as_str());
+    }
+
+    #[test]
+    fn orphan_duplicate_and_foreign_information_rows_refuse() {
+        let complete = format!("{MODEL}{INFORMATION}");
+        let option = INFORMATION.split("[[signal]]").next().unwrap();
+        let signal = "\n[[signal]]\noption = \"assay\"\nid = \"positive\"\n";
+        let likelihood = "\n[[likelihood]]\noption = \"assay\"\nstate = \"high\"\nsignal = \"positive\"\nprobability = \"17/20\"\n";
+        for text in [
+            format!("{MODEL}{signal}"),
+            format!("{MODEL}{likelihood}"),
+            format!("{MODEL}{option}"),
+            format!("{complete}{option}"),
+            format!("{complete}{signal}"),
+            format!("{complete}{likelihood}"),
+            complete.replace("option = \"assay\"", "option = \"missing\""),
+            complete.replace("signal = \"positive\"", "signal = \"missing\""),
+            complete.replace("state = \"high\"\nsignal", "state = \"missing\"\nsignal"),
+        ] {
+            assert_eq!(refusal(&text).code, BASIS.as_str(), "{text}");
+        }
+    }
+
+    #[test]
+    fn information_probability_cost_and_duration_domains_are_explicit() {
+        let complete = format!("{MODEL}{INFORMATION}");
+        for (old, new) in [
+            ("probability = \"17/20\"", "probability = \"21/20\""),
+            ("probability = \"17/20\"", "probability = \"-1/20\""),
+            ("probability = \"17/20\"", "probability = \"17/0\""),
+            ("probability = \"17/20\"", "probability = \"16/20\""),
+            ("test_cost = \"6000000\"", "test_cost = \"-0.0001\""),
+            ("delay_cost = \"3800000.0001\"", "delay_cost = \"-1\""),
+            ("delay_days = 180", "delay_days = -1"),
+            ("delay_days = 180", "delay_days = 4294967296"),
+        ] {
+            assert_eq!(
+                refusal(&complete.replace(old, new)).code,
+                DOMAIN.as_str(),
+                "{new}"
+            );
+        }
+        for (old, new) in [
+            ("delay_days = 180", "delay_days = \"180\""),
+            (
+                "delay_days = 180",
+                "delay_days = 180\nevidence = \"calibrated\"",
+            ),
+            ("test_cost = \"6000000\"\n", ""),
+            ("delay_cost = \"3800000.0001\"", "delay_cost = \"1.00001\""),
+        ] {
+            assert_eq!(
+                refusal(&complete.replace(old, new)).code,
+                INPUT.as_str(),
+                "{new}"
+            );
+        }
+        let limit = complete.replace("delay_days = 180", "delay_days = 4294967295");
+        assert_eq!(
+            parse(&limit, source(&limit)).unwrap().information_options[0]
+                .value
+                .delay_days,
+            u32::MAX
+        );
+    }
+
+    #[test]
+    fn information_row_order_is_canonical_but_source_and_amount_changes_remain_bound() {
+        let text = format!("{MODEL}{INFORMATION}");
+        let original = parse(&text, source(&text)).unwrap();
+        let mut rows: Vec<_> = INFORMATION.split("[[").skip(1).collect();
+        rows.reverse();
+        let reordered = format!(
+            "{MODEL}{}",
+            rows.iter()
+                .map(|row| format!("[[{row}"))
+                .collect::<String>()
+        );
+        let reordered = parse(&reordered, source(&reordered)).unwrap();
+        assert_eq!(
+            original.information_options[0].value,
+            reordered.information_options[0].value
+        );
+        assert_eq!(
+            original.information_options[0].value_tag(),
+            reordered.information_options[0].value_tag()
+        );
+        assert_ne!(
+            original.information_options[0].claim_id,
+            reordered.information_options[0].claim_id
+        );
+        let changed = text.replace("3800000.0001", "3800000.0002");
+        assert_eq!(
+            parse(&changed, source(&text)).unwrap_err().code,
+            RefusalCode::DigestMismatch505.as_str()
+        );
+        let changed = parse(&changed, source(&changed)).unwrap();
+        assert_ne!(
+            original.information_options[0].value_tag(),
+            changed.information_options[0].value_tag()
+        );
+        assert_ne!(
+            original.information_options[0].claim_id,
+            changed.information_options[0].claim_id
+        );
     }
 }

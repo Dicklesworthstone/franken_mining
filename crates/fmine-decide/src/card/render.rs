@@ -169,13 +169,168 @@ fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
     )
 }
 
+fn choice_json(c: &information::ExpectedChoice) -> String {
+    format!(
+        "{{\"kind\":{},\"id\":{},\"expected_value\":{}}}",
+        js(c.kind.as_str()),
+        js(&c.id),
+        rq(c.expected_value.major)
+    )
+}
+
+fn signal_json(s: &information::SignalPolicy) -> String {
+    let weights = s.posterior_state_weights.as_ref().map_or_else(
+        || "null".into(),
+        |values| {
+            format!(
+                "[{}]",
+                values
+                    .iter()
+                    .map(|(state, p)| format!(
+                        "{{\"state_id\":{},\"probability\":{}}}",
+                        js(state),
+                        rq(*p)
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        },
+    );
+    let actions = s.posterior_action_values.as_ref().map_or_else(
+        || "null".into(),
+        |values| {
+            format!(
+                "[{}]",
+                values
+                    .iter()
+                    .map(|a| format!(
+                        "{{\"action_id\":{},\"value\":{}}}",
+                        js(&a.action_id),
+                        rq(a.value.major)
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        },
+    );
+    format!(
+        "{{\"signal_id\":{},\"probability\":{},\"reachable\":{},\"posterior_state_weights\":{weights},\"posterior_action_values\":{actions},\"best_actions\":{},\"selected_action\":{},\"conditional_value\":{},\"strict_primary_change\":{}}}",
+        js(&s.signal_id),
+        rq(s.probability),
+        s.probability != ZERO,
+        ids(&s.best_actions),
+        s.selected_action
+            .as_ref()
+            .map_or_else(|| "null".into(), |id| js(id)),
+        s.conditional_value
+            .map_or_else(|| "null".into(), |v| rq(v.major)),
+        s.strict_primary_change
+            .map_or_else(|| "null".into(), |v| v.to_string())
+    )
+}
+
+fn option_stats_json(o: &information::InformationStats) -> String {
+    let signals = o
+        .signals
+        .iter()
+        .map(signal_json)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"option_id\":{},\"label\":{},\"test_cost\":{},\"delay_cost\":{},\"total_cost\":{},\"delay_days\":{},\"gross_value\":{},\"net_value\":{},\"evsi\":{},\"net_voi\":{},\"status\":{},\"strict_change_probability\":{},\"baseline_optimal_after_every_reachable_signal\":{},\"signals\":[{signals}]}}",
+        js(&o.option_id),
+        js(&o.label),
+        rq(o.test_cost.major),
+        rq(o.delay_cost.major),
+        rq(o.total_cost.major),
+        o.delay_days,
+        rq(o.gross_value.major),
+        rq(o.net_value.major),
+        rq(o.evsi.major),
+        rq(o.net_voi.major),
+        js(o.status.as_str()),
+        rq(o.strict_change_probability),
+        o.baseline_optimal_after_every_reachable_signal
+    )
+}
+
+fn information_json(i: &InformationSummary) -> String {
+    let options = i
+        .options
+        .iter()
+        .map(option_stats_json)
+        .collect::<Vec<_>>()
+        .join(",");
+    let order = i
+        .overall_order
+        .iter()
+        .map(choice_json)
+        .collect::<Vec<_>>()
+        .join(",");
+    let winners = i
+        .overall_winners
+        .iter()
+        .map(choice_json)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"method\":{},\"monte_carlo_se\":null,\"standard_error_note\":{},\"baseline_primary\":{},\"baseline_winners\":{},\"baseline_value\":{},\"perfect_information_value\":{},\"evpi\":{},\"options\":[{options}],\"option_order\":{},\"option_winners\":{},\"overall_order\":[{order}],\"overall_winners\":[{winners}],\"scope\":{}}}",
+        js(information::METHOD),
+        js(information::STANDARD_ERROR_NOTE),
+        js(&i.baseline_primary),
+        ids(&i.baseline_winners),
+        rq(i.baseline_value.major),
+        rq(i.perfect_information_value.major),
+        rq(i.evpi.major),
+        ids(&i.option_order),
+        ids(&i.option_winners),
+        js(information::SCOPE)
+    )
+}
+
+fn money_json(m: Money) -> String {
+    format!(
+        "{{\"currency\":{},\"minor\":{}}}",
+        js(currency_name(m.ccy)),
+        js(&m.minor.to_string())
+    )
+}
+
+fn information_input_json(o: &InformationOption) -> String {
+    let likelihoods = o
+        .likelihoods
+        .iter()
+        .map(|l| {
+            format!(
+                "{{\"state_id\":{},\"signal_id\":{},\"probability\":{}}}",
+                js(&l.state_id),
+                js(&l.signal_id),
+                rq(l.probability)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"model_key\":{},\"option_id\":{},\"label\":{},\"currency\":{},\"valuation_basis\":{},\"test_cost\":{},\"delay_cost\":{},\"delay_days\":{},\"signals\":{},\"likelihoods\":[{likelihoods}]}}",
+        js(&o.model_key),
+        js(&o.option_id),
+        js(&o.label),
+        js(currency_name(o.currency)),
+        js(&o.valuation_basis),
+        money_json(o.test_cost),
+        money_json(o.delay_cost),
+        o.delay_days,
+        ids(&o.signals)
+    )
+}
+
 pub(super) fn summary_json(s: &DecisionSummary) -> String {
     let alternatives = s.alternatives.iter().map(|a| {
         let states = a.states.iter().map(|r| format!("{{\"state_id\":{},\"weight\":{},\"payoff\":{},\"best_in_hindsight\":{},\"regret\":{}}}", js(&r.state_id), rq(r.weight), rq(r.payoff.major), rq(r.best_in_hindsight.major), rq(r.regret.major))).collect::<Vec<_>>().join(",");
         format!("{{\"action_id\":{},\"label\":{},\"role\":{},\"mean\":{},\"p10_p50_p90\":[{},{},{}],\"cvar95_loss\":{},\"mean_regret\":{},\"max_regret\":{},\"states\":[{states}]}}", js(&a.action_id), js(&a.label), js(a.role.as_str()), rq(a.mean.major), rq(a.p10_p50_p90[0].major), rq(a.p10_p50_p90[1].major), rq(a.p10_p50_p90[2].major), rq(a.cvar95_loss.major), rq(a.mean_regret.major), rq(a.max_regret.major))
     }).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"valuation_basis\":{},\"monetary_scale\":\"major_currency_units\",\"expected_value_order\":{},\"expected_value_winners\":{},\"expected_value_primary\":{},\"runner_up\":{},\"minimax_regret_order\":{},\"minimax_regret_winners\":{},\"minimax_regret_primary\":{},\"alternatives\":[{alternatives}]}}",
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"valuation_basis\":{},\"monetary_scale\":\"major_currency_units\",\"expected_value_order\":{},\"expected_value_winners\":{},\"expected_value_primary\":{},\"runner_up\":{},\"minimax_regret_order\":{},\"minimax_regret_winners\":{},\"minimax_regret_primary\":{},\"alternatives\":[{alternatives}],\"information\":{}}}",
         js(&s.model_key),
         js(&s.question),
         js(currency_name(s.currency)),
@@ -186,7 +341,10 @@ pub(super) fn summary_json(s: &DecisionSummary) -> String {
         js(&s.runner_up),
         ids(&s.minimax_regret_order),
         ids(&s.minimax_regret_winners),
-        js(&s.minimax_regret_primary)
+        js(&s.minimax_regret_primary),
+        s.information
+            .as_ref()
+            .map_or_else(|| "null".into(), information_json)
     )
 }
 
@@ -244,8 +402,14 @@ pub(super) fn inputs_json(inputs: &DecisionInputs) -> String {
         .map(|a| claim_json(a, &action_json(&a.value)))
         .collect::<Vec<_>>()
         .join(",");
+    let options = inputs
+        .information_options
+        .iter()
+        .map(|o| claim_json(o, &information_input_json(&o.value)))
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        "{{\"weights\":{},\"actions\":[{actions}]}}",
+        "{{\"weights\":{},\"actions\":[{actions}],\"information_options\":[{options}]}}",
         claim_json(&inputs.weights, &weights_json(&inputs.weights.value))
     )
 }
@@ -280,7 +444,7 @@ impl EvaluatedCard {
     pub fn to_markdown(&self) -> String {
         let s = self.summary();
         let mut out = format!(
-            "# Draft decision comparison: {}\n\n{NO_CLAIM}\n\n**Model:** {}. **Currency:** {} in major units. **Valuation basis:** {}.\n\n**Evidence:** {}; **output colour:** estimated (no calibrated output is asserted); weakest input colour: {}.\n\n**Expected-value co-winners:** {}. **Displayed primary / runner-up:** {} / {}.\n\n**Minimax-regret co-winners:** {}.\n\n{TIE_RULE}\n\n",
+            "# Draft decision comparison: {}\n\n{NO_CLAIM}\n\n**Model:** {}. **Currency:** {} in major units. **Valuation basis:** {}.\n\n**Evidence:** {}; **output colour:** estimated (no calibrated output is asserted); weakest input colour: {}.\n\n**Act-now expected-value co-winners:** {}. **Displayed primary / runner-up:** {} / {}.\n\n**Act-now minimax-regret co-winners:** {}.\n\n{TIE_RULE}\n\n",
             md(&s.question),
             md(&s.model_key),
             currency_name(s.currency),
@@ -324,6 +488,9 @@ impl EvaluatedCard {
                 );
             }
         }
+        if let Some(information) = &s.information {
+            information_markdown(&mut out, information, &self.inputs.information_options);
+        }
         out.push_str("\n## Declared unknown unknowns\n\n");
         for u in &self.claim.uu_terms {
             let _ = writeln!(
@@ -340,6 +507,9 @@ impl EvaluatedCard {
         for a in &self.inputs.actions {
             source_markdown(&mut out, a);
         }
+        for option in &self.inputs.information_options {
+            source_markdown(&mut out, option);
+        }
         let _ = write!(
             out,
             "\nOutput Claim: `{}`. Confidentiality: {}.\n\nDigest: `{}`\n",
@@ -348,6 +518,134 @@ impl EvaluatedCard {
             self.digest()
         );
         out
+    }
+}
+
+fn information_markdown(
+    out: &mut String,
+    i: &InformationSummary,
+    inputs: &[Claim<InformationOption>],
+) {
+    let _ = write!(
+        out,
+        "\n## Value of information in the declared finite model\n\n**Method:** {}. **Monte Carlo standard error:** not applicable. {}\n\n{}\n\n**Act-now baseline:** {} (co-winners: {}), exact value {}. **Perfect-information value:** {}. **EVPI:** {}.\n\nStrict change is measured relative to the fixed displayed baseline action {}; a posterior tie retaining that action is not a strict change.\n\n",
+        information::METHOD,
+        information::STANDARD_ERROR_NOTE,
+        information::SCOPE,
+        md(&i.baseline_primary),
+        md(&i.baseline_winners.join(", ")),
+        ratio(i.baseline_value.major),
+        ratio(i.perfect_information_value.major),
+        ratio(i.evpi.major),
+        md(&i.baseline_primary)
+    );
+    out.push_str("| Option | Test cost | Delay cost | Delay days | Gross policy value | EVSI | Net policy value | Net VOI | Net status | Strict change probability |\n|---|---:|---:|---:|---:|---:|---:|---:|---|---:|\n");
+    for o in &i.options {
+        let _ = writeln!(
+            out,
+            "| {} ({}) | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            md(&o.label),
+            md(&o.option_id),
+            ratio(o.test_cost.major),
+            ratio(o.delay_cost.major),
+            o.delay_days,
+            ratio(o.gross_value.major),
+            ratio(o.evsi.major),
+            ratio(o.net_value.major),
+            ratio(o.net_voi.major),
+            o.status.as_str(),
+            ratio(o.strict_change_probability)
+        );
+    }
+    let choices = |values: &[information::ExpectedChoice]| {
+        values
+            .iter()
+            .map(|c| {
+                format!(
+                    "{} {} ({})",
+                    c.kind.as_str(),
+                    md(&c.id),
+                    ratio(c.expected_value.major)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let _ = write!(
+        out,
+        "\n**Information-option co-winners by net expected value:** {}.\n\n**Overall expected-value co-winners:** {}.\n\n**Overall expected-value order:** {}.\n\nEqual overall values retain all co-winners; act-now choices precede information options for presentation only. This expected-value comparison buys at most one option and supplies no test-policy risk or regret ranking.\n",
+        md(&i.option_winners.join(", ")),
+        choices(&i.overall_winners),
+        choices(&i.overall_order)
+    );
+    for o in &i.options {
+        if o.baseline_optimal_after_every_reachable_signal {
+            let _ = writeln!(
+                out,
+                "\nFor option {}, the act-now baseline remains optimal after every reachable result; gross EVSI is zero.",
+                md(&o.option_id)
+            );
+        }
+        let _ = write!(
+            out,
+            "\n### Conditional policy: {}\n\n| Signal | Probability | Posterior state weights | Conditional action values | Co-winners | Displayed action | Conditional best value | Strict primary change |\n|---|---:|---|---|---|---|---:|---|\n",
+            md(&o.option_id)
+        );
+        for s in &o.signals {
+            let weights = s.posterior_state_weights.as_ref().map_or_else(
+                || "unreachable".into(),
+                |values| {
+                    values
+                        .iter()
+                        .map(|(id, p)| format!("{}: {}", md(id), ratio(*p)))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                },
+            );
+            let values = s.posterior_action_values.as_ref().map_or_else(
+                || "not applicable".into(),
+                |values| {
+                    values
+                        .iter()
+                        .map(|a| format!("{}: {}", md(&a.action_id), ratio(a.value.major)))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                },
+            );
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} | {} | {} | {} | {} | {} |",
+                md(&s.signal_id),
+                ratio(s.probability),
+                weights,
+                values,
+                if s.best_actions.is_empty() {
+                    "none".into()
+                } else {
+                    md(&s.best_actions.join(", "))
+                },
+                s.selected_action
+                    .as_ref()
+                    .map_or_else(|| "not applicable".into(), |id| md(id)),
+                s.conditional_value
+                    .map_or_else(|| "not applicable".into(), |v| ratio(v.major)),
+                s.strict_primary_change
+                    .map_or_else(|| "not applicable".into(), |v| v.to_string())
+            );
+        }
+    }
+    out.push_str("\n### Complete declared likelihood matrices\n\nEach entry is P(signal | state), not a posterior state probability.\n\n| Option | State | Signal | Declared conditional probability |\n|---|---|---|---:|\n");
+    for input in inputs {
+        for l in &input.value.likelihoods {
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} | {} |",
+                md(&input.value.option_id),
+                md(&l.state_id),
+                md(&l.signal_id),
+                ratio(l.probability)
+            );
+        }
     }
 }
 

@@ -17,16 +17,22 @@ use fmine_evidence::{EpistemicStatus, EvidenceClass, KnowledgeState, Refusal, Re
 use fmine_numerics::exact_feas::Rat;
 use fmine_units::{Currency, Money, UnitsError};
 
+pub mod information;
 pub mod model;
 mod render;
+
+pub use information::{
+    InformationOption, InformationSummary, Likelihood, MAX_INFORMATION_OPTIONS,
+    MAX_INFORMATION_WORK, MAX_SIGNALS,
+};
 
 type Result<T> = std::result::Result<T, Refusal>;
 const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);
 pub const MAX_STATES: usize = 4096;
 pub const MAX_ACTIONS: usize = 256;
-pub const NO_CLAIM: &str = "Draft comparison conditional on the declared complete finite state/payoff model. State weights are not calibrated probabilities; monetary quantiles and CVaR describe this model only. No forecast, VOI, hard-constraint or safety assessment, historical evidence-cut verification, sign-off, reserve disclosure or execution authorization is supplied.";
-pub const TIE_RULE: &str = "All exact co-winners are retained; ascending action_id orders equal values for presentation only. Primary and runner-up do not assert a unique preferred action when tied.";
+pub const NO_CLAIM: &str = "Draft comparison conditional on the declared complete finite state/payoff model. State weights and information-option likelihoods are not calibrated probabilities; monetary quantiles, CVaR and exact enumerated information values describe this model only. No forecast, Monte Carlo VOI accuracy claim, hard-constraint or safety assessment, historical evidence-cut verification, sign-off, reserve disclosure or execution authorization is supplied.";
+pub const TIE_RULE: &str = "All exact co-winners are retained; ascending action_id or option_id orders equal values for presentation only. Equal overall expected values list act-now choices before information options. Primary and runner-up do not assert a unique preferred action when tied.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WeightSet {
@@ -67,6 +73,7 @@ pub struct ActionPayoffs {
 pub struct DecisionInputs {
     pub weights: Claim<WeightSet>,
     pub actions: Vec<Claim<ActionPayoffs>>,
+    pub information_options: Vec<Claim<InformationOption>>,
 }
 
 fn put_rat(enc: &mut Encoder, value: Rat) {
@@ -169,6 +176,8 @@ pub struct DecisionSummary {
     pub minimax_regret_order: Vec<String>,
     pub minimax_regret_winners: Vec<String>,
     pub minimax_regret_primary: String,
+    /// Expected-value comparisons for buying at most one test. The base risk/regret matrix stays separate.
+    pub information: Option<InformationSummary>,
 }
 
 /// Sealed computed comparison; input and output snapshots have no mutable accessors.
@@ -452,6 +461,7 @@ pub fn evaluate(inputs: &DecisionInputs) -> Result<EvaluatedCard> {
             format!("requires 2..={MAX_ACTIONS} actions and 1..={MAX_STATES} states"),
         ));
     }
+    information::check_work(inputs)?;
     let mut inputs = inputs.clone();
     let mut weakest = admit(
         &inputs.weights,
@@ -568,7 +578,7 @@ pub fn evaluate(inputs: &DecisionInputs) -> Result<EvaluatedCard> {
         .collect::<Result<Vec<_>>>()?;
     let (expected_value_order, expected_value_winners) = ranking(&alternatives, false)?;
     let (minimax_regret_order, minimax_regret_winners) = ranking(&alternatives, true)?;
-    let summary = DecisionSummary {
+    let mut summary = DecisionSummary {
         model_key: inputs.weights.value.model_key.clone(),
         question: inputs.weights.value.question.clone(),
         currency,
@@ -581,7 +591,12 @@ pub fn evaluate(inputs: &DecisionInputs) -> Result<EvaluatedCard> {
         minimax_regret_primary: minimax_regret_order[0].clone(),
         minimax_regret_order,
         minimax_regret_winners,
+        information: None,
     };
+    let (information, information_color) =
+        information::assess(&mut inputs.information_options, &summary)?;
+    summary.information = information;
+    weakest = weakest.min(information_color);
     let mut binding = Encoder::new_frame(*b"DCCL", 1);
     binding.put_str(&render::summary_json(&summary));
     binding.put_str(&render::inputs_json(&inputs));
@@ -590,6 +605,9 @@ pub fn evaluate(inputs: &DecisionInputs) -> Result<EvaluatedCard> {
     metadata.include(&inputs.weights)?;
     for action in &inputs.actions {
         metadata.include(action)?;
+    }
+    for option in &inputs.information_options {
+        metadata.include(option)?;
     }
     let claim = Claim::new(
         "decision.finite-scenario/1",
@@ -769,7 +787,11 @@ mod tests {
             action("build", ActionRole::Action, 300_000_000, -200_000_000),
             action("do_nothing", ActionRole::DoNothing, 0, 0),
         ];
-        DecisionInputs { weights, actions }
+        DecisionInputs {
+            weights,
+            actions,
+            information_options: Vec::new(),
+        }
     }
 
     fn stats<'a>(card: &'a EvaluatedCard, id: &str) -> &'a AlternativeStats {
@@ -1098,5 +1120,395 @@ mod tests {
             *action = action_claim(value);
         }
         assert_eq!(evaluate(&inputs).unwrap_err().code, "FMINE-REF-207");
+    }
+
+    fn information_claim(value: InformationOption) -> Claim<InformationOption> {
+        let tag = value.canonical_tag();
+        let key = format!("information.{}", value.option_id);
+        claim(
+            &key,
+            value,
+            &tag,
+            AdditivityClass::NonAdditive,
+            EvidenceClass::Assumed,
+        )
+    }
+
+    fn test_option(inputs: &DecisionInputs, id: &str, accuracy: Rat) -> InformationOption {
+        let wrong = ONE.checked_sub(accuracy).unwrap();
+        InformationOption {
+            model_key: inputs.weights.value.model_key.clone(),
+            option_id: id.into(),
+            label: format!("Invented {id}"),
+            currency: Currency::USD,
+            valuation_basis: inputs.actions[0].value.valuation_basis.clone(),
+            test_cost: money(6_000_000),
+            delay_cost: money(3_800_000),
+            delay_days: 180,
+            signals: vec!["bad".into(), "good".into()],
+            likelihoods: [
+                ("high", "good", accuracy),
+                ("high", "bad", wrong),
+                ("low", "good", wrong),
+                ("low", "bad", accuracy),
+            ]
+            .into_iter()
+            .map(|(state, signal, probability)| Likelihood {
+                state_id: state.into(),
+                signal_id: signal.into(),
+                probability,
+            })
+            .collect(),
+        }
+    }
+
+    fn information(card: &EvaluatedCard) -> &InformationSummary {
+        card.summary().information.as_ref().unwrap()
+    }
+
+    fn signal<'a>(
+        option: &'a information::InformationStats,
+        id: &str,
+    ) -> &'a information::SignalPolicy {
+        option.signals.iter().find(|s| s.signal_id == id).unwrap()
+    }
+
+    #[test]
+    fn gb29_exact_preposterior_value_and_costs_retain_base_risk() {
+        let mut inputs = fixture();
+        let base = evaluate(&inputs).unwrap();
+        assert!(base.summary().information.is_none());
+        assert!(base.to_json().contains("\"information\":null"));
+        inputs
+            .information_options
+            .push(information_claim(test_option(
+                &inputs,
+                "met_test",
+                rat(17, 20),
+            )));
+        let card = evaluate(&inputs).unwrap();
+        let info = information(&card);
+        let option = &info.options[0];
+        assert_eq!(info.baseline_value.major, rat(100_000_000, 1));
+        assert_eq!(info.perfect_information_value.major, rat(180_000_000, 1));
+        assert_eq!(info.evpi.major, rat(80_000_000, 1));
+        assert_eq!(option.gross_value.major, rat(141_000_000, 1));
+        assert_eq!(option.evsi.major, rat(41_000_000, 1));
+        assert_eq!(option.total_cost.major, rat(9_800_000, 1));
+        assert_eq!(option.net_value.major, rat(131_200_000, 1));
+        assert_eq!(option.net_voi.major, rat(31_200_000, 1));
+        assert_eq!(option.strict_change_probability, rat(43, 100));
+        let good = signal(option, "good");
+        assert_eq!(good.probability, rat(57, 100));
+        assert_eq!(
+            good.posterior_state_weights.as_ref().unwrap()[0],
+            ("high".into(), rat(17, 19))
+        );
+        assert_eq!(
+            good.conditional_value.unwrap().major,
+            rat(4_700_000_000, 19)
+        );
+        assert_eq!(good.best_actions, ["build"]);
+        let bad = signal(option, "bad");
+        assert_eq!(
+            bad.posterior_state_weights.as_ref().unwrap()[0],
+            ("high".into(), rat(9, 43))
+        );
+        assert_eq!(bad.best_actions, ["do_nothing"]);
+        assert_eq!(bad.strict_primary_change, Some(true));
+        assert_eq!(
+            info.overall_winners[0].kind,
+            information::ChoiceKind::InformationOption
+        );
+        assert_eq!(card.summary().alternatives, base.summary().alternatives);
+        assert_eq!(card.claim().parents.len(), 4);
+        assert!(card.to_json().contains("\"monte_carlo_se\":null"));
+        assert!(card.to_markdown().contains("P(signal | state)"));
+    }
+
+    #[test]
+    fn exact_no_change_threshold_and_neighbor_keep_posterior_ties() {
+        for (prior, evsi, changes) in [
+            (rat(34, 43), ZERO, ZERO),
+            (rat(39, 50), rat(2_300_000, 1), rat(38, 125)),
+        ] {
+            let mut inputs = fixture();
+            let mut weights = inputs.weights.value.clone();
+            weights.states[0].1 = prior;
+            weights.states[1].1 = ONE.checked_sub(prior).unwrap();
+            inputs.weights = weight_claim(weights);
+            inputs
+                .information_options
+                .push(information_claim(test_option(&inputs, "test", rat(17, 20))));
+            let card = evaluate(&inputs).unwrap();
+            let option = &information(&card).options[0];
+            assert_eq!(option.evsi.major, evsi);
+            assert_eq!(option.strict_change_probability, changes);
+            assert_eq!(
+                option.net_voi.major,
+                evsi.checked_sub(rat(9_800_000, 1)).unwrap()
+            );
+            assert_eq!(
+                option.baseline_optimal_after_every_reachable_signal,
+                evsi == ZERO
+            );
+            if evsi == ZERO {
+                assert_eq!(signal(option, "bad").best_actions, ["build", "do_nothing"]);
+                assert_eq!(signal(option, "bad").strict_primary_change, Some(false));
+            }
+        }
+    }
+
+    #[test]
+    fn perfect_uninformative_unreachable_and_expensive_options() {
+        let mut inputs = fixture();
+        let mut perfect = test_option(&inputs, "perfect", ONE);
+        perfect.test_cost = money(0);
+        perfect.delay_cost = money(0);
+        perfect.signals.push("impossible".into());
+        for state in ["high", "low"] {
+            perfect.likelihoods.push(Likelihood {
+                state_id: state.into(),
+                signal_id: "impossible".into(),
+                probability: ZERO,
+            });
+        }
+        inputs.information_options.push(information_claim(perfect));
+        let card = evaluate(&inputs).unwrap();
+        let option = &information(&card).options[0];
+        assert_eq!(option.evsi, information(&card).evpi);
+        let impossible = signal(option, "impossible");
+        assert_eq!(impossible.probability, ZERO);
+        assert_eq!(impossible.posterior_state_weights, None);
+        assert_eq!(impossible.posterior_action_values, None);
+        assert!(impossible.best_actions.is_empty());
+        assert_eq!(impossible.conditional_value, None);
+        assert_eq!(impossible.strict_primary_change, None);
+
+        let mut uninformative = test_option(&inputs, "uninformative", rat(1, 2));
+        uninformative.test_cost = money(0);
+        uninformative.delay_cost = money(0);
+        inputs.information_options = vec![information_claim(uninformative)];
+        let tied = evaluate(&inputs).unwrap();
+        let info = information(&tied);
+        assert_eq!(info.options[0].evsi.major, ZERO);
+        assert_eq!(info.options[0].status, information::NetStatus::Zero);
+        assert_eq!(info.overall_winners.len(), 2);
+        assert_eq!(
+            info.overall_winners[0].kind,
+            information::ChoiceKind::ActNow
+        );
+        assert_eq!(
+            info.overall_winners[1].kind,
+            information::ChoiceKind::InformationOption
+        );
+
+        let mut expensive = test_option(&inputs, "expensive", rat(17, 20));
+        expensive.test_cost = money(60_000_000);
+        expensive.delay_cost = money(40_000_000);
+        expensive.delay_days = 0; // Duration does not infer a cost or discount rule.
+        inputs.information_options = vec![information_claim(expensive)];
+        let costly = evaluate(&inputs).unwrap();
+        let info = information(&costly);
+        assert_eq!(info.options[0].gross_value.major, rat(141_000_000, 1));
+        assert_eq!(info.options[0].net_value.major, rat(41_000_000, 1));
+        assert_eq!(info.options[0].net_voi.major, rat(-59_000_000, 1));
+        assert_eq!(info.options[0].status, information::NetStatus::Negative);
+        assert_eq!(info.overall_winners[0].id, "build");
+    }
+
+    #[test]
+    fn negative_payoffs_and_prior_ties_do_not_fabricate_zero_or_zero_evsi() {
+        let mut inputs = fixture();
+        let mut weights = inputs.weights.value.clone();
+        for (_, weight) in &mut weights.states {
+            *weight = rat(1, 2);
+        }
+        inputs.weights = weight_claim(weights);
+        for (index, action) in inputs.actions.iter_mut().enumerate() {
+            let mut value = action.value.clone();
+            value.values[0].1 = money(if index == 0 { -10 } else { -100 });
+            value.values[1].1 = money(if index == 0 { -100 } else { -10 });
+            *action = action_claim(value);
+        }
+        let mut perfect = test_option(&inputs, "perfect", ONE);
+        perfect.test_cost = money(1);
+        perfect.delay_cost = money(2);
+        inputs.information_options = vec![information_claim(perfect)];
+        let card = evaluate(&inputs).unwrap();
+        let info = information(&card);
+        assert_eq!(info.baseline_winners, ["build", "do_nothing"]);
+        assert_eq!(info.baseline_value.major, rat(-55, 1));
+        assert_eq!(info.options[0].gross_value.major, rat(-10, 1));
+        assert_eq!(info.options[0].evsi.major, rat(45, 1));
+        assert_eq!(info.options[0].net_value.major, rat(-13, 1));
+        assert_eq!(info.options[0].strict_change_probability, rat(1, 2));
+        assert_eq!(info.overall_winners[0].id, "perfect");
+    }
+
+    #[test]
+    fn garbling_never_increases_information_value() {
+        let mut inputs = fixture();
+        for (id, accuracy) in [
+            ("precise", rat(9, 10)),
+            ("garbled", rat(17, 20)),
+            ("noise", rat(1, 2)),
+        ] {
+            let mut option = test_option(&inputs, id, accuracy);
+            option.test_cost = money(0);
+            option.delay_cost = money(0);
+            inputs.information_options.push(information_claim(option));
+        }
+        let card = evaluate(&inputs).unwrap();
+        let info = information(&card);
+        assert_eq!(info.option_order, ["precise", "garbled", "noise"]);
+        let by_id = |id: &str| {
+            info.options
+                .iter()
+                .find(|o| o.option_id == id)
+                .unwrap()
+                .evsi
+                .major
+        };
+        assert_eq!(by_id("precise"), rat(54_000_000, 1));
+        assert_eq!(by_id("garbled"), rat(41_000_000, 1));
+        assert_eq!(by_id("noise"), ZERO);
+    }
+
+    #[test]
+    fn invalid_material_information_never_drops_the_option() {
+        for mutation in 0..13 {
+            let mut inputs = fixture();
+            let mut value = test_option(&inputs, "test", rat(17, 20));
+            match mutation {
+                0 => {
+                    value.likelihoods.pop();
+                }
+                1 => {
+                    value.likelihoods[0] = value.likelihoods[1].clone();
+                }
+                2 => {
+                    value.likelihoods[0].state_id = "foreign".into();
+                }
+                3 => {
+                    value.likelihoods[0].signal_id = "foreign".into();
+                }
+                4 => {
+                    value.likelihoods[0].probability = rat(-1, 20);
+                }
+                5 => {
+                    value.likelihoods[0].probability = rat(21, 20);
+                }
+                6 => {
+                    value.likelihoods[0].probability = rat(16, 20);
+                }
+                7 => {
+                    value.signals[0] = value.signals[1].clone();
+                }
+                8 => {
+                    value.valuation_basis.push_str(" different basis");
+                }
+                9 => {
+                    value.test_cost.ccy = Currency::CAD;
+                }
+                10 => {
+                    value.delay_cost = money(-1);
+                }
+                11 => {
+                    value.model_key = "another model".into();
+                }
+                12 => {
+                    value.option_id.clear();
+                }
+                _ => unreachable!(),
+            }
+            inputs.information_options.push(information_claim(value));
+            assert!(evaluate(&inputs).is_err(), "mutation {mutation}");
+        }
+        let mut inputs = fixture();
+        let option = information_claim(test_option(&inputs, "test", rat(17, 20)));
+        inputs.information_options = vec![option.clone(), option.clone()];
+        assert!(evaluate(&inputs).is_err());
+        inputs.information_options = vec![option; MAX_INFORMATION_OPTIONS + 1];
+        assert_eq!(evaluate(&inputs).unwrap_err().code, "FMINE-REF-203");
+        inputs.information_options.truncate(1);
+        inputs.information_options[0]
+            .value
+            .signals
+            .resize(MAX_SIGNALS + 1, "signal".into());
+        assert_eq!(evaluate(&inputs).unwrap_err().code, "FMINE-REF-203");
+    }
+
+    #[test]
+    fn all_information_claims_and_nonhashed_metadata_bind_even_losing_options() {
+        let mut inputs = fixture();
+        let weights = inputs.weights.value.clone();
+        let tag = weights.canonical_tag();
+        inputs.weights = claim(
+            "weights",
+            weights,
+            &tag,
+            AdditivityClass::NonAdditive,
+            EvidenceClass::ModelledCalibrated,
+        )
+        .with_regime(
+            ValidityDomain::unconstrained().with("declared_model_axis", 0.0, 1.0),
+            "declared-regime",
+        );
+        for action in &mut inputs.actions {
+            let value = action.value.clone();
+            let tag = value.canonical_tag();
+            let key = value.action_id.clone();
+            *action = claim(
+                &key,
+                value,
+                &tag,
+                AdditivityClass::ExtensiveAdditive,
+                EvidenceClass::ModelledCalibrated,
+            )
+            .with_regime(
+                ValidityDomain::unconstrained().with("declared_model_axis", 0.0, 1.0),
+                "declared-regime",
+            );
+        }
+        for (id, accuracy) in [("winner", rat(17, 20)), ("loser", rat(1, 2))] {
+            let mut option = information_claim(test_option(&inputs, id, accuracy));
+            option.uu_terms[0].scenario_id = format!("option_{id}");
+            inputs.information_options.push(option);
+        }
+        let card = evaluate(&inputs).unwrap();
+        assert_eq!(card.claim().evidence, EvidenceClass::Assumed);
+        assert_eq!(card.weakest_input_color(), ColorRank::Estimated);
+        assert_eq!(card.claim().parents.len(), 5);
+        assert_eq!(card.claim().uu_terms.len(), 3);
+        assert_eq!(information(&card).overall_winners[0].id, "winner");
+        let mut changed = inputs.clone();
+        changed.information_options[1].uu_terms[0]
+            .description
+            .push_str(" changed");
+        assert_eq!(
+            changed.information_options[1].claim_id,
+            inputs.information_options[1].claim_id
+        );
+        let changed_card = evaluate(&changed).unwrap();
+        assert_ne!(changed_card.digest(), card.digest());
+        assert_ne!(changed_card.claim().claim_id, card.claim().claim_id);
+        assert_eq!(changed_card.summary(), card.summary());
+        changed.information_options[1].stale = true;
+        assert_eq!(evaluate(&changed).unwrap_err().code, "FMINE-REF-502");
+        let mut tampered = inputs.clone();
+        tampered.information_options[1].value.delay_cost = money(0);
+        assert_eq!(evaluate(&tampered).unwrap_err().code, "FMINE-REF-507");
+        inputs.information_options.reverse();
+        inputs.actions.reverse();
+        inputs.weights.value.states.reverse();
+        for a in &mut inputs.actions {
+            a.value.values.reverse();
+        }
+        for o in &mut inputs.information_options {
+            o.value.signals.reverse();
+            o.value.likelihoods.reverse();
+        }
+        assert_eq!(evaluate(&inputs).unwrap().to_json(), card.to_json());
     }
 }
