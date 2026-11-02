@@ -258,6 +258,33 @@ fn option_stats_json(o: &information::InformationStats) -> String {
     )
 }
 
+fn risk_choice_json(c: &information::RiskChoice) -> String {
+    format!(
+        "{{\"kind\":{},\"id\":{},\"expected_value\":{},\"cvar95_loss\":{},\"loss_probability\":{}}}",
+        js(c.kind.as_str()),
+        js(&c.id),
+        rq(c.expected_value.major),
+        rq(c.cvar95_loss.major),
+        rq(c.loss_probability)
+    )
+}
+
+fn risk_comparison_json(r: &information::RiskComparison) -> String {
+    let array = |rows: &[information::RiskChoice]| {
+        format!(
+            "[{}]",
+            rows.iter().map(risk_choice_json).collect::<Vec<_>>().join(",")
+        )
+    };
+    format!(
+        "{{\"tail_risk_order\":{},\"tail_risk_winners\":{},\"expected_value_cvar95_frontier\":{},\"rule\":{}}}",
+        array(&r.tail_risk_order),
+        array(&r.tail_risk_winners),
+        array(&r.expected_value_cvar95_frontier),
+        js(information::ranking::RULE)
+    )
+}
+
 fn information_json(i: &InformationSummary) -> String {
     let options = i
         .options
@@ -278,7 +305,7 @@ fn information_json(i: &InformationSummary) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"method\":{},\"monte_carlo_se\":null,\"standard_error_note\":{},\"baseline_primary\":{},\"baseline_winners\":{},\"baseline_value\":{},\"perfect_information_value\":{},\"evpi\":{},\"options\":[{options}],\"option_order\":{},\"option_winners\":{},\"overall_order\":[{order}],\"overall_winners\":[{winners}],\"scope\":{}}}",
+        "{{\"method\":{},\"monte_carlo_se\":null,\"standard_error_note\":{},\"baseline_primary\":{},\"baseline_winners\":{},\"baseline_value\":{},\"perfect_information_value\":{},\"evpi\":{},\"options\":[{options}],\"option_order\":{},\"option_winners\":{},\"overall_order\":[{order}],\"overall_winners\":[{winners}],\"risk_comparison\":{},\"scope\":{}}}",
         js(information::METHOD),
         js(information::STANDARD_ERROR_NOTE),
         js(&i.baseline_primary),
@@ -288,6 +315,7 @@ fn information_json(i: &InformationSummary) -> String {
         rq(i.evpi.major),
         ids(&i.option_order),
         ids(&i.option_winners),
+        risk_comparison_json(&i.risk_comparison),
         js(information::SCOPE)
     )
 }
@@ -584,10 +612,32 @@ fn information_markdown(
     };
     let _ = write!(
         out,
-        "\n**Information-option co-winners by net expected value:** {}.\n\n**Overall expected-value co-winners:** {}.\n\n**Overall expected-value order:** {}.\n\nEqual overall values retain all co-winners; act-now choices precede information options for presentation only. This expected-value comparison buys at most one option and supplies no test-policy risk or regret ranking.\n",
+        "\n**Information-option co-winners by net expected value:** {}.\n\n**Overall expected-value co-winners:** {}.\n\n**Overall expected-value order:** {}.\n\nEqual overall values retain all co-winners; act-now choices precede information options for presentation only. Expected value and tail risk remain separate views; neither silently overrides the other.\n",
         md(&i.option_winners.join(", ")),
         choices(&i.overall_winners),
         choices(&i.overall_order)
+    );
+    let risk_rows = |values: &[information::RiskChoice]| {
+        values
+            .iter()
+            .map(|c| format!(
+                "{} {} (EV {}, CVaR95 loss {}, P(loss) {})",
+                c.kind.as_str(),
+                md(&c.id),
+                ratio(c.expected_value.major),
+                ratio(c.cvar95_loss.major),
+                ratio(c.loss_probability)
+            ))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let _ = write!(
+        out,
+        "\n\n### Expected value versus realized tail risk\n\n**Lowest-CVaR95 co-winners:** {}.\n\n**Tail-risk order (lower signed-loss CVaR95 is better):** {}.\n\n**Expected-value/CVaR95 Pareto frontier:** {}.\n\n{}\n",
+        risk_rows(&i.risk_comparison.tail_risk_winners),
+        risk_rows(&i.risk_comparison.tail_risk_order),
+        risk_rows(&i.risk_comparison.expected_value_cvar95_frontier),
+        information::ranking::RULE
     );
     for o in &i.options {
         if o.baseline_optimal_after_every_reachable_signal {

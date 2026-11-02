@@ -84,8 +84,14 @@ Enforces `INV-002` (`authoritative: false`, `may_actuate: false`, `is_safe_certi
   baseline stays optimal after every reachable signal. Test and delay costs are charged once per option;
   net VOI and net policy value remain signed. Delay duration implies no discounting or state transition.
   Overall expected-value rankings compare acting now with buying at most one option; all exact ties remain
-  visible, with act-now first only for presentation. No joint signal distribution, sequential/batched tests,
-  or test-policy risk/regret is inferred. Existing base action risk/regret remains separate and unchanged.
+  visible, with act-now first only for presentation. The same admitted marginal payoff laws also produce a
+  separate signed-loss CVaR95 ordering across every act-now action and one-test policy, plus an exact
+  expected-value/CVaR95 Pareto frontier. Lower CVaR95 loss is better and every exact tail-risk tie remains.
+  A choice leaves the frontier only when another admitted choice has weakly higher expected value and weakly
+  lower CVaR95 loss with at least one strict improvement. Exact loss probability is retained beside each
+  comparison point but never combined into an invented scalar utility or lexicographic recommendation.
+  No joint signal distribution, sequential/batched tests, or cross-option regret is inferred. Existing base
+  action regret remains separate and unchanged.
   Every option's complete Claim metadata participates in output evidence, parents, sources, UU, value tag
   and digest. JSON/Markdown report `method=exact_finite_enumeration`, Monte Carlo standard error as null/not
   applicable, and the uncalibrated-model boundary. Determinism is Exact; this does not pass `GATE-HELM-02`.
