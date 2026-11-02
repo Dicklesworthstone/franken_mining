@@ -197,7 +197,17 @@ impl Fixture {
         for directory in ["corpus", "registries/sources"] {
             fs::create_dir_all(root.join(directory)).unwrap();
         }
-        let source_digest = workbook(&root, "2030Q4", Some("2031-02-15"));
+        let source_digest = workbook_with_labels(
+            &root,
+            "2030Q4",
+            Some("2031-02-15"),
+            match metric {
+                "tcc_usd_per_oz" => "Total cash costs ($/oz)",
+                "c1_usd_per_lb" => "C1 cash costs ($/lb)",
+                _ => "All-in sustaining costs ($/oz)",
+            },
+            "December 31",
+        );
         let mut fixture = Self {
             root,
             head: Digest32::default(),
@@ -383,6 +393,42 @@ fn original_registered_cells_resolve_exact_printed_values_and_reopen_their_asses
             "attributable:3/5",
             "2030FY",
             "2030Q4.xlsx:YTD!D5",
+            1000,
+            900,
+            1100,
+        ),
+        (
+            "tcc_usd_per_oz",
+            "attributable:3/5",
+            "2030FY",
+            "2030Q4.xlsx:YTD!D5",
+            1000,
+            900,
+            1100,
+        ),
+        (
+            "tcc_usd_per_oz",
+            "attributable:3/5",
+            "2030Q4",
+            "2030Q4.xlsx:QTD!D5",
+            1000,
+            900,
+            1100,
+        ),
+        (
+            "c1_usd_per_lb",
+            "attributable:3/5",
+            "2030FY",
+            "2030Q4.xlsx:YTD!D5",
+            1000,
+            900,
+            1100,
+        ),
+        (
+            "c1_usd_per_lb",
+            "attributable:3/5",
+            "2030Q4",
+            "2030Q4.xlsx:QTD!D5",
             1000,
             900,
             1100,
@@ -839,7 +885,7 @@ fn registered_headers_cannot_reinterpret_the_frozen_cost_or_calendar_period() {
         "All-in sustaining costs ($/oz) per produced ounce",
         "December 31",
     );
-    cost.refuse(&cost.resolve(), ns(AVAILABLE), "FMINE-REF-105");
+    cost.refuse(&cost.resolve(), ns(AVAILABLE), "FMINE-REF-208");
 
     for period in ["2030FY", "2030Q4"] {
         let shifted = Fixture::new("production_koz", "100%", period, 0, 500);
@@ -851,6 +897,62 @@ fn registered_headers_cannot_reinterpret_the_frozen_cost_or_calendar_period() {
             "June 30",
         );
         shifted.refuse(&shifted.resolve(), ns(AVAILABLE), "FMINE-REF-102");
+    }
+}
+
+#[test]
+fn cash_cost_headers_keep_sold_unit_definitions_and_refuse_substitution_before_append() {
+    for (metric, label, sold, wrong_unit, other_definition) in [
+        (
+            "tcc_usd_per_oz",
+            "Total cash costs ($/oz)",
+            "ounce",
+            "Total cash costs ($/lb)",
+            "All-in sustaining costs ($/oz)",
+        ),
+        (
+            "c1_usd_per_lb",
+            "C1 cash costs ($/lb)",
+            "pound",
+            "C1 cash costs ($/oz)",
+            "All-in sustaining costs ($/lb)",
+        ),
+    ] {
+        for (header, expected) in [
+            (format!("{label} per {sold} sold"), None),
+            (
+                format!("{label} per {sold} produced"),
+                Some("FMINE-REF-208"),
+            ),
+            (
+                format!("{label} per {sold} sold or produced"),
+                Some("FMINE-REF-208"),
+            ),
+            (
+                format!("{label} per {sold} sold on a co-product basis"),
+                Some("FMINE-REF-208"),
+            ),
+            (format!("{label} adjusted"), Some("FMINE-REF-105")),
+            (wrong_unit.into(), Some("FMINE-REF-201")),
+            (other_definition.into(), Some("FMINE-REF-201")),
+        ] {
+            let mut fixture = Fixture::new(metric, "attributable:3/5", "2030FY", 900, 1100);
+            fixture.source_digest = workbook_with_labels(
+                &fixture.root,
+                "2030Q4",
+                Some("2031-02-15"),
+                &header,
+                "December 31",
+            );
+            if let Some(code) = expected {
+                fixture.refuse(&fixture.resolve(), ns(AVAILABLE), code);
+            } else {
+                let admitted = fixture.ok(fixture.resolve(), ns(AVAILABLE));
+                assert!(admitted.payload_json.contains("\"numerator\":\"1000\""));
+            }
+        }
+        let wrong_ownership = Fixture::new(metric, "100%", "2030FY", 900, 1100);
+        wrong_ownership.refuse(&wrong_ownership.resolve(), ns(AVAILABLE), "FMINE-REF-105");
     }
 }
 
@@ -1211,6 +1313,18 @@ fn registered_cost(
     ownership: &str,
     label: &str,
 ) {
+    registered_cost_with_format(fixture, release, published, value, ownership, label, 1);
+}
+
+fn registered_cost_with_format(
+    fixture: &Fixture,
+    release: &str,
+    published: &str,
+    value: &str,
+    ownership: &str,
+    label: &str,
+    format_id: u32,
+) {
     let mut annual = sheet("YTD", "twelve", "400.4", label, "December 31");
     for (address, cell) in &mut annual.cells {
         if address == "D5" {
@@ -1226,7 +1340,7 @@ fn registered_cost(
         &[annual],
         Some(&MinimalStyles {
             num_fmts: vec![],
-            xfs: vec![1],
+            xfs: vec![format_id],
         }),
     );
     let file = format!("{release}.xlsx");
@@ -1319,6 +1433,127 @@ fn reopen_revision(fixture: &Fixture, digest: Digest32) -> Envelope {
     assert_eq!(report.exit_code, 0, "{report:?}");
     assert_eq!(fixture.bytes(), before);
     report
+}
+
+#[test]
+fn cash_cost_revisions_preserve_decimal_signed_values_first_scores_and_offline_replay() {
+    for (metric, label, format_id, raw, values, fractions, bounds, scores) in [
+        (
+            "tcc_usd_per_oz",
+            "Total cash costs ($/oz) per ounce sold",
+            1,
+            ["800.4", "780.4"],
+            ["800", "780"],
+            [("800", "1"), ("780", "1")],
+            (790, 810),
+            ["20", "120"],
+        ),
+        (
+            "c1_usd_per_lb",
+            "C1 cash costs ($/lb) per pound sold",
+            2,
+            ["2.254", "-0.254"],
+            ["2.25", "-0.25"],
+            [("9", "4"), ("-1", "4")],
+            (2, 3),
+            ["1", "23.5"],
+        ),
+    ] {
+        let mut fixture = Fixture::with_vintages(
+            metric,
+            "attributable:3/5",
+            "2030FY",
+            bounds.0,
+            bounds.1,
+            Some("registered_comparatives"),
+        );
+        let mut retained = Vec::new();
+        for (index, release, published, available, cut) in [
+            (0, "2030Q4", "2031-02-15", AVAILABLE, CUT),
+            (
+                1,
+                "2031Q1",
+                "2031-05-15",
+                "2031-05-16T00:00:00Z",
+                "2031-05-17T00:00:00Z",
+            ),
+        ] {
+            registered_cost_with_format(
+                &fixture, release, published, raw[index], "60", label, format_id,
+            );
+            let source = fixture.source_claim(&format!("{release}.xlsx:YTD!D5"));
+            let command = if index == 0 {
+                fixture.resolve()
+            } else {
+                restate(&fixture, release)
+            };
+            let admitted = fixture.ok(command, ns(available));
+            let (num, den) = fractions[index];
+            for expected in [
+                format!("\"source_claim_id\":\"{}\"", source.claim.claim_id),
+                format!("\"exact_value\":{{\"numerator\":\"{num}\",\"denominator\":\"{den}\"}}"),
+                format!("\"displayed\":\"{}\"", values[index]),
+            ] {
+                assert!(
+                    admitted.payload_json.contains(&expected),
+                    "{expected}: {admitted:?}"
+                );
+            }
+            let journal =
+                DurableJournal::open_read(&fixture.root.join(JOURNAL), Some(fixture.head)).unwrap();
+            let Entry::Operation(receipt) = &journal.records().last().unwrap().entry else {
+                panic!("registered source admission must retain its operation");
+            };
+            assert!(receipt.contains(&format!("stored = \"{}\"", raw[index])));
+            drop(journal);
+            let result = assess_revision(&mut fixture, cut, "latest-as-of");
+            let body = assessment(&result.payload_json);
+            assert!(
+                body.contains(&format!("\"value\":{},", values[index])),
+                "{body}"
+            );
+            assert!(
+                body.contains(&format!(
+                    "\"interval_score\":{{\"n_scored\":1,\"observed_mean\":{},",
+                    scores[index]
+                )),
+                "{body}"
+            );
+            retained.push((
+                digest_field(body, "digest"),
+                full_report(&result.payload_json).to_string(),
+            ));
+        }
+        let first = assess_revision(&mut fixture, "2031-05-18T00:00:00Z", "first-published");
+        let body = assessment(&first.payload_json);
+        assert!(
+            body.contains(&format!("\"value\":{},", values[0])),
+            "{body}"
+        );
+        assert!(
+            body.contains(&format!(
+                "\"interval_score\":{{\"n_scored\":1,\"observed_mean\":{},",
+                scores[0]
+            )),
+            "{body}"
+        );
+        fs::rename(
+            fixture.root.join("corpus"),
+            fixture.root.join("offline-corpus"),
+        )
+        .unwrap();
+        fs::rename(
+            fixture.root.join("registries"),
+            fixture.root.join("offline-registries"),
+        )
+        .unwrap();
+        for (digest, report) in retained {
+            assert_eq!(
+                full_report(&reopen_revision(&fixture, digest).payload_json),
+                report
+            );
+        }
+    }
 }
 
 #[test]

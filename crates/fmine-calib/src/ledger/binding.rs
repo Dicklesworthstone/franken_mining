@@ -74,6 +74,8 @@ pub enum PublicMetric {
     ProductionKoz,
     ProductionKt,
     AiscUsdPerOz,
+    TccUsdPerOz,
+    C1UsdPerLb,
 }
 
 impl PublicMetric {
@@ -82,6 +84,8 @@ impl PublicMetric {
             "production_koz" => Ok(Self::ProductionKoz),
             "production_kt" => Ok(Self::ProductionKt),
             "aisc_usd_per_oz" => Ok(Self::AiscUsdPerOz),
+            "tcc_usd_per_oz" => Ok(Self::TccUsdPerOz),
+            "c1_usd_per_lb" => Ok(Self::C1UsdPerLb),
             _ => Err(domain("unsupported public-resolution metric")),
         }
     }
@@ -91,6 +95,8 @@ impl PublicMetric {
             Self::ProductionKoz => "production_koz",
             Self::ProductionKt => "production_kt",
             Self::AiscUsdPerOz => "aisc_usd_per_oz",
+            Self::TccUsdPerOz => "tcc_usd_per_oz",
+            Self::C1UsdPerLb => "c1_usd_per_lb",
         }
     }
 
@@ -98,7 +104,8 @@ impl PublicMetric {
         match self {
             Self::ProductionKoz => "koz",
             Self::ProductionKt => "kt",
-            Self::AiscUsdPerOz => "usd_per_oz",
+            Self::AiscUsdPerOz | Self::TccUsdPerOz => "usd_per_oz",
+            Self::C1UsdPerLb => "usd_per_lb",
         }
     }
 
@@ -107,7 +114,8 @@ impl PublicMetric {
         matches!(self, Self::ProductionKoz | Self::ProductionKt)
     }
 
-    /// Exact original-release line label; AISC means issuer-reported cost per sold gold ounce.
+    /// Exact original-release line label. Costs retain their issuer-reported definition and sold-unit
+    /// denominator: AISC/TCC per gold ounce, C1 per copper pound (plan Appendix I.9).
     pub const fn field(self, ownership: PublicOwnership) -> &'static str {
         match (self, ownership) {
             (Self::ProductionKoz, PublicOwnership::Full) => "summary:au_prod_100_koz",
@@ -117,6 +125,8 @@ impl PublicMetric {
             (Self::ProductionKt, PublicOwnership::Full) => "summary:cu_prod_100_kt",
             (Self::ProductionKt, PublicOwnership::Attributable { .. }) => "summary:cu_prod_attr_kt",
             (Self::AiscUsdPerOz, _) => "summary:aisc_usd_per_oz",
+            (Self::TccUsdPerOz, _) => "summary:tcc_usd_per_oz",
+            (Self::C1UsdPerLb, _) => "summary:c1_usd_per_lb",
         }
     }
 }
@@ -970,11 +980,57 @@ mod tests {
                 );
             }
         }
+        for unsupported in ["production_mlb", "production_t", "aisc_usd_per_lb"] {
+            assert!(PublicMetric::parse(unsupported).is_err(), "{unsupported}");
+        }
+    }
+
+    #[test]
+    fn cost_targets_freeze_distinct_definitions_units_and_vintage_permissions() {
+        let mut target = policy(&[ObjectId::from_raw(PrefixKind::Forecast, [1; 16])]);
+        let mut encodings = BTreeSet::new();
+        for (name, unit, field) in [
+            ("aisc_usd_per_oz", "usd_per_oz", "summary:aisc_usd_per_oz"),
+            ("tcc_usd_per_oz", "usd_per_oz", "summary:tcc_usd_per_oz"),
+            ("c1_usd_per_lb", "usd_per_lb", "summary:c1_usd_per_lb"),
+        ] {
+            target.metric = PublicMetric::parse(name).unwrap();
+            assert_eq!(target.metric.as_str(), name);
+            assert_eq!(target.metric.unit(), unit);
+            assert!(!target.metric.is_production());
+            for ownership in [
+                PublicOwnership::Full,
+                PublicOwnership::Attributable { num: 3, den: 5 },
+            ] {
+                target.ownership = ownership;
+                assert_eq!(target.metric.field(ownership), field);
+                for vintages in [
+                    PublicVintagePolicy::OriginalOnly,
+                    PublicVintagePolicy::RegisteredComparatives,
+                ] {
+                    let rule = target.to_resolution_rule_with_vintages(vintages).unwrap();
+                    assert!(
+                        encodings.insert(rule.clone()),
+                        "definitions cannot share an identity"
+                    );
+                    assert_eq!(
+                        PublicResolutionPolicy::parse_resolution_rule_with_vintages(&rule).unwrap(),
+                        Some((target.clone(), vintages))
+                    );
+                    assert_eq!(
+                        vintages
+                            .validate_release(target.period, "1971Q1", true)
+                            .is_ok(),
+                        vintages == PublicVintagePolicy::RegisteredComparatives
+                    );
+                }
+            }
+        }
         for unsupported in [
-            "production_mlb",
-            "production_t",
-            "c1_usd_per_lb",
-            "aisc_usd_per_lb",
+            "tcc_usd_per_lb",
+            "c1_usd_per_oz",
+            "c1_usd_per_kt",
+            "adjusted_tcc",
         ] {
             assert!(PublicMetric::parse(unsupported).is_err(), "{unsupported}");
         }
@@ -1179,7 +1235,7 @@ mod tests {
         let (mut ledger, ids) = forecasts(PublicPeriod::Year(1970).end_ns().unwrap());
         let first = policy(&ids[..1]);
         let digest = ledger.freeze_cohort(spec(&first, "first", 2)).unwrap();
-        for mutation in 0..6 {
+        for mutation in 0..8 {
             let mut changed = first.clone();
             match mutation {
                 0 => changed.issuer = "another_issuer".into(),
@@ -1187,6 +1243,8 @@ mod tests {
                 2 => changed.period = PublicPeriod::Year(1971),
                 3 => changed.ownership = PublicOwnership::Attributable { num: 1, den: 1 },
                 4 => changed.metric = PublicMetric::ProductionKt,
+                5 => changed.metric = PublicMetric::TccUsdPerOz,
+                6 => changed.metric = PublicMetric::C1UsdPerLb,
                 _ => {
                     changed.members.insert(ids[0], "another_site".into());
                 }
