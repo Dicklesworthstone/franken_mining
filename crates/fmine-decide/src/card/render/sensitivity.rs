@@ -372,9 +372,10 @@ pub(super) fn json(summary: &DecisionSummary) -> String {
     use super::{ids, js, rq};
     match assess(&summary.alternatives, &summary.expected_value_primary) {
         Err(error) => format!(
-            "{{\"status\":\"refused\",\"code\":{},\"what\":{},\"no_claim\":{}}}",
+            "{{\"status\":\"refused\",\"code\":{},\"what\":{},\"fix\":{},\"no_claim\":{}}}",
             js(error.code),
             js(&error.what),
+            js(error.fix),
             js(NO_CLAIM)
         ),
         Ok(result) => {
@@ -399,6 +400,97 @@ pub(super) fn json(summary: &DecisionSummary) -> String {
             )
         }
     }
+}
+
+pub(super) fn markdown(summary: &DecisionSummary) -> String {
+    use std::fmt::Write as _;
+
+    use super::{md, ratio};
+
+    let mut out = format!("\n## Expected-value flip margins\n\n{NO_CLAIM}\n\n");
+    let result = match assess(&summary.alternatives, &summary.expected_value_primary) {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = writeln!(
+                out,
+                "**Sensitivity refused:** {} — {}. **Remedy:** {}. The base comparison above is retained; no flip margin is substituted.",
+                md(error.code),
+                md(&error.what),
+                md(error.fix)
+            );
+            return out;
+        }
+    };
+    let _ = write!(
+        out,
+        "**Act-now primary:** {}. **Smallest uniform extra cost to a tie:** {} {} in every state. **Cost challengers:** {}.\n\n",
+        md(&result.primary),
+        ratio(result.uniform_cost_to_tie.major),
+        crate::card::currency_name(summary.currency),
+        md(&result.cost_challengers.join(", "))
+    );
+    if let Some(radius) = result.total_variation_to_tie {
+        let _ = write!(
+            out,
+            "**Smallest total-variation weight shift to a tie:** {}. **Weight challengers:** {}.\n\n",
+            ratio(radius),
+            md(&result.weight_challengers.join(", "))
+        );
+    } else {
+        out.push_str("**No weight-only tie exists on this declared state support:** the primary strictly outperforms every rival in every state. This does not cover omitted states or changes in payoffs.\n\n");
+    }
+    out.push_str("A zero margin means a tie already exists. A reachable tie does not necessarily allow a rival to become strictly better. Every rival is checked, not only the displayed runner-up.\n\n| Challenger | Uniform cost to tie | Minimum weight shift to tie | Strict overtake reachable by reweighting? | Smallest primary advantage in any state |\n|---|---:|---|---|---:|\n");
+    for row in &result.comparisons {
+        let radius = row.weight_boundary.as_ref().map_or_else(
+            || "unreachable: strict pointwise dominance".into(),
+            |proof| ratio(proof.total_variation),
+        );
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} |",
+            md(&row.action_id),
+            ratio(row.uniform_cost_to_tie.major),
+            radius,
+            if row.strict_overtake_possible {
+                "yes"
+            } else {
+                "no"
+            },
+            ratio(row.minimum_state_advantage.major)
+        );
+    }
+    out.push_str("\n### Exact weight-transfer witnesses\n\nEach row moves the stated mass between existing states. Unmentioned weights stay unchanged. Positive-radius witnesses are checked for nonnegative weights, unit total mass, an exact payoff tie and a matching dual lower bound on the required radius.\n");
+    for row in &result.comparisons {
+        let Some(proof) = &row.weight_boundary else {
+            continue;
+        };
+        let _ = write!(out, "\n**Challenger:** {}.\n\n", md(&row.action_id));
+        if proof.transfers.is_empty() {
+            out.push_str("Already tied at the declared weights; no transfer is needed.\n");
+            continue;
+        }
+        out.push_str("| From state | To state | Weight moved |\n|---|---|---:|\n");
+        for transfer in &proof.transfers {
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} |",
+                md(&transfer.from_state),
+                md(&transfer.to_state),
+                ratio(transfer.mass)
+            );
+        }
+        if let Some((slope, intercept)) = proof.dual {
+            let _ = writeln!(
+                out,
+                "\n**Checked lower-bound certificate:** any gap reduction is at most {} × total variation + {}; at radius {} this equals the exact gap {}. Monetary terms use the card's major currency units.",
+                ratio(slope.major),
+                ratio(intercept.major),
+                ratio(proof.total_variation),
+                ratio(row.uniform_cost_to_tie.major)
+            );
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -527,5 +619,13 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn unrepresentable_stress_gain_refuses_without_a_saturated_radius() {
+        // Exact mean advantage is one, but the difference of these state advantages exceeds i128.
+        let s = states(&[i128::MAX, -i128::MAX + 2], &[r(1, 2), r(1, 2)]);
+        let error = boundary(&s, ONE, Currency::USD).unwrap_err();
+        assert_eq!(error.code, "FMINE-REF-207");
     }
 }

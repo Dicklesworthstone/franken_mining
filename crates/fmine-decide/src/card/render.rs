@@ -417,6 +417,12 @@ pub(super) fn inputs_json(inputs: &DecisionInputs) -> String {
     )
 }
 
+fn body_digest(body: &str) -> String {
+    let mut enc = Encoder::new_frame(*b"DCDR", 1);
+    enc.put_str(body);
+    sha256(&enc.finish()).to_hex()
+}
+
 impl EvaluatedCard {
     fn body(&self) -> String {
         let summary = summary_json(self.summary());
@@ -433,14 +439,13 @@ impl EvaluatedCard {
     /// Domain-separated digest binds all input values and metadata, the rules and the complete results.
     #[must_use]
     pub fn digest(&self) -> String {
-        let mut enc = Encoder::new_frame(*b"DCDR", 1);
-        enc.put_str(&self.body());
-        sha256(&enc.finish()).to_hex()
+        body_digest(&self.body())
     }
 
     #[must_use]
     pub fn to_json(&self) -> String {
-        format!("{{{},\"digest\":{}}}", self.body(), js(&self.digest()))
+        let body = self.body();
+        format!("{{{body},\"digest\":{}}}", js(&body_digest(&body)))
     }
 
     #[must_use]
@@ -476,6 +481,7 @@ impl EvaluatedCard {
                 ratio(a.max_regret.major)
             );
         }
+        out.push_str(&sensitivity::markdown(s));
         out.push_str("\n## Same-state payoff and regret\n\n| Action | State | Weight | Payoff | Best in hindsight | Regret |\n|---|---|---:|---:|---:|---:|\n");
         for a in &s.alternatives {
             for r in &a.states {

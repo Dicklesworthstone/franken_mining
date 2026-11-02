@@ -41,6 +41,19 @@ Enforces `INV-002` (`authoritative: false`, `may_actuate: false`, `is_safe_certi
   Arithmetic is Exact; inherited floating UU/colour metadata is retained by its exact bits, not used as payoff
   inputs. This draft comparison supplies no calibrated probabilities, Monte Carlo VOI accuracy, retrospective evidence proof,
   physical feasibility, sign-off or authorization, and is not a durable decision-ledger entry.
+- DESIGN (BD-225/BD-227): the serialized `summary.sensitivity` and Markdown flip-margin section compare the
+  displayed act-now expected-value primary with every rival, not only the runner-up. They compute the exact
+  uniform extra cost to a tie and the minimum total-variation change in the shared state weights, retaining
+  every equal weakest challenger. Stress weights may reach zero but remain nonnegative and sum to one;
+  payoffs and the declared state population do not change. Each positive-radius result carries canonical
+  weight transfers and a checked primal tie with a matching dual lower bound proving minimality. Baseline
+  ties, strict pointwise dominance, and ties without possible strict overtaking are distinct. The complete
+  sensitivity result participates in the existing output Claim value tag and report digest. An exact
+  arithmetic limit produces a visible `FMINE-REF-207` sensitivity refusal with its remedy, retaining the
+  underlying comparison rather than substituting an approximate or saturated margin. These thresholds are
+  conditional ties, not probabilities of reversal, calibrated confidence bounds, Wasserstein radii or
+  protection against omitted states and unknown unknowns. Information policies and minimax-regret choices
+  are not reoptimized under this stress. No input is mutated or new decision-ledger authority created.
 - DESIGN (BD-227, §22.4): optional `DecisionInputs::information_options` contains source-bound
   `Claim<InformationOption>` values with a complete exact `Likelihood` matrix, explicit signals, nonnegative
   test and delay costs, and independently declared delay days. All options, including losers, must pass the

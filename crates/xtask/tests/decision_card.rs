@@ -106,3 +106,21 @@ fn information_policy_keeps_identical_library_and_binary_rendering() {
     oracle.arg("--with-information");
     rendering_parity(oracle);
 }
+
+#[test]
+fn flip_margins_pass_independent_exact_witness_and_boundary_checks() {
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("testdata/decision_sensitivity_oracle.py");
+    let output = Command::new("python3")
+        .arg("-I")
+        .arg(script)
+        .arg(binary())
+        .output()
+        .expect("execute exact decision sensitivity scenarios");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
