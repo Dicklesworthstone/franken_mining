@@ -21,7 +21,7 @@ root="$(cd "$here/.." && pwd)"
 secs="${1:-60}"
 shift $(($# > 0 ? 1 : 0))
 targets=("$@")
-[ "${#targets[@]}" -gt 0 ] || targets=(codec anchor journal xlsx numfmt registry record html cli cli_run)
+[ "${#targets[@]}" -gt 0 ] || targets=(codec anchor journal xlsx numfmt registry record html cli cli_run pit cpit pcpsp)
 
 base="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}"
 target_dir="$base/rch_target_fmine_fuzz"
