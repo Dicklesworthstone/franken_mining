@@ -94,8 +94,7 @@ fn observation(
         .into_iter()
         .next()
         .expect("one observation");
-    let keyed =
-        key::from_mine_stats(&profile, &workbook, release, &raw).map_err(|e| e.to_string());
+    let keyed = key::from_mine_stats(&profile, &workbook, release, &raw).map_err(|e| e.to_string());
     assert!(keyed.is_ok(), "{keyed:?}");
     Observation {
         release: Quarter::parse(release).unwrap(),
@@ -330,8 +329,7 @@ fn persistence_point_zero_and_signed_values_preserve_ordered_intervals() {
     for production in [false, true] {
         let cost = target(production);
         let mut rules =
-            record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml"))
-                .unwrap();
+            record::parse_rules(include_str!("../../../forecasts/fy2026/rules.toml")).unwrap();
         rules.sites = vec![record::RulesSite {
             name: "Site A".into(),
             status: SiteStatus::Live,
@@ -588,9 +586,7 @@ fn latest_guidance_requires_agreement_and_converts_its_own_share_before_subtract
             hi: Rat::from_integer(60)
         })
     );
-    assert!(
-        sources.evidence.documents["latest.pdf"].contains("\"in_forecast_manifest\":false")
-    );
+    assert!(sources.evidence.documents["latest.pdf"].contains("\"in_forecast_manifest\":false"));
     for (token, low, high) in [("80 - 88", -100, -90), ("-8 - 0", -210, -200)] {
         for row in guidance
             .registry

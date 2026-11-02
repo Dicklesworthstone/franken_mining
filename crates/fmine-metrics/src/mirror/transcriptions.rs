@@ -146,7 +146,7 @@ fn context(
                     | "definition_col"
             );
         if (!perimeter_field && !capex_field)
-            || value.is_empty()
+            || value.trim().is_empty()
             || fields.insert(key, value).is_some()
         {
             return Err(fail(
@@ -761,6 +761,12 @@ mod tests {
             (";definition_page=2", ""),
             ("definition_page=2", "definition_page=3"),
             ("definition_row=Scope timing and leases", "definition_row="),
+            ("definition_table=Capital policy", "definition_table=   "),
+            (
+                "definition_row=Scope timing and leases",
+                "definition_row= \t ",
+            ),
+            ("definition_col=2025", "definition_col=   "),
             (";timing=cash", ";timing=cash;timing=accrual"),
             (
                 ";timing=cash",

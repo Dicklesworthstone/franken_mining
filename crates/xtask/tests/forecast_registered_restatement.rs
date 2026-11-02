@@ -1,6 +1,8 @@
 //! Verified comparative revisions through the public durable-journal interface.
 //! Every workbook, issuer, publication date and clock here is invented test evidence.
 
+#![cfg(test)]
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,10 +38,7 @@ impl WallClock for NeverClock {
     }
 }
 fn ns(text: &str) -> i64 {
-    parse_utc(text)
-        .unwrap()
-        .checked_mul(1_000_000_000)
-        .unwrap()
+    parse_utc(text).unwrap().checked_mul(1_000_000_000).unwrap()
 }
 fn string_field<'a>(text: &'a str, field: &str) -> &'a str {
     text.split_once(&format!("\"{field}\":\""))
@@ -269,7 +268,10 @@ fn verified_revisions_preserve_first_scores_and_historical_report_bytes_across_r
     fs::rename(f.root.join("registries"), f.root.join("offline-registries")).unwrap();
     let before = fs::read(f.root.join("journal")).unwrap();
     assert_eq!(report(&f.retrieve(early_digest).payload_json), early_report);
-    assert_eq!(report(&f.retrieve(latest_digest).payload_json), latest_report);
+    assert_eq!(
+        report(&f.retrieve(latest_digest).payload_json),
+        latest_report
+    );
     assert_eq!(fs::read(f.root.join("journal")).unwrap(), before);
 }
 

@@ -358,7 +358,7 @@ impl Replay {
     fn outcome_at(&mut self, row: Row<'_>, observed_ns: Option<i64>) -> Result<(), Refusal> {
         if self.public_bound(self.forecast_id(row.string("forecast")?)?)? {
             return Err(invalid(
-                "this forecast has a frozen public target; use forecast journal resolve, not caller-supplied outcomes",
+                "this forecast has a frozen public target; use forecast journal resolve or restate, not caller-supplied outcomes",
             ));
         }
         let kind = row.string("kind")?;

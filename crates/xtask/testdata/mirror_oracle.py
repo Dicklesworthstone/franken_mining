@@ -430,6 +430,7 @@ class MirrorIntegration(unittest.TestCase):
             ("timing=cash", "timing=accrual"), ("leases=excluded", "leases=unstated"),
             ("leases=excluded", "leases=included"),
             (";definition_row=Cash capital excluding leases", ""),
+            ("definition_table=Capital policy", "definition_table=   "),
             ("definition_page=2", "definition_page=3"),
         ):
             with self.subTest(new=new):

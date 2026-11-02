@@ -78,7 +78,7 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     [--selector first-published|latest-as-of] [--provenance <path>]`: read-only ordered transcript replay and
     cohort assessment through `fmine-calib`; first-published is the default (BD-343). An optional provenance
     bundle checks all declared ancestors at each frozen forecast's registration cut (BD-344);
-  - `forecast journal init|register|freeze|outcome|assess|inspect|report --journal <path>`: durable forecast admission,
+  - `forecast journal init|register|freeze|outcome|resolve|restate|assess|inspect|report --journal <path>`: durable forecast admission,
     cohort freezing, append-only resolution and persisted assessment seals with runtime-assigned times (BD-047);
   - `forecast record score --record <directory> --as-of YYYY-MM-DDTHH:MM:SSZ --tsa-roots <pem>`:
     authenticated frozen-record assessment and common-population baseline comparison in JSON or Markdown (BD-076);
@@ -108,7 +108,7 @@ Workbook Claim reads retain their established payload and identity-ledger certif
 ### Durable forecast registration (BD-047)
 
 DESIGN: `forecast journal init` binds a cell id and operator-declared clock uncertainty to a new journal.
-`register`, `freeze`, `outcome`, `resolve` and `assess` require an exact predecessor `--head`; all mutations require
+`register`, `freeze`, `outcome`, `resolve`, `restate` and `assess` require an exact predecessor `--head`; all mutations require
 `--trust-host-clock`. The runtime clock is sampled under the journal's exclusive lock. The captured nanoseconds
 remain in the journal frame's `observed_ns`; new admissions assign `ForecastLedger` registration, freeze and
 recording times to the upper bound, `observed_ns + clock_skew_ns`. A caller cannot supply those times.
@@ -179,6 +179,8 @@ unit, ownership and sold-ounce cost definition. The registered publication day m
 period and selected reporting quarter; availability remains midnight after that day. Neither the numeric
 value, source Claim, publication evidence nor superseded sequence is accepted from the caller.
 
+Explicit `public_vintages` fields require a v4 cohort operation during both admission and replay; an older
+operation version cannot acquire the newer policy grammar. Omitting the field preserves existing v3 freezes.
 The generated `registered_restatement` operation uses `fmine.forecast-operation.v4` and retains the
 predecessor sequence alongside the same complete source evidence as an original admission. Replay checks
 the frozen permission, original admission, chronological predecessor and reconstructed canonical source
@@ -205,7 +207,7 @@ retain their explicit weaker binding status; existing frame bytes and semantic i
 
 The `fmine.forecast-journal.v1` payload reports the cell, exact head, clock bounds, operation schema, inventories
 and checkpoints. `operation_schema` continues to identify the row grammar. `operation_version_counts` contains
-`legacy_v1` and `v2` counts excluding genesis, plus `v3` when present; their sum is `n_operations`. `record_time_policy` is `none`,
+`legacy_v1` and `v2` counts excluding genesis, plus `v3` and `v4` when present; their sum is `n_operations`. `record_time_policy` is `none`,
 `legacy_observed`, `clock_upper_bound` or `mixed`. An assessment adds `report` with mode `durable_journal`;
 its version counts and time policy describe the prefix through its first persisted checkpoint. A v2 checkpoint
 over legacy operations remains mixed and does not upgrade the earlier time evidence. `inspect` is read-only

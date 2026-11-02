@@ -253,7 +253,8 @@ impl Fixture {
         let before = self.bytes();
         let envelope = execute_with_clock(command, &self.root, &FixedClock(at));
         assert_ne!(envelope.exit_code, 0, "{envelope:?}");
-        assert_eq!(envelope.refusal.unwrap().code, code);
+        let refusal = envelope.refusal.unwrap();
+        assert_eq!(refusal.code, code, "{refusal:?}");
         assert_eq!(self.bytes(), before, "refusal must not append any bytes");
         let journal = DurableJournal::open_read(&self.root.join(JOURNAL), Some(self.head));
         assert!(journal.is_ok(), "original head must still verify");
@@ -1296,11 +1297,22 @@ fn replay_rechecks_restatement_values_claim_bodies_and_operation_versions() {
         1,
     );
 
+    assert!(receipt.contains("supersedes = 1\n"));
+    let missing_predecessor = receipt.replace("supersedes = 1\n", "");
+    let original_vintage = receipt.replace("vintage = \"2031Q1\"", "vintage = \"2030Q4\"");
+    assert_ne!(original_vintage, receipt);
+
     for (variant, operation, expected_refusal) in [
         ("intact", receipt, None),
         ("value", changed_value, Some("FMINE-REF-507")),
         ("claim", changed_claim, Some("FMINE-REF-507")),
         ("v3", downgraded, Some("FMINE-REF-107")),
+        (
+            "missing_predecessor",
+            missing_predecessor,
+            Some("FMINE-REF-107"),
+        ),
+        ("original_vintage", original_vintage, Some("FMINE-REF-507")),
     ] {
         let mut recipient = revision_fixture(Some("registered_comparatives"));
         recipient.ok(recipient.resolve(), ns(AVAILABLE));
@@ -1312,8 +1324,7 @@ fn replay_rechecks_restatement_values_claim_bodies_and_operation_versions() {
         recipient.head = writer.head();
         drop(writer);
         assert!(
-            DurableJournal::open_read(&recipient.root.join(JOURNAL), Some(recipient.head))
-                .is_ok()
+            DurableJournal::open_read(&recipient.root.join(JOURNAL), Some(recipient.head)).is_ok()
         );
         let before = recipient.bytes();
         let result = execute_with_clock(
@@ -1328,7 +1339,7 @@ fn replay_rechecks_restatement_values_claim_bodies_and_operation_versions() {
             assert_ne!(result.exit_code, 0, "{variant}: {result:?}");
             let refusal = result.refusal.expect("changed receipt must refuse");
             assert_eq!(refusal.code, code, "{variant}: {refusal:?}");
-            if code == "FMINE-REF-507" {
+            if matches!(variant, "value" | "claim") {
                 assert!(
                     refusal.what.contains("source Claim does not bind"),
                     "{variant}: {refusal:?}"
@@ -1340,4 +1351,151 @@ fn replay_rechecks_restatement_values_claim_bodies_and_operation_versions() {
         }
         assert_eq!(recipient.bytes(), before, "{variant} changed replay bytes");
     }
+}
+
+fn add_later_workbook(
+    root: &Path,
+    release: &str,
+    published: Option<&str>,
+    annual: MinimalSheet,
+) -> Digest32 {
+    let bytes = build_minimal_xlsx_styled(
+        &[annual],
+        Some(&MinimalStyles {
+            num_fmts: vec![],
+            xfs: vec![1],
+        }),
+    );
+    let digest = sha256(&bytes);
+    let file = format!("{release}.xlsx");
+    fs::write(root.join("corpus").join(&file), &bytes).unwrap();
+    let date = published.map_or_else(String::new, |date| {
+        format!(
+            "published_at = \"{date}\"\npublished_at_basis = \"FACT: invented later publication\"\n"
+        )
+    });
+    let path = registry_path(root, ISSUER);
+    let mut registry = fs::read_to_string(&path).unwrap();
+    registry.push_str(&format!(
+        "\n[[source]]\nfile = \"{file}\"\nkind = \"mine_stats\"\nquarter = \"{release}\"\npath = \"{file}\"\nurl_basis = \"W1 table\"\nbytes = {}\nsha256 = \"{digest}\"\n{date}",
+        bytes.len()
+    ));
+    fs::write(path, registry).unwrap();
+    digest
+}
+
+fn later_sheet(production: &str) -> MinimalSheet {
+    sheet(
+        "YTD",
+        "twelve",
+        production,
+        "All-in sustaining costs ($/oz)",
+        "December 31",
+    )
+}
+
+#[test]
+fn later_releases_cannot_regress_publication_or_reuse_a_vintage_after_assessment() {
+    let mut fixture = revision_fixture(Some("registered_comparatives"));
+    fixture.ok(fixture.resolve(), ns(AVAILABLE));
+    registered_cost(
+        &fixture,
+        "2031Q2",
+        "2032-08-15",
+        "1474.4",
+        "60",
+        "All-in sustaining costs ($/oz)",
+    );
+    fixture.ok(restate(&fixture, "2031Q2"), ns("2032-08-16T00:00:00Z"));
+    assess_revision(&mut fixture, "2032-08-17T00:00:00Z", "latest-as-of");
+    for release in ["2031Q2", "2031Q1"] {
+        fixture.refuse(
+            &restate(&fixture, release),
+            ns("2032-08-18T00:00:00Z"),
+            "FMINE-REF-107",
+        );
+    }
+    // A later reporting quarter cannot override an earlier registered publication date.
+    registered_cost(
+        &fixture,
+        "2031Q3",
+        "2031-11-15",
+        "1473.4",
+        "60",
+        "All-in sustaining costs ($/oz)",
+    );
+    fixture.refuse(
+        &restate(&fixture, "2031Q3"),
+        ns("2032-08-18T00:00:00Z"),
+        "FMINE-REF-206",
+    );
+}
+
+#[test]
+fn later_sources_preserve_calendar_ambiguity_and_byte_guards_without_fallback() {
+    for (mutation, code) in [
+        ("calendar", "FMINE-REF-102"),
+        ("subject", "FMINE-REF-201"),
+        ("year", "FMINE-REF-201"),
+        ("ambiguous", "FMINE-REF-104"),
+        // A printed dash is a Nil/Unknown Claim, rejected before numeric extraction.
+        ("placeholder", "FMINE-REF-202"),
+        ("bytes", "FMINE-REF-505"),
+    ] {
+        let mut fixture = revision_fixture(Some("registered_comparatives"));
+        fixture.ok(fixture.resolve(), ns(AVAILABLE));
+        let mut annual = later_sheet("500.4");
+        let replacement = match mutation {
+            "calendar" => Some((
+                "A3",
+                MinimalCell::Text("For the twelve months ended June 30,".into()),
+            )),
+            "subject" => Some(("A5", MinimalCell::Text("Other (60%)".into()))),
+            "year" => Some(("B3", MinimalCell::Number(2029.0))),
+            "placeholder" => Some(("D5", MinimalCell::Text("—".into()))),
+            _ => None,
+        };
+        if let Some((locator, value)) = replacement {
+            annual
+                .cells
+                .iter_mut()
+                .find(|(cell, _)| cell == locator)
+                .unwrap()
+                .1 = value;
+        }
+        if mutation == "ambiguous" {
+            annual.cells.extend([
+                ("A6".into(), MinimalCell::Text("Site A (150%)".into())),
+                ("D6".into(), MinimalCell::Number(999.0)),
+            ]);
+        }
+        add_later_workbook(&fixture.root, "2031Q4", Some("2032-02-15"), annual);
+        // The alternative has a valid AISC target and distinct bytes. A malformed selected
+        // release cannot fall back to it, and duplicate registry hashes cannot mask the refusal.
+        add_later_workbook(
+            &fixture.root,
+            "2032Q4",
+            Some("2033-02-15"),
+            later_sheet("501.4"),
+        );
+        if mutation == "bytes" {
+            let path = fixture.root.join("corpus/2031Q4.xlsx");
+            let mut bytes = fs::read(&path).unwrap();
+            bytes.push(0);
+            fs::write(path, bytes).unwrap();
+        }
+        fixture.refuse(
+            &restate(&fixture, "2031Q4"),
+            ns("2033-02-16T00:00:00Z"),
+            code,
+        );
+    }
+    let mut fixture = revision_fixture(Some("registered_comparatives"));
+    fixture.ok(fixture.resolve(), ns(AVAILABLE));
+    add_later_workbook(&fixture.root, "2031Q4", None, later_sheet("500.4"));
+    fixture.refuse(
+        &restate(&fixture, "2031Q4"),
+        ns("2032-02-16T00:00:00Z"),
+        "FMINE-REF-202",
+    );
 }
