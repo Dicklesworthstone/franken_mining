@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod debt;
+
 const STAGED: &str = include_str!("../../../../tests/capital/recourse.toml");
 const STATIC: &str = include_str!("../../../../tests/capital/cash_schedule.toml");
 const ENTITY: &str = include_str!("../../../../tests/capital/entity_funding.toml");

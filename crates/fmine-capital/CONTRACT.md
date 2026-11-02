@@ -271,6 +271,15 @@ selected only when debt is declared; models without debt retain their existing r
   declarations are mutually exclusive. The separate entity Claim retains the original source hash,
   line anchors and UU metadata; unknown, duplicate and orphan entity rows refuse. Matrix/output bounds
   are checked before canonical tagging, and finalization invokes the same typed core admission rules.
+  Optional `[[entity_debt]]` requires `cash_flow_convention = "native_excludes_modeled_debt"` within entity
+  funding. `[[debt_facility]]` requires `id`, `entity`, `basis`, `cfads_basis`, `minimum_dscr`,
+  `sweep_fraction`, `allow_distributions_without_service`; the ratios are quoted `n/d` and the last field
+  is exactly quoted `"true"` or `"false"`. `[[debt_opening_principal]]` requires `facility`, `state`,
+  `value`; `[[debt_service]]` requires `facility`, `period`, `state`, `interest_rate`, `draw`,
+  `principal_payment_cap`, `cfads`; `[[candidate_debt_service]]` requires `facility`, `period`,
+  `candidate`, `state`, `draw`, `principal_payment_cap`, `cfads`. All matrices are complete, including
+  explicit zeroes. Debt rows require both entity/debt declarations and retain their original line anchors
+  in the existing entity Claim; unknown, duplicate, orphan and malformed rows refuse.
   Optional `[[equity_basis]]` requires `entity`, `share_class`, `shares_per_unit`, `initial_share_units` and
   accepts `max_tail_loss_per_share`. `[[baseline_equity_nav]]` requires `state`, `value` for every state;
   `[[candidate_share_change]]` requires `candidate`, `state`, `value` for every candidate/state pair,
@@ -408,6 +417,13 @@ waterfall, comparing every checkpoint, transfer, distribution, conservation row,
 static/policy statistic. CLI integrations compare full JSON and Markdown with the library and verify the
 checked-in `tests/capital/entity_funding.toml` example's original source hash. That example combines the
 three-period policy with 100 Parent shares: mean/adaptive value 9/20 USD/share and tail loss 1/20 USD/share.
+The independent Python Fraction debt oracle derives principal/service recurrences and recursively solves
+child receipts, sweeps and distributions from the inputs. It compares every debt field, checkpoint,
+coverage gate, principal/cash residual, structural rejection and static/adaptive statistic. The complete
+`tests/capital/debt_funding.toml` example observes Good/Bad, pays JV service, sweeps 50/0 and distributes
+30/0 to Parent. The selected policy builds only after Good and retains initial final principal obligations
+in both states: mean/adaptive value 9/20 USD/share, tail loss 1/20 USD/share, Parent cash 30/20, debt 29/79.
+Library/binary integrations retain identical JSON/Markdown and the example's unchanged complete source bytes.
 This bounded slice does not claim the full GATE-CAP-01/03/04 scale, selection-frequency or historical evidence.
 
 ## 9. Lifted Code & Foundation Dependencies
