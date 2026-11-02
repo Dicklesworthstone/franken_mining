@@ -100,7 +100,7 @@ def main() -> None:
     root, out = Path(sys.argv[1]), Path(sys.argv[2])
     seeds: dict[str, list[bytes]] = {t: [] for t in
                                      ("codec", "anchor", "journal", "xlsx", "numfmt", "registry", "record", "html",
-                                      "cli", "cli_run")}
+                                      "cli", "cli_run", "pit")}
 
     # codec: mode, script length, script (one read per byte), payload. A script byte's kind is its value mod 11 and
     # its bound its high nibble: every kind once, then bytes, strings and sequences under small, mid and no bounds.
@@ -189,6 +189,14 @@ def main() -> None:
     seeds["cli"].append(b"\x00" + b"\x00".join([b"assure", b"public", b"--issuer", b"barrick", b"--output", b"o"]))
     seeds["cli"].append(b"\x01" + b"\x00".join(
         [b"assure public", b"what \"quoted\"", b"fmine robot-docs", b"why\tnow", b"w1", b"anc_x", b"00ff"]))
+
+    # pit: a selector (decimal places mod 10 in the low nibble; bit 4 asks for rounding), then the .upit text, NUL,
+    # the .prec text, NUL, and a candidate pit. One invented five-block pair: 2 places, rounding to 2 places, 6
+    # places, and 1 place, which refuses 6.25 unless rounding is asked for.
+    upit = "NAME: tiny\nTYPE: UPIT\nNBLOCKS: 5\nOBJECTIVE_FUNCTION:\n0 -1.50\n1 -2.00\n2 -1.00\n3 6.25\n4 -0.10\nEOF\n"
+    prec = "0 0\n1 0\n2 0\n3 3 0 1 2\n4 1 3\n"
+    for selector, pick in ((2, "0 1 2 3"), (0x12, "% candidate\n3 4"), (6, ""), (1, "0 1 2 3 4")):
+        seeds["pit"].append(bytes([selector]) + f"{upit}\0{prec}\0{pick}".encode())
 
     # cli_run: one byte per vocabulary entry, in the order fuzz_targets/cli_run.rs builds it (verb paths, then its
     # FLAGS, PAIRS and VALUES). Each verb alone, with a selector, with options, and as a full mutation command. A

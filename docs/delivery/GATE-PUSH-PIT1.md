@@ -48,3 +48,14 @@ from MineLib's Results page.
   truncation. newman1 is also checked against 26,086,899.03, the optimum Gurobi reports in AMPL's MineLib example.
 - **Data.** MineLib's licence is not recorded, so its files are not committed, and the test is `#[ignore]`. CI cannot
   run it. No other agent or machine has reproduced it.
+
+## Later change (2026-11-02, `a5642a3`, `ba7fa12`)
+
+- **What changed.** `fmine plan pit` (bd-ip99) runs `pitflow` on a UPIT pair. It reads the files with
+  `pitflow::minelib`, a parser separate from this test's own. `--candidate` (bd-nq06) checks a pit given as block
+  ids against the certified optimum.
+- **The verdict stands.** `pitflow` itself is unchanged.
+- **Through the verb.** `minelib_instances_match_gate_push_pit1_through_the_verb` (`crates/xtask/tests/plan_pit.rs`,
+  ignored) gives the same value, rounded count and pit size as the table above on all eleven instances. Read back
+  as a candidate, each instance's own pit is `optimal` with gap 0. It was run by hand on the same machine by the
+  same agent, so it is not an independent reproduction.

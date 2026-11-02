@@ -20,6 +20,7 @@ fmine-registry = { path = "../crates/fmine-registry" }
 fmine-calib = { path = "../crates/fmine-calib" }
 fmine-cli = { path = "../crates/fmine-cli" }
 fmine-evidence = { path = "../crates/fmine-evidence" }
+fmine-optimize = { path = "../crates/fmine-optimize" }
 
 [workspace]
 members = ["."]
@@ -93,6 +94,13 @@ bench = false
 [[bin]]
 name = "cli_run"
 path = "fuzz_targets/cli_run.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pit"
+path = "fuzz_targets/pit.rs"
 test = false
 doc = false
 bench = false
