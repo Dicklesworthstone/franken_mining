@@ -373,7 +373,7 @@ pub(super) fn summary_json(s: &DecisionSummary) -> String {
         ids(&s.expected_value_order),
         ids(&s.expected_value_winners),
         js(&s.expected_value_primary),
-        js(&s.runner_up),
+        s.runner_up.as_deref().map_or_else(|| "null".into(), js),
         ids(&s.minimax_regret_order),
         ids(&s.minimax_regret_winners),
         js(&s.minimax_regret_primary),
@@ -494,7 +494,9 @@ impl EvaluatedCard {
             color_name(self.weakest_input_color),
             md(&s.expected_value_winners.join(", ")),
             md(&s.expected_value_primary),
-            md(&s.runner_up),
+            s.runner_up
+                .as_deref()
+                .map_or_else(|| "none (one alternative)".into(), md),
             md(&s.minimax_regret_winners.join(", "))
         );
         out.push_str("All amounts below are exact rational major currency units. Quantiles use the weighted inverse CDF. CVaR95 integrates the largest 5% of **signed loss = −NPV**, so it may be negative when all outcomes gain.\n\n| Action | Role | Mean | P10 / P50 / P90 | CVaR95 loss | Mean regret | Maximum regret |\n|---|---|---:|---|---:|---:|---:|\n");

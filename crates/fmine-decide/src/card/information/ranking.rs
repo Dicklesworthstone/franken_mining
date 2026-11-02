@@ -251,7 +251,7 @@ mod tests {
             expected_value_order: vec![],
             expected_value_winners: vec![],
             expected_value_primary: "a".into(),
-            runner_up: "b".into(),
+            runner_up: Some("b".into()),
             minimax_regret_order: vec![],
             minimax_regret_winners: vec![],
             minimax_regret_primary: "a".into(),

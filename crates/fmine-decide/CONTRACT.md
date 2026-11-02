@@ -56,6 +56,16 @@ The projection is an internal versioned replay input (version 2), not a new dura
   Arithmetic is Exact; inherited floating UU/colour metadata is retained by its exact bits, not used as payoff
   inputs. This draft comparison supplies no calibrated probabilities, Monte Carlo VOI accuracy, retrospective evidence proof,
   physical feasibility, sign-off or authorization, and is not a durable decision-ledger entry.
+- DESIGN (BD-229): `card::evaluate_feasible` compares the nonempty action set retained by an external
+  constraint evaluator, with the same complete-state, canonical Claim, metadata and exact arithmetic
+  admission. It permits zero or one declared do-nothing role and refuses information options. It neither
+  proves physical feasibility nor supplies a missing alternative. The ordinary `card::evaluate` contract
+  remains at least two alternatives and exactly one do-nothing role. A sole feasible action retains its
+  actual monetary mean, quantiles and tail loss, with itself as hindsight benchmark and zero regret.
+  `DecisionSummary::runner_up` is optional: a singleton serializes it as null and reports sensitivity
+  unavailable because there is no challenger. Existing comparisons retain their runner-up string and
+  canonical JSON bytes. Multiple feasible actions compute regret only against that supplied set, even
+  when every action has a negative payoff and doing nothing was excluded by the caller's constraints.
 - DESIGN (BD-225/BD-227): the serialized `summary.sensitivity` and Markdown flip-margin section compare the
   displayed act-now expected-value primary with every rival, not only the runner-up. They compute the exact
   uniform extra cost to a tie and the minimum total-variation change in the shared state weights, retaining

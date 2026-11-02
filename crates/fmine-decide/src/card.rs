@@ -172,7 +172,8 @@ pub struct DecisionSummary {
     pub expected_value_order: Vec<String>,
     pub expected_value_winners: Vec<String>,
     pub expected_value_primary: String,
-    pub runner_up: String,
+    /// Absent when an externally screened comparison contains only one feasible alternative.
+    pub runner_up: Option<String>,
     pub minimax_regret_order: Vec<String>,
     pub minimax_regret_winners: Vec<String>,
     pub minimax_regret_primary: String,
@@ -451,14 +452,36 @@ fn ranking(alternatives: &[AlternativeStats], minimax: bool) -> Result<(Vec<Stri
 /// Computes every alternative and its regret from the same complete named state matrix.
 /// Any unusable material input refuses the comparison; actions and states are never dropped or repaired.
 pub fn evaluate(inputs: &DecisionInputs) -> Result<EvaluatedCard> {
-    if inputs.actions.len() < 2
+    evaluate_impl(inputs, true)
+}
+
+/// Compares a nonempty set of alternatives already screened by the caller's constraints.
+/// A do-nothing alternative is optional and never invented. Regret uses only the supplied set,
+/// including a sole feasible action's real payoffs and zero regret against itself.
+/// All ordinary Claim, state, basis and arithmetic checks still apply. This function does not
+/// certify feasibility or admit information options that could change the screened action set.
+pub fn evaluate_feasible(inputs: &DecisionInputs) -> Result<EvaluatedCard> {
+    evaluate_impl(inputs, false)
+}
+
+fn evaluate_impl(inputs: &DecisionInputs, require_do_nothing: bool) -> Result<EvaluatedCard> {
+    let minimum_actions = if require_do_nothing { 2 } else { 1 };
+    if inputs.actions.len() < minimum_actions
         || inputs.actions.len() > MAX_ACTIONS
         || inputs.weights.value.states.is_empty()
         || inputs.weights.value.states.len() > MAX_STATES
     {
         return Err(refusal(
             RefusalCode::NoClaimInDomain201,
-            format!("requires 2..={MAX_ACTIONS} actions and 1..={MAX_STATES} states"),
+            format!(
+                "requires {minimum_actions}..={MAX_ACTIONS} actions and 1..={MAX_STATES} states"
+            ),
+        ));
+    }
+    if !require_do_nothing && !inputs.information_options.is_empty() {
+        return Err(refusal(
+            RefusalCode::NoClaimInDomain201,
+            "a screened feasible-set comparison cannot contain information options",
         ));
     }
     information::check_work(inputs)?;
@@ -565,10 +588,14 @@ pub fn evaluate(inputs: &DecisionInputs) -> Result<EvaluatedCard> {
         }
         action.values.sort_by(|a, b| a.0.cmp(&b.0));
     }
-    if do_nothing != 1 {
+    if do_nothing > 1 || (require_do_nothing && do_nothing != 1) {
         return Err(refusal(
             RefusalCode::NoClaimInDomain201,
-            "exactly one explicit do_nothing action is required",
+            if require_do_nothing {
+                "exactly one explicit do_nothing action is required"
+            } else {
+                "at most one explicit do_nothing action is permitted"
+            },
         ));
     }
     let alternatives = inputs
@@ -585,7 +612,7 @@ pub fn evaluate(inputs: &DecisionInputs) -> Result<EvaluatedCard> {
         valuation_basis: basis,
         alternatives,
         expected_value_primary: expected_value_order[0].clone(),
-        runner_up: expected_value_order[1].clone(),
+        runner_up: expected_value_order.get(1).cloned(),
         expected_value_order,
         expected_value_winners,
         minimax_regret_primary: minimax_regret_order[0].clone(),
@@ -803,6 +830,127 @@ mod tests {
     }
 
     #[test]
+    fn screened_singleton_retains_real_payoffs_without_inventing_a_hold() {
+        for (high, low, mean) in [(100, -40, 65), (-20, -100, -40)] {
+            let mut inputs = fixture();
+            let mut weights = inputs.weights.value.clone();
+            weights.states = vec![("high".into(), rat(3, 4)), ("low".into(), rat(1, 4))];
+            inputs.weights = weight_claim(weights);
+            let mut action = inputs.actions[0].value.clone();
+            action.values = vec![("high".into(), money(high)), ("low".into(), money(low))];
+            inputs.actions = vec![action_claim(action)];
+            assert!(
+                evaluate(&inputs).is_err(),
+                "ordinary admission remains strict"
+            );
+            let card = evaluate_feasible(&inputs).unwrap();
+            let actual = stats(&card, "build");
+            assert_eq!(actual.role, ActionRole::Action);
+            assert_eq!(actual.mean.major, rat(mean, 1));
+            assert_eq!(
+                actual.p10_p50_p90.map(|v| v.major),
+                [rat(low, 1), rat(high, 1), rat(high, 1)]
+            );
+            assert_eq!(actual.cvar95_loss.major, rat(-low, 1));
+            assert_eq!(
+                (actual.mean_regret.major, actual.max_regret.major),
+                (ZERO, ZERO)
+            );
+            for state in &actual.states {
+                assert_eq!(state.best_in_hindsight, state.payoff);
+                assert_eq!(state.regret.major, ZERO);
+            }
+            assert_eq!(card.summary().expected_value_winners, ["build"]);
+            assert_eq!(card.summary().minimax_regret_winners, ["build"]);
+            assert_eq!(card.summary().runner_up, None);
+            assert!(card.to_json().contains("\"runner_up\":null"));
+            assert!(card.to_json().contains("\"reason\":\"one_alternative\""));
+            assert!(
+                card.to_markdown()
+                    .contains("only one alternative was admitted")
+            );
+            assert_eq!(card.claim().parents.len(), 2);
+            assert_eq!(card.claim().evidence, EvidenceClass::Assumed);
+            assert_eq!(card.claim().uu_terms, vec![uu()]);
+        }
+    }
+
+    #[test]
+    fn screened_regret_uses_only_feasible_actions_even_when_all_lose_money() {
+        let mut inputs = fixture();
+        let mut weights = inputs.weights.value.clone();
+        weights.states = vec![("high".into(), rat(1, 2)), ("low".into(), rat(1, 2))];
+        inputs.weights = weight_claim(weights);
+        for (index, (id, high, low)) in [("a", -20, -100), ("b", -80, -30)].into_iter().enumerate()
+        {
+            let mut action = inputs.actions[index].value.clone();
+            action.action_id = id.into();
+            action.role = ActionRole::Action;
+            action.values = vec![("high".into(), money(high)), ("low".into(), money(low))];
+            inputs.actions[index] = action_claim(action);
+        }
+        assert!(evaluate(&inputs).is_err());
+        let card = evaluate_feasible(&inputs).unwrap();
+        assert_eq!(card.summary().expected_value_winners, ["b"]);
+        assert_eq!(card.summary().minimax_regret_winners, ["b"]);
+        for (id, mean, mean_regret, max_regret) in [("a", -60, 35, 70), ("b", -55, 30, 60)] {
+            let actual = stats(&card, id);
+            assert_eq!(actual.mean.major, rat(mean, 1));
+            assert_eq!(actual.mean_regret.major, rat(mean_regret, 1));
+            assert_eq!(actual.max_regret.major, rat(max_regret, 1));
+            assert_eq!(actual.states[0].best_in_hindsight.major, rat(-20, 1));
+            assert_eq!(actual.states[1].best_in_hindsight.major, rat(-30, 1));
+        }
+        inputs.actions.reverse();
+        inputs.weights.value.states.reverse();
+        assert_eq!(
+            card.to_json(),
+            evaluate_feasible(&inputs).unwrap().to_json()
+        );
+    }
+
+    #[test]
+    fn screened_admission_preserves_ordinary_receipts_and_refuses_empty_sets_and_information() {
+        let mut inputs = fixture();
+        let ordinary = evaluate(&inputs).unwrap();
+        let screened = evaluate_feasible(&inputs).unwrap();
+        assert_eq!(ordinary, screened);
+        assert_eq!(ordinary.to_json(), screened.to_json());
+        assert_eq!(ordinary.to_markdown(), screened.to_markdown());
+        let option = InformationOption {
+            model_key: inputs.weights.value.model_key.clone(),
+            option_id: "test".into(),
+            label: "test".into(),
+            currency: Currency::USD,
+            valuation_basis: inputs.actions[0].value.valuation_basis.clone(),
+            test_cost: money(0),
+            delay_cost: money(0),
+            delay_days: 0,
+            signals: vec!["signal".into()],
+            likelihoods: ["high", "low"]
+                .map(|state| Likelihood {
+                    state_id: state.into(),
+                    signal_id: "signal".into(),
+                    probability: ONE,
+                })
+                .into(),
+        };
+        let tag = option.canonical_tag();
+        inputs.information_options.push(claim(
+            "test",
+            option,
+            &tag,
+            AdditivityClass::NonAdditive,
+            EvidenceClass::Assumed,
+        ));
+        assert!(evaluate(&inputs).is_ok());
+        assert!(evaluate_feasible(&inputs).is_err());
+        inputs.information_options.clear();
+        inputs.actions.clear();
+        assert!(evaluate_feasible(&inputs).is_err());
+    }
+
+    #[test]
     fn gb29_exact_payoffs_regret_quantiles_and_signed_loss() {
         let inputs = fixture();
         let card = evaluate(&inputs).unwrap();
@@ -943,7 +1091,7 @@ mod tests {
             ["build", "do_nothing"]
         );
         assert_eq!(card.summary().expected_value_primary, "build");
-        assert_eq!(card.summary().runner_up, "do_nothing");
+        assert_eq!(card.summary().runner_up.as_deref(), Some("do_nothing"));
         inputs.actions.reverse();
         inputs.weights.value.states.reverse();
         for action in &mut inputs.actions {
@@ -1066,6 +1214,12 @@ mod tests {
                 _ => unreachable!(),
             }
             assert!(evaluate(&inputs).is_err(), "mutation {mutation}");
+            if !matches!(mutation, 0 | 8) {
+                assert!(
+                    evaluate_feasible(&inputs).is_err(),
+                    "screened mutation {mutation}"
+                );
+            }
         }
     }
 
