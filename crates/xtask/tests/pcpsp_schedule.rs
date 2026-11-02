@@ -9,7 +9,7 @@
 //! `FMINE_SEARCH_ROUNDS` (default 1,000).
 //!
 //! 1. `toposort::pcpsp::parse` reads the pair, values at 10⁶ rounded half away from zero, uses rounded up and limits
-//!    down at 10⁶. A refused instance (w23, for its negative uses) is reported and counts against the gate.
+//!    down at 10⁶. A refused instance is reported and counts against the gate.
 //! 2. The ultimate pit `P` under each block's most valuable destination, `w_b = max_d value[b][d]`, from
 //!    `pitflow::solve` with its certificate checked by `pitflow::verify`. Only `P`'s blocks enter the LP. That leaves
 //!    the LP's optimum, and the schedule problem's, unchanged. For a closed set `T`, `T ∪ P` is closed, so
@@ -18,7 +18,8 @@
 //!    `T_t` down to `T_t ∩ P` therefore never lowers the value, and with uses non-negative and limits upper it stays
 //!    feasible. The LP's by-period fractions are mixtures of closed sets (their level sets), so the same holds there.
 //!    PDLP's certified bound on the smaller LP is a bound for the whole instance. Blocks outside `P` start unmined;
-//!    the search may still add them.
+//!    the search may still add them. With a negative use (w23's blending rows) a block outside `P` can make the room
+//!    that lets ore be milled, so cutting `T_t` down can break a limit; such an instance's LP has every block.
 //! 3. The LP relaxation over `P`, built here from the parsed integers: "by" variables `w[b][t]` as for CPIT
 //!    (`crates/xtask/tests/cpit_schedule.rs`), and `y[b][d][t]`, the share of block `b` sent to destination `d` in
 //!    period `t`, with `Σ_d y[b][d][t] = w[b][t] − w[b][t − 1]`. Limits apply to `Σ_{b,d} use[r][b][d] · y[b][d][t]`.
@@ -26,7 +27,8 @@
 //!    certified.
 //! 4. Each block goes whole to the destination the LP sends most of it to (its most valuable one if the LP mines
 //!    none of it). Blocks are ranked by their LP expected period, as for CPIT, and left out below a final weight of
-//!    10⁻⁶, 0.5 or 0.9. Each threshold gives a schedule: `greedy` on `with_destinations`, then `pcpsp::improve`.
+//!    10⁻⁶, 0.5 or 0.9. Each threshold gives a schedule: `pcpsp::greedy`, which sends a block that fits nowhere at
+//!    its destination to another one rather than leave it and every block under it unmined, then `pcpsp::improve`.
 //! 5. NPV is `Σ_t V_t / (1 + rate)^t` in `f64`, from `check`'s exact per-period sums under the final destinations.
 //!
 //! Asserted: every schedule passes `check`, `pcpsp::improve` never lowers an NPV, and no NPV exceeds PDLP's certified
@@ -51,7 +53,7 @@ use fmine_optimize::pitflow::minelib::Rounding;
 use fmine_optimize::pitflow::{ClosureProblem, solve, verify};
 use fmine_optimize::toposort::pcpsp::{self, PcpspModel};
 use fmine_optimize::toposort::search::discount_factors;
-use fmine_optimize::toposort::{check, cpit, greedy};
+use fmine_optimize::toposort::{check, cpit};
 
 /// MineLib's Results page (Results.xhtml, mirrored at github.com/borelian/minelib, read 2026-11-02): the PCPSP LP
 /// upper bound and the best-known feasible schedule's value, in whole units. w23's best-known value is 0: no feasible
@@ -302,8 +304,9 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
     let threads: usize = env_or("FMINE_PDLP_THREADS", 0);
     let rounds: usize = env_or("FMINE_SEARCH_ROUNDS", 1_000);
     let mut failures = Vec::new();
-    // `(instance, NPV / best known)`, or `None` for an instance refused or without a published value.
-    let mut gate: Vec<(String, Option<f64>)> = Vec::new();
+    // `(instance, gap to best known, best known is 0)`; the gap is `None` for an instance refused or without a
+    // published value.
+    let mut gate: Vec<(String, Option<f64>, bool)> = Vec::new();
     for name in names.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         let base = Path::new(&dir).join(name);
         let read = |ext: &str| std::fs::read_to_string(base.join(format!("{name}.{ext}"))).unwrap();
@@ -320,15 +323,24 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
                     "{{\"bead\":\"bd-2rne\",\"instance\":\"{name}\",\"refused\":{:?}}}",
                     format!("{} {}", e.code, e.what)
                 );
-                gate.push((name.to_string(), None));
+                gate.push((name.to_string(), None, false));
                 continue;
             }
         };
         let (n, periods, dn) = (model.blocks(), model.periods(), model.destinations());
         let rate = model.discount_rate as f64 / cpit::RATE_SCALE as f64;
         let t_pit = Instant::now();
-        let (pit, index, pit_value) = ultimate_pit(&model);
+        let (in_pit, pit_index, pit_value) = ultimate_pit(&model);
         let pit_s = t_pit.elapsed().as_secs_f64();
+        let pit_blocks = in_pit.len();
+        // Step 2's restriction needs every use non-negative; otherwise the LP has every block.
+        let signed = (0..model.resources())
+            .any(|r| (0..n).any(|b| (0..dn).any(|d| model.uses(r, b, d).unwrap() < 0)));
+        let (pit, index, scope) = if signed {
+            ((0..n).collect(), (0..n).map(Some).collect(), "all")
+        } else {
+            (in_pit, pit_index, "pit")
+        };
         let columns = Columns {
             n: pit.len(),
             periods,
@@ -336,7 +348,7 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
         };
         let cache = std::env::var("FMINE_PCPSP_LP_CACHE")
             .ok()
-            .map(|d| Path::new(&d).join(format!("{name}-{tol}.pit.pcpsp-lp")));
+            .map(|d| Path::new(&d).join(format!("{name}-{tol}.{scope}.pcpsp-lp")));
         let cached = cache
             .as_ref()
             .and_then(|path| std::fs::read(path).ok())
@@ -411,7 +423,6 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
             .map(|&(_, l, b)| (l, b))
             .unwrap_or((f64::NAN, f64::NAN));
         let factors = discount_factors(model.discount_rate, cpit::RATE_SCALE, periods).unwrap();
-        let problem = model.with_destinations(&destination).unwrap();
         let t1 = Instant::now();
         let mut npvs = Vec::new();
         let mut improved = Vec::new();
@@ -424,8 +435,8 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
                     (w(b, periods - 1) >= threshold).then(|| (expected[b] * 1e9).round() as i64)
                 })
                 .collect();
-            let schedule = greedy(&problem, &rank).unwrap();
-            let c = check(&problem, &schedule).unwrap();
+            let (schedule, start) = pcpsp::greedy(&model, &rank, &destination).unwrap();
+            let c = check(&model.with_destinations(&start).unwrap(), &schedule).unwrap();
             if !c.feasible() {
                 failures.push(format!(
                     "{name}: threshold {threshold}: greedy's schedule fails check"
@@ -434,7 +445,7 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
             let before = npv(&c.period_values, rate);
             npvs.push(before);
             let t2 = Instant::now();
-            let i = pcpsp::improve(&model, &schedule, &destination, &factors, rounds).unwrap();
+            let i = pcpsp::improve(&model, &schedule, &start, &factors, rounds).unwrap();
             search_s += t2.elapsed().as_secs_f64();
             let c = check(
                 &model.with_destinations(&i.destination).unwrap(),
@@ -502,9 +513,15 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
             .collect::<Vec<_>>()
             .join(",");
         let of_best_known = (best_known > 0.0).then(|| best / best_known);
-        gate.push((name.to_string(), of_best_known));
+        // A best-known value of 0 (no schedule published) is met by any schedule worth at least that; the gate line
+        // names such instances.
+        let gap = match of_best_known {
+            Some(r) => Some(1.0 - r),
+            None => (best_known == 0.0 && best >= 0.0).then_some(0.0),
+        };
+        gate.push((name.to_string(), gap, best_known == 0.0));
         println!(
-            "{{\"bead\":\"bd-2rne\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"destinations\":{dn},\"resources\":{},\"rounded\":[{},{},{}],\"pit_blocks\":{},\"pit_value\":{:.3},\"pit_s\":{pit_s:.2},\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"npv\":[{}],\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{},\"known\":{}}}",
+            "{{\"bead\":\"bd-2rne\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"destinations\":{dn},\"resources\":{},\"rounded\":[{},{},{}],\"pit_blocks\":{pit_blocks},\"lp_blocks\":{},\"pit_value\":{:.3},\"pit_s\":{pit_s:.2},\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"npv\":[{}],\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{},\"known\":{}}}",
             model.resources(),
             model.rounded_values,
             model.rounded_uses,
@@ -536,29 +553,38 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
         }
     }
     // GATE-PUSH-TOPO over the instances run: within 3% of best known on at least 80%, within 5% on all. An instance
-    // refused or without a published value has no gap, and so is neither.
+    // refused or without a published value has no gap, and so is neither. One whose best known is 0 has gap 0 when
+    // its schedule is worth at least 0, and is listed apart: its gap to the certified bound is the one that informs.
     let within = |limit: f64| {
         gate.iter()
-            .filter(|(_, r)| r.is_some_and(|r| r >= 1.0 - limit))
+            .filter(|(_, g, _)| g.is_some_and(|g| g <= limit))
             .count()
     };
     let worst = gate
         .iter()
-        .map(|(_, r)| r.map_or(f64::INFINITY, |r| 1.0 - r))
+        .map(|(_, g, _)| g.unwrap_or(f64::INFINITY))
         .fold(f64::NEG_INFINITY, f64::max);
     let (three, five, total) = (within(0.03), within(0.05), gate.len());
+    let no_gap: Vec<&str> = gate
+        .iter()
+        .filter(|(_, g, _)| g.is_none())
+        .map(|(k, _, _)| k.as_str())
+        .collect();
+    let zero: Vec<&str> = gate
+        .iter()
+        .filter(|(_, _, zero)| *zero)
+        .map(|(k, _, _)| k.as_str())
+        .collect();
     println!(
-        "{{\"bead\":\"bd-2rne\",\"gate\":\"GATE-PUSH-TOPO\",\"instances\":{total},\"within_3pct\":{three},\"within_5pct\":{five},\"worst_gap\":{},\"passes\":{},\"no_gap\":{:?}}}",
+        "{{\"bead\":\"bd-2rne\",\"gate\":\"GATE-PUSH-TOPO\",\"instances\":{total},\"within_3pct\":{three},\"within_5pct\":{five},\"worst_gap\":{},\"passes\":{},\"no_gap\":{:?},\"best_known_zero\":{:?}}}",
         if worst.is_finite() {
             format!("{worst:.4}")
         } else {
             "null".to_string()
         },
         total > 0 && three * 5 >= total * 4 && five == total,
-        gate.iter()
-            .filter(|(_, r)| r.is_none())
-            .map(|(k, _)| k.as_str())
-            .collect::<Vec<_>>()
+        no_gap,
+        zero,
     );
     assert!(failures.is_empty(), "{failures:#?}");
 }

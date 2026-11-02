@@ -5,10 +5,11 @@
 //! (Operations Research 60(3), 2012) that turns a ranking of the blocks into a feasible schedule.
 //!
 //! **Problem.** Blocks carry values and require other blocks, as in `pitflow`. There are `T` periods and some
-//! resources: block `b` uses `usage[r][b] ≥ 0` of resource `r` in the period it is mined, and resource `r` may use at
-//! most `limit[r][t] ≥ 0` in period `t`. A schedule mines each block in one period or not at all. It is feasible when
-//! every mined block's required blocks are mined in the same period or earlier, and no resource goes over its limit
-//! in any period. The limits are upper limits only, so mining nothing is feasible.
+//! resources: block `b` uses `usage[r][b]` of resource `r` in the period it is mined, and resource `r` may use at most
+//! `limit[r][t] ≥ 0` in period `t`. A use may be negative, as in a blending row, where a block below the target grade
+//! makes room for one above it. A schedule mines each block in one period or not at all. It is feasible when every
+//! mined block's required blocks are mined in the same period or earlier, and no resource goes over its limit in any
+//! period. The limits are upper limits and not negative, so mining nothing is feasible.
 //!
 //! **Value.** [`check`] returns each period's value sum exactly, undiscounted. Discounting is the caller's.
 //!
@@ -18,7 +19,8 @@
 //!   precedence cycle are never taken and stay unmined.
 //! - Each block in that order goes in the earliest period, no earlier than its required blocks, with room on every
 //!   resource. A block without a rank, with a required block left unmined, or with no period that has room stays
-//!   unmined.
+//!   unmined. Every schedule along the way is feasible, so with negative uses a block can make room only for the
+//!   blocks taken after it.
 //! - [`greedy`] runs [`check`] on its schedule and refuses rather than return one that fails.
 //!
 //! [`check`] is written apart from [`greedy`] and shares nothing with it but the problem type. Both live in this
@@ -66,7 +68,7 @@ pub struct ScheduleProblem {
 impl ScheduleProblem {
     /// # Errors
     /// `FMINE-REF-207` (proposed) when there are no periods or more than [`MAX_PERIODS`], when the resources do not each
-    /// have one use per block and one limit per period, or when a use or a limit is negative.
+    /// have one use per block and one limit per period, or when a limit is negative.
     pub fn new(
         blocks: ClosureProblem,
         periods: usize,
@@ -92,11 +94,6 @@ impl ScheduleProblem {
                     "toposort: resource {r} has {} uses for {n} blocks and {} limits for {periods} periods",
                     uses.len(),
                     caps.len()
-                )));
-            }
-            if let Some(b) = uses.iter().position(|&q| q < 0) {
-                return Err(refuse(format!(
-                    "toposort: block {b} uses a negative amount of resource {r}"
                 )));
             }
             if let Some(t) = caps.iter().position(|&q| q < 0) {
@@ -276,9 +273,44 @@ pub fn greedy(
     problem: &ScheduleProblem,
     rank: &[Option<i64>],
 ) -> Result<Vec<Option<u32>>, Refusal> {
-    let blocks = &problem.blocks;
-    let n = blocks.node_count();
     let periods = problem.periods;
+    let mut used = vec![vec![0_i128; periods]; problem.usage.len()];
+    let schedule = kahn(&problem.blocks, rank, |b, from| {
+        let fits = |t: usize| {
+            used.iter()
+                .zip(&problem.usage)
+                .zip(&problem.limits)
+                .all(|((row, uses), caps)| row[t] + i128::from(uses[b]) <= i128::from(caps[t]))
+        };
+        let t = (from..periods).find(|&t| fits(t))?;
+        for (row, uses) in used.iter_mut().zip(&problem.usage) {
+            row[t] += i128::from(uses[b]);
+        }
+        Some(t)
+    })?;
+    let checked = check(problem, &schedule)?;
+    if !checked.feasible() {
+        return Err(refuse(format!(
+            "toposort: the greedy schedule fails its check ({} unmet requirements, limits exceeded at {:?})",
+            checked.unmet, checked.over_limit
+        )));
+    }
+    Ok(schedule)
+}
+
+/// TopoSort's order (see the module notes). Each ranked block whose required blocks are all mined is offered to
+/// `place` with the latest of their periods; it is mined in the period `place` returns, which must be that one or
+/// later, or stays unmined for `None`.
+///
+/// # Errors
+/// `FMINE-REF-207` (proposed) when `rank` does not have one entry per block, or when a block or period index does not
+/// fit `u32`.
+pub(crate) fn kahn(
+    blocks: &ClosureProblem,
+    rank: &[Option<i64>],
+    mut place: impl FnMut(usize, usize) -> Option<usize>,
+) -> Result<Vec<Option<u32>>, Refusal> {
+    let n = blocks.node_count();
     if rank.len() != n {
         return Err(refuse(format!(
             "toposort: {} ranks for {n} blocks",
@@ -301,7 +333,6 @@ pub fn greedy(
         }
     }
     let mut schedule: Vec<Option<u32>> = vec![None; n];
-    let mut used = vec![vec![0_i128; periods]; problem.usage.len()];
     while let Some(Reverse((_, taken))) = ready.pop() {
         let b = taken as usize;
         if rank[b].is_some() {
@@ -313,18 +344,8 @@ pub fn greedy(
                     _ => None,
                 };
             }
-            if let Some(from) = earliest {
-                let fits = |t: usize| {
-                    used.iter().zip(&problem.usage).zip(&problem.limits).all(
-                        |((row, uses), caps)| row[t] + i128::from(uses[b]) <= i128::from(caps[t]),
-                    )
-                };
-                if let Some(t) = (from..periods).find(|&t| fits(t)) {
-                    for (row, uses) in used.iter_mut().zip(&problem.usage) {
-                        row[t] += i128::from(uses[b]);
-                    }
-                    schedule[b] = Some(id(t)?);
-                }
+            if let Some(t) = earliest.and_then(|from| place(b, from)) {
+                schedule[b] = Some(id(t)?);
             }
         }
         for &d in &dependents[start[b]..start[b + 1]] {
@@ -334,13 +355,6 @@ pub fn greedy(
                 ready.push(key(d)?);
             }
         }
-    }
-    let checked = check(problem, &schedule)?;
-    if !checked.feasible() {
-        return Err(refuse(format!(
-            "toposort: the greedy schedule fails its check ({} unmet requirements, limits exceeded at {:?})",
-            checked.unmet, checked.over_limit
-        )));
     }
     Ok(schedule)
 }
@@ -406,6 +420,24 @@ mod tests {
     }
 
     #[test]
+    fn a_negative_use_makes_room_only_for_blocks_taken_after_it() {
+        // One blending row with limit 0: block 0 is above the target grade (+1), block 1 below it (−1).
+        let blocks = || ClosureProblem::from_requirements(vec![5, 1], &[vec![], vec![]]).unwrap();
+        let p = ScheduleProblem::new(blocks(), 1, vec![vec![1, -1]], vec![vec![0]]).unwrap();
+        assert_eq!(
+            greedy(&p, &[Some(1), Some(0)]).unwrap(),
+            vec![Some(0), Some(0)]
+        );
+        assert_eq!(
+            greedy(&p, &[Some(0), Some(1)]).unwrap(),
+            vec![None, Some(0)]
+        );
+        let c = check(&p, &[Some(0), None]).unwrap();
+        assert_eq!((c.used, c.over_limit), (vec![vec![1]], vec![(0, 0)]));
+        assert!(check(&p, &[Some(0), Some(0)]).unwrap().feasible());
+    }
+
+    #[test]
     fn a_precedence_cycle_stays_unmined() {
         let blocks =
             ClosureProblem::from_requirements(vec![5, 5, 1], &[vec![1], vec![0], vec![]]).unwrap();
@@ -425,7 +457,6 @@ mod tests {
             (2, vec![vec![1, 1]], vec![]),
             (2, vec![vec![1]], vec![vec![3, 3]]),
             (2, vec![vec![1, 1]], vec![vec![3]]),
-            (2, vec![vec![1, -1]], vec![vec![3, 3]]),
             (2, vec![vec![1, 1]], vec![vec![3, -3]]),
         ] {
             assert_eq!(
@@ -471,6 +502,19 @@ mod tests {
             .collect();
         let blocks = ClosureProblem::from_requirements(weights, &requires).unwrap();
         ScheduleProblem::new(blocks, periods, usage, limits).unwrap()
+    }
+
+    /// [`random_problem`] with one more resource whose uses run from −3 to 3 and whose limits from 0 to 2, as a
+    /// blending row's might.
+    pub(super) fn random_signed_problem(seed: u64) -> ScheduleProblem {
+        let p = random_problem(seed);
+        let (n, periods) = (p.blocks().node_count(), p.periods());
+        let mut r = lcg(seed ^ 0x3C3C);
+        let mut usage = p.usage.clone();
+        let mut limits = p.limits.clone();
+        usage.push((0..n).map(|_| r(7) as i64 - 3).collect());
+        limits.push((0..periods).map(|_| r(3) as i64).collect());
+        ScheduleProblem::new(p.blocks, periods, usage, limits).unwrap()
     }
 
     /// Feasibility written out from the definition, for comparison with [`check`].
@@ -519,8 +563,13 @@ mod tests {
     #[test]
     fn check_agrees_with_the_definition_on_every_schedule() {
         let (mut agreed, mut feasible_seen, mut infeasible_seen) = (0, 0, 0);
-        for seed in 0..60 {
-            let p = random_problem(seed);
+        let problems = (0..60).flat_map(|seed| {
+            [
+                (seed, random_problem(seed)),
+                (seed, random_signed_problem(seed)),
+            ]
+        });
+        for (seed, p) in problems {
             for s in every_schedule(p.blocks().node_count(), p.periods()) {
                 let c = check(&p, &s).unwrap();
                 let expected = feasible_by_definition(&p, &s);
@@ -583,6 +632,25 @@ mod tests {
             mined_some += usize::from(s.iter().any(Option::is_some));
         }
         assert!(mined_some > 300, "{mined_some}");
+    }
+
+    /// With signed uses a block greedy left out may fit at the end, since a later block may have made room, so only
+    /// feasibility is asserted.
+    #[test]
+    fn greedy_is_feasible_with_signed_uses() {
+        let (mut mined_some, mut blended) = (0, 0);
+        for seed in 0..400 {
+            let p = random_signed_problem(seed);
+            let n = p.blocks().node_count();
+            let mut r = lcg(seed ^ 0xA5A5);
+            let rank: Vec<Option<i64>> = (0..n).map(|_| (r(5) > 0).then(|| r(10) as i64)).collect();
+            let s = greedy(&p, &rank).unwrap();
+            assert!(feasible_by_definition(&p, &s), "seed {seed}: {s:?}");
+            let last = p.resources() - 1;
+            mined_some += usize::from(s.iter().any(Option::is_some));
+            blended += usize::from((0..n).any(|b| s[b].is_some() && p.usage(last).unwrap()[b] < 0));
+        }
+        assert!(mined_some > 300 && blended > 100, "{mined_some} {blended}");
     }
 
     #[test]

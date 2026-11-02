@@ -218,6 +218,16 @@ def main() -> None:
     for selector, choices in ((0x01, b""), (0x01, bytes([0x00, 0x00, 0x01])), (0x21, bytes([0x10, 0x20, 0x01])),
                               (0x11, bytes([0xF0, 0x01, 0x11])), (0x00, b"")):
         seeds["pcpsp"].append(bytes([selector]) + f"{pcpsp}\0{cprec}\0".encode() + choices)
+    # The unit tests' blend (bd-ixfw): a mill for two blocks and a blending row with limit 0, where block 1's negative
+    # use makes room for one of blocks 0 and 2. Uses at one place (selector 0x20); every block to the mill, ranked
+    # either way round.
+    blend = ("NAME: blend\nTYPE: PCPSP\nNBLOCKS: 3\nNPERIODS: 1\nNDESTINATIONS: 2\nNRESOURCE_SIDE_CONSTRAINTS: 2\n"
+             "NGENERAL_SIDE_CONSTRAINTS: 0\nDISCOUNT_RATE: 0\nRESOURCE_CONSTRAINT_LIMITS:\n0 0 L 2\n1 0 L 0\n"
+             "OBJECTIVE_FUNCTION:\n0 -1 4\n1 -1 1\n2 -1 3\nRESOURCE_CONSTRAINT_COEFFICIENTS:\n0 1 0 1\n0 1 1 1\n1 1 0 1\n"
+             "1 1 1 -1.25\n2 1 0 1\n2 1 1 0.5\nEOF\n")
+    bprec = "0 0\n1 0\n2 0\n"
+    for choices in (bytes([0x01, 0x21, 0x11]), bytes([0x21, 0x01, 0x11])):
+        seeds["pcpsp"].append(bytes([0x20]) + f"{blend}\0{bprec}\0".encode() + choices)
 
     # cli_run: one byte per vocabulary entry, in the order fuzz_targets/cli_run.rs builds it (verb paths, then its
     # FLAGS, PAIRS and VALUES). Each verb alone, with a selector, with options, and as a full mutation command. A

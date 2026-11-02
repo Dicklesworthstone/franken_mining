@@ -21,6 +21,10 @@
 //! the blocks that require it: given waste in period 0 and the ore under it in period 2, **Earlier** brings the ore to
 //! period 0 when there is room, where **Later** first would send the waste to period 2 and keep the ore there.
 //!
+//! A use may be negative (a blending row), so taking a block out of a period can put that period over a limit too.
+//! **Earlier**, **Later** and **Drop** therefore check the period the block leaves as well as the one it enters;
+//! **Swap** checks both periods, and **Add** leaves none.
+//!
 //! Rounds stop after one without a move, or after the caller's limit. Blocks are visited in Kahn order (ties by id),
 //! and in reverse for **Later** and **Drop**. Blocks on a precedence cycle are never visited by those four, and a swap
 //! never takes one. [`improve`] ends with [`check`], and refuses rather than return a schedule that fails it or is
@@ -283,6 +287,14 @@ impl<'a> Search<'a> {
         })
     }
 
+    /// Whether period `t` keeps every limit without `b`; with a negative use, taking `b` out raises what `t` uses.
+    fn leaves(&self, b: usize, t: usize) -> bool {
+        (0..self.problem.resources()).all(|r| {
+            let (uses, caps) = (self.uses(r), self.caps(r));
+            self.used[r][t] - i128::from(uses[b]) <= i128::from(caps[t])
+        })
+    }
+
     fn uses(&self, r: usize) -> &'a [i64] {
         self.problem.usage(r).unwrap_or(&[])
     }
@@ -312,7 +324,9 @@ impl<'a> Search<'a> {
         let order = std::mem::take(&mut self.order);
         let f = self.factors;
         for &b in &order {
-            if let Some(t) = self.period(b).filter(|_| self.value(b) > 0)
+            if let Some(t) = self
+                .period(b)
+                .filter(|&t| self.value(b) > 0 && self.leaves(b, t))
                 && let Some(to) = self
                     .earliest(b)
                     .and_then(|lo| (lo..t).find(|&to| f[to] > f[t] && self.fits(b, to)))
@@ -338,7 +352,9 @@ impl<'a> Search<'a> {
             }
         }
         for &b in order.iter().rev() {
-            if let Some(t) = self.period(b).filter(|_| self.value(b) < 0)
+            if let Some(t) = self
+                .period(b)
+                .filter(|&t| self.value(b) < 0 && self.leaves(b, t))
                 && let Some(to) = (t + 1..=self.latest(b))
                     .rev()
                     .find(|&to| f[to] < f[t] && self.fits(b, to))
@@ -352,7 +368,7 @@ impl<'a> Search<'a> {
                 let required_by_mined = self.dependents[self.start[b]..self.start[b + 1]]
                     .iter()
                     .any(|&d| self.schedule[d as usize].is_some());
-                if f[t] > 0 && !required_by_mined {
+                if f[t] > 0 && !required_by_mined && self.leaves(b, t) {
                     self.relocate(b, Some(t), None);
                     self.moves.dropped += 1;
                 }
@@ -429,7 +445,9 @@ mod tests {
     use super::*;
     use crate::pitflow::ClosureProblem;
     use crate::toposort::greedy;
-    use crate::toposort::tests::{every_schedule, feasible_by_definition, lcg, random_problem};
+    use crate::toposort::tests::{
+        every_schedule, feasible_by_definition, lcg, random_problem, random_signed_problem,
+    };
 
     /// 10% a period, at 10⁹.
     const TEN_PERCENT: (i64, i64) = (100_000_000, 1_000_000_000);
@@ -618,46 +636,92 @@ mod tests {
         }
     }
 
-    /// From greedy's schedule under random rankings: the result is feasible by the definition, worth at least as
-    /// much, never more than the best schedule there is, and a second call changes nothing.
+    #[test]
+    fn a_block_below_the_blend_stays_where_its_period_needs_it() {
+        // A blend with limit 0 in both periods. Block 0 is below the target (use −2), block 1 above it (+2), and both
+        // are mined together. Each move of block 0 alone would raise the value and put its period over the blend:
+        // - worth −1 in period 0: **Later** to period 1, or **Drop**;
+        // - worth −1 in period 1: **Drop**;
+        // - worth 1 in period 1: **Earlier** to period 0.
+        // Block 1 cannot move alone either: wherever it goes, it is over the blend.
+        for (value, period) in [(-1, 0), (-1, 1), (1, 1)] {
+            let blocks =
+                ClosureProblem::from_requirements(vec![value, 5], &[vec![], vec![]]).unwrap();
+            let p = ScheduleProblem::new(blocks, 2, vec![vec![-2, 2]], vec![vec![0, 0]]).unwrap();
+            let s = vec![Some(period); 2];
+            let i = improve(&p, &s, &factors(2), 10).unwrap();
+            assert_eq!(
+                (i.schedule, i.moves),
+                (s, Moves::default()),
+                "{value} {period}"
+            );
+        }
+    }
+
+    /// Greedy under a random ranking, then [`improve`]: the result is feasible by the definition, worth at least as
+    /// much, never more than the best schedule there is, and a second call changes nothing. Returns the values before
+    /// and after, and the best.
+    fn improve_case(p: &ScheduleProblem, seed: u64) -> (i128, i128, i128) {
+        let n = p.blocks().node_count();
+        let f = factors(p.periods());
+        let mut r = lcg(seed ^ 0x5A5A);
+        let rank: Vec<Option<i64>> = (0..n).map(|_| (r(5) > 0).then(|| r(10) as i64)).collect();
+        let s = greedy(p, &rank).unwrap();
+        let i = improve(p, &s, &f, 1_000).unwrap();
+        assert!(
+            feasible_by_definition(p, &i.schedule),
+            "seed {seed}: {:?}",
+            i.schedule
+        );
+        assert_eq!(i.before, discounted_value(p, &s, &f).unwrap());
+        assert_eq!(i.after, discounted_value(p, &i.schedule, &f).unwrap());
+        assert!(i.after >= i.before, "seed {seed}");
+        let again = improve(p, &i.schedule, &f, 1_000).unwrap();
+        assert_eq!(
+            (again.schedule.as_slice(), again.moves),
+            (i.schedule.as_slice(), Moves::default())
+        );
+        let best = every_schedule(n, p.periods())
+            .into_iter()
+            .filter(|s| feasible_by_definition(p, s))
+            .map(|s| discounted_value(p, &s, &f).unwrap())
+            .max()
+            .unwrap();
+        assert!(i.after <= best, "seed {seed}");
+        (i.before, i.after, best)
+    }
+
     #[test]
     fn improve_is_feasible_monotone_and_bounded_by_the_exhaustive_optimum() {
         let (mut cases, mut gained, mut optimal_before, mut optimal_after) = (0, 0, 0, 0);
         for seed in 0..400 {
-            let p = random_problem(seed);
-            let n = p.blocks().node_count();
-            let f = factors(p.periods());
-            let mut r = lcg(seed ^ 0x5A5A);
-            let rank: Vec<Option<i64>> = (0..n).map(|_| (r(5) > 0).then(|| r(10) as i64)).collect();
-            let s = greedy(&p, &rank).unwrap();
-            let i = improve(&p, &s, &f, 1_000).unwrap();
-            assert!(
-                feasible_by_definition(&p, &i.schedule),
-                "seed {seed}: {:?}",
-                i.schedule
-            );
-            assert_eq!(i.before, discounted_value(&p, &s, &f).unwrap());
-            assert_eq!(i.after, discounted_value(&p, &i.schedule, &f).unwrap());
-            assert!(i.after >= i.before, "seed {seed}");
-            let again = improve(&p, &i.schedule, &f, 1_000).unwrap();
-            assert_eq!(
-                (again.schedule.as_slice(), again.moves),
-                (i.schedule.as_slice(), Moves::default())
-            );
-            let best = every_schedule(n, p.periods())
-                .into_iter()
-                .filter(|s| feasible_by_definition(&p, s))
-                .map(|s| discounted_value(&p, &s, &f).unwrap())
-                .max()
-                .unwrap();
-            assert!(i.after <= best, "seed {seed}");
+            let (before, after, best) = improve_case(&random_problem(seed), seed);
             cases += 1;
-            gained += usize::from(i.after > i.before);
-            optimal_before += usize::from(i.before == best);
-            optimal_after += usize::from(i.after == best);
+            gained += usize::from(after > before);
+            optimal_before += usize::from(before == best);
+            optimal_after += usize::from(after == best);
         }
         println!(
             "{{\"bead\":\"bd-5lxu\",\"cases\":{cases},\"improved\":{gained},\"optimal_greedy\":{optimal_before},\"optimal_after\":{optimal_after}}}"
+        );
+        assert!(
+            gained > 0 && optimal_after > optimal_before,
+            "{gained} {optimal_before} {optimal_after}"
+        );
+    }
+
+    /// The same with one more resource whose uses may be negative.
+    #[test]
+    fn improve_keeps_every_limit_with_signed_uses() {
+        let (mut gained, mut optimal_before, mut optimal_after) = (0, 0, 0);
+        for seed in 0..400 {
+            let (before, after, best) = improve_case(&random_signed_problem(seed), seed);
+            gained += usize::from(after > before);
+            optimal_before += usize::from(before == best);
+            optimal_after += usize::from(after == best);
+        }
+        println!(
+            "{{\"bead\":\"bd-ixfw\",\"cases\":400,\"improved\":{gained},\"optimal_greedy\":{optimal_before},\"optimal_after\":{optimal_after}}}"
         );
         assert!(
             gained > 0 && optimal_after > optimal_before,

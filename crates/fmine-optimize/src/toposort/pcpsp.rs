@@ -10,16 +10,23 @@
 //!   triple not listed uses nothing.
 //!
 //! Values, uses and limits are scaled and rounded as in [`super::cpit`]. Values are scaled at `value_decimals` with the
-//! caller's rounding, and uses and limits at `use_decimals`. A use with more places is rounded up and a limit down,
-//! and each rounding is counted.
+//! caller's rounding, and uses and limits at `use_decimals`. A use with more places is rounded up (toward +∞, whatever
+//! its sign) and a limit down, so a schedule within the rounded limits is within the file's. Each rounding is counted.
 //!
+//! - **Negative uses** are read: MineLib's w23 has them in its blending rows, where a block below the target grade
+//!   makes room at the mill for one above it. Limits must not be negative, so mining nothing stays feasible.
 //! - **Not read.** Each of these is refused with its reason, since [`ScheduleProblem`] holds none of them: general
-//!   side constraints (a count other than 0), `G` and `I` limits, and negative uses. MineLib's w23 has negative uses
-//!   (its blending rows), so it is refused.
+//!   side constraints (a count other than 0), and `G` and `I` limits.
 //! - **Whole blocks.** PCPSP lets a mined block be split between destinations. Here each mined block goes whole to one
 //!   destination, so a schedule is feasible for PCPSP but can be worth less than the best split one.
 //!   [`PcpspModel::with_destinations`] turns one destination per block into a [`ScheduleProblem`], so [`check`],
 //!   [`super::greedy`] and [`super::search::improve`] apply unchanged.
+//!
+//! [`greedy`] is TopoSort with a fallback. A ranked block that fits at its destination in no period from its required
+//! blocks' latest on goes to another destination, the most valuable first (the lowest of equals), in the earliest
+//! period where one fits. Under [`super::greedy`] it would stay unmined, and so would every block that requires it. On
+//! MineLib's w23, whose blending rows leave ore no room at the mill once the blend is spent, that stopped all mining
+//! after period 2. A block mined at a loss this way and then required by nothing is dropped by the period moves.
 //!
 //! [`destinations`] changes the destinations of mined blocks, period by period:
 //! - **Switch.** A block goes to its most valuable destination that keeps every limit in its period, when that is
@@ -289,7 +296,7 @@ fn header<'a>(
 ///
 /// # Errors
 /// `FMINE-REF-506` (proposed) for any malformed, missing, duplicate or out-of-range header, section, limit, value,
-/// use or precedence line; a limit kind other than `L`; general side constraints; a negative use or limit; more than
+/// use or precedence line; a limit kind other than `L`; general side constraints; a negative limit; more than
 /// [`MAX_RESOURCES`] resources or [`MAX_DESTINATIONS`] destinations; and a value that needs rounding under
 /// [`Rounding::Refuse`]. `FMINE-REF-207` (proposed) when the precedences fail [`ClosureProblem::new`]'s size guard,
 /// or when the blocks' values largest in magnitude, one per block, sum to [`crate::pitflow::ABS_VALUE_SUM_LIMIT`]
@@ -452,11 +459,6 @@ pub fn parse(
                 "line {line}: block {b}, destination {d}, resource {r} is outside {n} blocks, {dn} destinations and {resources} resources"
             )));
         };
-        if q < 0 {
-            return Err(bad(format!(
-                "line {line}: use {q} is negative; negative uses (such as blending rows) are not read"
-            )));
-        }
         if std::mem::replace(was, true) {
             return Err(bad(format!(
                 "line {line}: block {b}, destination {d}, resource {r} has two uses"
@@ -533,6 +535,58 @@ fn apply(
     destination[b] = u32::try_from(to)
         .map_err(|_| refuse(format!("pcpsp: destination {to} does not fit u32")))?;
     Ok(())
+}
+
+/// TopoSort with a fallback to other destinations (see the module notes). `rank` is as for [`super::greedy`], and
+/// `destination[b]` is the destination block `b` tries first. Returns the schedule and each block's destination,
+/// which differs from `destination` only for blocks that fell back.
+///
+/// # Errors
+/// `FMINE-REF-207` (proposed) when `rank` or `destination` does not have one entry per block, when a destination is
+/// out of range, or, as a defect, when the result fails [`check`].
+pub fn greedy(
+    model: &PcpspModel,
+    rank: &[Option<i64>],
+    destination: &[u32],
+) -> Result<(Vec<Option<u32>>, Vec<u32>), Refusal> {
+    let start = model.with_destinations(destination)?;
+    let (periods, dn) = (model.periods, model.destinations);
+    let mut dest = destination.to_vec();
+    let mut used = vec![vec![0_i128; periods]; model.resources()];
+    let schedule = super::kahn(start.blocks(), rank, |b, from| {
+        let fits = |d: usize, t: usize| {
+            used.iter()
+                .zip(&model.uses)
+                .zip(&model.limits)
+                .all(|((row, uses), caps)| {
+                    row[t] + i128::from(uses[b * dn + d]) <= i128::from(caps[t])
+                })
+        };
+        let first = dest[b] as usize;
+        let mut others: Vec<usize> = (0..dn).filter(|&d| d != first).collect();
+        others.sort_by_key(|&d| (std::cmp::Reverse(model.values[b * dn + d]), d));
+        let (t, d) = (from..periods)
+            .find(|&t| fits(first, t))
+            .map(|t| (t, first))
+            .or_else(|| {
+                (from..periods).find_map(|t| others.iter().find(|&&d| fits(d, t)).map(|&d| (t, d)))
+            })?;
+        // `d` is below `dn`, which is at most `MAX_DESTINATIONS`, so it fits.
+        dest[b] = u32::try_from(d).ok()?;
+        for (row, uses) in used.iter_mut().zip(&model.uses) {
+            row[t] += i128::from(uses[b * dn + d]);
+        }
+        Some(t)
+    })?;
+    let end = model.with_destinations(&dest)?;
+    let checked = check(&end, &schedule)?;
+    if !checked.feasible() {
+        return Err(refuse(format!(
+            "pcpsp greedy: defect, the schedule fails its check ({} unmet requirements, limits exceeded at {:?})",
+            checked.unmet, checked.over_limit
+        )));
+    }
+    Ok((schedule, dest))
 }
 
 /// Destination moves on a feasible schedule (see the module notes). `destination` is updated in place.
@@ -892,7 +946,7 @@ mod tests {
             (PCPSP.replace("2 1 1 1\n", "2 2 1 1\n"), "outside"),
             (PCPSP.replace("2 1 1 1\n", "2 1 2 1\n"), "outside"),
             (PCPSP.replace("2 1 1 1\n", "2 1 0 1\n"), "two uses"),
-            (PCPSP.replace("2 1 1 1\n", "2 1 1 -1\n"), "negative uses"),
+            (PCPSP.replace("1 1 L 1", "1 1 L -1"), "negative"),
             (
                 PCPSP.replace("OBJECTIVE_FUNCTION:", "GENERAL_CONSTRAINT_LIMITS:"),
                 "not a PCPSP section read here",
@@ -939,6 +993,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn blending_rows_read_signed_uses_and_schedule_within_the_blend() {
+        // Resource 0 is the mill (two blocks); resource 1 a blend with limit 0. Block 1 is below the target and makes
+        // room for one block above it: block 0 (worth 4, +1) or block 2 (worth 3, +0.5), not both.
+        let blend = "NAME: blend\nTYPE: PCPSP\nNBLOCKS: 3\nNPERIODS: 1\nNDESTINATIONS: 2\nNRESOURCE_SIDE_CONSTRAINTS: 2\nNGENERAL_SIDE_CONSTRAINTS: 0\nDISCOUNT_RATE: 0\nRESOURCE_CONSTRAINT_LIMITS:\n0 0 L 2\n1 0 L 0\nOBJECTIVE_FUNCTION:\n0 -1 4\n1 -1 1\n2 -1 3\nRESOURCE_CONSTRAINT_COEFFICIENTS:\n0 1 0 1\n0 1 1 1\n1 1 0 1\n1 1 1 -1.25\n2 1 0 1\n2 1 1 0.5\nEOF\n";
+        let m = parse(blend, "0 0\n1 0\n2 0\n", 0, Rounding::Refuse, 1).unwrap();
+        // −1.25 at one place rounds toward +∞, to −1.2: less room, never more.
+        assert_eq!(
+            (
+                m.uses(1, 0, 1),
+                m.uses(1, 1, 1),
+                m.uses(1, 2, 1),
+                m.uses(1, 1, 0)
+            ),
+            (Some(10), Some(-12), Some(5), Some(0))
+        );
+        assert_eq!(m.rounded_uses, 1);
+        let d = vec![1, 1, 1];
+        let p = m.with_destinations(&d).unwrap();
+        // Ranked above block 1, blocks 0 and 2 find the blend full and stay unmined; the search then adds block 0.
+        let s = greedy(&p, &[Some(0), Some(2), Some(1)]).unwrap();
+        assert_eq!(s, vec![None, Some(0), None]);
+        // With the fallback they go to the dump instead, mined at a loss, and the search drops them.
+        let (s2, d2) = super::greedy(&m, &[Some(0), Some(2), Some(1)], &d).unwrap();
+        assert_eq!((s2.clone(), d2.clone()), (vec![Some(0); 3], vec![0, 1, 0]));
+        let i2 = improve(&m, &s2, &d2, &factors(1), 10).unwrap();
+        assert_eq!(i2.schedule, vec![Some(0), Some(0), None]);
+        let i = improve(&m, &s, &d, &factors(1), 10).unwrap();
+        assert_eq!(i.schedule, vec![Some(0), Some(0), None]);
+        let c = check(&m.with_destinations(&i.destination).unwrap(), &i.schedule).unwrap();
+        assert!(c.feasible());
+        // Uses are at one place: the mill is full (20 of 20) and the blend 0.2 under its target.
+        assert_eq!(
+            (c.period_values, c.used),
+            (vec![5], vec![vec![20], vec![-2]])
+        );
     }
 
     #[test]
@@ -1027,6 +1119,17 @@ mod tests {
         }
     }
 
+    /// [`random_model`] with one more resource whose uses run from −3 to 3 and whose limits from 0 to 2.
+    fn random_signed_model(seed: u64) -> PcpspModel {
+        let mut m = random_model(seed);
+        let mut r = lcg(seed ^ 0x3C3C);
+        let cells = m.blocks() * m.destinations();
+        m.uses.push((0..cells).map(|_| r(7) as i64 - 3).collect());
+        m.limits
+            .push((0..m.periods()).map(|_| r(3) as i64).collect());
+        m
+    }
+
     /// The discounted value of a choice of period and destination per block, from the definition, or `None` when it
     /// breaks a requirement or a limit.
     fn worth(m: &PcpspModel, s: &[Option<u32>], d: &[u32], f: &[i64]) -> Option<i128> {
@@ -1083,47 +1186,137 @@ mod tests {
             .unwrap_or(0)
     }
 
+    /// Greedy under random destinations and ranks, then [`improve`]: feasible and valued as the definition says,
+    /// never worth less, never more than the exhaustive optimum, and a second call moves nothing. Returns the values
+    /// before and after, the optimum, and whether an exchange was made.
+    fn improve_case(m: &PcpspModel, seed: u64) -> (i128, i128, i128, bool) {
+        let mut r = lcg(seed ^ 0x5eed);
+        let f = factors(m.periods());
+        let d: Vec<u32> = (0..m.blocks())
+            .map(|_| r(m.destinations() as u64) as u32)
+            .collect();
+        let rank: Vec<Option<i64>> = (0..m.blocks())
+            .map(|_| (r(5) > 0).then(|| r(10) as i64))
+            .collect();
+        let s = greedy(&m.with_destinations(&d).unwrap(), &rank).unwrap();
+        let i = improve(m, &s, &d, &f, 1_000).unwrap();
+        let before = worth(m, &s, &d, &f).unwrap();
+        let after = worth(m, &i.schedule, &i.destination, &f);
+        assert_eq!(after, Some(i.after), "seed {seed}: infeasible or misvalued");
+        assert_eq!(before, i.before, "seed {seed}");
+        let best = optimum(m, &f);
+        assert!(
+            before <= i.after && i.after <= best,
+            "seed {seed}: {before} {} {best}",
+            i.after
+        );
+        let again = improve(m, &i.schedule, &i.destination, &f, 1_000).unwrap();
+        assert_eq!(
+            (again.moves, again.destination_moves, again.after),
+            (Moves::default(), DestinationMoves::default(), i.after),
+            "seed {seed}: a second call moved"
+        );
+        (before, i.after, best, i.destination_moves.exchanges > 0)
+    }
+
     #[test]
     fn improve_is_feasible_monotone_and_bounded_by_the_exhaustive_optimum() {
         let (mut improved, mut optimal_before, mut optimal_after, mut exchanged) = (0, 0, 0, 0);
         let cases = 300;
         for seed in 0..cases {
-            let m = random_model(seed);
-            let mut r = lcg(seed ^ 0x5eed);
-            let f = factors(m.periods());
-            let d: Vec<u32> = (0..m.blocks())
-                .map(|_| r(m.destinations() as u64) as u32)
-                .collect();
-            let rank: Vec<Option<i64>> = (0..m.blocks())
-                .map(|_| (r(5) > 0).then(|| r(10) as i64))
-                .collect();
-            let s = greedy(&m.with_destinations(&d).unwrap(), &rank).unwrap();
-            let i = improve(&m, &s, &d, &f, 1_000).unwrap();
-            let before = worth(&m, &s, &d, &f).unwrap();
-            let after = worth(&m, &i.schedule, &i.destination, &f);
-            assert_eq!(after, Some(i.after), "seed {seed}: infeasible or misvalued");
-            assert_eq!(before, i.before, "seed {seed}");
-            let best = optimum(&m, &f);
-            assert!(
-                before <= i.after && i.after <= best,
-                "seed {seed}: {before} {} {best}",
-                i.after
-            );
-            let again = improve(&m, &i.schedule, &i.destination, &f, 1_000).unwrap();
-            assert_eq!(
-                (again.moves, again.destination_moves, again.after),
-                (Moves::default(), DestinationMoves::default(), i.after),
-                "seed {seed}: a second call moved"
-            );
-            improved += usize::from(i.after > before);
+            let (before, after, best, exchange) = improve_case(&random_model(seed), seed);
+            improved += usize::from(after > before);
             optimal_before += usize::from(before == best);
-            optimal_after += usize::from(i.after == best);
-            exchanged += usize::from(i.destination_moves.exchanges > 0);
+            optimal_after += usize::from(after == best);
+            exchanged += usize::from(exchange);
         }
         println!(
             "{{\"bead\":\"bd-2rne\",\"cases\":{cases},\"improved\":{improved},\"optimal_greedy\":{optimal_before},\"optimal_after\":{optimal_after},\"with_exchanges\":{exchanged}}}"
         );
         assert!(improved > 0 && exchanged > 0 && optimal_after > optimal_before);
+    }
+
+    /// The fallback greedy on random models, with and without a signed resource: feasible by the definition, and a
+    /// destination changes only for a block it mined. Without negative uses, a ranked block it leaves unmined has a
+    /// required block unmined or fits at no destination in any period from theirs on.
+    #[test]
+    fn the_fallback_greedy_is_feasible_and_falls_back_only_when_stuck() {
+        let (mut fell_back, mut mined_more) = (0, 0);
+        for seed in 0..300 {
+            for (m, signed) in [
+                (random_model(seed), false),
+                (random_signed_model(seed), true),
+            ] {
+                let mut r = lcg(seed ^ 0x5eed);
+                let n = m.blocks();
+                let d: Vec<u32> = (0..n).map(|_| r(m.destinations() as u64) as u32).collect();
+                let rank: Vec<Option<i64>> =
+                    (0..n).map(|_| (r(5) > 0).then(|| r(10) as i64)).collect();
+                let (s, dest) = super::greedy(&m, &rank, &d).unwrap();
+                let f = factors(m.periods());
+                assert!(
+                    worth(&m, &s, &dest, &f).is_some(),
+                    "seed {seed} {signed}: {s:?} {dest:?}"
+                );
+                for b in 0..n {
+                    assert!(dest[b] == d[b] || s[b].is_some(), "seed {seed}: block {b}");
+                }
+                fell_back += usize::from(dest != d);
+                let plain = greedy(&m.with_destinations(&d).unwrap(), &rank).unwrap();
+                mined_more += usize::from(
+                    s.iter().filter(|t| t.is_some()).count()
+                        > plain.iter().filter(|t| t.is_some()).count(),
+                );
+                if signed {
+                    continue;
+                }
+                for b in 0..n {
+                    let Some(from) = m
+                        .requires(b)
+                        .unwrap()
+                        .iter()
+                        .try_fold(0, |e, &q| s[q as usize].map(|t| e.max(t as usize)))
+                    else {
+                        continue;
+                    };
+                    if s[b].is_some() || rank[b].is_none() {
+                        continue;
+                    }
+                    for t in from..m.periods() {
+                        for x in 0..m.destinations() {
+                            let (mut trial, mut td) = (s.clone(), dest.clone());
+                            trial[b] = Some(t as u32);
+                            td[b] = x as u32;
+                            assert!(
+                                worth(&m, &trial, &td, &f).is_none(),
+                                "seed {seed}: block {b} fits destination {x} in period {t}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            fell_back > 50 && mined_more > 50,
+            "{fell_back} {mined_more}"
+        );
+    }
+
+    /// The same with one more resource whose uses may be negative.
+    #[test]
+    fn improve_keeps_every_limit_with_signed_uses() {
+        let (mut improved, mut optimal_before, mut optimal_after) = (0, 0, 0);
+        let cases = 300;
+        for seed in 0..cases {
+            let (before, after, best, _) = improve_case(&random_signed_model(seed), seed);
+            improved += usize::from(after > before);
+            optimal_before += usize::from(before == best);
+            optimal_after += usize::from(after == best);
+        }
+        println!(
+            "{{\"bead\":\"bd-ixfw\",\"cases\":{cases},\"improved\":{improved},\"optimal_greedy\":{optimal_before},\"optimal_after\":{optimal_after}}}"
+        );
+        assert!(improved > 0 && optimal_after > optimal_before);
     }
 
     #[test]
