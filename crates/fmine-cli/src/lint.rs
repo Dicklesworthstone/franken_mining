@@ -14,7 +14,7 @@ use crate::{Envelope, NextAction, escape_json};
 /// conversion engine; a larger document can be checked in explicit sections.
 const MAX_DRAFT_BYTES: u64 = 4 * 1024 * 1024;
 
-fn read_draft(path: &Path) -> Result<String, Refusal> {
+pub(super) fn read_draft(path: &Path) -> Result<String, Refusal> {
     let refuse = |why: String| {
         Refusal::new(
             RefusalCode::InputMissingOrUnreadable506,

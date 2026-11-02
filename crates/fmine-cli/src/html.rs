@@ -176,7 +176,7 @@ fn html_claim(value: &HtmlClaim) -> Result<String, Refusal> {
     ))
 }
 
-fn report_json(report: &HtmlClaimsReport) -> Result<String, Refusal> {
+pub(super) fn report_json(report: &HtmlClaimsReport) -> Result<String, Refusal> {
     let claims = report
         .claims
         .iter()
@@ -212,7 +212,7 @@ fn report_json(report: &HtmlClaimsReport) -> Result<String, Refusal> {
     ))
 }
 
-fn markdown(report: &HtmlClaimsReport) -> String {
+pub(super) fn markdown(report: &HtmlClaimsReport) -> String {
     let mut out = format!(
         "# HTML Claims — {}\n\n{}\n\nDefinitions: {}; SHA-256 `{}`. Source registry SHA-256 `{}`.\n\n",
         text(&report.issuer),

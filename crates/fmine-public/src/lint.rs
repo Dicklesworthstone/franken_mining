@@ -18,7 +18,7 @@ use crate::key::{
     SeriesOwnershipBasis, canonical_value_tag, claims_digest,
 };
 
-pub const RULES_VERSION: &str = "cited-equality/4";
+pub const RULES_VERSION: &str = "cited-equality/5";
 pub const NO_CLAIM: &str = "Checks supported numeric equalities against cited public Claims in the selected source snapshot. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure.";
 pub const DISCOVERY_NO_CLAIM: &str = "Matches supported numeric equalities to public Claims in the selected source snapshot only when their stated semantic keys identify exactly one candidate. It does not establish the truth of issuer assertions, verify other prose, assess publicness or authorize disclosure. General-prose discovery precision has not been measured.";
 
@@ -302,6 +302,7 @@ impl LintReport {
 fn metric(c: &KeyedCell) -> Option<Metric> {
     Some(match c.key.line.label.as_str() {
         "summary:aisc_usd_per_oz"
+        | "html:aisc_usd_per_oz_sold"
         | "all-in sustaining costs per ounce"
         | "site:costs per ounce:all-in sustaining costs"
         | "site:costs per ounce ($/oz):all-in sustaining costs"
@@ -309,6 +310,7 @@ fn metric(c: &KeyedCell) -> Option<Metric> {
         | "site:costs per pound:all-in sustaining costs"
         | "site:costs per pound ($/lb):all-in sustaining costs" => Metric::Aisc,
         "summary:tcc_usd_per_oz"
+        | "html:tcc_usd_per_oz_sold"
         | "total cash costs per ounce"
         | "total cash costs per ounce (on a co-product basis)"
         | "site:costs per ounce:total cash costs"
@@ -329,9 +331,11 @@ fn metric(c: &KeyedCell) -> Option<Metric> {
         | "site::production (thousands of tonnes)" => Metric::CopperProduction,
         "summary:au_sold_attr_koz" | "ounces sold" => Metric::Sales,
         "site:average grade (grams per tonne):processed"
+        | "html:processed_grade_g_per_t"
+        | "html:processed_grade_percent"
         | "site:average grade (percent):processed"
         | "site:average grade:processed" => Metric::ProcessedGrade,
-        "site::recovery rate (percent)" => Metric::Recovery,
+        "site::recovery rate (percent)" | "html:recovery_percent" => Metric::Recovery,
         _ => return None,
     })
 }
@@ -640,9 +644,19 @@ fn basis_findings(c: &Context, claim: &KeyedCell, metric: Metric) -> Vec<(Verdic
         failures.push((Verdict::BasisMismatch, "sold_produced_denominator"));
     }
     let co_product = claim.key.line.label == "total cash costs per ounce (on a co-product basis)";
+    // HTML labels establish the printed rate, not the issuer's by-/co-product definition.
+    let unstated_credit = matches!(
+        claim.key.line.label.as_str(),
+        "html:aisc_usd_per_oz_sold" | "html:tcc_usd_per_oz_sold"
+    );
+    if unstated_credit && c.bases.iter().any(|basis| basis.is_credit()) {
+        failures.push((Verdict::Unchecked, "source_credit_basis_unstated"));
+    }
     if c.bases.iter().any(|b| match b {
-        B::CoProduct => !co_product,
-        B::ByProduct => co_product || !matches!(metric, Metric::Aisc | Metric::Tcc),
+        B::CoProduct => !unstated_credit && !co_product,
+        B::ByProduct => {
+            !unstated_credit && (co_product || !matches!(metric, Metric::Aisc | Metric::Tcc))
+        }
         B::Geo | B::Scorecard => true,
         B::NonGaap => !matches!(metric, Metric::Aisc | Metric::Tcc | Metric::C1),
         B::GoldOunces => claim.key.unit == "usd_per_lb" || metric == Metric::CopperProduction,
@@ -923,9 +937,12 @@ fn discover(
                 && !n.currency.is_some_and(|currency| {
                     !matches!(currency, Currency::Usd | Currency::Dollar) || !m.rate()
                 })
-                && basis_findings(&ctx, c, m)
-                    .iter()
-                    .all(|(_, reason)| *reason == "registered_printed_basis_conflict")
+                && basis_findings(&ctx, c, m).iter().all(|(_, reason)| {
+                    matches!(
+                        *reason,
+                        "registered_printed_basis_conflict" | "source_credit_basis_unstated"
+                    )
+                })
         })
         .collect();
     match candidates.as_slice() {

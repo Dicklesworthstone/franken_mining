@@ -1,0 +1,135 @@
+# Invented GB-30 exercise from plan section 23.10; not a real capital recommendation.
+# Uses the five displayed joint-scenario payoffs, including rounded buyback inputs.
+# The exact mean of D here is 61.18M, rather than the plan's one-decimal 61.2M.
+# A+E: mean 372M, worst 20% signed loss 210M. A+D: mean 241.18M, loss 130.6M.
+# The 150M loss cap selects A+D; expected-value cost of that cap is 130.82M.
+schema = "fmine.capital-program.v1"
+model_key = "invented-gb30-capital-program"
+question = "Which static packages fit the invented 800M budget and 150M joint tail-loss limit?"
+currency = "USD"
+valuation_basis = "Invented nominal USD net delta-NAV at one valuation date, fixed share count and common economic ownership; all capital costs already included in payoffs; no additional discounting or synergies"
+budget = "800000000"
+tail_mass = "1/5"
+max_tail_loss = "150000000"
+payoff_convention = "additive_net_delta_nav"
+reference_class_basis = "Explicitly unadjusted illustrative payoffs; no fitted reference-class, hazard or overrun model"
+
+[[state]]
+id = "s1_low_price_overrun"
+weight = "1/5"
+
+[[state]]
+id = "s2_low"
+weight = "1/5"
+
+[[state]]
+id = "s3_base"
+weight = "1/5"
+
+[[state]]
+id = "s4_high"
+weight = "1/5"
+
+[[state]]
+id = "s5_country_shock"
+weight = "1/5"
+
+[[candidate]]
+id = "A"
+label = "Invented brownfield package"
+cost = "400000000"
+reference_class_basis = "Unadjusted GB-30 displayed scenario assumptions"
+
+[[candidate]]
+id = "E"
+label = "Invented greenfield package"
+cost = "400000000"
+exclusion_group = "greenfield_variant"
+reference_class_basis = "Unadjusted GB-30 displayed country-risk scenario assumptions"
+
+[[candidate]]
+id = "D"
+label = "Invented buyback at P/NAV 0.85"
+cost = "400000000"
+reference_class_basis = "Unadjusted GB-30 displayed rounded buyback payoffs; no risk-free treatment"
+
+[[payoff]]
+candidate = "A"
+state = "s1_low_price_overrun"
+value = "-60000000"
+
+[[payoff]]
+candidate = "A"
+state = "s2_low"
+value = "40000000"
+
+[[payoff]]
+candidate = "A"
+state = "s3_base"
+value = "220000000"
+
+[[payoff]]
+candidate = "A"
+state = "s4_high"
+value = "480000000"
+
+[[payoff]]
+candidate = "A"
+state = "s5_country_shock"
+value = "220000000"
+
+[[payoff]]
+candidate = "E"
+state = "s1_low_price_overrun"
+value = "-150000000"
+
+[[payoff]]
+candidate = "E"
+state = "s2_low"
+value = "60000000"
+
+[[payoff]]
+candidate = "E"
+state = "s3_base"
+value = "420000000"
+
+[[payoff]]
+candidate = "E"
+state = "s4_high"
+value = "960000000"
+
+[[payoff]]
+candidate = "E"
+state = "s5_country_shock"
+value = "-330000000"
+
+[[payoff]]
+candidate = "D"
+state = "s1_low_price_overrun"
+value = "-70600000"
+
+[[payoff]]
+candidate = "D"
+state = "s2_low"
+value = "0"
+
+[[payoff]]
+candidate = "D"
+state = "s3_base"
+value = "70600000"
+
+[[payoff]]
+candidate = "D"
+state = "s4_high"
+value = "258800000"
+
+[[payoff]]
+candidate = "D"
+state = "s5_country_shock"
+value = "47100000"
+
+[[uu]]
+id = "UU-unmodelled-joint-shock"
+description = "An unmodelled joint market and operating shock may invalidate the declared scenario support"
+trigger = "Observed cost or market co-movements fall outside the declared shared states"
+downside_usd_m = "250"

@@ -1,5 +1,6 @@
 //! FrankenMining CLI (`fmine`) implementation (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
 
+mod capital;
 mod claim_inspection;
 pub mod cost;
 mod decision;
@@ -10,6 +11,7 @@ pub mod html;
 pub mod issued;
 mod lint;
 mod lint_guidance;
+mod lint_html;
 mod lint_publicness;
 pub mod mirror;
 pub mod packet;
@@ -56,6 +58,8 @@ pub enum CliCommand {
     ReserveReplacement(reserve::Command),
     /// Compare explicit monetary alternatives on one declared finite scenario set (BD-225).
     DecideCard { model: PathBuf },
+    /// Construct affordable static project bundles on shared declared scenarios (BD-229).
+    CapitalProgram { model: PathBuf },
     /// Compare explicitly selected public JV production/sales assertions on a common dated perimeter.
     Mirror(mirror::Command),
     /// Local issuance status, recall and owner-authorized journal events (BD-347).
@@ -143,6 +147,14 @@ pub enum CliCommand {
         /// Search the selected snapshot for uncited, fully specified equalities (BD-345.S3).
         discover: bool,
         /// Assess dated publication evidence independently of numeric equality (BD-345.S4).
+        as_of: Option<String>,
+    },
+    /// Check a disclosure draft against explicitly mapped, registered HTML source Claims.
+    LintHtml {
+        draft: PathBuf,
+        issuer: String,
+        definitions: PathBuf,
+        discover: bool,
         as_of: Option<String>,
     },
     /// Replay a forecast transcript and assess its frozen cohort without dropping missing outcomes (BD-343).
@@ -431,6 +443,7 @@ fn verb_hint(args: &[String]) -> &'static str {
             | "--timestamp-roots"
             | "--timestamp-intermediates"
             | "--definitions"
+            | "--html-definitions"
             | "--definition"
             | "--input"
             | "--bindings"
@@ -468,7 +481,18 @@ fn verb_hint(args: &[String]) -> &'static str {
                 };
             }
             "guidance" => return "guidance completion",
-            "decide" => return "decide card",
+            "decide" => {
+                let mut next = i + 1;
+                while let Some(word) = args.get(next) {
+                    match word.as_str() {
+                        "--format" | "--workspace" => next += 2,
+                        "--json" => next += 1,
+                        "program" => return "decide program",
+                        _ => return "decide card",
+                    }
+                }
+                return "decide card";
+            }
             "metrics" => return "metrics cost",
             "html" => return "html claims",
             "mirror" => return "mirror",
@@ -852,6 +876,7 @@ pub fn parse_args(
     let mut discover = false;
     let mut provenance = None;
     let mut definitions = None;
+    let mut html_definitions = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -960,6 +985,16 @@ pub fn parse_args(
                     args.get(i).ok_or("missing value for --definitions")?,
                 ));
             }
+            "--html-definitions" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    .ok_or("missing value for --html-definitions")?;
+                if html_definitions.replace(PathBuf::from(value)).is_some() {
+                    return Err("--html-definitions may be supplied only once".into());
+                }
+            }
             flag if flag.starts_with("--") => return Err(format!("unknown flag '{flag}'")),
             arg => positional.push(arg.to_string()),
         }
@@ -1031,17 +1066,26 @@ pub fn parse_args(
     if definitions.is_some() && positional[0] != "check" {
         return Err("--definitions requires 'check tables'".to_string());
     }
+    if html_definitions.is_some() && positional[0] != "lint" {
+        return Err("--html-definitions requires 'lint'".into());
+    }
 
     let cmd = match positional[0].as_str() {
         "decide" => {
             let [_, subcommand, model] = positional.as_slice() else {
-                return Err("expected 'fmine decide card <model-file>'".into());
+                return Err("expected 'fmine decide card|program <model-file>'".into());
             };
-            if subcommand != "card" || model.trim().is_empty() {
-                return Err("expected 'fmine decide card <model-file>'".into());
+            if model.trim().is_empty() {
+                return Err("expected 'fmine decide card|program <model-file>'".into());
             }
-            CliCommand::DecideCard {
-                model: PathBuf::from(model),
+            match subcommand.as_str() {
+                "card" => CliCommand::DecideCard {
+                    model: PathBuf::from(model),
+                },
+                "program" => CliCommand::CapitalProgram {
+                    model: PathBuf::from(model),
+                },
+                _ => return Err("expected 'fmine decide card|program <model-file>'".into()),
             }
         }
         "check" => {
@@ -1258,6 +1302,18 @@ pub fn parse_args(
             let draft = positional
                 .get(1)
                 .ok_or("lint requires a local draft path")?;
+            if html_definitions.is_some() {
+                if synthetic || through.is_some() {
+                    return Err(
+                        "--html-definitions is exclusive with --synthetic and --through".into(),
+                    );
+                }
+                for flag in ["--issuer", "--as-of", "--discover"] {
+                    if args.iter().filter(|arg| arg.as_str() == flag).count() > 1 {
+                        return Err(format!("{flag} may be supplied only once"));
+                    }
+                }
+            }
             if issuer.is_some() && synthetic || issuer.is_none() && !synthetic {
                 return Err("lint requires --issuer <issuer> or --synthetic".to_string());
             }
@@ -1278,12 +1334,22 @@ pub fn parse_args(
             {
                 return Err("lint --as-of requires YYYY-MM-DD".to_string());
             }
-            CliCommand::Lint {
-                draft: PathBuf::from(draft),
-                issuer,
-                through,
-                discover,
-                as_of,
+            if let Some(definitions) = html_definitions {
+                CliCommand::LintHtml {
+                    draft: PathBuf::from(draft),
+                    issuer: issuer.ok_or("HTML lint requires --issuer")?,
+                    definitions,
+                    discover,
+                    as_of,
+                }
+            } else {
+                CliCommand::Lint {
+                    draft: PathBuf::from(draft),
+                    issuer,
+                    through,
+                    discover,
+                    as_of,
+                }
             }
         }
         "forecast" => {
@@ -1627,6 +1693,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::HtmlClaims(command) => html::execute(command, workspace_root),
         CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
         CliCommand::DecideCard { model } => decision::execute(model, workspace_root),
+        CliCommand::CapitalProgram { model } => capital::execute(model, workspace_root),
         CliCommand::Mirror(command) => mirror::execute(command, workspace_root),
         CliCommand::RelianceExplicit(command) => {
             reliance_explicit::execute(command, workspace_root)
@@ -1785,6 +1852,20 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             fmine_public::recovery::run_public(workspace_root, issuer, through.as_deref()),
         ),
         CliCommand::RecoverySynthetic => recovery_envelope(fmine_public::recovery::run_synthetic()),
+        CliCommand::LintHtml {
+            draft,
+            issuer,
+            definitions,
+            discover,
+            as_of,
+        } => lint_html::execute(
+            draft,
+            issuer,
+            definitions,
+            *discover,
+            as_of.as_deref(),
+            workspace_root,
+        ),
         CliCommand::Lint {
             draft,
             issuer,
@@ -1992,6 +2073,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 cost::USAGE,
                 html::USAGE,
                 "decide card <model-file>",
+                capital::USAGE,
                 "assure public --issuer <issuer> [--through YYYYQn]",
                 "assure public --synthetic",
                 "assure challenges --issuer <issuer> [--through YYYYQn]",
@@ -2017,6 +2099,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 "recovery gap --issuer <issuer> [--through YYYYQn]",
                 "recovery gap --synthetic",
                 "lint <draft> --issuer <issuer> [--through YYYYQn] [--discover] [--as-of YYYY-MM-DD]",
+                "lint <draft> --issuer <issuer> --html-definitions <mapping.toml> [--discover] [--as-of YYYY-MM-DD]",
                 "lint <draft> --synthetic [--discover]",
                 "forecast assess --ledger <path> --cohort <name> --as-of YYYY-MM-DDTHH:MM:SSZ [--selector first-published|latest-as-of] [--provenance <path>]",
                 "forecast journal init --journal <new-path> --cell <cell-id> --trust-host-clock [--max-clock-skew-ms <bound>]",
@@ -2083,6 +2166,14 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(cost::ROBOT_DOCS_JSON);
             payload.push_str(",\"html_claims\":");
             payload.push_str(html::ROBOT_DOCS_JSON);
+            payload.push_str(",\"capital_program\":");
+            payload.push_str(capital::ROBOT_DOCS_JSON);
+            payload.push_str(concat!(
+                ",\"html_lint\":{\"selection\":\"Explicit --html-definitions selects only mapped registered HTML Claims\",",
+                "\"equality\":\"Exact existing equality, precision, vintage and ambiguity checks; printed credit treatment is not inferred\",",
+                "\"publication\":\"Optional --as-of filters future source bytes before reads; registered dates are reported separately from equality\",",
+                "\"mapping_history\":\"Current mapping and registry bytes are bound; historical mapping availability is not established\"}"
+            ));
             payload.push('}');
             Envelope::ok(
                 "robot-docs",

@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "cost", "html", "decision", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "claim_inspection", "cost", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -63,6 +63,22 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
     Exact enumeration reports Monte Carlo error as not applicable and supplies no Monte Carlo gate result.
     Markdown renders the same result and evidence. No issuance certificate,
     historical cut, calibration verdict, operational feasibility or execution authority is manufactured.
+  - `decide program <model-file>` (BD-229): constructs all subsets of at most eight declared candidates
+    on at most 256 shared states through `fmine-capital`. The bounded local model supplies exact USD costs,
+    complete additive net delta-NAV payoffs, budget, prerequisites, exclusion groups, an exact tail mass
+    and an optional signed-loss CVaR ceiling. Costs constrain spending without being subtracted again from
+    net payoffs. Every bundle and rejection remains visible; risk is computed from the joint scenario sums.
+    JSON and Markdown report exact co-winners, budget slack and the expected-value cost of the risk limit,
+    with complete source-bound Claims and explicit reference-class adjustment bases. This is a conditional
+    static comparison; staged recourse, entity waterfalls, variable share counts, empirical selection
+    frequencies and execution authority are not supplied.
+  - `lint <draft> --issuer <issuer> --html-definitions <mapping.toml> [--discover] [--as-of YYYY-MM-DD]`
+    (BD-059/BD-345): checks only the mapped, registered HTML Claims through the existing exact equality
+    kernel. The receipt retains full value, label, mapping and registry evidence. A separate source-publication
+    assessment reports the registered dates; it does not establish historical availability of the current
+    mapping. Future source bytes are excluded before reads. HTML cost-credit treatment is unstated, so an
+    explicit by-product or co-product assertion remains unchecked. This source selector is exclusive with
+    `--synthetic` and `--through`; ordinary workbook lint remains available through its existing selector.
   - `assure public --issuer <issuer> [--through YYYYQn]`: the gate-eligible run over the filings in
     `registries/sources/<issuer>.toml`, optionally only those at or before a quarter;
   - `assure public --synthetic`: the known-answer run, never gate-eligible;

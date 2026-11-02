@@ -254,6 +254,64 @@ No live HTML filing is registered in the repository yet. The executable path is 
 filings; it does not establish real issuer coverage or completion of the broader BD-057/BD-059 acceptance
 population. Full Claim receipts are returned directly by `html claims`.
 
+### Check a disclosure draft against registered HTML evidence
+
+The same HTML mapping can supply the Claims checked by disclosure lint:
+
+```bash
+cargo run -p fmine-cli -- lint draft.md --issuer example \
+  --html-definitions local/html-claims.toml --format markdown
+cargo run -p fmine-cli -- lint draft.md --issuer example \
+  --html-definitions local/html-claims.toml --discover --as-of 2025-05-01 --json
+```
+
+Use actual registered sources and mappings as described above. A cited equality links the printed number
+to its canonical Claim ID with `[10.00 USD/oz sold](fmine:clm_ID)` and states the subject, period, ownership
+basis and metric. `--discover` searches the selected semantic population for an uncited equality; the
+amount never chooses among competing vintages. The existing checker retains mismatches, excess precision,
+stale citations and ambiguity. Current HTML cost mappings do not establish by-product or co-product credit
+treatment, so a draft asserting either treatment remains unchecked rather than borrowing a workbook rule.
+
+The report includes the full HTML value and label citations, source hashes, mapping and registry evidence.
+An optional date filters future filings before their bytes are read and reports source publication separately
+from numeric agreement. It does not prove that the current mapping or registry existed on that date.
+This selector reads only the mapped HTML population and cannot be combined with `--through` or `--synthetic`.
+
+### Select affordable capital bundles under shared scenario risk
+
+DESIGN (BD-229, plan section 23): `decide program` constructs and compares static combinations of declared
+capital candidates. Run the invented GB-30 exercise:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/gb30.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/gb30.toml --json
+```
+
+The example has an USD 800M budget and three USD 400M packages: brownfield A, greenfield E and buyback D.
+Every package supplies net delta-NAV under the **same five named scenarios**. Without the risk limit, A+E
+has the highest mean at USD 372M. Its worst-20% signed loss is USD 210M. A USD 150M tail-loss ceiling selects
+**A+D**, whose mean is USD 241.18M and tail loss USD 130.6M. The expected-value cost of that constraint is
+USD 130.82M. These exact answers use the plan's displayed rounded buyback inputs; they reproduce its
+one-decimal presentation of 241.2M and 130.8M without treating those rounded figures as exact inputs.
+
+The strict `fmine.capital-program.v1` model declares `budget`, `tail_mass`, optional `max_tail_loss`, a common
+USD valuation basis, the `additive_net_delta_nav` convention and explicit reference-class adjustment bases.
+It contains `[[state]]`, `[[candidate]]`, complete `[[payoff]]` rows, optional `[[requires]]` edges and named
+`[[uu]]` risks. Candidates sharing an `exclusion_group` cannot appear together. Monetary values are quoted
+major USD amounts with at most four decimal places; weights and tail mass are exact rational strings.
+
+The evaluator examines every subset of at most eight candidates on at most 256 states. It keeps every
+structurally rejected bundle and reason, all risk-rejected comparisons, hold-cash and every exact co-winner.
+Spending constrains the budget; it is **not deducted again** from already-net payoffs. Portfolio CVaR comes
+from summed payoffs within each shared state, including fractional tail-boundary mass, so dependence remains
+in the calculation. Full input/output Claims, source bytes, constraints and adjustment bases bind the receipt,
+including candidates that never win.
+
+These are conditional static comparisons of declared assumptions. The example applies no fitted
+reference-class correction, and the output supplies no empirical selection frequency, staged recourse,
+entity cash-flow waterfall, changing share denominator, project feasibility approval or execution authority.
+The wider CapitalProgram and its M4 gates remain open.
+
 ### Compare explicit decision alternatives
 
 DESIGN (BD-225, plan §22): `decide card` evaluates an explicitly declared finite scenario model and renders a

@@ -4,7 +4,8 @@
 
 E-layer Helm capital-program comparison, within the planned 20k/23k LOC budget. This first BD-229 slice
 enumerates declared static binary subsets and depends on the permitted `fmine-capital -> fmine-decide` edge.
-Module families are `program` (the crate root), `model` and `render`.
+- **Allowed Module Families:** `["model", "render"]`
+The capital-program kernel lives in the crate root.
 
 ## 2. Mathematical & Domain Formulation
 
