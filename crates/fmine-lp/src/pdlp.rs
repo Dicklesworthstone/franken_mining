@@ -168,7 +168,9 @@ impl LpProblem {
 /// Solver settings. Any value outside its stated range is refused, never adjusted.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PdlpOptions {
-    /// Relative tolerance ε of the stopping rule, in `(0, 1)`. Default `1e-4`.
+    /// Relative tolerance ε of the stopping rule, in `(0, 1)`. Default `1e-4`, cuPDLP's. ε does not bound the
+    /// certified bound's distance from the optimum: on MineLib's CPIT LPs at 1e-4 that distance reached 1.05%,
+    /// and at 1e-6 it stayed within 1e-4 (CONTRACT §8).
     pub tolerance: f64,
     /// Accepted PDHG steps before giving up, at least 1. Default 1,000,000.
     pub max_iterations: u64,

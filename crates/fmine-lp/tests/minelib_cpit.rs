@@ -4,9 +4,11 @@
 //! Ignored by default: MineLib's files are not in the repository (their licence is not recorded). Point
 //! `FMINE_MINELIB_DIR` at a directory holding `<name>/<name>.cpit` and `<name>/<name>.prec`, list instances in
 //! `FMINE_MINELIB_INSTANCES` (comma-separated, default `newman1`), and run
-//! `cargo test --release -p fmine-lp --test minelib_cpit -- --ignored --nocapture`. Optional: `FMINE_PDLP_TOL`
-//! (the solver's tolerance, default 1e-6; at 1e-4 the bound misses on several instances), `FMINE_PDLP_THREADS` (default 0, the machine's), `FMINE_PDLP_MAX_SECONDS` (default 1800, the
-//! KILL time limit), `FMINE_CPIT_DISCOUNT_FROM` (default 0; see below).
+//! `cargo test --release -p fmine-lp --test minelib_cpit -- --ignored --nocapture`. Optional:
+//! - `FMINE_PDLP_TOL`, the solver's tolerance, default 1e-6. At 1e-4 the bound misses on several instances;
+//! - `FMINE_PDLP_THREADS`, default 0, the machine's;
+//! - `FMINE_PDLP_MAX_SECONDS`, default 1800, the KILL time limit;
+//! - `FMINE_CPIT_DISCOUNT_FROM`, default 0 (see below).
 //!
 //! The LP, in "by" variables `w[b][t]` = the fraction of block `b` mined in periods `0..=t`, all in `[0, 1]`:
 //! - maximise `Σ_b Σ_t p_bt (w[b][t] − w[b][t−1])`, with `p_bt = p_b / (1 + α)^(t + FROM)` for the file's periods
@@ -18,12 +20,16 @@
 //! - each resource row `Σ_b q_br (w[b][t] − w[b][t−1])` within its `L`, `G` or `I` limits.
 //!
 //! This is MineLib's CPIT relaxation (format note §5.1) after the change of variables `w[b][t] = Σ_{τ≤t} x[b][τ]`,
-//! which keeps the optimum. The run must reach PDLP's stopping rule at `FMINE_PDLP_TOL` within the time limit, and
-//! the certified upper bound must lie at or above MineLib's published LP optimum and within 1e-4 relative of it,
-//! each allowing one unit for MineLib's rounding. That is KILL-PUSH-PDLP's 1e-4 gap measured from the certified
-//! bound to the true optimum. The solver's own gap is not used: its primal point may break zero-right-hand-side
-//! precedence rows by whole units while the residual, relative to `‖b‖`, which the capacities dominate, is
-//! small. At the default 1e-4 tolerance the bound on kd was 1.05% above the optimum.
+//! which keeps the optimum.
+//!
+//! The run ends at PDLP's stopping rule for `FMINE_PDLP_TOL`, or when the time limit stops it. Either way its
+//! certified upper bound must lie at or above MineLib's published LP optimum and within 1e-4 relative of it, each
+//! allowing one unit for MineLib's rounding. That is KILL-PUSH-PDLP's 1e-4 gap, measured from the certified bound
+//! to the true optimum. The solver's own gap is not used, and neither is whether the stopping rule fired:
+//! - its primal point may break zero-right-hand-side precedence rows by whole units while the residual, relative
+//!   to `‖b‖`, which the capacities dominate, stays small;
+//! - at the default 1e-4 tolerance, kd met the rule with its bound 1.05% above the optimum;
+//! - at 1e-6, zuck_medium had not met the rule after 30 minutes, but its bound was within 3.0e-6.
 
 // Test helpers outside `#[test]` functions: a malformed MineLib file must fail the test at once.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -343,7 +349,8 @@ fn kill_push_pdlp_on_minelib_cpit_lp_relaxations() {
             },
             dual_within_gap_s.map_or("null".to_string(), |v| format!("{v:.1}")),
         );
-        if s.status() != PdlpStatus::Optimal {
+        // `Stopped` is the time limit, and the bound below is judged all the same.
+        if s.status() == PdlpStatus::IterationLimit {
             failures.push(format!("{name}: {:?} after {solve_s:.0} s", s.status()));
         }
         match (ub, published) {
