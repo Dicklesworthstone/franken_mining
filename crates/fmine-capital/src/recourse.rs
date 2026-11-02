@@ -11,6 +11,7 @@ pub const MAX_OBSERVATIONS: usize = 4;
 pub const MAX_POLICIES: usize = 256;
 pub const NO_CLAIM: &str = "Exact bounded two-stage comparison conditional on the declared shared scenarios, paid information gate, observation classes, stage assignments, dated cash flows and net NAV inputs. Initial commitments and their full declared effects are retained in every continuation. A policy can respond only to the declared observation after purchasing the information gate; otherwise one common continuation applies to every state. Risk is evaluated over each complete unconditional policy distribution. Net adaptive value is reported separately against the best static subset under the same objective and risk constraint; it is already included in policy outcomes and must not be added again. Cash checks cover only opening and declared period-end checkpoints. Input weights and information assumptions are uncalibrated. No further stages, implicit information, intra-period payment ordering, entity waterfalls, execution authorization, regulatory claim, selection-frequency estimate or historical validation is supplied.";
 pub const ENTITY_NO_CLAIM: &str = "Exact bounded two-stage comparison conditional on declared shared scenarios, paid information, observation classes, stage assignments and net NAV for the objective entity. Initial commitments and all their effects remain in every continuation. Decisions depend only on purchased declared observations; global risk uses the complete unconditional policy. Entity cash follows explicit native flows, fixed funding transfers and gated child-first ownership distributions, with outside shareholders' cash leaving the modeled graph. Floors are checked at initial opening, before distributions and at closing; later receipts never erase earlier breaches. A paid information gate must incur negative net native external cash before observation; an internal transfer alone is not payment. No partner top-up, dilution, debt-service covenant, fiscal rule, permission or second valuation denominator is inferred. Net adaptive value is separate from the full static comparison and must not be added to NAV again. Inputs remain uncalibrated assumptions. No further stages, intra-phase payment ordering, execution authorization, regulatory claim, selection frequency or historical validation is supplied.";
+pub const ENTITY_DEBT_NO_CLAIM: &str = "Exact bounded two-stage comparison conditional on declared shared scenarios, paid information, observation classes, stage assignments, objective-entity NAV and external senior debt terms. Initial commitments and later debt obligations remain in every continuation, including abandonment. Recourse debt draws, scheduled-principal increments and CFADS increments are zero before observation. Coverage derives from separately declared CFADS and mandatory service; it excludes principal sweeps and never creates cash. Period rates apply to opening principal plus draws, full mandatory service precedes cash-floor checks, and each entity sweeps cash above its floor before its child-first ownership distribution. Zero-service distribution permission is explicit. Only the realized subset's same-state debt and cash ledgers enter a policy. Earlier funding failures remain binding; cash and principal conservation are exact. Paid information consumes native external cash; internal transfers and CFADS alone do not pay for it. Risk uses the complete unconditional policy and net adaptive value remains separate from the full static comparison. Debt cash is not charged to already-net NAV again. Inputs remain uncalibrated assumptions; no actual lending agreement, annualization, arrears, default remedy, waiver, partner top-up, ownership dilution, additional decision stages, second valuation denominator, historical validation, selection frequency, regulatory claim or execution authorization is inferred.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecisionStage {
@@ -157,7 +158,14 @@ impl EvaluatedRecourseProgram {
 }
 
 fn no_claim_for(inputs: &RecourseInputs) -> &'static str {
-    if inputs.program.entity_funding.is_some() {
+    if inputs
+        .program
+        .entity_funding
+        .as_ref()
+        .is_some_and(|claim| claim.value.debt.is_some())
+    {
+        ENTITY_DEBT_NO_CLAIM
+    } else if inputs.program.entity_funding.is_some() {
         ENTITY_NO_CLAIM
     } else {
         NO_CLAIM
@@ -428,6 +436,20 @@ fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
                 return Err(invalid(
                     "recourse candidates must have explicit zero entity transfers before observation",
                 ));
+            }
+        }
+        if let Some(debt) = &entities.debt {
+            for flow in &debt.candidate_flows {
+                if earlier_periods.contains(flow.period_id.as_str())
+                    && stages.get(flow.candidate_id.as_str()) == Some(&DecisionStage::Recourse)
+                    && (flow.draw.minor != 0
+                        || flow.principal_payment_cap.minor != 0
+                        || flow.cfads.minor != 0)
+                {
+                    return Err(invalid(
+                        "recourse debt draws, principal payment caps and CFADS increments must each be explicitly zero before observation",
+                    ));
+                }
             }
         }
     }

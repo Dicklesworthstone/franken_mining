@@ -424,6 +424,7 @@ impl EntityRows {
             transfers: transfers.into_values().collect(),
             distributions: self.distributions.into_values().collect(),
             gates: self.gates.into_values().collect(),
+            debt: None,
         };
         crate::entity::validate_bounds(&funding, context.states.len(), context.candidates.len())?;
         crate::entity::canonicalize(&mut funding);

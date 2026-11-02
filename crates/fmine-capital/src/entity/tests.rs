@@ -9,17 +9,17 @@ use crate::tests::{
     candidate_claim, claim, equity_claim, inputs, r, usd, with_equity, with_schedule,
 };
 
-const TWO_PERIODS: &[(&str, &str)] = &[
+pub(super) const TWO_PERIODS: &[(&str, &str)] = &[
     ("first", "2030-01-01/2030-06-30"),
     ("second", "2030-07-01/2030-12-31"),
 ];
-const THREE_PERIODS: &[(&str, &str)] = &[
+pub(super) const THREE_PERIODS: &[(&str, &str)] = &[
     ("first", "2030-01-01/2030-04-30"),
     ("second", "2030-05-01/2030-08-31"),
     ("third", "2030-09-01/2030-12-31"),
 ];
 
-fn funding_claim(value: EntityFunding) -> Claim<EntityFunding> {
+pub(super) fn funding_claim(value: EntityFunding) -> Claim<EntityFunding> {
     let tag = value.canonical_tag();
     claim(
         "capital.entity-funding",
@@ -29,7 +29,7 @@ fn funding_claim(value: EntityFunding) -> Claim<EntityFunding> {
     )
 }
 
-fn with_entities(
+pub(super) fn with_entities(
     mut program: ProgramInputs,
     entities: &[(&str, i128, i128)],
     periods: &[(&str, &str)],
@@ -41,7 +41,7 @@ fn with_entities(
         entities: entities.iter().map(|(id, _, _)| Entity { id: (*id).into(), label: (*id).into() }).collect(),
         periods: periods.iter().map(|(id, dates)| EntityPeriod { id: (*id).into(), cash_period: (*dates).into() }).collect(),
         floors: vec![], opening_cash: vec![], baseline_flows: vec![], candidate_flows: vec![],
-        transfers: vec![], distributions: vec![], gates: vec![],
+        transfers: vec![], distributions: vec![], gates: vec![], debt: None,
     };
     for (entity, opening, floor) in entities {
         for (state, _) in &program.weights.value.states {
@@ -80,13 +80,13 @@ fn with_entities(
     program
 }
 
-fn edit(program: &mut ProgramInputs, change: impl FnOnce(&mut EntityFunding)) {
+pub(super) fn edit(program: &mut ProgramInputs, change: impl FnOnce(&mut EntityFunding)) {
     let mut value = program.entity_funding.as_ref().unwrap().value.clone();
     change(&mut value);
     program.entity_funding = Some(funding_claim(value));
 }
 
-fn flow(
+pub(super) fn flow(
     funding: &mut EntityFunding,
     period: &str,
     entity: &str,
@@ -107,7 +107,13 @@ fn flow(
         .value = usd(value);
 }
 
-fn baseline(funding: &mut EntityFunding, period: &str, entity: &str, state: &str, value: i128) {
+pub(super) fn baseline(
+    funding: &mut EntityFunding,
+    period: &str,
+    entity: &str,
+    state: &str,
+    value: i128,
+) {
     funding
         .baseline_flows
         .iter_mut()
@@ -116,7 +122,13 @@ fn baseline(funding: &mut EntityFunding, period: &str, entity: &str, state: &str
         .value = usd(value);
 }
 
-fn distribution(funding: &mut EntityFunding, child: &str, parent: &str, share: Rat, cap: i128) {
+pub(super) fn distribution(
+    funding: &mut EntityFunding,
+    child: &str,
+    parent: &str,
+    share: Rat,
+    cap: i128,
+) {
     funding.distributions.push(EntityDistribution {
         entity_id: child.into(),
         parent_entity_id: parent.into(),
@@ -140,7 +152,7 @@ fn distribution(funding: &mut EntityFunding, child: &str, parent: &str, share: R
     }
 }
 
-fn transfer(
+pub(super) fn transfer(
     funding: &mut EntityFunding,
     id: &str,
     from: &str,
@@ -163,7 +175,7 @@ fn transfer(
     });
 }
 
-fn choice<'a>(report: &'a EvaluatedProgram, selected: &[&str]) -> &'a ProgramChoice {
+pub(super) fn choice<'a>(report: &'a EvaluatedProgram, selected: &[&str]) -> &'a ProgramChoice {
     report
         .summary()
         .choices
@@ -177,7 +189,10 @@ fn choice<'a>(report: &'a EvaluatedProgram, selected: &[&str]) -> &'a ProgramCho
         .unwrap()
 }
 
-fn state<'a>(assessment: &'a EntityFundingAssessment, id: &str) -> &'a EntityFundingState {
+pub(super) fn state<'a>(
+    assessment: &'a EntityFundingAssessment,
+    id: &str,
+) -> &'a EntityFundingState {
     assessment
         .states
         .iter()
@@ -185,7 +200,7 @@ fn state<'a>(assessment: &'a EntityFundingAssessment, id: &str) -> &'a EntityFun
         .unwrap()
 }
 
-fn cash<'a>(
+pub(super) fn cash<'a>(
     state: &'a EntityFundingState,
     entity: &str,
     period: Option<&str>,
@@ -200,7 +215,7 @@ fn cash<'a>(
         .unwrap()
 }
 
-fn dividend<'a>(
+pub(super) fn dividend<'a>(
     state: &'a EntityFundingState,
     entity: &str,
     period: &str,
@@ -212,7 +227,7 @@ fn dividend<'a>(
         .unwrap()
 }
 
-fn no_op() -> ProgramInputs {
+pub(super) fn no_op() -> ProgramInputs {
     inputs(&[("unused", 1, &[-1])], &[ONE], 0, r(1, 5), None)
 }
 
@@ -606,7 +621,7 @@ fn locked_cash_releases_later_without_erasing_an_earlier_entity_shortfall() {
     )));
 }
 
-fn recourse_example(
+pub(super) fn recourse_example(
     weights: &[Rat],
     observations: &[&str],
     extra_candidate: bool,
