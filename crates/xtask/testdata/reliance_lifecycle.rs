@@ -968,7 +968,7 @@ fn ordinary_assurance_output_registers_the_exact_selected_format() {
         );
         if format == "markdown" {
             assert!(
-                preview.starts_with("# fmine `assure public` (ok)\n"),
+                preview.starts_with("# Public assurance — synthetic\n"),
                 "{preview}"
             );
             assert!(
@@ -976,7 +976,9 @@ fn ordinary_assurance_output_registers_the_exact_selected_format() {
                 "{receipt}"
             );
             assert!(receipt.contains("\"operation\":\"issue\""), "{receipt}");
-            assert!(preview.ends_with("```\n"));
+            assert!(preview.ends_with(
+                "Full canonical bodies and numerical certificates remain available in the unchanged JSON report.\n\n\n"
+            ));
             assert!(receipt.ends_with("```\n"));
         }
     }

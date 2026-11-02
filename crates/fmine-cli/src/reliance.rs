@@ -499,17 +499,8 @@ fn executable() -> Result<PathBuf, Refusal> {
 }
 
 fn artifact_bytes(env: &Envelope, format: OutputFormat) -> Vec<u8> {
-    let body = match format {
-        OutputFormat::Json => env.to_json(),
-        OutputFormat::Markdown => format!(
-            "# fmine `{}` ({})\n\n```json\n{}\n```",
-            env.verb,
-            env.status,
-            env.to_json()
-        ),
-    };
     // This exact buffer, including LF, is hashed and persisted. The issuance receipt is separate.
-    format!("{body}\n").into_bytes()
+    format!("{}\n", env.render(format)).into_bytes()
 }
 
 fn operation_name(operation: &Operation) -> &'static str {
@@ -1184,7 +1175,12 @@ mod tests {
         )
         .unwrap();
         let artifact = std::fs::read_to_string(root.join("report.md")).unwrap();
-        assert!(artifact.starts_with("# fmine `assure public` (ok)\n"));
+        assert!(artifact.starts_with("# Public assurance — synthetic\n"));
+        let preview_args =
+            ["assure", "public", "--synthetic", "--format", "markdown"].map(str::to_string);
+        let (preview, exit) = crate::run(&preview_args, &root);
+        assert_eq!(exit, 0);
+        assert_eq!(artifact, format!("{preview}\n"));
         assert!(artifact.ends_with('\n'));
         assert!(receipt.contains(&blake3_hash(artifact.as_bytes()).to_hex()));
         for extra in [

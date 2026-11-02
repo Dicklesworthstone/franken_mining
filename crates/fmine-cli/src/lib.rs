@@ -338,6 +338,21 @@ impl Envelope {
         }
     }
 
+    /// The selected presentation before stdout or issuance appends its final LF.
+    fn render(&self, format: OutputFormat) -> String {
+        match format {
+            OutputFormat::Json => self.to_json(),
+            OutputFormat::Markdown => self.rendered_markdown.clone().unwrap_or_else(|| {
+                format!(
+                    "# fmine `{}` ({})\n\n```json\n{}\n```",
+                    self.verb,
+                    self.status,
+                    self.to_json()
+                )
+            }),
+        }
+    }
+
     /// Serializes this `FMT-ENV-1` envelope to canonical JSON. After `anchor_id` come, in this order, `flags`,
     /// `certificate`, `warnings`, `next_actions`, `no_claim` (report verbs only), `payload` and `refusal`.
     #[must_use]
@@ -398,18 +413,7 @@ impl Envelope {
 #[must_use]
 pub fn run(args: &[String], default_root: &Path) -> (String, u8) {
     let (env, format) = invoke(args, default_root);
-    let text = match format {
-        OutputFormat::Json => env.to_json(),
-        OutputFormat::Markdown => env.rendered_markdown.clone().unwrap_or_else(|| {
-            format!(
-                "# fmine `{}` ({})\n\n```json\n{}\n```",
-                env.verb,
-                env.status,
-                env.to_json()
-            )
-        }),
-    };
-    (text, env.exit_code)
+    (env.render(format), env.exit_code)
 }
 
 /// The envelope for `args`, and the output format: [`run`] before printing. A parse error is a usage-error
