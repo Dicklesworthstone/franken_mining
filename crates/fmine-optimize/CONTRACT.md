@@ -1,7 +1,7 @@
 # CONTRACT.md — `fmine-optimize`
 
 ## 1. Purpose
-The Pushback optimisation crate. Four solver slices so far, and three readers that feed them:
+The Pushback optimisation crate. Five solver slices so far, and three readers that feed them:
 - `pitflow` (`BD-250`, plan §15.4): the ultimate pit as a maximum-weight closure, by Hochbaum's pseudoflow (lowest-label variant, gap termination) on an `i64` CSR precedence graph. Each pit comes with its pseudoflow certificate, which `verify` checks without the solver.
 - `pitflow::shells` (`bd-nzwd`, plan §15.4 and PO-PUSH-3): nested pit shells across an increasing list of exact revenue factors. These are the pit-by-pit sequence from which pushbacks are chosen.
   - Shell `k` is the union of the pit solved at factor `k` and shell `k − 1`.
@@ -21,11 +21,14 @@ The Pushback optimisation crate. Four solver slices so far, and three readers th
 - `toposort` (`bd-kcpj`, plan §15.4 row `fmine-optimize::toposort` and PO-PUSH-5): multi-period schedules on a precedence graph, with per-period upper limits on resources.
   - `check` is PO-PUSH-5's feasibility check. Every mined block's required blocks must be mined in the same period or earlier, and no resource may go over its limit in any period. It returns each period's exact value sum, and every broken requirement and limit.
   - `greedy` is TopoSort (Chicoisne, Espinoza, Goycoolea, Moreno and Rubio, Operations Research 2012). It takes Kahn's topological order with the caller's rank breaking ties, then puts each block in the earliest period with room. It runs `check` on its schedule and refuses one that fails.
+- `toposort::search` (`bd-5lxu`, plan §15.4's "plus local search and repair"): `improve` takes a feasible schedule and makes moves that keep it feasible and strictly raise its discounted value. The discount factors are the caller's integers; `discount_factors` gives `(1 + rate)^−t` times 2⁴⁰, rounded down period by period.
+  - The moves, in each round's order: a positive block to an earlier period; two blocks traded between adjacent periods, the higher-valued going earlier; a positive block added under mined blocks; a negative block to a later period; and a negative block that no mined block requires dropped.
+  - It ends with `check` and refuses a result that fails it or is worth less than its input. It is a heuristic, with no bound on its distance from the optimum.
 - `toposort::cpit` (`bd-kcpj`): MineLib's CPIT text pair (`.cpit` periods, limits, values, uses and discount rate; `.prec` as for UPIT) read into a `ScheduleProblem`. No I/O.
   - Values are scaled as UPIT values are. Uses are rounded up (`Rounding::Ceiling`) and limits down (`Rounding::Floor`) when places are dropped, and both are counted.
   - Only `L` (upper) limits are read; `G` and `I` are refused. At most `MAX_RESOURCES` (64) resources.
 
-`fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. Shells, slope arcs and `toposort` have no caller outside tests yet. Bienstock–Zuckerberg, Lagrangian, local search and the stochastic layer are later slices.
+`fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. Shells, slope arcs and `toposort` have no caller outside tests yet. Bienstock–Zuckerberg, Lagrangian and the stochastic layer are later slices.
 
 - **Crate:** `fmine-optimize`
 - **Layer:** E
@@ -48,6 +51,7 @@ The Pushback optimisation crate. Four solver slices so far, and three readers th
   - A schedule is one `Option<u32>` per block: its period, or `None` for unmined.
   - `greedy` takes one `Option<i64>` rank per block, lower first, or `None` to leave the block out.
 - For `toposort::cpit`: the two files' text, the value places and `Rounding`, and the use places.
+- For `toposort::search::improve`: a `ScheduleProblem`, a schedule that passes `check`, one non-negative `i64` discount factor per period that never rises, and a round limit. `discount_factors` takes a non-negative rate over a positive scale (`CpitModel::discount_rate` over `cpit::RATE_SCALE` fits) and a period count.
 
 ## 3. Outputs
 - `PitSolution`: `in_pit` (one flag per block), `value` (the pit's total, the maximum over all closed sets), `pit_size`, `arc_flow` (the certificate, one flow per arc in CSR order) and `stats` (`PitStats`: mergers, splits, relabels, largest label).
@@ -62,6 +66,7 @@ The Pushback optimisation crate. Four solver slices so far, and three readers th
   - `boundary_blocks`, the blocks near a side of the grid or a domain contact whose arcs were reduced one by one.
 - `ScheduleCheck`: `mined`, `period_values` (exact and undiscounted, `i128`), `used[r][t]`, `unmet` with the first `WITNESSES` (10) `(block, required)` pairs, `over_limit` (every `(resource, period)` over its limit), `feasible()` and `value()`.
 - `greedy`: one `Option<u32>` period per block, a schedule that has passed `check`.
+- `search::Improvement`: the improved schedule (it has passed `check`), its discounted value `after` and the input's `before` (exact `i128`, `after ≥ before`), the rounds run, and `Moves` (counts of earlier, swaps, added, later and dropped). `discounted_value` gives `Σ value · factor[t]` exactly.
 - `CpitModel`: `name`, `problem`, `discount_rate` (times `RATE_SCALE`, 10⁹), `rounded_values`, `rounded_uses` and `rounded_limits`. Discounting is the caller's.
 
 None is a Claim.
@@ -95,6 +100,12 @@ None is a Claim.
   - `greedy`'s schedule is feasible under any ranking on 400 random problems (`greedy_is_feasible_under_any_ranking_and_mines_whatever_fits`). There, a ranked block left unmined although its required blocks were mined fits no period from theirs on.
   - With room for everything and the ultimate pit ranked, `greedy` mines exactly the pit in period 0, at `solve`'s value (`with_room_to_spare_the_ultimate_pit_is_mined_in_period_zero`, 100 random problems).
   - Known answers: `greedy_follows_rank_within_precedence_and_capacity`, `a_precedence_cycle_stays_unmined`, `check_counts_late_and_missing_requirements_and_overfull_periods`, and `cpit::tests::tiny_pair_reads_exactly_and_schedules`.
+  - `search::improve`, on greedy's schedules for 400 random problems under random rankings (`improve_is_feasible_monotone_and_bounded_by_the_exhaustive_optimum`):
+    - the result is feasible by the definition, worth at least its input, and never more than the best of every schedule;
+    - a second call makes no move.
+    - On the 2026-11-02 run it raised 275 of the 400 and brought those at the exhaustive optimum from 97 to 334.
+  - Each move on a known case, `Earlier` before `Later` included: `each_move_on_a_known_case`. Discount factors to the unit: `discount_factors_fall_by_the_rate_rounding_down`.
+  - Planted negatives, each run once and reverted: a capacity test that always passes, and a drop of positive blocks. `improve`'s final check or value test refused both.
   - Planted on 2026-11-02, each run once and reverted. A `check` that accepts a required block mined one period late failed 2 tests. A `greedy` that ignores limits was refused by its own `check` in 3 tests.
   - On MineLib's CPIT instances, see §9.
 
@@ -144,6 +155,9 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input.
   - `ScheduleProblem::new`: no periods or more than `MAX_PERIODS` (65,536); resources without one use per block and one limit per period; a negative use or limit;
   - `check`: a schedule whose length is not the block count, or a period past the last;
   - `greedy`: ranks whose length is not the block count, or a schedule that fails `check`, which would be a defect.
+  - `search::discount_factors`: a negative rate, a scale that is not positive, or periods outside `1..=MAX_PERIODS`;
+  - `search::discounted_value`: a schedule or factor list of the wrong length, or a period past the last;
+  - `search::improve`: an input schedule that fails `check`, factors of the wrong length, negative or rising; and, as defects, a result that fails `check` or is worth less than the input.
 
   Tests: `malformed_problems_refuse`, `check_counts_late_and_missing_requirements_and_overfull_periods`, `greedy_follows_rank_within_precedence_and_capacity`.
 - `FMINE-REF-506` (proposed), from `toposort::cpit::parse`:
@@ -249,7 +263,8 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `bd-nzwd` and `bd-t75z`: no caller in the workspace yet. `BD-250`'s one caller is `fmine plan pit`, on MineLib UPIT pairs only; no block model or price deck feeds it.
 - MineLib's PCPSP files (destinations) are not read. UPIT pairs are read by `minelib`, and CPIT pairs by `toposort::cpit`.
 - Schedules:
-  - There is no local search or repair after `greedy`, which plan §15.4 pairs with TopoSort.
+  - `search::improve` moves one block or trades two at a time. It never moves a block together with what it requires, which a waste block and the ore under it would need to go earlier as a pair. It has no "repair" of infeasible schedules; it only takes feasible ones. Its moves are monotone, so it stops at the first local optimum, with no perturbation or restart.
+  - The discount factors are rounded down period by period, so `improve`'s value can differ from the exact NPV in the last of about 12 significant digits. Every move it makes also raises the exact NPV, since each one's sign is that of a difference of factors.
   - `check` lives in this crate beside `greedy`, not in the separate `fmine-verify` crate plan §15.4 names. It shares no code with `greedy` beyond the problem type.
   - No API joins the LP and the schedule: the ranks come from PDLP only inside `crates/xtask/tests/cpit_schedule.rs`.
   - No `fmine` verb schedules: `fmine-cli` is at its planned LOC budget, and BUDGET-AMEND-002 awaits the owner.
@@ -287,6 +302,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `pitflow::minelib::Rounding` (`Refuse`, `HalfAwayFromZero`, `Ceiling`, `Floor`)
 - `toposort::ScheduleProblem` (`new`, `blocks`, `periods`, `resources`, `usage`, `limits`)
 - `toposort::ScheduleCheck` (`mined`, `period_values`, `used`, `unmet`, `first_unmet`, `over_limit`, `feasible`, `value`), `toposort::WITNESSES`, `toposort::MAX_PERIODS`
+- `toposort::search::improve`, `toposort::search::Improvement` (`schedule`, `before`, `after`, `rounds`, `moves`), `toposort::search::Moves` (`later`, `earlier`, `swaps`, `added`, `dropped`), `toposort::search::discount_factors`, `toposort::search::discounted_value`, `toposort::search::DISCOUNT_SCALE`, `toposort::search::SWAP_SCAN`
 - `toposort::check`, `toposort::greedy`
 - `toposort::cpit::parse`, `toposort::cpit::CpitModel` (`name`, `problem`, `discount_rate`, `rounded_values`, `rounded_uses`, `rounded_limits`), `toposort::cpit::MAX_RESOURCES`, `toposort::cpit::RATE_SCALE`
 
