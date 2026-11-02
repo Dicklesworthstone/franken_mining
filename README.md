@@ -683,7 +683,11 @@ its named annual reserve-price decks and already-converted amounts. A rounded he
 interval compatibility; an approximate headline supplies no numerical tolerance and stays unassessed.
 
 JSON and Markdown retain definitions, every source token and locator, document hashes, publication evidence,
-reader roles, deck dependencies and refused series. An unusable series returns `FMINE-REF-202` with the complete
+reader roles, deck dependencies and refused series. Computed series also expose canonical source Claims and
+a cumulative result Claim. Their identities bind the original signed amounts, exact rounding enclosures,
+definitions, annual price decks and publication evidence; the calculation is rechecked before those identities
+are issued. Markdown names the same Claims as JSON. They remain issuer assertions and confer no calibration.
+An unusable series returns `FMINE-REF-202` with the complete
 report; an incompatible rounded headline is a cited finding. Source-byte changes and reader disagreements
 retain their existing typed refusals. `--as-of` rejects every selected post-cut document before opening PDFs;
 it uses current registered rules and does not establish a complete historical information set. The report
@@ -894,7 +898,8 @@ Rates such as AISC, grades and recovery are not subtracted. A successful `deriva
 separate direct-publication assessment and warns that the derived figure may itself be new information.
 It is arithmetic over issuer assertions, not permission to disclose them.
 
-Complete quarter sets can also establish **H1 = Q1 + Q2** and **FY = Q1 + Q2 + Q3 + Q4** for those
+Complete quarter sets can also establish **H1 = Q1 + Q2**, **9M = Q1 + Q2 + Q3**, and
+**FY = Q1 + Q2 + Q3 + Q4** for those
 same additive quantities. For example, `Example Mine H1 2030 100% basis gold production is 300 koz.`
 can be supported by dated Q1 and Q2 disclosures of `100.0` and `200.0`: their exact sum enclosure is
 `[299.9, 300.1]`. A draft stating `300.0` would claim more precision than those inputs establish.
@@ -903,6 +908,11 @@ source ancestry. Every quarter must be present on the same subject, metric, owne
 competing eligible vintages stay ambiguous. Missing or undated quarters cannot become zero, and a
 supporting sum cannot conceal a directly disclosed contradiction. Rates and ownership scaling remain
 outside these arithmetic rules.
+
+Nine-month cumulative disclosures can also be checked directly in cited or discovery mode. The grammar
+recognizes `9M 2030`, `20309M`, and `nine months of 2030`, keeping them distinct from Q3, H1, and FY.
+An undated `9M` remains a numeric nine-million amount. Every derived nine-month total requires all three
+dated, compatible quarter assertions; a missing quarter or competing eligible vintage remains explicit.
 
 DESIGN (BD-345.S3): `--discover` also searches for source Claims when a supported equality has no Claim link.
 The subject, metric, reporting period, ownership basis and unit must still be stated explicitly. A unique
@@ -1415,9 +1425,11 @@ public_members = "north-mara-production=North Mara"
 ```
 
 The frozen digest binds the exact issuer, subject, period, metric/unit and ownership basis for every member.
-Supported metrics are gold production (`production_koz`), copper production (`production_kt`) and
-issuer-reported AISC per sold gold ounce (`aisc_usd_per_oz`), at site level over a calendar year (`YYYYFY`)
-or individual calendar quarter. Copper retains the printed kilotonnes and the declared full or attributable
+Supported metrics are gold production (`production_koz`), copper production (`production_kt`),
+issuer-reported AISC (`aisc_usd_per_oz`) and total cash costs (`tcc_usd_per_oz`) per sold gold ounce,
+and copper C1 cash costs per sold pound (`c1_usd_per_lb`), at site level over a calendar year (`YYYYFY`)
+or individual calendar quarter. Cost definitions and sold-unit denominators must match exactly; negative
+printed costs remain signed. Copper production retains the printed kilotonnes and the declared full or attributable
 ownership basis; resolution performs no implicit pounds conversion or ownership scaling.
 A declared deadline after the target period ends
 refuses. When the original workbook has been published and registered with its digest and dated evidence:

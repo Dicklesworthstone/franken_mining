@@ -457,3 +457,161 @@ fn all_synthetic_rounding_corners_are_enclosed_and_overflow_refuses() {
     ));
     assert!(refusal(&overflow).reason.contains("overflow"));
 }
+
+#[test]
+fn replacement_claims_preserve_exact_values_sources_and_no_laundering() {
+    use fmine_evidence::{EvidenceClass, KnowledgeState};
+    let f = with_headline(
+        with_aggregate(
+            fixture(["1.2", "2.2", "3.2"], ["-1.0", "-1.0", "-1.0"]),
+            "6.55",
+            "-3.00",
+        ),
+        "218",
+        HeadlineKind::Approximate,
+    );
+    let report = report(&f);
+    let result = computed(&report);
+    let claims = result.claims("synthetic", ClaimBasis::Synthetic).unwrap();
+    assert_eq!(claims.inputs.len(), 9);
+    assert_eq!(claims.derived.value.annual.percent.printed, q(220, 1));
+    assert_eq!(
+        claims.derived.value.aggregate.unwrap().percent.printed,
+        q(655, 3)
+    );
+    assert_eq!(claims.derived.value.joint.percent, result.joint.percent);
+    assert_eq!(
+        claims.derived.value.headline.as_ref().unwrap().state,
+        HeadlineState::ApproximateUnassessed
+    );
+    let mut parents: Vec<_> = claims.inputs.iter().map(|c| c.claim_id).collect();
+    parents.sort();
+    assert_eq!(claims.derived.parents, parents);
+    assert_eq!(claims.derived.anchors.len(), 9);
+    assert_eq!(claims.inputs[1].value.reading.value.printed, q(-1, 1));
+    for input in &claims.inputs {
+        assert_eq!(input.evidence, EvidenceClass::Assumed);
+        assert_eq!(input.state, KnowledgeState::Unknown);
+        assert_eq!(
+            input.anchors[0].locator,
+            input.value.reading.source.locator.to_string()
+        );
+        assert_eq!(input.anchors[0].artifact_sha256, [0x11; 32]);
+        input.check_id().unwrap();
+    }
+    assert_eq!(claims.derived.evidence, EvidenceClass::Assumed);
+    assert_eq!(claims.derived.state, KnowledgeState::Unknown);
+    result
+        .check_claims("synthetic", ClaimBasis::Synthetic, &claims)
+        .unwrap();
+    let issuer = result
+        .claims("synthetic", ClaimBasis::IssuerAssertions)
+        .unwrap();
+    assert_eq!(issuer.derived.evidence, EvidenceClass::ISSUER);
+    assert_ne!(issuer.derived.claim_id, claims.derived.claim_id);
+    assert!(issuer.derived.color().is_err());
+    assert!(claims.to_json().contains("\"synthetic\":true"));
+}
+
+#[test]
+fn replacement_claims_recompute_mutated_results_and_check_complete_envelopes() {
+    use fmine_claim::Representation;
+    let f = with_headline(
+        with_aggregate(
+            fixture(["1.2", "2.2", "3.2"], ["-1.0", "-1.0", "-1.0"]),
+            "6.55",
+            "-3.00",
+        ),
+        "218",
+        HeadlineKind::Rounded,
+    );
+    let original = report(&f);
+    let result = computed(&original);
+    let claims = result.claims("synthetic", ClaimBasis::Synthetic).unwrap();
+    for mutation in 0..9 {
+        let mut changed = result.clone();
+        match mutation {
+            0 => changed.annual.percent.printed = q(999, 1),
+            1 => changed.joint.percent.lo = q(0, 1),
+            2 => changed.years[0].normalized_depletion.printed = q(999, 1),
+            3 => changed.years[0].net_change.value.bounds.lo = q(0, 1),
+            4 => changed.years[0].net_change.source.token = "99.0".into(),
+            5 => changed.years[0].net_change.document.sha256 = "0".into(),
+            6 => changed.headline.as_mut().unwrap().state = HeadlineState::Incompatible,
+            7 => changed.years[0].net_change.source.basis = "attributable_geo_ex_ad".into(),
+            _ => changed.selection.years.pop().map(|_| ()).unwrap(),
+        }
+        assert!(
+            changed.claims("synthetic", ClaimBasis::Synthetic).is_err(),
+            "{mutation}"
+        );
+    }
+    for mutation in 0..7 {
+        let mut changed = claims.clone();
+        match mutation {
+            0 => changed.derived.value.annual.percent.printed = q(999, 1),
+            1 => changed.inputs[0].value.reading.source.period = "2039".into(),
+            2 => changed.derived.representation = Representation::Interval { lo: 0.0, hi: 1.0 },
+            3 => changed.derived.parents.clear(),
+            4 => changed.derived.anchors.clear(),
+            5 => changed.derived.stale = true,
+            _ => changed.derived.calibration_failed = true,
+        }
+        assert!(
+            result
+                .check_claims("synthetic", ClaimBasis::Synthetic, &changed)
+                .is_err(),
+            "{mutation}"
+        );
+    }
+    let mut changed = original;
+    changed.rules[0].basis = "different".into();
+    assert!(changed.claims(ClaimBasis::Synthetic).is_err());
+}
+
+#[test]
+fn replacement_claim_identity_binds_precision_decks_dates_and_sources() {
+    let mut f = geo(fixture(["2.0", "6.0", "-1.0"], ["-1.0", "-2.0", "-1.0"]));
+    let original = report(&f).claims(ClaimBasis::Synthetic).unwrap();
+    f.0.series[0].years.reverse();
+    f.1.definitions.reverse();
+    f.1.geo_decks.reverse();
+    f.2.reverse();
+    for a in &mut f.2 {
+        a.readers.reverse();
+    }
+    assert_eq!(original, report(&f).claims(ClaimBasis::Synthetic).unwrap());
+    for mutation in 0..4 {
+        let mut changed = f.clone();
+        match mutation {
+            0 => {
+                changed.2[0].token.push('0');
+                changed.2[0].value = parse_token(&changed.2[0].token).unwrap();
+            }
+            1 => changed.1.geo_decks[0].gold_usd_per_oz = "1234".into(),
+            2 => changed.3[0].published_at = "2033-03-01".into(),
+            _ => {
+                changed.3[0].sha256 = "2".repeat(64);
+                for a in &mut changed.2 {
+                    a.doc_sha256 = changed.3[0].sha256.clone();
+                }
+            }
+        }
+        let result = report(&changed).claims(ClaimBasis::Synthetic).unwrap();
+        assert_eq!(
+            result[0].derived.value.annual.percent.printed,
+            original[0].derived.value.annual.percent.printed
+        );
+        assert_ne!(
+            result[0].derived.claim_id, original[0].derived.claim_id,
+            "{mutation}"
+        );
+    }
+    let refused = report(&fixture(["1", "1", "1"], ["0", "0", "0"]));
+    assert!(refused.claims(ClaimBasis::Synthetic).unwrap().is_empty());
+    let mut duplicate = report(&f);
+    let mut competing = duplicate.geo_decks[0].clone();
+    competing.gold_usd_per_oz = "9999".into();
+    duplicate.geo_decks.push(competing);
+    assert!(duplicate.claims(ClaimBasis::Synthetic).is_err());
+}
