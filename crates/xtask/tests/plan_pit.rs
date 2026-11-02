@@ -405,9 +405,9 @@ fn plan_pit_refuses_malformed_pairs_and_rejects_bad_options() {
             "NBLOCKS 3",
         ),
         (
-            good_upit.replace("1 -1\n", "1 1e3\n"),
+            good_upit.replace("1 -1\n", "1 1e\n"),
             good_prec.clone(),
-            "plain decimal",
+            "not a decimal",
         ),
         (good_upit.clone(), "0 0\n1 1 2\n".to_string(), "requires 2"),
         (

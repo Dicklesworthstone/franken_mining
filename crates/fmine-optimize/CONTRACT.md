@@ -11,7 +11,7 @@ The Pushback optimisation crate. Five solver slices and four readers so far; `to
   - Each block requires every block whose centre lies in its upward cone, up to K layers above.
   - Arcs implied by shorter ones are dropped, and every block's closure stays the same.
 - `pitflow::minelib` (`bd-ip99`): MineLib's UPIT text pair (`.upit` values, `.prec` precedence) read into a `ClosureProblem`. No I/O.
-  - Values are plain decimals scaled to `i64` at a declared number of places, at most `MAX_DECIMALS` (9).
+  - Values are decimals scaled to `i64` at a declared number of places, at most `MAX_DECIMALS` (9). An exponent of one or two digits (`-5.65503E+6`, as MineLib's newman1.pcpsp writes) moves the point exactly before scaling.
   - A value with more non-zero places is refused unless the caller passes `Rounding::HalfAwayFromZero`; each rounded value is counted in `UpitModel::rounded`.
   - Every block must appear exactly once in each file. Headers, counts, ids and duplicates are checked; nothing is defaulted.
 - `pitflow::candidate` (`bd-nq06`, plan §15.4 `UntrustedCandidate`): an external pit, given as block ids, checked on a `ClosureProblem`. No I/O.
@@ -157,7 +157,7 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input.
   Tests: `slope::tests::bad_input_is_refused`, one row each.
 - `FMINE-REF-506` (proposed), from `minelib::parse` and `minelib::scaled`:
   - a missing, repeated or unknown header, or a `TYPE` other than `UPIT`;
-  - a value that is not a plain decimal, does not fit `i64` at the places declared, or has non-zero places past them under `Rounding::Refuse`; more than 9 declared places;
+  - a value that is not a decimal (an exponent of more than two digits included), does not fit `i64` at the places declared, or has non-zero places past them under `Rounding::Refuse`; more than 9 declared places;
   - an objective line count that differs from `NBLOCKS`, or a block id out of range or given twice;
   - a precedence line whose count differs from its list, that requires itself, an out-of-range block or one block twice, or a block with no precedence line or two.
 

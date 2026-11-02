@@ -60,28 +60,66 @@ pub(crate) fn lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
         .filter(|(_, l)| !l.is_empty() && !l.starts_with('%'))
 }
 
-/// `"-2236.7886"` at 6 places is `(-2_236_788_600, false)`. The flag is set when non-zero places were rounded off.
+/// `"-2236.7886"` at 6 places is `(-2_236_788_600, false)`. The flag is set when non-zero places were rounded off. An
+/// exponent moves the point exactly, so `"-5.65503E+6"` (as MineLib's newman1.pcpsp writes) is `-5_655_030` whole
+/// units.
 ///
 /// # Errors
-/// `FMINE-REF-506` (proposed) for a token that is not a plain decimal (`-`, digits, an optional `.` and digits), more
-/// than [`MAX_DECIMALS`] places, a value outside `i64`, or non-zero places past the scale under [`Rounding::Refuse`].
+/// `FMINE-REF-506` (proposed) for a token that is not a decimal (`-`, digits, an optional `.` and digits, then
+/// optionally `e` or `E`, a sign and one or two digits), more than [`MAX_DECIMALS`] places, a value outside `i64`, or
+/// non-zero places past the scale under [`Rounding::Refuse`].
 pub fn scaled(token: &str, decimals: u32, rounding: Rounding) -> Result<(i64, bool), Refusal> {
     if decimals > MAX_DECIMALS {
         return Err(bad(format!(
             "{decimals} decimal places; at most {MAX_DECIMALS}"
         )));
     }
+    let not_decimal = || bad(format!("value {token:?} is not a decimal"));
     let (neg, body) = match token.strip_prefix('-') {
         Some(rest) => (true, rest),
         None => (false, token),
     };
-    let (int, frac) = body.split_once('.').unwrap_or((body, ""));
+    let (mantissa, shift, left) = match body.split_once(['e', 'E']) {
+        Some((m, e)) => {
+            let digits = e.strip_prefix(['+', '-']).unwrap_or(e);
+            if digits.is_empty() || digits.len() > 2 || !digits.bytes().all(|b| b.is_ascii_digit())
+            {
+                return Err(not_decimal());
+            }
+            let shift = digits
+                .bytes()
+                .fold(0_usize, |s, b| s * 10 + usize::from(b - b'0'));
+            (m, shift, e.starts_with('-'))
+        }
+        None => (body, 0, false),
+    };
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
     if int.is_empty()
         || !int.bytes().all(|b| b.is_ascii_digit())
         || !frac.bytes().all(|b| b.is_ascii_digit())
     {
-        return Err(bad(format!("value {token:?} is not a plain decimal")));
+        return Err(not_decimal());
     }
+    // The digits with the point moved `shift` places, padded with zeros where it moves past them.
+    let moved: (String, String);
+    let (int, frac) = if shift == 0 {
+        (int, frac)
+    } else {
+        let digits = [int, frac].concat();
+        moved = if left {
+            match int.len().checked_sub(shift) {
+                Some(point) => (digits[..point].to_string(), digits[point..].to_string()),
+                None => (String::new(), "0".repeat(shift - int.len()) + &digits),
+            }
+        } else {
+            let point = int.len() + shift;
+            match point.checked_sub(digits.len()) {
+                Some(pad) => (digits + &"0".repeat(pad), String::new()),
+                None => (digits[..point].to_string(), digits[point..].to_string()),
+            }
+        };
+        (moved.0.as_str(), moved.1.as_str())
+    };
     let places = decimals as usize;
     let (kept, dropped) = frac.split_at(frac.len().min(places));
     let overflow = || {
@@ -324,7 +362,26 @@ mod tests {
         assert!(scaled("402.182999999999", 6, Rounding::Refuse).is_err());
         assert!(scaled("9223372036854775807.5", 0, h).is_err());
         assert!(scaled("9223372036854775808", 0, Rounding::Refuse).is_err());
-        for t in ["1e5", ".5", "--1", "+1", "1.2.3", "", "-", "1,5"] {
+        // Exponents move the point exactly, either way, past the digits given.
+        let r = Rounding::Refuse;
+        assert_eq!(
+            scaled("-5.65503E+6", 6, r).ok(),
+            Some((-5_655_030_000_000, false))
+        );
+        assert_eq!(scaled("1e5", 0, r).ok(), Some((100_000, false)));
+        assert_eq!(scaled("12.5e-1", 2, r).ok(), Some((125, false)));
+        assert_eq!(scaled("125E-03", 3, r).ok(), Some((125, false)));
+        assert_eq!(scaled("1.25e-4", 6, r).ok(), Some((125, false)));
+        assert_eq!(scaled("0.000125e+06", 0, r).ok(), Some((125, false)));
+        assert_eq!(scaled("1.25e-4", 5, h).ok(), Some((13, true)));
+        assert!(scaled("1.25e-4", 5, r).is_err());
+        assert!(scaled("1e19", 0, r).is_err());
+        for t in [".5", "--1", "+1", "1.2.3", "", "-", "1,5"] {
+            assert!(scaled(t, 6, h).is_err(), "{t:?}");
+        }
+        for t in [
+            "1e", "e5", "1e+", "1e5.5", "1e123", "1e-123", "1ee5", "1e+-5", "1.e", ".1e2", "1E 5",
+        ] {
             assert!(scaled(t, 6, h).is_err(), "{t:?}");
         }
         assert!(scaled("1", MAX_DECIMALS + 1, h).is_err());
