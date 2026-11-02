@@ -11,14 +11,29 @@
 Implements `DecisionCard` (`FMT-CARD-1`), `FlipMargin`, `rank_voi_campaigns` (`GATE-HELM-02`), and the
 CEO/CFO/Mine-GM 1-Page Executive Decision Card Markdown renderer (`render_one_pager_markdown`, `§9.6`).
 
+`rank_voi_campaigns` evaluates finite-state information experiments against one validated decision problem.
+Each experiment uses a state-by-signal likelihood matrix and a finite nonnegative cost in the payoff unit
+(USD millions). Ranking is by descending net VOI, with campaign identifier breaking ties. The result retains
+the prior action values and all optimal action indices, plus each signal's model probability, posterior state
+probabilities, action expected payoffs, tied optimal actions and EVSI contribution. Impossible signals have no
+posterior or action payoff vector, no optimal action and zero contribution. Zero-cost campaigns have no defined
+benefit/cost ratio, including a zero-EVSI campaign; positive costs are never rounded down to zero for this ratio.
+The compatibility `summary` field is copied from the retained analysis, without repeating the evaluation.
+
+The Markdown policy names zero-based state and action indices in the supplied problem. It does not invent a
+mapping from those alternatives to the card's action labels. All probabilities and information values remain
+conditional on the declared finite model; rendering them does not promote evidence, calibration or authority.
+A prior-optimal action that remains optimal for every possible signal is reported explicitly.
+
 `DecisionCard::build_as_of` consumes an ordinary card and returns an immutable `RetrospectiveDecisionCard`
 (`BD-344`, §22.6). It checks the expected-NPV Claim's canonical identity, graph node kind and immediate parents,
 then checks every declared ancestor against a decision timestamp and per-cell record anchor. A successful
 `fmine_claim::dag::replay::ReplayCertificate` must bind the same root, cut, checked cone and card output. The replay
 generator returns `DecisionCard::temporal_replay_bytes()`: rendered Markdown, the NPV Claim body and exact bits of
-displayed numeric values and VOI calculation totals. Thus changing a value beneath the displayed decimal
-precision cannot reuse a proof. Unrendered Claim metadata is subject to the existing Claim canonical-body limits.
-The projection is an internal versioned replay input, not a new durable `FMT-CARD-1` encoding.
+displayed numeric values, VOI calculation totals and the complete retained conditional policy. Thus changing a
+value beneath the displayed decimal precision cannot reuse a proof. Unrendered Claim metadata is subject to the
+existing Claim canonical-body limits.
+The projection is an internal versioned replay input (version 2), not a new durable `FMT-CARD-1` encoding.
 
 ## 3. Authority, Epistemics & Representation
 Enforces `INV-002` (`authoritative: false`, `may_actuate: false`, `is_safe_certification: false`, `is_signing_basis: false`) and `INV-015` (non-empty `uu_register`, `FMINE-REF-204`) on every `DecisionCard`.
@@ -81,10 +96,17 @@ Enforces `INV-002` (`authoritative: false`, `may_actuate: false`, `is_safe_certi
   All parsed Claims remain internal, Assumed and uncalibrated. Unknown fields cannot upgrade those labels.
 - `FlipMargin`, `DecisionCard` (`build`, `build_as_of`, `temporal_replay_bytes`)
 - `RetrospectiveDecisionCard`: immutable `card`, `cone` and `replay` accessors; scoped Markdown renderer
-- `VoiCampaign`, `VoiRankedItem`, `rank_voi_campaigns`
+- `VoiCampaign`, `VoiRankedItem`, `rank_voi_campaigns -> Result<Vec<VoiRankedItem>, Refusal>`
 - `render_one_pager_markdown`
 
 ## 5. Guards & Typed Refusals
+`rank_voi_campaigns` validates the shared problem once, even for an empty campaign list. Every campaign must
+have a distinct nonempty identifier, a well-formed likelihood matrix and a valid cost. Any failure returns a
+refusal for the entire request; it never returns a partial ranking or substitutes a zero score:
+
+- `FMINE-REF-109`: invalid problem, campaign identity, likelihood or cost.
+- `FMINE-REF-207`: numerical evaluation failure, including an unrepresentable positive-cost benefit/cost ratio.
+
 `DecisionCard::build` relays the claim's refusals:
 - `FMINE-REF-204` (unbudgeted unknowns, `G-UU`), exit 3: a non-`KnownKnown` claim with no `UuTerm`.
 - `FMINE-REF-205` (calibration required, `NL-4`), exit 3: an `expected_npv_usd_m` with no colour to show, because
@@ -99,7 +121,10 @@ Enforces `INV-002` (`authoritative: false`, `may_actuate: false`, `is_safe_certi
 ## 6. Proof Obligations (`PO-*`)
 - `PO-DEC-1`: `DecisionCard::build` refuses a card whose claim has an empty `uu_terms` (`FMINE-REF-204`) or no colour
   (`FMINE-REF-205`).
-- `PO-DEC-2`: `rank_voi_campaigns` guarantees `0 <= EVSI <= EVPI` (`GATE-HELM-02`).
+- `PO-DEC-2`: `rank_voi_campaigns` relays the validated finite evaluator's `0 <= EVSI <= EVPI` guarantee, retains
+  the posterior action policy and refuses invalid inputs instead of clamping or returning a partial ranking.
+  The GB-29 closed-form test checks EVSI `$41M`, net VOI `$31.2M` with the declared `$9.8M` combined cost, and the
+  high/low observation action switch. This is a finite-model known answer, not the Monte Carlo `GATE-HELM-02`.
 - `PO-DEC-3`: retrospective construction binds the actual NPV Claim and the replayed output; neither an unrelated
   clean root nor an older certificate for edited output is accepted. The checked snapshot has no mutable accessor.
 
@@ -117,10 +142,16 @@ Invalid or unanchored decision inputs fail closed with typed `Refusal`.
 ## 10. Non-Goals & Scope Boundary
 Never actuates physical equipment (`INV-002`) or performs file/network I/O (`L-3`).
 
+Finite-state VOI is not a Monte Carlo estimator and supplies no Monte Carlo standard error, Bayesian evidence
+for the supplied prior/likelihood, or calibrated predictive probability. The K-problem / 100-seed statistical
+`GATE-HELM-02` and real retrospective cards remain separate requirements. Campaign ranking does not model
+portfolio interactions; a delay cost affects the result only if included in the supplied campaign cost.
+
 The retrospective proof covers the **declared expected-NPV Claim ancestry**. The existing action text, CVaR,
 flip margins and VOI fields have no individual Claim provenance. Their bytes are replayed, but this does not prove
 complete historical sourcing for those fields or certify the whole decision. The renderer states this boundary.
 The replay contract requires all evidence reads to use the supplied store view; captured values or external I/O
 cannot be detected by a pure in-process checker. This slice supplies the guard and synthetic controls, not the
 two real retrospective cards required by GATE-HELM-01. No cross-host replay result is asserted;
-`DeterministicPerIsa` remains the crate's class. Ordinary `build` and its output are unchanged.
+`DeterministicPerIsa` remains the crate's class. Ordinary `build` retains its existing Claim guards; its VOI
+section now renders the retained conditional action policy.

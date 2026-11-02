@@ -1191,8 +1191,10 @@ public_members = "north-mara-production=North Mara"
 ```
 
 The frozen digest binds the exact issuer, subject, period, metric/unit and ownership basis for every member.
-Supported metrics are gold production (`production_koz`) and issuer-reported AISC per sold gold ounce
-(`aisc_usd_per_oz`), at site level over a calendar year (`YYYYFY`) or individual calendar quarter.
+Supported metrics are gold production (`production_koz`), copper production (`production_kt`) and
+issuer-reported AISC per sold gold ounce (`aisc_usd_per_oz`), at site level over a calendar year (`YYYYFY`)
+or individual calendar quarter. Copper retains the printed kilotonnes and the declared full or attributable
+ownership basis; resolution performs no implicit pounds conversion or ownership scaling.
 A declared deadline after the target period ends
 refuses. When the original workbook has been published and registered with its digest and dated evidence:
 

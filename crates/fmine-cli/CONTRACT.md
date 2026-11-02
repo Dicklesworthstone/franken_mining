@@ -160,10 +160,14 @@ The member string maps existing aliases to exact source subjects (`alias=Subject
 The adapter converts aliases to immutable forecast IDs and embeds the canonical
 `fmine_calib::ledger::binding::PublicResolutionPolicy` in the cohort's hashed resolution rule.
 The complete member set, sole eligible issuer, metric/unit, original FY/quarter release and ownership
-basis are fixed before any outcome. Supported metrics are site-level `production_koz` and `aisc_usd_per_oz`,
-over calendar years (`YYYYFY`) or individual calendar quarters;
+basis are fixed before any outcome. Supported metrics are site-level gold `production_koz`, copper
+`production_kt` and gold `aisc_usd_per_oz`, over calendar years (`YYYYFY`) or individual calendar quarters;
 ownership is `100%` or `attributable:n/d`. AISC means the issuer's reported per-sold-ounce cost,
 with no subtraction of annual and year-to-date rates or implicit ownership conversion.
+Copper production retains the printed kilotonnes and the same exact source-Claim, original-release and
+ownership checks. Gold figures, pounds, and unsupported copper cost definitions never substitute for that
+target. Both production metrics refuse negative values during admission and semantic replay; an unmarked
+printed zero remains valid. Copper adds no durable encoding change for existing gold targets or receipts.
 
 `forecast journal resolve --journal <path> --head <hex> --cohort <name> --forecast <alias>
 --trust-host-clock` takes no outcome value, target override, source locator or availability timestamp.

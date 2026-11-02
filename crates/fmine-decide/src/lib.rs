@@ -2,13 +2,15 @@
 //! `GATE-HELM-02`), and `EpistemicOnePager` renderer (`§9.6`, `BD-052`, `BD-054`).
 //! Determinism: DeterministicPerIsa (no cross-host digest test; plan §29.2, bd-hp2j.1).
 
+use std::collections::BTreeSet;
+
 use fmine_claim::Claim;
 use fmine_claim::dag::replay::ReplayCertificate;
 use fmine_claim::dag::{CheckedCone, ConeCut, TemporalGraph};
 use fmine_core::codec::Encoder;
 use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::{Color, Refusal, RefusalCode};
-use fmine_numerics::voi::{VoiProblem, VoiSummary};
+use fmine_numerics::voi::{VoiAnalysis, VoiError, VoiExperiment, VoiProblem, VoiSummary};
 
 pub mod card;
 
@@ -66,31 +68,66 @@ pub struct VoiRankedItem {
     pub description: String,
     pub cost_usd_m: f64,
     pub summary: VoiSummary,
-    pub benefit_cost_ratio: f64,
+    /// Full conditional decision policy from the same evaluation as `summary`.
+    pub analysis: VoiAnalysis,
+    /// Undefined for every zero-cost campaign, including one with zero EVSI.
+    pub benefit_cost_ratio: Option<f64>,
 }
 
 /// Evaluates and ranks candidate `VoiCampaign`s by descending `net_voi` (`EVSI - cost`),
-/// breaking ties by `campaign_id` (`BD-225`, `GATE-HELM-02`).
-#[must_use]
-pub fn rank_voi_campaigns(problem: &VoiProblem, campaigns: &[VoiCampaign]) -> Vec<VoiRankedItem> {
-    let mut items: Vec<VoiRankedItem> = campaigns
+/// breaking ties by `campaign_id` (`BD-225`). The finite model is validated once; any invalid model,
+/// campaign identity, likelihood or cost refuses the entire ranking. Results are conditional on the
+/// supplied model and do not establish calibration or the Monte Carlo `GATE-HELM-02`.
+pub fn rank_voi_campaigns(
+    problem: &VoiProblem,
+    campaigns: &[VoiCampaign],
+) -> Result<Vec<VoiRankedItem>, Refusal> {
+    let validated = problem.validate().map_err(voi_refusal)?;
+    let mut identifiers = BTreeSet::new();
+    for campaign in campaigns {
+        if campaign.campaign_id.trim().is_empty()
+            || !identifiers.insert(campaign.campaign_id.as_str())
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutsidePhysicalDomain109,
+                "VOI campaigns require nonempty, distinct campaign identifiers",
+            ));
+        }
+    }
+    let mut items = campaigns
         .iter()
         .map(|c| {
-            let summary = problem.compute_evsi(&c.likelihood, c.cost_usd_m);
-            let bcr = if c.cost_usd_m > 1e-9 {
-                summary.evsi / c.cost_usd_m
+            let analysis = validated
+                .evaluate(VoiExperiment {
+                    likelihood: &c.likelihood,
+                    cost: c.cost_usd_m,
+                })
+                .map_err(voi_refusal)?;
+            let benefit_cost_ratio = if c.cost_usd_m > 0.0 {
+                let ratio = analysis.summary.evsi / c.cost_usd_m;
+                if !ratio.is_finite() || (analysis.summary.evsi > 0.0 && ratio == 0.0) {
+                    return Err(Refusal::new(
+                        RefusalCode::NumericalCertificateFailed207,
+                        format!(
+                            "VOI campaign {} benefit-cost ratio is not representable",
+                            c.campaign_id
+                        ),
+                    ));
+                }
+                Some(ratio)
             } else {
-                0.0
+                None
             };
-            VoiRankedItem {
+            Ok(VoiRankedItem {
                 campaign_id: c.campaign_id.clone(),
                 description: c.description.clone(),
                 cost_usd_m: c.cost_usd_m,
-                summary,
-                benefit_cost_ratio: bcr,
-            }
+                summary: analysis.summary,
+                analysis,
+                benefit_cost_ratio,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, Refusal>>()?;
 
     items.sort_by(|a, b| {
         b.summary
@@ -98,7 +135,66 @@ pub fn rank_voi_campaigns(problem: &VoiProblem, campaigns: &[VoiCampaign]) -> Ve
             .total_cmp(&a.summary.net_voi)
             .then_with(|| a.campaign_id.cmp(&b.campaign_id))
     });
-    items
+    Ok(items)
+}
+
+fn voi_refusal(error: VoiError) -> Refusal {
+    Refusal::new(
+        if error.is_numerical_failure() {
+            RefusalCode::NumericalCertificateFailed207
+        } else {
+            RefusalCode::OutsidePhysicalDomain109
+        },
+        format!("VOI model: {error}"),
+    )
+}
+
+fn encode_voi_summary(enc: &mut Encoder, summary: VoiSummary) {
+    enc.put_u64(summary.prior_best_action as u64);
+    for value in [
+        summary.prior_expected_value,
+        summary.perfect_info_expected_value,
+        summary.evpi,
+        summary.evsi,
+        summary.net_voi,
+    ] {
+        enc.put_u64(value.to_bits());
+    }
+}
+
+fn encode_values(enc: &mut Encoder, values: &[f64]) {
+    enc.put_u64(values.len() as u64);
+    for value in values {
+        enc.put_u64(value.to_bits());
+    }
+}
+
+fn encode_optional_values(enc: &mut Encoder, values: Option<&[f64]>) {
+    match values {
+        Some(values) => {
+            enc.put_u8(1);
+            encode_values(enc, values);
+        }
+        None => enc.put_u8(0),
+    }
+}
+
+fn encode_indices(enc: &mut Encoder, indices: &[usize]) {
+    enc.put_u64(indices.len() as u64);
+    for index in indices {
+        enc.put_u64(*index as u64);
+    }
+}
+
+fn display_values(values: &[f64]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| format!("{value:.6}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 /// Executive and operational `DecisionCard` (`§22`, `BD-052`).
@@ -260,13 +356,13 @@ impl DecisionCard {
         })
     }
 
-    /// Internal replay projection, version 1: the rendered card, expected-NPV canonical Claim body and exact
-    /// bits of displayed numeric values and the VOI calculation totals. Exact bits prevent edits hidden by
-    /// Markdown's decimal formatting from
-    /// reusing a certificate. This is an in-process replay input, not a new durable card format.
+    /// Internal replay projection, version 2: the rendered card, expected-NPV canonical Claim body and exact
+    /// bits of displayed numeric values, VOI totals and conditional policies. Exact bits prevent edits hidden
+    /// by Markdown's decimal formatting from reusing a certificate. This is an in-process replay input, not a
+    /// new durable card format.
     #[must_use]
     pub fn temporal_replay_bytes(&self) -> Vec<u8> {
-        let mut enc = Encoder::new_frame(*b"DCRP", 1);
+        let mut enc = Encoder::new_frame(*b"DCRP", 2);
         enc.put_str(&self.render_one_pager_markdown());
         enc.put_bytes(&self.expected_npv_usd_m.canonical_body());
         enc.put_u64(self.expected_npv_usd_m.value.to_bits());
@@ -283,17 +379,23 @@ impl DecisionCard {
         enc.put_u64(self.top_voi_items.len() as u64);
         for item in &self.top_voi_items {
             enc.put_str(&item.description);
-            enc.put_u64(item.summary.prior_best_action as u64);
-            for value in [
-                item.cost_usd_m,
-                item.benefit_cost_ratio,
-                item.summary.prior_expected_value,
-                item.summary.perfect_info_expected_value,
-                item.summary.evpi,
-                item.summary.evsi,
-                item.summary.net_voi,
-            ] {
-                enc.put_u64(value.to_bits());
+            enc.put_u64(item.cost_usd_m.to_bits());
+            encode_optional_values(
+                &mut enc,
+                item.benefit_cost_ratio.as_ref().map(std::slice::from_ref),
+            );
+            encode_voi_summary(&mut enc, item.summary);
+            encode_voi_summary(&mut enc, item.analysis.summary);
+            encode_values(&mut enc, &item.analysis.prior_action_values);
+            encode_indices(&mut enc, &item.analysis.prior_best_actions);
+            enc.put_u64(item.analysis.signals.len() as u64);
+            for signal in &item.analysis.signals {
+                enc.put_u64(signal.signal_index as u64);
+                enc.put_u64(signal.probability.to_bits());
+                encode_optional_values(&mut enc, signal.posterior_state_probs.as_deref());
+                encode_indices(&mut enc, &signal.best_actions);
+                encode_optional_values(&mut enc, signal.action_expected_payoffs.as_deref());
+                enc.put_u64(signal.evsi_contribution.to_bits());
             }
         }
         enc.finish()
@@ -344,16 +446,67 @@ impl DecisionCard {
             ));
         }
 
-        out.push_str("\n## Ranked Value-of-Information (`VOI`) Campaigns\n");
+        out.push_str("\n## Ranked Value-of-Information (`VOI`) Campaigns\n\n");
+        if !self.top_voi_items.is_empty() {
+            out.push_str(
+                "Finite-model values conditional on the supplied priors, payoffs and signal likelihoods; \
+                 these probabilities do not establish calibration. State and action indices are zero-based \
+                 positions in the supplied problem, without a mapping to this card's named actions. \
+                 Payoffs, costs and information values use USD millions.\n\n",
+            );
+        }
         for v in &self.top_voi_items {
+            let ratio = v.benefit_cost_ratio.map_or_else(
+                || "undefined (zero campaign cost)".to_string(),
+                |ratio| format!("{ratio:.2}x"),
+            );
             out.push_str(&format!(
-                "- **{}**: EVSI `${:.2}M`, Cost `${:.2}M`, Net VOI `${:.2}M` (BCR `{:.2}x`)\n",
+                "### {}\n\n{}\n\n\
+                 EVSI `${:.2}M`, Cost `${:.2}M`, Net VOI `${:.2}M`; benefit/cost: {}.\n\n\
+                 Before observing a signal, best action indices: `{:?}`; action expected values: `{}`.\n\n\
+                 | Signal | Model probability | Posterior state probabilities | Best action indices | Action expected values ($M) | EVSI contribution ($M) |\n\
+                 | --- | ---: | --- | --- | --- | ---: |\n",
                 v.campaign_id,
+                v.description,
                 v.summary.evsi,
                 v.cost_usd_m,
                 v.summary.net_voi,
-                v.benefit_cost_ratio
+                ratio,
+                v.analysis.prior_best_actions,
+                display_values(&v.analysis.prior_action_values),
             ));
+            for signal in &v.analysis.signals {
+                let posterior = signal.posterior_state_probs.as_deref().map_or_else(
+                    || "impossible signal; no posterior".to_string(),
+                    display_values,
+                );
+                let values = signal
+                    .action_expected_payoffs
+                    .as_deref()
+                    .map_or_else(|| "not applicable".to_string(), display_values);
+                out.push_str(&format!(
+                    "| {} | {:.6} | {} | {:?} | {} | {:.6} |\n",
+                    signal.signal_index,
+                    signal.probability,
+                    posterior,
+                    signal.best_actions,
+                    values,
+                    signal.evsi_contribution,
+                ));
+            }
+            out.push('\n');
+            if v.analysis.prior_best_actions.iter().any(|action| {
+                v.analysis
+                    .signals
+                    .iter()
+                    .filter(|signal| signal.probability > 0.0)
+                    .all(|signal| signal.best_actions.contains(action))
+            }) {
+                out.push_str(
+                    "A prior-optimal action remains optimal for every possible signal; no test result \
+                     requires changing that choice.\n\n",
+                );
+            }
         }
         out
     }
@@ -736,7 +889,7 @@ mod tests {
     }
 
     #[test]
-    fn test_voi_campaign_ranking_gate_helm_02() {
+    fn voi_campaigns_rank_by_net_value() {
         let problem = VoiProblem {
             state_probs: vec![0.5, 0.5],
             payoffs: vec![vec![100.0, 0.0], vec![-80.0, 0.0]],
@@ -755,8 +908,248 @@ mod tests {
                 likelihood: vec![vec![0.92, 0.08], vec![0.08, 0.92]],
             },
         ];
-        let ranked = rank_voi_campaigns(&problem, &campaigns);
+        let ranked = rank_voi_campaigns(&problem, &campaigns).expect("valid finite campaigns");
         assert_eq!(ranked[0].campaign_id, "CAMP-HIGH");
         assert!(ranked[0].summary.net_voi > ranked[1].summary.net_voi);
+    }
+
+    fn testwork_problem() -> VoiProblem {
+        VoiProblem {
+            state_probs: vec![0.6, 0.4],
+            payoffs: vec![vec![300.0, 0.0], vec![-200.0, 0.0]],
+        }
+    }
+
+    fn testwork_campaign(id: &str, cost: f64) -> VoiCampaign {
+        VoiCampaign {
+            campaign_id: id.into(),
+            description: "Synthetic GB-29 metallurgical testwork and delay".into(),
+            cost_usd_m: cost,
+            likelihood: vec![vec![0.85, 0.15], vec![0.15, 0.85]],
+        }
+    }
+
+    fn close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() <= 1e-10 * expected.abs().max(1.0),
+            "{actual} differs from {expected}"
+        );
+    }
+
+    #[test]
+    fn gb29_ranking_exposes_the_observation_that_changes_the_action() {
+        let mut useless = testwork_campaign("uninformative", 1.0);
+        useless.likelihood = vec![vec![0.5, 0.5], vec![0.5, 0.5]];
+        let ranked = rank_voi_campaigns(
+            &testwork_problem(),
+            &[useless, testwork_campaign("testwork", 9.8)],
+        )
+        .expect("declared finite model");
+        let testwork = &ranked[0];
+        assert_eq!(testwork.campaign_id, "testwork");
+        assert_eq!(testwork.summary, testwork.analysis.summary);
+        close(testwork.summary.prior_expected_value, 100.0);
+        close(testwork.summary.evpi, 80.0);
+        close(testwork.summary.evsi, 41.0);
+        close(testwork.summary.net_voi, 31.2);
+        close(
+            testwork.benefit_cost_ratio.expect("positive cost"),
+            41.0 / 9.8,
+        );
+        assert_eq!(testwork.analysis.prior_best_actions, [0]);
+        close(testwork.analysis.prior_action_values[0], 100.0);
+        let high = &testwork.analysis.signals[0];
+        let low = &testwork.analysis.signals[1];
+        close(high.probability, 0.57);
+        close(low.probability, 0.43);
+        close(
+            high.posterior_state_probs.as_ref().expect("possible")[0],
+            17.0 / 19.0,
+        );
+        close(
+            low.posterior_state_probs.as_ref().expect("possible")[0],
+            9.0 / 43.0,
+        );
+        close(
+            high.action_expected_payoffs.as_ref().expect("possible")[0],
+            4700.0 / 19.0,
+        );
+        close(
+            low.action_expected_payoffs.as_ref().expect("possible")[0],
+            -4100.0 / 43.0,
+        );
+        assert_eq!(high.best_actions, [0]);
+        assert_eq!(low.best_actions, [1]);
+        close(high.evsi_contribution + low.evsi_contribution, 41.0);
+        close(ranked[1].summary.evsi, 0.0);
+        close(ranked[1].summary.net_voi, -1.0);
+
+        let mut card = temporal_card(vec![]);
+        let previous_color = card.color.clone();
+        card.top_voi_items = ranked;
+        let shown = card.render_one_pager_markdown();
+        assert!(shown.contains("EVSI `$41.00M`, Cost `$9.80M`, Net VOI `$31.20M`"));
+        assert!(shown.contains("| 0 | 0.570000 | [0.894737, 0.105263] | [0] |"));
+        assert!(shown.contains("| 1 | 0.430000 | [0.209302, 0.790698] | [1] |"));
+        assert!(shown.contains("zero-based positions in the supplied problem"));
+        assert!(shown.contains("do not establish calibration"));
+        assert!(shown.contains("no test result requires changing that choice"));
+        assert_eq!(card.color, previous_color);
+    }
+
+    #[test]
+    fn campaign_and_action_ties_and_impossible_signals_are_retained() {
+        let problem = VoiProblem {
+            state_probs: vec![0.5, 0.5],
+            payoffs: vec![vec![10.0, 10.0, 0.0], vec![-10.0, -10.0, 0.0]],
+        };
+        let mut campaign = testwork_campaign("beta", 0.0);
+        campaign.likelihood = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0]];
+        let mut alpha = campaign.clone();
+        alpha.campaign_id = "alpha".into();
+        let ranked = rank_voi_campaigns(&problem, &[campaign, alpha]).expect("valid ties");
+        assert_eq!(ranked[0].campaign_id, "alpha");
+        assert_eq!(ranked[1].campaign_id, "beta");
+        let analysis = &ranked[0].analysis;
+        assert_eq!(analysis.prior_best_actions, [0, 1, 2]);
+        assert_eq!(analysis.signals[0].best_actions, [0, 1]);
+        assert_eq!(analysis.signals[1].best_actions, [2]);
+        let impossible = &analysis.signals[2];
+        assert_eq!(impossible.signal_index, 2);
+        close(impossible.probability, 0.0);
+        assert_eq!(impossible.posterior_state_probs, None);
+        assert_eq!(impossible.action_expected_payoffs, None);
+        assert!(impossible.best_actions.is_empty());
+        close(impossible.evsi_contribution, 0.0);
+        close(analysis.summary.evsi, 5.0);
+        assert_eq!(ranked[0].benefit_cost_ratio, None);
+
+        let mut card = temporal_card(vec![]);
+        card.top_voi_items = ranked;
+        let shown = card.render_one_pager_markdown();
+        assert!(shown.contains("benefit/cost: undefined (zero campaign cost)"));
+        assert!(shown.contains(
+            "| 2 | 0.000000 | impossible signal; no posterior | [] | not applicable | 0.000000 |"
+        ));
+
+        let mut free_useless = testwork_campaign("free-useless", 0.0);
+        free_useless.likelihood = vec![vec![1.0], vec![1.0]];
+        let ranked =
+            rank_voi_campaigns(&problem, &[free_useless]).expect("free uninformative test");
+        close(ranked[0].summary.evsi, 0.0);
+        assert_eq!(ranked[0].benefit_cost_ratio, None);
+    }
+
+    #[test]
+    fn invalid_campaigns_refuse_the_whole_ranking() {
+        let problem = testwork_problem();
+        let valid = testwork_campaign("valid", 9.8);
+        let mut invalid = Vec::new();
+        for id in ["", "  ", "valid"] {
+            invalid.push(testwork_campaign(id, 1.0));
+        }
+        for cost in [-1.0, f64::NAN, f64::INFINITY] {
+            invalid.push(testwork_campaign("bad-cost", cost));
+        }
+        for likelihood in [
+            vec![],
+            vec![vec![1.0]],
+            vec![vec![0.5, 0.5], vec![1.0]],
+            vec![vec![0.8, 0.8], vec![0.5, 0.5]],
+            vec![vec![-0.5, 1.5], vec![0.5, 0.5]],
+            vec![vec![f64::NAN, 0.5], vec![0.5, 0.5]],
+        ] {
+            let mut campaign = testwork_campaign("bad-likelihood", 1.0);
+            campaign.likelihood = likelihood;
+            invalid.push(campaign);
+        }
+        for campaign in invalid {
+            let error = rank_voi_campaigns(&problem, &[valid.clone(), campaign])
+                .expect_err("no partial ranking after a malformed campaign");
+            assert_eq!(error.code, "FMINE-REF-109");
+        }
+        let invalid_problem = VoiProblem {
+            state_probs: vec![0.6, 0.6],
+            payoffs: problem.payoffs,
+        };
+        assert_eq!(
+            rank_voi_campaigns(&invalid_problem, &[])
+                .expect_err("validate even when no campaigns are requested")
+                .code,
+            "FMINE-REF-109"
+        );
+    }
+
+    #[test]
+    fn small_positive_cost_keeps_its_ratio_and_unrepresentable_ratios_refuse() {
+        let ranked = rank_voi_campaigns(
+            &testwork_problem(),
+            &[testwork_campaign("small-cost", 1e-10)],
+        )
+        .expect("positive cost is not treated as free");
+        close(ranked[0].benefit_cost_ratio.expect("defined"), 41.0 / 1e-10);
+        assert_eq!(
+            rank_voi_campaigns(
+                &testwork_problem(),
+                &[testwork_campaign("overflow", f64::MIN_POSITIVE)],
+            )
+            .expect_err("an infinite ratio is not a usable ranking output")
+            .code,
+            "FMINE-REF-207"
+        );
+        let tiny_payoffs = VoiProblem {
+            state_probs: vec![0.5, 0.5],
+            payoffs: vec![vec![f64::MIN_POSITIVE, 0.0], vec![0.0, f64::MIN_POSITIVE]],
+        };
+        let costly_perfect_test = VoiCampaign {
+            campaign_id: "underflow".into(),
+            description: "Synthetic representable gain with an unrepresentable ratio".into(),
+            cost_usd_m: f64::MAX,
+            likelihood: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+        };
+        assert_eq!(
+            rank_voi_campaigns(&tiny_payoffs, &[costly_perfect_test])
+                .expect_err("a positive ratio must not silently underflow to zero")
+                .code,
+            "FMINE-REF-207"
+        );
+    }
+
+    #[test]
+    fn replay_projection_binds_subdisplay_policy_and_summary_edits() {
+        let mut card = temporal_card(vec![]);
+        card.top_voi_items =
+            rank_voi_campaigns(&testwork_problem(), &[testwork_campaign("testwork", 9.8)])
+                .expect("synthetic policy");
+        let original_bytes = card.temporal_replay_bytes();
+        let shown = card.render_one_pager_markdown();
+        for field in 0..6 {
+            let mut changed = card.clone();
+            let item = &mut changed.top_voi_items[0];
+            match field {
+                0 => item.analysis.prior_action_values[0] += 1e-10,
+                1 => item.analysis.signals[0].probability += 1e-10,
+                2 => {
+                    item.analysis.signals[0]
+                        .posterior_state_probs
+                        .as_mut()
+                        .expect("possible")[0] += 1e-10
+                }
+                3 => {
+                    item.analysis.signals[0]
+                        .action_expected_payoffs
+                        .as_mut()
+                        .expect("possible")[0] += 1e-10
+                }
+                4 => item.analysis.signals[0].evsi_contribution += 1e-10,
+                _ => item.analysis.summary.evpi += 1e-10,
+            }
+            assert_eq!(shown, changed.render_one_pager_markdown(), "field {field}");
+            assert_ne!(
+                original_bytes,
+                changed.temporal_replay_bytes(),
+                "field {field}"
+            );
+        }
     }
 }

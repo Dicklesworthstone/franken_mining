@@ -22,7 +22,22 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
   were first observed on aarch64-macos, and agreed on both CI hosts in run 41237993223 at 84f32ac.
 - `brent_root` → `Result<Root, RootError>`: `NoSignChange`, `NonFinite` (endpoint or iterate) and `NotConverged` refuse; an unconverged iterate is never returned (bd-t1dk)
 - `eproc::{BettingEProcess, EProcStatus}`
-- `voi::{VoiProblem, VoiSummary}`
+- `voi::{VoiProblem, VoiExperiment, ValidatedVoiProblem, VoiAnalysis, VoiSignalPolicy, VoiSummary}`:
+  `validate` checks a finite rectangular payoff model and its probability distribution once, retaining an
+  immutable borrow for multiple experiments. `evaluate` checks every conditional likelihood row and a
+  finite nonnegative cost, then returns prior action values, all tied optimal actions, each signal's
+  probability and posterior, every posterior action payoff, and the signal's information-value contribution.
+  Impossible signals remain present with no posterior or action policy. The first tied action is the
+  deterministic selection. `compute_evpi` and `compute_evsi` now return `Result`; malformed models never
+  become zero-value campaigns. No probability or score is silently normalized or clamped.
+  Prior and posterior action selection compare compensated weighted payoff differences, including product
+  residuals, so large common payoffs do not conceal which action is better. EVSI uses direct gain near zero
+  and the independently computed perfect-information-minus-residual-regret form near EVPI. Their identity
+  must agree within the stated probability-mass tolerance plus a floating-point operation allowance, scaled
+  by information values rather than absolute portfolio size. Finite `0 <= EVSI <= EVPI` remains required.
+  Signal contributions and the summary may differ by arithmetic rounding; these are finite-model results,
+  not certified exact arithmetic, sampled Monte Carlo estimates, or calibration evidence. Probability mass
+  admission tolerance is `1e-12`; accepted probabilities are retained as supplied.
 - `risk::{TailRiskSummary, compute_cvar, max_drawdown}`
 - `tropical::{TropicalEdge, TropicalDag, TropicalScheduleResult}`
 - `sparse` (BD-145, lifted from fs-sparse; see §9):
@@ -156,6 +171,9 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
     is computed (all four empty; a `None` entry counts as empty), never stored.
 
 ## 5. Guards & Typed Refusals
+- `voi::VoiError` distinguishes empty or malformed matrices, invalid probabilities or mass, nonfinite
+  payoffs, invalid costs, arithmetic failure and information-bound failure. `is_numerical_failure` lets
+  decision consumers distinguish domain refusal from numerical refusal without parsing error strings.
 - `FMINE-REF-207` (numerical certificate failed, proposed; exit 3) from Cholesky when the matrix is not square or
   a diagonal pivot is `<= 1e-12` (`test_cholesky_non_spd_refuses_207`).
 - `TropicalDag::earliest_starts` returns `None` on a positive precedence cycle; it is not a refusal code.
@@ -172,6 +190,10 @@ Pure mathematical kernels (`K0`) consumed by `K1..K4`, `E`, and `V`. Determinism
 
 ## 6. Proof Obligations (`PO-*`)
 - `PO-NUM-1`: `0 <= EVSI <= EVPI` across all prior covariance and action sets (`GATE-HELM-02`).
+  The finite discrete slice is checked against all 27 deterministic policies on each of 729 two-state,
+  three-action payoff matrices. Known-answer controls cover uninformative and perfect signals, information
+  refinement, common payoff offsets, cancellation and fully revealing signal splits. This does not pass
+  the plan's separate Monte Carlo VOI or real-decision gates.
 - `PO-NUM-3`: Ville's inequality $\mathbb{P}_{H_0}(\sup_t E_t \ge 1/\alpha) \le \alpha$ holds empirically and `CVaR` satisfies coherent subadditivity $\text{CVaR}_\alpha(X+Y) \le \text{CVaR}_\alpha(X) + \text{CVaR}_\alpha(Y)$.
 - `PO-NUM-4`: Tropical `(max,+)` and `(min,+)` critical paths satisfy zero-slack duality.
 
