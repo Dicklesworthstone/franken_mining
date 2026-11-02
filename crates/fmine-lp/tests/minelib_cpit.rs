@@ -290,13 +290,27 @@ fn kill_push_pdlp_on_minelib_cpit_lp_relaxations() {
             max_iterations: u64::MAX,
             threads,
         };
+        let published = PUBLISHED_LP
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|&(_, v)| v);
         let mut evals = 0u64;
+        // When the (unrounded) dual objective first came within KILL_GAP of the published optimum: how early the
+        // bound was good, which the stopping rule cannot see.
+        let mut dual_within_gap_s: Option<f64> = None;
         let s = solve_observed(&p, &options, &mut |pr| {
             evals += 1;
             let secs = t1.elapsed().as_secs_f64();
+            let dual = -pr.dual_objective;
+            if let Some(pubd) = published
+                && dual_within_gap_s.is_none()
+                && (dual - pubd - 1.0) / pubd <= KILL_GAP
+            {
+                dual_within_gap_s = Some(secs);
+            }
             if evals.is_power_of_two() || evals.is_multiple_of(500) {
                 println!(
-                    "{{\"progress\":\"{name}\",\"s\":{secs:.1},\"it\":{},\"restarts\":{},\"rel_p\":{:.2e},\"rel_d\":{:.2e},\"rel_gap\":{:.2e},\"value\":{:.1}}}",
+                    "{{\"progress\":\"{name}\",\"s\":{secs:.1},\"it\":{},\"restarts\":{},\"rel_p\":{:.2e},\"rel_d\":{:.2e},\"rel_gap\":{:.2e},\"value\":{:.1},\"dual\":{dual:.1}}}",
                     pr.iterations, pr.restarts, pr.relative_primal_residual, pr.relative_dual_residual, pr.relative_gap, -pr.primal_objective
                 );
             }
@@ -306,13 +320,9 @@ fn kill_push_pdlp_on_minelib_cpit_lp_relaxations() {
         let solve_s = t1.elapsed().as_secs_f64();
         let pr = s.progress();
         let ub = s.bound().map(|b| -b.value());
-        let published = PUBLISHED_LP
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|&(_, v)| v);
         let violation = p.max_violation(s.x()).unwrap();
         println!(
-            "{{\"bead\":\"BD-251\",\"instance\":\"{name}\",\"blocks\":{},\"periods\":{},\"rows\":{},\"cols\":{},\"nnz\":{},\"build_s\":{build_s:.1},\"solve_s\":{solve_s:.1},\"status\":\"{:?}\",\"iterations\":{},\"restarts\":{},\"rel_p\":{:.2e},\"rel_d\":{:.2e},\"rel_gap\":{:.2e},\"lp_value\":{:.3},\"certified_ub\":{},\"published\":{},\"ub_rel_to_published\":{},\"max_violation\":{violation:.3e},\"tol\":{tol},\"discount_from\":{from}}}",
+            "{{\"bead\":\"BD-251\",\"instance\":\"{name}\",\"blocks\":{},\"periods\":{},\"rows\":{},\"cols\":{},\"nnz\":{},\"build_s\":{build_s:.1},\"solve_s\":{solve_s:.1},\"status\":\"{:?}\",\"iterations\":{},\"restarts\":{},\"rel_p\":{:.2e},\"rel_d\":{:.2e},\"rel_gap\":{:.2e},\"lp_value\":{:.3},\"certified_ub\":{},\"published\":{},\"ub_rel_to_published\":{},\"dual_within_gap_s\":{},\"max_violation\":{violation:.3e},\"tol\":{tol},\"discount_from\":{from}}}",
             cpit.blocks,
             cpit.periods,
             p.rows(),
@@ -331,6 +341,7 @@ fn kill_push_pdlp_on_minelib_cpit_lp_relaxations() {
                 (Some(u), Some(p)) => format!("{:.3e}", (u - p) / p),
                 _ => "null".to_string(),
             },
+            dual_within_gap_s.map_or("null".to_string(), |v| format!("{v:.1}")),
         );
         if s.status() != PdlpStatus::Optimal {
             failures.push(format!("{name}: {:?} after {solve_s:.0} s", s.status()));
