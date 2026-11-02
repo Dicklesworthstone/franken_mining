@@ -19,7 +19,7 @@ use fmine_runtime::{HostWallClock, WallClock};
 
 use super::{
     Assessment, AssessmentFailure, MemberOutcome, Replay, Row, absent, cohort_json, invalid, js,
-    missing_name, parse_subset, payload_json, selection, selector_name, time, utc,
+    missing, missing_name, parse_subset, payload_json, selection, selector_name, time, utc,
 };
 use crate::{DOCTOR_WHY, Envelope, NextAction};
 
@@ -81,6 +81,7 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
     {
         V4_SCHEMA
     } else if expected_table == "registered_outcome"
+        || expected_table == "registered_missing"
         || doc.rows[0]
             .fields
             .iter()
@@ -284,12 +285,18 @@ fn perform(
         } => {
             let id = state.forecast_id(forecast)?;
             let policy = state.public_policy(cohort, id)?;
-            let resolved = super::source::resolve(root, &policy, id)?;
-            (
-                source_request(&state, cohort, forecast, &resolved, None)?,
-                "registered_outcome",
-                None,
-            )
+            match super::source::resolve(root, &policy, id)? {
+                super::source::ResolvedOriginalOutcome::Published(resolved) => (
+                    source_request(&state, cohort, forecast, &resolved, None)?,
+                    "registered_outcome",
+                    None,
+                ),
+                super::source::ResolvedOriginalOutcome::Missing(resolved) => (
+                    source_missing_request(&state, cohort, forecast, &resolved)?,
+                    "registered_missing",
+                    None,
+                ),
+            }
         }
         Command::Restate {
             cohort,
@@ -457,27 +464,48 @@ fn read_request(path: &Path) -> Result<String, Refusal> {
 /// Evidence recorded at admission. Historical replay verifies this record and its journal hash;
 /// it does not assert that the current filesystem still contains the admitted source bytes.
 #[derive(Debug)]
+enum SourceAdmissionValue {
+    Numeric { exact: Rat, displayed: String },
+    Missing {
+        value_kind: String,
+        token: String,
+        reason: fmine_calib::MissingReason,
+    },
+}
+
+#[derive(Debug)]
 pub(super) struct SourceAdmission {
     cohort: Digest32,
     claim: ObjectId,
-    exact: Rat,
-    displayed: String,
+    value: SourceAdmissionValue,
     published_at: String,
     published_at_basis: String,
 }
 
 impl SourceAdmission {
     pub(super) fn to_json(&self) -> String {
-        format!(
-            "{{\"basis\":\"recorded_registered_source_admission\",\"source_bytes_reverified_on_replay\":false,\"cohort_digest\":{},\"source_claim_id\":{},\"exact_value\":{{\"numerator\":{},\"denominator\":{}}},\"displayed\":{},\"published_at\":{},\"published_at_basis\":{}}}",
-            js(&self.cohort.to_hex()),
-            js(&self.claim.to_string()),
-            js(&self.exact.num().to_string()),
-            js(&self.exact.den().to_string()),
-            js(&self.displayed),
-            js(&self.published_at),
-            js(&self.published_at_basis),
-        )
+        match &self.value {
+            SourceAdmissionValue::Numeric { exact, displayed } => format!(
+                "{{\"basis\":\"recorded_registered_source_admission\",\"source_bytes_reverified_on_replay\":false,\"cohort_digest\":{},\"source_claim_id\":{},\"exact_value\":{{\"numerator\":{},\"denominator\":{}}},\"displayed\":{},\"published_at\":{},\"published_at_basis\":{}}}",
+                js(&self.cohort.to_hex()),
+                js(&self.claim.to_string()),
+                js(&exact.num().to_string()),
+                js(&exact.den().to_string()),
+                js(displayed),
+                js(&self.published_at),
+                js(&self.published_at_basis),
+            ),
+            SourceAdmissionValue::Missing { value_kind, token, reason } => format!(
+                "{{\"basis\":\"recorded_registered_source_admission\",\"source_bytes_reverified_on_replay\":false,\"cohort_digest\":{},\"source_claim_id\":{},\"exact_value\":null,\"displayed\":null,\"source_value_kind\":{},\"source_token\":{},\"missing_reason\":{},\"published_at\":{},\"published_at_basis\":{}}}",
+                js(&self.cohort.to_hex()),
+                js(&self.claim.to_string()),
+                js(value_kind),
+                js(token),
+                js(missing_name(*reason)),
+                js(&self.published_at),
+                js(&self.published_at_basis),
+            ),
+        }
     }
 }
 
@@ -602,6 +630,39 @@ fn source_request(
             "available_at",
             fmine_calib::record::format_utc(resolved.available_at_ns / 1_000_000_000),
         ),
+    ] {
+        let _ = writeln!(request, "{key} = {}", toml_string(&value)?);
+    }
+    Ok(request)
+}
+
+fn source_missing_request(
+    state: &Replay,
+    cohort: &str,
+    forecast: &str,
+    resolved: &super::source::ResolvedPublicMissing,
+) -> Result<String, Refusal> {
+    let id = state.cohorts.get(cohort).ok_or_else(|| absent("frozen cohort missing"))?;
+    let anchor = resolved.source.claim.anchors.first().ok_or_else(|| absent("source Claim anchor missing"))?;
+    let mut request = String::from("[[registered_missing]]\n");
+    for (key, value) in [
+        ("forecast", forecast.to_string()),
+        ("cohort", cohort.to_string()),
+        ("cohort_digest", id.to_hex()),
+        ("reason", missing_name(resolved.reason).to_string()),
+        ("source", resolved.citation.source.clone()),
+        ("vintage", resolved.citation.vintage.clone()),
+        ("locator", resolved.citation.locator.clone()),
+        ("sha256", Digest32(resolved.citation.sha256).to_hex()),
+        ("claim_id", resolved.source.claim.claim_id.to_string()),
+        ("claim_body", bytes_hex(&resolved.source.claim.canonical_body())),
+        ("value_kind", resolved.value_kind.to_string()),
+        ("token", resolved.token.clone()),
+        ("ownership_source", resolved.ownership_source.to_string()),
+        ("anchor_path", anchor.artifact_path.clone()),
+        ("published_at", resolved.published_at.clone()),
+        ("published_at_basis", resolved.published_at_basis.clone()),
+        ("available_at", fmine_calib::record::format_utc(resolved.available_at_ns / 1_000_000_000)),
     ] {
         let _ = writeln!(request, "{key} = {}", toml_string(&value)?);
     }
@@ -770,12 +831,91 @@ fn apply_source(
         SourceAdmission {
             cohort: cohort_digest,
             claim,
-            exact,
-            displayed,
+            value: SourceAdmissionValue::Numeric { exact, displayed },
             published_at,
             published_at_basis: published_at_basis.to_string(),
         },
     );
+    Ok(())
+}
+
+fn apply_source_missing(state: &mut Replay, row: Row<'_>, recorded_ns: i64) -> Result<(), Refusal> {
+    row.allowed(&[
+        "forecast", "cohort", "cohort_digest", "reason", "source", "vintage", "locator",
+        "sha256", "claim_id", "claim_body", "value_kind", "token", "ownership_source",
+        "anchor_path", "published_at", "published_at_basis", "available_at",
+    ], &[])?;
+    let forecast = state.forecast_id(row.string("forecast")?)?;
+    let cohort = row.string("cohort")?;
+    let policy = state.public_policy(cohort, forecast)?;
+    if row.string("vintage")? != policy.period.original_release() || row.string("source")? != policy.issuer {
+        return Err(invalid("registered missing outcome must bind the frozen issuer's original release"));
+    }
+    let cohort_digest = super::hex(row.string("cohort_digest")?)?;
+    if state.cohorts.get(cohort) != Some(&cohort_digest) {
+        return Err(invalid("source missing admission differs from the frozen cohort"));
+    }
+    if !state.ledger.outcomes(forecast).is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::FrozenRecordMutation507,
+            "the original public outcome status was already recorded",
+        ));
+    }
+    let reason = missing(row.string("reason")?)?;
+    if reason != fmine_calib::MissingReason::NotPublished {
+        return Err(invalid("registered source dashes map only to not_published"));
+    }
+    let published_at = row.string("published_at")?.to_string();
+    if !fmine_registry::sources::is_date(&published_at) {
+        return Err(invalid("source publication date must be YYYY-MM-DD"));
+    }
+    let publication_start = time(&format!("{published_at}T00:00:00Z"))?;
+    let published_at_basis = row.string("published_at_basis")?;
+    if !fmine_registry::sources::PUBLISHED_AT_BASES.iter().any(|prefix| {
+        published_at_basis.strip_prefix(prefix).is_some_and(|detail| !detail.trim().is_empty())
+    }) {
+        return Err(invalid("publication basis needs FACT: or INFERENCE: followed by its evidence"));
+    }
+    let available_ns = publication_start.checked_add(86_400_000_000_000)
+        .ok_or_else(|| invalid("publication availability overflows"))?;
+    if available_ns != row.time("available_at")? || publication_start < policy.period.end_ns()? {
+        return Err(invalid("source availability must conservatively follow the complete target and publication day"));
+    }
+    let body = claim_body(row.string("claim_body")?)?;
+    let claim = row.string("claim_id")?.parse::<ObjectId>().map_err(|e| invalid(e.to_string()))?;
+    if claim != ObjectId::from_canonical_bytes(PrefixKind::Claim, &body) {
+        return Err(Refusal::new(RefusalCode::FrozenRecordMutation507, "source Claim body differs from its stored identity"));
+    }
+    let citation = fmine_calib::OutcomeCitation {
+        source: policy.issuer.clone(),
+        vintage: row.string("vintage")?.to_string(),
+        locator: row.string("locator")?.to_string(),
+        sha256: super::hex(row.string("sha256")?)?.0,
+    };
+    let expected = super::source::receipt_missing_claim_body(
+        &policy, forecast, &citation, row.string("value_kind")?, row.string("token")?,
+        row.string("ownership_source")?, row.string("anchor_path")?,
+    )?;
+    if body != expected {
+        return Err(Refusal::new(
+            RefusalCode::FrozenRecordMutation507,
+            "missing-outcome Claim does not bind the frozen target, dash and cited anchor",
+        ));
+    }
+    let event = state.ledger.append_outcome(
+        forecast, available_ns, recorded_ns, fmine_calib::OutcomeKind::Missing { reason },
+    )?;
+    state.source_admissions.insert((forecast, event), SourceAdmission {
+        cohort: cohort_digest,
+        claim,
+        value: SourceAdmissionValue::Missing {
+            value_kind: row.string("value_kind")?.to_string(),
+            token: row.string("token")?.to_string(),
+            reason,
+        },
+        published_at,
+        published_at_basis: published_at_basis.to_string(),
+    });
     Ok(())
 }
 
@@ -905,6 +1045,19 @@ fn apply(
                 ));
             }
             apply_source(state, row, authority_ns, false)?;
+        }
+        "registered_missing" => {
+            if version != OperationVersion::V3 {
+                return Err(invalid(
+                    "registered source missing outcomes require operation version three",
+                ));
+            }
+            if row.time("available_at")? > lower {
+                return Err(late(
+                    "registered publication availability exceeds the writer's earliest possible clock time",
+                ));
+            }
+            apply_source_missing(state, row, authority_ns)?;
         }
         "registered_restatement" => {
             if version != OperationVersion::V4 {

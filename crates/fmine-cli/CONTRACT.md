@@ -203,11 +203,16 @@ Under the exclusive writer lock it loads the original registered Mine Stats rele
 bytes and the canonical Claim, and matches the exact frozen issuer, subject, period, metric, unit, scope
 and ownership. It uses the displayed decimal, retaining the stored value and exact rational separately;
 the existing score kernel receives that rational's deterministic floating-point projection.
-Ambiguous, missing, placeholder, status-marked, stale, altered and incompatible sources refuse without
-appending. Candidate cardinality is checked before canonical-key projection, and a reader refusal on either
-QTD/YTD summary sheet blocks admission: an unusable competing row cannot disappear and leave a false singleton.
-Unrelated detailed-sheet refusals do not replace the target. A later comparative cannot fill a missing original.
-An unmarked printed zero remains valid. Cross-crate forecast replay controls retain their CLI harness and all
+Ambiguous, absent-file, status-derived, stale, altered and incompatible sources refuse without appending.
+A source-native dash (`NilReason::Unknown`) at the exact frozen target in the authenticated original release is
+different: `resolve` appends a source-verified `NotPublished` missing event, retaining the dash token, canonical
+source Claim, workbook hash and publication evidence. It remains in the cohort denominator and cannot later be
+reinterpreted as a numeric original. `n/a`, withheld/disposed interpretations and other status-derived placeholders
+still refuse because their additional interpretation evidence is not yet frozen by this protocol. Candidate
+cardinality is checked before canonical-key projection, and a reader refusal on either QTD/YTD summary sheet blocks
+admission: an unusable competing row cannot disappear and leave a false singleton. Unrelated detailed-sheet
+refusals do not replace the target. A later comparative cannot fill a missing original. An unmarked printed zero
+remains valid. Cross-crate forecast replay controls retain their CLI harness and all
 assertions in `crates/xtask/testdata/forecast_replay_controls.rs`.
 The six cross-crate forecast-record source fixture tests likewise retain their CLI harness and unchanged
 assertions in `crates/xtask/testdata/forecast_record_sources.rs`.
@@ -216,13 +221,15 @@ complete target period. Retrieval never substitutes for a missing publication da
 is retained metadata rather than independent proof of publication time. Conservative availability is
 midnight after that date, checked against the sampled clock's lower bound before admission.
 
-Public-bound freezes and generated `registered_outcome` operations use
+Public-bound freezes and generated `registered_outcome` / `registered_missing` operations use
 `schema = "fmine.forecast-operation.v3"`; their authority time uses the same upper-bound policy as v2.
 The raw `outcome` route refuses every public-bound member, including members shared with other cohorts.
-The generated operation retains the frozen cohort digest, source Claim ID and canonical body, exact and
-displayed values, ownership provenance, source anchor and publication evidence. Replay reconstructs the
-original issuer Claim from the frozen policy and retained evidence, checking its complete canonical body
-and identity before restoring the event. This prevents value, subject, period, basis or anchor substitution.
+A numeric generated operation retains the frozen cohort digest, source Claim ID and canonical body, exact and
+displayed values, ownership provenance, source anchor and publication evidence. A registered missing operation
+retains the same frozen/source bindings plus the exact dash token and its `not_published` reason, never an invented
+numeric value. Replay reconstructs the original source Claim from the frozen policy and retained evidence,
+checking its complete canonical body and identity before restoring either event. This prevents value, placeholder,
+subject, period, basis or anchor substitution.
 `source_admissions` and each selected member's `source_admission` distinguish recorded source verification
 from unverified supplied outcomes. Replay does not re-read source files or assert present file availability.
 The journal head binds admission evidence; the existing assessment digest binds the cohort, numeric event

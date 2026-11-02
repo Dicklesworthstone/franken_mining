@@ -1315,9 +1315,13 @@ target, locator or date. The receipt retains the source Claim, exact printed val
 publication basis. The registered publication date must fall after the complete target period; retrieval
 never supplies a missing publication date. Date-only availability conservatively begins at midnight after
 the publication day. The stated FACT/INFERENCE basis is retained metadata, not independent proof of that time.
-Missing original releases, altered bytes, placeholders, ambiguous cells and ownership mismatches refuse
-without changing the journal. Caller-supplied `outcome` requests cannot bypass a frozen public binding.
-Historical reports reconstruct the recorded source Claim without requiring the workbook to remain on disk.
+Missing original-release files, altered bytes, ambiguous cells and ownership mismatches refuse without changing
+the journal. When the authenticated original cell itself prints a source-native dash, `resolve` instead records a
+source-verified `not_published` missing event. The dash token, canonical source Claim, workbook hash and publication
+evidence remain attached, and the member stays in every cohort denominator. Status-derived placeholders and
+`n/a` still refuse rather than guessing their meaning. Caller-supplied `outcome` requests cannot bypass a frozen
+public binding. Historical reports reconstruct the recorded source Claim without requiring the workbook to remain
+on disk.
 
 To retain later comparative revisions as separately scored outcomes, include this field in the cohort
 request **before freezing it**:
@@ -1346,7 +1350,8 @@ superseded event under lock; callers supply neither its sequence nor an outcome 
 continues to score the original, while `latest-as-of` uses a restatement only once both its availability
 and recording time fall within the assessment cut. Each event retains its own source Claim and publication
 evidence. Previously saved reports retain their original result, journal prefix and source admission after
-later revisions. Automatic missing-status events remain future work.
+later revisions. An original source-native dash is already a durable `not_published` event and cannot be backfilled
+by a comparative; automatic inference of other missing reasons remains outside this source-bound protocol.
 
 For example, an outcome available at `12:00:00Z` and recorded at an observed `12:00:01.500Z` with a one-second
 uncertainty has a recording upper bound of `12:00:02.500Z`. A later assessment cut at `12:00:02Z` leaves that
