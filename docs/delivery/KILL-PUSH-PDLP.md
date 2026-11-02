@@ -83,8 +83,23 @@ Both runs were made at `9b9fe28` on 2026-11-02, the 1e-4 run straight after the 
   - Under the first rule, zuck_medium, zuck_large and mclaughlin_limit fail at ε = 1e-6.
   - The new rule is looser than the first, which required both the stopping rule and the bound.
   - It is stricter than judging the stopping rule alone, which passes all ten at ε = 1e-4 with bounds up to 1.05% off.
-- **The best bound is not kept.** Only the last evaluation's multipliers are certified. On w23 at 1e-4 the dual objective had been within 1e-4 at 32 s, yet the returned bound was 1.9e-4 off.
 - **One family.** MineLib's CPIT LPs are 0–1 boxes, precedence and monotonicity rows, and capacity rows. Blend networks, SAA extensive forms and CVaR LPs are not tested at scale.
 - **Speed.** The timings come from one loaded machine, not a benchmark suite. HiGHS and OR-Tools PDLP (the plan's lab oracles) were not run, so there is no comparison.
 - **Not run:** mclaughlin, MineLib's largest instance, with about 2.9×10⁹ nonzeros in this formulation.
 - **CI cannot run it**, because MineLib's licence is not recorded and its files are not committed.
+
+## Later change (2026-11-02, `7615b65`)
+
+- **What changed.** When the runs above were made, only the last evaluation's multipliers were certified. On w23 at 1e-4 the dual objective had been within 1e-4 at 32 s, yet the returned bound was 1.9e-4 off. `pdlp` now also keeps the multipliers with the highest dual objective seen and returns the higher of the two certified bounds.
+- **The decision stands.** The step, restart and stopping logic are unchanged, so Decision 3's rerun trigger does not apply. Every bound above can only tighten.
+- **Rerun at ε = 1e-4** on the five instances that had missed, the same way as above. Each took the same steps as before. The gaps:
+
+  | Instance | Before | Now |
+  |---|---|---|
+  | newman1 | 2.8e-4 | 1.3e-4 |
+  | kd | 1.05e-2 | 9.5e-3 |
+  | sm2 | 3.8e-4 | 2.7e-4 |
+  | w23 | 1.9e-4 | 4.2e-5 |
+  | mclaughlin_limit | 1.1e-4 | 8.4e-5 |
+
+  The other five were already within 1e-4 and were not rerun; by construction they can only have tightened. So seven of ten are within 1e-4 at ε = 1e-4, and newman1, kd and sm2 still miss. The ε = 1e-6 runs were not repeated.
