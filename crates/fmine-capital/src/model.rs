@@ -1059,6 +1059,7 @@ fn parse_model(
         candidates: claims,
         funding,
         funding_schedule,
+        entity_funding: None,
         equity,
     };
     validate(&inputs)?;

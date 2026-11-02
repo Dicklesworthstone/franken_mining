@@ -2,10 +2,11 @@
 
 ## 1. Charter & Layer
 
-E-layer Helm capital-program comparison, within the planned 20k/23k LOC budget. These bounded BD-229 slices
+E-layer Helm capital-program comparison, within the planned 20k/23k LOC budget. These bounded BD-229/BD-314 slices
 enumerate declared static subsets and two-stage policies, using the permitted `fmine-capital -> fmine-decide` edge.
-- **Allowed Module Families:** `["model", "render", "recourse"]`
+- **Allowed Module Families:** `["model", "render", "recourse", "entity"]`
 The static kernel lives in the crate root; `recourse` composes its state-level results into complete policies.
+`entity` supplies separately conserved cash ledgers and declared ownership distributions as feasibility constraints.
 
 ## 2. Mathematical & Domain Formulation
 
@@ -32,6 +33,32 @@ period's floor applies at its close. Every negative slack produces a dated struc
 earlier breaches followed by later recovery. All checkpoint rows remain visible even for rejected subsets.
 There is no implicit within-period payment ordering, discounting, credit facility or adaptive recourse.
 Aggregate funding and scheduled funding are mutually exclusive; neither changes the already-net NAV input.
+
+DESIGN (BD-314, §23.2): optional `EntityFunding` is a third, mutually exclusive funding mode. Every named
+entity has explicit opening cash in each shared state, a floor for every period, and complete external
+baseline and candidate cash-flow matrices. Fixed funding transfers have two modeled endpoints, one period,
+a complete state-amount vector and an optional activating candidate. External partner funding must already
+appear in the native cash inputs; ownership never implies a partner contribution or a parent top-up.
+
+Each state starts with opening-floor checks. Every period then applies native external flows and all fixed
+transfers, checks each entity's pre-distribution floor, processes ownership distributions child first, and
+checks closing floors. An earlier failure remains a rejection even if a later distribution repairs it.
+Put a dividend in an earlier period when it is intended to fund a subsequent expenditure. No payment order
+inside the native-flow/transfer phase is inferred. Fixed transfers debit and credit the same exact amount.
+
+Each distributing entity has one parent, an explicit ownership fraction and distribution basis. The graph
+must be acyclic. A complete period/state permission and cap determine the maximum payout: a closed gate
+pays zero; an open gate pays the lesser of its cap and positive cash above the current entity floor. Only
+the parent's fraction reaches its ledger. The remainder is explicitly paid outside the modeled graph.
+Blocked or capped cash remains with its entity. A parent's onward distribution includes child receipts
+through deterministic child-first ordering. All amounts and carry balances remain rational, including
+sub-minor-unit ownership splits; no cash is rounded through fixed-decimal `Money`.
+
+Every period proves modeled closing cash plus external distributions equals modeled opening cash plus
+native external flows. Internal transfers and parent receipts cancel exactly. A conservation failure
+refuses the comparison. Source-bound NAV remains attributable to `objective_entity`; cash movements do
+not create another NAV gain or deduction. When equity is declared, its entity must equal that objective
+entity. The model does not derive another entity's NAV or infer dilution, taxes, debt covenants or gates.
 
 DESIGN (BD-229, PO-CAP-2): optional `EquityBasis` switches to the explicit
 `additive_equity_nav_with_share_changes` convention. Candidate payoffs then represent changes in **total
@@ -113,6 +140,8 @@ acquires a stronger validated regime. Every authority flag remains false.
 The two-stage result additionally binds the complete information Claim, candidate stages, observation
 partition/date/basis and the full static result. Its source assumptions remain uncalibrated; the model does
 not infer signal accuracy, information rights, approval or a calendar of economic NAV realization.
+Entity funding adds its complete graph, matrices, fixed-transfer activation, ownership, gate and cap Claim
+to the same evidence and digest binding. Losing candidates and closed distribution gates remain bound.
 
 ## 4. Public API Surface
 
@@ -121,6 +150,17 @@ not infer signal accuracy, information rights, approval or a calendar of economi
   `StateCashFlow` and `CandidateCashFlow`; assessments retain `CashScheduleCheckpoint` rows and minimum slack.
 - `EquityBasis`, `CandidateShareChange`, `ExactPerShare`, `PerShareStats`, `EquityState`, `EquityAssessment`:
   optional source-bound equity inputs and exact per-share outcomes, distinct from total-USD quantities.
+- `entity::{EntityFunding, Entity, EntityPeriod, EntityFloor, EntityOpeningCash, EntityStateCashFlow,
+  EntityCandidateCashFlow, EntityTransfer, EntityDistribution, EntityDistributionGate}`: the complete
+  entity funding declaration in `ProgramInputs.entity_funding`. `EntityFundingAssessment` contains a
+  state-indexed ledger, exact minimum slack, all fixed transfers, distributions and conservation rows.
+  `EntityCashPhase` distinguishes opening, pre-distribution and closing checks. Every rejected choice
+  retains the full assessment. Optional entity JSON keys are omitted for legacy models.
+  At most four entities, sixteen periods and sixty-four transfers are admitted. With `E` entities,
+  `P` periods, `T` transfers and `D` distributing entities, work per state is
+  `E*(2P+1) + T + D*P + P`. All subsets times states times this work must fit 65,536 ledger rows.
+  For recourse the bound covers static subsets plus complete policies. These bounds precede canonical
+  admission/enumeration; output is never pruned to fit them.
 - `evaluate(&ProgramInputs) -> Result<EvaluatedProgram, Refusal>`: exact exhaustive comparison, bounded to
   1–8 candidates and 1–256 shared states (at most 256 subsets). Schedules admit 1–16 periods and at most
   65,536 checkpoints across all subsets: `2^candidates × states × (periods + 1)`. Bounds apply before schedule
@@ -143,6 +183,10 @@ not infer signal accuracy, information rights, approval or a calendar of economi
   candidates and `k` classes, policy count is `2^(f-1) * (2^r + 2^(r*k))`. The combined static and policy
   checkpoint count `(2^(f+r) + policies) * states * (periods + 1)` must not exceed 65,536. Bounds precede
   canonical tagging/enumeration; rejected policies are retained, never pruned to satisfy work limits.
+  Entity-funded policies reuse the entire same-state entity ledger of each realized subset. Recourse native
+  flows and candidate-triggered transfers must be zero before observation. The information gate must incur
+  negative net native external cash across the entities in every state before observation; an internal
+  transfer alone does not buy information. Initial obligations remain in every realized entity path.
 - `model::parse(text, SourceAnchor)`: verifies SHA-256 against actual bytes, then reads the strict
   static-only `fmine.capital-program.v1` TOML subset; staged tables refuse. Top-level strings are `schema`,
   `model_key`, `question`, `currency`,
@@ -192,6 +236,10 @@ Every candidate's cash flows remain required even when another constraint preven
 Equity additionally refuses missing/duplicate/foreign matrix entries, nonpositive initial shares or unit
 scale, incompatible currency/model/valuation metadata, absent entity/share class, an incompatible payoff
 convention, a legacy total-USD risk ceiling, and orphan equity rows without a complete declaration.
+Entity funding refuses incomplete/duplicate/foreign matrices, missing or mismatched objective entities,
+invalid periods and currencies, negative opening balances/floors/transfer amounts/distribution caps,
+unknown/self/cyclic distribution edges, ownership outside [0,1], absent transfer/distribution bases,
+unknown activation candidates and gates without a distribution rule. It excludes both legacy funding modes.
 Recourse additionally refuses incomplete/duplicate/foreign stage and observation mappings, an unknown or
 noninitial information candidate, a missing paid gate, absent or mistimed cash schedules, pre-observation
 recourse cash flows, and initial prerequisites that depend on a later decision. It admits at least one
@@ -220,6 +268,11 @@ dropped to obtain a plausible result. Input/source errors use the existing refus
 - A continuation is constant within each information set, and all first-stage commitments survive in every state.
 - Policy funding and structural constraints hold on each realized path; global risk uses the original state weights.
 - The static feasible set embeds in the policy set, so every available net adaptive value is nonnegative.
+- Cash cannot move between entities except through declared transfers and distributions. Parent ownership
+  never changes funding obligations or credits outside shareholders' cash to the parent.
+- Every period conserves native external cash after explicitly accounting for outside distributions.
+- Entity floor failures and their phases remain on the realized policy state; another state's failure
+  cannot reject an otherwise feasible adaptive continuation.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 
@@ -259,6 +312,12 @@ The complete `tests/capital/cash_schedule.toml` example selects bridge plus plan
 The complete `tests/capital/recourse.toml` example buys the study, then issues shares and builds only after
 Good, abandoning after Bad. Its exact mean is 19/120 USD/share with USD 120 total expected NAV change;
 closing cash is USD 80 and USD 20 respectively. The best feasible fixed program is hold.
+Entity known answers cover trapped cash reversing the selected investment, explicit partner/capital-call
+shortfalls, caps and blocked distributions carried into later periods, exact one-third ownership cash,
+multilevel child-first payouts and retained pre-distribution failures. The three-period policy pays for a
+study, receives a conditional JV distribution, then builds only after Good: mean NAV 45, tail loss 5 and
+adaptive value 45, with parent cash 30/20. Direct guards cover matrix completeness, cycles, units, source and
+losing-input identity, permutation, overflow, pre-observation transfers and combined ledger-row bounds.
 This bounded slice does not claim the full GATE-CAP-01/03/04 scale, selection-frequency or historical evidence.
 
 ## 9. Lifted Code & Foundation Dependencies
@@ -270,9 +329,11 @@ kernel in `fmine-numerics::risk::exact` for per-share statistics. No IO, spawnin
 ## 10. Non-Goals & Scope Boundary
 
 Static declared net-NAV comparison with optional aggregate or dated-checkpoint funding and exact equity NAV
-per-share optimization, plus bounded two-stage policies with purchased declared information. No additional
+per-share optimization, entity-specific cash/ownership distributions, and bounded two-stage policies with
+purchased declared information. No additional
 decision stages, undeclared project interactions, inferred observation likelihoods, price/fiscal model,
-reference-class fitting, entity waterfalls, portfolio safety, calibrated probabilities or
+reference-class fitting, automatic capital-call dilution, changing ownership, inferred debt-service gates,
+simultaneous parent/carve-out NAV objectives, portfolio safety, calibrated probabilities or
 physical authorization is supplied. Reference-class bases must be explicitly declared, including an honest
 unadjusted basis; the system does not apply an unnamed adjustment. Selection frequency is explicitly
 unavailable. The broad BD-229 CapitalProgram and production-scale gates remain open.

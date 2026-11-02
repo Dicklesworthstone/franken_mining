@@ -297,6 +297,7 @@ pub(crate) fn inputs(
         candidates,
         funding: None,
         funding_schedule: None,
+        entity_funding: None,
         equity: None,
     }
 }

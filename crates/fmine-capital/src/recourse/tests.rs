@@ -160,6 +160,8 @@ fn state<'a>(policy: &'a PolicyChoice, id: &str) -> &'a PolicyState {
 fn cash<'a>(policy: &'a PolicyChoice, period: &str, state: &str) -> &'a CashScheduleCheckpoint {
     policy
         .funding_schedule
+        .as_ref()
+        .unwrap()
         .checkpoints
         .iter()
         .find(|row| row.period_id.as_deref() == Some(period) && row.state_id == state)
@@ -652,7 +654,15 @@ fn pathwise_constraints_can_leave_one_adaptive_policy_and_no_static_comparator()
     );
     assert!(conflicting.statistics.is_none());
     assert_eq!(conflicting.states.len(), 2);
-    assert_eq!(conflicting.funding_schedule.checkpoints.len(), 6);
+    assert_eq!(
+        conflicting
+            .funding_schedule
+            .as_ref()
+            .unwrap()
+            .checkpoints
+            .len(),
+        6
+    );
 }
 
 #[test]

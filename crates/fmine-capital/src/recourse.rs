@@ -10,6 +10,7 @@ mod tests;
 pub const MAX_OBSERVATIONS: usize = 4;
 pub const MAX_POLICIES: usize = 256;
 pub const NO_CLAIM: &str = "Exact bounded two-stage comparison conditional on the declared shared scenarios, paid information gate, observation classes, stage assignments, dated cash flows and net NAV inputs. Initial commitments and their full declared effects are retained in every continuation. A policy can respond only to the declared observation after purchasing the information gate; otherwise one common continuation applies to every state. Risk is evaluated over each complete unconditional policy distribution. Net adaptive value is reported separately against the best static subset under the same objective and risk constraint; it is already included in policy outcomes and must not be added again. Cash checks cover only opening and declared period-end checkpoints. Input weights and information assumptions are uncalibrated. No further stages, implicit information, intra-period payment ordering, entity waterfalls, execution authorization, regulatory claim, selection-frequency estimate or historical validation is supplied.";
+pub const ENTITY_NO_CLAIM: &str = "Exact bounded two-stage comparison conditional on declared shared scenarios, paid information, observation classes, stage assignments and net NAV for the objective entity. Initial commitments and all their effects remain in every continuation. Decisions depend only on purchased declared observations; global risk uses the complete unconditional policy. Entity cash follows explicit native flows, fixed funding transfers and gated child-first ownership distributions, with outside shareholders' cash leaving the modeled graph. Floors are checked at initial opening, before distributions and at closing; later receipts never erase earlier breaches. A paid information gate must incur negative net native external cash before observation; an internal transfer alone is not payment. No partner top-up, dilution, debt-service covenant, fiscal rule, permission or second valuation denominator is inferred. Net adaptive value is separate from the full static comparison and must not be added to NAV again. Inputs remain uncalibrated assumptions. No further stages, intra-phase payment ordering, execution authorization, regulatory claim, selection frequency or historical validation is supplied.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecisionStage {
@@ -91,7 +92,8 @@ pub struct PolicyChoice {
     pub branches: Vec<PolicyBranch>,
     pub states: Vec<PolicyState>,
     pub structural_rejections: Vec<PolicyRejection>,
-    pub funding_schedule: FundingScheduleAssessment,
+    pub funding_schedule: Option<FundingScheduleAssessment>,
+    pub entity_funding: Option<EntityFundingAssessment>,
     pub equity: Option<EquityAssessment>,
     pub statistics: Option<AlternativeStats>,
     pub tail_loss: Option<ExactMoney>,
@@ -150,6 +152,14 @@ impl EvaluatedRecourseProgram {
     }
     #[must_use]
     pub fn no_claim(&self) -> &'static str {
+        no_claim_for(&self.inputs)
+    }
+}
+
+fn no_claim_for(inputs: &RecourseInputs) -> &'static str {
+    if inputs.program.entity_funding.is_some() {
+        ENTITY_NO_CLAIM
+    } else {
         NO_CLAIM
     }
 }
@@ -183,17 +193,19 @@ fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
             "two-stage programs require bounded complete candidate-stage and state-observation declarations",
         ));
     }
-    let schedule = &program
-        .funding_schedule
-        .as_ref()
-        .ok_or_else(|| {
-            bad(
+    let schedule = program.funding_schedule.as_ref().map(|claim| &claim.value);
+    let entities = program.entity_funding.as_ref().map(|claim| &claim.value);
+    let period_count = match (schedule, entities) {
+        (Some(schedule), None) => schedule.periods.len(),
+        (None, Some(entities)) => entities.periods.len(),
+        _ => {
+            return Err(bad(
                 RefusalCode::NoClaimInDomain201,
-                "two-stage programs require a dated funding schedule",
-            )
-        })?
-        .value;
-    if !(2..=MAX_CASH_PERIODS).contains(&schedule.periods.len()) {
+                "two-stage programs require exactly one dated funding schedule or entity funding declaration",
+            ));
+        }
+    };
+    if !(2..=MAX_CASH_PERIODS).contains(&period_count) {
         return Err(bad(
             RefusalCode::NoClaimInDomain201,
             "two-stage programs require 2..=16 cash periods with a declared observation boundary",
@@ -278,14 +290,18 @@ fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
                 "recourse policy count exceeds the bounded domain",
             )
         })?;
+    let work_per_state = match entities {
+        Some(funding) => entity::work_per_state(funding)?,
+        None => period_count + 1,
+    };
     let checkpoints = (1_usize << candidate_count)
         .checked_add(policy_count)
         .and_then(|count| count.checked_mul(state_count))
-        .and_then(|count| count.checked_mul(schedule.periods.len() + 1));
+        .and_then(|count| count.checked_mul(work_per_state));
     if policy_count > MAX_POLICIES || checkpoints.is_none_or(|count| count > MAX_CASH_CHECKPOINTS) {
         return Err(bad(
             RefusalCode::NoClaimInDomain201,
-            "two-stage programs admit at most 256 policies and 65536 combined static/policy cash checkpoints",
+            "two-stage programs admit at most 256 policies and 65536 combined static/policy cash ledger rows",
         ));
     }
     let mut metadata = super::validate(program)?;
@@ -304,10 +320,22 @@ fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
             "observation_date must be a valid YYYY-MM-DD date",
         ));
     }
-    let mut periods: Vec<_> = schedule.periods.iter().collect();
-    periods.sort_by(|a, b| (&a.cash_period, &a.id).cmp(&(&b.cash_period, &b.id)));
+    let mut periods: Vec<_> = match (schedule, entities) {
+        (Some(schedule), None) => schedule
+            .periods
+            .iter()
+            .map(|period| (period.id.as_str(), period.cash_period.as_str()))
+            .collect(),
+        (None, Some(entities)) => entities
+            .periods
+            .iter()
+            .map(|period| (period.id.as_str(), period.cash_period.as_str()))
+            .collect(),
+        _ => return Err(internal("admitted recourse funding mode changed")),
+    };
+    periods.sort_by(|a, b| (a.1, a.0).cmp(&(b.1, b.0)));
     let boundary = periods.iter().position(|period| {
-        period_dates(&period.cash_period).is_some_and(|(start, _)| start == basis.observation_date)
+        period_dates(period.1).is_some_and(|(start, _)| start == basis.observation_date)
     });
     let Some(boundary) = boundary.filter(|index| *index > 0) else {
         return Err(bad(
@@ -315,11 +343,7 @@ fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
             "observation_date must start a noninitial declared cash period",
         ));
     };
-    let earlier_periods: BTreeSet<_> = periods
-        .iter()
-        .take(boundary)
-        .map(|p| p.id.as_str())
-        .collect();
+    let earlier_periods: BTreeSet<_> = periods.iter().take(boundary).map(|p| p.0).collect();
     for candidate in &program.candidates {
         if stages.get(candidate.value.candidate_id.as_str()) == Some(&DecisionStage::Initial)
             && candidate
@@ -349,37 +373,77 @@ fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
             "the information gate needs positive committed cost and strictly negative net NAV in every state",
         ));
     }
+    // Internal transfers conserve group cash. Only native external flows establish a paid gate.
+    let native_flows: Vec<_> = match (schedule, entities) {
+        (Some(schedule), None) => schedule
+            .candidate_flows
+            .iter()
+            .map(|flow| {
+                (
+                    flow.period_id.as_str(),
+                    "",
+                    flow.candidate_id.as_str(),
+                    flow.state_id.as_str(),
+                    flow.value,
+                )
+            })
+            .collect(),
+        (None, Some(entities)) => entities
+            .candidate_flows
+            .iter()
+            .map(|flow| {
+                (
+                    flow.period_id.as_str(),
+                    flow.entity_id.as_str(),
+                    flow.candidate_id.as_str(),
+                    flow.state_id.as_str(),
+                    flow.value,
+                )
+            })
+            .collect(),
+        _ => return Err(internal("admitted recourse funding mode changed")),
+    };
     let mut gate_flows = Vec::new();
-    for flow in &schedule.candidate_flows {
-        if !earlier_periods.contains(flow.period_id.as_str()) {
+    for (period_id, entity_id, candidate_id, state_id, value) in native_flows {
+        if !earlier_periods.contains(period_id) {
             continue;
         }
-        if stages.get(flow.candidate_id.as_str()) == Some(&DecisionStage::Recourse)
-            && flow.value.minor != 0
-        {
+        if stages.get(candidate_id) == Some(&DecisionStage::Recourse) && value.minor != 0 {
             return Err(invalid(
                 "recourse candidates must have explicit zero cash flow before observation",
             ));
         }
-        if flow.candidate_id == basis.information_candidate {
-            gate_flows.push(flow);
+        if candidate_id == basis.information_candidate {
+            gate_flows.push((period_id, entity_id, state_id, value));
+        }
+    }
+    if let Some(entities) = entities {
+        for transfer in &entities.transfers {
+            if earlier_periods.contains(transfer.period_id.as_str())
+                && transfer.candidate_id.as_deref().is_some_and(|candidate| {
+                    stages.get(candidate) == Some(&DecisionStage::Recourse)
+                })
+                && transfer.amounts.iter().any(|(_, amount)| amount.minor != 0)
+            {
+                return Err(invalid(
+                    "recourse candidates must have explicit zero entity transfers before observation",
+                ));
+            }
         }
     }
     let period_order: BTreeMap<_, _> = periods
         .iter()
         .enumerate()
-        .map(|(index, p)| (p.id.as_str(), index))
+        .map(|(index, p)| (p.0, index))
         .collect();
-    gate_flows.sort_by(|a, b| {
-        (period_order.get(a.period_id.as_str()), &a.state_id)
-            .cmp(&(period_order.get(b.period_id.as_str()), &b.state_id))
-    });
+    gate_flows
+        .sort_by(|a, b| (period_order.get(a.0), a.1, a.2).cmp(&(period_order.get(b.0), b.1, b.2)));
     let mut gate_cash: BTreeMap<&str, i128> = state_ids.iter().map(|state| (*state, 0)).collect();
-    for flow in gate_flows {
+    for (_, _, state_id, value) in gate_flows {
         let cash = gate_cash
-            .get_mut(flow.state_id.as_str())
+            .get_mut(state_id)
             .ok_or_else(|| internal("admitted gate cash flow lost its shared state"))?;
-        *cash = checked_minor_add(*cash, flow.value.minor)?;
+        *cash = checked_minor_add(*cash, value.minor)?;
     }
     if gate_cash.values().any(|cash| *cash >= 0) {
         return Err(invalid(
@@ -489,6 +553,7 @@ fn rejection_state(reason: &StructuralRejection) -> Option<&str> {
     match reason {
         StructuralRejection::LiquidityShortfall { state_id, .. }
         | StructuralRejection::CashScheduleShortfall { state_id, .. }
+        | StructuralRejection::EntityCashShortfall { state_id, .. }
         | StructuralRejection::NonpositiveShareCount { state_id, .. } => Some(state_id),
         StructuralRejection::BudgetExceeded
         | StructuralRejection::MissingPrerequisite { .. }
@@ -500,6 +565,7 @@ struct CatalogState<'a> {
     net_nav: Money,
     rejections: Vec<&'a StructuralRejection>,
     checkpoints: Vec<&'a CashScheduleCheckpoint>,
+    entity_funding: Option<&'a entity::EntityFundingState>,
     equity: Option<&'a EquityState>,
 }
 
@@ -516,18 +582,25 @@ impl<'a> Catalog<'a> {
         let checkpoints_per_state = inputs
             .funding_schedule
             .as_ref()
-            .ok_or_else(|| internal("admitted recourse program lost its funding schedule"))?
-            .value
-            .periods
-            .len()
-            + 1;
+            .map_or(0, |claim| claim.value.periods.len() + 1);
+        if checkpoints_per_state == 0 && inputs.entity_funding.is_none() {
+            return Err(internal("admitted recourse program lost its dated funding"));
+        }
         let mut states = Vec::with_capacity(program.summary().choices.len());
         for (mask, choice) in program.summary().choices.iter().enumerate() {
-            let schedule = choice
-                .funding_schedule
-                .as_ref()
-                .ok_or_else(|| internal("static subset lost its complete cash checkpoints"))?;
-            if schedule.checkpoints.len() != state_count * checkpoints_per_state {
+            let schedule = choice.funding_schedule.as_ref();
+            if schedule.map_or(0, |assessment| assessment.checkpoints.len())
+                != state_count * checkpoints_per_state
+                || choice
+                    .entity_funding
+                    .as_ref()
+                    .map_or(0, |assessment| assessment.states.len())
+                    != if inputs.entity_funding.is_some() {
+                        state_count
+                    } else {
+                        0
+                    }
+            {
                 return Err(internal(
                     "static subset has an incomplete cash checkpoint matrix",
                 ));
@@ -563,6 +636,7 @@ impl<'a> Catalog<'a> {
                 let mut checkpoints = Vec::with_capacity(checkpoints_per_state);
                 for checkpoint in 0..checkpoints_per_state {
                     let row = schedule
+                        .ok_or_else(|| internal("static subset lost its cash schedule"))?
                         .checkpoints
                         .get(checkpoint * state_count + state_index)
                         .ok_or_else(|| internal("static cash checkpoint index is missing"))?;
@@ -571,6 +645,19 @@ impl<'a> Catalog<'a> {
                     }
                     checkpoints.push(row);
                 }
+                let entity_funding = choice
+                    .entity_funding
+                    .as_ref()
+                    .map(|assessment| {
+                        let row = assessment.states.get(state_index).ok_or_else(|| {
+                            internal("static entity funding state index is missing")
+                        })?;
+                        if row.state_id != *state {
+                            return Err(internal("static entity funding state order changed"));
+                        }
+                        Ok(row)
+                    })
+                    .transpose()?;
                 let equity = choice
                     .equity
                     .as_ref()
@@ -589,6 +676,7 @@ impl<'a> Catalog<'a> {
                     net_nav: Money::from_minor(inputs.policy.value.currency, net_nav),
                     rejections,
                     checkpoints,
+                    entity_funding,
                     equity,
                 });
             }
@@ -734,11 +822,38 @@ fn build_policy(
             checkpoints.push(checkpoint.clone());
         }
     }
-    let funding_schedule = FundingScheduleAssessment {
-        checkpoints,
-        minimum_slack: money(
-            minimum_slack.ok_or_else(|| internal("policy lacks cash checkpoints"))?,
-        ),
+    let funding_schedule = if inputs.funding_schedule.is_some() {
+        Some(FundingScheduleAssessment {
+            checkpoints,
+            minimum_slack: money(
+                minimum_slack.ok_or_else(|| internal("policy lacks cash checkpoints"))?,
+            ),
+        })
+    } else {
+        None
+    };
+    let entity_funding = if inputs.entity_funding.is_some() {
+        let mut states = Vec::with_capacity(state_count);
+        let mut minimum_slack = None;
+        for (state_index, mask) in masks.iter().enumerate() {
+            let source = catalog
+                .state(*mask, state_index)?
+                .entity_funding
+                .ok_or_else(|| internal("policy lost a declared entity funding state"))?;
+            let slack = source.minimum_slack.major;
+            if minimum_slack.is_none_or(|old| exact_compare(slack, old).is_lt()) {
+                minimum_slack = Some(slack);
+            }
+            states.push(source.clone());
+        }
+        Some(EntityFundingAssessment {
+            states,
+            minimum_slack: money(
+                minimum_slack.ok_or_else(|| internal("policy lacks entity cash checkpoints"))?,
+            ),
+        })
+    } else {
+        None
     };
     let policy_id = format!("policy_{ordinal:03x}");
     let is_hold = states.iter().all(|state| state.selected.is_empty());
@@ -784,6 +899,7 @@ fn build_policy(
         budget_slack: initial.budget_slack,
         funding: None,
         funding_schedule: None,
+        entity_funding: None,
         equity: equity.clone(),
         structural_rejections: structural_rejections
             .iter()
@@ -804,6 +920,7 @@ fn build_policy(
         states,
         structural_rejections,
         funding_schedule,
+        entity_funding,
         equity,
         statistics: None,
         tail_loss: None,
@@ -977,7 +1094,7 @@ pub fn evaluate(inputs: &RecourseInputs) -> Result<EvaluatedRecourseProgram> {
         &render::basis_json(&inputs.information.value),
     ));
     binding.put_str(&render::summary_json(&summary));
-    binding.put_str(NO_CLAIM);
+    binding.put_str(no_claim_for(&inputs));
     let digest = sha256(&binding.finish()).to_hex();
     let tag = format!("capital-recourse/v1:{digest}");
     let claim = metadata.claim(

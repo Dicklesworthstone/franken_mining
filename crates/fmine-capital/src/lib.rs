@@ -22,9 +22,12 @@ use fmine_numerics::exact_feas::Rat;
 use fmine_numerics::risk::exact::{ExactDistribution, compare as exact_compare};
 use fmine_units::{Currency, Money, UnitsError};
 
+pub mod entity;
 pub mod model;
 pub mod recourse;
 mod render;
+
+use entity::{EntityCashPhase, EntityFunding, EntityFundingAssessment};
 
 pub const MAX_CANDIDATES: usize = 8;
 pub const MAX_STATES: usize = 256;
@@ -39,6 +42,8 @@ pub const NO_CLAIM: &str = "Static comparison conditional on the declared comple
 pub const CASH_SCHEDULE_NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, additive net delta-NAV payoffs, spending constraints and reference-class adjustment bases. Cash checks cover the opening and period-end checkpoints of the declared cash schedule and basis; they do not guarantee intra-period balances or adaptive staged decisions. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No project interactions, staged recourse, entity waterfalls, variable share counts, physical feasibility, retrospective evidence, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and declared cash flows constrain funding and are not charged to net delta-NAV again.";
 pub const EQUITY_NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, true additive equity-NAV changes, signed share changes, spending constraints and reference-class adjustment bases. Selection uses the change in NAV per actual share for the named entity and share class; total-USD NAV statistics remain separate reporting columns. Optional funding checks cover only the explicitly declared cash window and basis, without guaranteeing intra-period balances. Share units are normalized exactly; no repurchase price, issuance proceeds or future share changes are inferred. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No staged recourse, entity waterfalls, calibration, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and declared cash requirements constrain funding and are not charged to equity NAV again.";
 pub const EQUITY_CASH_SCHEDULE_NO_CLAIM: &str = "Static comparison conditional on the declared complete shared-scenario model, true additive equity-NAV changes, signed share changes, spending constraints and reference-class adjustment bases. Selection uses the change in NAV per actual share for the named entity and share class; total-USD NAV statistics remain separate reporting columns. Cash checks cover opening and period-end checkpoints of the declared schedule and basis; they do not guarantee intra-period balances or adaptive staged decisions. Share units are normalized exactly; no repurchase price, issuance proceeds or future share changes are inferred. Input weights are uncalibrated assumptions. The selected set is optimal only among the enumerated declared subsets. No staged recourse, entity waterfalls, calibration, selection-frequency estimate, regulatory claim or execution authorization is supplied. Planned costs and declared cash flows constrain funding and are not charged to equity NAV again.";
+pub const ENTITY_CASH_NO_CLAIM: &str = "Static comparison conditional on declared shared scenarios and net NAV attributable to the named objective entity. Entity cash stays in its own ledger except for explicitly declared fixed transfers and gated ownership distributions. Cash floors apply at initial opening, after native flows and fixed transfers, and after child-first distributions; earlier failures remain even after later receipts. The ownership remainder leaves the modeled graph as an explicit external distribution. Native flows include all declared outside partner contributions; no contribution, top-up, dilution, debt-service covenant, tax rule or distribution permission is inferred. Transfers and distributions constrain cash feasibility and are not added to or deducted from already-net NAV. Input probabilities, valuations and gates are uncalibrated assumptions. Selection is conditional on the complete bounded subset population; no intra-phase payment ordering, further valuation entity, historical validation, selection-frequency estimate, regulatory claim or execution authorization is supplied.";
+pub const EQUITY_ENTITY_CASH_NO_CLAIM: &str = "Static comparison conditional on declared shared scenarios, additive equity-NAV changes and signed share changes for the named objective entity and share class. Selection uses exact change in NAV per actual share; total-USD NAV remains a separate reporting column. Entity cash stays in its own ledger except for declared fixed transfers and gated ownership distributions. Floors apply at initial opening, after native flows and transfers, and after child-first distributions; later receipts do not erase earlier failures. The ownership remainder leaves the graph as explicit external cash. No partner contribution, top-up, dilution, debt-service covenant, fiscal rule, distribution permission or second entity's NAV is inferred. Cash movements are not charged to already-net NAV again. Inputs remain uncalibrated assumptions. No intra-phase payment ordering, historical validation, selection-frequency estimate, regulatory claim or execution authorization is supplied.";
 const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);
 type Result<T> = std::result::Result<T, Refusal>;
@@ -245,10 +250,18 @@ pub struct ProgramInputs {
     pub candidates: Vec<Claim<CapitalCandidate>>,
     pub funding: Option<Claim<ProgramFunding>>,
     pub funding_schedule: Option<Claim<FundingSchedule>>,
+    pub entity_funding: Option<Claim<EntityFunding>>,
     pub equity: Option<Claim<EquityBasis>>,
 }
 
 fn no_claim_for(inputs: &ProgramInputs) -> &'static str {
+    if inputs.entity_funding.is_some() {
+        return if inputs.equity.is_some() {
+            EQUITY_ENTITY_CASH_NO_CLAIM
+        } else {
+            ENTITY_CASH_NO_CLAIM
+        };
+    }
     match (inputs.equity.is_some(), inputs.funding_schedule.is_some()) {
         (false, false) => NO_CLAIM,
         (false, true) => CASH_SCHEDULE_NO_CLAIM,
@@ -277,6 +290,14 @@ pub enum StructuralRejection {
         period_id: Option<String>,
         checkpoint_date: String,
         state_id: String,
+        shortfall: ExactMoney,
+    },
+    EntityCashShortfall {
+        entity_id: String,
+        state_id: String,
+        period_id: Option<String>,
+        checkpoint_date: String,
+        phase: EntityCashPhase,
         shortfall: ExactMoney,
     },
     NonpositiveShareCount {
@@ -331,6 +352,7 @@ pub struct ProgramChoice {
     pub funding: Option<FundingAssessment>,
     /// Complete checkpoint results, also retained for structurally rejected subsets.
     pub funding_schedule: Option<FundingScheduleAssessment>,
+    pub entity_funding: Option<EntityFundingAssessment>,
     pub equity: Option<EquityAssessment>,
     pub structural_rejections: Vec<StructuralRejection>,
     /// None for a structurally rejected subset; no rejected subset is silently removed.
@@ -348,6 +370,7 @@ pub struct ProgramSummary {
     pub policy: ProgramPolicy,
     pub funding: Option<ProgramFunding>,
     pub funding_schedule: Option<FundingSchedule>,
+    pub entity_funding: Option<EntityFunding>,
     pub equity: Option<EquityBasis>,
     pub choices: Vec<ProgramChoice>,
     /// Budget, prerequisites, exclusions and declared funding applied, before the optional tail-loss limit.
@@ -917,6 +940,13 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
             inputs.candidates.len(),
         )?;
     }
+    if let Some(funding) = &inputs.entity_funding {
+        entity::validate_bounds(
+            &funding.value,
+            inputs.weights.value.states.len(),
+            inputs.candidates.len(),
+        )?;
+    }
     if let Some(equity) = &inputs.equity {
         validate_equity_bounds(
             &equity.value,
@@ -1076,10 +1106,14 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
             "prerequisite graph contains a cycle",
         ));
     }
-    if inputs.funding.is_some() && inputs.funding_schedule.is_some() {
+    if usize::from(inputs.funding.is_some())
+        + usize::from(inputs.funding_schedule.is_some())
+        + usize::from(inputs.entity_funding.is_some())
+        > 1
+    {
         return Err(bad(
             RefusalCode::BasisMismatch105,
-            "declare either aggregate funding or a cash schedule, not both",
+            "declare only one of aggregate funding, a cash schedule or entity funding",
         ));
     }
     if let Some(funding) = &inputs.funding {
@@ -1089,6 +1123,20 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
     if let Some(schedule) = &inputs.funding_schedule {
         validate_schedule(schedule, policy, &states, &candidates)?;
         metadata.include(schedule)?;
+    }
+    if let Some(funding) = &inputs.entity_funding {
+        entity::validate(funding, policy, &states, &candidates)?;
+        metadata.include(funding)?;
+        if inputs
+            .equity
+            .as_ref()
+            .is_some_and(|equity| equity.value.entity != funding.value.objective_entity)
+        {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "equity valuation and entity funding must name the same objective entity",
+            ));
+        }
     }
     if let Some(equity) = &inputs.equity {
         validate_equity(equity, policy, &states, &candidates)?;
@@ -1677,6 +1725,9 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
             .share_changes
             .sort_by(|a, b| (&a.candidate_id, &a.state_id).cmp(&(&b.candidate_id, &b.state_id)));
     }
+    if let Some(claim) = &mut inputs.entity_funding {
+        entity::canonicalize(&mut claim.value);
+    }
     let funding_index = inputs
         .funding
         .as_ref()
@@ -1692,6 +1743,11 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
         .equity
         .as_ref()
         .map(|claim| EquityIndex::new(&claim.value, &inputs.candidates))
+        .transpose()?;
+    let entity_index = inputs
+        .entity_funding
+        .as_ref()
+        .map(|claim| entity::Index::new(&claim.value, &inputs.candidates, &inputs.weights.value))
         .transpose()?;
     let policy = &inputs.policy.value;
     let money = |major| ExactMoney {
@@ -1771,6 +1827,26 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
                 }
             }
         }
+        let entity_funding = entity_index
+            .as_ref()
+            .map(|index| index.assess(mask))
+            .transpose()?;
+        if let Some(funding) = &entity_funding {
+            for state in &funding.states {
+                for checkpoint in &state.checkpoints {
+                    if checkpoint.slack.major.signum() < 0 {
+                        rejected.push(StructuralRejection::EntityCashShortfall {
+                            entity_id: checkpoint.entity_id.clone(),
+                            state_id: state.state_id.clone(),
+                            period_id: checkpoint.period_id.clone(),
+                            checkpoint_date: checkpoint.checkpoint_date.clone(),
+                            phase: checkpoint.phase,
+                            shortfall: money(arithmetic(checkpoint.slack.major.checked_neg())?),
+                        });
+                    }
+                }
+            }
+        }
         let equity = equity_index
             .as_ref()
             .map(|index| index.assess(mask))
@@ -1834,6 +1910,7 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
             budget_slack: money(arithmetic(amount(policy.budget)?.checked_sub(spend))?),
             funding,
             funding_schedule,
+            entity_funding,
             equity,
             structural_rejections: rejected,
             statistics: None,
@@ -1871,6 +1948,10 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
         funding: inputs.funding.as_ref().map(|claim| claim.value.clone()),
         funding_schedule: inputs
             .funding_schedule
+            .as_ref()
+            .map(|claim| claim.value.clone()),
+        entity_funding: inputs
+            .entity_funding
             .as_ref()
             .map(|claim| claim.value.clone()),
         equity: inputs.equity.as_ref().map(|claim| claim.value.clone()),
