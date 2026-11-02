@@ -77,8 +77,12 @@ fn assess(alternatives: &[AlternativeStats], primary_id: &str) -> Result<Decisio
     };
     let mut comparisons = Vec::new();
     for rival in alternatives.iter().filter(|a| a.action_id != primary_id) {
-        if primary.states.len() != rival.states.len() || primary.mean.currency != rival.mean.currency {
-            return Err(failed("sensitivity requires the same state population and currency"));
+        if primary.states.len() != rival.states.len()
+            || primary.mean.currency != rival.mean.currency
+        {
+            return Err(failed(
+                "sensitivity requires the same state population and currency",
+            ));
         }
         let states = primary
             .states
@@ -90,7 +94,9 @@ fn assess(alternatives: &[AlternativeStats], primary_id: &str) -> Result<Decisio
                     || a.payoff.currency != primary.mean.currency
                     || b.payoff.currency != primary.mean.currency
                 {
-                    return Err(failed("sensitivity states, weights or monetary basis differ"));
+                    return Err(failed(
+                        "sensitivity states, weights or monetary basis differ",
+                    ));
                 }
                 Ok(State {
                     id: a.state_id.clone(),
@@ -250,9 +256,11 @@ fn boundary(
 fn dual_intercept(states: &[State], minimum: Rat, slope: Rat) -> Result<Rat> {
     let mut intercept = ZERO;
     for state in states {
-        let extra = arithmetic(arithmetic(state.advantage.checked_sub(minimum))?.checked_sub(slope))?;
+        let extra =
+            arithmetic(arithmetic(state.advantage.checked_sub(minimum))?.checked_sub(slope))?;
         if extra.signum() > 0 {
-            intercept = arithmetic(intercept.checked_add(arithmetic(state.weight.checked_mul(extra))?))?;
+            intercept =
+                arithmetic(intercept.checked_add(arithmetic(state.weight.checked_mul(extra))?))?;
         }
     }
     Ok(intercept)
@@ -268,7 +276,10 @@ fn verify(states: &[State], gap: Rat, proof: &WeightBoundary) -> Result<()> {
             return Err(failed("invalid stress transfer"));
         }
         for (id, delta) in [
-            (&transfer.from_state, arithmetic(transfer.mass.checked_neg())?),
+            (
+                &transfer.from_state,
+                arithmetic(transfer.mass.checked_neg())?,
+            ),
             (&transfer.to_state, transfer.mass),
         ] {
             let weight = stressed
@@ -289,10 +300,11 @@ fn verify(states: &[State], gap: Rat, proof: &WeightBoundary) -> Result<()> {
             return Err(failed("stress has a negative weight"));
         }
         sum = arithmetic(sum.checked_add(weight))?;
-        residual = arithmetic(residual.checked_add(arithmetic(weight.checked_mul(state.advantage))?))?;
-        original_gap = arithmetic(original_gap.checked_add(arithmetic(
-            state.weight.checked_mul(state.advantage),
-        )?))?;
+        residual =
+            arithmetic(residual.checked_add(arithmetic(weight.checked_mul(state.advantage))?))?;
+        original_gap = arithmetic(
+            original_gap.checked_add(arithmetic(state.weight.checked_mul(state.advantage))?),
+        )?;
         let delta = arithmetic(weight.checked_sub(state.weight))?;
         let magnitude = if delta.signum() < 0 {
             arithmetic(delta.checked_neg())?
@@ -310,7 +322,9 @@ fn verify(states: &[State], gap: Rat, proof: &WeightBoundary) -> Result<()> {
         || transfer_mass != proof.total_variation
         || arithmetic(l1.checked_div(Rat::from_integer(2)))? != proof.total_variation
     {
-        return Err(failed("stress witness does not certify the declared exact tie and radius"));
+        return Err(failed(
+            "stress witness does not certify the declared exact tie and radius",
+        ));
     }
     let (slope, intercept) = proof
         .dual
@@ -319,7 +333,10 @@ fn verify(states: &[State], gap: Rat, proof: &WeightBoundary) -> Result<()> {
         return Err(failed("stress dual slope must be positive"));
     }
     if intercept.major != dual_intercept(states, minimum, slope.major)?
-        || arithmetic(arithmetic(slope.major.checked_mul(proof.total_variation))?.checked_add(intercept.major))? != gap
+        || arithmetic(
+            arithmetic(slope.major.checked_mul(proof.total_variation))?
+                .checked_add(intercept.major),
+        )? != gap
     {
         return Err(failed("stress dual bound does not establish minimality"));
     }
@@ -328,10 +345,19 @@ fn verify(states: &[State], gap: Rat, proof: &WeightBoundary) -> Result<()> {
 
 fn boundary_json(value: &WeightBoundary) -> String {
     use super::{js, rq};
-    let transfers = value.transfers.iter().map(|t| format!(
-        "{{\"from_state\":{},\"to_state\":{},\"mass\":{}}}",
-        js(&t.from_state), js(&t.to_state), rq(t.mass)
-    )).collect::<Vec<_>>().join(",");
+    let transfers = value
+        .transfers
+        .iter()
+        .map(|t| {
+            format!(
+                "{{\"from_state\":{},\"to_state\":{},\"mass\":{}}}",
+                js(&t.from_state),
+                js(&t.to_state),
+                rq(t.mass)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     let dual = value.dual.map_or_else(|| "null".into(), |(slope, intercept)| format!(
         "{{\"slope\":{},\"intercept\":{},\"bound\":\"gap_reduction_le_slope_times_total_variation_plus_intercept\"}}",
         rq(slope.major), rq(intercept.major)
@@ -347,7 +373,9 @@ pub(super) fn json(summary: &DecisionSummary) -> String {
     match assess(&summary.alternatives, &summary.expected_value_primary) {
         Err(error) => format!(
             "{{\"status\":\"refused\",\"code\":{},\"what\":{},\"no_claim\":{}}}",
-            js(error.code), js(&error.what), js(NO_CLAIM)
+            js(error.code),
+            js(&error.what),
+            js(NO_CLAIM)
         ),
         Ok(result) => {
             let rows = result.comparisons.iter().map(|r| format!(
@@ -359,10 +387,15 @@ pub(super) fn json(summary: &DecisionSummary) -> String {
             )).collect::<Vec<_>>().join(",");
             format!(
                 "{{\"status\":\"ok\",\"primary\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"uniform_cost_to_tie\":{},\"cost_challengers\":{},\"total_variation_to_tie\":{},\"weight_challengers\":{},\"comparisons\":[{rows}],\"no_claim\":{}}}",
-                js(&result.primary), js(crate::card::currency_name(summary.currency)),
-                rq(result.uniform_cost_to_tie.major), ids(&result.cost_challengers),
-                result.total_variation_to_tie.map_or_else(|| "null".into(), rq),
-                ids(&result.weight_challengers), js(NO_CLAIM)
+                js(&result.primary),
+                js(crate::card::currency_name(summary.currency)),
+                rq(result.uniform_cost_to_tie.major),
+                ids(&result.cost_challengers),
+                result
+                    .total_variation_to_tie
+                    .map_or_else(|| "null".into(), rq),
+                ids(&result.weight_challengers),
+                js(NO_CLAIM)
             )
         }
     }
@@ -376,13 +409,21 @@ mod tests {
         Rat::new(n, d).unwrap()
     }
     fn states(values: &[i128], weights: &[Rat]) -> Vec<State> {
-        values.iter().zip(weights).enumerate().map(|(i, (d, w))| State {
-            id: format!("s{i}"), weight: *w, advantage: Rat::from_integer(*d),
-        }).collect()
+        values
+            .iter()
+            .zip(weights)
+            .enumerate()
+            .map(|(i, (d, w))| State {
+                id: format!("s{i}"),
+                weight: *w,
+                advantage: Rat::from_integer(*d),
+            })
+            .collect()
     }
     fn solve(states: &[State]) -> (Rat, Option<WeightBoundary>) {
         let gap = states.iter().fold(ZERO, |sum, s| {
-            sum.checked_add(s.weight.checked_mul(s.advantage).unwrap()).unwrap()
+            sum.checked_add(s.weight.checked_mul(s.advantage).unwrap())
+                .unwrap()
         });
         boundary(states, gap, Currency::USD).unwrap()
     }
@@ -397,9 +438,14 @@ mod tests {
         let (slope, intercept) = p.dual.unwrap();
         assert_eq!(slope.major, r(500, 1));
         assert_eq!(intercept.major, ZERO);
-        assert_eq!(p.transfers, vec![WeightTransfer {
-            from_state: "s0".into(), to_state: "s1".into(), mass: r(1, 5),
-        }]);
+        assert_eq!(
+            p.transfers,
+            vec![WeightTransfer {
+                from_state: "s0".into(),
+                to_state: "s1".into(),
+                mass: r(1, 5),
+            }]
+        );
     }
 
     #[test]
@@ -407,7 +453,10 @@ mod tests {
         let s = states(&[10, 4, -1], &[r(1, 10), r(4, 5), r(1, 10)]);
         let p = solve(&s).1.unwrap();
         assert_eq!(p.total_variation, r(7, 10));
-        assert_eq!(p.transfers.iter().map(|t| t.mass).collect::<Vec<_>>(), vec![r(1, 10), r(3, 5)]);
+        assert_eq!(
+            p.transfers.iter().map(|t| t.mass).collect::<Vec<_>>(),
+            vec![r(1, 10), r(3, 5)]
+        );
         let (slope, intercept) = p.dual.unwrap();
         assert_eq!(slope.major, r(5, 1));
         assert_eq!(intercept.major, r(3, 5));
@@ -452,18 +501,26 @@ mod tests {
                         for j in 0..=12 - i {
                             let q = [r(i, 12), r(j, 12), r(12 - i - j, 12)];
                             let residual = q.iter().zip([a, b, c]).fold(ZERO, |sum, (p, d)| {
-                                sum.checked_add(p.checked_mul(Rat::from_integer(d)).unwrap()).unwrap()
+                                sum.checked_add(p.checked_mul(Rat::from_integer(d)).unwrap())
+                                    .unwrap()
                             });
                             if residual.signum() <= 0 {
                                 let l1 = q.iter().zip(w).fold(ZERO, |sum, (p, w)| {
                                     let v = p.checked_sub(w).unwrap();
                                     sum.checked_add(if v.signum() < 0 {
                                         v.checked_neg().unwrap()
-                                    } else { v }).unwrap()
+                                    } else {
+                                        v
+                                    })
+                                    .unwrap()
                                 });
                                 let tv = l1.checked_div(r(2, 1)).unwrap();
-                                let bound = proof.as_ref().expect("reachable tie has a certificate");
-                                assert!(tv.checked_cmp(bound.total_variation).unwrap() != Ordering::Less);
+                                let bound =
+                                    proof.as_ref().expect("reachable tie has a certificate");
+                                assert!(
+                                    tv.checked_cmp(bound.total_variation).unwrap()
+                                        != Ordering::Less
+                                );
                             }
                         }
                     }
