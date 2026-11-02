@@ -39,9 +39,12 @@
 //! Each move strictly raises its period's value, and moves are made only in periods whose discount factor is
 //! positive, so each strictly raises the discounted value. [`destinations`] also gives each unmined block its most
 //! valuable destination (the lowest of equals), which changes no value but lets the period moves' **Add** take the
-//! block where it is worth mining. [`improve`] alternates [`super::search::improve`] on the
-//! periods with [`destinations`] until a cycle makes no move, or the caller's limit. It ends with [`check`] and
-//! refuses rather than return a schedule that fails it or is worth less than the one it was given.
+//! block where it is worth mining. [`improve`] alternates [`super::search::improve_without_cones`] on the
+//! periods with [`destinations`] until a cycle makes no move, then [`super::search::improve`], whose **Cone** move
+//! takes a block earlier with what it requires, with [`destinations`] until a cycle makes no move again, or the
+//! caller's limit (`bd-ynoj`). A cone takes room that destination switches may use better: allowed from the start, it
+//! left MineLib's w23 9.9% lower. It ends with [`check`] and refuses rather than return a schedule that fails it or
+//! is worth less than the one it was given.
 
 use fmine_evidence::Refusal;
 
@@ -776,14 +779,14 @@ pub struct PcpspImprovement {
     /// Cycles of period moves then destination moves, the last of them the one without a move unless the limit
     /// stopped it.
     pub cycles: usize,
-    /// Period moves, from [`super::search::improve`].
+    /// Period moves, from [`super::search::improve_without_cones`] and then [`super::search::improve`].
     pub moves: Moves,
     /// Destination moves, from [`destinations`].
     pub destination_moves: DestinationMoves,
 }
 
 /// Period moves and destination moves in turn, from a feasible schedule (see the module notes). `max_rounds` limits
-/// the cycles and each call of [`super::search::improve`].
+/// the cycles and each period search's rounds.
 ///
 /// # Errors
 /// `FMINE-REF-207` (proposed) when the schedule and destinations given fail [`check`] or do not fit the model, when
@@ -810,13 +813,20 @@ pub fn improve(
     let mut moves = Moves::default();
     let mut destination_moves = DestinationMoves::default();
     let mut cycles = 0;
+    // Cones only once period and destination moves have both stopped without them (`bd-ynoj`).
+    let mut cones = false;
     while cycles < max_rounds {
         cycles += 1;
         let problem = model.with_destinations(&destination)?;
-        let timed = search::improve(&problem, &schedule, factors, max_rounds)?;
+        let timed = if cones {
+            search::improve(&problem, &schedule, factors, max_rounds)?
+        } else {
+            search::improve_without_cones(&problem, &schedule, factors, max_rounds)?
+        };
         let m = timed.moves;
         moves.later += m.later;
         moves.earlier += m.earlier;
+        moves.cones += m.cones;
         moves.swaps += m.swaps;
         moves.added += m.added;
         moves.dropped += m.dropped;
@@ -826,7 +836,10 @@ pub fn improve(
         destination_moves.exchanges += d.exchanges;
         destination_moves.unmined += d.unmined;
         if m == Moves::default() && d == DestinationMoves::default() {
-            break;
+            if cones {
+                break;
+            }
+            cones = true;
         }
     }
     let end = model.with_destinations(&destination)?;

@@ -381,8 +381,8 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
             .iter()
             .map(|(r, m)| {
                 format!(
-                    "{{\"rounds\":{r},\"earlier\":{},\"swaps\":{},\"added\":{},\"later\":{},\"dropped\":{}}}",
-                    m.earlier, m.swaps, m.added, m.later, m.dropped
+                    "{{\"rounds\":{r},\"earlier\":{},\"cones\":{},\"swaps\":{},\"added\":{},\"later\":{},\"dropped\":{}}}",
+                    m.earlier, m.cones, m.swaps, m.added, m.later, m.dropped
                 )
             })
             .collect::<Vec<_>>()

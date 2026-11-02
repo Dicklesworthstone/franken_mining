@@ -17,17 +17,27 @@
 //!   mined block that requires it.
 //! - **Drop.** A mined block of negative value that no mined block requires is unmined.
 //!
+//! A round in which none of those moves then tries one more (`bd-ynoj`):
+//! - **Cone.** A block of positive value that a required block in its own period `t` keeps there goes to `t − 1`
+//!   together with every block it requires, directly or not, that is in `t`: at most `CONE_LIMIT` blocks, whose values
+//!   sum to more than 0, and for which `t − 1` has room. A cone may hold a precedence cycle's blocks, which then move
+//!   together.
+//!
+//! **Cone** waits for the single-block moves to stop, because a cone takes room that they may use better. Tried in
+//! every round, before **Swap**, it left MineLib's PCPSP w23 9.9% lower (CONTRACT §9).
+//!
 //! **Later** comes after the moves that bring value forward, because a block it moves can no longer be mined before
 //! the blocks that require it: given waste in period 0 and the ore under it in period 2, **Earlier** brings the ore to
-//! period 0 when there is room, where **Later** first would send the waste to period 2 and keep the ore there.
+//! period 0 when there is room, where **Later** first would send the waste to period 2 and keep the ore there. When
+//! there is no room until a later round, **Cone** brings the waste and the ore back a period at a time.
 //!
 //! A use may be negative (a blending row), so taking a block out of a period can put that period over a limit too.
-//! **Earlier**, **Later** and **Drop** therefore check the period the block leaves as well as the one it enters;
-//! **Swap** checks both periods, and **Add** leaves none.
+//! **Earlier**, **Cone**, **Later** and **Drop** therefore check the period left as well as the one entered; **Swap**
+//! checks both periods, and **Add** leaves none.
 //!
 //! Rounds stop after one without a move, or after the caller's limit. Blocks are visited in Kahn order (ties by id),
-//! and in reverse for **Later** and **Drop**. Blocks on a precedence cycle are never visited by those four, and a swap
-//! never takes one. [`improve`] ends with [`check`], and refuses rather than return a schedule that fails it or is
+//! and in reverse for **Later** and **Drop**. Blocks on a precedence cycle are never visited, and a swap never takes
+//! one. [`improve`] ends with [`check`], and refuses rather than return a schedule that fails it or is
 //! worth less than the one it was given.
 //!
 //! It is a heuristic: nothing bounds its distance from the optimum.
@@ -41,6 +51,9 @@ pub const DISCOUNT_SCALE: i64 = 1 << 40;
 
 /// How many lower-valued blocks each swap candidate looks at, at most.
 pub const SWAP_SCAN: usize = 64;
+
+/// How many blocks a **Cone** move takes, at most.
+pub const CONE_LIMIT: usize = 64;
 
 /// `factor[0] = DISCOUNT_SCALE` and `factor[t + 1] = ⌊factor[t] · rate_scale / (rate_scale + rate)⌋`: the discount
 /// `(1 + rate / rate_scale)^−t`, times `DISCOUNT_SCALE`, rounded down one period at a time. The factors never rise.
@@ -113,6 +126,8 @@ pub struct Moves {
     pub later: usize,
     /// Blocks of positive value moved earlier.
     pub earlier: usize,
+    /// Cones moved one period earlier, each counted once.
+    pub cones: usize,
     /// Pairs traded between adjacent periods.
     pub swaps: usize,
     /// Blocks added.
@@ -148,6 +163,30 @@ pub fn improve(
     factors: &[i64],
     max_rounds: usize,
 ) -> Result<Improvement, Refusal> {
+    improve_with(problem, schedule, factors, max_rounds, true)
+}
+
+/// [`improve`] without **Cone**: the single-block moves alone. [`super::pcpsp::improve`] uses it until destination
+/// moves stop too.
+///
+/// # Errors
+/// As [`improve`].
+pub fn improve_without_cones(
+    problem: &ScheduleProblem,
+    schedule: &[Option<u32>],
+    factors: &[i64],
+    max_rounds: usize,
+) -> Result<Improvement, Refusal> {
+    improve_with(problem, schedule, factors, max_rounds, false)
+}
+
+fn improve_with(
+    problem: &ScheduleProblem,
+    schedule: &[Option<u32>],
+    factors: &[i64],
+    max_rounds: usize,
+    cones: bool,
+) -> Result<Improvement, Refusal> {
     let first = check(problem, schedule)?;
     if !first.feasible() {
         return Err(refuse(format!(
@@ -170,7 +209,11 @@ pub fn improve(
     let mut rounds = 0;
     while rounds < max_rounds {
         rounds += 1;
-        let made = search.round();
+        // Cones only from a schedule no single-block move improves (`bd-ynoj`).
+        let made = match search.round() {
+            0 if cones => search.cone_round(),
+            made => made,
+        };
         if made == 0 {
             break;
         }
@@ -211,6 +254,10 @@ struct Search<'a> {
     /// Kahn order, ties by id; blocks on a precedence cycle are missing.
     order: Vec<usize>,
     moves: Moves,
+    /// The cone being gathered, and the stamp marking its blocks in `seen`.
+    cone: Vec<usize>,
+    seen: Vec<u32>,
+    stamp: u32,
 }
 
 impl<'a> Search<'a> {
@@ -248,6 +295,9 @@ impl<'a> Search<'a> {
             dependents,
             order,
             moves: Moves::default(),
+            cone: Vec::with_capacity(CONE_LIMIT),
+            seen: vec![0; n],
+            stamp: 0,
         })
     }
 
@@ -381,6 +431,70 @@ impl<'a> Search<'a> {
             + (m.swaps - before.swaps)
             + (m.added - before.added)
             + (m.dropped - before.dropped)
+    }
+
+    /// One pass of **Cone** over the blocks in Kahn order; returns how many cones went earlier.
+    fn cone_round(&mut self) -> usize {
+        let order = std::mem::take(&mut self.order);
+        let f = self.factors;
+        let mut made = 0;
+        for &b in &order {
+            if let Some(t) = self.period(b).filter(|&t| {
+                t > 0 && f[t - 1] > f[t] && self.value(b) > 0 && self.earliest(b) == Some(t)
+            }) && self.gather_cone(b, t)
+                && self.cone_goes_earlier(t)
+            {
+                for i in 0..self.cone.len() {
+                    self.relocate(self.cone[i], Some(t), Some(t - 1));
+                }
+                made += 1;
+            }
+        }
+        self.order = order;
+        self.moves.cones += made;
+        made
+    }
+
+    /// Gathers into `cone` the block `b`, in period `t`, and every block it requires, directly or not, that is in `t`.
+    /// Returns `false` when there are more than `CONE_LIMIT`.
+    fn gather_cone(&mut self, b: usize, t: usize) -> bool {
+        // After 2³² cones the stamp wraps to 0; `seen` is cleared then, so no old mark can match.
+        self.stamp = self.stamp.wrapping_add(1);
+        if self.stamp == 0 {
+            self.seen.fill(0);
+            self.stamp = 1;
+        }
+        self.cone.clear();
+        self.cone.push(b);
+        self.seen[b] = self.stamp;
+        let mut next = 0;
+        while next < self.cone.len() {
+            let a = self.cone[next];
+            next += 1;
+            for &q in self.required(a) {
+                let q = q as usize;
+                if self.seen[q] != self.stamp && self.period(q) == Some(t) {
+                    if self.cone.len() == CONE_LIMIT {
+                        return false;
+                    }
+                    self.seen[q] = self.stamp;
+                    self.cone.push(q);
+                }
+            }
+        }
+        true
+    }
+
+    /// Whether the gathered cone, in period `t`, is worth more than 0 and can go to `t − 1` within every limit of both.
+    fn cone_goes_earlier(&self, t: usize) -> bool {
+        let value: i128 = self.cone.iter().map(|&a| i128::from(self.value(a))).sum();
+        value > 0
+            && (0..self.problem.resources()).all(|r| {
+                let (uses, caps) = (self.uses(r), self.caps(r));
+                let u: i128 = self.cone.iter().map(|&a| i128::from(uses[a])).sum();
+                self.used[r][t - 1] + u <= i128::from(caps[t - 1])
+                    && self.used[r][t] - u <= i128::from(caps[t])
+            })
     }
 
     /// Trades between periods `t` and `t + 1` (see the module notes).
@@ -584,6 +698,29 @@ mod tests {
                 ..Moves::default()
             }
         );
+        // Cone: the ore and its waste both in period 1. The ore cannot go earlier alone, nor the waste later; together
+        // they go to period 0, worth 8 more there. Not when the waste outweighs the ore, nor without room for both.
+        let p = one_resource(vec![-2, 10], &[vec![], vec![0]], vec![1, 1], 2, 2);
+        let i = improve(&p, &[Some(1), Some(1)], &f[..2], 10).unwrap();
+        assert_eq!(i.schedule, vec![Some(0), Some(0)]);
+        assert_eq!(
+            i.moves,
+            Moves {
+                cones: 1,
+                ..Moves::default()
+            }
+        );
+        assert_eq!(i.after - i.before, 8 * i128::from(f[0] - f[1]));
+        let heavy = one_resource(vec![-20, 10], &[vec![], vec![0]], vec![1, 1], 2, 2);
+        let blocks = ClosureProblem::from_requirements(vec![-2, 10], &[vec![], vec![0]]).unwrap();
+        let tight = ScheduleProblem::new(blocks, 2, vec![vec![1, 1]], vec![vec![1, 2]]).unwrap();
+        for p in [heavy, tight] {
+            let i = improve(&p, &[Some(1), Some(1)], &f[..2], 10).unwrap();
+            assert_eq!(
+                (i.schedule, i.moves),
+                (vec![Some(1), Some(1)], Moves::default())
+            );
+        }
         // Add: the ore under mined waste.
         let p = one_resource(vec![-2, 10], &[vec![], vec![0]], vec![1, 1], 2, 2);
         let i = improve(&p, &[Some(0), None], &f[..2], 10).unwrap();
@@ -660,8 +797,8 @@ mod tests {
 
     /// Greedy under a random ranking, then [`improve`]: the result is feasible by the definition, worth at least as
     /// much, never more than the best schedule there is, and a second call changes nothing. Returns the values before
-    /// and after, and the best.
-    fn improve_case(p: &ScheduleProblem, seed: u64) -> (i128, i128, i128) {
+    /// and after, the best, and the cones moved.
+    fn improve_case(p: &ScheduleProblem, seed: u64) -> (i128, i128, i128, usize) {
         let n = p.blocks().node_count();
         let f = factors(p.periods());
         let mut r = lcg(seed ^ 0x5A5A);
@@ -688,21 +825,23 @@ mod tests {
             .max()
             .unwrap();
         assert!(i.after <= best, "seed {seed}");
-        (i.before, i.after, best)
+        (i.before, i.after, best, i.moves.cones)
     }
 
     #[test]
     fn improve_is_feasible_monotone_and_bounded_by_the_exhaustive_optimum() {
-        let (mut cases, mut gained, mut optimal_before, mut optimal_after) = (0, 0, 0, 0);
+        let (mut cases, mut gained, mut optimal_before, mut optimal_after, mut cones) =
+            (0, 0, 0, 0, 0);
         for seed in 0..400 {
-            let (before, after, best) = improve_case(&random_problem(seed), seed);
+            let (before, after, best, c) = improve_case(&random_problem(seed), seed);
             cases += 1;
             gained += usize::from(after > before);
             optimal_before += usize::from(before == best);
             optimal_after += usize::from(after == best);
+            cones += c;
         }
         println!(
-            "{{\"bead\":\"bd-5lxu\",\"cases\":{cases},\"improved\":{gained},\"optimal_greedy\":{optimal_before},\"optimal_after\":{optimal_after}}}"
+            "{{\"bead\":\"bd-5lxu\",\"cases\":{cases},\"improved\":{gained},\"optimal_greedy\":{optimal_before},\"optimal_after\":{optimal_after},\"cones\":{cones}}}"
         );
         assert!(
             gained > 0 && optimal_after > optimal_before,
@@ -710,18 +849,68 @@ mod tests {
         );
     }
 
+    /// [`improve`] from every feasible schedule of 60 random problems, and of the same 60 with a signed resource, not
+    /// only from greedy's: the result is feasible by the definition, worth at least its input and never more than the
+    /// best, and a second call makes no move.
+    #[test]
+    fn improve_from_every_feasible_schedule_is_monotone_and_bounded() {
+        let (mut starts, mut total) = (0, Moves::default());
+        for seed in 0..60 {
+            for p in [random_problem(seed), random_signed_problem(seed)] {
+                let f = factors(p.periods());
+                let feasible: Vec<Vec<Option<u32>>> =
+                    every_schedule(p.blocks().node_count(), p.periods())
+                        .into_iter()
+                        .filter(|s| feasible_by_definition(&p, s))
+                        .collect();
+                let values: Vec<i128> = feasible
+                    .iter()
+                    .map(|s| discounted_value(&p, s, &f).unwrap())
+                    .collect();
+                let best = values.iter().copied().max().unwrap();
+                for (s, &value) in feasible.iter().zip(&values) {
+                    let i = improve(&p, s, &f, 1_000).unwrap();
+                    assert!(
+                        feasible_by_definition(&p, &i.schedule),
+                        "seed {seed}: {s:?}"
+                    );
+                    assert!(
+                        i.before == value && i.after >= value && i.after <= best,
+                        "seed {seed}: {s:?}"
+                    );
+                    let again = improve(&p, &i.schedule, &f, 1_000).unwrap();
+                    assert_eq!(again.moves, Moves::default(), "seed {seed}: {s:?}");
+                    starts += 1;
+                    let m = i.moves;
+                    total.earlier += m.earlier;
+                    total.cones += m.cones;
+                    total.swaps += m.swaps;
+                    total.added += m.added;
+                    total.later += m.later;
+                    total.dropped += m.dropped;
+                }
+            }
+        }
+        println!(
+            "{{\"bead\":\"bd-ynoj\",\"starts\":{starts},\"earlier\":{},\"cones\":{},\"swaps\":{},\"added\":{},\"later\":{},\"dropped\":{}}}",
+            total.earlier, total.cones, total.swaps, total.added, total.later, total.dropped
+        );
+        assert!(total.cones > 0, "{total:?}");
+    }
+
     /// The same with one more resource whose uses may be negative.
     #[test]
     fn improve_keeps_every_limit_with_signed_uses() {
-        let (mut gained, mut optimal_before, mut optimal_after) = (0, 0, 0);
+        let (mut gained, mut optimal_before, mut optimal_after, mut cones) = (0, 0, 0, 0);
         for seed in 0..400 {
-            let (before, after, best) = improve_case(&random_signed_problem(seed), seed);
+            let (before, after, best, c) = improve_case(&random_signed_problem(seed), seed);
             gained += usize::from(after > before);
             optimal_before += usize::from(before == best);
             optimal_after += usize::from(after == best);
+            cones += c;
         }
         println!(
-            "{{\"bead\":\"bd-ixfw\",\"cases\":400,\"improved\":{gained},\"optimal_greedy\":{optimal_before},\"optimal_after\":{optimal_after}}}"
+            "{{\"bead\":\"bd-ixfw\",\"cases\":400,\"improved\":{gained},\"optimal_greedy\":{optimal_before},\"optimal_after\":{optimal_after},\"cones\":{cones}}}"
         );
         assert!(
             gained > 0 && optimal_after > optimal_before,

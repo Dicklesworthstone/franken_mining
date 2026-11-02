@@ -530,8 +530,8 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
             .iter()
             .map(|(cycles, m, d)| {
                 format!(
-                    "{{\"cycles\":{cycles},\"earlier\":{},\"swaps\":{},\"added\":{},\"later\":{},\"dropped\":{},\"switches\":{},\"exchanges\":{},\"unmined\":{}}}",
-                    m.earlier, m.swaps, m.added, m.later, m.dropped, d.switches, d.exchanges, d.unmined
+                    "{{\"cycles\":{cycles},\"earlier\":{},\"cones\":{},\"swaps\":{},\"added\":{},\"later\":{},\"dropped\":{},\"switches\":{},\"exchanges\":{},\"unmined\":{}}}",
+                    m.earlier, m.cones, m.swaps, m.added, m.later, m.dropped, d.switches, d.exchanges, d.unmined
                 )
             })
             .collect::<Vec<_>>()
