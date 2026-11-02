@@ -26,7 +26,7 @@ conditional on the declared finite model; rendering them does not promote eviden
 A prior-optimal action that remains optimal for every possible signal is reported explicitly.
 
 `DecisionCard::build_as_of` consumes an ordinary card and returns an immutable `RetrospectiveDecisionCard`
-(`BD-344`, §22.6). It checks the expected-NPV Claim's canonical identity, graph node kind and immediate parents,
+(`BD-344`, `bd-r76w`, §22.6; the plan's guard `G-HELM-4`). It checks the expected-NPV Claim's canonical identity, graph node kind and immediate parents,
 then checks every declared ancestor against a decision timestamp and per-cell record anchor. A successful
 `fmine_claim::dag::replay::ReplayCertificate` must bind the same root, cut, checked cone and card output. The replay
 generator returns `DecisionCard::temporal_replay_bytes()`: rendered Markdown, the NPV Claim body and exact bits of
@@ -95,6 +95,25 @@ The projection is an internal versioned replay input (version 2), not a new dura
   Every option's complete Claim metadata participates in output evidence, parents, sources, UU, value tag
   and digest. JSON/Markdown report `method=exact_finite_enumeration`, Monte Carlo standard error as null/not
   applicable, and the uncalibrated-model boundary. Determinism is Exact; this does not pass `GATE-HELM-02`.
+- `card::information` types. `InformationSummary` holds `baseline_primary`, `baseline_winners`,
+  `baseline_value`, `perfect_information_value`, `evpi`, `options` (one `InformationStats` each), `option_order`,
+  `option_winners`, `overall_order` and `overall_winners` (`ExpectedChoice`: a `ChoiceKind` of `ActNow` or
+  `InformationOption`, an id and an expected value), and `risk_comparison`.
+  - `InformationStats` carries an option's costs, delay days, gross and net value, EVSI, net VOI, `NetStatus`,
+    strict-change probability, one `SignalPolicy` per signal (posterior weights and `PosteriorActionValue`s, `None`
+    for an unreachable signal), and `policy_risk`.
+  - `PolicyRisk` is the exact law of that option's net payoff when each reachable signal's `selected_action` is
+    followed (`POLICY_RULE`, `RISK_SCOPE`). It holds the mean, P10/P50/P90, signed-loss CVaR95, loss probability,
+    the ascending `PolicyPayoffMass` distribution, and the reachable signals whose posterior ties could change the
+    tail.
+  - `risk_comparison` is a `RiskComparison` over every act-now action and every one-test policy, each a
+    `RiskChoice` (kind, id, expected value, CVaR95 loss, loss probability). It holds `tail_risk_order` (lower
+    CVaR95 loss first), `tail_risk_winners` (every exact co-winner) and `expected_value_cvar95_frontier`. The JSON
+    carries the ranking rule beside them; the Markdown has an "Expected value versus realized tail risk" section.
+  - Constants: `MAX_INFORMATION_OPTIONS` (64), `MAX_SIGNALS` (256), `MAX_INFORMATION_WORK` (4,000,000),
+    `METHOD`, `STANDARD_ERROR_NOTE` and `SCOPE`.
+- `card` result types: `ExactMoney`, `StateResult`, `AlternativeStats` and `DecisionSummary`, under
+  `EvaluatedCard`; constants `MAX_STATES` (4,096), `MAX_ACTIONS` (256), `NO_CLAIM` and `TIE_RULE`.
 - `card::model::parse` admits the strict `fmine.decision-model.v1` TOML subset with explicit `state`, `action`,
   `payoff` and `uu` rows plus optional `information_option`, `signal` and `likelihood` rows. It checks the
   supplied source SHA-256 against the actual text, exact rational weights and likelihoods,
@@ -102,6 +121,7 @@ The projection is an internal versioned replay input (version 2), not a new dura
   All parsed Claims remain internal, Assumed and uncalibrated. Unknown fields cannot upgrade those labels.
 - `FlipMargin`, `DecisionCard` (`build`, `build_as_of`, `temporal_replay_bytes`)
 - `RetrospectiveDecisionCard`: immutable `card`, `cone` and `replay` accessors; scoped Markdown renderer
+  (`render_one_pager_markdown`), which puts a "Historical check" section before the card
 - `VoiCampaign`, `VoiRankedItem`, `rank_voi_campaigns -> Result<Vec<VoiRankedItem>, Refusal>`
 - `render_one_pager_markdown`
 
@@ -133,6 +153,9 @@ refusal for the entire request; it never returns a partial ranking or substitute
   high/low observation action switch. This is a finite-model known answer, not the Monte Carlo `GATE-HELM-02`.
 - `PO-DEC-3`: retrospective construction binds the actual NPV Claim and the replayed output; neither an unrelated
   clean root nor an older certificate for edited output is accepted. The checked snapshot has no mutable accessor.
+  Tests: the four `retrospective_card_*` tests in `lib.rs`, and the `compile_fail` doctest on
+  `RetrospectiveDecisionCard`, which fails to compile an assignment to its private `card` field. This discharges
+  the plan's guard `G-HELM-4` over the declared expected-NPV ancestry only, within the limits in §10.
 
 ## 7. Failure Modes & Deterministic Fallbacks
 Invalid or unanchored decision inputs fail closed with typed `Refusal`.
@@ -171,5 +194,7 @@ section now renders the retained conditional action policy.
 `DecisionCard::build` does not require a do-nothing alternative and does not compute regret. `card::evaluate` does both. Nothing in `DecisionCard::build` refuses a priced safety constraint, and there is no banner for an assumed top-3 sensitivity. VOI is shown without a Monte Carlo standard error. GATE-HELM-01 still needs two real retrospective cards. There is no golden card and no decision-ledger entry. The module docs label flip margins BD-227 and VOI ranking BD-225. The plan's BD-225 is the card schema and BD-227 is the VOI estimator.
 
 The local outline names these tests for the properties above: `test_decision_card_uu_and_flip_margin_guards`, `retrospective_card_seals_actual_root_and_replayed_output`, `retrospective_card_refuses_unrelated_root_and_omitted_parents`, `retrospective_card_refuses_late_ancestor_and_changed_cut_or_cone`, `retrospective_card_refuses_output_or_claim_edits_after_replay`, `temporal_replay_projection_binds_subdisplay_numeric_edits`, `replay_projection_binds_subdisplay_policy_and_summary_edits`, `voi_campaigns_rank_by_net_value`, `gb29_ranking_exposes_the_observation_that_changes_the_action`, `campaign_and_action_ties_and_impossible_signals_are_retained`, `invalid_campaigns_refuse_the_whole_ranking`, `small_positive_cost_keeps_its_ratio_and_unrepresentable_ratios_refuse`, `gb29_exact_payoffs_regret_quantiles_and_signed_loss`, `overflow_refuses_instead_of_saturating_or_dropping_an_action`, `garbling_never_increases_information_value`, `invalid_material_information_never_drops_the_option`, and `exact_radius_bounds_every_independent_three_state_grid_stress`. The known-answer files named there are `crates/xtask/testdata/decision_card_oracle.py` and `decision_sensitivity_oracle.py`, driven by `crates/xtask/tests/decision_card.rs`.
+
+The merge ec60a12 dropped two test families from this list; bd-coro restores them. `PolicyRisk` is tested in `card/information/policy_risk.rs` (5): `actual_gb29_policy_has_more_tail_loss_despite_positive_net_information_value`, `fractional_tail_boundary_and_inverse_cdf_endpoints_are_exact`, `all_gain_signed_losses_and_uniform_cost_translation_are_preserved`, `incomplete_mass_wrong_mean_and_unrepresentable_net_outcomes_refuse` and `full_model_retains_unreachable_signals_and_exposes_risk_relevant_posterior_ties`. `risk_comparison` is tested in `card/information/ranking.rs` (4): `frontier_keeps_expected_value_tail_tradeoffs_and_drops_dominated_choices`, `tail_ranking_retains_exact_ties_and_uses_value_only_for_presentation`, `equal_expected_value_with_strictly_lower_tail_loss_dominates` and `exact_loss_probability_distinguishes_zero_from_negative_payoff`. The other counts are `card.rs` 15, `card/model.rs` 10, `card/render/sensitivity.rs` 5 and `lib.rs` 12.
 
 `registries/l6_allow.toml` in this tree has two `fmine-decide` rows, for `from_linear_sensitivity` and for `build` (`cvar95_loss_usd_m`).
