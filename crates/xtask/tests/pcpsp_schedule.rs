@@ -10,21 +10,30 @@
 //!
 //! 1. `toposort::pcpsp::parse` reads the pair, values at 10⁶ rounded half away from zero, uses rounded up and limits
 //!    down at 10⁶. A refused instance (w23, for its negative uses) is reported and counts against the gate.
-//! 2. The LP relaxation, built here from the parsed integers: "by" variables `w[b][t]` as for CPIT
+//! 2. The ultimate pit `P` under each block's most valuable destination, `w_b = max_d value[b][d]`, from
+//!    `pitflow::solve` with its certificate checked by `pitflow::verify`. Only `P`'s blocks enter the LP. That leaves
+//!    the LP's optimum, and the schedule problem's, unchanged. For a closed set `T`, `T ∪ P` is closed, so
+//!    `w(T \ P) ≤ 0`. Summed by parts, a schedule is worth `Σ_t (f_t − f_{t+1}) u(T_t)`, where `T_t` is what is mined
+//!    by period `t`, `u_b ≤ w_b` is the value at the destinations used and `f` falls (`f_{T} = 0`). Cutting every
+//!    `T_t` down to `T_t ∩ P` therefore never lowers the value, and with uses non-negative and limits upper it stays
+//!    feasible. The LP's by-period fractions are mixtures of closed sets (their level sets), so the same holds there.
+//!    PDLP's certified bound on the smaller LP is a bound for the whole instance. Blocks outside `P` start unmined;
+//!    the search may still add them.
+//! 3. The LP relaxation over `P`, built here from the parsed integers: "by" variables `w[b][t]` as for CPIT
 //!    (`crates/xtask/tests/cpit_schedule.rs`), and `y[b][d][t]`, the share of block `b` sent to destination `d` in
 //!    period `t`, with `Σ_d y[b][d][t] = w[b][t] − w[b][t − 1]`. Limits apply to `Σ_{b,d} use[r][b][d] · y[b][d][t]`.
 //!    The value is `Σ value[b][d] · y[b][d][t] / (1 + rate)^t`, periods from 0. PDLP solves it, and its dual bound is
 //!    certified.
-//! 3. Each block goes whole to the destination the LP sends most of it to (its most valuable one if the LP mines
+//! 4. Each block goes whole to the destination the LP sends most of it to (its most valuable one if the LP mines
 //!    none of it). Blocks are ranked by their LP expected period, as for CPIT, and left out below a final weight of
 //!    10⁻⁶, 0.5 or 0.9. Each threshold gives a schedule: `greedy` on `with_destinations`, then `pcpsp::improve`.
-//! 4. NPV is `Σ_t V_t / (1 + rate)^t` in `f64`, from `check`'s exact per-period sums under the final destinations.
+//! 5. NPV is `Σ_t V_t / (1 + rate)^t` in `f64`, from `check`'s exact per-period sums under the final destinations.
 //!
 //! Asserted: every schedule passes `check`, `pcpsp::improve` never lowers an NPV, and no NPV exceeds PDLP's certified
 //! bound or MineLib's LP bound (each allowing one unit for rounding). The gate's verdict is printed, not asserted:
 //! the plan says to report the honest gap.
 //!
-//! `FMINE_PCPSP_LP_CACHE` keeps each LP solution and bound (`<name>-<tol>.pcpsp-lp`, little-endian `f64`s), so later
+//! `FMINE_PCPSP_LP_CACHE` keeps each LP solution and bound (`<name>-<tol>.pit.pcpsp-lp`, little-endian `f64`s), so later
 //! runs skip PDLP. `FMINE_PCPSP_SOLUTION_OUT` names a directory for each instance's best schedule in MineLib's format
 //! (`<name>_pcpsp_fmine.sol`), which `crates/xtask/testdata/minelib_pcpsp_oracle.py` checks from the files alone. With
 //! `FMINE_MINELIB_SOLS`, MineLib's own PCPSP schedule (`<name>_pcpsp_*.sol`, blocks split between destinations to six
@@ -39,6 +48,7 @@ use std::time::Instant;
 use fmine_lp::pdlp::{LpProblem, PdlpOptions, solve_observed};
 use fmine_numerics::sparse::Coo;
 use fmine_optimize::pitflow::minelib::Rounding;
+use fmine_optimize::pitflow::{ClosureProblem, solve, verify};
 use fmine_optimize::toposort::pcpsp::{self, PcpspModel};
 use fmine_optimize::toposort::search::discount_factors;
 use fmine_optimize::toposort::{check, cpit, greedy};
@@ -101,24 +111,54 @@ impl Columns {
     }
 }
 
-/// The relaxation as a minimisation (costs negated), from the parsed model.
-fn relaxation(m: &PcpspModel, rate: f64) -> LpProblem {
-    let (n, periods, dn) = (m.blocks(), m.periods(), m.destinations());
+/// The ultimate pit under each block's most valuable destination, its certificate checked: the blocks in it, each
+/// block's index among them, and its value.
+fn ultimate_pit(m: &PcpspModel) -> (Vec<usize>, Vec<Option<usize>>, i64) {
+    let n = m.blocks();
+    let best = (0..n)
+        .map(|b| {
+            (0..m.destinations())
+                .map(|d| m.value(b, d).unwrap())
+                .max()
+                .unwrap()
+        })
+        .collect();
+    let requires: Vec<Vec<u32>> = (0..n).map(|b| m.requires(b).unwrap().to_vec()).collect();
+    let closure = ClosureProblem::from_requirements(best, &requires).unwrap();
+    let pit = solve(&closure).unwrap();
+    assert_eq!(
+        verify(&closure, pit.in_pit(), pit.arc_flow()).unwrap(),
+        pit.value()
+    );
+    let blocks: Vec<usize> = (0..n).filter(|&b| pit.in_pit()[b]).collect();
+    let mut index = vec![None; n];
+    for (i, &b) in blocks.iter().enumerate() {
+        index[b] = Some(i);
+    }
+    (blocks, index, pit.value())
+}
+
+/// The relaxation over the pit's blocks as a minimisation (costs negated), from the parsed model. Column `i` is
+/// block `pit[i]`.
+fn relaxation(m: &PcpspModel, rate: f64, pit: &[usize], index: &[Option<usize>]) -> LpProblem {
+    let (n, periods, dn) = (pit.len(), m.periods(), m.destinations());
     let c = Columns {
         n,
         periods,
         destinations: dn,
     };
-    let arcs: usize = (0..n).map(|b| m.requires(b).unwrap().len()).sum();
+    let arcs: usize = pit.iter().map(|&b| m.requires(b).unwrap().len()).sum();
     let rows = arcs * periods + n * (periods - 1) + n * periods + m.resources() * periods;
     let mut coo = Coo::new(rows, c.count()).unwrap();
     let (mut lo, mut hi) = (Vec::with_capacity(rows), Vec::with_capacity(rows));
     let mut r = 0;
     for t in 0..periods {
-        for b in 0..n {
-            for &q in m.requires(b).unwrap() {
+        for (b, &block) in pit.iter().enumerate() {
+            for &q in m.requires(block).unwrap() {
+                // The pit is closed, so what a pit block requires is in the pit.
+                let q = index[q as usize].unwrap();
                 coo.push(r, c.w(b, t), 1.0).unwrap();
-                coo.push(r, c.w(q as usize, t), -1.0).unwrap();
+                coo.push(r, c.w(q, t), -1.0).unwrap();
                 lo.push(f64::NEG_INFINITY);
                 hi.push(0.0);
                 r += 1;
@@ -150,9 +190,9 @@ fn relaxation(m: &PcpspModel, rate: f64) -> LpProblem {
     }
     for res in 0..m.resources() {
         for (t, &cap) in m.limits(res).unwrap().iter().enumerate() {
-            for b in 0..n {
+            for (b, &block) in pit.iter().enumerate() {
                 for d in 0..dn {
-                    let q = m.uses(res, b, d).unwrap();
+                    let q = m.uses(res, block, d).unwrap();
                     if q != 0 {
                         coo.push(r, c.y(b, d, t), q as f64 / SCALE).unwrap();
                     }
@@ -167,9 +207,9 @@ fn relaxation(m: &PcpspModel, rate: f64) -> LpProblem {
     let mut cost = vec![0.0; c.count()];
     for t in 0..periods {
         let factor = (1.0 + rate).powi(t as i32).recip();
-        for b in 0..n {
+        for (b, &block) in pit.iter().enumerate() {
             for d in 0..dn {
-                cost[c.y(b, d, t)] = -(m.value(b, d).unwrap() as f64 / SCALE) * factor;
+                cost[c.y(b, d, t)] = -(m.value(block, d).unwrap() as f64 / SCALE) * factor;
             }
         }
     }
@@ -286,14 +326,17 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
         };
         let (n, periods, dn) = (model.blocks(), model.periods(), model.destinations());
         let rate = model.discount_rate as f64 / cpit::RATE_SCALE as f64;
+        let t_pit = Instant::now();
+        let (pit, index, pit_value) = ultimate_pit(&model);
+        let pit_s = t_pit.elapsed().as_secs_f64();
         let columns = Columns {
-            n,
+            n: pit.len(),
             periods,
             destinations: dn,
         };
         let cache = std::env::var("FMINE_PCPSP_LP_CACHE")
             .ok()
-            .map(|d| Path::new(&d).join(format!("{name}-{tol}.pcpsp-lp")));
+            .map(|d| Path::new(&d).join(format!("{name}-{tol}.pit.pcpsp-lp")));
         let cached = cache
             .as_ref()
             .and_then(|path| std::fs::read(path).ok())
@@ -315,7 +358,7 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
             let certified = (!f[0].is_nan()).then_some(f[0]);
             (f[2..].to_vec(), certified, f[1], "cached".to_string())
         } else {
-            let lp = relaxation(&model, rate);
+            let lp = relaxation(&model, rate, &pit, &index);
             let t0 = Instant::now();
             let options = PdlpOptions {
                 tolerance: tol,
@@ -339,14 +382,17 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
             }
             (s.x().to_vec(), certified, lp_s, format!("{:?}", s.status()))
         };
-        let w = |b: usize, t: usize| x[columns.w(b, t)].clamp(0.0, 1.0);
+        // A block outside the pit has no column: it is never mined in the LP.
+        let w = |b: usize, t: usize| index[b].map_or(0.0, |i| x[columns.w(i, t)].clamp(0.0, 1.0));
         let expected: Vec<f64> = (0..n)
             .map(|b| (0..periods).map(|t| 1.0 - w(b, t)).sum())
             .collect();
         let destination: Vec<u32> = (0..n)
             .map(|b| {
                 let mass = |d: usize| -> f64 {
-                    (0..periods).map(|t| x[columns.y(b, d, t)].max(0.0)).sum()
+                    index[b].map_or(0.0, |i| {
+                        (0..periods).map(|t| x[columns.y(i, d, t)].max(0.0)).sum()
+                    })
                 };
                 let by_lp = (0..dn).max_by(|&a, &c| mass(a).total_cmp(&mass(c)).then(c.cmp(&a)));
                 let by_value =
@@ -458,11 +504,13 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
         let of_best_known = (best_known > 0.0).then(|| best / best_known);
         gate.push((name.to_string(), of_best_known));
         println!(
-            "{{\"bead\":\"bd-2rne\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"destinations\":{dn},\"resources\":{},\"rounded\":[{},{},{}],\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"npv\":[{}],\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{},\"known\":{}}}",
+            "{{\"bead\":\"bd-2rne\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"destinations\":{dn},\"resources\":{},\"rounded\":[{},{},{}],\"pit_blocks\":{},\"pit_value\":{:.3},\"pit_s\":{pit_s:.2},\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"npv\":[{}],\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{},\"known\":{}}}",
             model.resources(),
             model.rounded_values,
             model.rounded_uses,
             model.rounded_limits,
+            pit.len(),
+            pit_value as f64 / SCALE,
             certified.map_or("null".to_string(), |u| format!("{u:.3}")),
             list(&npvs),
             list(&improved),
