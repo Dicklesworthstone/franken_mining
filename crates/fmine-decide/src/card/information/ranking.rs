@@ -1,5 +1,5 @@
 //! Exact tail-risk comparison for act-now alternatives and one-test policies (BD-225/227).
-//! Determinism: Exact.
+//! Determinism: Exact
 //!
 //! This module deliberately does not collapse expected value and tail risk into one score. It ranks
 //! signed-loss CVaR95 separately and retains the exact expected-value/CVaR95 Pareto frontier.
