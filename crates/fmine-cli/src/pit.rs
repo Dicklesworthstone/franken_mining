@@ -1,5 +1,5 @@
 //! `plan pit`: the ultimate pit of a MineLib UPIT pair, by pseudoflow, with its closure certificate checked again
-//! here (bd-ip99, BD-250).
+//! here (bd-ip99, BD-250). `--candidate` checks an external pit against it as an untrusted candidate (bd-nq06).
 //! Determinism: Exact
 
 use std::path::{Path, PathBuf};
@@ -7,17 +7,16 @@ use std::path::{Path, PathBuf};
 use fmine_core::Digest32;
 use fmine_core::anchor::SourceAnchor;
 use fmine_evidence::{Refusal, RefusalCode};
-use fmine_optimize::pitflow::{self, minelib};
+use fmine_optimize::pitflow::{self, candidate, minelib};
 
 use crate::{Envelope, NextAction, escape_json, worksheet_input};
 
 const MAX_BYTES: u64 = 1024 * 1024 * 1024;
-pub const USAGE: &str =
-    "plan pit --upit <file.upit> --prec <file.prec> [--decimals N] [--round] [--list-blocks]";
+pub const USAGE: &str = "plan pit --upit <file.upit> --prec <file.prec> [--decimals N] [--round] [--list-blocks] [--candidate <file>]";
 const NO_CLAIM: &str = "The maximum-value closed set of the supplied block values and precedence arcs. Values and \
 arcs are taken as given: no price, cost, recovery or slope is derived or checked, and the pit is not a reserve, \
 a schedule or a mine plan.";
-pub const ROBOT_DOCS_JSON: &str = r#"{"input":"MineLib UPIT pair: <name>.upit (NAME, TYPE: UPIT, NBLOCKS, OBJECTIVE_FUNCTION, one '<block> <value>' line per block) and <name>.prec (one '<block> <count> <required>...' line per block); each file at most 1 GiB, SHA-256 bound","values":"Plain decimals scaled to integers at --decimals places (default 6, at most 9); a value with more non-zero places refuses unless --round, which rounds half away from zero and reports the count and the bound on the value","output":"Exact value at the declared places, pit and model sizes, the pseudoflow certificate re-verified (closed pit, no flow into it, excess signs), solver counters; --list-blocks adds the in-pit block ids","no_claim":"Values and arcs are taken as given; not a reserve, schedule or mine plan"}"#;
+pub const ROBOT_DOCS_JSON: &str = r#"{"input":"MineLib UPIT pair: <name>.upit (NAME, TYPE: UPIT, NBLOCKS, OBJECTIVE_FUNCTION, one '<block> <value>' line per block) and <name>.prec (one '<block> <count> <required>...' line per block); each file at most 1 GiB, SHA-256 bound","values":"Plain decimals scaled to integers at --decimals places (default 6, at most 9); a value with more non-zero places refuses unless --round, which rounds half away from zero and reports the count and the bound on the value","output":"Exact value at the declared places, pit and model sizes, the pseudoflow certificate re-verified (closed pit, no flow into it, excess signs), solver counters; --list-blocks adds the in-pit block ids","candidate":"--candidate <file>: an external pit as whitespace-separated block ids ('%' comments), SHA-256 bound; reports its exact value, every unmet requirement (count and first witnesses), the gap to the certified optimum when closed, and verdict not_closed, optimal or suboptimal; any value or bound the candidate claims is ignored","no_claim":"Values and arcs are taken as given; not a reserve, schedule or mine plan"}"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
@@ -26,6 +25,7 @@ pub struct Command {
     pub decimals: u32,
     pub round: bool,
     pub list_blocks: bool,
+    pub candidate: Option<PathBuf>,
 }
 
 /// Common output/workspace options are removed by the main router.
@@ -35,7 +35,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     {
         return Err(USAGE.into());
     }
-    let (mut upit, mut prec, mut decimals) = (None, None, None);
+    let (mut upit, mut prec, mut decimals, mut candidate) = (None, None, None, None);
     let (mut round, mut list_blocks) = (false, false);
     let mut i = 2;
     while i < args.len() {
@@ -58,6 +58,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         let fresh = match flag {
             "--upit" => upit.replace(PathBuf::from(value)).is_none(),
             "--prec" => prec.replace(PathBuf::from(value)).is_none(),
+            "--candidate" => candidate.replace(PathBuf::from(value)).is_none(),
             "--decimals" => {
                 let d = value
                     .parse::<u32>()
@@ -84,6 +85,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         decimals: decimals.unwrap_or(6),
         round,
         list_blocks,
+        candidate,
     })
 }
 
@@ -176,6 +178,51 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
             payload.push_str(&ids.join(","));
             payload.push(']');
         }
+        let mut candidate_line = String::new();
+        if let Some(path) = &command.candidate {
+            let (text, source) = worksheet_input::read(&root.join(path), "CANDIDATE", MAX_BYTES)?;
+            let in_set = candidate::parse_ids(&text, model.problem.node_count())?;
+            let c = candidate::check(&model.problem, &in_set)?;
+            let gap = i128::from(pit.value()) - i128::from(c.value);
+            // A closed set worth more than the certified optimum would contradict the certificate.
+            if c.closed() && gap < 0 {
+                return Err(Refusal::new(
+                    RefusalCode::NumericalCertificateFailed207,
+                    "plan pit: a closed candidate exceeds the certified optimum".to_string(),
+                ));
+            }
+            let verdict = match (c.closed(), gap) {
+                (false, _) => "not_closed",
+                (true, 0) => "optimal",
+                (true, _) => "suboptimal",
+            };
+            let gap_text = if c.closed() {
+                format!("\"{}\"", decimal(gap, d))
+            } else {
+                "null".to_string()
+            };
+            let witnesses: Vec<String> = c
+                .first_unmet
+                .iter()
+                .map(|(b, p)| format!("[{b},{p}]"))
+                .collect();
+            payload.push_str(&format!(
+                ",\"candidate\":{{\"source\":{},\"blocks\":{},\"value\":\"{}\",\"unmet_requirements\":{},\"first_unmet\":[{}],\"gap_to_optimum\":{gap_text},\"verdict\":\"{verdict}\"}}",
+                source_json(&source, text.len()),
+                c.blocks,
+                decimal(i128::from(c.value), d),
+                c.unmet,
+                witnesses.join(","),
+            ));
+            candidate_line = format!(
+                "\n**Candidate** `{}`: {verdict}. {} blocks, value {}, {} unmet requirements, gap to the certified optimum {}.\n",
+                path.display(),
+                c.blocks,
+                decimal(i128::from(c.value), d),
+                c.unmet,
+                gap_text.trim_matches('"'),
+            );
+        }
         payload.push('}');
         let mut envelope = Envelope::ok("plan pit", payload, Vec::new());
         envelope.no_claim = Some(NO_CLAIM);
@@ -186,7 +233,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
             ));
         }
         envelope.rendered_markdown = Some(format!(
-            "# Ultimate pit: {}\n\n| blocks | arcs | pit blocks | value | rounded values | certificate |\n|---:|---:|---:|---:|---:|---|\n| {} | {} | {} | {} | {} | verified |\n\n{NO_CLAIM}\n",
+            "# Ultimate pit: {}\n\n| blocks | arcs | pit blocks | value | rounded values | certificate |\n|---:|---:|---:|---:|---:|---|\n| {} | {} | {} | {} | {} | verified |\n{candidate_line}\n{NO_CLAIM}\n",
             model.name,
             model.problem.node_count(),
             model.problem.arc_count(),

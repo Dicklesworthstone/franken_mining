@@ -87,40 +87,56 @@ fn hundredths(units: i64) -> String {
     format!("{sign}{}.{:02}", units.abs() / 100, units.abs() % 100)
 }
 
-/// The best value over every closed set, by enumeration.
-fn brute_force(weights: &[i64], requires: &[Vec<usize>]) -> i64 {
+/// The best value over every closed set, by enumeration, and the largest-numbered set (as a bit mask) with it.
+fn brute_force(weights: &[i64], requires: &[Vec<usize>]) -> (i64, u32) {
     (0u32..1 << weights.len())
         .filter(|set| {
             (0..weights.len())
                 .all(|b| (set >> b) & 1 == 0 || requires[b].iter().all(|&p| (set >> p) & 1 == 1))
         })
         .map(|set| {
-            (0..weights.len())
+            let value = (0..weights.len())
                 .filter(|&b| (set >> b) & 1 == 1)
                 .map(|b| weights[b])
-                .sum()
+                .sum();
+            (value, set)
         })
         .max()
         .unwrap()
 }
 
-#[test]
-fn plan_pit_equals_brute_force_and_lists_a_closed_pit_of_that_value() {
-    let mut state = 0x2545_f491_4f6c_dd1d_u64;
-    let mut next = |bound: u64| {
+/// A seeded LCG: `next(bound)` is below `bound`.
+fn lcg(seed: u64) -> impl FnMut(u64) -> u64 {
+    let mut state = seed;
+    move |bound| {
         state = state
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1_442_695_040_888_963_407);
         (state >> 33) % bound
-    };
+    }
+}
+
+/// Forty pairs of 4 to 12 blocks: values in hundredths, each block requiring some lower-numbered blocks.
+fn generated() -> Vec<(Vec<i64>, Vec<Vec<usize>>)> {
+    let mut next = lcg(0x2545_f491_4f6c_dd1d);
+    (0..40)
+        .map(|case| {
+            let n = 4 + (case % 9);
+            let weights: Vec<i64> = (0..n).map(|_| next(4001) as i64 - 2200).collect();
+            let requires: Vec<Vec<usize>> = (0..n)
+                .map(|b| (0..b).filter(|_| next(3) == 0).collect())
+                .collect();
+            (weights, requires)
+        })
+        .collect()
+}
+
+#[test]
+fn plan_pit_equals_brute_force_and_lists_a_closed_pit_of_that_value() {
     let mut nontrivial = 0;
-    for case in 0..40 {
-        let n = 4 + (case % 9);
-        let weights: Vec<i64> = (0..n).map(|_| next(4001) as i64 - 2200).collect();
-        let requires: Vec<Vec<usize>> = (0..n)
-            .map(|b| (0..b).filter(|_| next(3) == 0).collect())
-            .collect();
-        let expected = brute_force(&weights, &requires);
+    for (case, (weights, requires)) in generated().into_iter().enumerate() {
+        let n = weights.len();
+        let (expected, _) = brute_force(&weights, &requires);
         let values: Vec<String> = weights.iter().map(|&w| hundredths(w)).collect();
         let root = root();
         let output = run(
@@ -167,6 +183,118 @@ fn plan_pit_equals_brute_force_and_lists_a_closed_pit_of_that_value() {
     }
     // Not every case may be all-or-nothing, or the closure constraint would go untested.
     assert!(nontrivial >= 20, "{nontrivial}");
+}
+
+/// A candidate file: a comment, then the ids split over a space-separated and a tab-separated line.
+fn candidate_file(set: &[usize]) -> String {
+    let ids: Vec<String> = set.iter().map(usize::to_string).collect();
+    let (head, tail) = ids.split_at(ids.len() / 2);
+    format!(
+        "% candidate pit\n{}\n  {}\n",
+        head.join(" "),
+        tail.join("\t")
+    )
+}
+
+#[test]
+fn plan_pit_judges_candidates_as_brute_force_does() {
+    let mut next = lcg(0x9e37_79b9_7f4a_7c15);
+    let mut verdicts = std::collections::BTreeMap::new();
+    for (weights, requires) in generated() {
+        let n = weights.len();
+        let values: Vec<String> = weights.iter().map(|&w| hundredths(w)).collect();
+        let (optimum, best) = brute_force(&weights, &requires);
+        let best: Vec<usize> = (0..n).filter(|&b| (best >> b) & 1 == 1).collect();
+        let random: Vec<usize> = (0..n).filter(|_| next(2) == 0).collect();
+        // The random set's closure: requirements point to lower numbers, so one downward sweep adds them all.
+        let mut member = vec![false; n];
+        for &b in &random {
+            member[b] = true;
+        }
+        for b in (0..n).rev() {
+            if member[b] {
+                for &p in &requires[b] {
+                    member[p] = true;
+                }
+            }
+        }
+        let closure: Vec<usize> = (0..n).filter(|&b| member[b]).collect();
+        for set in [best, closure, random] {
+            let unmet: Vec<(usize, usize)> = set
+                .iter()
+                .flat_map(|&b| {
+                    requires[b]
+                        .iter()
+                        .filter(|p| !set.contains(p))
+                        .map(move |&p| (b, p))
+                })
+                .collect();
+            let value: i64 = set.iter().map(|&b| weights[b]).sum();
+            let verdict = match (unmet.is_empty(), optimum - value) {
+                (false, _) => "not_closed",
+                (true, 0) => "optimal",
+                (true, _) => "suboptimal",
+            };
+            let gap = if unmet.is_empty() {
+                format!("\"{}\"", hundredths(optimum - value))
+            } else {
+                "null".into()
+            };
+            let witnesses: Vec<String> = unmet
+                .iter()
+                .take(10)
+                .map(|(b, p)| format!("[{b},{p}]"))
+                .collect();
+            let root = root();
+            fs::write(root.join("candidate.txt"), candidate_file(&set)).unwrap();
+            let output = run(
+                &root,
+                &upit(&values),
+                &prec(&requires),
+                &["--decimals", "2", "--candidate", "candidate.txt"],
+            );
+            let json = output.to_json();
+            assert_eq!(output.exit_code, 0, "{json}");
+            let expected = format!(
+                "\"blocks\":{},\"value\":\"{}\",\"unmet_requirements\":{},\"first_unmet\":[{}],\"gap_to_optimum\":{gap},\"verdict\":\"{verdict}\"}}",
+                set.len(),
+                hundredths(value),
+                unmet.len(),
+                witnesses.join(",")
+            );
+            assert!(json.contains(&expected), "missing {expected}: {json}");
+            assert!(
+                output
+                    .rendered_markdown
+                    .unwrap()
+                    .contains(&format!("**Candidate** `candidate.txt`: {verdict}."))
+            );
+            *verdicts.entry(verdict).or_insert(0) += 1;
+        }
+    }
+    // Each verdict must come up, or one branch goes untested.
+    assert!(
+        verdicts.len() == 3 && verdicts.values().all(|&count| count >= 5),
+        "{verdicts:?}"
+    );
+    let root = root();
+    for (text, detail) in [
+        ("0 2", "line 1: block 2 is not one of 2 blocks"),
+        ("1\n% 1\n1", "line 3: block 1 is listed twice"),
+        ("0 1.0", "\"1.0\" is not a block id"),
+    ] {
+        fs::write(root.join("candidate.txt"), text).unwrap();
+        let output = run(
+            &root,
+            &upit(&args(&["1", "-1"])),
+            &prec(&[vec![], vec![0]]),
+            &["--candidate", "candidate.txt"],
+        );
+        assert_eq!((output.status, output.exit_code), ("refused", 5));
+        let refusal = output.refusal.unwrap();
+        assert_eq!(refusal.code, "FMINE-REF-506");
+        assert!(refusal.what.contains(detail), "{text:?}: {}", refusal.what);
+    }
 }
 
 #[test]
@@ -348,6 +476,18 @@ fn plan_pit_refuses_malformed_pairs_and_rejects_bad_options() {
             "plan", "pit", "--upit", "pit.upit", "--prec", "pit.prec", "--scale", "6",
         ],
         vec!["plan", "pit", "--upit", "--prec", "pit.prec"],
+        vec![
+            "plan",
+            "pit",
+            "--upit",
+            "pit.upit",
+            "--prec",
+            "pit.prec",
+            "--candidate",
+            "a",
+            "--candidate",
+            "b",
+        ],
     ] {
         let output = invoke(&args(&call), &root).0;
         assert_eq!(
@@ -395,7 +535,15 @@ fn minelib_instances_match_gate_push_pit1_through_the_verb() {
     ] {
         let upit_path = format!("{name}/{name}.upit");
         let prec_path = format!("{name}/{name}.prec");
-        let mut call = args(&["plan", "pit", "--upit", &upit_path, "--prec", &prec_path]);
+        let mut call = args(&[
+            "plan",
+            "pit",
+            "--upit",
+            &upit_path,
+            "--prec",
+            &prec_path,
+            "--list-blocks",
+        ]);
         if rounded > 0 {
             call.push("--round".into());
         }
@@ -405,7 +553,25 @@ fn minelib_instances_match_gate_push_pit1_through_the_verb() {
         assert_eq!(string_field(&json, "value"), value, "{name}");
         assert_eq!(number_field(&json, "rounded_values"), rounded, "{name}");
         assert_eq!(number_field(&json, "pit_blocks"), pit_blocks, "{name}");
-        eprintln!("{name}: value {value}, rounded {rounded}, pit {pit_blocks}");
+        // The verb's own pit, read back as an untrusted candidate, is closed and optimal.
+        let ids = json
+            .split_once("\"in_pit\":[")
+            .unwrap()
+            .1
+            .split(']')
+            .next()
+            .unwrap();
+        let candidate = root().join("candidate.txt");
+        fs::write(&candidate, ids.replace(',', "\n")).unwrap();
+        call.extend(args(&["--candidate", candidate.to_str().unwrap()]));
+        let checked = invoke(&call, &dir).0.to_json();
+        let expected = format!(
+            "\"blocks\":{pit_blocks},\"value\":\"{value}\",\"unmet_requirements\":0,\"first_unmet\":[],\"gap_to_optimum\":\"0.000000\",\"verdict\":\"optimal\"}}"
+        );
+        assert!(checked.contains(&expected), "{name}: missing {expected}");
+        eprintln!(
+            "{name}: value {value}, rounded {rounded}, pit {pit_blocks}; own pit as candidate: optimal"
+        );
     }
 }
 
