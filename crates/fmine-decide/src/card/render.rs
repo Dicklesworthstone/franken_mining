@@ -10,6 +10,7 @@ use fmine_evidence::{AoaStatus, AssertionSource, Color, EvidenceClass};
 
 use super::*;
 
+mod policy_risk;
 mod sensitivity;
 
 fn js(value: &str) -> String {
@@ -239,7 +240,7 @@ fn option_stats_json(o: &information::InformationStats) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"option_id\":{},\"label\":{},\"test_cost\":{},\"delay_cost\":{},\"total_cost\":{},\"delay_days\":{},\"gross_value\":{},\"net_value\":{},\"evsi\":{},\"net_voi\":{},\"status\":{},\"strict_change_probability\":{},\"baseline_optimal_after_every_reachable_signal\":{},\"signals\":[{signals}]}}",
+        "{{\"option_id\":{},\"label\":{},\"test_cost\":{},\"delay_cost\":{},\"total_cost\":{},\"delay_days\":{},\"gross_value\":{},\"net_value\":{},\"evsi\":{},\"net_voi\":{},\"status\":{},\"strict_change_probability\":{},\"baseline_optimal_after_every_reachable_signal\":{},\"signals\":[{signals}],\"policy_risk\":{}}}",
         js(&o.option_id),
         js(&o.label),
         rq(o.test_cost.major),
@@ -252,7 +253,8 @@ fn option_stats_json(o: &information::InformationStats) -> String {
         rq(o.net_voi.major),
         js(o.status.as_str()),
         rq(o.strict_change_probability),
-        o.baseline_optimal_after_every_reachable_signal
+        o.baseline_optimal_after_every_reachable_signal,
+        policy_risk::json(&o.policy_risk)
     )
 }
 

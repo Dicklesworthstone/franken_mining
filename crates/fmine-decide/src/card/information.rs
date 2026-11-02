@@ -2,16 +2,20 @@
 //! Determinism: Exact (rational weights, likelihoods, payoffs and costs; no simulation or clamping).
 //!
 //! Every option observes a named signal before choosing among the unchanged admitted actions. Comparing
-//! expected values requires no joint signal distribution. Cross-option regret, risk and test batches would.
+//! expected values and marginal tail risks requires no cross-option joint signal distribution.
+//! Cross-option regret and sequential/batched tests still require that unprovided dependence model.
 
 use super::*;
+
+mod policy_risk;
+pub use policy_risk::{POLICY_RULE, PolicyPayoffMass, PolicyRisk, RISK_SCOPE};
 
 pub const MAX_INFORMATION_OPTIONS: usize = 64;
 pub const MAX_SIGNALS: usize = 256;
 pub const MAX_INFORMATION_WORK: usize = 4_000_000;
 pub const METHOD: &str = "exact_finite_enumeration";
 pub const STANDARD_ERROR_NOTE: &str = "Not applicable: all finite states and signals are enumerated exactly; no Monte Carlo sampling occurs. This is conditional mathematical exactness, not a calibrated uncertainty estimate for the declared weights, likelihoods or payoffs, and does not pass GATE-HELM-02.";
-pub const SCOPE: &str = "Choose an act-now action or buy at most one information option and follow its signal policy. Costs are paid once before the signal. Delay cost and duration are independently declared; no discounting or cash-flow rule is inferred. Base action risk/regret excludes test policies because their joint counterfactual signal distribution is unspecified.";
+pub const SCOPE: &str = "Choose an act-now action or buy at most one information option and follow its signal policy. Costs are paid once before the signal. Delay cost and duration are independently declared; no discounting or cash-flow rule is inferred. Each test policy has its own exact marginal payoff risk. Cross-option regret and combined tests remain undefined without a joint counterfactual signal model; the act-now regret comparison is unchanged.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Likelihood {
@@ -132,6 +136,7 @@ pub struct InformationStats {
     pub strict_change_probability: Rat,
     pub baseline_optimal_after_every_reachable_signal: bool,
     pub signals: Vec<SignalPolicy>,
+    pub policy_risk: PolicyRisk,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -422,6 +427,7 @@ fn evaluate_option(
         0 => NetStatus::Zero,
         _ => NetStatus::Negative,
     };
+    let policy_risk = policy_risk::evaluate(option, base, &policies, &likelihoods, total_cost, gross)?;
     Ok(InformationStats {
         option_id: option.option_id.clone(),
         label: option.label.clone(),
@@ -437,6 +443,7 @@ fn evaluate_option(
         strict_change_probability: change_probability,
         baseline_optimal_after_every_reachable_signal: change_probability == ZERO,
         signals: policies,
+        policy_risk,
     })
 }
 
