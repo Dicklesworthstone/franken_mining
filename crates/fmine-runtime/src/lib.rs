@@ -1,6 +1,7 @@
 //! DESIGN: the runtime owns the explicit host wall-clock adapter. A reading provides no claim of clock
 //! synchronization, bounded uncertainty, monotonicity, authority or external time proof.
 
+pub mod budget;
 pub mod process;
 pub mod region;
 

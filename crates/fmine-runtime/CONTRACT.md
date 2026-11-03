@@ -6,6 +6,7 @@ The runtime owns the host wall clock, the subprocess pipes and the capability mo
 - the `HostWallClock` adapter, which reads `SystemTime::now()` and converts it exactly to signed Unix nanoseconds;
 - `process::output_with_input` (BD-076), the synchronous subprocess pipe workers that offline timestamp verification uses. It sends an exact input snapshot while it drains stdout and stderr at the same time. Each captured stream is bounded by a caller-chosen byte limit, plus one byte to detect overflow. All workers are scoped and joined, and a failure kills and reaps the child. This gives a structured process lifetime, not a general executor;
 - `region` (BD-077), the plan §26.6 region tree and its capability sets as types. `CapSet<SPAWN, TIME, RANDOM, IO, REMOTE>` is a type, and a context `Cx<C>` only narrows: `open::<R>()` and `narrow::<D>()` compile only when the new set is within the old one. The clock and the subprocess pipes are reachable through a context only when it holds TIME (`Cx::clock`) or IO (`Cx::run`). Each of the 18 regions is a type, and its set is checked against its parent's when the crate compiles. `REGIONS` records each region's parent, set, supervisor, instances and role, and `profile(role)` gives the tree a node of that role runs.
+- `budget` (BD-078), the plan §26.7 budget table and a meter that spends a budget. `Budget{deadline_ns, poll_quota, cost_quota, priority}` composes by `meet`: the tighter of each limit and the higher priority. `budget_table(&Params)` gives the five rows (ledger writer, telemetry, estimation run, peer session, finance bridge), with what the plan leaves to the run passed in as `Params`. A `Meter` takes every time from its caller, refuses a poll or charge past a limit without recording it, and then stays exhausted, reporting the row's `OnExhaust`.
 
 A reading claims no synchronisation, uncertainty bound, monotonicity or authority. The caller decides whether to trust it, under its own policy.
 
@@ -13,11 +14,12 @@ A reading claims no synchronisation, uncertainty bound, monotonicity or authorit
 - **Layer:** S1
 - **Subsystem:** Bedrock
 - **LOC budget:** 12,000 planned / 14,000 ceiling
-- **Allowed Module Families:** `["clock", "process", "region"]`
+- **Allowed Module Families:** `["budget", "clock", "process", "region"]`
 
 ## 2. Inputs
 - **The host clock**, through `HostWallClock::now_ns`.
 - **A caller's `Command`, input bytes and output limit**, through `process::output_with_input`. The caller chooses the executable and the environment.
+- **A run's budget parameters and a meter's times and costs**, through `budget_table(&Params)`, `Meter::poll(now_ns)` and `Meter::charge(cost, now_ns)`. The meter reads no clock.
 - **Nothing else.** It has no workspace or external dependencies, and reads no files or registries.
 
 ## 3. Outputs
@@ -30,6 +32,12 @@ A reading claims no synchronisation, uncertainty bound, monotonicity or authorit
   - `REGIONS: &[RegionSpec]` and `profile(Role) -> Vec<RegionSpec>`.
 
   A leaf region's set is the plan's row. An interior region (process, node, authority, ingest, compute, sync), for which the plan gives no set, holds the union of its children's: the least that lets every child narrow from it. Only the process root holds RANDOM, because no row grants it and engines get seeds as inputs.
+- **`budget`:**
+  - `budget_table(&Params) -> Result<[BudgetRow; 5], BudgetError>`. Each row is a region, a `Budget`, a `CostUnit` where it has a cost quota, and an `OnExhaust`;
+  - `Budget::meet` and `Budget::UNLIMITED`, its identity;
+  - `BudgetRow::meter(parent, now_ns)`, a `Meter` for the row's budget met with its parent's;
+  - `Meter::poll` and `Meter::charge`, each `Result<(), Stop>`, and `Meter::spent() -> (polls, cost)`;
+  - `OnExhaust::exit_code()`: 6 for the ledger writer's refused batch and 9 for the finance bridge's indeterminate post (§30.1). Sealing early, cancelling and draining carry on inside the region, so they have no exit code.
 - **No Claim and no trusted time.** The one clock caller, `fmine-cli`'s `reliance` module (BD-347), maps a `ClockError` to `FMINE-REF-506`. It builds a `TrustedTime` from the reading only when its access policy sets `trust_host_clock`, and takes the uncertainty from its own header's `max_clock_skew_ns`.
 
 ## 4. Invariants
@@ -59,10 +67,23 @@ A reading claims no synchronisation, uncertainty bound, monotonicity or authorit
   - Transfer's REMOTE set to 0 fails the plan-tree and REMOTE tests.
   - Law given IO under a compute region without it fails to compile (E0277 at the edge `const`).
   - A rule letting a child gain a capability makes the `open` and `narrow` compile-fail doctests compile, so they fail.
+- **The budget table is the plan's table (BD-078).** `budget::tests::the_table_is_the_plans_table` parses the §26.7 table from the plan file. It checks each row's region and order, deadline, cost quota and unit, priority and on-exhaust action, and that no row has a poll quota. Fixed durations and sizes are read from the cell text, and the per-run cells are checked against distinct test parameters. The exit codes are read from the cell (`exit 6`), and for the indeterminate post from §30.1's table (9).
+- **Each region exhausts as its row says**, on virtual time, one test per row:
+  - the ledger writer refuses at 250 ms (exit 6);
+  - telemetry seals early past 64 MiB or at 1 s;
+  - an estimation run cancels past blocks × realizations, or at the tighter of its own deadline and its parent's;
+  - a peer session drains at its window's bytes or end, and the next window's meter starts at zero;
+  - a finance post is indeterminate at 120 s against a debug `fa` and at 10 s otherwise (exit 9).
+
+  Each test checks the last allowed poll or charge, one nanosecond or one unit before the limit.
+- **Refused, not clamped.** A charge past the quota is refused whole and `spent()` does not change. Exhaustion is sticky: a later free charge, or a time before the one that exhausted it, gets the same answer. A time before the start (`BeforeStart`) and a running cost past `u64` (`Overflow`) are refused without spending or exhausting. A zero parameter, and blocks × realizations past `u64`, are refused by `budget_table`.
+- **Meet laws.** `meet_is_a_semilattice_with_unlimited_as_its_identity`: commutative and idempotent over 192 budgets (each pair), associative over 28 (each triple), `UNLIMITED` is its identity, each limit is one of its operands' and no looser than either, and the priority is the higher.
+- **Planted bugs, all four at once, reverted:** a deadline reached only past it (`>`), a cost quota refused when met (`>=`), `meet` keeping the lower priority, and telemetry's priority 181. Eight of the ten budget tests failed, and every plant failed at least one.
 
 ## 5. Refusals
 - **`ClockError::{BeforeUnixEpoch, NanosecondOverflow}`**, a local error with no refusal code. Callers map it to their own refusal. `fmine-cli` uses `FMINE-REF-506`.
 - **`ProcessError::{Spawn, Worker, Read, OutputLimit, Wait, MissingPipe, WorkerPanicked, InvalidLimit}`**, also local. It separates failures to start the process or a worker, output reads, byte limits, waits and worker panics. Consumers keep their own refusal mapping.
+- **`BudgetError::{Zero(name), Overflow, BeforeStart}`** and **`Stop::{Exhausted(Exhausted{limit, on_exhaust}), Invalid(BudgetError)}`**, local. Running out of budget is `Stop::Exhausted`, an expected outcome that carries the region's action. A bad input is `Stop::Invalid`.
 
 ## 6. Determinism class
 `src/lib.rs` has no `//! Determinism:` header. The conversion is exact integer arithmetic. The reading is external, so `HostWallClock` gives a different value on every call by design. A deterministic consumer injects a fixed `WallClock`. A subprocess result depends on the executable and environment the caller supplies. No timeout and no host-clock sample is added.
@@ -77,10 +98,11 @@ Not applicable: it emits no Claim. A reading is not evidence of the true time, a
 - **Direct children only.** Every worker and direct child is joined and reaped before return. Managing a descendant process tree is out of scope; the timestamp consumer runs OpenSSL directly.
 
 ## 9. Oracles
-No fixture. The clock tests are known answers at the conversion's edges: the epoch, one second before it, an exact sub-second value, `i64::MAX` and its successor, and `Duration::MAX`. The process tests run real children against pipe capacity and the output bounds (Invariants). The region table's oracle is the plan's own §26.6 drawing, read from `COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` by a test. An edit to either side that the other does not share fails it.
+No fixture. The clock tests are known answers at the conversion's edges: the epoch, one second before it, an exact sub-second value, `i64::MAX` and its successor, and `Duration::MAX`. The process tests run real children against pipe capacity and the output bounds (Invariants). The region table's oracle is the plan's own §26.6 drawing, read from `COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` by a test. An edit to either side that the other does not share fails it. The budget table's oracle is the same file's §26.7 table, with §30.1's exit codes.
 
 ## 10. Known gaps
-- **Most of the planned runtime is absent.** The registry charter and plan §28.3 list a region tree, CapSet profiles, an AppSpec per role, budgets and an obligation registry. The tree and the profiles exist as types (BD-077). Nothing runs, supervises, restarts or cancels a region yet, and there is no AppSpec (BD-079), budget table (BD-078) or obligation registry (BD-089).
+- **Most of the planned runtime is absent.** The registry charter and plan §28.3 list a region tree, CapSet profiles, an AppSpec per role, budgets and an obligation registry. The tree and the profiles exist as types (BD-077), and the budget table and its meter as values (BD-078). Nothing runs, supervises, restarts or cancels a region yet, and there is no AppSpec (BD-079) or obligation registry (BD-089). No region spends a budget yet: a meter reports `OnExhaust`, and carrying out the action (refusing the batch, sealing, cancelling, draining, reconciling) is its caller's job.
+- **Budget rules the plan does not state.** §26.7 says budgets compose by `meet` but not what that does to priority. Here it takes the higher, so a child never runs below its parent. The plan gives no poll quota, so every row's is `None`. No scheduler reads priority yet. Only the five §26.7 regions have rows; the others run on their parent's budget.
 - **The capability model binds only code that uses it.** `HostWallClock` and `process::output_with_input` are still public, and `fmine-cli` and `fmine-io` call them directly. `Cx::clock` and `Cx::run` are the capability paths, not the only paths. Moving those callers onto a `Cx` is later work. The `ambient_root` ban is a token check, like `open_child_region`'s. It cannot be dodged by renaming, because an associated function cannot be aliased with `use`.
 - **The plan's §26.6 text disagrees with its own rows on REMOTE.** The peer-session line says "the ONLY REMOTE-capable region besides FinanceBridge". But the finance bridge's row is `CapSet<0,1,0,1,0>` ("local socket only"), and the transfer region's is `CapSet<0,1,0,1,1>` ("CAS chunks over QUIC/ATP"). The code follows the rows, so REMOTE goes to the peer-session and transfer regions. Which is right is the owner's call.
 - **No asupersync.** The workspace pins it as the sole async runtime (`asupersync_pin = "=0.5.0"`), but it is not in `Cargo.lock`, so `check-all` reports INT-AS-001a as `NOT_APPLICABLE`.
@@ -97,6 +119,7 @@ No fixture. The clock tests are known answers at the conversion's edges: the epo
 - `region::{CapSet, Mask, Caps, Within, Has, Spawn, Time, Random, Io, Remote}`. The narrowing rule's `rule::{Bit, Allowed}` is public but hidden, because `Within`'s impl names it.
 - `region::{Region, RegionKind, RegionSpec, Supervisor, Instances, Role, REGIONS, profile}`, and one unit type per region (`ProcessRegion` … `OperationsRegion`).
 - `region::Cx` with `ambient_root`, `open`, `narrow`, `caps`, `region`, `clock` and `run`.
+- `budget::{Budget, BudgetRow, CostUnit, OnExhaust, FaBuild, Params, BudgetError, Limit, Exhausted, Stop, Meter, budget_table}`.
 
 ## 12. Proof obligations
 - None is discharged here. PO-BED-5 waits on the region runtime. Of PO-BED-8, this crate holds the compile-time half: engine regions' sets are empty or SPAWN alone, and a context cannot widen. The runtime mask test is BD-097's (Known gaps).
