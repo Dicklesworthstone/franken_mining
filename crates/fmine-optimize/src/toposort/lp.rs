@@ -21,13 +21,28 @@
 //!    that of a block it requires.
 //! 4. [`incumbent`] runs [`super::search::improve`] on each start and takes the first with the highest discounted
 //!    value.
+//! 5. [`lagrangian_bound`] (`bd-oq7d`, plan §15.4 row `fmine-optimize::lag`) bounds the same problem from above,
+//!    exactly and without an LP solver. The limits are moved into the objective at prices `μ[r][t] ≥ 0` a unit.
+//!    What is left is a maximum closure on the time-expanded graph: node `t·n + b` stands for `w[b][t]`, and it
+//!    requires `t·n + q` for each block `q` that `b` requires, and `(t + 1)·n + b`. The node weighs
+//!    `value[b] · (F_t − F_{t+1}) − Σ_r use[r][b] · (μ[r][t] − μ[r][t+1])`, with `F` the search's integer discount
+//!    factors (`super::search::discount_factors`) and `F_T = μ[r][T] = 0`. Then `pitflow` closure plus
+//!    `Σ μ[r][t] · limit[r][t]` is at least every schedule's discounted value at `F`, in `i128`, for any prices.
+//!    This is weak duality, in the objective [`super::search::improve`] maximises.
+//!    - Weights past `pitflow`'s 2⁶² guard are divided by the least power of two that brings them under it, rounded
+//!      up, so the bound stays valid. It loosens by at most one unit of that power per node.
+//!    - The prices follow subgradient steps (Polyak's, toward a target such as the incumbent's value, halved after
+//!      [`STALL`] steps without a better bound). Every iterate's bound is valid; the least is kept.
+//!    - At its minimum over the prices the bound equals the LP relaxation's optimum, since the closure polytope is
+//!      integral. No step rule here is proved to reach it.
 
 use fmine_evidence::Refusal;
 use fmine_numerics::sparse::{Coo, Csr};
 
 use super::search::{Improvement, improve};
-use super::{MAX_PERIODS, ScheduleProblem, greedy, greedy_from, refuse};
+use super::{MAX_PERIODS, ScheduleProblem, greedy, greedy_from, id, refuse};
 use crate::pitflow::minelib::MAX_DECIMALS;
+use crate::pitflow::{ABS_VALUE_SUM_LIMIT, ClosureProblem, solve};
 
 /// The final shares below which [`starts`] leaves a block out, one pair of schedules each.
 pub const THRESHOLDS: [f64; 3] = [1e-6, 0.5, 0.9];
@@ -399,6 +414,304 @@ pub fn incumbent(
     Ok(Incumbent { searched, best })
 }
 
+/// [`lagrangian_bound`]'s steps without a better bound before it halves its step.
+pub const STALL: usize = 5;
+
+/// Prices at or above this stop [`lagrangian_bound`]: its steps have run away.
+const PRICE_LIMIT: f64 = 4_611_686_018_427_387_904.0;
+
+/// What the closure at one set of prices gives ([`lagrangian_value`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LagrangianValue {
+    /// At least every schedule's discounted value at the factors.
+    pub bound: i128,
+    /// The power of two the closure's weights were divided by, rounded up; 0 when they fit `pitflow`'s guard.
+    pub shift: u32,
+    /// The closure as a schedule: each block's first period in it, or `None`. It keeps every requirement, but not
+    /// necessarily every limit.
+    pub schedule: Vec<Option<u32>>,
+    /// `used[r][t]`: how much of resource `r` the schedule uses in period `t`.
+    pub used: Vec<Vec<i128>>,
+}
+
+/// What [`lagrangian_bound`] returns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lagrangian {
+    /// The least bound found.
+    pub bound: i128,
+    /// The prices that gave it, one per resource and period.
+    pub prices: Vec<Vec<i64>>,
+    /// Each step's bound in order, the first at zero prices.
+    pub history: Vec<i128>,
+}
+
+/// The time-expanded graph's arcs (see the module notes) in `pitflow`'s CSR form.
+struct Expanded {
+    offsets: Vec<usize>,
+    targets: Vec<u32>,
+}
+
+fn expanded(problem: &ScheduleProblem) -> Result<Expanded, Refusal> {
+    let blocks = problem.blocks();
+    let (n, periods) = (blocks.node_count(), problem.periods());
+    let too_many = || {
+        refuse(format!(
+            "lagrangian: {n} blocks and {} arcs over {periods} periods are too many nodes or arcs",
+            blocks.arc_count()
+        ))
+    };
+    let nodes = n.checked_mul(periods).ok_or_else(too_many)?;
+    let arcs = blocks
+        .arc_count()
+        .checked_mul(periods)
+        .and_then(|a| a.checked_add(nodes))
+        .ok_or_else(too_many)?;
+    let mut offsets = Vec::with_capacity(nodes + 1);
+    offsets.push(0);
+    let mut targets = Vec::with_capacity(arcs);
+    for t in 0..periods {
+        for b in 0..n {
+            for &q in blocks.requires(b).unwrap_or(&[]) {
+                targets.push(id(t * n + q as usize)?);
+            }
+            if t + 1 < periods {
+                targets.push(id((t + 1) * n + b)?);
+            }
+            offsets.push(targets.len());
+        }
+    }
+    Ok(Expanded { offsets, targets })
+}
+
+fn overflow() -> Refusal {
+    refuse("lagrangian: a closure weight or the bound overflows i128".to_string())
+}
+
+/// `⌈w / 2^k⌉`.
+fn ceil_shift(w: i128, k: u32) -> Option<i128> {
+    w.checked_neg().map(|m| -(m >> k))
+}
+
+/// The bound at `prices`, on the graph `graph` of `problem`. The caller has checked the factors and prices.
+fn evaluate(
+    problem: &ScheduleProblem,
+    factors: &[i64],
+    graph: &Expanded,
+    prices: &[Vec<i64>],
+) -> Result<LagrangianValue, Refusal> {
+    let blocks = problem.blocks();
+    let (n, periods) = (blocks.node_count(), problem.periods());
+    let usage: Vec<&[i64]> = (0..problem.resources())
+        .map(|r| problem.usage(r).unwrap_or(&[]))
+        .collect();
+    let next = |row: &[i64], t: usize| i128::from(row.get(t + 1).copied().unwrap_or(0));
+    let mut weights = Vec::with_capacity(n * periods);
+    for (t, &f) in factors.iter().enumerate() {
+        let df = i128::from(f) - next(factors, t);
+        for (b, &v) in blocks.weights().iter().enumerate() {
+            let mut w = i128::from(v).checked_mul(df).ok_or_else(overflow)?;
+            for (row, uses) in prices.iter().zip(&usage) {
+                let dp = i128::from(row.get(t).copied().unwrap_or(0)) - next(row, t);
+                let q = i128::from(uses.get(b).copied().unwrap_or(0));
+                w = q
+                    .checked_mul(dp)
+                    .and_then(|x| w.checked_sub(x))
+                    .ok_or_else(overflow)?;
+            }
+            weights.push(w);
+        }
+    }
+    // The least power of two that brings the weights under pitflow's guard: no less than the top bit's excess.
+    let top = weights
+        .iter()
+        .map(|w| 128 - w.unsigned_abs().leading_zeros())
+        .max()
+        .unwrap_or(0);
+    let mut shift = top.saturating_sub(62);
+    let small = loop {
+        let scaled: Option<Vec<i128>> = weights.iter().map(|&w| ceil_shift(w, shift)).collect();
+        let fits = scaled.filter(|s| {
+            s.iter()
+                .try_fold(0_i128, |a, x| a.checked_add(x.abs()))
+                .is_some_and(|sum| sum < ABS_VALUE_SUM_LIMIT)
+        });
+        if let Some(s) = fits {
+            break s;
+        }
+        shift += 1;
+        if shift > 126 {
+            return Err(overflow());
+        }
+    };
+    let small = small
+        .into_iter()
+        .map(|w| i64::try_from(w).map_err(|_| overflow()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let closure = solve(&ClosureProblem::new(
+        small,
+        graph.offsets.clone(),
+        graph.targets.clone(),
+    )?)?;
+    let mut bound = i128::from(closure.value())
+        .checked_mul(1_i128 << shift)
+        .ok_or_else(overflow)?;
+    for (r, row) in prices.iter().enumerate() {
+        for (&p, &c) in row.iter().zip(problem.limits(r).unwrap_or(&[])) {
+            bound = i128::from(p)
+                .checked_mul(i128::from(c))
+                .and_then(|x| bound.checked_add(x))
+                .ok_or_else(overflow)?;
+        }
+    }
+    let mut schedule = vec![None; n];
+    for (node, _) in closure.in_pit().iter().enumerate().filter(|&(_, &on)| on) {
+        let (t, b) = (node / n.max(1), node % n.max(1));
+        if let Some(slot @ None) = schedule.get_mut(b) {
+            *slot = Some(id(t)?);
+        }
+    }
+    let mut used = vec![vec![0_i128; periods]; usage.len()];
+    for (b, slot) in schedule.iter().enumerate() {
+        if let Some(t) = *slot {
+            for (row, uses) in used.iter_mut().zip(&usage) {
+                if let Some(u) = row.get_mut(t as usize) {
+                    *u += i128::from(uses.get(b).copied().unwrap_or(0));
+                }
+            }
+        }
+    }
+    Ok(LagrangianValue {
+        bound,
+        shift,
+        schedule,
+        used,
+    })
+}
+
+fn check_factors(problem: &ScheduleProblem, factors: &[i64]) -> Result<(), Refusal> {
+    if factors.len() == problem.periods() {
+        Ok(())
+    } else {
+        Err(refuse(format!(
+            "lagrangian: {} discount factors for {} periods",
+            factors.len(),
+            problem.periods()
+        )))
+    }
+}
+
+/// The bound at `prices` (see the module notes): one row per resource, one price per period, each at least 0, in
+/// units of the discounted value a unit of the resource.
+///
+/// # Errors
+/// `FMINE-REF-207` (proposed) when `factors` is not one per period or `prices` not one non-negative price per
+/// resource and period; when a weight or the bound overflows `i128`, or there are too many nodes or arcs for
+/// `pitflow`; and as `pitflow::solve` refuses.
+pub fn lagrangian_value(
+    problem: &ScheduleProblem,
+    factors: &[i64],
+    prices: &[Vec<i64>],
+) -> Result<LagrangianValue, Refusal> {
+    check_factors(problem, factors)?;
+    let periods = problem.periods();
+    let shaped = prices.len() == problem.resources()
+        && prices
+            .iter()
+            .all(|row| row.len() == periods && row.iter().all(|&p| p >= 0));
+    if !shaped {
+        return Err(refuse(format!(
+            "lagrangian: prices must be {} rows of {periods} non-negative prices, one per resource and period",
+            problem.resources()
+        )));
+    }
+    evaluate(problem, factors, &expanded(problem)?, prices)
+}
+
+/// The least bound over at most `steps` closures, the prices moved by subgradient steps from zero (see the module
+/// notes). `target` steers the steps. It should be a schedule's value, such as the incumbent's; a bound at or below
+/// it ends the run, and when the schedule is feasible that bound proves it best. Steps that drive a price to 2⁶²
+/// also end the run.
+///
+/// # Errors
+/// `FMINE-REF-207` (proposed) when `steps` is 0, and as [`lagrangian_value`] refuses.
+pub fn lagrangian_bound(
+    problem: &ScheduleProblem,
+    factors: &[i64],
+    target: i128,
+    steps: usize,
+) -> Result<Lagrangian, Refusal> {
+    check_factors(problem, factors)?;
+    if steps == 0 {
+        return Err(refuse(
+            "lagrangian: the bound needs at least one step".to_string(),
+        ));
+    }
+    let graph = expanded(problem)?;
+    let limits: Vec<&[i64]> = (0..problem.resources())
+        .map(|r| problem.limits(r).unwrap_or(&[]))
+        .collect();
+    let mut prices = vec![vec![0.0_f64; problem.periods()]; limits.len()];
+    let (mut theta, mut stall) = (2.0_f64, 0_usize);
+    let mut history = Vec::with_capacity(steps);
+    let mut best: Option<(i128, Vec<Vec<i64>>)> = None;
+    for _ in 0..steps {
+        if prices
+            .iter()
+            .flatten()
+            .any(|&p| p.is_nan() || p >= PRICE_LIMIT)
+        {
+            break;
+        }
+        let at: Vec<Vec<i64>> = prices
+            .iter()
+            .map(|row| row.iter().map(|&p| p.round() as i64).collect())
+            .collect();
+        let v = evaluate(problem, factors, &graph, &at)?;
+        history.push(v.bound);
+        match &best {
+            Some((b, _)) if v.bound >= *b => {
+                stall += 1;
+                if stall >= STALL {
+                    theta /= 2.0;
+                    stall = 0;
+                }
+            }
+            _ => {
+                best = Some((v.bound, at));
+                stall = 0;
+            }
+        }
+        // C − used is a subgradient of the bound in the prices; the bound falls along its negative.
+        let slack: Vec<Vec<f64>> = limits
+            .iter()
+            .zip(&v.used)
+            .map(|(caps, used)| {
+                caps.iter()
+                    .zip(used)
+                    .map(|(&c, &u)| (i128::from(c) - u) as f64)
+                    .collect()
+            })
+            .collect();
+        let norm: f64 = slack.iter().flatten().map(|g| g * g).sum();
+        let gap = v.bound.saturating_sub(target);
+        if gap <= 0 || norm <= 0.0 {
+            break;
+        }
+        let step = theta * gap as f64 / norm;
+        for (row, g) in prices.iter_mut().zip(&slack) {
+            for (p, &gi) in row.iter_mut().zip(g) {
+                *p = (*p - step * gi).max(0.0);
+            }
+        }
+    }
+    let (bound, prices) = best.ok_or_else(|| refuse("lagrangian: no step ran".to_string()))?;
+    Ok(Lagrangian {
+        bound,
+        prices,
+        history,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -574,5 +887,164 @@ mod tests {
         let wrong = Shares::new(2, 2, vec![0.0; 4]).unwrap();
         let e = starts(&p, &wrong).unwrap_err();
         assert!(e.to_string().contains("shares for 2 blocks"), "{e}");
+    }
+
+    #[test]
+    fn the_lagrangian_bound_of_a_small_case_reaches_its_lp_optimum_by_hand() {
+        let p = small();
+        let f = discount_factors(1, 4, 2).unwrap();
+        let (f0, f1) = (i128::from(f[0]), i128::from(f[1]));
+        let d = f0 - f1;
+        // At zero prices the closure mines all three blocks in period 0.
+        let v = lagrangian_value(&p, &f, &[vec![0, 0]]).unwrap();
+        assert_eq!(
+            (v.bound, v.shift, v.schedule.clone(), v.used.clone()),
+            (7 * f0, 0, vec![Some(0); 3], vec![vec![3, 0]])
+        );
+        // The LP mines half of blocks 0 and 2 with all of block 1 in period 0: 7·F1 + 5·D = 5·F0 + 2·F1, above the
+        // best schedule's 4·F0 + 3·F1 (blocks 0 and 2, then 1). A price of 2·D on period 0 reaches it: there block 1
+        // weighs D, blocks 0 and 2 together 0, and the prices add 2 × 2·D.
+        let lp = 5 * f0 + 2 * f1;
+        let best = 4 * f0 + 3 * f1;
+        let d64 = i64::try_from(2 * d).unwrap();
+        assert_eq!(lagrangian_value(&p, &f, &[vec![d64, 0]]).unwrap().bound, lp);
+        for (p0, p1) in [(0, 0), (d64 / 2, 0), (d64, 0), (d64 * 2, 0), (d64, d64 / 4)] {
+            let b = lagrangian_value(&p, &f, &[vec![p0, p1]]).unwrap().bound;
+            assert!(b >= lp, "prices ({p0}, {p1}): {b} below the LP's {lp}");
+        }
+
+        let run = lagrangian_bound(&p, &f, best, 100).unwrap();
+        println!(
+            r#"{{"test":"lagrangian_small","bound":{},"lp":{lp},"steps":{},"prices":{:?},"over":{}}}"#,
+            run.bound,
+            run.history.len(),
+            run.prices,
+            (run.bound - lp) as f64 / lp as f64
+        );
+        assert_eq!(run.history[0], 7 * f0);
+        assert!(run.history.iter().all(|&b| b >= lp), "{:?}", run.history);
+        assert_eq!(Some(&run.bound), run.history.iter().min());
+        assert!(
+            (run.bound - lp) as f64 <= 1e-4 * lp as f64,
+            "{} against {lp}",
+            run.bound
+        );
+        assert_eq!(
+            lagrangian_value(&p, &f, &run.prices).unwrap().bound,
+            run.bound
+        );
+    }
+
+    #[test]
+    fn lagrangian_weights_past_the_guard_are_shifted_and_still_bound() {
+        // The small case at 2^20 times the values: the weights' absolute values sum to about 2^63, past the guard, so
+        // they are shifted, each rounded up.
+        let blocks = ClosureProblem::from_requirements(
+            vec![-(1 << 20), 3 << 20, 5 << 20],
+            &[vec![], vec![], vec![0]],
+        )
+        .unwrap();
+        let p = ScheduleProblem::new(blocks, 2, vec![vec![1, 1, 1]], vec![vec![2, 2]]).unwrap();
+        let f = discount_factors(1, 4, 2).unwrap();
+        let (f0, f1) = (i128::from(f[0]), i128::from(f[1]));
+        let price = i64::try_from((2 * (f0 - f1)) << 20).unwrap();
+        let exact = (5 * f0 + 2 * f1) << 20;
+        let v = lagrangian_value(&p, &f, &[vec![price, 0]]).unwrap();
+        assert!(v.shift > 0, "{v:?}");
+        // Six nodes, each up by less than one unit of 2^shift.
+        assert!(
+            v.bound >= exact && v.bound <= exact + (6 << v.shift),
+            "{} against {exact} at shift {}",
+            v.bound,
+            v.shift
+        );
+    }
+
+    #[test]
+    fn every_lagrangian_step_bounds_the_best_schedule_found_by_enumeration() {
+        use crate::toposort::search::discounted_value;
+
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = |m: u64| {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            (z ^ (z >> 31)) % m
+        };
+        let (mut cases, mut tight) = (0, 0);
+        for _ in 0..200 {
+            let n = 2 + next(4) as usize;
+            let periods = 1 + next(3) as usize;
+            let values: Vec<i64> = (0..n).map(|_| next(15) as i64 - 5).collect();
+            let requires: Vec<Vec<u32>> = (0..n)
+                .map(|b| (0..b as u32).filter(|_| next(3) == 0).collect())
+                .collect();
+            let blocks = ClosureProblem::from_requirements(values, &requires).unwrap();
+            let uses: Vec<i64> = (0..n).map(|_| 1 + next(3) as i64).collect();
+            let limits: Vec<i64> = (0..periods).map(|_| 1 + next(6) as i64).collect();
+            let p = ScheduleProblem::new(blocks, periods, vec![uses], vec![limits]).unwrap();
+            let f = discount_factors(1, 10, periods).unwrap();
+            // Every schedule, each block in a period or left out.
+            let mut opt = i128::MIN;
+            let mut schedule = vec![None; n];
+            for code in 0..(periods + 1).pow(n as u32) {
+                let mut c = code;
+                for slot in &mut schedule {
+                    let k = c % (periods + 1);
+                    c /= periods + 1;
+                    *slot = (k < periods).then_some(k as u32);
+                }
+                if check(&p, &schedule).unwrap().feasible() {
+                    opt = opt.max(discounted_value(&p, &schedule, &f).unwrap());
+                }
+            }
+            let run = lagrangian_bound(&p, &f, opt, 40).unwrap();
+            assert!(
+                run.history.iter().all(|&b| b >= opt),
+                "case {cases}: {:?} below {opt}",
+                run.history
+            );
+            assert_eq!(Some(&run.bound), run.history.iter().min());
+            cases += 1;
+            tight += usize::from(run.bound == opt);
+        }
+        println!(
+            r#"{{"test":"lagrangian_enumeration","cases":{cases},"bound_equals_best":{tight}}}"#
+        );
+    }
+
+    #[test]
+    fn the_lagrangian_bound_refuses_wrong_factors_prices_and_steps() {
+        let p = small();
+        let f = discount_factors(1, 4, 2).unwrap();
+        for (e, why) in [
+            (
+                lagrangian_value(&p, &f[..1], &[vec![0, 0]]).unwrap_err(),
+                "1 discount factors for 2 periods",
+            ),
+            (
+                lagrangian_value(&p, &f, &[vec![0]]).unwrap_err(),
+                "1 rows of 2 non-negative prices",
+            ),
+            (
+                lagrangian_value(&p, &f, &[vec![0, 0], vec![0, 0]]).unwrap_err(),
+                "1 rows of 2 non-negative prices",
+            ),
+            (
+                lagrangian_value(&p, &f, &[vec![0, -1]]).unwrap_err(),
+                "non-negative prices",
+            ),
+            (
+                lagrangian_bound(&p, &f, 0, 0).unwrap_err(),
+                "at least one step",
+            ),
+            (
+                lagrangian_bound(&p, &f[..1], 0, 5).unwrap_err(),
+                "1 discount factors for 2 periods",
+            ),
+        ] {
+            assert!(e.to_string().contains(why), "{e}");
+        }
     }
 }

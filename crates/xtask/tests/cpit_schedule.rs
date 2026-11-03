@@ -41,6 +41,13 @@
 //! lower the NPV and must stay under both bounds. It is reported as `from_known`, and written beside the API's
 //! schedule as `<name>_cpit_fmine_from_known.sol`. This warm start uses MineLib's own schedule; the API's schedule
 //! above does not.
+//!
+//! With `FMINE_LAGRANGIAN_STEPS` above 0 (default 0, skipped), `toposort::lp::lagrangian_bound` (bd-oq7d) runs that
+//! many closures, aimed at the best schedule's value. Its bound is exact in the search's integer objective (factors
+//! `discount_factors`, rounded down), with no LP solver. So every step must lie at or above the API's schedule,
+//! MineLib's schedule and the search from it, compared in `i128`. It is reported as `lagrangian`, in whole units,
+//! beside PDLP's certified bound and MineLib's LP bound. Those are in the `f64` objective, so the ratios are
+//! approximate.
 
 // Test helpers outside `#[test]` functions: a malformed MineLib file must fail the test at once.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -51,7 +58,9 @@ use std::time::Instant;
 use fmine_lp::pdlp::{LpProblem, PdlpOptions, solve_observed};
 use fmine_optimize::pitflow::minelib::Rounding;
 use fmine_optimize::toposort::lp::{self, Shares, THRESHOLDS};
-use fmine_optimize::toposort::search::{discount_factors, improve};
+use fmine_optimize::toposort::search::{
+    DISCOUNT_SCALE, discount_factors, discounted_value, improve,
+};
 use fmine_optimize::toposort::{check, cpit};
 
 /// MineLib's Results page (Results.xhtml, mirrored at github.com/borelian/minelib, read 2026-11-01): the CPIT LP
@@ -248,6 +257,8 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
         // MineLib's schedule as an untrusted candidate (bd-3l5o): read, checked, then searched from, so that it can
         // become the incumbent.
         let mut from_known = None;
+        // Its exact discounted value and the search's from it, in the search's own integer objective.
+        let mut known_exact = None;
         let known_npv = known.map(|path| {
             let schedule =
                 cpit::parse_solution(&std::fs::read_to_string(&path).unwrap(), p).unwrap();
@@ -291,8 +302,36 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
                 .unwrap();
             }
             from_known = Some((after, i.rounds, t.elapsed().as_secs_f64()));
+            known_exact = Some((
+                discounted_value(p, &schedule, &factors).unwrap(),
+                i.after,
+            ));
             v
         });
+        // The Lagrangian bound (bd-oq7d): exact in the search's integer objective, so every schedule here must lie at
+        // or under every one of its steps.
+        let steps: usize = env_or("FMINE_LAGRANGIAN_STEPS", 0);
+        let incumbent = found.searched[found.best].after;
+        let lagrangian = (steps > 0).then(|| {
+            let target = known_exact.map_or(incumbent, |(_, after)| after.max(incumbent));
+            let t = Instant::now();
+            let l = lp::lagrangian_bound(p, &factors, target, steps).unwrap();
+            let s = t.elapsed().as_secs_f64();
+            let mut values = vec![("the API's schedule", incumbent)];
+            if let Some((k, after)) = known_exact {
+                values.push(("MineLib's schedule", k));
+                values.push(("the search from MineLib's schedule", after));
+            }
+            for (what, v) in values {
+                if let Some(b) = l.history.iter().find(|&&b| b < v) {
+                    failures.push(format!(
+                        "{name}: a Lagrangian step bounds at {b}, below {what}'s {v}"
+                    ));
+                }
+            }
+            (l, s)
+        });
+        let whole = |v: i128| v as f64 / SCALE / DISCOUNT_SCALE as f64;
         let greedy_best = npvs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let rel = |bound: f64| (bound - best) / bound;
         let list = |v: &[f64]| {
@@ -312,7 +351,7 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
             .collect::<Vec<_>>()
             .join(",");
         println!(
-            "{{\"bead\":\"bd-5lxu\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"resources\":{},\"rounded\":[{},{},{}],\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"per_threshold\":[\"earliest\",\"lp_release\"],\"npv\":[{}],\"mined\":{mined:?},\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"greedy_best\":{greedy_best:.3},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{:.4},\"best_known_rechecked\":{},\"from_known\":{}}}",
+            "{{\"bead\":\"bd-5lxu\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"resources\":{},\"rounded\":[{},{},{}],\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"per_threshold\":[\"earliest\",\"lp_release\"],\"npv\":[{}],\"mined\":{mined:?},\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"greedy_best\":{greedy_best:.3},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{:.4},\"best_known_rechecked\":{},\"from_known\":{},\"lagrangian\":{}}}",
             p.resources(),
             model.rounded_values,
             model.rounded_uses,
@@ -328,6 +367,17 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
                 "{{\"npv\":{v:.3},\"of_best_known\":{:.6},\"rounds\":{r},\"search_s\":{s:.2}}}",
                 v / best_known
             )),
+            lagrangian.as_ref().map_or("null".to_string(), |(l, s)| {
+                let bound = whole(l.bound);
+                format!(
+                    "{{\"steps\":{},\"bound\":{bound:.3},\"first\":{:.3},\"of_certified\":{},\"of_published_lp\":{:.6},\"gap_to_incumbent\":{:.4e},\"seconds\":{s:.1}}}",
+                    l.history.len(),
+                    whole(l.history[0]),
+                    certified.map_or("null".to_string(), |u| format!("{:.6}", bound / u)),
+                    bound / published_lp,
+                    (l.bound - incumbent) as f64 / l.bound as f64
+                )
+            }),
         );
         match certified {
             Some(u) if best > u + 1.0 => failures.push(format!(
