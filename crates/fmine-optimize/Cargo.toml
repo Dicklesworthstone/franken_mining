@@ -9,6 +9,7 @@ description = "Pushback optimisation kernels: ultimate pit limits by Hochbaum ps
 
 [dependencies]
 fmine-evidence = { path = "../fmine-evidence" }
+fmine-numerics = { path = "../fmine-numerics" }
 
 [lints]
 workspace = true

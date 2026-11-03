@@ -27,6 +27,7 @@
 //! crate, so it is not the separate `fmine-verify` checker that plan §15.4 names.
 
 pub mod cpit;
+pub mod lp;
 pub mod pcpsp;
 pub mod search;
 

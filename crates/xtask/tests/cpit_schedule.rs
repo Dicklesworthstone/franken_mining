@@ -10,18 +10,21 @@
 //!
 //! 1. `toposort::cpit::parse` reads the pair. Values are at 10⁶, rounded half away from zero as in GATE-PUSH-PIT1;
 //!    uses are rounded up and limits down at 10⁶, so the schedule also keeps the file's limits.
-//! 2. The LP is KILL-PUSH-PDLP's, in "by" variables `w[b][t]`, built here from the parsed integers, with the discount
-//!    counted from period 0 (`crates/fmine-lp/tests/minelib_cpit.rs` explains why).
-//! 3. Block `b`'s expected number of periods before it is mined is `Σ_t (1 − w[b][t])`. That ranks it. A block the
-//!    LP mines less than a threshold of by the last period is left out. Three thresholds are tried. Each gives two
-//!    schedules: `greedy`'s, and `greedy_from`'s with each block released at its LP median period, the first by which
-//!    the LP has mined half of it (bd-wife). Each schedule must pass the checker; the best NPV is reported, with all six.
-//! 4. `toposort::search::improve` (`bd-5lxu`) runs on each schedule, with `discount_factors` from the file's rate and
-//!    at most `FMINE_SEARCH_ROUNDS` rounds (default 1,000), and its result must pass the checker too.
+//! 2. The LP is KILL-PUSH-PDLP's, in "by" variables `w[b][t]`, from `toposort::lp::relaxation` (`bd-ubzs`), with the
+//!    discount counted from period 0 (`crates/fmine-lp/tests/minelib_cpit.rs` explains why). PDLP solves it here.
+//! 3. `toposort::lp::starts` ranks block `b` by its expected number of periods before it is mined,
+//!    `Σ_t (1 − w[b][t])`. A block the LP mines less than a threshold of by the last period is left out. Three
+//!    thresholds are tried. Each gives two schedules: `greedy`'s, and `greedy_from`'s with each block released at its
+//!    LP median period, the first by which the LP has mined half of it (bd-wife). Each schedule must pass the checker;
+//!    the best NPV is reported, with all six.
+//! 4. `toposort::lp::incumbent` runs `toposort::search::improve` (`bd-5lxu`) on each schedule, with `discount_factors`
+//!    from the file's rate and at most `FMINE_SEARCH_ROUNDS` rounds (default 1,000). Each result must pass the checker
+//!    too, and the one it picks must have the highest NPV.
 //! 5. NPV is `Σ_t V_t / (1 + rate)^t` in `f64`, from the checker's exact per-period sums.
 //!
-//! Asserted: every schedule passes `toposort::check`, the search never lowers an NPV, and no NPV exceeds PDLP's
-//! certified bound or MineLib's LP bound (each allowing one unit for rounding). No gap threshold is asserted.
+//! Asserted: every schedule passes `toposort::check`, the search never lowers an NPV, the API's pick has the highest
+//! NPV, and no NPV exceeds PDLP's certified bound or MineLib's LP bound (each allowing one unit for rounding). No gap
+//! threshold is asserted.
 //! GATE-PUSH-TOPO is set on PCPSP, not CPIT.
 //!
 //! `FMINE_CPIT_LP_CACHE`, if set, names a directory where each instance's LP solution and certified bound are kept
@@ -42,10 +45,10 @@ use std::path::Path;
 use std::time::Instant;
 
 use fmine_lp::pdlp::{LpProblem, PdlpOptions, solve_observed};
-use fmine_numerics::sparse::Coo;
 use fmine_optimize::pitflow::minelib::Rounding;
-use fmine_optimize::toposort::search::{discount_factors, improve};
-use fmine_optimize::toposort::{ScheduleProblem, check, cpit, greedy, greedy_from};
+use fmine_optimize::toposort::lp::{self, Shares, THRESHOLDS};
+use fmine_optimize::toposort::search::discount_factors;
+use fmine_optimize::toposort::{check, cpit};
 
 /// MineLib's Results page (Results.xhtml, mirrored at github.com/borelian/minelib, read 2026-11-01): the CPIT LP
 /// upper bound and the best-known feasible schedule's value, in whole units.
@@ -66,9 +69,6 @@ const PUBLISHED: &[(&str, f64, f64)] = &[
 /// Places for values, uses and limits.
 const DECIMALS: u32 = 6;
 const SCALE: f64 = 1e6;
-
-/// The by-period fraction a block must reach by the last period to be ranked.
-const THRESHOLDS: [f64; 3] = [1e-6, 0.5, 0.9];
 
 /// A MineLib CPIT solution: one `<block> <destination> <period> <fraction>` line per mined block, whole blocks only.
 fn read_solution(text: &str, n: usize) -> Vec<Option<u32>> {
@@ -105,72 +105,9 @@ fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
         .unwrap_or(default)
 }
 
-/// The relaxation as a minimisation (costs negated), from the parsed problem.
-fn relaxation(p: &ScheduleProblem, rate: f64) -> LpProblem {
-    let blocks = p.blocks();
-    let (n, periods) = (blocks.node_count(), p.periods());
-    let col = |b: usize, t: usize| t * n + b;
-    let arcs: usize = (0..n).map(|b| blocks.requires(b).unwrap().len()).sum();
-    let rows = arcs * periods + n * (periods - 1) + p.resources() * periods;
-    let mut coo = Coo::new(rows, n * periods).unwrap();
-    let (mut lo, mut hi) = (Vec::with_capacity(rows), Vec::with_capacity(rows));
-    let mut r = 0;
-    for t in 0..periods {
-        for b in 0..n {
-            for &q in blocks.requires(b).unwrap() {
-                coo.push(r, col(b, t), 1.0).unwrap();
-                coo.push(r, col(q as usize, t), -1.0).unwrap();
-                lo.push(f64::NEG_INFINITY);
-                hi.push(0.0);
-                r += 1;
-            }
-        }
-    }
-    for t in 1..periods {
-        for b in 0..n {
-            coo.push(r, col(b, t - 1), 1.0).unwrap();
-            coo.push(r, col(b, t), -1.0).unwrap();
-            lo.push(f64::NEG_INFINITY);
-            hi.push(0.0);
-            r += 1;
-        }
-    }
-    for res in 0..p.resources() {
-        let (uses, caps) = (p.usage(res).unwrap(), p.limits(res).unwrap());
-        for (t, &cap) in caps.iter().enumerate() {
-            for (b, &q) in uses.iter().enumerate().filter(|(_, q)| **q != 0) {
-                let q = q as f64 / SCALE;
-                coo.push(r, col(b, t), q).unwrap();
-                if t > 0 {
-                    coo.push(r, col(b, t - 1), -q).unwrap();
-                }
-            }
-            lo.push(f64::NEG_INFINITY);
-            hi.push(cap as f64 / SCALE);
-            r += 1;
-        }
-    }
-    assert_eq!(r, rows);
-    let factor: Vec<f64> = (0..periods)
-        .map(|t| (1.0 + rate).powi(t as i32).recip())
-        .collect();
-    let mut cost = vec![0.0; n * periods];
-    for (b, &w) in blocks.weights().iter().enumerate() {
-        let profit = w as f64 / SCALE;
-        for t in 0..periods {
-            let next = factor.get(t + 1).map_or(0.0, |f| profit * f);
-            cost[col(b, t)] = -(profit * factor[t] - next);
-        }
-    }
-    LpProblem::new(
-        cost,
-        &coo.assemble(),
-        lo,
-        hi,
-        vec![0.0; n * periods],
-        vec![1.0; n * periods],
-    )
-    .unwrap()
+/// `toposort::lp`'s relaxation, handed to PDLP.
+fn to_lp(r: lp::Relaxation) -> LpProblem {
+    LpProblem::new(r.cost, &r.matrix, r.row_lo, r.row_hi, r.col_lo, r.col_hi).unwrap()
 }
 
 #[test]
@@ -220,14 +157,15 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
             let certified = (!f[0].is_nan()).then_some(f[0]);
             (f[2..].to_vec(), certified, f[1], "cached".to_string())
         } else {
-            let lp = relaxation(p, rate);
+            let relaxed =
+                to_lp(lp::relaxation(p, model.discount_rate, cpit::RATE_SCALE, DECIMALS).unwrap());
             let t0 = Instant::now();
             let options = PdlpOptions {
                 tolerance: tol,
                 max_iterations: u64::MAX,
                 threads,
             };
-            let s = solve_observed(&lp, &options, &mut |_| {
+            let s = solve_observed(&relaxed, &options, &mut |_| {
                 t0.elapsed().as_secs_f64() < max_seconds
             })
             .unwrap();
@@ -244,10 +182,7 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
             }
             (s.x().to_vec(), certified, lp_s, format!("{:?}", s.status()))
         };
-        let w = |b: usize, t: usize| x[t * n + b].clamp(0.0, 1.0);
-        let expected: Vec<f64> = (0..n)
-            .map(|b| (0..periods).map(|t| 1.0 - w(b, t)).sum())
-            .collect();
+        let shares = Shares::new(n, periods, x).unwrap();
         let (published_lp, best_known) = PUBLISHED
             .iter()
             .find(|(k, _, _)| *k == name)
@@ -256,45 +191,22 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
         let factors = discount_factors(model.discount_rate, cpit::RATE_SCALE, periods).unwrap();
         let rounds: usize = env_or("FMINE_SEARCH_ROUNDS", 1_000);
         let t1 = Instant::now();
+        let starts = lp::starts(p, &shares).unwrap();
+        let greedy_s = t1.elapsed().as_secs_f64();
+        let t2 = Instant::now();
+        let found = lp::incumbent(p, &starts, &factors, rounds).unwrap();
+        let search_s = t2.elapsed().as_secs_f64();
         let mut npvs = Vec::new();
         let mut mined = Vec::new();
         let mut improved = Vec::new();
         let mut moves = Vec::new();
-        let mut search_s = 0.0;
-        // Each block's LP median period: the first by which the LP has mined half of the block, or the last period if
-        // it never has. The LP mines a required block at least as fast as the block itself, so no block's median comes
-        // before that of a block it requires.
-        let median: Vec<u32> = (0..n)
-            .map(|b| {
-                (0..periods)
-                    .find(|&t| w(b, t) >= 0.5)
-                    .unwrap_or(periods - 1) as u32
-            })
-            .collect();
-        let mut best_schedule: Option<(f64, Vec<Option<u32>>)> = None;
-        for (threshold, release) in THRESHOLDS
-            .into_iter()
-            .flat_map(|th| [(th, None), (th, Some(&median))])
-        {
-            let rank: Vec<Option<i64>> = (0..n)
-                .map(|b| {
-                    (w(b, periods - 1) >= threshold).then(|| (expected[b] * 1e9).round() as i64)
-                })
-                .collect();
+        for (start, i) in starts.iter().zip(&found.searched) {
             let threshold = format!(
-                "{threshold}{}",
-                if release.is_some() {
-                    ", LP release"
-                } else {
-                    ""
-                }
+                "{}{}",
+                start.threshold,
+                if start.released { ", LP release" } else { "" }
             );
-            let schedule = match release {
-                None => greedy(p, &rank),
-                Some(release) => greedy_from(p, &rank, release),
-            }
-            .unwrap();
-            let c = check(p, &schedule).unwrap();
+            let c = check(p, &start.schedule).unwrap();
             if !c.feasible() {
                 failures.push(format!(
                     "{name}: threshold {threshold}: {} unmet, over {:?}",
@@ -304,9 +216,6 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
             let before = npv(&c.period_values, rate);
             npvs.push(before);
             mined.push(c.mined);
-            let t2 = Instant::now();
-            let i = improve(p, &schedule, &factors, rounds).unwrap();
-            search_s += t2.elapsed().as_secs_f64();
             let c = check(p, &i.schedule).unwrap();
             if !c.feasible() {
                 failures.push(format!(
@@ -323,16 +232,20 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
             }
             improved.push(after);
             moves.push((i.rounds, i.moves));
-            if best_schedule.as_ref().is_none_or(|(v, _)| after > *v) {
-                best_schedule = Some((after, i.schedule));
-            }
+        }
+        // The API picks by its integer discounted value; it must be the highest NPV here too, up to `f64` noise.
+        let best = improved[found.best];
+        let top = improved.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        if best < top - 1e-9 * top.abs().max(1.0) {
+            failures.push(format!(
+                "{name}: the API's best schedule is worth {best}, below the {top} of another"
+            ));
         }
         // MineLib's solution format, so the schedule can be checked without this code
         // (crates/xtask/testdata/minelib_cpit_oracle.py).
-        if let (Ok(dir), Some((_, schedule))) =
-            (std::env::var("FMINE_CPIT_SOLUTION_OUT"), &best_schedule)
-        {
-            let text: String = schedule
+        if let Ok(dir) = std::env::var("FMINE_CPIT_SOLUTION_OUT") {
+            let text: String = found
+                .schedule()
                 .iter()
                 .enumerate()
                 .filter_map(|(b, t)| t.map(|t| format!("{b} 0 {t} 1.000000\n")))
@@ -367,9 +280,7 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
             }
             v
         });
-        let greedy_s = t1.elapsed().as_secs_f64() - search_s;
         let greedy_best = npvs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        let best = improved.iter().copied().fold(greedy_best, f64::max);
         let rel = |bound: f64| (bound - best) / bound;
         let list = |v: &[f64]| {
             v.iter()

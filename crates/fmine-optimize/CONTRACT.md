@@ -1,7 +1,7 @@
 # CONTRACT.md — `fmine-optimize`
 
 ## 1. Purpose
-The Pushback optimisation crate. Five solver slices and four readers so far; `toposort::pcpsp` is both a reader and a search:
+The Pushback optimisation crate. Five solver slices, four readers and an LP bridge so far; `toposort::pcpsp` is both a reader and a search:
 - `pitflow` (`BD-250`, plan §15.4): the ultimate pit as a maximum-weight closure, by Hochbaum's pseudoflow (lowest-label variant, gap termination) on an `i64` CSR precedence graph. Each pit comes with its pseudoflow certificate, which `verify` checks without the solver.
 - `pitflow::shells` (`bd-nzwd`, plan §15.4 and PO-PUSH-3): nested pit shells across an increasing list of exact revenue factors. These are the pit-by-pit sequence from which pushbacks are chosen.
   - Shell `k` is the union of the pit solved at factor `k` and shell `k − 1`.
@@ -41,8 +41,13 @@ The Pushback optimisation crate. Five solver slices and four readers so far; `to
     - The candidates are the assignment at the last prices, the master's mixture rounded block by block, and the mixture's columns. Each is repaired to every limit in `i128`.
     - The best is taken only when it is worth strictly more.
     - On w23, where a blend allows no single block or pair into the mill, it raised the searched NPV by 20.5% (§9).
+- `toposort::lp` and `toposort::pcpsp::lp` (`bd-ubzs`, plan §15.4: "feasible incumbents from LP solutions"): schedules from an LP relaxation, the pipeline behind §9's MineLib tables as library code. The crate formulates the LP and reads its solution; the caller solves it, since this crate does not depend on `fmine-lp` and the topology registry has no same-layer edge for it.
+  - `relaxation` gives the LP as plain parts, `Relaxation { cost, matrix, row_lo, row_hi, col_lo, col_hi }`: what `fmine_lp::pdlp::LpProblem::new` takes. CPIT's is in "by" shares `w[b][t]`. PCPSP's adds `y[b][d][t]`, the share sent to each destination in each period, over `pcpsp::lp::scope`'s blocks: the ultimate pit under each block's most valuable destination, certificate checked, or every block when a use is negative.
+  - `Shares` and `pcpsp::lp::Solution` read a solution back. A value that is not a number in `[0, 1]` is refused, not clamped. PCPSP blocks go whole to the destination the LP sends most of them to.
+  - `starts` gives TopoSort's six schedules: three thresholds on the LP's final share, each with `greedy` and with `greedy_from` at the LP median periods. `incumbent` searches each, with `search::improve` or `pcpsp::improve`, and picks the first with the highest discounted value.
+  - Moved from the two xtask harnesses without changing a bit (§9).
 
-`fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. Shells, slope arcs and `toposort` have no caller outside tests yet. Bienstock–Zuckerberg, Lagrangian and the stochastic layer are later slices.
+`fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. Shells, slope arcs and `toposort` have no caller outside tests yet: the MineLib harnesses in `crates/xtask/tests/` call `toposort::lp` and `toposort::pcpsp::lp`. Bienstock–Zuckerberg, Lagrangian and the stochastic layer are later slices.
 
 - **Crate:** `fmine-optimize`
 - **Layer:** E
@@ -84,6 +89,8 @@ The Pushback optimisation crate. Five solver slices and four readers so far; `to
 - `search::Improvement`: the improved schedule (it has passed `check`), its discounted value `after` and the input's `before` (exact `i128`, `after ≥ before`), the rounds run, and `Moves` (counts of earlier, cones, swaps, added, later and dropped). `discounted_value` gives `Σ value · factor[t]` exactly.
 - `pcpsp::PcpspModel`: `name`, `discount_rate`, the rounding counts, and `blocks`, `periods`, `destinations`, `resources`, `value(b, d)`, `uses(r, b, d)`, `limits(r)`, `requires(b)`. `pcpsp::DestinationMoves` counts switches, exchanges, periods reassigned by Price (`priced`) and unmined blocks given a destination. `pcpsp::PcpspImprovement` holds the improved schedule and destinations (they pass `check` together), `before` and `after` (exact `i128`, `after ≥ before`), the cycles run, and both kinds of move counts.
 - `CpitModel`: `name`, `problem`, `discount_rate` (times `RATE_SCALE`, 10⁹), `rounded_values`, `rounded_uses` and `rounded_limits`. Discounting is the caller's.
+- `lp::Relaxation`: `cost`, `matrix` (`fmine_numerics::sparse::Csr`), `row_lo`, `row_hi`, `col_lo` and `col_hi`, a minimisation in `f64`. `lp::Shares`: `blocks`, `periods`, `share(b, t)`, `expected(b)` and `medians()`. `pcpsp::lp::Scope`: the LP's `blocks`, `pit_blocks`, `pit_value` (certificate checked) and `whole`. `pcpsp::lp::Solution`: `shares()` and `destinations()`.
+- `lp::Start` and `pcpsp::lp::Start`: the `threshold`, whether `released`, and the schedule (with its `destination` for PCPSP), which has passed `check`. `lp::Incumbent` and `pcpsp::lp::Incumbent`: the `searched` improvements, one per start, and the index of the `best`.
 
 None is a Claim.
 
@@ -149,6 +156,20 @@ None is a Claim.
       - No repair and no limit test at acceptance: `destinations` refused its own result as a defect (infeasible); 5 tests failed.
       - The price's sign flipped in the assignment, `value + λ · use`: at first every test passed, since the repair still reached the known cases' answers and only 898 of the 900 periods ended at their best. `each_block_goes_where_value_less_priced_use_is_largest` was then added, and it fails.
   - Planted negatives on 2026-11-02, each run once and reverted. A destination limit test that always passes was refused by `destinations`' final check (infeasible), and a switch to a less valuable destination by its value test. Each failed 2 of the 5 `pcpsp` tests. A `parse` that checks the arcs with zero values again, as before the fuzz finding in §8, read the case that must be refused and failed `every_malformed_pair_refuses`. A `check` that ignores every limit but the first (in the tiny pair, the mill's) failed `pcpsp::tests::bad_inputs_refuse` and `check_agrees_with_the_definition_on_every_schedule`. For `bd-ixfw`: a search that takes a block out of a period as if no use were negative (the check before signed uses) failed the known blend case and both signed `improve` tests; a `pcpsp::greedy` whose fallback ignores limits was refused by its own `check` in the fallback test. For `bd-tll7`: a `greedy_from` that ignores the release failed both release tests.
+  - Schedules from an LP (`bd-ubzs`):
+    - `lp::tests`:
+      - `the_relaxation_of_a_small_case_has_each_row_and_cost` checks every row, bound and cost of a three-block, two-period case by hand, at whole units and at tenths.
+      - `power_matches_powi_bit_for_bit` checks the discount power against `powi` bitwise, for six rates and 200 periods.
+      - `shares_refuse_what_is_not_a_share_in_range`, `the_relaxation_refuses_a_bad_rate_or_places`, `ranks_and_medians_follow_the_lp`, `starts_and_the_incumbent_on_a_small_case` and `the_incumbent_is_the_first_of_the_best`. The last two cover the six starts' order, a tie on rank broken by id, and a swap that the search finds.
+    - `pcpsp::lp::tests`:
+      - `the_scope_is_the_pit_unless_a_use_is_negative` and `the_relaxation_over_the_pit_has_each_row_and_cost`.
+      - `the_relaxation_refuses_blocks_that_are_not_closed_or_in_order` and `the_solution_refuses_what_is_not_a_share_in_range`.
+      - `the_solution_sends_each_block_where_the_lp_sends_most_of_it` covers a block outside the LP, a tie between destinations, and a majority.
+      - `starts_and_the_incumbent_on_the_small_pair`: **Later** moves a waste block beside the ore it lies under.
+    - Planted negatives on 2026-11-03, each run once and reverted, with a grep showing none left:
+      - A median counted at a share above one half, not at least one half: 4 tests failed.
+      - Destination ties sent to the highest destination: the tie case failed.
+      - A scope that ignores negative uses: the scope test failed.
   - On MineLib's CPIT instances, see §9.
 
 ## 5. Refusals
@@ -219,7 +240,9 @@ No value is clamped, rescaled or perturbed to make a problem fit.
 ## 6. Determinism class
 `BitwisePortable`, declared on every file and checked by `xtask check-det`. Integer arithmetic only (`i64`, with `i128` sums in `new`, `verify` and `toposort`, and `i128` and `u128` in `slope`'s angle and cone tests); no hashing, threads or platform-dependent iteration order. `greedy`'s ready set is a binary heap keyed by `(rank, block id)`, a total order.
 
-The one exception is `toposort::pcpsp::price` (`bd-rbxh`). Its prices and its simplex use `f64`, with IEEE `+ − × ÷`, `abs`, `max` and comparisons only, in a fixed order: no libm call, `mul_add` or reduction whose order varies. These are correctly rounded, so the floats, and therefore Price's choices, are the same on every IEEE platform. The floats only guide. Price's repair, its acceptance and `destinations`' final `check` are in `i128`.
+One exception is `toposort::pcpsp::price` (`bd-rbxh`). Its prices and its simplex use `f64`, with IEEE `+ − × ÷`, `abs`, `max` and comparisons only, in a fixed order: no libm call, `mul_add` or reduction whose order varies. These are correctly rounded, so the floats, and therefore Price's choices, are the same on every IEEE platform. The floats only guide. Price's repair, its acceptance and `destinations`' final `check` are in `i128`.
+
+`toposort::lp` and `toposort::pcpsp::lp` (`bd-ubzs`) are the other `f64` files, under the same rule. The relaxation's coefficients are integers divided by `10^decimals`. Its discount factors are `1 / (1 + rate)^t`, the power taken by repeated squaring in the order `powi` uses, without a libm call; a test checks them against `powi` bit for bit. The solution's shares are read, summed and compared, and ranks are rounded with `round`, which is exact. The schedules they lead to are checked, valued and compared in `i128`.
 
 ## 7. Evidence class of outputs
 Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState` is assigned.
@@ -391,6 +414,8 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 
   The table is the `bd-rbxh` run.
 
+  Rerun for `bd-ubzs` on 2026-11-02, both tests on all ten instances from the cache, through `toposort::lp` and `toposort::pcpsp::lp` in place of each test's own relaxation, ranks, starts and pick. All twenty best schedules were byte-identical to the `bd-ynoj` (CPIT) and `bd-rbxh` (PCPSP) runs, and every reported value, gap, count and gate line was the same; only the timings differ. newman1's LPs, solved fresh by PDLP from the crate's formulations, were bitwise equal to the cached points and bounds, for CPIT and PCPSP.
+
   | Instance | Blocks | In the LP | LP solve | Greedy | Searched | Certified bound | Gap | Of best known |
   |---|---|---|---|---|---|---|---|---|
   | newman1 | 1,060 | 1,059 | 4.0 s | 23,932,689 | 23,983,606 | 24,496,143 | 2.09% | 1.014 |
@@ -430,7 +455,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   - `search::improve` moves one block or trades two at a time, and its cone (`bd-ynoj`) moves a block with what it requires, but only within one period. The cone goes one period earlier at a time and holds at most 64 blocks. Cones wait for the other moves to stop. On PCPSP that costs zuck_medium the 1.9% that earlier cones found, which is the price of not losing w23's 9.9% (§9). It has no "repair" of infeasible schedules; it only takes feasible ones. Its moves are monotone, so it stops at the first local optimum, with no perturbation or restart.
   - The discount factors are rounded down period by period, so `improve`'s value can differ from the exact NPV in the last of about 12 significant digits. Every move it makes also raises the exact NPV, since each one's sign is that of a difference of factors.
   - `check` lives in this crate beside `greedy`, not in the separate `fmine-verify` crate plan §15.4 names. It shares no code with `greedy` beyond the problem type.
-  - No API joins the LP and the schedule: the ranks come from PDLP only inside `crates/xtask/tests/cpit_schedule.rs` and `pcpsp_schedule.rs`. The PCPSP test's restriction of the LP to the ultimate pit is likewise test code, not API.
+  - The LP bridge (`bd-ubzs`) formulates the relaxation and reads its solution back, but does not solve it: `fmine-lp` is in the same layer as this crate, and the topology allows no edge between them. The caller solves it; today only `crates/xtask/tests/cpit_schedule.rs` and `pcpsp_schedule.rs` do, with PDLP.
   - No `fmine` verb schedules: `fmine-cli` is at its planned LOC budget, and BUDGET-AMEND-002 awaits the owner.
 - `candidate` reads a plain id list only. Which vendor formats (Whittle, Deswik, COMET) should be read is OPEN-PUSH-4. The candidate check was built ahead of the owner's answer to OPEN-PUSH-1, on its recommended answer (data files only, no linked code); it is removed if the owner rules otherwise.
 - Slope arcs have no external gate. MineLib's UPIT files come with their arcs already made, and the workspace holds no geotechnical slope data. The slopes in the tests are invented.
@@ -470,6 +495,8 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `toposort::check`, `toposort::greedy`, `toposort::greedy_from`
 - `toposort::cpit::parse`, `toposort::cpit::CpitModel` (`name`, `problem`, `discount_rate`, `rounded_values`, `rounded_uses`, `rounded_limits`), `toposort::cpit::MAX_RESOURCES`, `toposort::cpit::RATE_SCALE`
 - `toposort::pcpsp::parse`, `toposort::pcpsp::PcpspModel` (`name`, `discount_rate`, `rounded_values`, `rounded_uses`, `rounded_limits`, `blocks`, `periods`, `destinations`, `resources`, `value`, `uses`, `limits`, `requires`, `with_destinations`), `toposort::pcpsp::greedy`, `toposort::pcpsp::greedy_from`, `toposort::pcpsp::destinations`, `toposort::pcpsp::DestinationMoves` (`switches`, `exchanges`, `priced`, `unmined`), `toposort::pcpsp::improve`, `toposort::pcpsp::PcpspImprovement` (`schedule`, `destination`, `before`, `after`, `cycles`, `moves`, `destination_moves`), `toposort::pcpsp::MAX_DESTINATIONS`, `toposort::pcpsp::price::PRICE_COLUMNS`, `toposort::pcpsp::price::MASTER_STEPS`, `toposort::pcpsp::price::REPAIR_MOVES`
+- `toposort::lp::relaxation`, `toposort::lp::Relaxation` (`cost`, `matrix`, `row_lo`, `row_hi`, `col_lo`, `col_hi`), `toposort::lp::Shares` (`new`, `blocks`, `periods`, `share`, `expected`, `medians`), `toposort::lp::starts`, `toposort::lp::Start` (`threshold`, `released`, `schedule`), `toposort::lp::incumbent`, `toposort::lp::Incumbent` (`searched`, `best`, `schedule`), `toposort::lp::THRESHOLDS`. `Shares::ranks` is crate-only: `starts` takes its thresholds from `THRESHOLDS`, and a public bare-`f64` threshold would need an L-6 exception.
+- `toposort::pcpsp::lp::scope`, `toposort::pcpsp::lp::Scope` (`blocks`, `pit_blocks`, `pit_value`, `whole`), `toposort::pcpsp::lp::relaxation`, `toposort::pcpsp::lp::Solution` (`new`, `shares`, `destinations`), `toposort::pcpsp::lp::starts`, `toposort::pcpsp::lp::Start` (`threshold`, `released`, `schedule`, `destination`), `toposort::pcpsp::lp::incumbent`, `toposort::pcpsp::lp::Incumbent` (`searched`, `best`, `chosen`)
 
 ## 12. Proof obligations
 - PO-PUSH-3 (nested shells are monotone in λ when block values are monotone in λ; plan §15.9 names its discharge "property test"):

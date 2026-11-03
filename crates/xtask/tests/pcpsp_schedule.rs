@@ -10,33 +10,29 @@
 //!
 //! 1. `toposort::pcpsp::parse` reads the pair, values at 10⁶ rounded half away from zero, uses rounded up and limits
 //!    down at 10⁶. A refused instance is reported and counts against the gate.
-//! 2. The ultimate pit `P` under each block's most valuable destination, `w_b = max_d value[b][d]`, from
-//!    `pitflow::solve` with its certificate checked by `pitflow::verify`. Only `P`'s blocks enter the LP. That leaves
-//!    the LP's optimum, and the schedule problem's, unchanged. For a closed set `T`, `T ∪ P` is closed, so
-//!    `w(T \ P) ≤ 0`. Summed by parts, a schedule is worth `Σ_t (f_t − f_{t+1}) u(T_t)`, where `T_t` is what is mined
-//!    by period `t`, `u_b ≤ w_b` is the value at the destinations used and `f` falls (`f_{T} = 0`). Cutting every
-//!    `T_t` down to `T_t ∩ P` therefore never lowers the value, and with uses non-negative and limits upper it stays
-//!    feasible. The LP's by-period fractions are mixtures of closed sets (their level sets), so the same holds there.
-//!    PDLP's certified bound on the smaller LP is a bound for the whole instance. Blocks outside `P` start unmined;
-//!    the search may still add them. With a negative use (w23's blending rows) a block outside `P` can make the room
-//!    that lets ore be milled, so cutting `T_t` down can break a limit; such an instance's LP has every block.
-//! 3. The LP relaxation over `P`, built here from the parsed integers: "by" variables `w[b][t]` as for CPIT
+//! 2. `toposort::pcpsp::lp::scope` (`bd-ubzs`) gives the LP's blocks: the ultimate pit `P` under each block's most
+//!    valuable destination, its certificate checked, or every block when a use is negative (w23's blending rows).
+//!    Its module notes show why cutting the LP down to `P` leaves its optimum, and the schedule problem's, unchanged,
+//!    so PDLP's certified bound on the smaller LP is a bound for the whole instance. Blocks outside `P` start unmined;
+//!    the search may still add them.
+//! 3. `toposort::pcpsp::lp::relaxation` formulates the LP over those blocks: "by" variables `w[b][t]` as for CPIT
 //!    (`crates/xtask/tests/cpit_schedule.rs`), and `y[b][d][t]`, the share of block `b` sent to destination `d` in
 //!    period `t`, with `Σ_d y[b][d][t] = w[b][t] − w[b][t − 1]`. Limits apply to `Σ_{b,d} use[r][b][d] · y[b][d][t]`.
-//!    The value is `Σ value[b][d] · y[b][d][t] / (1 + rate)^t`, periods from 0. PDLP solves it, and its dual bound is
-//!    certified.
-//! 4. Each block goes whole to the destination the LP sends most of it to (its most valuable one if the LP mines
-//!    none of it). Blocks are ranked by their LP expected period, as for CPIT, and left out below a final weight of
-//!    10⁻⁶, 0.5 or 0.9. Each threshold gives two schedules, each searched by `pcpsp::improve`. One is from
-//!    `pcpsp::greedy`, which sends a block that fits nowhere at its destination to another one rather than leave it,
-//!    and every block under it, unmined. The other is from `pcpsp::greedy_from`, with each block released at its LP
-//!    median period, the first by which the LP has mined half of it (bd-tll7). Earliest-first placement uses up
-//!    w23's blocks below its blend targets early and leaves the ones above with nothing to blend with.
+//!    The value is `Σ value[b][d] · y[b][d][t] / (1 + rate)^t`, periods from 0. PDLP solves it here, and its dual
+//!    bound is certified.
+//! 4. `toposort::pcpsp::lp::Solution` sends each block whole to the destination the LP sends most of it to (its most
+//!    valuable one if the LP mines none of it). `starts` ranks blocks by their LP expected period, as for CPIT, and
+//!    leaves them out below a final weight of 10⁻⁶, 0.5 or 0.9. Each threshold gives two schedules, and `incumbent`
+//!    searches each with `pcpsp::improve`. One is from `pcpsp::greedy`, which sends a block that fits nowhere at its
+//!    destination to another one rather than leave it, and every block under it, unmined. The other is from
+//!    `pcpsp::greedy_from`, with each block released at its LP median period, the first by which the LP has mined half
+//!    of it (bd-tll7). Earliest-first placement uses up w23's blocks below its blend targets early and leaves the ones
+//!    above with nothing to blend with.
 //! 5. NPV is `Σ_t V_t / (1 + rate)^t` in `f64`, from `check`'s exact per-period sums under the final destinations.
 //!
-//! Asserted: every schedule passes `check`, `pcpsp::improve` never lowers an NPV, and no NPV exceeds PDLP's certified
-//! bound or MineLib's LP bound (each allowing one unit for rounding). The gate's verdict is printed, not asserted:
-//! the plan says to report the honest gap.
+//! Asserted: every schedule passes `check`, `pcpsp::improve` never lowers an NPV, `incumbent`'s pick has the highest
+//! NPV, and no NPV exceeds PDLP's certified bound or MineLib's LP bound (each allowing one unit for rounding). The
+//! gate's verdict is printed, not asserted: the plan says to report the honest gap.
 //!
 //! `FMINE_PCPSP_LP_CACHE` keeps each LP solution and bound (`<name>-<tol>.pit.pcpsp-lp`, or `.all.` for an LP over
 //! every block; little-endian `f64`s), so later runs skip PDLP. `FMINE_PCPSP_SOLUTION_OUT` names a directory for each instance's best schedule in MineLib's format
@@ -51,9 +47,10 @@ use std::path::Path;
 use std::time::Instant;
 
 use fmine_lp::pdlp::{LpProblem, PdlpOptions, solve_observed};
-use fmine_numerics::sparse::Coo;
 use fmine_optimize::pitflow::minelib::Rounding;
-use fmine_optimize::pitflow::{ClosureProblem, solve, verify};
+use fmine_optimize::toposort::lp;
+use fmine_optimize::toposort::lp::THRESHOLDS;
+use fmine_optimize::toposort::pcpsp::lp::{Solution, incumbent, relaxation, scope, starts};
 use fmine_optimize::toposort::pcpsp::{self, PcpspModel};
 use fmine_optimize::toposort::search::discount_factors;
 use fmine_optimize::toposort::{check, cpit};
@@ -78,9 +75,6 @@ const PUBLISHED: &[(&str, f64, f64)] = &[
 const DECIMALS: u32 = 6;
 const SCALE: f64 = 1e6;
 
-/// The by-period fraction a block must reach by the last period to be ranked.
-const THRESHOLDS: [f64; 3] = [1e-6, 0.5, 0.9];
-
 /// `Σ_t V_t / (1 + rate)^t`, periods counted from 0.
 fn npv(period_values: &[i128], rate: f64) -> f64 {
     period_values
@@ -97,136 +91,9 @@ fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
         .unwrap_or(default)
 }
 
-/// Column of `w[b][t]`, then of `y[b][d][t]` after all `w`.
-struct Columns {
-    n: usize,
-    periods: usize,
-    destinations: usize,
-}
-
-impl Columns {
-    fn w(&self, b: usize, t: usize) -> usize {
-        t * self.n + b
-    }
-    fn y(&self, b: usize, d: usize, t: usize) -> usize {
-        self.n * self.periods + (t * self.n + b) * self.destinations + d
-    }
-    fn count(&self) -> usize {
-        self.n * self.periods * (1 + self.destinations)
-    }
-}
-
-/// The ultimate pit under each block's most valuable destination, its certificate checked: the blocks in it, each
-/// block's index among them, and its value.
-fn ultimate_pit(m: &PcpspModel) -> (Vec<usize>, Vec<Option<usize>>, i64) {
-    let n = m.blocks();
-    let best = (0..n)
-        .map(|b| {
-            (0..m.destinations())
-                .map(|d| m.value(b, d).unwrap())
-                .max()
-                .unwrap()
-        })
-        .collect();
-    let requires: Vec<Vec<u32>> = (0..n).map(|b| m.requires(b).unwrap().to_vec()).collect();
-    let closure = ClosureProblem::from_requirements(best, &requires).unwrap();
-    let pit = solve(&closure).unwrap();
-    assert_eq!(
-        verify(&closure, pit.in_pit(), pit.arc_flow()).unwrap(),
-        pit.value()
-    );
-    let blocks: Vec<usize> = (0..n).filter(|&b| pit.in_pit()[b]).collect();
-    let mut index = vec![None; n];
-    for (i, &b) in blocks.iter().enumerate() {
-        index[b] = Some(i);
-    }
-    (blocks, index, pit.value())
-}
-
-/// The relaxation over the pit's blocks as a minimisation (costs negated), from the parsed model. Column `i` is
-/// block `pit[i]`.
-fn relaxation(m: &PcpspModel, rate: f64, pit: &[usize], index: &[Option<usize>]) -> LpProblem {
-    let (n, periods, dn) = (pit.len(), m.periods(), m.destinations());
-    let c = Columns {
-        n,
-        periods,
-        destinations: dn,
-    };
-    let arcs: usize = pit.iter().map(|&b| m.requires(b).unwrap().len()).sum();
-    let rows = arcs * periods + n * (periods - 1) + n * periods + m.resources() * periods;
-    let mut coo = Coo::new(rows, c.count()).unwrap();
-    let (mut lo, mut hi) = (Vec::with_capacity(rows), Vec::with_capacity(rows));
-    let mut r = 0;
-    for t in 0..periods {
-        for (b, &block) in pit.iter().enumerate() {
-            for &q in m.requires(block).unwrap() {
-                // The pit is closed, so what a pit block requires is in the pit.
-                let q = index[q as usize].unwrap();
-                coo.push(r, c.w(b, t), 1.0).unwrap();
-                coo.push(r, c.w(q, t), -1.0).unwrap();
-                lo.push(f64::NEG_INFINITY);
-                hi.push(0.0);
-                r += 1;
-            }
-        }
-    }
-    for t in 1..periods {
-        for b in 0..n {
-            coo.push(r, c.w(b, t - 1), 1.0).unwrap();
-            coo.push(r, c.w(b, t), -1.0).unwrap();
-            lo.push(f64::NEG_INFINITY);
-            hi.push(0.0);
-            r += 1;
-        }
-    }
-    for t in 0..periods {
-        for b in 0..n {
-            for d in 0..dn {
-                coo.push(r, c.y(b, d, t), 1.0).unwrap();
-            }
-            coo.push(r, c.w(b, t), -1.0).unwrap();
-            if t > 0 {
-                coo.push(r, c.w(b, t - 1), 1.0).unwrap();
-            }
-            lo.push(0.0);
-            hi.push(0.0);
-            r += 1;
-        }
-    }
-    for res in 0..m.resources() {
-        for (t, &cap) in m.limits(res).unwrap().iter().enumerate() {
-            for (b, &block) in pit.iter().enumerate() {
-                for d in 0..dn {
-                    let q = m.uses(res, block, d).unwrap();
-                    if q != 0 {
-                        coo.push(r, c.y(b, d, t), q as f64 / SCALE).unwrap();
-                    }
-                }
-            }
-            lo.push(f64::NEG_INFINITY);
-            hi.push(cap as f64 / SCALE);
-            r += 1;
-        }
-    }
-    assert_eq!(r, rows);
-    let mut cost = vec![0.0; c.count()];
-    for t in 0..periods {
-        let factor = (1.0 + rate).powi(t as i32).recip();
-        for (b, &block) in pit.iter().enumerate() {
-            for d in 0..dn {
-                cost[c.y(b, d, t)] = -(m.value(block, d).unwrap() as f64 / SCALE) * factor;
-            }
-        }
-    }
-    LpProblem::new(
-        cost,
-        &coo.assemble(),
-        lo,
-        hi,
-        vec![0.0; c.count()],
-        vec![1.0; c.count()],
-    )
-    .unwrap()
+/// `toposort::pcpsp::lp`'s relaxation, handed to PDLP.
+fn to_lp(r: lp::Relaxation) -> LpProblem {
+    LpProblem::new(r.cost, &r.matrix, r.row_lo, r.row_hi, r.col_lo, r.col_hi).unwrap()
 }
 
 /// What MineLib's own split schedule is worth here, in `f64`, and how far it is from whole and within limits.
@@ -333,25 +200,15 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
         let (n, periods, dn) = (model.blocks(), model.periods(), model.destinations());
         let rate = model.discount_rate as f64 / cpit::RATE_SCALE as f64;
         let t_pit = Instant::now();
-        let (in_pit, pit_index, pit_value) = ultimate_pit(&model);
+        let lp_scope = scope(&model).unwrap();
         let pit_s = t_pit.elapsed().as_secs_f64();
-        let pit_blocks = in_pit.len();
-        // Step 2's restriction needs every use non-negative; otherwise the LP has every block.
-        let signed = (0..model.resources())
-            .any(|r| (0..n).any(|b| (0..dn).any(|d| model.uses(r, b, d).unwrap() < 0)));
-        let (pit, index, scope) = if signed {
-            ((0..n).collect(), (0..n).map(Some).collect(), "all")
-        } else {
-            (in_pit, pit_index, "pit")
-        };
-        let columns = Columns {
-            n: pit.len(),
-            periods,
-            destinations: dn,
-        };
+        let (pit, pit_blocks, pit_value) =
+            (&lp_scope.blocks, lp_scope.pit_blocks, lp_scope.pit_value);
+        let columns = pit.len() * periods * (1 + dn);
+        let kind = if lp_scope.whole { "all" } else { "pit" };
         let cache = std::env::var("FMINE_PCPSP_LP_CACHE")
             .ok()
-            .map(|d| Path::new(&d).join(format!("{name}-{tol}.{scope}.pcpsp-lp")));
+            .map(|d| Path::new(&d).join(format!("{name}-{tol}.{kind}.pcpsp-lp")));
         let cached = cache
             .as_ref()
             .and_then(|path| std::fs::read(path).ok())
@@ -362,25 +219,21 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
                     .iter()
                     .map(|c| f64::from_le_bytes(*c))
                     .collect();
-                assert_eq!(
-                    f.len(),
-                    2 + columns.count(),
-                    "{name}: cached LP of the wrong size"
-                );
+                assert_eq!(f.len(), 2 + columns, "{name}: cached LP of the wrong size");
                 f
             });
         let (x, certified, lp_s, lp_status) = if let Some(f) = cached {
             let certified = (!f[0].is_nan()).then_some(f[0]);
             (f[2..].to_vec(), certified, f[1], "cached".to_string())
         } else {
-            let lp = relaxation(&model, rate, &pit, &index);
+            let relaxed = to_lp(relaxation(&model, pit, DECIMALS).unwrap());
             let t0 = Instant::now();
             let options = PdlpOptions {
                 tolerance: tol,
                 max_iterations: u64::MAX,
                 threads,
             };
-            let s = solve_observed(&lp, &options, &mut |_| {
+            let s = solve_observed(&relaxed, &options, &mut |_| {
                 t0.elapsed().as_secs_f64() < max_seconds
             })
             .unwrap();
@@ -398,28 +251,7 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
             (s.x().to_vec(), certified, lp_s, format!("{:?}", s.status()))
         };
         // A block outside the pit has no column: it is never mined in the LP.
-        let w = |b: usize, t: usize| index[b].map_or(0.0, |i| x[columns.w(i, t)].clamp(0.0, 1.0));
-        let expected: Vec<f64> = (0..n)
-            .map(|b| (0..periods).map(|t| 1.0 - w(b, t)).sum())
-            .collect();
-        let destination: Vec<u32> = (0..n)
-            .map(|b| {
-                let mass = |d: usize| -> f64 {
-                    index[b].map_or(0.0, |i| {
-                        (0..periods).map(|t| x[columns.y(i, d, t)].max(0.0)).sum()
-                    })
-                };
-                let by_lp = (0..dn).max_by(|&a, &c| mass(a).total_cmp(&mass(c)).then(c.cmp(&a)));
-                let by_value =
-                    (0..dn).max_by_key(|&d| (model.value(b, d).unwrap(), std::cmp::Reverse(d)));
-                let d = if (0..dn).map(mass).sum::<f64>() > 1e-9 {
-                    by_lp
-                } else {
-                    by_value
-                };
-                d.unwrap() as u32
-            })
-            .collect();
+        let solution = Solution::new(&model, pit, &x).unwrap();
         let (published_lp, best_known) = PUBLISHED
             .iter()
             .find(|(k, _, _)| *k == name)
@@ -427,52 +259,30 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
             .unwrap_or((f64::NAN, f64::NAN));
         let factors = discount_factors(model.discount_rate, cpit::RATE_SCALE, periods).unwrap();
         let t1 = Instant::now();
+        let starts = starts(&model, &solution).unwrap();
+        let greedy_s = t1.elapsed().as_secs_f64();
+        let t2 = Instant::now();
+        let found = incumbent(&model, &starts, &factors, rounds).unwrap();
+        let search_s = t2.elapsed().as_secs_f64();
         let mut npvs = Vec::new();
         let mut improved = Vec::new();
         let mut moves = Vec::new();
-        let mut search_s = 0.0;
-        // Each block's LP median period: the first by which the LP has mined half of the block, or the last period if
-        // it never has. The LP mines a required block at least as fast as the block itself, so no block's median comes
-        // before that of a block it requires.
-        let median: Vec<u32> = (0..n)
-            .map(|b| {
-                (0..periods)
-                    .find(|&t| w(b, t) >= 0.5)
-                    .unwrap_or(periods - 1) as u32
-            })
-            .collect();
-        let mut best_schedule: Option<(f64, Vec<Option<u32>>, Vec<u32>)> = None;
-        for (threshold, release) in THRESHOLDS
-            .into_iter()
-            .flat_map(|th| [(th, None), (th, Some(&median))])
-        {
+        for (start, i) in starts.iter().zip(&found.searched) {
             let at = format!(
-                "threshold {threshold}{}",
-                if release.is_some() {
-                    ", LP release"
-                } else {
-                    ""
-                }
+                "threshold {}{}",
+                start.threshold,
+                if start.released { ", LP release" } else { "" }
             );
-            let rank: Vec<Option<i64>> = (0..n)
-                .map(|b| {
-                    (w(b, periods - 1) >= threshold).then(|| (expected[b] * 1e9).round() as i64)
-                })
-                .collect();
-            let (schedule, start) = match release {
-                None => pcpsp::greedy(&model, &rank, &destination),
-                Some(release) => pcpsp::greedy_from(&model, &rank, &destination, release),
-            }
+            let c = check(
+                &model.with_destinations(&start.destination).unwrap(),
+                &start.schedule,
+            )
             .unwrap();
-            let c = check(&model.with_destinations(&start).unwrap(), &schedule).unwrap();
             if !c.feasible() {
                 failures.push(format!("{name}: {at}: greedy's schedule fails check"));
             }
             let before = npv(&c.period_values, rate);
             npvs.push(before);
-            let t2 = Instant::now();
-            let i = pcpsp::improve(&model, &schedule, &start, &factors, rounds).unwrap();
-            search_s += t2.elapsed().as_secs_f64();
             let c = check(
                 &model.with_destinations(&i.destination).unwrap(),
                 &i.schedule,
@@ -489,16 +299,21 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
             }
             improved.push(after);
             moves.push((i.cycles, i.moves, i.destination_moves));
-            if best_schedule.as_ref().is_none_or(|(v, _, _)| after > *v) {
-                best_schedule = Some((after, i.schedule, i.destination));
-            }
         }
-        if let (Ok(dir), Some((_, schedule, dest))) =
-            (std::env::var("FMINE_PCPSP_SOLUTION_OUT"), &best_schedule)
+        // The API picks by its integer discounted value; it must be the highest NPV here too, up to `f64` noise.
+        let best = improved[found.best];
+        let top = improved.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        if best < top - 1e-9 * top.abs().max(1.0) {
+            failures.push(format!(
+                "{name}: the API's best schedule is worth {best}, below the {top} of another"
+            ));
+        }
+        if let (Ok(dir), Some(chosen)) = (std::env::var("FMINE_PCPSP_SOLUTION_OUT"), found.chosen())
         {
-            let text: String = schedule
+            let text: String = chosen
+                .schedule
                 .iter()
-                .zip(dest)
+                .zip(&chosen.destination)
                 .enumerate()
                 .filter_map(|(b, (t, d))| t.map(|t| format!("{b} {d} {t} 1.000000\n")))
                 .collect();
@@ -516,9 +331,6 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
                     .then(|| value_known(&model, &std::fs::read_to_string(&path).unwrap(), rate))
             })
         });
-        let greedy_s = t1.elapsed().as_secs_f64() - search_s;
-        let greedy_best = npvs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        let best = improved.iter().copied().fold(greedy_best, f64::max);
         let rel = |bound: f64| (bound - best) / bound;
         let list = |v: &[f64]| {
             v.iter()

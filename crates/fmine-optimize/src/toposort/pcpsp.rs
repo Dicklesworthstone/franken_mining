@@ -60,6 +60,7 @@ use super::{MAX_PERIODS, ScheduleProblem, check, refuse};
 use crate::pitflow::ClosureProblem;
 use crate::pitflow::minelib::{MAX_DECIMALS, Rounding, bad, lines, number, parse_prec, scaled};
 
+pub mod lp;
 pub mod price;
 
 /// The most destinations a PCPSP file may declare.
