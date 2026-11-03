@@ -2303,3 +2303,170 @@ fn an_lp_guided_omf_schedule_lies_under_its_certified_bound() {
         "limits",
     );
 }
+
+/// [`an_lp_guided_omf_schedule_lies_under_its_certified_bound`]'s model and schedule: the section, 10 tonnes a period
+/// over 3 periods, values at 4 to the unit, 10% a period.
+fn with_section_schedule<R>(f: impl FnOnce(&pit::PitModel, &pit::ScheduleSpec<'_>) -> R) -> R {
+    use fmine_optimize::pitflow::slope::{SlopeTable, SlopeTangent};
+
+    let p = section();
+    let uniform = SlopeTable::uniform(SlopeTangent::new(1, 1).unwrap());
+    let m = pit::PitModel::new(&p, "section", &uniform, None, 2).unwrap();
+    let limits = [10, 10, 10];
+    let tonnes = [pit::Capacity {
+        attribute: "tonnes",
+        per_unit: 1,
+        limits: &limits,
+    }];
+    let spec = pit::ScheduleSpec {
+        value: "value",
+        per_unit: 4,
+        capacities: &tonnes,
+        periods: 3,
+        discount: [100_000_000, 1_000_000_000],
+        max_rounds: 100,
+    };
+    f(&m, &spec)
+}
+
+/// `values` as a solution file under `fmine_lp::mps::write`'s names, `C` or `R`, in Rust's shortest round-trip form.
+fn solution_file(prefix: char, values: &[f64]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from("# Objective value = not read\n");
+    for (i, v) in values.iter().enumerate() {
+        let _ = writeln!(out, "{prefix}{i} {v:?}");
+    }
+    out
+}
+
+#[test]
+fn the_schedule_lp_goes_out_as_mps_and_its_solution_comes_back_as_a_checked_schedule_and_bound() {
+    use fmine_lp::mps::{self, Names};
+    use fmine_lp::pdlp::PdlpOptions;
+    use fmine_optimize::toposort::check;
+
+    with_section_schedule(|m, spec| {
+        // Out: the relaxation as MPS, which reads back to the same problem.
+        let lp = m.schedule_lp(spec).unwrap();
+        let text = mps::write("section", &lp).unwrap();
+        let back = mps::read(&text).unwrap();
+        assert_eq!(mps::write("section", &back.problem).unwrap(), text);
+        assert_eq!(
+            (back.problem.rows(), back.problem.cols()),
+            (lp.rows(), lp.cols())
+        );
+
+        // Back: PDLP's own solution and multipliers, as files under the MPS names, give lp_schedule's schedule and
+        // bound bit for bit.
+        let pdlp = PdlpOptions {
+            tolerance: 1e-6,
+            ..PdlpOptions::default()
+        };
+        let s = m.lp_schedule(spec, &pdlp).unwrap();
+        let x = mps::read_values(
+            &solution_file('C', s.lp().x()),
+            Names::Columns,
+            &back.problem,
+        )
+        .unwrap();
+        let y = mps::read_values(
+            &solution_file('R', s.lp().bound_multipliers()),
+            Names::Rows,
+            &back.problem,
+        )
+        .unwrap();
+        let g = m.guided_schedule(spec, x).unwrap();
+        assert_eq!(g.incumbent(), s.incumbent());
+        assert_eq!((g.problem(), g.factors()), (s.problem(), s.factors()));
+        let bound = m.schedule_bound(spec, &y).unwrap().unwrap();
+        assert_eq!(Some(bound.to_bits()), s.upper_bound().map(f64::to_bits));
+
+        // A poor solution is only worse: nothing mined gives a checked schedule, and zero multipliers a weaker bound.
+        let nothing = m.guided_schedule(spec, vec![0.0; lp.cols()]).unwrap();
+        let c = check(nothing.problem(), nothing.incumbent().schedule()).unwrap();
+        assert!(c.feasible(), "{c:?}");
+        let best = &s.incumbent().searched[s.incumbent().best];
+        assert!(nothing.incumbent().searched[nothing.incumbent().best].after <= best.after);
+        let weak = m
+            .schedule_bound(spec, &vec![0.0; lp.rows()])
+            .unwrap()
+            .unwrap();
+        assert!(weak >= bound, "{weak} below {bound}");
+        println!(
+            r#"{{"test":"omf_schedule_lp_out_and_back","rows":{},"cols":{},"mps_bytes":{},"bound":{bound},"zero_y_bound":{weak}}}"#,
+            lp.rows(),
+            lp.cols(),
+            text.len()
+        );
+
+        // Refused, not clamped: a share just above 1, and counts that do not match the problem.
+        let mut over = s.lp().x().to_vec();
+        over[0] = f64::from_bits(1.0_f64.to_bits() + 1);
+        refused_as(
+            m.guided_schedule(spec, over),
+            "FMINE-REF-207",
+            "not in [0, 1]",
+        );
+        refused_as(
+            m.guided_schedule(spec, vec![0.0; 3]),
+            "FMINE-REF-207",
+            "3 shares",
+        );
+        refused_as(
+            m.schedule_bound(spec, &[0.0; 3]),
+            "FMINE-REF-207",
+            "3 multipliers",
+        );
+    });
+}
+
+/// The section's schedule LP as `fmine_lp::mps::write` gives it: the input HiGHS solved for the two fixtures below.
+const SECTION_MPS: &str = include_str!("../../testdata/omf_section_schedule.mps");
+
+/// HiGHS's column values for [`SECTION_MPS`] (oracle fixture, §33.2).
+const HIGHS_COLUMNS: &str =
+    include_str!("../../../../fixtures/fmine-io/omf_section_schedule_highs_columns.txt");
+
+/// HiGHS's row multipliers for [`SECTION_MPS`] (oracle fixture, §33.2).
+const HIGHS_ROWS: &str =
+    include_str!("../../../../fixtures/fmine-io/omf_section_schedule_highs_rows.txt");
+
+/// The §15.4 loop with an outside solver (bd-06kg). HiGHS's solution of the exported LP, captured once from
+/// [`SECTION_MPS`] by `scripts/oracle/highs_lp.py` (its capture records are beside the fixtures, and nothing here
+/// regenerates them), comes back through `read_values` as a checked schedule and a certified bound.
+#[test]
+fn highs_solution_of_the_exported_schedule_lp_comes_back_as_a_checked_schedule_and_bound() {
+    use fmine_lp::mps::{self, Names};
+    use fmine_optimize::toposort::check;
+    use fmine_optimize::toposort::search::DISCOUNT_SCALE;
+
+    with_section_schedule(|m, spec| {
+        let lp = m.schedule_lp(spec).unwrap();
+        let text = mps::write("section", &lp).unwrap();
+        assert!(
+            text == SECTION_MPS,
+            "the exported LP is no longer the one HiGHS solved: put this text in \
+             crates/fmine-io/testdata/omf_section_schedule.mps and capture both fixtures again (CONTRACT §9)\n{text}"
+        );
+        let x = mps::read_values(HIGHS_COLUMNS, Names::Columns, &lp).unwrap();
+        let y = mps::read_values(HIGHS_ROWS, Names::Rows, &lp).unwrap();
+        let violation = lp.max_violation(&x).unwrap();
+        let g = m.guided_schedule(spec, x).unwrap();
+        let found = &g.incumbent().searched[g.incumbent().best];
+        let c = check(g.problem(), g.incumbent().schedule()).unwrap();
+        let bound = m.schedule_bound(spec, &y).unwrap().unwrap();
+        let lp_best = 25.0 / 9.0 + 20.0 / 9.9;
+        println!(
+            r#"{{"test":"omf_outside_lp","violation":{violation},"bound":{bound},"lp_best":{lp_best},"after":{},"feasible":{}}}"#,
+            found.after,
+            c.feasible()
+        );
+        assert!(c.feasible(), "{c:?}");
+        let f1 = i128::from(DISCOUNT_SCALE) * 10 / 11;
+        assert_eq!(found.after, -16 * i128::from(DISCOUNT_SCALE) + 21 * f1);
+        assert!(
+            bound >= lp_best - 1e-9 && bound <= lp_best + 1e-6,
+            "{bound} against {lp_best}"
+        );
+    });
+}

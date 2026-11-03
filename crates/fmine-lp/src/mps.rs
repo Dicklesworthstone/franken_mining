@@ -28,6 +28,10 @@
 //! - rows named `R0`, `R1`, … and columns `C0`, `C1`, …, with the objective row `OBJ`;
 //! - a row with two finite bounds as `G` or `L` with a range, whichever reads back exactly;
 //! - a row with no finite bound as `N`.
+//!
+//! **Solutions** ([`read_values`], bd-06kg) come back from an outside solver that read [`write`]'s file: one
+//! `name value` line per column (a primal solution) or per row (multipliers), under `write`'s names. Lines whose
+//! first field starts with `#` are comments, as in Gurobi's `.sol` files.
 
 use std::collections::{HashMap, HashSet};
 
@@ -643,6 +647,73 @@ pub fn write(name: &str, problem: &LpProblem) -> Result<String, Refusal> {
     Ok(out)
 }
 
+/// Which of [`write`]'s names a solution file gives values for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Names {
+    /// The columns `C0, C1, …`: a primal solution.
+    Columns,
+    /// The rows `R0, R1, …`: row multipliers, as [`crate::pdlp::certified_bound`] takes them. The certificate holds
+    /// whatever their sign convention; the wrong one only weakens the bound.
+    Rows,
+}
+
+/// Reads a solution of `problem`, as written by [`write`], from an outside solver (see the module notes): one value
+/// per column or per row, in `problem`'s order. Nothing in it is checked against the problem but its names.
+///
+/// # Errors
+/// `FMINE-REF-506`, naming the line, for a line that is not a name and a value, a name that is not one of `names`
+/// (`C7` for column 7; no leading zeros), a value that is not a finite number, or a name given twice; and, naming
+/// the first, for names given no value.
+pub fn read_values(text: &str, names: Names, problem: &LpProblem) -> Result<Vec<f64>, Refusal> {
+    let (prefix, count, what) = match names {
+        Names::Columns => ('C', problem.c.len(), "column"),
+        Names::Rows => ('R', problem.row_lo.len(), "row"),
+    };
+    let bad = |detail: String| {
+        Refusal::new(
+            RefusalCode::InputMissingOrUnreadable506,
+            format!("solution: {detail}"),
+        )
+    };
+    let mut values = vec![None; count];
+    for (k, raw) in text.lines().enumerate() {
+        let line = k + 1;
+        let fields: Vec<&str> = raw.split_whitespace().collect();
+        if fields.first().is_none_or(|f| f.starts_with('#')) {
+            continue;
+        }
+        let [name, value] = fields[..] else {
+            return Err(bad(format!("line {line} is not a name and a value")));
+        };
+        let index = name
+            .strip_prefix(prefix)
+            .filter(|d| {
+                d.bytes().all(|b| b.is_ascii_digit()) && (*d == "0" || !d.starts_with('0'))
+            })
+            .and_then(|d| d.parse::<usize>().ok())
+            .filter(|&j| j < count)
+            .ok_or_else(|| {
+                bad(format!(
+                    "line {line}: \"{name}\" is not one of the problem's {count} {what}s, {prefix}0 to \
+                     {prefix}{}",
+                    count.saturating_sub(1)
+                ))
+            })?;
+        let v = number(line, value)
+            .map_err(|_| bad(format!("line {line}: \"{value}\" is not a finite number")))?;
+        if values[index].replace(v).is_some() {
+            return Err(bad(format!("line {line}: {name} is given twice")));
+        }
+    }
+    if let Some(first) = values.iter().position(Option::is_none) {
+        let missing = values.iter().filter(|v| v.is_none()).count();
+        return Err(bad(format!(
+            "{missing} of the problem's {count} {what}s have no value, the first {prefix}{first}"
+        )));
+    }
+    Ok(values.into_iter().flatten().collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -987,5 +1058,94 @@ ENDATA
             .map(drop)
             .unwrap_err();
         assert_eq!(e.code, "FMINE-REF-207", "{e:?}");
+    }
+
+    #[test]
+    fn a_solution_file_reads_back_by_name_and_its_multipliers_certify_again() {
+        use crate::pdlp::certified_bound;
+        use std::fmt::Write as _;
+
+        // Three columns and two rows; the file lists them out of order, with comments and blank lines.
+        let p = LpProblem::new(
+            vec![-3.0, -2.0, 0.5],
+            &csr(2, 3, &[(0, 0, 1.0), (0, 1, 1.0), (1, 1, 3.0), (1, 2, 1.0)]),
+            vec![f64::NEG_INFINITY; 2],
+            vec![4.0, 6.0],
+            vec![0.0; 3],
+            vec![3.0, 5.0, 1.0],
+        )
+        .unwrap();
+        let x = read_values(
+            "# Objective value = -11\nC2 0\n\n  C0\t3\nC1 1e0\n# done\n",
+            Names::Columns,
+            &p,
+        )
+        .unwrap();
+        assert_eq!(bits(&x), bits(&[3.0, 1.0, 0.0]));
+        let y = read_values("R1 -0.25\nR0 -2.5\n", Names::Rows, &p).unwrap();
+        assert_eq!(bits(&y), bits(&[-2.5, -0.25]));
+
+        // PDLP's multipliers, written in Rust's shortest round-trip form and read back, certify the same bound bit
+        // for bit.
+        let s = solve(&p, &PdlpOptions::default()).unwrap();
+        assert!(s.bound().is_some());
+        let mut file = String::from("# from fmine-lp\n");
+        for (i, v) in s.bound_multipliers().iter().enumerate() {
+            let _ = writeln!(file, "R{i} {v:?}");
+        }
+        let back = read_values(&file, Names::Rows, &p).unwrap();
+        assert_eq!(bits(&back), bits(s.bound_multipliers()));
+        assert_eq!(
+            certified_bound(&p, &back)
+                .unwrap()
+                .map(|b| b.value().to_bits()),
+            s.bound().map(|b| b.value().to_bits())
+        );
+
+        let refused = |text: &str, names: Names, why: &str| {
+            let e = read_values(text, names, &p).unwrap_err();
+            assert_eq!(e.code, "FMINE-REF-506", "{e:?}");
+            assert!(e.what.contains(why), "{why} not in {e:?}");
+        };
+        let all = "C0 1\nC1 1\nC2 1\n";
+        refused(
+            "C0 1\nC1 1\n",
+            Names::Columns,
+            "1 of the problem's 3 columns have no value, the first C2",
+        );
+        refused("R0 1\n", Names::Rows, "the first R1");
+        refused(
+            &format!("{all}C1 2\n"),
+            Names::Columns,
+            "line 4: C1 is given twice",
+        );
+        refused(
+            &format!("{all}C3 0\n"),
+            Names::Columns,
+            "\"C3\" is not one of the problem's 3 columns, C0 to C2",
+        );
+        refused("C01 1\n", Names::Columns, "\"C01\"");
+        refused("C 1\n", Names::Columns, "\"C\" is not one");
+        refused("C-1 1\n", Names::Columns, "\"C-1\"");
+        refused("R0 1\nR1 1\n", Names::Columns, "\"R0\" is not one");
+        refused(
+            all,
+            Names::Rows,
+            "\"C0\" is not one of the problem's 2 rows, R0 to R1",
+        );
+        refused("OBJ -11\n", Names::Rows, "\"OBJ\"");
+        refused(
+            "C0 1 2\n",
+            Names::Columns,
+            "line 1 is not a name and a value",
+        );
+        refused("C0\n", Names::Columns, "line 1 is not a name and a value");
+        for v in ["NaN", "inf", "-inf", "1e999", "one", "0x1"] {
+            refused(
+                &format!("C0 {v}\nC1 1\nC2 1\n"),
+                Names::Columns,
+                &format!("\"{v}\" is not a finite number"),
+            );
+        }
     }
 }

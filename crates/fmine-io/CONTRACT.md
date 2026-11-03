@@ -69,6 +69,13 @@ attribute, then a certified ultimate pit (`solve`) or nested shells by revenue f
   `toposort::lp`'s six TopoSort starts and keeps the best (`starts`, `incumbent`). `LpSchedule::upper_bound` is
   minus PDLP's certified dual bound: no schedule of the scaled problem is worth more at those factors, so the
   schedule's gap to the best possible is known, though not closed.
+- Outside solvers (bd-06kg, plan §15.4 `UntrustedCandidate`). `PitModel::schedule_lp` hands out the same relaxation
+  as an `LpProblem`. Column `t·n + b` is block `b`'s share, in `pitflow`'s order, mined by period `t`.
+  `fmine_lp::mps::write` gives it as MPS, and an outside solver's solution comes back under `write`'s names through
+  `fmine_lp::mps::read_values`. `guided_schedule` runs `lp_schedule`'s starts and search from any shares `x`.
+  `schedule_bound` is minus `certified_bound` of any row multipliers `y`. Neither trusts the solver. `x` only ranks
+  and releases blocks, and TopoSort and the search refuse a schedule that fails `check`. Every `y` bounds by weak
+  duality, so a poor one only bounds loosely.
 
 `reliance` is the filesystem adapter for the S0 reliance model (BD-347). A journal is one canonical
 `fmine_claim::reliance::JournalRecord` frame per lowercase hexadecimal line, ending in LF. Each record's
@@ -147,6 +154,8 @@ for current reuse; an unpinned replay establishes only internal consistency of t
 - `omf::pit::LpSchedule` and `PitModel::lp_schedule` (bd-djb7). `LpSchedule::{problem, factors, lp, upper_bound,
   incumbent}` give the `ScheduleProblem`, the discount factors, fmine-lp's `PdlpSolution`, minus its dual bound,
   and `toposort::lp::Incumbent`.
+- `PitModel::{schedule_lp, guided_schedule, schedule_bound}` and `omf::pit::GuidedSchedule` (bd-06kg).
+  `GuidedSchedule::{problem, factors, incumbent}` give the same as `LpSchedule`'s.
 - `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, FormatCount, MinimalCell,
   MinimalSheet, MinimalStyles, build_minimal_xlsx, build_minimal_xlsx_styled, col_index_to_letters,
   parse_a1_ref}`; `Workbook::format_census`;
@@ -284,6 +293,9 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   schedule that fails `check`.
 - LP schedules (bd-djb7) refuse as schedules do, then pass on the refusals of `relaxation`, `LpProblem::new`,
   PDLP's `solve` (among them options out of range), `Shares::new`, `starts` and `incumbent`.
+- Outside solutions (bd-06kg): `guided_schedule` refuses through `Shares::new` (`FMINE-REF-207`) a share outside
+  `[0, 1]`, even by one ulp, rather than clamp it, and a count that is not one per block and period.
+  `schedule_bound` passes on `certified_bound`'s refusal of a `y` that is not one finite value per row.
 - XML text decodes the five named entities and `&#10;`, `&#13;`, `&#160;`, each once (`&amp;` last); no DTD or
   entity declaration is read, so nothing expands.
 - `numtok` keeps malformed grouping, unsupported attached notation, decimal overflow and ambiguous standalone
@@ -429,6 +441,23 @@ for current reuse; an unpinned replay establishes only internal consistency of t
     0, and the bound without its sign change fell below the optimum; the test failed on each.
   Limits for the wrong number of periods are refused. Not checked: a real OMF block model; the gap on models
   larger than the test's 15 blocks.
+- `PO-IO-11` (bd-06kg): the schedule LP goes out as MPS, and an outside solution comes back checked.
+  - `omf::tests::the_schedule_lp_goes_out_as_mps_and_its_solution_comes_back_as_a_checked_schedule_and_bound`:
+    - PO-IO-10's relaxation (111 rows, 45 columns) is written as MPS and read back to the same text.
+    - PDLP's `x` and bound multipliers, written as solution files and read back, give `lp_schedule`'s incumbent,
+      problem and factors, and its bound, bit for bit.
+    - Shares of zero give a checked schedule worth no more. Multipliers of zero give a weaker bound (37 against
+      4.7979798173).
+    - Refused: a share one ulp above 1, and wrong counts of shares and multipliers.
+  - `omf::tests::highs_solution_of_the_exported_schedule_lp_comes_back_as_a_checked_schedule_and_bound`:
+    - The exported text equals the pinned `testdata/omf_section_schedule.mps`, the input HiGHS solved. A change to
+      the relaxation fails here until both fixtures are captured again.
+    - HiGHS's shares violate no row or bound (0). The guided schedule passes `check` and reaches the hand optimum.
+    - HiGHS's multipliers certify 4.7979797979797985 against the hand optimum `25/9 + 20/9.9`
+      (4.797979797979798), held within 1e-6. PDLP's bound at ε = 1e-6 is 4.7979798173.
+  - Planted, reverted: the bound without its sign change. Both tests failed.
+  - Not checked: a client's commercial solver; any model but this 15-block section; an outside primal solution
+    whose shares lie outside `[0, 1]` by the solver's tolerance, which `guided_schedule` refuses (HiGHS's did not).
 - FACT (BD-347, `reliance::tests`): exact artifact issuance and current-use retrieval preserve bytes and
   refuse after withdrawal; invalid digest, key, time, stale or absent trust, and an existing destination
   cannot create an authorized output. A failed final append retains the unissued artifact and poisons its
@@ -473,7 +502,12 @@ would permit a concurrent withdrawal race.
 - `fmine-geom` supplies `volcert`'s certified closed meshes and block proportions (V to K0, bd-aqfl).
 - `fmine-optimize` supplies `pitflow`'s slope arcs, certified ultimate pit and nested shells (V to E, bd-joiv),
   and `toposort`'s schedules (bd-fr8x, bd-djb7).
-- `fmine-lp` supplies PDLP and its certified dual bound for LP schedules (V to E, bd-djb7).
+- `fmine-lp` supplies PDLP and its certified dual bound for LP schedules (V to E, bd-djb7), and MPS output and
+  solution files for outside solvers (bd-06kg).
+- Oracle fixtures (§33.2, bd-06kg): `fixtures/fmine-io/omf_section_schedule_highs_{columns,rows}.txt` are HiGHS's
+  solution of `testdata/omf_section_schedule.mps`, from scipy 1.18.1's `linprog(method="highs")` as run by
+  `scripts/oracle/highs_lp.py`, with capture records beside them. The script reads the MPS with its own parser and
+  shares no code with fmine-lp. It was written by the agent that wrote the code under test.
 - `fmine-calib` supplies the shared `ProofTimes` and UTC parser (V to K0); timestamp verification invokes
   OpenSSL 1.1 or 3.x on `PATH` with Unix `/dev/stdin` and `/dev/null`. Unsupported installations refuse.
 - No omf-rust code is lifted. Its schemas, read checks and validator (tree 64d3057) are the specification the
@@ -489,6 +523,8 @@ tensor grids, sub-blocks, or surfaces that are open or intersect themselves (the
 OMF pits take block values as given in attributes. They hold no price deck or cost model, do not value sub-blocks,
 and do not write the pit back to OMF. Schedules have no destinations (PCPSP). `schedule` takes the caller's
 ranking; `lp_schedule` searches from the LP's starts and reports its gap to the bound, but proves no schedule best.
+No outside solver runs in CI or at run time: HiGHS ran once in the lab and its output is pinned. There is no CLI verb
+for the MPS export or the solution import (fmine-cli is past its planned budget).
 The bounded HTML reader is not a browser or DOM repair engine. It does not execute scripts, resolve CSS,
 interpret inline XBRL transformations, or establish issuer, metric, period or ownership semantics. Its source
 anchor records the inspected bytes and location, not the financial meaning, publisher authenticity or independent

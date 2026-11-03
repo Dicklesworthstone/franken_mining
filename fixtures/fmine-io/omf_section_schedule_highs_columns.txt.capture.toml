@@ -1,0 +1,12 @@
+# Capture record (§33.2) for omf_section_schedule_highs_columns.txt, written by `xtask capture-fixture`.
+# bd-06kg: HiGHS's columns solution of the OMF section's schedule LP, read back by fmine_lp::mps::read_values
+# inputs_digest is the sha256 of crates/fmine-io/testdata/omf_section_schedule.mps.
+oracle = "HiGHS through scipy.optimize.linprog(method=highs), the MPS read by scripts/oracle/highs_lp.py (shares no code with fmine-lp)"
+version = "scipy 1.18.1, numpy 2.5.4; Python 3.15.0"
+platform = "aarch64-macos"
+inputs_digest = "sha256:35116126ac185056e6c4a13cff05e3c46c091846bca53f107dc588c7d826925b"
+outputs_digest = "sha256:902a11449673c33171d40ae1eb5f3313f6d86803d3b277d1103aaa0cef61ede8"
+command = "python3 -I scripts/oracle/highs_lp.py crates/fmine-io/testdata/omf_section_schedule.mps --columns"
+captured_by = "coding agent that wrote the fmine-io and fmine-lp code under test (no separate lab runner)"
+date = "2026-11-03"
+licence = "HiGHS MIT, SciPy BSD-3-Clause; the converter is this repository licence"

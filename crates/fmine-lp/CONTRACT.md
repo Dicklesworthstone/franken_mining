@@ -29,6 +29,7 @@ The Pushback linear-programming crate. Two slices so far:
   - a range `R` on a row with right-hand side `b`: `G` gives `[b, b + |R|]`, `L` gives `[b − |R|, b]`, and `E` gives `[b, b + R]` or `[b + R, b]` by the sign of `R`;
   - a column's default bounds are `[0, +∞)`.
 - `mps::write(name, problem)`: any `LpProblem`, under a name with no space or tab.
+- `mps::read_values(text, names, problem)` (bd-06kg): a solution of `problem` from an outside solver that read `write`'s file. It has one `name value` line for each column (`Names::Columns`, `C0`, `C1`, …) or each row (`Names::Rows`, `R0`, `R1`, …). Lines whose first field starts with `#` are comments, as in Gurobi's `.sol` files.
 
 ## 3. Outputs
 - `PdlpSolution`:
@@ -118,6 +119,8 @@ None is a Claim.
   - `each_defect_is_refused_naming_its_line`: 34 one-defect files, each refused with its line and reason, and `LpProblem::new`'s own refusal passed through;
   - `a_small_lp_solved_from_its_mps_text_certifies_its_hand_optimum`: `max 3x + 2y` over two rows, read and solved at ε = 1e-9, certifies a bound at or below −11 and within 1e-6 of it.
   - Planted bug: the `E` row's range sign rule reversed. The every-section test caught it, and it was reverted.
+  - `a_solution_file_reads_back_by_name_and_its_multipliers_certify_again` (bd-06kg): out-of-order lines, tabs, comments and blank lines read to the right indices. PDLP's bound multipliers, written in Rust's shortest form and read back, certify the same bound bit for bit. 18 one-defect files are refused: missing, repeated and unknown names, leading zeros, the other kind of name, `OBJ`, wrong field counts, and six non-finite or malformed numbers.
+  - The outside half is in fmine-io (PO-IO-11). HiGHS's solution of an exported schedule LP, pinned as an oracle fixture, comes back through `read_values`, and its multipliers certify within one ulp of the hand optimum.
 - **KILL-PUSH-PDLP** (`tests/minelib_cpit.rs`, ignored, run by hand). It runs the LP relaxations of MineLib's CPIT instances, whose optima MineLib publishes (§9). A run ends at the stopping rule or at the 30-minute limit. It passes when its certified bound then lies within 1e-4 relative of the published optimum, allowing one unit for MineLib's rounding. Whether the stopping rule fired is not judged, since it does not bound that gap (§8). §8 has the results.
 
 ## 5. Refusals
@@ -132,6 +135,7 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input. `m
   - a field that is not a finite number, or a line with the wrong number of fields;
   - `LpProblem::new`'s refusals, passed through as 207.
 - From `mps::write`: a name holding a space or tab, and a row whose two finite bounds no range reads back exactly.
+- From `mps::read_values`: a line that is not a name and a value, a name that is not one of the problem's columns or rows (`C7`, no leading zeros), a value that is not a finite number, a name given twice, and names given no value (the first is named). A missing value is refused, not taken as 0.
 - From `LpProblem::new`:
   - a cost, bound or row length that does not match `a`;
   - a cost or matrix entry that is not finite;
@@ -256,7 +260,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   - The LP is built in "by" variables (`w[b][t]` is the fraction of block `b` mined by period `t`), which keeps the optimum.
   - The published optima match a discount exponent counted from 0. On newman1 at ε = 1e-7 that gives 24,486,185.05 against the published 24,486,184. Counting from 1, as the format note reads, gives 22,672,394.94.
 - External: netlib's published LP optima (`lp/data/readme`, "Optimal Value", MINOS 5.3, 11 significant figures) for the 35 LPs `tests/netlib.rs` lists, from the uncompressed MPS files in HiGHS's `check/instances` (MIT, commit `0edab95`), read 2026-11-03. Also from there, 8 LPs that netlib lists as infeasible (`lp/infeas`), each matching the git blob hash HiGHS records. Their infeasibility is netlib's statement, and the four proved here confirm it for those four.
-- HiGHS and OR-Tools PDLP (plan §15.4's lab oracles) are not run.
+- HiGHS (bd-06kg), through scipy 1.18.1's `linprog(method="highs")`, run once in the lab by `scripts/oracle/highs_lp.py`. That script has its own MPS parser and shares no code with this crate, but has the same author. Its solution of one exported schedule LP is pinned under `fixtures/fmine-io/` with capture records. The script also matched netlib's published optima for AFIRO, SC50A and BLEND, read from netlib's own files. OR-Tools PDLP is not run.
 
 ## 10. Known gaps
 - `BD-251`: one library caller, `fmine-io`'s `omf::pit::PitModel::lp_schedule` (bd-djb7), which solves `toposort::lp`'s relaxation of an OMF schedule and reports minus the dual bound as its upper bound. The MineLib harnesses in `crates/xtask/tests/` also call `pdlp::solve`. The plan's blend, SAA and CVaR uses have no caller.
@@ -268,7 +272,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - At 1e-6 the three largest MineLib instances do not meet the stopping rule within 30 minutes. Their bounds were within 1e-4, but the solver cannot tell that without an outside optimum or a feasible point.
 - Best-seen tracking keeps the multipliers with the highest dual objective and certifies only those, the final `y` and the two shifted. The dual objective leaves out wrong-signed reduced costs of open columns. Where the certified value departs from it, another evaluation may have certified more.
 - No QP, MILP or decomposition (the crate's other planned slices).
-- `mps` reads free format only: fixed-column MPS with spaces in names is not read. Integer markers are refused, not skipped. Only one `RHS`, `RANGES` and `BOUNDS` set is read. Nothing in the workspace writes MPS yet, and no outside solver has read `write`'s output.
+- `mps` reads free format only: fixed-column MPS with spaces in names is not read. Integer markers are refused, not skipped. Only one `RHS`, `RANGES` and `BOUNDS` set is read. fmine-io's `PitModel::schedule_lp` is the one caller that exports (bd-06kg). HiGHS has read `write`'s output for that one 111-row LP, through a parser of the same author, not HiGHS's own MPS reader. No commercial solver has. No CLI verb exports or imports.
 - netlib's files are not in the repository, because no licence for the collection is recorded here (HiGHS carries these under its MIT). `tests/netlib.rs` is ignored, run by hand with `FMINE_NETLIB_DIR`, and CI does not run it. 35 of netlib's LPs were run, all small; the larger ones were not.
 - MineLib's files are not in the repository, because their licence is not recorded. KILL-PUSH-PDLP is an ignored test, run by hand with `FMINE_MINELIB_DIR`, and CI does not run it.
 - MineLib's mclaughlin (2.1 million blocks, 73 million arcs, 20 periods) is not run. It has about 2.9×10⁹ nonzeros in this formulation: about 140 GB at §8's rate for this crate alone, plus the test's own COO and CSR copies. It was not attempted on this shared 256 GB host.
@@ -283,7 +287,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `pdlp::solve`, `pdlp::solve_observed`
 - `pdlp::DualBound`: `value`, `repaired_rows`, `implied_columns`
 - `pdlp::certified_bound`, `pdlp::certified_infeasibility`
-- `mps::read`, `mps::write`, `mps::MpsModel` (public fields)
+- `mps::read`, `mps::write`, `mps::MpsModel` (public fields), `mps::read_values`, `mps::Names`
 
 ## 12. Proof obligations
 - PO-PUSH-4 ("Every dual bound is valid"; plan: "Dual feasibility verified with outward interval rounding, then weak duality") is discharged by `pdlp::bound`.

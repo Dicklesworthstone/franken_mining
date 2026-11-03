@@ -29,9 +29,16 @@
 //! the best (`lp::incumbent`). PDLP's certified dual bound, negated, is an upper bound on the discounted value of
 //! every schedule (with discount factors `(1 + rate)^−t` in `f64`), so the incumbent's gap to it bounds how far
 //! from best the schedule can be.
+//!
+//! **Outside solvers** (bd-06kg, plan §15.4 `UntrustedCandidate`). [`PitModel::schedule_lp`] hands out the same
+//! relaxation, which `fmine_lp::mps::write` gives as MPS. A solution from any solver that reads it, under `write`'s
+//! names, comes back through `fmine_lp::mps::read_values`. [`PitModel::guided_schedule`] builds the schedule from
+//! its shares and checks it exactly. [`PitModel::schedule_bound`] certifies an upper bound from its row multipliers.
+//! Neither trusts the solver. A wrong solution gives a worse schedule or a weaker bound, and the schedule is still
+//! checked and the bound still certified.
 
 use fmine_evidence::{Refusal, RefusalCode};
-use fmine_lp::pdlp::{LpProblem, PdlpOptions, PdlpSolution, solve as solve_lp};
+use fmine_lp::pdlp::{LpProblem, PdlpOptions, PdlpSolution, certified_bound, solve as solve_lp};
 use fmine_optimize::pitflow::shells::{NestedShells, RevenueFactor, ShellModel, nested_shells};
 use fmine_optimize::pitflow::slope::{BlockGrid, SlopeTable, slope_arcs};
 use fmine_optimize::pitflow::{ClosureProblem, PitSolution, solve};
@@ -374,20 +381,61 @@ impl<'p> PitModel<'p> {
         pdlp: &PdlpOptions,
     ) -> Result<LpSchedule, Refusal> {
         let (problem, factors) = self.schedule_problem(spec)?;
-        let r = relaxation(&problem, spec.discount[0], spec.discount[1], 0)?;
-        let lp = solve_lp(
-            &LpProblem::new(r.cost, &r.matrix, r.row_lo, r.row_hi, r.col_lo, r.col_hi)?,
-            pdlp,
-        )?;
-        let shares = Shares::new(problem.blocks().node_count(), spec.periods, lp.x().to_vec())?;
-        let starts = starts(&problem, &shares)?;
-        let incumbent = incumbent(&problem, &starts, &factors, spec.max_rounds)?;
+        let lp = solve_lp(&relaxed(&problem, spec)?, pdlp)?;
+        let incumbent = guide(&problem, &factors, spec, lp.x().to_vec())?;
         Ok(LpSchedule {
             problem,
             factors,
             lp,
             incumbent,
         })
+    }
+
+    /// [`PitModel::lp_schedule`]'s LP relaxation, for an outside solver (see the module notes): column `t·n + b` is
+    /// the share of block `b`, in `pitflow`'s order, mined by period `t`.
+    ///
+    /// # Errors
+    /// Those of [`PitModel::schedule`] but the rank's, and of `relaxation` and `LpProblem::new`.
+    pub fn schedule_lp(&self, spec: &ScheduleSpec<'_>) -> Result<LpProblem, Refusal> {
+        let (problem, _) = self.schedule_problem(spec)?;
+        relaxed(&problem, spec)
+    }
+
+    /// A schedule guided by a solution `x` of [`PitModel::schedule_lp`] from anywhere, such as an outside solver's:
+    /// [`PitModel::lp_schedule`]'s starts and search, from `x` in place of PDLP's. Nothing in `x` is trusted. It only
+    /// ranks and releases blocks, and TopoSort and the search refuse any schedule that fails `toposort::check`.
+    ///
+    /// # Errors
+    /// Those of [`PitModel::schedule`] but the rank's, and of `Shares::new` (among them a share outside `[0, 1]`,
+    /// which is refused rather than clamped, or a count that is not one per block and period), `starts` and
+    /// `incumbent`.
+    pub fn guided_schedule(
+        &self,
+        spec: &ScheduleSpec<'_>,
+        x: Vec<f64>,
+    ) -> Result<GuidedSchedule, Refusal> {
+        let (problem, factors) = self.schedule_problem(spec)?;
+        let incumbent = guide(&problem, &factors, spec, x)?;
+        Ok(GuidedSchedule {
+            problem,
+            factors,
+            incumbent,
+        })
+    }
+
+    /// An upper bound on every schedule's discounted value from multipliers `y` of [`PitModel::schedule_lp`]'s rows,
+    /// from anywhere: minus `fmine_lp::pdlp::certified_bound`, as [`LpSchedule::upper_bound`]. Nothing in `y` is
+    /// trusted: by weak duality every `y` gives a bound, and a poor `y` only a weak one. `None` when `y` certifies
+    /// none.
+    ///
+    /// # Errors
+    /// Those of [`PitModel::schedule_lp`], and `certified_bound`'s for a `y` that is not one finite value per row.
+    pub fn schedule_bound(
+        &self,
+        spec: &ScheduleSpec<'_>,
+        y: &[f64],
+    ) -> Result<Option<f64>, Refusal> {
+        Ok(certified_bound(&self.schedule_lp(spec)?, y)?.map(|b| -b.value()))
     }
 
     fn schedule_problem(
@@ -509,6 +557,56 @@ impl LpSchedule {
     pub fn incumbent(&self) -> &Incumbent {
         &self.incumbent
     }
+}
+
+/// A schedule from [`PitModel::guided_schedule`], in `pitflow`'s block order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuidedSchedule {
+    problem: ScheduleProblem,
+    factors: Vec<i64>,
+    incumbent: Incumbent,
+}
+
+impl GuidedSchedule {
+    /// The problem scheduled.
+    #[must_use]
+    pub fn problem(&self) -> &ScheduleProblem {
+        &self.problem
+    }
+
+    /// The integer discount factors the search used (`toposort::search::discount_factors`).
+    #[must_use]
+    pub fn factors(&self) -> &[i64] {
+        &self.factors
+    }
+
+    /// The searched starts and the best of them.
+    #[must_use]
+    pub fn incumbent(&self) -> &Incumbent {
+        &self.incumbent
+    }
+}
+
+/// `toposort::lp::relaxation` of `problem` at `spec`'s rate, with the values' own scale, as an `LpProblem`.
+fn relaxed(problem: &ScheduleProblem, spec: &ScheduleSpec<'_>) -> Result<LpProblem, Refusal> {
+    let r = relaxation(problem, spec.discount[0], spec.discount[1], 0)?;
+    LpProblem::new(r.cost, &r.matrix, r.row_lo, r.row_hi, r.col_lo, r.col_hi)
+}
+
+/// `lp::starts` from the shares `x`, each searched by `lp::incumbent`.
+fn guide(
+    problem: &ScheduleProblem,
+    factors: &[i64],
+    spec: &ScheduleSpec<'_>,
+    x: Vec<f64>,
+) -> Result<Incumbent, Refusal> {
+    let shares = Shares::new(problem.blocks().node_count(), spec.periods, x)?;
+    incumbent(
+        problem,
+        &starts(problem, &shares)?,
+        factors,
+        spec.max_rounds,
+    )
 }
 
 /// OMF block `b`'s `(u, v, w)` indices.
