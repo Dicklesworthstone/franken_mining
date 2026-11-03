@@ -1,8 +1,9 @@
 # GATE-LAYERS-00: every xtask check wired from commit 1 (BD-015)
 
-- **Status:** PASS measured locally at `2f87dfd` on 2026-11-01. **CI: pending.** It needs the first CI run whose
-  head contains `2f87dfd`. The L-6 check in its current form (`6b105e3`) is not yet on `origin/main`, so no CI run
-  has checked it.
+- **Status:** PASS. It was measured locally at `2f87dfd` on 2026-11-01, and in CI at `eddeb7d`, which contains
+  `2f87dfd` and the L-6 check of `6b105e3`. The CI run is 41563917513 of 2026-11-03 02:05Z. Its step "Run
+  GATE-LAYERS-00 (xtask check-all)" passed in all four matrix jobs (ubuntu-latest and macos-15, dev and release),
+  and lint (clippy, warnings denied) and deny passed too. Run 41563909550, on the same head, also passed.
 - **Recorded by:** SwiftBasin (agent). Self-verified only.
 
 ## What is wired
@@ -48,7 +49,16 @@ GATE-LAYERS-00 PASS: 60 crates registered, 90771 actual Rust LOC (planned 112800
 - **Refusals.** Eight codes are proposed in `docs/adr/ADR-REFUSALS-01.md` but not yet in plan §8.4. They are
   warnings.
 
+## Since then
+
+The gate is not green at every later head. It failed in CI at the following:
+- `e89eb90`: a sweep committed the OMF module before its CONTRACT family entry, and `omf_samples.rs` before its
+  clippy allow. `fa6ea1d` adds both.
+- `3ef6f1d`: `risk/bootstrap/tests.rs` had no determinism header. `5e95eec` adds it, and was local when this was
+  written.
+
+`check-all` exits 0 locally at `c0be549`. The gate is a standing check, not a one-time pass.
+
 ## To close BD-015
 
-Cite this record together with `ci:<run-id>@<sha7>`, from a run whose head contains `2f87dfd` and whose check-all
-step passed.
+Cite this record together with `ci:41563917513@eddeb7d`.
