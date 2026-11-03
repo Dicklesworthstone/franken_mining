@@ -47,7 +47,7 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   - `starts` gives TopoSort's six schedules: three thresholds on the LP's final share, each with `greedy` and with `greedy_from` at the LP median periods. `incumbent` searches each, with `search::improve` or `pcpsp::improve`, and picks the first with the highest discounted value.
   - Moved from the two xtask harnesses without changing a bit (§9).
 
-`fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. Shells, slope arcs and `toposort` have no caller outside tests yet: the MineLib harnesses in `crates/xtask/tests/` call `toposort::lp` and `toposort::pcpsp::lp`. Bienstock–Zuckerberg, Lagrangian and the stochastic layer are later slices.
+`fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. `fmine-io`'s `omf::pit::PitModel` (bd-joiv) calls `slope::slope_arcs`, `solve` and `shells::nested_shells` on OMF block models. `toposort` has no caller outside tests yet: the MineLib harnesses in `crates/xtask/tests/` call `toposort::lp` and `toposort::pcpsp::lp`. Bienstock–Zuckerberg, Lagrangian and the stochastic layer are later slices.
 
 - **Crate:** `fmine-optimize`
 - **Layer:** E

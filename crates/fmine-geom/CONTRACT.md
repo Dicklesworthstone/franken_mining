@@ -91,7 +91,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - No external reference implementation (no Shewchuk `predicates.c`, no CGAL, no OpenVDB, no libigl winding number) is run.
 
 ## 10. Known gaps
-- `BD-193` (bd-193), `BD-191` (bd-191) and `BD-192` (bd-192): their only caller is `volcert`, in this crate; nothing outside it calls the crate yet. The first outside caller will be a mesh, block-model or stockpile slice.
+- `BD-193` (bd-193), `BD-191` (bd-191) and `BD-192` (bd-192): their only caller is `volcert`, in this crate, which `fmine-io`'s `omf::proportions_in_surface` (bd-aqfl) calls from outside.
 - `winding` takes OMF surfaces only through `volcert` (bd-aqfl) and has no DXF ingest (plan §27 row "fs-rep-mesh `winding_exact`"); the octree is single-threaded and rebuilt per soup.
 - `volcert` (bd-wq34): its one caller outside the crate is `fmine-io`'s OMF reader (bd-aqfl), on synthetic files only so far; no DXF reader feeds it; grids are axis-aligned and unrotated, with no sub-blocks; no self-intersection check; time and memory at production grid sizes are not measured (the tests run in about four seconds unoptimized). The plan's "interval arithmetic" for the volume is replaced by exact arithmetic, which is tighter. Each component costs one winding query, linear in the triangle count; only faces covered by coplanar triangles split components, so the aligned single box above needs one query and the touching pair two, but the query count on a real pit shell is not measured.
 - `orient3d`, `incircle` and `insphere` go from stage A straight to the exact stage, as upstream does; only `orient2d` has stages B and C. The signs are the same; near-degenerate throughput is lower.
