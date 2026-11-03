@@ -8,7 +8,8 @@
 //! - R-TYPED: the reason holds a `test:`, `record:`, `ci:`, `decision:` or `commit:` reference;
 //! - R-RESOLVE: each reference resolves:
 //!   - a `test:` reference's last `::` segment is a `fn` under `crates/`. Trailing punctuation, an `@<sha>`
-//!     suffix and the `{` opening an `{a, b}` group are not part of the name;
+//!     suffix and the `{` opening an `{a, b}` group are not part of the name. In the `<file>#<fn>` form the
+//!     file must exist as well;
 //!   - a `record:` path is a file;
 //!   - `ci:<run>@<sha>` and `commit:<sha>` are well formed. They are not looked up, because CI checks out at
 //!     depth 1;
@@ -484,6 +485,17 @@ fn unresolved(
         "test" => {
             // `p{a,b}` names `pa` and `pb`; only `pa` reaches here, since the reference ends at the `,`.
             let path = v.split('@').next().unwrap_or(v);
+            // `<file>#<fn>` names the file as well, and the file must exist.
+            let (file, path) = match path.split_once('#') {
+                Some((file, name)) => (Some(file), name),
+                None => (None, path),
+            };
+            if let Some(file) = file {
+                let escapes = file.starts_with('/') || file.split('/').any(|s| s == "..");
+                if escapes || !is_file(file) {
+                    return Some(format!("no file {file}"));
+                }
+            }
             let name = path.rsplit("::").next().unwrap_or(path).replace('{', "");
             (!fns.contains(&name)).then(|| format!("no `fn {name}(` under crates/"))
         }
@@ -608,11 +620,12 @@ mod tests {
             .iter()
             .map(|(n, t)| (n.to_string(), t.to_string()))
             .collect();
-        // Any path ending `docs/real.md` "exists", so only the escape guard refuses `../docs/real.md`.
+        // Any path ending `docs/real.md` "exists", so only the escape guard refuses `../docs/real.md`. So does
+        // one test file.
         evaluate(
             &lines.join("\n"),
             &fns,
-            &|p| p.ends_with("docs/real.md"),
+            &|p| p.ends_with("docs/real.md") || p == "crates/xtask/tests/real.rs",
             &records,
         )
     }
@@ -662,6 +675,7 @@ mod tests {
             "test:xtask::tests::test_golden_{hash_10k_inputs,other}",
             "test:fmine-calib::record::tests::test_golden_hash_10k_inputs",
             "test:a::test_golden_hash_10k_inputs@cd423b9.",
+            "test:crates/xtask/tests/real.rs#test_golden_hash_10k_inputs",
             "record:docs/real.md#E1; ci:41237995169@84f32ac, commit:84f32ac. decision:D-1",
         ] {
             assert!(reason(ok).is_ok(), "{ok}");
@@ -672,6 +686,22 @@ mod tests {
                 "no `fn no_such_fn(` under crates/",
             ),
             ("test:fmine-public", "no `fn fmine-public(` under crates/"),
+            (
+                "test:crates/xtask/tests/real.rs",
+                "no `fn crates/xtask/tests/real.rs(` under crates/",
+            ),
+            (
+                "test:crates/xtask/tests/real.rs#no_such_fn",
+                "no `fn no_such_fn(` under crates/",
+            ),
+            (
+                "test:crates/xtask/tests/gone.rs#test_golden_hash_10k_inputs",
+                "no file crates/xtask/tests/gone.rs",
+            ),
+            (
+                "test:../crates/xtask/tests/real.rs#test_golden_hash_10k_inputs",
+                "no file ../crates/xtask/tests/real.rs",
+            ),
             ("record:docs/missing.md", "no file docs/missing.md"),
             ("record:../docs/real.md", "no file ../docs/real.md"),
             ("record:/docs/real.md", "no file /docs/real.md"),
