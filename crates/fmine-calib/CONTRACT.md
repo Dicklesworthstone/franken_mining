@@ -97,6 +97,37 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   nominal level remains descriptive. A positive calibration flag requires complete resolution and a conservative
   effective sample at least the frozen threshold (minimum 35; stricter thresholds are allowed). The default
   correlation range is [0, 0.5].
+- DESIGN (BD-051, plan §10.4): `AssessmentPolicy.coverage_monitor` optionally freezes a
+  `CoverageMonitorPolicy`: alarm alpha, nonempty support declaration, nonempty conditional-null explanation,
+  and an explicit observation order containing every member exactly once. The null is
+  `P(hit_t | all preceding observations) = 1 - policy.alpha`. The declaration is an assumption; this kernel
+  does not establish it from marginal coverage, correlation sensitivity or effective sample size. Both excess
+  hits and excess misses can reject this point null; it is not a test of coverage being at least the target.
+  The supported probability-bearing inputs are Gaussian forecasts, intervals whose explicit nominal level
+  exactly equals `1-alpha`, and exact central quantile levels `alpha/2` and `1-alpha/2`. Nearby descriptive
+  levels, absent nominal levels, Bernoulli events and empirical/discrete forecasts refuse: a discrete
+  distribution's inclusive interval need not carry the requested probability. No randomization is invented.
+- DESIGN: `Assessment.coverage_monitor` retains a `CoverageMonitorAssessment` with the frozen declaration,
+  null probability, consumed `CoverageObservation` entries, first unresolved `blocked_by` member, counts of
+  all deferred members and their already-resolved originals, and the numerical `CoverageSnapshot`. Each
+  observation retains its original `MemberAssessment` (value, citation, sequence and event digest), exact
+  frozen interval and inclusive hit indicator. Monitoring always selects `FirstPublished` originals at the
+  same bitemporal cut, even when ordinary scores use `LatestAsOf`. It consumes only the contiguous resolved
+  prefix of the frozen order. Missing members are never skipped, reordered, imputed or treated as misses.
+  The first blocker retains its missing-event identity or inferred Pending/Overdue status.
+  `BernoulliCoverageProcess` supplies the uniform Beta(1,1) log-mixture, running maximum and persistent first
+  crossing. A restatement cannot replace a consumed original or erase a prior alarm; later observations can
+  lower current evidence without lowering its running maximum. The alarm is diagnostic and does not mutate
+  the forecast or retrain a model. A persistent alarm downgrades an otherwise positive `Calibrated` summary
+  to `Descriptive`; it preserves existing `Overconfident` and `Biased` findings and cannot establish either
+  classification by itself. An aggregate hit-rate recovery cannot erase the earlier diagnostic rejection.
+- DESIGN: opt-in monitoring selects `COH1`/v2 and `ASM1`/v2 frames. Cohort hashes bind the complete declaration
+  and original sequence; assessment hashes additionally bind every consumed original, interval and hit,
+  blocker, deferred counts, and every snapshot field. An absent monitor adds no bytes or presence marker,
+  preserving all existing v1 cohort and assessment identities exactly. Monitoring admission and replay are
+  pure, with failed freezes/assessments leaving authority times, sealed cuts and caches unchanged. Arithmetic
+  uses finite log evidence and is `DeterministicPerIsa`; exponentiated displays may be absent when they cannot
+  represent a finite positive value. The numerical kernel caps monitoring at 1,000,000 observations.
 - `gaussian_crps`, `gaussian_log_score`, `winkler_interval_score` → `Result<f64, ScoreError>` (non-finite inputs, non-positive std_dev, alpha outside (0, 1) and inverted intervals refuse; nothing is clamped, bd-8wrk)
 - DESIGN (BD-047/BD-048): `ForecastPayload::Empirical { samples }` freezes a uniform univariate predictive
   distribution with 1–4,096 finite samples. Repeated values retain their probability mass; supplied sample

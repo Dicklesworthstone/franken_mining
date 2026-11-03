@@ -19,6 +19,8 @@ use crate::{
 };
 
 pub mod binding;
+pub mod coverage;
+pub use coverage::{CoverageMonitorAssessment, CoverageMonitorPolicy, CoverageObservation};
 
 /// Plan §21.6's floor on independent outcomes for a positive calibration claim. A policy may be stricter.
 pub const MIN_CALIBRATION_N: usize = 35;
@@ -195,6 +197,8 @@ pub struct AssessmentPolicy {
     pub correlation_range: (f64, f64),
     /// A declared physical outcome domain can make interval scores bounded. Observations outside it refuse.
     pub outcome_bounds: Option<(f64, f64)>,
+    /// Optional exact conditional coverage test. Its support and sequence are frozen before outcomes.
+    pub coverage_monitor: Option<CoverageMonitorPolicy>,
 }
 
 impl Default for AssessmentPolicy {
@@ -204,6 +208,7 @@ impl Default for AssessmentPolicy {
             min_calibration_n: MIN_CALIBRATION_N,
             correlation_range: (0.0, 0.5),
             outcome_bounds: None,
+            coverage_monitor: None,
         }
     }
 }
@@ -228,6 +233,9 @@ impl AssessmentPolicy {
                 "invalid frozen assessment policy; the calibration minimum must be at least 35",
             ));
         }
+        if let Some(monitor) = &self.coverage_monitor {
+            monitor.validate(self.alpha)?;
+        }
         Ok(())
     }
 
@@ -244,6 +252,10 @@ impl AssessmentPolicy {
         enc.put_u8(u8::from(self.outcome_bounds.is_some()));
         if let Some((lo, hi)) = self.outcome_bounds {
             floats(enc, &[lo, hi]);
+        }
+        // DESIGN: absent monitoring writes no new bytes, preserving every v1 cohort identity.
+        if let Some(monitor) = &self.coverage_monitor {
+            monitor.encode(enc);
         }
     }
 }
@@ -470,6 +482,8 @@ pub struct Assessment {
     pub selector: OutcomeSelector,
     pub per_member: Vec<MemberAssessment>,
     pub summary: AssessmentSummary,
+    /// Evidence from original publications in the frozen sequence, independently of `selector`.
+    pub coverage_monitor: Option<CoverageMonitorAssessment>,
     pub digest: Digest32,
 }
 
@@ -603,6 +617,9 @@ impl ForecastLedger {
         {
             return Err(domain("duplicate member or eligible source in a cohort"));
         }
+        if let Some(monitor) = &spec.policy.coverage_monitor {
+            monitor.validate_members(&spec.members)?;
+        }
         if self.cohort_names.contains_key(&spec.name) {
             return Err(frozen("cohort name already frozen; create a new cohort"));
         }
@@ -632,7 +649,12 @@ impl ForecastLedger {
             }
         }
         self.check_record_time(spec.frozen_at_ns)?;
-        let mut enc = Encoder::new_frame(*b"COH1", 1);
+        let version = if spec.policy.coverage_monitor.is_some() {
+            2
+        } else {
+            1
+        };
+        let mut enc = Encoder::new_frame(*b"COH1", version);
         enc.put_str(&spec.name);
         enc.put_i64(spec.frozen_at_ns);
         enc.put_str(&spec.resolution_rule);
@@ -679,6 +701,9 @@ impl ForecastLedger {
             rec.payload
                 .interval(spec.policy.alpha)
                 .map_err(score_refusal)?;
+            if spec.policy.coverage_monitor.is_some() {
+                coverage::monitor_interval(&rec.payload, spec.policy.alpha)?;
+            }
             rec.encode(&mut enc);
         }
         let digest = blake3_hash(&enc.finish());
@@ -906,14 +931,35 @@ impl ForecastLedger {
                 return Err(absent("cohort member unavailable"));
             }
             let per_member = self.select_members(&records, as_of_ns, selector);
-            let summary =
+            let mut summary =
                 summarize(&records, &per_member, &frozen.spec.policy).map_err(score_refusal)?;
+            let coverage_monitor = frozen
+                .spec
+                .policy
+                .coverage_monitor
+                .as_ref()
+                .map(|policy| {
+                    let originals =
+                        self.select_members(&records, as_of_ns, OutcomeSelector::FirstPublished);
+                    coverage::assess(policy, frozen.spec.policy.alpha, &records, &originals)
+                })
+                .transpose()?;
+            // DESIGN: a persistent rejection of the declared conditional null precludes a positive
+            // calibration label. The two-sided test cannot by itself classify overconfidence or bias.
+            if summary.flag == CalibrationFlag::Calibrated
+                && coverage_monitor
+                    .as_ref()
+                    .is_some_and(|m| m.snapshot.alarmed())
+            {
+                summary.flag = CalibrationFlag::Descriptive;
+            }
             let mut assessment = Assessment {
                 cohort,
                 as_of_ns,
                 selector,
                 per_member,
                 summary,
+                coverage_monitor,
                 digest: Digest32::default(),
             };
             assessment.digest = blake3_hash(&assessment.canonical_bytes());
@@ -1228,7 +1274,12 @@ impl Assessment {
     /// selected event hashes, all unresolved reasons, every score and the complete denominator.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        let mut enc = Encoder::new_frame(*b"ASM1", 1);
+        let version = if self.coverage_monitor.is_some() {
+            2
+        } else {
+            1
+        };
+        let mut enc = Encoder::new_frame(*b"ASM1", version);
         enc.put_fixed(&self.cohort.0);
         enc.put_i64(self.as_of_ns);
         enc.put_u8(match self.selector {
@@ -1237,30 +1288,7 @@ impl Assessment {
         });
         enc.put_u64(self.per_member.len() as u64);
         for member in &self.per_member {
-            enc.put_fixed(&member.forecast_id.bytes);
-            enc.put_u8(u8::from(member.selected_event.is_some()));
-            if let Some((seq, digest)) = member.selected_event {
-                enc.put_u64(seq);
-                enc.put_fixed(&digest.0);
-            }
-            match &member.outcome {
-                MemberOutcome::Resolved {
-                    value,
-                    event_seq,
-                    event_digest,
-                    citation,
-                } => {
-                    enc.put_u8(0);
-                    floats(&mut enc, &[*value]);
-                    enc.put_u64(*event_seq);
-                    enc.put_fixed(&event_digest.0);
-                    citation.encode(&mut enc);
-                }
-                MemberOutcome::Unresolved { reason } => {
-                    enc.put_u8(1);
-                    enc.put_u8(reason.tag());
-                }
-            }
+            member.encode(&mut enc);
         }
         let s = &self.summary;
         for n in [s.n_members, s.n_resolved, s.n_unresolved] {
@@ -1303,7 +1331,40 @@ impl Assessment {
             CalibrationFlag::Overconfident => 3,
             CalibrationFlag::Biased => 4,
         });
+        // DESIGN: no extension marker in v1; opt-in monitoring alone selects the v2 frame.
+        if let Some(monitor) = &self.coverage_monitor {
+            monitor.encode(&mut enc);
+        }
         enc.finish()
+    }
+}
+
+impl MemberAssessment {
+    fn encode(&self, enc: &mut Encoder) {
+        enc.put_fixed(&self.forecast_id.bytes);
+        enc.put_u8(u8::from(self.selected_event.is_some()));
+        if let Some((seq, digest)) = self.selected_event {
+            enc.put_u64(seq);
+            enc.put_fixed(&digest.0);
+        }
+        match &self.outcome {
+            MemberOutcome::Resolved {
+                value,
+                event_seq,
+                event_digest,
+                citation,
+            } => {
+                enc.put_u8(0);
+                floats(enc, &[*value]);
+                enc.put_u64(*event_seq);
+                enc.put_fixed(&event_digest.0);
+                citation.encode(enc);
+            }
+            MemberOutcome::Unresolved { reason } => {
+                enc.put_u8(1);
+                enc.put_u8(reason.tag());
+            }
+        }
     }
 }
 
