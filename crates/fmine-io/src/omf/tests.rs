@@ -1,9 +1,12 @@
 //! OMF files built here, member by member, read back whole; then one defect at a time, each refused.
 
+use std::cell::Cell;
+
+use super::gzip::gunzip;
 use super::parquet::testkit::{Col, Opts, gzip_stored, nullable as ncol, required as rcol, write};
 use super::parquet::{Logical, Physical, Values};
 use super::*;
-use crate::zip_inflate::{write_stored_zip, write_stored_zip_with_crcs};
+use crate::zip_inflate::{read_stored_entries, write_stored_zip, write_stored_zip_with_crcs};
 
 const U32: Logical = Logical::Integer {
     bits: 32,
@@ -65,8 +68,13 @@ fn grouped(mut c: Col, group: &'static str, present: &[bool]) -> Col {
     c
 }
 
+thread_local! {
+    /// The page form `pq` writes; the mutation test varies it.
+    static PAGES: Cell<Opts> = Cell::new(Opts::default());
+}
+
 fn pq(cols: &[Col], rows: usize) -> Vec<u8> {
-    write(cols, rows, Opts::default())
+    write(cols, rows, PAGES.with(Cell::get))
 }
 
 fn xyz(v: &[[f64; 3]]) -> Vec<u8> {
@@ -179,8 +187,35 @@ fn refused(bytes: &[u8], why: &str) {
 
 const TRI: [[f64; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
 
-#[test]
-fn a_file_of_every_geometry_and_attribute_reads_back() {
+const fn form(
+    v2: bool,
+    gzip: bool,
+    rows_per_page: usize,
+    rows_per_group: usize,
+    split: bool,
+) -> Opts {
+    Opts {
+        v2,
+        gzip,
+        rows_per_page,
+        rows_per_group,
+        bitpacked_levels: split,
+        crc: split,
+    }
+}
+
+/// The page forms besides the default (v2 pages, GZIP): v1 and v2 without a codec, v1 with GZIP, and pages and row
+/// groups split small, with bit-packed levels and page CRCs.
+const FORMS: [Opts; 5] = [
+    form(false, false, usize::MAX, usize::MAX, false),
+    form(true, false, usize::MAX, usize::MAX, false),
+    form(false, true, usize::MAX, usize::MAX, false),
+    form(false, true, 2, 3, true),
+    form(true, false, 1, 2, true),
+];
+
+/// A file holding every geometry and attribute type, its Parquet written in the current `PAGES` form.
+fn every_kind() -> Vec<u8> {
     let mut b = Build::default();
 
     // A point set with nullable floats and a continuous colormap.
@@ -513,8 +548,12 @@ fn a_file_of_every_geometry_and_attribute_reads_back() {
         ),
     );
 
-    let file = b.file(&[points, lines, surface, grid, blocks, tensor, composite].join(","));
-    let p = read(&file).unwrap();
+    b.file(&[points, lines, surface, grid, blocks, tensor, composite].join(","))
+}
+
+#[test]
+fn a_file_of_every_geometry_and_attribute_reads_back() {
+    let p = read(&every_kind()).unwrap();
 
     let attr = |name: &str, location: Location, data: AttributeData| Attribute {
         name: name.to_owned(),
@@ -783,6 +822,11 @@ fn a_file_of_every_geometry_and_attribute_reads_back() {
         ],
     };
     assert_eq!(p, expected);
+    for (k, pages) in FORMS.into_iter().enumerate() {
+        PAGES.with(|c| c.set(pages));
+        assert!(read(&every_kind()).unwrap() == expected, "page form {k}");
+    }
+    PAGES.with(|c| c.set(Opts::default()));
     // Duplicate element names, a vendor warning, are read; and so are keys OMF does not define.
     let Geometry::Composite { elements } = &p.elements[6].geometry else {
         panic!("not a composite");
@@ -1489,4 +1533,89 @@ fn read_path_reads_a_file_and_names_a_missing_one() {
     assert_eq!(read_path(&path).unwrap(), read(&bytes).unwrap());
     let e = read_path(&dir.join("absent.omf")).unwrap_err();
     assert!(e.what.contains("absent.omf"), "{}", e.what);
+}
+
+/// splitmix64, from a fixed seed, so every run makes the same mutants.
+fn splitmix(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+fn below(s: &mut u64, n: usize) -> usize {
+    (splitmix(s) % n.max(1) as u64) as usize
+}
+
+/// One to four edits: a bit flipped, a byte replaced, inserted or removed, or the bytes cut short.
+fn mutate(bytes: &mut Vec<u8>, s: &mut u64) {
+    for _ in 0..=below(s, 4) {
+        let at = below(s, bytes.len());
+        match below(s, 5) {
+            0 if !bytes.is_empty() => bytes[at] ^= 1_u8 << below(s, 8),
+            1 if !bytes.is_empty() => bytes[at] = splitmix(s) as u8,
+            2 => bytes.truncate(at),
+            3 => bytes.insert(at, splitmix(s) as u8),
+            _ if !bytes.is_empty() => {
+                bytes.remove(at);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Mutants of the every-kind file, 1,000 in each of three page forms: GZIP v2 (omf-rust's), and v1 and v2 without a
+/// codec, where an edit to a page reaches the value and level decoders instead of the gzip CRC-32. Each mutant changes
+/// one member, the index as JSON text and any other member as bytes, and is zipped again with true CRC-32s, so the
+/// change reaches the parsers rather than the archive's own check. No mutant panics, every refusal is
+/// `FMINE-REF-506`, and in each form at least one mutant in fifty is read and one in fifty refused, so the search is
+/// not vacuous. The floor was one in twenty until a first run of the GZIP form read 50 of 1,500 (3.3%): there the
+/// gzip CRC-32 refuses most edits to a page, as it should. A bounded random search, not a proof.
+#[test]
+fn mutated_files_are_read_or_refused_and_never_panic() {
+    const N: usize = 1000;
+    let mut s = 0x0194_2026_1103_0F4F_u64;
+    for (k, pages) in [Opts::default(), FORMS[0], FORMS[1]]
+        .into_iter()
+        .enumerate()
+    {
+        PAGES.with(|c| c.set(pages));
+        let file = every_kind();
+        let members = read_stored_entries(&file, MAX_MEMBER_BYTES, MAX_ARCHIVE_BYTES).unwrap();
+        let names: Vec<&String> = members.keys().collect();
+        let (mut accepted, mut refusals) = (0, 0);
+        for _ in 0..N {
+            let name = names[below(&mut s, names.len())];
+            let mut m = members.clone();
+            let Some(bytes) = m.get_mut(name) else {
+                panic!("{name} is not a member");
+            };
+            if name == INDEX {
+                let mut text = gunzip(bytes, MAX_INDEX_BYTES).unwrap();
+                mutate(&mut text, &mut s);
+                *bytes = gzip_stored(&text);
+            } else {
+                mutate(bytes, &mut s);
+            }
+            let entries: Vec<(&str, &[u8])> =
+                m.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+            match read(&with_comment(
+                write_stored_zip_with_crcs(&entries),
+                "Open Mining Format 2.0",
+            )) {
+                Ok(_) => accepted += 1,
+                Err(e) => {
+                    assert_eq!(e.code, "FMINE-REF-506", "{e:?}");
+                    refusals += 1;
+                }
+            }
+        }
+        println!("page form {k}: {accepted} read, {refusals} refused");
+        assert!(
+            accepted * 50 >= N && refusals * 50 >= N,
+            "page form {k}: {accepted} read, {refusals} refused"
+        );
+    }
+    PAGES.with(|c| c.set(Opts::default()));
 }

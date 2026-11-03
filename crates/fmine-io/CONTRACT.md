@@ -5,7 +5,7 @@
 - **Layer:** `V` (Verification, Ingestion & Assurance)
 - **Subsystem:** `Ingestion`
 - **LOC Budget:** `40k planned / 46k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance", "forecast"]`
+- **Allowed Module Families:** `["xlsx", "zip_inflate", "styles", "numfmt", "numtok", "reliance", "forecast", "omf"]`
 
 ## 2. Mathematical & Domain Formulation
 Pure-Rust ZIP and RFC 1951 DEFLATE (`zip_inflate`); `.xlsx` workbook, shared-string and worksheet extraction
@@ -21,6 +21,18 @@ values in `f64` `Display` form. The format is fixed so an independently written 
 can use a real filing's layout without shipping any issuer's bytes. `build_minimal_xlsx_styled` (bd-jg43.3) adds a
 styles part (`MinimalStyles`: custom formats and `cellXfs`) for `MinimalCell::Styled` cells; with `None` its bytes
 are exactly `build_minimal_xlsx`'s (golden test).
+
+`omf` (BD-194) reads Open Mining Format 2 files: block models with regular, octree, full or free-form sub-blocks,
+surfaces, line sets, point sets, grid surfaces and composites, with every attribute type. An OMF 2 file is a ZIP of
+stored members whose comment names the format; its index is gzipped JSON, each array is a Parquet file and each
+image a PNG or JPEG. omf-rust needs the `parquet` crate and imports `chrono`, both banned (L-5, E858), so the
+reader is its own: `omf::json` (RFC 8259, numbers kept as written), `omf::gzip` (RFC 1952 over `inflate_raw`) and
+`omf::parquet`, the subset omf-rust writes. That subset is a Thrift compact footer; a flat schema or one level of
+groups; definition levels 0 or 1; BOOLEAN, INT32, INT64, FLOAT, DOUBLE and BYTE_ARRAY; the string, date, UTC
+microsecond timestamp and integer logical types; v1 and v2 data pages; PLAIN values; RLE/bit-packed levels; and
+no codec or GZIP. `read` decodes every array the index names and returns typed values: 32-bit floats are widened
+exactly, nulls are `None`, dates are days and date-times microseconds since 1970. Every check the vendor reader
+makes when reading, and every error its validator raises, refuses the file (§5).
 
 `reliance` is the filesystem adapter for the S0 reliance model (BD-347). A journal is one canonical
 `fmine_claim::reliance::JournalRecord` frame per lowercase hexadecimal line, ending in LF. Each record's
@@ -80,7 +92,14 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   percentages, scale words, annotations and split text runs remain text for a semantic adapter. Token spans index decoded cell text; `byte_range` indexes the original document.
   `HTML_MAX_BYTES` (8 MiB), `HTML_MAX_CELLS` (100,000 origins) and `HTML_MAX_SLOTS` (1,000,000 expanded grid slots)
   bound document ingestion. The slot budget is global and includes padding.
-- `zip_inflate::{read_zip_entries, inflate_raw, write_stored_zip, ZipError, MAX_ENTRY_BYTES, MAX_ARCHIVE_BYTES}`
+- `zip_inflate::{read_zip_entries, write_stored_zip, ZipError, MAX_ENTRY_BYTES, MAX_ARCHIVE_BYTES}`. The inflater,
+  CRC-32, stored-member reader and archive comment are crate-private, for `omf`.
+- `omf::{read, read_path, Project, Element, Geometry, Orient2, Orient3, Grid2, Grid3, BlockModel, Subblocks,
+  SubblockMode, RegularSubblock, FreeformSubblock, Location, Attribute, AttributeData, Numbers, Vectors,
+  Boundaries, Colormap, MAX_MEMBER_BYTES, MAX_ARCHIVE_BYTES, MAX_INDEX_BYTES}` and `omf::json::{parse, Json,
+  MAX_DEPTH}` (BD-194). `Project` holds every element with its arrays decoded; metadata and a continuous
+  colormap's range stay `Json` as written. `Grid3::count` and `blocks`, `Subblocks::len` and
+  `AttributeData::item_count` give the counts the location lengths follow from.
 - `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, FormatCount, MinimalCell,
   MinimalSheet, MinimalStyles, build_minimal_xlsx, build_minimal_xlsx_styled, col_index_to_letters,
   parse_a1_ref}`; `Workbook::format_census`;
@@ -177,6 +196,26 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   name that appears twice, are `ZipError::InvalidArchive`: a spreadsheet program and this reader cannot take
   different parts under one name. The registered workbooks peak at 0.4 MB an entry. CRC-32 is not checked; a
   registered file's integrity is its SHA-256 against the source registry.
+- OMF files (BD-194) refuse with `FMINE-REF-506` and a detail beginning `OMF: ` that names the element and attribute
+  path. A member is at most `MAX_MEMBER_BYTES` (1 GiB), the members together `MAX_ARCHIVE_BYTES` (2 GiB) and the
+  inflated index `MAX_INDEX_BYTES` (64 MiB); Parquet pages, decoded bytes and rows are bounded too, and JSON
+  nests at most 128 deep. Refused:
+  - a comment other than "Open Mining Format 2.x"; a compressed member; a member whose CRC-32 is wrong; no index;
+  - gzip with a bad header, CRC-32 or size; JSON with duplicate keys, a bad number, escape or surrogate, or trailing
+    text;
+  - Parquet outside the subset: dictionary pages, other codecs, repetition, deeper nesting, encryption, INT96 and
+    fixed-length types, or a page CRC that does not match;
+  - an array whose columns, types or nullability are not those OMF gives it, or whose length is not the index's
+    `item_count`; a member the index names that is absent;
+  - the vendor reader's checks: category indices below the names count, segment and triangle indices below the
+    vertex count, sizes above zero, boundaries that do not decrease, sub-block parents inside the grid, corners
+    with `min < max <= count` (free-form in [0, 1]), and sub-block sizes of the mode, octree ones aligned;
+  - the vendor validator's errors: finite origins and sizes, unit axes, orthogonal axes, counts above zero, octree
+    counts that are powers of two, an attribute at a location its element does not have, a length other than the
+    location's, and a projected texture anywhere but `Projected`.
+  The vendor validator compares u with v three times (omf-rust 64d3057); this reader checks all three pairs, and
+  refuses a NaN size or boundary, which the vendor lets through. Its warnings are not checked: two elements may
+  share a name. Images are checked by signature only, and members the index never names are not read.
 - XML text decodes the five named entities and `&#10;`, `&#13;`, `&#160;`, each once (`&amp;` last); no DTD or
   entity declaration is read, so nothing expands.
 - `numtok` keeps malformed grouping, unsupported attached notation, decimal overflow and ambiguous standalone
@@ -239,6 +278,29 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   one time in twenty and reach display refusals, and the deflated seed's inflater refusals meet the same floor, so
   the search is not vacuous. This is a bounded random search, not a proof and not a coverage-guided fuzzer. The
   coverage-guided targets for the same code are `fuzz/fuzz_targets/xlsx.rs` and `numfmt.rs` (`scripts/fuzz.sh`).
+- `PO-IO-6` (BD-194): `omf::tests` builds OMF files member by member, with Parquet from the crate's own test
+  writer (`omf::parquet::testkit`, v1 and v2 pages, GZIP and none, split pages and row groups, both level
+  encodings). One file holding every geometry and attribute type reads back equal to the values written, and each
+  refusal of §5 is reached by a file with that one defect. The test writer shares its author with the reader, so
+  `tests/omf_samples.rs` reads the files omf-rust publishes (tree 64d3057, MIT), written by parquet-rs. The files
+  are not committed; it is `#[ignore]`d and reads them from `FMINE_OMF_DIR`. On 2026-11-03 its four tests passed:
+  - `one_of_everything.omf`: every element, attribute, value and null equals the vendor test's constants, and
+    omf-python's copy of it equals it element for element;
+  - pyramid and bunny: the vendor examples' values, and the bunny's 69,634 vertices and 69,630 triangles read;
+  - the octree bunny: each of 5,123 sub-blocks gives its source CSV's centroid within 9.1e-13 m, and its size and
+    category exactly; the 1,774 body centroids, computed in the vendor's order of operations, equal the vendor
+    reader's output bit for bit;
+  - omf-python's test files: nullable numbers, dates, date-times, categories, booleans and colors, continuous
+    colormap ranges, element metadata and a duplicate name read as generated; `missing_parquet` and
+    `array_length_mismatch` are refused, as the vendor refuses them.
+  Two bugs planted in turn (nulls inverted, octree alignment unchecked) each failed the unit tests, and the first
+  failed three of the four sample tests; both were reverted. `mutated_files_are_read_or_refused_and_never_panic`
+  edits one member of the every-kind file at a time, the index as JSON text and other members as bytes, rezips it
+  with true CRC-32s and reads it: 1,000 mutants in each of three page forms (GZIP v2, and v1 and v2 without a
+  codec). None panicked and every refusal was `FMINE-REF-506`; the forms read 36, 40 and 55 and refused the rest,
+  over a floor of one in fifty each way. Its floor was one in twenty until the GZIP form read 50 of 1,500, because
+  the gzip CRC-32 refuses most edits to a page. It is a bounded random search, not a proof, and there is no OMF fuzz
+  target. Not checked: files from writers other than omf-rust.
 - FACT (BD-347, `reliance::tests`): exact artifact issuance and current-use retrieval preserve bytes and
   refuse after withdrawal; invalid digest, key, time, stale or absent trust, and an existing destination
   cannot create an authorized output. A failed final append retains the unissued artifact and poisons its
@@ -273,16 +335,24 @@ would permit a concurrent withdrawal race.
 
 ## 8. Gates & Kill Criteria (`GATE-*` / `KILL-*`)
 - `GATE-BULL-01` (part 1, extraction fidelity)
+- `KILL-6` (OMF purity, plan §32.2) has not fired. It fires if omf-rust needs banned dependencies and the Parquet
+  subset passes 8,000 lines. The first holds (E858). Measured at BD-194, `omf/parquet.rs` without its test writer
+  and tests is 923 lines (838 of code); the whole reader, `omf.rs` and `omf/` without tests, is 2,877.
 
 ## 9. Lifted Code & Foundation Dependencies
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim` (V to S0), and `fmine-runtime` (V to S1, explicit clock
   and owned bounded subprocesses).
 - `fmine-calib` supplies the shared `ProofTimes` and UTC parser (V to K0); timestamp verification invokes
   OpenSSL 1.1 or 3.x on `PATH` with Unix `/dev/stdin` and `/dev/null`. Unsupported installations refuse.
+- No omf-rust code is lifted. Its schemas, read checks and validator (tree 64d3057) are the specification the
+  `omf` reader follows.
 
 ## 10. Non-Goals & Scope Boundary
 Reads cells and adapts the reliance model to local files; does not interpret tables (`fmine-public`) or compute
 metrics (`fmine-metrics`).
+The OMF reader reads; it does not write OMF, decode images, transform geometry into world coordinates, or turn a
+block model into the engines' types. It reads OMF 2 only: OMF 1 files and Parquet from other writers outside the
+subset are refused, not converted.
 The bounded HTML reader is not a browser or DOM repair engine. It does not execute scripts, resolve CSS,
 interpret inline XBRL transformations, or establish issuer, metric, period or ownership semantics. Its source
 anchor records the inspected bytes and location, not the financial meaning, publisher authenticity or independent

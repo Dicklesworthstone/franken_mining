@@ -7115,7 +7115,8 @@ Production code is either lifted (with provenance and a licence check) or reimpl
 ✖ **KILL-6 (OMF purity).** If omf-rust needs banned dependencies *and* the Parquet subset exceeds 8k LOC: exchange
 OMF through lab-oracle conversion to CSV/DXF in the interim, and say so. Evaluated 2026-11-01 (BD-190, E858): the
 first condition holds, and the second is estimated not to (2,000–3,000 lines of code; INFERENCE), so KILL-6 has not
-fired. BD-194 re-checks it against its measured line count.
+fired. Measured at BD-194 (2026-11-03), the Parquet subset is 923 lines without its tests and the whole OMF reader
+2,877, so KILL-6 still has not fired (`fmine-io` CONTRACT §8).
 
 ### 32.3 Coexistence with Avathon
 

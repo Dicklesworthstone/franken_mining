@@ -7,6 +7,8 @@
 //! the vendor's own, from its `tests/integration_tests.rs`, `examples/*/main.rs` and
 //! `omf-python/scripts/generate_test_data.rs`.
 
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
 use std::path::PathBuf;
 
 use fmine_io::omf::{
@@ -523,7 +525,7 @@ fn one_of_everything_reads_as_the_vendor_built_it() {
             .collect::<Vec<_>>(),
         element_names
     );
-    assert_eq!(q.elements[..9], p.elements[..9]);
+    assert_eq!(q.elements, p.elements);
 }
 
 #[test]
