@@ -320,7 +320,8 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   Not checked: files from writers other than omf-rust.
 - `PO-IO-7` (bd-aqfl): `omf::tests::a_wireframe_against_a_block_model_gives_each_parent_block_its_proportion`
   writes a box Surface as an element origin plus vertices from zero, inside a composite, and 3 × 1 × 2 unit
-  blocks that the box covers in quarters. At depths 0 to 3 each block's exact proportion lies within its bounds;
+  blocks that the box covers in quarters. The surface's volume enclosure holds the box's volume. At depths 0 to 3
+  each block's exact proportion lies within its bounds;
   from depth 2 the bounds equal it, and the sure volume is the box's 1.96875. Depth 99 is refused. With the element
   origin dropped (planted, reverted) the first block's 0.375 fell outside its bounds [0, 0].
   `proportions_refuse_missing_ambiguous_and_unsuitable_elements` reaches each refusal of §5 on the every-kind file.

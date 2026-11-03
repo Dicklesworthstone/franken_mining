@@ -1680,6 +1680,9 @@ fn a_wireframe_against_a_block_model_gives_each_parent_block_its_proportion() {
         "",
     );
     let p = read(&b.file(&[design, model].join(","))).unwrap();
+    let volume = surface_mesh(&p, "pit shell").unwrap().volume();
+    let exact = 1.75 * 0.75 * 1.5;
+    assert!(volume.lo() <= exact && exact <= volume.hi(), "{volume:?}");
 
     let fx = [0.5, 1.0, 0.25];
     let fz = [1.0, 0.5];
