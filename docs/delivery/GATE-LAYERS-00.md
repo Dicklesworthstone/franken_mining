@@ -1,6 +1,8 @@
 # GATE-LAYERS-00: every xtask check wired from commit 1 (BD-015)
 
-- **Status:** PASS. It was measured locally at `2f87dfd` on 2026-11-01, and in CI at `eddeb7d`, which contains
+Verdict: PASS (measured locally at `2f87dfd` on 2026-11-01 and in CI at `eddeb7d`, run 41563917513; self-verified only)
+
+- **Measured:** locally at `2f87dfd` on 2026-11-01, and in CI at `eddeb7d`, which contains
   `2f87dfd` and the L-6 check of `6b105e3`. The CI run is 41563917513 of 2026-11-03 02:05Z. Its step "Run
   GATE-LAYERS-00 (xtask check-all)" passed in all four matrix jobs (ubuntu-latest and macos-15, dev and release),
   and lint (clippy, warnings denied) and deny passed too. Run 41563909550, on the same head, also passed.
