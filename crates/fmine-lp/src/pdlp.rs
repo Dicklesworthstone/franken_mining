@@ -22,15 +22,20 @@
 //! Every returned solution carries a [`certified_bound`]: the highest of its final multipliers', of the
 //! multipliers with the best dual objective seen at any evaluation, and of each of those moved for open columns
 //! (bd-tcp4), with the multipliers it came from. So the optimum is bounded even when the iteration limit or the
-//! observer stops the run. There is no presolve,
-//! feasibility polishing or infeasibility detection: an infeasible or unbounded problem runs to the iteration
-//! limit.
+//! observer stops the run.
+//!
+//! At each evaluation, three candidate Farkas rays are tried: the last step's change in `y`, its change since the
+//! last restart, and `y` itself (bd-gj80). One that [`certified_infeasibility`] certifies proves that no `x` meets
+//! the rows and column bounds, and stops the run with [`PdlpStatus::Infeasible`]. A candidate is certified only
+//! when a plain-arithmetic value of it is positive, and after a failed attempt the next waits 1, 2, 4, … up to 64
+//! evaluations. There is no presolve, feasibility polishing or unboundedness detection: an unbounded problem, and
+//! an infeasible one that no candidate proves, run to the iteration limit.
 
 mod bound;
 mod engine;
 mod mat;
 
-pub use bound::{DualBound, certified_bound};
+pub use bound::{DualBound, certified_bound, certified_infeasibility};
 
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_numerics::sparse::Csr;
@@ -201,6 +206,8 @@ pub enum PdlpStatus {
     IterationLimit,
     /// The observer asked to stop.
     Stopped,
+    /// Row multipliers proved that no `x` meets the rows and column bounds: [`PdlpSolution::infeasibility_ray`].
+    Infeasible,
 }
 
 /// Where the run stands at an evaluation, every 64 steps; the measures are those of the better of the current and
@@ -230,6 +237,7 @@ pub struct PdlpSolution {
     last: Progress,
     bound: Option<DualBound>,
     bound_y: Vec<f64>,
+    ray: Option<Vec<f64>>,
 }
 
 impl PdlpSolution {
@@ -260,7 +268,8 @@ impl PdlpSolution {
     /// `y`; those with the highest dual objective seen at any evaluation; and each of the two moved so that a
     /// column open on the side its reduced cost points to, with no bound there that the rows imply, gets a
     /// reduced cost of the right sign (bd-tcp4). The dual objective is not monotone along the run, so the
-    /// best-seen can be the tighter. On a boxed problem nothing is moved. A tie goes to the earlier.
+    /// best-seen can be the tighter. On a boxed problem nothing is moved. A tie goes to the earlier. With
+    /// [`PdlpStatus::Infeasible`] there is no feasible point, so the bound holds but says nothing.
     #[must_use]
     pub fn bound(&self) -> Option<DualBound> {
         self.bound
@@ -271,6 +280,13 @@ impl PdlpSolution {
     #[must_use]
     pub fn bound_multipliers(&self) -> &[f64] {
         &self.bound_y
+    }
+
+    /// With [`PdlpStatus::Infeasible`], the row multipliers that prove no `x` meets the rows and column bounds:
+    /// `certified_infeasibility(problem, ray)` certifies them again. `None` with any other status.
+    #[must_use]
+    pub fn infeasibility_ray(&self) -> Option<&[f64]> {
+        self.ray.as_deref()
     }
 }
 
@@ -301,7 +317,7 @@ pub fn solve_observed(
     if options.max_iterations == 0 {
         return Err(refuse("max_iterations is 0"));
     }
-    let (status, x, y, best_y, last) = engine::run_pdlp(problem, options, observer)?;
+    let (status, x, y, best_y, last, ray) = engine::run_pdlp(problem, options, observer)?;
     // The final and the best-seen multipliers, then each moved for open columns (bd-tcp4): the highest certified
     // bound wins, the earlier on a tie. On a boxed problem nothing is moved.
     let mut candidates = vec![y.clone(), best_y];
@@ -329,6 +345,7 @@ pub fn solve_observed(
         last,
         bound,
         bound_y,
+        ray,
     })
 }
 
@@ -351,6 +368,41 @@ mod tests {
             max_iterations: 200_000,
             threads: 1,
         }
+    }
+
+    /// With x, y in [0, 1], x − y = 1 leaves only (1, 0), so x + y ≥ 1.5 cannot hold: the run stops with a ray that
+    /// certifies. With x + y ≥ 0.5 instead, (1, 0) is the one feasible point, and the run ends there with no ray.
+    #[test]
+    fn an_infeasible_lp_is_proved_infeasible() {
+        let a = csr(2, 2, &[(0, 0, 1.0), (0, 1, 1.0), (1, 0, 1.0), (1, 1, -1.0)]);
+        let lp = |need: f64| {
+            LpProblem::new(
+                vec![1.0, 2.0],
+                &a,
+                vec![need, 1.0],
+                vec![f64::INFINITY, 1.0],
+                vec![0.0; 2],
+                vec![1.0; 2],
+            )
+            .unwrap()
+        };
+        let p = lp(1.5);
+        let s = solve(&p, &opts()).unwrap();
+        assert_eq!(s.status(), PdlpStatus::Infeasible, "{:?}", s.progress());
+        let ray = s.infeasibility_ray().unwrap();
+        let proof = certified_infeasibility(&p, ray).unwrap().unwrap();
+        assert!(proof.value() > 0.0, "{proof:?}");
+        assert!(s.progress().iterations < 10_000, "{:?}", s.progress());
+
+        let p = lp(0.5);
+        let s = solve(&p, &opts()).unwrap();
+        assert_eq!(s.status(), PdlpStatus::Optimal);
+        assert_eq!(s.infeasibility_ray(), None);
+        assert!(
+            (s.progress().primal_objective - 1.0).abs() < 1e-6,
+            "{:?}",
+            s.progress()
+        );
     }
 
     /// max x + y s.t. x + 2y ≤ 4, 3x + y ≤ 6, 0 ≤ x, y ≤ 10: the vertex (8/5, 6/5), worth 14/5. The upper bounds

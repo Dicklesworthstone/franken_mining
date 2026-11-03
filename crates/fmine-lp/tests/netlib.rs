@@ -11,6 +11,10 @@
 //! Every instance must read and write back to the same text, and any certified bound must lie at or below
 //! netlib's optimum. Those not in [`KNOWN_GAPS`] must also certify within [`PINNED_GAP`] of it.
 //!
+//! bd-gj80: `netlib_infeasible_lps_are_proved_infeasible` runs, from the same directory, the [`INFEASIBLE`] LPs:
+//! the 8 of netlib's `lp/infeas` that HiGHS carries. Each must read and write back the same way and never be
+//! reported optimal. Those not in [`INFEASIBLE_UNPROVED`] must end with a Farkas ray that certifies.
+//!
 //! The optima are netlib's (`lp/data/readme`, "Optimal Value", computed with MINOS 5.3), quoted to 11 significant
 //! figures, so each comparison allows half a unit in the last figure.
 
@@ -21,7 +25,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use fmine_lp::mps;
-use fmine_lp::pdlp::{PdlpOptions, certified_bound, solve};
+use fmine_lp::pdlp::{PdlpOptions, PdlpStatus, certified_bound, certified_infeasibility, solve};
 
 /// netlib's published optimal values, by file name.
 const PUBLISHED: &[(&str, f64)] = &[
@@ -73,6 +77,17 @@ const KNOWN_GAPS: &[&str] = &[
     "share2b", "stair",
 ];
 
+/// netlib's infeasible LPs (`lp/infeas`) that HiGHS's `check/instances` carries.
+const INFEASIBLE: &[&str] = &[
+    "bgetam", "box1", "ex72a", "forest6", "galenet", "klein1", "refinery", "woodinfe",
+];
+
+/// Infeasible instances that no Farkas ray proved within the step limit on 2026-11-03. Every column of BOX1, EX72A
+/// and KLEIN1 is open above, as are 75 of WOODINFE's 89. A ray certifies only when each open column with no top the
+/// rows imply has `−aⱼ·y` of the right sign exactly, and none of the candidates reached that. bd-tcp4's multiplier
+/// shift, tried on the rays, proved none of them either. Each must still not be reported optimal.
+const INFEASIBLE_UNPROVED: &[&str] = &["box1", "ex72a", "klein1", "woodinfe"];
+
 /// Every other instance must certify within this of its optimum. Observed 2026-11-03: the 24 lay within 2.5e-7
 /// (ETAMACRO 2.2e-7, SCAGR7 2.4e-7); ADLITTLE and E226 were 0.67 and 4.6 off before the multiplier shift.
 const PINNED_GAP: f64 = 1e-6;
@@ -87,14 +102,13 @@ fn json<T: std::fmt::Display>(v: Option<T>) -> String {
     v.map_or_else(|| "null".to_string(), |v| v.to_string())
 }
 
-/// One instance's run: `Err` names what failed.
-fn run(dir: &Path, name: &str, published: f64) -> Result<(), String> {
+/// The instance read, checked to write back to the same text, and checked to be a minimisation.
+fn read_checked(dir: &Path, name: &str) -> Result<mps::MpsModel, String> {
     let text = std::fs::read_to_string(dir.join(format!("{name}.mps")))
         .map_err(|e| format!("open: {e}"))?;
     let m = mps::read(&text).map_err(|e| format!("read: {}", e.what))?;
-    let p = &m.problem;
     // Written and read back, the problem writes the same text again: nothing was lost on the way.
-    let written = mps::write("netlib", p).map_err(|e| format!("write: {}", e.what))?;
+    let written = mps::write("netlib", &m.problem).map_err(|e| format!("write: {}", e.what))?;
     let again = mps::read(&written).map_err(|e| format!("read back: {}", e.what))?;
     if mps::write("netlib", &again.problem).map_err(|e| format!("write again: {}", e.what))?
         != written
@@ -104,17 +118,43 @@ fn run(dir: &Path, name: &str, published: f64) -> Result<(), String> {
     if m.maximise {
         return Err("netlib's LPs are minimisations".into());
     }
+    Ok(m)
+}
 
+fn options() -> PdlpOptions {
+    PdlpOptions {
+        tolerance: 1e-9,
+        max_iterations: 1_000_000,
+        threads: 1,
+    }
+}
+
+/// The instances of `table` that `FMINE_NETLIB_INSTANCES` lists, or all of them when it is not set. A listed name
+/// in neither table fails the test.
+fn chosen(table: &[&str]) -> Vec<String> {
+    match std::env::var("FMINE_NETLIB_INSTANCES") {
+        Ok(list) => list
+            .split(',')
+            .map(str::trim)
+            .inspect(|n| {
+                assert!(
+                    PUBLISHED.iter().any(|(p, _)| p == n) || INFEASIBLE.contains(n),
+                    "{n} is not a netlib instance listed here"
+                );
+            })
+            .filter(|n| table.contains(n))
+            .map(str::to_string)
+            .collect(),
+        Err(_) => table.iter().map(|n| n.to_string()).collect(),
+    }
+}
+
+/// One instance's run: `Err` names what failed.
+fn run(dir: &Path, name: &str, published: f64) -> Result<(), String> {
+    let m = read_checked(dir, name)?;
+    let p = &m.problem;
     let t = Instant::now();
-    let s = solve(
-        p,
-        &PdlpOptions {
-            tolerance: 1e-9,
-            max_iterations: 1_000_000,
-            threads: 1,
-        },
-    )
-    .map_err(|e| format!("solve: {}", e.what))?;
+    let s = solve(p, &options()).map_err(|e| format!("solve: {}", e.what))?;
     let seconds = t.elapsed().as_secs_f64();
     let bound = s.bound();
     let value = bound.map(|b| b.value());
@@ -170,10 +210,8 @@ fn run(dir: &Path, name: &str, published: f64) -> Result<(), String> {
 fn netlib_lps_certify_at_or_below_their_published_optima() {
     let dir =
         std::env::var("FMINE_NETLIB_DIR").expect("FMINE_NETLIB_DIR names the netlib MPS directory");
-    let names: Vec<String> = match std::env::var("FMINE_NETLIB_INSTANCES") {
-        Ok(list) => list.split(',').map(|s| s.trim().to_string()).collect(),
-        Err(_) => PUBLISHED.iter().map(|(n, _)| n.to_string()).collect(),
-    };
+    let table: Vec<&str> = PUBLISHED.iter().map(|(n, _)| *n).collect();
+    let names = chosen(&table);
     let mut failures = Vec::new();
     for name in &names {
         let published = PUBLISHED
@@ -183,6 +221,63 @@ fn netlib_lps_certify_at_or_below_their_published_optima() {
             .1;
         if let Err(why) = run(Path::new(&dir), name, published) {
             println!(r#"{{"test":"netlib","instance":"{name}","failed":{why:?}}}"#);
+            failures.push(format!("{name}: {why}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {}: {failures:#?}",
+        failures.len(),
+        names.len()
+    );
+}
+
+/// One infeasible instance's run: `Err` names what failed.
+fn run_infeasible(dir: &Path, name: &str) -> Result<(), String> {
+    let m = read_checked(dir, name)?;
+    let p = &m.problem;
+    let t = Instant::now();
+    let s = solve(p, &options()).map_err(|e| format!("solve: {}", e.what))?;
+    let seconds = t.elapsed().as_secs_f64();
+    let proof = s
+        .infeasibility_ray()
+        .map(|ray| certified_infeasibility(p, ray).unwrap());
+    let margin = proof.flatten().map(|b| b.value());
+    println!(
+        r#"{{"test":"netlib_infeasible","instance":"{name}","rows":{},"cols":{},"nnz":{},"status":"{:?}","iterations":{},"restarts":{},"seconds":{seconds:.3},"margin":{},"implied_columns":{},"repaired_rows":{},"relative_primal_residual":{:e}}}"#,
+        p.rows(),
+        p.cols(),
+        p.nnz(),
+        s.status(),
+        s.progress().iterations,
+        s.progress().restarts,
+        json(margin),
+        json(proof.flatten().map(|b| b.implied_columns())),
+        json(proof.flatten().map(|b| b.repaired_rows())),
+        s.progress().relative_primal_residual,
+    );
+    if s.status() == PdlpStatus::Optimal {
+        return Err("reported optimal".into());
+    }
+    if proof.is_some() && margin.is_none() {
+        return Err("the returned ray does not certify".into());
+    }
+    if margin.is_none() && !INFEASIBLE_UNPROVED.contains(&name) {
+        return Err(format!("not proved infeasible: {:?}", s.status()));
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "needs netlib's MPS files (FMINE_NETLIB_DIR); release build"]
+fn netlib_infeasible_lps_are_proved_infeasible() {
+    let dir =
+        std::env::var("FMINE_NETLIB_DIR").expect("FMINE_NETLIB_DIR names the netlib MPS directory");
+    let names = chosen(INFEASIBLE);
+    let mut failures = Vec::new();
+    for name in &names {
+        if let Err(why) = run_infeasible(Path::new(&dir), name) {
+            println!(r#"{{"test":"netlib_infeasible","instance":"{name}","failed":{why:?}}}"#);
             failures.push(format!("{name}: {why}"));
         }
     }

@@ -4,8 +4,8 @@
 
 mod common;
 
-use common::{Dense, Rng, random_closure, random_cpit, random_dense};
-use fmine_lp::pdlp::{PdlpOptions, PdlpStatus, certified_bound, solve};
+use common::{Dense, Rng, random_closure, random_cpit, random_dense, random_integer_lp};
+use fmine_lp::pdlp::{PdlpOptions, PdlpStatus, certified_bound, certified_infeasibility, solve};
 
 fn tight() -> PdlpOptions {
     PdlpOptions {
@@ -278,8 +278,124 @@ fn infeasible_problems_never_report_optimal() {
         max_iterations: 20_000,
         threads: 1,
     };
-    let s = solve(&d.problem(), &o).unwrap();
-    assert_eq!(s.status(), PdlpStatus::IterationLimit);
+    let p = d.problem();
+    let s = solve(&p, &o).unwrap();
+    // Before bd-gj80 this ran to the iteration limit; now a Farkas ray proves it.
+    assert_eq!(s.status(), PdlpStatus::Infeasible, "{:?}", s.progress());
+    assert!(
+        certified_infeasibility(&p, s.infeasibility_ray().unwrap())
+            .unwrap()
+            .is_some()
+    );
+}
+
+/// No multipliers prove infeasible an LP that has a feasible point (bd-gj80). Each LP here has an integer point
+/// that meets every bound exactly in `f64`, so a certificate would be a false proof. The multipliers tried are the
+/// solver's final and bound multipliers, which would certify the optimum if the costs were not set aside, and
+/// random ones at five scales.
+#[test]
+fn farkas_rays_never_certify_a_feasible_lp() {
+    let mut rng = Rng(0x5eed_0007);
+    let o = PdlpOptions {
+        tolerance: 1e-9,
+        max_iterations: 20_000,
+        threads: 1,
+    };
+    let mut tried = 0;
+    for case in 0..400 {
+        let d = random_integer_lp(&mut rng, case % 2 == 1, false);
+        let p = d.problem();
+        let s = solve(&p, &o).unwrap();
+        assert_ne!(s.status(), PdlpStatus::Infeasible, "case {case}: {d:?}");
+        let mut ys = vec![s.y().to_vec(), s.bound_multipliers().to_vec()];
+        for k in 0..20 {
+            let scale = [1e-6, 1e-2, 1.0, 1e2, 1e6][k % 5];
+            ys.push(
+                (0..p.rows())
+                    .map(|_| rng.uniform(-1.0, 1.0) * scale)
+                    .collect(),
+            );
+        }
+        for y in &ys {
+            tried += 1;
+            assert_eq!(
+                certified_infeasibility(&p, y).unwrap(),
+                None,
+                "case {case}: y = {y:?}, {d:?}"
+            );
+        }
+    }
+    println!("{{\"suite\":\"fmine-lp/pdlp\",\"case\":\"farkas_validity\",\"tried\":{tried}}}");
+}
+
+/// LPs that integer multipliers prove infeasible, two or more rows at a time, and in which vertex enumeration finds
+/// no feasible vertex, end with [`PdlpStatus::Infeasible`] and a ray that certifies again (bd-gj80).
+#[test]
+fn infeasible_lps_end_with_a_certified_ray() {
+    let mut rng = Rng(0x5eed_0008);
+    let (mut steps, mut most) = (0u64, 0u64);
+    for case in 0..300 {
+        let d = random_integer_lp(&mut rng, false, true);
+        assert_eq!(
+            d.vertex_optimum(),
+            None,
+            "case {case}: a feasible vertex, {d:?}"
+        );
+        let p = d.problem();
+        let s = solve(&p, &tight()).unwrap();
+        assert_eq!(
+            s.status(),
+            PdlpStatus::Infeasible,
+            "case {case}: {:?}, {d:?}",
+            s.progress()
+        );
+        let ray = s.infeasibility_ray().unwrap();
+        assert!(
+            certified_infeasibility(&p, ray)
+                .unwrap()
+                .is_some_and(|b| b.value() > 0.0),
+            "case {case}"
+        );
+        steps += s.progress().iterations;
+        most = most.max(s.progress().iterations);
+    }
+    println!(
+        "{{\"suite\":\"fmine-lp/pdlp\",\"case\":\"farkas_detection\",\"steps\":{steps},\"most_steps\":{most}}}"
+    );
+}
+
+/// As [`infeasible_lps_end_with_a_certified_ray`], with some columns open above (those whose combined row has
+/// `gⱼ ≤ 0`, so the integer proof still holds). An open column with no top the rows imply needs `−aⱼ·y` of the right
+/// sign exactly, which a ray from the iterates may miss.
+#[test]
+fn infeasible_lps_with_open_columns_end_with_a_certified_ray() {
+    let mut rng = Rng(0x5eed_0009);
+    let o = PdlpOptions {
+        tolerance: 1e-9,
+        max_iterations: 50_000,
+        threads: 1,
+    };
+    let (mut proved, mut open, mut steps) = (0, 0, 0u64);
+    for case in 0..300 {
+        let d = random_integer_lp(&mut rng, true, true);
+        open += d.u.iter().filter(|v| v.is_infinite()).count();
+        let p = d.problem();
+        let s = solve(&p, &o).unwrap();
+        assert_ne!(s.status(), PdlpStatus::Optimal, "case {case}: {d:?}");
+        if s.status() == PdlpStatus::Infeasible {
+            assert!(
+                certified_infeasibility(&p, s.infeasibility_ray().unwrap())
+                    .unwrap()
+                    .is_some(),
+                "case {case}"
+            );
+            proved += 1;
+            steps += s.progress().iterations;
+        }
+    }
+    println!(
+        "{{\"suite\":\"fmine-lp/pdlp\",\"case\":\"farkas_open\",\"proved\":{proved},\"of\":300,\"open_columns\":{open},\"steps\":{steps}}}"
+    );
 }
 
 fn transport(seed: u64, sources: usize, sinks: usize) -> Dense {

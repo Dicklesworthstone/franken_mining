@@ -25,6 +25,10 @@
 //!   implied bound therefore certifies only when its reduced cost is exactly zero.
 //! - [`shift_for_open_columns`] moves multipliers so that such a column's reduced cost gets the right sign, by a
 //!   margin. It is a heuristic for the solver to try: whatever it returns is certified like any other `y`.
+//! - Infeasibility (a Farkas ray): with every cost taken as zero, the same sum bounds `0·x` at every `x` that meets
+//!   the rows and column bounds. If it is positive, no such `x` exists ([`certified_infeasibility`]). The implied
+//!   bounds are used here too: each holds at every such `x`, so the argument stands. If none exists, it needs
+//!   nothing from them.
 //!
 //! The bound is for the problem as stored in `f64`. How the caller rounded its own data into `f64` is not bounded
 //! here.
@@ -362,6 +366,38 @@ pub(crate) fn shift_for_open_columns(problem: &LpProblem, y: &[f64]) -> Option<V
 /// # Errors
 /// `FMINE-REF-207` when `y` is not one finite value per row.
 pub fn certified_bound(problem: &LpProblem, y: &[f64]) -> Result<Option<DualBound>, Refusal> {
+    check_multipliers(problem, y)?;
+    Ok(certify(problem, false, y, &mut None))
+}
+
+/// Row multipliers `y` as a proof that no `x` meets the rows and column bounds (a Farkas ray): the bound that
+/// [`certified_bound`] would give them with every cost taken as zero, when it is positive. That bound holds for
+/// `0·x` at every `x` meeting the rows and column bounds, and no such `x` can have `0·x` above zero. `None` when
+/// the bound is not positive, or not finite.
+///
+/// # Errors
+/// `FMINE-REF-207` when `y` is not one finite value per row.
+pub fn certified_infeasibility(
+    problem: &LpProblem,
+    y: &[f64],
+) -> Result<Option<DualBound>, Refusal> {
+    check_multipliers(problem, y)?;
+    Ok(infeasibility(problem, y, &mut None))
+}
+
+/// Implied column bounds, derived on first use and kept for the next certification of the same problem.
+pub(crate) type Implied = Option<(Vec<f64>, Vec<f64>)>;
+
+/// [`certified_infeasibility`] for multipliers already checked, sharing `implied`.
+pub(crate) fn infeasibility(
+    problem: &LpProblem,
+    y: &[f64],
+    implied: &mut Implied,
+) -> Option<DualBound> {
+    certify(problem, true, y, implied).filter(|b| b.value > 0.0)
+}
+
+fn check_multipliers(problem: &LpProblem, y: &[f64]) -> Result<(), Refusal> {
     if y.len() != problem.rows() {
         return Err(refuse(format!(
             "{} multipliers for {} rows",
@@ -372,6 +408,16 @@ pub fn certified_bound(problem: &LpProblem, y: &[f64]) -> Result<Option<DualBoun
     if let Some(i) = y.iter().position(|v| !v.is_finite()) {
         return Err(refuse(format!("multiplier {i} is {}", y[i])));
     }
+    Ok(())
+}
+
+/// The bound from finite multipliers `y`, one per row, with every cost taken as zero when `zero_cost` is set.
+fn certify(
+    problem: &LpProblem,
+    zero_cost: bool,
+    y: &[f64],
+    implied: &mut Implied,
+) -> Option<DualBound> {
     let mut repaired_rows = 0;
     let mut ys = Vec::with_capacity(y.len());
     let mut total = 0.0f64;
@@ -391,18 +437,18 @@ pub fn certified_bound(problem: &LpProblem, y: &[f64]) -> Result<Option<DualBoun
             ys.push(0.0);
         }
     }
-    let mut implied = None;
     let mut implied_columns = 0;
     for j in 0..problem.cols() {
         let (rows, vals) = problem.at.row(j);
-        let (mut rlo, mut rhi) = (problem.c[j], problem.c[j]);
+        let cj = if zero_cost { 0.0 } else { problem.c[j] };
+        let (mut rlo, mut rhi) = (cj, cj);
         for (&i, &a) in rows.iter().zip(vals) {
             let yi = ys[i as usize];
             rlo = add_lo(rlo, -mul_hi(a, yi));
             rhi = add_hi(rhi, -mul_lo(a, yi));
         }
         if !(rlo.is_finite() && rhi.is_finite()) {
-            return Ok(None);
+            return None;
         }
         let (mut l, mut u) = (problem.col_lo[j], problem.col_hi[j]);
         let (open_lo, open_hi) = (
@@ -418,7 +464,7 @@ pub fn certified_bound(problem: &LpProblem, y: &[f64]) -> Result<Option<DualBoun
                 u = iu[j];
             }
             if (l == f64::NEG_INFINITY && rhi > 0.0) || (u == f64::INFINITY && rlo < 0.0) {
-                return Ok(None);
+                return None;
             }
             implied_columns += 1;
         }
@@ -435,13 +481,13 @@ pub fn certified_bound(problem: &LpProblem, y: &[f64]) -> Result<Option<DualBoun
         total = add_lo(total, term);
     }
     if total.is_nan() || total == f64::NEG_INFINITY {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(DualBound {
+    Some(DualBound {
         value: total,
         repaired_rows,
         implied_columns,
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -544,5 +590,65 @@ mod tests {
             &[inf, inf],
         );
         assert_eq!(implied_bounds(&p), (vec![0.0, 0.0], vec![7.0, inf]));
+    }
+
+    #[test]
+    fn farkas_rays_prove_infeasibility_only_where_it_holds() {
+        let inf = f64::INFINITY;
+        let proof = |p: &LpProblem, y: &[f64]| certified_infeasibility(p, y).unwrap();
+        // x0 + x1 <= −1 over x >= 0: the multiplier −1 proves it by 1, and −3 by 3. The wrong sign is repaired to
+        // zero, which proves nothing.
+        let p = problem(
+            &[(&[(0, 1.0), (1, 1.0)], -inf, -1.0)],
+            &[0.0, 0.0],
+            &[inf, inf],
+        );
+        assert_eq!(proof(&p, &[-1.0]).map(|b| b.value()), Some(1.0));
+        assert_eq!(proof(&p, &[-3.0]).map(|b| b.value()), Some(3.0));
+        assert_eq!(proof(&p, &[1.0]), None);
+        // x0 + x1 >= 3 and x0 + x1 <= 2 over the box [0, 5]: only the two rows together prove it.
+        let p = problem(
+            &[
+                (&[(0, 1.0), (1, 1.0)], 3.0, inf),
+                (&[(0, 1.0), (1, 1.0)], -inf, 2.0),
+            ],
+            &[0.0, 0.0],
+            &[5.0, 5.0],
+        );
+        assert_eq!(proof(&p, &[1.0, -1.0]).map(|b| b.value()), Some(1.0));
+        assert_eq!(proof(&p, &[1.0, 0.0]), None);
+        // A free column certifies when its reduced cost is exactly zero: x0 − x1 in [1, ∞) and (−∞, 0].
+        let p = problem(
+            &[
+                (&[(0, 1.0), (1, -1.0)], 1.0, inf),
+                (&[(0, 1.0), (1, -1.0)], -inf, 0.0),
+            ],
+            &[-inf, 0.0],
+            &[inf, 1.0],
+        );
+        assert_eq!(proof(&p, &[1.0, -1.0]).map(|b| b.value()), Some(1.0));
+        // x0 + x1 <= 4 and x1 >= 5 over x >= 0. At (−1, 2), x1's reduced cost is −1 with no top, so its term uses
+        // the top 4 that the first row implies: 6 − 4 = 2.
+        let rows: [Row; 2] = [(&[(0, 1.0), (1, 1.0)], -inf, 4.0), (&[(1, 1.0)], 5.0, inf)];
+        let p = problem(&rows, &[0.0, 0.0], &[inf, inf]);
+        let b = proof(&p, &[-1.0, 2.0]).unwrap();
+        assert_eq!((b.value(), b.implied_columns()), (2.0, 1));
+        // With x1 >= 3 instead the problem is feasible, and nothing proves otherwise.
+        let p = problem(
+            &[rows[0], (&[(1, 1.0)], 3.0, inf)],
+            &[0.0, 0.0],
+            &[inf, inf],
+        );
+        for y in [
+            [-1.0, 2.0],
+            [-1.0, 1.0],
+            [0.0, 1.0],
+            [-1.0, 0.0],
+            [-1e300, 1e300],
+        ] {
+            assert_eq!(proof(&p, &y), None, "{y:?}");
+        }
+        assert!(certified_infeasibility(&p, &[1.0]).is_err());
+        assert!(certified_infeasibility(&p, &[1.0, f64::NAN]).is_err());
     }
 }

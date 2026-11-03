@@ -23,7 +23,7 @@ The Pushback linear-programming crate. Two slices so far:
   - `max_iterations`, at least 1, default 1,000,000;
   - `threads`, where 0 means the machine's parallelism, at most 16.
 - For `solve_observed`, an observer called at each evaluation (every 64 steps). It returns `false` to stop the run.
-- For `certified_bound(problem, y)`, any row multipliers `y`, one finite value per row.
+- For `certified_bound(problem, y)` and `certified_infeasibility(problem, y)`, any row multipliers `y`, one finite value per row.
 - `mps::read(text)`: free-format MPS text. Its sections are `NAME`, `OBJSENSE` (`MIN` or `MAX`), `ROWS` (`N`, `L`, `G`, `E`), `COLUMNS`, `RHS`, `RANGES` and `BOUNDS` (`UP`, `LO`, `FX`, `FR`, `MI`, `PL`), then `ENDATA`. The module notes give each rule:
   - the first `N` row is the objective; a right-hand side `b` on it is the objective constant `−b`;
   - a range `R` on a row with right-hand side `b`: `G` gives `[b, b + |R|]`, `L` gives `[b − |R|, b]`, and `E` gives `[b, b + R]` or `[b + R, b]` by the sign of `R`;
@@ -32,7 +32,7 @@ The Pushback linear-programming crate. Two slices so far:
 
 ## 3. Outputs
 - `PdlpSolution`:
-  - `status`: `Optimal` (the stopping rule held), `IterationLimit` or `Stopped`;
+  - `status`: `Optimal` (the stopping rule held), `IterationLimit`, `Stopped`, or `Infeasible` (a Farkas ray certified that no `x` meets the rows and column bounds; bd-gj80);
   - `x`, one value per column, always within the column bounds;
   - `y`, one multiplier per row;
   - `progress`, the measures at the returned point;
@@ -40,7 +40,8 @@ The Pushback linear-programming crate. Two slices so far:
     - `y`;
     - those with the highest dual objective seen at any evaluation (the current point and the average, every 64 steps). The dual objective is not monotone along a run, so these can be the tighter;
     - each of the two moved by the shift for open columns (§4, bd-tcp4). On a boxed problem nothing is moved;
-  - `bound_multipliers`, the multipliers `bound` came from: `certified_bound(problem, bound_multipliers)` gives it again.
+  - `bound_multipliers`, the multipliers `bound` came from: `certified_bound(problem, bound_multipliers)` gives it again;
+  - `infeasibility_ray`, with `Infeasible` only: the row multipliers that prove it, which `certified_infeasibility` certifies again. The `bound` of an infeasible problem holds but says nothing.
 - `Progress`: iterations, restarts, primal and dual objectives, relative primal residual, relative dual residual and relative gap (§4), step size and primal weight.
 - `DualBound`:
   - `value`: no feasible `x` has `c·x` below it;
@@ -48,6 +49,7 @@ The Pushback linear-programming crate. Two slices so far:
   - `implied_columns`: the count of columns whose infinite bound met a reduced cost of the wrong sign, and whose term used a bound the rows imply instead (bd-tcp4).
 
   `None` means an infinite column bound met a reduced cost of the wrong sign, and the rows imply no finite bound on that side either, so this `y` bounds nothing.
+- `certified_infeasibility(problem, y)`: the `DualBound` that `certified_bound` would give `y` with every cost taken as zero, when its value is positive, and `None` otherwise. A positive bound on `0·x` over the points meeting the rows and column bounds means there are none.
 - `LpProblem::objective(x)` and `LpProblem::max_violation(x)`: the latter is the largest row or column bound violation, in the problem's units.
 - `mps::MpsModel`: the `NAME` text, the objective row's name, the row and column names in file order, whether the file maximised, the objective constant in the file's sense, and the `LpProblem`. A maximisation is stored as the minimisation of `−c`.
 - `mps::write`'s text: rows `R0`, `R1`, … under the objective `OBJ`, columns `C0`, `C1`, …, numbers in their shortest round-trip form. A row with two different finite bounds is written as `G` or `L` with a range, whichever reads back exactly.
@@ -76,6 +78,11 @@ None is a Claim.
 
     Only such a column is touched, so a boxed problem's bound does not change by a bit.
   - **The shift for open columns** (bd-tcp4) is a heuristic whose output is certified like any `y`. Some columns are open on one side with no bound the rows imply, and have a reduced cost on the wrong side of a margin (10⁻¹¹ of `1 + |cⱼ| + Σᵢ |aᵢⱼ yᵢ|`). For each, one row's multiplier moves to set that reduced cost to the margin. The row is the one of largest `|aᵢⱼ|` whose new multiplier keeps a sign its sides allow, and that pushes no other such column past its margin. A column open on both sides with no implied bound is never moved.
+- **Infeasibility is reported only when proved** (bd-gj80). `certified_infeasibility` is `certified_bound`'s sum with every cost taken as zero, the same dual repair, outward rounding and implied bounds. It bounds `0·x` at every point that meets the rows and column bounds, so a positive value leaves no such point. The implied bounds hold at every such point, so they may be used; if there is none, the argument needs nothing from them.
+  - At each evaluation the engine computes, in plain arithmetic and scaled units, three candidates' value with the infinite sides left out: the last step's change in `y`, its change since the last restart, and `y` itself. It costs `O(rows + columns)` from products already held.
+  - A candidate with a positive value is unscaled and certified. A certified one ends the run with `Infeasible` and is returned.
+  - After a failed certification, the next attempt waits 1, then 2, 4, … up to 64 evaluations. The check runs after the stopping rule, so a run that meets the rule ends `Optimal` first.
+  - Nothing else changes: the 35 feasible netlib LPs took the same steps to the same bounds, bit for bit, as before it.
 - The bound's checks:
   - `certified_bound_is_valid_at_any_multipliers`: 400 random LPs, half with open column tops, each at 25 random `y` from 10⁻⁶ to 10⁶ in scale. No bound exceeds the optimum found by vertex enumeration, and more than 5,000 bounds are finite. 9,573 of 10,000 were finite with implied bounds; with them switched off, 8,726;
   - `implied_column_bounds_hold_at_every_feasible_point`: 300 random LPs with open tops, and each mirrored (`x → −x`) so the tops become bottoms. For each open column `j`, `c = ±eⱼ` and `y = 0` make the certified bound minus the implied bound. That bound may not exceed the LP's own optimum, found by vertex enumeration with open bounds cut at 10⁶, so an LP unbounded in `xⱼ` fails any finite implied bound. 254 implied bounds were checked and 226 columns had none;
@@ -89,7 +96,13 @@ None is a Claim.
   - `closure_lps_match_the_best_closure`: 150 random closure LPs on up to 12 blocks. The value is within 10⁻⁶ relative of the best closure found over all subsets, and the bound is not below it;
   - `two_variable_known_answer`: a hand-solved LP, whose multipliers match the exact duals.
 - `bound_is_the_best_seen_and_reproducible_from_its_multipliers`: 240 small LPs (dense, closure, and CPIT-shaped from `random_cpit`), each run for 12 evaluations. The bound equals `certified_bound` of `bound_multipliers`, is not below that of the final `y`, and is not below the final `y`'s bound of a run cut at any earlier evaluation, less 10⁻⁹ relative for rounding. The solver is deterministic, so a shorter run's final point is one the longer run evaluated. In 18 of the 240 the final `y` alone certified less than an earlier evaluation, and the test requires at least one such case.
-- `infeasible_problems_never_report_optimal`: an infeasible LP runs to the iteration limit.
+- Infeasibility (bd-gj80):
+  - `farkas_rays_prove_infeasibility_only_where_it_holds`: hand cases. One row proves it, two rows prove it only together, a free column certifies with a reduced cost of exactly zero, and an open column certifies through the top a row implies. A feasible variant certifies nothing at five multipliers, up to ±10³⁰⁰;
+  - `farkas_rays_never_certify_a_feasible_lp`: 400 random LPs of integer data, half with open tops. Each has an integer point meeting every bound exactly in `f64`. 8,800 multipliers were tried and none certified: the solver's final and bound multipliers, and random ones at five scales. With the costs not set aside (planted, below) this test fails;
+  - `infeasible_lps_end_with_a_certified_ray`: 300 random boxed LPs made infeasible by integer multipliers on two or more rows, with a margin of at least 1. Vertex enumeration finds no feasible vertex in any. Each run ends `Infeasible` with a ray that certifies again, in at most 128 steps;
+  - `infeasible_lps_with_open_columns_end_with_a_certified_ray`: the same with some columns open above (215 in all), keeping the integer proof. 300 of 300 were proved;
+  - `an_infeasible_lp_is_proved_infeasible` and `infeasible_problems_never_report_optimal`: hand LPs. Before bd-gj80 the latter ran to the iteration limit; now it ends `Infeasible`.
+  - bd-tcp4's multiplier shift, tried on the rays with costs zero, changed nothing on the open-column oracle (300 of 300 either way) or on netlib, so it is not used.
 - `any_thread_count_gives_the_same_bits`: a 72,000-column transport LP (144,000 nonzeros) gives the same iterations, `x` and `y`, bit for bit, at 1, 2 and 5 threads.
 - `spmv_matches_the_numerics_csr_bit_for_bit_at_any_piece_count`: the solver's own `u32` CSR product equals `fmine_numerics::sparse::Csr::spmv`.
 - Planted bugs, each caught and then reverted:
@@ -97,7 +110,8 @@ None is a Claim.
   - taking the wrong row bound in the dual objective (caught by the tiny and closure oracles);
   - `||` for `&&` in the stopping rule (caught by five tests);
   - returning the final `y` as `bound_multipliers` when the best-seen bound wins (caught by the reproducibility check);
-  - never updating the best-seen multipliers. The dense and closure LPs alone did not catch it, because their final multipliers were always the best; the CPIT-shaped ones do (case 11).
+  - never updating the best-seen multipliers. The dense and closure LPs alone did not catch it, because their final multipliers were always the best; the CPIT-shaped ones do (case 11);
+  - certifying infeasibility with the real costs instead of zero (bd-gj80). `farkas_rays_never_certify_a_feasible_lp` caught it on its first case. The hand unit test did not, since its costs are zero.
 - **MPS** (`mps::tests`):
   - `every_section_and_bound_type_reads_as_written`: one file with every section, row type, range sign and bound type, tab-led lines, set names given and left out, and an objective constant reads to a hand-built `LpProblem`, bit for bit;
   - `a_written_problem_reads_back_bit_for_bit`: that problem, and one of tenths, ±10³⁰⁰, a subnormal, signed zeros and a free row, read back from `write` bit for bit. A row whose range reads back exactly as neither `G` nor `L` (`[1, 2⁵³ + 2]`) is refused;
@@ -127,7 +141,7 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input. `m
   - a tolerance outside `(0, 1)`, or `max_iterations` of 0;
   - a step size or iterate that becomes non-finite;
   - a worker thread that panicked.
-- From `certified_bound`: multipliers that are not one finite value per row.
+- From `certified_bound` and `certified_infeasibility`: multipliers that are not one finite value per row.
 - From `objective` and `max_violation`: `x` that is not one value per column.
 
 Tests: `bad_input_is_refused`, one row each. No value is clamped or rescaled to make a problem fit. The solver's scaling is internal, and results are returned unscaled.
@@ -176,6 +190,20 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   - Before bd-tcp4, none of the four had a finite bound at its final `y`.
   - With implied bounds and no shift, ADLITTLE's and E226's final `y` still certified nothing. A column with no implied top had a wrong-signed reduced cost. Their bounds came from the best-seen multipliers, with gaps of 0.67 and 4.6.
   - E226's objective row has the right-hand side −7.113, so its objective has the constant 7.113. netlib's optimum leaves it out: the certified bound on `c·x` alone is within 3.3e-8 of it.
+- **netlib's infeasible LPs** (`netlib_infeasible_lps_are_proved_infeasible`, ignored, run by hand on 2026-11-03 in release, with the same settings). These are the 8 of `lp/infeas` that HiGHS's `check/instances` carries. Each read and wrote back to the same text, and none was reported optimal.
+
+  | LP | Rows | Columns | Nonzeros | Steps | Columns on an implied bound | End |
+  |---|---|---|---|---|---|---|
+  | BGETAM | 400 | 688 | 2,409 | 64 | 123 | proved |
+  | GALENET | 8 | 8 | 16 | 64 | 0 | proved |
+  | REFINERY | 323 | 464 | 1,626 | 3,712 | 100 | proved |
+  | FOREST6 | 66 | 95 | 210 | 4,480 | 34 | proved |
+  | BOX1 | 231 | 261 | 651 | 1,000,000 | | limit |
+  | EX72A | 197 | 215 | 467 | 1,000,000 | | limit |
+  | KLEIN1 | 54 | 54 | 696 | 1,000,000 | | limit |
+  | WOODINFE | 35 | 89 | 140 | 1,000,000 | | limit |
+
+  Every column of BOX1, EX72A and KLEIN1 is open above, as are 75 of WOODINFE's 89. A ray certifies only when every open column with no top the rows imply has `−aⱼ·y` of the right sign exactly. None of the candidates did, and neither did the shift.
 - **Memory**, counted from the code and not measured:
   - about 48 bytes per nonzero, because `A` and `Aᵀ`, as a `u32` index and an `f64` value, are held by `LpProblem` and again, scaled, by the solver;
   - about 14 `f64` vectors of column length and 12 of row length;
@@ -227,12 +255,13 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - External: MineLib's published "CPIT LP upper bound: objective value of the optimal LP relaxation". The source is Espinoza, Goycoolea, Moreno and Newman, MineLib, Annals of Operations Research 2013; the Results page is mirrored at github.com/borelian/minelib and was read 2026-11-01.
   - The LP is built in "by" variables (`w[b][t]` is the fraction of block `b` mined by period `t`), which keeps the optimum.
   - The published optima match a discount exponent counted from 0. On newman1 at ε = 1e-7 that gives 24,486,185.05 against the published 24,486,184. Counting from 1, as the format note reads, gives 22,672,394.94.
-- External: netlib's published LP optima (`lp/data/readme`, "Optimal Value", MINOS 5.3, 11 significant figures) for the 35 LPs `tests/netlib.rs` lists, from the uncompressed MPS files in HiGHS's `check/instances` (MIT, commit `0edab95`), read 2026-11-03.
+- External: netlib's published LP optima (`lp/data/readme`, "Optimal Value", MINOS 5.3, 11 significant figures) for the 35 LPs `tests/netlib.rs` lists, from the uncompressed MPS files in HiGHS's `check/instances` (MIT, commit `0edab95`), read 2026-11-03. Also from there, 8 LPs that netlib lists as infeasible (`lp/infeas`), each matching the git blob hash HiGHS records. Their infeasibility is netlib's statement, and the four proved here confirm it for those four.
 - HiGHS and OR-Tools PDLP (plan §15.4's lab oracles) are not run.
 
 ## 10. Known gaps
 - `BD-251`: one library caller, `fmine-io`'s `omf::pit::PitModel::lp_schedule` (bd-djb7), which solves `toposort::lp`'s relaxation of an OMF schedule and reports minus the dual bound as its upper bound. The MineLib harnesses in `crates/xtask/tests/` also call `pdlp::solve`. The plan's blend, SAA and CVaR uses have no caller.
-- No presolve, no feasibility polishing and no infeasibility or unboundedness detection. An infeasible or unbounded LP runs to `max_iterations`.
+- No presolve, no feasibility polishing and no unboundedness detection: an unbounded LP runs to `max_iterations`. A primal ray would need equality rows met exactly, which floating point does not give.
+- Infeasibility is proved only where some candidate ray certifies. A column open on the side its term needs, with no implied bound, needs `−aⱼ·y` of the right sign exactly. 4 of netlib's 8 infeasible LPs ran to the step limit for that reason (§8). The random oracles' LPs are small and their infeasibility has a margin of at least 1, so they do not show how detection fares near the edge of feasibility.
 - The returned `x` is not feasible (§8). Nothing here turns it into a feasible point or a primal bound.
 - Implied bounds come from one row at a time over the column bounds, a single-row propagation. A column bounded only by a combination of rows gets no implied bound. Only the shift then helps, and it does not help a free column (§8). On netlib, 10 of 35 LPs certify nothing at multipliers whose dual objective is within 6e-7 of the optimum (§8).
 - At the default ε = 1e-4, the certified bound misses KILL-PUSH-PDLP's 1e-4 on three of ten MineLib instances, newman1, kd and sm2, even with the best-seen bound (§8). The default is cuPDLP's and is kept, and the MineLib test runs at 1e-6.
@@ -248,12 +277,12 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 ## 11. Public API
 - `pdlp::LpProblem`: `new`, `rows`, `cols`, `nnz`, `objective`, `max_violation`
 - `pdlp::PdlpOptions` (`tolerance`, `max_iterations`, `threads`; `Default`)
-- `pdlp::PdlpStatus` (`Optimal`, `IterationLimit`, `Stopped`)
+- `pdlp::PdlpStatus` (`Optimal`, `IterationLimit`, `Stopped`, `Infeasible`)
 - `pdlp::Progress` (public fields)
-- `pdlp::PdlpSolution`: `status`, `x`, `y`, `progress`, `bound`, `bound_multipliers`
+- `pdlp::PdlpSolution`: `status`, `x`, `y`, `progress`, `bound`, `bound_multipliers`, `infeasibility_ray`
 - `pdlp::solve`, `pdlp::solve_observed`
 - `pdlp::DualBound`: `value`, `repaired_rows`, `implied_columns`
-- `pdlp::certified_bound`
+- `pdlp::certified_bound`, `pdlp::certified_infeasibility`
 - `mps::read`, `mps::write`, `mps::MpsModel` (public fields)
 
 ## 12. Proof obligations
@@ -261,4 +290,5 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   - The weak-duality inequality and the rounding argument are in its module documentation and are not machine-checked.
   - `certified_bound_is_valid_at_any_multipliers`, `implied_column_bounds_hold_at_every_feasible_point`, `directed_operations_enclose_the_exact_result` and `directed_quotients_enclose_the_exact_result` check it on random and hand cases.
   - The implied bounds' validity (each holds at every feasible `x`) is argued in `pdlp::bound`'s module notes, and is not machine-checked either. The shift needs no argument, since its output is certified like any `y`.
+- An `Infeasible` status rests on the same argument with every cost zero (bd-gj80; `pdlp::bound`'s notes). `farkas_rays_never_certify_a_feasible_lp` checks it on random cases, and it is not machine-checked.
 - No other PO-* is discharged here. That PDHG with restarts converges is Applegate et al.'s and Lu and Yang's result, not proved or machine-checked here.

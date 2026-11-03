@@ -217,6 +217,111 @@ pub fn random_dense(rng: &mut Rng, open_tops: bool) -> Dense {
     Dense { c, a, lo, hi, l, u }
 }
 
+/// A random LP of integer data: `n ≤ 4` columns in integer boxes and 2 to 5 rows. An integer point `x0` of the box
+/// fixes the row bounds, so `x0` meets every bound exactly in `f64`; with `open_tops`, some columns lose their
+/// upper bound, which `x0` still meets.
+///
+/// With `infeasible`, integer multipliers `w`, two or more of them nonzero, are drawn instead. Each row with
+/// `wᵢ > 0` gets its lower bound raised, and each with `wᵢ < 0` its upper bound lowered, by the same whole amount.
+/// That is enough that the sides `w` picks sum to at least 1 more than the largest `g·x` over the box, where
+/// `g = Σᵢ wᵢ aᵢ`. No `x` in the box then meets every row, since any that did would have `g·x` at least that sum.
+/// With `open_tops`, some columns with `gⱼ ≤ 0` then lose their upper bound. That leaves the largest `g·x`
+/// unchanged, so the proof stands.
+pub fn random_integer_lp(rng: &mut Rng, open_tops: bool, infeasible: bool) -> Dense {
+    let n = 1 + rng.below(4) as usize;
+    let m = 2 + rng.below(4) as usize;
+    let (mut l, mut u, mut x0) = (Vec::new(), Vec::new(), Vec::new());
+    for _ in 0..n {
+        let lo = rng.below(5) as f64 - 3.0;
+        let hi = lo + 1.0 + rng.below(4) as f64;
+        x0.push(lo + rng.below((hi - lo) as u64 + 1) as f64);
+        l.push(lo);
+        u.push(if open_tops && !infeasible && rng.below(3) == 0 {
+            f64::INFINITY
+        } else {
+            hi
+        });
+    }
+    let c: Vec<f64> = (0..n).map(|_| rng.below(11) as f64 - 5.0).collect();
+    let a: Vec<Vec<f64>> = (0..m)
+        .map(|_| {
+            (0..n)
+                .map(|_| {
+                    if rng.below(4) == 0 {
+                        0.0
+                    } else {
+                        rng.below(11) as f64 - 5.0
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let v: Vec<f64> = a
+        .iter()
+        .map(|row| row.iter().zip(&x0).map(|(a, x)| a * x).sum())
+        .collect();
+    let slack = |rng: &mut Rng| rng.below(3) as f64;
+    let (mut lo, mut hi) = (Vec::new(), Vec::new());
+    for &vi in &v {
+        match rng.below(4) {
+            0 => {
+                lo.push(vi);
+                hi.push(vi);
+            }
+            1 => {
+                lo.push(f64::NEG_INFINITY);
+                hi.push(vi + slack(rng));
+            }
+            2 => {
+                lo.push(vi - slack(rng));
+                hi.push(f64::INFINITY);
+            }
+            _ => {
+                lo.push(vi - slack(rng));
+                hi.push(vi + slack(rng));
+            }
+        }
+    }
+    if infeasible {
+        let w: Vec<f64> = loop {
+            let w: Vec<f64> = (0..m).map(|_| rng.below(5) as f64 - 2.0).collect();
+            if w.iter().filter(|v| **v != 0.0).count() >= 2 {
+                break w;
+            }
+        };
+        let g: Vec<f64> = (0..n)
+            .map(|j| (0..m).map(|i| w[i] * a[i][j]).sum())
+            .collect();
+        let most: f64 = (0..n).map(|j| (g[j] * l[j]).max(g[j] * u[j])).sum();
+        let at_x0: f64 = (0..m).map(|i| w[i] * v[i]).sum();
+        let weight: f64 = w.iter().map(|v| v.abs()).sum();
+        let shift = ((most - at_x0 + 1.0) / weight).ceil();
+        for j in 0..n {
+            if open_tops && g[j] <= 0.0 && rng.below(2) == 0 {
+                u[j] = f64::INFINITY;
+            }
+        }
+        for i in 0..m {
+            if w[i] > 0.0 {
+                lo[i] = v[i] + shift;
+                hi[i] = if rng.below(2) == 0 {
+                    f64::INFINITY
+                } else {
+                    lo[i] + slack(rng)
+                };
+            } else if w[i] < 0.0 {
+                hi[i] = v[i] - shift;
+                lo[i] = if rng.below(2) == 0 {
+                    f64::NEG_INFINITY
+                } else {
+                    hi[i] - slack(rng)
+                };
+            }
+        }
+    }
+    Dense { c, a, lo, hi, l, u }
+}
+
 /// A small open-pit scheduling LP shaped like MineLib's CPIT relaxations, in "by" variables `w[b][t]` (index
 /// `t·n + b`, in `[0, 1]`): a vertical section `width` blocks wide and `depth` deep, where each block below the top
 /// needs the three above it, `periods` periods, and one capacity row per period on the blocks mined in it. Values

@@ -5,6 +5,7 @@ use std::ops::Range;
 
 use fmine_evidence::Refusal;
 
+use super::bound::{Implied, infeasibility};
 use super::mat::{Mat, chunks, even_pieces, fold, nnz_pieces, run, spmv, workers};
 use super::{LpProblem, PdlpOptions, PdlpStatus, Progress, refuse};
 
@@ -15,6 +16,9 @@ const RESTART_NECESSARY: f64 = 0.8;
 const RESTART_ARTIFICIAL: f64 = 0.36;
 /// Restart displacements below this leave the primal weight alone.
 const WEIGHT_MIN_MOVE: f64 = 1e-10;
+/// After a candidate Farkas ray fails its certification, the evaluations to skip before trying again: one, then
+/// doubling after each failure up to this.
+const RAY_WAIT_MAX: u64 = 64;
 
 /// The problem after scaling: `K = D_r A D_c`, `x = D_c x̃`, `y = D_r ỹ`.
 struct Scaled {
@@ -139,6 +143,14 @@ impl Measures {
     }
 }
 
+/// A candidate Farkas ray in scaled units, `y − from` (or `y` alone), with `Kᵀ` of each part.
+struct Ray<'a> {
+    y: &'a [f64],
+    from: Option<&'a [f64]>,
+    kty: &'a [f64],
+    kty_from: Option<&'a [f64]>,
+}
+
 /// A point `(x, y)` with its products `Kx` and `Kᵀy`, each entry multiplied by `mult` as it is read (the
 /// average is stored as weighted sums).
 struct Point<'a> {
@@ -246,6 +258,63 @@ impl Solver<'_> {
     fn unscale_dual(&self, y: &[f64]) -> Vec<f64> {
         y.iter().zip(&self.s.dr).map(|(v, d)| v * d).collect()
     }
+
+    /// The bound `ray` gives on `0·x` (`bound` module notes, with every cost zero), in plain arithmetic and scaled
+    /// units, which leave it unchanged. Rows and columns whose needed side is infinite are left out, so a positive
+    /// value only says the ray is worth certifying.
+    fn ray_value(&self, ray: &Ray<'_>) -> Result<f64, Refusal> {
+        let s = &self.s;
+        let rows = fold(run(&self.rows, (), |range, ()| {
+            chunks(range)
+                .map(|ch| {
+                    let mut acc = 0.0f64;
+                    for i in ch {
+                        let d = ray.y[i] - ray.from.map_or(0.0, |f| f[i]);
+                        let side = if d > 0.0 {
+                            s.lo[i]
+                        } else if d < 0.0 {
+                            s.hi[i]
+                        } else {
+                            0.0
+                        };
+                        if side.is_finite() {
+                            acc += d * side;
+                        }
+                    }
+                    [acc]
+                })
+                .collect::<Vec<_>>()
+        })?)[0];
+        let cols = fold(run(&self.cols, (), |range, ()| {
+            chunks(range)
+                .map(|ch| {
+                    let mut acc = 0.0f64;
+                    for j in ch {
+                        let r = ray.kty_from.map_or(0.0, |f| f[j]) - ray.kty[j];
+                        let end = if r > 0.0 {
+                            s.l[j]
+                        } else if r < 0.0 {
+                            s.u[j]
+                        } else {
+                            0.0
+                        };
+                        if end.is_finite() {
+                            acc += r * end;
+                        }
+                    }
+                    [acc]
+                })
+                .collect::<Vec<_>>()
+        })?)[0];
+        Ok(rows + cols)
+    }
+
+    /// `ray`'s multipliers, unscaled.
+    fn unscale_ray(&self, ray: &Ray<'_>) -> Vec<f64> {
+        (0..ray.y.len())
+            .map(|i| (ray.y[i] - ray.from.map_or(0.0, |f| f[i])) * self.s.dr[i])
+            .collect()
+    }
 }
 
 /// The multipliers with the highest dual objective seen at any evaluation, scaled, with that objective. Any
@@ -266,8 +335,16 @@ impl BestDual {
     }
 }
 
-/// Status, `x`, `y`, the best-seen multipliers (all unscaled) and the measures at the returned point.
-type Outcome = (PdlpStatus, Vec<f64>, Vec<f64>, Vec<f64>, Progress);
+/// Status, `x`, `y`, the best-seen multipliers (all unscaled), the measures at the returned point, and with
+/// [`PdlpStatus::Infeasible`] the certified Farkas ray (unscaled).
+type Outcome = (
+    PdlpStatus,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    Progress,
+    Option<Vec<f64>>,
+);
 
 /// Runs PDLP on `p`.
 pub(super) fn run_pdlp(
@@ -339,8 +416,11 @@ pub(super) fn run_pdlp(
         dobj: start.dobj,
     };
     let mut prev_candidate = f64::INFINITY;
-    let (mut x0, mut y0) = (x.clone(), y.clone());
+    let (mut x0, mut y0, mut kty0) = (x.clone(), y.clone(), kty.clone());
     let eps = o.tolerance;
+    // Farkas rays: evaluations still to skip, the current skip length, and the implied bounds once derived.
+    let (mut ray_wait, mut ray_skip) = (0u64, 0u64);
+    let mut implied: Implied = None;
 
     let progress = |me: &Measures, iters: u64, restarts: u64, eta: f64, omega: f64| Progress {
         iterations: iters,
@@ -500,6 +580,7 @@ pub(super) fn run_pdlp(
                 yo,
                 solver.unscale_dual(&best.y),
                 progress(&mc, iters, restarts, eta, omega),
+                None,
             ));
         }
         if ma.converged(eps) {
@@ -510,11 +591,61 @@ pub(super) fn run_pdlp(
                 yo,
                 solver.unscale_dual(&best.y),
                 progress(&ma, iters, restarts, eta, omega),
+                None,
             ));
         }
         let (kc, ka) = (mc.kkt(omega), ma.kkt(omega));
         let use_avg = ka < kc;
         let (cand, cand_kkt) = if use_avg { (ma, ka) } else { (mc, kc) };
+        // Farkas rays: on an infeasible problem `y` runs off along one (Applegate, Lubin and Schudel 2021), so the
+        // last step's change, the change since the restart and `y` itself point along it. The first whose plain
+        // value is positive and that certifies ends the run.
+        if ray_wait > 0 {
+            ray_wait -= 1;
+        } else {
+            let mut rays = vec![Ray {
+                y: &y,
+                from: Some(&yn),
+                kty: &kty,
+                kty_from: Some(&ktyn),
+            }];
+            if restarts > 0 {
+                rays.push(Ray {
+                    y: &y,
+                    from: Some(&y0),
+                    kty: &kty,
+                    kty_from: Some(&kty0),
+                });
+            }
+            rays.push(Ray {
+                y: &y,
+                from: None,
+                kty: &kty,
+                kty_from: None,
+            });
+            let mut tried = false;
+            for ray in &rays {
+                if solver.ray_value(ray)? > 0.0 {
+                    tried = true;
+                    let r = solver.unscale_ray(ray);
+                    if infeasibility(p, &r, &mut implied).is_some() {
+                        let (xo, yo) = solver.unscale(&cur);
+                        return Ok((
+                            PdlpStatus::Infeasible,
+                            xo,
+                            yo,
+                            solver.unscale_dual(&best.y),
+                            progress(&mc, iters, restarts, eta, omega),
+                            Some(r),
+                        ));
+                    }
+                }
+            }
+            if tried {
+                ray_skip = (2 * ray_skip).clamp(1, RAY_WAIT_MAX);
+                ray_wait = ray_skip;
+            }
+        }
         if !observer(&progress(&cand, iters, restarts, eta, omega)) {
             let (xo, yo) = solver.unscale(if use_avg { &avg } else { &cur });
             return Ok((
@@ -523,6 +654,7 @@ pub(super) fn run_pdlp(
                 yo,
                 solver.unscale_dual(&best.y),
                 progress(&cand, iters, restarts, eta, omega),
+                None,
             ));
         }
         let restart = cand_kkt <= RESTART_SUFFICIENT * kkt_restart
@@ -564,6 +696,7 @@ pub(super) fn run_pdlp(
         }
         x0.copy_from_slice(&x);
         y0.copy_from_slice(&y);
+        kty0.copy_from_slice(&kty);
         for v in [&mut sx, &mut sy, &mut skx, &mut skty] {
             v.iter_mut().for_each(|e| *e = 0.0);
         }
@@ -602,6 +735,7 @@ pub(super) fn run_pdlp(
                 yo,
                 by,
                 progress(&ma, iters, restarts, eta, omega),
+                None,
             ));
         }
     }
@@ -613,5 +747,6 @@ pub(super) fn run_pdlp(
         yo,
         by,
         progress(&mc, iters, restarts, eta, omega),
+        None,
     ))
 }
