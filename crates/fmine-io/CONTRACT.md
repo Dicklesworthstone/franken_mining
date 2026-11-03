@@ -84,6 +84,21 @@ attribute, then a certified ultimate pit (`solve`) or nested shells by revenue f
   nothing is improved by `improve`; one that breaks something is reported, not repaired. Uses are rounded up as for
   any schedule. So a candidate within the scaled limits is within the true ones. With uses from floats, one over a
   scaled limit by less than the number of blocks it mines that period may still be within the true limit.
+- Designs (bd-hq5y, plan §15.5 shell-to-design loss). An engineer's designed pit, as a closed Surface in the same
+  project, comes in through `PitModel::design`, which uses `proportions`' frame and `volcert::block_proportions`.
+  Each parent block has between `inside` and `inside + band` of `8^depth` sub-cells inside the design.
+  `Design::against` compares the design with any shell (one flag per block, such as `PitSolution::in_pit`) for any
+  per-block quantity in integers (`weights`: value, tonnes or metal). It gives four totals, each an exact integer
+  enclosure in units of a weight over `8^depth`:
+  - the shell's total;
+  - the design's total;
+  - `left`, the part of the shell the design leaves;
+  - `added`, the part of the design outside the shell.
+  The loss is `shell − design`, which is `left − added`. For a positive weight the least is `inside` sub-cells and
+  the most `inside + band`, and the other way round for a negative one. So the true total, with the design as
+  placed and each block's quantity spread evenly through it, lies within the enclosure. A design reaching outside
+  the block model's blocks is refused, since nothing values that part. The design is not checked against the
+  slopes, so its loss can be negative when it breaks them.
 
 `reliance` is the filesystem adapter for the S0 reliance model (BD-347). A journal is one canonical
 `fmine_claim::reliance::JournalRecord` frame per lowercase hexadecimal line, ending in LF. Each record's
@@ -168,6 +183,8 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   `CandidateSchedule::{problem, factors, schedule, check, value, improvement}` give the `ScheduleProblem`, the
   discount factors, the candidate in `pitflow`'s order, `toposort::ScheduleCheck`, its discounted value, and
   `search::Improvement` when it is feasible.
+- `PitModel::design` and `omf::pit::{Design, ShellToDesign}` (bd-hq5y). `Design::{cells_per_block, cells, total,
+  against}`. `ShellToDesign`'s public fields are `shell`, `design`, `left`, `added` and `loss`.
 - `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, FormatCount, MinimalCell,
   MinimalSheet, MinimalStyles, build_minimal_xlsx, build_minimal_xlsx_styled, col_index_to_letters,
   parse_a1_ref}`; `Workbook::format_census`;
@@ -313,6 +330,11 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   below `first` or more than `u32::MAX` above it. It never rounds or clamps. `candidate_schedule` refuses as
   schedules do (`207`), and refuses a candidate that is not one entry per parent block or puts a block past the last
   period, naming the block. Breaking a requirement or a limit is not a refusal: `check` reports it.
+- Designs (bd-hq5y): `design` passes on the refusals of `surface_mesh_in` (`506` for a missing element or one that
+  is not a Surface, and `ClosedMesh::certify`'s for a surface that is not closed) and of `block_proportions`
+  (`109` for a depth above 6). It refuses (`109`) a design whose bounding box leaves `[0, size · count]` on any
+  axis of the block model's frame. In a turned frame, rounding may refuse a design that only touches the model's
+  side. `against` and `total` refuse (`207`) a shell or weights that are not one per block.
 - XML text decodes the five named entities and `&#10;`, `&#13;`, `&#160;`, each once (`&amp;` last); no DTD or
   entity declaration is read, so nothing expands.
 - `numtok` keeps malformed grouping, unsupported attached notation, decimal overflow and ambiguous standalone
@@ -489,6 +511,25 @@ for current reuse; an unpinned replay establishes only internal consistency of t
     last.
   - Planted, reverted: the candidate taken without reversing its layers. The test failed.
   - Not checked: a vendor's own export; any model but this 15-block section; the refusal of periods as dates.
+- `PO-IO-13` (bd-hq5y): a designed pit against the certified shell gives its loss in exact enclosures.
+  `omf::tests::a_designed_pit_against_the_certified_shell_gives_its_loss_in_exact_enclosures` compares boxes
+  through the section's full width with PO-IO-9's ultimate pit (values at 4 a unit, tonnes at 10).
+  - "design" covers the middle three columns and half of each corner column. At depth 1 every block is exact
+    (4 or 8 of 8 sub-cells). In quarter-units:
+    - the pit is worth 5 and the design −7;
+    - the design leaves −4 (half the pit's top corners) and adds −16;
+    - so the loss is 12, with each enclosure a single value.
+  - Tonnes: 14.4 t designed against the pit's 10.8 t.
+  - "deep design" leaves the top layer out. It is worth 9, so its loss is −4: the slopes are not checked.
+  - "rough design" has its sides off the sub-cell faces, so the corner columns are 0.52 inside, worth −7.48. Depths
+    1 to 4 enclose that in [−19, −7], [−13, −7], [−10, −7] and [−8.5, −7], each half as wide as the one before.
+  - At each depth `loss` equals `shell − design` as an interval.
+  - Refused: a design 1 m past the model's side, a missing element, a BlockModel, depth 99, and shells and weights
+    of the wrong length.
+  - Planted, reverted: proportions left in OMF's layer order. The deep design failed; the full-height boxes, the
+    same in every layer, did not.
+  - Not checked: a vendor's own design export (an open pit surface must be closed before it is read); turned
+    models; grade uncertainty.
 - FACT (BD-347, `reliance::tests`): exact artifact issuance and current-use retrieval preserve bytes and
   refuse after withdrawal; invalid digest, key, time, stale or absent trust, and an existing destination
   cannot create an authorized output. A failed final append retains the unissued artifact and poisons its
@@ -557,7 +598,9 @@ ranking; `lp_schedule` searches from the LP's starts and reports its gap to the 
 No outside solver runs in CI or at run time: HiGHS ran once in the lab and its output is pinned. There is no CLI verb
 for the MPS export, the solution import or a candidate schedule (fmine-cli is past its planned budget). A candidate
 comes only as periods per parent block, from an attribute or the caller. Periods as dates, a calendar, vendor
-string files and partial blocks are not read, and a broken candidate is never repaired.
+string files and partial blocks are not read, and a broken candidate is never repaired. The shell-to-design loss is
+geometric: no grade uncertainty over realizations (no geostatistics here), no ramp-induced slope flattening, no
+check of the design against the slopes, and no closing of an open design surface.
 The bounded HTML reader is not a browser or DOM repair engine. It does not execute scripts, resolve CSS,
 interpret inline XBRL transformations, or establish issuer, metric, period or ownership semantics. Its source
 anchor records the inspected bytes and location, not the financial meaning, publisher authenticity or independent

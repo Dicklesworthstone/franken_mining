@@ -45,8 +45,19 @@
 //! as for any schedule, so a candidate within the scaled limits is within the true ones. With uses from floats, one
 //! over a scaled limit by less than the number of blocks it mines that period may still be within the true limit;
 //! a larger `per_unit` tells them apart.
+//!
+//! **Designs** (bd-hq5y, plan §15.5 shell-to-design loss). An engineer's designed pit, as a closed Surface in the same
+//! project, comes in through [`PitModel::design`]. That gives each parent block's proportion inside it, as
+//! `fmine_geom::volcert` certifies them: between `inside` and `inside + band` of `8^depth` sub-cells.
+//! [`Design::against`] compares the design with a shell, such as the ultimate pit or one of the nested shells, for
+//! any per-block quantity: value, tonnes or metal. It gives the shell's total, the design's, the part of the shell
+//! the design leaves, and the part of the design outside the shell. The loss, shell minus design, is the first part
+//! minus the second. Each total is an exact integer enclosure in sub-cells, and the true one lies within it for the
+//! design as placed. A block's quantity is taken as spread evenly through it. The design is not checked against the
+//! slopes: the loss is what its ramps and smoothing cost.
 
 use fmine_evidence::{Refusal, RefusalCode};
+use fmine_geom::volcert::block_proportions;
 use fmine_lp::pdlp::{LpProblem, PdlpOptions, PdlpSolution, certified_bound, solve as solve_lp};
 use fmine_optimize::pitflow::shells::{NestedShells, RevenueFactor, ShellModel, nested_shells};
 use fmine_optimize::pitflow::slope::{BlockGrid, SlopeTable, slope_arcs};
@@ -55,7 +66,7 @@ use fmine_optimize::toposort::lp::{Incumbent, Shares, incumbent, relaxation, sta
 use fmine_optimize::toposort::search::{Improvement, discount_factors, discounted_value, improve};
 use fmine_optimize::toposort::{ScheduleCheck, ScheduleProblem, check, greedy};
 
-use super::proportions::{element, kind, missing};
+use super::proportions::{element, kind, missing, parent_grid, surface_mesh_in};
 use super::{
     Attribute, AttributeData, BlockModel, Element, Geometry, Grid3, Location, Numbers, Project,
 };
@@ -70,7 +81,8 @@ fn outside(detail: String) -> Refusal {
     Refusal::new(RefusalCode::OutsidePhysicalDomain109, detail)
 }
 
-fn unschedulable(detail: String) -> Refusal {
+/// `FMINE-REF-207` (proposed), as `toposort` and `pitflow` refuse inputs that do not fit their problem.
+fn ill_posed(detail: String) -> Refusal {
     Refusal::new(RefusalCode::NumericalCertificateFailed207, detail)
 }
 
@@ -119,6 +131,7 @@ fn on_blocks<'a>(e: &'a Element, name: &str) -> Result<&'a Attribute, Refusal> {
 /// `pitflow`'s order; [`PitModel::omf_order`] puts per-block results back in OMF's.
 #[derive(Debug, Clone)]
 pub struct PitModel<'p> {
+    project: &'p Project,
     element: &'p Element,
     count: [u32; 3],
     grid: BlockGrid,
@@ -213,6 +226,7 @@ impl<'p> PitModel<'p> {
         };
         let (offsets, targets) = slope_arcs(&grid, slopes, &domain_of, levels)?.into_csr();
         Ok(Self {
+            project,
             element: e,
             count: *count,
             grid,
@@ -523,7 +537,7 @@ impl<'p> PitModel<'p> {
         let name = &self.element.name;
         let n = problem.blocks().node_count();
         if periods.len() != n {
-            return Err(unschedulable(format!(
+            return Err(ill_posed(format!(
                 "OMF: a candidate schedule for block model \"{name}\" has {} entries for {n} parent blocks",
                 periods.len()
             )));
@@ -533,7 +547,7 @@ impl<'p> PitModel<'p> {
             .enumerate()
             .find_map(|(b, &t)| t.filter(|&t| t as usize >= spec.periods).map(|t| (b, t)));
         if let Some((b, t)) = late {
-            return Err(unschedulable(format!(
+            return Err(ill_posed(format!(
                 "OMF: a candidate schedule puts block {:?} of block model \"{name}\" in period {t}, but there are {}",
                 uvw(b, self.count),
                 spec.periods
@@ -593,6 +607,140 @@ impl<'p> PitModel<'p> {
         let w = (self.count[2] as usize).checked_sub(1)?.checked_sub(k)?;
         Some(w * layer + block % layer)
     }
+
+    /// The proportion of every parent block inside the closed Surface element `design`, such as an engineer's designed
+    /// pit, at refinement `depth` (see the module notes), in `pitflow`'s order.
+    ///
+    /// # Errors
+    /// Those of `omf::surface_mesh_in`, `omf::parent_grid` and `fmine_geom::volcert::block_proportions`, among them a
+    /// depth above `volcert::MAX_DEPTH` and a surface that is not closed or faces inward. `FMINE-REF-109` when the
+    /// design reaches outside the block model, where no block values it.
+    pub fn design(&self, design: &str, depth: u8) -> Result<Design, Refusal> {
+        let name = &self.element.name;
+        let mesh = surface_mesh_in(self.project, design, name)?;
+        let grid = parent_grid(self.project, name)?;
+        let [lo, hi] = mesh.bounds();
+        let (size, counts) = (grid.size(), grid.counts());
+        let top = std::array::from_fn::<f64, 3, _>(|a| size[a] * f64::from(counts[a]));
+        if !(0..3).all(|a| lo[a] >= 0.0 && hi[a] <= top[a]) {
+            return Err(outside(format!(
+                "OMF: design \"{design}\" spans {lo:?} to {hi:?} in block model \"{name}\"'s frame, beyond its blocks \
+                 from [0.0, 0.0, 0.0] to {top:?}; no block values the part outside"
+            )));
+        }
+        let proportions = block_proportions(&mesh, &grid, depth)?;
+        let n = self.grid.block_count();
+        let (mut inside, mut band) = (vec![0; n], vec![0; n]);
+        let [nu, nv, _] = self.count.map(|c| c as usize);
+        for ([u, v, w], p) in proportions.iter() {
+            let b = (w as usize * nv + v as usize) * nu + u as usize;
+            let (Some(i), Some(c)) = (inside.get_mut(b), band.get_mut(b)) else {
+                return Err(outside(format!(
+                    "OMF: design \"{design}\" has a proportion for block {:?}, outside block model \"{name}\"'s {:?}",
+                    [u, v, w],
+                    self.count
+                )));
+            };
+            (*i, *c) = (p.inside(), p.band());
+        }
+        Ok(Design {
+            cells: proportions.cells_per_block(),
+            inside: reversed_layers(&inside, self.count),
+            band: reversed_layers(&band, self.count),
+        })
+    }
+}
+
+/// [`PitModel::design`]'s proportions, in `pitflow`'s block order: block `b` has between `inside` and
+/// `inside + band` of its [`Design::cells_per_block`] sub-cells inside the design.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Design {
+    cells: u32,
+    inside: Vec<u32>,
+    band: Vec<u32>,
+}
+
+impl Design {
+    /// Sub-cells per block, `8^depth`.
+    #[must_use]
+    pub fn cells_per_block(&self) -> u32 {
+        self.cells
+    }
+
+    /// Block `block`'s sub-cells inside the design, at least and at most: `[inside, inside + band]`; `None` past the
+    /// last block.
+    #[must_use]
+    pub fn cells(&self, block: usize) -> Option<[u32; 2]> {
+        let (&i, &c) = (self.inside.get(block)?, self.band.get(block)?);
+        Some([i, i + c])
+    }
+
+    /// The design's total of a per-block quantity, `weights` in `pitflow`'s order such as [`PitModel::weights`]: the
+    /// exact enclosure `[lo, hi]` of `Σ weights[b] · (sub-cells of b inside)`, in units of a weight over
+    /// [`Design::cells_per_block`].
+    ///
+    /// # Errors
+    /// `FMINE-REF-207` (proposed) when `weights` is not one per block.
+    pub fn total(&self, weights: &[i64]) -> Result<[i128; 2], Refusal> {
+        Ok(self
+            .against(&vec![false; self.inside.len()], weights)?
+            .design)
+    }
+
+    /// The design against the shell `shell`, one flag per block in `pitflow`'s order such as `PitSolution::in_pit`,
+    /// for the quantity `weights` (see the module notes).
+    ///
+    /// # Errors
+    /// `FMINE-REF-207` (proposed) when `shell` or `weights` is not one per block.
+    pub fn against(&self, shell: &[bool], weights: &[i64]) -> Result<ShellToDesign, Refusal> {
+        let n = self.inside.len();
+        if shell.len() != n || weights.len() != n {
+            return Err(ill_posed(format!(
+                "shell to design: {} shell flags and {} weights for {n} blocks",
+                shell.len(),
+                weights.len()
+            )));
+        }
+        // |weight| < 2^63 and cells ≤ 2^18, so each term is below 2^81 and no sum over a grid's blocks nears 2^127.
+        let cells = i128::from(self.cells);
+        let add = |sum: &mut [i128; 2], part: [i128; 2]| {
+            sum[0] += part[0];
+            sum[1] += part[1];
+        };
+        let mut out = ShellToDesign::default();
+        for (((&in_shell, &w), &i), &c) in
+            shell.iter().zip(weights).zip(&self.inside).zip(&self.band)
+        {
+            let (w, i, c) = (i128::from(w), i128::from(i), i128::from(c));
+            let (sure, most) = (w * i, w * (i + c));
+            let part = [sure.min(most), sure.max(most)];
+            add(&mut out.design, part);
+            if in_shell {
+                out.shell += w * cells;
+                add(&mut out.left, [w * cells - part[1], w * cells - part[0]]);
+            } else {
+                add(&mut out.added, part);
+            }
+        }
+        out.loss = [out.left[0] - out.added[1], out.left[1] - out.added[0]];
+        Ok(out)
+    }
+}
+
+/// [`Design::against`]'s comparison, in units of a weight over [`Design::cells_per_block`]. Each enclosure `[lo, hi]`
+/// is exact, and the true total lies within it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShellToDesign {
+    /// The shell's total, every block whole.
+    pub shell: i128,
+    /// The design's total.
+    pub design: [i128; 2],
+    /// The part of the shell outside the design.
+    pub left: [i128; 2],
+    /// The part of the design outside the shell.
+    pub added: [i128; 2],
+    /// The shell-to-design loss: `shell − design`, which is `left − added`.
+    pub loss: [i128; 2],
 }
 
 /// A per-period limit on a quantity each block uses, such as tonnes mined or milled: the Number attribute

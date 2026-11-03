@@ -1990,7 +1990,26 @@ fn section() -> Project {
         48,
     );
     let level = r#"{"origin":[1000,2000,300]}"#;
+    // Designed pits as boxes through the section's full width (V): the middle three columns and half of each corner
+    // column, all three layers ("design") or the lower two ("deep design"); the same one with its sides 0.25 m and
+    // 0.5 m off the sub-cell faces ("rough design"); and one reaching 1 m past the model's left side ("too wide").
+    let mut design = |name: &str, from: [f64; 2], to: [f64; 2]| {
+        let geometry = box_surface(
+            &mut b,
+            [1000.0 + from[0], 2000.0, 300.0 + from[1]],
+            [0.0; 3],
+            [to[0] - from[0], 12.5, to[1] - from[1]],
+        );
+        element(name, &geometry, "")
+    };
+    let designs = [
+        design("design", [6.25, 0.0], [56.25, 37.5]),
+        design("deep design", [6.25, 0.0], [56.25, 25.0]),
+        design("rough design", [6.0, 0.0], [56.5, 37.5]),
+        design("too wide", [-1.0, 0.0], [56.25, 37.5]),
+    ];
     let elements = [
+        designs.join(","),
         block_model_at(
             "section",
             level,
@@ -2622,4 +2641,105 @@ fn a_clients_schedule_in_the_omf_is_checked_then_improved_and_a_broken_one_is_re
             r#"puts block [2, 0, 2] of block model "section" in period 3, but there are 3"#,
         );
     });
+}
+
+/// Plan §15.5's shell-to-design loss on the section: designed pits as boxes against the certified ultimate pit, for
+/// value and tonnes. With the design's sides on sub-cell faces every enclosure is exact; off them, each encloses the
+/// hand value, more tightly at each depth.
+#[test]
+fn a_designed_pit_against_the_certified_shell_gives_its_loss_in_exact_enclosures() {
+    use fmine_optimize::pitflow::slope::{SlopeTable, SlopeTangent};
+
+    let p = section();
+    let uniform = SlopeTable::uniform(SlopeTangent::new(1, 1).unwrap());
+    let m = pit::PitModel::new(&p, "section", &uniform, None, 2).unwrap();
+    let pit = m.ultimate_pit("value", 4).unwrap();
+    let shell = pit.in_pit();
+    let value = m.weights("value", 4).unwrap();
+    let tonnes = m.weights("tonnes", 10).unwrap();
+
+    // At depth 1 each corner-column block is four of its eight sub-cells inside, exactly, and the rest are whole.
+    let d = m.design("design", 1).unwrap();
+    assert_eq!(d.cells_per_block(), 8);
+    let per_block: Vec<[u32; 2]> = (0..15).map(|b| d.cells(b).unwrap()).collect();
+    for (b, c) in m.omf_order(&per_block).iter().enumerate() {
+        let want = if b % 5 == 0 || b % 5 == 4 { 4 } else { 8 };
+        assert_eq!(*c, [want, want], "block {b}");
+    }
+    assert_eq!(d.cells(15), None);
+
+    // In eighths of a quarter-unit: the pit is worth 5 and the design -7, the nine middle blocks (5) less half of the
+    // six corner ones (-12). The design leaves half of the pit's two top corners (-4) and adds the two bottom blocks
+    // beside the ore and the lower halves of the corner columns (-16). So it costs 12.
+    let s = d.against(shell, &value).unwrap();
+    assert_eq!(
+        (s.shell, s.design, s.left, s.added, s.loss),
+        (40, [-56, -56], [-32, -32], [-128, -128], [96, 96])
+    );
+    // 14.4 t designed against the pit's 10.8 t, in tenths over eight.
+    let t = d.against(shell, &tonnes).unwrap();
+    assert_eq!((t.shell, t.design), (864, [1152, 1152]));
+    assert_eq!(d.total(&tonnes).unwrap(), [1152, 1152]);
+
+    // Leaving the top layer out breaks the slopes, so the deep design is worth more than the pit, 9 against 5: the
+    // loss is negative. The design is not checked against the slopes.
+    let deep = m.design("deep design", 1).unwrap();
+    let s = deep.against(shell, &value).unwrap();
+    assert_eq!(
+        (s.design, s.left, s.added, s.loss),
+        ([72, 72], [-160, -160], [-128, -128], [-32, -32])
+    );
+
+    // The rough design's corner columns are 0.52 inside, so it is worth 5 - 6 x 4 x 0.52 = -7.48 quarter-units. Each
+    // depth encloses that with half the width of the one before.
+    let mut width = i128::MAX;
+    for depth in 1..=4u8 {
+        let r = m.design("rough design", depth).unwrap();
+        let cells = i128::from(r.cells_per_block());
+        let [lo, hi] = r.total(&value).unwrap();
+        println!(
+            r#"{{"test":"omf_design","depth":{depth},"cells":{cells},"design":[{},{}],"true":-7.48}}"#,
+            lo as f64 / cells as f64,
+            hi as f64 / cells as f64
+        );
+        assert!(
+            lo * 25 <= -187 * cells && -187 * cells <= hi * 25,
+            "depth {depth}: [{lo}, {hi}] / {cells}"
+        );
+        let w = (hi - lo) * 4096 / cells;
+        assert!(
+            w * 2 == width || width == i128::MAX,
+            "depth {depth}: {w} after {width}"
+        );
+        width = w;
+        let s = r.against(shell, &value).unwrap();
+        assert_eq!(s.loss, [s.shell - s.design[1], s.shell - s.design[0]]);
+    }
+
+    refused_as(
+        m.design("too wide", 1),
+        "FMINE-REF-109",
+        "beyond its blocks from [0.0, 0.0, 0.0] to [62.5, 12.5, 37.5]",
+    );
+    refused_as(
+        m.design("nothing", 1),
+        "FMINE-REF-506",
+        r#"no element is called "nothing""#,
+    );
+    refused_as(
+        m.design("section", 1),
+        "FMINE-REF-506",
+        "is a BlockModel, not a Surface",
+    );
+    refused_as(m.design("design", 99), "FMINE-REF-109", "depth 99");
+    refused_as(
+        d.against(&shell[..14], &value),
+        "FMINE-REF-207",
+        "14 shell flags and 15 weights for 15 blocks",
+    );
+    refused_as(
+        d.total(&value[..3]),
+        "FMINE-REF-207",
+        "15 shell flags and 3 weights for 15 blocks",
+    );
 }
