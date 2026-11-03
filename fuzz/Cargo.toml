@@ -118,3 +118,10 @@ path = "fuzz_targets/pcpsp.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "omf"
+path = "fuzz_targets/omf.rs"
+test = false
+doc = false
+bench = false

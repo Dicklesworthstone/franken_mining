@@ -4,10 +4,14 @@ Usage: python3 -I fuzz/seeds.py <repo-root> <out-dir>
 
 Each target gets a directory of seed files in its own input format (fuzz_targets/*.rs): a selector byte, where the
 target has one, then the bytes. All content is invented or copied from committed registries and rules; no issuer
-value, workbook or transcription is read.
+value, workbook or transcription is read. The one exception is opt-in: with FMINE_OMF_DIR set to an omf-rust
+checkout, the omf target also gets the published sample files under 64 KiB (MIT, invented geometry).
 """
 
+import gzip
 import io
+import json
+import os
 import random
 import re
 import struct
@@ -96,11 +100,322 @@ def workbook(compression: int) -> bytes:
     return buf.getvalue()
 
 
+# OMF: Parquet in the subset fmine_io::omf reads (v1 or v2 data pages, PLAIN values, RLE or bit-packed levels, no
+# codec, so that a mutated page reaches the decoders and not a gzip CRC-32), ported from omf::parquet::testkit.
+
+BOOL, I32, I64, F32, F64, BYTES = 0, 1, 2, 4, 5, 6
+
+
+def varint(v: int) -> bytes:
+    out = bytearray()
+    while True:
+        b, v = v & 0x7F, v >> 7
+        if v == 0:
+            out.append(b)
+            return bytes(out)
+        out.append(b | 0x80)
+
+
+def zigzag(v: int) -> bytes:
+    return varint(2 * v if v >= 0 else -2 * v - 1)
+
+
+# A Thrift compact value: ("bool", b), ("i8", v), ("i32", v), ("i64", v), ("bin", bytes), ("list", kind, items) or
+# ("struct", [(field id, value)]).
+KIND = {"i8": 3, "i32": 5, "i64": 6, "bin": 8, "list": 9, "struct": 12}
+
+
+def kind(v) -> int:
+    return (1 if v[1] else 2) if v[0] == "bool" else KIND[v[0]]
+
+
+def ser(v) -> bytes:
+    t = v[0]
+    if t == "bool":
+        return bytes([1 if v[1] else 0])
+    if t == "i8":
+        return bytes([v[1] & 0xFF])
+    if t in ("i32", "i64"):
+        return zigzag(v[1])
+    if t == "bin":
+        return varint(len(v[1])) + v[1]
+    if t == "list":
+        items = v[2]
+        head = bytes([(len(items) << 4) | v[1]]) if len(items) < 15 else bytes([0xF0 | v[1]]) + varint(len(items))
+        return head + b"".join(ser(i) for i in items)
+    out, last = bytearray(), 0
+    for fid, x in v[1]:
+        delta = fid - last
+        out += bytes([(delta << 4) | kind(x)]) if 1 <= delta <= 15 else bytes([kind(x)]) + zigzag(fid)
+        if x[0] != "bool":
+            out += ser(x)
+        last = fid
+    return bytes(out + b"\x00")
+
+
+def st(*fields):
+    return ("struct", list(fields))
+
+
+def i32(v):
+    return ("i32", v)
+
+
+def i64(v):
+    return ("i64", v)
+
+
+def col(name, physical, values, logical=None, present=None):
+    """A column; `present` makes it nullable (its values are the present rows only)."""
+    return {"name": name, "physical": physical, "values": values, "logical": logical,
+            "optional": present is not None, "present": present, "group": None}
+
+
+def grouped(c, group, present):
+    """`c`, required, inside an optional group, with `present` rows."""
+    return {**c, "optional": False, "present": present, "group": group}
+
+
+def logical_fields(logical):
+    union = lambda fid, inner: [(10, st((fid, st(*inner))))]  # noqa: E731
+    if logical is None:
+        return []
+    if logical == "string":
+        return union(1, [])
+    if logical == "date":
+        return union(6, [])
+    if logical == "micros":
+        return union(8, [(1, ("bool", True)), (2, st((2, st())))])
+    _, bits, signed = logical
+    return union(10, [(1, ("i8", bits)), (2, ("bool", signed))])
+
+
+def levels(present, bitpacked) -> bytes:
+    if bitpacked:
+        out = bytearray(varint(((len(present) + 7) // 8) << 1 | 1))
+        for g in range(0, len(present), 8):
+            out.append(sum(1 << i for i, x in enumerate(present[g:g + 8]) if x))
+        return bytes(out)
+    out, i = bytearray(), 0
+    while i < len(present):
+        j = next((j for j in range(i, len(present)) if present[j] != present[i]), len(present))
+        out += varint((j - i) << 1) + bytes([1 if present[i] else 0])
+        i = j
+    return bytes(out)
+
+
+def plain(physical, values) -> bytes:
+    if physical == BOOL:
+        return bytes(sum(1 << i for i, x in enumerate(values[g:g + 8]) if x) for g in range(0, len(values), 8))
+    if physical == BYTES:
+        return b"".join(struct.pack("<I", len(v)) + v for v in values)
+    fmt = {I32: "<i", I64: "<q", F32: "<f", F64: "<d"}[physical]
+    return b"".join(struct.pack(fmt, v) for v in values)
+
+
+def parquet(cols, rows, form) -> bytes:
+    """A Parquet file of `rows` rows holding `cols`, in `form` = (v2, rows per page, rows per group, bit-packed)."""
+    v2, per_page, per_group, bitpacked = form
+    out = bytearray(b"PAR1")
+    groups, next_value, g0 = [], [0] * len(cols), 0
+    while True:
+        g1 = min(rows, g0 + per_group)
+        chunks = []
+        for ci, c in enumerate(cols):
+            start, p0 = len(out), g0
+            while True:
+                p1 = min(g1, p0 + per_page)
+                pres = c["present"][p0:p1] if c["present"] is not None else [True] * (p1 - p0)
+                k = sum(pres)
+                vals = plain(c["physical"], c["values"][next_value[ci]:next_value[ci] + k])
+                next_value[ci] += k
+                lv = levels(pres, bitpacked) if c["present"] is not None else b""
+                n = p1 - p0
+                if v2:
+                    body = lv + vals
+                    header = st((1, i32(3)), (2, i32(len(body))), (3, i32(len(body))),
+                                (8, st((1, i32(n)), (2, i32(n - k)), (3, i32(n)), (4, i32(0)), (5, i32(len(lv))),
+                                       (6, i32(0)), (7, ("bool", False)))))
+                else:
+                    body = (struct.pack("<I", len(lv)) + lv if c["present"] is not None else b"") + vals
+                    header = st((1, i32(0)), (2, i32(len(body))), (3, i32(len(body))),
+                                (5, st((1, i32(n)), (2, i32(0)), (3, i32(3)), (4, i32(3)))))
+                out += ser(header) + body
+                p0 = p1
+                if p0 >= g1:
+                    break
+            path = ([("bin", c["group"].encode())] if c["group"] else []) + [("bin", c["name"].encode())]
+            size = len(out) - start
+            chunks.append(st((2, i64(start)), (3, st((1, i32(c["physical"])), (2, ("list", 5, [i32(0), i32(3)])),
+                                                     (3, ("list", 8, path)), (4, i32(0)), (5, i64(g1 - g0)),
+                                                     (6, i64(size)), (7, i64(size)), (9, i64(start))))))
+        groups.append(st((1, ("list", 12, chunks)), (2, i64(0)), (3, i64(g1 - g0))))
+        if g1 >= rows:
+            break
+        g0 = g1
+    top, i = [], 0
+    while i < len(cols):
+        c = cols[i]
+        leaf = lambda c: st((1, i32(c["physical"])), (3, i32(1 if c["optional"] else 0)),  # noqa: E731
+                            (4, ("bin", c["name"].encode())), *logical_fields(c["logical"]))
+        if c["group"]:
+            members = [m for m in cols[i:] if m["group"] == c["group"]]
+            top.append(st((3, i32(1)), (4, ("bin", c["group"].encode())), (5, i32(len(members)))))
+            top += [leaf(m) for m in members]
+            i += len(members)
+        else:
+            top.append(leaf(c))
+            i += 1
+    roots = sum(1 for j, c in enumerate(cols) if not c["group"] or j == 0 or cols[j - 1]["group"] != c["group"])
+    schema = [st((4, ("bin", b"schema")), (5, i32(roots)))] + top
+    meta = ser(st((1, i32(2)), (2, ("list", 12, schema)), (3, i64(rows)), (4, ("list", 12, groups)),
+                  (6, ("bin", b"fmine fuzz seeds"))))
+    return bytes(out + meta + struct.pack("<I", len(meta)) + b"PAR1")
+
+
+def omf_input(index: bytes, members) -> bytes:
+    """The omf target's input: the index text and the members, each length-prefixed."""
+    out = struct.pack("<I", len(index)) + index
+    for name, data in members:
+        out += bytes([len(name)]) + name.encode() + struct.pack("<I", len(data)) + data
+    return out
+
+
+def omf_every_kind(form) -> bytes:
+    """Every geometry and attribute type, as omf::tests::every_kind builds them, with Parquet in `form`."""
+    members = []
+
+    def arr(cols, rows):
+        name = f"{len(members) + 1}.parquet"
+        members.append((name, parquet(cols, rows, form)))
+        return {"filename": name, "item_count": rows}
+
+    def image(data, ext):
+        name = f"{len(members) + 1}.{ext}"
+        members.append((name, data))
+        return {"filename": name, "item_count": 0}
+
+    def xyz(points, physical=F64):
+        return arr([col(a, physical, [p[i] for p in points]) for i, a in enumerate("xyz")], len(points))
+
+    def u32(name, v):
+        return col(name, I32, v, ("int", 32, False))
+
+    def u8(name, v):
+        return col(name, I32, v, ("int", 8, False))
+
+    def ramp(rows):
+        return arr([u8(ch, [r[i] for r in rows]) for i, ch in enumerate("rgba")], len(rows))
+
+    def attribute(name, location, data):
+        return {"name": name, "units": "u", "location": location, "data": data}
+
+    def element(name, geometry, attributes):
+        return {"name": name, "geometry": geometry, "attributes": attributes}
+
+    tri, micros_2000 = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], 946_684_800_000_000
+    points = {"name": "points", "color": [1, 2, 3, 255], "metadata": {"m": "x"},
+              "geometry": {"type": "PointSet", "origin": [1, 2, 3], "vertices": xyz(tri)},
+              "attributes": [attribute("grade", "Vertices", {
+                  "type": "Number", "values": arr([col("number", F64, [1.5, 2.5], None, [True, False, True])], 3),
+                  "colormap": {"type": "Continuous", "range": {"min": 0, "max": 10},
+                               "gradient": ramp([[0, 0, 0, 255], [255, 255, 255, 255]])}})]}
+    lines = element("lines", {"type": "LineSet",
+                              "vertices": xyz([[0.0, 0.0, 0.0], [0.1, 1.0, 1.0], [2.0, 2.0, -2.5]], F32),
+                              "segments": arr([u32("a", [0, 1]), u32("b", [1, 2])], 2)},
+                    [attribute("label", "Primitives", {
+                        "type": "Text", "values": arr([col("text", BYTES, [b"a"], "string", [True, False])], 2)})])
+    present = [True, False, True]
+    paint = arr([grouped(u8(ch, v), "color", present) for ch, v in zip("rgba", ([1, 5], [2, 6], [3, 7], [4, 8]))], 3)
+    png = image(b"\x89PNG\r\n\x1a\nnot really an image", "png")
+    uv = arr([col("u", F64, [0.0, 1.0, 0.0]), col("v", F64, [0.0, 0.0, 1.0])], 3)
+    jpg = image(bytes([0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3]), "jpg")
+    surface = element("tri", {"type": "Surface", "vertices": xyz(tri),
+                              "triangles": arr([u32("a", [0]), u32("b", [1]), u32("c", [2])], 1)}, [
+        attribute("paint", "Vertices", {"type": "Color", "values": paint}),
+        attribute("tex", "Vertices", {"type": "MappedTexture", "image": png, "texcoords": uv}),
+        attribute("proj", "Projected", {"type": "ProjectedTexture", "image": jpg,
+                                        "orient": {"origin": [0, 0, 0], "u": [1, 0, 0], "v": [0, 1, 0]},
+                                        "width": 2, "height": 3})])
+    grid = element("grid", {"type": "GridSurface", "orient": {"origin": [0, 0, 0], "u": [0, 1, 0], "v": [-1, 0, 0]},
+                            "grid": {"type": "Regular", "size": [1, 2], "count": [2, 1]},
+                            "heights": arr([col("scalar", F64, [0.0, 1.0, 2.0, 3.0, 4.0, 5.0])], 6)},
+                   [attribute("wet", "Primitives", {
+                       "type": "Boolean", "values": arr([col("bool", BOOL, [True], None, [True, False])], 2)})])
+    parents, corners = [[0, 0, 0], [1, 0, 0], [1, 0, 0]], [[0, 0, 0, 2, 2, 2], [0, 0, 0, 1, 1, 1], [1, 1, 1, 2, 2, 2]]
+    sub = arr([u32(f"parent_{a}", [p[i] for p in parents]) for i, a in enumerate("uvw")]
+              + [u32(f"corner_{m}_{a}", [c[3 * j + i] for c in corners])
+                 for j, m in enumerate(("min", "max")) for i, a in enumerate("uvw")], 3)
+    blocks = element("blocks", {
+        "type": "BlockModel",
+        "orient": {"origin": [10, 20, 30], "u": [0.6, 0.8, 0], "v": [-0.8, 0.6, 0], "w": [0, 0, 1]},
+        "grid": {"type": "Regular", "size": [10, 10, 5], "count": [2, 1, 1]},
+        "subblocks": {"type": "Regular", "count": [2, 2, 2], "subblocks": sub, "mode": "Octree"}}, [
+        {"name": "rock", "units": "u", "location": "Subblocks", "data": {
+            "type": "Category",
+            "values": arr([col("index", I32, [0, 1], ("int", 32, False), [True, True, False])], 3),
+            "names": arr([col("name", BYTES, [b"ore", b"waste"], "string")], 2),
+            "gradient": ramp([[255, 0, 0, 255], [0, 0, 255, 255]]),
+            "attributes": [attribute("density", "Categories", {
+                "type": "Number", "values": arr([col("number", I64, [3], None, [True, False])], 2)})]}},
+        attribute("mined", "Primitives", {
+            "type": "Number", "values": arr([col("number", I64, [micros_2000], "micros", [True, False])], 2),
+            "colormap": {"type": "Discrete",
+                         "boundaries": arr([col("value", I64, [0, micros_2000], "micros"),
+                                            col("inclusive", BOOL, [False, True])], 2),
+                         "gradient": ramp([[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3]])}})])
+    free = arr([u32("parent_u", [1]), u32("parent_v", [0]), u32("parent_w", [2])]
+               + [col(f"corner_{m}_{a}", F32, [v]) for m, vs in (("min", (0.0, 0.0, 0.0)), ("max", (0.5, 1.0, 0.25)))
+                  for a, v in zip("uvw", vs)], 1)
+    tensor = element("tensor", {
+        "type": "BlockModel", "orient": {"origin": [0, 0, 0]},
+        "grid": {"type": "Tensor", "u": arr([col("scalar", F64, [1.0, 2.0])], 2),
+                 "v": arr([col("scalar", F64, [3.0])], 1), "w": arr([col("scalar", F32, [4.0, 5.0, 6.5])], 3)},
+        "subblocks": {"type": "Freeform", "subblocks": free}}, [
+        attribute("when", "Subblocks", {
+            "type": "Number", "values": arr([col("number", I32, [10_957], "date", [True])], 1)}),
+        attribute("dir", "Subblocks", {"type": "Vector", "values": arr(
+            [grouped(col("x", F64, [1.0]), "vector", [True]), grouped(col("y", F64, [2.0]), "vector", [True])], 1)})])
+    children = [element("child", {"type": "PointSet", "vertices": xyz([p])}, []) for p in ([5.0] * 3, [6.0] * 3)]
+    composite = element("group", {"type": "Composite", "elements": children}, [
+        attribute("arrow", "Elements", {"type": "Vector", "values": arr(
+            [grouped(col(a, F64, [v]), "vector", [True, False]) for a, v in zip("xyz", (0.0, 0.0, 1.0))], 2)})])
+    project = {"name": "pit", "description": "d", "coordinate_reference_system": "EPSG:32633", "units": "m",
+               "origin": [100, 200, 0], "author": "a", "application": "t", "date": "2000-01-01T00:00:00Z",
+               "metadata": {"k": 1}, "unknown_key": True,
+               "elements": [points, lines, surface, grid, blocks, tensor, composite]}
+    return omf_input(json.dumps(project).encode(), members)
+
+
+def omf_samples(directory: str) -> list[bytes]:
+    """The omf-rust sample files under `directory` of at most 64 KiB, in the omf target's input format."""
+    out = []
+    for path in sorted(Path(directory).rglob("*.omf")):
+        if path.stat().st_size > 64 << 10:
+            continue
+        try:
+            with zipfile.ZipFile(path) as z:
+                index = gzip.decompress(z.read("index.json.gz"))
+                members = [(n, z.read(n)) for n in z.namelist() if n != "index.json.gz" and len(n) < 256]
+        except (OSError, KeyError, zipfile.BadZipFile):
+            continue
+        out.append(omf_input(index, members))
+    return out
+
+
 def main() -> None:
     root, out = Path(sys.argv[1]), Path(sys.argv[2])
     seeds: dict[str, list[bytes]] = {t: [] for t in
                                      ("codec", "anchor", "journal", "xlsx", "numfmt", "registry", "record", "html",
-                                      "cli", "cli_run", "pit", "cpit", "pcpsp")}
+                                      "cli", "cli_run", "pit", "cpit", "pcpsp", "omf")}
+
+    # omf: every geometry and attribute type in v1 and v2 pages, then with pages and row groups split small and
+    # bit-packed levels; then the omf-rust samples, when FMINE_OMF_DIR names a checkout.
+    big = 1 << 62
+    for form in ((False, big, big, False), (True, big, big, False), (False, 2, 3, True), (True, 1, 2, True)):
+        seeds["omf"].append(omf_every_kind(form))
+    if os.environ.get("FMINE_OMF_DIR"):
+        seeds["omf"] += omf_samples(os.environ["FMINE_OMF_DIR"])
 
     # codec: mode, script length, script (one read per byte), payload. A script byte's kind is its value mod 11 and
     # its bound its high nibble: every kind once, then bytes, strings and sequences under small, mid and no bounds.

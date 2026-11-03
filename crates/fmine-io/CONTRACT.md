@@ -299,8 +299,12 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   with true CRC-32s and reads it: 1,000 mutants in each of three page forms (GZIP v2, and v1 and v2 without a
   codec). None panicked and every refusal was `FMINE-REF-506`; the forms read 36, 40 and 55 and refused the rest,
   over a floor of one in fifty each way. Its floor was one in twenty until the GZIP form read 50 of 1,500, because
-  the gzip CRC-32 refuses most edits to a page. It is a bounded random search, not a proof, and there is no OMF fuzz
-  target. Not checked: files from writers other than omf-rust.
+  the gzip CRC-32 refuses most edits to a page. It is a bounded random search, not a proof. The coverage-guided
+  target is `fuzz/fuzz_targets/omf.rs`. It takes the members, not the archive, so that a mutation is not stopped by
+  a CRC-32, and it checks every project it reads for in-range vertex, category and sub-block indices. Its seeds
+  (`fuzz/seeds.py`) are the every-kind file in four uncompressed page forms, plus the omf-rust samples under
+  64 KiB when `FMINE_OMF_DIR` is set. Its first 24 h run started 2026-11-03 03:07Z; its result belongs on BD-197.
+  Not checked: files from writers other than omf-rust.
 - FACT (BD-347, `reliance::tests`): exact artifact issuance and current-use retrieval preserve bytes and
   refuse after withdrawal; invalid digest, key, time, stale or absent trust, and an existing destination
   cannot create an authorized output. A failed final append retains the unissued artifact and poisons its
