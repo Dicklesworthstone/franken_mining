@@ -1,0 +1,17 @@
+# Capture record (§33.2) for proj_utm_corpus.txt: PROJ's easting and northing for 10,000 WGS 84 points in each of
+# the nine projected CRSs of registries/crs.toml (bd-035, PO-CRS-1). The points are not stored: each comes from a
+# 64-bit LCG seeded with the EPSG code, as whole microdegrees over the zone's area of use (its 6-degree strip,
+# latitudes 0 to 84 north or -80 to 0 south); scripts/oracle/proj_utm_corpus.py documents the draw, and
+# fmine-crs's tests/proj_corpus.rs draws the same points and recomputes inputs_digest, the sha256 of every point as
+# `<lat bits> <lon bits>` (16 hex digits each), one line per point, all CRSs in registry order. Each CRS is PROJ's
+# pipeline `unitconvert xy_in=deg xy_out=rad`, then `utm zone=<z> [south] ellps=WGS84`, as pyproj's Transformer from
+# EPSG:4326 (always_xy) builds it; the output is printed to 0.1 mm.
+oracle = "PROJ (through pyproj's Transformer, EPSG:4326 to each EPSG:326xx/327xx code)"
+version = "pyproj 3.8.0 wheel from PyPI, bundling PROJ 9.8.1; Python 3 (Homebrew) in a scratch venv"
+platform = "arm64-darwin"
+inputs_digest = "sha256:b9dbb887e2c6cdb3db56e10bfb9451c51bd1d6960a46db32cd9fe452f5a589db"
+outputs_digest = "sha256:0d8a0b874e965047a971baa91867e95802cf13d92359925a421dd4d2fa88feec"
+command = "<python with pyproj 3.8.0> -I scripts/oracle/proj_utm_corpus.py registries/crs.toml"
+captured_by = "coding agent that is writing the fmine-crs comparison (no separate lab runner)"
+date = "2026-11-03"
+licence = "PROJ is MIT-licensed (pyproj MIT); the coordinates are its computed output for generated points; the script is this repository's licence"
