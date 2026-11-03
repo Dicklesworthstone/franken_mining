@@ -600,6 +600,22 @@ pub(super) fn rejection_json(r: &StructuralRejection) -> String {
             js(crate::entity::render::phase_name(phase)),
             rq(shortfall.major)
         ),
+        StructuralRejection::EntityCapitalCallShortfall {
+            entity_id,
+            call_id,
+            state_id,
+            period_id,
+            checkpoint_date,
+            shortfall,
+        } => format!(
+            "{{\"kind\":\"entity_capital_call_shortfall\",\"entity_id\":{},\"call_id\":{},\"state_id\":{},\"period_id\":{},\"checkpoint_date\":{},\"shortfall\":{}}}",
+            js(entity_id),
+            js(call_id),
+            js(state_id),
+            js(period_id),
+            js(checkpoint_date),
+            rq(shortfall.major)
+        ),
     }
 }
 
@@ -853,6 +869,17 @@ impl EvaluatedProgram {
                             "entity cash-floor shortfall for {entity_id} in {state_id} at {} ({checkpoint_date}, {}): {} USD",
                             period_id.as_deref().unwrap_or("opening"),
                             crate::entity::render::phase_label(phase),
+                            ratio(shortfall.major)
+                        ),
+                        StructuralRejection::EntityCapitalCallShortfall {
+                            entity_id,
+                            call_id,
+                            state_id,
+                            period_id,
+                            checkpoint_date,
+                            shortfall,
+                        } => format!(
+                            "capital-call shortfall for {entity_id}/{call_id} in {state_id} at {period_id} ({checkpoint_date}): {} USD",
                             ratio(shortfall.major)
                         ),
                     })

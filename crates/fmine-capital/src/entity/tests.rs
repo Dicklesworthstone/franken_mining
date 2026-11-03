@@ -41,7 +41,7 @@ pub(super) fn with_entities(
         entities: entities.iter().map(|(id, _, _)| Entity { id: (*id).into(), label: (*id).into() }).collect(),
         periods: periods.iter().map(|(id, dates)| EntityPeriod { id: (*id).into(), cash_period: (*dates).into() }).collect(),
         floors: vec![], opening_cash: vec![], baseline_flows: vec![], candidate_flows: vec![],
-        transfers: vec![], distributions: vec![], gates: vec![], debt: None,
+        transfers: vec![], distributions: vec![], gates: vec![], debt: None, capital_calls: None,
     };
     for (entity, opening, floor) in entities {
         for (state, _) in &program.weights.value.states {

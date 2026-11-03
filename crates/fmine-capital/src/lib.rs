@@ -50,6 +50,7 @@ pub const EQUITY_ENTITY_DEBT_CASH_NO_CLAIM: &str = "Static comparison conditiona
 pub const ENTITY_VALUATIONS_NO_CLAIM: &str = "Static comparison conditional on declared shared scenarios and separate complete equity-NAV and share-change matrices for the primary and secondary entities. Only the named primary entity's expected change in NAV per actual share determines selection. Every declared entity must retain positive ending shares; all statistics and hindsight comparisons use this jointly structurally feasible population. Optional entity-specific tail-loss limits apply to each complete unconditional shared-state distribution, and all limits bind jointly. Secondary values are separate reporting and constraint quantities, never weighted into the objective or added across overlapping valuation perimeters. Share units are normalized exactly. Optional aggregate or dated cash inputs constrain only their declared checkpoints and are not charged to already-net NAV again. No ownership-based NAV derivation, capital-call dilution, transaction reconciliation, undeclared project interaction, calibration, historical validation, selection frequency, regulatory claim or execution authorization is supplied. All probabilities and valuations remain uncalibrated source assumptions.";
 pub const ENTITY_VALUATIONS_CASH_NO_CLAIM: &str = "Static comparison conditional on separate source-declared primary and secondary equity-NAV/share matrices over the same shared scenarios. The primary entity's expected per-share change is the sole objective. Every entity's ending shares must remain positive, and every declared per-share tail-loss limit binds the complete unconditional distribution; hindsight statistics use the jointly structurally feasible population before risk. Secondary valuation perimeters need not be cash entities, and their values are never inferred from ownership or summed into the primary objective. Entity cash follows explicit native flows, fixed transfers and gated child-first distributions. Opening, pre-distribution and closing floors remain binding even after later receipts; outside ownership payouts leave the graph. Cash movements are not charged to any already-net NAV again. No automatic dilution, partner contribution, fiscal rule, debt covenant, valuation consistency reconciliation, calibration, historical validation, selection frequency, regulatory claim or execution authorization is inferred. Inputs remain uncalibrated assumptions.";
 pub const ENTITY_VALUATIONS_DEBT_NO_CLAIM: &str = "Static comparison conditional on separate source-declared primary and secondary equity-NAV/share matrices, shared scenarios, entity cash and explicit external senior debt terms. Only primary expected NAV/share change determines selection; all entities require positive ending shares and all declared per-share tail-loss limits bind jointly on complete unconditional outcomes. Secondary values are never inferred from cash or ownership, combined across overlapping perimeters, or treated as another objective. Native cash excludes modeled debt cash. Full-period interest on opening principal plus draws and mandatory principal service precede pre-distribution floor checks. Separately declared CFADS is not another receipt; coverage excludes sweeps and zero-service permission is explicit. Child-first sweeps include child receipts and apply to roots before ownership distributions. Earlier funding failures remain binding and cash/principal conservation is exact. Debt and other cash movements do not adjust already-net valuations again. No actual loan terms, annualization, default remedy, waiver, capital-call dilution, partner top-up, transaction reconciliation, calibration, historical validation, selection frequency, regulatory claim or execution authorization is inferred.";
+pub const ENTITY_CAPITAL_CALL_NO_CLAIM: &str = "Static comparison conditional on declared shared scenarios, separate entity cash and explicit pre-money subscription terms. Native cash excludes modeled capital-call contributions. Each active call debits the full declared parent contribution and credits the JV with parent plus outside funding; ownership becomes (prior parent share times declared pre-money value plus parent contribution) divided by pre-money value plus all contributions. Explicit sequences govern multiple calls within an entity-period. Updated ownership applies to that period's and later child-first distributions. Calls settle before any modeled debt service and pre-distribution cash-floor checks. A funding shortfall remains a structural rejection even when existing JV cash covers expenditures; unaffordable parent contributions are never clipped. Inactive and rejected calls remain visible. Optional debt retains its declared coverage and sweep rules. Selection uses the primary already-net NAV objective, or its per-share change when equity is declared; every declared secondary share-count and tail-loss constraint remains binding. Cash and ownership calculations never infer or adjust those independent valuations or share counts. Inputs remain uncalibrated assumptions; no actual JV agreement, penalty dilution, automatic top-up, subscription rollback, intra-phase liquidity guarantee, transaction reconciliation, historical validation, regulatory claim or execution authorization is supplied.";
 const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);
 type Result<T> = std::result::Result<T, Refusal>;
@@ -262,6 +263,13 @@ pub struct ProgramInputs {
 }
 
 fn no_claim_for(inputs: &ProgramInputs) -> &'static str {
+    if inputs
+        .entity_funding
+        .as_ref()
+        .is_some_and(|claim| claim.value.capital_calls.is_some())
+    {
+        return ENTITY_CAPITAL_CALL_NO_CLAIM;
+    }
     if !inputs.entity_valuations.is_empty() {
         return match inputs.entity_funding.as_ref() {
             Some(claim) if claim.value.debt.is_some() => ENTITY_VALUATIONS_DEBT_NO_CLAIM,
@@ -323,6 +331,14 @@ pub enum StructuralRejection {
         period_id: Option<String>,
         checkpoint_date: String,
         phase: EntityCashPhase,
+        shortfall: ExactMoney,
+    },
+    EntityCapitalCallShortfall {
+        entity_id: String,
+        call_id: String,
+        state_id: String,
+        period_id: String,
+        checkpoint_date: String,
         shortfall: ExactMoney,
     },
     NonpositiveShareCount {
@@ -1992,6 +2008,18 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
                             checkpoint_date: checkpoint.checkpoint_date.clone(),
                             phase: checkpoint.phase,
                             shortfall: money(arithmetic(checkpoint.slack.major.checked_neg())?),
+                        });
+                    }
+                }
+                for call in &state.capital_calls {
+                    if call.funding_surplus.major.signum() < 0 {
+                        rejected.push(StructuralRejection::EntityCapitalCallShortfall {
+                            entity_id: call.entity_id.clone(),
+                            call_id: call.call_id.clone(),
+                            state_id: state.state_id.clone(),
+                            period_id: call.period_id.clone(),
+                            checkpoint_date: call.checkpoint_date.clone(),
+                            shortfall: money(arithmetic(call.funding_surplus.major.checked_neg())?),
                         });
                     }
                 }

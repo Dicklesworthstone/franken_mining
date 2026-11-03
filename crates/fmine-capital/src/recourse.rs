@@ -10,6 +10,7 @@ mod tests;
 
 pub const MAX_OBSERVATIONS: usize = 4;
 pub const MAX_POLICIES: usize = 256;
+pub const ENTITY_CAPITAL_CALL_NO_CLAIM: &str = "Exact bounded two-stage comparison with explicitly declared pre-money subscription calls, entity cash and independent already-net NAV inputs. A policy responds only to purchased observations. Initial commitments and their future capital calls persist after abandonment; a recourse candidate cannot activate a call before observation. Every active call debits its full planned parent funding, credits parent plus outside cash to the JV and updates ownership using the declared pre-money value and explicit sequence. Updated shares govern current and later dividends, without inferring terminal NAV or equity share counts. Calls settle before modeled debt service and pre-distribution floors. Underfunded calls and unaffordable parent contributions remain structural failures; inactive and rejected call ledgers remain visible. Only each realized subset's same-state cash, ownership, debt and rejection rows enter a policy. Optional debt and every declared valuation constraint remain binding. Risk uses the complete unconditional policy; net adaptive value is separate from the static comparison and is not added to NAV again. Inputs remain uncalibrated assumptions; no actual JV agreement, penalty dilution, automatic top-up, subscription rollback, transaction reconciliation, further decision stages, intra-phase liquidity guarantee, historical validation, regulatory claim or execution authorization is supplied.";
 pub const ENTITY_VALUATION_NO_CLAIM: &str = "Exact bounded two-stage comparison of complete declared entity NAV and share-count matrices on one shared scenario index. The primary equity entity supplies the sole optimization objective; each additional entity retains its own valuation basis, actual-share denominator, statistics and optional signed tail-loss ceiling. All entities require positive ending shares on every realized path. Risk limits are applied jointly to each complete unconditional policy distribution; entity NAV/share values are never added, averaged or inferred from cash ownership. Initial NAV and share commitments survive every continuation, including abandonment. Only a realized subset's same-state ledgers and structural failures enter that policy; a static subset's whole-distribution risk result is not inherited. Dated funding, entity cash and any declared debt constraints remain binding, and cash movements are not charged to already-net NAV again. Decisions respond only to purchased declared observations. Net adaptive value compares the same primary objective under the same joint limits and remains separate from NAV. Inputs remain uncalibrated assumptions; no actual deal terms, automatic contractual ownership dilution, further decision stages, historical validation, selection frequency, regulatory claim or execution authorization is inferred.";
 pub const NO_CLAIM: &str = "Exact bounded two-stage comparison conditional on the declared shared scenarios, paid information gate, observation classes, stage assignments, dated cash flows and net NAV inputs. Initial commitments and their full declared effects are retained in every continuation. A policy can respond only to the declared observation after purchasing the information gate; otherwise one common continuation applies to every state. Risk is evaluated over each complete unconditional policy distribution. Net adaptive value is reported separately against the best static subset under the same objective and risk constraint; it is already included in policy outcomes and must not be added again. Cash checks cover only opening and declared period-end checkpoints. Input weights and information assumptions are uncalibrated. No further stages, implicit information, intra-period payment ordering, entity waterfalls, execution authorization, regulatory claim, selection-frequency estimate or historical validation is supplied.";
 pub const ENTITY_NO_CLAIM: &str = "Exact bounded two-stage comparison conditional on declared shared scenarios, paid information, observation classes, stage assignments and net NAV for the objective entity. Initial commitments and all their effects remain in every continuation. Decisions depend only on purchased declared observations; global risk uses the complete unconditional policy. Entity cash follows explicit native flows, fixed funding transfers and gated child-first ownership distributions, with outside shareholders' cash leaving the modeled graph. Floors are checked at initial opening, before distributions and at closing; later receipts never erase earlier breaches. A paid information gate must incur negative net native external cash before observation; an internal transfer alone is not payment. No partner top-up, dilution, debt-service covenant, fiscal rule, permission or second valuation denominator is inferred. Net adaptive value is separate from the full static comparison and must not be added to NAV again. Inputs remain uncalibrated assumptions. No further stages, intra-phase payment ordering, execution authorization, regulatory claim, selection frequency or historical validation is supplied.";
@@ -161,6 +162,14 @@ impl EvaluatedRecourseProgram {
 }
 
 fn no_claim_for(inputs: &RecourseInputs) -> &'static str {
+    if inputs
+        .program
+        .entity_funding
+        .as_ref()
+        .is_some_and(|claim| claim.value.capital_calls.is_some())
+    {
+        return ENTITY_CAPITAL_CALL_NO_CLAIM;
+    }
     if !inputs.program.entity_valuations.is_empty() {
         return ENTITY_VALUATION_NO_CLAIM;
     }
@@ -433,6 +442,19 @@ fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
         }
     }
     if let Some(entities) = entities {
+        if let Some(calls) = &entities.capital_calls {
+            for call in &calls.calls {
+                if earlier_periods.contains(call.period_id.as_str())
+                    && call.candidate_id.as_deref().is_some_and(|candidate| {
+                        stages.get(candidate) == Some(&DecisionStage::Recourse)
+                    })
+                {
+                    return Err(invalid(
+                        "a recourse candidate cannot activate a capital call before observation",
+                    ));
+                }
+            }
+        }
         for transfer in &entities.transfers {
             if earlier_periods.contains(transfer.period_id.as_str())
                 && transfer.candidate_id.as_deref().is_some_and(|candidate| {
@@ -583,6 +605,7 @@ fn rejection_state(reason: &StructuralRejection) -> Option<&str> {
         StructuralRejection::LiquidityShortfall { state_id, .. }
         | StructuralRejection::CashScheduleShortfall { state_id, .. }
         | StructuralRejection::EntityCashShortfall { state_id, .. }
+        | StructuralRejection::EntityCapitalCallShortfall { state_id, .. }
         | StructuralRejection::NonpositiveShareCount { state_id, .. }
         | StructuralRejection::EntityNonpositiveShareCount { state_id, .. } => Some(state_id),
         StructuralRejection::BudgetExceeded

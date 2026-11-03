@@ -304,6 +304,17 @@ fn rejection_text(reason: &StructuralRejection) -> String {
             crate::entity::render::phase_label(phase),
             ratio(shortfall.major)
         ),
+        StructuralRejection::EntityCapitalCallShortfall {
+            entity_id,
+            call_id,
+            state_id,
+            period_id,
+            checkpoint_date,
+            shortfall,
+        } => format!(
+            "capital-call shortfall for {entity_id}/{call_id} in {state_id} at {period_id} ({checkpoint_date}): {} USD",
+            ratio(shortfall.major)
+        ),
     }
 }
 

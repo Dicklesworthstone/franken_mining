@@ -37,8 +37,9 @@ Aggregate funding and scheduled funding are mutually exclusive; neither changes 
 DESIGN (BD-314, §23.2): optional `EntityFunding` is a third, mutually exclusive funding mode. Every named
 entity has explicit opening cash in each shared state, a floor for every period, and complete external
 baseline and candidate cash-flow matrices. Fixed funding transfers have two modeled endpoints, one period,
-a complete state-amount vector and an optional activating candidate. External partner funding must already
-appear in the native cash inputs; ownership never implies a partner contribution or a parent top-up.
+a complete state-amount vector and an optional activating candidate. Outside partner funding appears in
+native cash inputs unless separately declared as modeled capital-call cash below; ownership alone never
+implies a partner contribution or a parent top-up.
 
 Each state starts with opening-floor checks. Every period then applies native external flows and all fixed
 transfers, checks each entity's pre-distribution floor, processes ownership distributions child first, and
@@ -54,11 +55,36 @@ Blocked or capped cash remains with its entity. A parent's onward distribution i
 through deterministic child-first ordering. All amounts and carry balances remain rational, including
 sub-minor-unit ownership splits; no cash is rounded through fixed-decimal `Money`.
 
-Without modeled debt, every period proves closing cash plus external distributions equals opening cash plus
-native external flows. Internal transfers and parent receipts cancel exactly. A conservation failure
+Without modeled debt or capital calls, every period proves closing cash plus external distributions equals
+opening cash plus native external flows. Internal transfers and parent receipts cancel exactly. A conservation failure
 refuses the comparison. Source-bound NAV remains attributable to `objective_entity`; cash movements do
 not create another NAV gain or deduction. When equity is declared, its entity must equal that objective
 entity. The model does not derive another entity's NAV or infer dilution, taxes or actual lending terms.
+
+DESIGN (BD-314, §23.2): optional `EntityCapitalCallFunding` supports the explicitly declared
+`pre_money_subscription` method. Its `native_excludes_modeled_capital_calls` convention keeps these
+contributions out of native cash and fixed transfers. Each call names a distributing JV, one period,
+an optional activating candidate, an explicit sequence, and a basis. Every shared state supplies positive
+pre-money equity value `V`, nonnegative required funding `Q`, parent contribution `P` and outside contribution
+`X`. With prior parent ownership `s`, the new fraction is `(s*V+P)/(V+P+X)`; the outside fraction is its exact
+complement. No JV penalty, subscription price, top-up, actual agreement or terminal NAV is inferred.
+
+Full planned contributions settle even on infeasible paths: the parent pays `P` and the JV receives `P+X`.
+They are never clipped to affordable cash. Signed funding surplus `P+X-Q` below zero causes a named
+call/state structural rejection independently of cash floors, so existing JV cash cannot mask an unmet
+raise. Oversubscription is permitted when explicitly supplied. Partial subscriptions still change ownership
+on rejected paths; no rollback, arrears, remedy or default recovery is fabricated. Inactive calls retain
+their declared terms, report zero actual funding/surplus and leave ownership unchanged.
+
+Calls follow chronological periods and explicit sequence within each JV/period; identifiers and source row
+order do not determine economics. Multiple candidate-triggered alternatives may occupy distinct sequences,
+and even an excluded combined subset retains its declared full ledger. Ownership starts at the distribution
+edge's initial fraction, carries across calls and periods, and governs the current and later dividends.
+All call cash settles after native flows/fixed transfers and before modeled debt service, pre-distribution
+floor checks and child-first distributions. Cash is checked after this complete phase, without inferred
+intermediate payment ordering. Internal parent contributions cancel; outside call contributions enter the
+period conservation equation as a separate external inflow. Call cash, ownership fractions and separately
+declared primary/secondary equity NAV/share counts remain distinct quantities.
 
 DESIGN (BD-314, §23.2): optional `EntityDebtFunding` derives debt service, coverage locks and principal
 sweeps for one external senior facility per debtor entity. The explicit `native_excludes_modeled_debt`
@@ -160,6 +186,8 @@ state, and incur negative cumulative cash before the observation in every state.
 start of a noninitial scheduled cash period. Recourse candidates have explicit zero cash flows before it.
 All initial commitments, NAV/share changes and later contractual cash flows persist in every continuation,
 including abandonment. No cash flow, study cost or share effect disappears when the policy changes course.
+Initial candidates' later capital calls also persist after abandonment. A recourse candidate cannot
+activate a call before observation, including a zero-contribution call with a contractual funding target.
 
 Every realized path must satisfy budget, prerequisites, exclusions, cash floors and positive ending shares.
 The union of mutually exclusive branch actions is not a realized portfolio and is not charged as one.
@@ -202,6 +230,9 @@ Optional debt inputs remain inside that same entity Claim: every facility, cash/
 principal, rate, draw, payment cap, CFADS increment, coverage threshold, sweep fraction and explicit
 zero-service permission is bound, including terms for losing candidates. Debt-specific scope text is
 selected only when debt is declared; models without debt retain their existing receipts and report bytes.
+Capital-call method, cash convention, sequence, activation, basis and complete state terms bind into that
+same entity Claim, including inactive calls and losing candidates. Optional cash components and call arrays
+are omitted when calls are absent, preserving legacy report bytes and scope text.
 Each secondary valuation has its own Claim binding its complete equity declaration and candidate NAV matrix,
 including never-selectable candidates and the entity's loss ceiling. Its original source hash, row anchors,
 UU definitions and evidence metadata enter the same complete result binding. Secondary entities and rows are
@@ -244,6 +275,14 @@ remain unchanged.
   preserves the declared permission beside the calculated effective gate. `EntityFundingState.debt`
   retains every facility/period result in canonical period/facility order. Debt adds `facilities*periods`
   rows per state to the same 65,536 total-work bound before canonical tagging or enumeration.
+- `entity::capital_call::{EntityCapitalCallFunding, CapitalCall, CapitalCallState}`: optional pre-money
+  subscription declarations. Each call requires a distributing entity and its existing modeled parent,
+  a known period, optional known candidate, explicit basis and a sequence in `1..=64` unique within its
+  entity/period. At most 64 calls are admitted, each with all shared states. `CapitalCallResult` retains
+  declared and actual contributions, active status, funding surplus, prior/ending ownership and its exact
+  conservation residual. `CapitalCallCashFlows` separates internal parent receipts/payments from outside
+  contributions on checkpoints and period conservation. Every declared call adds one row per state to
+  the existing combined static/policy work bound before canonical tagging or enumeration.
 - `evaluate(&ProgramInputs) -> Result<EvaluatedProgram, Refusal>`: exact exhaustive comparison, bounded to
   1–8 candidates and 1–256 shared states (at most 256 subsets). Schedules admit 1–16 periods and at most
   65,536 checkpoints across all subsets: `2^candidates × states × (periods + 1)`. Bounds apply before schedule
@@ -366,6 +405,10 @@ Debt additionally refuses an unrecognized cash convention, more than one facilit
 incomplete/duplicate/foreign facility matrices, negative opening principal/draws/payment caps/rates,
 nonpositive coverage thresholds, sweep fractions outside `[0,1]`, currency mismatch or absent loan/CFADS
 bases. Recourse debt draws, principal caps and CFADS increments must each be zero before observation.
+Capital calls additionally refuse unknown methods/cash conventions, empty or oversized call populations,
+unknown distributors/periods/candidates, repeated call ids or entity/period sequences, missing or repeated
+states, nonpositive pre-money value, negative funding/contributions, currency mismatch and absent bases.
+Declared calls activated by a recourse candidate must occur at or after the observation boundary.
 Recourse additionally refuses incomplete/duplicate/foreign stage and observation mappings, an unknown or
 noninitial information candidate, a missing paid gate, absent or mistimed cash schedules, pre-observation
 recourse cash flows, and initial prerequisites that depend on a later decision. It admits at least one
@@ -398,10 +441,14 @@ dropped to obtain a plausible result. Input/source errors use the existing refus
 - A continuation is constant within each information set, and all first-stage commitments survive in every state.
 - Policy funding and structural constraints hold on each realized path; global risk uses the original state weights.
 - The static feasible set embeds in the policy set, so every available net adaptive value is nonnegative.
-- Cash cannot move between entities except through declared transfers and distributions. Parent ownership
-  never changes funding obligations or credits outside shareholders' cash to the parent.
+- Cash cannot move between entities except through declared transfers, capital calls and distributions.
+  Ownership alone never creates a funding obligation or credits outside shareholders' cash to the parent.
 - Every period conserves native external cash after explicitly accounting for outside distributions and,
-  when declared, external loan draws, interest, scheduled principal and sweeps. Principal conserves exactly.
+  when declared, outside call funding, external loan draws, interest, scheduled principal and sweeps.
+  Principal conserves exactly.
+- Every call preserves total ownership at one, carries the exact updated fraction into subsequent calls
+  and dividends, and retains full contributions on underfunded or unaffordable paths. Required-raise
+  shortfalls reject only policies that realize that same call/state, independent of existing JV cash.
 - Coverage uses the declared same-state CFADS and scheduled service; cash reserves, sweeps and loan draws
   do not silently change that numerator or denominator. Zero service has no numerical ratio.
 - Each entity's sweep consumes eligible child receipts before its own dividend, including roots with no
@@ -467,6 +514,13 @@ multilevel child-first payouts and retained pre-distribution failures. The three
 study, receives a conditional JV distribution, then builds only after Good: mean NAV 45, tail loss 5 and
 adaptive value 45, with parent cash 30/20. Direct guards cover matrix completeness, cycles, units, source and
 losing-input identity, permutation, overflow, pre-observation transfers and combined ledger-row bounds.
+Capital-call known answers cover a parent top-up from 3/5 to 4/5, outside-only dilution to 3/10,
+current and later dividends, exact ownership carry, explicit sequence versus source order, and inactive
+terms retained beside zero settlement. Independent required-raise failures remain visible despite surplus
+JV cash; full parent payments remain visible despite a floor breach and subsequent dividend recovery.
+The two-stage regression keeps an initial later call after abandonment and excludes an unrealized state's
+call shortfall from a feasible policy. Invalid terms/matrices/sequences, altered Claims and calls activated
+by future decisions before observation refuse.
 Debt known answers cover exact principal carry and falling interest after sweeps, coverage equality and
 locked-cash carry, mandatory-service shortfalls, draw-before-interest and independent CFADS, final payoff
 caps, explicit zero-service permissions, and nested intermediary/root sweeps of child receipts. The
@@ -502,7 +556,7 @@ Static declared net-NAV comparison with optional aggregate or dated-checkpoint f
 per-share optimization, entity-specific cash/ownership distributions, and bounded two-stage policies with
 purchased declared information. No additional
 decision stages, undeclared project interactions, inferred observation likelihoods, price/fiscal model,
-reference-class fitting, automatic capital-call dilution, changing cash-waterfall ownership, inferred loan agreements,
+reference-class fitting, inferred JV dilution penalties or loan agreements,
 blended or simultaneous optimization objectives, portfolio safety, calibrated probabilities or
 physical authorization is supplied. Reference-class bases must be explicitly declared, including an honest
 unadjusted basis; the system does not apply an unnamed adjustment. Selection frequency is explicitly

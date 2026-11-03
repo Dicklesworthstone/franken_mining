@@ -157,8 +157,17 @@ pub(crate) fn funding_json(funding: &EntityFunding) -> String {
     let debt = funding.debt.as_ref().map_or_else(String::new, |debt| {
         format!(",\"debt\":{}", debt::render::funding_json(debt, &order))
     });
+    let capital_calls = funding
+        .capital_calls
+        .as_ref()
+        .map_or_else(String::new, |calls| {
+            format!(
+                ",\"capital_calls\":{}",
+                capital_call::render::funding_json(calls, &order)
+            )
+        });
     format!(
-        "{{\"model_key\":{},\"currency\":{},\"cash_basis\":{},\"opening_date\":{},\"objective_entity\":{},\"entities\":[{entities}],\"periods\":[{periods}],\"floors\":[{floors}],\"opening_cash\":[{opening}],\"baseline_flows\":[{baseline}],\"candidate_flows\":[{candidates}],\"transfers\":[{transfers}],\"distributions\":[{distributions}],\"gates\":[{gates}]{debt}}}",
+        "{{\"model_key\":{},\"currency\":{},\"cash_basis\":{},\"opening_date\":{},\"objective_entity\":{},\"entities\":[{entities}],\"periods\":[{periods}],\"floors\":[{floors}],\"opening_cash\":[{opening}],\"baseline_flows\":[{baseline}],\"candidate_flows\":[{candidates}],\"transfers\":[{transfers}],\"distributions\":[{distributions}],\"gates\":[{gates}]{debt}{capital_calls}}}",
         js(&funding.model_key),
         currency(funding.currency),
         js(&funding.cash_basis),
@@ -183,8 +192,9 @@ pub(crate) fn assessment_json(assessment: &EntityFundingAssessment) -> String {
 fn state_json(state: &EntityFundingState) -> String {
     let checkpoints = state.checkpoints.iter().map(|c| {
         let debt = c.debt.as_ref().map_or_else(String::new, |flows| format!(",\"debt\":{}", debt::render::cash_flows_json(flows)));
+        let capital_call = c.capital_call.as_ref().map_or_else(String::new, |flows| format!(",\"capital_call\":{}", capital_call::render::cash_flows_json(flows)));
         format!(
-        "{{\"entity_id\":{},\"period_id\":{},\"checkpoint_date\":{},\"phase\":{},\"opening_cash\":{},\"baseline_cash_flow\":{},\"candidate_cash_flow\":{},\"transfer_in\":{},\"transfer_out\":{},\"distribution_in\":{},\"distribution_out\":{},\"closing_cash\":{},\"minimum_cash\":{},\"slack\":{}{debt}}}",
+        "{{\"entity_id\":{},\"period_id\":{},\"checkpoint_date\":{},\"phase\":{},\"opening_cash\":{},\"baseline_cash_flow\":{},\"candidate_cash_flow\":{},\"transfer_in\":{},\"transfer_out\":{},\"distribution_in\":{},\"distribution_out\":{},\"closing_cash\":{},\"minimum_cash\":{},\"slack\":{}{debt}{capital_call}}}",
         js(&c.entity_id), c.period_id.as_deref().map_or_else(|| "null".into(), js), js(&c.checkpoint_date), js(phase_name(&c.phase)), rq(c.opening_cash.major), rq(c.baseline_cash_flow.major), rq(c.candidate_cash_flow.major), rq(c.transfer_in.major), rq(c.transfer_out.major), rq(c.distribution_in.major), rq(c.distribution_out.major), rq(c.closing_cash.major), rq(c.minimum_cash.major), rq(c.slack.major)
     )}).collect::<Vec<_>>().join(",");
     let transfers = state.transfers.iter().map(|t| format!(
@@ -199,8 +209,9 @@ fn state_json(state: &EntityFundingState) -> String {
     )}).collect::<Vec<_>>().join(",");
     let conservation = state.conservation.iter().map(|c| {
         let debt = c.debt.as_ref().map_or_else(String::new, |flows| format!(",\"debt\":{}", debt::render::cash_flows_json(flows)));
+        let capital_call = c.capital_call.as_ref().map_or_else(String::new, |flows| format!(",\"capital_call\":{}", capital_call::render::cash_flows_json(flows)));
         format!(
-        "{{\"period_id\":{},\"checkpoint_date\":{},\"opening_cash\":{},\"baseline_cash_flow\":{},\"candidate_cash_flow\":{},\"internal_transfers\":{},\"internal_distributions\":{},\"external_distributions\":{},\"closing_cash\":{},\"residual\":{}{debt}}}",
+        "{{\"period_id\":{},\"checkpoint_date\":{},\"opening_cash\":{},\"baseline_cash_flow\":{},\"candidate_cash_flow\":{},\"internal_transfers\":{},\"internal_distributions\":{},\"external_distributions\":{},\"closing_cash\":{},\"residual\":{}{debt}{capital_call}}}",
         js(&c.period_id), js(&c.checkpoint_date), rq(c.opening_cash.major), rq(c.baseline_cash_flow.major), rq(c.candidate_cash_flow.major), rq(c.internal_transfers.major), rq(c.internal_distributions.major), rq(c.external_distributions.major), rq(c.closing_cash.major), rq(c.residual.major)
     )}).collect::<Vec<_>>().join(",");
     let debt = if state.debt.is_empty() {
@@ -216,8 +227,21 @@ fn state_json(state: &EntityFundingState) -> String {
                 .join(",")
         )
     };
+    let capital_calls = if state.capital_calls.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ",\"capital_calls\":[{}]",
+            state
+                .capital_calls
+                .iter()
+                .map(capital_call::render::result_json)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
     format!(
-        "{{\"state_id\":{},\"checkpoints\":[{checkpoints}],\"transfers\":[{transfers}],\"distributions\":[{distributions}],\"conservation\":[{conservation}],\"minimum_slack\":{}{debt}}}",
+        "{{\"state_id\":{},\"checkpoints\":[{checkpoints}],\"transfers\":[{transfers}],\"distributions\":[{distributions}],\"conservation\":[{conservation}],\"minimum_slack\":{}{debt}{capital_calls}}}",
         js(&state.state_id),
         rq(state.minimum_slack.major)
     )
@@ -387,6 +411,9 @@ pub(crate) fn inputs_markdown(out: &mut String, claim: &Claim<EntityFunding>) {
     if let Some(debt) = &f.debt {
         debt::render::inputs_markdown(out, debt, &order);
     }
+    if let Some(calls) = &f.capital_calls {
+        capital_call::render::inputs_markdown(out, calls, &order);
+    }
 }
 
 pub(crate) fn assessment_markdown(
@@ -444,6 +471,7 @@ pub(crate) fn assessment_markdown(
         }
         debt::render::checkpoint_markdown(out, state);
         debt::render::assessment_markdown(out, state);
+        capital_call::render::assessment_markdown(out, state);
         out.push_str("\n**Fixed transfers and capital calls**\n\nActual amounts debit the payer and credit the recipient equally.\n\n| Transfer | Period | Date | From | To | Candidate trigger | Active | Declared amount | Actual amount | Basis |\n|---|---|---|---|---|---|---|---:|---:|---|\n");
         for t in &state.transfers {
             let _ = writeln!(
@@ -496,7 +524,9 @@ pub(crate) fn assessment_markdown(
                 ratio(d.cash_after_distribution.major)
             );
         }
-        if state.debt.is_empty() {
+        if !state.capital_calls.is_empty() {
+            out.push_str("\n**Cash conservation across the modeled graph**\n\nInternal transfers, parent subscriptions and parent dividend receipts move cash between entities. Outside subscriptions enter the graph; outside dividends and any modeled debt service leave it. The exact residual is closing cash plus outside dividends, modeled interest, scheduled principal and sweeps, minus opening cash, native flows, modeled loan draws and outside subscription funding. Subscription and debt components are retained below.\n\n| Period | Date | Opening cash | Baseline net | Candidate net | Internal transfers | Internal distributions | External distributions | Closing cash | Residual |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---:|\n");
+        } else if state.debt.is_empty() {
             out.push_str("\n**Cash conservation across the modeled graph**\n\nInternal transfers and parent distribution receipts move cash between entities. External ownership distributions leave the graph. The exact residual is closing cash plus external distributions minus opening cash and native flows.\n\n| Period | Date | Opening cash | Baseline net | Candidate net | Internal transfers | Internal distributions | External distributions | Closing cash | Residual |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---:|\n");
         } else {
             out.push_str("\n**Cash conservation across the modeled graph**\n\nInternal transfers and parent distribution receipts move cash between entities. External ownership distributions and debt service leave the graph; draws enter it. The exact residual is closing cash plus external distributions, interest, scheduled principal and sweeps, minus opening cash, native flows and draws. All debt movement totals are retained below.\n\n| Period | Date | Opening cash | Baseline net | Candidate net | Internal transfers | Internal distributions | External distributions | Closing cash | Residual |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---:|\n");
@@ -518,5 +548,6 @@ pub(crate) fn assessment_markdown(
             );
         }
         debt::render::conservation_markdown(out, state);
+        capital_call::render::conservation_markdown(out, state);
     }
 }
