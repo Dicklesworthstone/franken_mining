@@ -49,7 +49,6 @@ Not applicable: no Claims are emitted. Uncertainty travels only as `sigma_m`, co
 PROJ, which §33.2 names as the oracle for CRS: `fixtures/fmine-crs/proj_utm_corpus.txt` holds PROJ 9.8.1's easting and northing (pyproj 3.8.0, to 0.1 mm) for 10,000 generated points per registered UTM CRS, with its capture record, made by `scripts/oracle/proj_utm_corpus.py`. The points are drawn again by the test from the same integer generator, which checks the record's inputs digest (`generated_points_match_the_capture_inputs_digest`). The Helmert shift and the mine grid have no oracle.
 
 ## 10. Known gaps
-- BD-033 (bd-033) and BD-034 (bd-034): the code and tests exist, but they stay open behind bd-023 (`Qty<D, B, R>`).
 - The PROJ comparison covers the UTM projection only, inside each registered zone's strip, and ran on one host (arm64-darwin). GATE-PORT-01's other formats are not covered.
 - `Helmert7Params::apply` has no test and no input checks; no "registered Helmert transforms" registry exists (BD-033's title), so PO-CRS-1 has no Helmert row to check.
 - The UTM zone is not checked against the longitude.
