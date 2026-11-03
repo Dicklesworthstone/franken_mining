@@ -323,6 +323,14 @@ remain unchanged.
   positive `n/d`. The parser bounds text to 4 MiB, rows to 45,056 and UU terms to 64. Core admission and
   parsing bound identifiers to 128 bytes and descriptions, bases, source paths and locators to 4096 bytes,
   preventing one large identifier from expanding into every enumerated subset's state statistics.
+  Optional secondary `[[entity_valuation]]` requires `entity`, `share_class`, `valuation_basis`,
+  `shares_per_unit`, `initial_share_units`, with optional `max_tail_loss_per_share`. Its independently named
+  valuation basis accompanies the shared model/currency. `[[entity_baseline_nav]]` requires `entity`,
+  `state`, `value`; `[[entity_candidate_payoff]]` and `[[entity_candidate_share_change]]` each require
+  `entity`, `candidate`, `state`, `value`. NAV values use quoted USD decimals; share quantities and caps use
+  exact quoted signed ratios. Every matrix entry is explicit, including zeroes. Primary equity is required;
+  unknown, duplicate, foreign, orphan or incomplete secondary inputs refuse. Each entity's Claim retains
+  only its own original valuation row anchors plus shared metadata/UU anchors and the complete file hash.
 - `model::evaluate(text, SourceAnchor) -> Result<EvaluatedModel, Refusal>`: source-bound static or two-stage
   dispatch with `mode`, `no_claim`, `to_json` and `to_markdown` accessors. The same strict schema accepts
   one optional `[[recourse]]` with `information_candidate`, `observation_date`, `information_basis`;
@@ -432,6 +440,12 @@ Good-only policy retains Parent mean 7/10 but carve-out tail loss 31/15, so its 
 Regressions retain initial secondary NAV/share effects after abandonment and admit a Good-only continuation
 despite a secondary share failure on its unrealized Bad path. Matrix, source, losing-input, metadata,
 canonical-order, overflow and complete static/recourse work-bound checks accompany these known answers.
+An independent Python Fraction oracle checks twelve secondary-valuation scenarios through the actual binary,
+including global versus observation-conditional tail risk, coarse information, multiple entity caps and
+composition with debt-funded policies. It derives each denominator from declared inputs, reconstructs every
+static and adaptive path, and compares full ledgers, statistics, rejections and winners. Three CLI integrations
+check JSON/Markdown parity and the original source bytes of `tests/capital/entity_valuation.toml`; that example
+retains eight portfolios, twenty policies and Parent closing cash of 30/20 under the joint entity limits.
 Recourse known answers cover paid study/build/abandon decisions, indistinguishable observations, sunk costs,
 global rather than branchwise tail limits, path-specific prerequisites and exclusions, adaptive-only funding,
 and equity issuance chosen by USD/share rather than total NAV. State-specific cash and share-count failures
