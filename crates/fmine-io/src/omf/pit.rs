@@ -22,11 +22,20 @@
 //! within the true ones. It places blocks in the caller's rank order by TopoSort (`toposort::greedy`) and improves
 //! that schedule by local search at the discount rate (`toposort::search::improve`). Both run `toposort::check` and
 //! refuse a schedule that fails it. The schedule is feasible and locally improved, not proved best.
+//!
+//! **LP schedules** (bd-djb7). [`PitModel::lp_schedule`] composes the pipeline the MineLib harnesses run. PDLP
+//! (`fmine_lp`) solves the schedule's LP relaxation (`toposort::lp::relaxation`, at the values' own `per_unit`).
+//! TopoSort then builds six schedules from the LP's shares (`lp::starts`), and local search improves each, keeping
+//! the best (`lp::incumbent`). PDLP's certified dual bound, negated, is an upper bound on the discounted value of
+//! every schedule (with discount factors `(1 + rate)^−t` in `f64`), so the incumbent's gap to it bounds how far
+//! from best the schedule can be.
 
 use fmine_evidence::{Refusal, RefusalCode};
+use fmine_lp::pdlp::{LpProblem, PdlpOptions, PdlpSolution, solve as solve_lp};
 use fmine_optimize::pitflow::shells::{NestedShells, RevenueFactor, ShellModel, nested_shells};
 use fmine_optimize::pitflow::slope::{BlockGrid, SlopeTable, slope_arcs};
 use fmine_optimize::pitflow::{ClosureProblem, PitSolution, solve};
+use fmine_optimize::toposort::lp::{Incumbent, Shares, incumbent, relaxation, starts};
 use fmine_optimize::toposort::search::{Improvement, discount_factors, improve};
 use fmine_optimize::toposort::{ScheduleProblem, greedy};
 
@@ -342,6 +351,49 @@ impl<'p> PitModel<'p> {
         spec: &ScheduleSpec<'_>,
         rank: &[Option<i64>],
     ) -> Result<OmfSchedule, Refusal> {
+        let (problem, factors) = self.schedule_problem(spec)?;
+        let start = greedy(&problem, &reversed_layers(rank, self.count))?;
+        let improvement = improve(&problem, &start, &factors, spec.max_rounds)?;
+        Ok(OmfSchedule {
+            problem,
+            factors,
+            improvement,
+        })
+    }
+
+    /// A schedule guided by the LP relaxation, as the MineLib harnesses build one (see the module notes): PDLP solves
+    /// `toposort::lp::relaxation` under `pdlp`; `lp::starts` turns its solution into TopoSort schedules; and
+    /// `lp::incumbent` improves each by local search and keeps the best.
+    ///
+    /// # Errors
+    /// Those of [`PitModel::schedule`] but the rank's, and of `relaxation`, `LpProblem::new`, PDLP's `solve` (among
+    /// them options out of range), `Shares::new`, `starts` and `incumbent`.
+    pub fn lp_schedule(
+        &self,
+        spec: &ScheduleSpec<'_>,
+        pdlp: &PdlpOptions,
+    ) -> Result<LpSchedule, Refusal> {
+        let (problem, factors) = self.schedule_problem(spec)?;
+        let r = relaxation(&problem, spec.discount[0], spec.discount[1], 0)?;
+        let lp = solve_lp(
+            &LpProblem::new(r.cost, &r.matrix, r.row_lo, r.row_hi, r.col_lo, r.col_hi)?,
+            pdlp,
+        )?;
+        let shares = Shares::new(problem.blocks().node_count(), spec.periods, lp.x().to_vec())?;
+        let starts = starts(&problem, &shares)?;
+        let incumbent = incumbent(&problem, &starts, &factors, spec.max_rounds)?;
+        Ok(LpSchedule {
+            problem,
+            factors,
+            lp,
+            incumbent,
+        })
+    }
+
+    fn schedule_problem(
+        &self,
+        spec: &ScheduleSpec<'_>,
+    ) -> Result<(ScheduleProblem, Vec<i64>), Refusal> {
         let blocks = ClosureProblem::new(
             self.weights(spec.value, spec.per_unit)?,
             self.offsets.clone(),
@@ -355,13 +407,7 @@ impl<'p> PitModel<'p> {
         let limits = spec.capacities.iter().map(|c| c.limits.to_vec()).collect();
         let problem = ScheduleProblem::new(blocks, spec.periods, usage, limits)?;
         let factors = discount_factors(spec.discount[0], spec.discount[1], spec.periods)?;
-        let start = greedy(&problem, &reversed_layers(rank, self.count))?;
-        let improvement = improve(&problem, &start, &factors, spec.max_rounds)?;
-        Ok(OmfSchedule {
-            problem,
-            factors,
-            improvement,
-        })
+        Ok((problem, factors))
     }
 
     /// Per-block results in `pitflow`'s order, such as `PitSolution::in_pit` or `NestedShells::first_shell`, in OMF's
@@ -420,6 +466,48 @@ impl OmfSchedule {
     #[must_use]
     pub fn improvement(&self) -> &Improvement {
         &self.improvement
+    }
+}
+
+/// A schedule from [`PitModel::lp_schedule`], in `pitflow`'s block order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LpSchedule {
+    problem: ScheduleProblem,
+    factors: Vec<i64>,
+    lp: PdlpSolution,
+    incumbent: Incumbent,
+}
+
+impl LpSchedule {
+    /// The problem scheduled.
+    #[must_use]
+    pub fn problem(&self) -> &ScheduleProblem {
+        &self.problem
+    }
+
+    /// The integer discount factors the search used (`toposort::search::discount_factors`).
+    #[must_use]
+    pub fn factors(&self) -> &[i64] {
+        &self.factors
+    }
+
+    /// PDLP's solution of the relaxation, a minimisation of minus the discounted value in units of `1 / per_unit`.
+    #[must_use]
+    pub fn lp(&self) -> &PdlpSolution {
+        &self.lp
+    }
+
+    /// Minus PDLP's certified bound: no schedule's discounted value, in units of `1 / per_unit` with factors
+    /// `(1 + rate)^−t`, exceeds it. `None` when PDLP certified no bound.
+    #[must_use]
+    pub fn upper_bound(&self) -> Option<f64> {
+        self.lp.bound().map(|b| -b.value())
+    }
+
+    /// The searched starts and the best of them.
+    #[must_use]
+    pub fn incumbent(&self) -> &Incumbent {
+        &self.incumbent
     }
 }
 

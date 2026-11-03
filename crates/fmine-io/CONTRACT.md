@@ -58,6 +58,12 @@ attribute, then a certified ultimate pit (`solve`) or nested shells by revenue f
   true ones. It places blocks in the caller's rank order with TopoSort (`greedy`) and improves the schedule by local
   search at the discount rate (`improve`); both refuse a schedule that fails `toposort::check`. The result is
   feasible and locally improved, not proved best.
+- `PitModel::lp_schedule` (bd-djb7) takes its starts from an LP instead of the caller's ranks. It builds the same
+  `ScheduleProblem` and its relaxation (`toposort::lp::relaxation` at decimals 0, so the LP is in units of
+  `1 / per_unit`, discounted by `(1 + rate)^-t` in `f64`), solves it with fmine-lp's PDLP, then searches from
+  `toposort::lp`'s six TopoSort starts and keeps the best (`starts`, `incumbent`). `LpSchedule::upper_bound` is
+  minus PDLP's certified dual bound: no schedule of the scaled problem is worth more at those factors, so the
+  schedule's gap to the best possible is known, though not closed.
 
 `reliance` is the filesystem adapter for the S0 reliance model (BD-347). A journal is one canonical
 `fmine_claim::reliance::JournalRecord` frame per lowercase hexadecimal line, ending in LF. Each record's
@@ -133,6 +139,9 @@ for current reuse; an unpinned replay establishes only internal consistency of t
 - `omf::pit::{Capacity, ScheduleSpec, OmfSchedule}` and `PitModel::{uses, schedule}` (bd-fr8x).
   `OmfSchedule::{problem, factors, improvement}` give `toposort`'s `ScheduleProblem`, the discount factors and
   `search::Improvement`.
+- `omf::pit::LpSchedule` and `PitModel::lp_schedule` (bd-djb7). `LpSchedule::{problem, factors, lp, upper_bound,
+  incumbent}` give the `ScheduleProblem`, the discount factors, fmine-lp's `PdlpSolution`, minus its dual bound,
+  and `toposort::lp::Incumbent`.
 - `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, FormatCount, MinimalCell,
   MinimalSheet, MinimalStyles, build_minimal_xlsx, build_minimal_xlsx_styled, col_index_to_letters,
   parse_a1_ref}`; `Workbook::format_census`;
@@ -267,6 +276,8 @@ for current reuse; an unpinned replay establishes only internal consistency of t
 - Schedules (bd-fr8x) refuse a capacity attribute as values are refused. `toposort`'s refusals (`207`) cover limits
   that are not one per period or are negative, a rank that is not one per block, a negative discount rate, and a
   schedule that fails `check`.
+- LP schedules (bd-djb7) refuse as schedules do, then pass on the refusals of `relaxation`, `LpProblem::new`,
+  PDLP's `solve` (among them options out of range), `Shares::new`, `starts` and `incumbent`.
 - XML text decodes the five named entities and `&#10;`, `&#13;`, `&#160;`, each once (`&amp;` last); no DTD or
   entity declaration is read, so nothing expands.
 - `numtok` keeps malformed grouping, unsupported attached notation, decimal overflow and ambiguous standalone
@@ -387,6 +398,17 @@ for current reuse; an unpinned replay establishes only internal consistency of t
     outside the pit unmined.
   With uses rounded to nearest (planted, reverted), all nine blocks fit period 0 and the test failed. Limits for
   the wrong number of periods and a missing capacity attribute are refused.
+- `PO-IO-10` (bd-djb7): `omf::tests::an_lp_guided_omf_schedule_lies_under_its_certified_bound` schedules PO-IO-9's
+  section and capacities from PDLP's solution of the relaxation (ε = 1e-6).
+  - The incumbent reaches the same hand optimum and passes an independent `toposort::check` with period values
+    [-16, 21, 0].
+  - The relaxation's optimum is `25/9 + 20/9.9`: 5/9 of the cone in period 0, all a period holds, and 4/9 in
+    period 1. PDLP's certified bound lies at or above it and within 1e-3 of it (4.7979798173 against
+    4.7979797980), and above the schedule's own `-16 + 21/1.1`.
+  - Planted, reverted: shares from a zero vector in place of PDLP's `x` left every start empty and the search at
+    0, and the bound without its sign change fell below the optimum; the test failed on each.
+  Limits for the wrong number of periods are refused. Not checked: a real OMF block model; the gap on models
+  larger than the test's 15 blocks.
 - FACT (BD-347, `reliance::tests`): exact artifact issuance and current-use retrieval preserve bytes and
   refuse after withdrawal; invalid digest, key, time, stale or absent trust, and an existing destination
   cannot create an authorized output. A failed final append retains the unissued artifact and poisons its
@@ -429,7 +451,9 @@ would permit a concurrent withdrawal race.
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim` (V to S0), and `fmine-runtime` (V to S1, explicit clock
   and owned bounded subprocesses).
 - `fmine-geom` supplies `volcert`'s certified closed meshes and block proportions (V to K0, bd-aqfl).
-- `fmine-optimize` supplies `pitflow`'s slope arcs, certified ultimate pit and nested shells (V to E, bd-joiv).
+- `fmine-optimize` supplies `pitflow`'s slope arcs, certified ultimate pit and nested shells (V to E, bd-joiv),
+  and `toposort`'s schedules (bd-fr8x, bd-djb7).
+- `fmine-lp` supplies PDLP and its certified dual bound for LP schedules (V to E, bd-djb7).
 - `fmine-calib` supplies the shared `ProofTimes` and UTC parser (V to K0); timestamp verification invokes
   OpenSSL 1.1 or 3.x on `PATH` with Unix `/dev/stdin` and `/dev/null`. Unsupported installations refuse.
 - No omf-rust code is lifted. Its schemas, read checks and validator (tree 64d3057) are the specification the
@@ -443,8 +467,8 @@ block model into the engines' types beyond the parent grid that block proportion
 files and Parquet from other writers outside the subset are refused, not converted. Block proportions do not handle
 rotated or tensor grids, sub-blocks, or surfaces that are open or intersect themselves (the last is not checked).
 OMF pits take block values as given in attributes. They hold no price deck or cost model, do not value sub-blocks,
-and do not write the pit back to OMF. Schedules use no LP relaxation (`toposort::lp` with fmine-lp's PDLP, as the
-MineLib harnesses do) and no destinations (PCPSP); the caller gives the ranking.
+and do not write the pit back to OMF. Schedules have no destinations (PCPSP). `schedule` takes the caller's
+ranking; `lp_schedule` searches from the LP's starts and reports its gap to the bound, but proves no schedule best.
 The bounded HTML reader is not a browser or DOM repair engine. It does not execute scripts, resolve CSS,
 interpret inline XBRL transformations, or establish issuer, metric, period or ownership semantics. Its source
 anchor records the inspected bytes and location, not the financial meaning, publisher authenticity or independent

@@ -2127,3 +2127,69 @@ fn an_omf_block_model_gives_a_feasible_discounted_schedule() {
         r#"0 attributes called "nothing""#,
     );
 }
+
+#[test]
+fn an_lp_guided_omf_schedule_lies_under_its_certified_bound() {
+    use fmine_lp::pdlp::PdlpOptions;
+    use fmine_optimize::pitflow::slope::{SlopeTable, SlopeTangent};
+    use fmine_optimize::toposort::check;
+    use fmine_optimize::toposort::search::DISCOUNT_SCALE;
+
+    let p = section();
+    let uniform = SlopeTable::uniform(SlopeTangent::new(1, 1).unwrap());
+    let m = pit::PitModel::new(&p, "section", &uniform, None, 2).unwrap();
+    let limits = [10, 10, 10];
+    let tonnes = [pit::Capacity {
+        attribute: "tonnes",
+        per_unit: 1,
+        limits: &limits,
+    }];
+    let spec = pit::ScheduleSpec {
+        value: "value",
+        per_unit: 4,
+        capacities: &tonnes,
+        periods: 3,
+        discount: [100_000_000, 1_000_000_000],
+        max_rounds: 100,
+    };
+    let pdlp = PdlpOptions {
+        tolerance: 1e-6,
+        ..PdlpOptions::default()
+    };
+    let s = m.lp_schedule(&spec, &pdlp).unwrap();
+    let found = s.incumbent();
+
+    // The same hand optimum as the ranked schedule, reached from the LP's starts.
+    let f1 = i128::from(DISCOUNT_SCALE) * 10 / 11;
+    assert_eq!(
+        found.searched[found.best].after,
+        -16 * i128::from(DISCOUNT_SCALE) + 21 * f1
+    );
+    let c = check(s.problem(), found.schedule()).unwrap();
+    assert!(c.feasible(), "{c:?}");
+    assert_eq!(c.period_values, vec![-16, 21, 0]);
+
+    // The relaxation splits the cone: 5/9 of it in period 0 (all a period holds) and 4/9 in period 1, each ninth worth
+    // 5 quarter-units, so its optimum is 25/9 + 20/9.9. The certified bound lies at or above it, and above the
+    // schedule's own value, -16 + 21/1.1.
+    let lp_best = 25.0 / 9.0 + 20.0 / 9.9;
+    let npv = -16.0 + 21.0 / 1.1;
+    let bound = s.upper_bound().unwrap();
+    println!(
+        r#"{{"test":"omf_lp_schedule","status":"{:?}","bound":{bound},"lp_best":{lp_best},"npv":{npv},"gap":{},"starts":{}}}"#,
+        s.lp().status(),
+        (bound - npv) / bound,
+        found.searched.len()
+    );
+    assert!(
+        bound >= lp_best - 1e-9 && bound <= lp_best * (1.0 + 1e-3),
+        "{bound} against {lp_best}"
+    );
+    assert!(npv < bound);
+
+    refused_as(
+        m.lp_schedule(&pit::ScheduleSpec { periods: 2, ..spec }, &pdlp),
+        "FMINE-REF-207",
+        "limits",
+    );
+}

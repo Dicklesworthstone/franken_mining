@@ -168,7 +168,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - HiGHS and OR-Tools PDLP (plan §15.4's lab oracles) are not run.
 
 ## 10. Known gaps
-- `BD-251`: no caller in the workspace yet.
+- `BD-251`: one library caller, `fmine-io`'s `omf::pit::PitModel::lp_schedule` (bd-djb7), which solves `toposort::lp`'s relaxation of an OMF schedule and reports minus the dual bound as its upper bound. The MineLib harnesses in `crates/xtask/tests/` also call `pdlp::solve`. The plan's blend, SAA and CVaR uses have no caller.
 - No presolve, no feasibility polishing and no infeasibility or unboundedness detection. An infeasible or unbounded LP runs to `max_iterations`.
 - The returned `x` is not feasible (§8). Nothing here turns it into a feasible point or a primal bound.
 - No implied-bound repair, so unbounded columns rarely certify (§8).

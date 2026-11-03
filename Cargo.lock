@@ -116,6 +116,7 @@ dependencies = [
  "fmine-core",
  "fmine-evidence",
  "fmine-geom",
+ "fmine-lp",
  "fmine-optimize",
  "fmine-runtime",
 ]
