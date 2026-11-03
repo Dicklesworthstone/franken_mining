@@ -17,4 +17,5 @@
 
 pub mod exact;
 pub mod vdb;
+pub mod volcert;
 pub mod winding;
