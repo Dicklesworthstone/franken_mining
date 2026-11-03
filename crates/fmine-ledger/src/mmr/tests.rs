@@ -1,4 +1,3 @@
-//! Determinism: BitwisePortable
 //! Known answers and published probes for the MMR (BD-083).
 //!
 //! `LEAF_INPUTS`, `NODE_HASHES`, `ROOTS` and `PEAKS` are transcribed from transparency-dev/merkle
