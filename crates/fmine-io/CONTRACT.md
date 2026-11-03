@@ -39,7 +39,12 @@ inside a closed Surface element, as `fmine_geom::volcert` sure and band sub-cell
 are found by name, at the top level or inside composites. A surface's positions are its element origin plus its
 vertices; a block model's grid starts at its frame origin. The project origin, which both share, is left out: it
 changes no proportion. `surface_mesh` certifies the surface closed and outward (`ClosedMesh::certify`), and
-`parent_grid` takes a regular grid whose axes are x, y and z (`BlockGrid::new`). Sub-blocks are not considered.
+`parent_grid` takes a regular grid (`BlockGrid::new`). Sub-blocks are not considered.
+- Proportions are computed in the block model's own frame (bd-wn57), so models turned, tilted or mirrored are
+  taken. `parent_grid` places the blocks from zero along u, v and w. `surface_mesh_in` maps the surface there:
+  `M⁻¹(p − origin)`, with `M`'s columns the axes and the inverse the adjugate over the determinant. For axes x, y and
+  z that is one subtraction. Otherwise each coordinate is rounded a few times more, and the certificate is for the
+  surface so placed. A mirrored frame reverses each triangle so the surface stays outward.
 
 `omf::pit::PitModel` (bd-joiv, plan §15.4) turns a regular OMF block model into `fmine_optimize::pitflow`'s
 problem: precedence arcs from slope templates (`slope_arcs`), with each block's slope domain taken from a Category
@@ -131,8 +136,8 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   MAX_DEPTH}` (BD-194). `Project` holds every element with its arrays decoded; metadata and a continuous
   colormap's range stay `Json` as written. `Grid3::count` and `blocks`, `Subblocks::len` and
   `AttributeData::item_count` give the counts the location lengths follow from.
-- `omf::{surface_mesh, parent_grid, proportions_in_surface}` (bd-aqfl), returning `fmine_geom::volcert`'s
-  `ClosedMesh`, `BlockGrid` and `Proportions`.
+- `omf::{surface_mesh, parent_grid, proportions_in_surface}` (bd-aqfl) and `omf::surface_mesh_in` (bd-wn57),
+  returning `fmine_geom::volcert`'s `ClosedMesh`, `BlockGrid` and `Proportions`.
 - `omf::pit::{PitModel, MAX_SIZE_SCALE}` (bd-joiv). `PitModel::{new, grid, size_scale, arc_count, weights,
   ultimate_pit, shells, omf_order}` return `fmine_optimize::pitflow`'s `BlockGrid`, `PitSolution` and
   `NestedShells`.
@@ -259,8 +264,9 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   refuses a NaN size or boundary, which the vendor lets through. Its warnings are not checked: two elements may
   share a name. Images are checked by signature only, and members the index never names are not read.
 - OMF block proportions (bd-aqfl) refuse with `FMINE-REF-506` a name that no element, or more than one, carries
-  (composites searched too), and an element of the wrong kind; with `FMINE-REF-109` a block model whose axes are
-  not exactly x, y and z, or whose grid is a tensor; then with `ClosedMesh::certify`'s, `BlockGrid::new`'s and
+  (composites searched too), and an element of the wrong kind; with `FMINE-REF-109` a tensor grid, or axes whose
+  determinant is zero or not finite (the reader already holds axes to unit length and right angles within 1e-6,
+  so only a hand-built `Project` reaches it); then with `ClosedMesh::certify`'s, `BlockGrid::new`'s and
   `block_proportions`' refusals (`109`, `207`), among them a surface that is not closed and outward.
 - OMF pits (bd-joiv) refuse with `FMINE-REF-506`:
   - a block model name that no element, or more than one, carries, or an element of another kind;
@@ -345,7 +351,7 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   encodings). One file holding every geometry and attribute type reads back equal to the values written, and each
   refusal of §5 is reached by a file with that one defect. The test writer shares its author with the reader, so
   `tests/omf_samples.rs` reads the files omf-rust publishes (tree 64d3057, MIT), written by parquet-rs. The files
-  are not committed; it is `#[ignore]`d and reads them from `FMINE_OMF_DIR`. On 2026-11-03 its four tests passed:
+  are not committed; it is `#[ignore]`d and reads them from `FMINE_OMF_DIR`. On 2026-11-03 its five tests passed:
   - `one_of_everything.omf`: every element, attribute, value and null equals the vendor test's constants, and
     omf-python's copy of it equals it element for element;
   - pyramid and bunny: the vendor examples' values, and the bunny's 69,634 vertices and 69,630 triangles read;
@@ -355,6 +361,15 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   - omf-python's test files: nullable numbers, dates, date-times, categories, booleans and colors, continuous
     colormap ranges, element metadata and a duplicate name read as generated; `missing_parquet` and
     `array_length_mismatch` are refused, as the vendor refuses them.
+  - The bunny surface against the octree bunny (bd-wn57, `omf::proportions_in_surface` at depth 3, in the model's
+    frame turned 10° about Z).
+    - The surface certifies closed. Its volume encloses 6,039,237,580.3241 m³ in both the model's frame and the
+      world's.
+    - Of 384 parent blocks, 170 are certified wholly outside and hold no Body sub-block, 23 wholly inside and hold
+      no Air, and 191 are crossed.
+    - The vendor's Body sub-blocks, a classification independent of `volcert` whose rule is not published, total
+      6.044e9 m³ (0.08% above the volume). Every parent's Body share lies within its certified bounds. That was
+      observed on the first run and is kept as a regression check, not derived.
   Two bugs planted in turn (nulls inverted, octree alignment unchecked) each failed the unit tests, and the first
   failed three of the four sample tests; both were reverted. `mutated_files_are_read_or_refused_and_never_panic`
   edits one member of the every-kind file at a time, the index as JSON text and other members as bytes, rezips it
@@ -374,8 +389,13 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   from depth 2 the bounds equal it, and the sure volume is the box's 1.96875. Depth 99 is refused. With the element
   origin dropped (planted, reverted) the first block's 0.375 fell outside its bounds [0, 0].
   `proportions_refuse_missing_ambiguous_and_unsuitable_elements` reaches each refusal of §5 on the every-kind file.
-  Not checked: a real wireframe against a real block model. The omf-rust bunny is described as patched closed and
-  the octree bunny is a block model, but neither was run through these functions.
+  `a_turned_or_mirrored_block_model_gives_the_box_its_proportions_in_its_own_frame` (bd-wn57) places the same box
+  through the model's axes in three frames: x, y and z; a turn that also tilts; and a mirror. The x, y and z frame
+  and the mirror give the exact proportions from depth 2. In the tilted frame, which rounds every coordinate, each
+  proportion lies within its bounds and the band narrows with depth (total 3.25, 1.92, 0.98 at depths 1 to 3).
+  Axes that span no volume are refused. Planted, reverted: without the mirror's triangle reversal the mirrored box
+  was refused as inward; with the origin left out, the first block's 0.375 fell outside [0, 0].
+  The real files are in PO-IO-6's `omf_samples.rs`.
 - `PO-IO-8` (bd-joiv): `omf::tests::an_omf_block_model_gives_its_certified_ultimate_pit_and_shells` writes a
   5 × 1 × 3 section of 12.5 m blocks (sizes scale to 25) with its ore at the bottom centre.
   - At 45° and 4 per unit, ore at 9.25 pays for its 9-block cone (value 5 quarter-units), and ore at 7.75 does not
@@ -465,7 +485,7 @@ metrics (`fmine-metrics`).
 The OMF reader reads; it does not write OMF, decode images, transform geometry into world coordinates, or turn a
 block model into the engines' types beyond the parent grid that block proportions take. It reads OMF 2 only: OMF 1
 files and Parquet from other writers outside the subset are refused, not converted. Block proportions do not handle
-rotated or tensor grids, sub-blocks, or surfaces that are open or intersect themselves (the last is not checked).
+tensor grids, sub-blocks, or surfaces that are open or intersect themselves (the last is not checked).
 OMF pits take block values as given in attributes. They hold no price deck or cost model, do not value sub-blocks,
 and do not write the pit back to OMF. Schedules have no destinations (PCPSP). `schedule` takes the caller's
 ranking; `lp_schedule` searches from the LP's starts and reports its gap to the bound, but proves no schedule best.

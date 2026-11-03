@@ -1623,6 +1623,15 @@ fn mutated_files_are_read_or_refused_and_never_panic() {
 /// A closed, outward box Surface from `origin + lo` to `origin + hi`: corner `i` takes `hi` on axis `a` when bit
 /// `a` of `i` is set, two triangles a face.
 fn box_surface(b: &mut Build, origin: [f64; 3], lo: [f64; 3], hi: [f64; 3]) -> String {
+    let corners: Vec<[f64; 3]> = (0..8usize)
+        .map(|i| std::array::from_fn(|a| if (i >> a) & 1 == 1 { hi[a] } else { lo[a] }))
+        .collect();
+    corner_surface(b, origin, &corners, false)
+}
+
+/// A closed box Surface on eight corners in [`box_surface`]'s order, two triangles a face. It faces outward when the
+/// corners keep the axes' handedness; `reversed` turns each triangle, for corners that mirror them.
+fn corner_surface(b: &mut Build, origin: [f64; 3], corners: &[[f64; 3]], reversed: bool) -> String {
     const FACES: [[u32; 3]; 12] = [
         [0, 2, 1],
         [1, 2, 3],
@@ -1637,11 +1646,9 @@ fn box_surface(b: &mut Build, origin: [f64; 3], lo: [f64; 3], hi: [f64; 3]) -> S
         [1, 3, 5],
         [3, 7, 5],
     ];
-    let corners: Vec<[f64; 3]> = (0..8usize)
-        .map(|i| std::array::from_fn(|a| if (i >> a) & 1 == 1 { hi[a] } else { lo[a] }))
-        .collect();
-    let col = |k: usize| FACES.iter().map(|t| t[k]).collect::<Vec<_>>();
-    let v = b.arr(xyz(&corners), 8);
+    let faces = FACES.map(|[x, y, z]| if reversed { [x, z, y] } else { [x, y, z] });
+    let col = |k: usize| faces.iter().map(|t| t[k]).collect::<Vec<_>>();
+    let v = b.arr(xyz(corners), 8);
     let t = b.arr(
         pq(
             &[u32c("a", &col(0)), u32c("b", &col(1)), u32c("c", &col(2))],
@@ -1745,13 +1752,116 @@ fn proportions_refuse_missing_ambiguous_and_unsuitable_elements() {
         "FMINE-REF-506",
         "is a Surface, not a BlockModel",
     );
-    refused_as(parent_grid(&p, "blocks"), "FMINE-REF-109", "is rotated");
     refused_as(parent_grid(&p, "tensor"), "FMINE-REF-109", "tensor grid");
     refused_as(
-        proportions_in_surface(&p, "tri", "tensor", 1),
+        proportions_in_surface(&p, "tri", "blocks", 1),
         "FMINE-REF-207",
         "closed mesh",
     );
+}
+
+#[test]
+fn a_turned_or_mirrored_block_model_gives_the_box_its_proportions_in_its_own_frame() {
+    // bd-aqfl's box, [0.5, 2.25] x [0, 0.75] x [0, 1.5] in the model's frame, placed in the world through the
+    // model's axes: x, y and z; a turn that also tilts (exact in decimals, not in binary); and a mirror.
+    let (lo, hi, origin) = ([0.5, 0.0, 0.0], [2.25, 0.75, 1.5], [2.0, 4.0, 5.0]);
+    let frames: [(&str, [[f64; 3]; 3]); 3] = [
+        ("axes", [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        (
+            "tilted",
+            [[0.6, 0.8, 0.0], [-0.48, 0.36, 0.8], [0.64, -0.48, 0.6]],
+        ),
+        (
+            "mirrored",
+            [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        ),
+    ];
+    let exact =
+        |ijk: [u32; 3]| [0.5, 1.0, 0.25][ijk[0] as usize] * 0.75 * [1.0, 0.5][ijk[2] as usize];
+    for (name, [u, v, w]) in frames {
+        let mut b = Build::default();
+        let corners: Vec<[f64; 3]> = (0..8usize)
+            .map(|i| {
+                let c: [f64; 3] =
+                    std::array::from_fn(|a| if (i >> a) & 1 == 1 { hi[a] } else { lo[a] });
+                std::array::from_fn(|a| origin[a] + u[a] * c[0] + v[a] * c[1] + w[a] * c[2])
+            })
+            .collect();
+        let shell = element(
+            "pit shell",
+            &corner_surface(&mut b, [0.0; 3], &corners, name == "mirrored"),
+            "",
+        );
+        let model = element(
+            "model",
+            &format!(
+                r#"{{"type":"BlockModel","orient":{{"origin":{origin:?},"u":{u:?},"v":{v:?},"w":{w:?}}},"grid":{{"type":"Regular","size":[1,1,1],"count":[3,1,2]}}}}"#
+            ),
+            "",
+        );
+        let mut p = read(&b.file(&[shell, model].join(","))).unwrap();
+        // The surface is a valid outward box in the world before it is placed in the model's frame.
+        let world = surface_mesh(&p, "pit shell").unwrap().volume();
+        // In the model's frame the box is 1.75 x 0.75 x 1.5 = 1.96875; the tilted frame rounds every coordinate.
+        let local = surface_mesh_in(&p, "pit shell", "model").unwrap().volume();
+        assert!(
+            (local.lo() - 1.96875).abs() < 1e-12 && (local.hi() - 1.96875).abs() < 1e-12,
+            "{name}: {local:?}"
+        );
+        if name != "tilted" {
+            assert!(
+                local.lo() <= 1.96875 && 1.96875 <= local.hi(),
+                "{name}: {local:?}"
+            );
+        }
+        let mut widths = Vec::new();
+        for depth in 0..=3u8 {
+            let props = proportions_in_surface(&p, "pit shell", "model", depth).unwrap();
+            assert_eq!(props.grid().origin(), [0.0; 3]);
+            let mut width = 0.0;
+            for ijk in [
+                [0, 0, 0],
+                [1, 0, 0],
+                [2, 0, 0],
+                [0, 0, 1],
+                [1, 0, 1],
+                [2, 0, 1],
+            ] {
+                let [l, h] = props.bounds(ijk);
+                assert!(
+                    l <= exact(ijk) && exact(ijk) <= h,
+                    "{name} depth {depth} block {ijk:?}: {} not in [{l}, {h}]",
+                    exact(ijk)
+                );
+                if name != "tilted" && depth >= 2 {
+                    assert_eq!((l, h), (exact(ijk), exact(ijk)), "{name} depth {depth}");
+                }
+                width += h - l;
+            }
+            widths.push(width);
+        }
+        println!(
+            r#"{{"test":"omf_turned_proportions","frame":"{name}","world_volume":[{},{}],"band_by_depth":{widths:?}}}"#,
+            world.lo(),
+            world.hi()
+        );
+        // The tilted box's faces sit within rounding of sub-cell planes, so at depth 3 at most the two layers of
+        // eighth-cells beside each face are in the band: the faces cross 10.125 block faces' worth of area.
+        assert!(
+            widths[3] < widths[1] && widths[3] <= 2.0 * 10.125 / 8.0,
+            "{name}: {widths:?}"
+        );
+
+        if let Geometry::BlockModel(m) = &mut p.elements[1].geometry {
+            m.orient.v = m.orient.u;
+            m.orient.w = m.orient.u;
+        }
+        refused_as(
+            proportions_in_surface(&p, "pit shell", "model", 1),
+            "FMINE-REF-109",
+            "span no volume",
+        );
+    }
 }
 
 /// A Number attribute at `location` from one nullable `number` column of `n` rows.

@@ -33,7 +33,7 @@ mod proportions;
 
 pub use json::Json;
 use parquet::{Column, Logical, Table, Values};
-pub use proportions::{parent_grid, proportions_in_surface, surface_mesh};
+pub use proportions::{parent_grid, proportions_in_surface, surface_mesh, surface_mesh_in};
 
 /// The largest member accepted.
 pub const MAX_MEMBER_BYTES: usize = 1 << 30;

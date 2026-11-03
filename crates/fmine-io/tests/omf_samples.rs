@@ -865,3 +865,81 @@ fn omf_python_test_files_read_or_are_refused_as_the_vendor_reads_them() {
         "does not match the declared length 999",
     );
 }
+
+/// The bunny surface against the octree bunny (bd-wn57): each parent block's certified proportion inside the
+/// surface, in the model's frame turned 10° about Z, against the Body and Air sub-blocks the vendor's CSV gave it.
+/// The vendor's rule for Body is not published, so only what any rule must meet is asserted: a block wholly outside
+/// holds no Body and a block wholly inside no Air.
+#[test]
+#[ignore = "needs omf-rust's sample files: set FMINE_OMF_DIR and run with --ignored"]
+fn the_bunny_surface_proportions_agree_with_the_octree_bunnys_body_blocks() {
+    let mut p = load("examples/bunny_blocks/bunny_blocks.omf");
+    let bunny = load("examples/bunny/bunny.omf");
+    assert_eq!(p.origin, bunny.origin);
+    p.elements.extend(bunny.elements);
+    let (surface, model) = ("Bunny surface", "Octree Block Model");
+    let volume = omf::surface_mesh_in(&p, surface, model).unwrap().volume();
+    let world = omf::surface_mesh(&p, surface).unwrap().volume();
+    let depth = 3;
+    let props = omf::proportions_in_surface(&p, surface, model, depth).unwrap();
+
+    // Body and Air per parent, in 100 m sub-block cells, 64 to a parent.
+    let Geometry::BlockModel(b) = &p.elements[0].geometry else {
+        panic!("{:?}", p.elements[0].geometry);
+    };
+    let Some(Subblocks::Regular { blocks, .. }) = &b.subblocks else {
+        panic!("{:?}", b.subblocks);
+    };
+    let AttributeData::Category { values, .. } = &attr(&p.elements[0], "Bunny").data else {
+        panic!("Bunny is not a category");
+    };
+    let mut cells = std::collections::BTreeMap::<[u32; 3], [u32; 2]>::new();
+    for (s, v) in blocks.iter().zip(values) {
+        let n: u32 = (0..3).map(|i| s.max[i] - s.min[i]).product();
+        cells.entry(s.parent).or_default()[usize::from(*v == Some(1))] += n;
+    }
+    let parent = 400.0_f64.powi(3);
+    let (mut sure, mut maybe, mut vendor) = (0.0, 0.0, 0.0);
+    let (mut outside, mut inside, mut crossed, mut beyond) = (0, 0, 0, 0.0_f64);
+    for i in 0..8 {
+        for j in 0..6 {
+            for k in 0..8 {
+                let [lo, hi] = props.bounds([i, j, k]);
+                let [air, body] = cells.get(&[i, j, k]).copied().unwrap_or_default();
+                assert!(air + body <= 64, "parent {i} {j} {k}: {air} + {body} cells");
+                if hi == 0.0 {
+                    outside += 1;
+                    assert_eq!(body, 0, "parent {i} {j} {k} is wholly outside but has Body");
+                } else if lo == 1.0 {
+                    inside += 1;
+                    assert_eq!(air, 0, "parent {i} {j} {k} is wholly inside but has Air");
+                } else {
+                    crossed += 1;
+                }
+                let f = f64::from(body) / 64.0;
+                beyond = beyond.max(lo - f).max(f - hi);
+                sure += lo * parent;
+                maybe += hi * parent;
+                vendor += f * parent;
+            }
+        }
+    }
+    assert!(
+        sure <= volume.hi() && volume.lo() <= maybe,
+        "{sure} {maybe} {volume:?}"
+    );
+    assert!(outside > 0 && inside > 0 && crossed > 0);
+    println!(
+        r#"{{"test":"omf_bunny_proportions","depth":{depth},"volume":[{},{}],"world_volume":[{},{}],"sure":{sure},"band":{},"vendor_body":{vendor},"vendor_vs_volume":{},"parents":{{"outside":{outside},"inside":{inside},"crossed":{crossed}}},"vendor_beyond_bounds":{beyond}}}"#,
+        volume.lo(),
+        volume.hi(),
+        world.lo(),
+        world.hi(),
+        maybe - sure,
+        vendor / volume.lo() - 1.0,
+    );
+    // Observed on the first run (2026-11-03), not implied by any published rule, and kept as a regression check:
+    // every parent's Body share lies within its certified bounds, and the Body total is within 0.1% of the volume.
+    assert_eq!(beyond, 0.0);
+    assert!((vendor / volume.lo() - 1.0).abs() < 1e-3);
+}

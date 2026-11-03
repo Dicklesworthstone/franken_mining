@@ -4,11 +4,19 @@
 //! Both elements are taken in the project's frame without the project origin, which they share: a surface vertex
 //! is its element origin plus the vertex, a block model starts at its frame origin. Leaving the project origin out
 //! changes no proportion and saves one rounding on every coordinate.
+//!
+//! **Turned models** (bd-wn57). Proportions are computed in the block model's own frame, where its blocks are
+//! axis-aligned from zero: a surface point `p` has grid coordinates `M⁻¹(p − origin)`, `M`'s columns being the
+//! axes u, v and w and its inverse the adjugate over the determinant. For axes x, y and z that is one subtraction.
+//! Otherwise each coordinate is rounded a few times more, and the certificate is for the surface so placed. The
+//! reader holds the axes to unit length and right angles within 1e-6; using the inverse rather than the transpose
+//! keeps the blocks exactly the parallelepipeds the file's axes span. A mirrored frame (negative determinant)
+//! reverses each triangle, so an outward surface stays outward.
 
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_geom::volcert::{BlockGrid, ClosedMesh, Proportions, block_proportions};
 
-use super::{BlockModel, Element, Geometry, Grid3, Project};
+use super::{BlockModel, Element, Geometry, Grid3, Orient3, Project};
 
 pub(super) fn missing(detail: String) -> Refusal {
     Refusal::new(RefusalCode::InputMissingOrUnreadable506, detail)
@@ -49,12 +57,11 @@ pub(super) fn kind(geometry: &Geometry) -> &'static str {
     }
 }
 
-/// The Surface element `name` as a certified closed mesh.
-///
-/// # Errors
-/// `FMINE-REF-506` when no element, or more than one, is called `name`, or when it is not a Surface; then
-/// `ClosedMesh::certify`'s refusals, for a surface that is not closed and outward-facing.
-pub fn surface_mesh(project: &Project, name: &str) -> Result<ClosedMesh, Refusal> {
+/// A surface's positions and triangles.
+type Triangles<'a> = (Vec<[f64; 3]>, &'a [[u32; 3]]);
+
+/// The Surface element `name`: its positions (element origin plus vertex) and triangles.
+fn surface<'a>(project: &'a Project, name: &str) -> Result<Triangles<'a>, Refusal> {
     let e = element(project, name)?;
     let Geometry::Surface {
         origin,
@@ -71,16 +78,24 @@ pub fn surface_mesh(project: &Project, name: &str) -> Result<ClosedMesh, Refusal
         .iter()
         .map(|v| std::array::from_fn(|a| origin[a] + v[a]))
         .collect();
-    ClosedMesh::certify(positions, triangles.clone())
+    Ok((positions, triangles))
 }
 
-/// The parent grid of the BlockModel element `name`. Sub-blocks are not considered.
+/// The Surface element `name` as a certified closed mesh, in the project's frame.
 ///
 /// # Errors
-/// `FMINE-REF-506` when no element, or more than one, is called `name`, or when it is not a BlockModel.
-/// `FMINE-REF-109` for a frame whose axes are not x, y and z or a tensor grid: proportions cover regular,
-/// axis-aligned grids only. Then `BlockGrid::new`'s refusals.
-pub fn parent_grid(project: &Project, name: &str) -> Result<BlockGrid, Refusal> {
+/// `FMINE-REF-506` when no element, or more than one, is called `name`, or when it is not a Surface; then
+/// `ClosedMesh::certify`'s refusals, for a surface that is not closed and outward-facing.
+pub fn surface_mesh(project: &Project, name: &str) -> Result<ClosedMesh, Refusal> {
+    let (positions, triangles) = surface(project, name)?;
+    ClosedMesh::certify(positions, triangles.to_vec())
+}
+
+/// The BlockModel element `name`'s frame and regular grid.
+fn block_model<'a>(
+    project: &'a Project,
+    name: &str,
+) -> Result<(&'a Orient3, [f64; 3], [u32; 3]), Refusal> {
     let e = element(project, name)?;
     let Geometry::BlockModel(BlockModel { orient, grid, .. }) = &e.geometry else {
         return Err(missing(format!(
@@ -88,16 +103,6 @@ pub fn parent_grid(project: &Project, name: &str) -> Result<BlockGrid, Refusal> 
             kind(&e.geometry)
         )));
     };
-    if orient.u != [1.0, 0.0, 0.0] || orient.v != [0.0, 1.0, 0.0] || orient.w != [0.0, 0.0, 1.0] {
-        return Err(Refusal::new(
-            RefusalCode::OutsidePhysicalDomain109,
-            format!(
-                "OMF: block model \"{name}\" is rotated (u {:?}, v {:?}, w {:?}); block proportions cover grids \
-                 whose axes are x, y and z",
-                orient.u, orient.v, orient.w
-            ),
-        ));
-    }
     let Grid3::Regular { size, count } = grid else {
         return Err(Refusal::new(
             RefusalCode::OutsidePhysicalDomain109,
@@ -106,21 +111,81 @@ pub fn parent_grid(project: &Project, name: &str) -> Result<BlockGrid, Refusal> 
             ),
         ));
     };
-    BlockGrid::new(orient.origin, *size, *count)
+    Ok((orient, *size, *count))
+}
+
+/// The parent grid of the BlockModel element `name`, in the model's own frame: block `(i, j, k)` spans
+/// `size·(i, j, k)` to `size·(i + 1, j + 1, k + 1)` from zero along u, v and w. Sub-blocks are not considered.
+///
+/// # Errors
+/// `FMINE-REF-506` when no element, or more than one, is called `name`, or when it is not a BlockModel.
+/// `FMINE-REF-109` for a tensor grid: proportions cover regular grids. Then `BlockGrid::new`'s refusals.
+pub fn parent_grid(project: &Project, name: &str) -> Result<BlockGrid, Refusal> {
+    let (_, size, count) = block_model(project, name)?;
+    BlockGrid::new([0.0; 3], size, count)
+}
+
+/// The Surface element `surface` as a certified closed mesh in the frame of the BlockModel element `block_model`
+/// (see the module notes), where [`parent_grid`] places its blocks.
+///
+/// # Errors
+/// Those of [`surface_mesh`] and [`parent_grid`], and `FMINE-REF-109` for axes whose determinant is not a finite
+/// nonzero number.
+pub fn surface_mesh_in(
+    project: &Project,
+    surface_name: &str,
+    block_model_name: &str,
+) -> Result<ClosedMesh, Refusal> {
+    let (positions, triangles) = surface(project, surface_name)?;
+    let (orient, _, _) = block_model(project, block_model_name)?;
+    let cross = |a: [f64; 3], b: [f64; 3]| -> [f64; 3] {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let (u, v, w, o) = (orient.u, orient.v, orient.w, orient.origin);
+    let adjugate = [cross(v, w), cross(w, u), cross(u, v)];
+    let det = dot(u, adjugate[0]);
+    if !det.is_finite() || det == 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutsidePhysicalDomain109,
+            format!(
+                "OMF: block model \"{block_model_name}\" has axes u {u:?}, v {v:?}, w {w:?} whose determinant is \
+                 {det}; they span no volume"
+            ),
+        ));
+    }
+    let rows = adjugate.map(|r| r.map(|x| x / det));
+    let local = positions
+        .iter()
+        .map(|p| {
+            let d: [f64; 3] = std::array::from_fn(|a| p[a] - o[a]);
+            rows.map(|r| dot(r, d))
+        })
+        .collect();
+    let triangles = if det < 0.0 {
+        triangles.iter().map(|&[a, b, c]| [a, c, b]).collect()
+    } else {
+        triangles.to_vec()
+    };
+    ClosedMesh::certify(local, triangles)
 }
 
 /// The proportion of each parent block of the BlockModel `block_model` inside the Surface `surface`, as sure and
-/// band sub-cell counts at `depth` (see `fmine_geom::volcert::block_proportions`).
+/// band sub-cell counts at `depth` (see `fmine_geom::volcert::block_proportions`), in the model's frame.
 ///
 /// # Errors
-/// Those of [`surface_mesh`], [`parent_grid`] and `block_proportions`.
+/// Those of [`surface_mesh_in`], [`parent_grid`] and `block_proportions`.
 pub fn proportions_in_surface(
     project: &Project,
     surface: &str,
     block_model: &str,
     depth: u8,
 ) -> Result<Proportions, Refusal> {
-    let mesh = surface_mesh(project, surface)?;
+    let mesh = surface_mesh_in(project, surface, block_model)?;
     let grid = parent_grid(project, block_model)?;
     block_proportions(&mesh, &grid, depth)
 }
