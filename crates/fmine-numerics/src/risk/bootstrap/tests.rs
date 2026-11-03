@@ -1,3 +1,5 @@
+//! Determinism: Exact
+
 use super::*;
 
 fn r(num: i128, den: i128) -> Rat {

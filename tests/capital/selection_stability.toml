@@ -1,0 +1,69 @@
+# DESIGN / SYNTHETIC: invented alternatives and scenario weights, not issuer data.
+# INFERENCE: expansion has mean4 USD and worst2/5 signed loss5 USD; steady has mean3.
+# The 5 USD loss ceiling admits expansion exactly, making steady its runner-up.
+# In a five-draw resample, expansion wins with zero or one Bad draw. Two or more
+# Bad draws breach the loss ceiling, so steady wins. No calibrated probability of
+# investment success or empirical effective sample size is asserted.
+schema = "fmine.capital-program.v1"
+model_key = "synthetic-selection-stability"
+question = "How stable is the nominal expansion choice under the declared scenario law?"
+currency = "USD"
+valuation_basis = "Synthetic already-net delta NAV at full project ownership and one valuation date"
+budget = "10"
+tail_mass = "2/5"
+max_tail_loss = "5"
+payoff_convention = "additive_net_delta_nav"
+reference_class_basis = "Explicitly unadjusted invented payoffs; no fitted reference class"
+
+[[state]]
+id = "bad"
+weight = "1/3"
+
+[[state]]
+id = "good"
+weight = "2/3"
+
+[[candidate]]
+id = "expansion"
+label = "Invented expansion"
+cost = "10"
+reference_class_basis = "Unadjusted synthetic growth payoff including its capital cost"
+
+[[candidate]]
+id = "steady"
+label = "Invented steady alternative"
+cost = "10"
+reference_class_basis = "Unadjusted synthetic constant payoff including its capital cost"
+
+[[payoff]]
+candidate = "expansion"
+state = "bad"
+value = "-8"
+
+[[payoff]]
+candidate = "expansion"
+state = "good"
+value = "10"
+
+[[payoff]]
+candidate = "steady"
+state = "bad"
+value = "3"
+
+[[payoff]]
+candidate = "steady"
+state = "good"
+value = "3"
+
+[[selection_stability]]
+method = "weighted_multinomial"
+seed = "229"
+replicates = "200"
+draws_per_replicate = "5"
+sampling_basis = "Synthetic conditional scenario-law resampling, not empirical calibration"
+
+[[uu]]
+id = "outside_scenarios"
+description = "An unmodelled permit delay could change either alternative's supplied payoff"
+downside_usd_m = "1.0"
+trigger = "A permitting event outside the declared two-state law occurs"

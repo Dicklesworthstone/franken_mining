@@ -178,8 +178,17 @@ pub(super) fn summary_json(summary: &RecourseSummary) -> String {
     } else {
         "no_structurally_feasible_static_comparator"
     });
+    let stability = summary.selection_stability.as_ref().map_or_else(
+        || "null".into(),
+        crate::stability::SelectionStabilitySummary::to_json,
+    );
+    let stability_status = if summary.selection_stability.is_some() {
+        "conditional_weighted_bootstrap"
+    } else {
+        "unavailable_declared_two_stage_model"
+    };
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"status\":{},\"information\":{},\"per_share_objective\":{},\"objective\":{},\"objective_unit\":{},\"statistics_unit\":\"USD\",\"per_share_statistics_unit\":\"USD/share\",\"tail_loss_unit\":\"USD\",\"per_share_tail_loss_unit\":\"USD/share\",\"spending_unit\":\"USD\",\"cash_unit\":\"USD\",\"policies\":[{policies}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"expected_per_share_cost_of_risk_limit\":{},\"net_adaptive_value\":{},\"net_adaptive_value_per_share\":{},\"net_adaptive_value_status\":{adaptive_status},\"unconstrained_net_adaptive_value\":{},\"unconstrained_net_adaptive_value_per_share\":{},\"unconstrained_net_adaptive_value_status\":{unconstrained_adaptive_status},\"selection_frequency\":null,\"selection_frequency_status\":\"unavailable_declared_two_stage_model\",\"regret_reference\":\"all_structurally_feasible_policies_before_risk_limit\"}}",
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"status\":{},\"information\":{},\"per_share_objective\":{},\"objective\":{},\"objective_unit\":{},\"statistics_unit\":\"USD\",\"per_share_statistics_unit\":\"USD/share\",\"tail_loss_unit\":\"USD\",\"per_share_tail_loss_unit\":\"USD/share\",\"spending_unit\":\"USD\",\"cash_unit\":\"USD\",\"policies\":[{policies}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"expected_per_share_cost_of_risk_limit\":{},\"net_adaptive_value\":{},\"net_adaptive_value_per_share\":{},\"net_adaptive_value_status\":{adaptive_status},\"unconstrained_net_adaptive_value\":{},\"unconstrained_net_adaptive_value_per_share\":{},\"unconstrained_net_adaptive_value_status\":{unconstrained_adaptive_status},\"selection_frequency\":{stability},\"selection_frequency_status\":\"{stability_status}\",\"regret_reference\":\"all_structurally_feasible_policies_before_risk_limit\"}}",
         js(&summary.model_key),
         js(&summary.question),
         currency(summary.currency),
@@ -338,6 +347,11 @@ impl EvaluatedRecourseProgram {
     #[must_use]
     pub fn to_markdown(&self) -> String {
         let s = self.summary();
+        let selection_note = if s.selection_stability.is_some() {
+            "Conditional selection stability is reported below."
+        } else {
+            "Selection frequency is unavailable."
+        };
         let baseline = self.static_program().summary();
         let basis = &self.inputs().information.value;
         let (unit, limit, risk_cost, before, after) = if let Some(equity) = &baseline.equity {
@@ -363,7 +377,7 @@ impl EvaluatedRecourseProgram {
             )
         };
         let mut out = format!(
-            "# Two-stage capital policy comparison\n\n{}\n\n**Declared model:** `{}`. **Evidence:** {}. **Confidentiality:** {}. **Digest:** `{}`.\n\n{}\n\n**Valuation basis:** {}. **Objective unit:** {unit}. **Budget on every realized path:** {} USD. **Upper loss tail mass:** {}. **Maximum global tail loss:** {limit} {unit}.\n\n## Adaptive and precommitted comparison\n\n| Result | Before the risk limit | After the risk limit |\n|---|---|---|\n| Two-stage policy co-winners | {} | {} |\n| Precommitted subset co-winners | {} | {} |\n| Net adaptive value ({unit}) | {before} | {after} |\n\nExpected-value cost of the policy risk limit: {risk_cost} {unit}. Net adaptive value is the difference between the best complete policy and the best precommitted subset under the corresponding constraints. Information-gate costs and all initial commitments are already included in policy outcomes. The reported difference must not be added to policy NAV again. If either comparison population has no applicable feasible winner, its difference is unavailable.\n\nRisk is evaluated once over each complete unconditional state distribution. Observation probabilities do not turn branch-specific risk limits into a global limit. Regret compares structurally feasible policies before applying the risk limit. Selection frequency is unavailable. All numeric results are exact rational quantities in the stated units.\n",
+            "# Two-stage capital policy comparison\n\n{}\n\n**Declared model:** `{}`. **Evidence:** {}. **Confidentiality:** {}. **Digest:** `{}`.\n\n{}\n\n**Valuation basis:** {}. **Objective unit:** {unit}. **Budget on every realized path:** {} USD. **Upper loss tail mass:** {}. **Maximum global tail loss:** {limit} {unit}.\n\n## Adaptive and precommitted comparison\n\n| Result | Before the risk limit | After the risk limit |\n|---|---|---|\n| Two-stage policy co-winners | {} | {} |\n| Precommitted subset co-winners | {} | {} |\n| Net adaptive value ({unit}) | {before} | {after} |\n\nExpected-value cost of the policy risk limit: {risk_cost} {unit}. Net adaptive value is the difference between the best complete policy and the best precommitted subset under the corresponding constraints. Information-gate costs and all initial commitments are already included in policy outcomes. The reported difference must not be added to policy NAV again. If either comparison population has no applicable feasible winner, its difference is unavailable.\n\nRisk is evaluated once over each complete unconditional state distribution. Observation probabilities do not turn branch-specific risk limits into a global limit. Regret compares structurally feasible policies before applying the risk limit. {selection_note} All numeric results are exact rational quantities in the stated units.\n",
             md(&s.question),
             md(&s.model_key),
             evidence(self.claim().evidence),
@@ -466,6 +480,9 @@ impl EvaluatedRecourseProgram {
                 term.downside_exposure_usd_m,
                 md(&term.trigger_indicator)
             );
+        }
+        if let Some(stability) = &s.selection_stability {
+            out.push_str(&stability.to_markdown());
         }
         out.push_str("\nAll four authority flags are false: reserve disclosure, execution authorization, geotechnical sign-off and regulatory compliance.\n\n## Complete precommitted comparison and program inputs\n\nThe following retained static report includes every declared candidate, state, cash-flow input, equity input and source Claim. It is the independent precommitted comparison population.\n\n---\n\n");
         out.push_str(&self.static_program().to_markdown());

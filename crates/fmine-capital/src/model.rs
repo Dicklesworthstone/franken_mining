@@ -14,6 +14,7 @@ use crate::recourse::{
 
 mod entity;
 mod entity_valuation;
+mod stability;
 #[cfg(test)]
 mod tests;
 
@@ -216,6 +217,7 @@ fn assumed<T>(
 /// Optional equity_basis/baseline_equity_nav/candidate_share_change rows declare exact equity ownership
 /// for the additive_equity_nav_with_share_changes convention and a separate USD/share risk limit.
 /// Optional entity_valuation rows add separate entity NAV/share matrices and jointly binding risk caps.
+/// Optional selection_stability declares a source-bound weighted bootstrap experiment for either mode.
 /// An explicit entity_funding declaration instead supplies separate entity periods, cash matrices,
 /// floors, fixed transfers and gated ownership distributions; it excludes both other funding modes.
 /// A candidate requires id/label/cost/reference_class_basis and may name one exclusion_group.
@@ -366,10 +368,20 @@ fn parse_model(
     let mut candidate_stages = BTreeMap::new();
     let mut observations = BTreeMap::new();
     let mut information_anchors = Vec::new();
+    let mut stability_row = None;
     let mut entity_rows = entity::EntityRows::default();
     let mut valuation_rows = entity_valuation::ValuationRows::default();
     for row in &doc.rows {
         match row.table.as_str() {
+            "selection_stability" => {
+                if stability_row.is_some() {
+                    return Err(input(
+                        row.line,
+                        "only one selection_stability declaration is allowed",
+                    ));
+                }
+                stability_row = Some((stability::declaration(row, model_key)?, row.line));
+            }
             "state" => {
                 let f = fields(&row.fields, &["id", "weight"], &[], row.line)?;
                 let id = get(&f, "id")?;
@@ -1047,6 +1059,8 @@ fn parse_model(
         }
         None
     };
+    let selection_stability =
+        stability::finish(stability_row, &source, &doc.top, &unknowns, &uu_anchors);
     let mut policy_anchors: Vec<_> = doc
         .top
         .iter()
@@ -1102,6 +1116,7 @@ fn parse_model(
         entity_funding,
         equity,
         entity_valuations,
+        selection_stability,
     };
     validate(&inputs)?;
     Ok((inputs, information))

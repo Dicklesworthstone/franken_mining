@@ -13,7 +13,7 @@ use super::*;
 mod policy_risk;
 mod sensitivity;
 
-fn js(value: &str) -> String {
+pub(super) fn js(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {
         match ch {
@@ -32,13 +32,13 @@ fn js(value: &str) -> String {
     out
 }
 
-fn ratio(value: Rat) -> String {
+pub(super) fn ratio(value: Rat) -> String {
     format!("{}/{}", value.num(), value.den())
 }
-fn rq(value: Rat) -> String {
+pub(super) fn rq(value: Rat) -> String {
     js(&ratio(value))
 }
-fn ids(values: &[String]) -> String {
+pub(super) fn ids(values: &[String]) -> String {
     format!(
         "[{}]",
         values.iter().map(|v| js(v)).collect::<Vec<_>>().join(",")
@@ -119,7 +119,7 @@ fn color_json(color: Color) -> String {
 
 /// Includes metadata omitted by generic Claim identity: support, representation, UU, current flags,
 /// supersession and the computed colour. The actual typed value is separately emitted by each caller.
-fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
+pub(super) fn claim_json<T>(claim: &Claim<T>, value: &str) -> String {
     let anchors = claim
         .anchors
         .iter()
@@ -717,7 +717,7 @@ fn information_markdown(
     }
 }
 
-fn md(s: &str) -> String {
+pub(super) fn md(s: &str) -> String {
     let mut out = String::new();
     for ch in s.chars() {
         match ch {

@@ -391,6 +391,50 @@ from summed payoffs within each shared state, including fractional tail-boundary
 in the calculation. Full input/output Claims, source bytes, constraints and adjustment bases bind the receipt,
 including candidates that never win.
 
+#### Measure whether the selected program changes under scenario resampling
+
+DESIGN (BD-229, plan sections 22.5 and 23.9): an optional `[[selection_stability]]` declaration adds
+deterministic weighted bootstrap comparisons to either a static portfolio or a two-stage policy model:
+
+```toml
+[[selection_stability]]
+method = "weighted_multinomial"
+seed = "229"
+replicates = "200"
+draws_per_replicate = "5"
+sampling_basis = "Synthetic sensitivity experiment on the declared five-state law; no empirical sample-size claim"
+```
+
+All fields are quoted strings. `seed` is an unsigned 64-bit integer, `replicates` is between 200 and 2,000,
+and `draws_per_replicate` is between 1 and 4,096; combined work also has an explicit admission limit.
+The sampling basis explains the chosen experiment size. It is not an inferred effective sample size or
+evidence that scenario rows are independent historical observations. Each replicate draws from the original
+declared weights, with replacement, and uses the resulting **same state-count vector across every alternative,
+valuation entity, static portfolio and adaptive policy**. Sampling never combines marginal project outcomes.
+
+Structural eligibility remains fixed over the complete original support. Omitting a Bad-state draw cannot
+erase its cash-floor failure, unmet capital call, nonpositive share count or contractual obligation.
+Within that population the engine recomputes expected value and every declared primary and secondary tail-loss
+limit for each replicate. A nominal risk rejection may therefore become feasible under another weighting,
+while a previously feasible choice may fail. Adaptive policies retain their original observation-based
+decisions; bootstrap analysis does not choose branches with hindsight.
+
+The report retains every replicate and all exact co-winners, gives selection frequencies with a fragility
+threshold of `4/5`, and shows runner-ups and ranking changes without inventing a tie-breaking probability.
+Replicates with no risk-feasible winner remain visible and in the denominator. Existing cash, debt, capital-call
+and ownership ledgers are reused; the engine sorts each payoff vector once before reweighting it.
+The seed, counts, method, basis and original source anchors bind the report alongside the economic inputs.
+
+These are **conditional selection frequencies under the supplied finite scenario law**, not calibrated
+probabilities that an investment is optimal or coverage for missing model mechanisms. Models without the
+declaration keep their existing output and explicitly unavailable selection-frequency status.
+
+Run the complete synthetic fragile-choice example with:
+
+```sh
+cargo run -p fmine-cli -- decide program tests/capital/selection_stability.toml --format markdown
+```
+
 #### Check whether the program can be funded in every declared scenario
 
 The optional funding clause constrains cash separately from net NAV:

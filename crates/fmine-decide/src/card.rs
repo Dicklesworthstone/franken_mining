@@ -20,6 +20,7 @@ use fmine_units::{Currency, Money, UnitsError};
 pub mod information;
 pub mod model;
 mod render;
+pub mod stability;
 
 pub use information::{
     InformationOption, InformationSummary, Likelihood, MAX_INFORMATION_OPTIONS,
