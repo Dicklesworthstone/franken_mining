@@ -101,8 +101,21 @@ fn policy_json(policy: &PolicyChoice) -> String {
                 crate::entity::render::assessment_json(funding)
             )
         });
+    let entity_valuations = if policy.entity_valuations.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ",\"entity_valuations\":[{}]",
+            policy
+                .entity_valuations
+                .iter()
+                .map(crate::entity::valuation::render::assessment_json)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
     format!(
-        "{{\"policy_id\":{},\"initial_selected\":{},\"initial_spend\":{},\"information_acquired\":{},\"branches\":[{branches}],\"states\":[{states}],\"structural_rejections\":[{rejections}],\"funding_schedule\":{}{entity},\"equity\":{},\"statistics\":{},\"tail_loss\":{},\"per_share_statistics\":{},\"per_share_tail_loss\":{},\"risk_rejected\":{}}}",
+        "{{\"policy_id\":{},\"initial_selected\":{},\"initial_spend\":{},\"information_acquired\":{},\"branches\":[{branches}],\"states\":[{states}],\"structural_rejections\":[{rejections}],\"funding_schedule\":{}{entity}{entity_valuations},\"equity\":{},\"statistics\":{},\"tail_loss\":{},\"per_share_statistics\":{},\"per_share_tail_loss\":{},\"risk_rejected\":{}}}",
         js(&policy.policy_id),
         ids(&policy.initial_selected),
         rq(policy.initial_spend.major),
@@ -269,6 +282,15 @@ fn rejection_text(reason: &StructuralRejection) -> String {
                 ratio(*shares)
             )
         }
+        StructuralRejection::EntityNonpositiveShareCount {
+            entity,
+            share_class,
+            state_id,
+            shares,
+        } => format!(
+            "nonpositive ending shares for {entity}/{share_class} in {state_id}: {} shares",
+            ratio(*shares)
+        ),
         StructuralRejection::EntityCashShortfall {
             entity_id,
             state_id,
@@ -280,6 +302,17 @@ fn rejection_text(reason: &StructuralRejection) -> String {
             "entity cash-floor shortfall for {entity_id} in {state_id} at {} ({checkpoint_date}, {}): {} USD",
             period_id.as_deref().unwrap_or("opening"),
             crate::entity::render::phase_label(phase),
+            ratio(shortfall.major)
+        ),
+        StructuralRejection::EntityCapitalCallShortfall {
+            entity_id,
+            call_id,
+            state_id,
+            period_id,
+            checkpoint_date,
+            shortfall,
+        } => format!(
+            "capital-call shortfall for {entity_id}/{call_id} in {state_id} at {period_id} ({checkpoint_date}): {} USD",
             ratio(shortfall.major)
         ),
     }
@@ -345,6 +378,9 @@ impl EvaluatedRecourseProgram {
             listed(&baseline.unconstrained_winners),
             listed(&baseline.feasible_winners)
         );
+        if !baseline.entity_valuations.is_empty() {
+            out.push_str("\nAdditional valuation entities retain separate NAV/share ledgers and signed tail-loss limits. The primary equity entity remains the sole objective. The constrained winners and reported risk cost apply every declared entity limit jointly to the complete policy distribution; an entity's state-specific share failure applies only when that path is realized. Entity NAV/share values are never blended into a common score.\n");
+        }
         claim_markdown(&mut out, self.claim());
         let _ = writeln!(
             out,
@@ -552,5 +588,12 @@ fn policy_markdown(out: &mut String, policy: &PolicyChoice) {
                 per_share_shown(state.delta_nav_per_share)
             );
         }
+    }
+    for assessment in &policy.entity_valuations {
+        crate::entity::valuation::render::assessment_markdown(
+            out,
+            &format!("Policy {}", policy.policy_id),
+            assessment,
+        );
     }
 }

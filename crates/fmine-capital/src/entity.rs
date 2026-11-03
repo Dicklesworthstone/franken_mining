@@ -1,13 +1,16 @@
-//! DESIGN (BD-314, §23.2): exact entity cash, fixed funding calls and gated ownership distributions.
+//! DESIGN (BD-314, §23.2): exact entity cash, declared funding calls and gated ownership distributions.
 //! Determinism: Exact (declared shared states, canonical period order and rational ownership splits).
 
 use super::*;
+use capital_call::{CapitalCallCashFlows, CapitalCallResult, EntityCapitalCallFunding};
 use debt::{DebtCashFlows, DebtDistributionGate, DebtServiceResult, EntityDebtFunding};
 
+pub mod capital_call;
 pub mod debt;
 pub(super) mod render;
 #[cfg(test)]
 mod tests;
+pub mod valuation;
 
 pub const MAX_ENTITIES: usize = 4;
 pub const MAX_TRANSFERS: usize = 64;
@@ -102,6 +105,7 @@ pub struct EntityFunding {
     pub distributions: Vec<EntityDistribution>,
     pub gates: Vec<EntityDistributionGate>,
     pub debt: Option<EntityDebtFunding>,
+    pub capital_calls: Option<EntityCapitalCallFunding>,
 }
 
 impl EntityFunding {
@@ -135,6 +139,7 @@ pub struct EntityCashCheckpoint {
     pub minimum_cash: ExactMoney,
     pub slack: ExactMoney,
     pub debt: Option<DebtCashFlows>,
+    pub capital_call: Option<CapitalCallCashFlows>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,9 +188,11 @@ pub struct EntityConservation {
     pub internal_distributions: ExactMoney,
     pub external_distributions: ExactMoney,
     pub closing_cash: ExactMoney,
-    /// Closing plus outside distributions minus opening and native flows; exactly zero.
+    /// Closing plus outside dividends and debt service, less opening, native flows, debt draws and
+    /// outside subscription funding. Internal funding cancels; the complete residual is exactly zero.
     pub residual: ExactMoney,
     pub debt: Option<DebtCashFlows>,
+    pub capital_call: Option<CapitalCallCashFlows>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,6 +204,7 @@ pub struct EntityFundingState {
     pub conservation: Vec<EntityConservation>,
     pub minimum_slack: ExactMoney,
     pub debt: Vec<DebtServiceResult>,
+    pub capital_calls: Vec<CapitalCallResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,6 +247,7 @@ pub(super) fn work_per_state(funding: &EntityFunding) -> Result<usize> {
                 .map_or(Some(0), |debt| debt.facilities.len().checked_mul(periods))
                 .and_then(|rows| n.checked_add(rows))
         })
+        .and_then(|n| n.checked_add(funding.capital_calls.as_ref().map_or(0, |c| c.calls.len())))
         .ok_or_else(|| bounded("entity cash result work exceeds the bounded domain"))
 }
 
@@ -264,6 +273,9 @@ pub(super) fn validate_bounds(
     if let Some(debt) = &funding.debt {
         debt::validate_bounds(debt, entities, periods, state_count, candidate_count)?;
     }
+    if let Some(calls) = &funding.capital_calls {
+        capital_call::validate_bounds(calls, state_count)?;
+    }
     let work = (1_usize << candidate_count)
         .checked_mul(state_count)
         .and_then(|n| {
@@ -273,7 +285,7 @@ pub(super) fn validate_bounds(
         });
     if work.is_none_or(|n| n > MAX_CASH_CHECKPOINTS) {
         return Err(bounded(
-            "entity funding may produce at most 65536 checkpoint, transfer, distribution, debt-service and conservation rows across all declared subsets",
+            "entity funding may produce at most 65536 checkpoint, transfer, capital-call, distribution, debt-service and conservation rows across all declared subsets",
         ));
     }
     let entity_periods = entities * periods;
@@ -473,6 +485,7 @@ pub(super) fn validate(
             candidates,
         )?;
     }
+    capital_call::validate(funding, states, candidates)?;
     admit(
         claim,
         &funding.canonical_tag(),
@@ -575,6 +588,9 @@ pub(super) fn canonicalize(funding: &mut EntityFunding) {
     if let Some(debt) = &mut funding.debt {
         debt::canonicalize(debt, &periods);
     }
+    if let Some(calls) = &mut funding.capital_calls {
+        capital_call::canonicalize(calls, &periods);
+    }
 }
 
 struct IndexedTransfer<'a> {
@@ -596,7 +612,6 @@ struct IndexedDistribution<'a> {
     declaration: &'a EntityDistribution,
     entity: usize,
     parent: usize,
-    external_share: Rat,
     gates: Vec<IndexedGate>,
 }
 
@@ -617,6 +632,7 @@ pub(super) struct Index<'a> {
     /// Includes roots and non-distributors so no debtor bypasses its sweep.
     waterfall_order: Vec<usize>,
     debt: Option<debt::Index<'a>>,
+    capital_calls: Option<capital_call::Index<'a>>,
 }
 
 fn index_of(index: &BTreeMap<&str, usize>, key: &str) -> Result<usize> {
@@ -654,6 +670,7 @@ struct Components {
     distribution_out: Rat,
     closing: Rat,
     debt: Option<DebtCashFlows>,
+    capital_call: Option<CapitalCallCashFlows>,
 }
 
 impl<'a> Index<'a> {
@@ -771,6 +788,19 @@ impl<'a> Index<'a> {
                 )
             })
             .transpose()?;
+        let capital_calls = funding
+            .capital_calls
+            .as_ref()
+            .map(|_| {
+                capital_call::Index::new(
+                    funding,
+                    &entity_index,
+                    &period_index,
+                    &state_index,
+                    &candidate_index,
+                )
+            })
+            .transpose()?;
         Ok(Self {
             declaration: funding,
             entities,
@@ -786,6 +816,7 @@ impl<'a> Index<'a> {
             distributions,
             waterfall_order,
             debt,
+            capital_calls,
         })
     }
 
@@ -882,7 +913,6 @@ impl<'a> Index<'a> {
                 declaration: rule,
                 entity: index_of(entities, &rule.entity_id)?,
                 parent: index_of(entities, &rule.parent_entity_id)?,
-                external_share: subtract(ONE, rule.parent_share)?,
                 gates: indexed_gates,
             });
         }
@@ -923,6 +953,7 @@ impl<'a> Index<'a> {
             minimum_cash: self.money(floor),
             slack: self.money(subtract(values.closing, floor)?),
             debt: values.debt,
+            capital_call: values.capital_call,
         })
     }
 
@@ -957,6 +988,16 @@ impl<'a> Index<'a> {
         let mut transfers = Vec::with_capacity(self.transfers.len());
         let mut distributions = Vec::with_capacity(self.distributions.len() * self.periods.len());
         let mut conservation = Vec::with_capacity(self.periods.len());
+        let mut capital_calls = Vec::with_capacity(
+            self.declaration
+                .capital_calls
+                .as_ref()
+                .map_or(0, |calls| calls.calls.len()),
+        );
+        let mut parent_shares = vec![ZERO; entity_count];
+        for distribution in &self.distributions {
+            parent_shares[distribution.entity] = distribution.declaration.parent_share;
+        }
         let mut principal = self
             .debt
             .as_ref()
@@ -985,6 +1026,7 @@ impl<'a> Index<'a> {
                     distribution_out: ZERO,
                     closing: opening,
                     debt: None,
+                    capital_call: None,
                 },
             )?;
             minimum(&mut minimum_slack, row.slack.major);
@@ -1034,7 +1076,21 @@ impl<'a> Index<'a> {
                     actual_amount: self.money(actual),
                 });
             }
-            // Native flows and fixed transfers settle before external debt draws and mandatory service.
+            // Calls change ownership in explicit order; their cash settles as one mandatory phase.
+            let call_settlement = self
+                .capital_calls
+                .as_ref()
+                .map(|calls| {
+                    calls.settle(
+                        period,
+                        state,
+                        selected_mask,
+                        self.closing_dates[period],
+                        &mut parent_shares,
+                    )
+                })
+                .transpose()?;
+            // Native flows, transfers and subscriptions precede external debt draws and mandatory service.
             for entity in 0..entity_count {
                 balances[entity] = subtract(
                     add(
@@ -1043,6 +1099,16 @@ impl<'a> Index<'a> {
                     )?,
                     transfer_out[entity],
                 )?;
+                if let Some(calls) = &call_settlement {
+                    let flows = calls.flows[entity];
+                    balances[entity] = subtract(
+                        add(
+                            add(balances[entity], flows.parent_in.major)?,
+                            flows.external_in.major,
+                        )?,
+                        flows.parent_out.major,
+                    )?;
+                }
             }
             let mut services = if let Some(debt) = &self.debt {
                 debt.service(
@@ -1081,6 +1147,7 @@ impl<'a> Index<'a> {
                             .map(|debt| debt.cash_flows_for(entity, &services))
                             .transpose()?
                             .flatten(),
+                        capital_call: call_settlement.as_ref().map(|calls| calls.flows[entity]),
                     },
                 )?;
                 minimum(&mut minimum_slack, row.slack.major);
@@ -1124,7 +1191,8 @@ impl<'a> Index<'a> {
                 } else {
                     ZERO
                 };
-                let receipt = arithmetic(gross.checked_mul(rule.parent_share))?;
+                let parent_share = parent_shares[child];
+                let receipt = arithmetic(gross.checked_mul(parent_share))?;
                 let outside = subtract(gross, receipt)?;
                 balances[child] = subtract(before, gross)?;
                 balances[parent] = add(balances[parent], receipt)?;
@@ -1138,8 +1206,8 @@ impl<'a> Index<'a> {
                     period_id: self.periods[period].id.clone(),
                     checkpoint_date: self.closing_dates[period].into(),
                     basis: rule.basis.clone(),
-                    parent_share: rule.parent_share,
-                    external_share: distribution.external_share,
+                    parent_share,
+                    external_share: subtract(ONE, parent_share)?,
                     allowed: gate.allowed,
                     maximum_distribution: self.money(gate.maximum),
                     cash_before_distribution: self.money(before),
@@ -1172,6 +1240,7 @@ impl<'a> Index<'a> {
                             .map(|debt| debt.cash_flows_for(entity, &services))
                             .transpose()?
                             .flatten(),
+                        capital_call: call_settlement.as_ref().map(|calls| calls.flows[entity]),
                     },
                 )?;
                 minimum(&mut minimum_slack, row.slack.major);
@@ -1205,6 +1274,14 @@ impl<'a> Index<'a> {
                     debt.draw.major,
                 )?;
             }
+            if let Some(calls) = &call_settlement {
+                if calls.totals.parent_in != calls.totals.parent_out {
+                    return Err(internal(
+                        "capital-call parent funding did not conserve exactly",
+                    ));
+                }
+                residual = subtract(residual, calls.totals.external_in.major)?;
+            }
             if residual != ZERO {
                 return Err(internal(
                     "entity cash did not conserve exactly across transfers and distributions",
@@ -1222,7 +1299,11 @@ impl<'a> Index<'a> {
                 closing_cash: self.money(closing_total),
                 residual: self.money(residual),
                 debt: debt_flows,
+                capital_call: call_settlement.as_ref().map(|calls| calls.totals),
             });
+            if let Some(calls) = call_settlement {
+                capital_calls.extend(calls.rows);
+            }
             debt_results.extend(services);
         }
         Ok(EntityFundingState {
@@ -1235,6 +1316,7 @@ impl<'a> Index<'a> {
                 minimum_slack.ok_or_else(|| internal("entity state lacks cash checkpoints"))?,
             ),
             debt: debt_results,
+            capital_calls,
         })
     }
 }

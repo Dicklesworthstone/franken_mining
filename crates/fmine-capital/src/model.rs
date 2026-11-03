@@ -13,6 +13,7 @@ use crate::recourse::{
 };
 
 mod entity;
+mod entity_valuation;
 #[cfg(test)]
 mod tests;
 
@@ -214,6 +215,7 @@ fn assumed<T>(
 /// declare signed cash flows at a complete sequence of dated checkpoints.
 /// Optional equity_basis/baseline_equity_nav/candidate_share_change rows declare exact equity ownership
 /// for the additive_equity_nav_with_share_changes convention and a separate USD/share risk limit.
+/// Optional entity_valuation rows add separate entity NAV/share matrices and jointly binding risk caps.
 /// An explicit entity_funding declaration instead supplies separate entity periods, cash matrices,
 /// floors, fixed transfers and gated ownership distributions; it excludes both other funding modes.
 /// A candidate requires id/label/cost/reference_class_basis and may name one exclusion_group.
@@ -365,6 +367,7 @@ fn parse_model(
     let mut observations = BTreeMap::new();
     let mut information_anchors = Vec::new();
     let mut entity_rows = entity::EntityRows::default();
+    let mut valuation_rows = entity_valuation::ValuationRows::default();
     for row in &doc.rows {
         match row.table.as_str() {
             "state" => {
@@ -782,6 +785,9 @@ fn parse_model(
                 }
                 uu_anchors.push(located(&source, row.line, &format!("UU {id}")));
             }
+            other if entity_valuation::handles_table(other) => {
+                valuation_rows.push(row, &source)?;
+            }
             other if entity::handles_table(other) => {
                 if other == "entity_funding" && (funding.is_some() || funding_schedule.is_some()) {
                     return Err(input(
@@ -970,6 +976,18 @@ fn parse_model(
         }
         None
     };
+    let entity_valuations = valuation_rows.finish(
+        entity::EntityContext {
+            policy: &policy,
+            states: &states,
+            candidates: &candidates,
+            unknowns: &unknowns,
+            uu_anchors: &uu_anchors,
+            top: &doc.top,
+            source: &source,
+        },
+        equity.as_ref().map(|claim| &claim.value),
+    )?;
     let information = if let Some(mut declaration) = information {
         if candidate_stages.len() != candidates.len() || observations.len() != states.len() {
             return Err(bad(
@@ -1083,6 +1101,7 @@ fn parse_model(
         funding_schedule,
         entity_funding,
         equity,
+        entity_valuations,
     };
     validate(&inputs)?;
     Ok((inputs, information))

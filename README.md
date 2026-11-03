@@ -661,6 +661,76 @@ matrix entries or arithmetic overflow refuse the whole comparison. The entity, s
 baseline NAV, share changes, risk limit, sources and unknown-risk terms all bind the result's receipt.
 Models without an equity declaration retain their existing economics and receipts.
 
+#### Evaluate parent and carve-out shareholders together
+
+DESIGN (BD-314, plan section 23.2): a capital program can evaluate additional entity/share-class denominators
+on the same scenarios while retaining one explicit primary objective. Each entity supplies its own net NAV
+changes, share changes and optional per-share loss ceiling. The selected program must satisfy all declared
+limits. Run the complete invented parent/carve-out example:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/entity_valuation.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/entity_valuation.toml --json
+```
+
+Parent starts at USD 1,000 NAV and 100 shares; the carve-out starts at USD 600 NAV and 60 shares. Both have a
+declared tail-loss limit of 1/10 USD/share. Good and Bad each have weight 1/2. Parent pays USD 10 for a study,
+whose declared net NAV effects are -10 for Parent and -6 for the carve-out. It can then choose either an
+aggressive deal or a fair deal after Good, abandoning further investment after Bad.
+
+The aggressive deal adds more Parent NAV but issues thirty carve-out shares. The fair deal issues six.
+Calculating each entity's ending NAV divided by its own actual shares gives:
+
+| Policy | Parent expected change/share | Parent tail loss/share | Carve-out expected change/share | Carve-out tail loss/share | Joint result |
+|---|---:|---:|---:|---:|---|
+| Study; aggressive deal only after Good | 7/10 | 1/10 | -13/12 | 31/15 | Carve-out limit exceeded |
+| Study; fair deal only after Good | 2/5 | 1/10 | 89/220 | 1/10 | All limits met |
+
+The fair policy wins under the joint limits. Parent ends with NAV 1,090/990 and 100 shares after Good/Bad;
+the carve-out ends with NAV 720/594 and 66/60 shares. The carve-out's Good-state gain is exactly 10/11
+USD/share, and both entities' Bad-state loss is 1/10. Parent's expected-value cost of the joint risk limits
+is 3/10 USD/share. The best feasible fixed program is hold, so constrained adaptive value is 2/5 USD/share.
+
+Funding is checked independently. Parent opens with USD 30 and pays the study while keeping its USD 20 floor.
+A Good-state child receipt of USD 50 produces a USD 30 Parent dividend in the next period, before Parent
+spends USD 20 on the chosen deal. Parent closes at USD 30/20 and the child at USD 20 in both states. The
+terminal share changes do not retroactively change that earlier dividend. All eight static portfolios and
+twenty policies remain visible, including funding failures and risk-rejected alternatives.
+
+Keep the existing primary `[[equity_basis]]`, `[[baseline_equity_nav]]`, `[[candidate_share_change]]` and
+`[[payoff]]` inputs. Add these strictly entity-keyed tables for each secondary valuation:
+
+| Table | Required fields |
+|---|---|
+| `[[entity_valuation]]` | `entity`, `share_class`, `valuation_basis`, `shares_per_unit`, `initial_share_units`; optional `max_tail_loss_per_share` |
+| `[[entity_baseline_nav]]` | `entity`, `state`, `value` |
+| `[[entity_candidate_payoff]]` | `entity`, `candidate`, `state`, `value` |
+| `[[entity_candidate_share_change]]` | `entity`, `candidate`, `state`, `value` |
+
+Every secondary entity needs every baseline state and every candidate/state NAV and share-change entry,
+including explicit zeroes. NAV uses quoted USD decimals; share quantities, scales and loss limits use exact
+quoted `n/d` fractions. Secondary entities must be distinct from each other and the primary entity. Each
+declares its own valuation basis and retains a separate Claim with the original file hash, row anchors and
+unknown-risk terms. A valuation perimeter need not be a node in the cash graph.
+
+All entities use the shared state weights and program tail mass. Nonpositive ending shares are named
+entity/share-class/state structural failures; undefined ratios remain visible. Statistics and hindsight
+regret use the population satisfying every structural constraint, then each entity's optional tail ceiling
+is applied. Equality passes, all caps bind jointly, and the primary mean alone ranks the surviving choices.
+No combination of per-share values across overlapping entity perimeters is used as an objective.
+
+Adaptive policies reuse each realized subset's same-state entity ledgers and retain initial NAV and share
+commitments after abandonment. They recompute every entity's unconditional policy risk; they never inherit a
+static subset's global risk rejection or a failure on an unrealized path. Reports retain all entity inputs,
+state ledgers, exact statistics, individual cap results and complete static/adaptive populations.
+
+Up to three secondary entities are admitted alongside the primary. With secondary valuations, the total
+static-plus-policy population times shared states times all valuation entities must not exceed 65,536
+valuation-state rows. Cash-work limits continue to apply independently. Valuations and transaction effects
+are explicit source assumptions: the engine does not infer NAV from ownership cash, reconcile overlapping
+perimeters, derive contractual capital-call dilution, or change dated waterfall ownership from terminal
+share changes. Without secondary declarations, existing report bytes and receipts remain unchanged.
+
 #### Fund a study, then choose a response
 
 DESIGN (BD-229, plan section 23): an explicit two-stage model can commit to a paid study, observe its declared

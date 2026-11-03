@@ -464,8 +464,24 @@ pub(super) fn inputs_json(inputs: &ProgramInputs) -> String {
                 claim_json(claim, &crate::entity::render::funding_json(&claim.value))
             )
         });
+    let valuations = if inputs.entity_valuations.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ",\"entity_valuations\":[{}]",
+            inputs
+                .entity_valuations
+                .iter()
+                .map(|claim| claim_json(
+                    claim,
+                    &crate::entity::valuation::render::input_json(&claim.value)
+                ))
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
     format!(
-        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}{schedule}{equity}{entity}}}",
+        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}{schedule}{equity}{entity}{valuations}}}",
         claim_json(&inputs.policy, &policy_json(&inputs.policy.value)),
         claim_json(&inputs.weights, &weights_json(&inputs.weights.value)),
         inputs.funding.as_ref().map_or_else(
@@ -556,6 +572,18 @@ pub(super) fn rejection_json(r: &StructuralRejection) -> String {
             js(state_id),
             rq(*shares)
         ),
+        StructuralRejection::EntityNonpositiveShareCount {
+            entity,
+            share_class,
+            state_id,
+            shares,
+        } => format!(
+            "{{\"kind\":\"entity_nonpositive_share_count\",\"entity\":{},\"share_class\":{},\"state_id\":{},\"shares\":{}}}",
+            js(entity),
+            js(share_class),
+            js(state_id),
+            rq(*shares)
+        ),
         StructuralRejection::EntityCashShortfall {
             entity_id,
             state_id,
@@ -570,6 +598,22 @@ pub(super) fn rejection_json(r: &StructuralRejection) -> String {
             period_id.as_deref().map_or_else(|| "null".into(), js),
             js(checkpoint_date),
             js(crate::entity::render::phase_name(phase)),
+            rq(shortfall.major)
+        ),
+        StructuralRejection::EntityCapitalCallShortfall {
+            entity_id,
+            call_id,
+            state_id,
+            period_id,
+            checkpoint_date,
+            shortfall,
+        } => format!(
+            "{{\"kind\":\"entity_capital_call_shortfall\",\"entity_id\":{},\"call_id\":{},\"state_id\":{},\"period_id\":{},\"checkpoint_date\":{},\"shortfall\":{}}}",
+            js(entity_id),
+            js(call_id),
+            js(state_id),
+            js(period_id),
+            js(checkpoint_date),
             rq(shortfall.major)
         ),
     }
@@ -616,7 +660,15 @@ pub(super) fn summary_json(s: &ProgramSummary) -> String {
         let entity = r.entity_funding.as_ref().map_or_else(String::new, |funding| {
             format!(",\"entity_funding\":{}", crate::entity::render::assessment_json(funding))
         });
-        format!("{{\"bundle_id\":{},\"selected\":{},\"spend\":{},\"budget_slack\":{},\"funding\":{}{schedule}{equity}{entity},\"structural_rejections\":[{}],\"risk_rejected\":{},\"tail_loss\":{},\"statistics\":{}}}", js(&r.bundle_id), ids(&r.selected), rq(r.spend.major), rq(r.budget_slack.major), r.funding.as_ref().map_or_else(|| "null".into(), funding_assessment_json), r.structural_rejections.iter().map(rejection_json).collect::<Vec<_>>().join(","), r.risk_rejected, r.tail_loss.map_or_else(|| "null".into(), |v| rq(v.major)), r.statistics.as_ref().map_or_else(|| "null".into(), statistics_json))
+        let valuations = if r.entity_valuations.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ",\"entity_valuations\":[{}]",
+                r.entity_valuations.iter().map(crate::entity::valuation::render::assessment_json).collect::<Vec<_>>().join(",")
+            )
+        };
+        format!("{{\"bundle_id\":{},\"selected\":{},\"spend\":{},\"budget_slack\":{},\"funding\":{}{schedule}{equity}{entity}{valuations},\"structural_rejections\":[{}],\"risk_rejected\":{},\"tail_loss\":{},\"statistics\":{}}}", js(&r.bundle_id), ids(&r.selected), rq(r.spend.major), rq(r.budget_slack.major), r.funding.as_ref().map_or_else(|| "null".into(), funding_assessment_json), r.structural_rejections.iter().map(rejection_json).collect::<Vec<_>>().join(","), r.risk_rejected, r.tail_loss.map_or_else(|| "null".into(), |v| rq(v.major)), r.statistics.as_ref().map_or_else(|| "null".into(), statistics_json))
     }).collect::<Vec<_>>().join(",");
     let schedule = s
         .funding_schedule
@@ -640,8 +692,20 @@ pub(super) fn summary_json(s: &ProgramSummary) -> String {
                 crate::entity::render::funding_json(funding)
             )
         });
+    let valuations = if s.entity_valuations.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ",\"entity_valuations\":[{}]",
+            s.entity_valuations
+                .iter()
+                .map(crate::entity::valuation::render::input_json)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule}{equity}{entity},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":null,\"selection_frequency_status\":\"unavailable_static_declared_model\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"}}",
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule}{equity}{entity}{valuations},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":null,\"selection_frequency_status\":\"unavailable_static_declared_model\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"}}",
         js(&s.model_key),
         js(&s.question),
         currency(s.policy.currency),
@@ -785,6 +849,15 @@ impl EvaluatedProgram {
                                 ratio(*shares)
                             )
                         }
+                        StructuralRejection::EntityNonpositiveShareCount {
+                            entity,
+                            share_class,
+                            state_id,
+                            shares,
+                        } => format!(
+                            "nonpositive ending shares for {entity}/{share_class} in {state_id}: {} shares",
+                            ratio(*shares)
+                        ),
                         StructuralRejection::EntityCashShortfall {
                             entity_id,
                             state_id,
@@ -796,6 +869,17 @@ impl EvaluatedProgram {
                             "entity cash-floor shortfall for {entity_id} in {state_id} at {} ({checkpoint_date}, {}): {} USD",
                             period_id.as_deref().unwrap_or("opening"),
                             crate::entity::render::phase_label(phase),
+                            ratio(shortfall.major)
+                        ),
+                        StructuralRejection::EntityCapitalCallShortfall {
+                            entity_id,
+                            call_id,
+                            state_id,
+                            period_id,
+                            checkpoint_date,
+                            shortfall,
+                        } => format!(
+                            "capital-call shortfall for {entity_id}/{call_id} in {state_id} at {period_id} ({checkpoint_date}): {} USD",
                             ratio(shortfall.major)
                         ),
                     })
@@ -829,6 +913,11 @@ impl EvaluatedProgram {
         if let Some(equity) = &self.inputs.equity {
             equity_markdown(&mut out, equity, &s.choices);
         }
+        crate::entity::valuation::render::static_markdown(
+            &mut out,
+            &self.inputs.entity_valuations,
+            &s.choices,
+        );
         if let Some(funding) = &self.inputs.funding {
             let f = &funding.value;
             let _ = writeln!(

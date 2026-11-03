@@ -1,0 +1,703 @@
+# DESIGN: invented Parent/carve-out comparison with independent valuation denominators.
+# Parent begins at NAV 1000 / 100 shares; carve-out at NAV 600 / 60 shares.
+# Parent pays 10 for a study, with already-net NAV changes of -10 Parent and -6 carve-out.
+# Good produces a prior 50 carve-out cash receipt: 30 reaches Parent and 20 goes outside.
+# Both possible terminal deals cost Parent 20 and require the study. They are mutually exclusive.
+# The aggressive deal benefits Parent but issues 30 carve-out shares; its Good child delta/share is -31/15.
+# The fair deal issues 6 carve-out shares. Study then fair only after Good gives child 720/66 vs 600/60,
+# a delta/share of 10/11; Bad retains the study's -6 NAV, giving child delta/share -1/10.
+# Parent mean/share is 7/10 for aggressive-Good versus 2/5 for fair-Good. Both have tail loss 1/10.
+# The carve-out's 1/10 tail ceiling rejects aggressive-Good (tail 31/15), retaining fair-Good at equality.
+# Fair-Good has child mean 89/220 per share; the joint risk limit costs Parent 3/10 per share.
+# Hold is best static; constrained adaptive value is 2/5 Parent USD/share. Parent closes at cash 30/20.
+# These are separate already-net NAV assumptions, not an inferred sum of cash or ownership values.
+# The fixed cash distribution occurs before the terminal share-for-asset terms. No subsequent
+# distribution or automatic ownership update is assumed. No actual issuer agreement is represented.
+schema = "fmine.capital-program.v1"
+model_key = "invented_parent_carve_out_denominators"
+question = "Which funded Parent policy respects the carve-out shareholders' separate downside limit?"
+currency = "USD"
+valuation_basis = "Invented Parent equity NAV including its interests, already net of study cost, cash paid and terminal deal economics"
+budget = "30"
+tail_mass = "1/5"
+payoff_convention = "additive_equity_nav_with_share_changes"
+reference_class_basis = "Invented complete entity valuations and uncalibrated shared-state probabilities"
+
+[[state]]
+id = "good"
+weight = "1/2"
+
+[[state]]
+id = "bad"
+weight = "1/2"
+
+[[candidate]]
+id = "study"
+label = "Invented paid information and retained transaction work"
+cost = "10"
+reference_class_basis = "Declared sunk information cost with separate already-net effects in each valuation perimeter"
+
+[[candidate]]
+id = "aggressive"
+label = "Invented Parent-favored terminal deal"
+cost = "20"
+exclusion_group = "terminal-deal"
+reference_class_basis = "Declared terminal share-for-asset economics; 30 newly issued carve-out shares"
+
+[[candidate]]
+id = "fair"
+label = "Invented mutually acceptable terminal deal"
+cost = "20"
+exclusion_group = "terminal-deal"
+reference_class_basis = "Declared terminal share-for-asset economics; 6 newly issued carve-out shares"
+
+[[payoff]]
+candidate = "study"
+state = "good"
+value = "-10"
+
+[[payoff]]
+candidate = "study"
+state = "bad"
+value = "-10"
+
+[[payoff]]
+candidate = "aggressive"
+state = "good"
+value = "160"
+
+[[payoff]]
+candidate = "aggressive"
+state = "bad"
+value = "-80"
+
+[[payoff]]
+candidate = "fair"
+state = "good"
+value = "100"
+
+[[payoff]]
+candidate = "fair"
+state = "bad"
+value = "-40"
+
+[[requires]]
+candidate = "aggressive"
+prerequisite = "study"
+
+[[requires]]
+candidate = "fair"
+prerequisite = "study"
+
+[[equity_basis]]
+entity = "parent"
+share_class = "Invented ordinary shares"
+shares_per_unit = "1/1"
+initial_share_units = "100/1"
+max_tail_loss_per_share = "1/10"
+
+[[baseline_equity_nav]]
+state = "good"
+value = "1000"
+
+[[baseline_equity_nav]]
+state = "bad"
+value = "1000"
+
+[[candidate_share_change]]
+candidate = "study"
+state = "good"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "study"
+state = "bad"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "aggressive"
+state = "good"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "aggressive"
+state = "bad"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "fair"
+state = "good"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "fair"
+state = "bad"
+value = "0/1"
+
+[[entity_valuation]]
+entity = "carve-out"
+share_class = "Invented ordinary shares"
+valuation_basis = "Invented carve-out equity NAV under its own perimeter, already net of study costs and complete terminal share-for-asset terms"
+shares_per_unit = "1/1"
+initial_share_units = "60/1"
+max_tail_loss_per_share = "1/10"
+
+[[entity_baseline_nav]]
+entity = "carve-out"
+state = "good"
+value = "600"
+
+[[entity_baseline_nav]]
+entity = "carve-out"
+state = "bad"
+value = "600"
+
+[[entity_candidate_payoff]]
+entity = "carve-out"
+candidate = "study"
+state = "good"
+value = "-6"
+
+[[entity_candidate_payoff]]
+entity = "carve-out"
+candidate = "study"
+state = "bad"
+value = "-6"
+
+[[entity_candidate_payoff]]
+entity = "carve-out"
+candidate = "aggressive"
+state = "good"
+value = "120"
+
+[[entity_candidate_payoff]]
+entity = "carve-out"
+candidate = "aggressive"
+state = "bad"
+value = "-60"
+
+[[entity_candidate_payoff]]
+entity = "carve-out"
+candidate = "fair"
+state = "good"
+value = "126"
+
+[[entity_candidate_payoff]]
+entity = "carve-out"
+candidate = "fair"
+state = "bad"
+value = "-54"
+
+[[entity_candidate_share_change]]
+entity = "carve-out"
+candidate = "study"
+state = "good"
+value = "0/1"
+
+[[entity_candidate_share_change]]
+entity = "carve-out"
+candidate = "study"
+state = "bad"
+value = "0/1"
+
+[[entity_candidate_share_change]]
+entity = "carve-out"
+candidate = "aggressive"
+state = "good"
+value = "30/1"
+
+[[entity_candidate_share_change]]
+entity = "carve-out"
+candidate = "aggressive"
+state = "bad"
+value = "30/1"
+
+[[entity_candidate_share_change]]
+entity = "carve-out"
+candidate = "fair"
+state = "good"
+value = "6/1"
+
+[[entity_candidate_share_change]]
+entity = "carve-out"
+candidate = "fair"
+state = "bad"
+value = "6/1"
+
+[[entity_funding]]
+cash_basis = "Invented separate USD cash ledgers; prior-period fixed ownership dividend funds the later Parent payment; terminal valuation is supplied separately"
+opening_date = "2030-01-01"
+objective_entity = "parent"
+
+[[entity]]
+id = "parent"
+label = "Invented Parent"
+
+[[entity]]
+id = "carve-out"
+label = "Invented carve-out"
+
+[[entity_period]]
+id = "first"
+cash_period = "2030-01-01/2030-04-30"
+
+[[entity_period]]
+id = "second"
+cash_period = "2030-05-01/2030-08-31"
+
+[[entity_period]]
+id = "third"
+cash_period = "2030-09-01/2030-12-31"
+
+[[entity_floor]]
+entity = "parent"
+period = "first"
+value = "20"
+
+[[entity_floor]]
+entity = "carve-out"
+period = "first"
+value = "20"
+
+[[entity_floor]]
+entity = "parent"
+period = "second"
+value = "20"
+
+[[entity_floor]]
+entity = "carve-out"
+period = "second"
+value = "20"
+
+[[entity_floor]]
+entity = "parent"
+period = "third"
+value = "20"
+
+[[entity_floor]]
+entity = "carve-out"
+period = "third"
+value = "20"
+
+[[entity_opening_cash]]
+entity = "parent"
+state = "good"
+value = "30"
+
+[[entity_opening_cash]]
+entity = "parent"
+state = "bad"
+value = "30"
+
+[[entity_opening_cash]]
+entity = "carve-out"
+state = "good"
+value = "20"
+
+[[entity_opening_cash]]
+entity = "carve-out"
+state = "bad"
+value = "20"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "first"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "first"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "carve-out"
+period = "first"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "carve-out"
+period = "first"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "second"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "second"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "carve-out"
+period = "second"
+state = "good"
+value = "50"
+
+[[entity_baseline_cash_flow]]
+entity = "carve-out"
+period = "second"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "third"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "third"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "carve-out"
+period = "third"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "carve-out"
+period = "third"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "study"
+state = "good"
+value = "-10"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "study"
+state = "bad"
+value = "-10"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "aggressive"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "aggressive"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "fair"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "fair"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "first"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "first"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "first"
+candidate = "aggressive"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "first"
+candidate = "aggressive"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "first"
+candidate = "fair"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "first"
+candidate = "fair"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "aggressive"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "aggressive"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "fair"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "fair"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "second"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "second"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "second"
+candidate = "aggressive"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "second"
+candidate = "aggressive"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "second"
+candidate = "fair"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "second"
+candidate = "fair"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "aggressive"
+state = "good"
+value = "-20"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "aggressive"
+state = "bad"
+value = "-20"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "fair"
+state = "good"
+value = "-20"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "fair"
+state = "bad"
+value = "-20"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "third"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "third"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "third"
+candidate = "aggressive"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "third"
+candidate = "aggressive"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "third"
+candidate = "fair"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "carve-out"
+period = "third"
+candidate = "fair"
+state = "bad"
+value = "0"
+
+[[entity_distribution]]
+entity = "carve-out"
+parent_entity = "parent"
+parent_share = "3/5"
+basis = "Invented fixed ownership for the cash dividend before the terminal deal; two fifths paid outside the graph"
+
+[[entity_distribution_gate]]
+entity = "carve-out"
+period = "first"
+state = "good"
+allowed = "true"
+maximum_distribution = "50"
+
+[[entity_distribution_gate]]
+entity = "carve-out"
+period = "first"
+state = "bad"
+allowed = "true"
+maximum_distribution = "50"
+
+[[entity_distribution_gate]]
+entity = "carve-out"
+period = "second"
+state = "good"
+allowed = "true"
+maximum_distribution = "50"
+
+[[entity_distribution_gate]]
+entity = "carve-out"
+period = "second"
+state = "bad"
+allowed = "true"
+maximum_distribution = "50"
+
+[[entity_distribution_gate]]
+entity = "carve-out"
+period = "third"
+state = "good"
+allowed = "true"
+maximum_distribution = "50"
+
+[[entity_distribution_gate]]
+entity = "carve-out"
+period = "third"
+state = "bad"
+allowed = "true"
+maximum_distribution = "50"
+
+[[recourse]]
+information_candidate = "study"
+observation_date = "2030-05-01"
+information_basis = "Invented paid study reveals Good or Bad before the prior dividend and terminal deal"
+
+[[candidate_stage]]
+candidate = "study"
+stage = "initial"
+
+[[candidate_stage]]
+candidate = "aggressive"
+stage = "recourse"
+
+[[candidate_stage]]
+candidate = "fair"
+stage = "recourse"
+
+[[state_observation]]
+state = "good"
+observation = "good"
+
+[[state_observation]]
+state = "bad"
+observation = "bad"
+
+[[uu]]
+id = "unrepresented_transaction_terms"
+description = "Invented model may omit a transaction, valuation-perimeter or information-rights effect"
+trigger = "A supplied term or independent entity valuation is shown to be incomplete"
+downside_usd_m = "5.0"
