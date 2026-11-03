@@ -104,6 +104,17 @@ licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
 target = "crates/fmine-geom/src/vdb.rs"
 guard_test = "vdb::tests::golden_iter_active_digest"
 
+# `check-lifts --upstream` reads 18% here: the test module (the differential corpus, upstream's rmesh-003 and
+# rmesh-004, refusals) is about half the file and shares nothing with the source. The code above `#[cfg(test)]`
+# shares 38%, and holds 65 of the source's 89 long lines verbatim.
+[[lift]]
+source = "crates/fs-rep-mesh/src/winding.rs"
+commit = "20463525d9775a18c1b237d2676f364f367175ab"
+sha256_at_lift = "563a937992d4b3ca9c2e56d6e494d620e71fb72db622ce67e8ea694d941f55cc"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+target = "crates/fmine-geom/src/winding.rs"
+guard_test = "winding::tests::differential_corpus_matches_upstream"
+
 [[analogue]]
 target = "crates/fmine-evidence/src/lattice.rs"
 upstream = "crates/fs-evidence/src/lib.rs"

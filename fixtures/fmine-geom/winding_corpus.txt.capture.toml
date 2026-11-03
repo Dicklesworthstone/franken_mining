@@ -1,0 +1,19 @@
+# Capture record (§33.2) for winding_corpus.txt: frankensim's own winding answers for fmine-geom's differential
+# corpus (bd-192). scripts/oracle/winding_corpus/assemble.py copies upstream's fs-rep-mesh winding.rs and
+# shapes.rs byte for byte (each checked against its sha256 at the commit), with lines 86-165 of fs-geom's lib.rs
+# (Point3 and Vec3) as a one-file fs-geom crate; driver.rs, the only new code, builds 13 soups (upstream's cube,
+# icosphere and corrupt generators, plus hand-written ones) and 1,264 query points (centres, random points,
+# far points, vertices, face centroids, edge midpoints and points 1e-9 off a face) and prints upstream's
+# winding_exact and WindingOctree answers at beta 1, 2 and 4. inputs_digest is the sha256 of the lines
+# `sha256:<hex> <name>` for the three upstream files and driver.rs, as assemble.py prints it on stderr.
+# rch returns a worker's stdout on stderr, so the file is the lines from the first `# fmine-geom` line to the
+# last `end` line of that stream; the run was repeated on the same worker with identical bytes.
+oracle = "frankensim fs-rep-mesh winding.rs (winding_exact, WindingOctree) with std atan2, and shapes.rs, unmodified"
+version = "frankensim commit 20463525d9775a18c1b237d2676f364f367175ab; the worker's rustc version was not recorded"
+platform = "x86_64-unknown-linux-gnu (rch worker vmi1152480), std atan2 from that worker's libm"
+inputs_digest = "sha256:893367fa4c5b5cae36d7df2a06c7d74e30a7a7447350ba709f687468db47b4b7"
+outputs_digest = "sha256:55b8657186930f5f91c27be78fdea58d55aa8fb9f77871bbd863ff99617698ba"
+command = "python3 -I scripts/oracle/winding_corpus/assemble.py <frankensim checkout> <empty dir>; then in <empty dir>: cargo run -q -p winding-oracle"
+captured_by = "coding agent that wrote the fmine-geom code under test (no separate lab runner)"
+date = "2026-11-03"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider (frankensim): the answers are upstream code's output; driver.rs and assemble.py are this repository's licence"

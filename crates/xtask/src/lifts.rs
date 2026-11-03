@@ -999,8 +999,9 @@ mod tests {
         let root = workspace_root();
         check_lifts(&root).expect("committed lifts");
         let (lifts, analogues) = load(&root).expect("registry");
-        // Seven, plus fmine-geom's eft.rs, expansion.rs and predicates.rs (bd-193) and vdb.rs (bd-191).
-        assert_eq!((lifts.len(), analogues.len()), (11, 5));
+        // Seven, plus fmine-geom's eft.rs, expansion.rs and predicates.rs (bd-193), vdb.rs (bd-191) and winding.rs
+        // (bd-192). The name keeps the count of eleven because bd-007's close reason cites this test by name.
+        assert_eq!((lifts.len(), analogues.len()), (12, 5));
     }
 
     /// Local only: set `FRANKENSIM_PATH` to a frankensim checkout that holds the pinned commit. The shared count
@@ -1012,12 +1013,13 @@ mod tests {
             println!("skipped: FRANKENSIM_PATH is not set");
             return;
         };
-        // One row is under MIN_OVERLAP_PERCENT, and that is its known answer: fs-sparse keeps precond.rs's tests in
-        // tests/precond_battery.rs, so the target's test module shares no line with the source
-        // (registries/lifts.toml). Every digest must still match, and no other row may be flagged.
-        let log =
-            check_upstream(&workspace_root(), Path::new(&up)).expect_err("precond.rs flagged");
-        assert_eq!(log.len(), 7, "{log:?}");
+        // Two rows are under MIN_OVERLAP_PERCENT, and that is their known answer (registries/lifts.toml): fs-sparse
+        // keeps precond.rs's tests in tests/precond_battery.rs, and winding.rs's test module is half the file, so
+        // neither target's test module shares a line with its source. Every digest must still match, and no other
+        // row may be flagged.
+        let log = check_upstream(&workspace_root(), Path::new(&up))
+            .expect_err("precond.rs and winding.rs flagged");
+        assert_eq!(log.len(), 12, "{log:?}");
         assert!(
             log.iter().all(|l| l.contains("\"sha256_ok\":true")),
             "{log:?}"
@@ -1026,10 +1028,15 @@ mod tests {
             .iter()
             .filter(|l| l.contains("\"not_a_lift\":true"))
             .collect();
-        assert_eq!(flagged.len(), 1, "{log:?}");
+        assert_eq!(flagged.len(), 2, "{log:?}");
         assert!(
             flagged[0].contains("crates/fs-sparse/src/precond.rs")
                 && flagged[0].contains("\"shared\":38,"),
+            "{log:?}"
+        );
+        assert!(
+            flagged[1].contains("crates/fs-rep-mesh/src/winding.rs")
+                && flagged[1].contains("\"shared\":65,"),
             "{log:?}"
         );
         assert!(log[0].contains("\"shared\":82,"), "{log:?}");

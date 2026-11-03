@@ -112,6 +112,14 @@ kind = "debt"
 reason = "DecisionCard CVaR loss in USD millions, passed bare beside a Claim for the expected NPV"
 
 [[allow]]
+crate = "fmine-geom"
+file = "src/winding.rs"
+fn = "build"
+params = "beta"
+kind = "generic"
+reason = "WindingOctree's accuracy ratio: a node is far when its distance exceeds beta times its radius, so beta is dimensionless"
+
+[[allow]]
 crate = "fmine-metrics"
 file = "src/lib.rs"
 fn = "compute_geo"

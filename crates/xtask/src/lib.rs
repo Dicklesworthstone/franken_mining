@@ -1595,11 +1595,11 @@ mod tests {
             .map(|e| walk(&e.path().join("src")))
             .sum();
         assert_eq!(report.files, expected, "{report:?}");
-        // fmine-core's seven, plus lmdi.rs, fmine-calib's and fmine-numerics' lib.rs (bd-hp2j.3), fmine-geom's six
-        // (bd-193, bd-191), fmine-optimize's thirteen (bd-250, bd-nzwd, bd-t75z, bd-ip99, bd-nq06, bd-kcpj, bd-5lxu,
-        // bd-2rne, bd-rbxh, bd-ubzs), fmine-calib's ledger/binding.rs (BD-047), fmine-io's forecast/prefix.rs (BD-047),
-        // fmine-lp's pdlp/bound.rs (BD-251) and fmine-ledger's mmr.rs (BD-083).
-        assert_eq!(report.bitwise_files, 33, "{report:?}");
+        // fmine-core's seven, plus lmdi.rs, fmine-calib's and fmine-numerics' lib.rs (bd-hp2j.3), fmine-geom's seven
+        // (bd-193, bd-191, bd-192), fmine-optimize's thirteen (bd-250, bd-nzwd, bd-t75z, bd-ip99, bd-nq06, bd-kcpj,
+        // bd-5lxu, bd-2rne, bd-rbxh, bd-ubzs), fmine-calib's ledger/binding.rs (BD-047), fmine-io's forecast/prefix.rs
+        // (BD-047), fmine-lp's pdlp/bound.rs (BD-251) and fmine-ledger's mmr.rs (BD-083).
+        assert_eq!(report.bitwise_files, 34, "{report:?}");
     }
 
     /// A broken registry fails `check-all`, naming the file and line; the workspace's own registry passes.

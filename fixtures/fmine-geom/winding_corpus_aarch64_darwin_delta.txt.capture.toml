@@ -1,0 +1,16 @@
+# Capture record (§33.2) for winding_corpus_aarch64_darwin_delta.txt: the 45 query rows where frankensim's winding
+# answers on an arm64 Mac differ from winding_corpus.txt (bd-192). The same assembled oracle (same inputs_digest)
+# was built and run on this Mac: refused the worker it was asked for, the rch shim fell back to a local build.
+# Its full output (sha256:752369c660f69cb1533650b5c7714995dd0321eeb5df10ea3d6614f0f81ddc37, 237,127 bytes) has the
+# same soups and query points; 107 answers in 45 rows differ, by at most 2.3e-16. scripts/oracle/winding_corpus/
+# host_delta.py keeps those rows with the Mac's answers. The full output's header line names
+# winding_corpus.txt.capture.toml because the driver prints fixed text; this file is its record.
+oracle = "frankensim fs-rep-mesh winding.rs (winding_exact, WindingOctree) with std atan2, and shapes.rs, unmodified"
+version = "frankensim commit 20463525d9775a18c1b237d2676f364f367175ab; local rustc 1.101.0-nightly (48f4b0553 2026-10-23), the default toolchain outside the repository"
+platform = "aarch64-apple-darwin (the dispatcher Mac), std atan2 from Apple's libm"
+inputs_digest = "sha256:893367fa4c5b5cae36d7df2a06c7d74e30a7a7447350ba709f687468db47b4b7"
+outputs_digest = "sha256:ca50ae55a3becf0a9c346486dd17a9684825aa30ac8b34688de0f574fe05a549"
+command = "assemble.py and cargo run as for winding_corpus.txt, on an aarch64-apple-darwin host; then python3 -I scripts/oracle/winding_corpus/host_delta.py fixtures/fmine-geom/winding_corpus.txt <that output>"
+captured_by = "coding agent that wrote the fmine-geom code under test (no separate lab runner)"
+date = "2026-11-03"
+licence = "LicenseRef-MIT-OpenAI-Anthropic-Rider (frankensim): the answers are upstream code's output; the scripts are this repository's licence"
