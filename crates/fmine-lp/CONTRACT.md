@@ -154,7 +154,17 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 
   The bound's distance from the optimum is the measure to trust. It can be judged only against an outside optimum or a feasible point, and this crate produces neither.
 - **Open columns.** A column with an infinite bound on the side its reduced cost points to certifies through a bound its rows imply (§4). Where they imply none, it certifies only when its reduced cost has the right sign, exactly. The shift (§4) tries to give it that sign. A free column with no implied bound needs a reduced cost of exactly zero, which an approximate `y` rarely has. Give such columns a finite bound when one is known.
-- **netlib** (`tests/netlib.rs`, ignored, run by hand on 2026-11-03 from a local debug build). Four netlib LPs, all with every column open above, at ε = 1e-9 and one thread. The gap is `(published − bound) / |published|`, against netlib's MINOS 5.3 optima. Every bound lay at or below the published optimum.
+- **netlib** (`tests/netlib.rs`, ignored, run by hand on 2026-11-03). 35 small netlib LPs, from 27 to 515 rows, 32 to 1,075 columns and 83 to 4,563 nonzeros, at ε = 1e-9, one million steps and one thread. Release and debug builds gave the same bounds and step counts. The release run took 141 s. The gap is `(published − bound) / |published|`, against netlib's MINOS 5.3 optima.
+  - Every file read and wrote back to the same text, including the four with `RANGES` (BOEING1, BOEING2, FORPLAN, SEBA).
+  - No bound lay above a published optimum. BEACONFD's and GROW7's lay 6e-12 above the 11-figure value, inside its rounding.
+  - 24 certified within 2.5e-7. The largest gaps were SCAGR7 2.4e-7 and ETAMACRO 2.2e-7, and the test now holds those 24 to 1e-6.
+  - FORPLAN stopped at the step limit with a bound 1.9e-2 below.
+  - 10 met the stopping rule and certified nothing: BORE3D, BRANDY, CAPRI, FINNIS, LOTFI, SCORPION, SCSD1, SHARE1B, SHARE2B and STAIR.
+    - Each has columns open above that no single row bounds. A re-run of the propagation outside the crate counted SCSD1's 760 of 760, SCORPION's 303 of 358 and FINNIS's 298 of 533.
+    - The shift did not give all of them a reduced cost of the right sign.
+    - Their dual objectives were within 2.6e-9 of the optimum, except FINNIS's, which was 5.9e-7 above it. That is the value an uncertified dual objective would have reported as a bound.
+
+  The four run first:
 
   | LP | Rows | Columns | Nonzeros | Steps | Columns on an implied bound | Gap |
   |---|---|---|---|---|---|---|
@@ -217,20 +227,20 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - External: MineLib's published "CPIT LP upper bound: objective value of the optimal LP relaxation". The source is Espinoza, Goycoolea, Moreno and Newman, MineLib, Annals of Operations Research 2013; the Results page is mirrored at github.com/borelian/minelib and was read 2026-11-01.
   - The LP is built in "by" variables (`w[b][t]` is the fraction of block `b` mined by period `t`), which keeps the optimum.
   - The published optima match a discount exponent counted from 0. On newman1 at ε = 1e-7 that gives 24,486,185.05 against the published 24,486,184. Counting from 1, as the format note reads, gives 22,672,394.94.
-- External: netlib's published LP optima (`lp/data/readme`, "Optimal Value", MINOS 5.3, 11 significant figures) for AFIRO, ADLITTLE, E226 and ISRAEL, from the uncompressed MPS files in HiGHS's `check/instances` (MIT, commit `0edab95`), read 2026-11-03.
+- External: netlib's published LP optima (`lp/data/readme`, "Optimal Value", MINOS 5.3, 11 significant figures) for the 35 LPs `tests/netlib.rs` lists, from the uncompressed MPS files in HiGHS's `check/instances` (MIT, commit `0edab95`), read 2026-11-03.
 - HiGHS and OR-Tools PDLP (plan §15.4's lab oracles) are not run.
 
 ## 10. Known gaps
 - `BD-251`: one library caller, `fmine-io`'s `omf::pit::PitModel::lp_schedule` (bd-djb7), which solves `toposort::lp`'s relaxation of an OMF schedule and reports minus the dual bound as its upper bound. The MineLib harnesses in `crates/xtask/tests/` also call `pdlp::solve`. The plan's blend, SAA and CVaR uses have no caller.
 - No presolve, no feasibility polishing and no infeasibility or unboundedness detection. An infeasible or unbounded LP runs to `max_iterations`.
 - The returned `x` is not feasible (§8). Nothing here turns it into a feasible point or a primal bound.
-- Implied bounds come from one row at a time over the column bounds, a single-row propagation. A column bounded only by a combination of rows gets no implied bound. Only the shift then helps, and it does not help a free column (§8).
+- Implied bounds come from one row at a time over the column bounds, a single-row propagation. A column bounded only by a combination of rows gets no implied bound. Only the shift then helps, and it does not help a free column (§8). On netlib, 10 of 35 LPs certify nothing at multipliers whose dual objective is within 6e-7 of the optimum (§8).
 - At the default ε = 1e-4, the certified bound misses KILL-PUSH-PDLP's 1e-4 on three of ten MineLib instances, newman1, kd and sm2, even with the best-seen bound (§8). The default is cuPDLP's and is kept, and the MineLib test runs at 1e-6.
 - At 1e-6 the three largest MineLib instances do not meet the stopping rule within 30 minutes. Their bounds were within 1e-4, but the solver cannot tell that without an outside optimum or a feasible point.
 - Best-seen tracking keeps the multipliers with the highest dual objective and certifies only those, the final `y` and the two shifted. The dual objective leaves out wrong-signed reduced costs of open columns. Where the certified value departs from it, another evaluation may have certified more.
 - No QP, MILP or decomposition (the crate's other planned slices).
 - `mps` reads free format only: fixed-column MPS with spaces in names is not read. Integer markers are refused, not skipped. Only one `RHS`, `RANGES` and `BOUNDS` set is read. Nothing in the workspace writes MPS yet, and no outside solver has read `write`'s output.
-- netlib's files are not in the repository, because no licence for the collection is recorded here (HiGHS carries these four under its MIT). `tests/netlib.rs` is ignored, run by hand with `FMINE_NETLIB_DIR`, and CI does not run it. Four of netlib's LPs were run, all small.
+- netlib's files are not in the repository, because no licence for the collection is recorded here (HiGHS carries these under its MIT). `tests/netlib.rs` is ignored, run by hand with `FMINE_NETLIB_DIR`, and CI does not run it. 35 of netlib's LPs were run, all small; the larger ones were not.
 - MineLib's files are not in the repository, because their licence is not recorded. KILL-PUSH-PDLP is an ignored test, run by hand with `FMINE_MINELIB_DIR`, and CI does not run it.
 - MineLib's mclaughlin (2.1 million blocks, 73 million arcs, 20 periods) is not run. It has about 2.9×10⁹ nonzeros in this formulation: about 140 GB at §8's rate for this crate alone, plus the test's own COO and CSR copies. It was not attempted on this shared 256 GB host.
 - The timings come from one loaded machine.
