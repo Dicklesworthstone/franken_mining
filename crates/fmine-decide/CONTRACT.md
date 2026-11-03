@@ -171,6 +171,40 @@ The projection is an internal versioned replay input (version 2), not a new dura
   changing primary/secondary risk, no feasible choice, original state retention, source admission,
   arithmetic/work refusals and positive-affine invariance of complete replicate results.
 
+- `card::robustness::{RobustnessDesign, StateDistance, RobustAlternative, RobustnessSummary}`:
+  DESIGN (BD-225, §22.5), optional finite-support Wasserstein-1 comparisons through the existing
+  `card::evaluate` and `fmine decide card` command. One source-bound `[[robustness]]` declaration
+  requires `method = "wasserstein_1"`, a nonnegative rational `radius`, and explicit `metric_basis`
+  and `radius_basis`. `[[transport_distance]]` supplies every ordered `from`/`to`/`value` pair,
+  including zero diagonals. The dimensionless metric is symmetric, strictly positive between
+  different states and satisfies every triangle inequality. No metric, radius or calibration is inferred.
+  All controls and original matrix-row anchors remain in an Assumed/Internal input Claim.
+
+  For action a, DESIGN: solve max Σᵢⱼ γᵢⱼ (−vₐⱼ) with γ ≥ 0, Σⱼ γᵢⱼ = pᵢ and
+  Σᵢⱼ γᵢⱼ dᵢⱼ ≤ radius; its negative is the worst-case mean. Separately solve the same problem
+  for same-state regret max_b(v_bⱼ) − vₐⱼ. All original actions enter the hindsight baseline.
+  The dual is min_{λ ≥ 0} λ·radius + Σᵢ pᵢ maxⱼ(lossⱼ − λdᵢⱼ), the finite-support
+  specialization of the Wasserstein dual (Mohajerin Esfahani and Kuhn, 2017, §4.1, equation 16;
+  https://arxiv.org/abs/1505.05116v3). This implementation obtains and checks both witnesses
+  directly; it does not import that paper's empirical-sample confidence guarantees.
+
+  Maximin mean and minimax expected regret have separate rankings, complete co-winner sets and
+  adversarial distributions. Every certificate retains all destination weights (including zeros),
+  all positive transport arcs, transport cost, dual multiplier/potentials, objective and exact zero
+  primal/dual gap. Nominal choices, regrets, tail statistics and information-option assessments stay
+  unchanged and visible. The robust scope is **act-now actions**: it neither optimizes information
+  policies nor certifies robust CVaR, hard constraints, missing regimes or empirical uncertainty.
+
+  Work is bounded before cloning or hashing: 1–64 states, at most 256 actions, a complete distance
+  matrix and at most 2,097,152 action/state-pair objective evaluations. Identifiers are at most 128
+  ASCII identifier bytes and the declared bases at most 4,096 bytes. Metric validation and cost
+  ordering are reused across both objectives and all actions. Each numerical solve uses exact
+  concave hull segments and returns at most n+1 positive arcs, without convergence tolerances.
+  Configuration metadata joins output ancestry, confidentiality, UU and weakest evidence/colour.
+  When the declaration is absent, the prior card fields, scope, Claim identity and report bytes remain
+  unchanged. Tests include independent primal-vertex enumeration, direct source-admission mutations,
+  zero/full-radius limits, distinct robust criteria and actual CLI/library JSON/Markdown parity.
+
 ## 5. Guards & Typed Refusals
 `rank_voi_campaigns` validates the shared problem once, even for an empty campaign list. Every campaign must
 have a distinct nonempty identifier, a well-formed likelihood matrix and a valid cost. Any failure returns a

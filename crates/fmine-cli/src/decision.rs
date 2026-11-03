@@ -20,7 +20,7 @@ pub(crate) const ROBOT_DOCS_JSON: &str = concat!(
     "\"tables\":{\"state\":[\"id\",\"weight\"],\"action\":[\"id\",\"label\",\"role\"],",
     "\"payoff\":[\"action\",\"state\",\"value\"],\"uu\":[\"id\",\"description\",\"trigger\",\"downside_usd_m\"],",
     "\"information_option\":[\"id\",\"label\",\"test_cost\",\"delay_cost\",\"delay_days\"],",
-    "\"signal\":[\"option\",\"id\"],\"likelihood\":[\"option\",\"state\",\"signal\",\"probability\"]},",
+    "\"signal\":[\"option\",\"id\"],\"likelihood\":[\"option\",\"state\",\"signal\",\"probability\"],\"robustness\":[\"method\",\"radius\",\"metric_basis\",\"radius_basis\"],\"transport_distance\":[\"from\",\"to\",\"value\"]},",
     "\"weights\":\"Quoted positive rational n/d; exact sum one\",",
     "\"actions\":\"At least two; roles action or do_nothing, exactly one do_nothing; complete common states\",",
     "\"money\":\"Quoted major-currency amounts, at most four decimal places; no implicit FX or discounting\",",
@@ -28,9 +28,9 @@ pub(crate) const ROBOT_DOCS_JSON: &str = concat!(
     "\"output\":\"Exact weighted mean, P10/P50/P90, signed-loss CVaR95, same-state regret and all co-winners\",",
     "\"information\":\"Optional single-test policies; exact EVPI, EVSI and net value after explicit nonnegative test/delay costs in model currency; delay_days is an integer duration, not a discount rule\",",
     "\"likelihoods\":\"Quoted P(signal|state) in [0,1]; explicit complete state-by-signal matrix including zeros; each state sums exactly to one\",",
-    "\"method\":\"Exact finite enumeration; Monte Carlo standard error not applicable; assumed probabilities remain uncalibrated\",",
+    "\"method\":\"Exact finite enumeration; Monte Carlo standard error not applicable; assumed probabilities remain uncalibrated\",\"robustness\":\"Optional single wasserstein_1 declaration: quoted nonnegative rational radius and dimensionless distances, explicit metric/radius bases, complete proper metric including zero diagonal, at most 64 states and 256 actions. Reports worst mean and worst expected regret of original act-now actions with exact transport certificates; no robust CVaR, information-policy optimization or calibrated confidence claim\",",
     "\"evidence\":\"Assumed, Internal, uncalibrated; no execution authority or decision-ledger append\",",
-    "\"example\":\"tests/decisions/expansion.toml\",\"information_example\":\"tests/decisions/metallurgical_test.toml\"}"
+    "\"example\":\"tests/decisions/expansion.toml\",\"information_example\":\"tests/decisions/metallurgical_test.toml\",\"robustness_example\":\"tests/decisions/wasserstein.toml\"}"
 );
 
 pub(crate) fn execute(model: &Path, root: &Path) -> Envelope {

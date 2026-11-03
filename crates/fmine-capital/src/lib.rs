@@ -1806,6 +1806,7 @@ fn populate_statistics(
             weights: inputs.weights.clone(),
             actions: actions.to_vec(),
             information_options: vec![],
+            robustness: None,
         })?
         .summary()
         .alternatives

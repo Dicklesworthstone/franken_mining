@@ -256,6 +256,7 @@ mod tests {
             minimax_regret_winners: vec![],
             minimax_regret_primary: "a".into(),
             information: None,
+            robustness: None,
         };
         summary.alternatives.push(crate::card::AlternativeStats {
             action_id: "a".into(),

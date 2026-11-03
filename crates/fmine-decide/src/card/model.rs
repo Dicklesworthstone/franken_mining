@@ -17,6 +17,10 @@ use fmine_units::{Currency, Money};
 
 use super::{ActionPayoffs, ActionRole, DecisionInputs, InformationOption, Likelihood, WeightSet};
 
+mod robustness;
+#[cfg(test)]
+mod robustness_tests;
+
 const INPUT: RefusalCode = RefusalCode::InputMissingOrUnreadable506;
 const BASIS: RefusalCode = RefusalCode::BasisMismatch105;
 const DOMAIN: RefusalCode = RefusalCode::OutsidePhysicalDomain109;
@@ -41,6 +45,9 @@ struct DeclaredAction {
 /// `signal { option, id }` and `likelihood { option, state, signal, probability }` rows. Costs are quoted
 /// monetary decimals; `delay_days` is an integer. Each conditional state row must explicitly include every
 /// declared signal, including zero probabilities, and sum exactly to one. Costs are never inferred from days.
+/// Optional `robustness { method, radius, metric_basis, radius_basis }` declares a finite-support
+/// Wasserstein comparison. `transport_distance { from, to, value }` explicitly supplies every ordered state
+/// pair, including diagonal zeros. Radius and distance are quoted nonnegative fractions in the declared metric.
 ///
 /// The source names these assumptions; its hash does not establish that they are measured or calibrated.
 /// No evidence-upgrade, retrospective, confidentiality-downgrade or authority fields are accepted.
@@ -82,6 +89,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
     let mut payoffs = BTreeMap::new();
     let mut unknowns = BTreeMap::new();
     let mut information = InformationRows::default();
+    let mut robustness = robustness::Rows::default();
     for row in &doc.rows {
         match row.table.as_str() {
             "state" => {
@@ -134,6 +142,8 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
             }
             "signal" => information.signal(row)?,
             "likelihood" => information.likelihood(row)?,
+            "robustness" => robustness.declaration(row, model_key)?,
+            "transport_distance" => robustness.distance(row)?,
             "uu" => {
                 let [id, description, trigger, exposure] = strings(
                     &row.fields,
@@ -214,6 +224,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
         }
     }
     let unknowns: Vec<_> = unknowns.into_values().collect();
+    let robustness = robustness.finish(&states, actions.len(), &unknowns, &source)?;
     let mut claims = Vec::new();
     for (id, action) in actions {
         let mut values = Vec::new();
@@ -260,6 +271,7 @@ pub fn parse(text: &str, source: SourceAnchor) -> Result<DecisionInputs, Refusal
         ),
         actions: claims,
         information_options,
+        robustness,
     })
 }
 
@@ -692,7 +704,7 @@ fn bad(code: RefusalCode, line: usize, message: &str) -> Refusal {
 mod tests {
     use super::*;
 
-    const MODEL: &str = r#"schema = "fmine.decision-model.v1"
+    pub(super) const MODEL: &str = r#"schema = "fmine.decision-model.v1"
 model_key = "synthetic-choice"
 question = "Synthetic: expand or hold?"
 currency = "USD"
@@ -734,7 +746,7 @@ trigger = "Declared synthetic monitoring threshold"
 downside_usd_m = "0.001"
 "#;
 
-    const INFORMATION: &str = r#"
+    pub(super) const INFORMATION: &str = r#"
 [[information_option]]
 id = "assay"
 label = "Invented metallurgical test"

@@ -946,6 +946,46 @@ outside the priced scenario matrix. This comparison supplies no feasibility appr
 frequency, historical replay proof or durable decision-ledger entry. It does not pass the full
 BD-225 or Helm acceptance gates.
 
+#### Compare choices when scenario weights are contested
+
+DESIGN (BD-225, plan §22.5): an optional Wasserstein-1 comparison finds each original action's worst
+expected value and worst expected same-state regret over an explicitly declared probability-transport
+budget. The nominal decision remains visible, alongside the maximin-value and minimax-expected-regret
+rankings and every exact co-winner. Run the complete synthetic example:
+
+```bash
+cargo run -p fmine-cli -- decide card tests/decisions/wasserstein.toml --format markdown
+cargo run -p fmine-cli -- decide card tests/decisions/wasserstein.toml --json
+```
+
+The optional declaration has four quoted fields:
+
+```toml
+[[robustness]]
+method = "wasserstein_1"
+radius = "1/4"
+metric_basis = "Synthetic dimensionless distance between the declared scenario regimes"
+radius_basis = "Declared sensitivity budget; no statistical confidence claim"
+```
+
+Supply a `[[transport_distance]]` row with quoted `from`, `to` and `value` fields for **every ordered state
+pair**, including diagonal `value = "0/1"`. Every off-diagonal distance must be positive, reverse distances
+must agree, and the complete matrix must satisfy the triangle inequality. Distances and radius are exact
+nonnegative fractions in the declared dimensionless metric. The engine does not infer a distance from a
+state's name, normalize the metric, choose a radius, or drop a missing matrix cell. This comparison supports
+at most 64 states and 256 actions, with an explicit bound on the total action/state-pair work.
+
+Each result retains a sparse probability-transport witness, its stressed state weights and cost, and a dual
+certificate whose value equals the primal value exactly. The worst-mean and worst-regret witnesses are
+separate: their adversaries may choose different distributions. Every action retains its supplied payoff
+in every original state. The configuration Claim binds the original declaration and every distance row,
+including its source digest and original line locator; source assumptions and unknown-risk terms survive.
+
+The metric and radius define a conditional sensitivity analysis. They supply no empirical confidence
+coverage or protection from omitted regimes. Nominal tail statistics and information-option values remain
+unchanged; this view does not reoptimize information policies or claim robust CVaR or physical feasibility.
+Models without the declaration keep their existing output bytes.
+
 ### Evaluate whether testwork is worth buying
 
 DESIGN (BD-227, plan §22.4): the same command evaluates an optional information-gathering step before choosing
