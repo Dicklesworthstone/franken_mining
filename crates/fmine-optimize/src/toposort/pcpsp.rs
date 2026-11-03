@@ -1,7 +1,7 @@
 //! MineLib's precedence-constrained production scheduling (PCPSP) text format, and schedules that send each mined
 //! block whole to one destination (`bd-2rne`). No I/O: the caller reads the bytes and binds their digests.
 //! Determinism: BitwisePortable (`i64` and `i128` integer arithmetic on decimal tokens only; no floating point, hashing
-//! or threads).
+//! or threads). The **Price** move's `f64` guidance is in [`price`]; what it proposes is checked here in `i128`.
 //!
 //! A `.pcpsp` file is laid out as a `.cpit` file is ([`super::cpit`]), except for:
 //! - `TYPE: PCPSP` and two more header lines, `NDESTINATIONS:` and `NGENERAL_SIDE_CONSTRAINTS:`;
@@ -35,6 +35,12 @@
 //!   one but not fitting alone. The other goes to a destination worth no more that uses no more of any resource and
 //!   less of one. The pair must keep every limit, and the first must gain more than the second loses. Larger gains
 //!   choose first, among the [`SWAP_SCAN`] smallest losses.
+//! - **Price** (`bd-rbxh`). Once switches and exchanges stop in a period, all of its mined blocks are reassigned
+//!   together ([`price`]). Row prices come from the period's destination LP, solved by Dantzig–Wolfe from the
+//!   current assignment. The candidate assignments they give are repaired to every limit in `i128`. The best is
+//!   taken if it is worth more. On w23, switches and exchanges stop where the blend allows no single block or pair
+//!   into the mill. That left the period values 20.9% below the destination LP at the same mining periods. At most
+//!   one Price move per period per call.
 //!
 //! Each move strictly raises its period's value, and moves are made only in periods whose discount factor is
 //! positive, so each strictly raises the discounted value. [`destinations`] also gives each unmined block its most
@@ -53,6 +59,8 @@ use super::search::{self, Moves, SWAP_SCAN, discounted_value};
 use super::{MAX_PERIODS, ScheduleProblem, check, refuse};
 use crate::pitflow::ClosureProblem;
 use crate::pitflow::minelib::{MAX_DECIMALS, Rounding, bad, lines, number, parse_prec, scaled};
+
+pub mod price;
 
 /// The most destinations a PCPSP file may declare.
 pub const MAX_DESTINATIONS: usize = 16;
@@ -500,6 +508,8 @@ pub struct DestinationMoves {
     pub switches: usize,
     /// Pairs of blocks that changed destination together.
     pub exchanges: usize,
+    /// Periods whose mined blocks were reassigned together from row prices ([`price`]).
+    pub priced: usize,
     /// Unmined blocks given their most valuable destination.
     pub unmined: usize,
 }
@@ -675,6 +685,7 @@ pub fn destinations(
         }
         let mut used: Vec<i128> = first.used.iter().map(|row| row[t]).collect();
         let caps: Vec<i128> = model.limits.iter().map(|row| i128::from(row[t])).collect();
+        let mut priced = false;
         loop {
             let mut moved = false;
             for &b in mined {
@@ -743,6 +754,20 @@ pub fn destinations(
             }
             for &b in mined {
                 touched[b] = false;
+            }
+            // Price, once per period, when switches and exchanges have stopped (`bd-rbxh`).
+            if !moved && !priced {
+                priced = true;
+                if let Some(pick) = price::reprice(model, mined, destination, &caps) {
+                    for (&b, &d) in mined.iter().zip(&pick) {
+                        let c = destination[b] as usize;
+                        if d != c {
+                            apply(model, &mut used, destination, (b, c, d))?;
+                        }
+                    }
+                    moves.priced += 1;
+                    moved = true;
+                }
             }
             if !moved {
                 break;
@@ -834,6 +859,7 @@ pub fn improve(
         let d = destinations(model, &schedule, &mut destination, factors)?;
         destination_moves.switches += d.switches;
         destination_moves.exchanges += d.exchanges;
+        destination_moves.priced += d.priced;
         destination_moves.unmined += d.unmined;
         if m == Moves::default() && d == DestinationMoves::default() {
             if cones {
@@ -1090,6 +1116,7 @@ mod tests {
                 DestinationMoves {
                     switches: 1,
                     exchanges: 0,
+                    priced: 0,
                     unmined: 0
                 }
             )
@@ -1108,6 +1135,7 @@ mod tests {
                 DestinationMoves {
                     switches: 0,
                     exchanges: 0,
+                    priced: 0,
                     unmined: 1
                 }
             )
@@ -1124,6 +1152,7 @@ mod tests {
                 DestinationMoves {
                     switches: 0,
                     exchanges: 1,
+                    priced: 0,
                     unmined: 0
                 }
             )
@@ -1413,6 +1442,68 @@ mod tests {
             (c.period_values, c.used),
             (vec![5, 5], vec![vec![2, 2], vec![0, 0]])
         );
+    }
+
+    /// [`destinations`] on greedy schedules of random models, with and without a signed resource. The result is
+    /// feasible by the definition and never worth less. In each period it is worth at most the best whole-block
+    /// destinations for the blocks mined there, found by enumeration. A second call moves nothing. Reports how many
+    /// periods were left at that best, before and after, and how many Price moves were made.
+    #[test]
+    fn destinations_with_price_are_feasible_monotone_and_bounded_per_period() {
+        let (mut priced, mut periods, mut best_before, mut best_after) = (0, 0, 0, 0);
+        for seed in 0..300 {
+            for m in [random_model(seed), random_signed_model(seed)] {
+                let mut r = lcg(seed ^ 0xD0D0);
+                let (n, dn) = (m.blocks(), m.destinations());
+                let d: Vec<u32> = (0..n).map(|_| r(dn as u64) as u32).collect();
+                let rank: Vec<Option<i64>> = (0..n).map(|_| Some(r(10) as i64)).collect();
+                let (s, start) = super::greedy(&m, &rank, &d).unwrap();
+                let f = factors(m.periods());
+                let mut dest = start.clone();
+                let moves = destinations(&m, &s, &mut dest, &f).unwrap();
+                let before = worth(&m, &s, &start, &f).unwrap();
+                let after = worth(&m, &s, &dest, &f);
+                assert!(
+                    after.is_some_and(|a| a >= before),
+                    "seed {seed}: {after:?} against {before}"
+                );
+                priced += moves.priced;
+                for t in 0..m.periods() {
+                    let mined: Vec<usize> = (0..n).filter(|&b| s[b] == Some(t as u32)).collect();
+                    // Other periods keep `dest`, so the whole schedule's value ranks period t's choices.
+                    let best = (0..dn.pow(mined.len() as u32))
+                        .filter_map(|mut code| {
+                            let mut trial = dest.clone();
+                            for &b in &mined {
+                                trial[b] = (code % dn) as u32;
+                                code /= dn;
+                            }
+                            worth(&m, &s, &trial, &f)
+                        })
+                        .max()
+                        .unwrap();
+                    let mut was = dest.clone();
+                    for &b in &mined {
+                        was[b] = start[b];
+                    }
+                    let (now, then) = (after.unwrap(), worth(&m, &s, &was, &f).unwrap());
+                    assert!(now <= best, "seed {seed} period {t}: {now} above {best}");
+                    periods += 1;
+                    best_before += usize::from(then == best);
+                    best_after += usize::from(now == best);
+                }
+                let mut again = dest.clone();
+                assert_eq!(
+                    destinations(&m, &s, &mut again, &f).unwrap(),
+                    DestinationMoves::default(),
+                    "seed {seed}: a second call moved"
+                );
+            }
+        }
+        println!(
+            "{{\"bead\":\"bd-rbxh\",\"periods\":{periods},\"at_best_before\":{best_before},\"at_best_after\":{best_after},\"priced\":{priced}}}"
+        );
+        assert!(priced > 0 && best_after > best_before);
     }
 
     /// The same with one more resource whose uses may be negative.
