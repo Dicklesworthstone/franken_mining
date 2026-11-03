@@ -126,6 +126,62 @@ fn certified_bound_is_valid_at_any_multipliers() {
     assert!(bounds > 5_000, "only {bounds} bounds were finite");
 }
 
+/// Each bound the rows imply for an open column holds at every feasible point (bd-tcp4). With `c = −eⱼ` and
+/// `y = 0`, the certified bound is minus column `j`'s implied top, so it may not exceed the LP's own minimum of
+/// `−xⱼ`, found by vertex enumeration with the open tops cut at 10⁶. An LP unbounded in `xⱼ` then has a minimum near
+/// −10⁶, below any finite top. The mirrored LP (`x → −x`) turns each open top into an open bottom, which checks the
+/// implied bottoms the same way through the other signs.
+#[test]
+fn implied_column_bounds_hold_at_every_feasible_point() {
+    let mut rng = Rng(0x5eed_0006);
+    let (mut implied, mut none) = (0, 0);
+    for case in 0..300 {
+        let d = random_dense(&mut rng, true);
+        let n = d.c.len();
+        let mirror = Dense {
+            a: d.a.iter().map(|r| r.iter().map(|v| -v).collect()).collect(),
+            l: d.u.iter().map(|v| -v).collect(),
+            u: d.l.iter().map(|v| -v).collect(),
+            ..d.clone()
+        };
+        for (lp, sign) in [(&d, -1.0), (&mirror, 1.0)] {
+            let cut = Dense {
+                l: lp.l.iter().map(|&v| v.max(-1e6)).collect(),
+                u: lp.u.iter().map(|&v| v.min(1e6)).collect(),
+                ..lp.clone()
+            };
+            for j in 0..n {
+                if lp.l[j].is_finite() && lp.u[j].is_finite() {
+                    continue;
+                }
+                let c: Vec<f64> = (0..n).map(|k| if k == j { sign } else { 0.0 }).collect();
+                let p = Dense {
+                    c: c.clone(),
+                    ..lp.clone()
+                }
+                .problem();
+                let opt = Dense { c, ..cut.clone() }.vertex_optimum().unwrap();
+                match certified_bound(&p, &vec![0.0; p.rows()]).unwrap() {
+                    Some(b) => {
+                        implied += 1;
+                        assert_eq!(b.implied_columns(), 1);
+                        assert!(
+                            b.value() <= opt + 1e-9 * (1.0 + opt.abs()),
+                            "case {case}, column {j}, sign {sign}: bound {} above {opt}, {lp:?}",
+                            b.value()
+                        );
+                    }
+                    None => none += 1,
+                }
+            }
+        }
+    }
+    println!(
+        "{{\"suite\":\"fmine-lp/pdlp\",\"case\":\"implied_bounds\",\"implied\":{implied},\"none\":{none}}}"
+    );
+    assert!(implied > 100 && none > 10, "{implied} implied, {none} none");
+}
+
 /// The returned bound is certified from the multipliers the solution carries, and is the best seen along the run.
 /// The solver is deterministic, so a run of `K` steps passes every evaluation that a run of `k < K` steps
 /// ended on. Its bound must therefore be at least the certified bound of each shorter run's final multipliers, up to

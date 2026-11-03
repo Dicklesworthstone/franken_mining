@@ -19,9 +19,10 @@
 //!   and `|c·x − dual objective| ≤ ε(1 + |c·x| + |dual objective|)`, where `b` holds each row's largest finite
 //!   bound.
 //!
-//! Every returned solution carries a [`certified_bound`]: the higher of its final multipliers' and of the
-//! multipliers with the best dual objective seen at any evaluation, with the multipliers it came from. So the
-//! optimum is bounded even when the iteration limit or the observer stops the run. There is no presolve,
+//! Every returned solution carries a [`certified_bound`]: the highest of its final multipliers', of the
+//! multipliers with the best dual objective seen at any evaluation, and of each of those moved for open columns
+//! (bd-tcp4), with the multipliers it came from. So the optimum is bounded even when the iteration limit or the
+//! observer stops the run. There is no presolve,
 //! feasibility polishing or infeasibility detection: an infeasible or unbounded problem runs to the iteration
 //! limit.
 
@@ -255,9 +256,11 @@ impl PdlpSolution {
         &self.last
     }
 
-    /// No feasible point is cheaper than this. It is the higher of two [`certified_bound`]s: that of `y`, and that
-    /// of the multipliers with the highest dual objective seen at any evaluation. The dual objective is not
-    /// monotone along the run, so the second can be the tighter.
+    /// No feasible point is cheaper than this. It is the highest [`certified_bound`] of up to four multipliers:
+    /// `y`; those with the highest dual objective seen at any evaluation; and each of the two moved so that a
+    /// column open on the side its reduced cost points to, with no bound there that the rows imply, gets a
+    /// reduced cost of the right sign (bd-tcp4). The dual objective is not monotone along the run, so the
+    /// best-seen can be the tighter. On a boxed problem nothing is moved. A tie goes to the earlier.
     #[must_use]
     pub fn bound(&self) -> Option<DualBound> {
         self.bound
@@ -299,17 +302,25 @@ pub fn solve_observed(
         return Err(refuse("max_iterations is 0"));
     }
     let (status, x, y, best_y, last) = engine::run_pdlp(problem, options, observer)?;
-    let at_end = certified_bound(problem, &y)?;
-    let at_best = certified_bound(problem, &best_y)?;
-    let best_is_higher = match (at_best, at_end) {
-        (Some(b), Some(e)) => b.value() > e.value(),
-        (Some(_), None) => true,
-        (None, _) => false,
-    };
-    let (bound, bound_y) = if best_is_higher {
-        (at_best, best_y)
-    } else {
-        (at_end, y.clone())
+    // The final and the best-seen multipliers, then each moved for open columns (bd-tcp4): the highest certified
+    // bound wins, the earlier on a tie. On a boxed problem nothing is moved.
+    let mut candidates = vec![y.clone(), best_y];
+    for k in 0..2 {
+        if let Some(moved) = bound::shift_for_open_columns(problem, &candidates[k]) {
+            candidates.push(moved);
+        }
+    }
+    let mut chosen: Option<(DualBound, usize)> = None;
+    for (k, candidate) in candidates.iter().enumerate() {
+        if let Some(b) = certified_bound(problem, candidate)?
+            && chosen.is_none_or(|(c, _)| b.value() > c.value())
+        {
+            chosen = Some((b, k));
+        }
+    }
+    let (bound, bound_y) = match chosen {
+        Some((b, k)) => (Some(b), candidates.swap_remove(k)),
+        None => (None, y.clone()),
     };
     Ok(PdlpSolution {
         status,
@@ -380,10 +391,10 @@ mod tests {
         );
     }
 
-    /// With the columns unbounded above, a reduced cost a hair below zero leaves no bound; one is either absent or
-    /// valid.
+    /// With the columns open above, a reduced cost a hair below zero is met by the top the rows imply (bd-tcp4).
+    /// Where the rows imply none, it leaves no bound.
     #[test]
-    fn unbounded_columns_certify_only_with_sign_feasible_reduced_costs() {
+    fn open_columns_certify_through_the_tops_their_rows_imply() {
         let a = csr(2, 2, &[(0, 0, 1.0), (0, 1, 2.0), (1, 0, 3.0), (1, 1, 1.0)]);
         let inf = f64::INFINITY;
         let p = LpProblem::new(
@@ -395,19 +406,92 @@ mod tests {
             vec![inf; 2],
         )
         .unwrap();
-        // y slightly too small in magnitude: column 0's reduced cost is negative, so no bound.
-        assert_eq!(certified_bound(&p, &[-0.4, -0.2 + 1e-9]).unwrap(), None);
-        // y slightly too large: both reduced costs positive, a valid (weaker) bound.
+        // y slightly too small in magnitude: both reduced costs are negative (−3e-9 and −1e-9), and the rows give
+        // both columns the top 2, so the bound is about −2.8 − 2e-9.
+        let b = certified_bound(&p, &[-0.4, -0.2 + 1e-9]).unwrap().unwrap();
+        assert_eq!(b.implied_columns(), 2);
+        assert!(
+            b.value() <= -2.8 - 1.9e-9 && b.value() > -2.8 - 2.1e-9,
+            "{}",
+            b.value()
+        );
+        // y slightly too large: both reduced costs positive, a valid (weaker) bound, with no implied top used.
         let b = certified_bound(&p, &[-0.4 - 1e-9, -0.2 - 1e-9])
             .unwrap()
-            .unwrap()
-            .value();
-        assert!(b <= -2.8 && b > -2.8 - 1e-6, "{b}");
+            .unwrap();
+        assert_eq!(b.implied_columns(), 0);
+        assert!(
+            b.value() <= -2.8 && b.value() > -2.8 - 1e-6,
+            "{}",
+            b.value()
+        );
         let s = solve(&p, &opts()).unwrap();
         assert_eq!(s.status(), PdlpStatus::Optimal);
-        if let Some(b) = s.bound() {
-            assert!(b.value() <= -2.8);
-        }
+        let b = s.bound().unwrap().value();
+        assert!(b <= -2.8 && b > -2.8 - 1e-6, "{b}");
+
+        // min x0 + x1 s.t. x0 + x1 >= 1 over x >= 0: no row bounds either column above.
+        let p = LpProblem::new(
+            vec![1.0, 1.0],
+            &csr(1, 2, &[(0, 0, 1.0), (0, 1, 1.0)]),
+            vec![1.0],
+            vec![inf],
+            vec![0.0; 2],
+            vec![inf; 2],
+        )
+        .unwrap();
+        assert_eq!(certified_bound(&p, &[1.0 + 1e-9]).unwrap(), None);
+        let b = certified_bound(&p, &[1.0 - 1e-9]).unwrap().unwrap();
+        assert!(
+            b.value() <= 1.0 - 1e-9 && b.value() > 1.0 - 1e-8,
+            "{}",
+            b.value()
+        );
+        // Moving the multiplier to about 1 − 3e-11 gives both reduced costs the margin, and a bound.
+        let moved = bound::shift_for_open_columns(&p, &[1.0 + 1e-9]).unwrap();
+        assert!(moved[0] < 1.0 && moved[0] > 1.0 - 1e-10, "{moved:?}");
+        let b = certified_bound(&p, &moved).unwrap().unwrap();
+        assert!(b.value() <= 1.0 && b.value() > 1.0 - 1e-10, "{}", b.value());
+        // Multipliers already of the right sign by the margin are left as they are.
+        assert_eq!(bound::shift_for_open_columns(&p, &[0.5]), None);
+        let s = solve(&p, &opts()).unwrap();
+        let b = s.bound().unwrap().value();
+        assert!(b <= 1.0 && b > 1.0 - 1e-6, "{b}");
+    }
+
+    /// The shift leaves boxed problems, and free columns with no implied bound, alone.
+    #[test]
+    fn the_shift_moves_only_what_it_can_certify() {
+        let inf = f64::INFINITY;
+        let a = csr(1, 2, &[(0, 0, 1.0), (0, 1, 1.0)]);
+        let boxed = LpProblem::new(
+            vec![1.0, 1.0],
+            &a,
+            vec![1.0],
+            vec![inf],
+            vec![0.0; 2],
+            vec![5.0; 2],
+        )
+        .unwrap();
+        assert_eq!(bound::shift_for_open_columns(&boxed, &[2.0]), None);
+        // min x0 + x1 s.t. x0 + x1 >= 1 with x0 >= 0 and x1 free: no row bounds x1 either way, so its reduced cost
+        // may not move, and the one row that could fix x0's would move it.
+        let free = LpProblem::new(
+            vec![1.0, 1.0],
+            &a,
+            vec![1.0],
+            vec![inf],
+            vec![0.0, -inf],
+            vec![inf; 2],
+        )
+        .unwrap();
+        assert_eq!(bound::shift_for_open_columns(&free, &[1.0 + 1e-9]), None);
+        // min −x0 s.t. x0 >= 1 is unbounded. The fix would need a negative multiplier on a ≥ row, which its sides
+        // forbid, so none is made.
+        let a = csr(1, 1, &[(0, 0, 1.0)]);
+        let ge =
+            LpProblem::new(vec![-1.0], &a, vec![1.0], vec![inf], vec![0.0], vec![inf]).unwrap();
+        assert_eq!(bound::shift_for_open_columns(&ge, &[0.0]), None);
     }
 
     /// min x1 + x2 s.t. x1 + x2 = 2 (an equality row), x1 free, 0 ≤ x2 ≤ 5.
@@ -430,8 +514,16 @@ mod tests {
         // The exact multiplier 1 leaves zero reduced costs, so even the free column certifies, at exactly 2.
         let b = certified_bound(&p, &[1.0]).unwrap().unwrap();
         assert_eq!(b.value(), 2.0);
-        // Any other multiplier leaves the free column a non-zero reduced cost: no bound.
-        assert_eq!(certified_bound(&p, &[1.0 + 1e-12]).unwrap(), None);
+        assert_eq!(b.implied_columns(), 0);
+        // 1 + 1e-12 leaves the free column the reduced cost −1e-12, met by the top 2 the row implies (x1 = 2 − x2):
+        // about 2 + 2e-12 − 2e-12 − 5e-12.
+        let b = certified_bound(&p, &[1.0 + 1e-12]).unwrap().unwrap();
+        assert_eq!(b.implied_columns(), 1);
+        assert!(
+            b.value() <= 2.0 - 4.9e-12 && b.value() > 2.0 - 5.1e-12,
+            "{}",
+            b.value()
+        );
     }
 
     /// A ≤ row's multiplier must be non-positive in a minimisation; a positive one is repaired to zero.
