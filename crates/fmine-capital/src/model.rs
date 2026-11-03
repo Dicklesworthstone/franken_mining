@@ -1083,6 +1083,7 @@ fn parse_model(
         funding_schedule,
         entity_funding,
         equity,
+        entity_valuations: Vec::new(),
     };
     validate(&inputs)?;
     Ok((inputs, information))

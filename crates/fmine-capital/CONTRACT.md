@@ -120,6 +120,23 @@ the legacy USD `max_tail_loss` is forbidden. Each bundle retains baseline/change
 actual shares. Nonpositive ending shares cause a named state-level structural rejection with undefined
 ending and delta NAV/share, retaining all state rows. No statistics or ranking are invented for that bundle.
 
+DESIGN (BD-314, §23.2): optional secondary `EntityValuation` Claims evaluate the same selected candidates on
+additional entity/share-class denominators. Existing `EquityBasis` remains the sole primary objective.
+Each secondary perimeter declares its own valuation basis, complete baseline NAV, candidate/state already-net
+NAV changes, candidate/state share changes and optional signed USD/share tail-loss ceiling. It shares the
+program model, currency, terminal states, weights and tail mass, but never receives inferred NAV from an
+ownership percentage, cash transfer or another entity's valuation. A valuation perimeter need not be a cash
+graph node. Terminal share changes do not alter dated cash-waterfall ownership fractions.
+
+Every entity's whole-bundle same-state ending NAV and actual shares are calculated before division. A
+nonpositive secondary ending count is a named entity/share-class/state structural rejection, retaining its
+undefined ratios. All primary and secondary statistics and hindsight regrets use the common population
+satisfying every structural constraint. Each entity then applies its own optional tail ceiling to its complete
+unconditional distribution; exceeding any ceiling rejects the choice for risk, while equality passes. All
+statistics remain visible for risk-rejected choices. Entity USD/share values are never summed or weighted
+together. Unconstrained winners maximize the primary mean before every risk cap; constrained winners maximize
+that same mean subject to all caps, so the reported risk cost stays in primary USD/share.
+
 The empty subset has zero spending and payoffs. Any sole structurally feasible subset retains its actual
 payoff statistics, with itself as hindsight benchmark and zero regret. A negative loss limit may exclude
 hold; no risk-feasible program is an explicit
@@ -149,6 +166,10 @@ The union of mutually exclusive branch actions is not a realized portfolio and i
 Cash and equity results are reused from the same state's static subset, preserving scenario dependence.
 Risk and regret are calculated over the complete unconditional policy distribution, after structural
 screening. Neither posterior-mean branch selection nor nodewise tail-risk constraints replace global CVaR.
+Secondary entity ledgers follow the same realized subset/state lookup. Their initial NAV and share effects
+survive abandonment. State-specific secondary share failures are copied only onto the paths that realize
+them. Whole-subset risk flags are never copied: every entity's policy statistics, regret and tail test are
+recomputed from the complete realized policy population before constrained winners and adaptive value.
 
 Net adaptive value is the best policy mean minus the best static-subset mean, reported separately before
 and after the same risk limit. This is a global comparison that may change the initial commitment; it is
@@ -181,6 +202,11 @@ Optional debt inputs remain inside that same entity Claim: every facility, cash/
 principal, rate, draw, payment cap, CFADS increment, coverage threshold, sweep fraction and explicit
 zero-service permission is bound, including terms for losing candidates. Debt-specific scope text is
 selected only when debt is declared; models without debt retain their existing receipts and report bytes.
+Each secondary valuation has its own Claim binding its complete equity declaration and candidate NAV matrix,
+including never-selectable candidates and the entity's loss ceiling. Its original source hash, row anchors,
+UU definitions and evidence metadata enter the same complete result binding. Secondary entities and rows are
+canonicalized by identifier. When no secondary valuation is declared, all legacy tags, scopes and reports
+remain unchanged.
 
 ## 4. Public API Surface
 
@@ -189,6 +215,14 @@ selected only when debt is declared; models without debt retain their existing r
   `StateCashFlow` and `CandidateCashFlow`; assessments retain `CashScheduleCheckpoint` rows and minimum slack.
 - `EquityBasis`, `CandidateShareChange`, `ExactPerShare`, `PerShareStats`, `EquityState`, `EquityAssessment`:
   optional source-bound equity inputs and exact per-share outcomes, distinct from total-USD quantities.
+- `entity::valuation::{EntityValuation, CandidateNavChange, EntityValuationAssessment}`:
+  `ProgramInputs.entity_valuations` holds zero to three secondary valuation Claims alongside required primary
+  equity. Secondary entity names are distinct from each other and the primary entity. Each assessment retains
+  the named entity/share class, complete `EquityAssessment`, exact per-share statistics, tail loss, cap and
+  risk result. Optional report arrays are omitted when empty. With secondary valuations, the complete static
+  plus policy population times shared states times primary-plus-secondary entities must not exceed 65,536
+  valuation-state rows. This independent bound and all matrix bounds precede canonical tagging/enumeration;
+  existing cash-work limits continue to apply separately.
 - `entity::{EntityFunding, Entity, EntityPeriod, EntityFloor, EntityOpeningCash, EntityStateCashFlow,
   EntityCandidateCashFlow, EntityTransfer, EntityDistribution, EntityDistributionGate}`: the complete
   entity funding declaration in `ProgramInputs.entity_funding`. `EntityFundingAssessment` contains a
@@ -312,6 +346,10 @@ Every candidate's cash flows remain required even when another constraint preven
 Equity additionally refuses missing/duplicate/foreign matrix entries, nonpositive initial shares or unit
 scale, incompatible currency/model/valuation metadata, absent entity/share class, an incompatible payoff
 convention, a legacy total-USD risk ceiling, and orphan equity rows without a complete declaration.
+Secondary valuations also refuse absent primary equity, repeated primary/secondary entity names, absent
+perimeter valuation bases, incomplete candidate NAV matrices, incompatible model/currency metadata, and
+population limits exceeded by the combined static and policy results. Every secondary Claim must pass the
+same source, freshness, uncertainty and evidence admission as the primary inputs.
 Entity funding refuses incomplete/duplicate/foreign matrices, missing or mismatched objective entities,
 invalid periods and currencies, negative opening balances/floors/transfer amounts/distribution caps,
 unknown/self/cyclic distribution edges, ownership outside [0,1], absent transfer/distribution bases,
@@ -342,6 +380,10 @@ dropped to obtain a plausible result. Input/source errors use the existing refus
   share-unit scale with compensating counts leaves every per-share result unchanged (PO-CAP-2).
 - USD funding and total-NAV reporting never enter the USD/share risk limit or objective without the explicit
   equity calculation. Share counts at or below zero remain visible structural rejections.
+- Every secondary NAV/share calculation uses its own same-state numerator and actual-share denominator.
+  All entity constraints share one structural comparison population; risk tests remain entity-specific and
+  apply jointly, with no conversion or blending of denominators. Recourse copies state-specific values and
+  reconstructs whole-policy risk instead of inheriting a subset's aggregate admission result.
 - Feasible-set statistics retain actual negative-NAV survivors, with no invented zero-payoff competitor.
 - All ties survive, and arithmetic risk cost is nonnegative whenever constrained winners exist.
 - Source, losing candidate, constraint, adjustment-basis and evidence metadata changes affect identity.
@@ -382,6 +424,14 @@ An independent Python Fraction oracle checks 44 legacy, scheduled and equity mod
 JSON/Markdown integration checks retain every bundle's timeline/equity ledger and library/binary byte parity.
 Equity known answers cover buyback accretion, issuance dilution, shared-state pairing, fractional tail mass,
 share-unit invariance, nonpositive ending counts, negative singleton survivors, source identity and overflow.
+Secondary valuation known answers cover a parent gain masking carve-out share dilution, simultaneous primary
+and multiple-secondary caps, exact cap equality, fractional tail mass, share-unit invariance, and common
+structural hindsight populations. The funded two-stage example chooses a fair Good-only deal under the
+carve-out cap: Parent mean 2/5 USD/share, carve-out mean 89/220 and both tail losses 1/10. The aggressive
+Good-only policy retains Parent mean 7/10 but carve-out tail loss 31/15, so its separate cap rejects it.
+Regressions retain initial secondary NAV/share effects after abandonment and admit a Good-only continuation
+despite a secondary share failure on its unrealized Bad path. Matrix, source, losing-input, metadata,
+canonical-order, overflow and complete static/recourse work-bound checks accompany these known answers.
 Recourse known answers cover paid study/build/abandon decisions, indistinguishable observations, sunk costs,
 global rather than branchwise tail limits, path-specific prerequisites and exclusions, adaptive-only funding,
 and equity issuance chosen by USD/share rather than total NAV. State-specific cash and share-count failures
@@ -438,8 +488,8 @@ Static declared net-NAV comparison with optional aggregate or dated-checkpoint f
 per-share optimization, entity-specific cash/ownership distributions, and bounded two-stage policies with
 purchased declared information. No additional
 decision stages, undeclared project interactions, inferred observation likelihoods, price/fiscal model,
-reference-class fitting, automatic capital-call dilution, changing ownership, inferred loan agreements,
-simultaneous parent/carve-out NAV objectives, portfolio safety, calibrated probabilities or
+reference-class fitting, automatic capital-call dilution, changing cash-waterfall ownership, inferred loan agreements,
+blended or simultaneous optimization objectives, portfolio safety, calibrated probabilities or
 physical authorization is supplied. Reference-class bases must be explicitly declared, including an honest
 unadjusted basis; the system does not apply an unnamed adjustment. Selection frequency is explicitly
 unavailable. The broad BD-229 CapitalProgram and production-scale gates remain open.

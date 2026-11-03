@@ -8,6 +8,7 @@ pub mod debt;
 pub(super) mod render;
 #[cfg(test)]
 mod tests;
+pub mod valuation;
 
 pub const MAX_ENTITIES: usize = 4;
 pub const MAX_TRANSFERS: usize = 64;

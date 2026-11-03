@@ -27,6 +27,7 @@ pub mod model;
 pub mod recourse;
 mod render;
 
+use entity::valuation::{EntityValuation, EntityValuationAssessment};
 use entity::{EntityCashPhase, EntityFunding, EntityFundingAssessment};
 
 pub const MAX_CANDIDATES: usize = 8;
@@ -46,6 +47,9 @@ pub const ENTITY_CASH_NO_CLAIM: &str = "Static comparison conditional on declare
 pub const EQUITY_ENTITY_CASH_NO_CLAIM: &str = "Static comparison conditional on declared shared scenarios, additive equity-NAV changes and signed share changes for the named objective entity and share class. Selection uses exact change in NAV per actual share; total-USD NAV remains a separate reporting column. Entity cash stays in its own ledger except for declared fixed transfers and gated ownership distributions. Floors apply at initial opening, after native flows and transfers, and after child-first distributions; later receipts do not erase earlier failures. The ownership remainder leaves the graph as explicit external cash. No partner contribution, top-up, dilution, debt-service covenant, fiscal rule, distribution permission or second entity's NAV is inferred. Cash movements are not charged to already-net NAV again. Inputs remain uncalibrated assumptions. No intra-phase payment ordering, historical validation, selection-frequency estimate, regulatory claim or execution authorization is supplied.";
 pub const ENTITY_DEBT_CASH_NO_CLAIM: &str = "Static comparison conditional on declared shared scenarios, net NAV for the objective entity, separate entity cash and explicit external senior debt terms. Native cash excludes modeled loan draws, interest, principal service and sweeps. Each period's declared rate applies to opening principal plus draws; full scheduled service is charged before cash-floor checks. Coverage uses separately declared CFADS divided by mandatory interest and principal, excluding sweeps; CFADS is not additional cash. Zero-service distribution permission is explicit. Child-first entities sweep available surplus before their own ownership distributions, subject to remaining principal. Dividends require both the declared gate and calculated coverage permission. Opening, pre-distribution and closing floors remain binding; later receipts do not erase earlier failures. Cash and principal conservation are exact. Debt cash does not change already-net NAV again. Inputs remain uncalibrated assumptions; no actual lending agreement, annualization, default remedy, arrears financing, covenant waiver, partner top-up, ownership dilution, second valuation denominator, historical validation, selection frequency, regulatory claim or execution authorization is inferred.";
 pub const EQUITY_ENTITY_DEBT_CASH_NO_CLAIM: &str = "Static comparison conditional on declared shared scenarios, additive equity-NAV changes and signed share changes for the objective entity. Selection uses exact change in NAV per actual share, with separate total-USD statistics. Entity funding includes explicitly declared external senior debt: period rates on opening principal plus draws, full mandatory interest and principal service, separately declared CFADS coverage and floor-safe principal sweeps before each entity's child-first ownership distribution. Native cash excludes modeled debt cash, and CFADS is not another receipt. Zero-service distribution permission is explicit. All opening, pre-distribution and closing cash failures remain binding; cash and principal are exactly conserved. Debt cash movements are not applied to already-net equity NAV again. No actual loan terms, day-count rule, arrears, default remedy, covenant waiver, automatic ownership dilution, partner top-up or second entity valuation is inferred. Inputs remain uncalibrated assumptions; no historical validation, selection frequency, regulatory claim or execution authorization is supplied.";
+pub const ENTITY_VALUATIONS_NO_CLAIM: &str = "Static comparison conditional on declared shared scenarios and separate complete equity-NAV and share-change matrices for the primary and secondary entities. Only the named primary entity's expected change in NAV per actual share determines selection. Every declared entity must retain positive ending shares; all statistics and hindsight comparisons use this jointly structurally feasible population. Optional entity-specific tail-loss limits apply to each complete unconditional shared-state distribution, and all limits bind jointly. Secondary values are separate reporting and constraint quantities, never weighted into the objective or added across overlapping valuation perimeters. Share units are normalized exactly. Optional aggregate or dated cash inputs constrain only their declared checkpoints and are not charged to already-net NAV again. No ownership-based NAV derivation, capital-call dilution, transaction reconciliation, undeclared project interaction, calibration, historical validation, selection frequency, regulatory claim or execution authorization is supplied. All probabilities and valuations remain uncalibrated source assumptions.";
+pub const ENTITY_VALUATIONS_CASH_NO_CLAIM: &str = "Static comparison conditional on separate source-declared primary and secondary equity-NAV/share matrices over the same shared scenarios. The primary entity's expected per-share change is the sole objective. Every entity's ending shares must remain positive, and every declared per-share tail-loss limit binds the complete unconditional distribution; hindsight statistics use the jointly structurally feasible population before risk. Secondary valuation perimeters need not be cash entities, and their values are never inferred from ownership or summed into the primary objective. Entity cash follows explicit native flows, fixed transfers and gated child-first distributions. Opening, pre-distribution and closing floors remain binding even after later receipts; outside ownership payouts leave the graph. Cash movements are not charged to any already-net NAV again. No automatic dilution, partner contribution, fiscal rule, debt covenant, valuation consistency reconciliation, calibration, historical validation, selection frequency, regulatory claim or execution authorization is inferred. Inputs remain uncalibrated assumptions.";
+pub const ENTITY_VALUATIONS_DEBT_NO_CLAIM: &str = "Static comparison conditional on separate source-declared primary and secondary equity-NAV/share matrices, shared scenarios, entity cash and explicit external senior debt terms. Only primary expected NAV/share change determines selection; all entities require positive ending shares and all declared per-share tail-loss limits bind jointly on complete unconditional outcomes. Secondary values are never inferred from cash or ownership, combined across overlapping perimeters, or treated as another objective. Native cash excludes modeled debt cash. Full-period interest on opening principal plus draws and mandatory principal service precede pre-distribution floor checks. Separately declared CFADS is not another receipt; coverage excludes sweeps and zero-service permission is explicit. Child-first sweeps include child receipts and apply to roots before ownership distributions. Earlier funding failures remain binding and cash/principal conservation is exact. Debt and other cash movements do not adjust already-net valuations again. No actual loan terms, annualization, default remedy, waiver, capital-call dilution, partner top-up, transaction reconciliation, calibration, historical validation, selection frequency, regulatory claim or execution authorization is inferred.";
 const ZERO: Rat = Rat::from_integer(0);
 const ONE: Rat = Rat::from_integer(1);
 type Result<T> = std::result::Result<T, Refusal>;
@@ -254,9 +258,17 @@ pub struct ProgramInputs {
     pub funding_schedule: Option<Claim<FundingSchedule>>,
     pub entity_funding: Option<Claim<EntityFunding>>,
     pub equity: Option<Claim<EquityBasis>>,
+    pub entity_valuations: Vec<Claim<EntityValuation>>,
 }
 
 fn no_claim_for(inputs: &ProgramInputs) -> &'static str {
+    if !inputs.entity_valuations.is_empty() {
+        return match inputs.entity_funding.as_ref() {
+            Some(claim) if claim.value.debt.is_some() => ENTITY_VALUATIONS_DEBT_NO_CLAIM,
+            Some(_) => ENTITY_VALUATIONS_CASH_NO_CLAIM,
+            None => ENTITY_VALUATIONS_NO_CLAIM,
+        };
+    }
     if inputs
         .entity_funding
         .as_ref()
@@ -317,6 +329,12 @@ pub enum StructuralRejection {
         state_id: String,
         shares: Rat,
     },
+    EntityNonpositiveShareCount {
+        entity: String,
+        share_class: String,
+        state_id: String,
+        shares: Rat,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -367,6 +385,7 @@ pub struct ProgramChoice {
     pub funding_schedule: Option<FundingScheduleAssessment>,
     pub entity_funding: Option<EntityFundingAssessment>,
     pub equity: Option<EquityAssessment>,
+    pub entity_valuations: Vec<EntityValuationAssessment>,
     pub structural_rejections: Vec<StructuralRejection>,
     /// None for a structurally rejected subset; no rejected subset is silently removed.
     pub statistics: Option<AlternativeStats>,
@@ -385,6 +404,7 @@ pub struct ProgramSummary {
     pub funding_schedule: Option<FundingSchedule>,
     pub entity_funding: Option<EntityFunding>,
     pub equity: Option<EquityBasis>,
+    pub entity_valuations: Vec<EntityValuation>,
     pub choices: Vec<ProgramChoice>,
     /// Budget, prerequisites, exclusions and declared funding applied, before the optional tail-loss limit.
     pub unconstrained_winners: Vec<String>,
@@ -886,17 +906,36 @@ fn validate_equity(
     states: &BTreeSet<&str>,
     candidates: &BTreeMap<&str, usize>,
 ) -> Result<()> {
-    let equity = &claim.value;
+    validate_equity_values(&claim.value, policy, states, candidates, true)?;
+    admit(
+        claim,
+        &claim.value.canonical_tag(),
+        AdditivityClass::NonAdditive,
+    )
+}
+
+fn validate_equity_values(
+    equity: &EquityBasis,
+    policy: &ProgramPolicy,
+    states: &BTreeSet<&str>,
+    candidates: &BTreeMap<&str, usize>,
+    primary: bool,
+) -> Result<()> {
     if equity.model_key != policy.model_key
         || equity.currency != policy.currency
-        || equity.valuation_basis != policy.valuation_basis
+        || (primary && equity.valuation_basis != policy.valuation_basis)
+        || !named(&equity.valuation_basis)
         || !named(&equity.entity)
         || !named(&equity.share_class)
         || policy.max_tail_loss.is_some()
     {
         return Err(bad(
             RefusalCode::BasisMismatch105,
-            "equity requires the policy model/currency/valuation basis, a named entity/share class, and no total-USD tail-loss cap",
+            if primary {
+                "equity requires the policy model/currency/valuation basis, a named entity/share class, and no total-USD tail-loss cap"
+            } else {
+                "secondary equity requires the policy model/currency, its own named valuation basis/entity/share class, and no total-USD tail-loss cap"
+            },
         ));
     }
     if equity.shares_per_unit.signum() <= 0 || equity.initial_share_units.signum() <= 0 {
@@ -934,7 +973,7 @@ fn validate_equity(
             ));
         }
     }
-    admit(claim, &equity.canonical_tag(), AdditivityClass::NonAdditive)
+    Ok(())
 }
 
 fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
@@ -945,6 +984,20 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
             RefusalCode::NoClaimInDomain201,
             "requires 1..=8 candidates and 1..=256 shared states",
         ));
+    }
+    entity::valuation::check_work_bound(inputs, 1_usize << inputs.candidates.len())?;
+    if !inputs.entity_valuations.is_empty() && inputs.equity.is_none() {
+        return Err(bad(
+            RefusalCode::BasisMismatch105,
+            "secondary entity valuations require one explicit primary equity objective",
+        ));
+    }
+    for claim in &inputs.entity_valuations {
+        entity::valuation::validate_bounds(
+            &claim.value,
+            inputs.weights.value.states.len(),
+            inputs.candidates.len(),
+        )?;
     }
     if let Some(schedule) = &inputs.funding_schedule {
         validate_schedule_bounds(
@@ -1154,6 +1207,17 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
     if let Some(equity) = &inputs.equity {
         validate_equity(equity, policy, &states, &candidates)?;
         metadata.include(equity)?;
+        let mut valuation_entities = BTreeSet::from([equity.value.entity.as_str()]);
+        for claim in &inputs.entity_valuations {
+            if !valuation_entities.insert(claim.value.equity.entity.as_str()) {
+                return Err(bad(
+                    RefusalCode::BasisMismatch105,
+                    "each secondary valuation must name a distinct entity different from the primary objective",
+                ));
+            }
+            entity::valuation::validate(claim, policy, &states, &candidates)?;
+            metadata.include(claim)?;
+        }
     }
     Ok(metadata)
 }
@@ -1339,16 +1403,32 @@ impl FundingScheduleIndex<'_> {
 
 struct EquityIndex<'a> {
     declaration: &'a EquityBasis,
-    candidates: &'a [Claim<CapitalCandidate>],
+    nav_changes: Vec<Money>,
+    candidate_count: usize,
     baseline_shares: Rat,
     baseline_per_share: Vec<Rat>,
 }
 
 impl<'a> EquityIndex<'a> {
-    fn new(
-        declaration: &'a EquityBasis,
-        candidates: &'a [Claim<CapitalCandidate>],
-    ) -> Result<Self> {
+    fn new(declaration: &'a EquityBasis, candidates: &[Claim<CapitalCandidate>]) -> Result<Self> {
+        Self::with_nav_changes(
+            declaration,
+            candidates
+                .iter()
+                .flat_map(|claim| claim.value.payoffs.iter().map(|(_, value)| *value))
+                .collect(),
+        )
+    }
+
+    fn with_nav_changes(declaration: &'a EquityBasis, nav_changes: Vec<Money>) -> Result<Self> {
+        let state_count = declaration.baseline_nav.len();
+        if state_count == 0 || !nav_changes.len().is_multiple_of(state_count) {
+            return Err(bad(
+                RefusalCode::NumericalCertificateFailed207,
+                "admitted equity NAV matrix lost its complete shared-state shape",
+            ));
+        }
+        let candidate_count = nav_changes.len() / state_count;
         let baseline_shares = arithmetic(
             declaration
                 .initial_share_units
@@ -1361,7 +1441,8 @@ impl<'a> EquityIndex<'a> {
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             declaration,
-            candidates,
+            nav_changes,
+            candidate_count,
             baseline_shares,
             baseline_per_share,
         })
@@ -1389,14 +1470,13 @@ impl<'a> EquityIndex<'a> {
         for (state_index, (state_id, baseline)) in equity.baseline_nav.iter().enumerate() {
             let mut nav_change_minor = 0_i128;
             let mut changed_units = ZERO;
-            for (candidate_index, candidate) in self.candidates.iter().enumerate() {
+            for candidate_index in 0..self.candidate_count {
                 if selected_mask & (1 << candidate_index) == 0 {
                     continue;
                 }
-                let (_, payoff) = candidate
-                    .value
-                    .payoffs
-                    .get(state_index)
+                let payoff = self
+                    .nav_changes
+                    .get(candidate_index * state_count + state_index)
                     .ok_or_else(missing)?;
                 nav_change_minor = checked_minor_add(nav_change_minor, payoff.minor)?;
                 let change = equity
@@ -1442,13 +1522,39 @@ impl<'a> EquityIndex<'a> {
     }
 }
 
-/// Per-share regret compares only subsets that satisfy every structural constraint in every state.
-fn per_share_statistics(
-    choices: &mut [ProgramChoice],
+struct EquityStatisticsInput<'a> {
+    action_id: &'a str,
+    label: String,
+    role: ActionRole,
+    assessment: &'a EquityAssessment,
+}
+
+impl<'a> EquityStatisticsInput<'a> {
+    fn new(choice: &'a ProgramChoice, assessment: &'a EquityAssessment) -> Self {
+        Self {
+            action_id: &choice.bundle_id,
+            label: if choice.selected.is_empty() {
+                "Do nothing".into()
+            } else {
+                choice.selected.join(" + ")
+            },
+            role: if choice.selected.is_empty() {
+                ActionRole::DoNothing
+            } else {
+                ActionRole::Action
+            },
+            assessment,
+        }
+    }
+}
+
+/// One shared calculation for every entity; the caller supplies the joint pre-risk feasible population.
+fn equity_statistics(
+    population: &[&EquityStatisticsInput<'_>],
     weights: &WeightSet,
-    equity: &EquityBasis,
+    currency: Currency,
     tail_mass: Rat,
-) -> Result<()> {
+) -> Result<Vec<(PerShareStats, ExactPerShare)>> {
     let missing = || {
         bad(
             RefusalCode::NumericalCertificateFailed207,
@@ -1456,18 +1562,11 @@ fn per_share_statistics(
         )
     };
     let mut best = vec![None; weights.states.len()];
-    for choice in choices
-        .iter()
-        .filter(|c| c.structural_rejections.is_empty())
-    {
-        for (index, state) in choice
-            .equity
-            .as_ref()
-            .ok_or_else(missing)?
-            .states
-            .iter()
-            .enumerate()
-        {
+    for input in population {
+        if input.assessment.states.len() != weights.states.len() {
+            return Err(missing());
+        }
+        for (index, state) in input.assessment.states.iter().enumerate() {
             let value = state.delta_nav_per_share.ok_or_else(missing)?.major;
             let old = best.get_mut(index).ok_or_else(missing)?;
             if match *old {
@@ -1478,15 +1577,10 @@ fn per_share_statistics(
             }
         }
     }
-    let per_share = |major| ExactPerShare {
-        currency: equity.currency,
-        major,
-    };
-    for choice in choices
-        .iter_mut()
-        .filter(|c| c.structural_rejections.is_empty())
-    {
-        let assessment = choice.equity.as_ref().ok_or_else(missing)?;
+    let per_share = |major| ExactPerShare { currency, major };
+    let mut outcomes = Vec::with_capacity(population.len());
+    for input in population {
+        let assessment = input.assessment;
         let mut values = Vec::with_capacity(weights.states.len());
         let mut states = Vec::with_capacity(weights.states.len());
         let mut mean_regret = ZERO;
@@ -1515,18 +1609,10 @@ fn per_share_statistics(
         }
         let distribution = ExactDistribution::new(&values)?;
         let tail = distribution.tail_loss(tail_mass)?;
-        choice.per_share_statistics = Some(PerShareStats {
-            action_id: choice.bundle_id.clone(),
-            label: if choice.selected.is_empty() {
-                "Do nothing".into()
-            } else {
-                choice.selected.join(" + ")
-            },
-            role: if choice.selected.is_empty() {
-                ActionRole::DoNothing
-            } else {
-                ActionRole::Action
-            },
+        let statistics = PerShareStats {
+            action_id: input.action_id.into(),
+            label: input.label.clone(),
+            role: input.role,
             mean: per_share(distribution.mean()),
             p10_p50_p90: [
                 per_share(distribution.quantile(arithmetic(Rat::new(1, 10))?)?),
@@ -1537,10 +1623,53 @@ fn per_share_statistics(
             mean_regret: per_share(mean_regret),
             max_regret: per_share(max_regret),
             states,
-        });
-        choice.per_share_tail_loss = Some(per_share(tail));
+        };
+        outcomes.push((statistics, per_share(tail)));
+    }
+    Ok(outcomes)
+}
+
+/// Per-share regret compares only subsets that satisfy every structural constraint in every state.
+fn per_share_statistics(
+    choices: &mut [ProgramChoice],
+    weights: &WeightSet,
+    equity: &EquityBasis,
+    tail_mass: Rat,
+) -> Result<()> {
+    let missing = || {
+        bad(
+            RefusalCode::NumericalCertificateFailed207,
+            "structurally feasible equity program lost its primary assessment",
+        )
+    };
+    let population = choices
+        .iter()
+        .enumerate()
+        .filter(|(_, choice)| choice.structural_rejections.is_empty())
+        .map(|(index, choice)| {
+            Ok((
+                index,
+                EquityStatisticsInput::new(choice, choice.equity.as_ref().ok_or_else(missing)?),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let outcomes = equity_statistics(
+        &population
+            .iter()
+            .map(|(_, input)| input)
+            .collect::<Vec<_>>(),
+        weights,
+        equity.currency,
+        tail_mass,
+    )?;
+    let indices: Vec<_> = population.iter().map(|(index, _)| *index).collect();
+    drop(population);
+    for (index, (statistics, tail)) in indices.into_iter().zip(outcomes) {
+        let choice = choices.get_mut(index).ok_or_else(missing)?;
+        choice.per_share_statistics = Some(statistics);
+        choice.per_share_tail_loss = Some(tail);
         choice.risk_rejected = match equity.max_tail_loss_per_share {
-            Some(limit) => exact_compare(tail, limit).is_gt(),
+            Some(limit) => exact_compare(tail.major, limit).is_gt(),
             None => false,
         };
     }
@@ -1680,6 +1809,7 @@ fn populate_statistics(
             policy.tail_mass,
         )?;
     }
+    entity::valuation::populate_statistics(choices, inputs)?;
     Ok(())
 }
 
@@ -1741,6 +1871,12 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
     if let Some(claim) = &mut inputs.entity_funding {
         entity::canonicalize(&mut claim.value);
     }
+    inputs
+        .entity_valuations
+        .sort_by(|a, b| a.value.equity.entity.cmp(&b.value.equity.entity));
+    for claim in &mut inputs.entity_valuations {
+        entity::valuation::canonicalize(&mut claim.value);
+    }
     let funding_index = inputs
         .funding
         .as_ref()
@@ -1762,6 +1898,7 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
         .as_ref()
         .map(|claim| entity::Index::new(&claim.value, &inputs.candidates, &inputs.weights.value))
         .transpose()?;
+    let valuation_index = entity::valuation::Index::new(&inputs.entity_valuations)?;
     let policy = &inputs.policy.value;
     let money = |major| ExactMoney {
         currency: policy.currency,
@@ -1874,6 +2011,19 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
                 }
             }
         }
+        let entity_valuations = valuation_index.assess(mask)?;
+        for valuation in &entity_valuations {
+            for state in &valuation.equity.states {
+                if state.ending_shares.signum() <= 0 {
+                    rejected.push(StructuralRejection::EntityNonpositiveShareCount {
+                        entity: valuation.entity.clone(),
+                        share_class: valuation.share_class.clone(),
+                        state_id: state.state_id.clone(),
+                        shares: state.ending_shares,
+                    });
+                }
+            }
+        }
         let bundle_id = format!("bundle_{mask:02x}");
         if rejected.is_empty() {
             let values = inputs
@@ -1925,6 +2075,7 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
             funding_schedule,
             entity_funding,
             equity,
+            entity_valuations,
             structural_rejections: rejected,
             statistics: None,
             tail_loss: None,
@@ -1968,6 +2119,11 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
             .as_ref()
             .map(|claim| claim.value.clone()),
         equity: inputs.equity.as_ref().map(|claim| claim.value.clone()),
+        entity_valuations: inputs
+            .entity_valuations
+            .iter()
+            .map(|claim| claim.value.clone())
+            .collect(),
         choices,
         unconstrained_winners,
         feasible_winners,

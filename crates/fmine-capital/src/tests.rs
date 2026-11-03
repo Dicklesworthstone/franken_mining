@@ -299,6 +299,7 @@ pub(crate) fn inputs(
         funding_schedule: None,
         entity_funding: None,
         equity: None,
+        entity_valuations: vec![],
     }
 }
 fn row<'a>(report: &'a EvaluatedProgram, members: &[&str]) -> &'a ProgramChoice {
