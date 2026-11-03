@@ -1941,6 +1941,16 @@ fn section() -> Project {
     let revenue = blocks(&mut b, "revenue", integers(&revenue));
     let cost: Vec<i64> = (0..15).map(|i| if i == 2 { 2 } else { 1 }).collect();
     let cost = blocks(&mut b, "cost", integers(&cost));
+    // A client's schedule in years from 1, as a planning tool might export it: the top layer in year 1, the three
+    // middle blocks and the ore in year 2, the rest left out.
+    let plan: Vec<Option<f64>> = (0..15)
+        .map(|i| match i {
+            10..=14 => Some(1.0),
+            2 | 6..=8 => Some(2.0),
+            _ => None,
+        })
+        .collect();
+    let plan = blocks(&mut b, "plan", floats(&plan));
     // Slope domains: the top layer soft (0), the two below hard (1).
     let rock_idx = b.arr(
         pq(
@@ -1986,7 +1996,9 @@ fn section() -> Project {
             level,
             "[12.5,12.5,12.5]",
             "[5,1,3]",
-            &[value, low, gaps, huge, tonnes, revenue, cost, rock, corners],
+            &[
+                value, low, gaps, huge, tonnes, revenue, cost, plan, rock, corners,
+            ],
         ),
         block_model_at(
             "tilted",
@@ -2467,6 +2479,147 @@ fn highs_solution_of_the_exported_schedule_lp_comes_back_as_a_checked_schedule_a
         assert!(
             bound >= lp_best - 1e-9 && bound <= lp_best + 1e-6,
             "{bound} against {lp_best}"
+        );
+    });
+}
+
+/// A client's schedule (plan §15.4 `UntrustedCandidate`), read from the block model's own "plan" attribute, is
+/// checked exactly and improved by local search to the hand optimum, both under the certified bound. Schedules that
+/// break a requirement or a limit are reported with their witnesses and not improved.
+#[test]
+fn a_clients_schedule_in_the_omf_is_checked_then_improved_and_a_broken_one_is_reported() {
+    use fmine_lp::pdlp::PdlpOptions;
+    use fmine_optimize::toposort::check;
+    use fmine_optimize::toposort::search::DISCOUNT_SCALE;
+
+    with_section_schedule(|m, spec| {
+        let s = i128::from(DISCOUNT_SCALE);
+        let f1 = s * 10 / 11;
+
+        // Years 1 and 2 are periods 0 and 1.
+        let plan = m.periods("plan", 1).unwrap();
+        let want: Vec<Option<u32>> = (0..15)
+            .map(|b| match b {
+                10..=14 => Some(0),
+                2 | 6..=8 => Some(1),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(plan, want);
+
+        // Feasible: the five top blocks fill period 0 (-20 quarter-units), then the middle three and the ore follow
+        // (-12 + 37 = 25).
+        let c = m.candidate_schedule(spec, &plan).unwrap();
+        assert_eq!(m.omf_order(c.schedule()), plan);
+        let k = c.check();
+        assert!(k.feasible(), "{k:?}");
+        assert_eq!(
+            (k.mined, k.period_values.clone(), k.used[0].clone()),
+            (9, vec![-20, 25, 0], vec![10, 8, 0])
+        );
+        assert_eq!(c.value(), -20 * s + 25 * f1);
+        // The search reaches the hand optimum, one top block later: -16 + 21 / 1.1 against -20 + 25 / 1.1.
+        let i = c.improvement().unwrap();
+        assert_eq!((i.before, i.after), (c.value(), -16 * s + 21 * f1));
+        let improved = check(c.problem(), &i.schedule).unwrap();
+        assert!(improved.feasible(), "{improved:?}");
+        assert_eq!(improved.period_values, vec![-16, 21, 0]);
+        // Both lie under PDLP's certified bound.
+        let pdlp = PdlpOptions {
+            tolerance: 1e-6,
+            ..PdlpOptions::default()
+        };
+        let bound = m.lp_schedule(spec, &pdlp).unwrap().upper_bound().unwrap();
+        let (given, after) = (c.value() as f64 / s as f64, i.after as f64 / s as f64);
+        println!(
+            r#"{{"test":"omf_candidate","given":{given},"after":{after},"bound":{bound},"gap_given":{},"gap_after":{},"rounds":{},"moves":"{:?}"}}"#,
+            (bound - given) / bound,
+            (bound - after) / bound,
+            i.rounds,
+            i.moves
+        );
+        assert!(given < after && after < bound, "{given} {after} {bound}");
+
+        // The ore alone in year 1 breaks every requirement it has: the three blocks above it are not mined.
+        let mut ore_first = vec![None; 15];
+        ore_first[2] = Some(0);
+        let c = m.candidate_schedule(spec, &ore_first).unwrap();
+        let k = c.check();
+        let omf = |b: u32| m.omf_index(b as usize).unwrap();
+        let witnesses: Vec<(usize, usize)> = k
+            .first_unmet
+            .iter()
+            .map(|&(b, q)| (omf(b), omf(q)))
+            .collect();
+        assert_eq!((k.unmet, witnesses), (3, vec![(2, 6), (2, 7), (2, 8)]));
+        assert!(k.over_limit.is_empty(), "{k:?}");
+        assert_eq!((c.value(), c.improvement()), (37 * s, None));
+
+        // The whole cone in year 1 keeps every requirement but uses 18 of period 0's 10.
+        let rushed: Vec<Option<u32>> = plan.iter().map(|t| t.map(|_| 0)).collect();
+        let c = m.candidate_schedule(spec, &rushed).unwrap();
+        let k = c.check();
+        assert_eq!(
+            (k.unmet, k.over_limit.clone(), k.used[0].clone()),
+            (0, vec![(0, 0)], vec![18, 0, 0])
+        );
+        assert_eq!((c.value(), c.improvement()), (5 * s, None));
+
+        // Integers read too: cost is 2 at the ore and 1 elsewhere.
+        let from_cost: Vec<Option<u32>> = (0..15).map(|b| Some(u32::from(b == 2))).collect();
+        assert_eq!(m.periods("cost", 1).unwrap(), from_cost);
+        assert_eq!(
+            [0, 4, 12, 14, 15].map(|b| m.omf_index(b)),
+            [Some(10), Some(14), Some(2), Some(4), None]
+        );
+
+        refused_as(
+            m.periods("value", -1),
+            "FMINE-REF-109",
+            r#"block [2, 0, 0] of block model "section" has value 9.25, not a whole number from -1"#,
+        );
+        refused_as(
+            m.periods("revenue", 1),
+            "FMINE-REF-109",
+            "block [0, 0, 0] of block model \"section\" has revenue 0,",
+        );
+        refused_as(
+            m.periods("huge", -1),
+            "FMINE-REF-109",
+            "has huge 10000000000000000000,",
+        );
+        refused_as(
+            m.periods("cost", -5_000_000_000),
+            "FMINE-REF-109",
+            "has cost 1, not a whole number from -5000000000 to -5000000000 + 4294967295",
+        );
+        refused_as(m.periods("cost", i64::MIN), "FMINE-REF-109", "has cost 1,");
+        refused_as(
+            m.periods("rock", 1),
+            "FMINE-REF-506",
+            "is not a Number of integers or floats",
+        );
+        refused_as(
+            m.periods("nothing", 1),
+            "FMINE-REF-506",
+            r#"0 attributes called "nothing""#,
+        );
+        refused_as(
+            m.periods("corner value", 1),
+            "FMINE-REF-506",
+            "is on Vertices",
+        );
+        refused_as(
+            m.candidate_schedule(spec, &plan[..14]),
+            "FMINE-REF-207",
+            "14 entries for 15 parent blocks",
+        );
+        let mut late = plan.clone();
+        late[12] = Some(3);
+        refused_as(
+            m.candidate_schedule(spec, &late),
+            "FMINE-REF-207",
+            r#"puts block [2, 0, 2] of block model "section" in period 3, but there are 3"#,
         );
     });
 }

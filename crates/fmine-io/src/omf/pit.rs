@@ -36,6 +36,15 @@
 //! its shares and checks it exactly. [`PitModel::schedule_bound`] certifies an upper bound from its row multipliers.
 //! Neither trusts the solver. A wrong solution gives a worse schedule or a weaker bound, and the schedule is still
 //! checked and the bound still certified.
+//!
+//! **Candidates** (bd-jfg4, plan §15.4 `UntrustedCandidate`). A schedule from a client's own planning tool, such as
+//! the mining period it exported as an attribute of the block model, comes in through [`PitModel::periods`] and
+//! [`PitModel::candidate_schedule`]. Nothing in it is trusted. `toposort::check` finds every requirement and limit it
+//! breaks and the exact value it mines in each period. A candidate that breaks none is improved by local search, as
+//! [`PitModel::schedule`] improves its own. One that breaks some is reported, not repaired. Values and uses are scaled
+//! as for any schedule, so a candidate within the scaled limits is within the true ones. With uses from floats, one
+//! over a scaled limit by less than the number of blocks it mines that period may still be within the true limit;
+//! a larger `per_unit` tells them apart.
 
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_lp::pdlp::{LpProblem, PdlpOptions, PdlpSolution, certified_bound, solve as solve_lp};
@@ -43,8 +52,8 @@ use fmine_optimize::pitflow::shells::{NestedShells, RevenueFactor, ShellModel, n
 use fmine_optimize::pitflow::slope::{BlockGrid, SlopeTable, slope_arcs};
 use fmine_optimize::pitflow::{ClosureProblem, PitSolution, solve};
 use fmine_optimize::toposort::lp::{Incumbent, Shares, incumbent, relaxation, starts};
-use fmine_optimize::toposort::search::{Improvement, discount_factors, improve};
-use fmine_optimize::toposort::{ScheduleProblem, greedy};
+use fmine_optimize::toposort::search::{Improvement, discount_factors, discounted_value, improve};
+use fmine_optimize::toposort::{ScheduleCheck, ScheduleProblem, check, greedy};
 
 use super::proportions::{element, kind, missing};
 use super::{
@@ -59,6 +68,10 @@ const TWO_63: f64 = 9_223_372_036_854_775_808.0;
 
 fn outside(detail: String) -> Refusal {
     Refusal::new(RefusalCode::OutsidePhysicalDomain109, detail)
+}
+
+fn unschedulable(detail: String) -> Refusal {
+    Refusal::new(RefusalCode::NumericalCertificateFailed207, detail)
 }
 
 /// `size` scaled by the smallest power of two, at most `2^MAX_SIZE_SCALE`, that makes all three integers from 1 to
@@ -438,6 +451,112 @@ impl<'p> PitModel<'p> {
         Ok(certified_bound(&self.schedule_lp(spec)?, y)?.map(|b| -b.value()))
     }
 
+    /// The periods in the Number attribute `attribute` on the parent blocks, such as the schedule a client's planning
+    /// tool exported, for [`PitModel::candidate_schedule`]: one entry per parent block in OMF's order. The value
+    /// `first` is period 0, `first + 1` period 1 and so on, and a null leaves the block out.
+    ///
+    /// # Errors
+    /// `FMINE-REF-506` when no attribute, or more than one, is called `attribute`, or it is not a Number of integers
+    /// or floats on the parent blocks. `FMINE-REF-109` for a value that is not a whole number, or lies below `first`
+    /// or more than `u32::MAX` above it.
+    pub fn periods(&self, attribute: &str, first: i64) -> Result<Vec<Option<u32>>, Refusal> {
+        let name = &self.element.name;
+        let a = on_blocks(self.element, attribute)?;
+        let range = |b: usize, x: String| {
+            outside(format!(
+                "OMF: block {:?} of block model \"{name}\" has {attribute} {x}, not a whole number from {first} to \
+                 {first} + {}",
+                uvw(b, self.count),
+                u32::MAX
+            ))
+        };
+        let period = |b: usize, x: i64| {
+            x.checked_sub(first)
+                .and_then(|t| u32::try_from(t).ok())
+                .ok_or_else(|| range(b, x.to_string()))
+        };
+        match &a.data {
+            AttributeData::Number {
+                values: Numbers::Integer(values),
+                ..
+            } => values
+                .iter()
+                .enumerate()
+                .map(|(b, x)| x.map(|x| period(b, x)).transpose())
+                .collect(),
+            AttributeData::Number {
+                values: Numbers::Float(values),
+                ..
+            } => values
+                .iter()
+                .enumerate()
+                .map(|(b, x)| {
+                    x.map(|x| {
+                        if x.fract() == 0.0 && x.abs() < TWO_63 {
+                            period(b, x as i64)
+                        } else {
+                            Err(range(b, x.to_string()))
+                        }
+                    })
+                    .transpose()
+                })
+                .collect(),
+            _ => Err(missing(format!(
+                "OMF: attribute \"{attribute}\" of block model \"{name}\" is not a Number of integers or floats"
+            ))),
+        }
+    }
+
+    /// An outside schedule as an untrusted candidate (see the module notes). `periods` holds one entry per parent
+    /// block in OMF's order, as [`PitModel::periods`] reads them, with `None` leaving a block out. `toposort::check`
+    /// reports what it breaks and what it mines, and local search improves it only when it breaks nothing.
+    ///
+    /// # Errors
+    /// Those of [`PitModel::schedule`] but the rank's and `greedy`'s. `FMINE-REF-207` (proposed) when `periods` does
+    /// not have one entry per parent block, or puts a block past the last period, naming it.
+    pub fn candidate_schedule(
+        &self,
+        spec: &ScheduleSpec<'_>,
+        periods: &[Option<u32>],
+    ) -> Result<CandidateSchedule, Refusal> {
+        let (problem, factors) = self.schedule_problem(spec)?;
+        let name = &self.element.name;
+        let n = problem.blocks().node_count();
+        if periods.len() != n {
+            return Err(unschedulable(format!(
+                "OMF: a candidate schedule for block model \"{name}\" has {} entries for {n} parent blocks",
+                periods.len()
+            )));
+        }
+        let late = periods
+            .iter()
+            .enumerate()
+            .find_map(|(b, &t)| t.filter(|&t| t as usize >= spec.periods).map(|t| (b, t)));
+        if let Some((b, t)) = late {
+            return Err(unschedulable(format!(
+                "OMF: a candidate schedule puts block {:?} of block model \"{name}\" in period {t}, but there are {}",
+                uvw(b, self.count),
+                spec.periods
+            )));
+        }
+        let schedule = reversed_layers(periods, self.count);
+        let check = check(&problem, &schedule)?;
+        let value = discounted_value(&problem, &schedule, &factors)?;
+        let improvement = if check.feasible() {
+            Some(improve(&problem, &schedule, &factors, spec.max_rounds)?)
+        } else {
+            None
+        };
+        Ok(CandidateSchedule {
+            problem,
+            factors,
+            schedule,
+            check,
+            value,
+            improvement,
+        })
+    }
+
     fn schedule_problem(
         &self,
         spec: &ScheduleSpec<'_>,
@@ -463,6 +582,16 @@ impl<'p> PitModel<'p> {
     #[must_use]
     pub fn omf_order<T: Clone>(&self, per_block: &[T]) -> Vec<T> {
         reversed_layers(per_block, self.count)
+    }
+
+    /// The OMF index of block `block` in `pitflow`'s order, such as a block of `ScheduleCheck::first_unmet`; `None`
+    /// past the last block.
+    #[must_use]
+    pub fn omf_index(&self, block: usize) -> Option<usize> {
+        let layer = self.count[0] as usize * self.count[1] as usize;
+        let k = block.checked_div(layer)?;
+        let w = (self.count[2] as usize).checked_sub(1)?.checked_sub(k)?;
+        Some(w * layer + block % layer)
     }
 }
 
@@ -584,6 +713,58 @@ impl GuidedSchedule {
     #[must_use]
     pub fn incumbent(&self) -> &Incumbent {
         &self.incumbent
+    }
+}
+
+/// A candidate from [`PitModel::candidate_schedule`], in `pitflow`'s block order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateSchedule {
+    problem: ScheduleProblem,
+    factors: Vec<i64>,
+    schedule: Vec<Option<u32>>,
+    check: ScheduleCheck,
+    value: i128,
+    improvement: Option<Improvement>,
+}
+
+impl CandidateSchedule {
+    /// The problem the candidate was checked on.
+    #[must_use]
+    pub fn problem(&self) -> &ScheduleProblem {
+        &self.problem
+    }
+
+    /// The integer discount factors (`toposort::search::discount_factors`).
+    #[must_use]
+    pub fn factors(&self) -> &[i64] {
+        &self.factors
+    }
+
+    /// The candidate, one period or `None` per block.
+    #[must_use]
+    pub fn schedule(&self) -> &[Option<u32>] {
+        &self.schedule
+    }
+
+    /// What `toposort::check` found: the requirements and limits the candidate breaks, and the value it mines in each
+    /// period, in units of `1 / per_unit`.
+    #[must_use]
+    pub fn check(&self) -> &ScheduleCheck {
+        &self.check
+    }
+
+    /// The candidate's discounted value, feasible or not, in units of `1 / (per_unit · DISCOUNT_SCALE)`
+    /// (`toposort::search::discounted_value`).
+    #[must_use]
+    pub fn value(&self) -> i128 {
+        self.value
+    }
+
+    /// Local search from the candidate, its `before` equal to [`CandidateSchedule::value`]; `None` when the candidate
+    /// breaks a requirement or a limit.
+    #[must_use]
+    pub fn improvement(&self) -> Option<&Improvement> {
+        self.improvement.as_ref()
     }
 }
 

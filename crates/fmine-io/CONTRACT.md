@@ -76,6 +76,14 @@ attribute, then a certified ultimate pit (`solve`) or nested shells by revenue f
   `schedule_bound` is minus `certified_bound` of any row multipliers `y`. Neither trusts the solver. `x` only ranks
   and releases blocks, and TopoSort and the search refuse a schedule that fails `check`. Every `y` bounds by weak
   duality, so a poor one only bounds loosely.
+- Candidates (bd-jfg4, plan §15.4 `UntrustedCandidate`). A client's own schedule, such as the mining period its
+  planning tool exported as a Number attribute on the parent blocks, comes in through `PitModel::periods`. The value
+  `first` is period 0, and a null leaves a block out. `PitModel::candidate_schedule` checks it with
+  `toposort::check`: the requirements and limits it breaks, with witnesses (`omf_index` names them in OMF's
+  numbering), and the exact value it mines in each period, with its discounted value. A candidate that breaks
+  nothing is improved by `improve`; one that breaks something is reported, not repaired. Uses are rounded up as for
+  any schedule. So a candidate within the scaled limits is within the true ones. With uses from floats, one over a
+  scaled limit by less than the number of blocks it mines that period may still be within the true limit.
 
 `reliance` is the filesystem adapter for the S0 reliance model (BD-347). A journal is one canonical
 `fmine_claim::reliance::JournalRecord` frame per lowercase hexadecimal line, ending in LF. Each record's
@@ -156,6 +164,10 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   and `toposort::lp::Incumbent`.
 - `PitModel::{schedule_lp, guided_schedule, schedule_bound}` and `omf::pit::GuidedSchedule` (bd-06kg).
   `GuidedSchedule::{problem, factors, incumbent}` give the same as `LpSchedule`'s.
+- `PitModel::{periods, candidate_schedule, omf_index}` and `omf::pit::CandidateSchedule` (bd-jfg4).
+  `CandidateSchedule::{problem, factors, schedule, check, value, improvement}` give the `ScheduleProblem`, the
+  discount factors, the candidate in `pitflow`'s order, `toposort::ScheduleCheck`, its discounted value, and
+  `search::Improvement` when it is feasible.
 - `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, FormatCount, MinimalCell,
   MinimalSheet, MinimalStyles, build_minimal_xlsx, build_minimal_xlsx_styled, col_index_to_letters,
   parse_a1_ref}`; `Workbook::format_census`;
@@ -296,6 +308,11 @@ for current reuse; an unpinned replay establishes only internal consistency of t
 - Outside solutions (bd-06kg): `guided_schedule` refuses through `Shares::new` (`FMINE-REF-207`) a share outside
   `[0, 1]`, even by one ulp, rather than clamp it, and a count that is not one per block and period.
   `schedule_bound` passes on `certified_bound`'s refusal of a `y` that is not one finite value per row.
+- Candidates (bd-jfg4): `periods` refuses an attribute as values are refused (`506`), but a null is a block left
+  out. It refuses (`109`), naming the block, a value that is not a whole number (`2.5`, NaN, infinity), or lies
+  below `first` or more than `u32::MAX` above it. It never rounds or clamps. `candidate_schedule` refuses as
+  schedules do (`207`), and refuses a candidate that is not one entry per parent block or puts a block past the last
+  period, naming the block. Breaking a requirement or a limit is not a refusal: `check` reports it.
 - XML text decodes the five named entities and `&#10;`, `&#13;`, `&#160;`, each once (`&amp;` last); no DTD or
   entity declaration is read, so nothing expands.
 - `numtok` keeps malformed grouping, unsupported attached notation, decimal overflow and ambiguous standalone
@@ -458,6 +475,20 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   - Planted, reverted: the bound without its sign change. Both tests failed.
   - Not checked: a client's commercial solver; any model but this 15-block section; an outside primal solution
     whose shares lie outside `[0, 1]` by the solver's tolerance, which `guided_schedule` refuses (HiGHS's did not).
+- `PO-IO-12` (bd-jfg4): a client's schedule in the OMF is checked, then improved.
+  `omf::tests::a_clients_schedule_in_the_omf_is_checked_then_improved_and_a_broken_one_is_reported` reads the
+  section's "plan" attribute, floats in years from 1: the top layer in year 1, the middle three and the ore in year 2.
+  - `check` passes it, with period values [-20, 25, 0] and uses [10, 8, 0]. Its discounted value is
+    `-20 · 2^40 + 25 · ⌊2^40 · 10/11⌋`.
+  - Local search reaches PO-IO-9's hand optimum in one "later" move (2.7272727 to 3.0909091 quarter-units), and an
+    independent `check` passes the result. Both lie under PDLP's certified bound, 4.7979798.
+  - The ore alone in year 1 breaks its three requirements, with witnesses (2, 6), (2, 7) and (2, 8) in OMF's
+    numbering. The whole cone in year 1 uses 18 of period 0's 10. Neither is improved.
+  - An Integer attribute reads too. Refused: 9.25, a value below `first`, 1e19, a period past `u32::MAX` or
+    overflowing `i64`, a Category, a missing attribute, one on Vertices, a short candidate, and a period past the
+    last.
+  - Planted, reverted: the candidate taken without reversing its layers. The test failed.
+  - Not checked: a vendor's own export; any model but this 15-block section; the refusal of periods as dates.
 - FACT (BD-347, `reliance::tests`): exact artifact issuance and current-use retrieval preserve bytes and
   refuse after withdrawal; invalid digest, key, time, stale or absent trust, and an existing destination
   cannot create an authorized output. A failed final append retains the unissued artifact and poisons its
@@ -524,7 +555,9 @@ OMF pits take block values as given in attributes. They hold no price deck or co
 and do not write the pit back to OMF. Schedules have no destinations (PCPSP). `schedule` takes the caller's
 ranking; `lp_schedule` searches from the LP's starts and reports its gap to the bound, but proves no schedule best.
 No outside solver runs in CI or at run time: HiGHS ran once in the lab and its output is pinned. There is no CLI verb
-for the MPS export or the solution import (fmine-cli is past its planned budget).
+for the MPS export, the solution import or a candidate schedule (fmine-cli is past its planned budget). A candidate
+comes only as periods per parent block, from an attribute or the caller. Periods as dates, a calendar, vendor
+string files and partial blocks are not read, and a broken candidate is never repaired.
 The bounded HTML reader is not a browser or DOM repair engine. It does not execute scripts, resolve CSS,
 interpret inline XBRL transformations, or establish issuer, metric, period or ownership semantics. Its source
 anchor records the inspected bytes and location, not the financial meaning, publisher authenticity or independent
