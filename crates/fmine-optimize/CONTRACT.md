@@ -330,6 +330,32 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   | mclaughlin_limit | 1,065,136,537 | 1,076,149,599 | 0.27% | 1.003 | 2.46 s |
 
   The gap is still to the certified bound. Search time is the total over the six schedules. All ten are within 3% of MineLib's best-known value: kd 0.8% and sm2 0.3% below it, the other eight at or above. Against the certified bound, six are within 3% and nine within 5%; zuck_medium is the outlier at 9.6%. Of the moves in the ten best schedules, 109,574 were "later" moves (a block of negative value put off to a period with a smaller factor), 13,412 cones, 10,134 swaps, 5,773 "earlier" moves, 65 dropped (all on kd) and none added. zuck_large's cached LP comes from a run PDLP stopped at its 600 s limit. Its certified bound is the same 57,391,118, and `greedy` on its ranks gives 51,185,071, not the 51,137,752 above (53,710,027 released).
+
+  PDLP tolerance 10⁻⁶ (`bd-iw7m`, 2026-11-02 and 2026-11-03), the same test and code (2414f7a; `bd-rbxh` changes PCPSP only), with `FMINE_PDLP_TOL=1e-6` and LPs solved fresh, at most 600 s each.
+  - Every certified bound comes within 0.0034% of MineLib's published LP bound. At 10⁻⁴, nine were within 0.03% and kd was 0.94% above.
+  - The LPs took 3,590 s in all, against about 1,580 s at 10⁻⁴. Five stopped at the 600 s cap.
+  - Eight searched values rose and two fell, so neither tolerance gives the better ranks everywhere. A tight bound did not mean a good point to rank from.
+  - The harness default stays 10⁻⁴, and the table above stays the 10⁻⁴ run. Ranking from more than one LP point and keeping the best schedule is not built.
+  - Every schedule in the table below passed the exact oracle: feasible, no problem, at NPVs equal to the test's to 10⁻³.
+
+  | Instance | LP at 10⁻⁶ | Certified bound | Above published | Searched | At 10⁻⁴ | Change | Of best known |
+  |---|---|---|---|---|---|---|---|
+  | newman1 | optimal, 0.5 s | 24,486,188 | 0.0000% | 24,011,422 | 23,988,996 | +0.09% | 1.022 |
+  | kd | optimal, 125.6 s | 409,511,851 | 0.0032% | 406,516,814 | 393,795,083 | +3.23% | 1.024 |
+  | zuck_small | optimal, 197.8 s | 854,190,258 | 0.0009% | 829,063,066 | 822,141,680 | +0.84% | 1.051 |
+  | p4hd | optimal, 127.2 s | 247,418,956 | 0.0013% | 247,223,012 | 247,170,155 | +0.02% | 1.004 |
+  | w23 | optimal, 119.5 s | 400,660,466 | 0.0018% | 396,071,945 | 396,029,021 | +0.01% | 1.010 |
+  | sm2 | stopped, 600.7 s | 1,648,060,717 | 0.0006% | 1,646,061,148 | 1,640,765,421 | +0.32% | 1.000 |
+  | marvin | stopped, 600.8 s | 863,934,506 | 0.0021% | 842,971,109 | 831,803,179 | +1.34% | 1.027 |
+  | zuck_medium | stopped, 602.6 s | 710,643,524 | 0.0003% | 638,403,145 | 642,707,459 | −0.67% | 1.037 |
+  | zuck_large | stopped, 604.4 s | 57,391,041 | 0.0034% | 57,188,844 | 57,137,644 | +0.09% | 1.007 |
+  | mclaughlin_limit | stopped, 610.6 s | 1,078,988,679 | 0.0009% | 1,074,914,865 | 1,076,149,599 | −0.11% | 1.001 |
+
+  PCPSP w23 at 10⁻⁶, over all of its blocks:
+  - The LP stopped at 601.3 s. Its certified bound, 387,719,818, is 0.07% below the one at 10⁻⁴.
+  - Before Price (2414f7a) the best schedule fell 0.40%, to 306,685,623.
+  - With Price (ad169df) it rose 1.07% above the 10⁻⁴ run's, to 374,843,739, which is 3.32% below its own bound.
+  - Both schedules passed the exact oracle.
 - PCPSP schedules (`bd-2rne`): MineLib's own PCPSP schedules (`sols/<name>_pcpsp_gmunoz120723.sol` in the mirror; nine, none for w23), and `crates/xtask/testdata/minelib_pcpsp_oracle.py`. That script reads only the MineLib pair and a schedule, splits included, and sums in exact fractions.
 
   `minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo` (`crates/xtask/tests/pcpsp_schedule.rs`, ignored, run by hand) on 2026-11-02: aarch64-macos, release, PDLP tolerance 10⁻⁴ with at most 600 s per LP. The test:
