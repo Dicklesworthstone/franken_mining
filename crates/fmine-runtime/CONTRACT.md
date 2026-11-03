@@ -7,6 +7,7 @@ The runtime owns the host wall clock, the subprocess pipes and the capability mo
 - `process::output_with_input` (BD-076), the synchronous subprocess pipe workers that offline timestamp verification uses. It sends an exact input snapshot while it drains stdout and stderr at the same time. Each captured stream is bounded by a caller-chosen byte limit, plus one byte to detect overflow. All workers are scoped and joined, and a failure kills and reaps the child. This gives a structured process lifetime, not a general executor;
 - `region` (BD-077), the plan §26.6 region tree and its capability sets as types. `CapSet<SPAWN, TIME, RANDOM, IO, REMOTE>` is a type, and a context `Cx<C>` only narrows: `open::<R>()` and `narrow::<D>()` compile only when the new set is within the old one. The clock and the subprocess pipes are reachable through a context only when it holds TIME (`Cx::clock`) or IO (`Cx::run`). Each of the 18 regions is a type, and its set is checked against its parent's when the crate compiles. `REGIONS` records each region's parent, set, supervisor, instances and role, and `profile(role)` gives the tree a node of that role runs.
 - `budget` (BD-078), the plan §26.7 budget table and a meter that spends a budget. `Budget{deadline_ns, poll_quota, cost_quota, priority}` composes by `meet`: the tighter of each limit and the higher priority. `budget_table(&Params)` gives the five rows (ledger writer, telemetry, estimation run, peer session, finance bridge), with what the plan leaves to the run passed in as `Params`. A `Meter` takes every time from its caller, refuses a poll or charge past a limit without recording it, and then stays exhausted, reporting the row's `OnExhaust`.
+- `supervise` (BD-079), one `AppSpec` per role (the role's `profile`), compiled to a `CompiledSupervisor` that decides restarts and escalations. The caller reports starts and failures with its own times. A child's own failures restart it with its group under its parent's strategy, up to 5 in any 60 s. The sync region's one-for-all is per peer (§26.6). The sixth escalates. An escalated peer session stops with its transfers, the peer is marked stale and the rest of the node runs on. An escalated ledger writer stops every writer and turns the node read-only: writes refuse with exit 4, and no writer starts again in the process. Any other escalation fails the parent in turn, and one that reaches the process root shuts the node down.
 
 A reading claims no synchronisation, uncertainty bound, monotonicity or authority. The caller decides whether to trust it, under its own policy.
 
@@ -14,12 +15,13 @@ A reading claims no synchronisation, uncertainty bound, monotonicity or authorit
 - **Layer:** S1
 - **Subsystem:** Bedrock
 - **LOC budget:** 12,000 planned / 14,000 ceiling
-- **Allowed Module Families:** `["budget", "clock", "process", "region"]`
+- **Allowed Module Families:** `["budget", "clock", "process", "region", "supervise"]`
 
 ## 2. Inputs
 - **The host clock**, through `HostWallClock::now_ns`.
 - **A caller's `Command`, input bytes and output limit**, through `process::output_with_input`. The caller chooses the executable and the environment.
 - **A run's budget parameters and a meter's times and costs**, through `budget_table(&Params)`, `Meter::poll(now_ns)` and `Meter::charge(cost, now_ns)`. The meter reads no clock.
+- **A node's starts and failures with their times**, through `CompiledSupervisor::start(child, now_ns)` and `fail(&child, now_ns)`. The supervisor reads no clock and starts nothing.
 - **Nothing else.** It has no workspace or external dependencies, and reads no files or registries.
 
 ## 3. Outputs
@@ -38,6 +40,10 @@ A reading claims no synchronisation, uncertainty bound, monotonicity or authorit
   - `BudgetRow::meter(parent, now_ns)`, a `Meter` for the row's budget met with its parent's;
   - `Meter::poll` and `Meter::charge`, each `Result<(), Stop>`, and `Meter::spent() -> (polls, cost)`;
   - `OnExhaust::exit_code()`: 6 for the ledger writer's refused batch and 9 for the finance bridge's indeterminate post (§30.1). Sealing early, cancelling and draining carry on inside the region, so they have no exit code.
+- **`supervise`:**
+  - `AppSpec::for_role(role)` and `AppSpec::compile() -> Result<CompiledSupervisor, SpecError>`;
+  - `CompiledSupervisor::fail(&child, now_ns) -> Result<Outcome, Refused>`. The `Outcome` is one of: `Restart{failed, restarted}`, in start order and with every running descendant; `PeerStale{peer, stopped}`; `ReadOnly{cell, stopped}`; or `Shutdown`;
+  - `CompiledSupervisor::start(child, now_ns)`, `running()`, `is_stale(peer)` and `writes()`. `writes()` refuses with `Refused::ReadOnly`, exit 4, on a read-only node.
 - **No Claim and no trusted time.** The one clock caller, `fmine-cli`'s `reliance` module (BD-347), maps a `ClockError` to `FMINE-REF-506`. It builds a `TrustedTime` from the reading only when its access policy sets `trust_host_clock`, and takes the uncertainty from its own header's `max_clock_skew_ns`.
 
 ## 4. Invariants
@@ -79,10 +85,26 @@ A reading claims no synchronisation, uncertainty bound, monotonicity or authorit
 - **Refused, not clamped.** A charge past the quota is refused whole and `spent()` does not change. Exhaustion is sticky: a later free charge, or a time before the one that exhausted it, gets the same answer. A time before the start (`BeforeStart`) and a running cost past `u64` (`Overflow`) are refused without spending or exhausting. A zero parameter, and blocks × realizations past `u64`, are refused by `budget_table`.
 - **Meet laws.** `meet_is_a_semilattice_with_unlimited_as_its_identity`: commutative and idempotent over 192 budgets (each pair), associative over 28 (each triple), `UNLIMITED` is its identity, each limit is one of its operands' and no looser than either, and the priority is the higher.
 - **Planted bugs, all four at once, reverted:** a deadline reached only past it (`>`), a cost quota refused when met (`>=`), `meet` keeping the lower priority, and telemetry's priority 181. Eight of the ten budget tests failed, and every plant failed at least one.
+- **Escalation lab tests (BD-079), on virtual time, from a full site tree:**
+  - `the_intensity_is_the_plans_and_the_sixth_failure_in_60_s_escalates`. It reads "Restart intensity is 5 restarts per 60 s per child" from §26.7. Five failures of an estimation run restart it, and the sixth fails the compute region, which the node restarts with everything after it. That restart clears the run's history. At exactly 60 s the oldest failure has left the window.
+  - `strategies_restart_the_failed_child_its_peer_group_or_the_rest`: one-for-one in ingest and compute; rest-for-one in authority and the node, in start order with descendants; one-for-all per peer in sync.
+  - `an_escalated_peer_goes_stale_and_local_authority_keeps_running`: the session and its transfers stop and the peer is stale. Writers, the other peer and writes run on. A transfer cannot start over the stale peer, and a new session clears the mark with a fresh history.
+  - `an_escalated_ledger_writer_turns_the_node_read_only_and_is_never_restarted`: every writer stops, and writes refuse with the code that §30.1's "writer escalation" row gives (4). No writer starts, for that cell or any other, and later authority restarts bring none back.
+  - `escalation_climbs_to_the_root_and_shuts_the_node_down`: telemetry fails ingest, ingest fails the node, and the node stops. Then every call refuses with `Stopped`.
+  - `every_role_compiles_and_a_broken_spec_is_refused`: each `SpecError` is reached by a broken site spec.
+  - `starts_are_checked_against_the_spec_and_time_never_goes_back`: the starts that are refused are a region outside the role, a key or peer that does not fit, a duplicate, a missing parent or peer session, and an earlier time.
+  - `seeded_schedules_match_the_model_and_replay_the_same`: 1,000 seeds of 200 steps, each of a failure or a start. Each outcome is checked against a model of each child's restarts that is built from the outcomes alone. Every failure an escalation passes must have a full window, and a restarted child must not. After each step, the running set is a closed tree, a read-only node runs no writer, and a stale peer runs nothing. Each seed replays to the same trace. Across the seeds there were 59,555 restarts (each strategy came up), 1,141 escalated restarts, 226 stale peers, 226 read-only nodes, 956 shutdowns and 159 refused writer starts, and the test asserts that each count is nonzero.
+- **Planted bugs in the supervisor, one at a time, reverted.** Each failed at least two tests, the seeded lab among them:
+  - a sixth restart allowed in the window;
+  - sync's group ignoring the peer;
+  - read-only stopping only the escalated writer;
+  - a restart keeping descendants' histories;
+  - a writer allowed to start on a read-only node.
 
 ## 5. Refusals
 - **`ClockError::{BeforeUnixEpoch, NanosecondOverflow}`**, a local error with no refusal code. Callers map it to their own refusal. `fmine-cli` uses `FMINE-REF-506`.
 - **`ProcessError::{Spawn, Worker, Read, OutputLimit, Wait, MissingPipe, WorkerPanicked, InvalidLimit}`**, also local. It separates failures to start the process or a worker, output reads, byte limits, waits and worker panics. Consumers keep their own refusal mapping.
+- **`SpecError::{Empty, RootHasParent, SecondRoot, Duplicate, MissingParent, KeyedParent, NoStrategy, WrongRole}`** and **`Refused::{NotInSpec, Shape, AlreadyRunning, ParentNotRunning, NotRunning, ReadOnly{cell}, TimeWentBack, Stopped}`**, local. `Refused::ReadOnly` is exit 4 (§30.1). The others are the caller's errors.
 - **`BudgetError::{Zero(name), Overflow, BeforeStart}`** and **`Stop::{Exhausted(Exhausted{limit, on_exhaust}), Invalid(BudgetError)}`**, local. Running out of budget is `Stop::Exhausted`, an expected outcome that carries the region's action. A bad input is `Stop::Invalid`.
 
 ## 6. Determinism class
@@ -101,7 +123,15 @@ Not applicable: it emits no Claim. A reading is not evidence of the true time, a
 No fixture. The clock tests are known answers at the conversion's edges: the epoch, one second before it, an exact sub-second value, `i64::MAX` and its successor, and `Duration::MAX`. The process tests run real children against pipe capacity and the output bounds (Invariants). The region table's oracle is the plan's own §26.6 drawing, read from `COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENMINING.md` by a test. An edit to either side that the other does not share fails it. The budget table's oracle is the same file's §26.7 table, with §30.1's exit codes.
 
 ## 10. Known gaps
-- **Most of the planned runtime is absent.** The registry charter and plan §28.3 list a region tree, CapSet profiles, an AppSpec per role, budgets and an obligation registry. The tree and the profiles exist as types (BD-077), and the budget table and its meter as values (BD-078). Nothing runs, supervises, restarts or cancels a region yet, and there is no AppSpec (BD-079) or obligation registry (BD-089). No region spends a budget yet: a meter reports `OnExhaust`, and carrying out the action (refusing the batch, sealing, cancelling, draining, reconciling) is its caller's job.
+- **Most of the planned runtime is absent.** The registry charter and plan §28.3 list a region tree, CapSet profiles, an AppSpec per role, budgets and an obligation registry. The tree and the profiles exist as types (BD-077). The budget table and its meter (BD-078) and the AppSpec and its supervisor (BD-079) exist as decision procedures. Nothing runs, restarts or cancels a region yet, and there is no obligation registry (BD-089). A meter reports an `OnExhaust`, and a supervisor reports an `Outcome`. Carrying them out is the caller's job: refusing the batch, sealing, cancelling, draining, reconciling, restarting, stopping, or refusing writes.
+- **Supervision rules the plan does not state.** These are this crate's reading:
+  - A child's intensity counts its own failures only, not restarts it shares with a failed sibling.
+  - A restart clears its descendants' histories, because they are fresh instances.
+  - An escalated writer stops every writer, because the node refuses all writes.
+  - A transfer belongs to the peer whose session carries it.
+  - The process root has no strategy, so a failure of the node itself shuts it down.
+  - Read-only mode lasts for the process. The plan's way out (`fmine doctor` verifies the hash chain, then a new process starts) is not here.
+  - The lab is this crate's own seeded schedule, not asupersync's LabRuntime, so there is no DPOR or crash-point chaos.
 - **Budget rules the plan does not state.** §26.7 says budgets compose by `meet` but not what that does to priority. Here it takes the higher, so a child never runs below its parent. The plan gives no poll quota, so every row's is `None`. No scheduler reads priority yet. Only the five §26.7 regions have rows; the others run on their parent's budget.
 - **The capability model binds only code that uses it.** `HostWallClock` and `process::output_with_input` are still public, and `fmine-cli` and `fmine-io` call them directly. `Cx::clock` and `Cx::run` are the capability paths, not the only paths. Moving those callers onto a `Cx` is later work. The `ambient_root` ban is a token check, like `open_child_region`'s. It cannot be dodged by renaming, because an associated function cannot be aliased with `use`.
 - **The plan's §26.6 text disagrees with its own rows on REMOTE.** The peer-session line says "the ONLY REMOTE-capable region besides FinanceBridge". But the finance bridge's row is `CapSet<0,1,0,1,0>` ("local socket only"), and the transfer region's is `CapSet<0,1,0,1,1>` ("CAS chunks over QUIC/ATP"). The code follows the rows, so REMOTE goes to the peer-session and transfer regions. Which is right is the owner's call.
@@ -120,6 +150,7 @@ No fixture. The clock tests are known answers at the conversion's edges: the epo
 - `region::{Region, RegionKind, RegionSpec, Supervisor, Instances, Role, REGIONS, profile}`, and one unit type per region (`ProcessRegion` … `OperationsRegion`).
 - `region::Cx` with `ambient_root`, `open`, `narrow`, `caps`, `region`, `clock` and `run`.
 - `budget::{Budget, BudgetRow, CostUnit, OnExhaust, FaBuild, Params, BudgetError, Limit, Exhausted, Stop, Meter, budget_table}`.
+- `supervise::{AppSpec, CompiledSupervisor, Child, Outcome, Refused, SpecError, RESTARTS, WINDOW_NS}`.
 
 ## 12. Proof obligations
 - None is discharged here. PO-BED-5 waits on the region runtime. Of PO-BED-8, this crate holds the compile-time half: engine regions' sets are empty or SPAWN alone, and a context cannot widen. The runtime mask test is BD-097's (Known gaps).

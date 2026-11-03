@@ -4,6 +4,7 @@
 pub mod budget;
 pub mod process;
 pub mod region;
+pub mod supervise;
 
 use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
