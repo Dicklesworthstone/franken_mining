@@ -1819,6 +1819,7 @@ fn section() -> Project {
     let mut huge = with_ore(9.25);
     huge[0] = Some(1e19);
     let huge = blocks(&mut b, "huge", floats(&huge));
+    let tonnes = blocks(&mut b, "tonnes", floats(&[Some(1.2); 15]));
     // Revenue at the ore (10) and at the top-left corner, block 10 (3); cost 2 at the ore and 1 elsewhere.
     let revenue: Vec<i64> = (0..15)
         .map(|i| match i {
@@ -1875,7 +1876,7 @@ fn section() -> Project {
             level,
             "[12.5,12.5,12.5]",
             "[5,1,3]",
-            &[value, low, gaps, huge, revenue, cost, rock, corners],
+            &[value, low, gaps, huge, tonnes, revenue, cost, rock, corners],
         ),
         block_model_at(
             "tilted",
@@ -2043,5 +2044,86 @@ fn omf_pits_refuse_unsuitable_models_and_attributes() {
         m.shells("value", "cost", 1, &factors),
         "FMINE-REF-207",
         "negative revenue",
+    );
+}
+
+#[test]
+fn an_omf_block_model_gives_a_feasible_discounted_schedule() {
+    use fmine_optimize::pitflow::slope::{SlopeTable, SlopeTangent};
+    use fmine_optimize::toposort::check;
+    use fmine_optimize::toposort::search::DISCOUNT_SCALE;
+
+    let p = section();
+    let uniform = SlopeTable::uniform(SlopeTangent::new(1, 1).unwrap());
+    let m = pit::PitModel::new(&p, "section", &uniform, None, 2).unwrap();
+    // Rank the ultimate pit's blocks 0 and leave the rest out.
+    let pit = m.ultimate_pit("value", 4).unwrap();
+    let rank: Vec<Option<i64>> = m
+        .omf_order(pit.in_pit())
+        .iter()
+        .map(|&p| p.then_some(0))
+        .collect();
+    // Blocks of 1.2 t use 2 units each at 1 per unit, rounded up, so 10 a period holds five.
+    let limits = [10, 10, 10];
+    let tonnes = [pit::Capacity {
+        attribute: "tonnes",
+        per_unit: 1,
+        limits: &limits,
+    }];
+    let spec = pit::ScheduleSpec {
+        value: "value",
+        per_unit: 4,
+        capacities: &tonnes,
+        periods: 3,
+        discount: [100_000_000, 1_000_000_000],
+        max_rounds: 100,
+    };
+    let s = m.schedule(&spec, &rank).unwrap();
+    let i = s.improvement();
+    // The ore needs all eight waste blocks above it by its own period, and a period holds five. At best, four waste
+    // blocks go in period 0 (-16 quarter-units) and the fifth, the three middle ones and the ore (37) in period 1,
+    // where the factor is 2^40 x 10/11 rounded down.
+    let f1 = i128::from(DISCOUNT_SCALE) * 10 / 11;
+    assert_eq!(i.after, -16 * i128::from(DISCOUNT_SCALE) + 21 * f1);
+    assert_eq!(s.factors()[1] as i128, f1);
+    let c = check(s.problem(), &i.schedule).unwrap();
+    assert!(c.feasible(), "{c:?}");
+    assert_eq!(
+        (c.mined, c.period_values.clone(), c.used[0].clone()),
+        (9, vec![-16, 21, 0], vec![8, 10, 0])
+    );
+    let periods = m.omf_order(&i.schedule);
+    for b in [2, 6, 7, 8] {
+        assert_eq!(periods[b], Some(1), "block {b}");
+    }
+    for b in [0, 1, 3, 4, 5, 9] {
+        assert_eq!(periods[b], None, "block {b}");
+    }
+    let top = |t| (10..15).filter(|&b| periods[b] == Some(t)).count();
+    assert_eq!((top(0), top(1)), (4, 1));
+    println!(
+        r#"{{"test":"omf_schedule","before":{},"after":{},"rounds":{},"moves":"{:?}","periods":{periods:?}}}"#,
+        i.before, i.after, i.rounds, i.moves
+    );
+
+    refused_as(
+        m.schedule(&pit::ScheduleSpec { periods: 2, ..spec }, &rank),
+        "FMINE-REF-207",
+        "limits",
+    );
+    let none = [pit::Capacity {
+        attribute: "nothing",
+        ..tonnes[0]
+    }];
+    refused_as(
+        m.schedule(
+            &pit::ScheduleSpec {
+                capacities: &none,
+                ..spec
+            },
+            &rank,
+        ),
+        "FMINE-REF-506",
+        r#"0 attributes called "nothing""#,
     );
 }

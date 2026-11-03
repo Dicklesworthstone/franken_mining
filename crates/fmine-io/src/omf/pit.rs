@@ -16,11 +16,19 @@
 //! **Values.** A block's weight is its value times `per_unit`, rounded to the nearest integer (halves away from zero).
 //! Each block moves by at most half a unit, `1 / (2 · per_unit)`, so the pit is best for the rounded values and
 //! within `blocks / per_unit` of best for the attribute's own.
+//!
+//! **Schedules** (bd-fr8x). [`PitModel::schedule`] builds `toposort`'s problem from the values, the precedence arcs
+//! and capacities whose per-block uses are attributes, rounded up so that a schedule within the scaled limits is
+//! within the true ones. It places blocks in the caller's rank order by TopoSort (`toposort::greedy`) and improves
+//! that schedule by local search at the discount rate (`toposort::search::improve`). Both run `toposort::check` and
+//! refuse a schedule that fails it. The schedule is feasible and locally improved, not proved best.
 
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_optimize::pitflow::shells::{NestedShells, RevenueFactor, ShellModel, nested_shells};
 use fmine_optimize::pitflow::slope::{BlockGrid, SlopeTable, slope_arcs};
 use fmine_optimize::pitflow::{ClosureProblem, PitSolution, solve};
+use fmine_optimize::toposort::search::{Improvement, discount_factors, improve};
+use fmine_optimize::toposort::{ScheduleProblem, greedy};
 
 use super::proportions::{element, kind, missing};
 use super::{
@@ -211,6 +219,24 @@ impl<'p> PitModel<'p> {
     /// blocks, or holds dates, or has a null. `FMINE-REF-109` for `per_unit` 0, or a value that is not finite or whose
     /// weight is outside `i64`.
     pub fn weights(&self, attribute: &str, per_unit: u32) -> Result<Vec<i64>, Refusal> {
+        self.scaled(attribute, per_unit, f64::round)
+    }
+
+    /// As [`PitModel::weights`], with floats rounded up rather than to the nearest integer: a block's use of a
+    /// capacity, so that a schedule within the scaled limits is within the true ones.
+    ///
+    /// # Errors
+    /// As [`PitModel::weights`].
+    pub fn uses(&self, attribute: &str, per_unit: u32) -> Result<Vec<i64>, Refusal> {
+        self.scaled(attribute, per_unit, f64::ceil)
+    }
+
+    fn scaled(
+        &self,
+        attribute: &str,
+        per_unit: u32,
+        round: fn(f64) -> f64,
+    ) -> Result<Vec<i64>, Refusal> {
         let name = &self.element.name;
         if per_unit == 0 {
             return Err(outside(format!(
@@ -252,7 +278,7 @@ impl<'p> PitModel<'p> {
                 .enumerate()
                 .map(|(b, x)| {
                     let x = x.ok_or_else(|| null(b))?;
-                    let w = (x * f64::from(per_unit)).round();
+                    let w = round(x * f64::from(per_unit));
                     if w.is_finite() && w.abs() < TWO_63 {
                         Ok(w as i64)
                     } else {
@@ -304,11 +330,96 @@ impl<'p> PitModel<'p> {
         nested_shells(&model, factors)
     }
 
+    /// A feasible, locally improved schedule (see the module notes). `rank` holds one entry per parent block in OMF's
+    /// order: lower ranks are taken first, and `None` leaves a block out.
+    ///
+    /// # Errors
+    /// Those of [`PitModel::weights`] and [`PitModel::uses`] for the value and each capacity, of
+    /// `ClosureProblem::new` and `ScheduleProblem::new` (among them limits that are not one per period, or negative),
+    /// of `discount_factors`, and of `greedy` (among them a rank that is not one per block) and `improve`.
+    pub fn schedule(
+        &self,
+        spec: &ScheduleSpec<'_>,
+        rank: &[Option<i64>],
+    ) -> Result<OmfSchedule, Refusal> {
+        let blocks = ClosureProblem::new(
+            self.weights(spec.value, spec.per_unit)?,
+            self.offsets.clone(),
+            self.targets.clone(),
+        )?;
+        let usage = spec
+            .capacities
+            .iter()
+            .map(|c| self.uses(c.attribute, c.per_unit))
+            .collect::<Result<Vec<_>, _>>()?;
+        let limits = spec.capacities.iter().map(|c| c.limits.to_vec()).collect();
+        let problem = ScheduleProblem::new(blocks, spec.periods, usage, limits)?;
+        let factors = discount_factors(spec.discount[0], spec.discount[1], spec.periods)?;
+        let start = greedy(&problem, &reversed_layers(rank, self.count))?;
+        let improvement = improve(&problem, &start, &factors, spec.max_rounds)?;
+        Ok(OmfSchedule {
+            problem,
+            factors,
+            improvement,
+        })
+    }
+
     /// Per-block results in `pitflow`'s order, such as `PitSolution::in_pit` or `NestedShells::first_shell`, in OMF's
     /// order: one per parent block, U fastest, then V, then W from the bottom.
     #[must_use]
     pub fn omf_order<T: Clone>(&self, per_block: &[T]) -> Vec<T> {
         reversed_layers(per_block, self.count)
+    }
+}
+
+/// A per-period limit on a quantity each block uses, such as tonnes mined or milled: the Number attribute
+/// `attribute` at `per_unit`, rounded up ([`PitModel::uses`]), and one limit per period in the same units.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capacity<'a> {
+    pub attribute: &'a str,
+    pub per_unit: u32,
+    pub limits: &'a [i64],
+}
+
+/// What [`PitModel::schedule`] schedules: the values in the attribute `value` at `per_unit`, over `periods` periods
+/// under `capacities`, discounted at `discount[0] / discount[1]` a period, with at most `max_rounds` rounds of local
+/// search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScheduleSpec<'a> {
+    pub value: &'a str,
+    pub per_unit: u32,
+    pub capacities: &'a [Capacity<'a>],
+    pub periods: usize,
+    pub discount: [i64; 2],
+    pub max_rounds: usize,
+}
+
+/// A schedule from [`PitModel::schedule`], in `pitflow`'s block order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OmfSchedule {
+    problem: ScheduleProblem,
+    factors: Vec<i64>,
+    improvement: Improvement,
+}
+
+impl OmfSchedule {
+    /// The problem scheduled: the scaled values, precedence, uses and limits.
+    #[must_use]
+    pub fn problem(&self) -> &ScheduleProblem {
+        &self.problem
+    }
+
+    /// The discount factors, `DISCOUNT_SCALE` in period 0 (`toposort::search::discount_factors`).
+    #[must_use]
+    pub fn factors(&self) -> &[i64] {
+        &self.factors
+    }
+
+    /// The search's result: the schedule, one period or `None` per block, and its discounted value before and after,
+    /// in units of `1 / (per_unit · DISCOUNT_SCALE)`.
+    #[must_use]
+    pub fn improvement(&self) -> &Improvement {
+        &self.improvement
     }
 }
 

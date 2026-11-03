@@ -53,6 +53,11 @@ attribute, then a certified ultimate pit (`solve`) or nested shells by revenue f
   measured from U toward V.
 - Block sizes are scaled by the smallest power of two up to 2^32 that makes them integers below 2^32. This is exact;
   the cone test is homogeneous in size.
+- `PitModel::schedule` (bd-fr8x) builds `toposort`'s `ScheduleProblem` from the values, the arcs and capacities
+  whose per-block uses are Number attributes, rounded up so that a schedule within the scaled limits is within the
+  true ones. It places blocks in the caller's rank order with TopoSort (`greedy`) and improves the schedule by local
+  search at the discount rate (`improve`); both refuse a schedule that fails `toposort::check`. The result is
+  feasible and locally improved, not proved best.
 
 `reliance` is the filesystem adapter for the S0 reliance model (BD-347). A journal is one canonical
 `fmine_claim::reliance::JournalRecord` frame per lowercase hexadecimal line, ending in LF. Each record's
@@ -125,6 +130,9 @@ for current reuse; an unpinned replay establishes only internal consistency of t
 - `omf::pit::{PitModel, MAX_SIZE_SCALE}` (bd-joiv). `PitModel::{new, grid, size_scale, arc_count, weights,
   ultimate_pit, shells, omf_order}` return `fmine_optimize::pitflow`'s `BlockGrid`, `PitSolution` and
   `NestedShells`.
+- `omf::pit::{Capacity, ScheduleSpec, OmfSchedule}` and `PitModel::{uses, schedule}` (bd-fr8x).
+  `OmfSchedule::{problem, factors, improvement}` give `toposort`'s `ScheduleProblem`, the discount factors and
+  `search::Improvement`.
 - `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, FormatCount, MinimalCell,
   MinimalSheet, MinimalStyles, build_minimal_xlsx, build_minimal_xlsx_styled, col_index_to_letters,
   parse_a1_ref}`; `Workbook::format_census`;
@@ -256,6 +264,9 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   - a category above 65,535.
 - Then `pitflow`'s own refusals (`207`) apply: among them a domain the slope table lacks, a negative revenue for
   shells, and the value-sum guard.
+- Schedules (bd-fr8x) refuse a capacity attribute as values are refused. `toposort`'s refusals (`207`) cover limits
+  that are not one per period or are negative, a rank that is not one per block, a negative discount rate, and a
+  schedule that fails `check`.
 - XML text decodes the five named entities and `&#10;`, `&#13;`, `&#160;`, each once (`&amp;` last); no DTD or
   entity declaration is read, so nothing expands.
 - `numtok` keeps malformed grouping, unsupported attached notation, decimal overflow and ambiguous standalone
@@ -366,6 +377,16 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   `omf_pits_refuse_unsuitable_models_and_attributes` reaches each refusal of §5. With the layer reversal dropped
   (planted, reverted), the ore sat on top and was mined alone, `(37, [2])`.
   Not checked: a real OMF block model; models larger than the test's 15 blocks.
+- `PO-IO-9` (bd-fr8x): `omf::tests::an_omf_block_model_gives_a_feasible_discounted_schedule` schedules the same
+  section over 3 periods at 10%, ranked by its ultimate pit.
+  - Blocks of 1.2 t round up to 2 units, so 10 units a period hold five blocks.
+  - The result is the hand optimum: four waste blocks in period 0, then the fifth, the three middle blocks and the
+    ore in period 1, worth `-16 · 2^40 + 21 · ⌊2^40 · 10/11⌋`.
+  - TopoSort filled period 0 with five blocks, and one "later" move deferred one of them.
+  - An independent `toposort::check` passes, with period values [-16, 21, 0], uses [8, 10, 0] and the blocks
+    outside the pit unmined.
+  With uses rounded to nearest (planted, reverted), all nine blocks fit period 0 and the test failed. Limits for
+  the wrong number of periods and a missing capacity attribute are refused.
 - FACT (BD-347, `reliance::tests`): exact artifact issuance and current-use retrieval preserve bytes and
   refuse after withdrawal; invalid digest, key, time, stale or absent trust, and an existing destination
   cannot create an authorized output. A failed final append retains the unissued artifact and poisons its
@@ -422,7 +443,8 @@ block model into the engines' types beyond the parent grid that block proportion
 files and Parquet from other writers outside the subset are refused, not converted. Block proportions do not handle
 rotated or tensor grids, sub-blocks, or surfaces that are open or intersect themselves (the last is not checked).
 OMF pits take block values as given in attributes. They hold no price deck or cost model, do not value sub-blocks,
-and do not write the pit back to OMF.
+and do not write the pit back to OMF. Schedules use no LP relaxation (`toposort::lp` with fmine-lp's PDLP, as the
+MineLib harnesses do) and no destinations (PCPSP); the caller gives the ranking.
 The bounded HTML reader is not a browser or DOM repair engine. It does not execute scripts, resolve CSS,
 interpret inline XBRL transformations, or establish issuer, metric, period or ownership semantics. Its source
 anchor records the inspected bytes and location, not the financial meaning, publisher authenticity or independent
