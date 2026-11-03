@@ -36,14 +36,18 @@ The Pushback linear-programming crate. Two slices so far:
   - `x`, one value per column, always within the column bounds;
   - `y`, one multiplier per row;
   - `progress`, the measures at the returned point;
-  - `bound`, the higher of two `certified_bound`s: that of `y`, and that of the multipliers with the highest dual objective seen at any evaluation (the current point and the average, every 64 steps). The dual objective is not monotone along a run, so the second can be the tighter;
+  - `bound`, the highest `certified_bound` of up to four multipliers, a tie going to the earlier:
+    - `y`;
+    - those with the highest dual objective seen at any evaluation (the current point and the average, every 64 steps). The dual objective is not monotone along a run, so these can be the tighter;
+    - each of the two moved by the shift for open columns (§4, bd-tcp4). On a boxed problem nothing is moved;
   - `bound_multipliers`, the multipliers `bound` came from: `certified_bound(problem, bound_multipliers)` gives it again.
 - `Progress`: iterations, restarts, primal and dual objectives, relative primal residual, relative dual residual and relative gap (§4), step size and primal weight.
 - `DualBound`:
   - `value`: no feasible `x` has `c·x` below it;
-  - `repaired_rows`: the count of multipliers set to zero because their sign needed an infinite row bound.
+  - `repaired_rows`: the count of multipliers set to zero because their sign needed an infinite row bound;
+  - `implied_columns`: the count of columns whose infinite bound met a reduced cost of the wrong sign, and whose term used a bound the rows imply instead (bd-tcp4).
 
-  `None` means an infinite column bound met a reduced cost of the wrong sign, so this `y` bounds nothing.
+  `None` means an infinite column bound met a reduced cost of the wrong sign, and the rows imply no finite bound on that side either, so this `y` bounds nothing.
 - `LpProblem::objective(x)` and `LpProblem::max_violation(x)`: the latter is the largest row or column bound violation, in the problem's units.
 - `mps::MpsModel`: the `NAME` text, the objective row's name, the row and column names in file order, whether the file maximised, the objective constant in the file's sense, and the `LpProblem`. A maximisation is stored as the minimisation of `−c`.
 - `mps::write`'s text: rows `R0`, `R1`, … under the objective `OBJ`, columns `C0`, `C1`, …, numbers in their shortest round-trip form. A row with two different finite bounds is written as `G` or `L` with a range, whichever reads back exactly.
@@ -65,10 +69,21 @@ None is a Claim.
 - **The bound is always valid** (PO-PUSH-4). `certified_bound` applies weak duality: `c·x ≥ Σᵢ min_{s∈[loᵢ,hiᵢ]} yᵢ s + Σⱼ min_{t∈[lⱼ,uⱼ]} rⱼ t` with `r = c − Aᵀy`.
   - Multipliers whose sign needs an infinite row bound are zeroed (dual repair).
   - Every `+` and `×` is rounded toward the safe side. Each one's exact error is found by an error-free transformation (TwoSum, and the `mul_add` residual), and the result moves one step only when that error is non-zero. So an exact computation stays exact.
+  - **Implied bounds** (bd-tcp4). Where a column's infinite bound meets a reduced cost of the wrong sign, its term uses a finite bound that the rows imply for every feasible `x` instead:
+    - row `i` gives `aᵢⱼxⱼ ≤ hiᵢ − Σₖ≠ⱼ min aᵢₖxₖ` and `≥ loᵢ − Σₖ≠ⱼ max aᵢₖxₖ` over the column bounds;
+    - a bound once found feeds later rows, for up to 16 passes;
+    - each sum, product and quotient is rounded outward too, a quotient stepping by the sign of its exact remainder `mul_add(q, b, −a)`.
+
+    Only such a column is touched, so a boxed problem's bound does not change by a bit.
+  - **The shift for open columns** (bd-tcp4) is a heuristic whose output is certified like any `y`. Some columns are open on one side with no bound the rows imply, and have a reduced cost on the wrong side of a margin (10⁻¹¹ of `1 + |cⱼ| + Σᵢ |aᵢⱼ yᵢ|`). For each, one row's multiplier moves to set that reduced cost to the margin. The row is the one of largest `|aᵢⱼ|` whose new multiplier keeps a sign its sides allow, and that pushes no other such column past its margin. A column open on both sides with no implied bound is never moved.
 - The bound's checks:
-  - `certified_bound_is_valid_at_any_multipliers`: 400 random LPs, half with open column tops, each at 25 random `y` from 10⁻⁶ to 10⁶ in scale. No bound exceeds the optimum found by vertex enumeration, and more than 5,000 bounds are finite;
+  - `certified_bound_is_valid_at_any_multipliers`: 400 random LPs, half with open column tops, each at 25 random `y` from 10⁻⁶ to 10⁶ in scale. No bound exceeds the optimum found by vertex enumeration, and more than 5,000 bounds are finite. 9,573 of 10,000 were finite with implied bounds; with them switched off, 8,726;
+  - `implied_column_bounds_hold_at_every_feasible_point`: 300 random LPs with open tops, and each mirrored (`x → −x`) so the tops become bottoms. For each open column `j`, `c = ±eⱼ` and `y = 0` make the certified bound minus the implied bound. That bound may not exceed the LP's own optimum, found by vertex enumeration with open bounds cut at 10⁶, so an LP unbounded in `xⱼ` fails any finite implied bound. 254 implied bounds were checked and 226 columns had none;
+  - `rows_imply_bounds_for_open_columns_only`: hand cases of one round, two rounds, a negative entry, a finite bound left alone, and a row that implies nothing;
+  - `directed_quotients_enclose_the_exact_result`: exact quotients stay exact, `1/3` and `1/10` land on the right adjacent doubles, and a quotient near underflow steps either way;
+  - `open_columns_certify_through_the_tops_their_rows_imply` and `the_shift_moves_only_what_it_can_certify`: a wrong-signed reduced cost met by an implied top, and the shift fixing one where the rows imply nothing. The shift leaves boxed problems alone, never moves a free column with no implied bound, and never gives a row a multiplier its sides forbid (on the unbounded `min −x₀, x₀ ≥ 1` it makes nothing);
   - `directed_operations_enclose_the_exact_result`: exact sums and products stay exact. Inexact ones (`0.1 · 3`, `1 ± 2⁻⁶⁰`, overflow past `f64::MAX`, underflow below the smallest subnormal) land on the adjacent double on the safe side;
-  - `wrong_signed_multipliers_are_repaired`, `equality_row_and_free_column` (the exact multiplier certifies the optimum 2 exactly; a multiplier off by 10⁻¹² certifies nothing) and `unbounded_columns_certify_only_with_sign_feasible_reduced_costs`.
+  - `wrong_signed_multipliers_are_repaired` and `equality_row_and_free_column`. In the latter, the exact multiplier certifies the optimum 2 exactly, and a multiplier off by 10⁻¹² certifies `2 − 5×10⁻¹²` through the top the row implies for the free column.
 - The solver against oracles that share no code with it (`tests/common`):
   - `tiny_lps_match_vertex_enumeration`: 300 random LPs with up to 4 columns and 4 rows of mixed kinds, at ε = 10⁻⁹. Each is `Optimal`, its objective within 10⁻⁶ relative of the vertex optimum, `x` within 10⁻⁶ of feasible, and its bound below the optimum and within 10⁻⁶ of it;
   - `closure_lps_match_the_best_closure`: 150 random closure LPs on up to 12 blocks. The value is within 10⁻⁶ relative of the best closure found over all subsets, and the bound is not below it;
@@ -123,7 +138,7 @@ Tests: `bad_input_is_refused`, one row each. No value is clamped or rescaled to 
   - each reduction adds per-chunk partial sums (`CHUNK` = 2¹⁴ entries, at absolute index boundaries) in chunk order.
 
   So the thread count never changes a bit (`any_thread_count_gives_the_same_bits`). There is no cross-host digest test.
-- `pdlp::bound` is `BitwisePortable`: IEEE `+ − ×`, `mul_add`, `next_up` and `next_down` only.
+- `pdlp::bound` is `BitwisePortable`: IEEE `+ − × ÷`, `mul_add`, `next_up` and `next_down` only, in a fixed order.
 - `mps` is `BitwisePortable`: Rust's correctly rounded decimal parse and shortest round-trip print, negation, and the range sums, each checked exact when written.
 
 Each is declared on its file and checked by `xtask check-det`.
@@ -138,7 +153,19 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   - At ε = 1e-6 the bound was within 3.2e-5.
 
   The bound's distance from the optimum is the measure to trust. It can be judged only against an outside optimum or a feasible point, and this crate produces neither.
-- **Unbounded columns.** A column with an infinite bound certifies only when its reduced cost has the right sign, exactly. An approximate `y` therefore usually gives no bound when any column is unbounded on the side its reduced cost points to. Give such columns a finite bound when one is known.
+- **Open columns.** A column with an infinite bound on the side its reduced cost points to certifies through a bound its rows imply (§4). Where they imply none, it certifies only when its reduced cost has the right sign, exactly. The shift (§4) tries to give it that sign. A free column with no implied bound needs a reduced cost of exactly zero, which an approximate `y` rarely has. Give such columns a finite bound when one is known.
+- **netlib** (`tests/netlib.rs`, ignored, run by hand on 2026-11-03 from a local debug build). Four netlib LPs, all with every column open above, at ε = 1e-9 and one thread. The gap is `(published − bound) / |published|`, against netlib's MINOS 5.3 optima. Every bound lay at or below the published optimum.
+
+  | LP | Rows | Columns | Nonzeros | Steps | Columns on an implied bound | Gap |
+  |---|---|---|---|---|---|---|
+  | AFIRO | 27 | 32 | 83 | 640 | 7 | 6.9e-11 |
+  | ADLITTLE | 56 | 97 | 383 | 11,712 | 34 | 2.0e-10 |
+  | E226 | 223 | 282 | 2,578 | 44,032 | 56 | 3.3e-8 |
+  | ISRAEL | 174 | 142 | 2,269 | 19,008 | 64 | 1.2e-8 |
+
+  - Before bd-tcp4, none of the four had a finite bound at its final `y`.
+  - With implied bounds and no shift, ADLITTLE's and E226's final `y` still certified nothing. A column with no implied top had a wrong-signed reduced cost. Their bounds came from the best-seen multipliers, with gaps of 0.67 and 4.6.
+  - E226's objective row has the right-hand side −7.113, so its objective has the constant 7.113. netlib's optimum leaves it out: the certified bound on `c·x` alone is within 3.3e-8 of it.
 - **Memory**, counted from the code and not measured:
   - about 48 bytes per nonzero, because `A` and `Aᵀ`, as a `u32` index and an `f64` value, are held by `LpProblem` and again, scaled, by the solver;
   - about 14 `f64` vectors of column length and 12 of row length;
@@ -190,19 +217,20 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - External: MineLib's published "CPIT LP upper bound: objective value of the optimal LP relaxation". The source is Espinoza, Goycoolea, Moreno and Newman, MineLib, Annals of Operations Research 2013; the Results page is mirrored at github.com/borelian/minelib and was read 2026-11-01.
   - The LP is built in "by" variables (`w[b][t]` is the fraction of block `b` mined by period `t`), which keeps the optimum.
   - The published optima match a discount exponent counted from 0. On newman1 at ε = 1e-7 that gives 24,486,185.05 against the published 24,486,184. Counting from 1, as the format note reads, gives 22,672,394.94.
+- External: netlib's published LP optima (`lp/data/readme`, "Optimal Value", MINOS 5.3, 11 significant figures) for AFIRO, ADLITTLE, E226 and ISRAEL, from the uncompressed MPS files in HiGHS's `check/instances` (MIT, commit `0edab95`), read 2026-11-03.
 - HiGHS and OR-Tools PDLP (plan §15.4's lab oracles) are not run.
 
 ## 10. Known gaps
 - `BD-251`: one library caller, `fmine-io`'s `omf::pit::PitModel::lp_schedule` (bd-djb7), which solves `toposort::lp`'s relaxation of an OMF schedule and reports minus the dual bound as its upper bound. The MineLib harnesses in `crates/xtask/tests/` also call `pdlp::solve`. The plan's blend, SAA and CVaR uses have no caller.
 - No presolve, no feasibility polishing and no infeasibility or unboundedness detection. An infeasible or unbounded LP runs to `max_iterations`.
 - The returned `x` is not feasible (§8). Nothing here turns it into a feasible point or a primal bound.
-- No implied-bound repair, so unbounded columns rarely certify (§8).
+- Implied bounds come from one row at a time over the column bounds, a single-row propagation. A column bounded only by a combination of rows gets no implied bound. Only the shift then helps, and it does not help a free column (§8).
 - At the default ε = 1e-4, the certified bound misses KILL-PUSH-PDLP's 1e-4 on three of ten MineLib instances, newman1, kd and sm2, even with the best-seen bound (§8). The default is cuPDLP's and is kept, and the MineLib test runs at 1e-6.
 - At 1e-6 the three largest MineLib instances do not meet the stopping rule within 30 minutes. Their bounds were within 1e-4, but the solver cannot tell that without an outside optimum or a feasible point.
-- Best-seen tracking keeps the multipliers with the highest dual objective and certifies only those and the final `y`. Where the certified value departs from the dual objective, as with an unbounded column (§8), another evaluation may have certified more.
+- Best-seen tracking keeps the multipliers with the highest dual objective and certifies only those, the final `y` and the two shifted. The dual objective leaves out wrong-signed reduced costs of open columns. Where the certified value departs from it, another evaluation may have certified more.
 - No QP, MILP or decomposition (the crate's other planned slices).
 - `mps` reads free format only: fixed-column MPS with spaces in names is not read. Integer markers are refused, not skipped. Only one `RHS`, `RANGES` and `BOUNDS` set is read. Nothing in the workspace writes MPS yet, and no outside solver has read `write`'s output.
-- `mps` has not yet run on a published LP test set; bd-j2ay's netlib check is open.
+- netlib's files are not in the repository, because no licence for the collection is recorded here (HiGHS carries these four under its MIT). `tests/netlib.rs` is ignored, run by hand with `FMINE_NETLIB_DIR`, and CI does not run it. Four of netlib's LPs were run, all small.
 - MineLib's files are not in the repository, because their licence is not recorded. KILL-PUSH-PDLP is an ignored test, run by hand with `FMINE_MINELIB_DIR`, and CI does not run it.
 - MineLib's mclaughlin (2.1 million blocks, 73 million arcs, 20 periods) is not run. It has about 2.9×10⁹ nonzeros in this formulation: about 140 GB at §8's rate for this crate alone, plus the test's own COO and CSR copies. It was not attempted on this shared 256 GB host.
 - The timings come from one loaded machine.
@@ -214,12 +242,13 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `pdlp::Progress` (public fields)
 - `pdlp::PdlpSolution`: `status`, `x`, `y`, `progress`, `bound`, `bound_multipliers`
 - `pdlp::solve`, `pdlp::solve_observed`
-- `pdlp::DualBound`: `value`, `repaired_rows`
+- `pdlp::DualBound`: `value`, `repaired_rows`, `implied_columns`
 - `pdlp::certified_bound`
 - `mps::read`, `mps::write`, `mps::MpsModel` (public fields)
 
 ## 12. Proof obligations
 - PO-PUSH-4 ("Every dual bound is valid"; plan: "Dual feasibility verified with outward interval rounding, then weak duality") is discharged by `pdlp::bound`.
   - The weak-duality inequality and the rounding argument are in its module documentation and are not machine-checked.
-  - `certified_bound_is_valid_at_any_multipliers` and `directed_operations_enclose_the_exact_result` check it on random cases.
+  - `certified_bound_is_valid_at_any_multipliers`, `implied_column_bounds_hold_at_every_feasible_point`, `directed_operations_enclose_the_exact_result` and `directed_quotients_enclose_the_exact_result` check it on random and hand cases.
+  - The implied bounds' validity (each holds at every feasible `x`) is argued in `pdlp::bound`'s module notes, and is not machine-checked either. The shift needs no argument, since its output is certified like any `y`.
 - No other PO-* is discharged here. That PDHG with restarts converges is Applegate et al.'s and Lu and Yang's result, not proved or machine-checked here.
