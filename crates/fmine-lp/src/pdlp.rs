@@ -43,13 +43,13 @@ fn refuse(detail: impl Into<String>) -> Refusal {
 /// `minimise c·x subject to row_lo ≤ A x ≤ row_hi, col_lo ≤ x ≤ col_hi`, checked on construction.
 #[derive(Debug, Clone)]
 pub struct LpProblem {
-    c: Vec<f64>,
+    pub(crate) c: Vec<f64>,
     a: Mat,
-    at: Mat,
-    row_lo: Vec<f64>,
-    row_hi: Vec<f64>,
-    col_lo: Vec<f64>,
-    col_hi: Vec<f64>,
+    pub(crate) at: Mat,
+    pub(crate) row_lo: Vec<f64>,
+    pub(crate) row_hi: Vec<f64>,
+    pub(crate) col_lo: Vec<f64>,
+    pub(crate) col_hi: Vec<f64>,
 }
 
 fn check_bounds(what: &str, lo: &[f64], hi: &[f64], n: usize) -> Result<(), Refusal> {

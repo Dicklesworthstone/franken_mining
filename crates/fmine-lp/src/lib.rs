@@ -3,7 +3,9 @@
 //!
 //! - `pdlp` (`BD-251`): restarted primal–dual hybrid gradient for large sparse linear programs, with a dual bound
 //!   certified by dual repair and outward rounding (PO-PUSH-4).
+//! - `mps` (bd-j2ay): free-format MPS read into, and written from, `pdlp::LpProblem`.
 //!
-//! Nothing in the workspace calls this crate yet. MILP, QP, MPS I/O and decomposition are later slices.
+//! `fmine-io`'s OMF schedules (bd-djb7) call `pdlp`. MILP, QP and decomposition are later slices.
 
+pub mod mps;
 pub mod pdlp;

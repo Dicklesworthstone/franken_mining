@@ -1,16 +1,17 @@
 # CONTRACT.md — `fmine-lp`
 
 ## 1. Purpose
-The Pushback linear-programming crate. One slice so far:
+The Pushback linear-programming crate. Two slices so far:
 - `pdlp` (`BD-251`, plan §15.4): restarted primal–dual hybrid gradient (PDLP) for large sparse LPs, with a certified dual bound (PO-PUSH-4). Plan §15.4 names its uses: multi-site blend networks, SAA extensive forms and CVaR LPs. It is the solver behind KILL-PUSH-PDLP: "1e-4 relative gap on real-size non-closure LPs".
+- `mps` (bd-j2ay, plan §15.4's "MPS I/O"): free-format MPS read into an `LpProblem` and written from one, so an LP can go to HiGHS, Gurobi or a client's solver, and a standard test LP can come in.
 
-Nothing in the workspace calls it yet. MILP, QP, MPS I/O and decomposition are later slices.
+`fmine-io`'s OMF schedules (bd-djb7) call `pdlp`. MILP, QP and decomposition are later slices.
 
 - **Crate:** `fmine-lp`
 - **Layer:** E
 - **Subsystem:** Pushback
 - **LOC budget:** 25,000 planned / 29,000 ceiling
-- **Allowed Module Families:** `["pdlp"]`
+- **Allowed Module Families:** `["pdlp", "mps"]`
 
 ## 2. Inputs
 - `LpProblem::new(c, a, row_lo, row_hi, col_lo, col_hi)`: `minimise c·x subject to row_lo ≤ A x ≤ row_hi and col_lo ≤ x ≤ col_hi`.
@@ -23,6 +24,11 @@ Nothing in the workspace calls it yet. MILP, QP, MPS I/O and decomposition are l
   - `threads`, where 0 means the machine's parallelism, at most 16.
 - For `solve_observed`, an observer called at each evaluation (every 64 steps). It returns `false` to stop the run.
 - For `certified_bound(problem, y)`, any row multipliers `y`, one finite value per row.
+- `mps::read(text)`: free-format MPS text. Its sections are `NAME`, `OBJSENSE` (`MIN` or `MAX`), `ROWS` (`N`, `L`, `G`, `E`), `COLUMNS`, `RHS`, `RANGES` and `BOUNDS` (`UP`, `LO`, `FX`, `FR`, `MI`, `PL`), then `ENDATA`. The module notes give each rule:
+  - the first `N` row is the objective; a right-hand side `b` on it is the objective constant `−b`;
+  - a range `R` on a row with right-hand side `b`: `G` gives `[b, b + |R|]`, `L` gives `[b − |R|, b]`, and `E` gives `[b, b + R]` or `[b + R, b]` by the sign of `R`;
+  - a column's default bounds are `[0, +∞)`.
+- `mps::write(name, problem)`: any `LpProblem`, under a name with no space or tab.
 
 ## 3. Outputs
 - `PdlpSolution`:
@@ -39,6 +45,8 @@ Nothing in the workspace calls it yet. MILP, QP, MPS I/O and decomposition are l
 
   `None` means an infinite column bound met a reduced cost of the wrong sign, so this `y` bounds nothing.
 - `LpProblem::objective(x)` and `LpProblem::max_violation(x)`: the latter is the largest row or column bound violation, in the problem's units.
+- `mps::MpsModel`: the `NAME` text, the objective row's name, the row and column names in file order, whether the file maximised, the objective constant in the file's sense, and the `LpProblem`. A maximisation is stored as the minimisation of `−c`.
+- `mps::write`'s text: rows `R0`, `R1`, … under the objective `OBJ`, columns `C0`, `C1`, …, numbers in their shortest round-trip form. A row with two different finite bounds is written as `G` or `L` with a range, whichever reads back exactly.
 
 None is a Claim.
 
@@ -75,10 +83,26 @@ None is a Claim.
   - `||` for `&&` in the stopping rule (caught by five tests);
   - returning the final `y` as `bound_multipliers` when the best-seen bound wins (caught by the reproducibility check);
   - never updating the best-seen multipliers. The dense and closure LPs alone did not catch it, because their final multipliers were always the best; the CPIT-shaped ones do (case 11).
+- **MPS** (`mps::tests`):
+  - `every_section_and_bound_type_reads_as_written`: one file with every section, row type, range sign and bound type, tab-led lines, set names given and left out, and an objective constant reads to a hand-built `LpProblem`, bit for bit;
+  - `a_written_problem_reads_back_bit_for_bit`: that problem, and one of tenths, ±10³⁰⁰, a subnormal, signed zeros and a free row, read back from `write` bit for bit. A row whose range reads back exactly as neither `G` nor `L` (`[1, 2⁵³ + 2]`) is refused;
+  - `each_defect_is_refused_naming_its_line`: 34 one-defect files, each refused with its line and reason, and `LpProblem::new`'s own refusal passed through;
+  - `a_small_lp_solved_from_its_mps_text_certifies_its_hand_optimum`: `max 3x + 2y` over two rows, read and solved at ε = 1e-9, certifies a bound at or below −11 and within 1e-6 of it.
+  - Planted bug: the `E` row's range sign rule reversed. The every-section test caught it, and it was reverted.
 - **KILL-PUSH-PDLP** (`tests/minelib_cpit.rs`, ignored, run by hand). It runs the LP relaxations of MineLib's CPIT instances, whose optima MineLib publishes (§9). A run ends at the stopping rule or at the 30-minute limit. It passes when its certified bound then lies within 1e-4 relative of the published optimum, allowing one unit for MineLib's rounding. Whether the stopping rule fired is not judged, since it does not bound that gap (§8). §8 has the results.
 
 ## 5. Refusals
-Every public function returns `Result<_, Refusal>`; none panics on bad input. All are `FMINE-REF-207` (proposed).
+Every public function returns `Result<_, Refusal>`; none panics on bad input. `mps`'s own are `FMINE-REF-506` (proposed), naming the line; all others are `FMINE-REF-207` (proposed).
+- From `mps::read`:
+  - an unknown section, a data line outside a section, no `ENDATA`, or text after it;
+  - a row type other than `N`, `L`, `G`, `E`; a row named twice; a row or column no line declared; a column whose lines are not contiguous;
+  - integer markers and integer bound types (`BV`, `LI`, `UI`, `SC`): this reads LPs;
+  - a second entry for one row and column, a second objective entry, right-hand side or range for one row; a right-hand side on a free row; a range on an `N` row; a range that overflows;
+  - a second `RHS`, `RANGES` or `BOUNDS` set;
+  - a negative `UP` bound on a column whose lower bound is still the default 0, which MPS readers take differently;
+  - a field that is not a finite number, or a line with the wrong number of fields;
+  - `LpProblem::new`'s refusals, passed through as 207.
+- From `mps::write`: a name holding a space or tab, and a row whose two finite bounds no range reads back exactly.
 - From `LpProblem::new`:
   - a cost, bound or row length that does not match `a`;
   - a cost or matrix entry that is not finite;
@@ -100,6 +124,7 @@ Tests: `bad_input_is_refused`, one row each. No value is clamped or rescaled to 
 
   So the thread count never changes a bit (`any_thread_count_gives_the_same_bits`). There is no cross-host digest test.
 - `pdlp::bound` is `BitwisePortable`: IEEE `+ − ×`, `mul_add`, `next_up` and `next_down` only.
+- `mps` is `BitwisePortable`: Rust's correctly rounded decimal parse and shortest round-trip print, negation, and the range sums, each checked exact when written.
 
 Each is declared on its file and checked by `xtask check-det`.
 
@@ -175,7 +200,9 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - At the default ε = 1e-4, the certified bound misses KILL-PUSH-PDLP's 1e-4 on three of ten MineLib instances, newman1, kd and sm2, even with the best-seen bound (§8). The default is cuPDLP's and is kept, and the MineLib test runs at 1e-6.
 - At 1e-6 the three largest MineLib instances do not meet the stopping rule within 30 minutes. Their bounds were within 1e-4, but the solver cannot tell that without an outside optimum or a feasible point.
 - Best-seen tracking keeps the multipliers with the highest dual objective and certifies only those and the final `y`. Where the certified value departs from the dual objective, as with an unbounded column (§8), another evaluation may have certified more.
-- No MPS I/O, QP, MILP or decomposition (the crate's other planned slices).
+- No QP, MILP or decomposition (the crate's other planned slices).
+- `mps` reads free format only: fixed-column MPS with spaces in names is not read. Integer markers are refused, not skipped. Only one `RHS`, `RANGES` and `BOUNDS` set is read. Nothing in the workspace writes MPS yet, and no outside solver has read `write`'s output.
+- `mps` has not yet run on a published LP test set; bd-j2ay's netlib check is open.
 - MineLib's files are not in the repository, because their licence is not recorded. KILL-PUSH-PDLP is an ignored test, run by hand with `FMINE_MINELIB_DIR`, and CI does not run it.
 - MineLib's mclaughlin (2.1 million blocks, 73 million arcs, 20 periods) is not run. It has about 2.9×10⁹ nonzeros in this formulation: about 140 GB at §8's rate for this crate alone, plus the test's own COO and CSR copies. It was not attempted on this shared 256 GB host.
 - The timings come from one loaded machine.
@@ -189,6 +216,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `pdlp::solve`, `pdlp::solve_observed`
 - `pdlp::DualBound`: `value`, `repaired_rows`
 - `pdlp::certified_bound`
+- `mps::read`, `mps::write`, `mps::MpsModel` (public fields)
 
 ## 12. Proof obligations
 - PO-PUSH-4 ("Every dual bound is valid"; plan: "Dual feasibility verified with outward interval rounding, then weak duality") is discharged by `pdlp::bound`.
