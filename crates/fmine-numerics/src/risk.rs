@@ -2,6 +2,7 @@
 //! Coherent tail risk (`VaR`, `CVaR`) and drawdown metrics (`BD-022`).
 //! Determinism: DeterministicPerIsa (no cross-host digest test; plan §29.2, bd-hp2j.1).
 
+pub mod bootstrap;
 pub mod exact;
 
 /// Summary of empirical loss distribution tail risk (`VaR_alpha`, `CVaR_alpha`).
