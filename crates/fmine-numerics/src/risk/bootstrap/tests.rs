@@ -1,3 +1,6 @@
+//! Regressions for the weighted bootstrap: exact rational sampling, count vectors and tail reductions.
+//! Determinism: Exact (integer Philox draws and checked rational arithmetic, as in `bootstrap.rs`).
+
 use super::*;
 
 fn r(num: i128, den: i128) -> Rat {
