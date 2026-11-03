@@ -28,9 +28,11 @@ use crate::zip_inflate::{archive_comment, read_stored_entries};
 mod gzip;
 pub mod json;
 mod parquet;
+mod proportions;
 
 pub use json::Json;
 use parquet::{Column, Logical, Table, Values};
+pub use proportions::{parent_grid, proportions_in_surface, surface_mesh};
 
 /// The largest member accepted.
 pub const MAX_MEMBER_BYTES: usize = 1 << 30;

@@ -17,8 +17,8 @@
 //!   of a `BlockGrid` its sub-cells wholly inside the mesh and those its surface meets, stored in a `VdbGrid`, so the
 //!   proportion inside lies between `inside` and `inside + band` sub-cells.
 //!
-//! Nothing outside this crate calls it yet. Mesh ingest (OMF, DXF), rotated block frames, sub-blocks and columnar
-//! attribute chunks are later slices.
+//! Outside this crate only `fmine-io`'s OMF reader calls it, through `volcert` (bd-aqfl). DXF ingest, rotated block
+//! frames, sub-blocks and columnar attribute chunks are later slices.
 
 pub mod exact;
 pub mod vdb;

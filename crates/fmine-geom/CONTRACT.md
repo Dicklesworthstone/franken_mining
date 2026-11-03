@@ -9,7 +9,7 @@ The Strata geometry crate. Three slices so far, all lifted from `frankensim` (`r
 A fourth slice is built here on all three, not lifted:
 - `volcert` (bd-wq34; plan §13.9, §13.11 `VolumeEnclosure`, PO-STRATA-8): `ClosedMesh::certify` refuses a mesh that is not closed and consistently oriented; `volume` is the divergence-theorem sum computed exactly and rounded outward; `block_proportions` gives each block of an axis-aligned `BlockGrid` the number of its `8^depth` sub-cells wholly inside the mesh and the number whose interior the surface meets, which bound the proportion inside from both sides. A surface lying on sub-cell faces, as a pit shell built from blocks does, cuts no sub-cell, so its proportions are exact. This is how a block model takes its domain coding from a wireframe.
 
-Nothing outside the crate calls any of them yet. Mesh ingest (OMF, DXF), rotated grid frames, sub-blocks and columnar attribute chunks are later slices.
+Outside the crate only `fmine-io`'s `omf::proportions_in_surface` (bd-aqfl) calls in, through `volcert`. DXF ingest, rotated grid frames, sub-blocks and columnar attribute chunks are later slices.
 
 - **Crate:** `fmine-geom`
 - **Layer:** K0
@@ -92,8 +92,8 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 
 ## 10. Known gaps
 - `BD-193` (bd-193), `BD-191` (bd-191) and `BD-192` (bd-192): their only caller is `volcert`, in this crate; nothing outside it calls the crate yet. The first outside caller will be a mesh, block-model or stockpile slice.
-- `winding` has no mesh ingest (OMF, DXF) (plan §27 row "fs-rep-mesh `winding_exact`"); the octree is single-threaded and rebuilt per soup.
-- `volcert` (bd-wq34): no caller outside the crate; no OMF or DXF reader feeds it; grids are axis-aligned and unrotated, with no sub-blocks; no self-intersection check; time and memory at production grid sizes are not measured (the tests run in about four seconds unoptimized). The plan's "interval arithmetic" for the volume is replaced by exact arithmetic, which is tighter. Each component costs one winding query, linear in the triangle count; only faces covered by coplanar triangles split components, so the aligned single box above needs one query and the touching pair two, but the query count on a real pit shell is not measured.
+- `winding` takes OMF surfaces only through `volcert` (bd-aqfl) and has no DXF ingest (plan §27 row "fs-rep-mesh `winding_exact`"); the octree is single-threaded and rebuilt per soup.
+- `volcert` (bd-wq34): its one caller outside the crate is `fmine-io`'s OMF reader (bd-aqfl), on synthetic files only so far; no DXF reader feeds it; grids are axis-aligned and unrotated, with no sub-blocks; no self-intersection check; time and memory at production grid sizes are not measured (the tests run in about four seconds unoptimized). The plan's "interval arithmetic" for the volume is replaced by exact arithmetic, which is tighter. Each component costs one winding query, linear in the triangle count; only faces covered by coplanar triangles split components, so the aligned single box above needs one query and the touching pair two, but the query count on a real pit shell is not measured.
 - `orient3d`, `incircle` and `insphere` go from stage A straight to the exact stage, as upstream does; only `orient2d` has stages B and C. The signs are the same; near-degenerate throughput is lower.
 - Not ported from upstream's `tests/exact_corpus.rs`: its fixture file, decoder and drift guard, and its interval, Newton and Taylor-model rows, which need fs-ivl's `Interval`, not lifted here. The expansion arithmetic is crate-private, so its `proddiff` rows are covered by the unit tests instead.
 - No predicate benchmark: stage-A filter rate is measured, wall time is not.

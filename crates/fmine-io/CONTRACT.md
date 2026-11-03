@@ -34,6 +34,13 @@ no codec or GZIP. `read` decodes every array the index names and returns typed v
 exactly, nulls are `None`, dates are days and date-times microseconds since 1970. Every check the vendor reader
 makes when reading, and every error its validator raises, refuses the file (§5).
 
+`omf::proportions_in_surface` (bd-aqfl, plan §13.9) gives each parent block of a BlockModel element its proportion
+inside a closed Surface element, as `fmine_geom::volcert` sure and band sub-cell counts at a chosen depth. Elements
+are found by name, at the top level or inside composites. A surface's positions are its element origin plus its
+vertices; a block model's grid starts at its frame origin. The project origin, which both share, is left out: it
+changes no proportion. `surface_mesh` certifies the surface closed and outward (`ClosedMesh::certify`), and
+`parent_grid` takes a regular grid whose axes are x, y and z (`BlockGrid::new`). Sub-blocks are not considered.
+
 `reliance` is the filesystem adapter for the S0 reliance model (BD-347). A journal is one canonical
 `fmine_claim::reliance::JournalRecord` frame per lowercase hexadecimal line, ending in LF. Each record's
 `previous` field binds BLAKE3 of the complete preceding line, including LF; genesis uses the zero digest.
@@ -100,6 +107,8 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   MAX_DEPTH}` (BD-194). `Project` holds every element with its arrays decoded; metadata and a continuous
   colormap's range stay `Json` as written. `Grid3::count` and `blocks`, `Subblocks::len` and
   `AttributeData::item_count` give the counts the location lengths follow from.
+- `omf::{surface_mesh, parent_grid, proportions_in_surface}` (bd-aqfl), returning `fmine_geom::volcert`'s
+  `ClosedMesh`, `BlockGrid` and `Proportions`.
 - `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, FormatCount, MinimalCell,
   MinimalSheet, MinimalStyles, build_minimal_xlsx, build_minimal_xlsx_styled, col_index_to_letters,
   parse_a1_ref}`; `Workbook::format_census`;
@@ -216,6 +225,10 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   The vendor validator compares u with v three times (omf-rust 64d3057); this reader checks all three pairs, and
   refuses a NaN size or boundary, which the vendor lets through. Its warnings are not checked: two elements may
   share a name. Images are checked by signature only, and members the index never names are not read.
+- OMF block proportions (bd-aqfl) refuse with `FMINE-REF-506` a name that no element, or more than one, carries
+  (composites searched too), and an element of the wrong kind; with `FMINE-REF-109` a block model whose axes are
+  not exactly x, y and z, or whose grid is a tensor; then with `ClosedMesh::certify`'s, `BlockGrid::new`'s and
+  `block_proportions`' refusals (`109`, `207`), among them a surface that is not closed and outward.
 - XML text decodes the five named entities and `&#10;`, `&#13;`, `&#160;`, each once (`&amp;` last); no DTD or
   entity declaration is read, so nothing expands.
 - `numtok` keeps malformed grouping, unsupported attached notation, decimal overflow and ambiguous standalone
@@ -305,6 +318,14 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   (`fuzz/seeds.py`) are the every-kind file in four uncompressed page forms, plus the omf-rust samples under
   64 KiB when `FMINE_OMF_DIR` is set. Its first 24 h run started 2026-11-03 03:07Z; its result belongs on BD-197.
   Not checked: files from writers other than omf-rust.
+- `PO-IO-7` (bd-aqfl): `omf::tests::a_wireframe_against_a_block_model_gives_each_parent_block_its_proportion`
+  writes a box Surface as an element origin plus vertices from zero, inside a composite, and 3 × 1 × 2 unit
+  blocks that the box covers in quarters. At depths 0 to 3 each block's exact proportion lies within its bounds;
+  from depth 2 the bounds equal it, and the sure volume is the box's 1.96875. Depth 99 is refused. With the element
+  origin dropped (planted, reverted) the first block's 0.375 fell outside its bounds [0, 0].
+  `proportions_refuse_missing_ambiguous_and_unsuitable_elements` reaches each refusal of §5 on the every-kind file.
+  Not checked: a real wireframe against a real block model. The omf-rust bunny is described as patched closed and
+  the octree bunny is a block model, but neither was run through these functions.
 - FACT (BD-347, `reliance::tests`): exact artifact issuance and current-use retrieval preserve bytes and
   refuse after withdrawal; invalid digest, key, time, stale or absent trust, and an existing destination
   cannot create an authorized output. A failed final append retains the unissued artifact and poisons its
@@ -346,6 +367,7 @@ would permit a concurrent withdrawal race.
 ## 9. Lifted Code & Foundation Dependencies
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim` (V to S0), and `fmine-runtime` (V to S1, explicit clock
   and owned bounded subprocesses).
+- `fmine-geom` supplies `volcert`'s certified closed meshes and block proportions (V to K0, bd-aqfl).
 - `fmine-calib` supplies the shared `ProofTimes` and UTC parser (V to K0); timestamp verification invokes
   OpenSSL 1.1 or 3.x on `PATH` with Unix `/dev/stdin` and `/dev/null`. Unsupported installations refuse.
 - No omf-rust code is lifted. Its schemas, read checks and validator (tree 64d3057) are the specification the
@@ -355,8 +377,9 @@ would permit a concurrent withdrawal race.
 Reads cells and adapts the reliance model to local files; does not interpret tables (`fmine-public`) or compute
 metrics (`fmine-metrics`).
 The OMF reader reads; it does not write OMF, decode images, transform geometry into world coordinates, or turn a
-block model into the engines' types. It reads OMF 2 only: OMF 1 files and Parquet from other writers outside the
-subset are refused, not converted.
+block model into the engines' types beyond the parent grid that block proportions take. It reads OMF 2 only: OMF 1
+files and Parquet from other writers outside the subset are refused, not converted. Block proportions do not handle
+rotated or tensor grids, sub-blocks, or surfaces that are open or intersect themselves (the last is not checked).
 The bounded HTML reader is not a browser or DOM repair engine. It does not execute scripts, resolve CSS,
 interpret inline XBRL transformations, or establish issuer, metric, period or ownership semantics. Its source
 anchor records the inspected bytes and location, not the financial meaning, publisher authenticity or independent

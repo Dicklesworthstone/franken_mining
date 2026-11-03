@@ -115,6 +115,7 @@ dependencies = [
  "fmine-claim",
  "fmine-core",
  "fmine-evidence",
+ "fmine-geom",
  "fmine-runtime",
 ]
 

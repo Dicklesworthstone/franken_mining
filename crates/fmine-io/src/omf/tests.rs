@@ -1619,3 +1619,134 @@ fn mutated_files_are_read_or_refused_and_never_panic() {
     }
     PAGES.with(|c| c.set(Opts::default()));
 }
+
+/// A closed, outward box Surface from `origin + lo` to `origin + hi`: corner `i` takes `hi` on axis `a` when bit
+/// `a` of `i` is set, two triangles a face.
+fn box_surface(b: &mut Build, origin: [f64; 3], lo: [f64; 3], hi: [f64; 3]) -> String {
+    const FACES: [[u32; 3]; 12] = [
+        [0, 2, 1],
+        [1, 2, 3],
+        [4, 5, 6],
+        [5, 7, 6],
+        [0, 1, 4],
+        [1, 5, 4],
+        [2, 6, 3],
+        [3, 6, 7],
+        [0, 4, 2],
+        [2, 4, 6],
+        [1, 3, 5],
+        [3, 7, 5],
+    ];
+    let corners: Vec<[f64; 3]> = (0..8usize)
+        .map(|i| std::array::from_fn(|a| if (i >> a) & 1 == 1 { hi[a] } else { lo[a] }))
+        .collect();
+    let col = |k: usize| FACES.iter().map(|t| t[k]).collect::<Vec<_>>();
+    let v = b.arr(xyz(&corners), 8);
+    let t = b.arr(
+        pq(
+            &[u32c("a", &col(0)), u32c("b", &col(1)), u32c("c", &col(2))],
+            12,
+        ),
+        12,
+    );
+    format!(r#"{{"type":"Surface","origin":{origin:?},"vertices":{v},"triangles":{t}}}"#)
+}
+
+fn refused_as<T>(r: Result<T, Refusal>, code: &str, why: &str) {
+    let e = r.map(drop).unwrap_err();
+    assert_eq!(e.code, code, "{e:?}");
+    assert!(e.what.contains(why), "wanted {why:?} in {}", e.what);
+}
+
+#[test]
+fn a_wireframe_against_a_block_model_gives_each_parent_block_its_proportion() {
+    // The box [2.5, 4.25] x [4, 4.75] x [5, 6.5], stored as an element origin plus vertices from zero, inside a
+    // composite; and 3 x 1 x 2 unit blocks from (2, 4, 5). The box covers 0.5, 1 and 0.25 of the blocks along x,
+    // 0.75 along y, and 1 and 0.5 along z, all at quarters, so from depth 2 every block's proportion is exact.
+    let mut b = Build::default();
+    let shell = element(
+        "pit shell",
+        &box_surface(&mut b, [2.5, 4.0, 5.0], [0.0; 3], [1.75, 0.75, 1.5]),
+        "",
+    );
+    let design = element(
+        "design",
+        &format!(r#"{{"type":"Composite","elements":[{shell}]}}"#),
+        "",
+    );
+    let model = element(
+        "model",
+        r#"{"type":"BlockModel","orient":{"origin":[2,4,5]},"grid":{"type":"Regular","size":[1,1,1],"count":[3,1,2]}}"#,
+        "",
+    );
+    let p = read(&b.file(&[design, model].join(","))).unwrap();
+
+    let fx = [0.5, 1.0, 0.25];
+    let fz = [1.0, 0.5];
+    for depth in 0..=3u8 {
+        let props = proportions_in_surface(&p, "pit shell", "model", depth).unwrap();
+        let mut inside = 0.0;
+        for (i, x) in fx.iter().enumerate() {
+            for (k, z) in fz.iter().enumerate() {
+                let exact = x * 0.75 * z;
+                let ijk = [i as u32, 0, k as u32];
+                let [lo, hi] = props.bounds(ijk);
+                assert!(
+                    lo <= exact && exact <= hi,
+                    "depth {depth} block {ijk:?}: {exact} not in [{lo}, {hi}]"
+                );
+                if depth >= 2 {
+                    assert_eq!((lo, hi), (exact, exact), "depth {depth} block {ijk:?}");
+                }
+                inside += lo;
+            }
+        }
+        println!(
+            r#"{{"test":"omf_proportions","depth":{depth},"blocks":{},"inside_volume":{inside},"stats":"{:?}"}}"#,
+            props.iter().count(),
+            props.stats()
+        );
+        if depth >= 2 {
+            assert_eq!(inside, 1.75 * 0.75 * 1.5);
+            assert_eq!(props.iter().count(), 6);
+        }
+    }
+    refused_as(
+        proportions_in_surface(&p, "pit shell", "model", 99),
+        "FMINE-REF-109",
+        "depth 99",
+    );
+}
+
+#[test]
+fn proportions_refuse_missing_ambiguous_and_unsuitable_elements() {
+    let p = read(&every_kind()).unwrap();
+    refused_as(
+        surface_mesh(&p, "nowhere"),
+        "FMINE-REF-506",
+        r#"no element is called "nowhere""#,
+    );
+    refused_as(
+        surface_mesh(&p, "child"),
+        "FMINE-REF-506",
+        r#"2 elements are called "child""#,
+    );
+    refused_as(
+        surface_mesh(&p, "points"),
+        "FMINE-REF-506",
+        "is a PointSet, not a Surface",
+    );
+    refused_as(surface_mesh(&p, "tri"), "FMINE-REF-207", "closed mesh");
+    refused_as(
+        parent_grid(&p, "tri"),
+        "FMINE-REF-506",
+        "is a Surface, not a BlockModel",
+    );
+    refused_as(parent_grid(&p, "blocks"), "FMINE-REF-109", "is rotated");
+    refused_as(parent_grid(&p, "tensor"), "FMINE-REF-109", "tensor grid");
+    refused_as(
+        proportions_in_surface(&p, "tri", "tensor", 1),
+        "FMINE-REF-207",
+        "closed mesh",
+    );
+}
