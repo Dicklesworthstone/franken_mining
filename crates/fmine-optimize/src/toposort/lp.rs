@@ -31,10 +31,18 @@
 //!    This is weak duality, in the objective [`super::search::improve`] maximises.
 //!    - Weights past `pitflow`'s 2⁶² guard are divided by the least power of two that brings them under it, rounded
 //!      up, so the bound stays valid. It loosens by at most one unit of that power per node.
-//!    - The prices follow subgradient steps (Polyak's, toward a target such as the incumbent's value, halved after
-//!      [`STALL`] steps without a better bound). Every iterate's bound is valid; the least is kept.
+//!    - The prices follow Polyak subgradient steps toward a level (`bd-6rf8`; `bd-oq7d` aimed at the target and
+//!      halved its steps). The level is a margin below the least bound found, and never below the target, such as
+//!      the incumbent's value. The margin starts at the first bound's distance to the target and halves after
+//!      [`STALL`] steps without a better bound. Every iterate's bound is valid; the least is kept.
+//!    - Each resource's slack is measured in units of its largest limit, so a resource counted in larger units does
+//!      not take the whole step. The step's direction adds [`DEFLECT`] times the last direction's part against it,
+//!      as Camerini, Fratta and Maffioli's deflected subgradient does, so that consecutive steps zigzag less.
 //!    - At its minimum over the prices the bound equals the LP relaxation's optimum, since the closure polytope is
 //!      integral. No step rule here is proved to reach it.
+//!    - PCPSP's bound (`bd-6rf8`, [`super::pcpsp::lp::lagrangian_bound`]) is the same closure. Each block in each
+//!      period is valued at its destination worth most at the prices, and the node weighs that value less the next
+//!      period's.
 
 use fmine_evidence::Refusal;
 use fmine_numerics::sparse::{Coo, Csr};
@@ -414,11 +422,15 @@ pub fn incumbent(
     Ok(Incumbent { searched, best })
 }
 
-/// [`lagrangian_bound`]'s steps without a better bound before it halves its step.
+/// [`lagrangian_bound`]'s steps without a better bound before it halves the margin its steps aim below the best.
 pub const STALL: usize = 5;
 
 /// Prices at or above this stop [`lagrangian_bound`]: its steps have run away.
 const PRICE_LIMIT: f64 = 4_611_686_018_427_387_904.0;
+
+/// How strongly [`lagrangian_bound`] deflects a step's direction from the last one when they turn against each other:
+/// the last direction is added at `DEFLECT` times the share of it the new subgradient opposes.
+pub const DEFLECT: f64 = 1.5;
 
 /// What the closure at one set of prices gives ([`lagrangian_value`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -430,7 +442,10 @@ pub struct LagrangianValue {
     /// The closure as a schedule: each block's first period in it, or `None`. It keeps every requirement, but not
     /// necessarily every limit.
     pub schedule: Vec<Option<u32>>,
-    /// `used[r][t]`: how much of resource `r` the schedule uses in period `t`.
+    /// Each scheduled block's destination: the one worth most at the prices in its period, the lowest of equals.
+    /// A [`ScheduleProblem`]'s blocks have one destination, 0.
+    pub destination: Vec<Option<u32>>,
+    /// `used[r][t]`: how much of resource `r` the schedule uses in period `t`, at those destinations.
     pub used: Vec<Vec<i128>>,
 }
 
@@ -445,24 +460,58 @@ pub struct Lagrangian {
     pub history: Vec<i128>,
 }
 
+/// What the Lagrangian bound reads of a schedule problem, over its columns: a [`ScheduleProblem`]'s blocks, or the
+/// blocks of a PCPSP model that [`super::pcpsp::lp`] passes. Column `i` at destination `d` is slot `slot[i] + d` of
+/// `values` and of each row of `uses`.
+pub(crate) struct Priced<'a> {
+    pub(crate) periods: usize,
+    pub(crate) destinations: usize,
+    pub(crate) slot: Vec<usize>,
+    pub(crate) values: &'a [i64],
+    pub(crate) uses: Vec<&'a [i64]>,
+    pub(crate) limits: Vec<&'a [i64]>,
+    /// The columns each column requires.
+    pub(crate) requires: Vec<Vec<u32>>,
+}
+
+impl<'a> Priced<'a> {
+    fn of(problem: &'a ScheduleProblem) -> Self {
+        let blocks = problem.blocks();
+        let n = blocks.node_count();
+        let rows = 0..problem.resources();
+        Self {
+            periods: problem.periods(),
+            destinations: 1,
+            slot: (0..n).collect(),
+            values: blocks.weights(),
+            uses: rows
+                .clone()
+                .map(|r| problem.usage(r).unwrap_or(&[]))
+                .collect(),
+            limits: rows.map(|r| problem.limits(r).unwrap_or(&[])).collect(),
+            requires: (0..n)
+                .map(|b| blocks.requires(b).unwrap_or(&[]).to_vec())
+                .collect(),
+        }
+    }
+}
+
 /// The time-expanded graph's arcs (see the module notes) in `pitflow`'s CSR form.
 struct Expanded {
     offsets: Vec<usize>,
     targets: Vec<u32>,
 }
 
-fn expanded(problem: &ScheduleProblem) -> Result<Expanded, Refusal> {
-    let blocks = problem.blocks();
-    let (n, periods) = (blocks.node_count(), problem.periods());
+fn expanded(p: &Priced) -> Result<Expanded, Refusal> {
+    let (n, periods) = (p.slot.len(), p.periods);
+    let arc_count: usize = p.requires.iter().map(Vec::len).sum();
     let too_many = || {
         refuse(format!(
-            "lagrangian: {n} blocks and {} arcs over {periods} periods are too many nodes or arcs",
-            blocks.arc_count()
+            "lagrangian: {n} blocks and {arc_count} arcs over {periods} periods are too many nodes or arcs"
         ))
     };
     let nodes = n.checked_mul(periods).ok_or_else(too_many)?;
-    let arcs = blocks
-        .arc_count()
+    let arcs = arc_count
         .checked_mul(periods)
         .and_then(|a| a.checked_add(nodes))
         .ok_or_else(too_many)?;
@@ -470,12 +519,12 @@ fn expanded(problem: &ScheduleProblem) -> Result<Expanded, Refusal> {
     offsets.push(0);
     let mut targets = Vec::with_capacity(arcs);
     for t in 0..periods {
-        for b in 0..n {
-            for &q in blocks.requires(b).unwrap_or(&[]) {
+        for (i, required) in p.requires.iter().enumerate() {
+            for &q in required {
                 targets.push(id(t * n + q as usize)?);
             }
             if t + 1 < periods {
-                targets.push(id((t + 1) * n + b)?);
+                targets.push(id((t + 1) * n + i)?);
             }
             offsets.push(targets.len());
         }
@@ -492,33 +541,57 @@ fn ceil_shift(w: i128, k: u32) -> Option<i128> {
     w.checked_neg().map(|m| -(m >> k))
 }
 
-/// The bound at `prices`, on the graph `graph` of `problem`. The caller has checked the factors and prices.
+/// The value in period `t` of the column at slot `s`, at its destination worth most at `prices`, and that
+/// destination, the lowest of equals: `max_d value · f − Σ_r use · μ[r][t]`.
+fn priced(
+    p: &Priced,
+    f: i64,
+    prices: &[Vec<i64>],
+    t: usize,
+    s: usize,
+) -> Result<(i128, usize), Refusal> {
+    let mut best: Option<(i128, usize)> = None;
+    for d in 0..p.destinations {
+        let at = s + d;
+        let v = i128::from(p.values.get(at).copied().unwrap_or(0));
+        let mut w = v.checked_mul(i128::from(f)).ok_or_else(overflow)?;
+        for (row, uses) in prices.iter().zip(&p.uses) {
+            let mu = i128::from(row.get(t).copied().unwrap_or(0));
+            let q = i128::from(uses.get(at).copied().unwrap_or(0));
+            w = q
+                .checked_mul(mu)
+                .and_then(|x| w.checked_sub(x))
+                .ok_or_else(overflow)?;
+        }
+        if best.is_none_or(|(b, _)| w > b) {
+            best = Some((w, d));
+        }
+    }
+    best.ok_or_else(|| refuse("lagrangian: a block has no destination".to_string()))
+}
+
+/// The bound at `prices`, on the graph `graph` of `p`. The caller has checked the factors and prices.
 fn evaluate(
-    problem: &ScheduleProblem,
+    p: &Priced,
     factors: &[i64],
     graph: &Expanded,
     prices: &[Vec<i64>],
 ) -> Result<LagrangianValue, Refusal> {
-    let blocks = problem.blocks();
-    let (n, periods) = (blocks.node_count(), problem.periods());
-    let usage: Vec<&[i64]> = (0..problem.resources())
-        .map(|r| problem.usage(r).unwrap_or(&[]))
-        .collect();
-    let next = |row: &[i64], t: usize| i128::from(row.get(t + 1).copied().unwrap_or(0));
-    let mut weights = Vec::with_capacity(n * periods);
-    for (t, &f) in factors.iter().enumerate() {
-        let df = i128::from(f) - next(factors, t);
-        for (b, &v) in blocks.weights().iter().enumerate() {
-            let mut w = i128::from(v).checked_mul(df).ok_or_else(overflow)?;
-            for (row, uses) in prices.iter().zip(&usage) {
-                let dp = i128::from(row.get(t).copied().unwrap_or(0)) - next(row, t);
-                let q = i128::from(uses.get(b).copied().unwrap_or(0));
-                w = q
-                    .checked_mul(dp)
-                    .and_then(|x| w.checked_sub(x))
-                    .ok_or_else(overflow)?;
-            }
-            weights.push(w);
+    let (n, periods) = (p.slot.len(), p.periods);
+    // Node `t·n + i` weighs column `i`'s priced value in period `t` less its value in period `t + 1` (0 past the
+    // last), so a closure that first takes the column in period `t` sums to its value there.
+    let mut weights = vec![0_i128; graph.offsets.len().saturating_sub(1)];
+    let mut later = vec![0_i128; n];
+    for ((t, &f), row) in factors
+        .iter()
+        .enumerate()
+        .zip(weights.chunks_mut(n.max(1)))
+        .rev()
+    {
+        for ((w, next), &s) in row.iter_mut().zip(later.iter_mut()).zip(&p.slot) {
+            let (now, _) = priced(p, f, prices, t, s)?;
+            *w = now.checked_sub(*next).ok_or_else(overflow)?;
+            *next = now;
         }
     }
     // The least power of two that brings the weights under pitflow's guard: no less than the top bit's excess.
@@ -555,9 +628,9 @@ fn evaluate(
     let mut bound = i128::from(closure.value())
         .checked_mul(1_i128 << shift)
         .ok_or_else(overflow)?;
-    for (r, row) in prices.iter().enumerate() {
-        for (&p, &c) in row.iter().zip(problem.limits(r).unwrap_or(&[])) {
-            bound = i128::from(p)
+    for (row, limits) in prices.iter().zip(&p.limits) {
+        for (&mu, &c) in row.iter().zip(*limits) {
+            bound = i128::from(mu)
                 .checked_mul(i128::from(c))
                 .and_then(|x| bound.checked_add(x))
                 .ok_or_else(overflow)?;
@@ -570,13 +643,18 @@ fn evaluate(
             *slot = Some(id(t)?);
         }
     }
-    let mut used = vec![vec![0_i128; periods]; usage.len()];
-    for (b, slot) in schedule.iter().enumerate() {
-        if let Some(t) = *slot {
-            for (row, uses) in used.iter_mut().zip(&usage) {
-                if let Some(u) = row.get_mut(t as usize) {
-                    *u += i128::from(uses.get(b).copied().unwrap_or(0));
-                }
+    let mut destination = vec![None; n];
+    let mut used = vec![vec![0_i128; periods]; p.uses.len()];
+    for ((at, to), &s) in schedule.iter().zip(destination.iter_mut()).zip(&p.slot) {
+        let Some(t) = at.map(|t| t as usize) else {
+            continue;
+        };
+        let f = factors.get(t).copied().unwrap_or(0);
+        let (_, d) = priced(p, f, prices, t, s)?;
+        *to = Some(id(d)?);
+        for (row, uses) in used.iter_mut().zip(&p.uses) {
+            if let Some(u) = row.get_mut(t) {
+                *u += i128::from(uses.get(s + d).copied().unwrap_or(0));
             }
         }
     }
@@ -584,18 +662,18 @@ fn evaluate(
         bound,
         shift,
         schedule,
+        destination,
         used,
     })
 }
 
-fn check_factors(problem: &ScheduleProblem, factors: &[i64]) -> Result<(), Refusal> {
-    if factors.len() == problem.periods() {
+fn check_factors(periods: usize, factors: &[i64]) -> Result<(), Refusal> {
+    if factors.len() == periods {
         Ok(())
     } else {
         Err(refuse(format!(
-            "lagrangian: {} discount factors for {} periods",
-            factors.len(),
-            problem.periods()
+            "lagrangian: {} discount factors for {periods} periods",
+            factors.len()
         )))
     }
 }
@@ -612,19 +690,28 @@ pub fn lagrangian_value(
     factors: &[i64],
     prices: &[Vec<i64>],
 ) -> Result<LagrangianValue, Refusal> {
-    check_factors(problem, factors)?;
-    let periods = problem.periods();
-    let shaped = prices.len() == problem.resources()
+    value_at(&Priced::of(problem), factors, prices)
+}
+
+/// [`lagrangian_value`] over `p`'s columns.
+pub(crate) fn value_at(
+    p: &Priced,
+    factors: &[i64],
+    prices: &[Vec<i64>],
+) -> Result<LagrangianValue, Refusal> {
+    check_factors(p.periods, factors)?;
+    let periods = p.periods;
+    let shaped = prices.len() == p.limits.len()
         && prices
             .iter()
-            .all(|row| row.len() == periods && row.iter().all(|&p| p >= 0));
+            .all(|row| row.len() == periods && row.iter().all(|&mu| mu >= 0));
     if !shaped {
         return Err(refuse(format!(
             "lagrangian: prices must be {} rows of {periods} non-negative prices, one per resource and period",
-            problem.resources()
+            p.limits.len()
         )));
     }
-    evaluate(problem, factors, &expanded(problem)?, prices)
+    evaluate(p, factors, &expanded(p)?, prices)
 }
 
 /// The least bound over at most `steps` closures, the prices moved by subgradient steps from zero (see the module
@@ -640,39 +727,55 @@ pub fn lagrangian_bound(
     target: i128,
     steps: usize,
 ) -> Result<Lagrangian, Refusal> {
-    check_factors(problem, factors)?;
+    bound(&Priced::of(problem), factors, target, steps)
+}
+
+/// [`lagrangian_bound`] over `p`'s columns.
+pub(crate) fn bound(
+    p: &Priced,
+    factors: &[i64],
+    target: i128,
+    steps: usize,
+) -> Result<Lagrangian, Refusal> {
+    check_factors(p.periods, factors)?;
     if steps == 0 {
         return Err(refuse(
             "lagrangian: the bound needs at least one step".to_string(),
         ));
     }
-    let graph = expanded(problem)?;
-    let limits: Vec<&[i64]> = (0..problem.resources())
-        .map(|r| problem.limits(r).unwrap_or(&[]))
+    let graph = expanded(p)?;
+    let limits = &p.limits;
+    let mut prices = vec![vec![0.0_f64; p.periods]; limits.len()];
+    // The steps aim at a level `margin` below the least bound, and never below `target`. The margin starts at the
+    // first bound's distance to the target and halves after STALL steps without a better bound.
+    let (mut margin, mut stall) = (None::<f64>, 0_usize);
+    // Each resource's scale: its largest limit, and at least 1.
+    let scale: Vec<f64> = limits
+        .iter()
+        .map(|row| row.iter().copied().max().unwrap_or(0).max(1) as f64)
         .collect();
-    let mut prices = vec![vec![0.0_f64; problem.periods()]; limits.len()];
-    let (mut theta, mut stall) = (2.0_f64, 0_usize);
+    let mut direction: Option<Vec<Vec<f64>>> = None;
     let mut history = Vec::with_capacity(steps);
     let mut best: Option<(i128, Vec<Vec<i64>>)> = None;
     for _ in 0..steps {
         if prices
             .iter()
             .flatten()
-            .any(|&p| p.is_nan() || p >= PRICE_LIMIT)
+            .any(|&mu| mu.is_nan() || mu >= PRICE_LIMIT)
         {
             break;
         }
         let at: Vec<Vec<i64>> = prices
             .iter()
-            .map(|row| row.iter().map(|&p| p.round() as i64).collect())
+            .map(|row| row.iter().map(|&mu| mu.round() as i64).collect())
             .collect();
-        let v = evaluate(problem, factors, &graph, &at)?;
+        let v = evaluate(p, factors, &graph, &at)?;
         history.push(v.bound);
         match &best {
             Some((b, _)) if v.bound >= *b => {
                 stall += 1;
                 if stall >= STALL {
-                    theta /= 2.0;
+                    margin = margin.map(|m| m / 2.0);
                     stall = 0;
                 }
             }
@@ -681,28 +784,63 @@ pub fn lagrangian_bound(
                 stall = 0;
             }
         }
-        // C − used is a subgradient of the bound in the prices; the bound falls along its negative.
+        let least = best.as_ref().map_or(v.bound, |(b, _)| *b);
+        let above = least.saturating_sub(target);
+        if above <= 0 {
+            break;
+        }
+        let margin = *margin.get_or_insert(above as f64);
+        // C − used is a subgradient of the bound in the prices; the bound falls along its negative. Each resource's
+        // slack is taken per unit of its scale, and the step's direction is deflected from the last one where they
+        // turn against each other.
         let slack: Vec<Vec<f64>> = limits
             .iter()
             .zip(&v.used)
-            .map(|(caps, used)| {
+            .zip(&scale)
+            .map(|((caps, used), &s)| {
                 caps.iter()
                     .zip(used)
-                    .map(|(&c, &u)| (i128::from(c) - u) as f64)
+                    .map(|(&c, &u)| (i128::from(c) - u) as f64 / s)
                     .collect()
             })
             .collect();
-        let norm: f64 = slack.iter().flatten().map(|g| g * g).sum();
-        let gap = v.bound.saturating_sub(target);
-        if gap <= 0 || norm <= 0.0 {
+        let dot = |a: &[Vec<f64>], b: &[Vec<f64>]| -> f64 {
+            a.iter()
+                .flatten()
+                .zip(b.iter().flatten())
+                .map(|(x, y)| x * y)
+                .sum()
+        };
+        let beta = direction.as_ref().map_or(0.0, |d| {
+            let dd = dot(d, d);
+            if dd > 0.0 {
+                (-DEFLECT * dot(&slack, d) / dd).max(0.0)
+            } else {
+                0.0
+            }
+        });
+        let d: Vec<Vec<f64>> = match &direction {
+            Some(prev) => slack
+                .iter()
+                .zip(prev)
+                .map(|(g, q)| g.iter().zip(q).map(|(x, y)| x + beta * y).collect())
+                .collect(),
+            None => slack,
+        };
+        let norm = dot(&d, &d);
+        if norm <= 0.0 || margin < 1.0 {
             break;
         }
-        let step = theta * gap as f64 / norm;
-        for (row, g) in prices.iter_mut().zip(&slack) {
-            for (p, &gi) in row.iter_mut().zip(g) {
-                *p = (*p - step * gi).max(0.0);
+        // This bound less the level: its excess over the least bound, plus the margin or what is left above the
+        // target.
+        let gap = v.bound.saturating_sub(least) as f64 + margin.min(above as f64);
+        let step = gap / norm;
+        for ((row, g), &s) in prices.iter_mut().zip(&d).zip(&scale) {
+            for (mu, &gi) in row.iter_mut().zip(g) {
+                *mu = (*mu - step * gi / s).max(0.0);
             }
         }
+        direction = Some(d);
     }
     let (bound, prices) = best.ok_or_else(|| refuse("lagrangian: no step ran".to_string()))?;
     Ok(Lagrangian {
@@ -901,6 +1039,7 @@ mod tests {
             (v.bound, v.shift, v.schedule.clone(), v.used.clone()),
             (7 * f0, 0, vec![Some(0); 3], vec![vec![3, 0]])
         );
+        assert_eq!(v.destination, [Some(0); 3]);
         // The LP mines half of blocks 0 and 2 with all of block 1 in period 0: 7·F1 + 5·D = 5·F0 + 2·F1, above the
         // best schedule's 4·F0 + 3·F1 (blocks 0 and 2, then 1). A price of 2·D on period 0 reaches it: there block 1
         // weighs D, blocks 0 and 2 together 0, and the prices add 2 × 2·D.

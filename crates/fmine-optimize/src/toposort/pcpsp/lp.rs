@@ -25,6 +25,18 @@
 //!    10⁻⁹ of in all goes to its most valuable destination, the lowest of equals.
 //! 4. [`starts`] and [`incumbent`] are [`crate::toposort::lp`]'s, with [`super::greedy`], [`super::greedy_from`] and
 //!    [`super::improve`].
+//! 5. [`lagrangian_bound`] (`bd-6rf8`; plan §15.11's `lag` fallback for KILL-PUSH-BZ and KILL-PUSH-PDLP) is
+//!    [`crate::toposort::lp::lagrangian_bound`] for PCPSP, exact in `i128` and without an LP solver. The limits move
+//!    into the objective at prices `μ[r][t] ≥ 0`. Then the share of a block mined in a period is worth most sent
+//!    whole to one destination, the one maximising `value[b][d] · F_t − Σ_r use[r][b][d] · μ[r][t]`. Call that
+//!    maximum `v[b][t]`. What is left is CPIT's closure on the time-expanded graph, node `(t, b)` weighing
+//!    `v[b][t] − v[b][t + 1]` (`v[b][T] = 0`).
+//!    - The bound is at least the discounted value at `F` of every schedule, including one that splits blocks between
+//!      destinations. So it bounds PCPSP's own optimum as well as [`super::improve`]'s whole-block schedules.
+//!    - Over [`scope`]'s blocks it bounds the whole instance, for the reason [`scope`] gives: cutting a schedule down
+//!      to the pit never lowers its value at falling factors and keeps it within the limits.
+//!    - At its minimum over the prices it is the LP relaxation's optimum at `F`, since for fixed prices the
+//!      destination shares drop out and the closure polytope is integral.
 
 use std::cmp::Reverse;
 
@@ -34,7 +46,10 @@ use fmine_numerics::sparse::Coo;
 use super::{PcpspImprovement, PcpspModel, greedy, greedy_from, improve};
 use crate::pitflow::{ClosureProblem, solve, verify};
 use crate::toposort::cpit::RATE_SCALE;
-use crate::toposort::lp::{Relaxation, Shares, THRESHOLDS, count, factors, first_best, put};
+use crate::toposort::lp::{
+    Lagrangian, LagrangianValue, Priced, Relaxation, Shares, THRESHOLDS, bound, count, factors,
+    first_best, put, value_at,
+};
 use crate::toposort::refuse;
 
 /// A block the LP sends less than this of in all goes to its most valuable destination.
@@ -378,6 +393,87 @@ pub fn incumbent(
     Ok(Incumbent { searched, best })
 }
 
+/// The Lagrangian bound's view of `model` over `blocks`: column `i` is block `blocks[i]`.
+fn priced<'a>(model: &'a PcpspModel, blocks: &[usize]) -> Result<Priced<'a>, Refusal> {
+    let index = columns(model, blocks)?;
+    let requires = blocks
+        .iter()
+        .map(|&b| {
+            model
+                .requires(b)
+                .unwrap_or(&[])
+                .iter()
+                .map(|&q| {
+                    index
+                        .get(q as usize)
+                        .copied()
+                        .flatten()
+                        .and_then(|c| u32::try_from(c).ok())
+                        .ok_or_else(|| {
+                            refuse(format!(
+                                "pcpsp lagrangian: block {b} requires block {q}, which is not among the bound's blocks"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<u32>, Refusal>>()
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let dn = model.destinations();
+    Ok(Priced {
+        periods: model.periods(),
+        destinations: dn,
+        slot: blocks.iter().map(|&b| b * dn).collect(),
+        values: &model.values,
+        uses: model.uses.iter().map(Vec::as_slice).collect(),
+        limits: model.limits.iter().map(Vec::as_slice).collect(),
+        requires,
+    })
+}
+
+/// The bound at `prices` over `blocks`, normally [`scope`]'s (see the module notes): one row per resource, one price
+/// per period, each at least 0, in units of the discounted value a unit of the resource. The schedule and
+/// destinations are over every block of the model; a block outside `blocks` is never scheduled.
+///
+/// # Errors
+/// `FMINE-REF-207` (proposed) when `blocks` is not in increasing order within the model or a block in it requires one
+/// that is not, and as [`crate::toposort::lp::lagrangian_value`] refuses.
+pub fn lagrangian_value(
+    model: &PcpspModel,
+    blocks: &[usize],
+    factors: &[i64],
+    prices: &[Vec<i64>],
+) -> Result<LagrangianValue, Refusal> {
+    let v = value_at(&priced(model, blocks)?, factors, prices)?;
+    let n = model.blocks();
+    let (mut schedule, mut destination) = (vec![None; n], vec![None; n]);
+    for (i, &b) in blocks.iter().enumerate() {
+        if let (Some(s), Some(d)) = (schedule.get_mut(b), destination.get_mut(b)) {
+            *s = v.schedule.get(i).copied().flatten();
+            *d = v.destination.get(i).copied().flatten();
+        }
+    }
+    Ok(LagrangianValue {
+        schedule,
+        destination,
+        ..v
+    })
+}
+
+/// The least bound over at most `steps` closures over `blocks`, normally [`scope`]'s, the prices moved as
+/// [`crate::toposort::lp::lagrangian_bound`] moves them.
+///
+/// # Errors
+/// As [`lagrangian_value`], and `FMINE-REF-207` (proposed) when `steps` is 0.
+pub fn lagrangian_bound(
+    model: &PcpspModel,
+    blocks: &[usize],
+    factors: &[i64],
+    target: i128,
+    steps: usize,
+) -> Result<Lagrangian, Refusal> {
+    bound(&priced(model, blocks)?, factors, target, steps)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -534,5 +630,255 @@ mod tests {
         assert!(best.after > best.before);
         let e = incumbent(&m, &[], &factors, 10).unwrap_err();
         assert!(e.to_string().contains("no starts"), "{e}");
+    }
+
+    #[test]
+    fn the_pcpsp_lagrangian_bound_of_the_small_pair_reaches_its_lp_optimum_by_hand() {
+        let m = pair("1");
+        let pit = [0, 1, 2];
+        let f = discount_factors(m.discount_rate, RATE_SCALE, 2).unwrap();
+        let (f0, f1) = (i128::from(f[0]), i128::from(f[1]));
+        // Values at one place: blocks 0 and 1 dumped at −10, block 2 milled at 95. At zero prices the closure mines the
+        // whole pit in period 0, one block over the mining limit.
+        let v = lagrangian_value(&m, &pit, &f, &[vec![0, 0], vec![0, 0]]).unwrap();
+        assert_eq!(
+            (v.bound, v.shift, v.used.clone()),
+            (75 * f0, 0, vec![vec![3, 0], vec![1, 0]])
+        );
+        assert_eq!(v.schedule, [Some(0), Some(0), Some(0), None]);
+        assert_eq!(v.destination, [Some(0), Some(0), Some(1), None]);
+        // The LP mines two thirds of each pit block in period 0 and the rest in period 1: 75·F1 + 50·(F0 − F1) =
+        // 50·F0 + 25·F1. The best whole-block schedule, waste block 1 put off beside the ore, is −10·F0 + 85·F1. Mining
+        // at 25·(F0 − F1) in period 0 makes the pit worth 75·F1 in either period, and the prices add 2 × 25·(F0 − F1).
+        let lp = 50 * f0 + 25 * f1;
+        let best = -10 * f0 + 85 * f1;
+        assert!(best < lp);
+        let mu = i64::try_from(25 * (f0 - f1)).unwrap();
+        let at = |mining: [i64; 2], mill: [i64; 2]| {
+            lagrangian_value(&m, &pit, &f, &[mining.to_vec(), mill.to_vec()])
+                .unwrap()
+                .bound
+        };
+        assert_eq!(at([mu, 0], [0, 0]), lp);
+        for (mining, mill) in [
+            ([mu / 2, 0], [0, 0]),
+            ([2 * mu, 0], [0, 0]),
+            ([mu, mu], [0, 0]),
+            ([mu, 0], [mu, 0]),
+            ([0, 0], [4 * mu, 0]),
+        ] {
+            let b = at(mining, mill);
+            assert!(
+                b >= lp,
+                "prices {mining:?} {mill:?}: {b} below the LP's {lp}"
+            );
+        }
+
+        let run = lagrangian_bound(&m, &pit, &f, best, 200).unwrap();
+        println!(
+            r#"{{"test":"pcpsp_lagrangian_small","bound":{},"lp":{lp},"steps":{},"prices":{:?},"over":{}}}"#,
+            run.bound,
+            run.history.len(),
+            run.prices,
+            (run.bound - lp) as f64 / lp as f64
+        );
+        assert_eq!(run.history[0], 75 * f0);
+        assert!(run.history.iter().all(|&b| b >= lp), "{:?}", run.history);
+        assert_eq!(Some(&run.bound), run.history.iter().min());
+        assert!(
+            (run.bound - lp) as f64 <= 1e-4 * lp as f64,
+            "{} against {lp}",
+            run.bound
+        );
+        assert_eq!(
+            lagrangian_value(&m, &pit, &f, &run.prices).unwrap().bound,
+            run.bound
+        );
+    }
+
+    /// The best discounted value at `f` over every schedule of `m`, each block whole at one destination in one period
+    /// or left out, found by trying them all. Requirements and limits are checked here, not by [`check`].
+    fn best_by_enumeration(m: &PcpspModel, f: &[i64]) -> i128 {
+        let (n, periods, dn) = (m.blocks(), m.periods(), m.destinations());
+        let options = 1 + periods * dn;
+        let mut best = i128::MIN;
+        let mut at: Vec<Option<(usize, usize)>> = vec![None; n];
+        for code in 0..options.pow(n as u32) {
+            let mut c = code;
+            for slot in &mut at {
+                let k = c % options;
+                c /= options;
+                *slot = (k > 0).then(|| ((k - 1) / dn, (k - 1) % dn));
+            }
+            let required = (0..n).all(|b| {
+                at[b].is_none_or(|(t, _)| {
+                    m.requires(b)
+                        .unwrap()
+                        .iter()
+                        .all(|&q| at[q as usize].is_some_and(|(tq, _)| tq <= t))
+                })
+            });
+            let within = (0..m.resources()).all(|r| {
+                (0..periods).all(|t| {
+                    let used: i64 = (0..n)
+                        .filter_map(|b| {
+                            at[b]
+                                .filter(|&(tb, _)| tb == t)
+                                .map(|(_, d)| m.uses(r, b, d).unwrap())
+                        })
+                        .sum();
+                    used <= m.limits(r).unwrap()[t]
+                })
+            });
+            if required && within {
+                let value: i128 = (0..n)
+                    .filter_map(|b| {
+                        at[b].map(|(t, d)| i128::from(m.value(b, d).unwrap()) * i128::from(f[t]))
+                    })
+                    .sum();
+                best = best.max(value);
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn every_pcpsp_lagrangian_step_bounds_the_best_schedule_found_by_enumeration() {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = |m: u64| {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            (z ^ (z >> 31)) % m
+        };
+        let (mut cases, mut tight, mut negative, mut single) = (0, 0, 0, 0);
+        for case in 0..150 {
+            let n = 2 + next(3) as usize;
+            let periods = 1 + next(2) as usize;
+            let dn = 1 + next(3) as usize;
+            let resources = 1 + next(2) as usize;
+            let with_negative = next(4) == 0;
+            let mut text = format!(
+                "NAME: e\nTYPE: PCPSP\nNBLOCKS: {n}\nNPERIODS: {periods}\nNDESTINATIONS: {dn}\nNRESOURCE_SIDE_CONSTRAINTS: {resources}\nNGENERAL_SIDE_CONSTRAINTS: 0\nDISCOUNT_RATE: 0.1\nRESOURCE_CONSTRAINT_LIMITS:\n"
+            );
+            for r in 0..resources {
+                for t in 0..periods {
+                    text += &format!("{r} {t} L {}\n", next(5));
+                }
+            }
+            text += "OBJECTIVE_FUNCTION:\n";
+            for b in 0..n {
+                text += &b.to_string();
+                for _ in 0..dn {
+                    text += &format!(" {}", next(15) as i64 - 6);
+                }
+                text += "\n";
+            }
+            text += "RESOURCE_CONSTRAINT_COEFFICIENTS:\n";
+            for b in 0..n {
+                for d in 0..dn {
+                    for r in 0..resources {
+                        let q = if with_negative && next(3) == 0 {
+                            -(1 + next(2) as i64)
+                        } else {
+                            next(4) as i64
+                        };
+                        if q != 0 {
+                            text += &format!("{b} {d} {r} {q}\n");
+                        }
+                    }
+                }
+            }
+            text += "EOF\n";
+            let prec: String = (0..n)
+                .map(|b| {
+                    let required: Vec<usize> = (0..b).filter(|_| next(3) == 0).collect();
+                    let list: String = required.iter().map(|q| format!(" {q}")).collect();
+                    format!("{b} {}{list}\n", required.len())
+                })
+                .collect();
+            let m = parse(&text, &prec, 0, Rounding::Refuse, 0).unwrap();
+            let f = discount_factors(m.discount_rate, RATE_SCALE, periods).unwrap();
+            let opt = best_by_enumeration(&m, &f);
+            let s = scope(&m).unwrap();
+            let all: Vec<usize> = (0..n).collect();
+            for blocks in [&s.blocks, &all] {
+                let run = lagrangian_bound(&m, blocks, &f, opt, 40).unwrap();
+                assert!(
+                    run.history.iter().all(|&b| b >= opt),
+                    "case {case} over {blocks:?}: {:?} below {opt}",
+                    run.history
+                );
+                assert_eq!(Some(&run.bound), run.history.iter().min());
+                tight += usize::from(run.bound == opt);
+            }
+            // With one destination the model is a ScheduleProblem, and the bound is CPIT's at any prices.
+            if dn == 1 {
+                let p = m.with_destinations(&vec![0; n]).unwrap();
+                let some: Vec<Vec<i64>> = (0..resources)
+                    .map(|_| (0..periods).map(|_| next(8) as i64 * (f[0] / 4)).collect())
+                    .collect();
+                for prices in [vec![vec![0; periods]; resources], some] {
+                    assert_eq!(
+                        lagrangian_value(&m, &all, &f, &prices).unwrap(),
+                        crate::toposort::lp::lagrangian_value(&p, &f, &prices).unwrap(),
+                        "case {case} at {prices:?}"
+                    );
+                }
+                single += 1;
+            }
+            cases += 1;
+            negative += usize::from(s.whole);
+        }
+        println!(
+            r#"{{"test":"pcpsp_lagrangian_enumeration","cases":{cases},"runs":{},"bound_equals_best":{tight},"negative_uses":{negative},"one_destination":{single}}}"#,
+            2 * cases
+        );
+        assert!(negative > 0 && single > 0, "{negative} {single}");
+    }
+
+    #[test]
+    fn the_pcpsp_lagrangian_bound_refuses_wrong_blocks_factors_prices_and_steps() {
+        let m = pair("1");
+        let f = discount_factors(m.discount_rate, RATE_SCALE, 2).unwrap();
+        let zero = [vec![0, 0], vec![0, 0]];
+        let pit = [0, 1, 2];
+        for (e, why) in [
+            (
+                lagrangian_value(&m, &[2], &f, &zero).unwrap_err(),
+                "block 2 requires block 0, which is not among the bound's blocks",
+            ),
+            (
+                lagrangian_value(&m, &[1, 0], &f, &zero).unwrap_err(),
+                "not in increasing order",
+            ),
+            (
+                lagrangian_value(&m, &[0, 4], &f, &zero).unwrap_err(),
+                "not in increasing order",
+            ),
+            (
+                lagrangian_value(&m, &pit, &f[..1], &zero).unwrap_err(),
+                "1 discount factors for 2 periods",
+            ),
+            (
+                lagrangian_value(&m, &pit, &f, &zero[..1]).unwrap_err(),
+                "2 rows of 2 non-negative prices",
+            ),
+            (
+                lagrangian_value(&m, &pit, &f, &[vec![0, 0], vec![0, -1]]).unwrap_err(),
+                "non-negative prices",
+            ),
+            (
+                lagrangian_bound(&m, &pit, &f, 0, 0).unwrap_err(),
+                "at least one step",
+            ),
+            (
+                lagrangian_bound(&m, &[2], &f, 0, 5).unwrap_err(),
+                "which is not among the bound's blocks",
+            ),
+        ] {
+            assert!(e.to_string().contains(why), "{e}");
+        }
     }
 }

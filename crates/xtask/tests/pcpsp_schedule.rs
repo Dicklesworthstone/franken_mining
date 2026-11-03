@@ -39,6 +39,12 @@
 //! (`<name>_pcpsp_fmine.sol`), which `crates/xtask/testdata/minelib_pcpsp_oracle.py` checks from the files alone. With
 //! `FMINE_MINELIB_SOLS`, MineLib's own PCPSP schedule (`<name>_pcpsp_*.sol`, blocks split between destinations to six
 //! places) is valued here in `f64` and reported beside its published value.
+//!
+//! With `FMINE_LAGRANGIAN_STEPS` above 0 (default 0, skipped), `toposort::pcpsp::lp::lagrangian_bound` (bd-6rf8) runs
+//! that many closures over the LP's blocks, aimed at the best searched schedule's value. Its bound is exact in the
+//! search's integer objective (factors `discount_factors`, rounded down), with no LP solver. So every step must lie at
+//! or above every searched schedule, compared in `i128`. It is reported as `lagrangian`, in whole units, beside PDLP's
+//! certified bound and MineLib's LP bound. Those are in the `f64` objective, so the ratios are approximate.
 
 // Test helpers outside `#[test]` functions: a malformed MineLib file must fail the test at once.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -50,9 +56,11 @@ use fmine_lp::pdlp::{LpProblem, PdlpOptions, solve_observed};
 use fmine_optimize::pitflow::minelib::Rounding;
 use fmine_optimize::toposort::lp;
 use fmine_optimize::toposort::lp::THRESHOLDS;
-use fmine_optimize::toposort::pcpsp::lp::{Solution, incumbent, relaxation, scope, starts};
+use fmine_optimize::toposort::pcpsp::lp::{
+    Solution, incumbent, lagrangian_bound, relaxation, scope, starts,
+};
 use fmine_optimize::toposort::pcpsp::{self, PcpspModel};
-use fmine_optimize::toposort::search::discount_factors;
+use fmine_optimize::toposort::search::{DISCOUNT_SCALE, discount_factors};
 use fmine_optimize::toposort::{check, cpit};
 
 /// MineLib's Results page (Results.xhtml, mirrored at github.com/borelian/minelib, read 2026-11-02): the PCPSP LP
@@ -331,6 +339,25 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
                     .then(|| value_known(&model, &std::fs::read_to_string(&path).unwrap(), rate))
             })
         });
+        // The Lagrangian bound (bd-6rf8): exact in the search's integer objective, so every searched schedule must lie
+        // at or under every one of its steps.
+        let steps: usize = env_or("FMINE_LAGRANGIAN_STEPS", 0);
+        let searched_best = found.chosen().map_or(0, |c| c.after);
+        let lagrangian = (steps > 0).then(|| {
+            let t = Instant::now();
+            let l = lagrangian_bound(&model, pit, &factors, searched_best, steps).unwrap();
+            let s = t.elapsed().as_secs_f64();
+            for (k, i) in found.searched.iter().enumerate() {
+                if let Some(b) = l.history.iter().find(|&&b| b < i.after) {
+                    failures.push(format!(
+                        "{name}: a Lagrangian step bounds at {b}, below searched schedule {k}'s {}",
+                        i.after
+                    ));
+                }
+            }
+            (l, s)
+        });
+        let whole = |v: i128| v as f64 / SCALE / DISCOUNT_SCALE as f64;
         let rel = |bound: f64| (bound - best) / bound;
         let list = |v: &[f64]| {
             v.iter()
@@ -357,7 +384,7 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
         };
         gate.push((name.to_string(), gap, best_known == 0.0));
         println!(
-            "{{\"bead\":\"bd-2rne\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"destinations\":{dn},\"resources\":{},\"rounded\":[{},{},{}],\"pit_blocks\":{pit_blocks},\"lp_blocks\":{},\"pit_value\":{:.3},\"pit_s\":{pit_s:.2},\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"per_threshold\":[\"earliest\",\"lp_release\"],\"npv\":[{}],\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{},\"known\":{}}}",
+            "{{\"bead\":\"bd-2rne\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"destinations\":{dn},\"resources\":{},\"rounded\":[{},{},{}],\"pit_blocks\":{pit_blocks},\"lp_blocks\":{},\"pit_value\":{:.3},\"pit_s\":{pit_s:.2},\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"per_threshold\":[\"earliest\",\"lp_release\"],\"npv\":[{}],\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{},\"known\":{},\"lagrangian\":{}}}",
             model.resources(),
             model.rounded_values,
             model.rounded_uses,
@@ -374,6 +401,22 @@ fn minelib_pcpsp_schedules_pass_the_checker_and_report_gate_push_topo() {
                 "{{\"npv\":{:.3},\"worst_whole\":{:.1e},\"worst_over\":{:.1e},\"unmet\":{}}}",
                 k.npv, k.worst_whole, k.worst_over, k.unmet
             )),
+            lagrangian.as_ref().map_or("null".to_string(), |(l, s)| {
+                let bound = whole(l.bound);
+                format!(
+                    "{{\"steps\":{},\"bound\":{bound:.3},\"first\":{:.3},\"of_certified\":{},\"of_published_lp\":{:.6},\"of_best_known\":{},\"gap_to_incumbent\":{:.4e},\"seconds\":{s:.1}}}",
+                    l.history.len(),
+                    whole(l.history[0]),
+                    certified.map_or("null".to_string(), |u| format!("{:.6}", bound / u)),
+                    bound / published_lp,
+                    if best_known > 0.0 {
+                        format!("{:.4}", bound / best_known)
+                    } else {
+                        "null".to_string()
+                    },
+                    (l.bound - searched_best) as f64 / l.bound as f64
+                )
+            }),
         );
         match certified {
             Some(u) if best > u + 1.0 => failures.push(format!(
