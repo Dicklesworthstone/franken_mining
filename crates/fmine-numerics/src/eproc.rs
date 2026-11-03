@@ -524,4 +524,92 @@ mod tests {
         }
         assert!(ep.rejected_null(), "no alarm in {steps} shifted scores");
     }
+
+    /// The wealth after each observation, as printed by `python3 -I scripts/oracle/risk_eproc_known_answers.py`,
+    /// which follows the stated betting rule in exact fractions (bd-022).
+    #[test]
+    fn test_betting_eprocess_known_answers() {
+        let cases: [(f64, &[f64], &[f64]); 2] = [
+            (
+                0.5,
+                &[1.0, 1.0, 0.75, 0.25, 1.0, 0.0, 0.875],
+                &[
+                    1.0,
+                    1.1875,
+                    1.375,
+                    1.1171875,
+                    1.444169207317073,
+                    0.9026057545731707,
+                    1.0558784298780488,
+                ],
+            ),
+            // The stake reaches its bound of 0.75 from the fourth step.
+            (
+                0.125,
+                &[1.0; 5],
+                &[
+                    1.0,
+                    1.4140845070422534,
+                    2.2422535211267607,
+                    3.7137323943661973,
+                    6.150869278169014,
+                ],
+            ),
+        ];
+        for (null_mean, us, want) in cases {
+            let mut ep = BettingEProcess::new(null_mean, 0.05).expect("valid");
+            for (t, (&u, &w)) in us.iter().zip(want).enumerate() {
+                let got = ep.observe(u).expect("in [0, 1]");
+                assert!(
+                    (got - w).abs() <= 1e-14 * w,
+                    "null {null_mean}, step {t}: {got} against {w}"
+                );
+            }
+            let peak = want.iter().copied().fold(1.0, f64::max);
+            assert!((ep.max_wealth - peak).abs() <= 1e-14 * peak);
+            assert_eq!(ep.rejected_null(), peak >= 20.0);
+        }
+    }
+
+    /// The log wealth after each score, from the same script. Stakes and factors are exact there; only the
+    /// logarithm is CPython's, not `det::ln`.
+    #[test]
+    fn test_score_eprocess_known_answers() {
+        let cases: [(f64, &[f64], &[f64]); 2] = [
+            (
+                0.5,
+                &[1.5, -0.5, 2.0, 0.25, -1.0, 1.0],
+                &[
+                    0.0,
+                    -0.262364264467491,
+                    0.1896208592755662,
+                    0.28493103907989115,
+                    -0.2767530019195906,
+                    -0.04344233324993668,
+                ],
+            ),
+            // A truncation of 0.2 holds every stake after the first at 0.2 / hi = 0.2.
+            (
+                0.2,
+                &[2.0, 2.0, 2.0, -1.0],
+                &[
+                    0.0,
+                    0.3364722366212129,
+                    0.6729444732424258,
+                    0.4498009219282161,
+                ],
+            ),
+        ];
+        for (truncation, scores, want) in cases {
+            let mut ep = ScoreBettingEProcess::new(-1.0, 2.0, 1.0, truncation, 0.1).expect("valid");
+            for (t, (&x, &w)) in scores.iter().zip(want).enumerate() {
+                let got = ep.observe(x).expect("in [-1, 2]");
+                assert!(
+                    (got - w).abs() <= 1e-14,
+                    "truncation {truncation}, step {t}: {got} against {w}"
+                );
+            }
+            assert_eq!(ep.n_steps(), scores.len() as u64);
+        }
+    }
 }

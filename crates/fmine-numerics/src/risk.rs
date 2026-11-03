@@ -186,4 +186,37 @@ mod tests {
         assert_eq!(r.alpha, alpha);
         assert!((r.cvar_alpha - 49.0).abs() < 1e-6, "CVaR {}", r.cvar_alpha);
     }
+
+    /// Mean, `VaR` and `CVaR` as printed by `python3 -I scripts/oracle/risk_eproc_known_answers.py`, which takes
+    /// `CVaR` as Rockafellar and Uryasev's minimum over `c` in exact fractions, not as this quantile integral (bd-022).
+    #[test]
+    fn test_cvar_known_answers() {
+        let pi = [3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0];
+        let ten: Vec<f64> = (1..=10).map(f64::from).collect();
+        let cases: [(&[f64], f64, f64, f64, f64); 6] = [
+            // alpha n = 6: the top two losses, 6 and 9.
+            (&pi, 0.75, 3.875, 5.0, 7.5),
+            // alpha n = 6.4: 6 carries 0.075 of the tail and 9 carries 0.125.
+            (&pi, 0.8, 3.875, 6.0, 7.875),
+            (&[-2.5, 0.0, 7.25, 1.5, -1.0], 0.9, 1.05, 7.25, 7.25),
+            (&[10.0], 0.5, 10.0, 10.0, 10.0),
+            (&ten, 0.95, 5.5, 10.0, 10.0),
+            // A tie across the quantile.
+            (&[5.0, 5.0, 5.0, 1.0], 0.5, 4.0, 5.0, 5.0),
+        ];
+        for (losses, alpha, mean, var, cvar) in cases {
+            let r = compute_cvar(losses, alpha).expect("valid");
+            assert!(
+                (r.mean_loss - mean).abs() <= 1e-12,
+                "{losses:?} at {alpha}: mean {}",
+                r.mean_loss
+            );
+            assert_eq!(r.var_alpha, var, "{losses:?} at {alpha}");
+            assert!(
+                (r.cvar_alpha - cvar).abs() <= 1e-12,
+                "{losses:?} at {alpha}: CVaR {}",
+                r.cvar_alpha
+            );
+        }
+    }
 }
