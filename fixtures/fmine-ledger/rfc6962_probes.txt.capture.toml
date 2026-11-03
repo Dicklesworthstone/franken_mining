@@ -1,0 +1,14 @@
+# Capture record (§33.2) for rfc6962_probes.txt: transparency-dev/merkle's published RFC 6962 inclusion and
+# consistency probes (bd-083), one line per probe. A published source: the answers (`wantErr`) are upstream's, and
+# the script only decodes base64 to hex. inputs_digest is the sha256 of the lines `sha256:<hex> <path>` for the
+# 196 JSON files under testdata/inclusion and testdata/consistency at the commit in version, sorted by path, each
+# ending in a newline; the script prints it on stderr.
+oracle = "transparency-dev/merkle testdata/inclusion and testdata/consistency (probes for its RFC 6962 verifier)"
+version = "github.com/transparency-dev/merkle commit c39fbf350a405f68571bf4c42a6a518eb0a46a4b; Python 3.15.0"
+platform = "arm64-darwin"
+inputs_digest = "sha256:6d27851e7298a58362c2f8e167a3b22d02603beca4774606de763a8ba4e6ccfd"
+outputs_digest = "sha256:1f0c164446f444e86e489c1d5e2daa00e71cda91bacc1bb40f0fd0c1db8c1ad7"
+command = "python3 -I scripts/oracle/ct_merkle_probes.py <checkout of transparency-dev/merkle at the commit in version>"
+captured_by = "coding agent that wrote the fmine-ledger code under test (no separate lab runner)"
+date = "2026-11-03"
+licence = "Apache-2.0 (transparency-dev/merkle, Copyright Google LLC); the converter is this repository's licence"

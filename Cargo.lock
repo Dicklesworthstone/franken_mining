@@ -119,6 +119,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-ledger"
+version = "0.1.0"
+dependencies = [
+ "fmine-core",
+]
+
+[[package]]
 name = "fmine-lp"
 version = "0.1.0"
 dependencies = [
