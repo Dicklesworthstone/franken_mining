@@ -20,6 +20,13 @@
 //! - **Discount.** The rate is kept exactly, at 10⁹. Discounting is the caller's.
 //! - **Size.** At most [`MAX_RESOURCES`] resources, since uses are stored for every block and resource, and at most
 //!   [`MAX_PERIODS`] periods.
+//!
+//! **Solutions** (bd-3l5o, plan §15.4 `UntrustedCandidate`). A schedule from anywhere, such as MineLib's best-known
+//! ones or a client's planning package, in MineLib's solution format: one `<block> <destination> <period>
+//! <fraction>` line per mined block, `%` comments, and a block not listed left unmined. [`parse_solution`] reads one
+//! and trusts nothing in it. CPIT has one destination and mines whole blocks, so the destination must be `0` and the
+//! fraction exactly 1 (`1`, or `1.` and zeros). `toposort::check` then decides feasibility and the exact value, and
+//! `search::improve` can start from it. [`write_solution`] writes a schedule back in the same format.
 
 use fmine_evidence::Refusal;
 
@@ -316,6 +323,73 @@ pub fn parse(
     })
 }
 
+/// A CPIT schedule in MineLib's solution format for `problem` (see the module notes): the period each block is mined
+/// in, or `None`. Nothing is checked but the format and the ids; `toposort::check` decides feasibility.
+///
+/// # Errors
+/// `FMINE-REF-506` (proposed), naming the line, for a line that is not four fields, a block or period that is not a
+/// non-negative integer below the problem's count, a destination other than `0`, a fraction other than exactly 1,
+/// or a block listed twice.
+pub fn parse_solution(text: &str, problem: &ScheduleProblem) -> Result<Vec<Option<u32>>, Refusal> {
+    let (n, periods) = (problem.blocks().node_count(), problem.periods());
+    let mut schedule = vec![None; n];
+    for (line, l) in lines(text) {
+        let fields: Vec<&str> = l.split_whitespace().collect();
+        let [block, destination, period, fraction] = fields[..] else {
+            return Err(bad(format!(
+                "line {line}: a solution line is <block> <destination> <period> <fraction>"
+            )));
+        };
+        let b = number(block, "block", line)?;
+        let t = number(period, "period", line)?;
+        if number(destination, "destination", line)? != 0 {
+            return Err(bad(format!(
+                "line {line}: destination {destination}; CPIT has only destination 0"
+            )));
+        }
+        let whole = fraction.strip_prefix('1').is_some_and(|rest| {
+            rest.is_empty()
+                || rest
+                    .strip_prefix('.')
+                    .is_some_and(|z| z.bytes().all(|d| d == b'0'))
+        });
+        if !whole {
+            return Err(bad(format!(
+                "line {line}: fraction {fraction}; CPIT mines whole blocks, 1"
+            )));
+        }
+        let slot = schedule
+            .get_mut(b)
+            .ok_or_else(|| bad(format!("line {line}: block {b} is not one of {n} blocks")))?;
+        let t = Some(t)
+            .filter(|&t| t < periods)
+            .and_then(|t| u32::try_from(t).ok())
+            .ok_or_else(|| {
+                bad(format!(
+                    "line {line}: period {period} is not one of {periods} periods"
+                ))
+            })?;
+        if slot.replace(t).is_some() {
+            return Err(bad(format!("line {line}: block {b} is listed twice")));
+        }
+    }
+    Ok(schedule)
+}
+
+/// `schedule` in MineLib's solution format, one `<block> 0 <period> 1` line per mined block in block order, which
+/// [`parse_solution`] reads back.
+#[must_use]
+pub fn write_solution(schedule: &[Option<u32>]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for (b, t) in schedule.iter().enumerate() {
+        if let Some(t) = t {
+            let _ = writeln!(out, "{b} 0 {t} 1");
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,5 +521,58 @@ mod tests {
             1,
         ));
         assert!(e.contains("past 2"), "{e}");
+    }
+
+    #[test]
+    fn a_solution_reads_back_and_an_outside_one_is_checked_before_any_search() {
+        use crate::toposort::search::{discount_factors, improve};
+
+        let m = parse(CPIT, PREC, 2, Rounding::Refuse, 1).unwrap();
+        let p = &m.problem;
+        let mut s = greedy(p, &[Some(0); 3]).unwrap();
+        let text = write_solution(&s);
+        assert_eq!(text, "0 0 0 1\n1 0 0 1\n2 0 1 1\n");
+        assert_eq!(parse_solution(&text, p).unwrap(), s);
+
+        // MineLib's own spelling, with comments, blank lines and a block left out.
+        let outside = "% from elsewhere\n2 0 1 1.000000\n\n  0 0 0 1.\n1 0 0 1.0\n";
+        assert_eq!(parse_solution(outside, p).unwrap(), s);
+        s[2] = None;
+        assert_eq!(parse_solution("1 0 0 1\n0 0 0 1\n", p).unwrap(), s);
+
+        // Read but infeasible: all three blocks in period 0 use 3.5 of its 2. check says so, and improve refuses it as
+        // a start rather than repair it.
+        let crowded = parse_solution("0 0 0 1\n1 0 0 1\n2 0 0 1\n", p).unwrap();
+        let c = check(p, &crowded).unwrap();
+        assert!(!c.feasible() && c.over_limit == vec![(0, 0)], "{c:?}");
+        let factors = discount_factors(m.discount_rate, RATE_SCALE, 2).unwrap();
+        let e = improve(p, &crowded, &factors, 10).unwrap_err();
+        assert!(e.what.contains("fails its check"), "{e:?}");
+        let found = improve(p, &parse_solution(outside, p).unwrap(), &factors, 10).unwrap();
+        assert!(check(p, &found.schedule).unwrap().feasible());
+
+        let cases = [
+            ("0 0 0\n", "is <block> <destination> <period> <fraction>"),
+            (
+                "0 0 0 1 x\n",
+                "is <block> <destination> <period> <fraction>",
+            ),
+            ("3 0 0 1\n", "line 1: block 3 is not one of 3 blocks"),
+            ("0 0 2 1\n", "line 1: period 2 is not one of 2 periods"),
+            ("0 1 0 1\n", "destination 1; CPIT has only destination 0"),
+            ("0 0 0 0.5\n", "fraction 0.5"),
+            ("0 0 0 0.999999\n", "fraction 0.999999"),
+            ("0 0 0 1.0000001\n", "fraction 1.0000001"),
+            ("0 0 0 1e0\n", "fraction 1e0"),
+            ("0 0 0 +1\n", "fraction +1"),
+            ("0 0 0 1\n% c\n0 0 1 1\n", "line 3: block 0 is listed twice"),
+            ("-1 0 0 1\n", "block \"-1\" is not a non-negative integer"),
+            ("0 0 x 1\n", "period \"x\" is not a non-negative integer"),
+        ];
+        for (text, why) in cases {
+            let e = parse_solution(text, p).unwrap_err();
+            assert_eq!(e.code, "FMINE-REF-506", "{e:?}");
+            assert!(e.what.contains(why), "{why} not in {e:?}");
+        }
     }
 }

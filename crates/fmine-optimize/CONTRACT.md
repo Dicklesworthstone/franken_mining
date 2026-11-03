@@ -30,6 +30,7 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
 - `toposort::cpit` (`bd-kcpj`): MineLib's CPIT text pair (`.cpit` periods, limits, values, uses and discount rate; `.prec` as for UPIT) read into a `ScheduleProblem`. No I/O.
   - Values are scaled as UPIT values are. Uses are rounded up (`Rounding::Ceiling`) and limits down (`Rounding::Floor`) when places are dropped, and both are counted.
   - Only `L` (upper) limits are read; `G` and `I` are refused. At most `MAX_RESOURCES` (64) resources.
+  - Solutions (`bd-3l5o`, plan §15.4 `UntrustedCandidate`): `parse_solution` reads a schedule from anywhere in MineLib's solution format, one `<block> <destination> <period> <fraction>` line per mined block. The destination must be 0 and the fraction exactly 1, since CPIT has one destination and mines whole blocks. It trusts nothing in the file: `check` decides feasibility and the exact value, and `search::improve` can start from it, so the outside schedule can become the incumbent. `write_solution` writes the same format, which `parse_solution` reads back.
 - `toposort::pcpsp` (`bd-2rne`): MineLib's PCPSP text pair (destinations, with one value per block and destination and uses per block, destination and resource) read into a `PcpspModel`. No I/O.
   - Scaling and rounding are as for CPIT. Uses round toward +∞ whatever their sign, so the rounded blend is never looser than the file's. Negative uses are read (`bd-ixfw`; MineLib's w23 has them in four blending rows). General side constraints and `G` and `I` limits are refused, since `ScheduleProblem` holds neither.
   - Each mined block goes whole to one destination; PCPSP's split blocks are not represented. `with_destinations` turns one destination per block into a `ScheduleProblem`, so `check`, `greedy` and `search::improve` apply unchanged.
@@ -47,7 +48,7 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
   - `starts` gives TopoSort's six schedules: three thresholds on the LP's final share, each with `greedy` and with `greedy_from` at the LP median periods. `incumbent` searches each, with `search::improve` or `pcpsp::improve`, and picks the first with the highest discounted value.
   - Moved from the two xtask harnesses without changing a bit (§9).
 
-`fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. `fmine-io`'s `omf::pit::PitModel` (bd-joiv) calls `slope::slope_arcs`, `solve` and `shells::nested_shells` on OMF block models. It also calls `toposort::greedy`, `toposort::search::discount_factors` and `toposort::search::improve` (bd-fr8x) to schedule OMF block models under capacities, and `toposort::lp`'s `relaxation`, `Shares`, `starts` and `incumbent` (bd-djb7), solving the relaxation with fmine-lp's PDLP in between. `toposort::pcpsp` has no caller outside tests. The MineLib harnesses in `crates/xtask/tests/` call `toposort::lp` and `toposort::pcpsp::lp`. Bienstock–Zuckerberg, Lagrangian and the stochastic layer are later slices.
+`fmine plan pit` (`fmine-cli`, `bd-ip99`, `bd-nq06`) calls `minelib::parse`, `solve`, `verify` and, with `--candidate`, `candidate::parse_ids` and `candidate::check`. `fmine-io`'s `omf::pit::PitModel` (bd-joiv) calls `slope::slope_arcs`, `solve` and `shells::nested_shells` on OMF block models. It also calls `toposort::greedy`, `toposort::search::discount_factors` and `toposort::search::improve` (bd-fr8x) to schedule OMF block models under capacities, and `toposort::lp`'s `relaxation`, `Shares`, `starts` and `incumbent` (bd-djb7), solving the relaxation with fmine-lp's PDLP in between. `toposort::pcpsp` has no caller outside tests. The MineLib harnesses in `crates/xtask/tests/` call `toposort::lp` and `toposort::pcpsp::lp`, and `cpit_schedule.rs` reads MineLib's schedules through `cpit::parse_solution` and writes its own with `write_solution` (bd-3l5o). Bienstock–Zuckerberg, Lagrangian and the stochastic layer are later slices.
 
 - **Crate:** `fmine-optimize`
 - **Layer:** E
@@ -69,7 +70,7 @@ The Pushback optimisation crate. Five solver slices, four readers and an LP brid
 - For `toposort` (`ScheduleProblem::new`): a `ClosureProblem` (values and requirements, as above), a period count, and per resource one `i64` use per block, of either sign, and one non-negative `i64` upper limit per period.
   - A schedule is one `Option<u32>` per block: its period, or `None` for unmined.
   - `greedy` takes one `Option<i64>` rank per block, lower first, or `None` to leave the block out. `greedy_from` also takes one release period per block, each a period of the problem.
-- For `toposort::cpit`: the two files' text, the value places and `Rounding`, and the use places.
+- For `toposort::cpit`: the two files' text, the value places and `Rounding`, and the use places. For `parse_solution`: a solution's text and the `ScheduleProblem` it is for.
 - For `toposort::search::improve`: a `ScheduleProblem`, a schedule that passes `check`, one non-negative `i64` discount factor per period that never rises, and a round limit. `discount_factors` takes a non-negative rate over a positive scale (`CpitModel::discount_rate` over `cpit::RATE_SCALE` fits) and a period count.
 - For `toposort::pcpsp`: `parse` as `cpit::parse`; `with_destinations` one destination per block; `greedy` one rank and one first destination per block, and `greedy_from` also one release period per block, each a period of the model; `destinations` and `improve` a schedule and destinations that pass `check` together, one discount factor per period (non-negative and never rising for `improve`), and a cycle limit for `improve`.
 
@@ -232,6 +233,7 @@ Every public function returns `Result<_, Refusal>`; none panics on bad input.
   - the `.prec` and decimal refusals of `minelib`.
 
   Test: `cpit::tests::every_malformed_pair_refuses`, one row each.
+- `FMINE-REF-506` (proposed), from `toposort::cpit::parse_solution`, naming the line: a line that is not four fields, a block or period that is not a non-negative integer below the problem's count, a destination other than 0, a fraction other than exactly 1 (`0.999999`, `1.0000001`, `1e0` and `+1` included), or a block listed twice. Test: `cpit::tests::a_solution_reads_back_and_an_outside_one_is_checked_before_any_search`, 13 cases. In the same test an infeasible candidate is reported by `check` (over its limit in period 0) and refused by `improve` as a start, not repaired. Planted, reverted: a period equal to the count let through; the test failed.
 - `FMINE-REF-506` (proposed), from `toposort::pcpsp::parse`: as for `cpit::parse` but reading negative uses (a negative limit is still refused), with a `TYPE` other than `PCPSP`, `NDESTINATIONS` of 0 or above `MAX_DESTINATIONS` (16), any general side constraint, an objective line without one value per destination, and a use for a destination out of range. Test: `pcpsp::tests::every_malformed_pair_refuses`, one row each.
 - `FMINE-REF-207` (proposed), from `toposort::pcpsp`: `parse` when each block's value largest in magnitude, summed over the blocks, reaches `ABS_VALUE_SUM_LIMIT` (2⁶²) (test: `pcpsp::tests::every_malformed_pair_refuses`, at the limit's edge); `with_destinations`, and `greedy` with its first destinations, given the wrong count or a destination past the last (`greedy` also refuses ranks of the wrong count, and a result that fails `check`, as a defect; `greedy_from` also release periods of the wrong count or past the last period); `destinations` and `improve` given a schedule and destinations that fail `check`, or factors of the wrong length (`improve` also refuses negative or rising ones); and, as defects, a result that fails `check` or is worth less than the input. Test: `pcpsp::tests::bad_inputs_refuse`.
 
@@ -374,6 +376,26 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   | zuck_large | stopped, 604.4 s | 57,391,041 | 0.0034% | 57,188,844 | 57,137,644 | +0.09% | 1.007 |
   | mclaughlin_limit | stopped, 610.6 s | 1,078,988,679 | 0.0009% | 1,074,914,865 | 1,076,149,599 | −0.11% | 1.001 |
 
+  From MineLib's own schedules (`bd-3l5o`, 2026-11-03), at 10⁻⁴ with the cached LPs: each `sols/<name>_cpit_gmunoz120723.sol` is read by `cpit::parse_solution` as an untrusted candidate, checked, and searched from by `improve` with the harness's factors and rounds. All ten are raised, and each result passed the exact oracle (`crates/xtask/testdata/minelib_cpit_oracle.py`) feasible, at NPVs equal to the test's to 10⁻³. This is a warm start from MineLib's schedule. The cold-start rows above are unchanged.
+
+  | Instance | MineLib's schedule, rechecked | Searched from it | Of best known | Rounds | Search time | Cold start at 10⁻⁴ | Cold start at 10⁻⁶ |
+  |---|---|---|---|---|---|---|---|
+  | kd | 396,858,192 | 405,742,817 | 1.0224 | 6 | 0.02 s | 393,795,083 | 406,516,814 |
+  | sm2 | 1,645,242,774 | 1,647,092,291 | 1.0011 | 17 | 0.33 s | 1,640,765,421 | 1,646,061,148 |
+  | newman1 | 23,483,671 | 23,864,851 | 1.0162 | 14 | 0.00 s | 23,988,996 | 24,011,422 |
+  | zuck_small | 788,652,600 | 813,233,968 | 1.0312 | 16 | 0.02 s | 822,141,680 | 829,063,066 |
+  | p4hd | 246,138,696 | 246,636,264 | 1.0020 | 4 | 0.05 s | 247,170,155 | 247,223,012 |
+  | w23 | 392,226,063 | 396,046,533 | 1.0097 | 8 | 0.10 s | 396,029,021 | 396,071,945 |
+  | marvin | 820,726,048 | 834,429,479 | 1.0167 | 15 | 0.08 s | 831,803,179 | 842,971,109 |
+  | zuck_medium | 615,411,415 | 645,522,363 | 1.0489 | 14 | 0.28 s | 642,707,459 | 638,403,145 |
+  | zuck_large | 56,777,190 | 57,054,925 | 1.0049 | 13 | 0.31 s | 57,137,644 | 57,188,844 |
+  | mclaughlin_limit | 1,073,327,197 | 1,075,397,040 | 1.0019 | 11 | 0.34 s | 1,076,149,599 | 1,074,914,865 |
+
+  - The search from MineLib's schedule gives the best of the three on sm2 (1,647,092,291, within 0.09% of its certified bound 1,648,501,297) and on zuck_medium. Elsewhere one of the cold starts is higher.
+  - Every value is under its certified bound and MineLib's LP bound.
+  - kd mines the same 12,154 blocks as MineLib's schedule, so its 2.24% gain comes from timing.
+  - "Best known" is MineLib's 2013 Results page. Newer published values were not checked.
+
   PCPSP w23 at 10⁻⁶, over all of its blocks:
   - The LP stopped at 601.3 s. Its certified bound, 387,719,818, is 0.07% below the one at 10⁻⁴.
   - Before Price (2414f7a) the best schedule fell 0.40%, to 306,685,623.
@@ -457,7 +479,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   - `check` lives in this crate beside `greedy`, not in the separate `fmine-verify` crate plan §15.4 names. It shares no code with `greedy` beyond the problem type.
   - The LP bridge (`bd-ubzs`) formulates the relaxation and reads its solution back, but does not solve it: `fmine-lp` is in the same layer as this crate, and the topology allows no edge between them. The caller solves it; today only `crates/xtask/tests/cpit_schedule.rs` and `pcpsp_schedule.rs` do, with PDLP.
   - No `fmine` verb schedules: `fmine-cli` is at its planned LOC budget, and BUDGET-AMEND-002 awaits the owner.
-- `candidate` reads a plain id list only. Which vendor formats (Whittle, Deswik, COMET) should be read is OPEN-PUSH-4. The candidate check was built ahead of the owner's answer to OPEN-PUSH-1, on its recommended answer (data files only, no linked code); it is removed if the owner rules otherwise.
+- `candidate` reads a plain id list only, and `cpit::parse_solution` only MineLib's CPIT solution format (no destinations, no part blocks; no PCPSP reader). Which vendor formats (Whittle, Deswik, COMET) should be read is OPEN-PUSH-4. An OMF schedule cannot yet come in this way: `fmine-io` has no reader keyed by OMF block order. The candidate check was built ahead of the owner's answer to OPEN-PUSH-1, on its recommended answer (data files only, no linked code); it is removed if the owner rules otherwise.
 - Slope arcs have no external gate. MineLib's UPIT files come with their arcs already made, and the workspace holds no geotechnical slope data. The slopes in the tests are invented.
 - Slope arcs cover regular grids only: no sub-blocks, rotated grids, or slopes that vary with depth inside a domain.
 - With more than one domain, the prefix sums cost 4 bytes per block on top of the arcs.
@@ -493,6 +515,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
 - `toposort::ScheduleCheck` (`mined`, `period_values`, `used`, `unmet`, `first_unmet`, `over_limit`, `feasible`, `value`), `toposort::WITNESSES`, `toposort::MAX_PERIODS`
 - `toposort::search::improve`, `toposort::search::improve_without_cones`, `toposort::search::Improvement` (`schedule`, `before`, `after`, `rounds`, `moves`), `toposort::search::Moves` (`later`, `earlier`, `cones`, `swaps`, `added`, `dropped`), `toposort::search::discount_factors`, `toposort::search::discounted_value`, `toposort::search::DISCOUNT_SCALE`, `toposort::search::SWAP_SCAN`, `toposort::search::CONE_LIMIT`
 - `toposort::check`, `toposort::greedy`, `toposort::greedy_from`
+- `toposort::cpit::parse_solution`, `toposort::cpit::write_solution` (`bd-3l5o`)
 - `toposort::cpit::parse`, `toposort::cpit::CpitModel` (`name`, `problem`, `discount_rate`, `rounded_values`, `rounded_uses`, `rounded_limits`), `toposort::cpit::MAX_RESOURCES`, `toposort::cpit::RATE_SCALE`
 - `toposort::pcpsp::parse`, `toposort::pcpsp::PcpspModel` (`name`, `discount_rate`, `rounded_values`, `rounded_uses`, `rounded_limits`, `blocks`, `periods`, `destinations`, `resources`, `value`, `uses`, `limits`, `requires`, `with_destinations`), `toposort::pcpsp::greedy`, `toposort::pcpsp::greedy_from`, `toposort::pcpsp::destinations`, `toposort::pcpsp::DestinationMoves` (`switches`, `exchanges`, `priced`, `unmined`), `toposort::pcpsp::improve`, `toposort::pcpsp::PcpspImprovement` (`schedule`, `destination`, `before`, `after`, `cycles`, `moves`, `destination_moves`), `toposort::pcpsp::MAX_DESTINATIONS`, `toposort::pcpsp::price::PRICE_COLUMNS`, `toposort::pcpsp::price::MASTER_STEPS`, `toposort::pcpsp::price::REPAIR_MOVES`
 - `toposort::lp::relaxation`, `toposort::lp::Relaxation` (`cost`, `matrix`, `row_lo`, `row_hi`, `col_lo`, `col_hi`), `toposort::lp::Shares` (`new`, `blocks`, `periods`, `share`, `expected`, `medians`), `toposort::lp::starts`, `toposort::lp::Start` (`threshold`, `released`, `schedule`), `toposort::lp::incumbent`, `toposort::lp::Incumbent` (`searched`, `best`, `schedule`), `toposort::lp::THRESHOLDS`. `Shares::ranks` is crate-only: `starts` takes its thresholds from `THRESHOLDS`, and a public bare-`f64` threshold would need an L-6 exception.

@@ -36,7 +36,11 @@
 //! With `FMINE_MINELIB_SOLS` pointing at the mirror's `sols/` files, MineLib's best-known schedule
 //! (`<name>_cpit_*.sol`) is read too. It must pass the same checker, and its NPV, computed the same way, must equal
 //! the published best-known value within one unit. That ties the checker and the NPV convention to an outside
-//! figure.
+//! figure. It is read by `toposort::cpit::parse_solution` as an untrusted candidate (bd-3l5o, plan §15.4), and
+//! `search::improve` then runs from it with the same factors and rounds. That search must pass the checker, must not
+//! lower the NPV and must stay under both bounds. It is reported as `from_known`, and written beside the API's
+//! schedule as `<name>_cpit_fmine_from_known.sol`. This warm start uses MineLib's own schedule; the API's schedule
+//! above does not.
 
 // Test helpers outside `#[test]` functions: a malformed MineLib file must fail the test at once.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -47,7 +51,7 @@ use std::time::Instant;
 use fmine_lp::pdlp::{LpProblem, PdlpOptions, solve_observed};
 use fmine_optimize::pitflow::minelib::Rounding;
 use fmine_optimize::toposort::lp::{self, Shares, THRESHOLDS};
-use fmine_optimize::toposort::search::discount_factors;
+use fmine_optimize::toposort::search::{discount_factors, improve};
 use fmine_optimize::toposort::{check, cpit};
 
 /// MineLib's Results page (Results.xhtml, mirrored at github.com/borelian/minelib, read 2026-11-01): the CPIT LP
@@ -69,25 +73,6 @@ const PUBLISHED: &[(&str, f64, f64)] = &[
 /// Places for values, uses and limits.
 const DECIMALS: u32 = 6;
 const SCALE: f64 = 1e6;
-
-/// A MineLib CPIT solution: one `<block> <destination> <period> <fraction>` line per mined block, whole blocks only.
-fn read_solution(text: &str, n: usize) -> Vec<Option<u32>> {
-    let mut schedule = vec![None; n];
-    for line in text.lines() {
-        let f: Vec<&str> = line.split_whitespace().collect();
-        if f.is_empty() || f[0].starts_with('%') {
-            continue;
-        }
-        assert_eq!(f.len(), 4, "solution line {line:?}");
-        assert_eq!(f[3].parse::<f64>().unwrap(), 1.0, "a part block: {line:?}");
-        let b: usize = f[0].parse().unwrap();
-        assert!(
-            schedule[b].replace(f[2].parse().unwrap()).is_none(),
-            "block {b} twice"
-        );
-    }
-    schedule
-}
 
 /// `Σ_t V_t / (1 + rate)^t`, periods counted from 0.
 fn npv(period_values: &[i128], rate: f64) -> f64 {
@@ -243,14 +228,13 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
         }
         // MineLib's solution format, so the schedule can be checked without this code
         // (crates/xtask/testdata/minelib_cpit_oracle.py).
-        if let Ok(dir) = std::env::var("FMINE_CPIT_SOLUTION_OUT") {
-            let text: String = found
-                .schedule()
-                .iter()
-                .enumerate()
-                .filter_map(|(b, t)| t.map(|t| format!("{b} 0 {t} 1.000000\n")))
-                .collect();
-            std::fs::write(Path::new(&dir).join(format!("{name}_cpit_fmine.sol")), text).unwrap();
+        let out = std::env::var("FMINE_CPIT_SOLUTION_OUT").ok();
+        if let Some(dir) = &out {
+            std::fs::write(
+                Path::new(dir).join(format!("{name}_cpit_fmine.sol")),
+                cpit::write_solution(found.schedule()),
+            )
+            .unwrap();
         }
         let sols = std::env::var("FMINE_MINELIB_SOLS").ok();
         let known = sols.as_deref().and_then(|d| {
@@ -261,8 +245,12 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
                     .then_some(path)
             })
         });
+        // MineLib's schedule as an untrusted candidate (bd-3l5o): read, checked, then searched from, so that it can
+        // become the incumbent.
+        let mut from_known = None;
         let known_npv = known.map(|path| {
-            let schedule = read_solution(&std::fs::read_to_string(&path).unwrap(), n);
+            let schedule =
+                cpit::parse_solution(&std::fs::read_to_string(&path).unwrap(), p).unwrap();
             let c = check(p, &schedule).unwrap();
             if !c.feasible() {
                 failures.push(format!(
@@ -271,6 +259,7 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
                     c.unmet,
                     c.over_limit
                 ));
+                return npv(&c.period_values, rate);
             }
             let v = npv(&c.period_values, rate);
             if (v - best_known).abs() > 1.0 {
@@ -278,6 +267,30 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
                     "{name}: MineLib's schedule is worth {v} here, not its published {best_known}"
                 ));
             }
+            let t = Instant::now();
+            let i = improve(p, &schedule, &factors, rounds).unwrap();
+            let c = check(p, &i.schedule).unwrap();
+            let after = npv(&c.period_values, rate);
+            if !c.feasible() || after < v - 1e-9 * v.abs().max(1.0) {
+                failures.push(format!(
+                    "{name}: the search from MineLib's schedule gave {after} from {v}, feasible {}",
+                    c.feasible()
+                ));
+            }
+            if certified.is_some_and(|u| after > u + 1.0) || after > published_lp + 1.0 {
+                failures.push(format!(
+                    "{name}: the search from MineLib's schedule gave {after}, above a bound ({certified:?}, \
+                     {published_lp})"
+                ));
+            }
+            if let Some(dir) = &out {
+                std::fs::write(
+                    Path::new(dir).join(format!("{name}_cpit_fmine_from_known.sol")),
+                    cpit::write_solution(&i.schedule),
+                )
+                .unwrap();
+            }
+            from_known = Some((after, i.rounds, t.elapsed().as_secs_f64()));
             v
         });
         let greedy_best = npvs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -299,7 +312,7 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
             .collect::<Vec<_>>()
             .join(",");
         println!(
-            "{{\"bead\":\"bd-5lxu\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"resources\":{},\"rounded\":[{},{},{}],\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"per_threshold\":[\"earliest\",\"lp_release\"],\"npv\":[{}],\"mined\":{mined:?},\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"greedy_best\":{greedy_best:.3},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{:.4},\"best_known_rechecked\":{}}}",
+            "{{\"bead\":\"bd-5lxu\",\"instance\":\"{name}\",\"blocks\":{n},\"periods\":{periods},\"resources\":{},\"rounded\":[{},{},{}],\"tol\":{tol},\"lp_status\":\"{lp_status}\",\"lp_s\":{lp_s:.1},\"certified_ub\":{},\"published_lp\":{published_lp:.0},\"best_known\":{best_known:.0},\"thresholds\":{THRESHOLDS:?},\"per_threshold\":[\"earliest\",\"lp_release\"],\"npv\":[{}],\"mined\":{mined:?},\"greedy_s\":{greedy_s:.2},\"searched\":[{}],\"moves\":[{moves}],\"search_s\":{search_s:.2},\"greedy_best\":{greedy_best:.3},\"best_npv\":{best:.3},\"gap_to_certified\":{},\"gap_to_published_lp\":{:.4e},\"of_best_known\":{:.4},\"best_known_rechecked\":{},\"from_known\":{}}}",
             p.resources(),
             model.rounded_values,
             model.rounded_uses,
@@ -311,6 +324,10 @@ fn minelib_cpit_schedules_pass_the_checker_under_the_certified_bound() {
             rel(published_lp),
             best / best_known,
             known_npv.map_or("null".to_string(), |v| format!("{v:.3}")),
+            from_known.map_or("null".to_string(), |(v, r, s)| format!(
+                "{{\"npv\":{v:.3},\"of_best_known\":{:.6},\"rounds\":{r},\"search_s\":{s:.2}}}",
+                v / best_known
+            )),
         );
         match certified {
             Some(u) if best > u + 1.0 => failures.push(format!(
