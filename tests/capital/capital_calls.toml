@@ -1,0 +1,536 @@
+# DESIGN / SYNTHETIC: invented subscriptions, observations and already-net NAV.
+# No actual JV agreement, calibrated forecast or execution authority is asserted.
+# An initial study obliges a future USD10 contribution even after abandonment.
+# Good-only build: parent ownership 13/21, dividend130, ending cash180; Bad
+# abandonment: initial obligation persists, ownership7/11, ending cash110.
+# Independent objective: mean delta NAV/share9/20, tail loss1/20.
+schema = "fmine.capital-program.v1"
+model_key = "invented_capital_program"
+question = "Compare invented capital choices \"jointly\" \\ Ω"
+currency = "USD"
+valuation_basis = "Invented 2030 real USD net delta NAV, full project ownership"
+budget = "105"
+tail_mass = "1/5"
+payoff_convention = "additive_equity_nav_with_share_changes"
+reference_class_basis = "Declared reference-class widening; illustrative and uncalibrated"
+
+[[state]]
+id = "good"
+weight = "1/2"
+
+[[state]]
+id = "bad"
+weight = "1/2"
+
+[[candidate]]
+id = "study"
+label = "Invented study"
+cost = "5"
+reference_class_basis = "Declared reference-class adjustment for study"
+
+[[candidate]]
+id = "build"
+label = "Invented build"
+cost = "100"
+reference_class_basis = "Declared reference-class adjustment for build"
+
+[[payoff]]
+candidate = "study"
+state = "good"
+value = "-5"
+
+[[payoff]]
+candidate = "study"
+state = "bad"
+value = "-5"
+
+[[payoff]]
+candidate = "build"
+state = "good"
+value = "100"
+
+[[payoff]]
+candidate = "build"
+state = "bad"
+value = "-20"
+
+[[requires]]
+candidate = "build"
+prerequisite = "study"
+
+[[equity_basis]]
+entity = "parent"
+share_class = "Invented ordinary shares"
+shares_per_unit = "1/1"
+initial_share_units = "100/1"
+max_tail_loss_per_share = "1/20"
+
+[[baseline_equity_nav]]
+state = "good"
+value = "1000"
+
+[[baseline_equity_nav]]
+state = "bad"
+value = "1000"
+
+[[candidate_share_change]]
+candidate = "study"
+state = "good"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "study"
+state = "bad"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "build"
+state = "good"
+value = "0/1"
+
+[[candidate_share_change]]
+candidate = "build"
+state = "bad"
+value = "0/1"
+
+[[uu]]
+id = "outside_scenarios"
+description = "Unmodelled \"permit\" delay \\ Ω"
+trigger = "A permitting delay outside the declared states occurs"
+downside_usd_m = "5.0"
+
+[[entity_funding]]
+cash_basis = "Invented native USD cash excluding modeled capital calls and any separately modeled debt"
+opening_date = "2030-01-01"
+objective_entity = "parent"
+
+[[entity]]
+id = "parent"
+label = "Invented parent"
+
+[[entity]]
+id = "jv"
+label = "Invented jv"
+
+[[entity_period]]
+id = "first"
+cash_period = "2030-01-01/2030-04-30"
+
+[[entity_period]]
+id = "second"
+cash_period = "2030-05-01/2030-08-31"
+
+[[entity_period]]
+id = "third"
+cash_period = "2030-09-01/2030-12-31"
+
+[[entity_floor]]
+entity = "parent"
+period = "first"
+value = "20"
+
+[[entity_floor]]
+entity = "jv"
+period = "first"
+value = "20"
+
+[[entity_floor]]
+entity = "parent"
+period = "second"
+value = "20"
+
+[[entity_floor]]
+entity = "jv"
+period = "second"
+value = "20"
+
+[[entity_floor]]
+entity = "parent"
+period = "third"
+value = "20"
+
+[[entity_floor]]
+entity = "jv"
+period = "third"
+value = "20"
+
+[[entity_opening_cash]]
+entity = "parent"
+state = "good"
+value = "125"
+
+[[entity_opening_cash]]
+entity = "parent"
+state = "bad"
+value = "125"
+
+[[entity_opening_cash]]
+entity = "jv"
+state = "good"
+value = "20"
+
+[[entity_opening_cash]]
+entity = "jv"
+state = "bad"
+value = "20"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "first"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "first"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "jv"
+period = "first"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "jv"
+period = "first"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "second"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "second"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "jv"
+period = "second"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "jv"
+period = "second"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "third"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "parent"
+period = "third"
+state = "bad"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "jv"
+period = "third"
+state = "good"
+value = "0"
+
+[[entity_baseline_cash_flow]]
+entity = "jv"
+period = "third"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "study"
+state = "good"
+value = "-5"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "study"
+state = "bad"
+value = "-5"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "build"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "first"
+candidate = "build"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "first"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "first"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "first"
+candidate = "build"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "first"
+candidate = "build"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "build"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "second"
+candidate = "build"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "second"
+candidate = "study"
+state = "good"
+value = "-10"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "second"
+candidate = "study"
+state = "bad"
+value = "-10"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "second"
+candidate = "build"
+state = "good"
+value = "-100"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "second"
+candidate = "build"
+state = "bad"
+value = "-100"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "build"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "parent"
+period = "third"
+candidate = "build"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "third"
+candidate = "study"
+state = "good"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "third"
+candidate = "study"
+state = "bad"
+value = "0"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "third"
+candidate = "build"
+state = "good"
+value = "210"
+
+[[entity_candidate_cash_flow]]
+entity = "jv"
+period = "third"
+candidate = "build"
+state = "bad"
+value = "0"
+
+[[entity_distribution]]
+entity = "jv"
+parent_entity = "parent"
+parent_share = "3/5"
+basis = "Invented initial ownership; subsequent declared subscriptions change dividend rights"
+
+[[entity_distribution_gate]]
+entity = "jv"
+period = "first"
+state = "good"
+allowed = "true"
+maximum_distribution = "1000"
+
+[[entity_distribution_gate]]
+entity = "jv"
+period = "first"
+state = "bad"
+allowed = "true"
+maximum_distribution = "1000"
+
+[[entity_distribution_gate]]
+entity = "jv"
+period = "second"
+state = "good"
+allowed = "true"
+maximum_distribution = "1000"
+
+[[entity_distribution_gate]]
+entity = "jv"
+period = "second"
+state = "bad"
+allowed = "true"
+maximum_distribution = "1000"
+
+[[entity_distribution_gate]]
+entity = "jv"
+period = "third"
+state = "good"
+allowed = "true"
+maximum_distribution = "1000"
+
+[[entity_distribution_gate]]
+entity = "jv"
+period = "third"
+state = "bad"
+allowed = "true"
+maximum_distribution = "1000"
+
+[[recourse]]
+information_candidate = "study"
+observation_date = "2030-05-01"
+information_basis = "Invented paid observation reveals partner funding before the build commitment"
+
+[[candidate_stage]]
+candidate = "study"
+stage = "initial"
+
+[[candidate_stage]]
+candidate = "build"
+stage = "recourse"
+
+[[state_observation]]
+state = "good"
+observation = "good"
+
+[[state_observation]]
+state = "bad"
+observation = "bad"
+
+[[entity_capital_calls]]
+method = "pre_money_subscription"
+cash_flow_convention = "native_excludes_modeled_capital_calls"
+
+[[capital_call]]
+id = "study_obligation"
+entity = "jv"
+period = "second"
+sequence = "1"
+basis = "Invented equal-price subscription, explicit pre-money valuation; no actual JV terms \\ \"Ω\""
+candidate = "study"
+
+[[capital_call_state]]
+call = "study_obligation"
+state = "good"
+pre_money_value = "100"
+required_funding = "10"
+parent_contribution = "10"
+external_contribution = "0"
+
+[[capital_call_state]]
+call = "study_obligation"
+state = "bad"
+pre_money_value = "100"
+required_funding = "10"
+parent_contribution = "10"
+external_contribution = "0"
+
+[[capital_call]]
+id = "build_subscription"
+entity = "jv"
+period = "second"
+sequence = "2"
+basis = "Invented equal-price subscription, explicit pre-money valuation; no actual JV terms \\ \"Ω\""
+candidate = "build"
+
+[[capital_call_state]]
+call = "build_subscription"
+state = "good"
+pre_money_value = "110"
+required_funding = "100"
+parent_contribution = "60"
+external_contribution = "40"
+
+[[capital_call_state]]
+call = "build_subscription"
+state = "bad"
+pre_money_value = "110"
+required_funding = "100"
+parent_contribution = "100"
+external_contribution = "0"

@@ -353,6 +353,13 @@ remain unchanged.
   `candidate`, `state`, `draw`, `principal_payment_cap`, `cfads`. All matrices are complete, including
   explicit zeroes. Debt rows require both entity/debt declarations and retain their original line anchors
   in the existing entity Claim; unknown, duplicate, orphan and malformed rows refuse.
+  Optional `[[entity_capital_calls]]` requires `method = "pre_money_subscription"` and
+  `cash_flow_convention = "native_excludes_modeled_capital_calls"`. `[[capital_call]]` requires `id`,
+  `entity`, `period`, `sequence`, `basis`, with optional activating `candidate`. The sequence is a quoted
+  integer in `1..=64`, unique within an entity/period. `[[capital_call_state]]` requires `call`, `state`,
+  `pre_money_value`, `required_funding`, `parent_contribution`, `external_contribution`; monetary values
+  are quoted USD decimals. Every call/state is explicit. All three tables require entity funding, retain
+  their original source/line anchors in its Claim, and pass the same typed admission and work bounds.
   Optional `[[equity_basis]]` requires `entity`, `share_class`, `shares_per_unit`, `initial_share_units` and
   accepts `max_tail_loss_per_share`. `[[baseline_equity_nav]]` requires `state`, `value` for every state;
   `[[candidate_share_change]]` requires `candidate`, `state`, `value` for every candidate/state pair,
@@ -521,6 +528,15 @@ JV cash; full parent payments remain visible despite a floor breach and subseque
 The two-stage regression keeps an initial later call after abandonment and excludes an unrealized state's
 call shortfall from a feasible policy. Invalid terms/matrices/sequences, altered Claims and calls activated
 by future decisions before observation refuse.
+An independent Python Fraction oracle checks twelve subscription scenarios through the actual binary,
+including exact sub-minor-unit ownership, ordered repeated calls, old versus new dividend rights,
+oversubscription, nested entity calls, debt coverage/sweeps and the complete rejected population. It
+reconstructs all static and adaptive call/cash/debt ledgers and compares exact statistics and winners.
+The checked-in synthetic `tests/capital/capital_calls.toml` pays a study and its later USD 10 subscription
+on both paths, then constructs only after Good. Parent ownership ends at 13/21 after Good and 7/11 after
+Bad abandonment, with cash of 180/110. Mean and net adaptive value are 9/20 USD/share, tail loss 1/20.
+Three integration tests verify the oracle, complete library/binary JSON/Markdown parity and original
+example source bytes. No actual issuer subscription or dilution agreement is claimed.
 Debt known answers cover exact principal carry and falling interest after sweeps, coverage equality and
 locked-cash carry, mandatory-service shortfalls, draw-before-interest and independent CFADS, final payoff
 caps, explicit zero-service permissions, and nested intermediary/root sweeps of child receipts. The

@@ -519,9 +519,10 @@ payment. Fixed transfers are never clipped to available cash. Internal movements
 conservation equation, while outside distributions explicitly reduce group cash:
 `closing cash + outside distributions = opening cash + native external flows`.
 
-Capital calls and ownership are separate declarations. Record an external partner's contribution as a
-native receipt and a parent's call as an internal transfer; do not also record that transfer as native
-cash. No contribution, top-up, dilution or actual lending terms are inferred. Declared gate permissions and
+For funding that leaves ownership unchanged, record an external partner's contribution as a native receipt
+and a parent's call as an internal transfer; do not also record that transfer as native cash. Explicit
+subscription calls below instead settle their own cash and update ownership. No contribution, top-up,
+actual JV agreement or lending terms are inferred. Declared gate permissions and
 caps remain assumptions; optional debt terms below add calculated coverage conditions. Candidate NAV remains separately
 declared and already net of costs; cash is not added to or deducted from those values again.
 
@@ -533,9 +534,79 @@ Each policy reuses only the ledger for its realized subset and state.
 The bounded model admits at most four entities, 64 transfers and 16 periods. With `E` entities, `P` periods,
 `T` transfers and `D` distribution edges, each state requires `E × (2P + 1) + T + D × P + P` ledger rows.
 Optional debt adds one result per facility/period, so `F` facilities add `F × P` rows per state.
+Optional subscription funding adds one row per declared call, including inactive calls.
 Across every static subset and, when present, every policy, the total may not exceed 65,536. This includes
 all checkpoints, inactive transfers, blocked distributions and conservation rows; oversized models refuse
 before enumeration. The complete source, including losing inputs and original line anchors, binds the receipt.
+
+#### Fund JV capital calls and carry changing ownership into dividends
+
+DESIGN (BD-314, plan section 23.2): explicit subscription calls can change a parent's JV interest when the
+parent and outside partner contribute different amounts. The engine settles the declared funding, checks
+the required raise, and uses the resulting ownership for current and later distributions. Run the complete
+invented example:
+
+```bash
+cargo run -p fmine-cli -- decide program tests/capital/capital_calls.toml --format markdown
+cargo run -p fmine-cli -- decide program tests/capital/capital_calls.toml --json
+```
+
+The supported method is explicitly named `pre_money_subscription`. Given the parent's previous fraction
+`s`, a declared positive 100% pre-money equity value `V`, parent funding `P` and outside funding `X`, the new
+parent fraction is `(s × V + P) / (V + P + X)`. All arithmetic remains exact. Starting at 60% and a pre-money
+value of USD 100, a USD 100 round preserves 60% if the parties fund 60/40, increases the parent to 80% if it
+funds the whole round, or reduces it to 30% if the outside partner funds the whole round.
+
+The example starts with Parent cash of USD 125, JV cash of USD 20 and a 60% Parent interest; each cash floor
+is USD 20. Parent pays USD 5 for a study. That initial decision also commits USD 10 of later JV funding,
+which remains payable after either observation. At a pre-money value of USD 100, this first subscription
+changes Parent ownership to 7/11. The JV spends those USD 10 on its declared initial obligation.
+
+After observing Good, the policy funds construction through a second USD 100 round at a pre-money value of
+USD 110: Parent contributes USD 60 and the partner USD 40. After Bad, it abandons construction while paying
+the initial obligation. The two possible realized paths are:
+
+| Result | Good: construct | Bad: abandon |
+|---|---:|---:|
+| Initial future Parent contribution | USD 10 | USD 10 |
+| Construction Parent / outside contribution | USD 60 / USD 40 | USD 0 / USD 0 |
+| Final Parent ownership | 13/21 | 7/11 |
+| Final JV dividend to Parent / outside partner | USD 130 / USD 80 | USD 0 / USD 0 |
+| Ending Parent cash | USD 180 | USD 110 |
+| Ending JV cash | USD 20 | USD 20 |
+| Separately declared Parent NAV/share change | 19/20 USD/share | -1/20 USD/share |
+
+Expected NAV/share improvement is **9/20**, tail loss is **1/20**, and net adaptive value is **9/20** over
+the best feasible fixed program, hold. Always constructing would require Parent to fund the entire second
+round after Bad, leaving only USD 10 against its USD 20 floor. That rejected path still shows the full
+payment and its resulting 17/21 ownership. All four static portfolios and six policies remain visible.
+
+Add these tables to a complete `entity_funding` model:
+
+| Table | Required fields |
+|---|---|
+| `[[entity_capital_calls]]` | `method = "pre_money_subscription"`, `cash_flow_convention = "native_excludes_modeled_capital_calls"` |
+| `[[capital_call]]` | `id`, `entity`, `period`, `sequence`, `basis`; optional activating `candidate` |
+| `[[capital_call_state]]` | `call`, `state`, `pre_money_value`, `required_funding`, `parent_contribution`, `external_contribution` |
+
+Each call uses the distributing entity's existing modeled parent and requires every shared state,
+including zero contributions. Money uses quoted USD decimals. `sequence` is a quoted integer in `1..=64`,
+unique within an entity/period; multiple calls follow that explicit order rather than identifier or input
+order. Up to 64 calls are admitted within the complete ledger-work bound. Candidate alternatives may
+activate different calls, and inactive calls retain their declared terms beside zero actual settlement.
+
+Native cash and fixed transfers must exclude these modeled contributions. Parent pays its full declared
+amount; the JV receives parent plus outside cash before debt service and pre-distribution floor checks.
+Funding is never reduced to available cash. A raise below `required_funding` is a separate structural
+failure even if the JV already holds enough cash. Partial contributions and their ownership effects stay
+visible on rejected paths; the model supplies no automatic top-up or rollback. Oversubscription is allowed
+when declared. Outside funding enters cash conservation separately, while internal Parent funding cancels.
+
+Initial candidates' future calls survive abandonment. Recourse candidates cannot activate calls before
+the observation boundary. The same-state call ledger composes with debt coverage/sweeps and independently
+declared primary and secondary valuations. Subscription ownership does not manufacture another entity's
+NAV or alter its separately supplied terminal share count. These synthetic examples demonstrate declared
+subscription mechanics; they do not represent an issuer's actual JV agreement or penalty-dilution terms.
 
 #### Calculate debt service, coverage locks and cash sweeps
 
@@ -728,7 +799,7 @@ Up to three secondary entities are admitted alongside the primary. With secondar
 static-plus-policy population times shared states times all valuation entities must not exceed 65,536
 valuation-state rows. Cash-work limits continue to apply independently. Valuations and transaction effects
 are explicit source assumptions: the engine does not infer NAV from ownership cash, reconcile overlapping
-perimeters, derive contractual capital-call dilution, or change dated waterfall ownership from terminal
+perimeters, infer actual JV penalty-dilution terms, or change dated waterfall ownership from terminal
 share changes. Without secondary declarations, existing report bytes and receipts remain unchanged.
 
 #### Fund a study, then choose a response
@@ -786,7 +857,7 @@ recalculating those ledgers for every policy, and sorts exact distributions with
 
 These are conditional comparisons of declared assumptions. The examples apply no fitted reference-class
 correction, and the output supplies no calibrated signal probabilities, empirical selection frequency,
-additional decision stages, automatic ownership dilution, project feasibility approval or execution authority.
+additional decision stages, inferred JV agreement terms, project feasibility approval or execution authority.
 The wider CapitalProgram and its M4 gates remain open.
 
 ### Compare explicit decision alternatives

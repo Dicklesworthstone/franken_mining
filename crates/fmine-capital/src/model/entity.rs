@@ -10,6 +10,7 @@ use crate::entity::{
     MAX_ENTITIES, MAX_TRANSFERS,
 };
 
+mod capital_call;
 mod debt;
 
 struct Header {
@@ -32,6 +33,7 @@ pub(super) struct EntityRows {
     distributions: BTreeMap<String, EntityDistribution>,
     gates: BTreeMap<(String, String, String), EntityDistributionGate>,
     debt: debt::DebtRows,
+    capital_calls: capital_call::CapitalCallRows,
     anchors: Vec<SourceAnchor>,
 }
 
@@ -60,6 +62,7 @@ pub(super) fn handles_table(table: &str) -> bool {
             | "entity_distribution"
             | "entity_distribution_gate"
     ) || debt::handles_table(table)
+        || capital_call::handles_table(table)
 }
 
 fn entity_fields<'a>(row: &'a TomlRow, required: &[&str], optional: &[&str]) -> Result<Fields<'a>> {
@@ -357,6 +360,7 @@ impl EntityRows {
                 format!("entity distribution gate {entity}/{period}/{state}")
             }
             other if debt::handles_table(other) => self.debt.push(row)?,
+            other if capital_call::handles_table(other) => self.capital_calls.push(row)?,
             other => {
                 return Err(input(
                     row.line,
@@ -429,7 +433,7 @@ impl EntityRows {
             distributions: self.distributions.into_values().collect(),
             gates: self.gates.into_values().collect(),
             debt: self.debt.finish()?,
-            capital_calls: None,
+            capital_calls: self.capital_calls.finish()?,
         };
         crate::entity::validate_bounds(&funding, context.states.len(), context.candidates.len())?;
         crate::entity::canonicalize(&mut funding);
