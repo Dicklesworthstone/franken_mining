@@ -1753,3 +1753,295 @@ fn proportions_refuse_missing_ambiguous_and_unsuitable_elements() {
         "closed mesh",
     );
 }
+
+/// A Number attribute at `location` from one nullable `number` column of `n` rows.
+fn numbers_at(b: &mut Build, name: &str, location: &str, col: Col, n: usize) -> String {
+    let arr = b.arr(pq(&[col], n), n);
+    attribute(
+        name,
+        location,
+        &format!(r#"{{"type":"Number","values":{arr}}}"#),
+    )
+}
+
+fn floats(v: &[Option<f64>]) -> Col {
+    ncol(
+        "number",
+        Physical::Double,
+        Logical::None,
+        v.iter().map(Option::is_some).collect(),
+        Values::Double(v.iter().flatten().copied().collect()),
+    )
+}
+
+fn integers(v: &[i64]) -> Col {
+    ncol(
+        "number",
+        Physical::Int64,
+        Logical::None,
+        vec![true; v.len()],
+        Values::Int64(v.to_vec()),
+    )
+}
+
+fn block_model_at(
+    name: &str,
+    orient: &str,
+    size: &str,
+    count: &str,
+    attributes: &[String],
+) -> String {
+    element(
+        name,
+        &format!(
+            r#"{{"type":"BlockModel","orient":{orient},"grid":{{"type":"Regular","size":{size},"count":{count}}}}}"#
+        ),
+        &attributes.join(","),
+    )
+}
+
+/// A 5 x 1 x 3 section of 12.5 m blocks, OMF order `w·5 + u` with `w = 0` at the bottom: waste at -1 everywhere but
+/// the ore at the bottom centre, block 2, worth 9.25 ("value") or 7.75 ("low value"). At 45 degrees its cone is the
+/// three blocks above it and the whole top layer: blocks 2, 6-8 and 10-14.
+fn section() -> Project {
+    let mut b = Build::default();
+    let blocks = |b: &mut Build, name: &str, col: Col| numbers_at(b, name, "Primitives", col, 15);
+    let with_ore = |ore: f64| -> Vec<Option<f64>> {
+        (0..15)
+            .map(|i| Some(if i == 2 { ore } else { -1.0 }))
+            .collect()
+    };
+    let value = blocks(&mut b, "value", floats(&with_ore(9.25)));
+    let low = blocks(&mut b, "low value", floats(&with_ore(7.75)));
+    let mut gappy = with_ore(9.25);
+    gappy[7] = None;
+    let gaps = blocks(&mut b, "gaps", floats(&gappy));
+    let mut huge = with_ore(9.25);
+    huge[0] = Some(1e19);
+    let huge = blocks(&mut b, "huge", floats(&huge));
+    // Revenue at the ore (10) and at the top-left corner, block 10 (3); cost 2 at the ore and 1 elsewhere.
+    let revenue: Vec<i64> = (0..15)
+        .map(|i| match i {
+            2 => 10,
+            10 => 3,
+            _ => 0,
+        })
+        .collect();
+    let revenue = blocks(&mut b, "revenue", integers(&revenue));
+    let cost: Vec<i64> = (0..15).map(|i| if i == 2 { 2 } else { 1 }).collect();
+    let cost = blocks(&mut b, "cost", integers(&cost));
+    // Slope domains: the top layer soft (0), the two below hard (1).
+    let rock_idx = b.arr(
+        pq(
+            &[ncol(
+                "index",
+                Physical::Int32,
+                U32,
+                vec![true; 15],
+                Values::Int32((0..15).map(|i| i32::from(i < 10)).collect()),
+            )],
+            15,
+        ),
+        15,
+    );
+    let rock_names = b.arr(
+        pq(
+            &[rcol(
+                "name",
+                Physical::ByteArray,
+                Logical::String,
+                Values::Bytes(vec![b"soft".to_vec(), b"hard".to_vec()]),
+            )],
+            2,
+        ),
+        2,
+    );
+    let rock = attribute(
+        "rock",
+        "Primitives",
+        &format!(r#"{{"type":"Category","values":{rock_idx},"names":{rock_names}}}"#),
+    );
+    let corners = numbers_at(
+        &mut b,
+        "corner value",
+        "Vertices",
+        floats(&[Some(0.0); 48]),
+        48,
+    );
+    let level = r#"{"origin":[1000,2000,300]}"#;
+    let elements = [
+        block_model_at(
+            "section",
+            level,
+            "[12.5,12.5,12.5]",
+            "[5,1,3]",
+            &[value, low, gaps, huge, revenue, cost, rock, corners],
+        ),
+        block_model_at(
+            "tilted",
+            r#"{"origin":[0,0,0],"u":[1,0,0],"v":[0,0.6,0.8],"w":[0,-0.8,0.6]}"#,
+            "[1,1,1]",
+            "[1,1,1]",
+            &[],
+        ),
+        block_model_at(
+            "mirrored",
+            r#"{"origin":[0,0,0],"u":[0,1,0],"v":[1,0,0],"w":[0,0,1]}"#,
+            "[1,1,1]",
+            "[1,1,1]",
+            &[],
+        ),
+        block_model_at("decimetre", level, "[0.1,1,1]", "[1,1,1]", &[]),
+    ];
+    read(&b.file(&elements.join(","))).unwrap()
+}
+
+fn omf_blocks(flags: &[bool]) -> Vec<usize> {
+    (0..flags.len()).filter(|&b| flags[b]).collect()
+}
+
+#[test]
+fn an_omf_block_model_gives_its_certified_ultimate_pit_and_shells() {
+    use fmine_optimize::pitflow::shells::RevenueFactor;
+    use fmine_optimize::pitflow::slope::{Sector, SlopeTable, SlopeTangent};
+
+    let p = section();
+    let steep = SlopeTangent::new(1, 1).unwrap();
+    let uniform = SlopeTable::uniform(steep);
+    let m = pit::PitModel::new(&p, "section", &uniform, None, 2).unwrap();
+    assert_eq!(m.size_scale(), 1, "12.5 m blocks are 25 half-metres");
+    let cone = vec![2, 6, 7, 8, 10, 11, 12, 13, 14];
+
+    // The ore pays for its cone: 9.25 x 4 = 37 quarter-units against 8 x 4 of waste.
+    let pit = m.ultimate_pit("value", 4).unwrap();
+    assert_eq!(
+        (pit.value(), omf_blocks(&m.omf_order(pit.in_pit()))),
+        (5, cone.clone())
+    );
+    // 7.75 does not: 31 against 32, so the best pit is empty.
+    let pit = m.ultimate_pit("low value", 4).unwrap();
+    assert_eq!((pit.value(), pit.pit_size()), (0, 0));
+    // At whole units 9.25 rounds to 9, still one more than the waste.
+    assert_eq!(m.ultimate_pit("value", 1).unwrap().value(), 1);
+
+    // A hard domain at 2:1 below the soft top layer narrows the cone to the block above and three on top, which
+    // 7.75 pays for: 31 - 4 x 4 = 15.
+    let hard = SlopeTangent::new(2, 1).unwrap();
+    let two = SlopeTable::new(vec![
+        vec![Sector::new(1, 0, steep).unwrap()],
+        vec![Sector::new(1, 0, hard).unwrap()],
+    ])
+    .unwrap();
+    let m2 = pit::PitModel::new(&p, "section", &two, Some("rock"), 2).unwrap();
+    let pit = m2.ultimate_pit("low value", 4).unwrap();
+    assert_eq!(
+        (pit.value(), omf_blocks(&m2.omf_order(pit.in_pit()))),
+        (15, vec![2, 7, 11, 12, 13])
+    );
+
+    // Shells at revenue factors 1/2, 3/2 and 2: the corner alone (3/2 - 1, in halves 1), then the cone (in halves
+    // 3 x 13 - 2 x 10 = 19), then the cone again (2 x 13 - 10 = 16).
+    let factors = [
+        RevenueFactor::new(1, 2).unwrap(),
+        RevenueFactor::new(3, 2).unwrap(),
+        RevenueFactor::new(2, 1).unwrap(),
+    ];
+    let shells = m.shells("revenue", "cost", 1, &factors).unwrap();
+    let summary: Vec<(usize, i64)> = shells
+        .shells()
+        .iter()
+        .map(|s| (s.blocks, s.value))
+        .collect();
+    assert_eq!(summary, vec![(1, 1), (9, 19), (9, 16)]);
+    let first = m.omf_order(shells.first_shell());
+    for (b, &f) in first.iter().enumerate() {
+        let want = if b == 10 {
+            0
+        } else if cone.contains(&b) {
+            1
+        } else {
+            u32::MAX
+        };
+        assert_eq!(f, want, "block {b}");
+    }
+    println!(
+        r#"{{"test":"omf_pit","arcs":{},"cone":{cone:?},"shells":{summary:?}}}"#,
+        m.arc_count()
+    );
+
+    // every_kind's block model is turned about W, which a pit accepts.
+    let every = read(&every_kind()).unwrap();
+    let turned = pit::PitModel::new(&every, "blocks", &uniform, None, 1).unwrap();
+    assert_eq!((turned.grid().block_count(), turned.arc_count()), (2, 0));
+}
+
+#[test]
+fn omf_pits_refuse_unsuitable_models_and_attributes() {
+    use fmine_optimize::pitflow::slope::{SlopeTable, SlopeTangent};
+
+    let p = section();
+    let uniform = SlopeTable::uniform(SlopeTangent::new(1, 1).unwrap());
+    let model =
+        |name: &str, domain: Option<&str>| pit::PitModel::new(&p, name, &uniform, domain, 2);
+    refused_as(model("tilted", None), "FMINE-REF-109", "W straight up");
+    refused_as(model("mirrored", None), "FMINE-REF-109", "is mirrored");
+    refused_as(
+        model("decimetre", None),
+        "FMINE-REF-109",
+        "not integers below 2^32",
+    );
+    refused_as(
+        model("nowhere", None),
+        "FMINE-REF-506",
+        r#"no element is called "nowhere""#,
+    );
+    refused_as(
+        model("section", Some("value")),
+        "FMINE-REF-506",
+        "is not a Category",
+    );
+    // The rock categories name domain 1, which a one-domain table lacks.
+    refused_as(model("section", Some("rock")), "FMINE-REF-207", "domain");
+    let every = read(&every_kind()).unwrap();
+    refused_as(
+        pit::PitModel::new(&every, "tensor", &uniform, None, 1),
+        "FMINE-REF-109",
+        "tensor grid",
+    );
+    refused_as(
+        pit::PitModel::new(&every, "tri", &uniform, None, 1),
+        "FMINE-REF-506",
+        "is a Surface, not a BlockModel",
+    );
+
+    let m = model("section", None).unwrap();
+    refused_as(
+        m.weights("nothing", 1),
+        "FMINE-REF-506",
+        r#"0 attributes called "nothing""#,
+    );
+    refused_as(
+        m.weights("corner value", 1),
+        "FMINE-REF-506",
+        "is on Vertices",
+    );
+    refused_as(m.weights("rock", 1), "FMINE-REF-506", "is not a Number");
+    refused_as(
+        m.weights("gaps", 1),
+        "FMINE-REF-506",
+        "no value for block [2, 0, 1]",
+    );
+    refused_as(
+        m.weights("value", 0),
+        "FMINE-REF-109",
+        "per_unit of at least 1",
+    );
+    refused_as(m.weights("huge", 1), "FMINE-REF-109", "is not a finite i64");
+    // Revenue must not be negative for shells to nest.
+    let factors = [fmine_optimize::pitflow::shells::RevenueFactor::new(1, 1).unwrap()];
+    refused_as(
+        m.shells("value", "cost", 1, &factors),
+        "FMINE-REF-207",
+        "negative revenue",
+    );
+}

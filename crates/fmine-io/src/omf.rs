@@ -28,6 +28,7 @@ use crate::zip_inflate::{archive_comment, read_stored_entries};
 mod gzip;
 pub mod json;
 mod parquet;
+pub mod pit;
 mod proportions;
 
 pub use json::Json;

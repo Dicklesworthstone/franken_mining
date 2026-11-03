@@ -13,6 +13,7 @@ fmine-claim = { path = "../fmine-claim" }
 fmine-core = { path = "../fmine-core" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-geom = { path = "../fmine-geom" }
+fmine-optimize = { path = "../fmine-optimize" }
 fmine-runtime = { path = "../fmine-runtime" }
 
 [lints]

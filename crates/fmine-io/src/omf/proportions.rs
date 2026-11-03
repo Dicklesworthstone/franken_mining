@@ -10,12 +10,12 @@ use fmine_geom::volcert::{BlockGrid, ClosedMesh, Proportions, block_proportions}
 
 use super::{BlockModel, Element, Geometry, Grid3, Project};
 
-fn missing(detail: String) -> Refusal {
+pub(super) fn missing(detail: String) -> Refusal {
     Refusal::new(RefusalCode::InputMissingOrUnreadable506, detail)
 }
 
 /// The one element called `name`, top level or inside a composite.
-fn element<'a>(project: &'a Project, name: &str) -> Result<&'a Element, Refusal> {
+pub(super) fn element<'a>(project: &'a Project, name: &str) -> Result<&'a Element, Refusal> {
     fn collect<'a>(elements: &'a [Element], name: &str, found: &mut Vec<&'a Element>) {
         for e in elements {
             if e.name == name {
@@ -38,7 +38,7 @@ fn element<'a>(project: &'a Project, name: &str) -> Result<&'a Element, Refusal>
     }
 }
 
-fn kind(geometry: &Geometry) -> &'static str {
+pub(super) fn kind(geometry: &Geometry) -> &'static str {
     match geometry {
         Geometry::PointSet { .. } => "a PointSet",
         Geometry::LineSet { .. } => "a LineSet",

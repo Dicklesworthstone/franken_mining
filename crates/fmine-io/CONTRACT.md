@@ -41,6 +41,19 @@ vertices; a block model's grid starts at its frame origin. The project origin, w
 changes no proportion. `surface_mesh` certifies the surface closed and outward (`ClosedMesh::certify`), and
 `parent_grid` takes a regular grid whose axes are x, y and z (`BlockGrid::new`). Sub-blocks are not considered.
 
+`omf::pit::PitModel` (bd-joiv, plan §15.4) turns a regular OMF block model into `fmine_optimize::pitflow`'s
+problem: precedence arcs from slope templates (`slope_arcs`), with each block's slope domain taken from a Category
+attribute, then a certified ultimate pit (`solve`) or nested shells by revenue factor (`nested_shells`).
+- Values come from Number attributes on the parent blocks (`Primitives`). Each weight is value × `per_unit` rounded
+  to the nearest integer, so each block moves by at most `1 / (2 · per_unit)` and the pit is within
+  `blocks / per_unit` of best for the attribute's values.
+- OMF orders parent blocks U first, then V, then W upward (omf-rust `block_model.rs`); `pitflow` puts layer 0 on
+  top. So the layers are reversed on the way in, and `omf_order` reverses them back.
+- W must be (0, 0, 1) with V counterclockwise of U. A model turned about W is taken, and its slope sectors are then
+  measured from U toward V.
+- Block sizes are scaled by the smallest power of two up to 2^32 that makes them integers below 2^32. This is exact;
+  the cone test is homogeneous in size.
+
 `reliance` is the filesystem adapter for the S0 reliance model (BD-347). A journal is one canonical
 `fmine_claim::reliance::JournalRecord` frame per lowercase hexadecimal line, ending in LF. Each record's
 `previous` field binds BLAKE3 of the complete preceding line, including LF; genesis uses the zero digest.
@@ -109,6 +122,9 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   `AttributeData::item_count` give the counts the location lengths follow from.
 - `omf::{surface_mesh, parent_grid, proportions_in_surface}` (bd-aqfl), returning `fmine_geom::volcert`'s
   `ClosedMesh`, `BlockGrid` and `Proportions`.
+- `omf::pit::{PitModel, MAX_SIZE_SCALE}` (bd-joiv). `PitModel::{new, grid, size_scale, arc_count, weights,
+  ultimate_pit, shells, omf_order}` return `fmine_optimize::pitflow`'s `BlockGrid`, `PitSolution` and
+  `NestedShells`.
 - `xlsx::{CellValue, ExtractedCell, QuarantineItem, Sheet, Workbook, CellCensus, FormatCount, MinimalCell,
   MinimalSheet, MinimalStyles, build_minimal_xlsx, build_minimal_xlsx_styled, col_index_to_letters,
   parse_a1_ref}`; `Workbook::format_census`;
@@ -229,6 +245,17 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   (composites searched too), and an element of the wrong kind; with `FMINE-REF-109` a block model whose axes are
   not exactly x, y and z, or whose grid is a tensor; then with `ClosedMesh::certify`'s, `BlockGrid::new`'s and
   `block_proportions`' refusals (`109`, `207`), among them a surface that is not closed and outward.
+- OMF pits (bd-joiv) refuse with `FMINE-REF-506`:
+  - a block model name that no element, or more than one, carries, or an element of another kind;
+  - a value or domain attribute that is missing or ambiguous, is not on the parent blocks, is the wrong type
+    (values are integer or float Numbers, domains are Categories), or has a null.
+- They refuse with `FMINE-REF-109`:
+  - a tensor grid, a W that is not straight up, or a mirrored frame;
+  - sizes no power of two up to 2^32 makes integers;
+  - `per_unit` 0, a value that is not finite, or a weight outside `i64`;
+  - a category above 65,535.
+- Then `pitflow`'s own refusals (`207`) apply: among them a domain the slope table lacks, a negative revenue for
+  shells, and the value-sum guard.
 - XML text decodes the five named entities and `&#10;`, `&#13;`, `&#160;`, each once (`&amp;` last); no DTD or
   entity declaration is read, so nothing expands.
 - `numtok` keeps malformed grouping, unsupported attached notation, decimal overflow and ambiguous standalone
@@ -327,6 +354,18 @@ for current reuse; an unpinned replay establishes only internal consistency of t
   `proportions_refuse_missing_ambiguous_and_unsuitable_elements` reaches each refusal of §5 on the every-kind file.
   Not checked: a real wireframe against a real block model. The omf-rust bunny is described as patched closed and
   the octree bunny is a block model, but neither was run through these functions.
+- `PO-IO-8` (bd-joiv): `omf::tests::an_omf_block_model_gives_its_certified_ultimate_pit_and_shells` writes a
+  5 × 1 × 3 section of 12.5 m blocks (sizes scale to 25) with its ore at the bottom centre.
+  - At 45° and 4 per unit, ore at 9.25 pays for its 9-block cone (value 5 quarter-units), and ore at 7.75 does not
+    (the pit is empty). At 1 per unit, 9.25 rounds to 9 (value 1).
+  - Two domains, the lower ones at 2:1, narrow the cone to 5 blocks, which 7.75 pays for (value 15).
+  - Shells at revenue factors 1/2, 3/2 and 2 hold 1, 9 and 9 blocks, worth 1, 19 and 16 in units of their
+    denominators.
+  - Every in-pit flag and first shell is checked block by block in OMF order, all against hand counts.
+  - A model turned about W is taken.
+  `omf_pits_refuse_unsuitable_models_and_attributes` reaches each refusal of §5. With the layer reversal dropped
+  (planted, reverted), the ore sat on top and was mined alone, `(37, [2])`.
+  Not checked: a real OMF block model; models larger than the test's 15 blocks.
 - FACT (BD-347, `reliance::tests`): exact artifact issuance and current-use retrieval preserve bytes and
   refuse after withdrawal; invalid digest, key, time, stale or absent trust, and an existing destination
   cannot create an authorized output. A failed final append retains the unissued artifact and poisons its
@@ -369,6 +408,7 @@ would permit a concurrent withdrawal race.
 - Depends on `fmine-core`, `fmine-evidence`, `fmine-claim` (V to S0), and `fmine-runtime` (V to S1, explicit clock
   and owned bounded subprocesses).
 - `fmine-geom` supplies `volcert`'s certified closed meshes and block proportions (V to K0, bd-aqfl).
+- `fmine-optimize` supplies `pitflow`'s slope arcs, certified ultimate pit and nested shells (V to E, bd-joiv).
 - `fmine-calib` supplies the shared `ProofTimes` and UTC parser (V to K0); timestamp verification invokes
   OpenSSL 1.1 or 3.x on `PATH` with Unix `/dev/stdin` and `/dev/null`. Unsupported installations refuse.
 - No omf-rust code is lifted. Its schemas, read checks and validator (tree 64d3057) are the specification the
@@ -381,6 +421,8 @@ The OMF reader reads; it does not write OMF, decode images, transform geometry i
 block model into the engines' types beyond the parent grid that block proportions take. It reads OMF 2 only: OMF 1
 files and Parquet from other writers outside the subset are refused, not converted. Block proportions do not handle
 rotated or tensor grids, sub-blocks, or surfaces that are open or intersect themselves (the last is not checked).
+OMF pits take block values as given in attributes. They hold no price deck or cost model, do not value sub-blocks,
+and do not write the pit back to OMF.
 The bounded HTML reader is not a browser or DOM repair engine. It does not execute scripts, resolve CSS,
 interpret inline XBRL transformations, or establish issuer, metric, period or ownership semantics. Its source
 anchor records the inspected bytes and location, not the financial meaning, publisher authenticity or independent

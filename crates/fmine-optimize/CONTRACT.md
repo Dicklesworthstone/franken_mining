@@ -443,7 +443,7 @@ Not applicable: no Claims are emitted, so no `EvidenceClass` or `KnowledgeState`
   - MineLib's nine schedules, valued by the test and by the oracle, come to their published values within 9 units; marvin's is 885,968,061.5 against 885,968,070. Their fractions are printed to six places. Some single fractions read 1.000001, a block's fractions sum to 1 within 10⁻⁴, and limits are exceeded by at most 1.1×10⁻⁸ of the limit. Those are the only problems the exact oracle finds (none on newman1, 2 to 518 elsewhere), so they are infeasible by rounding only: no precedence is unmet and no block is in two periods. `check`, which takes whole blocks, does not read them.
 
 ## 10. Known gaps
-- `bd-nzwd` and `bd-t75z`: no caller in the workspace yet. `BD-250`'s one caller is `fmine plan pit`, on MineLib UPIT pairs only; no block model or price deck feeds it.
+- `bd-nzwd` and `bd-t75z` have one caller, `fmine-io`'s `omf::pit::PitModel` (bd-joiv). It feeds `slope_arcs`, `solve` and `nested_shells` a regular OMF block model whose values are attributes, tested so far only on synthetic files. `BD-250`'s other caller is `fmine plan pit`, on MineLib UPIT pairs only. No price deck feeds any of them, and no `fmine` verb reads OMF (fmine-cli is over its LOC budget).
 - PCPSP (`toposort::pcpsp`):
   - Blocks are not split between destinations, so a schedule can be worth less than PCPSP's best. The LP relaxation splits them.
   - General side constraints and lower limits are not read.
