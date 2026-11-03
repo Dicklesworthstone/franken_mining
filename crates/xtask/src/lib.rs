@@ -363,7 +363,7 @@ pub fn check_oracle(root: &Path) -> Result<oracle::Report, Vec<String>> {
     oracle::check(root)
 }
 
-/// Check capability rules (`L-3`, `BD-006`): ban `open_child_region` outside `fmine-runtime`,
+/// Check capability rules (`L-3`, `BD-006`): ban `open_child_region` and `ambient_root` outside `fmine-runtime`,
 /// and ban `std::fs`, `std::net`, `std::process`, `SystemTime::now` in `S0`, `K`, and `E` production `src/` files.
 pub fn check_caps(root: &Path) -> Result<(), Vec<String>> {
     let report = check_loc_budget(root)?;
@@ -405,6 +405,13 @@ pub fn check_caps_in_source(
     if pkg_name != "fmine-runtime" && prod_code.contains("open_child_region") {
         return Err(format!(
             "{}: `open_child_region` is banned outside `fmine-runtime` (L-3, S3(a))",
+            path.display()
+        ));
+    }
+    // The root context holds every capability; other code receives a `Cx` and narrows it (BD-077).
+    if pkg_name != "fmine-runtime" && prod_code.contains("ambient_root") {
+        return Err(format!(
+            "{}: `Cx::ambient_root` is banned outside `fmine-runtime` (L-3, BD-077)",
             path.display()
         ));
     }
@@ -1386,6 +1393,20 @@ mod tests {
             "pub fn bad() { cx.open_child_region(); }",
         );
         assert!(res.is_err());
+    }
+
+    /// BD-077: only the runtime may make the all-capability root context; every other layer is refused, and the
+    /// runtime itself is not.
+    #[test]
+    fn test_seeded_ambient_root_fails_outside_the_runtime() {
+        let code = "pub fn bad() { let cx = fmine_runtime::region::Cx::ambient_root(); }";
+        for (pkg, layer) in [("fmine-cli", "U"), ("fmine-plan", "K3"), ("fmine-io", "V")] {
+            let at = PathBuf::from(format!("crates/{pkg}/src/lib.rs"));
+            let res = check_caps_in_source(pkg, layer, &at, code);
+            assert!(res.is_err_and(|e| e.contains("ambient_root")), "{pkg}");
+        }
+        let at = Path::new("crates/fmine-runtime/src/region.rs");
+        assert!(check_caps_in_source("fmine-runtime", "S1", at, code).is_ok());
     }
 
     /// BD-325, B(ii): every layer, not only the pure ones `L-3` already covers.

@@ -2,6 +2,7 @@
 //! synchronization, bounded uncertainty, monotonicity, authority or external time proof.
 
 pub mod process;
+pub mod region;
 
 use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
