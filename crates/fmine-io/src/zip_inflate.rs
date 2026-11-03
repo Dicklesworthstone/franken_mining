@@ -2,8 +2,8 @@
 //!
 //! The reader is bounded for hostile input (BD-073): no entry is allocated or inflated past its declared size, the
 //! declared sizes are capped, and a name that appears twice is refused, so this reader and a spreadsheet program
-//! cannot take different parts under one name. The CRC-32 is not checked; a registered file's integrity is its
-//! SHA-256 against the source registry.
+//! cannot take different parts under one name. The CRC-32 is not checked for `.xlsx` parts; a registered file's
+//! integrity is its SHA-256 against the source registry. OMF members (`read_stored_entries`) are checked against it.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -49,6 +49,60 @@ fn read_bounded(
     max_entry: usize,
     max_archive: usize,
 ) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
+    read_entries(bytes, max_entry, max_archive, false)
+}
+
+/// Entries of an archive whose members must all be stored (method 0), as OMF 2 requires (`BD-194`), within the
+/// given bounds. A compressed member is refused as `UnsupportedMethod`, and a member whose CRC-32 differs from the
+/// central directory's is refused.
+pub(crate) fn read_stored_entries(
+    bytes: &[u8],
+    max_entry: usize,
+    max_archive: usize,
+) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
+    read_entries(bytes, max_entry, max_archive, true)
+}
+
+/// The archive comment, from the end-of-central-directory record.
+pub(crate) fn archive_comment(bytes: &[u8]) -> Result<&[u8], ZipError> {
+    let eocd = find_eocd(bytes)?;
+    let len = usize::from(u16::from_le_bytes([bytes[eocd + 20], bytes[eocd + 21]]));
+    bytes
+        .get(eocd + 22..eocd + 22 + len)
+        .ok_or(ZipError::InvalidArchive("truncated archive comment"))
+}
+
+/// CRC-32 (IEEE 802.3, reflected, as ZIP, gzip and Parquet use it).
+pub(crate) fn crc32(bytes: &[u8]) -> u32 {
+    !bytes.iter().fold(!0_u32, |crc, &b| {
+        CRC_TABLE[usize::from((crc as u8) ^ b)] ^ (crc >> 8)
+    })
+}
+
+const CRC_TABLE: [u32; 256] = crc_table();
+
+const fn crc_table() -> [u32; 256] {
+    let mut t = [0_u32; 256];
+    let mut i = 0;
+    while i < 256 {
+        let mut c = i as u32;
+        let mut k = 0;
+        while k < 8 {
+            c = if c & 1 == 1 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
+            k += 1;
+        }
+        t[i] = c;
+        i += 1;
+    }
+    t
+}
+
+/// The end-of-central-directory record's offset, scanning backward from the end.
+fn find_eocd(bytes: &[u8]) -> Result<usize, ZipError> {
     if bytes.len() < 22 {
         return Err(ZipError::InvalidArchive("buffer shorter than EOCD"));
     }
@@ -61,7 +115,16 @@ fn read_bounded(
             break;
         }
     }
-    let eocd = eocd_pos.ok_or(ZipError::InvalidArchive("EOCD signature not found"))?;
+    eocd_pos.ok_or(ZipError::InvalidArchive("EOCD signature not found"))
+}
+
+fn read_entries(
+    bytes: &[u8],
+    max_entry: usize,
+    max_archive: usize,
+    stored_only: bool,
+) -> Result<BTreeMap<String, Vec<u8>>, ZipError> {
+    let eocd = find_eocd(bytes)?;
     let total_entries = u16::from_le_bytes([bytes[eocd + 10], bytes[eocd + 11]]) as usize;
     let cd_offset = u32::from_le_bytes([
         bytes[eocd + 16],
@@ -78,6 +141,12 @@ fn read_bounded(
             return Err(ZipError::InvalidArchive("invalid central directory header"));
         }
         let method = u16::from_le_bytes([bytes[pos + 10], bytes[pos + 11]]);
+        let crc = u32::from_le_bytes([
+            bytes[pos + 16],
+            bytes[pos + 17],
+            bytes[pos + 18],
+            bytes[pos + 19],
+        ]);
         let comp_size = u32::from_le_bytes([
             bytes[pos + 20],
             bytes[pos + 21],
@@ -136,9 +205,12 @@ fn read_bounded(
         let payload = match method {
             0 if comp_size == uncomp_size => slice.to_vec(),
             0 => return Err(ZipError::InvalidArchive("stored entry whose sizes differ")),
-            8 => inflate_raw(slice, uncomp_size)?,
+            8 if !stored_only => inflate_raw(slice, uncomp_size)?,
             other => return Err(ZipError::UnsupportedMethod(other)),
         };
+        if stored_only && crc32(&payload) != crc {
+            return Err(ZipError::InvalidArchive("member CRC-32 does not match"));
+        }
         if entries.insert(name, payload).is_some() {
             return Err(ZipError::InvalidArchive("duplicate entry name"));
         }
@@ -303,7 +375,9 @@ fn decode_dynamic_tables(br: &mut BitReader<'_>) -> Result<(HuffTable, HuffTable
     Ok((lit_table, dist_table))
 }
 
-fn inflate_raw(data: &[u8], expected_size: usize) -> Result<Vec<u8>, ZipError> {
+/// Inflates a raw DEFLATE stream to exactly `expected_size` bytes; a stream that would inflate further is refused at
+/// that size, and one that ends short is refused. Bytes after the final block are not read.
+pub(crate) fn inflate_raw(data: &[u8], expected_size: usize) -> Result<Vec<u8>, ZipError> {
     const LEN_BASE: [u16; 29] = [
         3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115,
         131, 163, 195, 227, 258,
@@ -397,9 +471,20 @@ fn inflate_raw(data: &[u8], expected_size: usize) -> Result<Vec<u8>, ZipError> {
     Ok(out)
 }
 
-/// Builds a valid uncompressed (method 0) ZIP archive from `(entry_name, entry_bytes)` pairs.
+/// Builds a valid uncompressed (method 0) ZIP archive from `(entry_name, entry_bytes)` pairs. Its CRC-32 fields are
+/// zero, which keeps the `.xlsx` writer's bytes as `test_minimal_xlsx_without_styles_byte_identical` pins them.
 #[must_use]
 pub fn write_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    stored_zip(entries, false)
+}
+
+/// `write_stored_zip` with each member's CRC-32 written, as an OMF member must have.
+#[cfg(test)]
+pub(crate) fn write_stored_zip_with_crcs(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    stored_zip(entries, true)
+}
+
+fn stored_zip(entries: &[(&str, &[u8])], with_crcs: bool) -> Vec<u8> {
     let mut out = Vec::new();
     let mut central_dir = Vec::new();
 
@@ -407,6 +492,7 @@ pub fn write_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let lfh_offset = out.len() as u32;
         let name_bytes = name.as_bytes();
         let len = data.len() as u32;
+        let crc = if with_crcs { crc32(data) } else { 0 };
 
         // Local file header (0x04034b50)
         out.extend_from_slice(&[0x50, 0x4b, 0x03, 0x04]);
@@ -415,7 +501,7 @@ pub fn write_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
         out.extend_from_slice(&0_u16.to_le_bytes()); // method 0 = stored
         out.extend_from_slice(&0_u16.to_le_bytes()); // mod time
         out.extend_from_slice(&0_u16.to_le_bytes()); // mod date
-        out.extend_from_slice(&0_u32.to_le_bytes()); // crc32
+        out.extend_from_slice(&crc.to_le_bytes());
         out.extend_from_slice(&len.to_le_bytes()); // comp size
         out.extend_from_slice(&len.to_le_bytes()); // uncomp size
         out.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
@@ -431,7 +517,7 @@ pub fn write_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
         central_dir.extend_from_slice(&0_u16.to_le_bytes());
         central_dir.extend_from_slice(&0_u16.to_le_bytes());
         central_dir.extend_from_slice(&0_u16.to_le_bytes());
-        central_dir.extend_from_slice(&0_u32.to_le_bytes());
+        central_dir.extend_from_slice(&crc.to_le_bytes());
         central_dir.extend_from_slice(&len.to_le_bytes());
         central_dir.extend_from_slice(&len.to_le_bytes());
         central_dir.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
