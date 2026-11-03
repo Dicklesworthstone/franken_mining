@@ -1375,7 +1375,7 @@ mod tests {
     fn a_clipped_grid_labels_its_blocks_as_the_full_grid_does() {
         let mesh = certify(sphere([1.3, 1.1, 0.9], 1.0, 3));
         let full = BlockGrid::new([0.0; 3], [0.25; 3], [12; 3]).unwrap();
-        // Offset (3, 2, 0) blocks: the clipped grid cuts through the sphere on four faces.
+        // Offset (3, 2, 0) blocks: the clipped grid cuts through the sphere on four more faces than the full grid.
         let clipped = BlockGrid::new([0.75, 0.5, 0.0], [0.25; 3], [4, 6, 12]).unwrap();
         let a = block_proportions(&mesh, &full, 3).unwrap();
         let b = block_proportions(&mesh, &clipped, 3).unwrap();
@@ -1563,7 +1563,7 @@ mod tests {
         (sha256(&bytes).to_hex(), blocks)
     }
 
-    /// Pinned on x86_64-linux; CI's macos-15 lane runs the same test on aarch64 (GATE-DET-01).
+    /// Pinned on x86_64-linux, dev and release, and reproduced on aarch64-darwin (GATE-DET-01).
     const FIXTURE_DIGEST: &str = "8eed3487ef39434b47cfa490724b83cb83f1a7f7d1cabeadf631178369dda9fb";
 
     #[test]

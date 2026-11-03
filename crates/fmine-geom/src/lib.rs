@@ -1,5 +1,6 @@
 //! Geometry kernels for Strata (`WP-11`, plan §27): exact geometric predicates (`BD-193`), the sparse voxel
-//! tree (`BD-191`) and generalized winding numbers (`BD-192`).
+//! tree (`BD-191`), generalized winding numbers (`BD-192`), and certified volumes and block proportions for closed
+//! meshes built on all three (bd-wq34).
 //! Determinism: BitwisePortable (straight-line IEEE `+ − × ÷`, `sqrt` and `mul_add`; the one transcendental,
 //! `atan2` in `winding`, is fmine-core's `det::atan2`).
 //!
@@ -11,9 +12,13 @@
 //! - `winding`: `winding_exact` and the dipole `WindingOctree` over a triangle `Soup`, lifted from `frankensim`
 //!   fs-rep-mesh with `det::atan2` in place of std's. Inside/outside holds up on soups with holes, flips and
 //!   duplicates; a differential corpus checks it against upstream's own output.
+//! - `volcert`: `ClosedMesh::certify` refuses a mesh that is not closed and consistently oriented; its `volume` is
+//!   the exact divergence-theorem sum, rounded outward (`VolumeEnclosure`); and `block_proportions` gives each block
+//!   of a `BlockGrid` its sub-cells wholly inside the mesh and those its surface meets, stored in a `VdbGrid`, so the
+//!   proportion inside lies between `inside` and `inside + band` sub-cells.
 //!
-//! Nothing in the workspace calls this crate yet. Meshes, block grids and columnar attribute chunks are later
-//! slices.
+//! Nothing outside this crate calls it yet. Mesh ingest (OMF, DXF), rotated block frames, sub-blocks and columnar
+//! attribute chunks are later slices.
 
 pub mod exact;
 pub mod vdb;

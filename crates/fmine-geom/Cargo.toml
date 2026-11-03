@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish = false
-description = "Geometry kernels: exact adaptive-precision orientation, incircle and insphere predicates with Simulation-of-Simplicity tie-breaking, and the sparse VdbGrid voxel tree."
+description = "Geometry kernels: exact adaptive-precision orientation, incircle and insphere predicates with Simulation-of-Simplicity tie-breaking, the sparse VdbGrid voxel tree, generalized winding numbers, and certified closed-mesh volumes and block proportions."
 
 [dependencies]
 fmine-core = { path = "../fmine-core" }
