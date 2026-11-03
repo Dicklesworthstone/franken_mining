@@ -12,14 +12,17 @@
 //!   `[lo, hi]`, a few units in the last place wide (PO-STRATA-8). The plan says interval arithmetic; exact
 //!   arithmetic is tighter and needs no local origin, so far-off coordinates (UTM northings) lose nothing.
 //! - [`block_proportions`] splits each block of a [`BlockGrid`] into `8^depth` equal sub-cells. A sub-cell joins the
-//!   band when an exact separating-axis test cannot separate its closed box from some triangle. Every other
-//!   sub-cell lies wholly inside or wholly outside: it takes the winding number of its face-connected component of
-//!   surface-free sub-cells and blocks, evaluated once per component, or 0 when the component reaches past the
-//!   mesh's bounding box. A block's proportion inside the mesh then lies in `[inside, inside + band] / 8^depth`.
+//!   band when the surface meets its interior, decided by an exact separating-axis test that lets the two touch.
+//!   Every other sub-cell lies wholly inside or wholly outside: it takes the winding number of its component,
+//!   evaluated once per component, or 0 when the component reaches past the mesh's bounding box. Two surface-free
+//!   sub-cells or blocks sharing a face are in one component unless the surface meets the face's interior, which,
+//!   missing both cells' interiors, it can only do lying in the face's plane. A block's proportion inside the mesh
+//!   then lies in `[inside, inside + band] / 8^depth`, and a surface lying on sub-cell faces, as a pit shell built
+//!   from blocks does, puts no sub-cell in the band.
 //!
-//! What the enclosure rests on. The band test, the cell boundaries and the volume are exact. The inside/outside
-//! label is `winding_exact` rounded to an integer, accepted only within 1e-6 of 0 or 1; that check catches a broken
-//! evaluation, it does not prove the rounding right. A proportion counts nominal sub-cells: the `f64` boundaries
+//! What the enclosure rests on. The band test, the face test, the cell boundaries and the volume are exact. The
+//! inside/outside label is `winding_exact` rounded to an integer, accepted only within 1e-6 of 0 or 1; that check
+//! catches a broken evaluation, it does not prove the rounding right. A proportion counts nominal sub-cells: the `f64` boundaries
 //! differ from the nominal ones by about one unit in the last place of the coordinate.
 
 use std::collections::BTreeMap;
@@ -471,64 +474,122 @@ fn box_corners(b: &[[f64; 3]; 2]) -> [[f64; 3]; 8] {
     std::array::from_fn(|i| [b[i & 1][0], b[(i >> 1) & 1][1], b[(i >> 2) & 1][2]])
 }
 
-/// Whether the closed triangle meets the closed box: the 13-axis separating-axis test in exact predicates, so
-/// `false` proves them disjoint. Box normals compare coordinates; the triangle normal is `orient3d` of the eight
-/// corners; each edge-by-axis direction is `orient2d` in the plane across that axis.
+/// Whether a line or plane through a triangle edge (or the whole triangle) separates the triangle from a box, given
+/// the signs of the box's corners and of the triangle's vertex off the line (`Zero` when the triangle lies on it).
+/// The box may touch the line, so this separates the triangle from the box's interior; but one corner must lie off
+/// it, so a degenerate edge or triangle, whose signs are all `Zero`, never separates.
+fn separates(corners: &[Sign], far: Sign) -> bool {
+    let side = match (
+        corners.contains(&Sign::Positive),
+        corners.contains(&Sign::Negative),
+    ) {
+        (true, false) => Sign::Positive,
+        (false, true) => Sign::Negative,
+        _ => return false,
+    };
+    far != side
+}
+
+/// Whether the closed triangle meets the interior of the box: the 13-axis separating-axis test in exact predicates,
+/// so either answer is proved. A closed triangle and an open box that do not meet are separated, touching allowed,
+/// along a box normal, the triangle's normal or an edge-by-axis cross product (the facet normals of their Minkowski
+/// difference). Box normals compare coordinates; the triangle normal is `orient3d` of the eight corners; each
+/// edge-by-axis direction is `orient2d` in the plane across that axis.
 fn meets(tri: &[[f64; 3]; 3], tbox: &[[f64; 3]; 2], cell: &[[f64; 3]; 2]) -> Result<bool, Refusal> {
-    if (0..3).any(|a| tbox[1][a] < cell[0][a] || tbox[0][a] > cell[1][a]) {
+    if (0..3).any(|a| tbox[1][a] <= cell[0][a] || tbox[0][a] >= cell[1][a]) {
         return Ok(false);
     }
-    let mut side = Sign::Zero;
-    let mut separated = true;
-    for corner in box_corners(cell) {
-        let s = orient3d(tri[0], tri[1], tri[2], corner)?;
-        if s == Sign::Zero || (side != Sign::Zero && s != side) {
-            separated = false;
-            break;
-        }
-        side = s;
+    let mut signs = [Sign::Zero; 8];
+    for (s, corner) in signs.iter_mut().zip(box_corners(cell)) {
+        *s = orient3d(tri[0], tri[1], tri[2], corner)?;
     }
-    if separated {
+    if separates(&signs, Sign::Zero) {
         return Ok(false);
     }
     for axis in 0..3 {
         let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
         let flat = |p: [f64; 3]| [p[u], p[v]];
-        let rect = [
-            [cell[0][u], cell[0][v]],
-            [cell[1][u], cell[0][v]],
-            [cell[0][u], cell[1][v]],
-            [cell[1][u], cell[1][v]],
-        ];
-        for e in 0..3 {
-            let (p, q, r) = (flat(tri[e]), flat(tri[(e + 1) % 3]), flat(tri[(e + 2) % 3]));
-            // The line through edge p-q separates when the whole rectangle lies strictly on one side and the third
-            // corner does not lie on that side.
-            let first = orient2d(p, q, rect[0])?;
-            if first == Sign::Zero || first == orient2d(p, q, r)? {
-                continue;
-            }
-            let mut all = true;
-            for &c in &rect[1..] {
-                if orient2d(p, q, c)? != first {
-                    all = false;
-                    break;
-                }
-            }
-            if all {
-                return Ok(false);
-            }
+        let rect = [[cell[0][u], cell[0][v]], [cell[1][u], cell[1][v]]];
+        if edges_separate(tri.map(flat), rect)? {
+            return Ok(false);
         }
     }
     Ok(true)
 }
 
-/// Marks the sub-cells of one block that the surface meets.
+/// Whether the line through some edge of the plane triangle `tri` separates it from the interior of the rectangle
+/// `rect` (low and high corners).
+fn edges_separate(tri: [[f64; 2]; 3], rect: [[f64; 2]; 2]) -> Result<bool, Refusal> {
+    let corners = [
+        rect[0],
+        [rect[1][0], rect[0][1]],
+        [rect[0][0], rect[1][1]],
+        rect[1],
+    ];
+    for e in 0..3 {
+        let (p, q, r) = (tri[e], tri[(e + 1) % 3], tri[(e + 2) % 3]);
+        let mut signs = [Sign::Zero; 4];
+        for (s, &c) in signs.iter_mut().zip(&corners) {
+            *s = orient2d(p, q, c)?;
+        }
+        if separates(&signs, orient2d(p, q, r)?) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether the face on the `high` or low side of `axis` of the cell at sub-cell `base`, `span` sub-cells wide, has
+/// an interior no triangle meets. A surface that meets neither of the two open cells sharing the face but meets the
+/// open face lies in the face's plane there, so only the triangles in `flat`, those whose three corners share a
+/// coordinate (`(axis, triangle)`), are checked.
+fn face_free(
+    mesh: &ClosedMesh,
+    lattice: &Lattice,
+    flat: &[(usize, u32)],
+    base: [u64; 3],
+    span: u64,
+    axis: usize,
+    high: bool,
+) -> Result<bool, Refusal> {
+    if flat.is_empty() {
+        return Ok(true);
+    }
+    let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+    let plane = lattice.at(axis, base[axis] + if high { span } else { 0 });
+    let rect = [
+        [lattice.at(u, base[u]), lattice.at(v, base[v])],
+        [lattice.at(u, base[u] + span), lattice.at(v, base[v] + span)],
+    ];
+    for &(a, t) in flat {
+        let i = usize::try_from(t).unwrap_or(usize::MAX);
+        let Some(tri) = mesh.corners.get(i) else {
+            return Err(uncertified(format!(
+                "block proportions: triangle {t} is not in the mesh"
+            )));
+        };
+        if a != axis || tri[0][axis] != plane {
+            continue;
+        }
+        let flat_tri = tri.map(|p| [p[u], p[v]]);
+        let apart = (0..2).any(|k| {
+            flat_tri.iter().all(|p| p[k] <= rect[0][k])
+                || flat_tri.iter().all(|p| p[k] >= rect[1][k])
+        });
+        if !apart && !edges_separate(flat_tri, rect)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Marks the sub-cells of one block whose interior the surface meets.
 struct Marker<'a> {
     mesh: &'a ClosedMesh,
     lattice: &'a Lattice,
     block_base: [u64; 3],
     crossed: Vec<bool>,
+    /// Whether the surface meets the block's interior, sub-cell faces inside it included.
     any: bool,
 }
 
@@ -551,6 +612,7 @@ impl Marker<'_> {
         if keep.is_empty() {
             return Ok(());
         }
+        self.any = true;
         if span == 1 {
             let side = self.lattice.side;
             let l: [u64; 3] = std::array::from_fn(|a| base[a] - self.block_base[a]);
@@ -561,7 +623,6 @@ impl Marker<'_> {
                 ))
             })?;
             *slot = true;
-            self.any = true;
             return Ok(());
         }
         let half = span / 2;
@@ -604,7 +665,7 @@ impl Dsu {
 }
 
 /// One block's proportion inside the mesh, in sub-cells of `8^depth` per block: `inside` sub-cells lie wholly
-/// inside, and the surface meets the `band` ones.
+/// inside, and the surface meets the interiors of the `band` ones.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BlockProportion {
     inside: u32,
@@ -724,7 +785,8 @@ impl Proportions {
     }
 }
 
-/// A crossed block: its sub-grid index and coordinates, and which of its sub-cells the surface meets.
+/// A block whose interior the surface meets: its sub-grid index and coordinates, and which of its sub-cells' interiors
+/// the surface meets.
 struct Crossed {
     index: u64,
     coords: [u64; 3],
@@ -813,7 +875,7 @@ pub fn block_proportions(
         }
     }
 
-    // Mark the sub-cells the surface meets, block by block.
+    // Mark the sub-cells whose interior the surface meets, block by block.
     let mut crossed: Vec<Crossed> = Vec::new();
     let mut slot_of: BTreeMap<u64, usize> = BTreeMap::new();
     for (&index, candidates) in &bins {
@@ -840,8 +902,29 @@ pub fn block_proportions(
         }
     }
 
-    // Join face-adjacent surface-free blocks and sub-cells. Node 0 is OUT, node 1 + b is near block b, and node
-    // 1 + near + s·cells + c is sub-cell c of crossed block s.
+    // The triangles near each block whose corners share a coordinate: only they can lie in a block or sub-cell face.
+    let mut flats: BTreeMap<u64, Vec<(usize, u32)>> = BTreeMap::new();
+    for (&index, candidates) in &bins {
+        let mut flat = Vec::new();
+        for &t in candidates {
+            let Some(tri) = mesh.corners.get(usize::try_from(t).unwrap_or(usize::MAX)) else {
+                continue;
+            };
+            for axis in 0..3 {
+                if tri[0][axis] == tri[1][axis] && tri[0][axis] == tri[2][axis] {
+                    flat.push((axis, t));
+                }
+            }
+        }
+        if !flat.is_empty() {
+            flats.insert(index, flat);
+        }
+    }
+    let flat_near = |b: u64| flats.get(&b).map_or(&[][..], Vec::as_slice);
+
+    // Join face-adjacent surface-free blocks and sub-cells whose shared face has an interior the surface does not
+    // meet. Node 0 is OUT, node 1 + b is near block b, and node 1 + near + s·cells + c is sub-cell c of crossed
+    // block s. A face's triangles are binned to the block on either side of it, so either block's list will do.
     let total = 1 + near + crossed.len() as u64 * cells;
     let mut dsu = Dsu((0..u32::try_from(total).map_err(|_| too_many())?).collect());
     let block_node = |b: u64| (1 + b) as u32;
@@ -852,36 +935,45 @@ pub fn block_proportions(
             continue;
         }
         let c = sub.coords(b);
+        let base: [u64; 3] = std::array::from_fn(|a| (sub.lo[a] + c[a]) * side);
+        let free = |axis: usize, high: bool| {
+            face_free(mesh, &lattice, flat_near(b), base, side, axis, high)
+        };
         for axis in 0..3 {
             if c[axis] + 1 < sub.dims[axis] {
                 let next = b + stride[axis];
-                if !is_crossed(next) {
+                if !is_crossed(next) && free(axis, true)? {
                     dsu.union(block_node(b), block_node(next));
                 }
-            } else if sub.beyond_out[axis][1] {
+            } else if sub.beyond_out[axis][1] && free(axis, true)? {
                 dsu.union(block_node(b), OUT);
             }
-            if c[axis] == 0 && sub.beyond_out[axis][0] {
+            if c[axis] == 0 && sub.beyond_out[axis][0] && free(axis, false)? {
                 dsu.union(block_node(b), OUT);
             }
         }
     }
     let cell_stride = [1, side, side * side];
     for (s, block) in crossed.iter().enumerate() {
+        let block_base: [u64; 3] = std::array::from_fn(|a| (sub.lo[a] + block.coords[a]) * side);
+        let flat = flat_near(block.index);
         for (c, &hit) in (0..cells).zip(&block.cells) {
             if hit {
                 continue;
             }
             let me = cell_node(s, c);
             let l = [c % side, (c / side) % side, c / (side * side)];
+            let at: [u64; 3] = std::array::from_fn(|a| block_base[a] + l[a]);
+            let free = |axis: usize, high: bool| face_free(mesh, &lattice, flat, at, 1, axis, high);
             for axis in 0..3 {
                 if l[axis] + 1 < side {
                     let next = c + cell_stride[axis];
-                    if !block.cells.get(next as usize).copied().unwrap_or(true) {
+                    if !block.cells.get(next as usize).copied().unwrap_or(true) && free(axis, true)?
+                    {
                         dsu.union(me, cell_node(s, next));
                     }
                 } else if block.coords[axis] + 1 == sub.dims[axis] {
-                    if sub.beyond_out[axis][1] {
+                    if sub.beyond_out[axis][1] && free(axis, true)? {
                         dsu.union(me, OUT);
                     }
                 } else {
@@ -889,25 +981,25 @@ pub fn block_proportions(
                     if let Some(&s2) = slot_of.get(&nb) {
                         // The neighbour's matching sub-cell sits on its low face.
                         let mirror = c - (side - 1) * cell_stride[axis];
-                        let free = crossed
+                        let open = crossed
                             .get(s2)
                             .and_then(|n| n.cells.get(mirror as usize))
                             .is_some_and(|&h| !h);
-                        if free {
+                        if open && free(axis, true)? {
                             dsu.union(me, cell_node(s2, mirror));
                         }
-                    } else {
+                    } else if free(axis, true)? {
                         dsu.union(me, block_node(nb));
                     }
                 }
                 if l[axis] == 0 {
                     if block.coords[axis] == 0 {
-                        if sub.beyond_out[axis][0] {
+                        if sub.beyond_out[axis][0] && free(axis, false)? {
                             dsu.union(me, OUT);
                         }
                     } else {
                         let nb = block.index - stride[axis];
-                        if !is_crossed(nb) {
+                        if !is_crossed(nb) && free(axis, false)? {
                             dsu.union(me, block_node(nb));
                         }
                     }
@@ -1141,13 +1233,14 @@ mod tests {
         (positions, triangles)
     }
 
-    /// The winding number of the boxes `(lo, hi, ±1)` over a closed sub-cell, or `None` when the sub-cell meets a
-    /// box's surface. Plain coordinate comparisons, independent of the module.
+    /// The winding number of the boxes `(lo, hi, ±1)` over a sub-cell's interior, or `None` when a box's surface
+    /// meets that interior: the open cell meets the closed box without lying in it. Plain coordinate comparisons,
+    /// independent of the module.
     fn analytic(boxes: &[([f64; 3], [f64; 3], i32)], cell: [[f64; 3]; 2]) -> Option<i32> {
         let mut k = 0;
         for &(lo, hi, s) in boxes {
-            let meets = (0..3).all(|a| cell[0][a] <= hi[a] && cell[1][a] >= lo[a]);
-            let within = (0..3).all(|a| cell[0][a] > lo[a] && cell[1][a] < hi[a]);
+            let meets = (0..3).all(|a| cell[0][a] < hi[a] && cell[1][a] > lo[a]);
+            let within = (0..3).all(|a| cell[0][a] >= lo[a] && cell[1][a] <= hi[a]);
             if meets && !within {
                 return None;
             }
@@ -1171,8 +1264,21 @@ mod tests {
             let b = box_mesh(lo, hi);
             mesh = join(mesh, if s > 0 { b } else { reversed(b) });
         }
-        let mesh = certify(mesh);
         let grid = BlockGrid::new(origin, size, counts).unwrap();
+        check_grid(mesh, |cell| analytic(boxes, cell), &grid, depth)
+    }
+
+    /// Checks every block of a dyadic grid against an oracle giving each sub-cell's winding number, or `None` for a
+    /// sub-cell whose interior the surface meets; returns the inside and band totals.
+    fn check_grid(
+        mesh: Mesh,
+        oracle: impl Fn([[f64; 3]; 2]) -> Option<i32>,
+        grid: &BlockGrid,
+        depth: u8,
+    ) -> (u64, u64) {
+        let (origin, size, counts) = (grid.origin(), grid.size(), grid.counts());
+        let mesh = certify(mesh);
+        let grid = *grid;
         let got = block_proportions(&mesh, &grid, depth).unwrap();
         let side = 1u32 << depth;
         let (mut inside_total, mut band_total) = (0u64, 0u64);
@@ -1195,7 +1301,7 @@ mod tests {
                                     std::array::from_fn(|a| at(a, 0)),
                                     std::array::from_fn(|a| at(a, 1)),
                                 ];
-                                match analytic(boxes, cell) {
+                                match oracle(cell) {
                                     None => band += 1,
                                     Some(1) => inside += 1,
                                     Some(0) => {}
@@ -1216,11 +1322,65 @@ mod tests {
         }
         let stats = got.stats();
         println!(
-            "{{\"test\":\"volcert_boxes\",\"depth\":{depth},\"inside\":{inside_total},\"band\":{band_total},\
+            "{{\"test\":\"volcert_grid\",\"depth\":{depth},\"inside\":{inside_total},\"band\":{band_total},\
              \"near_blocks\":{},\"crossed_blocks\":{},\"winding_queries\":{}}}",
             stats.near_blocks, stats.crossed_blocks, stats.winding_queries
         );
         (inside_total, band_total)
+    }
+
+    /// Slanted faces through lattice corners and edges: the octahedron `|x - c|₁ ≤ r`. Over a closed box the L1
+    /// distance to `c` runs from `near` to `far`; the open box meets the surface exactly when `near < r < far` (for
+    /// `r > 0` the distance has no local minimum at `r`), so cells touching a face at a corner or edge are not band.
+    #[test]
+    fn an_octahedron_through_lattice_corners_matches_its_l1_oracle() {
+        let (c, r) = ([1.0, 0.75, 1.5], 0.5);
+        let oracle = |cell: [[f64; 3]; 2]| {
+            let near: f64 = (0..3)
+                .map(|a| (cell[0][a] - c[a]).max(c[a] - cell[1][a]).max(0.0))
+                .sum();
+            let far: f64 = (0..3)
+                .map(|a| (cell[0][a] - c[a]).abs().max((cell[1][a] - c[a]).abs()))
+                .sum();
+            if near < r && r < far {
+                None
+            } else {
+                Some(i32::from(far <= r))
+            }
+        };
+        let grid = BlockGrid::new([0.0; 3], [0.5, 0.25, 1.0], [4, 5, 3]).unwrap();
+        let mut touching = 0;
+        for depth in 0..=3 {
+            let (inside, band) = check_grid(octahedron(c, [r; 3]), oracle, &grid, depth);
+            // A sub-cell fits inside only once its L1 extent is at most r, from depth 2.
+            assert!(
+                band > 0 && (depth < 2 || inside > 0),
+                "depth {depth}: {inside} inside, {band} band"
+            );
+            // Sub-cells meeting the surface only on their boundary, which a closed-cell test would put in the band.
+            let side = 1u32 << depth;
+            let step: [f64; 3] = std::array::from_fn(|a| grid.size()[a] / f64::from(side));
+            for z in 0..3 * side {
+                for y in 0..5 * side {
+                    for x in 0..4 * side {
+                        let lo = [
+                            f64::from(x) * step[0],
+                            f64::from(y) * step[1],
+                            f64::from(z) * step[2],
+                        ];
+                        let cell = [lo, std::array::from_fn(|a| lo[a] + step[a])];
+                        let near: f64 = (0..3)
+                            .map(|a| (cell[0][a] - c[a]).max(c[a] - cell[1][a]).max(0.0))
+                            .sum();
+                        let far: f64 = (0..3)
+                            .map(|a| (cell[0][a] - c[a]).abs().max((cell[1][a] - c[a]).abs()))
+                            .sum();
+                        touching += usize::from(near == r || far == r);
+                    }
+                }
+            }
+        }
+        assert!(touching > 100, "{touching} touching sub-cells");
     }
 
     #[test]
@@ -1232,9 +1392,32 @@ mod tests {
             let (inside, band) = check_boxes(&one, origin, size, counts, depth);
             assert!(inside > 0 && band > 0);
         }
-        // Faces on sub-cell boundaries: the closed sub-cells on both sides touch the surface, so both are band.
-        let aligned = [([0.5, 0.25, 1.0], [1.25, 0.75, 2.0], 1)];
-        check_boxes(&aligned, origin, size, counts, 2);
+        // Faces on sub-cell faces at depth 2: no sub-cell interior is cut, so every proportion is exact. One box is
+        // flush with the grid's two x faces, which must not join it to the outside; one touches another shell, and
+        // one is hollow, so a covered face must keep its two sides apart.
+        let cell = 0.125 * 0.0625 * 0.25;
+        for (boxes, volume) in [
+            (vec![([0.5, 0.25, 1.0], [1.25, 0.75, 2.0], 1)], 0.375),
+            (vec![([0.0, 0.25, 1.0], [2.0, 0.75, 2.0], 1)], 1.0),
+            (
+                vec![
+                    ([0.5, 0.25, 1.0], [1.25, 0.75, 2.0], 1),
+                    ([1.25, 0.375, 1.25], [1.75, 0.625, 1.75], 1),
+                ],
+                0.4375,
+            ),
+            (
+                vec![
+                    ([0.5, 0.25, 1.0], [1.5, 1.0, 2.5], 1),
+                    ([0.75, 0.5, 1.5], [1.25, 0.75, 2.0], -1),
+                ],
+                1.0625,
+            ),
+        ] {
+            let (inside, band) = check_boxes(&boxes, origin, size, counts, 2);
+            assert_eq!(band, 0, "{boxes:?}");
+            assert_eq!(inside as f64 * cell, volume, "{boxes:?}");
+        }
         // A hollow: an inward box inside an outward one winds 0 in the cavity.
         let hollow = [
             ([0.1, 0.2, 0.3], [1.9, 1.2, 2.8], 1),
