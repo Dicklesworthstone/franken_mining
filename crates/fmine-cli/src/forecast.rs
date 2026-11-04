@@ -212,6 +212,7 @@ impl Replay {
                 "rho_high",
                 "outcome_lo",
                 "outcome_hi",
+                "gaussian_crps_bounds",
                 "event_log_floor",
                 "public_issuer",
                 "public_metric",
@@ -245,6 +246,15 @@ impl Replay {
             _ => {
                 return Err(invalid(
                     "outcome_lo and outcome_hi must be supplied together",
+                ));
+            }
+        };
+        policy.gaussian_crps_bounds = match row.optional_string("gaussian_crps_bounds")? {
+            None => false,
+            Some("registered-domain") => true,
+            Some(_) => {
+                return Err(invalid(
+                    "gaussian_crps_bounds must be the quoted mode registered-domain, or omitted",
                 ));
             }
         };
@@ -869,8 +879,13 @@ fn cohort_json(cohort: &Cohort) -> String {
     let event_log = p
         .event_log_floor
         .map_or_else(String::new, |floor| format!(",\"event_log_floor\":{floor}"));
+    let gaussian_bounds = if p.gaussian_crps_bounds {
+        ",\"gaussian_crps_bounds\":\"registered-domain\""
+    } else {
+        ""
+    };
     format!(
-        "{{\"name\":{},\"digest\":{},\"frozen_at\":{},\"resolution_rule\":{},\"public_resolution\":{public},\"eligible_sources\":[{}],\"policy\":{{\"alpha\":{},\"min_calibration_n\":{},\"correlation_range\":{},\"outcome_bounds\":{}{monitor}{event_log}}}}}",
+        "{{\"name\":{},\"digest\":{},\"frozen_at\":{},\"resolution_rule\":{},\"public_resolution\":{public},\"eligible_sources\":[{}],\"policy\":{{\"alpha\":{},\"min_calibration_n\":{},\"correlation_range\":{},\"outcome_bounds\":{}{monitor}{event_log}{gaussian_bounds}}}}}",
         js(&spec.name),
         js(&cohort.digest.to_hex()),
         utc(spec.frozen_at_ns),

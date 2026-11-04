@@ -242,13 +242,15 @@ Requests still contain one permitted TOML table with no top-level fields, using 
 an ordinary request, then adds `schema = "fmine.forecast-operation.v2"` to the stored operation; the public-bound
 freeze and resolution operations described below use v3, and explicit vintage policies and comparative
 restatements use v4. Cohort freezes opting into sequential coverage monitoring or bounded event log loss
-use v5, including when the same freeze declares a public vintage policy. The `FJR1`
+use v5, including when the same freeze declares a public vintage policy. Finite-domain Gaussian CRPS
+freezes use v6, including a simultaneous coverage monitor or public vintage policy. The `FJR1`
 frame format is unchanged. Replay dispatches per operation: legacy rows without top-level fields retain
 their original observed-time semantics and identities; v2 rows use the upper bound. Unknown schemas or extra
 top-level fields refuse.
-Replay requires v4 or an opt-in v5 cohort freeze for explicit `public_vintages`; v4 admits only a vintage
+Replay requires v4 or an opt-in v5/v6 cohort freeze for explicit `public_vintages`; v4 admits only a vintage
 freeze or a `registered_restatement`. V5 admits only a cohort freeze with a monitor declaration or
-`event_log_floor`. Older operation versions reject either new scoring policy before mutating state.
+`event_log_floor`. V6 admits only a cohort freeze declaring `gaussian_crps_bounds`; older versions reject
+that declaration. Older operation versions also reject the v5 scoring policies before mutating state.
 Relabeling an ordinary operation or downgrading a new permission field refuses. Mixed journals preserve
 the earlier policies and identities without rewriting operations.
 
@@ -276,6 +278,30 @@ or establish calibration. JSON retains the floor, units, cap interpretation, obs
 completion bounds; Markdown renders the same interpretation. Every unresolved member contributes both
 possible binary losses to those bounds. Continuous forecasts and simultaneous continuous-coverage monitoring
 refuse. Omission preserves existing output and record identities; later restatements never rewrite saved scores.
+
+DESIGN (BD-048/BD-343): `gaussian_crps_bounds = "registered-domain"` freezes Gaussian completion bounds
+over finite `outcome_lo` and `outcome_hi`. Only Gaussian/empirical cohorts containing a Gaussian qualify.
+For example, after registering synthetic Gaussian forecasts `f1` and `f2`, a live freeze request can contain:
+
+```toml
+[[cohort]]
+name = "bounded-demo"
+members = "f1, f2"
+resolution_rule = "Synthetic annual output on a fixed basis"
+eligible_sources = "synthetic:issuer"
+outcome_lo = "-1"
+outcome_hi = "2"
+gaussian_crps_bounds = "registered-domain"
+```
+
+`fmine forecast journal freeze --journal forecasts.journal --head <hex> --request cohort.toml --trust-host-clock`
+freezes that request before the forecasts' deadlines. A later assessment reports finite CRPS lower/upper
+completion bounds even while an outcome is pending. The cohort JSON retains the mode and domain. Both the
+original distribution and observed scores are unchanged; an outcome outside the domain refuses, rather than
+being clamped. Omission preserves legacy Gaussian summaries and checkpoint digests, including their unbounded
+missing-member scores under an old finite domain. The opt-in uses `COH1`/v4 and `ASM1`/v4; old journal operations
+keep their previous meanings. The live regressions pin a pre-change Gaussian checkpoint through a later v6
+append and refuse schema downgrade or removal of the mode. No new time proof or calibration claim is made.
 
 DESIGN: a public-bound freeze adds `public_issuer`, `public_metric`, `public_period`, `public_ownership`
 and `public_members` to the cohort request, with `resolution_rule = "registered-public-cell"`.
@@ -347,7 +373,7 @@ unit, ownership and sold-unit cost definition. The registered publication day mu
 period and selected reporting quarter; availability remains midnight after that day. Neither the numeric
 value, source Claim, publication evidence nor superseded sequence is accepted from the caller.
 
-Explicit `public_vintages` fields require a v4 cohort operation, or v5 when opting into the scoring policies
+Explicit `public_vintages` fields require a v4 cohort operation, or v5/v6 when opting into the scoring policies
 above, during admission and replay; an older operation version cannot acquire the newer policy grammar.
 Omitting these opt-in fields preserves existing v3 freezes.
 The generated `registered_restatement` operation uses `fmine.forecast-operation.v4` and retains the
@@ -376,7 +402,7 @@ retain their explicit weaker binding status; existing frame bytes and semantic i
 
 The `fmine.forecast-journal.v1` payload reports the cell, exact head, clock bounds, operation schema, inventories
 and checkpoints. `operation_schema` continues to identify the row grammar. `operation_version_counts` contains
-`legacy_v1` and `v2` counts excluding genesis, plus `v3` and `v4` when present; their sum is `n_operations`. `record_time_policy` is `none`,
+`legacy_v1` and `v2` counts excluding genesis, plus `v3` through `v6` when present; their sum is `n_operations`. `record_time_policy` is `none`,
 `legacy_observed`, `clock_upper_bound` or `mixed`. An assessment adds `report` with mode `durable_journal`;
 its version counts and time policy describe the prefix through its first persisted checkpoint. A v2 checkpoint
 over legacy operations remains mixed and does not upgrade the earlier time evidence. `inspect` is read-only

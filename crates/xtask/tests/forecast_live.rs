@@ -202,6 +202,22 @@ fn forecast(alias: &str, lo: i64, hi: i64, due: &str) -> String {
     )
 }
 
+fn gaussian_forecast(alias: &str, due: &str) -> String {
+    format!(
+        "[[forecast]]\nid = \"{alias}\"\nmodel_key = \"synthetic:{alias}\"\noutcome_due = \"{due}\"\nkind = \"gaussian\"\nmean = \"0\"\nstd_dev = \"1\"\n"
+    )
+}
+
+fn gaussian_cohort(opt_in: bool) -> String {
+    let mut request = cohort("f1, f2")
+        .replace("outcome_lo = \"0\"", "outcome_lo = \"-1\"")
+        .replace("outcome_hi = \"100\"", "outcome_hi = \"2\"");
+    if opt_in {
+        request.push_str("gaussian_crps_bounds = \"registered-domain\"\n");
+    }
+    request
+}
+
 fn cohort(members: &str) -> String {
     format!(
         "[[cohort]]\nname = \"three-sites\"\nmembers = \"{members}\"\nresolution_rule = \"Synthetic annual output on a fixed basis\"\neligible_sources = \"synthetic:issuer\"\nalpha = \"0.2\"\nmin_calibration_n = 35\nrho_low = \"0\"\nrho_high = \"0.5\"\noutcome_lo = \"0\"\noutcome_hi = \"100\"\n"
@@ -238,6 +254,192 @@ fn write_fixture(path: &std::path::Path, records: &mut [Record]) -> Digest32 {
         .collect();
     fs::write(path, bytes).expect("write synthetic fixture");
     previous
+}
+
+#[test]
+fn gaussian_domain_bounds_replay_with_pending_members_and_require_the_frozen_domain() {
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    for alias in ["f1", "f2"] {
+        journal.append(&gaussian_forecast(alias, DUE), ns("2030-01-02T00:00:00Z"));
+    }
+    let omitted = gaussian_cohort(true)
+        .replace("outcome_lo = \"-1\"\n", "")
+        .replace("outcome_hi = \"2\"\n", "");
+    let request = journal.request(&omitted);
+    journal.refuse(&request, ns("2030-01-03T00:00:00Z"), "FMINE-REF-109");
+    let wrong_mode =
+        journal.request(&gaussian_cohort(true).replace("registered-domain", "estimated"));
+    journal.refuse(&wrong_mode, ns("2030-01-03T00:00:00Z"), "FMINE-REF-107");
+    let frozen = journal.append(&gaussian_cohort(true), ns("2030-01-03T00:00:00Z"));
+    assert!(frozen.contains("\"gaussian_crps_bounds\":\"registered-domain\""));
+    let outside = journal.request(&outcome("f1", 3, "2031-01-02T00:00:00Z", false));
+    journal.refuse(&outside, ns("2031-01-03T00:00:00Z"), "FMINE-REF-109");
+    journal.append(
+        &outcome("f1", 0, "2031-01-02T00:00:00Z", false),
+        ns("2031-01-03T00:00:00Z"),
+    );
+    let output = journal.assess(CUT, "first-published", None, ns(CUT));
+    assert!(output.contains("\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1"));
+    assert!(output.contains("\"operation_version_counts\":{\"legacy_v1\":0,\"v2\":4,\"v6\":1}"));
+    let crps = output
+        .split_once("\"crps\":{")
+        .unwrap()
+        .1
+        .split_once(",\"interval_score\"")
+        .unwrap()
+        .0;
+    let number = |field: &str| -> f64 {
+        crps.split_once(&format!("\"{field}\":"))
+            .unwrap()
+            .1
+            .split([',', '}'])
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    // Independent normal known answers; one observed outcome at the mean, one pending on [-1,2].
+    let at_mean = 0.233_694_977_255_109_07;
+    let at_two = 1.452_791_821_685_903;
+    assert!((number("observed_mean") - at_mean).abs() < 2e-13);
+    assert!((number("lower") - at_mean).abs() < 2e-13);
+    assert!((number("upper") - (at_mean + at_two) / 2.0).abs() < 2e-13);
+    assert!(crps.contains("\"upper_unbounded\":false"));
+    let before = fs::read(&journal.path).unwrap();
+    let replay = journal.run(
+        &Command::Report {
+            journal: journal.path.clone(),
+            head: Some(journal.head),
+            assessment: assessment_digest(&output),
+            provenance: None,
+            timestamp: None,
+        },
+        0,
+    );
+    assert_eq!(replay.exit_code, 0, "{}", replay.to_json());
+    assert_eq!(assessment(&replay.payload_json), assessment(&output));
+    assert_eq!(fs::read(&journal.path).unwrap(), before);
+
+    let snapshot = DurableJournal::open_read(&journal.path, Some(journal.head)).unwrap();
+    for (change, from, to) in [
+        (
+            "downgrade",
+            "fmine.forecast-operation.v6",
+            "fmine.forecast-operation.v5",
+        ),
+        (
+            "removed",
+            "gaussian_crps_bounds = \"registered-domain\"\n",
+            "",
+        ),
+        ("changed", "registered-domain", "estimated"),
+    ] {
+        let mut records = snapshot.records().to_vec();
+        for record in &mut records {
+            if let Entry::Operation(text) = &mut record.entry
+                && text.contains("schema = \"fmine.forecast-operation.v6\"")
+            {
+                *text = text.replace(from, to);
+            }
+        }
+        let path = journal
+            .root
+            .join(format!("changed-version-{change}.journal"));
+        let pin = write_fixture(&path, &mut records);
+        assert_refused(
+            &journal.run(
+                &Command::Inspect {
+                    journal: path,
+                    head: Some(pin),
+                },
+                0,
+            ),
+            "FMINE-REF-107",
+        );
+    }
+}
+
+#[test]
+fn legacy_bounded_gaussian_checkpoint_survives_a_new_v6_cohort() {
+    // FACT: captured at c410307 before adding the finite-domain opt-in; these values include an
+    // unresolved Gaussian under a registered finite domain with the old conservative [0,+infinity] loss.
+    let old_digest = Digest32(
+        parse_hex32("ca9c4b239c871c4f454dcdf010dceaec10daccbd719b50d4f420dedcd46ea2bd").unwrap(),
+    );
+    let old_cohort = "5cd6b2ea312f087dc2bfc1b46fbb67a5906395115294658a9fdb34cee68ac304";
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    let snapshot = DurableJournal::open_read(&journal.path, Some(journal.head)).unwrap();
+    let mut records = snapshot.records().to_vec();
+    drop(snapshot);
+    for (at, request) in [
+        (
+            "2030-01-02T00:00:00Z",
+            gaussian_forecast("f1", "2031-01-01T00:00:00Z"),
+        ),
+        (
+            "2030-01-02T00:00:00Z",
+            gaussian_forecast("f2", "2031-01-01T00:00:00Z"),
+        ),
+        ("2030-01-03T00:00:00Z", gaussian_cohort(false)),
+        (
+            "2031-01-03T00:00:00Z",
+            outcome("f1", 0, "2031-01-02T00:00:00Z", false),
+        ),
+        (
+            CUT,
+            format!(
+                "[[assessment]]\ncohort = \"three-sites\"\nas_of = \"{CUT}\"\nselector = \"first-published\"\nexpected_digest = \"{old_digest}\"\n"
+            ),
+        ),
+    ] {
+        records.push(Record {
+            sequence: records.len() as u64,
+            previous: Digest32::default(),
+            observed_ns: ns(at),
+            entry: Entry::Operation(format!(
+                "schema = \"fmine.forecast-operation.v2\"\n{request}"
+            )),
+        });
+    }
+    journal.head = write_fixture(&journal.path, &mut records);
+    let report = |journal: &Journal| {
+        journal.run(
+            &Command::Report {
+                journal: journal.path.clone(),
+                head: Some(journal.head),
+                assessment: old_digest,
+                provenance: None,
+                timestamp: None,
+            },
+            0,
+        )
+    };
+    let before = report(&journal);
+    assert_eq!(before.exit_code, 0, "{}", before.to_json());
+    assert!(before.payload_json.contains(old_cohort));
+    assert_eq!(assessment_digest(&before.payload_json), old_digest);
+    assert!(
+        before
+            .payload_json
+            .contains("\"lower\":0.11684748862755456,\"upper\":null,\"upper_unbounded\":true")
+    );
+    journal.append(
+        &gaussian_forecast("next", "2032-01-01T00:00:00Z"),
+        ns("2031-01-11T00:00:00Z"),
+    );
+    journal.append(
+        &gaussian_cohort(true)
+            .replace("three-sites", "new-domain")
+            .replace("f1, f2", "next"),
+        ns("2031-01-12T00:00:00Z"),
+    );
+    let after = report(&journal);
+    assert_eq!(after.exit_code, 0, "{}", after.to_json());
+    assert_eq!(
+        assessment(&after.payload_json),
+        assessment(&before.payload_json)
+    );
+    assert!(after.payload_json.contains("\"v6\":1"));
 }
 
 #[test]

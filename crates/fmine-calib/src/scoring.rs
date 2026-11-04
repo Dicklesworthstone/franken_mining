@@ -6,6 +6,42 @@
 use crate::ScoreError;
 use fmine_core::det;
 
+/// DESIGN (BD-048/BD-343): Gaussian CRPS extrema over a prospectively frozen finite outcome domain.
+/// Its derivative in the outcome is `2 * Phi((y - mean) / std_dev) - 1`, so the minimum is at the
+/// mean or nearer domain endpoint and the maximum is at an endpoint. Selecting an extremizer does
+/// not clamp a supplied observation; outcome admission separately enforces the frozen domain.
+pub(crate) fn gaussian_crps_bounds(
+    mean: f64,
+    std_dev: f64,
+    (lo, hi): (f64, f64),
+) -> Result<(f64, f64), ScoreError> {
+    if !lo.is_finite() || !hi.is_finite() {
+        return Err(ScoreError::NonFinite);
+    }
+    if lo > hi {
+        return Err(ScoreError::InvertedInterval { lo, hi });
+    }
+    let left = crate::gaussian_crps(mean, std_dev, lo)?;
+    let right = crate::gaussian_crps(mean, std_dev, hi)?;
+    let minimum = if mean < lo {
+        left
+    } else if mean > hi {
+        right
+    } else {
+        crate::gaussian_crps(mean, std_dev, mean)?
+    };
+    let maximum = left.max(right);
+    if [left, right, minimum]
+        .iter()
+        .all(|value| value.is_finite() && *value >= 0.0)
+        && minimum <= maximum
+    {
+        Ok((minimum, maximum))
+    } else {
+        Err(arithmetic("Gaussian CRPS completion bounds"))
+    }
+}
+
 /// Negative natural log of the probability assigned to the observed binary outcome (plan §10.2).
 ///
 /// DESIGN: the caller must freeze `probability_floor` in `(0, 0.5)` before outcomes. The loss is
@@ -240,6 +276,61 @@ impl PositiveSum {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gaussian_completion_extrema_match_independent_normal_known_answers() {
+        // FACT: these N(0,1) scores at z=0,1,2,3 were evaluated independently with
+        // 80-digit decimal arithmetic and erf's power series, not the candidate's CDF.
+        let [s0, s1, s2, s3] = [
+            0.233_694_977_255_109_07,
+            0.602_441_357_627_616_3,
+            1.452_791_821_685_903,
+            2.436_574_725_086_339,
+        ];
+        for (domain, expected) in [
+            ((-3.0, -1.0), (s1, s3)),
+            ((-1.0, 2.0), (s0, s2)),
+            ((1.0, 3.0), (s1, s3)),
+            ((0.0, 0.0), (s0, s0)),
+            ((2.0, 2.0), (s2, s2)),
+        ] {
+            for (mean, sd) in [(0.0, 1.0), (7.0, 2.0), (-9.0, 0.125)] {
+                let shifted = (mean + sd * domain.0, mean + sd * domain.1);
+                let actual = gaussian_crps_bounds(mean, sd, shifted).unwrap();
+                assert!((actual.0 - sd * expected.0).abs() < 2e-13);
+                assert!((actual.1 - sd * expected.1).abs() < 2e-13);
+                for step in 0..=1024 {
+                    let y = shifted.0 + (shifted.1 - shifted.0) * f64::from(step) / 1024.0;
+                    let score = crate::gaussian_crps(mean, sd, y).unwrap();
+                    assert!(score >= actual.0 - 2e-13 && score <= actual.1 + 2e-13);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gaussian_completion_bounds_refuse_invalid_domains_and_unrepresentable_scores() {
+        for domain in [
+            (f64::NAN, 1.0),
+            (0.0, f64::INFINITY),
+            (f64::NEG_INFINITY, 0.0),
+            (2.0, 1.0),
+        ] {
+            assert!(gaussian_crps_bounds(0.0, 1.0, domain).is_err());
+        }
+        for (mean, sd) in [
+            (f64::NAN, 1.0),
+            (0.0, 0.0),
+            (0.0, -1.0),
+            (0.0, f64::INFINITY),
+        ] {
+            assert!(gaussian_crps_bounds(mean, sd, (-1.0, 2.0)).is_err());
+        }
+        assert!(matches!(
+            gaussian_crps_bounds(0.0, 1e-308, (2.0, 3.0)),
+            Err(ScoreError::Arithmetic { .. })
+        ));
+    }
 
     #[test]
     fn event_log_scores_match_independent_logs_and_retain_the_declared_cap() {

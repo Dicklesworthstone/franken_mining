@@ -31,6 +31,7 @@ const V2_SCHEMA: &str = "fmine.forecast-operation.v2";
 const V3_SCHEMA: &str = "fmine.forecast-operation.v3";
 const V4_SCHEMA: &str = "fmine.forecast-operation.v4";
 const V5_SCHEMA: &str = "fmine.forecast-operation.v5";
+const V6_SCHEMA: &str = "fmine.forecast-operation.v6";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +49,7 @@ enum OperationVersion {
     V3,
     V4,
     V5,
+    V6,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -69,6 +71,10 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
         && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V5_SCHEMA)
     {
         Ok(OperationVersion::V5)
+    } else if doc.top.len() == 1
+        && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V6_SCHEMA)
+    {
+        Ok(OperationVersion::V6)
     } else {
         Err(invalid("unknown stored forecast operation schema"))
     }
@@ -82,7 +88,9 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
             "a {expected_table} request needs exactly its one table and no top-level fields"
         )));
     }
-    let schema = if super::MONITOR_FIELDS
+    let schema = if doc.rows[0].get("gaussian_crps_bounds").is_some() {
+        V6_SCHEMA
+    } else if super::MONITOR_FIELDS
         .iter()
         .any(|key| doc.rows[0].get(key).is_some())
         || doc.rows[0].get("event_log_floor").is_some()
@@ -375,6 +383,7 @@ fn perform(
             OperationVersion::V3 => versions.v3 += 1,
             OperationVersion::V4 => versions.v4 += 1,
             OperationVersion::V5 => versions.v5 += 1,
+            OperationVersion::V6 => versions.v6 += 1,
         }
         let report_origin = match (previous.report_origin, assessment.as_ref()) {
             (Some(origin), _) => Some(origin),
@@ -1059,9 +1068,22 @@ fn apply(
         .iter()
         .any(|key| row.get(key).is_some());
     let event_log_declared = row.get("event_log_floor").is_some();
-    if (monitor_declared || event_log_declared) && version != OperationVersion::V5 {
+    let gaussian_bounds_declared = row.get("gaussian_crps_bounds").is_some();
+    if gaussian_bounds_declared && version != OperationVersion::V6 {
         return Err(invalid(
-            "coverage monitor and event log policies require operation version five",
+            "Gaussian CRPS bounds require operation version six",
+        ));
+    }
+    if version == OperationVersion::V6 && (row.table != "cohort" || !gaussian_bounds_declared) {
+        return Err(invalid(
+            "operation version six requires a finite-domain Gaussian CRPS cohort freeze",
+        ));
+    }
+    if (monitor_declared || event_log_declared)
+        && !matches!(version, OperationVersion::V5 | OperationVersion::V6)
+    {
+        return Err(invalid(
+            "coverage monitor and event log policies require operation version five or six",
         ));
     }
     if version == OperationVersion::V5
@@ -1073,10 +1095,13 @@ fn apply(
     }
     let vintage_freeze = row.table == "cohort" && row.get("public_vintages").is_some();
     if row.get("public_vintages").is_some()
-        && !matches!(version, OperationVersion::V4 | OperationVersion::V5)
+        && !matches!(
+            version,
+            OperationVersion::V4 | OperationVersion::V5 | OperationVersion::V6
+        )
     {
         return Err(invalid(
-            "public vintage policy requires operation version four or an opt-in version-five freeze",
+            "public vintage policy requires operation version four or an opt-in version-five/six freeze",
         ));
     }
     if version == OperationVersion::V4 && row.table != "registered_restatement" && !vintage_freeze {
@@ -1104,7 +1129,8 @@ fn apply(
         OperationVersion::V2
         | OperationVersion::V3
         | OperationVersion::V4
-        | OperationVersion::V5 => upper,
+        | OperationVersion::V5
+        | OperationVersion::V6 => upper,
     };
     let row = Row(row);
     match row.0.table.as_str() {
@@ -1202,11 +1228,15 @@ struct VersionCounts {
     v3: usize,
     v4: usize,
     v5: usize,
+    v6: usize,
 }
 
 impl VersionCounts {
     fn policy(self) -> &'static str {
-        match (self.legacy_v1, self.v2 + self.v3 + self.v4 + self.v5) {
+        match (
+            self.legacy_v1,
+            self.v2 + self.v3 + self.v4 + self.v5 + self.v6,
+        ) {
             (0, 0) => "none",
             (_, 0) => "legacy_observed",
             (0, _) => "clock_upper_bound",
@@ -1239,8 +1269,13 @@ impl VersionCounts {
         } else {
             format!(",\"v5\":{}", self.v5)
         };
+        let v6 = if self.v6 == 0 {
+            String::new()
+        } else {
+            format!(",\"v6\":{}", self.v6)
+        };
         format!(
-            "\"operation_version_counts\":{{\"legacy_v1\":{},\"v2\":{}{v3}{v4}{v5}}},\"record_time_policy\":{}",
+            "\"operation_version_counts\":{{\"legacy_v1\":{},\"v2\":{}{v3}{v4}{v5}{v6}}},\"record_time_policy\":{}",
             self.legacy_v1,
             self.v2,
             js(self.policy())
@@ -1282,6 +1317,7 @@ fn version_counts(
             OperationVersion::V3 => counts.v3 += 1,
             OperationVersion::V4 => counts.v4 += 1,
             OperationVersion::V5 => counts.v5 += 1,
+            OperationVersion::V6 => counts.v6 += 1,
         }
         if doc
             .rows

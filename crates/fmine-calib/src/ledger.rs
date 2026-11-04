@@ -15,6 +15,7 @@ use fmine_numerics::norm_inv;
 
 use crate::scoring::{
     MAX_EMPIRICAL_SAMPLES, SortedEmpirical, bernoulli_log_score, empirical_interval,
+    gaussian_crps_bounds,
 };
 use crate::{
     CalibrationFlag, CalibrationReport, ScoreError, gaussian_crps, winkler_interval_score,
@@ -197,8 +198,11 @@ pub struct AssessmentPolicy {
     pub min_calibration_n: usize,
     /// Equicorrelation range; the lower effective sample uses the upper correlation.
     pub correlation_range: (f64, f64),
-    /// A declared physical outcome domain can make interval scores bounded. Observations outside it refuse.
+    /// A declared physical outcome domain can bound completion scores. Observations outside it refuse.
     pub outcome_bounds: Option<(f64, f64)>,
+    /// Opt into Gaussian CRPS extrema over `outcome_bounds`, preserving legacy assessment identities
+    /// when false. Requires a finite domain and only Gaussian/empirical members, including a Gaussian.
+    pub gaussian_crps_bounds: bool,
     /// Optional exact conditional coverage test. Its support and sequence are frozen before outcomes.
     pub coverage_monitor: Option<CoverageMonitorPolicy>,
     /// Optional event log-loss floor in `(0, 0.5)`, frozen before outcomes. Bernoulli cohorts only.
@@ -212,6 +216,7 @@ impl Default for AssessmentPolicy {
             min_calibration_n: MIN_CALIBRATION_N,
             correlation_range: (0.0, 0.5),
             outcome_bounds: None,
+            gaussian_crps_bounds: false,
             coverage_monitor: None,
             event_log_floor: None,
         }
@@ -236,6 +241,13 @@ impl AssessmentPolicy {
         {
             return Err(domain(
                 "invalid frozen assessment policy; the calibration minimum must be at least 35",
+            ));
+        }
+        if self.gaussian_crps_bounds
+            && (self.outcome_bounds.is_none() || self.event_log_floor.is_some())
+        {
+            return Err(domain(
+                "Gaussian CRPS bounds require a registered finite outcome domain and no event log policy",
             ));
         }
         if let Some(monitor) = &self.coverage_monitor {
@@ -265,6 +277,12 @@ impl AssessmentPolicy {
         enc.put_u8(u8::from(self.outcome_bounds.is_some()));
         if let Some((lo, hi)) = self.outcome_bounds {
             floats(enc, &[lo, hi]);
+        }
+        // DESIGN: v4 alone records this opt-in and the optional monitor's presence. Older policy
+        // bytes retain their exact layout, including bounded domains with legacy Gaussian bounds.
+        if self.gaussian_crps_bounds {
+            enc.put_u8(1);
+            enc.put_u8(u8::from(self.coverage_monitor.is_some()));
         }
         // DESIGN: absent monitoring writes no new bytes, preserving every v1 cohort identity.
         if let Some(monitor) = &self.coverage_monitor {
@@ -491,6 +509,8 @@ pub struct AssessmentSummary {
     pub coverage: Option<CoverageSummary>,
     /// Available only when every member is Gaussian or empirical, never on a hidden subset.
     pub crps: Option<ScoreSummary>,
+    /// Whether finite-domain Gaussian completion bounds were frozen before the outcomes.
+    pub gaussian_crps_bounds: bool,
     pub interval_score: Option<ScoreSummary>,
     /// Available only for an all-Bernoulli cohort.
     pub brier: Option<ScoreSummary>,
@@ -675,7 +695,9 @@ impl ForecastLedger {
             }
         }
         self.check_record_time(spec.frozen_at_ns)?;
-        let version = if spec.policy.event_log_floor.is_some() {
+        let version = if spec.policy.gaussian_crps_bounds {
+            4
+        } else if spec.policy.event_log_floor.is_some() {
             3
         } else if spec.policy.coverage_monitor.is_some() {
             2
@@ -693,6 +715,7 @@ impl ForecastLedger {
         }
         enc.put_u64(spec.members.len() as u64);
         let mut bernoulli = None;
+        let mut has_gaussian = false;
         for id in &spec.members {
             let rec = self
                 .records
@@ -710,6 +733,17 @@ impl ForecastLedger {
                 policy.validate_forecast(rec)?;
             }
             let event = matches!(rec.payload, ForecastPayload::Bernoulli { .. });
+            has_gaussian |= matches!(rec.payload, ForecastPayload::Gaussian { .. });
+            if spec.policy.gaussian_crps_bounds
+                && !matches!(
+                    rec.payload,
+                    ForecastPayload::Gaussian { .. } | ForecastPayload::Empirical { .. }
+                )
+            {
+                return Err(domain(
+                    "Gaussian CRPS bounds require only Gaussian or empirical forecasts",
+                ));
+            }
             if spec.policy.event_log_floor.is_some() && !event {
                 return Err(domain(
                     "event log scoring requires only Bernoulli forecasts",
@@ -738,6 +772,11 @@ impl ForecastLedger {
                 coverage::monitor_interval(&rec.payload, spec.policy.alpha)?;
             }
             rec.encode(&mut enc);
+        }
+        if spec.policy.gaussian_crps_bounds && !has_gaussian {
+            return Err(domain(
+                "Gaussian CRPS bounds require at least one Gaussian forecast",
+            ));
         }
         let digest = blake3_hash(&enc.finish());
         self.latest_record_ns = Some(spec.frozen_at_ns);
@@ -1225,7 +1264,20 @@ fn summarize(
             if let Some(y) = y {
                 z_sum = finite(z_sum + finite((y - mean) / std_dev)?)?;
             }
-            crps.add(score, score.map_or((0.0, None), |s| (s, Some(s))))?;
+            let bounds = if let Some(score) = score {
+                (score, Some(score))
+            } else if policy.gaussian_crps_bounds {
+                let domain = policy.outcome_bounds.ok_or(ScoreError::InvalidParameter {
+                    name: "gaussian_crps_bounds_requires_domain",
+                    value: 0.0,
+                })?;
+                let (lower, upper) = gaussian_crps_bounds(mean, std_dev, domain)?;
+                (lower, Some(upper))
+            } else {
+                // DESIGN: older frozen policies keep their original conservative summary bytes.
+                (0.0, None)
+            };
+            crps.add(score, bounds)?;
         }
         if let Some(empirical) = empirical {
             let score = y.map(|value| empirical.crps(value)).transpose()?;
@@ -1304,6 +1356,7 @@ fn summarize(
         unresolved_by_reason: missing,
         coverage,
         crps: all_crps.then(|| crps.finish(n, resolved)),
+        gaussian_crps_bounds: policy.gaussian_crps_bounds,
         interval_score: (n > 0 && !events).then(|| interval.finish(n, resolved)),
         brier: events.then(|| brier.finish(n, resolved)),
         event_log: policy
@@ -1324,7 +1377,9 @@ impl Assessment {
     /// selected event hashes, all unresolved reasons, every score and the complete denominator.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        let version = if self.summary.event_log.is_some() {
+        let version = if self.summary.gaussian_crps_bounds {
+            4
+        } else if self.summary.event_log.is_some() {
             3
         } else if self.coverage_monitor.is_some() {
             2
@@ -1383,7 +1438,11 @@ impl Assessment {
             CalibrationFlag::Overconfident => 3,
             CalibrationFlag::Biased => 4,
         });
-        // DESIGN: no extension marker in v1; opt-in monitoring alone selects the v2 frame.
+        if self.summary.gaussian_crps_bounds {
+            enc.put_u8(1);
+            enc.put_u8(u8::from(self.coverage_monitor.is_some()));
+        }
+        // DESIGN: no extension marker in v1; monitoring without v4 bounds selects the v2 frame.
         if let Some(monitor) = &self.coverage_monitor {
             monitor.encode(&mut enc);
         }
@@ -2144,6 +2203,193 @@ mod tests {
             s.crps.expect("CRPS").whole_cohort.lower,
             s.crps.expect("CRPS").observed_mean.expect("observed") / 2.0
         );
+    }
+
+    #[test]
+    fn gaussian_domain_completion_retains_missing_members_and_sealed_assessments() {
+        let normal = ForecastPayload::Gaussian {
+            mean: 0.0,
+            std_dev: 1.0,
+        };
+        let (mut ledger, cohort, ids) = make_cohort(
+            vec![
+                normal.clone(),
+                ForecastPayload::Empirical {
+                    samples: vec![-2.0, 2.0],
+                },
+                normal,
+                ForecastPayload::Empirical {
+                    samples: vec![0.0, 2.0],
+                },
+            ],
+            AssessmentPolicy {
+                outcome_bounds: Some((-1.0, 2.0)),
+                gaussian_crps_bounds: true,
+                ..AssessmentPolicy::default()
+            },
+        );
+        for id in &ids[..2] {
+            ledger
+                .append_outcome(*id, 101, 102, published(0.0))
+                .unwrap();
+        }
+        let original = ledger
+            .assess(cohort, 103, OutcomeSelector::FirstPublished)
+            .unwrap()
+            .clone();
+        let summary = &original.summary;
+        assert_eq!(
+            (summary.n_members, summary.n_resolved, summary.n_unresolved),
+            (4, 2, 2)
+        );
+        assert!(summary.gaussian_crps_bounds);
+        let crps = summary.crps.unwrap();
+        // Independent standard-normal constants from scoring's known-answer test; empirical
+        // CRPS of [-2,2] at zero is 1, and [0,2] has extrema 0.5 and 1.5 over [-1,2].
+        let (at_mean, at_two) = (0.233_694_977_255_109_07, 1.452_791_821_685_903);
+        for (actual, expected) in [
+            (crps.observed_mean.unwrap(), (at_mean + 1.0) / 2.0),
+            (crps.whole_cohort.lower, (2.0 * at_mean + 1.5) / 4.0),
+            (
+                crps.whole_cohort.upper.unwrap(),
+                (at_mean + at_two + 2.5) / 4.0,
+            ),
+        ] {
+            assert!((actual - expected).abs() < 2e-13);
+        }
+        assert_eq!(summary.flag, CalibrationFlag::Descriptive);
+        assert_eq!(summary.mean_standardized_bias, None);
+        assert_eq!(&original.canonical_bytes()[8..10], &4u16.to_le_bytes());
+        assert!(
+            ledger
+                .append_outcome(ids[2], 104, 105, published(3.0))
+                .is_err()
+        );
+        assert!(ledger.outcomes(ids[2]).is_empty());
+        ledger
+            .append_outcome(ids[2], 104, 104, published(2.0))
+            .unwrap();
+        ledger
+            .append_outcome(ids[3], 104, 104, published(-1.0))
+            .unwrap();
+        let completed = ledger
+            .assess(cohort, 105, OutcomeSelector::FirstPublished)
+            .unwrap();
+        let total = completed.summary.crps.unwrap();
+        assert!((total.observed_mean.unwrap() - crps.whole_cohort.upper.unwrap()).abs() < 2e-13);
+        assert_eq!(total.whole_cohort.lower, total.whole_cohort.upper.unwrap());
+        assert_eq!(
+            ledger
+                .assess(cohort, 103, OutcomeSelector::FirstPublished)
+                .unwrap(),
+            &original,
+            "late resolution must not rewrite the earlier completion bounds or digest"
+        );
+    }
+
+    #[test]
+    fn gaussian_domain_opt_in_is_frozen_and_refusals_do_not_advance_authority() {
+        let normal = ForecastPayload::Gaussian {
+            mean: 0.0,
+            std_dev: 1.0,
+        };
+        let policy = AssessmentPolicy {
+            outcome_bounds: Some((-1.0, 2.0)),
+            ..AssessmentPolicy::default()
+        };
+        let (mut ledger, old, ids) = make_cohort(vec![normal.clone()], policy.clone());
+        let (_, bounded_same_name, bounded_ids) = make_cohort(
+            vec![normal.clone()],
+            AssessmentPolicy {
+                gaussian_crps_bounds: true,
+                ..policy.clone()
+            },
+        );
+        assert_eq!(ids, bounded_ids);
+        assert_ne!(
+            old, bounded_same_name,
+            "the opt-in is bound even when every other input is identical"
+        );
+        let mut spec = ledger.cohort(old).unwrap().spec.clone();
+        spec.name = "bounded".into();
+        spec.policy.gaussian_crps_bounds = true;
+        spec.policy.outcome_bounds = None;
+        spec.frozen_at_ns = 50;
+        assert!(ledger.freeze_cohort(spec.clone()).is_err());
+        spec.policy.outcome_bounds = Some((-1.0, 2.0));
+        spec.frozen_at_ns = 2;
+        let new = ledger.freeze_cohort(spec).unwrap();
+        assert_ne!(old, new);
+        let mut monitored = ledger.cohort(new).unwrap().spec.clone();
+        monitored.name = "bounded and monitored".into();
+        monitored.policy.coverage_monitor = Some(CoverageMonitorPolicy {
+            alarm_alpha: 0.05,
+            support: "synthetic independent annual total".into(),
+            conditional_null: "Assume P(hit_t | past) = 0.8".into(),
+            order: ids.clone(),
+        });
+        let monitored = ledger.freeze_cohort(monitored).unwrap();
+        let with_monitor = ledger
+            .assess(monitored, 3, OutcomeSelector::FirstPublished)
+            .unwrap();
+        assert!(with_monitor.coverage_monitor.is_some());
+        assert_eq!(&with_monitor.canonical_bytes()[8..10], &4u16.to_le_bytes());
+        let legacy = ledger
+            .assess(old, 3, OutcomeSelector::FirstPublished)
+            .unwrap()
+            .clone();
+        let bounded = ledger
+            .assess(new, 3, OutcomeSelector::FirstPublished)
+            .unwrap();
+        assert_eq!(
+            legacy.summary.crps.unwrap().whole_cohort,
+            ScoreBounds {
+                lower: 0.0,
+                upper: None
+            }
+        );
+        assert_eq!(&legacy.canonical_bytes()[8..10], &1u16.to_le_bytes());
+        assert!(bounded.summary.crps.unwrap().whole_cohort.upper.is_some());
+        assert_eq!(ledger.forecast(ids[0]).unwrap().payload, normal);
+
+        for payload in [
+            interval(),
+            ForecastPayload::Bernoulli { probability: 0.5 },
+            ForecastPayload::Empirical {
+                samples: vec![0.0, 1.0],
+            },
+        ] {
+            let (mut ledger, old, _) = make_cohort(vec![payload], policy.clone());
+            let mut invalid = ledger.cohort(old).unwrap().spec.clone();
+            invalid.name = "requires Gaussian".into();
+            invalid.frozen_at_ns = 50;
+            invalid.policy.gaussian_crps_bounds = true;
+            assert!(ledger.freeze_cohort(invalid).is_err());
+            ledger
+                .register_payload("next", 3, 100, normal.clone())
+                .unwrap();
+        }
+
+        let (mut ledger, cohort, _) = make_cohort(
+            vec![ForecastPayload::Gaussian {
+                mean: 0.0,
+                std_dev: 1e-308,
+            }],
+            AssessmentPolicy {
+                outcome_bounds: Some((2.0, 3.0)),
+                gaussian_crps_bounds: true,
+                ..AssessmentPolicy::default()
+            },
+        );
+        assert!(
+            ledger
+                .assess(cohort, 50, OutcomeSelector::FirstPublished)
+                .is_err()
+        );
+        assert!(ledger.assessments.is_empty());
+        ledger
+            .register_payload("after failed arithmetic", 3, 100, normal)
+            .unwrap();
     }
 
     fn calibrated_case(
