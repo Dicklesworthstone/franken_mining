@@ -1003,6 +1003,11 @@ impl PublicAssuranceReport {
         );
         let _ = write!(o, "\"waterfall\":{},", self.waterfall.to_json());
         self.mine_ledger_json(&mut o);
+        let _ = write!(
+            o,
+            "\"company_cost_layers\":{},",
+            self.mine_ledger.cost_layers.to_json()
+        );
 
         let counts = self.state_counts();
         let alt = self.alternate_counts();
@@ -1989,6 +1994,8 @@ fn opt(enc: &mut Encoder, s: Option<&str>) {
 /// and locators (a refusal's reason, an (iv) item's needed fact), the share used and the share printed, the
 /// nil-token certificate, then every infeasible component with its correction sets and implied ranges.
 fn encode_mine_ledger(enc: &mut Encoder, ledger: &MineLedger) {
+    // Company cost layers are a separately source-bound report projection, not scored identities. Their
+    // own digest covers their inputs and exact results; they do not change this established M0 certificate.
     enc.put_u64(ledger.instances.len() as u64);
     for i in &ledger.instances {
         for field in [

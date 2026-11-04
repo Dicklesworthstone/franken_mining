@@ -542,6 +542,7 @@ fn workbook_envelope(report: &PublicAssuranceReport) -> Envelope {
             }
         }
     }
+    out.push_str(&report.mine_ledger.cost_layers.to_markdown());
     out.push_str("\n## Verified workbook bytes\n\n| File | SHA-256 |\n|---|---|\n");
     for source in &report.sources {
         let _ = writeln!(

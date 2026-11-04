@@ -239,6 +239,7 @@ fn ledger(out: &mut String, report: &PublicAssuranceReport) {
             text(reason)
         );
     }
+    out.push_str(&report.mine_ledger.cost_layers.to_markdown());
 }
 
 fn metrics(out: &mut String, report: &PublicAssuranceReport) {

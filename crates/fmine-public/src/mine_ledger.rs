@@ -80,6 +80,12 @@ use crate::key::{Period, PeriodKind, StatusKind, SubjectStatus};
 use crate::mine_stats::{MineStatsCell, MineStatsRead, MineStatsValue, View};
 use crate::sources::{RegionMemberRow, RegisteredShare};
 
+mod cost_layers;
+pub use cost_layers::{
+    CompanyCostLayer, CompanyCostLayers, CostLayerAmounts, CostLayerOperand, CostLayerRegion,
+    CostLayerUnavailable, CostLayerValue,
+};
+
 /// The flow columns of the summary sheets per metal: 100% production, attributable production, attributable
 /// sold (field ids of the Mine Stats reader).
 pub const FLOW_FIELDS: [[&str; 3]; 2] = [
@@ -450,6 +456,9 @@ pub struct MineLedger {
     pub infeasible: Vec<Component>,
     /// Components the kernel made no joint claim on: `(id, reason)`.
     pub indeterminate: Vec<(String, String)>,
+    /// Company rates minus the sold-weighted regional rates. This separately digested projection is outside
+    /// the scored identity families and their certificate: it identifies no corporate or JV cost component.
+    pub cost_layers: CompanyCostLayers,
 }
 
 impl MineLedger {
@@ -2012,6 +2021,7 @@ pub fn mine_ledger(files: &[LedgerFile<'_>], rules: &LedgerRules<'_>) -> MineLed
         components,
         infeasible,
         indeterminate,
+        cost_layers: cost_layers::assess(files, rules, &slots),
     }
 }
 

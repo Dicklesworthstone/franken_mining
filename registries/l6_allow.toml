@@ -58,6 +58,14 @@ reason = "dimensionless miscoverage level in (0, 1)"
 [[allow]]
 crate = "fmine-calib"
 file = "src/scoring.rs"
+fn = "bernoulli_log_score"
+params = "probability, probability_floor"
+kind = "generic"
+reason = "dimensionless Bernoulli probability and prospectively frozen dimensionless log-loss probability floor"
+
+[[allow]]
+crate = "fmine-calib"
+file = "src/scoring.rs"
 fn = "empirical_crps"
 params = "outcome"
 kind = "generic"

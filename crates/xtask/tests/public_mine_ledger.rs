@@ -11,6 +11,11 @@ use fmine_public::mine_stats::MineStatsRead;
 use fmine_public::sources::{RegionMemberRow, RegisteredShare};
 use fmine_registry::sources::MineStatsLabelAlias;
 
+// Exercise the existing private CLI renderer without adding a product API solely for tests.
+use fmine_cli::packet;
+#[path = "../../fmine-cli/src/assure_report.rs"]
+mod assure_report;
+
 #[cfg(test)]
 mod tests {
     use fmine_io::xlsx::{MinimalCell, MinimalSheet, MinimalStyles, build_minimal_xlsx_styled};
@@ -672,6 +677,410 @@ mod tests {
 
     const CARLIN: [&str; 6] = ["200", "100", "100", "1000", "800", "1300"];
     const HEMLO: [&str; 6] = ["100", "100", "100", "1500", "1200", "1700"];
+
+    fn company_members() -> Vec<RegionMemberRow> {
+        vec![
+            member("North America", "Carlin", "2030Q1"),
+            member("Africa & Middle East", "Kibali", "2030Q1"),
+        ]
+    }
+
+    fn company_rows() -> Vec<RateRow<'static>> {
+        vec![
+            (
+                "North America",
+                ["100", "100", "100", "1000", "1000", "1000"],
+            ),
+            (
+                "Africa & Middle East",
+                ["300", "300", "300", "2000", "2000", "2000"],
+            ),
+            ("Total Gold", ["400", "400", "400", "1800", "1750", "1700"]),
+        ]
+    }
+
+    fn company_cost_layer<'a>(
+        l: &'a MineLedger,
+        field: &str,
+    ) -> &'a fmine_public::mine_ledger::CompanyCostLayer {
+        l.cost_layers
+            .rows
+            .iter()
+            .find(|r| r.field == field)
+            .expect("company rate")
+    }
+
+    #[test]
+    fn company_cost_layers_have_exact_signed_rounding_bounds_without_scoring_residuals() {
+        use fmine_numerics::exact_feas::Rat;
+        let regions = ["North America".into(), "Africa & Middle East".into()];
+        let members = company_members();
+        let rules = LedgerRules {
+            regions: &regions,
+            region_members: &members,
+            ..NONE
+        };
+        let l = rate_ledger(&company_rows(), &rules);
+        assert_eq!(l.cost_layers.rows.len(), 3);
+        // Independent exact vertex enumeration: regional point 1750, box [1748.25,1751.75].
+        // Company half-step rounding adds another 0.5 to each endpoint of the implied difference.
+        for (field, point, low, high) in [
+            ("cos_usd_per_oz", 50, 191, 209),
+            ("tcc_usd_per_oz", 0, -9, 9),
+            ("aisc_usd_per_oz", -50, -209, -191),
+        ] {
+            let row = company_cost_layer(&l, field);
+            let a = row.result.as_ref().expect("exact implied layer");
+            assert_eq!(a.weighted_point, Rat::from_integer(1750));
+            assert_eq!(
+                a.weighted_interval,
+                (Rat::new(6993, 4).unwrap(), Rat::new(7007, 4).unwrap())
+            );
+            assert_eq!(a.point, Rat::from_integer(point));
+            assert_eq!(
+                a.interval,
+                (Rat::new(low, 4).unwrap(), Rat::new(high, 4).unwrap())
+            );
+            assert!(
+                !l.instances
+                    .iter()
+                    .any(|i| i.subject == "Total Gold" && i.field == field)
+            );
+            assert_eq!(row.region_map.len(), 2);
+            assert_eq!(row.sources.len(), 1);
+        }
+        let row = company_cost_layer(&l, "cos_usd_per_oz");
+        assert_eq!(row.company.at.as_deref(), Some("2030Q1:QTD!E7"));
+        assert_eq!(row.regions[0].region, "Africa & Middle East");
+        assert_eq!(row.regions[0].rate.at.as_deref(), Some("2030Q1:QTD!E6"));
+        assert_eq!(row.regions[0].sold.at.as_deref(), Some("2030Q1:QTD!D6"));
+        assert_eq!(row.regions[1].rate.at.as_deref(), Some("2030Q1:QTD!E5"));
+        let json = l.cost_layers.to_json();
+        assert_eq!(json.matches("\"status\":\"unresolved\"").count(), 3);
+        assert!(!json.contains("\"status\":\"consistent\""));
+        assert!(json.contains("outside scored identity counts"));
+    }
+
+    #[test]
+    fn company_cost_layers_retain_unavailable_operands_and_exclude_only_nil_sales() {
+        let regions = ["North America".into(), "Africa & Middle East".into()];
+        let members = company_members();
+        let rules = LedgerRules {
+            regions: &regions,
+            region_members: &members,
+            ..NONE
+        };
+        for (sold, reason) in [
+            ("", "blank_operand"),
+            ("n/a", "placeholder_operand"),
+            ("0", "weight_not_positive"),
+            ("-1", "weight_not_positive"),
+        ] {
+            let mut rows = company_rows();
+            rows[0].1[2] = sold;
+            let l = rate_ledger(&rows, &rules);
+            let e = company_cost_layer(&l, "cos_usd_per_oz")
+                .result
+                .as_ref()
+                .unwrap_err();
+            assert_eq!(e.reason, reason, "sold {sold:?}");
+            assert_eq!(e.at.as_deref(), Some("2030Q1:QTD!D5"));
+        }
+        let mut rows = company_rows();
+        rows[0].1[2] = "—";
+        rows[0].1[3] = "n/a";
+        let l = rate_ledger(&rows, &rules);
+        let row = company_cost_layer(&l, "cos_usd_per_oz");
+        assert_eq!(
+            row.result.as_ref().unwrap().weighted_point,
+            fmine_numerics::exact_feas::Rat::from_integer(2000)
+        );
+        assert_eq!(row.regions.len(), 2, "unused operands remain evidence");
+        assert!(
+            l.cost_layers
+                .to_json()
+                .contains("\"excluded_nil_sold\":true")
+        );
+        rows[1].1[2] = "—";
+        let l = rate_ledger(&rows, &rules);
+        assert_eq!(
+            company_cost_layer(&l, "cos_usd_per_oz")
+                .result
+                .as_ref()
+                .unwrap_err()
+                .reason,
+            "weights_all_nil"
+        );
+        let rows = company_rows();
+        let l = rate_ledger(&rows[1..], &rules);
+        let row = company_cost_layer(&l, "cos_usd_per_oz");
+        assert_eq!(
+            row.result.as_ref().unwrap_err().reason,
+            "operand_row_missing"
+        );
+        assert!(row.regions[1].sold.at.is_none());
+        let l = rate_ledger(
+            &rows,
+            &LedgerRules {
+                region_members: &[],
+                ..rules
+            },
+        );
+        assert_eq!(
+            company_cost_layer(&l, "cos_usd_per_oz")
+                .result
+                .as_ref()
+                .unwrap_err()
+                .reason,
+            "region_not_in_map"
+        );
+        let l = rate_ledger(
+            &rows,
+            &LedgerRules {
+                region_members: &members[..1],
+                ..rules
+            },
+        );
+        let row = company_cost_layer(&l, "cos_usd_per_oz");
+        assert_eq!(row.result.as_ref().unwrap_err().reason, "region_not_in_map");
+        let omitted = row
+            .regions
+            .iter()
+            .find(|r| r.region == "Africa & Middle East")
+            .unwrap();
+        assert!(!omitted.mapped);
+        assert_eq!(omitted.rate.at.as_deref(), Some("2030Q1:QTD!E6"));
+        assert_eq!(omitted.sold.at.as_deref(), Some("2030Q1:QTD!D6"));
+        assert!(l.cost_layers.to_json().contains("\"mapped\":false"));
+    }
+
+    #[test]
+    fn company_cost_layers_keep_comparative_columns_in_the_release_map() {
+        use fmine_numerics::exact_feas::Rat;
+        let regions = ["North America".into(), "Africa & Middle East".into()];
+        let mut members = company_members();
+        members.push(RegionMemberRow {
+            region: "North America".into(),
+            member: "Old member".into(),
+            first: "2029Q1".into(),
+            last: Some("2029Q4".into()),
+        });
+        let rules = LedgerRules {
+            regions: &regions,
+            region_members: &members,
+            ..NONE
+        };
+        let current = company_rows();
+        let rows: Vec<(&str, &[&str])> = current
+            .iter()
+            .map(|(label, values)| (*label, values.as_slice()))
+            .collect();
+        let mut sheet = summary_cols("QTD", "three", &GOLD_RATES, &rows);
+        sheet.cells.push(("I3".into(), MinimalCell::Number(2029.0)));
+        for (col, header) in ["I", "J", "K", "L", "M", "N"].into_iter().zip(GOLD_RATES) {
+            sheet.cells.push((format!("{col}4"), text(header)));
+        }
+        let prior = [
+            ["100", "100", "100", "800", "800", "800"],
+            ["300", "300", "300", "1200", "1200", "1200"],
+            ["400", "400", "400", "1300", "1300", "1300"],
+        ];
+        for (row, values) in prior.into_iter().enumerate() {
+            for (col, value) in ["I", "J", "K", "L", "M", "N"].into_iter().zip(values) {
+                sheet
+                    .cells
+                    .push((format!("{col}{}", row + 5), data(value).unwrap()));
+            }
+        }
+        let (l, refusals) = run(vec![("2030Q1".into(), vec![sheet])], &rules);
+        assert!(refusals.is_empty(), "{refusals:?}");
+        assert_eq!(l.cost_layers.rows.len(), 6);
+        for row in &l.cost_layers.rows {
+            assert!(row.region_map.iter().all(|r| r.member != "Old member"));
+            assert_eq!(row.release, "2030Q1");
+            if row.group == Group::Prior {
+                assert_eq!(row.period.code(), "2029Q1");
+                assert_eq!(row.result.as_ref().unwrap().point, Rat::from_integer(200));
+                assert_eq!(
+                    row.result.as_ref().unwrap().weighted_point,
+                    Rat::from_integer(1100)
+                );
+            } else {
+                assert_eq!(row.period.code(), "2030Q1");
+                assert_eq!(
+                    row.result.as_ref().unwrap().weighted_point,
+                    Rat::from_integer(1750)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn company_cost_layers_refuse_ambiguous_releases_and_mismatched_operand_periods() {
+        let regions = ["North America".into(), "Africa & Middle East".into()];
+        let members = company_members();
+        let rules = LedgerRules {
+            regions: &regions,
+            region_members: &members,
+            ..NONE
+        };
+        let values = company_rows();
+        let rows: Vec<(&str, &[&str])> = values
+            .iter()
+            .map(|(label, values)| (*label, values.as_slice()))
+            .collect();
+        let sheet = summary_cols("QTD", "three", &GOLD_RATES, &rows);
+        let mut other = sheet.clone();
+        other
+            .cells
+            .push(("A30".into(), text("Another source publication")));
+        let (l, refusals) = run(
+            vec![
+                ("2030Q1".into(), vec![sheet.clone()]),
+                ("2030Q1".into(), vec![other]),
+            ],
+            &rules,
+        );
+        assert!(refusals.is_empty());
+        let layer = company_cost_layer(&l, "cos_usd_per_oz");
+        assert_eq!(layer.sources.len(), 2);
+        assert_eq!(
+            layer.result.as_ref().unwrap_err().reason,
+            "release_source_ambiguous"
+        );
+        let workbook =
+            Workbook::from_bytes("invented.xlsx", &build_minimal_xlsx_styled(&[sheet], None))
+                .unwrap();
+        let mut read = read_mine_stats(&workbook, "2030Q1", None).unwrap();
+        let sales = read
+            .values
+            .iter_mut()
+            .find(|v| v.site == "North America" && v.label == "au_sold_attr_koz")
+            .unwrap();
+        sales.period = "2030Q2".into();
+        let l = mine_ledger(
+            &[LedgerFile {
+                quarter: "2030Q1",
+                read: &read,
+                workbook: &workbook,
+            }],
+            &rules,
+        );
+        let e = company_cost_layer(&l, "cos_usd_per_oz")
+            .result
+            .as_ref()
+            .unwrap_err();
+        assert_eq!(e.reason, "period_mismatch");
+        assert_eq!(e.at.as_deref(), Some("2030Q1:QTD!D5"));
+    }
+
+    #[test]
+    fn company_cost_layer_map_and_input_evidence_are_deterministic_and_digest_bound() {
+        let regions = ["North America".into(), "Africa & Middle East".into()];
+        let members = company_members();
+        let rules = LedgerRules {
+            regions: &regions,
+            region_members: &members,
+            ..NONE
+        };
+        let rows = company_rows();
+        let l = rate_ledger(&rows, &rules);
+        let mut reversed = members.clone();
+        reversed.reverse();
+        let reordered_map = rate_ledger(
+            &rows,
+            &LedgerRules {
+                region_members: &reversed,
+                ..rules
+            },
+        );
+        assert_eq!(l.cost_layers, reordered_map.cost_layers);
+        let mut permuted = rows.clone();
+        permuted.swap(0, 1);
+        let reordered_cells = rate_ledger(&permuted, &rules);
+        for (a, b) in l
+            .cost_layers
+            .rows
+            .iter()
+            .zip(&reordered_cells.cost_layers.rows)
+        {
+            assert_eq!(a.result, b.result, "row order changes no arithmetic");
+            assert_eq!(a.region_map_digest(), b.region_map_digest());
+        }
+        assert_ne!(
+            l.cost_layers.digest(),
+            reordered_cells.cost_layers.digest(),
+            "moved citations and source bytes remain bound"
+        );
+        let mut changed_map = members.clone();
+        changed_map[0].member = "Hemlo".into();
+        let changed = rate_ledger(
+            &rows,
+            &LedgerRules {
+                region_members: &changed_map,
+                ..rules
+            },
+        );
+        assert_eq!(
+            l.cost_layers.rows[0].result,
+            changed.cost_layers.rows[0].result
+        );
+        assert_ne!(
+            l.cost_layers.digest(),
+            changed.cost_layers.digest(),
+            "a different declared perimeter remains distinct"
+        );
+        let mut changed_rows = rows.clone();
+        changed_rows[0].1[3] = "1001";
+        let changed = rate_ledger(&changed_rows, &rules);
+        assert_ne!(
+            company_cost_layer(&l, "cos_usd_per_oz").result,
+            company_cost_layer(&changed, "cos_usd_per_oz").result
+        );
+        assert_ne!(l.cost_layers.digest(), changed.cost_layers.digest());
+    }
+
+    #[test]
+    fn company_cost_layers_reach_the_source_bound_json_and_markdown_report() {
+        let values = company_rows();
+        let rows: Vec<(&str, &[&str])> = values
+            .iter()
+            .map(|(label, values)| (*label, values.as_slice()))
+            .collect();
+        let report = keyed_report(
+            vec![(
+                "2030Q1".into(),
+                vec![summary_cols("QTD", "three", &GOLD_RATES, &rows)],
+            )],
+            company_members(),
+        );
+        let projection = &report.mine_ledger.cost_layers;
+        assert_eq!(projection.rows.len(), 3);
+        let json = report.to_json();
+        assert!(json.contains(&format!("\"company_cost_layers\":{}", projection.to_json())));
+        let markdown = assure_report::markdown(&report).expect("public report");
+        assert!(markdown.contains("Implied unallocated company cost layers"));
+        assert!(markdown.contains(&projection.digest().to_hex()));
+        assert!(markdown.contains("unresolved breakdown"));
+        assert!(markdown.contains("191/4"));
+        assert!(markdown.contains("209/4"));
+        assert!(markdown.contains("2030Q1:QTD!E7"));
+        assert!(
+            markdown.contains(
+                &report.sources[0]
+                    .workbook
+                    .sha256
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            )
+        );
+        assert_eq!(
+            json,
+            report.to_json(),
+            "rendering does not rewrite the receipt"
+        );
+    }
 
     #[test]
     fn weighted_region_histories_bind_real_claims_and_preserve_member_rate_roles() {

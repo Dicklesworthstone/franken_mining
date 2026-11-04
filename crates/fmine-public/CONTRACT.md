@@ -182,6 +182,15 @@ The public lane of M0 (`fmine assure public`).
   and the sold-weighted rates is then posed jointly; each infeasible component reports every minimum correction
   set (an exhaustive search up to 32 cells within the kernel's run cap) and the range each of its cells can
   take, never a corrected value, and whether it is infeasible only jointly.
+- DESIGN (BD-331.S4): `MineLedger::cost_layers` reports each `Total Gold` cost-of-sales, TCC and AISC rate
+  minus its release-map regions' attributable-sold-weighted rate. Exact closed half-step rounding boxes
+  supply the regional-mean and difference bounds; signed differences and intervals containing zero remain
+  unresolved cost breakdowns. The residual identifies no corporate G&A, JV or other component and does not
+  reconcile the company sales denominator. Nil regional sales are explicitly excluded with both operands
+  retained; unavailable operands, nonpositive weights, missing maps, ambiguous releases, period mismatches
+  and bounded-arithmetic failures stay visible without a numeric result. The separate projection digest
+  binds workbook hashes, every operand/rounding step, release and period, active map declarations, results
+  and limitations. JSON and Markdown expose it outside identity counts and the existing M0 certificate.
 - `synthetic`: invented workbooks in the real layout, seeded with one known answer per state. They are never
   gate-eligible. `write_issuer_workspace` writes them, plus a later title-only vintage, with a digest registry
   under the reserved issuer name `synthetic`; `run_public_assurance` runs that name in the synthetic lane.

@@ -2,6 +2,120 @@
 mod tests {
     use super::*;
 
+    #[test]
+    fn exact_inputs_keep_exact_layer_and_arithmetic_limits_never_become_numbers() {
+        use super::cost_layers::amounts;
+        let exact = |value| CostLayerOperand {
+            at: Some("synthetic-exact-input".into()),
+            value: CostLayerValue::Number {
+                value: Rat::from_integer(value),
+                step: Rat::from_integer(0),
+            },
+        };
+        let regions = [
+            CostLayerRegion {
+                region: "A".into(),
+                mapped: true,
+                rate: exact(1000),
+                sold: exact(100),
+            },
+            CostLayerRegion {
+                region: "B".into(),
+                mapped: true,
+                rate: exact(2000),
+                sold: exact(300),
+            },
+        ];
+        let result = amounts(&exact(1800), &regions).unwrap();
+        let fifty = Rat::from_integer(50);
+        assert_eq!(result.point, fifty);
+        assert_eq!(result.interval, (fifty, fifty));
+        assert_eq!(
+            result.weighted_interval,
+            (Rat::from_integer(1750), Rat::from_integer(1750))
+        );
+        assert_eq!(
+            amounts(&exact(1800), &vec![regions[0].clone(); 1024])
+                .unwrap()
+                .point,
+            Rat::from_integer(800)
+        );
+        let overflow = [CostLayerRegion {
+            region: "A".into(),
+            mapped: true,
+            rate: exact(i128::MAX),
+            sold: exact(2),
+        }];
+        assert_eq!(
+            amounts(&exact(1800), &overflow).unwrap_err().reason,
+            "exact_arithmetic_unavailable"
+        );
+    }
+
+    #[test]
+    fn company_layer_sweep_bounds_match_independent_exhaustive_small_boxes() {
+        use super::cost_layers::weighted_mean_bounds;
+        let mut seed = 719_u64;
+        let mut next = |n: u64| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) % n
+        };
+        for _ in 0..100 {
+            let parts: Vec<(Interval, Interval)> = (0..1 + next(6))
+                .map(|_| {
+                    let rate = i128::from(next(1000)) - 500;
+                    let weight = i128::from(next(20)) + 1;
+                    (
+                        (
+                            Rat::new(rate, 10).unwrap(),
+                            Rat::new(rate + i128::from(next(20)), 10).unwrap(),
+                        ),
+                        (
+                            Rat::new(weight, 10).unwrap(),
+                            Rat::new(weight + i128::from(next(20)), 10).unwrap(),
+                        ),
+                    )
+                })
+                .collect();
+            let mut reference = None;
+            for mask in 0..1_u64 << parts.len() {
+                let (mut lower, mut upper, mut total) = (
+                    Rat::from_integer(0),
+                    Rat::from_integer(0),
+                    Rat::from_integer(0),
+                );
+                for (k, &((a, b), (c, d))) in parts.iter().enumerate() {
+                    let w = if mask & (1 << k) == 0 { c } else { d };
+                    total = total.checked_add(w).unwrap();
+                    lower = lower.checked_add(a.checked_mul(w).unwrap()).unwrap();
+                    upper = upper.checked_add(b.checked_mul(w).unwrap()).unwrap();
+                }
+                let (low, high) = (
+                    lower.checked_div(total).unwrap(),
+                    upper.checked_div(total).unwrap(),
+                );
+                reference = Some(match reference {
+                    None => (low, high),
+                    Some((old_low, old_high)) => (
+                        if low.checked_cmp(old_low).unwrap().is_lt() {
+                            low
+                        } else {
+                            old_low
+                        },
+                        if high.checked_cmp(old_high).unwrap().is_gt() {
+                            high
+                        } else {
+                            old_high
+                        },
+                    ),
+                });
+            }
+            assert_eq!(weighted_mean_bounds(&parts), reference);
+        }
+    }
+
     /// [`sum_holds`] against the kernel posing Σ lines = total with every box rounded once, on pseudo-random
     /// values of mixed steps around the slack bound.
     #[test]

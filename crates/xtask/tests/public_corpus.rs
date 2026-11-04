@@ -3,7 +3,7 @@
 
 #[cfg(test)]
 mod corpus {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fmt::Write as _;
     use std::path::{Path, PathBuf};
 
@@ -122,6 +122,103 @@ mod corpus {
             .expect("registry")
             .through("2026Q2")
             .expect("bound")
+    }
+
+    /// BD-331.S4: exact company-layer bounds from an independent openpyxl/Fraction reader with exhaustive
+    /// weight-vertex enumeration, recorded before the candidate projection was run. Never regenerate these
+    /// expected values from FrankenMining's output; this test also binds every answer to its original bytes.
+    #[test]
+    #[ignore = "needs the 18 registered Barrick workbooks (through 2026Q2) under corpus_of_input_docs/downloaded/mine_stats/"]
+    fn barrick_company_cost_layers_match_independent_exact_bounds() {
+        use fmine_numerics::exact_feas::Rat;
+
+        let root = workspace_root();
+        let report = run_public_assurance(&barrick_to_2026q2(&root), &root)
+            .expect("registered files present and unaltered");
+        let rows = &report.mine_ledger.cost_layers.rows;
+        assert_eq!(
+            rows.len(),
+            102,
+            "complete independent company-rate population"
+        );
+        let observed: BTreeMap<_, _> = rows
+            .iter()
+            .map(|r| {
+                (
+                    (
+                        r.release.as_str(),
+                        r.sheet.as_str(),
+                        r.group.as_str(),
+                        r.field.as_str(),
+                    ),
+                    r,
+                )
+            })
+            .collect();
+        assert_eq!(
+            observed.len(),
+            rows.len(),
+            "each company-rate key is unique"
+        );
+        let oracle = std::fs::read_to_string(
+            root.join("crates/xtask/testdata/company_cost_layers_known_answers.tsv"),
+        )
+        .expect("committed independent known answers");
+        let mut lines = oracle
+            .lines()
+            .filter(|line| !line.trim().is_empty() && !line.starts_with('#'));
+        assert_eq!(
+            lines.next(),
+            Some("release\tsheet\tgroup\tfield\tcompany_cell\tsource_sha256\tlo\thi")
+        );
+        let rational = |text: &str| {
+            let (num, den) = text.split_once('/').unwrap_or((text, "1"));
+            Rat::new(
+                num.parse().expect("integer numerator"),
+                den.parse().expect("integer denominator"),
+            )
+            .expect("valid exact oracle ratio")
+        };
+        let mut expected = BTreeSet::new();
+        for line in lines {
+            let columns: Vec<_> = line.split('\t').collect();
+            let [release, sheet, group, field, cell, sha256, lo, hi] = columns.as_slice() else {
+                panic!("expected eight independent oracle columns: {line}");
+            };
+            let key = (*release, *sheet, *group, *field);
+            assert!(expected.insert(key), "duplicate oracle key {key:?}");
+            let row = observed
+                .get(&key)
+                .unwrap_or_else(|| panic!("missing company-rate case {key:?}"));
+            let amounts = row
+                .result
+                .as_ref()
+                .unwrap_or_else(|e| panic!("expected unresolved numeric layer {key:?}, got {e:?}"));
+            assert_eq!(
+                amounts.interval,
+                (rational(lo), rational(hi)),
+                "independent bounds for {key:?}"
+            );
+            let suffix = format!("{sheet}!{cell}");
+            assert!(
+                row.company
+                    .at
+                    .as_deref()
+                    .is_some_and(|at| at.ends_with(&suffix)),
+                "company anchor for {key:?}"
+            );
+            assert_eq!(row.sources.len(), 1, "one original source for {key:?}");
+            assert_eq!(
+                row.sources[0].1.to_hex(),
+                *sha256,
+                "source SHA-256 for {key:?}"
+            );
+        }
+        assert_eq!(
+            expected.len(),
+            102,
+            "complete independent oracle population"
+        );
     }
 
     /// GATE-BULL-01 on the real registered workbooks. Every expected value below comes from the independent
