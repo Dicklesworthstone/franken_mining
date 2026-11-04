@@ -2052,7 +2052,7 @@ impl MemberVal {
 /// ounces must sum to the region's (the declared component sum). Then the McCormick relaxation of the weighted
 /// mean: a checked certificate is (iv). Where it does not refute, the exact decision runs: weights reaching the
 /// rate, their witness checked, are (i) `MembersExact`; none is (iv) ([`EXACT_REGION_REFUTATION`]); no answer
-/// (overflow, more than 16 members) leaves (i) `relaxation_only`. The alternative construction (the region's
+/// (arithmetic overflow or an unchecked witness) leaves (i) `relaxation_only`. The alternative construction (the region's
 /// ounces rounded once) is reported, never scored.
 fn regional_state(
     sheet: &Sheet,
@@ -2163,7 +2163,7 @@ pub const EXACT_REGION_REFUTATION: &str = "exact_weighted_mean";
 /// The exact decision on a region's printed rate `r` against its weighed members, every printed value a whole
 /// number standing for its closed box ±½, the members' ounces free of the region's (the component sum):
 /// `Some(true)` with a witness checked exactly, `Some(false)` when no weights reach the rate, `None` on overflow
-/// or more than 16 members.
+/// or an unchecked witness. The exact decision takes linear work in the number of members.
 fn exact_region_holds(r: i64, weighting: &MemberWeighting) -> Option<bool> {
     let half = Rat::from_integer(1)
         .checked_div(Rat::from_integer(2))

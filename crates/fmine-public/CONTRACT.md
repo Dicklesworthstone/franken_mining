@@ -167,9 +167,11 @@ The public lane of M0 (`fmine assure public`).
   region's cost of sales, TCC and AISC per ounce (`RATE_FIELDS`) = its members' rates weighted by attributable
   gold sold, members found as in family 3, in row order. A member whose sold cell is the nil token leaves the
   identity; a placeholder left in it refuses (a rate is never read as 0), as do no member left
-  (`weights_all_nil`) and a weight at or below 0 (`weight_not_positive`). It is decided alone and exactly (the
-  extremes at vertices of the weight box, at most 16 members; a feasible answer carries a witness checked
-  exactly) and never posed jointly. A conflict is (iv) `cost_totals_unpublished`, not (iii): the issuer may
+  (`weights_all_nil`) and a weight at or below 0 (`weight_not_positive`). It is decided alone and exactly: two
+  separable affine bounds select weight vertices in linear work without a member-count ceiling, and a feasible
+  answer carries a witness checked exactly. Empty/reversed boxes, weights whose bounds reach zero, arithmetic
+  overflow or a failed witness check yield no answer. The identity is never posed jointly. A conflict is (iv)
+  `cost_totals_unpublished`, not (iii): the issuer may
   weight by quantities it does not print. Exclusions by name come first (a
   `withheld` status covering an operand's period, or a region member's; a region whose members differ between
   the operands' releases; a site on two site sheets of one metal), then a missing row or release, a label printed
@@ -736,7 +738,7 @@ The public lane of M0 (`fmine assure public`).
   `ConsistentBasis::MembersExact` when weights and rates in their boxes reach the rate, the witness checked
   exactly; (iv) `region_outside_members` with the certificate `EXACT_REGION_REFUTATION` when none do (a
   safety net: no synthetic case was found where the relaxation misses a refutation); and (i) with
-  `ConsistentBasis::Members`, `relaxation_only`, only when it gives no answer (overflow, more than 16 members).
+  `ConsistentBasis::Members`, `relaxation_only`, only when it gives no answer (overflow or a failed witness check).
   The rounded-once alternative is reported, never scored. The instance is (v) instead, naming a cell where it
   has one, when:
   - a member's rate or ounces is anything else, or its ounces are negative (`region_member_operand`, at the

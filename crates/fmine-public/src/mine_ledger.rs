@@ -43,9 +43,9 @@
 //!   members' rates weighted by their attributable gold sold, R·Σwᵢ = Σ rᵢ·wᵢ, members found as in family 3 and
 //!   taken in row order. A member whose sold cell is the nil token sold nothing and leaves the identity; any other
 //!   placeholder still in it refuses (a rate is never read as 0), and so do no member left (`weights_all_nil`) and
-//!   a weight printed at or below 0 (`weight_not_positive`). The rest is decided alone and exactly: the extremes of
-//!   the members' weighted means sit at vertices of the weight box, and a feasible answer carries a witness checked
-//!   exactly. A conflict is (iv), naming the region's and members' costs in dollars, not (iii): the issuer may
+//!   a weight printed at or below 0 (`weight_not_positive`). The rest is decided alone and exactly: two separable
+//!   affine bounds select weight vectors in linear work, and a feasible answer carries a witness checked exactly.
+//!   A conflict is (iv), naming the region's and members' costs in dollars, not (iii): the issuer may
 //!   weight by quantities it does not publish. Never posed jointly. The AISC tables' regional check
 //!   (`aisc::regional_state`) runs the same decision where the kernel's McCormick relaxation does not refute.
 //!
@@ -1399,49 +1399,50 @@ fn at_most(x: Rat, y: Rat) -> Option<bool> {
 pub(crate) type Interval = (Rat, Rat);
 
 /// Whether `R·Σwᵢ = Σ rᵢ·wᵢ` holds for true values in the closed boxes `region` = [e, f] (R) and `parts` =
-/// ([aᵢ, bᵢ] for rᵢ, [cᵢ, dᵢ] for wᵢ), every cᵢ > 0. `None` on overflow, past 16 parts, or a witness that fails
-/// its exact check (never a claim).
+/// ([aᵢ, bᵢ] for rᵢ, [cᵢ, dᵢ] for wᵢ), every cᵢ > 0. `None` on empty or invalid boxes, arithmetic overflow,
+/// or a witness that fails its exact check (never a claim). Work and scratch space are linear in the part count.
 ///
 /// With W = Σwᵢ > 0 the identity reads R = Σ rᵢwᵢ/W. For fixed weights the rates' weighted mean takes every value
 /// in [L(w), U(w)], L(w) = Σ aᵢwᵢ/W and U(w) = Σ bᵢwᵢ/W, so it holds at w iff that range meets [e, f]. It holds
 /// somewhere iff min L ≤ f and max U ≥ e: if no point has both, take one with L ≤ f (so U < e) and one with
-/// U ≥ e; along the segment between them U crosses e, where L ≤ U = e ≤ f. L and U are linear-fractional with a
-/// positive denominator, so their extremes over the weight box are at its vertices. A feasible answer is returned
-/// with a witness: weights at a vertex or at that crossing, R = max(e, L(w)), rates on the segment from (aᵢ) to
-/// (bᵢ), each value checked against its box and the identity checked exactly. The AISC tables' regional rule uses
-/// it too (`aisc::regional_state`).
+/// U ≥ e; along the segment between them U crosses e, where L ≤ U = e ≤ f. Since W > 0, the two conditions are
+/// min Σ(aᵢ − f)wᵢ ≤ 0 and max Σ(bᵢ − e)wᵢ ≥ 0. Each is affine and separable: choose the high weight for a
+/// negative coefficient in the minimum, or a positive coefficient in the maximum, and the low weight otherwise.
+/// These two vertices suffice; no enumeration is needed. A feasible answer is returned with a witness: weights
+/// at one selected vertex or at that crossing, R = max(e, L(w)), rates on the segment from (aᵢ) to (bᵢ), each
+/// value checked against its box and the identity checked exactly. The AISC tables' regional rule uses it too
+/// (`aisc::regional_state`).
 pub(crate) fn weighted_mean_holds(
     region: Interval,
     parts: &[(Interval, Interval)],
 ) -> Option<bool> {
     let n = parts.len();
-    if n == 0 || n > 16 {
+    let (e, f) = region;
+    if n == 0 || !at_most(e, f)? {
         return None;
     }
-    let (e, f) = region;
-    let a: Vec<Rat> = parts.iter().map(|((lo, _), _)| *lo).collect();
-    let b: Vec<Rat> = parts.iter().map(|((_, hi), _)| *hi).collect();
-    let vertex = |mask: u32| -> Vec<Rat> {
-        parts
-            .iter()
-            .enumerate()
-            .map(|(k, (_, (lo, hi)))| if (mask >> k) & 1 == 1 { *hi } else { *lo })
-            .collect()
-    };
-    let (mut v_lo, mut v_hi) = (vertex(0), vertex(0));
-    let (mut min_l, mut max_u) = (mean(&a, &v_lo)?, mean(&b, &v_hi)?);
-    for mask in 1..(1_u32 << n) {
-        let w = vertex(mask);
-        let l = mean(&a, &w)?;
-        if !at_most(min_l, l)? {
-            (min_l, v_lo) = (l, w.clone());
+    let (mut a, mut b) = (Vec::with_capacity(n), Vec::with_capacity(n));
+    let (mut v_lo, mut v_hi) = (Vec::with_capacity(n), Vec::with_capacity(n));
+    let (mut lower, mut upper) = (Rat::from_integer(0), Rat::from_integer(0));
+    for &((lo, hi), (c, d)) in parts {
+        if c.signum() <= 0 || !at_most(c, d)? || !at_most(lo, hi)? {
+            return None;
         }
-        let u = mean(&b, &w)?;
-        if !at_most(u, max_u)? {
-            (max_u, v_hi) = (u, w);
-        }
+        let (below, above) = (lo.checked_sub(f).ok()?, hi.checked_sub(e).ok()?);
+        let low_weight = if below.signum() < 0 { d } else { c };
+        let high_weight = if above.signum() > 0 { d } else { c };
+        lower = lower
+            .checked_add(below.checked_mul(low_weight).ok()?)
+            .ok()?;
+        upper = upper
+            .checked_add(above.checked_mul(high_weight).ok()?)
+            .ok()?;
+        a.push(lo);
+        b.push(hi);
+        v_lo.push(low_weight);
+        v_hi.push(high_weight);
     }
-    if !(at_most(min_l, f)? && at_most(e, max_u)?) {
+    if lower.signum() > 0 || upper.signum() < 0 {
         return Some(false);
     }
     let w = if at_most(e, mean(&b, &v_lo)?)? {

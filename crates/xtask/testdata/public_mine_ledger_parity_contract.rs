@@ -82,10 +82,27 @@ mod tests {
         assert!(outcomes.iter().all(|&n| n >= 50), "{outcomes:?}");
     }
 
-    /// [`weighted_mean_holds`] against two other derivations on pseudo-random boxes of mixed steps: the separable
-    /// test (max over the weights of Σ (bᵢ − e)·wᵢ ≥ 0 and min of Σ (aᵢ − f)·wᵢ ≤ 0, each term at an end of its
-    /// weight's box) must agree exactly, and the kernel's McCormick relaxation, which only refutes, must never
-    /// refute what the closed form calls feasible.
+    /// Small exhaustive fractional-extrema oracle, independent of the production affine-bound selection.
+    fn corner_oracle(region: Interval, parts: &[(Interval, Interval)]) -> bool {
+        assert!(!parts.is_empty() && parts.len() <= 8);
+        let a: Vec<_> = parts.iter().map(|((a, _), _)| *a).collect();
+        let b: Vec<_> = parts.iter().map(|((_, b), _)| *b).collect();
+        let mut lower_reached = false;
+        let mut upper_reached = false;
+        for mask in 0..(1_usize << parts.len()) {
+            let weights: Vec<_> = parts
+                .iter()
+                .enumerate()
+                .map(|(i, (_, (c, d)))| if mask & (1 << i) == 0 { *c } else { *d })
+                .collect();
+            lower_reached |= at_most(mean(&a, &weights).unwrap(), region.1).unwrap();
+            upper_reached |= at_most(region.0, mean(&b, &weights).unwrap()).unwrap();
+        }
+        lower_reached && upper_reached
+    }
+
+    /// [`weighted_mean_holds`] against an exhaustive corner oracle and the separable predicate on random boxes
+    /// of mixed steps. The kernel's McCormick relaxation must never refute a positive exact decision.
     #[test]
     fn test_exact_weighted_mean_matches_the_separable_test_and_the_kernel() {
         let steps = [
@@ -151,6 +168,11 @@ mod tests {
                 scope: xf::Scope::Visible,
             });
             let holds = weighted_mean_holds(region, &parts).expect("decided");
+            assert_eq!(
+                holds,
+                corner_oracle(region, &parts),
+                "corner oracle trial {trial}"
+            );
             // The separable test.
             let (e, f) = region;
             let mut up = Rat::from_integer(0);
@@ -201,5 +223,116 @@ mod tests {
         }
         assert!(outcomes.iter().all(|&k| k >= 50), "{outcomes:?}");
         assert!(refuted >= 50, "the kernel refuted only {refuted}");
+    }
+
+    #[test]
+    fn weighted_mean_handles_large_regions_without_a_member_ceiling() {
+        let r = Rat::from_integer;
+        for n in [17, 128, 10_000] {
+            let parts = vec![((r(1), r(3)), (r(1), r(2))); n];
+            assert_eq!(
+                weighted_mean_holds((r(2), r(2)), &parts),
+                Some(true),
+                "n={n}"
+            );
+            assert_eq!(
+                weighted_mean_holds((r(4), r(5)), &parts),
+                Some(false),
+                "n={n}"
+            );
+            assert_eq!(
+                weighted_mean_holds((r(-1), r(0)), &parts),
+                Some(false),
+                "n={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn weighted_mean_checks_interpolated_signed_and_boundary_witnesses() {
+        let r = Rat::from_integer;
+        // Neither selected corner reaches 5: their means are 5/2 and 15/2. Interior weights (2, 2) do.
+        let parts = [((r(0), r(0)), (r(1), r(3))), ((r(10), r(10)), (r(1), r(3)))];
+        for region in [
+            (r(5), r(5)),
+            (Rat::new(5, 2).unwrap(), Rat::new(5, 2).unwrap()),
+        ] {
+            assert!(corner_oracle(region, &parts));
+            assert_eq!(weighted_mean_holds(region, &parts), Some(true));
+        }
+        assert_eq!(weighted_mean_holds((r(8), r(9)), &parts), Some(false));
+        let signed = [((r(-4), r(-3)), (r(1), r(3))), ((r(5), r(6)), (r(1), r(3)))];
+        assert_eq!(weighted_mean_holds((r(1), r(1)), &signed), Some(true));
+        let fixed = [
+            ((r(-10), r(-10)), (r(2), r(2))),
+            ((r(10), r(10)), (r(2), r(2))),
+        ];
+        assert_eq!(weighted_mean_holds((r(0), r(0)), &fixed), Some(true));
+        assert_eq!(weighted_mean_holds((r(1), r(1)), &fixed), Some(false));
+        // A single member needs interpolation between rate bounds, including exact closed endpoints.
+        for value in [-3, -2, -1] {
+            assert_eq!(
+                weighted_mean_holds((r(value), r(value)), &[((r(-3), r(-1)), (r(2), r(5)))]),
+                Some(true)
+            );
+        }
+    }
+
+    #[test]
+    fn weighted_mean_invalid_boxes_and_overflow_never_claim_a_verdict() {
+        let r = Rat::from_integer;
+        assert_eq!(weighted_mean_holds((r(0), r(1)), &[]), None);
+        assert_eq!(
+            weighted_mean_holds((r(2), r(1)), &[((r(0), r(1)), (r(1), r(2)))]),
+            None
+        );
+        for part in [
+            ((r(2), r(1)), (r(1), r(2))),
+            ((r(0), r(1)), (r(2), r(1))),
+            ((r(0), r(1)), (r(0), r(1))),
+            ((r(0), r(1)), (r(-2), r(-1))),
+            ((r(0), r(1)), (r(0), r(0))),
+        ] {
+            assert_eq!(weighted_mean_holds((r(0), r(1)), &[part]), None);
+        }
+        assert_eq!(
+            weighted_mean_holds(
+                (r(0), r(1)),
+                &[((r(i128::MAX), r(i128::MAX)), (r(2), r(2)))]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn sold_weighted_ledger_decides_more_than_sixteen_members() {
+        let period = Period {
+            year: 2030,
+            kind: PeriodKind::Quarter(1),
+        };
+        let slot = |name: String, value| Slot {
+            locator: name,
+            operand: Operand::Number {
+                value: Rat::from_integer(value),
+                step: Rat::from_integer(1),
+            },
+            period,
+            printed_share: None,
+        };
+        let members: Vec<_> = (0..64)
+            .map(|i| (slot(format!("T!R{i}"), 100), slot(format!("T!W{i}"), 10)))
+            .collect();
+        let refs: Vec<_> = members
+            .iter()
+            .map(|(rate, weight)| (rate, weight))
+            .collect();
+        assert_eq!(
+            decide_weighted(&refs, &slot("T!Total".into(), 100)),
+            (State::Consistent, false)
+        );
+        assert_eq!(
+            decide_weighted(&refs, &slot("T!Total".into(), 110)),
+            (State::Unresolved(Need::CostTotals), false)
+        );
     }
 }
