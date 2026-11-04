@@ -13,7 +13,9 @@ use fmine_core::id::{ObjectId, PrefixKind};
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_numerics::norm_inv;
 
-use crate::scoring::{MAX_EMPIRICAL_SAMPLES, SortedEmpirical, empirical_interval};
+use crate::scoring::{
+    MAX_EMPIRICAL_SAMPLES, SortedEmpirical, bernoulli_log_score, empirical_interval,
+};
 use crate::{
     CalibrationFlag, CalibrationReport, ScoreError, gaussian_crps, winkler_interval_score,
 };
@@ -199,6 +201,8 @@ pub struct AssessmentPolicy {
     pub outcome_bounds: Option<(f64, f64)>,
     /// Optional exact conditional coverage test. Its support and sequence are frozen before outcomes.
     pub coverage_monitor: Option<CoverageMonitorPolicy>,
+    /// Optional event log-loss floor in `(0, 0.5)`, frozen before outcomes. Bernoulli cohorts only.
+    pub event_log_floor: Option<f64>,
 }
 
 impl Default for AssessmentPolicy {
@@ -209,6 +213,7 @@ impl Default for AssessmentPolicy {
             correlation_range: (0.0, 0.5),
             outcome_bounds: None,
             coverage_monitor: None,
+            event_log_floor: None,
         }
     }
 }
@@ -236,6 +241,14 @@ impl AssessmentPolicy {
         if let Some(monitor) = &self.coverage_monitor {
             monitor.validate(self.alpha)?;
         }
+        if let Some(floor) = self.event_log_floor {
+            bernoulli_log_score(0.5, true, floor).map_err(score_refusal)?;
+            if self.coverage_monitor.is_some() {
+                return Err(domain(
+                    "event log scoring and continuous interval monitoring need separate cohorts",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -256,6 +269,10 @@ impl AssessmentPolicy {
         // DESIGN: absent monitoring writes no new bytes, preserving every v1 cohort identity.
         if let Some(monitor) = &self.coverage_monitor {
             monitor.encode(enc);
+        }
+        // DESIGN: only the opt-in v3 frame binds this floor; v1/v2 policy bytes stay unchanged.
+        if let Some(floor) = self.event_log_floor {
+            floats(enc, &[floor]);
         }
     }
 }
@@ -444,6 +461,13 @@ pub struct ScoreSummary {
     pub whole_cohort: ScoreBounds,
 }
 
+/// A capped binary log loss in nats, retaining the predeclared floor beside its full-cohort bounds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EventLogScoreSummary {
+    pub probability_floor: f64,
+    pub score: ScoreSummary,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CoverageSummary {
     pub inside: usize,
@@ -470,6 +494,8 @@ pub struct AssessmentSummary {
     pub interval_score: Option<ScoreSummary>,
     /// Available only for an all-Bernoulli cohort.
     pub brier: Option<ScoreSummary>,
+    /// Available only for all-Bernoulli cohorts with a prospectively frozen probability floor.
+    pub event_log: Option<EventLogScoreSummary>,
     pub effective_n: EffectiveSampleSize,
     pub mean_standardized_bias: Option<f64>,
     pub flag: CalibrationFlag,
@@ -649,7 +675,9 @@ impl ForecastLedger {
             }
         }
         self.check_record_time(spec.frozen_at_ns)?;
-        let version = if spec.policy.coverage_monitor.is_some() {
+        let version = if spec.policy.event_log_floor.is_some() {
+            3
+        } else if spec.policy.coverage_monitor.is_some() {
             2
         } else {
             1
@@ -682,6 +710,11 @@ impl ForecastLedger {
                 policy.validate_forecast(rec)?;
             }
             let event = matches!(rec.payload, ForecastPayload::Bernoulli { .. });
+            if spec.policy.event_log_floor.is_some() && !event {
+                return Err(domain(
+                    "event log scoring requires only Bernoulli forecasts",
+                ));
+            }
             if event
                 && spec
                     .policy
@@ -1122,6 +1155,7 @@ fn summarize(
     let mut crps = ScoreAccumulator::new();
     let mut interval = ScoreAccumulator::new();
     let mut brier = ScoreAccumulator::new();
+    let mut event_log = ScoreAccumulator::new();
     let all_gaussian = n > 0
         && records
             .iter()
@@ -1210,6 +1244,15 @@ fn summarize(
                 score,
                 score.map_or((loss0.min(loss1), Some(loss0.max(loss1))), |s| (s, Some(s))),
             )?;
+            if let Some(floor) = policy.event_log_floor {
+                let loss0 = bernoulli_log_score(p, false, floor)?;
+                let loss1 = bernoulli_log_score(p, true, floor)?;
+                let score = y.map(|v| if v == 0.0 { loss0 } else { loss1 });
+                event_log.add(
+                    score,
+                    score.map_or((loss0.min(loss1), Some(loss0.max(loss1))), |s| (s, Some(s))),
+                )?;
+            }
         }
     }
     let n_unresolved = n - resolved;
@@ -1263,6 +1306,13 @@ fn summarize(
         crps: all_crps.then(|| crps.finish(n, resolved)),
         interval_score: (n > 0 && !events).then(|| interval.finish(n, resolved)),
         brier: events.then(|| brier.finish(n, resolved)),
+        event_log: policy
+            .event_log_floor
+            .filter(|_| events)
+            .map(|floor| EventLogScoreSummary {
+                probability_floor: floor,
+                score: event_log.finish(n, resolved),
+            }),
         effective_n,
         mean_standardized_bias: bias,
         flag,
@@ -1274,7 +1324,9 @@ impl Assessment {
     /// selected event hashes, all unresolved reasons, every score and the complete denominator.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        let version = if self.coverage_monitor.is_some() {
+        let version = if self.summary.event_log.is_some() {
+            3
+        } else if self.coverage_monitor.is_some() {
             2
         } else {
             1
@@ -1334,6 +1386,13 @@ impl Assessment {
         // DESIGN: no extension marker in v1; opt-in monitoring alone selects the v2 frame.
         if let Some(monitor) = &self.coverage_monitor {
             monitor.encode(&mut enc);
+        }
+        if let Some(log) = s.event_log {
+            floats(&mut enc, &[log.probability_floor]);
+            enc.put_u64(log.score.n_scored as u64);
+            optional_float(&mut enc, log.score.observed_mean);
+            floats(&mut enc, &[log.score.whole_cohort.lower]);
+            optional_float(&mut enc, log.score.whole_cohort.upper);
         }
         enc.finish()
     }
@@ -1456,6 +1515,176 @@ mod tests {
             hi: 1.0,
             nominal: Some(0.8),
         }
+    }
+
+    #[test]
+    fn event_log_completion_bounds_match_all_binary_completions() {
+        let probabilities = [0.0_f64, 0.125, 0.25, 0.5, 0.75, 1.0];
+        for observed in 0..=probabilities.len() {
+            let (mut ledger, cohort, ids) = make_cohort(
+                probabilities
+                    .iter()
+                    .map(|p| ForecastPayload::Bernoulli { probability: *p })
+                    .collect(),
+                AssessmentPolicy {
+                    event_log_floor: Some(0.01),
+                    ..AssessmentPolicy::default()
+                },
+            );
+            for (i, id) in ids[..observed].iter().enumerate() {
+                ledger
+                    .append_outcome(*id, 101, 102, published((i % 2) as f64))
+                    .unwrap();
+            }
+            let report = ledger
+                .assess(cohort, 103, OutcomeSelector::FirstPublished)
+                .unwrap();
+            let log = report.summary.event_log.unwrap();
+            let mut minimum = f64::INFINITY;
+            let mut maximum = f64::NEG_INFINITY;
+            for completion in 0..(1 << (probabilities.len() - observed)) {
+                let total = probabilities
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let occurred = if i < observed {
+                            i % 2 == 1
+                        } else {
+                            completion & (1 << (i - observed)) != 0
+                        };
+                        -(if occurred { *p } else { 1.0 - p }).max(0.01).ln()
+                    })
+                    .sum::<f64>()
+                    / probabilities.len() as f64;
+                minimum = minimum.min(total);
+                maximum = maximum.max(total);
+            }
+            assert_eq!(log.probability_floor, 0.01);
+            assert_eq!(log.score.n_scored, observed);
+            assert_eq!(log.score.observed_mean.is_none(), observed == 0);
+            assert!((log.score.whole_cohort.lower - minimum).abs() < 2e-14);
+            assert!((log.score.whole_cohort.upper.unwrap() - maximum).abs() < 2e-14);
+            assert_eq!(report.summary.n_members, probabilities.len());
+            assert_eq!(report.summary.n_unresolved, probabilities.len() - observed);
+            assert!(report.summary.brier.is_some());
+            assert_eq!(
+                report.summary.flag,
+                if observed == 0 {
+                    CalibrationFlag::Unscored
+                } else {
+                    CalibrationFlag::Descriptive
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn event_log_floor_is_frozen_and_restatements_preserve_old_assessments() {
+        let build = |floor| {
+            make_cohort(
+                vec![ForecastPayload::Bernoulli { probability: 0.0 }],
+                AssessmentPolicy {
+                    event_log_floor: floor,
+                    ..AssessmentPolicy::default()
+                },
+            )
+        };
+        let (mut ledger, cohort, ids) = build(Some(0.01));
+        let (_, changed, changed_ids) = build(Some(0.02));
+        let (mut legacy, legacy_cohort, legacy_ids) = build(None);
+        assert_eq!(
+            ids, changed_ids,
+            "a scoring floor must not rewrite the frozen probability"
+        );
+        assert_eq!(ids, legacy_ids);
+        assert_ne!(cohort, changed);
+        assert_ne!(cohort, legacy_cohort);
+        ledger
+            .append_outcome(ids[0], 101, 102, published(1.0))
+            .unwrap();
+        legacy
+            .append_outcome(ids[0], 101, 102, published(1.0))
+            .unwrap();
+        let original = ledger
+            .assess(cohort, 103, OutcomeSelector::FirstPublished)
+            .unwrap()
+            .clone();
+        let old = legacy
+            .assess(legacy_cohort, 103, OutcomeSelector::FirstPublished)
+            .unwrap();
+        assert!(old.summary.event_log.is_none());
+        assert_eq!(old.summary.brier, original.summary.brier);
+        assert!(
+            (original
+                .summary
+                .event_log
+                .unwrap()
+                .score
+                .observed_mean
+                .unwrap()
+                - 100.0_f64.ln())
+            .abs()
+                < 1e-14
+        );
+        ledger
+            .append_outcome(
+                ids[0],
+                104,
+                105,
+                OutcomeKind::Restated {
+                    value: 0.0,
+                    citation: citation("v2"),
+                    supersedes: 1,
+                },
+            )
+            .unwrap();
+        let latest = ledger
+            .assess(cohort, 106, OutcomeSelector::LatestAsOf)
+            .unwrap()
+            .clone();
+        assert_eq!(
+            latest.summary.event_log.unwrap().score.observed_mean,
+            Some(0.0)
+        );
+        assert_ne!(original.digest, latest.digest);
+        assert_eq!(
+            ledger
+                .assess(cohort, 103, OutcomeSelector::FirstPublished)
+                .unwrap(),
+            &original
+        );
+        let again = ledger
+            .assess(cohort, 106, OutcomeSelector::FirstPublished)
+            .unwrap();
+        assert_eq!(again.summary.event_log, original.summary.event_log);
+        let mut altered = original.clone();
+        altered
+            .summary
+            .event_log
+            .as_mut()
+            .unwrap()
+            .probability_floor = 0.02;
+        assert_ne!(blake3_hash(&altered.canonical_bytes()), original.digest);
+    }
+
+    #[test]
+    fn invalid_event_log_policy_refuses_without_advancing_authority_time() {
+        let (mut ledger, cohort, _) = make_cohort(vec![interval()], AssessmentPolicy::default());
+        let mut spec = ledger.cohort(cohort).unwrap().spec.clone();
+        spec.name = "bad log floor".into();
+        spec.frozen_at_ns = 99;
+        for floor in [0.0, -0.1, 0.5, 1.0, f64::NAN, f64::INFINITY] {
+            spec.policy.event_log_floor = Some(floor);
+            assert!(ledger.freeze_cohort(spec.clone()).is_err());
+        }
+        spec.policy.event_log_floor = Some(0.01);
+        assert!(
+            ledger.freeze_cohort(spec.clone()).is_err(),
+            "continuous members cannot be event-scored"
+        );
+        spec.policy.event_log_floor = None;
+        spec.frozen_at_ns = 3;
+        ledger.freeze_cohort(spec).unwrap();
     }
 
     #[test]

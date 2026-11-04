@@ -1,9 +1,62 @@
-//! DESIGN (BD-048): univariate uniform empirical forecasts, without a Gaussian approximation.
-//! Sorted scratch values determine scores; callers retain the original draw order in frozen records.
+//! DESIGN (BD-048): univariate uniform empirical forecasts and explicitly floored event log scores.
+//! Sorted scratch values determine empirical scores; callers retain original draws in frozen records.
 //! This module supplies no shared realization-space, weighting, or calibration claim.
 //! Determinism: DeterministicPerIsa (no cross-host empirical-score digest has been established).
 
 use crate::ScoreError;
+use fmine_core::det;
+
+/// Negative natural log of the probability assigned to the observed binary outcome (plan §10.2).
+///
+/// DESIGN: the caller must freeze `probability_floor` in `(0, 0.5)` before outcomes. The loss is
+/// `-ln(max(P(outcome), probability_floor))`, in nats; the forecast itself is never changed. The
+/// floor deliberately caps extreme losses and removes strict propriety in the floored tails.
+/// Invalid probabilities or floors refuse. This bounded diagnostic supplies no calibration verdict.
+pub fn bernoulli_log_score(
+    probability: f64,
+    outcome: bool,
+    probability_floor: f64,
+) -> Result<f64, ScoreError> {
+    if !probability.is_finite() || !probability_floor.is_finite() {
+        return Err(ScoreError::NonFinite);
+    }
+    if !(0.0..=1.0).contains(&probability) {
+        return Err(ScoreError::InvalidParameter {
+            name: "event_probability",
+            value: probability,
+        });
+    }
+    if !(probability_floor > 0.0 && probability_floor < 0.5) {
+        return Err(ScoreError::InvalidParameter {
+            name: "event_log_floor",
+            value: probability_floor,
+        });
+    }
+    let assigned = if outcome {
+        probability
+    } else {
+        1.0 - probability
+    };
+    let loss = if assigned < probability_floor {
+        -det::ln(probability_floor)
+    } else if !outcome && probability > 0.0 {
+        // Preserve the positive loss when 1-p rounds to one, and correct cancellation otherwise.
+        if assigned == 1.0 {
+            probability
+        } else {
+            -det::ln(assigned) * (probability / (1.0 - assigned))
+        }
+    } else if assigned == 1.0 {
+        0.0
+    } else {
+        -det::ln(assigned)
+    };
+    if loss.is_finite() && loss >= 0.0 {
+        Ok(loss)
+    } else {
+        Err(arithmetic("event log score"))
+    }
+}
 
 /// Independent of the journal adapter's encoded-operation byte limit.
 pub const MAX_EMPIRICAL_SAMPLES: usize = 4096;
@@ -187,6 +240,51 @@ impl PositiveSum {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_log_scores_match_independent_logs_and_retain_the_declared_cap() {
+        for p in [0.0_f64, 0.01, 0.125, 0.25, 0.5, 0.75, 0.99, 1.0] {
+            for occurred in [false, true] {
+                let assigned = if occurred { p } else { 1.0 - p };
+                let expected = -assigned.max(0.01).ln();
+                let got = bernoulli_log_score(p, occurred, 0.01).unwrap();
+                assert!((got - expected).abs() < 2e-14, "p={p}, outcome={occurred}");
+            }
+        }
+        assert_eq!(bernoulli_log_score(1.0, true, 0.01).unwrap(), 0.0);
+        assert_eq!(bernoulli_log_score(0.0, false, 0.01).unwrap(), 0.0);
+        assert_eq!(
+            bernoulli_log_score(0.0, true, 0.01).unwrap(),
+            bernoulli_log_score(0.005, true, 0.01).unwrap()
+        );
+        // FACT: -ln(1-p) is positive even when floating-point subtraction rounds 1-p to one.
+        for p in [f64::from_bits(1), 1e-300, 1e-20, 1e-12, 1e-8] {
+            let got = bernoulli_log_score(p, false, 0.01).unwrap();
+            let expected = -(-p).ln_1p();
+            assert!(got > 0.0);
+            assert!((got / expected - 1.0).abs() < 2e-14);
+        }
+        let smallest = f64::from_bits(1);
+        assert!((bernoulli_log_score(0.0, true, smallest).unwrap() + smallest.ln()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn event_log_scoring_refuses_invalid_probabilities_and_floors() {
+        for p in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.01, 1.01] {
+            assert!(bernoulli_log_score(p, false, 0.01).is_err());
+        }
+        for floor in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            -0.01,
+            0.0,
+            0.5,
+            1.0,
+        ] {
+            assert!(bernoulli_log_score(0.25, true, floor).is_err());
+        }
+    }
 
     fn quadratic_oracle(samples: &[f64], y: f64) -> f64 {
         let n = samples.len() as f64;

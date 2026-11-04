@@ -97,6 +97,20 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   nominal level remains descriptive. A positive calibration flag requires complete resolution and a conservative
   effective sample at least the frozen threshold (minimum 35; stricter thresholds are allowed). The default
   correlation range is [0, 0.5].
+- DESIGN (BD-048, plan §10.2): `AssessmentPolicy.event_log_floor` optionally freezes a probability floor in
+  `(0, 0.5)` for all-Bernoulli cohorts. `scoring::bernoulli_log_score` returns
+  `-ln(max(P(observed outcome), floor))` in nats without changing the forecast. The explicit cap removes
+  strict propriety in the floored tails; it is reported beside the unchanged proper Brier score. The floor
+  is not selected retrospectively, and a score never establishes event calibration. Invalid floors,
+  continuous members and simultaneous continuous-coverage monitoring refuse before the freeze mutates time.
+  `AssessmentSummary.event_log` retains the floor, observed mean and whole-frozen-cohort completion bounds.
+  Each missing member contributes the minimum/maximum of its losses at zero and one, keeping every missing
+  outcome in the denominator. Zero/one probabilities have finite capped losses; tiny non-event losses remain
+  positive despite cancellation in `1-p`. First-publication and restated assessments stay separate.
+  This opt-in selects `COH1`/v3 and `ASM1`/v3; absent log scoring preserves all v1/v2 bytes and identities.
+  Independent logarithms, exhaustive binary completions, floor/digest mutations and unchanged legacy goldens
+  are covered by `scoring::tests::event_log_scores_match_independent_logs_and_retain_the_declared_cap` and
+  the `ledger::tests::event_log_*` regressions. The arithmetic remains `DeterministicPerIsa`.
 - DESIGN (BD-051, plan §10.4): `AssessmentPolicy.coverage_monitor` optionally freezes a
   `CoverageMonitorPolicy`: alarm alpha, nonempty support declaration, nonempty conditional-null explanation,
   and an explicit observation order containing every member exactly once. The null is
