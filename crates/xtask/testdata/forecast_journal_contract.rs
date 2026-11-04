@@ -145,6 +145,52 @@ fn binary_v2_registration_and_freeze_survive_restart_with_exact_upper_times() {
 }
 
 #[test]
+fn binary_monitored_freeze_survives_restart_and_invalid_policy_does_not_append() {
+    let workspace = Workspace::new();
+    let init = workspace.init();
+    let registered = workspace.append("register", field(&init, "head"), FORECAST, 0);
+    let monitor = "monitor_alarm_alpha = \"0.05\"\nmonitor_support = \"Synthetic quarterly interval\"\nmonitor_conditional_null = \"Conditional hit probability is exactly 0.8\"\nmonitor_order = \"f1\"\n";
+    let before = workspace.bytes();
+    let partial = format!("{COHORT}monitor_alarm_alpha = \"0.05\"\n");
+    let refused = workspace.append("freeze", field(&registered, "head"), &partial, 3);
+    assert!(refused.contains("FMINE-REF-107"));
+    assert_eq!(workspace.bytes(), before);
+    let frozen = workspace.append(
+        "freeze",
+        field(&registered, "head"),
+        &format!("{COHORT}{monitor}"),
+        0,
+    );
+    let before = workspace.bytes();
+    let inspected = workspace.run(
+        &[
+            "inspect",
+            "--journal",
+            "journal",
+            "--head",
+            field(&frozen, "head"),
+        ],
+        0,
+    );
+    assert_eq!(workspace.bytes(), before);
+    assert_eq!(field(&inspected, "head"), field(&frozen, "head"));
+    assert_eq!(
+        field(&inspected, "forecast_id"),
+        field(&registered, "forecast_id")
+    );
+    assert!(inspected.contains("\"operation_version_counts\":{\"legacy_v1\":0,\"v2\":1,\"v5\":1}"));
+    assert!(inspected.contains("\"coverage_monitor\":{\"alarm_alpha\":0.05"));
+    assert!(inspected.contains("\"support\":\"Synthetic quarterly interval\""));
+    let journal =
+        Journal::open_read(&workspace.0.join("journal"), None).expect("durable monitor record");
+    let Entry::Operation(request) = &journal.records()[2].entry else {
+        panic!("freeze operation")
+    };
+    assert!(request.starts_with("schema = \"fmine.forecast-operation.v5\"\n"));
+    assert!(request.contains(monitor));
+}
+
+#[test]
 fn binary_rejects_caller_time_version_and_stale_head_without_changing_history() {
     let workspace = Workspace::new();
     let init = workspace.init();

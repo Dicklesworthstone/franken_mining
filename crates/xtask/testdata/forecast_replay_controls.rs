@@ -12,6 +12,133 @@ fn report(text: &str, cutoff: &str, selector: OutcomeSelector) -> (Replay, Asses
     (replay, report)
 }
 
+fn monitor_fields(order: &str) -> String {
+    format!(
+        "monitor_alarm_alpha = \"0.05\"\nmonitor_support = \"Synthetic quarterly unit-cost intervals\"\nmonitor_conditional_null = \"Conditional hit probability is exactly 0.8 at every frozen step\"\nmonitor_order = \"{order}\"\n"
+    )
+}
+
+#[test]
+fn monitor_replay_retains_original_evidence_and_stops_before_a_missing_member() {
+    let order = "north-unit-cost,south-unit-cost,central-unit-cost";
+    let text = FIXTURE.replace(
+        "rho_high = \"0.5\"",
+        &format!("rho_high = \"0.5\"\n{}", monitor_fields(order)),
+    );
+    let (first_state, first) = report(&text, CUT, OutcomeSelector::FirstPublished);
+    let (latest_state, latest) = report(&text, CUT, OutcomeSelector::LatestAsOf);
+    let first_monitor = first.coverage_monitor.as_ref().expect("monitor enabled");
+    let latest_monitor = latest.coverage_monitor.as_ref().expect("monitor enabled");
+    let monitor = latest_state
+        .coverage_monitor_json(latest_monitor)
+        .expect("evidence");
+    assert_eq!(
+        monitor,
+        first_state
+            .coverage_monitor_json(first_monitor)
+            .expect("original sequence")
+    );
+    assert_eq!(latest_monitor.snapshot.n, 1);
+    assert_eq!(latest_monitor.snapshot.hits, 1);
+    assert_eq!(latest_monitor.n_deferred, 1);
+    assert_eq!(latest_monitor.n_deferred_resolved, 1);
+    let north = latest_state.forecast_id("north-unit-cost").expect("north");
+    let south = latest_state.forecast_id("south-unit-cost").expect("south");
+    let original = &latest_state.ledger.outcomes(north)[0];
+    let blocker = latest_monitor.blocked_by.as_ref().expect("blocked");
+    assert_eq!(blocker.forecast_id, south);
+    assert!(monitor.contains(&original.digest.to_hex()));
+    assert!(monitor.contains(&blocker.selected_event.expect("missing event").1.to_hex()));
+    for evidence in [
+        "\"selector\":\"first-published\"",
+        "\"assumption_verified\":false",
+        "\"value\":1479",
+        "\"vintage\":\"synthetic-first\"",
+        "\"locator\":\"Invented!A1\"",
+        "\"kind\":\"missing\"",
+        "\"reason\":\"not_published\"",
+        "\"interval\":[1476,1490]",
+        "\"hit\":true",
+        "\"log_e_value\":",
+        "\"max_log_e_value\":",
+        "\"first_crossing\":null",
+    ] {
+        assert!(monitor.contains(evidence), "missing {evidence}: {monitor}");
+    }
+    assert!(!monitor.contains("synthetic-restated"));
+    assert!(!monitor.contains("\"value\":1474"));
+    let rendered = latest_state
+        .render(&latest, sha256(text.as_bytes()))
+        .expect("report");
+    assert!(rendered.contains("\"value\":1474"));
+    assert!(rendered.contains(&format!("\"coverage_monitor\":{monitor}")));
+    assert!(rendered.contains("\"conditional_null\":\"Conditional hit probability is exactly 0.8"));
+    assert_ne!(first.digest, latest.digest);
+
+    let (legacy_state, legacy) = report(FIXTURE, CUT, OutcomeSelector::LatestAsOf);
+    assert!(
+        !legacy_state
+            .render(&legacy, sha256(FIXTURE.as_bytes()))
+            .expect("legacy report")
+            .contains("coverage_monitor")
+    );
+    assert_ne!(legacy.cohort, latest.cohort);
+    let reordered = text.replace(order, "north-unit-cost,central-unit-cost,south-unit-cost");
+    let (_, reordered) = report(&reordered, CUT, OutcomeSelector::LatestAsOf);
+    assert_ne!(latest.cohort, reordered.cohort);
+    assert_eq!(
+        reordered
+            .coverage_monitor
+            .expect("reordered monitor")
+            .snapshot
+            .n,
+        2
+    );
+}
+
+#[test]
+fn monitor_adapter_refuses_partial_or_nonprobabilistic_declarations() {
+    let policy = monitor_fields("one");
+    let payload = "kind = \"interval\"\nlo = \"0\"\nhi = \"1\"\nnominal = \"0.8\"";
+    for rejected in [
+        policy.replace("monitor_alarm_alpha = \"0.05\"\n", ""),
+        policy.replace("monitor_support = \"Synthetic quarterly unit-cost intervals\"\n", ""),
+        policy.replace("monitor_conditional_null = \"Conditional hit probability is exactly 0.8 at every frozen step\"\n", ""),
+        policy.replace("monitor_order = \"one\"\n", ""),
+        policy.replace("monitor_order = \"one\"", "monitor_order = \"one,one\""),
+        policy.replace("monitor_order = \"one\"", "monitor_order = \"unknown\""),
+        policy.replace("monitor_alarm_alpha = \"0.05\"", "monitor_alarm_alpha = \"1\""),
+    ] {
+        Replay::parse(&single(payload, &rejected, "")).expect_err("invalid frozen declaration");
+    }
+    for unsupported in [
+        "kind = \"interval\"\nlo = \"0\"\nhi = \"1\"",
+        "kind = \"interval\"\nlo = \"0\"\nhi = \"1\"\nnominal = \"0.9\"",
+        "kind = \"bernoulli\"\nprobability = \"0.8\"",
+        "kind = \"empirical\"\nsamples = \"0,1\"",
+    ] {
+        Replay::parse(&single(unsupported, &policy, "")).expect_err("unsupported coverage null");
+    }
+}
+
+#[test]
+fn monitor_alarm_is_exposed_without_claiming_recalibration() {
+    let text = single(
+        "kind = \"interval\"\nlo = \"0\"\nhi = \"1\"\nnominal = \"0.8\"",
+        &monitor_fields("one").replace("\"0.05\"", "\"0.9\""),
+        &published("2"),
+    );
+    let (replay, assessment) = report(&text, CUT, OutcomeSelector::FirstPublished);
+    let monitor = assessment.coverage_monitor.as_ref().expect("monitor");
+    assert!(monitor.snapshot.alarmed());
+    assert_eq!(monitor.snapshot.first_crossing, Some(1));
+    let json = replay
+        .render(&assessment, sha256(text.as_bytes()))
+        .expect("alarmed report");
+    assert!(json.contains("\"first_crossing\":1,\"alarmed\":true"));
+    assert!(json.contains("\"calibration_flag\":\"descriptive\""));
+}
+
 #[test]
 fn synthetic_restatements_keep_the_frozen_denominator_and_change_the_selected_score() {
     let (replay, first) = report(FIXTURE, CUT, OutcomeSelector::FirstPublished);
@@ -173,6 +300,114 @@ locator = "Invented!A1"
 sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
 "#
     )
+}
+
+#[test]
+fn event_log_floor_is_reachable_and_reported_with_missing_completion_bounds() {
+    let payload = "kind = \"bernoulli\"\nprobability = \"0.25\"";
+    let policy = "event_log_floor = \"0.01\"";
+    let text = single(payload, policy, &published("1"));
+    let (replay, assessment) = report(&text, CUT, OutcomeSelector::FirstPublished);
+    let log = assessment.summary.event_log.expect("declared log loss");
+    assert_eq!(log.probability_floor, 0.01);
+    assert_eq!(log.score.n_scored, 1);
+    assert!((log.score.observed_mean.expect("observed") - 1.386_294_361_119_890_6).abs() < 1e-12);
+    assert_eq!(
+        assessment
+            .summary
+            .brier
+            .expect("unchanged proper Brier")
+            .observed_mean,
+        Some(0.5625)
+    );
+    let json = replay
+        .render(&assessment, sha256(text.as_bytes()))
+        .expect("log loss report");
+    for field in [
+        "\"event_log_floor\":0.01",
+        "\"event_log\":{\"probability_floor\":0.01,\"units\":\"nats\"",
+        "\"loss_kind\":\"capped_negative_log_probability\"",
+        "\"strictly_proper\":false",
+        "\"calibration_flag\":\"descriptive\"",
+    ] {
+        assert!(json.contains(field), "missing {field}");
+    }
+    let (_, missing) = report(
+        &single(payload, policy, ""),
+        CUT,
+        OutcomeSelector::FirstPublished,
+    );
+    let score = missing
+        .summary
+        .event_log
+        .expect("missing member retained")
+        .score;
+    assert_eq!(missing.summary.n_members, 1);
+    assert_eq!(missing.summary.n_unresolved, 1);
+    assert_eq!(score.n_scored, 0);
+    assert_eq!(score.observed_mean, None);
+    assert!((score.whole_cohort.lower - 0.287_682_072_451_780_9).abs() < 1e-12);
+    assert!(
+        (score.whole_cohort.upper.expect("bounded missing outcome") - 1.386_294_361_119_890_6)
+            .abs()
+            < 1e-12
+    );
+
+    let legacy_text = single(payload, "", &published("1"));
+    let (legacy_replay, legacy) = report(&legacy_text, CUT, OutcomeSelector::FirstPublished);
+    assert_eq!(legacy.summary.brier, assessment.summary.brier);
+    assert!(
+        !legacy_replay
+            .render(&legacy, sha256(legacy_text.as_bytes()))
+            .expect("legacy output")
+            .contains("event_log")
+    );
+    assert_ne!(legacy.cohort, assessment.cohort);
+    let (_, changed_floor) = report(
+        &text.replace("event_log_floor = \"0.01\"", "event_log_floor = \"0.02\""),
+        CUT,
+        OutcomeSelector::FirstPublished,
+    );
+    assert_ne!(assessment.cohort, changed_floor.cohort);
+}
+
+#[test]
+fn event_log_adapter_caps_certain_errors_and_refuses_invalid_or_incompatible_policies() {
+    let payload = "kind = \"bernoulli\"\nprobability = \"0\"";
+    let policy = "event_log_floor = \"0.01\"";
+    let (_, capped) = report(
+        &single(payload, policy, &published("1")),
+        CUT,
+        OutcomeSelector::FirstPublished,
+    );
+    assert!(
+        (capped
+            .summary
+            .event_log
+            .expect("finite cap")
+            .score
+            .observed_mean
+            .expect("score")
+            - 4.605_170_185_988_091)
+            .abs()
+            < 1e-12
+    );
+    for floor in ["0", "0.5", "-0.1", "nan", "inf"] {
+        Replay::parse(&single(
+            payload,
+            &format!("event_log_floor = \"{floor}\""),
+            "",
+        ))
+        .expect_err("invalid floor");
+    }
+    let interval = "kind = \"interval\"\nlo = \"0\"\nhi = \"1\"\nnominal = \"0.8\"";
+    Replay::parse(&single(interval, policy, "")).expect_err("event log requires binary forecasts");
+    Replay::parse(&single(
+        payload,
+        &format!("{policy}\n{}", monitor_fields("one")),
+        "",
+    ))
+    .expect_err("binary log loss and continuous coverage monitoring cannot share a cohort");
 }
 
 #[test]

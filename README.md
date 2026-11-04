@@ -1690,6 +1690,38 @@ cargo run -p fmine-cli -- forecast assess --ledger tests/forecasts/empirical_syn
   --cohort empirical-demo --as-of 2031-02-17T00:00:00Z
 ```
 
+Sequential coverage monitoring is an optional policy frozen with the cohort. In the synthetic interval
+fixture `tests/forecasts/cohort_synthetic.toml`, add these fields inside its `[[cohort]]` row, before the outcome rows:
+
+```toml
+monitor_alarm_alpha = "0.05"
+monitor_support = "Synthetic quarterly unit-cost intervals"
+monitor_conditional_null = "Assumed exact conditional 80% coverage at every frozen step"
+monitor_order = "north-unit-cost,south-unit-cost,central-unit-cost"
+```
+
+All four fields are required. The order must contain every member exactly once. The mathematical null is
+**P(interval hit | past) = 1-alpha**, at the declared support; the command retains this assumption without
+claiming to verify it. Gaussian forecasts, explicitly probability-bearing intervals and exact central
+quantiles are supported. Empirical and Bernoulli forecasts do not satisfy this continuous-coverage grammar.
+
+The assessment reports log e-values, their running maximum, the first alarm, and each original value,
+interval, hit, citation and event digest. Monitoring uses original publications even when `latest-as-of`
+scoring selects a restatement. It stops at the first unresolved member rather than admitting later resolved
+outcomes out of order, and reports the blocked member and deferred counts. An alarm does not recalibrate
+the forecasts. In the example order, the missing south member blocks the already resolved central member.
+
+For a separate all-Bernoulli cohort, add `event_log_floor = "0.01"` to its cohort row to enable a bounded
+event log score. The loss is `-ln(max(P(observed outcome), floor))`, in **nats**, with a finite floor strictly
+between zero and 0.5 fixed before outcomes. The report retains the floor, observed mean and whole-cohort
+completion bounds, including both possible losses for every unresolved member. The explicit floor caps
+extreme losses and removes strict propriety in the floored tails; the original forecast probabilities and
+proper Brier score are unchanged. This is descriptive scoring and supplies no calibration claim.
+
+Both policies are available through replay and live journal freezes. The live writer records an opt-in
+freeze as operation v5; clients continue to omit schema markers. Omitting the policies preserves existing
+identities and output. `robot-docs` exposes the accepted fields and their interpretation.
+
 Check every member's evidence ancestry at its own registration time with a provenance bundle:
 
 ```bash
@@ -1879,7 +1911,9 @@ using the membership, resolution-source and scoring-policy fields shown in the c
 has no top-level fields. Decimal values are quoted strings. The latest possible time under the declared
 clock bound must be **strictly before** every affected outcome deadline, including on an empty or quiet journal.
 For ordinary new requests, the writer internally adds `schema = "fmine.forecast-operation.v2"`; public-bound
-freezes and generated source resolutions use v3. Callers must not include this marker in their request files.
+freezes and generated source resolutions use v3, explicit vintage policies and comparative restatements use v4,
+and freezes opting into coverage monitoring or bounded event log loss use v5. Callers must not include this
+marker in their request files.
 The frame retains the sampled `observed_ns`, while registration,
 cohort freeze and outcome recording times use the clock's upper bound (`observed_ns + clock_skew_ns`).
 
