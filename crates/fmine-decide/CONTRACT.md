@@ -136,6 +136,74 @@ The projection is an internal versioned replay input (version 2), not a new dura
   (`render_one_pager_markdown`), which puts a "Historical check" section before the card
 - `VoiCampaign`, `VoiRankedItem`, `rank_voi_campaigns -> Result<Vec<VoiRankedItem>, Refusal>`
 - `render_one_pager_markdown`
+- `card::stability::{SelectionStabilityDesign, SelectionStabilityProblem, StabilityAlternative,
+  StabilityTailLimit, SelectionScope, SelectionStabilitySummary}`: DESIGN (BD-229, §22.5), source-bound
+  conditional bootstrap robustness for complete comparison populations. `evaluate` admits a Claim of
+  the original model, structural eligibility, named state law, objective unit and complete outcome laws.
+  It returns a Claim retaining source ancestry, confidentiality, uncertainty and the weakest evidence;
+  its tag binds the complete input metadata, source model, conditional result and scope boundary.
+  It reports exact co-winner frequencies, nominal runner-up ties, fragile nominal choices below 4/5,
+  candidate inclusion bounds and every replicate's counts/winners. Capital static/adaptive adapters are
+  the first consumer. `ordered_values` aligns named outcomes to the original support without dropping
+  missing, duplicate or extra rows. The result never changes nominal economics or asserts authorization.
+
+  Structural eligibility is fixed over the complete original support; zero-count states do not waive
+  cash, share or contractual constraints. Every replicate recomputes mean and all signed tail-loss
+  constraints from shared count weights, using pre-sorted numerical payoff laws. Additional entity laws
+  constrain separately and never enter the primary objective. All exact ties survive. Alternative
+  inclusion frequencies may sum above one; candidate lower/upper bounds mean inclusion in every/any
+  nonempty co-winner set. Policy initial and realized-state selections are distinct scopes, including
+  continuations on unsampled states. Definite/possible flip bounds describe choices outside the nominal
+  co-winner set, not arbitrary tie-break changes within that set. No-feasible replicates remain in every
+  denominator, are reported separately and never become an invented zero-value winner.
+
+  The declared `weighted_multinomial` experiment has an unsigned 64-bit seed, 200–2,000 replicates,
+  1–4,096 draws each, at most 8,000,000 total draws and 32,000,000 state/law/alternative/replicate
+  evaluations. State/candidate/alternative identifiers are at most 128 ASCII letters, digits, dots,
+  underscores or hyphens. The conservative replicate count × sum of all alternative identifier bytes
+  cannot exceed 8,000,000, bounding retained winners even when every alternative ties. These bounds
+  precede canonical hashing. The exact sampler uses existing Philox with
+  independent replicate streams; no floating weight approximation or global denominator LCM is used.
+  `SelectionStabilityDesign` has canonical tags and JSON; the complete summary has JSON and Markdown.
+  Counts, sources, seed and experiment size remain explicit. Frequencies are conditional sensitivity,
+  not calibrated optimality probabilities, confidence intervals or empirical model-uncertainty coverage.
+  Known-answer and metamorphic tests cover dominant negative choices, fragile choices, every tie,
+  changing primary/secondary risk, no feasible choice, original state retention, source admission,
+  arithmetic/work refusals and positive-affine invariance of complete replicate results.
+
+- `card::robustness::{RobustnessDesign, StateDistance, RobustAlternative, RobustnessSummary}`:
+  DESIGN (BD-225, §22.5), optional finite-support Wasserstein-1 comparisons through the existing
+  `card::evaluate` and `fmine decide card` command. One source-bound `[[robustness]]` declaration
+  requires `method = "wasserstein_1"`, a nonnegative rational `radius`, and explicit `metric_basis`
+  and `radius_basis`. `[[transport_distance]]` supplies every ordered `from`/`to`/`value` pair,
+  including zero diagonals. The dimensionless metric is symmetric, strictly positive between
+  different states and satisfies every triangle inequality. No metric, radius or calibration is inferred.
+  All controls and original matrix-row anchors remain in an Assumed/Internal input Claim.
+
+  For action a, DESIGN: solve max Σᵢⱼ γᵢⱼ (−vₐⱼ) with γ ≥ 0, Σⱼ γᵢⱼ = pᵢ and
+  Σᵢⱼ γᵢⱼ dᵢⱼ ≤ radius; its negative is the worst-case mean. Separately solve the same problem
+  for same-state regret max_b(v_bⱼ) − vₐⱼ. All original actions enter the hindsight baseline.
+  The dual is min_{λ ≥ 0} λ·radius + Σᵢ pᵢ maxⱼ(lossⱼ − λdᵢⱼ), the finite-support
+  specialization of the Wasserstein dual (Mohajerin Esfahani and Kuhn, 2017, §4.1, equation 16;
+  https://arxiv.org/abs/1505.05116v3). This implementation obtains and checks both witnesses
+  directly; it does not import that paper's empirical-sample confidence guarantees.
+
+  Maximin mean and minimax expected regret have separate rankings, complete co-winner sets and
+  adversarial distributions. Every certificate retains all destination weights (including zeros),
+  all positive transport arcs, transport cost, dual multiplier/potentials, objective and exact zero
+  primal/dual gap. Nominal choices, regrets, tail statistics and information-option assessments stay
+  unchanged and visible. The robust scope is **act-now actions**: it neither optimizes information
+  policies nor certifies robust CVaR, hard constraints, missing regimes or empirical uncertainty.
+
+  Work is bounded before cloning or hashing: 1–64 states, at most 256 actions, a complete distance
+  matrix and at most 2,097,152 action/state-pair objective evaluations. Identifiers are at most 128
+  ASCII identifier bytes and the declared bases at most 4,096 bytes. Metric validation and cost
+  ordering are reused across both objectives and all actions. Each numerical solve uses exact
+  concave hull segments and returns at most n+1 positive arcs, without convergence tolerances.
+  Configuration metadata joins output ancestry, confidentiality, UU and weakest evidence/colour.
+  When the declaration is absent, the prior card fields, scope, Claim identity and report bytes remain
+  unchanged. Tests include independent primal-vertex enumeration, direct source-admission mutations,
+  zero/full-radius limits, distinct robust criteria and actual CLI/library JSON/Markdown parity.
 
 ## 5. Guards & Typed Refusals
 `rank_voi_campaigns` validates the shared problem once, even for an empty campaign list. Every campaign must

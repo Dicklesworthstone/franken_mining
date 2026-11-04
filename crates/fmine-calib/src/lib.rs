@@ -21,8 +21,9 @@ pub mod ledger;
 pub mod record;
 pub mod scoring;
 pub use ledger::{
-    Assessment, AssessmentPolicy, AssessmentSummary, Cohort, CohortSpec, CoverageSummary,
-    EffectiveSampleSize, ForecastLedger, ForecastPayload, FrozenForecast, MemberAssessment,
+    Assessment, AssessmentPolicy, AssessmentSummary, Cohort, CohortSpec, CoverageMonitorAssessment,
+    CoverageMonitorPolicy, CoverageObservation, CoverageSummary, EffectiveSampleSize,
+    EventLogScoreSummary, ForecastLedger, ForecastPayload, FrozenForecast, MemberAssessment,
     MemberOutcome, MissingReason, OutcomeCitation, OutcomeEvent, OutcomeKind, OutcomeSelector,
     ScoreBounds, ScoreSummary,
 };

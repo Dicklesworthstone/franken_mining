@@ -26,6 +26,7 @@ pub mod entity;
 pub mod model;
 pub mod recourse;
 mod render;
+pub mod stability;
 
 use entity::valuation::{EntityValuation, EntityValuationAssessment};
 use entity::{EntityCashPhase, EntityFunding, EntityFundingAssessment};
@@ -260,9 +261,13 @@ pub struct ProgramInputs {
     pub entity_funding: Option<Claim<EntityFunding>>,
     pub equity: Option<Claim<EquityBasis>>,
     pub entity_valuations: Vec<Claim<EntityValuation>>,
+    pub selection_stability: Option<Claim<stability::SelectionStabilityDesign>>,
 }
 
 fn no_claim_for(inputs: &ProgramInputs) -> &'static str {
+    if inputs.selection_stability.is_some() {
+        return stability::NO_CLAIM;
+    }
     if inputs
         .entity_funding
         .as_ref()
@@ -428,6 +433,7 @@ pub struct ProgramSummary {
     /// Absent when no structurally/risk-feasible subset exists; negative values cannot occur.
     pub expected_value_cost_of_risk_limit: Option<ExactMoney>,
     pub expected_per_share_cost_of_risk_limit: Option<ExactPerShare>,
+    pub selection_stability: Option<stability::SelectionStabilitySummary>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1002,6 +1008,7 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
         ));
     }
     entity::valuation::check_work_bound(inputs, 1_usize << inputs.candidates.len())?;
+    stability::check_work(inputs, 1_usize << inputs.candidates.len())?;
     if !inputs.entity_valuations.is_empty() && inputs.equity.is_none() {
         return Err(bad(
             RefusalCode::BasisMismatch105,
@@ -1104,6 +1111,20 @@ fn validate(inputs: &ProgramInputs) -> Result<Metadata> {
     let mut metadata = Metadata::new();
     metadata.include(&inputs.policy)?;
     metadata.include(&inputs.weights)?;
+    if let Some(claim) = &inputs.selection_stability {
+        admit(
+            claim,
+            &claim.value.canonical_tag(),
+            AdditivityClass::NonAdditive,
+        )?;
+        if claim.value.model_key != policy.model_key {
+            return Err(bad(
+                RefusalCode::BasisMismatch105,
+                "selection stability must use the program's model key",
+            ));
+        }
+        metadata.include(claim)?;
+    }
     let mut candidates = BTreeMap::new();
     for (i, claim) in inputs.candidates.iter().enumerate() {
         let c = &claim.value;
@@ -1785,6 +1806,7 @@ fn populate_statistics(
             weights: inputs.weights.clone(),
             actions: actions.to_vec(),
             information_options: vec![],
+            robustness: None,
         })?
         .summary()
         .alternatives
@@ -2133,6 +2155,8 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
         }
         _ => (None, None),
     };
+    let selection_stability =
+        stability::assess(&inputs, &choices, None, &metadata, &feasible_winners)?;
     let summary = ProgramSummary {
         model_key: policy.model_key.clone(),
         question: inputs.weights.value.question.clone(),
@@ -2157,6 +2181,7 @@ pub fn evaluate(inputs: &ProgramInputs) -> Result<EvaluatedProgram> {
         feasible_winners,
         expected_value_cost_of_risk_limit: risk_cost,
         expected_per_share_cost_of_risk_limit: per_share_risk_cost,
+        selection_stability,
     };
     let mut binding = Encoder::new_frame(*b"CAPP", 1);
     binding.put_str(&render::inputs_json(&inputs));

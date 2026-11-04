@@ -124,6 +124,7 @@ pub struct RecourseSummary {
     pub net_adaptive_value_per_share: Option<ExactPerShare>,
     pub unconstrained_net_adaptive_value: Option<ExactMoney>,
     pub unconstrained_net_adaptive_value_per_share: Option<ExactPerShare>,
+    pub selection_stability: Option<stability::SelectionStabilitySummary>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -162,6 +163,9 @@ impl EvaluatedRecourseProgram {
 }
 
 fn no_claim_for(inputs: &RecourseInputs) -> &'static str {
+    if inputs.program.selection_stability.is_some() {
+        return stability::NO_CLAIM;
+    }
     if inputs
         .program
         .entity_funding
@@ -328,6 +332,7 @@ fn admit_inputs(inputs: &RecourseInputs) -> Result<Admission> {
         ));
     }
     entity::valuation::check_work_bound(program, (1_usize << candidate_count) + policy_count)?;
+    stability::check_work(program, (1_usize << candidate_count) + policy_count)?;
     let mut metadata = super::validate(program)?;
     if basis.model_key != program.policy.value.model_key
         || basis.currency != program.policy.value.currency
@@ -1166,6 +1171,13 @@ pub fn evaluate(inputs: &RecourseInputs) -> Result<EvaluatedRecourseProgram> {
             currency,
             per_share_objective,
         );
+    let selection_stability = stability::assess(
+        &inputs.program,
+        &comparisons,
+        Some(&policies),
+        &metadata,
+        &feasible_winners,
+    )?;
     for (policy, comparison) in policies.iter_mut().zip(comparisons) {
         policy.statistics = comparison.statistics;
         policy.tail_loss = comparison.tail_loss;
@@ -1189,6 +1201,7 @@ pub fn evaluate(inputs: &RecourseInputs) -> Result<EvaluatedRecourseProgram> {
         net_adaptive_value_per_share,
         unconstrained_net_adaptive_value,
         unconstrained_net_adaptive_value_per_share,
+        selection_stability,
     };
     let mut binding = Encoder::new_frame(*b"CAPR", 1);
     binding.put_str(static_program.digest());

@@ -300,6 +300,7 @@ pub(crate) fn inputs(
         entity_funding: None,
         equity: None,
         entity_valuations: vec![],
+        selection_stability: None,
     }
 }
 fn row<'a>(report: &'a EvaluatedProgram, members: &[&str]) -> &'a ProgramChoice {

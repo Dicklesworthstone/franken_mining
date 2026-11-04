@@ -480,8 +480,17 @@ pub(super) fn inputs_json(inputs: &ProgramInputs) -> String {
                 .join(",")
         )
     };
+    let stability = inputs
+        .selection_stability
+        .as_ref()
+        .map_or_else(String::new, |claim| {
+            format!(
+                ",\"selection_stability\":{}",
+                claim_json(claim, &claim.value.to_json())
+            )
+        });
     format!(
-        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}{schedule}{equity}{entity}{valuations}}}",
+        "{{\"policy\":{},\"weights\":{},\"candidates\":[{candidates}],\"funding\":{}{schedule}{equity}{entity}{valuations}{stability}}}",
         claim_json(&inputs.policy, &policy_json(&inputs.policy.value)),
         claim_json(&inputs.weights, &weights_json(&inputs.weights.value)),
         inputs.funding.as_ref().map_or_else(
@@ -704,8 +713,17 @@ pub(super) fn summary_json(s: &ProgramSummary) -> String {
                 .join(",")
         )
     };
+    let stability = s.selection_stability.as_ref().map_or_else(
+        || "null".into(),
+        stability::SelectionStabilitySummary::to_json,
+    );
+    let stability_status = if s.selection_stability.is_some() {
+        "conditional_weighted_bootstrap"
+    } else {
+        "unavailable_static_declared_model"
+    };
     format!(
-        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule}{equity}{entity}{valuations},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":null,\"selection_frequency_status\":\"unavailable_static_declared_model\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"}}",
+        "{{\"model_key\":{},\"question\":{},\"currency\":{},\"monetary_scale\":\"major_currency_units\",\"status\":{},\"policy\":{},\"funding\":{}{schedule}{equity}{entity}{valuations},\"choices\":[{choices}],\"unconstrained_winners\":{},\"feasible_winners\":{},\"expected_value_cost_of_risk_limit\":{},\"selection_frequency\":{stability},\"selection_frequency_status\":\"{stability_status}\",\"regret_reference\":\"all_structurally_feasible_subsets_before_risk_limit\"}}",
         js(&s.model_key),
         js(&s.question),
         currency(s.policy.currency),
@@ -760,6 +778,11 @@ impl EvaluatedProgram {
     #[must_use]
     pub fn to_markdown(&self) -> String {
         let s = self.summary();
+        let selection_note = if s.selection_stability.is_some() {
+            "Conditional selection stability is reported below."
+        } else {
+            "Selection frequency is unavailable for this declared static model."
+        };
         let (tail_limit, risk_unit, risk_cost, measurement_note, comparison_table) = if let Some(
             equity,
         ) =
@@ -787,7 +810,7 @@ impl EvaluatedProgram {
             )
         };
         let mut out = format!(
-            "# Static capital program comparison\n\n{}\n\n**Declared model:** `{}`. **Evidence:** {}. **Confidentiality:** {}. **Digest:** `{}`.\n\n{}\n\n**Valuation basis:** {}. **Reference-class basis:** {}.\n\nBudget: {} USD. Upper loss tail mass: {}. Maximum tail loss: {tail_limit} {risk_unit}. Candidate net delta-NAV already includes spending; the cost column constrains the budget only.\n\n**Expected-value co-winners before risk limit:** {}. **Risk-feasible co-winners:** {}. **Expected-value cost of the risk limit:** {risk_cost} {risk_unit}.\n\nSelection frequency is unavailable for this declared static model. Regret compares every structurally feasible subset before the tail-loss limit. {measurement_note}\n\n{comparison_table}",
+            "# Static capital program comparison\n\n{}\n\n**Declared model:** `{}`. **Evidence:** {}. **Confidentiality:** {}. **Digest:** `{}`.\n\n{}\n\n**Valuation basis:** {}. **Reference-class basis:** {}.\n\nBudget: {} USD. Upper loss tail mass: {}. Maximum tail loss: {tail_limit} {risk_unit}. Candidate net delta-NAV already includes spending; the cost column constrains the budget only.\n\n**Expected-value co-winners before risk limit:** {}. **Risk-feasible co-winners:** {}. **Expected-value cost of the risk limit:** {risk_cost} {risk_unit}.\n\n{selection_note} Regret compares every structurally feasible subset before the tail-loss limit. {measurement_note}\n\n{comparison_table}",
             md(&s.question),
             md(&s.model_key),
             evidence(self.claim.evidence),
@@ -997,6 +1020,12 @@ impl EvaluatedProgram {
         }
         claim_markdown(&mut out, &self.inputs.weights);
         claim_markdown(&mut out, &self.inputs.policy);
+        if let Some(stability) = &s.selection_stability {
+            out.push_str(&stability.to_markdown());
+        }
+        if let Some(claim) = &self.inputs.selection_stability {
+            claim_markdown(&mut out, claim);
+        }
         out.push_str("\n## Declared unknown unknowns\n\n");
         for u in &self.claim.uu_terms {
             let _ = writeln!(

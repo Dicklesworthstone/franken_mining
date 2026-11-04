@@ -4,6 +4,7 @@
 
 pub mod bootstrap;
 pub mod exact;
+pub mod transport;
 
 /// Summary of empirical loss distribution tail risk (`VaR_alpha`, `CVaR_alpha`).
 ///

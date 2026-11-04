@@ -30,6 +30,7 @@ const OPERATION_SCHEMA: &str = "fmine.forecast-ledger.v1";
 const V2_SCHEMA: &str = "fmine.forecast-operation.v2";
 const V3_SCHEMA: &str = "fmine.forecast-operation.v3";
 const V4_SCHEMA: &str = "fmine.forecast-operation.v4";
+const V5_SCHEMA: &str = "fmine.forecast-operation.v5";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +47,7 @@ enum OperationVersion {
     V2,
     V3,
     V4,
+    V5,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -63,6 +65,10 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
         && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V4_SCHEMA)
     {
         Ok(OperationVersion::V4)
+    } else if doc.top.len() == 1
+        && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V5_SCHEMA)
+    {
+        Ok(OperationVersion::V5)
     } else {
         Err(invalid("unknown stored forecast operation schema"))
     }
@@ -76,7 +82,13 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
             "a {expected_table} request needs exactly its one table and no top-level fields"
         )));
     }
-    let schema = if expected_table == "registered_restatement"
+    let schema = if super::MONITOR_FIELDS
+        .iter()
+        .any(|key| doc.rows[0].get(key).is_some())
+        || doc.rows[0].get("event_log_floor").is_some()
+    {
+        V5_SCHEMA
+    } else if expected_table == "registered_restatement"
         || doc.rows[0].get("public_vintages").is_some()
     {
         V4_SCHEMA
@@ -355,13 +367,14 @@ fn perform(
     let mut response = None;
     journal.append(&request, clock, |record, header| {
         let assessment = apply(&mut state, record, header, Some(table))?;
-        // Comparative policies and receipts carry v4; prior operation versions retain their meaning.
+        // New opt-in policies retain distinct versions; older operation meanings stay frozen.
         let mut versions = previous.versions;
         match version {
             OperationVersion::LegacyV1 => versions.legacy_v1 += 1,
             OperationVersion::V2 => versions.v2 += 1,
             OperationVersion::V3 => versions.v3 += 1,
             OperationVersion::V4 => versions.v4 += 1,
+            OperationVersion::V5 => versions.v5 += 1,
         }
         let report_origin = match (previous.report_origin, assessment.as_ref()) {
             (Some(origin), _) => Some(origin),
@@ -1042,10 +1055,28 @@ fn apply(
         return Err(invalid("a stored live request needs exactly one table"));
     }
     let row = &doc.rows[0];
-    let vintage_freeze = row.table == "cohort" && row.get("public_vintages").is_some();
-    if row.get("public_vintages").is_some() && version != OperationVersion::V4 {
+    let monitor_declared = super::MONITOR_FIELDS
+        .iter()
+        .any(|key| row.get(key).is_some());
+    let event_log_declared = row.get("event_log_floor").is_some();
+    if (monitor_declared || event_log_declared) && version != OperationVersion::V5 {
         return Err(invalid(
-            "public vintage policy requires operation version four",
+            "coverage monitor and event log policies require operation version five",
+        ));
+    }
+    if version == OperationVersion::V5
+        && (row.table != "cohort" || !(monitor_declared || event_log_declared))
+    {
+        return Err(invalid(
+            "operation version five requires a coverage-monitor or event-log cohort freeze",
+        ));
+    }
+    let vintage_freeze = row.table == "cohort" && row.get("public_vintages").is_some();
+    if row.get("public_vintages").is_some()
+        && !matches!(version, OperationVersion::V4 | OperationVersion::V5)
+    {
+        return Err(invalid(
+            "public vintage policy requires operation version four or an opt-in version-five freeze",
         ));
     }
     if version == OperationVersion::V4 && row.table != "registered_restatement" && !vintage_freeze {
@@ -1070,7 +1101,10 @@ fn apply(
     let (lower, upper) = record.time_bounds(header)?;
     let authority_ns = match version {
         OperationVersion::LegacyV1 => record.observed_ns,
-        OperationVersion::V2 | OperationVersion::V3 | OperationVersion::V4 => upper,
+        OperationVersion::V2
+        | OperationVersion::V3
+        | OperationVersion::V4
+        | OperationVersion::V5 => upper,
     };
     let row = Row(row);
     match row.0.table.as_str() {
@@ -1167,11 +1201,12 @@ struct VersionCounts {
     v2: usize,
     v3: usize,
     v4: usize,
+    v5: usize,
 }
 
 impl VersionCounts {
     fn policy(self) -> &'static str {
-        match (self.legacy_v1, self.v2 + self.v3 + self.v4) {
+        match (self.legacy_v1, self.v2 + self.v3 + self.v4 + self.v5) {
             (0, 0) => "none",
             (_, 0) => "legacy_observed",
             (0, _) => "clock_upper_bound",
@@ -1199,8 +1234,13 @@ impl VersionCounts {
         } else {
             format!(",\"v4\":{}", self.v4)
         };
+        let v5 = if self.v5 == 0 {
+            String::new()
+        } else {
+            format!(",\"v5\":{}", self.v5)
+        };
         format!(
-            "\"operation_version_counts\":{{\"legacy_v1\":{},\"v2\":{}{v3}{v4}}},\"record_time_policy\":{}",
+            "\"operation_version_counts\":{{\"legacy_v1\":{},\"v2\":{}{v3}{v4}{v5}}},\"record_time_policy\":{}",
             self.legacy_v1,
             self.v2,
             js(self.policy())
@@ -1241,6 +1281,7 @@ fn version_counts(
             OperationVersion::V2 => counts.v2 += 1,
             OperationVersion::V3 => counts.v3 += 1,
             OperationVersion::V4 => counts.v4 += 1,
+            OperationVersion::V5 => counts.v5 += 1,
         }
         if doc
             .rows
@@ -1560,6 +1601,102 @@ fn markdown(
                 "\nWhole-cohort coverage completion bounds: [{}, {}]. These bounds retain unresolved members and are not confidence intervals.",
                 coverage.whole_cohort.0, coverage.whole_cohort.1
             );
+        }
+        if let Some(log) = report.summary.event_log {
+            let score = log.score;
+            let _ = writeln!(
+                out,
+                "\n## Event log score\n\nFrozen probability floor: {}. Loss: -ln(max(P(observed outcome), floor)), in nats. Scored: {} of {}; observed mean: {}. Whole-cohort completion bounds: [{}, {}].\n\nEvery unresolved member remains in these completion bounds. The explicit floor caps extreme losses and removes strict propriety in the floored tails; the original probabilities and proper Brier score are unchanged. This descriptive score does not establish calibration.",
+                log.probability_floor,
+                score.n_scored,
+                report.summary.n_members,
+                score
+                    .observed_mean
+                    .map_or_else(|| "unscored".into(), |value| value.to_string()),
+                score.whole_cohort.lower,
+                score
+                    .whole_cohort
+                    .upper
+                    .map_or_else(|| "unbounded".into(), |value| value.to_string()),
+            );
+        }
+        if let Some(monitor) = &report.coverage_monitor {
+            let snapshot = monitor.snapshot;
+            let _ = writeln!(
+                out,
+                "\n## Sequential coverage monitor\n\nDeclared support: {}. Declared assumption: {}. The exact conditional null is P(interval hit | past) = {}; this assumption is supplied, not independently verified. Alarm alpha: {}.\n\nOriginal publications in frozen order: {} observed, {} hits. Log e-value: {}; running maximum: {}; log alarm threshold: {}. First crossing: {}. Alarmed: {}.\n\nRestatements do not replace this sequence. An alarm does not recalibrate the forecasts.\n\n| Order | Forecast | Frozen interval | Original outcome and citation | Hit | Event digest | Source Claim |\n|---|---|---|---|---|---|---|",
+                text(&monitor.policy.support),
+                text(&monitor.policy.conditional_null),
+                monitor.null_probability,
+                monitor.policy.alarm_alpha,
+                snapshot.n,
+                snapshot.hits,
+                snapshot.log_e_value,
+                snapshot.max_log_e_value,
+                snapshot.log_threshold,
+                snapshot
+                    .first_crossing
+                    .map_or_else(|| "none".into(), |n| n.to_string()),
+                snapshot.alarmed(),
+            );
+            for (index, observation) in monitor.observations.iter().enumerate() {
+                let member = &observation.member;
+                let alias = state
+                    .aliases
+                    .get(&member.forecast_id)
+                    .map_or("unknown", String::as_str);
+                if let MemberOutcome::Resolved {
+                    value, citation, ..
+                } = &member.outcome
+                {
+                    let event = member
+                        .selected_event
+                        .map_or_else(|| "none".into(), |(_, digest)| digest.to_hex());
+                    let claim = member
+                        .selected_event
+                        .and_then(|(seq, _)| {
+                            state.source_admissions.get(&(member.forecast_id, seq))
+                        })
+                        .map_or_else(|| "not verified".into(), |source| source.claim.to_string());
+                    let _ = writeln!(
+                        out,
+                        "| {} | {} | [{}, {}] | {}; {} / {} / {}; SHA-256 `{}` | {} | `{}` | {} |",
+                        index + 1,
+                        text(alias),
+                        observation.interval.0,
+                        observation.interval.1,
+                        value,
+                        text(&citation.source),
+                        text(&citation.vintage),
+                        text(&citation.locator),
+                        Digest32(citation.sha256).to_hex(),
+                        observation.hit,
+                        event,
+                        text(&claim),
+                    );
+                }
+            }
+            if let Some(blocker) = &monitor.blocked_by {
+                let alias = state
+                    .aliases
+                    .get(&blocker.forecast_id)
+                    .map_or("unknown", String::as_str);
+                let event = blocker
+                    .selected_event
+                    .map_or_else(|| "none".into(), |(_, digest)| digest.to_hex());
+                let reason = match &blocker.outcome {
+                    MemberOutcome::Unresolved { reason } => missing_name(*reason),
+                    MemberOutcome::Resolved { .. } => "resolved",
+                };
+                let _ = writeln!(
+                    out,
+                    "\nSequence stops at unresolved forecast {} (reason: {}; retained event digest: `{event}`). {} later members are deferred, including {} with resolved original publications. No later member was skipped into the sequence.",
+                    text(alias),
+                    reason,
+                    monitor.n_deferred,
+                    monitor.n_deferred_resolved,
+                );
+            }
         }
     }
     out

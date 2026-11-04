@@ -10,9 +10,9 @@ use fmine_calib::ledger::binding::{
 };
 use fmine_calib::record::{format_utc, parse_hex32, parse_utc};
 use fmine_calib::{
-    Assessment, AssessmentPolicy, CalibrationFlag, Cohort, CohortSpec, ForecastLedger,
-    ForecastPayload, MemberAssessment, MemberOutcome, MissingReason, OutcomeCitation, OutcomeKind,
-    OutcomeSelector, ScoreSummary,
+    Assessment, AssessmentPolicy, CalibrationFlag, Cohort, CohortSpec, CoverageMonitorAssessment,
+    CoverageMonitorPolicy, ForecastLedger, ForecastPayload, MemberAssessment, MemberOutcome,
+    MissingReason, OutcomeCitation, OutcomeKind, OutcomeSelector, ScoreSummary,
 };
 use fmine_core::hash::{Digest32, sha256};
 use fmine_core::id::ObjectId;
@@ -27,6 +27,15 @@ mod source;
 
 const SCHEMA: &str = "fmine.forecast-ledger.v1";
 pub const DISTRIBUTIONS_JSON: &str = r#"{"kinds":["gaussian","interval","quantiles","bernoulli","empirical"],"empirical":{"samples":"Quoted comma-separated finite numbers, from one through 4096 samples; the live journal also limits each operation to 64 KiB","weights":"Uniform; repeated samples retain their probability mass","quantiles":"Inverse empirical CDF without interpolation","scoring":"CRPS and central interval score; mixed Gaussian/empirical cohorts retain a common CRPS denominator","identity":"Original sample order is frozen; reordering keeps the distribution scores but changes its record identity","scope":"Univariate predictive distribution; no joint realization join or calibration claim","example":"tests/forecasts/empirical_synthetic.toml"}}"#;
+pub const COVERAGE_MONITOR_JSON: &str = r#"{"cohort_fields":["monitor_alarm_alpha","monitor_support","monitor_conditional_null","monitor_order"],"declaration":"All four fields are required together; monitor_order is the comma-separated complete permutation of forecast aliases","null":"Exact conditional P(interval hit | past) = 1-alpha at the declared support; not a claim that marginal coverage or effective sample size establishes this assumption","payloads":"Gaussian, explicitly probability-bearing intervals and exact central quantiles; Bernoulli and empirical forecasts refuse","sequence":"Original publications only; stop at the first unresolved member and retain deferred counts even under latest-as-of scoring","evidence":"Finite log evidence, running maximum, first alarm, original values, citations and event digests; an alarm does not recalibrate","journal":"Monitor freezes use operation v5 and retain the existing bounded host-clock policy"}"#;
+pub const EVENT_LOG_JSON: &str = r#"{"cohort_field":"event_log_floor","declaration":"A quoted finite probability strictly between zero and 0.5, frozen before outcomes in an all-Bernoulli cohort","loss":"-ln(max(P(observed outcome), probability_floor)) in nats; the forecast probability is unchanged","interpretation":"The explicit floor caps extreme losses and removes strict propriety in the floored tails; the unchanged proper Brier score is also reported","missing":"Every unresolved member contributes both possible binary losses to whole-cohort completion bounds; no missing outcome leaves the denominator","journal":"Opt-in freezes use operation v5; omission preserves existing record identities and output","scope":"Descriptive scoring, not a calibration claim; continuous coverage monitoring cannot be enabled on the same cohort"}"#;
+
+const MONITOR_FIELDS: [&str; 4] = [
+    "monitor_alarm_alpha",
+    "monitor_support",
+    "monitor_conditional_null",
+    "monitor_order",
+];
 
 #[derive(Debug)]
 pub(super) struct AssessmentFailure {
@@ -203,6 +212,7 @@ impl Replay {
                 "rho_high",
                 "outcome_lo",
                 "outcome_hi",
+                "event_log_floor",
                 "public_issuer",
                 "public_metric",
                 "public_period",
@@ -210,7 +220,7 @@ impl Replay {
                 "public_members",
                 "public_vintages",
             ],
-            &[],
+            &MONITOR_FIELDS,
         )?;
         let mut policy = AssessmentPolicy::default();
         if let Some(alpha) = row.optional_number("alpha")? {
@@ -238,6 +248,19 @@ impl Replay {
                 ));
             }
         };
+        policy.event_log_floor = row.optional_number("event_log_floor")?;
+        if MONITOR_FIELDS.iter().any(|key| row.0.get(key).is_some()) {
+            policy.coverage_monitor = Some(CoverageMonitorPolicy {
+                alarm_alpha: row.number("monitor_alarm_alpha")?,
+                support: row.string("monitor_support")?.to_string(),
+                conditional_null: row.string("monitor_conditional_null")?.to_string(),
+                order: row
+                    .identifiers("monitor_order")?
+                    .into_iter()
+                    .map(|alias| self.forecast_id(&alias))
+                    .collect::<Result<Vec<_>, _>>()?,
+            });
+        }
         let name = row.string("name")?.to_string();
         let members = row
             .identifiers("members")?
@@ -507,8 +530,17 @@ impl Replay {
             js(&c.cohort), utc(c.as_of_ns), js(selector_name(c.selector)), js(&c.digest.to_hex()),
             if c.expected.is_some() { "true" } else { "null" },
         )).collect::<Vec<_>>().join(",");
+        let monitor = report
+            .coverage_monitor
+            .as_ref()
+            .map(|monitor| {
+                self.coverage_monitor_json(monitor)
+                    .map(|value| format!(",\"coverage_monitor\":{value}"))
+            })
+            .transpose()?
+            .unwrap_or_default();
         Ok(format!(
-            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":{},\"lane\":{},{identity_key}:{},\"authority_times\":{},\"source_citations\":{},\"external_time_proof\":\"not_verified\",\"temporal_validation\":{},\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]}},\"checkpoints\":[{}]}}",
+            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":{},\"lane\":{},{identity_key}:{},\"authority_times\":{},\"source_citations\":{},\"external_time_proof\":\"not_verified\",\"temporal_validation\":{},\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]{monitor}}},\"checkpoints\":[{}]}}",
             js(mode),
             js(&self.lane),
             js(&identity.to_hex()),
@@ -537,6 +569,51 @@ impl Replay {
             members,
             checkpoints,
             identity_key = js(identity_key),
+        ))
+    }
+
+    fn coverage_monitor_json(
+        &self,
+        monitor: &CoverageMonitorAssessment,
+    ) -> Result<String, Refusal> {
+        let observations = monitor
+            .observations
+            .iter()
+            .map(|observation| {
+                self.member_json(&observation.member).map(|member| {
+                    format!(
+                        "{{\"member\":{member},\"interval\":{},\"hit\":{}}}",
+                        pair(observation.interval),
+                        observation.hit,
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .join(",");
+        let blocked = monitor
+            .blocked_by
+            .as_ref()
+            .map(|member| self.member_json(member))
+            .transpose()?
+            .unwrap_or_else(|| "null".into());
+        let s = monitor.snapshot;
+        Ok(format!(
+            "{{\"policy\":{},\"null_probability\":{},\"selector\":\"first-published\",\"null_kind\":\"exact_conditional_point_null\",\"assumption_verified\":false,\"n_observed\":{},\"hits\":{},\"log_e_value\":{},\"max_log_e_value\":{},\"log_threshold\":{},\"e_value\":{},\"max_e_value\":{},\"threshold\":{},\"first_crossing\":{},\"alarmed\":{},\"blocked_by\":{blocked},\"n_deferred\":{},\"n_deferred_resolved\":{},\"observations\":[{observations}]}}",
+            monitor_policy_json(&monitor.policy),
+            monitor.null_probability,
+            s.n,
+            s.hits,
+            s.log_e_value,
+            s.max_log_e_value,
+            s.log_threshold,
+            optional_number(s.e_value()),
+            optional_number(s.max_e_value()),
+            optional_number(s.threshold()),
+            s.first_crossing
+                .map_or_else(|| "null".into(), |n| n.to_string()),
+            s.alarmed(),
+            monitor.n_deferred,
+            monitor.n_deferred_resolved,
         ))
     }
 
@@ -783,8 +860,17 @@ fn cohort_json(cohort: &Cohort) -> String {
             }),
             policy.members.iter().map(|(id, subject)| format!("{{\"forecast_id\":{},\"subject\":{}}}", js(&id.to_string()), js(subject))).collect::<Vec<_>>().join(","),
         ));
+    let monitor = p
+        .coverage_monitor
+        .as_ref()
+        .map_or_else(String::new, |policy| {
+            format!(",\"coverage_monitor\":{}", monitor_policy_json(policy))
+        });
+    let event_log = p
+        .event_log_floor
+        .map_or_else(String::new, |floor| format!(",\"event_log_floor\":{floor}"));
     format!(
-        "{{\"name\":{},\"digest\":{},\"frozen_at\":{},\"resolution_rule\":{},\"public_resolution\":{public},\"eligible_sources\":[{}],\"policy\":{{\"alpha\":{},\"min_calibration_n\":{},\"correlation_range\":{},\"outcome_bounds\":{}}}}}",
+        "{{\"name\":{},\"digest\":{},\"frozen_at\":{},\"resolution_rule\":{},\"public_resolution\":{public},\"eligible_sources\":[{}],\"policy\":{{\"alpha\":{},\"min_calibration_n\":{},\"correlation_range\":{},\"outcome_bounds\":{}{monitor}{event_log}}}}}",
         js(&spec.name),
         js(&cohort.digest.to_hex()),
         utc(spec.frozen_at_ns),
@@ -798,6 +884,21 @@ fn cohort_json(cohort: &Cohort) -> String {
         p.min_calibration_n,
         pair(p.correlation_range),
         p.outcome_bounds.map_or_else(|| "null".to_string(), pair)
+    )
+}
+
+fn monitor_policy_json(policy: &CoverageMonitorPolicy) -> String {
+    format!(
+        "{{\"alarm_alpha\":{},\"support\":{},\"conditional_null\":{},\"order\":[{}]}}",
+        policy.alarm_alpha,
+        js(&policy.support),
+        js(&policy.conditional_null),
+        policy
+            .order
+            .iter()
+            .map(|id| js(&id.to_string()))
+            .collect::<Vec<_>>()
+            .join(","),
     )
 }
 
@@ -840,6 +941,12 @@ fn score_json(score: Option<ScoreSummary>) -> String {
 
 fn summary_json(report: &Assessment) -> String {
     let s = &report.summary;
+    let event_log = s.event_log.map_or_else(String::new, |log| {
+        format!(
+            ",\"event_log\":{{\"probability_floor\":{},\"units\":\"nats\",\"loss_kind\":\"capped_negative_log_probability\",\"strictly_proper\":false,\"score\":{}}}",
+            log.probability_floor, score_json(Some(log.score)),
+        )
+    });
     let flag = match s.flag {
         CalibrationFlag::Calibrated => "calibrated",
         CalibrationFlag::Overconfident => "overconfident",
@@ -865,7 +972,7 @@ fn summary_json(report: &Assessment) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"n_members\":{},\"n_resolved\":{},\"n_unresolved\":{},\"unresolved_by_reason\":{{{reasons}}},\"bounds_kind\":\"whole_cohort_completion_bounds_not_confidence_intervals\",\"coverage\":{coverage},\"crps\":{},\"interval_score\":{},\"brier\":{},\"effective_n\":{{\"lower\":{},\"upper\":{},\"correlation_range\":{}}},\"mean_standardized_bias\":{},\"calibration_flag\":{}}}",
+        "{{\"n_members\":{},\"n_resolved\":{},\"n_unresolved\":{},\"unresolved_by_reason\":{{{reasons}}},\"bounds_kind\":\"whole_cohort_completion_bounds_not_confidence_intervals\",\"coverage\":{coverage},\"crps\":{},\"interval_score\":{},\"brier\":{}{event_log},\"effective_n\":{{\"lower\":{},\"upper\":{},\"correlation_range\":{}}},\"mean_standardized_bias\":{},\"calibration_flag\":{}}}",
         s.n_members,
         s.n_resolved,
         s.n_unresolved,

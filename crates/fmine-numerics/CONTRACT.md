@@ -27,7 +27,11 @@ It does no I/O and holds no domain rules (L-3). `xtask check-claims` exempts it 
   - `risk`: a slice of losses and `alpha` in (0, 1).
   - `risk::bootstrap` (DESIGN, BD-229, §22.5): a complete exact unit-sum weight vector in caller-defined
     canonical state order, an explicit seed/replicate/draw plan, and rational payoff vectors in that same order.
+  - `risk::transport` (DESIGN, BD-225, §22.5): a positive exact unit-sum nominal law, a complete declared
+    proper metric, destination values and a nonnegative transport radius, all rational and in canonical state order.
   - `eproc`: for `BettingEProcess`, a null mean and `alpha` in (0, 1), then PIT values in [0, 1]. For `ScoreBettingEProcess`, a score range `[lo, hi]` with `lo < 0 < hi`, a prior second moment > 0, a stake truncation and `alpha` in (0, 1), then scores in the range.
+  - `eproc::coverage` (DESIGN, BD-051, §10.4): a finite null probability and alarm significance in (0, 1),
+    followed by at most 1,000,000 ordered boolean interval hits. Missing outcomes are not observations.
   - `tropical`: node counts, arcs with finite `f64` minimum lags, and a finite deadline.
 - **`sparse`.** COO triplets `(row, col, value)`, CSR parts, `LdltOptions`, right-hand sides, a PCG tolerance and an iteration limit.
 - **`exact_feas`.** Cells with exact printed values and rounding steps (`Rat = fmine_units::ExactQty`), identities over cell ids, and `Rules`, each declaring a convention and one construction per family. The discovery reports take footings, printed values, factors, unit pairs and price decks. The generator takes a Philox key and a `GenSpec`.
@@ -39,10 +43,14 @@ None is a Claim; callers wrap results.
   - `cholesky_solve` gives `Result<Vec<f64>, Refusal>`, and `brent_root` gives `Result<Root, RootError>`.
   - `norm_cdf` and `norm_inv` give an `f64`.
   - `BettingEProcess` gives its wealth and `rejected_null`, or an `EProcError`. `ScoreBettingEProcess` gives its log wealth, its next stake and `rejected_null`, or an `EProcError`.
+  - `BernoulliCoverageProcess` gives prefix counts, current and maximum log evidence, the log threshold and
+    the sticky first crossing, or `CoverageError`. Finite positive exponentials are optional display values.
   - `voi` gives `VoiSummary`; `VoiAnalysis`, which adds the prior action values, every tied optimal action and, per signal, its probability, posterior, action values, tied optimal actions and EVSI contribution; `McEvsi`, an estimate with its standard error and a `VoiStatus`; or a `VoiError`.
   - `risk` gives `TailRiskSummary` and a drawdown, or a `RiskError`.
   - `risk::bootstrap` gives complete per-replicate state counts and exact reweighted means/optional signed
     tail losses. It supplies neither feasibility decisions nor calibrated uncertainty about the scenario law.
+  - `risk::transport` gives a worst expectation with a sparse transport witness, complete stressed weights,
+    transport cost and exact dual multiplier/potentials/value. Every returned certificate has zero duality gap.
   - `TropicalDag` gives start-time vectors, or a `TropicalError`.
 - **`sparse`.** `Csr`, `SymbolicLdlt`, `LdltFactor` (solve, `Inertia`, `FactorStats`), `Ilu0` and `PcgSolution`, or a typed error.
 - **`exact_feas`.**
@@ -66,6 +74,13 @@ None is a Claim; callers wrap results.
   - `test_risk_refuses_empty_non_finite_and_alpha_out_of_domain`: an `alpha` of 1 − 2⁻⁵³ over 49 losses gives the largest loss;
   - `test_tropical_refuses_bad_arcs_cycles_and_deadlines`: a positive cycle refuses, and a zero-lag cycle is feasible.
 - **The finite VOI evaluator matches exhaustive enumeration.** `every_small_discrete_policy_matches_an_independent_exhaustive_oracle` checks EVSI, net VOI and the reported policy against all 27 deterministic policies on each of 729 two-state, three-action payoff matrices, with dyadic probabilities so that the oracle's arithmetic is exact. Known answers also cover uninformative and perfect signals and refinement (`test_evpi_non_negative_and_evsi_monotone`), large common offsets and cancellation (`no_signal_cannot_create_value_from_large_common_offsets_or_cancellation`, `common_payoff_offsets_preserve_decision_value`), and a fully revealing signal split in pieces (`splitting_a_fully_revealing_signal_preserves_perfect_information`).
+- **The coverage mixture retains every ordered prefix.** `coverage_gb08_beta_integral_known_answers` checks
+  the plan's 7/12, 14/24 and 36/60 examples against independently calculated beta integrals.
+  `coverage_all_short_paths_match_exact_evidence_and_first_crossing` enumerates all 4,096 length-12 paths,
+  compares every prefix with integer factorial cancellation, and verifies its exact first-passage null
+  probability satisfies Ville. Ordering preserves final evidence but can change the first alarm;
+  `coverage_sequence_order_retains_final_evidence_but_not_alarm_history` checks that distinction.
+  The million-observation cap and refused-update atomicity are exercised at the actual limit.
 - **The Monte Carlo EVSI recovers the closed form (GATE-HELM-02, bd-227).** `test_mc_evsi_recovers_closed_form_chi2` runs K = 12 problems: GB-29, its two flips, a three-action variant and eight seeded problems. Each gets 100 seeds of 2,000 draws.
   - The χ² statistic of the seed means' standardised deviations is 5.87, with upper tail 0.92. The test is two-sided at α = 0.01, so the tail must lie in [0.005, 0.995].
   - The deviations are standardised by the estimator's own reported SEs, so the test checks the SE as well as the mean.
@@ -89,12 +104,17 @@ None is a Claim; callers wrap results.
 - **The kill report fires only when all four measures are empty.** `test_kill_report_fires_when_all_measures_empty`. Its seeded negative is `test_mutation_joint_solve_replaced_by_baseline_fires_kill`.
 
 ## 5. Refusals
+- **`risk::transport`.** Malformed nominal laws, metrics, value dimensions and radii refuse with
+  `FMINE-REF-109`; the 1–64 state bound refuses with `FMINE-REF-201`; unrepresentable arithmetic or failed
+  primal feasibility, mass conservation or exact primal/dual equality refuses with `FMINE-REF-207`.
 - **`risk::bootstrap`.** Invalid weights, count-vector dimensions and tail masses refuse with
   `FMINE-REF-109`; population/work limits refuse with `FMINE-REF-201`; unrepresentable exact arithmetic or
   exhaustion of the bounded integer rejection sampler refuses with `FMINE-REF-207`. No partial sample set is returned.
 - **`FMINE-REF-207`** (numerical certificate failed; proposed; exit 3), from `cholesky_solve`. It fires on `n = 0`, on lengths that do not describe an `n × n` system, or on a pivot that is non-finite or ≤ 1e-14: `test_cholesky_non_spd_refuses_207`.
 - **`NON_IDENTIFIABLE` (`"FMINE-REF-104"`)** is the `reason_code()` of an ambiguous discovery finding (`Discovered`, `TieFinding`, `UnitFinding`, `DeckFinding`). It is a label on a report, not a `Refusal`: `test_ambiguous_discovery_refuses_ref_104` and `test_deck_ambiguity_refuses_ref_104`.
 - **Typed errors, which carry no refusal code:**
+  - `CoverageError::{NullProbabilityOutOfDomain, AlarmAlphaOutOfDomain, ObservationLimit, NumericalFailure}`.
+    Domain and work-limit errors leave process state unchanged; no update returns non-finite logarithms.
   - `RootError::{NoSignChange, NonFinite, NotConverged}`;
   - `SparseError::{TooManyRows, OutOfRange, NonCanonical { reason, row }, LengthMismatch}`;
   - `LdltError::{NotSquare, StructurallyAsymmetric, NonFiniteEntry, PatternMismatch, InvalidOptions, FactorBudget, PivotBreakdown, RhsLength, NonFiniteRhs, Invariant}`. `PivotBreakdown` is a root front left with no acceptable pivot after delays, and `Invariant` replaces upstream's asserts;
@@ -118,8 +138,12 @@ Each file's `//! Determinism:` header:
 - `exact_feas.rs` and `exact_feas/generator.rs`: **Exact**. They use rational arithmetic, and the generator's draws are Philox integers.
 - `risk/bootstrap.rs`: **Exact**. The seed and replicate index select independent Philox integer streams;
   exact conditional sampling and payoff reduction use no floating conversion. Callers canonicalize state order.
+- `risk/transport.rs`: **Exact**. Cost ordering, concave hulls, marginal-gain ordering and primal/dual checks
+  use checked rational arithmetic. Equal slopes use canonical source and destination indices.
 - `exact_feas/discover.rs` and `exact_feas/power.rs`: **DeterministicPerIsa**. The counts are exact, but the tails and the Clopper–Pearson bounds are `f64` through `fmine_core::det`.
 - `eproc.rs`, `voi.rs`, `risk.rs`, `tropical.rs`, `sparse.rs`, `sparse/direct.rs` and `sparse/precond.rs`: **DeterministicPerIsa**. None has a cross-host digest test. The `sparse` files repeat bitwise on one host (Invariants).
+- `eproc/coverage.rs`: **DeterministicPerIsa**. Integer counts, fixed-order compensated log accumulation
+  and `fmine_core::det` logarithms; floating-point evidence is not an exact-arithmetic certificate.
 
 ## 7. Evidence class of outputs
 Not applicable: no Claims are emitted. A caller that wraps a result in a Claim decides its class and state.
@@ -141,6 +165,10 @@ Not applicable: no Claims are emitted. A caller that wraps a result in a Claim d
   conditional tree avoids a global common denominator and uses at most 128 rejection attempts per branch.
   Resampled payoff counts may be zero, but their total must be 1–4,096. Callers keep hard constraints over
   the original support: the kernel never treats an unsampled state as a waiver or an absent scenario.
+- **`risk::transport` (DESIGN).** 1–64 original states have strictly positive nominal weights summing
+  exactly to one. The metric is symmetric, has zero diagonal and strictly positive distinct-state distances,
+  and satisfies every triangle inequality. The ambiguity set stays on this finite declared support;
+  a zero stressed weight never removes an original state or waives a caller's structural constraints.
 - **`tropical`.** Arcs must name nodes in `0..n_nodes` and carry finite lags, and the deadline must be finite. Comparisons use `RELAXATION_TOLERANCE` = 1e-12, absolute. A start can be left up to that much short per arc on its path, a positive cycle below it is not detected, and above about 1e4 an ulp exceeds it, so a zero-total cycle whose lags do not cancel exactly can be refused as positive. `test_min_plus_longest_path_duality` covers one four-node DAG.
 - **`sparse`.** A solve's accuracy is what the residual known answers and the dense comparisons show, within the tolerances in their tests. There is no cross-host bitwise guarantee.
 - **`exact_feas` caps.**
@@ -166,6 +194,11 @@ No fixture under `fixtures/` (§33.2).
   vectors and checks exact means and three fractional tails. Other direct tests cover signed extremes,
   zero counts, tied payoff grouping, rational probabilities without a representable global denominator,
   rejection boundaries/exhaustion, seed replay, replicate/draw prefix invariance and input/work refusals.
+- **Transport known answers.** `exhaustive_small_laws_match_independent_transport_polytope_vertices`
+  enumerates deterministic assignments and every budget-cut edge of the row-simplex product, independently
+  of the hull algorithm. Direct tests cover fractional transports, signed values, tied hull slopes, zero and
+  saturated radii, sparse primal/dual checks, radius monotonicity, permutation and exact scaling, bounds,
+  malformed metrics, arithmetic overflow and intentionally infeasible or suboptimal certificates.
 - **Published-document known answers.** These use values transcribed from issuer documents, and so rest on those transcriptions:
   - `test_e114_turquoise_ridge_certificate` and `test_certificate_digest_golden_e114`;
   - `test_e691_veladero_implied_q`;
@@ -174,6 +207,8 @@ No fixture under `fixtures/` (§33.2).
   The cross-crate AISC tables are checked in `crates/xtask/tests/public_exact_feas_oracle.rs` and `public_exact_feas_blame.rs`.
 
 ## 10. Known gaps
+- **Finite transport is a declared ambiguity experiment.** It neither learns nor calibrates its metric or
+  radius, adds unseen scenarios, nor computes distributionally robust CVaR. Callers preserve these boundaries.
 - **Weighted bootstrap is conditional sensitivity.** It does not establish that input scenarios are independent
   observed samples, estimate a defensible effective sample size, calibrate their weights, or cover model misspecification.
 - **The four original kernels are not lifts.** Beyond its refusal test, each has one example test of its statistics or algebra (Ville, EVSI monotone, CVaR coherence, duality). `voi` also has GB-29's known answers, the exhaustive policy check and GATE-HELM-02, and `eproc` the score e-process's Ville test with its planted negative. The refusals make bad input visible; they do not make the kernels correct in general. A real lift waits on bd-022.
@@ -199,6 +234,16 @@ No fixture under `fixtures/` (§33.2).
   - `NUMERICS_DIGEST_KEY`, `normal_digest_inputs`, `digest_norm_cdf_inv`, `golden_digest_norm_cdf_inv_10k`, `digest_cholesky_brent` and `golden_digest_cholesky_brent_10k` (bd-hp2j.3).
 - **`eproc::{BettingEProcess, EProcError}`.** `new(null_mean, alpha) -> Result<Self, EProcError>`, `threshold` (1/α), `observe(u) -> Result<f64, EProcError>` (the wealth) and `rejected_null` (the running maximum wealth ≥ 1/α).
 - **`eproc::ScoreBettingEProcess`.** `new(lo, hi, prior_second_moment, truncation, alpha) -> Result<Self, EProcError>`, `stake`, `observe(score) -> Result<f64, EProcError>` (the log wealth), `log_wealth`, `max_log_wealth`, `n_steps`, `log_threshold` (−ln α) and `rejected_null`. Its caller is `fmine_calib::SpatialFrontPitMonitor` (bd-311).
+- **`eproc::coverage::{BernoulliCoverageProcess, CoverageSnapshot, CoverageError, MAX_OBSERVATIONS}`**
+  (DESIGN, BD-051). `new(null_probability, alarm_alpha)`, `observe(hit)` and `snapshot()` give evidence for
+  the uniform Beta(1,1) mixture `B(k+1,n-k+1)/(p^k(1-p)^(n-k))` using O(1) time and memory per observation.
+  `CoverageSnapshot { n, hits, log_e_value, max_log_e_value, log_threshold, first_crossing }` exposes
+  `alarmed()` and optional finite-positive `e_value()`, `max_e_value()` and `threshold()` materializations.
+  The null is the **conditional point equality** `P(hit_t | past) = p`; both excess misses and excess hits
+  may reject. This is not an undercoverage-only or "at least p" test. Callers must freeze the policy and
+  order before outcomes and justify the conditional assumption at their chosen support. A marginal
+  probability, effective sample size or correlation range is not that justification. This kernel neither
+  creates a calibration claim nor establishes BD-051's control-mine gate, CUSUM or investigation workflow.
 - **`voi::{VoiProblem { state_probs, payoffs }, VoiExperiment { likelihood, cost }, ValidatedVoiProblem, VoiAnalysis, VoiSignalPolicy, VoiSummary, VoiError, PROBABILITY_MASS_TOLERANCE}`**.
   - `VoiProblem`: `validate() -> Result<ValidatedVoiProblem, VoiError>`, `compute_evpi() -> Result<(best_action, prior_ev, evpi), VoiError>`, `compute_evsi(likelihood, cost) -> Result<VoiSummary, VoiError>`, `evaluate(experiment) -> Result<VoiAnalysis, VoiError>` and `estimate_evsi_mc(likelihood, cost, n_samples, key) -> Result<McEvsi, VoiError>`.
   - `ValidatedVoiProblem` borrows the problem immutably and checks it once for many experiments: `evaluate(experiment)` and `estimate_evsi_mc(experiment, n_samples, key)`.
@@ -230,6 +275,16 @@ No fixture under `fixtures/` (§33.2).
   Each reduction is linear in the original state count and allocates no new payoff order. Original states
   with zero resampled counts remain addressable. Extending the replicate or draw count preserves earlier
   streams. Parent and adaptive callers can reuse the same count vectors without recalculating cash ledgers.
+- **`risk::transport::{TransportPlan, TransportCertificate, TransportArc, MAX_STATES}`** (DESIGN, BD-225, §22.5).
+  `TransportPlan::new(weights, costs)` validates the nominal law and metric and sorts each metric row once.
+  `maximize(values, radius)` solves max Σ γᵢⱼ vⱼ with γ ≥ 0, Σⱼ γᵢⱼ = pᵢ and Σ γᵢⱼ dᵢⱼ ≤ radius.
+  Concave row hulls and a descending marginal-gain sweep take O(n² log n) work and O(n²) memory;
+  metric admission takes O(n³) work. The witness has at most n+1 positive `TransportArc { source, target, mass }`
+  entries. A direct check over the original problem independently reconstructs primal row/column mass,
+  cost and objective and the feasible dual λ·radius + Σ pᵢ maxⱼ(vⱼ − λdᵢⱼ), requiring exact equality.
+  `TransportCertificate` retains `radius`, `worst_case_value`, `transport_cost`, `destination_weights`,
+  `arcs`, `dual_lambda`, `dual_potentials`, `dual_value` and zero `duality_gap`. Radius zero recovers the
+  nominal expectation; saturation reaches the largest declared value with λ = 0 and possible budget slack.
 - **`tropical::{PrecedenceArc { from, to, min_lag }, TropicalDag, TropicalError, RELAXATION_TOLERANCE}`**, with `new`, `add_arc` (checked when a pass runs), `earliest_starts() -> Result<Vec<f64>, TropicalError>` and `latest_starts(deadline) -> Result<Vec<f64>, TropicalError>`.
 - **`sparse`** (BD-145):
   - **`Coo::{new, push, staged, assemble}`.** Duplicates accumulate in insertion order after a stable (row, col) sort.

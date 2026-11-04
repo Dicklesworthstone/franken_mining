@@ -20,6 +20,8 @@ use fmine_units::{Currency, Money, UnitsError};
 pub mod information;
 pub mod model;
 mod render;
+pub mod robustness;
+pub mod stability;
 
 pub use information::{
     InformationOption, InformationSummary, Likelihood, MAX_INFORMATION_OPTIONS,
@@ -74,6 +76,7 @@ pub struct DecisionInputs {
     pub weights: Claim<WeightSet>,
     pub actions: Vec<Claim<ActionPayoffs>>,
     pub information_options: Vec<Claim<InformationOption>>,
+    pub robustness: Option<Claim<robustness::RobustnessDesign>>,
 }
 
 fn put_rat(enc: &mut Encoder, value: Rat) {
@@ -179,6 +182,7 @@ pub struct DecisionSummary {
     pub minimax_regret_primary: String,
     /// Expected-value comparisons for buying at most one test. The base risk/regret matrix stays separate.
     pub information: Option<InformationSummary>,
+    pub robustness: Option<robustness::RobustnessSummary>,
 }
 
 /// Sealed computed comparison; input and output snapshots have no mutable accessors.
@@ -485,6 +489,7 @@ fn evaluate_impl(inputs: &DecisionInputs, require_do_nothing: bool) -> Result<Ev
         ));
     }
     information::check_work(inputs)?;
+    robustness::check_work(inputs)?;
     let mut inputs = inputs.clone();
     let mut weakest = admit(
         &inputs.weights,
@@ -619,11 +624,15 @@ fn evaluate_impl(inputs: &DecisionInputs, require_do_nothing: bool) -> Result<Ev
         minimax_regret_order,
         minimax_regret_winners,
         information: None,
+        robustness: None,
     };
     let (information, information_color) =
         information::assess(&mut inputs.information_options, &summary)?;
     summary.information = information;
     weakest = weakest.min(information_color);
+    let (robustness, robustness_color) = robustness::assess(&mut inputs.robustness, &summary)?;
+    summary.robustness = robustness;
+    weakest = weakest.min(robustness_color);
     let mut binding = Encoder::new_frame(*b"DCCL", 1);
     binding.put_str(&render::summary_json(&summary));
     binding.put_str(&render::inputs_json(&inputs));
@@ -635,6 +644,9 @@ fn evaluate_impl(inputs: &DecisionInputs, require_do_nothing: bool) -> Result<Ev
     }
     for option in &inputs.information_options {
         metadata.include(option)?;
+    }
+    if let Some(configuration) = &inputs.robustness {
+        metadata.include(configuration)?;
     }
     let claim = Claim::new(
         "decision.finite-scenario/1",
@@ -818,6 +830,7 @@ mod tests {
             weights,
             actions,
             information_options: Vec::new(),
+            robustness: None,
         }
     }
 

@@ -1,0 +1,97 @@
+# Invented plan §22.5 exercise; no real mine valuation or calibrated ambiguity set.
+# Hand answers in USD millions:
+# Nominal means: build 6, steady 5, hold 0. The nominal winner is build.
+# At radius 1/4 and unit scenario distance, worst means are build 0, steady 5, hold 0.
+# Same-state hindsight payoffs are adverse 5 and favorable 12. Worst expected regrets
+# are build 17/2, steady 7, hold 12. Both robustness criteria therefore select steady.
+# The metric/radius are explicit sensitivity assumptions; no robust VOI/CVaR is claimed.
+schema = "fmine.decision-model.v1"
+model_key = "invented-wasserstein-expansion"
+question = "Does the invented expansion choice survive a declared probability-transport stress?"
+currency = "USD"
+valuation_basis = "Invented incremental NPV at 2026-01-01; real 2026 USD; 100% ownership; all cash flows already discounted"
+
+[[state]]
+id = "adverse"
+weight = "1/4"
+
+[[state]]
+id = "favorable"
+weight = "3/4"
+
+[[action]]
+id = "build"
+label = "Build the expansion"
+role = "action"
+
+[[action]]
+id = "steady"
+label = "Choose the smaller fixed-return option"
+role = "action"
+
+[[action]]
+id = "hold"
+label = "Do nothing"
+role = "do_nothing"
+
+[[payoff]]
+action = "build"
+state = "adverse"
+value = "-12000000.0000"
+
+[[payoff]]
+action = "build"
+state = "favorable"
+value = "12000000.0000"
+
+[[payoff]]
+action = "steady"
+state = "adverse"
+value = "5000000.0000"
+
+[[payoff]]
+action = "steady"
+state = "favorable"
+value = "5000000.0000"
+
+[[payoff]]
+action = "hold"
+state = "adverse"
+value = "0.0000"
+
+[[payoff]]
+action = "hold"
+state = "favorable"
+value = "0.0000"
+
+[[robustness]]
+method = "wasserstein_1"
+radius = "1/4"
+metric_basis = "Invented unit dimensionless distance separates the adverse and favorable named scenarios"
+radius_basis = "Declared sensitivity permits transport of up to one quarter of unit-distance probability mass; not calibrated"
+
+[[transport_distance]]
+from = "adverse"
+to = "adverse"
+value = "0/1"
+
+[[transport_distance]]
+from = "adverse"
+to = "favorable"
+value = "1/1"
+
+[[transport_distance]]
+from = "favorable"
+to = "adverse"
+value = "1/1"
+
+[[transport_distance]]
+from = "favorable"
+to = "favorable"
+value = "0/1"
+
+[[uu]]
+id = "UU-omitted-expansion-state"
+description = "An unmodelled operating or permitting event could fall outside both declared states"
+trigger = "Independent evidence contradicts the assumed two-state payoff model"
+downside_usd_m = "20.0"

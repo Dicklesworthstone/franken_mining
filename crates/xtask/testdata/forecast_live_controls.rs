@@ -2,6 +2,7 @@ use super::*;
 
 const REGISTER: &str = "[[forecast]]\nid = \"one\"\nmodel_key = \"synthetic\"\noutcome_due = \"2030-01-02T00:00:00Z\"\nkind = \"interval\"\nlo = \"40\"\nhi = \"50\"\nnominal = \"0.8\"\n";
 const FREEZE: &str = "[[cohort]]\nname = \"test\"\nmembers = \"one\"\nresolution_rule = \"Invented source value\"\neligible_sources = \"synthetic:issuer\"\n";
+const MONITOR: &str = "monitor_alarm_alpha = \"0.05\"\nmonitor_support = \"Synthetic intervals\"\nmonitor_conditional_null = \"Conditional hit probability is exactly 0.8\"\nmonitor_order = \"one\"\n";
 
 fn semantic_record(request: String, observed_ns: i64) -> Record {
     Record {
@@ -10,6 +11,344 @@ fn semantic_record(request: String, observed_ns: i64) -> Record {
         observed_ns,
         entry: Entry::Operation(request),
     }
+}
+
+#[test]
+fn monitor_v5_freeze_binds_policy_without_reinterpreting_older_operations() {
+    let start = time("2030-01-01T00:00:00Z").expect("date");
+    let header = Header {
+        cell_id: "synthetic".into(),
+        clock_skew_ns: 7,
+    };
+    let request = format!("{FREEZE}{MONITOR}");
+    let stored = version_request(&request, "cohort").expect("monitor writer");
+    assert!(stored.starts_with(&format!("schema = \"{V5_SCHEMA}\"\n")));
+    let mut state = Replay::default();
+    apply(
+        &mut state,
+        &semantic_record(
+            version_request(REGISTER, "forecast").expect("register"),
+            start,
+        ),
+        &header,
+        None,
+    )
+    .expect("registration");
+    for schema in [None, Some(V2_SCHEMA), Some(V3_SCHEMA), Some(V4_SCHEMA)] {
+        let older = schema.map_or_else(
+            || request.clone(),
+            |schema| format!("schema = \"{schema}\"\n{request}"),
+        );
+        assert_eq!(
+            apply(
+                &mut state,
+                &semantic_record(older, start + 20),
+                &header,
+                None
+            )
+            .expect_err("old grammar cannot enable monitoring")
+            .code,
+            "FMINE-REF-107"
+        );
+        assert!(state.cohorts.is_empty());
+        let event_policy = format!("{FREEZE}event_log_floor = \"0.01\"\n");
+        let older = schema.map_or_else(
+            || event_policy.clone(),
+            |schema| format!("schema = \"{schema}\"\n{event_policy}"),
+        );
+        assert_eq!(
+            apply(
+                &mut state,
+                &semantic_record(older, start + 20),
+                &header,
+                None
+            )
+            .expect_err("old grammar cannot enable event log scoring")
+            .code,
+            "FMINE-REF-107"
+        );
+    }
+    apply(
+        &mut state,
+        &semantic_record(stored.clone(), start + 20),
+        &header,
+        Some("cohort"),
+    )
+    .expect("monitored freeze");
+    let cohort = state
+        .ledger
+        .cohort(state.cohorts["test"])
+        .expect("frozen cohort");
+    assert_eq!(cohort.spec.frozen_at_ns, start + 27);
+    assert_eq!(
+        cohort
+            .spec
+            .policy
+            .coverage_monitor
+            .as_ref()
+            .expect("policy")
+            .order,
+        vec![state.forecast_id("one").expect("one")]
+    );
+    assert!(cohort_json(cohort).contains("\"coverage_monitor\":{\"alarm_alpha\":0.05"));
+    let counts = VersionCounts {
+        v2: 1,
+        v5: 1,
+        ..VersionCounts::default()
+    };
+    assert_eq!(counts.policy(), "clock_upper_bound");
+    assert!(counts.fields().contains("\"v5\":1"));
+
+    let mut reopened = Replay::default();
+    apply(
+        &mut reopened,
+        &semantic_record(
+            version_request(REGISTER, "forecast").expect("register"),
+            start,
+        ),
+        &header,
+        None,
+    )
+    .expect("replayed registration");
+    apply(
+        &mut reopened,
+        &semantic_record(stored, start + 20),
+        &header,
+        None,
+    )
+    .expect("replayed freeze");
+    assert_eq!(state.cohorts, reopened.cohorts);
+    let plain_v5 = format!("schema = \"{V5_SCHEMA}\"\n{FREEZE}");
+    assert_eq!(
+        apply(
+            &mut reopened,
+            &semantic_record(plain_v5, start + 30),
+            &header,
+            None
+        )
+        .expect_err("v5 needs an opt-in policy")
+        .code,
+        "FMINE-REF-107"
+    );
+}
+
+#[test]
+fn writer_combines_monitor_and_public_vintage_policies_in_v5() {
+    let combined = format!("{FREEZE}{MONITOR}public_vintages = \"registered_comparatives\"\n");
+    assert!(
+        version_request(&combined, "cohort")
+            .expect("combined version")
+            .starts_with(&format!("schema = \"{V5_SCHEMA}\"\n"))
+    );
+    let event_log = format!("{FREEZE}event_log_floor = \"0.01\"\n");
+    assert!(
+        version_request(&event_log, "cohort")
+            .expect("event log version")
+            .starts_with(&format!("schema = \"{V5_SCHEMA}\"\n"))
+    );
+    assert!(
+        version_request(FREEZE, "cohort")
+            .expect("unchanged plain freeze")
+            .starts_with(&format!("schema = \"{V2_SCHEMA}\"\n"))
+    );
+}
+
+#[test]
+fn event_log_journal_persists_scores_and_retrieves_the_original_after_restatement() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct Clock(i64);
+    impl WallClock for Clock {
+        fn now_ns(&self) -> Result<i64, fmine_runtime::ClockError> {
+            Ok(self.0)
+        }
+    }
+    static SERIAL: AtomicU64 = AtomicU64::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "fmine-event-log-journal-{}-{}",
+        std::process::id(),
+        SERIAL.fetch_add(1, Ordering::Relaxed),
+    ));
+    std::fs::create_dir(&root).expect("synthetic journal workspace");
+    let journal = PathBuf::from("history");
+    let request = PathBuf::from("request.toml");
+    let head = || {
+        Journal::open_read(&root.join(&journal), None)
+            .expect("reopen journal")
+            .head()
+    };
+    let run = |command: Command, observed: i64| {
+        let result = execute_with_clock(&command, &root, &Clock(observed));
+        assert_eq!(result.exit_code, 0, "{:?}", result.refusal);
+        result
+    };
+    let start = time("2030-01-01T00:00:00Z").expect("start");
+    run(
+        Command::Init {
+            journal: journal.clone(),
+            cell_id: "synthetic-event-log".into(),
+            clock_skew_ns: 7,
+        },
+        start,
+    );
+    let registration = "[[forecast]]\nid = \"one\"\nmodel_key = \"synthetic-binary\"\noutcome_due = \"2030-01-02T00:00:00Z\"\nkind = \"bernoulli\"\nprobability = \"0.25\"\n";
+    std::fs::write(root.join(&request), registration).expect("registration request");
+    run(
+        Command::Register {
+            journal: journal.clone(),
+            head: head(),
+            request: request.clone(),
+        },
+        start + 10,
+    );
+    std::fs::write(
+        root.join(&request),
+        format!("{FREEZE}event_log_floor = \"0.01\"\n"),
+    )
+    .expect("freeze request");
+    let frozen = run(
+        Command::Freeze {
+            journal: journal.clone(),
+            head: head(),
+            request: request.clone(),
+        },
+        start + 20,
+    );
+    assert!(frozen.payload_json.contains("\"v5\":1"));
+    assert!(frozen.payload_json.contains("\"event_log_floor\":0.01"));
+    let original = "[[outcome]]\nforecast = \"one\"\nkind = \"published\"\navailable_at = \"2030-01-03T00:00:00Z\"\nvalue = \"1\"\nsource = \"synthetic:issuer\"\nvintage = \"first\"\nlocator = \"Invented!A1\"\nsha256 = \"1111111111111111111111111111111111111111111111111111111111111111\"\n";
+    std::fs::write(root.join(&request), original).expect("original outcome");
+    run(
+        Command::Outcome {
+            journal: journal.clone(),
+            head: head(),
+            request: request.clone(),
+        },
+        time("2030-01-03T00:00:00Z").expect("publication") + 7,
+    );
+    let assessed = run(
+        Command::Assess {
+            journal: journal.clone(),
+            head: head(),
+            cohort: "test".into(),
+            as_of: "2030-01-04T00:00:00Z".into(),
+            selector: "first-published".into(),
+            expected_digest: None,
+        },
+        time("2030-01-04T00:00:00Z").expect("cut") + 7,
+    );
+    assert!(
+        assessed
+            .payload_json
+            .contains("\"event_log\":{\"probability_floor\":0.01,\"units\":\"nats\"")
+    );
+    let markdown = assessed.rendered_markdown.expect("human score report");
+    assert!(markdown.contains("## Event log score"));
+    assert!(markdown.contains("Frozen probability floor: 0.01"));
+    assert!(markdown.contains("in nats. Scored: 1 of 1"));
+    assert!(markdown.contains("removes strict propriety in the floored tails"));
+    let saved_digest = {
+        let reopened =
+            Journal::open_read(&root.join(&journal), None).expect("assessment persisted");
+        let state = replay(&reopened).expect("semantic replay");
+        state.checkpoints[0].digest
+    };
+    let restated = original
+        .replace("\"published\"", "\"restated\"")
+        .replace("2030-01-03", "2030-01-05")
+        .replace("value = \"1\"", "value = \"0\"")
+        .replace("vintage = \"first\"", "vintage = \"restated\"");
+    std::fs::write(root.join(&request), format!("{restated}supersedes = 1\n"))
+        .expect("restatement");
+    run(
+        Command::Outcome {
+            journal: journal.clone(),
+            head: head(),
+            request,
+        },
+        time("2030-01-05T00:00:00Z").expect("restatement date") + 7,
+    );
+    let latest = run(
+        Command::Assess {
+            journal: journal.clone(),
+            head: head(),
+            cohort: "test".into(),
+            as_of: "2030-01-06T00:00:00Z".into(),
+            selector: "latest-as-of".into(),
+            expected_digest: None,
+        },
+        time("2030-01-06T00:00:00Z").expect("latest cut") + 7,
+    );
+    assert!(latest.payload_json.contains("\"observed_mean\":0.287"));
+    let before = std::fs::read(root.join(&journal)).expect("saved journal bytes");
+    let retrieved = run(
+        Command::Report {
+            journal: journal.clone(),
+            head: Some(head()),
+            assessment: saved_digest,
+            provenance: None,
+            timestamp: None,
+        },
+        -1,
+    );
+    assert!(retrieved.payload_json.contains(&saved_digest.to_hex()));
+    assert!(retrieved.payload_json.contains("\"observed_mean\":1.386"));
+    assert!(retrieved.payload_json.contains("\"value\":1"));
+    assert!(retrieved.payload_json.contains("\"vintage\":\"first\""));
+    assert_eq!(
+        std::fs::read(root.join(journal)).expect("read-only retrieval"),
+        before
+    );
+}
+
+#[test]
+fn monitor_markdown_displays_original_intervals_and_the_missing_reason() {
+    let fixture = include_str!("../../../tests/forecasts/cohort_synthetic.toml");
+    let monitor = MONITOR.replace(
+        "monitor_order = \"one\"",
+        "monitor_order = \"north-unit-cost,south-unit-cost,central-unit-cost\"",
+    );
+    let text = fixture.replace(
+        "rho_high = \"0.5\"",
+        &format!("rho_high = \"0.5\"\n{monitor}"),
+    );
+    let mut state = Replay::parse(&text).expect("monitored synthetic transcript");
+    let assessment = state
+        .assessment(
+            "synthetic-demo",
+            time("2026-10-31T00:00:00Z").expect("cut"),
+            super::super::OutcomeSelector::LatestAsOf,
+        )
+        .expect("restated assessment");
+    let header = Header {
+        cell_id: "synthetic".into(),
+        clock_skew_ns: 0,
+    };
+    let rendered = markdown(
+        &header,
+        Digest32::default(),
+        &state,
+        "assess",
+        Some(&assessment),
+        4,
+        VersionCounts {
+            v5: 1,
+            ..VersionCounts::default()
+        },
+    );
+    let monitor = rendered
+        .split_once("## Sequential coverage monitor")
+        .expect("human monitor")
+        .1;
+    assert!(monitor.contains("[1476, 1490]"));
+    assert!(monitor.contains("1479; synthetic:issuer / synthetic-first / Invented!A1"));
+    assert!(!monitor.contains("1474"));
+    assert!(monitor.contains("reason: not_published"));
+    assert!(
+        monitor.contains(
+            "1 later members are deferred, including 1 with resolved original publications"
+        )
+    );
 }
 
 #[test]

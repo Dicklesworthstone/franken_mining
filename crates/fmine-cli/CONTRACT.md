@@ -241,12 +241,41 @@ Requests still contain one permitted TOML table with no top-level fields, using 
 `fmine.forecast-ledger.v1` row grammar with the three assigned-time fields prohibited. The writer validates
 an ordinary request, then adds `schema = "fmine.forecast-operation.v2"` to the stored operation; the public-bound
 freeze and resolution operations described below use v3, and explicit vintage policies and comparative
-restatements use v4. The `FJR1`
+restatements use v4. Cohort freezes opting into sequential coverage monitoring or bounded event log loss
+use v5, including when the same freeze declares a public vintage policy. The `FJR1`
 frame format is unchanged. Replay dispatches per operation: legacy rows without top-level fields retain
 their original observed-time semantics and identities; v2 rows use the upper bound. Unknown schemas or extra
 top-level fields refuse.
-Replay also requires v4 for explicit `public_vintages` freezes; v4 admits only that freeze grammar or a
-`registered_restatement`. Relabeling an ordinary operation or downgrading a new permission field refuses. Mixed journals preserve both policies without rewriting earlier operations.
+Replay requires v4 or an opt-in v5 cohort freeze for explicit `public_vintages`; v4 admits only a vintage
+freeze or a `registered_restatement`. V5 admits only a cohort freeze with a monitor declaration or
+`event_log_floor`. Older operation versions reject either new scoring policy before mutating state.
+Relabeling an ordinary operation or downgrading a new permission field refuses. Mixed journals preserve
+the earlier policies and identities without rewriting operations.
+
+DESIGN (BD-051, plan §10.4): replay and live cohort requests can freeze `monitor_alarm_alpha`,
+`monitor_support`, `monitor_conditional_null` and `monitor_order`. All four fields are required together;
+the order is a comma-separated complete permutation of existing forecast aliases, converted to immutable
+forecast IDs. The kernel requires an exact conditional point null, P(interval hit | past) = 1-alpha, at
+the declared support. The declaration is retained as an assumption, not verified by marginal coverage or
+effective sample size. Gaussian forecasts, intervals with an explicit matching nominal probability and
+exact central quantiles are supported; Bernoulli and empirical distributions refuse this continuous null.
+
+The cohort JSON exposes the frozen monitor policy. Assessment JSON and journal Markdown retain original
+publication values, intervals, hits, citations, event digests and source-admission evidence even under
+`latest-as-of` scoring. Monitoring consumes the contiguous resolved prefix in frozen order, retaining the
+first unresolved member, its missing reason/event evidence, and counts of later deferred and already
+resolved members. Finite log evidence, its running maximum, the threshold and the first alarm are reported;
+exponentiated values are null if they cannot be represented as finite positive numbers. An alarm remains
+visible and does not recalibrate. Neither new monitor output nor policy bytes appear when monitoring is omitted.
+
+DESIGN (BD-048, plan §10.2): `event_log_floor = "0.01"`, for example, freezes a finite floor strictly
+between zero and 0.5 in an all-Bernoulli cohort. The reported loss is
+`-ln(max(P(observed outcome), floor))` in nats, alongside the unchanged proper Brier score. The floor caps
+extreme losses and removes strict propriety in the floored tails; it does not change forecast probabilities
+or establish calibration. JSON retains the floor, units, cap interpretation, observed mean and full-cohort
+completion bounds; Markdown renders the same interpretation. Every unresolved member contributes both
+possible binary losses to those bounds. Continuous forecasts and simultaneous continuous-coverage monitoring
+refuse. Omission preserves existing output and record identities; later restatements never rewrite saved scores.
 
 DESIGN: a public-bound freeze adds `public_issuer`, `public_metric`, `public_period`, `public_ownership`
 and `public_members` to the cohort request, with `resolution_rule = "registered-public-cell"`.
@@ -318,8 +347,9 @@ unit, ownership and sold-unit cost definition. The registered publication day mu
 period and selected reporting quarter; availability remains midnight after that day. Neither the numeric
 value, source Claim, publication evidence nor superseded sequence is accepted from the caller.
 
-Explicit `public_vintages` fields require a v4 cohort operation during both admission and replay; an older
-operation version cannot acquire the newer policy grammar. Omitting the field preserves existing v3 freezes.
+Explicit `public_vintages` fields require a v4 cohort operation, or v5 when opting into the scoring policies
+above, during admission and replay; an older operation version cannot acquire the newer policy grammar.
+Omitting these opt-in fields preserves existing v3 freezes.
 The generated `registered_restatement` operation uses `fmine.forecast-operation.v4` and retains the
 predecessor sequence alongside the same complete source evidence as an original admission. Replay checks
 the frozen permission, original admission, chronological predecessor and reconstructed canonical source

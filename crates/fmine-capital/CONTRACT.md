@@ -4,7 +4,7 @@
 
 E-layer Helm capital-program comparison, within the planned 20k/23k LOC budget. These bounded BD-229/BD-314 slices
 enumerate declared static subsets and two-stage policies, using the permitted `fmine-capital -> fmine-decide` edge.
-- **Allowed Module Families:** `["model", "render", "recourse", "entity"]`
+- **Allowed Module Families:** `["model", "render", "recourse", "entity", "stability"]`
 The static kernel lives in the crate root; `recourse` composes its state-level results into complete policies.
 `entity` supplies separately conserved cash ledgers and declared ownership distributions as feasibility constraints.
 
@@ -206,6 +206,26 @@ must never be added to policy NAV again. Every static subset embeds as a constan
 If either comparison population has no admissible winner, the difference is unavailable, not measured
 against an invented zero. Per-share objectives retain separate USD/share and total-USD quantities.
 
+DESIGN (BD-229, §22.5/§23.9): optional source-bound selection stability draws 200–2,000 multinomial
+resamples of the declared shared-state law, using an explicit seed, 1–4,096 draws per replicate and a
+sampling basis. This is a conditional sensitivity experiment; neither the draw count nor the frequencies
+are an empirical effective sample size, calibrated probability of optimality or model-uncertainty coverage.
+The same Philox replicate identity gives identical count vectors to static subsets and adaptive policies.
+Original structural eligibility remains fixed over **all** declared states: a zero-count Bad state cannot
+waive its cash floor, capital call, share-count failure or other obligation. Each replicate recomputes the
+primary mean and every primary/secondary tail-loss constraint. Nominal risk-rejection flags are not reused.
+The adapter reuses assessed outcomes; it does not rerun cash, debt, ownership or policy enumeration.
+
+Every exact co-winner survives. Each alternative reports risk-feasible and co-winner counts over all
+replicates, and a nominal co-winner below frequency 4/5 is flagged fragile. The nominal runner-up retains
+every exact tie at the next lower feasible mean. Definite/possible flip frequencies concern selection
+outside the nominal co-winner set: respectively no nominal winner survives, or at least one new winner
+appears. They are unavailable without a nominal winner. No-feasible replicates remain in the denominator
+and have their own count. Candidate inclusion lower/upper bounds require membership in every/any nonempty
+co-winner set. Static selection, initial policy commitments and each original state's realized policy are
+reported separately; state-specific inclusion is not an occurrence probability. All count vectors and
+winners remain in JSON and Markdown, including empty feasible sets.
+
 ## 3. Authority, Epistemics & Representation
 
 All imported values remain Assumed, Internal, Estimated and parametrically uncertain. A complete input
@@ -244,6 +264,15 @@ remain unchanged.
 - `ProgramPolicy`, `CapitalCandidate`, `ProgramFunding`, `FundingSchedule`, `ProgramInputs`: typed monetary
   declarations wrapped in Claims; funding is optional and explicit. A schedule uses `CashPeriod`,
   `StateCashFlow` and `CandidateCashFlow`; assessments retain `CashScheduleCheckpoint` rows and minimum slack.
+- `stability::{SelectionStabilityDesign, SelectionStabilitySummary}`: shared decision-robustness types;
+  `ProgramInputs.selection_stability` is an optional Claim. One `[[selection_stability]]` row requires
+  quoted `method = "weighted_multinomial"`, `seed`, `replicates`, `draws_per_replicate` and `sampling_basis`.
+  Seed is an unsigned 64-bit integer; counts use the bounds above. The original source, declaration,
+  model key and UU anchors bind the Claim and output. Unknown, duplicate or malformed fields refuse.
+  Before tagging/enumeration, the combined static-plus-policy population × states × declared valuation
+  laws × replicates must not exceed 32,000,000; the sampler independently caps total draws at 8,000,000.
+  `summary.selection_frequency` holds the analysis when declared, with status
+  `conditional_weighted_bootstrap`. Models without it retain their prior null field, scope and report bytes.
 - `EquityBasis`, `CandidateShareChange`, `ExactPerShare`, `PerShareStats`, `EquityState`, `EquityAssessment`:
   optional source-bound equity inputs and exact per-share outcomes, distinct from total-USD quantities.
 - `entity::valuation::{EntityValuation, CandidateNavChange, EntityValuationAssessment}`:
@@ -558,7 +587,15 @@ coverage gate, principal/cash residual, structural rejection and static/adaptive
 30/0 to Parent. The selected policy builds only after Good and retains initial final principal obligations
 in both states: mean/adaptive value 9/20 USD/share, tail loss 1/20 USD/share, Parent cash 30/20, debt 29/79.
 Library/binary integrations retain identical JSON/Markdown and the example's unchanged complete source bytes.
-This bounded slice does not claim the full GATE-CAP-01/03/04 scale, selection-frequency or historical evidence.
+DESIGN: `capital_stability_oracle.py` independently recomputes every reported resample with Python Fraction
+over declared inputs, including ties, changed risk eligibility, zero-count structural failures, secondary
+constraints, per-share objectives and adaptive capital-call policies. It checks alternative and candidate
+frequency bounds, all winners, shared static/adaptive count vectors, replay and source ordering. The
+complete synthetic `selection_stability.toml` has expansion mean 4 and tail loss 5 versus steady mean 3;
+with five draws, expansion wins exactly when Bad appears at most once. Source-bound parser and actual
+CLI/library JSON/Markdown parity tests accompany the independent oracle.
+This bounded slice does not claim full GATE-CAP-01/03/04 scale or historical evidence. Selection stability
+is explicit and optional; no gate claiming its presence on every capital card is closed here.
 
 ## 9. Lifted Code & Foundation Dependencies
 
@@ -575,5 +612,6 @@ decision stages, undeclared project interactions, inferred observation likelihoo
 reference-class fitting, inferred JV dilution penalties or loan agreements,
 blended or simultaneous optimization objectives, portfolio safety, calibrated probabilities or
 physical authorization is supplied. Reference-class bases must be explicitly declared, including an honest
-unadjusted basis; the system does not apply an unnamed adjustment. Selection frequency is explicitly
-unavailable. The broad BD-229 CapitalProgram and production-scale gates remain open.
+unadjusted basis; the system does not apply an unnamed adjustment. Conditional selection frequency requires
+the explicit bootstrap declaration; absent declarations remain unavailable. Wasserstein robustness and
+empirical model-uncertainty calibration are not supplied. Broad BD-229 and production-scale gates remain open.
