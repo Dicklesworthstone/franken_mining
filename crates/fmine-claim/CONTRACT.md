@@ -104,8 +104,11 @@ It does no I/O. Storage, locking and key custody belong to the callers in `fmine
 **Replay.**
 - The store refuses any replacement, even with identical bytes, and a body whose content id differs.
 - The generator runs against a full view and a guarded view. Both runs must give the same output bytes and the same ordered read receipts. Every read must lie in the root's declared ancestry. A denied read fails the replay even if the generator swallows the error.
+- The guarded view reuses the root cone's successful admission in the same immutable graph and cut. Declared reads use a sorted membership index instead of traversing their ancestry again. Undeclared reads still receive their own temporal check and cannot pass the final ancestry check; ordered receipts and certificate bytes are unchanged.
 - Tests:
   - `clean_replay_rebuilds_exact_output_and_binds_actual_payload_reads`;
+  - `deep_shared_ancestry_replays_all_payloads_in_requested_order` (12,000 nodes, shared ancestors and repeated reads);
+  - `shared_ancestor_admission_does_not_admit_an_undeclared_descendant`;
   - `store_rejects_wrong_body_and_both_identical_and_changed_replacements`;
   - `unrecorded_future_dependency_fails_even_when_graph_and_output_look_clean`;
   - `unrecorded_pre_cut_dependency_is_not_excused_by_matching_replay`;

@@ -9,14 +9,14 @@
 //! Canonical-key checking authenticates the bytes supplied, not fields omitted by the object's canonical codec
 //! (for example, a `Claim` body commits its value tag, not a separate encoding of its generic physical value).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, blake3_hash};
 use fmine_core::id::ObjectId;
 use fmine_evidence::{Refusal, RefusalCode};
 
-use super::{ConeCut, TemporalGraph};
+use super::{CheckedCone, ConeCut, TemporalGraph};
 
 #[derive(Debug, Clone)]
 struct StoredObject {
@@ -101,6 +101,7 @@ pub struct ReplayView<'a> {
     store: &'a ReplayStore,
     graph: &'a TemporalGraph,
     cut: Option<&'a ConeCut>,
+    admitted: Vec<ObjectId>,
     reads: Vec<ReadReceipt>,
     failure: Option<Refusal>,
 }
@@ -110,6 +111,11 @@ impl<'a> ReplayView<'a> {
     /// admitted by the cut and anchor. Any failed attempt permanently fails this run, even if its error is caught.
     pub fn read(&mut self, id: ObjectId) -> Result<&'a [u8], Refusal> {
         let temporal_error = self.cut.and_then(|cut| {
+            // The root check already admitted these nodes and their complete ancestry in this same
+            // immutable graph at this cut. Rechecking each read would retraverse shared ancestors.
+            if self.admitted.binary_search(&id).is_ok() {
+                return None;
+            }
             self.graph.check(id, cut).err().map(|error| {
                 refuse(format!(
                     "purged replay read {id} has inadmissible ancestry: {error}"
@@ -230,16 +236,23 @@ fn refuse(detail: impl Into<String>) -> Refusal {
 fn run<'a, F>(
     store: &'a ReplayStore,
     graph: &'a TemporalGraph,
-    cut: Option<&'a ConeCut>,
+    guard: Option<(&'a ConeCut, &CheckedCone)>,
     generate: &F,
 ) -> (Result<Vec<u8>, Refusal>, RunReceipt)
 where
     F: Fn(&mut ReplayView<'a>) -> Result<Vec<u8>, Refusal>,
 {
+    // CheckedCone's ids are the sorted keys of its availability map. Owning this small index keeps
+    // the public view lifetime tied only to the caller's immutable inputs, not a local certificate.
+    let (cut, admitted) = guard.map_or_else(
+        || (None, Vec::new()),
+        |(cut, cone)| (Some(cut), cone.nodes().to_vec()),
+    );
     let mut view = ReplayView {
         store,
         graph,
         cut,
+        admitted,
         reads: Vec::new(),
         failure: None,
     };
@@ -277,16 +290,15 @@ where
         full: Some(Box::new(full.clone())),
         purged: None,
     })?;
-    let (output, purged) = run(store, graph, Some(cut), &generate);
+    let (output, purged) = run(store, graph, Some((cut, &cone)), &generate);
     let failure = |refusal| ReplayError {
         refusal,
         full: Some(Box::new(full.clone())),
         purged: Some(Box::new(purged.clone())),
     };
     let purged_output = output.map_err(failure)?;
-    let allowed: BTreeSet<_> = cone.nodes().iter().copied().collect();
     for read in full.reads.iter().chain(&purged.reads) {
-        if !allowed.contains(&read.id) {
+        if cone.nodes().binary_search(&read.id).is_err() {
             return Err(failure(refuse(format!(
                 "replay read {} is not in the declared ancestry of {root}",
                 read.id
@@ -434,6 +446,114 @@ mod tests {
         .expect("deterministic replay");
         assert_eq!(certificate, again);
         assert_eq!(certificate.digest(), again.digest());
+        // FACT: receipt identity captured from c410307 before reusing the checked root cone.
+        assert_eq!(
+            certificate.digest().to_hex(),
+            "de8cb5a43a72b6093eed42cd81ceace67b6822208f6b0eed811d93498bdaaec3"
+        );
+    }
+
+    #[test]
+    fn deep_shared_ancestry_replays_all_payloads_in_requested_order() {
+        const COUNT: u64 = 12_000;
+        let mut store = ReplayStore::new();
+        let mut nodes = Vec::new();
+        let mut ids = Vec::new();
+        for value in 0..COUNT {
+            let bytes = value.to_le_bytes();
+            let mut node = source(&bytes, value as i64 + 1, value + 1);
+            if value > 0 {
+                node.kind = NodeKind::Claim;
+                node.parents.push(ids[value as usize - 1]);
+                // A chain supplies depth; the extra edges share already-used ancestry across branches.
+                node.parents.push(ids[value as usize / 2]);
+                node.availability = Availability::Derived {
+                    performed_at: Some(value as i64 + 1),
+                    declared_available_at: None,
+                };
+            }
+            store.insert(node.id, bytes.to_vec()).expect("unique body");
+            ids.push(node.id);
+            nodes.push(node);
+        }
+        let graph = TemporalGraph::new(nodes).expect("deep shared graph");
+        let root = *ids.last().expect("nonempty graph");
+        let cut = ConeCut {
+            decision_ns: COUNT as i64,
+            anchor: Anchor::new([("site", COUNT)]).expect("unique authority cell"),
+        };
+        let mut order = Vec::new();
+        for value in (0..COUNT).rev() {
+            order.push(value);
+            if value % 128 == 0 {
+                order.push(value / 2);
+            }
+        }
+        let certificate = verify_replay(&store, &graph, root, &cut, |view| {
+            let mut total = 0_u64;
+            for &value in &order {
+                let bytes = view.read(ids[value as usize])?;
+                total += u64::from_le_bytes(bytes.try_into().expect("eight-byte payload"));
+            }
+            Ok(total.to_le_bytes().to_vec())
+        })
+        .expect("every deep and shared ancestor is admissible");
+        let expected_total =
+            COUNT * (COUNT - 1) / 2 + (0..COUNT).step_by(128).map(|value| value / 2).sum::<u64>();
+        assert!(certificate.matches_output(&expected_total.to_le_bytes()));
+        assert_eq!(certificate.full_run(), certificate.purged_run());
+        let expected_reads: Vec<_> = order
+            .iter()
+            .map(|&value| ReadReceipt {
+                id: ids[value as usize],
+                content_digest: Some(blake3_hash(&value.to_le_bytes())),
+            })
+            .collect();
+        assert_eq!(certificate.full_reads(), expected_reads);
+    }
+
+    #[test]
+    fn shared_ancestor_admission_does_not_admit_an_undeclared_descendant() {
+        for after_cut in [false, true] {
+            let mut fixture = Fixture::new();
+            let hidden = fixture.add(b"undeclared derived parameter", 4, 4);
+            let hidden_node = fixture.nodes.last_mut().expect("hidden node");
+            hidden_node.kind = NodeKind::FittedParameters;
+            hidden_node.parents = vec![fixture.a, fixture.b];
+            hidden_node.availability = Availability::Derived {
+                performed_at: Some(if after_cut { 11 } else { 4 }),
+                declared_available_at: None,
+            };
+            let graph = TemporalGraph::new(fixture.nodes).expect("shared graph");
+            let error = verify_replay(&fixture.store, &graph, fixture.root, &cut(), |view| {
+                let _ = view.read(fixture.root)?;
+                // Repeated caught errors must retain both failed attempts and cannot become a pass.
+                let _ = view.read(hidden);
+                let _ = view.read(hidden);
+                sum(view, fixture.a, fixture.b)
+            })
+            .expect_err("shared parents do not declare the extra descendant");
+            let expected = if after_cut {
+                "has inadmissible ancestry"
+            } else {
+                "not in the declared ancestry"
+            };
+            assert!(error.refusal.what.contains(expected));
+            assert!(error.refusal.what.contains(&hidden.to_string()));
+            let full = error.full.expect("completed full run");
+            let purged = error.purged.expect("completed purged run");
+            assert_eq!(full.output_digest, Some(blake3_hash(b"5")));
+            assert_eq!(full.output_digest, purged.output_digest);
+            assert_eq!(full.reads.len(), 5);
+            assert_eq!(purged.reads.len(), 5);
+            for index in [1, 2] {
+                assert_eq!(purged.reads[index].id, hidden);
+                assert_eq!(
+                    purged.reads[index].content_digest,
+                    (!after_cut).then(|| blake3_hash(b"undeclared derived parameter"))
+                );
+            }
+        }
     }
 
     #[test]
