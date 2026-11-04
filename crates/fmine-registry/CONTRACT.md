@@ -76,6 +76,17 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
 - `RegistryCatalog`, `RegistryError`
 - `toml_subset::{parse_subset, TomlDoc, TomlRow, TomlField, TomlValue, SubsetError}`: a strict TOML subset (`[[table]]` rows, basic strings, integers, comments); anything else refuses naming the line (bd-s9j3.1)
 - `sources::{parse_sources_registry, load_sources_registry, SourcesRegistry, SourceRow, ReconstructionRow, BasisRow, MissingFactRow, MineStatsLabelRow, ShareRow, RegionMemberRow, SourcesError, is_quarter, is_url_basis, URL_BASES, URL_BASIS_FETCHED}`, `SourcesRegistry::members_of`, `RegionMemberRow::holds_for`: issuer source registries (each `url_basis` is `"W1 table"`, `"W1 naming rule"` or `"fetched and verified YYYY-MM-DD"` with a calendar date, BD-339.S3; each `[[reconstruction]]` declares `basis = "reconstructed"`, or `"stated"` with `quote_doc` (a registered file), `quote_locator` (`sheet!cell`) and `quote_prefix`, BD-331.S2; optional `[[missing_fact]]` rows, BD-331.S2: `subject`, `family`, `text` (prose with no digits), `evidence`, optional `closing_document`, once per subject and family; optional `[[mine_stats_label]]` rows: `label`, optional `section`, duplicates refused; optional `kind = "site" | "region"` on `[[subject]]`; optional `[[share]]` rows, BD-331.S3: `subject` (a registered non-region subject, once), positive `num` ≤ `den`, `evidence`, optional Mine Stats `label`; optional `[[region_member]]` rows, BD-331.S4: `region` (a registered region), `member` (a registered non-region subject), release quarter `first` and optional `last` ≥ `first`, no two rows of one member over overlapping releases) `registries/sources/<issuer>.toml` (`fmine.sources.v1`), checked on load
+- `sources::SubtotalMemberRow`, `SourcesRegistry::subtotal_members` (BD-331.S4): optional
+  `[[subtotal_member]]` rows define a flat sum separately from regional membership. Required `subtotal` and
+  `member` name registered non-region subjects, `period_from` is an inclusive `YYYYQn`, optional `period_to`
+  is at or after it, and `evidence` cites the membership and bounds. The bounds describe the physical period,
+  including comparative columns, never the workbook release. `covers_period(first, last)` requires the whole
+  period; `overlaps_period` exposes partial membership, which a sum must refuse. Both reject malformed or
+  reversed query periods. Rows retain registry order; absent tables give an empty vector. Unknown fields or
+  subjects, self-membership, overlapping rows for the same `(subtotal, member)`, and nested subtotal members
+  (including cycles) refuse. Independent flat subtotals may share a member. Barrick registers four continuing
+  NGM mines from 2023Q1 and Long Canyon only through 2023Q4, citing W1 §10 and the issuer's footnotes. This does
+  not add the component mines to North America's regional sum or register a cost-weighting rule.
 - `sources::PrintedShareCorrection`, `SourcesRegistry::printed_share_corrections` (bd-prmn.4): optional
   `[[printed_share_correction]]` rows, the share to use where a Mine Stats label prints a stale one: `subject`
   (a registered site, not a region), `printed` (the decimal inside `(…%)`, e.g. `"47.5"`), positive `num` ≤
@@ -97,7 +108,7 @@ Serves as the schema and registry catalog authority for `fmine doctor` and `xtas
   are not supported; registries without these rows retain empty vectors. Runtime additionally verifies
   the exact quote against the digest-bound workbook and each selector against observed canonical claims
   with one unit. A scope covers a claim only when its full period lies within the quarter bounds.
-  `region_members` remains the sole membership map. The E461 golden test pins the source digest and quote
+  `region_members` remains the sole regional membership map. The E461 golden test pins the source digest and quote
   plus all 18 region-summary selectors for 2024Q1 through 2025Q4.
 - DESIGN (BD-345.S4): workbook `SourceRow` accepts optional `published_at` and `published_at_basis`
   together. The date must be a calendar date and the basis must cite a source after `FACT: ` or

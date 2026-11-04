@@ -9,7 +9,7 @@ use fmine_public::mine_ledger::{
 };
 use fmine_public::mine_stats::MineStatsRead;
 use fmine_public::sources::{RegionMemberRow, RegisteredShare};
-use fmine_registry::sources::MineStatsLabelAlias;
+use fmine_registry::sources::{MineStatsLabelAlias, SubtotalMemberRow};
 
 // Exercise the existing private CLI renderer without adding a product API solely for tests.
 use fmine_cli::packet;
@@ -31,6 +31,7 @@ mod tests {
     const NONE: LedgerRules<'static> = LedgerRules {
         regions: &[],
         region_members: &[],
+        subtotal_members: &[],
         statuses: &[],
         corrections: &[],
         aliases: &[],
@@ -625,6 +626,329 @@ mod tests {
             first: first.to_string(),
             last: None,
         }
+    }
+
+    fn ngm_member(member: &str, first: &str, last: Option<&str>) -> SubtotalMemberRow {
+        SubtotalMemberRow {
+            subtotal: "Nevada Gold Mines".into(),
+            member: member.into(),
+            period_from: first.into(),
+            period_to: last.map(str::to_string),
+            evidence: "invented period membership".into(),
+        }
+    }
+
+    fn ngm_labels() -> [RegisteredShare; 1] {
+        [RegisteredShare {
+            subject: "Nevada Gold Mines".into(),
+            label: "Nevada Gold Mines LLC".into(),
+            num: 123,
+            den: 200,
+            evidence: "invented label".into(),
+        }]
+    }
+
+    fn subtotals(l: &MineLedger) -> Vec<&Instance> {
+        l.instances
+            .iter()
+            .filter(|i| i.family == Family::SitesToSubtotal)
+            .collect()
+    }
+
+    #[test]
+    fn subtotal_gold_flows_use_exact_sum_and_stable_member_order() {
+        let members: Vec<_> = ["Carlin", "Cortez", "Turquoise Ridge", "Phoenix"]
+            .into_iter()
+            .map(|m| ngm_member(m, "2023Q1", None))
+            .collect();
+        let labels = ngm_labels();
+        let mut rows = [
+            ("Carlin (61.5%)", ["10", "6", "6", "900", "800", "1000"]),
+            ("Cortez (61.5%)", ["20", "12", "12", "900", "800", "1000"]),
+            (
+                "Turquoise Ridge (61.5%)",
+                ["30", "18", "18", "900", "800", "1000"],
+            ),
+            ("Phoenix (61.5%)", ["40", "24", "24", "900", "800", "1000"]),
+            (
+                "Nevada Gold Mines LLC (61.5%)",
+                ["100", "60", "60", "9999", "9999", "9999"],
+            ),
+        ];
+        let ledger = |rows: &[RateRow<'_>], members: &[SubtotalMemberRow]| {
+            rate_ledger(
+                rows,
+                &LedgerRules {
+                    subtotal_members: members,
+                    labels: &labels,
+                    ..NONE
+                },
+            )
+        };
+        let l = ledger(&rows, &members);
+        assert_eq!(
+            subtotals(&l).len(),
+            3,
+            "cost rates never pose an additive subtotal"
+        );
+        assert!(
+            subtotals(&l)
+                .iter()
+                .all(|i| i.state == State::Consistent && i.component.is_none())
+        );
+        let production = at(&l, Family::SitesToSubtotal, "2030Q1:QTD!B9");
+        assert_eq!(production.subject, "Nevada Gold Mines LLC");
+        assert_eq!(
+            production.cells,
+            locs(&[Some("B5"), Some("B6"), Some("B7"), Some("B8"), Some("B9")])
+        );
+        // Five integer source boxes allow a gap of 2.5, so +2 holds and +3 does not.
+        rows[4].1[0] = "102";
+        rows[4].1[1] = "63";
+        let changed = ledger(&rows, &members);
+        assert_eq!(
+            at(&changed, Family::SitesToSubtotal, "2030Q1:QTD!B9").state,
+            State::Consistent
+        );
+        assert_eq!(
+            at(&changed, Family::SitesToSubtotal, "2030Q1:QTD!C9").state,
+            State::Discrepancy
+        );
+        rows.reverse();
+        let reordered = ledger(&rows, &members);
+        assert_eq!(
+            at(&reordered, Family::SitesToSubtotal, "2030Q1:QTD!C5").state,
+            State::Discrepancy
+        );
+        assert_eq!(
+            at(&reordered, Family::SitesToSubtotal, "2030Q1:QTD!B5").cells,
+            locs(&[Some("B9"), Some("B8"), Some("B7"), Some("B6"), Some("B5")])
+        );
+        assert_eq!(Family::ALL.last(), Some(&Family::SitesToSubtotal));
+        assert_eq!(Family::SitesToSubtotal.as_str(), "sites_to_subtotal");
+    }
+
+    #[test]
+    fn subtotal_membership_uses_current_and_prior_physical_periods() {
+        let mut members: Vec<_> = ["Carlin", "Cortez", "Turquoise Ridge", "Phoenix"]
+            .into_iter()
+            .map(|m| ngm_member(m, "2023Q1", None))
+            .collect();
+        members.push(ngm_member("Long Canyon", "2023Q1", Some("2023Q4")));
+        let labels = ngm_labels();
+        let rows = [
+            ("Carlin (61.5%)", ["10", "10", "10"]),
+            ("Cortez (61.5%)", ["20", "20", "20"]),
+            ("Turquoise Ridge (61.5%)", ["30", "30", "30"]),
+            ("Phoenix (61.5%)", ["40", "40", "40"]),
+            ("Long Canyon (61.5%)", ["n/a", "n/a", "n/a"]),
+            ("Nevada Gold Mines LLC (61.5%)", ["100", "100", "100"]),
+        ];
+        let sheets = [("QTD", "three"), ("YTD", "six")].map(|(name, months)| {
+            let mut sheet = summary(name, months, GOLD, &rows);
+            for (address, cell) in &mut sheet.cells {
+                if address == "B3" {
+                    *cell = MinimalCell::Number(2024.0);
+                }
+            }
+            sheet.cells.push(("I3".into(), MinimalCell::Number(2023.0)));
+            for (col, header) in ["I", "J", "K"].into_iter().zip(GOLD) {
+                sheet.cells.push((format!("{col}4"), text(header)));
+                for (row, value) in [
+                    (5, "10"),
+                    (6, "20"),
+                    (7, "30"),
+                    (8, "40"),
+                    (9, if col == "K" { "2" } else { "5" }),
+                    (10, if col == "K" { "102" } else { "105" }),
+                ] {
+                    sheet
+                        .cells
+                        .push((format!("{col}{row}"), data(value).unwrap()));
+                }
+            }
+            sheet
+        });
+        let rules = LedgerRules {
+            subtotal_members: &members,
+            labels: &labels,
+            ..NONE
+        };
+        let (l, refusals) = run(vec![("2024Q2".into(), sheets.into())], &rules);
+        assert!(refusals.is_empty(), "{refusals:?}");
+        assert_eq!(subtotals(&l).len(), 12);
+        // Omitting Long Canyon's two sold ounces still falls inside the wrong sum's rounding boxes.
+        // Pin every operand, not merely the resulting state.
+        for (anchor, operands) in [
+            ("D10", vec!["D5", "D6", "D7", "D8", "D10"]),
+            ("K10", vec!["K5", "K6", "K7", "K8", "K9", "K10"]),
+        ] {
+            assert_eq!(
+                at(&l, Family::SitesToSubtotal, &format!("2024Q2:QTD!{anchor}")).cells,
+                operands
+                    .into_iter()
+                    .map(|cell| Some(format!("2024Q2:QTD!{cell}")))
+                    .collect::<Vec<_>>()
+            );
+        }
+        for i in subtotals(&l) {
+            assert_eq!(i.state, State::Consistent, "{i:?}");
+            assert_eq!(i.cells.len(), if i.group == Group::Prior { 6 } else { 5 });
+            assert_eq!(
+                i.period.year,
+                if i.group == Group::Prior { 2023 } else { 2024 }
+            );
+            assert_eq!(
+                i.cells.iter().flatten().any(|c| c.ends_with("9")),
+                i.group == Group::Prior
+            );
+        }
+    }
+
+    #[test]
+    fn subtotal_missing_members_and_period_changes_refuse_before_values() {
+        let labels = ngm_labels();
+        let base = [
+            ngm_member("Carlin", "2030Q1", None),
+            ngm_member("Cortez", "2030Q1", None),
+        ];
+        let rows = [
+            ("Carlin (61.5%)", ["10", "10", "10"]),
+            ("Nevada Gold Mines LLC (61.5%)", ["30", "30", "30"]),
+        ];
+        let ledger = |rows: &[Row<'_>],
+                      members: &[SubtotalMemberRow],
+                      statuses: &[SubjectStatus],
+                      months| {
+            let sheet = summary("YTD", months, GOLD, rows);
+            let rules = LedgerRules {
+                subtotal_members: members,
+                labels: &labels,
+                statuses,
+                ..NONE
+            };
+            run(vec![("2030Q2".into(), vec![sheet])], &rules).0
+        };
+        let missing = ledger(&rows, &base, &[], "six");
+        let i = subtotals(&missing)[0];
+        assert_eq!(i.state, refused(Reason::OperandRowMissing, None));
+        assert_eq!(
+            i.cells,
+            [
+                Some("2030Q2:YTD!B5".into()),
+                None,
+                Some("2030Q2:YTD!B6".into())
+            ]
+        );
+        let changed = [base[0].clone(), ngm_member("Cortez", "2030Q2", None)];
+        assert_eq!(
+            subtotals(&ledger(&rows, &changed, &[], "six"))[0].state,
+            refused(Reason::CrossMapSubtotal, None)
+        );
+        let unavailable = [ngm_member("Carlin", "2031Q1", None)];
+        assert_eq!(
+            subtotals(&ledger(&rows, &unavailable, &[], "six"))[0].state,
+            refused(Reason::SubtotalNotInMap, None)
+        );
+        // Withholding has precedence over the missing row and over a partial membership interval.
+        for subject in ["Cortez", "Nevada Gold Mines"] {
+            let status = [SubjectStatus {
+                subject: subject.into(),
+                kind: StatusKind::Withheld,
+                first: (2030, 1),
+                last: Some((2030, 6)),
+                evidence: "invented withheld subtotal operand".into(),
+            }];
+            assert_eq!(
+                subtotals(&ledger(&rows, &changed, &status, "six"))[0].state,
+                refused(
+                    Reason::Withheld {
+                        evidence: status[0].evidence.clone()
+                    },
+                    None
+                )
+            );
+        }
+        // A status outside the physical period cannot hide an incomplete subtotal.
+        let later = [SubjectStatus {
+            subject: "Cortez".into(),
+            kind: StatusKind::Withheld,
+            first: (2031, 1),
+            last: None,
+            evidence: "later".into(),
+        }];
+        assert_eq!(
+            subtotals(&ledger(&rows, &base, &later, "six"))[0].state,
+            refused(Reason::OperandRowMissing, None)
+        );
+    }
+
+    #[test]
+    fn subtotal_alias_duplicates_and_placeholder_rules_keep_their_locators() {
+        let members = [
+            ngm_member("Carlin", "2030Q1", None),
+            ngm_member("Cortez", "2030Q1", None),
+        ];
+        let labels = ngm_labels();
+        let rules = LedgerRules {
+            subtotal_members: &members,
+            labels: &labels,
+            ..NONE
+        };
+        let ledger = |a, b, total| {
+            run(
+                vec![(
+                    "2030Q1".into(),
+                    vec![summary(
+                        "QTD",
+                        "three",
+                        GOLD,
+                        &[
+                            ("Carlin (61.5%)", [a; 3]),
+                            ("Cortez (61.5%)", [b; 3]),
+                            ("Nevada Gold Mines LLC (61.5%)", [total; 3]),
+                        ],
+                    )],
+                )],
+                &rules,
+            )
+            .0
+        };
+        let nil = ledger("10", "—", "10");
+        assert!(
+            subtotals(&nil)
+                .iter()
+                .all(|i| i.state == State::Consistent && i.nil_token)
+        );
+        assert_eq!(
+            subtotals(&ledger("—", "—", "—"))[0].state,
+            State::NotPublished
+        );
+        assert_eq!(
+            subtotals(&ledger("10", "n/a", "10"))[0].state,
+            refused(Reason::PlaceholderOperand, Some("2030Q1:QTD!B6"))
+        );
+        assert_eq!(
+            subtotals(&ledger("", "n/a", "10"))[0].state,
+            refused(Reason::BlankOperand, Some("2030Q1:QTD!B5"))
+        );
+        let both = summary(
+            "QTD",
+            "three",
+            GOLD,
+            &[
+                ("Carlin (61.5%)", ["10"; 3]),
+                ("Cortez (61.5%)", ["20"; 3]),
+                ("Nevada Gold Mines (61.5%)", ["30"; 3]),
+                ("Nevada Gold Mines LLC (61.5%)", ["30"; 3]),
+            ],
+        );
+        let l = run(vec![("2030Q1".into(), vec![both])], &rules).0;
+        assert_eq!(
+            subtotals(&l)[0].state,
+            refused(Reason::OperandUnreadable, Some("2030Q1:QTD!B7"))
+        );
+        assert_eq!(subtotals(&l)[0].anchor, "2030Q1:QTD!B7");
     }
 
     /// Locators on release 2030Q1's `QTD` sheet, `None` kept.

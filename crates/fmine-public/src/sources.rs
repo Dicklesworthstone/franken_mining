@@ -15,7 +15,7 @@ use fmine_registry::sources::{
 };
 pub use fmine_registry::sources::{
     DocumentRow, HtmlSourceRow, MineStatsLabelAlias, PrintedShareCorrection, RegionMemberRow,
-    RestatementNoteRow, RestatementScopeRow,
+    RestatementNoteRow, RestatementScopeRow, SubtotalMemberRow,
 };
 
 use crate::aisc::{ExplanationBasis, IdentityFamily};
@@ -126,6 +126,8 @@ pub struct IssuerProfile {
     pub subject_statuses: Vec<SubjectStatus>,
     /// The region map (BD-331.S4): which sites each region rolls up, by release quarter.
     pub region_members: Vec<RegionMemberRow>,
+    /// Flat subtotal membership by the full physical reporting period, independently of the region map.
+    pub subtotal_members: Vec<SubtotalMemberRow>,
     /// Printed shares the Mine Stats ledger replaces with a registered one (BD-331.S4, W1-DR-01).
     pub printed_share_corrections: Vec<PrintedShareCorrection>,
     /// Stale Mine Statistics row labels the ledger reads as registered ones (BD-331.S4, W1-DR-02).
@@ -245,6 +247,7 @@ impl IssuerProfile {
                 .map(subject_status)
                 .collect::<Result<_, _>>()?,
             region_members: reg.region_members,
+            subtotal_members: reg.subtotal_members,
             printed_share_corrections: reg.printed_share_corrections,
             mine_stats_label_aliases: reg.mine_stats_label_aliases,
             documents: reg.documents,

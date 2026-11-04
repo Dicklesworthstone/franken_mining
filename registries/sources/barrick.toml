@@ -415,6 +415,42 @@ region = "Africa & Middle East"
 member = "Bulyanhulu"
 first = "2024Q1"
 
+# FACT, W1 §10: NGM's 2023 physical periods include Long Canyon (Q1_2024:QTD!A33). From 2024 its
+# production and non-GAAP cost metrics are excluded (Q1_2024:QTD!A32, E489); E457 at Q2_2026:QTD!A31
+# names the four continuing mines. These bounds follow the operand period, including comparatives, not
+# the workbook's release. DESIGN, BD-331.S4: these flat subtotals are separate from the region map above;
+# the NGM mines must not also enter North America's sum alongside their NGM subtotal.
+[[subtotal_member]]
+subtotal = "Nevada Gold Mines"
+member = "Carlin"
+period_from = "2023Q1"
+evidence = "W1 §10, Q1_2024:QTD!A33; E457, Q2_2026:QTD!A31"
+
+[[subtotal_member]]
+subtotal = "Nevada Gold Mines"
+member = "Cortez"
+period_from = "2023Q1"
+evidence = "W1 §10, Q1_2024:QTD!A33; E457, Q2_2026:QTD!A31"
+
+[[subtotal_member]]
+subtotal = "Nevada Gold Mines"
+member = "Turquoise Ridge"
+period_from = "2023Q1"
+evidence = "W1 §10, Q1_2024:QTD!A33; E457, Q2_2026:QTD!A31"
+
+[[subtotal_member]]
+subtotal = "Nevada Gold Mines"
+member = "Phoenix"
+period_from = "2023Q1"
+evidence = "W1 §10, Q1_2024:QTD!A33; E457, Q2_2026:QTD!A31"
+
+[[subtotal_member]]
+subtotal = "Nevada Gold Mines"
+member = "Long Canyon"
+period_from = "2023Q1"
+period_to = "2023Q4"
+evidence = "W1 §10, Q1_2024:QTD!A33; E489, Q1_2024:QTD!A32"
+
 # FACT E461: exact text at QTD!A33 in the registered Q4 2025 Mine Stats workbook, including its footnote number.
 # The note binds to that source's registered digest. These are exact canonical summary lines, not a wildcard.
 # DESIGN: scopes retain both printed region names; they do not alias subjects or override [[region_member]].

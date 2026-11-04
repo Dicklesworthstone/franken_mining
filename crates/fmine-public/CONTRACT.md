@@ -163,7 +163,17 @@ The public lane of M0 (`fmine assure public`).
   release's quarter block, a site found by name on whichever sheet of its metal it prints in each release. A
   sum's nil token is exactly 0; a sum is decided alone by |Σ parts − total| ≤
   Σ half-steps (the kernel's answer for one rounded-once sum, checked by a test) and never posed jointly. The
-  Nevada Gold Mines LLC sub-sum is not posed (it needs a registry table). Sold-weighted rate (family 5): a
+  `sites_to_subtotal` appends to the stable family tags: a registered subtotal's three gold flows equal its
+  component mines under the distinct `subtotal_member` registry. Membership must cover the operand's whole
+  physical period, not its release: NGM's 2023 comparative includes Long Canyon; 2024 onward excludes it
+  (W1 §10). Partial-period membership refuses (`cross_map_subtotal`), and no applicable members refuses
+  (`subtotal_not_in_map`). Subtotal and member aliases, missing rows, placeholders and withheld statuses
+  follow the sum rules; both a subtotal's and its members' withheld statuses apply. Regional maps are unchanged.
+  Operands follow registry order; the subtotal instance keeps its source's printed subject.
+  The report retains the cited membership declarations in `mine_stats_ledger.subtotal_members`; M0AS v9
+  binds every subtotal, member, period bound and evidence string even when the numeric states do not change.
+  Profiles without subtotal declarations retain their v8 certificate encoding.
+  Sold-weighted rate (family 5): a
   region's cost of sales, TCC and AISC per ounce (`RATE_FIELDS`) = its members' rates weighted by attributable
   gold sold, members found as in family 3, in row order. A member whose sold cell is the nil token leaves the
   identity; a placeholder left in it refuses (a rate is never read as 0), as do no member left

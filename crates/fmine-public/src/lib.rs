@@ -284,6 +284,8 @@ pub struct PublicAssuranceReport {
     /// The Mine Stats identity ledger (BD-331.S4): ownership and quarter sums on the summary sheets. Bound into
     /// the state root in its own section; counted apart from `instances` and the totals.
     pub mine_ledger: MineLedger,
+    /// Cited physical-period membership rules for subtotal identities; bound in M0AS v9 when present.
+    pub subtotal_members: Vec<sources::SubtotalMemberRow>,
     /// The same families run over hidden worksheets (BD-331.S2). Bound into the state root in its own section
     /// and never counted in `instances`, the totals or `GATE-BULL-01`.
     pub hidden_scope: HiddenScope,
@@ -400,7 +402,16 @@ impl PublicAssuranceReport {
         use mine_ledger::{Family, State};
         let l = &self.mine_ledger;
         let list = |cells: &[String]| cells.iter().map(|c| js(c)).collect::<Vec<_>>().join(",");
-        o.push_str("\"mine_stats_ledger\":{\"construction\":\"rounded_once\",\"families\":[");
+        o.push_str("\"mine_stats_ledger\":{\"construction\":\"rounded_once\",");
+        if !self.subtotal_members.is_empty() {
+            let rows = self.subtotal_members.iter().map(|r| format!(
+                "{{\"subtotal\":{},\"member\":{},\"period_from\":{},\"period_to\":{},\"evidence\":{}}}",
+                js(&r.subtotal), js(&r.member), js(&r.period_from),
+                r.period_to.as_deref().map_or_else(|| "null".into(), js), js(&r.evidence)
+            )).collect::<Vec<_>>().join(",");
+            let _ = write!(o, "\"subtotal_members\":[{rows}],");
+        }
+        o.push_str("\"families\":[");
         for (n, family) in Family::ALL.into_iter().enumerate() {
             let mut by_reason: BTreeMap<&str, usize> = BTreeMap::new();
             for i in l.instances.iter().filter(|i| i.family == family) {
@@ -1619,6 +1630,7 @@ fn mine_stats_section(
         &LedgerRules {
             regions: &profile.regions,
             region_members: &profile.region_members,
+            subtotal_members: &profile.subtotal_members,
             statuses: &profile.subject_statuses,
             corrections: &profile.printed_share_corrections,
             aliases: &profile.mine_stats_label_aliases,
@@ -1872,7 +1884,16 @@ fn assess_inner(
     // token and refused counts. Version 6 adds the Mine Stats ledger section (BD-331.S4). Version 7 adds its
     // site-sheet family and binds each instance's nil-token certificate. Version 8 adds the public
     // waterfall digest, including pair classifications, source citations, intervals and exact rate gaps.
-    let mut enc = Encoder::new_frame(*b"M0AS", 8);
+    // Version 9 binds the cited subtotal policy, including period boundaries even when its cells agree.
+    // Issuers without this opt-in keep the exact v8 frame and root.
+    let mut enc = Encoder::new_frame(
+        *b"M0AS",
+        if profile.subtotal_members.is_empty() {
+            8
+        } else {
+            9
+        },
+    );
     enc.put_str(issuer);
     enc.put_str(lane.as_str());
     enc.put_u64(sources.len() as u64);
@@ -1948,6 +1969,16 @@ fn assess_inner(
         }
     }
     encode_mine_ledger(&mut enc, &mine_ledger);
+    if !profile.subtotal_members.is_empty() {
+        enc.put_u64(profile.subtotal_members.len() as u64);
+        for r in &profile.subtotal_members {
+            for value in [&r.subtotal, &r.member, &r.period_from] {
+                enc.put_str(value);
+            }
+            opt(&mut enc, r.period_to.as_deref());
+            enc.put_str(&r.evidence);
+        }
+    }
     enc.put_fixed(&waterfall.digest().0);
     let state_root = blake3_hash(&enc.finish());
     let ledger_anchor = ledger_anchor(issuer, lane, sources.len(), state_root);
@@ -1971,6 +2002,7 @@ fn assess_inner(
         disclosures,
         waterfall,
         mine_ledger,
+        subtotal_members: profile.subtotal_members.clone(),
         hidden_scope: hidden,
         one_cell,
         ledger_anchor,

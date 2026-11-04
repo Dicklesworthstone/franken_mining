@@ -1744,7 +1744,8 @@ mod corpus {
         // cells are compared as a set, the aggregate's cell last. No sum here has an `at`, which order would set.
         let sum_cells_sorted = |line: &str| -> String {
             let sum = line.contains("\"family\":\"sites_to_region\"")
-                || line.contains("\"family\":\"region_to_total\"");
+                || line.contains("\"family\":\"region_to_total\"")
+                || line.contains("\"family\":\"sites_to_subtotal\"");
             let Some(start) = line.find("\"cells\":[").map(|k| k + "\"cells\":[".len()) else {
                 return line.to_string();
             };
@@ -1765,16 +1766,39 @@ mod corpus {
                 &line[start + len..]
             )
         };
-        // One log line per instance (the census's format: anchor, cells, family, state, reason, component,
-        // implied corrections), printed before its comparison so a failing run shows every line up to the miss.
-        for (a, b) in ours.iter().zip(&instances) {
+        // Stable enum tags append new families; the independent reader orders family names lexically.
+        // Compare every complete normalized record while leaving both presentation orders independent.
+        let mut ours: Vec<_> = ours.iter().map(|line| sum_cells_sorted(line)).collect();
+        let mut independent: Vec<_> = instances
+            .iter()
+            .map(|line| sum_cells_sorted(line))
+            .collect();
+        ours.sort_unstable();
+        independent.sort_unstable();
+        // Print each complete record before comparison; no source operand or outcome field is discarded.
+        for (a, b) in ours.iter().zip(&independent) {
             println!("{a}");
-            assert_eq!(sum_cells_sorted(a), sum_cells_sorted(b));
+            assert_eq!(a, b);
         }
         // The sum families' counts (c697b13's census), pinned so that both sides cannot drift together.
         let counts = |f: Family| ["i", "iii", "v", "np"].map(|code| l.count(f, code));
         assert_eq!(counts(Family::SitesToRegion), [282, 0, 24, 0]);
         assert_eq!(counts(Family::RegionToTotal), [204, 0, 0, 0]);
+        // Independent original-cell census (W1 §10): all 102 subtotal residuals are exactly zero.
+        assert_eq!(counts(Family::SitesToSubtotal), [102, 0, 0, 0]);
+        let prior_2023 = l
+            .instances
+            .iter()
+            .filter(|i| i.family == Family::SitesToSubtotal && i.period.year == 2023)
+            .collect::<Vec<_>>();
+        assert_eq!(prior_2023.len(), 21);
+        assert!(prior_2023.iter().all(|i| i.cells.len() == 6));
+        assert!(
+            l.instances
+                .iter()
+                .filter(|i| { i.family == Family::SitesToSubtotal && i.period.year >= 2024 })
+                .all(|i| i.cells.len() == 5)
+        );
         // Family 5 (ac07fee's census): i, iii, iv, v, np.
         let rate =
             ["i", "iii", "iv", "v", "np"].map(|code| l.count(Family::SoldWeightedRate, code));

@@ -37,8 +37,10 @@
 //!   which is the kernel's answer for one sum with every box rounded once (a test checks the two agree). These
 //!   sums are never posed jointly: a region sum links every site of a block, and a site's chain of quarters
 //!   joined to the summary's would grow the other families' components past the exhaustive correction search.
-//!   Not yet posed: the Nevada Gold Mines LLC sub-sum (Carlin, Cortez, Turquoise Ridge, Phoenix, Long Canyon),
-//!   which needs a registry table of its own.
+//! - **Sites to subtotal** (family 3). The three gold flows of a registered subtotal equal its component mines.
+//!   Membership covers the operand's whole physical period, including the prior-year comparative: NGM includes
+//!   Long Canyon through 2023 only (W1 §10). Partial coverage refuses (`cross_map_subtotal`); no applicable
+//!   members refuses (`subtotal_not_in_map`). Subtotal and member aliases use the same lookup as regions.
 //! - **Sold-weighted rate** (family 5). A region's cost of sales, total cash costs and AISC per ounce = its
 //!   members' rates weighted by their attributable gold sold, R·Σwᵢ = Σ rᵢ·wᵢ, members found as in family 3 and
 //!   taken in row order. A member whose sold cell is the nil token sold nothing and leaves the identity; any other
@@ -74,7 +76,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fmine_io::xlsx::{CellValue, Workbook, parse_a1_ref};
 use fmine_numerics::exact_feas::{self as xf, Rat};
-use fmine_registry::sources::{MineStatsLabelAlias, PrintedShareCorrection};
+use fmine_registry::sources::{MineStatsLabelAlias, PrintedShareCorrection, SubtotalMemberRow};
 
 use crate::key::{Period, PeriodKind, StatusKind, SubjectStatus};
 use crate::mine_stats::{MineStatsCell, MineStatsRead, MineStatsValue, View};
@@ -242,7 +244,7 @@ pub enum Metal {
     Copper,
 }
 
-/// The families, declared in the order of their names, which is the order instances are sorted in.
+/// The families in stable tag order, which is the order instances are sorted in; new tags append.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Family {
     Ownership,
@@ -257,10 +259,12 @@ pub enum Family {
     SitesToRegion,
     /// Family 5: a region's gold unit cost = its members' unit costs weighted by attributable gold sold.
     SoldWeightedRate,
+    /// Family 3: a subtotal = Σ its component mines in the operand period's map.
+    SitesToSubtotal,
 }
 
 impl Family {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Ownership,
         Self::QuarterSum,
         Self::RegionToTotal,
@@ -268,6 +272,7 @@ impl Family {
         Self::SiteSheet,
         Self::SitesToRegion,
         Self::SoldWeightedRate,
+        Self::SitesToSubtotal,
     ];
 
     #[must_use]
@@ -280,6 +285,7 @@ impl Family {
             Self::SiteSheet => "site_sheet",
             Self::SitesToRegion => "sites_to_region",
             Self::SoldWeightedRate => "sold_weighted_rate",
+            Self::SitesToSubtotal => "sites_to_subtotal",
         }
     }
 }
@@ -314,6 +320,10 @@ pub enum Reason {
     CrossMapRegion,
     /// A region row whose region has no registered member in the release's map.
     RegionNotInMap,
+    /// A subtotal's membership changes within the operand's physical period.
+    CrossMapSubtotal,
+    /// A printed subtotal has no applicable registered members for its physical period.
+    SubtotalNotInMap,
     /// An operand's release does not print a row for the subject.
     OperandRowMissing,
     /// An operand's release is not among the files read.
@@ -339,6 +349,8 @@ impl Reason {
             Self::Withheld { .. } => "withheld",
             Self::CrossMapRegion => "cross_map_region",
             Self::RegionNotInMap => "region_not_in_map",
+            Self::CrossMapSubtotal => "cross_map_subtotal",
+            Self::SubtotalNotInMap => "subtotal_not_in_map",
             Self::OperandRowMissing => "operand_row_missing",
             Self::ReleaseMissing => "release_missing",
             Self::BlankOperand => "blank_operand",
@@ -477,6 +489,7 @@ impl MineLedger {
 pub struct LedgerRules<'a> {
     pub regions: &'a [String],
     pub region_members: &'a [RegionMemberRow],
+    pub subtotal_members: &'a [SubtotalMemberRow],
     pub statuses: &'a [SubjectStatus],
     pub corrections: &'a [PrintedShareCorrection],
     pub aliases: &'a [MineStatsLabelAlias],
@@ -1251,7 +1264,8 @@ fn sum_holds(parts: &[&Slot], total: &Slot) -> Option<bool> {
 
 /// Families 3 and 4 on each summary sheet, flow field and column group: a region's value is the sum of its
 /// registered members in the release's map (`sites_to_region`); `Total Gold` is the sum of the map's regions and
-/// `Total Copper` the sum of the copper block's sites (`region_to_total`). A member's row is found by its subject
+/// `Total Copper` the sum of the copper block's sites (`region_to_total`). Registered subtotals use their
+/// component mines from the operand's physical period (`sites_to_subtotal`). A row is found by its subject
 /// or by its registered Mine Stats label. Each instance is decided alone, in exact arithmetic, and never posed
 /// jointly: a sum links every site of a block, so posing the sums would merge the other families' components
 /// into ones far past the exhaustive correction search.
@@ -1287,6 +1301,37 @@ fn sums(
                 rules.map_regions(release),
                 None,
             ));
+            let subtotals: BTreeSet<&str> = rules
+                .subtotal_members
+                .iter()
+                .map(|m| m.subtotal.as_str())
+                .collect();
+            for subtotal in subtotals {
+                let (Found::One(total) | Found::Both(total)) = find_member(rows, rules, subtotal)
+                else {
+                    continue;
+                };
+                let ((year, start), (_, end)) = total.period.months();
+                let first = format!("{year}Q{}", start.div_ceil(3));
+                let last = format!("{year}Q{}", end.div_ceil(3));
+                let members: Vec<_> = rules
+                    .subtotal_members
+                    .iter()
+                    .filter(|m| m.subtotal == subtotal && m.overlaps_period(&first, &last))
+                    .collect();
+                let why = if members.iter().any(|m| !m.covers_period(&first, &last)) {
+                    Some(Reason::CrossMapSubtotal)
+                } else {
+                    members.is_empty().then_some(Reason::SubtotalNotInMap)
+                };
+                let mut seen = BTreeSet::new();
+                let parts = members
+                    .into_iter()
+                    .filter(|m| seen.insert(m.member.as_str()))
+                    .map(|m| m.member.clone())
+                    .collect();
+                posings.push((Family::SitesToSubtotal, subtotal, parts, why));
+            }
         } else {
             let mut sites: Vec<(&str, u32)> = rows
                 .iter()
@@ -1299,8 +1344,16 @@ fn sums(
         }
         for (family, aggregate, parts, why) in posings {
             // No aggregate row, no anchor: nothing is posed (the census stops there; no registered file lacks it).
-            let Some(&total) = rows.get(aggregate) else {
-                continue;
+            let anchor = if family == Family::SitesToSubtotal {
+                find_member(rows, rules, aggregate)
+            } else {
+                rows.get(aggregate)
+                    .map_or(Found::Missing, |s| Found::One(s))
+            };
+            let (total, duplicate_anchor) = match anchor {
+                Found::Missing => continue,
+                Found::One(s) => (s, false),
+                Found::Both(s) => (s, true),
             };
             let found: Vec<Found<'_>> = parts.iter().map(|p| find_member(rows, rules, p)).collect();
             let mut cells: Vec<Option<String>> = found
@@ -1315,9 +1368,14 @@ fn sums(
                 reason,
                 at: at.map(|s| s.locator.clone()),
             };
-            let withheld = (family == Family::SitesToRegion)
+            let withheld = matches!(family, Family::SitesToRegion | Family::SitesToSubtotal)
                 .then(|| parts.iter().find_map(|m| rules.withheld(m, &total.period)))
-                .flatten();
+                .flatten()
+                .or_else(|| {
+                    (family == Family::SitesToSubtotal)
+                        .then(|| rules.withheld(aggregate, &total.period))
+                        .flatten()
+                });
             let present: Vec<&Slot> = found
                 .iter()
                 .filter_map(|f| match f {
@@ -1338,7 +1396,14 @@ fn sums(
                 refused(reason, None)
             } else if parts.is_empty() || found.iter().any(|f| matches!(f, Found::Missing)) {
                 refused(Reason::OperandRowMissing, None)
+            } else if duplicate_anchor {
+                refused(Reason::OperandUnreadable, Some(total))
             } else if let Some(Found::Both(s)) = found.iter().find(|f| matches!(f, Found::Both(_)))
+            {
+                refused(Reason::OperandUnreadable, Some(s))
+            } else if let Some(s) = ops
+                .iter()
+                .find(|s| family == Family::SitesToSubtotal && s.period != total.period)
             {
                 refused(Reason::OperandUnreadable, Some(s))
             } else if let Some(b) = first(&|o| *o == Operand::Blank) {
@@ -1372,7 +1437,16 @@ fn sums(
             out.push((
                 Instance {
                     family,
-                    subject: aggregate.to_string(),
+                    subject: if family == Family::SitesToSubtotal {
+                        rows.iter()
+                            .find_map(|(name, slot)| {
+                                (slot.locator == total.locator).then_some(*name)
+                            })
+                            .unwrap_or(aggregate)
+                    } else {
+                        aggregate
+                    }
+                    .to_string(),
                     field: (*field).to_string(),
                     group: *group,
                     period: total.period,

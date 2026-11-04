@@ -1,8 +1,9 @@
 """Mine Statistics census: ownership and quarter-sum identities on the QTD/YTD summary sheets, and the site_sheet
 identity (summary value = Minestats value), each instance decided alone on its own displayed cells, then the decided
 instances of these three families posed jointly by shared cells, with every minimum correction set of each jointly
-infeasible component. The sum families sites_to_region and region_to_total (region = sum of its sites, total = sum
-of the regions or of the copper sites) are decided alone only, never posed jointly; so is family sold_weighted_rate
+infeasible component. The sum families sites_to_region, region_to_total and sites_to_subtotal (region = sum of its
+sites, total = sum of the regions or of the copper sites, NGM = sum of its period's mines) are decided alone only,
+never posed jointly; so is family sold_weighted_rate
 (a region's gold unit cost = its members' unit costs weighted by their attributable gold sold), and so is family
 site_quarter_sum (on the Minestats* site sheets, a site's cumulative row = the previous cumulative + the quarter).
 
@@ -144,8 +145,8 @@ copper; unit-cost columns are out of scope. Each instance is decided alone and n
   Copper" = sum of every non-aggregate data row of the copper block, in row order; operands those cells, then the
   Total Copper cell. Once per (release, sheet, gold block), one line lists the gold data rows that are neither an
   aggregate nor a member of any region in the release's map (a completeness check of the map; a report, not an
-  instance). Nevada Gold Mines LLC's own sub-sum (Carlin + Cortez + ...) is not posed: it needs a registry table of
-  its mines that the rule does not have yet.
+  instance). Nevada Gold Mines LLC's own sub-sum is handled separately by sites_to_subtotal below, with membership
+  keyed by operand period rather than the release's region map.
 - Decision, first match wins (after exclusions and missing rows): 1. Any operand blank -> v, blank_operand, at = the
   first blank operand in operand order. 2. All operands placeholders (any kind) -> np. 3. Any operand a placeholder
   other than the nil token (a text cell whose text is exactly "—" or "— "; "n/a", "N/A", "-", "–" and number-shown-
@@ -155,6 +156,25 @@ copper; unit-cost columns are out of scope. Each instance is decided alone and n
   operand is the nil token, certificate "nil_token", else null.
 - Record: family, field = the flow field id, anchor = the aggregate cell, cells = the operand locators in operand
   order, state, reason, at, share and printed_share null, certificate as in step 4.
+
+Family sites_to_subtotal (added 2026-11-04 by an independent source reader before the Rust implementation).
+- OBSERVED source: Q1_2024:QTD!A33 defines NGM as the 61.5% interest in Carlin, Cortez, Turquoise Ridge, Phoenix and
+  Long Canyon until its end-2023 care-and-maintenance transition. A32 says Long Canyon production and non-GAAP cost
+  metrics are no longer included starting Q1 2024. Q2_2026:QTD!A31 names the four remaining mines. These footnotes
+  were read from the hash-verified original OOXML, not inferred from a later release's layout or Rust registry.
+- DESIGN: one instance per summary sheet, column group and gold flow field, anchored on the NGM subtotal row. All
+  three fields are in scope: 100%-basis production, attributable production and attributable sold. Each sum uses
+  cells from the same field and group; it applies no further ownership factor to already-attributable quantities.
+- Membership is keyed by the operand period, not release: Carlin, Cortez, Turquoise Ridge and Phoenix, in that
+  order; append Long Canyon for 2023 periods only. Thus the 2024 files' prior group includes Long Canyon and their
+  current group excludes it. No membership before 2023 is established here; such an input stops the run.
+- Operands: the members in the stated order, then the NGM subtotal. Resolve its printed name with member_row's
+  "Nevada Gold Mines" / "Nevada Gold Mines LLC" alias. A missing subtotal row stops the run; a missing member is
+  v, operand_row_missing; two alias rows are v, operand_unreadable, before decide_sum's unchanged nil/blank rules.
+- Each instance is decided alone using decide_sum's exact closed half-step intervals. It never enters the joint
+  components or changes the existing regional sums, their completeness lines, per-release counts or known answers.
+- OBSERVED census: 102 instances, all i (34 per field), with exactly zero displayed residual in all 102. There
+  are 21 five-member 2023 instances and 81 four-member instances. No nil, missing or unreadable operand occurs.
 
 Family sold_weighted_rate (the plan's family 5, "sold-weighted roll-ups"; added 2026-10-30 by a second reader, who
 wrote it from the rule as given, without reading crates/ or any Rust). On the QTD and YTD summary sheets the gold
@@ -279,7 +299,7 @@ Output (stdout, one compact JSON object per line, ensure_ascii=False, determinis
    come last (J37);
 2. one line per jointly infeasible component {"component","cells","instances","joint_only","corrections"};
 3. per family {"family","n","i","iii","v","np","v_by_reason"} (ownership, quarter_sum, site_sheet, sites_to_region,
-   region_to_total); then {"family":"sold_weighted_rate","n","i","iii","iv","v","np","v_by_reason"} (J37); then
+   region_to_total, sites_to_subtotal); then {"family":"sold_weighted_rate","n","i","iii","iv","v","np","v_by_reason"} (J37); then
    {"family":"site_quarter_sum","n","i","iii","v","np","v_by_reason"} (J47); then
    one line per refused Minestats* sheet {"family":"site_sheet","refused","reason"}; then one
    line per release {"family":"site_sheet","release","no_minestats_column"}; then one line per (release, sheet)
@@ -560,6 +580,7 @@ ORDER_FROM_2025Q4 = {
 MAP_TO_2025Q3 = {k: frozenset(v) for k, v in ORDER_TO_2025Q3.items()}
 MAP_FROM_2025Q4 = {k: frozenset(v) for k, v in ORDER_FROM_2025Q4.items()}
 MEMBER_ALIAS = {"Nevada Gold Mines": "Nevada Gold Mines LLC"}  # sum families only (J30; issuer registry)
+NGM_CORE = ("Carlin", "Cortez", "Turquoise Ridge", "Phoenix")  # OBSERVED: Q1_2024:QTD!A33; Q2_2026:QTD!A31
 REGIONS = set(MAP_TO_2025Q3) | set(MAP_FROM_2025Q4)
 E818_SUBJECT = "Loulo-Gounkoto"
 E818_PERIODS = {"2025Q1", "2025Q2", "2025Q3", "2025 H1", "2025 9M"}
@@ -1413,6 +1434,43 @@ def sum_instances(releases):
     return out, outside
 
 
+def subtotal_instances(releases):
+    """NGM gold flows; independent source membership uses the operand's year, never the release's map."""
+    out = []
+    for (y, q), rel in sorted(releases.items()):
+        for sname in ("QTD", "YTD"):
+            sheet = rel.sheets.get(sname)
+            if sheet is None:
+                continue
+            kind = "Q%d" % q if sname == "QTD" else CUM[q]
+            blk = sheet.blocks["au"]
+            agg_how, agg_row = member_row(blk, "Nevada Gold Mines")
+            if agg_row is None:
+                die("%s: block has no Nevada Gold Mines subtotal row" % sheet.loc(blk.header_row, 1))
+            agg = next(s for s, data in blk.rows.items() if data[0] == agg_row)
+            for g in GROUPS:
+                operand_year = y if g == "current" else y - 1
+                per = period(operand_year, kind)
+                if operand_year < 2023:
+                    die("%s: no source-supported NGM membership for %s" % (sheet.loc(agg_row, 1), per))
+                parts = NGM_CORE + (("Long Canyon",) if operand_year == 2023 else ())
+                found = [member_row(blk, s) for s in parts]
+                for flow in FLOWS:
+                    col = blk.cols[(g, flow)]
+                    ops = [read_sum_operand(sheet, r, col) if r is not None else None for _how, r in found]
+                    ops.append(read_sum_operand(sheet, agg_row, col))
+                    inst = base("sites_to_subtotal", agg, "au", flow, g, per, ops[-1].loc, ops)
+                    if any(how == "missing" for how, _r in found):
+                        inst["state"], inst["reason"] = "v", "operand_row_missing"
+                    elif any(how == "both" for how, _r in found) or agg_how == "both":
+                        first = next(i for i, (how, _r) in enumerate(found + [(agg_how, agg_row)]) if how == "both")
+                        inst["state"], inst["reason"], inst["at"] = "v", "operand_unreadable", ops[first].loc
+                    else:
+                        inst["state"], inst["reason"], inst["at"], inst["certificate"] = decide_sum(ops)
+                    out.append(inst)
+    return out
+
+
 # -------------------------------------------------------------------------------------------------- sold-weighted rates
 
 SWR_FAMILY = "sold_weighted_rate"
@@ -2120,11 +2178,12 @@ def main(argv):
     reg = Registry(REGISTRY)  # J39
     site, unmatched = site_sheet_instances(releases)
     sums, outside = sum_instances(releases)
+    subtotals = subtotal_instances(releases)  # independent period membership; decided alone
     swr = swr_instances(releases)  # decided alone, never posed (J37)
     sqs = sqs_instances(releases, reg)  # decided alone, never posed (J47)
     instances = ownership_instances(releases) + quarter_sum_instances(releases) + site
     instances.sort(key=sort_key)
-    printed = sorted(instances + sums + swr + sqs, key=sort_key)
+    printed = sorted(instances + sums + subtotals + swr + sqs, key=sort_key)
     seen = set()
     for x in printed:
         k = sort_key(x)
@@ -2142,7 +2201,7 @@ def main(argv):
         emit(rec)
     for line in comp_lines:
         emit(line)
-    for fam in ("ownership", "quarter_sum", "site_sheet", "sites_to_region", "region_to_total"):
+    for fam in ("ownership", "quarter_sum", "site_sheet", "sites_to_region", "region_to_total", "sites_to_subtotal"):
         xs = [x for x in printed if x["family"] == fam]
         by = {}
         for x in xs:
@@ -2151,7 +2210,7 @@ def main(argv):
         emit({"family": fam, "n": len(xs), **{s: sum(1 for x in xs if x["state"] == s)
                                                for s in ("i", "iii", "v", "np")},
               "v_by_reason": dict(sorted(by.items()))})
-    emit(swr_summary(swr))  # J37: directly after the five family summaries
+    emit(swr_summary(swr))  # J37: directly after the linear family summaries
     emit(sqs_summary(sqs))  # J47
     for _y, rel in sorted(releases.items()):
         for where, why in rel.refusals:

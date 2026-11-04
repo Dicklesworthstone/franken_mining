@@ -65,6 +65,67 @@ fn report(sources: Vec<LoadedSource>) -> PublicAssuranceReport {
     assess(&profile, Lane::Synthetic, sources)
 }
 
+#[test]
+fn subtotal_policy_is_cited_and_bound_even_when_no_numeric_state_changes() {
+    use fmine_public::sources::SubtotalMemberRow;
+
+    let input = source(
+        "synthetic-policy.xlsx",
+        "2030Q1",
+        120,
+        None,
+        "synthetic:source",
+    );
+    let mut profile = synthetic::synthetic_profile();
+    profile.subjects = ["Site A", "Site B", "Subtotal", "Other subtotal"]
+        .map(str::to_string)
+        .to_vec();
+    profile.reconstructions.clear();
+    let legacy = assess(&profile, Lane::Synthetic, vec![input.clone()]);
+    profile.subtotal_members.push(SubtotalMemberRow {
+        subtotal: "Subtotal".into(),
+        member: "Site A".into(),
+        period_from: "2030Q1".into(),
+        period_to: None,
+        evidence: "Synthetic membership | source note".into(),
+    });
+    let bound = assess(&profile, Lane::Synthetic, vec![input.clone()]);
+    assert_eq!(legacy.mine_ledger.instances, bound.mine_ledger.instances);
+    assert_ne!(
+        legacy.ledger_anchor.state_root,
+        bound.ledger_anchor.state_root
+    );
+    assert!(
+        bound
+            .to_json()
+            .contains("\"subtotal_members\":[{\"subtotal\":\"Subtotal\"")
+    );
+    for field in 0..5 {
+        let mut changed = profile.clone();
+        let row = &mut changed.subtotal_members[0];
+        match field {
+            0 => row.subtotal = "Other subtotal".into(),
+            1 => row.member = "Site B".into(),
+            2 => row.period_from = "2029Q1".into(),
+            3 => row.period_to = Some("2030Q4".into()),
+            _ => row.evidence.push_str(" amended"),
+        }
+        let changed = assess(&changed, Lane::Synthetic, vec![input.clone()]);
+        assert_eq!(changed.mine_ledger.instances, bound.mine_ledger.instances);
+        assert_ne!(
+            changed.ledger_anchor.state_root, bound.ledger_anchor.state_root,
+            "field {field}"
+        );
+    }
+    profile.subtotal_members.clear();
+    assert_eq!(
+        assess(&profile, Lane::Synthetic, vec![input])
+            .ledger_anchor
+            .state_root,
+        legacy.ledger_anchor.state_root
+    );
+}
+
 fn metrics_section(markdown: &str) -> &str {
     markdown
         .split("## Published values and all selected vintages")

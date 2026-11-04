@@ -185,6 +185,49 @@ impl RegionMemberRow {
     }
 }
 
+/// One member of a flat subtotal (BD-331.S4). Its inclusive bounds describe the physical reporting period,
+/// not the file's release: NGM's 2023 comparisons include Long Canyon, while its 2024 values exclude it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubtotalMemberRow {
+    pub subtotal: String,
+    pub member: String,
+    /// First included quarter, `YYYYQn`.
+    pub period_from: String,
+    /// Last included quarter, `YYYYQn`; open when absent.
+    pub period_to: Option<String>,
+    /// Citation supporting the membership and its period bounds.
+    pub evidence: String,
+}
+
+impl SubtotalMemberRow {
+    /// Whether the membership covers the full inclusive physical period `first` through `last`.
+    #[must_use]
+    pub fn covers_period(&self, first: &str, last: &str) -> bool {
+        is_quarter(first)
+            && is_quarter(last)
+            && first <= last
+            && self.period_from.as_str() <= first
+            && self.period_to.as_deref().is_none_or(|end| last <= end)
+    }
+
+    /// Whether any part of the physical period is included. A consumer must refuse a partially covered
+    /// member rather than silently leave it out of a sum over the whole period.
+    #[must_use]
+    pub fn overlaps_period(&self, first: &str, last: &str) -> bool {
+        is_quarter(first)
+            && is_quarter(last)
+            && first <= last
+            && self.period_from.as_str() <= last
+            && self.period_to.as_deref().is_none_or(|end| first <= end)
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        let before = |a: &str, b: Option<&str>| b.is_none_or(|b| a <= b);
+        before(&self.period_from, other.period_to.as_deref())
+            && before(&other.period_from, self.period_to.as_deref())
+    }
+}
+
 /// One registered Mine Statistics row label (bd-gwf1.1): the label without its footnote number, and the label of
 /// the row it belongs to when it is a sub-row (`Processed` under `Average grade (grams per tonne)`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -291,6 +334,8 @@ pub struct SourcesRegistry {
     pub subject_statuses: Vec<SubjectStatusRow>,
     /// Region members, in file order; a site is in at most one region for any release.
     pub region_members: Vec<RegionMemberRow>,
+    /// Flat subtotal members, in file order, selected by the full physical period rather than release.
+    pub subtotal_members: Vec<SubtotalMemberRow>,
     /// Printed shares the run corrects, at most one per `(subject, printed)`, in file order.
     pub printed_share_corrections: Vec<PrintedShareCorrection>,
     /// Stale Mine Statistics labels read as registered ones, at most one per label for any release, in file order.
@@ -732,6 +777,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
             "missing_fact",
             "subject_status",
             "region_member",
+            "subtotal_member",
             "printed_share_correction",
             "mine_stats_label_alias",
             "document",
@@ -1426,6 +1472,68 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         region_members.push(row_member);
     }
 
+    let mut subtotal_members: Vec<SubtotalMemberRow> = Vec::new();
+    for row in doc.rows_of("subtotal_member") {
+        let f = Fields::of_row(row);
+        f.only(&["subtotal", "member", "period_from", "period_to", "evidence"])?;
+        let (subtotal, subtotal_line) = f.string("subtotal")?;
+        let (member, member_line) = f.string("member")?;
+        for (name, line) in [(&subtotal, subtotal_line), (&member, member_line)] {
+            if !subjects.contains(name) || regions.contains(name) {
+                return fail(
+                    line,
+                    format!("{name:?} is not a registered non-region subject"),
+                );
+            }
+        }
+        if subtotal == member {
+            return fail(member_line, "a subtotal cannot contain itself");
+        }
+        let (evidence, evidence_line) = f.string("evidence")?;
+        if evidence.trim().is_empty() {
+            return fail(evidence_line, "evidence must cite the subtotal membership");
+        }
+        let entry = SubtotalMemberRow {
+            subtotal,
+            member,
+            period_from: f.string("period_from")?.0,
+            period_to: f.optional_string("period_to")?,
+            evidence,
+        };
+        if [Some(&entry.period_from), entry.period_to.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|q| !is_quarter(q))
+        {
+            return fail(
+                row.line,
+                "period_from and period_to must be quarters YYYYQ1..YYYYQ4",
+            );
+        }
+        if entry
+            .period_to
+            .as_ref()
+            .is_some_and(|end| end < &entry.period_from)
+        {
+            return fail(row.line, "period_to is before period_from");
+        }
+        if subtotal_members
+            .iter()
+            .any(|m| m.subtotal == entry.subtotal && m.member == entry.member && m.overlaps(&entry))
+        {
+            return fail(
+                member_line,
+                "duplicate subtotal member over overlapping periods",
+            );
+        }
+        subtotal_members.push(entry);
+    }
+    for (row, entry) in doc.rows_of("subtotal_member").zip(&subtotal_members) {
+        if subtotal_members.iter().any(|m| m.subtotal == entry.member) {
+            return fail(row.line, "nested subtotal members are not supported");
+        }
+    }
+
     let mut printed_share_corrections: Vec<PrintedShareCorrection> = Vec::new();
     for row in doc.rows_of("printed_share_correction") {
         let f = Fields::of_row(row);
@@ -1531,6 +1639,7 @@ pub fn parse_sources_registry(text: &str) -> Result<SourcesRegistry, SourcesErro
         missing_facts,
         subject_statuses,
         region_members,
+        subtotal_members,
         printed_share_corrections,
         mine_stats_label_aliases,
         documents,
@@ -2318,6 +2427,155 @@ mod tests {
             let e = refusal(&minimal(&b, &format!("{head}{extra}")));
             assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
         }
+    }
+
+    #[test]
+    fn test_subtotal_members_cover_physical_periods_and_refuse_invalid_rows() {
+        let head = "[[subject]]\nname = \"Subtotal\"\n\n\
+                    [[subject]]\nname = \"Other\"\n\n\
+                    [[subject]]\nname = \"Site B\"\n\n\
+                    [[subject]]\nname = \"Region\"\nkind = \"region\"\n\n";
+        let member = |subtotal: &str, site: &str, first: &str, last: Option<&str>| {
+            let last = last
+                .map(|q| format!("period_to = \"{q}\"\n"))
+                .unwrap_or_default();
+            format!(
+                "[[subtotal_member]]\nsubtotal = \"{subtotal}\"\nmember = \"{site}\"\n\
+                 period_from = \"{first}\"\n{last}evidence = \"synthetic membership\"\n"
+            )
+        };
+        let old = member("Subtotal", "Site A", "2029Q1", Some("2029Q4"));
+        let current = member("Subtotal", "Site A", "2030Q1", None);
+        let valid = format!(
+            "{head}{old}{current}{}{}",
+            member("Subtotal", "Site B", "2029Q1", Some("2029Q4")),
+            member("Other", "Site A", "2029Q1", None),
+        );
+        let reg = parse_sources_registry(&minimal("", &valid)).expect("flat memberships");
+        assert_eq!(reg.subtotal_members.len(), 4);
+        assert!(
+            parse_sources_registry(&minimal("", ""))
+                .expect("legacy")
+                .subtotal_members
+                .is_empty()
+        );
+        let m = &reg.subtotal_members[0];
+        assert!(m.covers_period("2029Q1", "2029Q4"));
+        assert!(m.overlaps_period("2029Q4", "2030Q1"));
+        assert!(!m.covers_period("2029Q4", "2030Q1"));
+        assert!(!m.overlaps_period("2030Q1", "2030Q4"));
+        assert!(reg.subtotal_members[1].covers_period("2030Q1", "2031Q4"));
+        for (first, last) in [
+            ("2029Q4", "2029Q1"),
+            ("2029Q0", "2029Q4"),
+            ("2029Q1", "2029Q5"),
+        ] {
+            assert!(!m.covers_period(first, last) && !m.overlaps_period(first, last));
+        }
+        for (extra, why) in [
+            (
+                member("Unknown", "Site A", "2030Q1", None),
+                "non-region subject",
+            ),
+            (
+                member("Subtotal", "Unknown", "2030Q1", None),
+                "non-region subject",
+            ),
+            (
+                member("Region", "Site A", "2030Q1", None),
+                "non-region subject",
+            ),
+            (
+                member("Subtotal", "Region", "2030Q1", None),
+                "non-region subject",
+            ),
+            (
+                member("Subtotal", "Subtotal", "2030Q1", None),
+                "contain itself",
+            ),
+            (
+                member("Subtotal", "Site A", "2030Q5", None),
+                "quarters YYYYQ1..YYYYQ4",
+            ),
+            (
+                member("Subtotal", "Site A", "2030Q1", Some("2031")),
+                "quarters YYYYQ1..YYYYQ4",
+            ),
+            (
+                member("Subtotal", "Site A", "2030Q2", Some("2030Q1")),
+                "before period_from",
+            ),
+            (format!("{old}{old}"), "overlapping periods"),
+            (
+                format!("{old}{}", member("Subtotal", "Site A", "2029Q4", None)),
+                "overlapping periods",
+            ),
+            (
+                format!("{current}{}", member("Subtotal", "Site A", "2031Q1", None)),
+                "overlapping periods",
+            ),
+            (
+                current.replace("evidence = \"synthetic membership\"\n", ""),
+                "has no evidence",
+            ),
+            (
+                current.replace("synthetic membership", "   "),
+                "evidence must cite",
+            ),
+            (format!("{current}first = \"2030Q1\"\n"), "unknown key"),
+            (
+                format!(
+                    "{}{}",
+                    member("Subtotal", "Other", "2030Q1", None),
+                    member("Other", "Site A", "2030Q1", None)
+                ),
+                "nested subtotal",
+            ),
+            (
+                format!(
+                    "{}{}",
+                    member("Other", "Subtotal", "2030Q1", None),
+                    member("Subtotal", "Other", "2030Q1", None)
+                ),
+                "nested subtotal",
+            ),
+        ] {
+            let e = refusal(&minimal("", &format!("{head}{extra}")));
+            assert!(e.reason.contains(why) && e.line > 0, "{why}: {e}");
+        }
+    }
+
+    #[test]
+    fn test_barrick_subtotal_membership_keeps_long_canyon_only_in_2023() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let reg = load_sources_registry(&root.join("registries/sources/barrick.toml"))
+            .expect("Barrick registry");
+        assert_eq!(reg.subtotal_members.len(), 5);
+        let members = |first: &str, last: &str| {
+            reg.subtotal_members
+                .iter()
+                .filter(|m| m.subtotal == "Nevada Gold Mines" && m.covers_period(first, last))
+                .map(|m| m.member.as_str())
+                .collect::<Vec<_>>()
+        };
+        let core = ["Carlin", "Cortez", "Turquoise Ridge", "Phoenix"];
+        assert_eq!(
+            members("2023Q1", "2023Q4"),
+            [&core[..], &["Long Canyon"]].concat()
+        );
+        assert_eq!(members("2024Q1", "2024Q4"), core);
+        assert_eq!(members("2025Q1", "2026Q2"), core);
+        assert!(members("2022Q1", "2022Q4").is_empty());
+        assert!(
+            reg.subtotal_members
+                .iter()
+                .all(|m| m.evidence.contains("Q1_2024:QTD!A33"))
+        );
+        assert!(reg.subtotal_members[4].evidence.contains("Q1_2024:QTD!A32"));
+        assert_eq!(
+            reg.members_of("North America", "2024Q1"),
+            ["Nevada Gold Mines", "Hemlo"]
+        );
     }
 
     /// BD-331.S4 (W1-DR-01): `[[printed_share_correction]]` rows. A site's printed share maps to a registered one;

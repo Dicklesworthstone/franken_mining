@@ -541,6 +541,7 @@ mod mine_ledger {
     const NONE: LedgerRules<'static> = LedgerRules {
         regions: &[],
         region_members: &[],
+        subtotal_members: &[],
         statuses: &[],
         corrections: &[],
         aliases: &[],
