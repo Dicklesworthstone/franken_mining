@@ -239,7 +239,37 @@ fn ledger(out: &mut String, report: &PublicAssuranceReport) {
             text(reason)
         );
     }
+    subtotal_members(out, report);
     out.push_str(&report.mine_ledger.cost_layers.to_markdown());
+}
+
+pub(super) fn subtotal_members(out: &mut String, report: &PublicAssuranceReport) {
+    if report.subtotal_members.is_empty() {
+        return;
+    }
+    out.push_str("\n### Subtotal membership by reported period\n\nThese cited declarations apply to the full physical reporting period, including comparative columns. They are separate from release-based regional membership and are bound into the assurance certificate.\n\n");
+    table(
+        out,
+        &[
+            "Subtotal",
+            "Member",
+            "First period",
+            "Last period",
+            "Evidence",
+        ],
+    );
+    for r in &report.subtotal_members {
+        row(
+            out,
+            &[
+                r.subtotal.clone(),
+                r.member.clone(),
+                r.period_from.clone(),
+                r.period_to.clone().unwrap_or_else(|| "open".into()),
+                r.evidence.clone(),
+            ],
+        );
+    }
 }
 
 fn metrics(out: &mut String, report: &PublicAssuranceReport) {

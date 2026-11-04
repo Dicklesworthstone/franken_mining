@@ -5,6 +5,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
+use fmine_cli::packet::{PacketKind, packets_from_report};
 use fmine_core::hash::Digest32;
 use fmine_io::xlsx::{
     MinimalCell, MinimalSheet, MinimalStyles, Workbook, build_minimal_xlsx_styled,
@@ -12,8 +13,8 @@ use fmine_io::xlsx::{
 };
 use fmine_public::consistency::TransitionKind;
 use fmine_public::consistency::mine_stats::{MineStatsConsistency, assess as consistency};
-use fmine_public::mine_ledger::{Family, Group};
-use fmine_public::sources::{IssuerProfile, RegisteredShare, SourceKind};
+use fmine_public::mine_ledger::{Family, Group, Reason, State};
+use fmine_public::sources::{IssuerProfile, RegisteredShare, SourceKind, SubtotalMemberRow};
 use fmine_public::{Lane, LoadedSource, PublicAssuranceReport, assess, synthetic};
 
 fn sheet(
@@ -147,6 +148,283 @@ fn alias_pair(
         })
         .collect();
     assessed(&profile, sources)
+}
+
+/// Invented two-mine subtotal: the second file repeats 2024Q1 in shifted columns and reversed site rows.
+/// Changing its printed member cannot change the declared subtotal membership for that physical period.
+fn subtotal_pair(
+    later_sold: &str,
+    later_member: &str,
+) -> (PublicAssuranceReport, MineStatsConsistency) {
+    let mut profile = synthetic::synthetic_profile();
+    profile.subjects = ["Carlin", "Cortez", "Phoenix", "Nevada Gold Mines"]
+        .map(str::to_string)
+        .into();
+    profile.regions.clear();
+    profile.region_members.clear();
+    profile.reconstructions.clear();
+    profile.subject_statuses.clear();
+    profile.shares = vec![RegisteredShare {
+        subject: "Nevada Gold Mines".into(),
+        label: "Nevada Gold Mines LLC".into(),
+        num: 1,
+        den: 2,
+        evidence: "invented 50% subtotal label".into(),
+    }];
+    profile.subtotal_members = ["Carlin", "Cortez"]
+        .map(|member| SubtotalMemberRow {
+            subtotal: "Nevada Gold Mines".into(),
+            member: member.into(),
+            period_from: "2024Q1".into(),
+            period_to: None,
+            evidence: "invented component membership".into(),
+        })
+        .into();
+    let sources = [("first.xlsx", "2024Q1", 0), ("later.xlsx", "2025Q1", 2)]
+        .map(|(file, release, shift)| {
+            let later = shift != 0;
+            let (first_member, second_member, full, attr) = if later {
+                (later_member, "Carlin", ["200", "100"], ["100", "50"])
+            } else {
+                ("Carlin", "Cortez", ["100", "200"], ["50", "100"])
+            };
+            let mut block = sheet("QTD", full[0], attr[0], "50", shift, false);
+            let (_, first_label) = block.cells.iter_mut().find(|(at, _)| at == "A5").unwrap();
+            *first_label = MinimalCell::Text(format!("{first_member} (50%)"));
+            let [a, b, c] = [2, 3, 4].map(|col| col_index_to_letters(col + shift));
+            let number = |raw: &str| MinimalCell::Styled {
+                raw: raw.into(),
+                xf: 0,
+            };
+            block.cells.extend([
+                (
+                    format!("{c}4"),
+                    MinimalCell::Text("Gold sold (000s oz attributable)".into()),
+                ),
+                (format!("{c}5"), number(attr[0])),
+                (
+                    "A6".into(),
+                    MinimalCell::Text(format!("{second_member} (50%)")),
+                ),
+                (format!("{a}6"), number(full[1])),
+                (format!("{b}6"), number(attr[1])),
+                (format!("{c}6"), number(attr[1])),
+                (
+                    "A7".into(),
+                    MinimalCell::Text("Nevada Gold Mines LLC (50%)".into()),
+                ),
+                (format!("{a}7"), number("300")),
+                (format!("{b}7"), number("150")),
+                (
+                    format!("{c}7"),
+                    number(if later { later_sold } else { "150" }),
+                ),
+            ]);
+            source(file, release, block)
+        })
+        .into();
+    assessed(&profile, sources)
+}
+
+#[test]
+fn subtotal_histories_bind_canonical_operands_and_preserve_first_registered_counts() {
+    for later_sold in ["150", "160"] {
+        let changed = later_sold == "160";
+        let (report, projection) = subtotal_pair(later_sold, "Cortez");
+        assert_eq!(report.mine_stats_consistency, projection);
+        assert!(projection.unkeyed.is_empty(), "{:?}", projection.unkeyed);
+        assert_eq!(
+            projection.first_registered[&(Family::SitesToSubtotal, "i")],
+            3
+        );
+        assert!(
+            !projection
+                .first_registered
+                .contains_key(&(Family::SitesToSubtotal, "iii"))
+        );
+        assert_eq!(
+            projection.all_files[&(Family::SitesToSubtotal, "i")],
+            if changed { 5 } else { 6 }
+        );
+        assert_eq!(
+            projection
+                .all_files
+                .get(&(Family::SitesToSubtotal, "iii"))
+                .copied()
+                .unwrap_or(0),
+            usize::from(changed)
+        );
+        let histories: Vec<_> = projection
+            .histories
+            .iter()
+            .filter(|h| h.family == Family::SitesToSubtotal)
+            .collect();
+        assert_eq!(histories.len(), 3);
+        for h in histories {
+            let broken = changed && h.series.line.label == "summary:au_sold_attr_koz";
+            assert_eq!(h.series.subject, "Nevada Gold Mines");
+            assert_eq!(h.series.valid_period.code(), "2024Q1");
+            assert_eq!(
+                h.sequence
+                    .iter()
+                    .map(|a| (a.release.as_str(), a.state))
+                    .collect::<Vec<_>>(),
+                [
+                    ("2024Q1", "i"),
+                    ("2025Q1", if broken { "iii" } else { "i" })
+                ]
+            );
+            assert_eq!(h.transitions.len(), 1);
+            assert_eq!(
+                h.transitions[0].kind,
+                if broken {
+                    TransitionKind::Broken
+                } else {
+                    TransitionKind::Persisted
+                }
+            );
+            assert_eq!(h.transitions[0].operands_changed, Some(broken));
+        }
+        // The raw ledger keeps the printed LLC label; every canonical anchor and component Claim is cited.
+        for (release, file, group, col, rows) in [
+            ("2024Q1", "first.xlsx", Group::Current, "D", [5, 6, 7]),
+            ("2025Q1", "later.xlsx", Group::Prior, "F", [6, 5, 7]),
+        ] {
+            let binding = projection
+                .bindings
+                .iter()
+                .find(|b| {
+                    b.instance.family == Family::SitesToSubtotal
+                        && b.instance.anchor == format!("{release}:QTD!{col}7")
+                })
+                .unwrap();
+            assert_eq!(binding.instance.group, group);
+            assert_eq!(binding.instance.subject, "Nevada Gold Mines LLC");
+            assert_eq!(binding.source.locator, format!("{file}:QTD!{col}7"));
+            assert_eq!(binding.source.key.subject, "Nevada Gold Mines");
+            assert_eq!(
+                binding.instance.cells,
+                rows.map(|row| Some(format!("{release}:QTD!{col}{row}")))
+            );
+            for (row, subject) in rows
+                .into_iter()
+                .zip(["Carlin", "Cortez", "Nevada Gold Mines"])
+            {
+                let claim = projection
+                    .source_claims
+                    .iter()
+                    .find(|c| c.locator == format!("{file}:QTD!{col}{row}"))
+                    .unwrap();
+                assert_eq!(claim.key.subject, subject);
+                assert_eq!(claim.key.line.label, "summary:au_sold_attr_koz");
+                assert_eq!(claim.key.valid_period.code(), "2024Q1");
+                assert!(claim.claim.check_id().is_ok());
+            }
+        }
+        let packets = packets_from_report(&report).expect("source-bound subtotal history exports");
+        let transitions: Vec<_> = packets
+            .iter()
+            .filter(|p| {
+                p.kind() == PacketKind::MineStatsIdentityTransition
+                    && p.family() == "mine_stats_identity:sites_to_subtotal"
+            })
+            .collect();
+        assert_eq!(transitions.len(), usize::from(changed));
+        if let Some(packet) = transitions.first() {
+            packet.validate().unwrap();
+            assert_eq!(packet.subject(), "Nevada Gold Mines");
+            assert_eq!(packet.finding_count(), 1);
+            let json = packet.to_json();
+            for evidence in [
+                "\"transition\":\"broken\"",
+                "\"operands_changed\":true",
+                "first.xlsx:QTD!D5",
+                "first.xlsx:QTD!D6",
+                "first.xlsx:QTD!D7",
+                "later.xlsx:QTD!F6",
+                "later.xlsx:QTD!F5",
+                "later.xlsx:QTD!F7",
+            ] {
+                assert!(json.contains(evidence), "missing {evidence}");
+            }
+        }
+    }
+}
+
+#[test]
+fn subtotal_member_mismatch_retains_missing_operands_without_claiming_a_broken_identity() {
+    // Phoenix prints Cortez's exact quantities in the later file, but it is not a registered component.
+    let (report, projection) = subtotal_pair("150", "Phoenix");
+    assert!(projection.unkeyed.is_empty());
+    assert_eq!(
+        projection.first_registered[&(Family::SitesToSubtotal, "i")],
+        3
+    );
+    assert_eq!(projection.all_files[&(Family::SitesToSubtotal, "i")], 3);
+    assert_eq!(projection.all_files[&(Family::SitesToSubtotal, "v")], 3);
+    let histories: Vec<_> = projection
+        .histories
+        .iter()
+        .filter(|h| h.family == Family::SitesToSubtotal)
+        .collect();
+    assert_eq!(histories.len(), 3);
+    for h in histories {
+        assert_eq!(
+            h.sequence.iter().map(|a| a.state).collect::<Vec<_>>(),
+            ["i", "v"]
+        );
+        assert_eq!(h.transitions[0].kind, TransitionKind::Reclassified);
+        assert_eq!(h.transitions[0].operands_changed, None);
+    }
+    let binding = projection
+        .bindings
+        .iter()
+        .find(|b| {
+            b.instance.family == Family::SitesToSubtotal && b.instance.anchor == "2025Q1:QTD!F7"
+        })
+        .unwrap();
+    assert_eq!(
+        binding.instance.state,
+        State::Refused {
+            reason: Reason::OperandRowMissing,
+            at: None
+        }
+    );
+    assert_eq!(
+        binding.instance.cells,
+        [
+            Some("2025Q1:QTD!F6".into()),
+            None,
+            Some("2025Q1:QTD!F7".into())
+        ]
+    );
+    let unexpected = report
+        .mine_stats_claims
+        .claims
+        .iter()
+        .find(|c| c.locator == "later.xlsx:QTD!F5")
+        .unwrap();
+    assert_eq!(unexpected.key.subject, "Phoenix");
+    let packets =
+        packets_from_report(&report).expect("recorded missing operands remain reviewable");
+    let transitions: Vec<_> = packets
+        .iter()
+        .filter(|p| {
+            p.kind() == PacketKind::MineStatsIdentityTransition
+                && p.family() == "mine_stats_identity:sites_to_subtotal"
+        })
+        .collect();
+    assert_eq!(transitions.len(), 3);
+    for packet in transitions {
+        packet.validate().unwrap();
+        assert_eq!(packet.subject(), "Nevada Gold Mines");
+        assert_eq!(packet.finding_count(), 1);
+        let json = packet.to_json();
+        assert!(json.contains("\"transition\":\"reclassified\""));
+        assert!(json.contains("\"operands_changed\":null"));
+        assert!(json.contains("\"reason\":\"operand_row_missing\""));
+        assert!(json.contains("supply the missing source key or input"));
+    }
 }
 
 #[test]

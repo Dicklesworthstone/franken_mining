@@ -320,3 +320,24 @@ totals_np = 60
 census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
 reason = "M0AS frame v8 binds public waterfall outcomes, source Claim digests, exact gaps and interval bars; no identity state moves."
 evidence = "BD-333.S1-S3, commit:547af4f, commit:51f1058, record:repro/barrick/waterfall_census.py, test:xtask::public_waterfall::barrick_waterfall_counts_and_north_mara_match_independent_census"
+
+# Observed 2026-11-04 with the pinned nightly debug binary and the root-producing source in c45e62f,
+# running `fmine assure public --issuer barrick --through 2026Q2` against all 18 registered workbooks.
+# Frame v9 binds the cited physical-period subtotal membership; the Mine Stats ledger adds 102 NGM
+# component-mine equalities. All 9,000 prior ledger outcomes and all AISC totals remain unchanged.
+# mine_stats_census.py independently establishes the source identities and locators. This root is a
+# reproducibility regression, not an independent oracle; the prior v8 epoch above remains unchanged.
+[[expected]]
+commit = "c45e62f45576a858fdb7491fe71aeda80d79984c"
+registry_epoch = "1b81a8aa03632cfd1e46ed3fa7172082df8a3648625d4ac53052b12c4e79e90d"
+state_root = "0effa0b43ff122299e95b8d12cdfa57319b26a1f2a7a71fce4ea7367d0e2f264"
+anchor_id = "anc_81413afd2e7cfa34b7969c5fb4e35f85"
+totals_i = 2436
+totals_ii = 3
+totals_iii = 4
+totals_iv = 92
+totals_v = 0
+totals_np = 60
+census_digest_of_digests = "003ba3180615a74edea10a3fcc115eea0db9126be0dbd40e65b6b5c40a2d2c5c"
+reason = "M0AS frame v9 binds cited subtotal membership and the ledger adds 102 physical-period NGM gold-flow identities; no prior identity state moves."
+evidence = "BD-331.S4, bd-prmn.4, commit:c45e62f, record:scripts/oracle/mine_stats_census.py, test:xtask::public_corpus::corpus::barrick_mine_ledger_matches_census"

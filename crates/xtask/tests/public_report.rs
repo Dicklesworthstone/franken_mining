@@ -100,6 +100,9 @@ fn subtotal_policy_is_cited_and_bound_even_when_no_numeric_state_changes() {
             .to_json()
             .contains("\"subtotal_members\":[{\"subtotal\":\"Subtotal\"")
     );
+    let markdown = assure_report::markdown(&bound).expect("cited report");
+    assert!(markdown.contains("Subtotal membership by reported period"));
+    assert!(markdown.contains("Synthetic membership \\| source note"));
     for field in 0..5 {
         let mut changed = profile.clone();
         let row = &mut changed.subtotal_members[0];

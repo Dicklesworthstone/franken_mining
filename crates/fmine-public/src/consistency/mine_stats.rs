@@ -83,7 +83,7 @@ fn role(family: Family, slot: usize, len: usize) -> Option<&'static str> {
             ["previous", "quarter", "total"].get(slot).copied()
         }
         Family::SiteSheet if len == 2 => ["summary", "site"].get(slot).copied(),
-        Family::RegionToTotal | Family::SitesToRegion if len >= 2 => {
+        Family::RegionToTotal | Family::SitesToRegion | Family::SitesToSubtotal if len >= 2 => {
             Some(if slot + 1 == len { "total" } else { "member" })
         }
         Family::SoldWeightedRate if len >= 3 && len % 2 == 1 => Some(if slot + 1 == len {
