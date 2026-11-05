@@ -13,6 +13,7 @@ fmine-units = { path = "../fmine-units" }
 fmine-time = { path = "../fmine-time" }
 fmine-evidence = { path = "../fmine-evidence" }
 fmine-claim = { path = "../fmine-claim" }
+fmine-numerics = { path = "../fmine-numerics" }
 
 [lints]
 workspace = true

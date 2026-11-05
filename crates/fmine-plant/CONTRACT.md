@@ -6,12 +6,14 @@ DESIGN: Crucible accounts for elemental inventory and declared conservative plan
 physical boundaries and intervals (plan §§17.2–17.5; BD-175/177/313). It keeps stocktake timing separate
 from integrated flows and refuses unclosed unit or whole-plant balances. This is original code, using
 the existing claim-admission pattern; no FrankenSim solver is copied or linked.
+An additional inventory adapter performs conditional measurement reconciliation through the shared
+K0 numerical owner, preserving the original observations and a separately declared error model.
 
 - **Crate:** `fmine-plant`
 - **Layer:** K2
 - **Subsystem:** Crucible
 - **LOC budget:** 32,000 planned / 37,000 ceiling
-- **Allowed Module Families:** `["inventory", "flowsheet"]`
+- **Allowed Module Families:** `["inventory", "flowsheet", "reconciliation"]`
 
 ## 2. Inputs
 
@@ -95,6 +97,8 @@ parents/anchors by ordered sets, and UU scenarios by identity. IEEE bits are ret
 epistemic metadata. `receipt_identity_is_input_order_independent_and_immutable` checks input permutations.
 Flowsheet units, streams and elements have canonical identity order; declaration/input permutations
 preserve the graph receipt. Generic claim-admission helper extraction preserves original inventory receipts.
+`reconciliation`: DeterministicPerIsa. Its typed binary64 estimates and covariance come from the
+shared LDLT-based numerical owner; source observations retain their original exact rational values.
 
 ## 7. Evidence class of outputs
 
@@ -108,11 +112,13 @@ validated regime or measurement-accuracy claim from successful arithmetic. It is
 One full physical boundary, one declared conserved elemental measurand, one positive-duration interval,
 two endpoint stocks and integrated nonnegative nominal mass totals. Element symbols are validated for
 case/shape, not looked up or chemically interpreted. The completeness declaration is conditional input;
-its truth is not independently audited. Closure is exact, with no measurement tolerance or error-model
-adjustment. No sequence continuity, as-of availability or authority-ledger check is inferred.
+its truth is not independently audited. `inventory` and `flowsheet` closure is exact, with no measurement
+tolerance or error-model adjustment. No sequence continuity, as-of availability or authority-ledger check is inferred.
 The flowsheet is restricted to conservative mechanical transfer on the declared dry-matter/H2O basis.
 Cycles and held inventory are admitted; reactions, phase changes that alter carrier definitions,
 process prediction and estimated recoveries are outside this nominal-accounting interface.
+Declared unit stocks must partition the outer inventory without overlap; geometry and source coverage
+are conditional declarations rather than an independently audited partition.
 
 ## 9. Oracles
 
@@ -133,7 +139,9 @@ impossible metal-in-water composition, identity order and internal confidentiali
 ## 10. Known gaps
 
 BD-175 now has a nominal conservative plant-flow graph; process-model prediction and shared cross-domain
-flow adapters remain. BD-177 still needs raw-stream error models and P754 reconciliation.
+flow adapters remain. BD-177 now has covariance-aware reconciliation of fully measured elemental totals;
+raw-stream tonnage/assay conversion, cross-element network reconciliation, missing observations, sensor
+bias estimation, plant error-model calibration and full P754 reconciliation remain.
 BD-287 process-card ingestion and BD-313 RTD inversion/deconvolution remain unimplemented
 here. No real plant fixture, source-file verification, assay/ore conversion, durable receipt decoder,
 CLI importer, forecast registration, sequence authority or permission-to-operate claim is supplied.
@@ -158,3 +166,44 @@ PO-UNIT-2: quantities enter as `Claim<MetalBalanceInput>` using exact kg values;
 checks public signatures. INV-005 is demonstrated by positive closure and both signs of a nonzero
 residual; INV-007 by the label-join/export refusal test. Exact arithmetic establishes no calibration
 or reconciliation proof obligation for a real plant.
+
+## 13. Fully measured elemental inventory reconciliation (DESIGN)
+
+`reconciliation::reconcile_inventory` takes the same six `Claim<MetalBalanceInput>` roles plus a
+`Claim<InventoryErrorModel>`. The model binds the exact five observation claim IDs, boundary/element/
+measurand/interval, a full 5×5 covariance in kg², an explicit unbiased-Gaussian assumption, a global
+chi-square rejection threshold, an optional simultaneous normalized-adjustment policy and a kg closure
+allowance. Physical public quantities use `Qty<Mass>` and `Qty<SquaredMass>`; test statistics are
+dimensionless. The deterministic model envelope describes supplied parameters; the covariance inside
+it describes measurement uncertainty. No independent-error assumption or variance is manufactured.
+
+All source admission, source anchors, semantic tags, stale/calibration checks and exact role/time
+checks still apply. The adapter retains the exact original imbalance and compares exact source
+quantities with their binary64 representations. Conversion loss exceeding the smaller of one-millionth
+of a declared sigma and one-fifth of the closure allowance refuses; so does an unrepresentable fitted
+adjustment or loss of the original exact residual. Fitted values are never rounded into an exact
+`MetalBalanceReceipt`. Full covariance remains present in the composite result; fitted coordinates
+must not be interpreted as independent measurements.
+
+`InventoryReconciliationOutcome::Admitted` contains an immutable `ReconciledInventoryReceipt` with
+original observations, original error-model claim, result claim and digest. Output evidence meets
+every source, confidentiality joins, compatible UU metadata survives, and knowledge is capped at
+`Estimated`. The result is a conditional model calculation, not a calibrated observation.
+`Rejected` retains the same originals, numerical diagnostics, refusal and digest but exposes no
+admitted balance claim. Negative fitted mass rejects with `FMINE-REF-109`; excess global/normalized
+discrepancy or domain closure error rejects with `FMINE-REF-101`. Malformed sources or numerically
+unresolved covariance/constraints return a refusal without a candidate. No measurement is deleted,
+no fitted negative is clamped, and a single balance cannot identify the uniquely faulty instrument.
+
+`examples/reconcile_inventory.rs` declares synthetic observations [10,100,72,8,31] kg and diagonal
+variances [1,4,1,1,9] kg². It obtains a -1 kg original residual, chi-square 0.0625, and fitted totals
+[10.0625,100.25,71.9375,7.9375,30.4375] kg. Replacing closing stock by 50 kg produces chi-square 25
+and rejection against the explicitly illustrative threshold 9. The example prints both outcomes.
+`reconciliation/tests.rs` independently checks these weights and full covariance, correlated errors,
+gross-error rejection, a negative candidate, exact-to-float precision loss, source/model tampering,
+scoped observation identities and participation of model evidence/confidentiality.
+
+This is plan §20.3's fully measured linear R1 slice using `fmine_numerics::reconciliation`; it does not
+claim a real plant fixture, empirical confidence calibration, latent-state/bias R2 model, uncertainty
+reconciliation across an entire flowsheet, reconciliation of grades as independent extensive totals,
+or P754 compliance. Original source families and receiver-side permissions remain authoritative.

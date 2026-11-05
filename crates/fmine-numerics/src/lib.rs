@@ -14,6 +14,7 @@
 pub mod eproc;
 pub mod exact_feas;
 pub mod risk;
+pub mod reconciliation;
 pub mod sparse;
 pub mod tropical;
 pub mod voi;

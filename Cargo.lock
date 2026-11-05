@@ -174,6 +174,7 @@ dependencies = [
  "fmine-claim",
  "fmine-core",
  "fmine-evidence",
+ "fmine-numerics",
  "fmine-time",
  "fmine-units",
 ]

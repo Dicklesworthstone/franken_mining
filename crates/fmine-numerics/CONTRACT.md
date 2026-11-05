@@ -5,7 +5,8 @@ The K0 numerical kernels that the domain crates call:
 - in `lib.rs`: a dense SPD Cholesky solve, Brent's bracketed root-finder, and the standard normal CDF and inverse CDF;
 - anytime-valid betting e-processes, on PIT values and on bounded scores (`eproc`), EVPI and EVSI in closed form and by Monte Carlo (`voi`), empirical VaR and CVaR (`risk`), and `(max, +)` / `(min, +)` precedence scheduling (`tropical`);
 - `sparse`: CSR with deterministic COO assembly, AMD with a supernodal LDLᵀ, and PCG with ILU(0);
-- `exact_feas`: exact rounding-interval feasibility for published tables (BD-340), with its discovery reports, table generator and power study.
+- `exact_feas`: exact rounding-interval feasibility for published tables (BD-340), with its discovery reports, table generator and power study;
+- `reconciliation`: fully measured linear WLS with full measurement and posterior covariance (plan §20.3 R1).
 
 It does no I/O and holds no domain rules (L-3). `xtask check-claims` exempts it from L-6, so its kernels take bare `f64`.
 
@@ -15,7 +16,7 @@ It does no I/O and holds no domain rules (L-3). `xtask check-claims` exempts it 
 - **Layer:** K0
 - **Subsystem:** Bedrock
 - **LOC budget:** 30,000 planned / 35,000 ceiling
-- **Allowed Module Families:** `["eproc", "voi", "risk", "tropical", "exact_feas", "sparse"]`
+- **Allowed Module Families:** `["eproc", "voi", "risk", "tropical", "exact_feas", "sparse", "reconciliation"]`
 
 ## 2. Inputs
 - **Dense kernels.** Bare `f64`, unitless to this crate:
@@ -227,6 +228,40 @@ No fixture under `fixtures/` (§33.2).
   - The `fmine check tables` verb waits on an owner question (bd-4wvl.8).
 
 ## 11. Public API
+
+### Fully measured linear reconciliation (DESIGN)
+
+`reconciliation::reconcile_linear(y, V, A, b)` solves the complete linear measurement problem
+`A x = b`, with 1–128 observed coordinates, 1–64 independent constraint rows, finite data and a
+strictly positive-definite, exactly symmetric full covariance V. It returns estimates, adjustments,
+full posterior and adjustment covariance, original/fitted balance residuals, degrees of freedom,
+the quadratic chi-square statistic and signed adjustments normalized by their own adjustment
+standard deviations. Unaffected variables have no normalized-adjustment diagnostic.
+
+The correction is `x = y - V A' (A V A')^-1 (A y - b)`. Two reusable factorizations use the existing
+`sparse::direct` LDLT owner, diagonal equilibration and a 16 MiB per-factor payload limit. There is no
+variance padding, rank dropping, covariance clipping or second solver implementation. Posterior
+covariance is propagated as `M V M'`, with `M = I - V A' (A V A')^-1 A`, to avoid cancellation in
+subtracting nearly equal variances. Compensated sums and explicit closure, stationarity, objective,
+covariance reconstruction, constrained-covariance and marginal/correlation audits fail closed.
+Numerical range loss, dependent constraints or indefinite covariance refuse `FMINE-REF-207`.
+These binary64 audits are nominal checks, not an interval-certified PSD proof.
+
+The determinism class is `DeterministicPerIsa`, inherited from the LDLT arithmetic. Coordinates have
+no domain units in this K0 kernel; callers supply typed quantities, source claims, support and a
+gross-error admission policy. The chi-square interpretation requires unbiased Gaussian measurement
+errors with the declared covariance. Correlated normalized adjustments do not identify a unique
+faulty instrument or supply an independent multiple-testing rule. Missing measurements, unknown
+biases, uncertain constraint coefficients, nonnegativity-constrained fitting and model calibration
+are outside this fully measured linear slice; no posterior probability or empirical coverage is inferred.
+
+Primary reference: [Tamhane and Mah (1985), Technometrics 27, 409–422](https://doi.org/10.1080/00401706.1985.10488080).
+`reconciliation/tests.rs` transcribes Example 1's original measurement units and checks both estimates
+and full covariance against an independently derived one-dimensional nullspace solution, reproducing
+the global statistic approximately 8.454741724. Additional oracles cover correlated errors, affine
+constraints, row/unit scaling, permutations, a finite error population with known covariance, exactly
+fixed coordinates, malformed problems and preservation of 1e-20 posterior variance from source
+variances 1e20 and 1e-20 in either coordinate order.
 - **`lib.rs`.**
   - `cholesky_solve(a: &[f64], b: &[f64], n: usize) -> Result<Vec<f64>, Refusal>`.
   - `brent_root(a, b, tol, max_iter, f) -> Result<Root, RootError>`, with `Root { x, f_x, bracket, iterations }`. An unconverged iterate is never returned (bd-t1dk).
