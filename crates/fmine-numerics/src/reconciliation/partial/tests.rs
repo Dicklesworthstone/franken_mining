@@ -139,6 +139,74 @@ fn redundant_partial_balance_retains_cross_measurement_covariance() {
 }
 
 #[test]
+fn recycle_with_unmeasured_product_retains_analytical_zero_cross_covariances() {
+    // Measured order: opening A/B, feed, shared A->B, recycle B->A, closing A/B.
+    // Unit A has a=[1,0,1,-1,1,-1,0], residual -1 and variance a'a=5.
+    // Unit B's measured contribution is b*y=101, with b=[0,1,0,1,-1,0,-1].
+    // Its unknown product absorbs the entire B balance. Eliminating that unknown
+    // leaves exactly the A constraint, so P=I-aa'/5 and u=b*P*y=100.6.
+    let a = [1.0, 0.0, 1.0, -1.0, 1.0, -1.0, 0.0];
+    let b = [0.0, 1.0, 0.0, 1.0, -1.0, 0.0, -1.0];
+    let mut covariance = [0.0; 49];
+    for i in 0..7 {
+        covariance[i * 7 + i] = 1.0;
+    }
+    let measured: Vec<_> = a.into_iter().chain(b).collect();
+    let r = reconcile_with_unmeasured(
+        &[10.0, 10.0, 100.0, 121.0, 20.0, 10.0, 10.0],
+        &covariance,
+        &measured,
+        &[0.0, -1.0],
+        &[0.0, 0.0],
+        1,
+    )
+    .unwrap();
+    assert_eq!(r.raw_observed_residuals, vec![-1.0, 101.0]);
+    assert_eq!(r.degrees_of_freedom, 1);
+    close(r.chi_square, 1.0 / 5.0);
+    close(r.latent_estimates[0], 503.0 / 5.0);
+    for (&actual, expected) in r
+        .measured_estimates
+        .iter()
+        .zip([10.2, 10.0, 100.2, 120.8, 20.2, 9.8, 10.0])
+    {
+        close(actual, expected);
+    }
+    // b*a=-2, hence Cov(x,u)=P*b'=b'+2a'/5 and Var(u)=4-4/5.
+    // The B stocktakes have exactly zero covariance with every A measurement.
+    // A roundoff residual around such a zero must not be tested against itself
+    // as its only scale, nor repaired by changing the returned covariance.
+    assert_eq!(r.posterior_covariance.len(), 64);
+    assert_eq!(r.adjustment_covariance.len(), 49);
+    for i in 0..8 {
+        for j in 0..8 {
+            let expected = if i == 7 && j == 7 {
+                16.0 / 5.0
+            } else if i == 7 {
+                b[j] + 2.0 * a[j] / 5.0
+            } else if j == 7 {
+                b[i] + 2.0 * a[i] / 5.0
+            } else {
+                (if i == j { 1.0 } else { 0.0 }) - a[i] * a[j] / 5.0
+            };
+            let actual = r.posterior_covariance[i * 8 + j];
+            assert!(
+                (actual - expected).abs() <= 1e-12,
+                "posterior[{i},{j}]: {actual:.17e} != {expected:.17e}"
+            );
+            if i < 7 && j < 7 {
+                let adjustment = a[i] * a[j] / 5.0;
+                assert!((r.adjustment_covariance[i * 7 + j] - adjustment).abs() <= 1e-12);
+            }
+        }
+    }
+    close(r.posterior_covariance[2 * 8 + 7], 2.0 / 5.0);
+    for residual in r.reconciled_residuals {
+        assert!(residual.abs() <= 1e-12);
+    }
+}
+
+#[test]
 fn correlated_carrier_and_trace_element_stock_differences_retain_posterior_scale() {
     let mut v = vec![0.0; 36];
     for (i, variance) in [4.0, 1.0, 0.0004, 4.0, 1.0, 0.0004].into_iter().enumerate() {

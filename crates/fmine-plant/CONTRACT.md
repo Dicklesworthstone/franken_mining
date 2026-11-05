@@ -368,3 +368,8 @@ with variance 4.2 kg², feed/tails covariance 0.4 kg², chi-square 0.2 and three
 `--ambiguous` adds a second unmeasured outlet and refuses before successful stdout. Tests cover
 these analytical answers, cross-scale correlated errors, observability, physical/policy rejection,
 source/model mutation, missing roles and provenance/confidentiality retention.
+
+`fmine plant infer --input tests/plant/flowsheet_infer.toml` exposes this owner through the shared graph
+worksheet parser. The separate schema explicitly names unmeasured streams and supplies covariance only
+for observed coordinates. The result retains source Claims, the full joint covariance, observed/inferred
+distinctions and the explicit availability of gross-error testing. No missing stock or prior is invented.

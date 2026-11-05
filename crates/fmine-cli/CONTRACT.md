@@ -29,6 +29,18 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Negative production is unusable. A degenerate printed range is interpreted as a point target.
 - **Envelope:** `FMT-ENV-1` (`schema_version: "fmine.env.v1"`).
 - **Verbs:**
+  - DESIGN (BD-149/175/177): `plant infer --input <worksheet.toml>` extends the shared graph worksheet
+    parser under the distinct `fmine.plant-unmeasured.v1` schema. `[[unmeasured]] stream` rows explicitly
+    name complete stream observations to infer; all unit stocktakes remain measured. The covariance
+    contains only genuine observed coordinates. The command calls the existing partial reconciliation
+    owner and refuses non-identifiable cycles or splits, mixed observed/unmeasured declarations and
+    undeclared missing data. The output distinguishes measured and inferred coordinate orders, retains
+    full joint and boundary covariance, and reports null observed totals for boundary roles containing
+    unmeasured streams. `no_redundancy` supplies no gross-error statistic or successful test verdict.
+    Rejected candidates retain source observations, model and available diagnostics without an admitted
+    Claim. Inputs remain Assumed, Internal and uncalibrated. `robot-docs.plant_inference` documents the
+    schema; `tests/plant/flowsheet_infer.toml` is a constructed runnable example. Actual-binary checks
+    live in `crates/xtask/testdata/plant_inference_contract.rs`.
   - DESIGN (BD-149/175/177): `plant flowsheet --input <worksheet.toml>` reads a byte-bound
     `fmine.plant-flowsheet.v1` worksheet and invokes the joint flowsheet reconciliation owner.
     The worksheet declares units, directed streams, total elemental measurands, explicit dry-matter/H2O/

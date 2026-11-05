@@ -30,6 +30,8 @@ pub const PROJECT_USAGE: &str = "plant project --input <worksheet.toml>";
 pub const PROJECT_DOCS_JSON: &str = project::ROBOT_DOCS_JSON;
 pub const NETWORK_USAGE: &str = "plant flowsheet --input <worksheet.toml>";
 pub const NETWORK_DOCS_JSON: &str = network::ROBOT_DOCS_JSON;
+pub const INFER_USAGE: &str = "plant infer --input <worksheet.toml>";
+pub const INFERENCE_DOCS_JSON: &str = network::INFERENCE_ROBOT_DOCS_JSON;
 pub const SCHEMA: &str = "fmine.plant-inventory.v1";
 const MAX_BYTES: u64 = 1024 * 1024;
 const ROLES: [&str; 5] = ["opening", "feed", "product", "other_outflow", "closing"];
@@ -72,6 +74,7 @@ pub enum Command {
     Inventory { mode: Mode, input: PathBuf },
     Project { input: PathBuf },
     Network { input: PathBuf },
+    Infer { input: PathBuf },
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -82,7 +85,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         || args[3].starts_with("--")
     {
         return Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {NETWORK_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {NETWORK_USAGE} | {INFER_USAGE}"
         ));
     }
     let input = PathBuf::from(&args[3]);
@@ -97,8 +100,9 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         }),
         "project" => Ok(Command::Project { input }),
         "flowsheet" => Ok(Command::Network { input }),
+        "infer" => Ok(Command::Infer { input }),
         _ => Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {NETWORK_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {NETWORK_USAGE} | {INFER_USAGE}"
         )),
     }
 }
@@ -552,6 +556,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         Command::Inventory { mode, input } => (*mode, input),
         Command::Project { input } => return project::execute(input, root),
         Command::Network { input } => return network::execute(input, root),
+        Command::Infer { input } => return network::execute_unmeasured(input, root),
     };
     let run = || -> Result<Envelope, Refusal> {
         let (text, source) =

@@ -279,6 +279,12 @@ mutates_authority = false
 description = "Jointly reconcile all declared plant units, shared internal transfers and stocks under a full source-bound covariance"
 
 [[verb]]
+path = "plant infer"
+subsystem = "Crucible"
+mutates_authority = false
+description = "Infer explicitly unmeasured identifiable streams from observed flows and stocks, retaining joint covariance and unavailable gross-error diagnostics"
+
+[[verb]]
 path = "robot schema"
 subsystem = "Adit"
 mutates_authority = false

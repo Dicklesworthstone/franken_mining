@@ -79,6 +79,7 @@ cargo run -p fmine-cli -- plant balance --input tests/plant/closed_inventory.tom
 cargo run -p fmine-cli -- plant reconcile --input tests/plant/measured_inventory.toml
 cargo run -p fmine-cli -- plant project --input tests/plant/material_projection.toml
 cargo run -p fmine-cli -- plant flowsheet --input tests/plant/flowsheet_reconcile.toml
+cargo run -p fmine-cli -- plant infer --input tests/plant/flowsheet_infer.toml
 ```
 
 The supplied examples are synthetic. `balance` checks exact nominal closure. `reconcile` uses the declared full
@@ -101,6 +102,12 @@ Run its synthetic mill/classifier
 example with `cargo run -p fmine-plant --example reconcile_flowsheet`; adding `-- --gross-error` demonstrates
 rejection. This fully measured conditional model preserves source evidence and does not infer missing
 measurements, sensor calibration or process performance.
+
+`plant infer` admits explicitly declared unmeasured streams while retaining measured opening and closing
+stocks for every unit. It uses the existing partial reconciliation owner to infer only uniquely identifiable
+flows, retaining full measured/inferred covariance and distinguishing observed contributions from complete
+totals. Ambiguous splits or unmeasured cycles refuse. A uniquely inferred flow with no redundant observations
+is labelled `no_redundancy`, with no gross-error statistic or claim that a consistency test passed.
 
 ### Run the public lane
 

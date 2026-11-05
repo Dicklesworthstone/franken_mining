@@ -1,9 +1,15 @@
-//! DESIGN: source-bound fully measured plant networks over the joint R1 owner.
+//! DESIGN: source-bound plant networks over the joint R1 owners.
 //! The worksheet declares extensive kg, complete topology and every covariance
-//! pair. No independence, missing channel, stream or stocktake is inferred.
+//! pair. Only the inference command may explicitly declare unmeasured streams.
+//! No independence, missing channel or stocktake is inferred.
 //! Determinism: DeterministicPerIsa
 
-use std::{collections::BTreeMap, path::Path};
+mod inference;
+
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use fmine_claim::{AdditivityClass, Claim};
 use fmine_core::{Digest32, anchor::SourceAnchor};
@@ -15,6 +21,7 @@ use fmine_plant::flowsheet::{
     reconciliation::{
         self, BoundaryRole, FlowsheetErrorModel, FlowsheetReconciliation,
         FlowsheetReconciliationOutcome, MaterialChannel, ObservationKey, ObservationLocation,
+        unmeasured::{self, UnmeasuredFlowModel},
     },
 };
 use fmine_plant::reconciliation::{Kilograms, KilogramsSquared};
@@ -32,6 +39,39 @@ const SCHEMA: &str = "fmine.plant-flowsheet.v1";
 const BASIS: &str = "kg/dry-matter+water/total-elements/all-phases/full-boundary";
 const VERB: &str = "plant flowsheet";
 const NO_CLAIM: &str = "Conditional joint Gaussian reconciliation of submitted complete conservative extensive kg observations. Sources and error policy remain Assumed, Internal and uncalibrated. No missing-stream inference, sensor-bias identification, assay-error propagation, fitted recovery, P754 compliance, ledger commit or operating authorization is supplied.";
+pub(super) const INFERENCE_ROBOT_DOCS_JSON: &str = inference::ROBOT_DOCS_JSON;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Measured,
+    Unmeasured,
+}
+impl Mode {
+    fn schema(self) -> &'static str {
+        match self {
+            Self::Measured => SCHEMA,
+            Self::Unmeasured => "fmine.plant-unmeasured.v1",
+        }
+    }
+    fn result_schema(self) -> &'static str {
+        match self {
+            Self::Measured => "fmine.plant-flowsheet-result.v1",
+            Self::Unmeasured => "fmine.plant-unmeasured-result.v1",
+        }
+    }
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Measured => VERB,
+            Self::Unmeasured => "plant infer",
+        }
+    }
+    fn calculation(self) -> &'static str {
+        match self {
+            Self::Measured => "conditional_gaussian_reconciliation",
+            Self::Unmeasured => "conditional_gaussian_inference",
+        }
+    }
+}
 
 pub(super) const ROBOT_DOCS_JSON: &str = concat!(
     "{\"schema\":\"fmine.plant-flowsheet.v1\",\"command\":\"plant flowsheet --input <worksheet.toml>\",",
@@ -71,8 +111,19 @@ struct Original {
 struct Worksheet {
     inputs: Vec<Claim<FlowsheetInput>>,
     originals: Vec<Original>,
-    model: Claim<FlowsheetErrorModel>,
+    model: ErrorModel,
     model_basis: String,
+}
+enum ErrorModel {
+    Measured(Claim<FlowsheetErrorModel>),
+    Unmeasured(Claim<UnmeasuredFlowModel>),
+}
+
+struct RunOutput {
+    envelope: Envelope,
+    admitted: String,
+    digest: String,
+    result: String,
 }
 
 fn channel_name(channel: &MaterialChannel) -> &str {
@@ -194,7 +245,7 @@ fn stream_row(row: &TomlRow) -> Result<StreamSpec, Refusal> {
     })
 }
 
-fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
+fn parse(text: &str, source: &SourceAnchor, mode: Mode) -> Result<Worksheet, Refusal> {
     let document = parse_subset(text).map_err(|e| bad(e.line, e.reason))?;
     if document.rows.len() > MAX_OBSERVATIONS * (MAX_OBSERVATIONS + 1) / 2 + 5 * MAX_OBSERVATIONS {
         return Err(bad(
@@ -218,8 +269,8 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
         &["normalized_adjustment_limit"],
         1,
     )?;
-    if get(&top, "schema")?.0 != SCHEMA {
-        return Err(bad(1, format!("schema must be {SCHEMA}")));
+    if get(&top, "schema")?.0 != mode.schema() {
+        return Err(bad(1, format!("schema must be {}", mode.schema())));
     }
     if get(&top, "basis")?.0 != BASIS {
         return Err(Refusal::new(
@@ -243,6 +294,7 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
     let mut units = BTreeMap::new();
     let mut streams = BTreeMap::new();
     let mut elements = BTreeMap::new();
+    let mut unmeasured = BTreeSet::new();
     for row in &document.rows {
         match row.table.as_str() {
             "unit" => {
@@ -272,8 +324,20 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
                 }
             }
             "coordinate" | "covariance" | "tolerance" => {}
+            "unmeasured" if mode == Mode::Unmeasured => {
+                let f = fields(&row.fields, &["stream"], &[], row.line)?;
+                if !unmeasured.insert(StreamId::new(get(&f, "stream")?.0)?) {
+                    return Err(bad(row.line, "duplicate unmeasured stream declaration"));
+                }
+            }
             _ => return Err(bad(row.line, format!("unsupported table {}", row.table))),
         }
+    }
+    if mode == Mode::Unmeasured && unmeasured.is_empty() {
+        return Err(Refusal::new(
+            RefusalCode::NoClaimInDomain201,
+            "plant infer requires at least one explicitly unmeasured stream",
+        ));
     }
     let width = elements.len() + 2;
     if (streams.len() + 2 * units.len()) > MAX_OBSERVATIONS / width
@@ -417,7 +481,10 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
         });
         inputs.push(claim);
     }
-    let order = reconciliation::observation_order(&inputs)?;
+    let order = match mode {
+        Mode::Measured => reconciliation::observation_order(&inputs)?,
+        Mode::Unmeasured => unmeasured::observation_order(&inputs, &unmeasured)?,
+    };
     let n = order.len();
     let positions: BTreeMap<_, _> = order
         .iter()
@@ -466,30 +533,67 @@ fn parse(text: &str, source: &SourceAnchor) -> Result<Worksheet, Refusal> {
             "exactly one declared kg tolerance per material channel is required",
         ));
     }
-    let model = FlowsheetErrorModel {
-        scope, declaration_id: inputs[0].claim_id, observations: order,
-        covariance: covariance.into_iter().map(|value| value.ok_or_else(|| bad(1, "every unordered covariance pair is required, including explicit zero cross terms"))).collect::<Result<_, _>>()?,
-        unbiased_gaussian_errors: true,
-        global_chi_square_limit: finite(get(&top, "global_chi_square_limit")?)?,
-        normalized_adjustment_limit: top.get("normalized_adjustment_limit").copied().map(finite).transpose()?,
-        closure_tolerances_kg: tolerances,
-    };
-    let tag = model.canonical_tag();
+    let covariance = covariance.into_iter().map(|value| value.ok_or_else(|| bad(1, "every unordered covariance pair is required, including explicit zero cross terms"))).collect::<Result<_, _>>()?;
+    let global_chi_square_limit = finite(get(&top, "global_chi_square_limit")?)?;
+    let normalized_adjustment_limit = top
+        .get("normalized_adjustment_limit")
+        .copied()
+        .map(finite)
+        .transpose()?;
     let basis = get(&top, "error_model_basis")?;
+    let locator = format!(
+        "error_model_basis line {}; all explicit covariance pairs, channel tolerances and rejection limits",
+        basis.1
+    );
+    let model = match mode {
+        Mode::Measured => {
+            let value = FlowsheetErrorModel {
+                scope,
+                declaration_id: inputs[0].claim_id,
+                observations: order,
+                covariance,
+                unbiased_gaussian_errors: true,
+                global_chi_square_limit,
+                normalized_adjustment_limit,
+                closure_tolerances_kg: tolerances,
+            };
+            let tag = value.canonical_tag();
+            ErrorModel::Measured(declared(
+                value,
+                &tag,
+                reconciliation::ERROR_MODEL_METRIC,
+                AdditivityClass::NonAdditive,
+                source,
+                locator,
+            ))
+        }
+        Mode::Unmeasured => {
+            let value = UnmeasuredFlowModel {
+                scope,
+                declaration_id: inputs[0].claim_id,
+                observations: order,
+                covariance,
+                unmeasured_streams: unmeasured,
+                unbiased_gaussian_errors: true,
+                global_chi_square_limit,
+                normalized_adjustment_limit,
+                closure_tolerances_kg: tolerances,
+            };
+            let tag = value.canonical_tag();
+            ErrorModel::Unmeasured(declared(
+                value,
+                &tag,
+                unmeasured::ERROR_MODEL_METRIC,
+                AdditivityClass::NonAdditive,
+                source,
+                locator,
+            ))
+        }
+    };
     Ok(Worksheet {
         inputs,
         originals,
-        model: declared(
-            model,
-            &tag,
-            reconciliation::ERROR_MODEL_METRIC,
-            AdditivityClass::NonAdditive,
-            source,
-            format!(
-                "error_model_basis line {}; all explicit covariance pairs, channel tolerances and rejection limits",
-                basis.1
-            ),
-        ),
+        model,
         model_basis: basis.0.into(),
     })
 }
@@ -698,42 +802,20 @@ fn actions() -> Vec<NextAction> {
         "inspect complete graph, observation support, every covariance pair and channel tolerance",
     )]
 }
-fn finish(mut envelope: Envelope) -> Envelope {
-    envelope.no_claim = Some(NO_CLAIM);
+fn finish(mut envelope: Envelope, mode: Mode) -> Envelope {
+    envelope.no_claim = Some(match mode {
+        Mode::Measured => NO_CLAIM,
+        Mode::Unmeasured => inference::NO_CLAIM,
+    });
     envelope
 }
 
-pub(super) fn execute(input: &Path, root: &Path) -> Envelope {
-    let (text, source) = match worksheet_input::read(
-        &root.join(input),
-        "plant flowsheet worksheet",
-        MAX_BYTES,
-    ) {
-        Ok(value) => value,
-        Err(refusal) => {
-            let mut envelope = Envelope::refused(VERB, refusal, actions());
-            envelope.payload_json = "{\"schema\":\"fmine.plant-flowsheet-result.v1\",\"admitted_claim\":null,\"receipt_digest\":null,\"result\":null}".into();
-            return finish(envelope);
-        }
-    };
-    let source_json = format!(
-        "{{\"path\":{},\"sha256\":{},\"bytes\":{}}}",
-        quoted(&source.artifact_path),
-        quoted(&Digest32(source.artifact_sha256).to_hex()),
-        text.len()
-    );
-    let worksheet = match parse(&text, &source) {
-        Ok(value) => value,
-        Err(refusal) => {
-            let mut envelope = Envelope::refused(VERB, refusal, actions());
-            envelope.payload_json = format!(
-                "{{\"schema\":\"fmine.plant-flowsheet-result.v1\",\"source\":{source_json},\"admitted_claim\":null,\"receipt_digest\":null,\"result\":null}}"
-            );
-            return finish(envelope);
-        }
-    };
-    let (mut envelope, admitted, digest, result) =
-        match reconciliation::reconcile_flowsheet(&worksheet.inputs, &worksheet.model) {
+fn measured_result(
+    inputs: &[Claim<FlowsheetInput>],
+    model: &Claim<FlowsheetErrorModel>,
+) -> RunOutput {
+    let (envelope, admitted, digest, result) =
+        match reconciliation::reconcile_flowsheet(inputs, model) {
             Ok(FlowsheetReconciliationOutcome::Admitted(receipt)) => (
                 Envelope::ok(VERB, String::new(), vec![]),
                 claim_json(receipt.claim()),
@@ -753,16 +835,21 @@ pub(super) fn execute(input: &Path, root: &Path) -> Envelope {
                 "null".into(),
             ),
         };
-    let model = &worksheet.model.value;
-    let scope = format!(
-        "{{\"boundary\":{},\"basis\":{},\"start_ns\":\"{}\",\"end_ns\":\"{}\"}}",
-        quoted(&model.scope.boundary),
-        quoted(BASIS),
-        model.scope.interval.start_ns,
-        model.scope.interval.end_ns
-    );
-    let tolerances = model
-        .closure_tolerances_kg
+    RunOutput {
+        envelope,
+        admitted,
+        digest,
+        result,
+    }
+}
+
+fn policy_json(
+    covariance: &[KilogramsSquared],
+    global_limit: f64,
+    adjustment_limit: Option<f64>,
+    closure_tolerances: &BTreeMap<MaterialChannel, Kilograms>,
+) -> String {
+    let tolerances = closure_tolerances
         .iter()
         .map(|(channel, q)| {
             format!(
@@ -773,23 +860,101 @@ pub(super) fn execute(input: &Path, root: &Path) -> Envelope {
         })
         .collect::<Vec<_>>()
         .join(",");
-    let model_json = format!(
-        "{{\"claim\":{},\"basis\":{},\"declaration_id\":{},\"covariance_kg2\":{},\"unbiased_gaussian_errors\":true,\"global_chi_square_limit\":{},\"normalized_adjustment_limit\":{},\"closure_tolerances_kg\":[{}]}}",
-        claim_json(&worksheet.model),
-        quoted(&worksheet.model_basis),
-        quoted(&model.declaration_id.to_string()),
-        numbers(model.covariance.iter().map(|q| q.value())),
-        number(model.global_chi_square_limit),
-        model
-            .normalized_adjustment_limit
-            .map_or_else(|| "null".into(), number),
+    format!(
+        "\"covariance_kg2\":{},\"unbiased_gaussian_errors\":true,\"global_chi_square_limit\":{},\"normalized_adjustment_limit\":{},\"closure_tolerances_kg\":[{}]",
+        numbers(covariance.iter().map(|q| q.value())),
+        number(global_limit),
+        adjustment_limit.map_or_else(|| "null".into(), number),
         tolerances
+    )
+}
+
+pub(super) fn execute(input: &Path, root: &Path) -> Envelope {
+    execute_mode(input, root, Mode::Measured)
+}
+
+pub(super) fn execute_unmeasured(input: &Path, root: &Path) -> Envelope {
+    execute_mode(input, root, Mode::Unmeasured)
+}
+
+fn execute_mode(input: &Path, root: &Path, mode: Mode) -> Envelope {
+    let schema = quoted(mode.result_schema());
+    let (text, source) = match worksheet_input::read(
+        &root.join(input),
+        "plant flowsheet worksheet",
+        MAX_BYTES,
+    ) {
+        Ok(value) => value,
+        Err(refusal) => {
+            let mut envelope = Envelope::refused(mode.verb(), refusal, actions());
+            envelope.payload_json = format!(
+                "{{\"schema\":{schema},\"admitted_claim\":null,\"receipt_digest\":null,\"result\":null}}"
+            );
+            return finish(envelope, mode);
+        }
+    };
+    let source_json = format!(
+        "{{\"path\":{},\"sha256\":{},\"bytes\":{}}}",
+        quoted(&source.artifact_path),
+        quoted(&Digest32(source.artifact_sha256).to_hex()),
+        text.len()
+    );
+    let worksheet = match parse(&text, &source, mode) {
+        Ok(value) => value,
+        Err(refusal) => {
+            let mut envelope = Envelope::refused(mode.verb(), refusal, actions());
+            envelope.payload_json = format!(
+                "{{\"schema\":{schema},\"source\":{source_json},\"admitted_claim\":null,\"receipt_digest\":null,\"result\":null}}"
+            );
+            return finish(envelope, mode);
+        }
+    };
+    let (output, model_json, coordinate_order) = match &worksheet.model {
+        ErrorModel::Measured(model) => {
+            let value = &model.value;
+            let model_json = format!(
+                "{{\"claim\":{},\"basis\":{},\"declaration_id\":{},{}}}",
+                claim_json(model),
+                quoted(&worksheet.model_basis),
+                quoted(&value.declaration_id.to_string()),
+                policy_json(
+                    &value.covariance,
+                    value.global_chi_square_limit,
+                    value.normalized_adjustment_limit,
+                    &value.closure_tolerances_kg
+                )
+            );
+            (
+                measured_result(&worksheet.inputs, model),
+                model_json,
+                order_json(&value.observations),
+            )
+        }
+        ErrorModel::Unmeasured(model) => (
+            inference::run(&worksheet.inputs, model),
+            inference::model_json(model, &worksheet.model_basis),
+            inference::order_json(&model.value),
+        ),
+    };
+    let RunOutput {
+        mut envelope,
+        admitted,
+        digest,
+        result,
+    } = output;
+    let scope = &worksheet.inputs[0].value.scope;
+    let scope = format!(
+        "{{\"boundary\":{},\"basis\":{},\"start_ns\":\"{}\",\"end_ns\":\"{}\"}}",
+        quoted(&scope.boundary),
+        quoted(BASIS),
+        scope.interval.start_ns,
+        scope.interval.end_ns
     );
     envelope.payload_json = format!(
-        "{{\"schema\":\"fmine.plant-flowsheet-result.v1\",\"mode\":\"conditional_gaussian_reconciliation\",\"source\":{source_json},\"scope\":{scope},\"graph\":{},\"observations\":{},\"coordinate_order\":{},\"covariance_layout\":\"row_major\",\"error_model\":{model_json},\"admitted_claim\":{admitted},\"receipt_digest\":{digest},\"result\":{result}}}",
+        "{{\"schema\":{schema},\"mode\":{},\"source\":{source_json},\"scope\":{scope},\"graph\":{},\"observations\":{},\"coordinate_order\":{coordinate_order},\"covariance_layout\":\"row_major\",\"error_model\":{model_json},\"admitted_claim\":{admitted},\"receipt_digest\":{digest},\"result\":{result}}}",
+        quoted(mode.calculation()),
         graph_json(&worksheet.inputs[0]),
         originals_json(&worksheet.originals, &worksheet.inputs),
-        order_json(&model.observations)
     );
-    finish(envelope)
+    finish(envelope, mode)
 }

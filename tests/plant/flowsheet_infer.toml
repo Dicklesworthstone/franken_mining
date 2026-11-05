@@ -1,0 +1,189 @@
+# ASSUMPTION: synthetic stock drawdown; no operating data or calibration.
+# Product is explicitly unmeasured, never a zero observation or balancing plug.
+# Independent hand answers: product=[30 dry,15 water,0.6 Au] kg.
+# Product covariance=[8,0,0.02;0,2,0;0.02,0,0.0008] kg2.
+# There are no redundant constraints, so no gross-error statistic is available.
+schema = "fmine.plant-unmeasured.v1"
+boundary = "synthetic-stock-drawdown/v1"
+basis = "kg/dry-matter+water/total-elements/all-phases/full-boundary"
+start_ns = "0"
+end_ns = "10"
+complete = "true"
+unbiased_gaussian_errors = "true"
+global_chi_square_limit = "9"
+error_model_basis = "Synthetic Gaussian stocktake errors with declared dry/Au covariance; illustrative only"
+
+[[unit]]
+id = "store"
+kind = "storage"
+
+[[stream]]
+id = "product"
+kind = "product"
+from = "store"
+
+[[unmeasured]]
+stream = "product"
+
+[[element]]
+symbol = "Au"
+measurand = "total-Au/all-phases"
+
+[[coordinate]]
+observation = "opening:store"
+channel = "dry"
+kg = "100.000"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "opening:store"
+channel = "water"
+kg = "40"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "opening:store"
+channel = "Au"
+kg = "2"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "closing:store"
+channel = "dry"
+kg = "70"
+start_ns = "10"
+end_ns = "10"
+
+[[coordinate]]
+observation = "closing:store"
+channel = "water"
+kg = "25"
+start_ns = "10"
+end_ns = "10"
+
+[[coordinate]]
+observation = "closing:store"
+channel = "Au"
+kg = "1.4"
+start_ns = "10"
+end_ns = "10"
+
+[[tolerance]]
+channel = "dry"
+kg = "1e-9"
+
+[[tolerance]]
+channel = "water"
+kg = "1e-9"
+
+[[tolerance]]
+channel = "Au"
+kg = "1e-10"
+
+[[covariance]]
+left = "opening:store/dry"
+right = "opening:store/dry"
+kg2 = "4"
+
+[[covariance]]
+left = "opening:store/dry"
+right = "opening:store/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:store/dry"
+right = "opening:store/Au"
+kg2 = "0.02"
+
+[[covariance]]
+left = "opening:store/dry"
+right = "closing:store/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:store/dry"
+right = "closing:store/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:store/dry"
+right = "closing:store/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:store/water"
+right = "opening:store/water"
+kg2 = "1"
+
+[[covariance]]
+left = "opening:store/water"
+right = "opening:store/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:store/water"
+right = "closing:store/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:store/water"
+right = "closing:store/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:store/water"
+right = "closing:store/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:store/Au"
+right = "opening:store/Au"
+kg2 = "0.0004"
+
+[[covariance]]
+left = "opening:store/Au"
+right = "closing:store/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:store/Au"
+right = "closing:store/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:store/Au"
+right = "closing:store/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:store/dry"
+right = "closing:store/dry"
+kg2 = "4"
+
+[[covariance]]
+left = "closing:store/dry"
+right = "closing:store/water"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:store/dry"
+right = "closing:store/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:store/water"
+right = "closing:store/water"
+kg2 = "1"
+
+[[covariance]]
+left = "closing:store/water"
+right = "closing:store/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:store/Au"
+right = "closing:store/Au"
+kg2 = "0.0004"

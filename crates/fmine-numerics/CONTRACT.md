@@ -413,7 +413,7 @@ FACT (independent constructed oracles): eliminating a missing intermediate from 
 feed-product-tail=0. Measurements [100,72,31], variances [4,1,9] yield inferred intermediate 706/7,
 global statistic 9/14 and joint variance 20/7 for feed/intermediate. Correlated stocktakes [10,30]
 with covariance [[4,1],[1,9]] infer an unmeasured inflow 20 with variance 11 and no redundancy.
-Ten partial-owner tests cover full covariance, affine constraints, multiple unknowns, unobservable
+Partial-owner tests cover full covariance, affine constraints, multiple unknowns, unobservable
 splits/cycles, scale changes, inadmissible models and a finite error population with independently
 known joint moments. Existing complete-data reconciliation remains unchanged.
 
@@ -426,3 +426,11 @@ the original covariance admission; no covariance is clipped or floored.
 The cross-scale regression infers dry/water/Au stock differences [30,15,0.6],
 variances [8,2,0.0008] and dry/Au covariance 0.02 from a correlated carrier and
 trace-element observation model. Both numerical and typed graph paths check it.
+
+The separate measured covariance reconstruction check, P_measured + covariance(adjustments) = V,
+uses the declared source marginal product sqrt(V_ii)*sqrt(V_jj) when the absolute entries provide
+a smaller scale. A truly zero covariance is then checked against its coordinate uncertainties,
+rather than against floating-point roundoff itself. This dimensionally consistent backward-error
+scale does not change any covariance entry or the retained-posterior conservation audit. A two-unit
+recycle regression independently eliminates the unmeasured product and checks its estimate 100.6,
+variance 3.2, feed/product covariance 0.4 and gross-error statistic 0.2 with one degree of freedom.

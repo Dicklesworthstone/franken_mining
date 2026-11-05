@@ -370,9 +370,19 @@ pub fn reconcile_with_unmeasured(
         for j in 0..n {
             let posterior = posterior_covariance[i * states + j];
             let adjustment = adjustment_covariance[i * n + j];
+            // P + cov(delta) reconstructs the original V, whose cross entry
+            // can be exactly zero despite positive marginal uncertainties.
+            // Scale that identity by its declared coordinate uncertainties,
+            // not by a roundoff cross-term alone. The separate conservation
+            // audit above still uses the retained posterior's own scale.
+            let marginal_scale = finite(
+                measurement_factor.scale[i] * measurement_factor.scale[j],
+                "measured covariance reconstruction scale",
+            )?;
             audit(
                 sum(&[posterior, adjustment, -covariance[i * n + j]])?,
-                posterior.abs() + adjustment.abs() + covariance[i * n + j].abs(),
+                (posterior.abs() + adjustment.abs() + covariance[i * n + j].abs())
+                    .max(marginal_scale),
                 "measured posterior plus adjustment covariance",
             )?;
         }
