@@ -221,6 +221,23 @@ pub(crate) fn admit_source<T>(
     semantic_tag: &str,
     expected_additivity: AdditivityClass,
 ) -> Result<()> {
+    admit_source_at_support(
+        input,
+        expected_metric,
+        semantic_tag,
+        expected_additivity,
+        SpatialSupport::PeriodAggregate,
+    )
+}
+
+/// The raw-lot projection keeps PlantLot support until its declared aggregation.
+pub(crate) fn admit_source_at_support<T>(
+    input: &Claim<T>,
+    expected_metric: &str,
+    semantic_tag: &str,
+    expected_additivity: AdditivityClass,
+    expected_support: SpatialSupport,
+) -> Result<()> {
     input.check_id()?;
     if input.metric_key != expected_metric || input.value_tag() != semantic_tag {
         return Err(bad(
@@ -228,10 +245,10 @@ pub(crate) fn admit_source<T>(
             "input value or metric differs from its bound semantic identity",
         ));
     }
-    if input.support != SpatialSupport::PeriodAggregate {
+    if input.support != expected_support {
         return Err(bad(
             RefusalCode::SupportMismatch102,
-            "source inputs need the common period-aggregate boundary support",
+            "source support does not match the declared observation role",
         ));
     }
     if input.additivity != expected_additivity {
@@ -339,7 +356,22 @@ pub(crate) fn admit(input: &Claim<MetalBalanceInput>) -> Result<()> {
 // calibration, support, uncertainty and supersession changes visible in receipts.
 pub(crate) fn put_source_envelope<T>(enc: &mut Encoder, input: &Claim<T>, role_tag: u8) {
     enc.put_bytes(&input.canonical_body());
-    enc.put_str("Deterministic/PeriodAggregate");
+    match input.support {
+        SpatialSupport::PeriodAggregate => enc.put_str("Deterministic/PeriodAggregate"),
+        SpatialSupport::PlantLot => enc.put_str("Deterministic/PlantLot"),
+        SpatialSupport::PointCore => enc.put_str("Deterministic/PointCore"),
+        SpatialSupport::MiningPolygon => enc.put_str("Deterministic/MiningPolygon"),
+        SpatialSupport::Composite { length_mm } => {
+            enc.put_str("Deterministic/Composite");
+            enc.put_u32(length_mm);
+        }
+        SpatialSupport::SmuBlock { dx_cm, dy_cm, dz_cm } => {
+            enc.put_str("Deterministic/SmuBlock");
+            enc.put_u32(dx_cm);
+            enc.put_u32(dy_cm);
+            enc.put_u32(dz_cm);
+        }
+    }
     enc.put_u8(role_tag);
     enc.put_u8(u8::from(input.stale));
     enc.put_u8(u8::from(input.calibration_failed));

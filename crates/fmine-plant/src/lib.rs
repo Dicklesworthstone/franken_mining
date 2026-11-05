@@ -6,4 +6,5 @@
 pub mod flowsheet;
 pub mod inventory;
 pub mod measurements;
+pub mod raw_measurements;
 pub mod reconciliation;

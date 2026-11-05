@@ -13,7 +13,7 @@ K0 numerical owner, preserving the original observations and a separately declar
 - **Layer:** K2
 - **Subsystem:** Crucible
 - **LOC budget:** 32,000 planned / 37,000 ceiling
-- **Allowed Module Families:** `["inventory", "flowsheet", "reconciliation", "measurements"]`
+- **Allowed Module Families:** `["inventory", "flowsheet", "reconciliation", "measurements", "raw_measurements"]`
 
 ## 2. Inputs
 
@@ -140,7 +140,7 @@ impossible metal-in-water composition, identity order and internal confidentiali
 
 BD-175 now has a nominal conservative plant-flow graph; process-model prediction and shared cross-domain
 flow adapters remain. BD-177 now has covariance-aware reconciliation of fully measured elemental totals;
-raw-stream uncertainty propagation, missing observations, sensor bias estimation, plant error-model
+nonlinear uncertainty propagation, missing observations, sensor bias estimation, plant error-model
 calibration and full P754 reconciliation remain. Joint cross-channel reconciliation of a fully measured
 conservative flowsheet is now available through the shared numerical owner (section 15).
 BD-287 process-card ingestion and BD-313 RTD inversion/deconvolution remain unimplemented
@@ -272,3 +272,43 @@ FACT (constructed known answers): `examples/reconcile_flowsheet.rs` fits a two-u
 opening-stock variance is 550/399 kg². `--gross-error` refuses before any successful stdout.
 Thirteen graph tests include an independent two-metal correlated stocktake solution and a case whose
 exact aggregate closes but binary64 loses 1 kg. Existing exact-flow receipt identities remain unchanged.
+
+## 16. Lot-to-stream projection with first-order covariance (DESIGN; BD-151/155/177)
+
+`raw_measurements::project_transfer` accepts an explicitly complete, nonoverlapping lot population
+for one physical stream and interval. Each PlantLot supplies exact wet kg M, water/wet-mass fraction w
+and every total dry-basis elemental fraction g. A named, matched moisture/assay dry state binds every
+source. The declaration must identify moisture as H2O and assays as covering all non-water matter.
+Drying mass loss alone establishes neither assumption. H/O assays require a separate water-composition
+model and refuse here. This is distinct from `measurements`' single-material nominal unit conversion.
+
+Each lot contributes exact D=M(1-w), W=Mw and E=M(1-w)g before any aggregation. Aggregate dry grade is
+sum(E)/sum(D), never an average of assays or a product of separately averaged moisture and grade.
+Missing roles, conflicting bases/times/supports, impossible fractions, duplicated elements and exact
+overflow refuse. Every declared element is present for every lot; no missing value becomes zero.
+
+A separate `RawTransferErrorModel` Claim binds the declaration and canonical observation IDs,
+dimensioned mass/fraction standard uncertainties, and a full dimensionless correlation matrix including
+cross-lot and cross-channel terms. All coefficients, including zero correlations and uncertainties,
+are explicit. Correlation is finite, exactly symmetric, positive definite and unit diagonal; singular
+raw correlations need a lower-dimensional declaration. The source must accept first-order applicability.
+Exact derivatives are formed before conversion, preserving small 1-w values near complete moisture.
+The shared numerical owner propagates J diag(sigma) R diag(sigma) J' into full extensive kg² covariance;
+nonzero numerical range loss refuses. Output covariance may legitimately be singular.
+
+The immutable `TransferProjectionReceipt` retains original sources, the error model, exact extensive
+amounts/aggregate grades, channel order, covariance and full-envelope digest. Evidence meets all sources,
+confidentiality joins and knowledge is capped at Estimated. Its nominal `Claim<FlowsheetInput>` uses
+the projection Claim as its parent, preserving the moisture/basis/model provenance into the graph.
+The approximate covariance does not automatically become a Gaussian WLS model. f(x) is not asserted
+to equal E[f(X)], and this method supplies no nonlinear confidence bounds or empirical calibration.
+First-order propagation follows [NIST TN1297 Appendix A](https://www.nist.gov/pml/nist-technical-note-1297/nist-tn-1297-appendix-law-propagation-uncertainty).
+
+FACT (independent constructed example): `cargo run -p fmine-plant --example raw_lot_transfer` combines
+100 kg at w=0.1 and g=0.01 with 200 kg at w=0.2 and g=0.02. Totals are 250 kg dry matter, 50 kg water
+and 4.1 kg Cu, giving 1.64% aggregate dry Cu. With sigmas [1 kg,0.01,0.001] per lot, weight correlation
+0.5 and explicitly zero remaining off-diagonals, covariance in [D,W,Cu] order is
+[[7.17,-4.62,0.1217],[-4.62,5.07,-0.0842],[0.1217,-0.0842,0.035881]] kg².
+Tests independently check this full matrix, near-one moisture derivatives, direct use by the existing
+exact graph, source/basis/model refusals, numerical range and provenance/confidentiality retention.
+Nominal quantities are Exact; covariance arithmetic is DeterministicPerIsa.
