@@ -414,7 +414,10 @@ fn admit(input: &Claim<FlowsheetInput>) -> Result<()> {
     Ok(())
 }
 
-fn validate_amounts(amounts: &MaterialAmounts, elements: &BTreeSet<ElementKey>) -> Result<()> {
+pub(crate) fn validate_amounts(
+    amounts: &MaterialAmounts,
+    elements: &BTreeSet<ElementKey>,
+) -> Result<()> {
     if !amounts.elements_kg.keys().eq(elements.iter()) {
         return Err(bad(
             RefusalCode::BasisMismatch105,

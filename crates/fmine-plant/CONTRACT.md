@@ -145,8 +145,8 @@ streams with measured endpoint stocks (§17), including cross-element and cross-
 Nonlinear uncertainty propagation, missing-stock inference, sensor bias estimation, plant error-model
 calibration and full P754 reconciliation remain.
 BD-287 now has source-bound, versioned nominal recovery-card evaluation (§18); report ingestion,
-source-box qualification, fitting and calibration remain. BD-313 RTD inversion/deconvolution remains
-unimplemented here. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
+source-box qualification, fitting and calibration remain. BD-313 now has source-bound forward RTD
+transport and conditional lag alignment (§19); kernel fitting and noisy inverse deconvolution remain. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
 forecast registration, sequence authority or permission-to-operate claim is supplied. The declared CLI
 worksheets expose nominal material conversion, elemental inventory accounting/reconciliation and joint flowsheet reconciliation;
 their byte-bound declarations remain Assumed rather than verified plant measurements.
@@ -438,3 +438,76 @@ retention, parser bounds, physical domains and mathematical refusal paths.
 This completes typed nominal card evaluation, not all of BD-287. Report ingestion, source-box
 qualification, parameter estimation, empirical uncertainty/covariance, forecast calibration,
 automatic route selection and plant control remain outside this contract.
+
+## 19. Throughput-volume residence time and lag alignment (DESIGN; bounded BD-313)
+
+`rtd::propagate` admits a source-bound, equal-active-tank model, every initial tank inventory,
+a declared nonexchanging dead stock and a complete contiguous feed history. Dry matter, water and
+declared total elements are extensive channels. The caller explicitly assumes that all channels
+share one passive transport response and that feed composition is constant per unit slurry volume
+within each interval. Missing initial stocks never default to empty or steady state.
+
+The model supports one through 64 active tanks. Bypass is a fraction of total slurry flow:
+`Q_train = (1 - bypass) * Q_total`. Active volume is `(1 - dead_fraction) * V`. At constant
+flow, active-path mean residence is active volume divided by actual train flow; the plan's
+`V_active / Q` notation therefore uses `Q_train`. Bypass reduces flow through the train as
+well as carrying its own immediate outlet. Dead stock remains present but does not exchange.
+
+Propagation advances in cumulative throughput volume. Shutdown retains all stocks; changing the
+duration of an interval with the same integrated volume does not silently reuse an old clock-time
+kernel. Flow-domain admission applies to each observed interval mean. Integrated volume and elapsed
+time do not establish pointwise bounds on unobserved within-interval flow excursions. The propagation
+uses cumulative throughput volume under the declared fixed-kernel and constant-composition-per-volume
+assumptions.
+
+Positive Erlang/Poisson weights compute both retained inventory and integrated outlet independently.
+Outlet is never filled from a balance remainder. All channels reuse the same transition weights.
+Long intervals are subdivided into analytic steps of at most 32 single-tank turnovers; global limits
+are 4,096 observed intervals and 65,536 kernel steps. Numerical range failure, exhausted work or
+cancellation refuses the complete operation without a partial success receipt. At fixed tank and
+channel counts the work and receipt storage grow linearly with interval count; the implementation
+does not construct a dense whole-history convolution matrix.
+
+Each interval records original feed-source identity, opening stock, incoming masses, bypass,
+tank discharge, total outlet, closing stock and independently calculated conservation residuals.
+The receipt additionally retains final individual tank stocks, dead stock, whole-window closure,
+source claims and the source-envelope digest. Exact source masses are admitted through the existing
+flowsheet amount validator, with explicitly bounded nominal conversion and channel-specific closure
+allowances. Outputs preserve evidence, confidentiality and unknown-unknown metadata and cannot
+exceed `Estimated`. This is `DeterministicPerIsa` nominal transport, not an uncertainty enclosure.
+
+### Separate conditional recovery comparison
+
+`rtd::recovery::compare_recovery` accepts a transport receipt, a source-bound declaration and
+complete tail-element observations for its intervals. The declaration must bind that exact
+transport Claim and element and state the delay-then-separation hypothesis, complete tail
+population and the accounting assumption that all non-tail metal is recovered.
+
+Under that hypothesis, observed tail metal is compared with transported feed-equivalent metal.
+The receipt retains both the lag-aligned ratio and the ordinary same-interval ratio, together
+with original tail sources and the immutable transport receipt. Zero denominators remain undefined;
+a positive tail mass with no corresponding transported metal refuses. Tail mass exceeding aligned
+metal also refuses. These transport inventories are passive feed-equivalent inventories; they do
+not assert actual reactive CIL gold stocks or infer a spatial recovery process inside the tanks.
+
+```sh
+cargo run -p fmine-plant --example rtd_shift_pulse
+cargo run -p fmine-plant --example rtd_shift_pulse -- --slow-shifts
+cargo run -p fmine-plant --example rtd_shift_pulse -- --outside-flow
+```
+
+The GB-41 illustration supplies four independent literal tail observations from a separate
+75-digit Decimal integration of the eight-tank Erlang pulse. Same-interval recovery appears as
+95.932746025%, 81.703370314%, 76.201535391% and 83.198456772%; lag alignment returns the constructed
+88% in every interval. Stretching alternating intervals retains the volume-based answer.
+The outside-flow variant refuses with `FMINE-REF-203` and empty stdout.
+
+Eight tests cover independent one-/two-tank solutions and the eight-tank pulse, channel
+conservation, physical bypass, dead stock, complete bypass, shutdown, throughput-clock equivalence,
+interval composition, source mutation, missing observations, conversion/domain refusal and
+bounded work/cancellation. Together with §18 and existing plant tests, the actual plant library
+passes 111 tests and all-target Clippy with warnings denied.
+
+This is known-kernel forward transport and conditional lag alignment. RTD fitting, noisy inverse
+deconvolution, mixed residence/reaction kinetics, empirical kernel qualification and recovery-card
+calibration remain unimplemented. BD-313 remains open.
