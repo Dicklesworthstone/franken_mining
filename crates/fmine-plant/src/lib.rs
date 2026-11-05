@@ -3,4 +3,5 @@
 //! It carries source claims and physical inventory; it does not fit recovery.
 //! Determinism: Exact
 
+pub mod flowsheet;
 pub mod inventory;

@@ -2,16 +2,16 @@
 
 ## 1. Purpose
 
-DESIGN: the first Crucible slice accounts for elemental inventory across a declared full physical plant
-boundary and interval (plan §§17.3, 17.5; BD-175/177/313). It keeps stocktake timing separate from integrated
-flows and refuses an unclosed balance. This is original code, using the existing claim-admission pattern;
-no FrankenSim solver is copied or linked.
+DESIGN: Crucible accounts for elemental inventory and declared conservative plant flowsheets across
+physical boundaries and intervals (plan §§17.2–17.5; BD-175/177/313). It keeps stocktake timing separate
+from integrated flows and refuses unclosed unit or whole-plant balances. This is original code, using
+the existing claim-admission pattern; no FrankenSim solver is copied or linked.
 
 - **Crate:** `fmine-plant`
 - **Layer:** K2
 - **Subsystem:** Crucible
 - **LOC budget:** 32,000 planned / 37,000 ceiling
-- **Allowed Module Families:** `["inventory"]`
+- **Allowed Module Families:** `["inventory", "flowsheet"]`
 
 ## 2. Inputs
 
@@ -26,6 +26,13 @@ stocktakes are instants at its endpoints. `PeriodAggregate` identifies their com
 Each input has a source artifact SHA-256 and locator, deterministic nominal representation, correct
 additivity, usable state and a matching semantic value tag. The kernel performs no IO.
 
+`flowsheet::account_flowsheet` accepts `Claim<FlowsheetInput>` values: one complete declaration of units,
+directed streams and elemental measurands; one integrated observation for every declared stream; and
+opening and closing stocktakes for every unit. Explicit zero amounts are required. Each observation
+contains exact kg of non-water dry matter (including dissolved matter), H2O, and every tracked element
+in all phases. Elements overlap the carriers and are not added to them. Mechanical unit labels select
+no equipment prediction. An internal edge has one shared observation and an explicit local outflow role.
+
 ## 3. Outputs
 
 `account_interval` returns an immutable `MetalBalanceReceipt`, containing original admitted inputs,
@@ -34,6 +41,12 @@ signed inventory change, zero exact residual and optional product / same-interva
 That ratio may exceed one during drawdown; zero feed produces `None`. It is not a recovery estimate.
 The composite output claim is non-additive. A nonzero residual returns a refusal containing its exact
 signed numerator/denominator, without a closed receipt or balancing stream.
+
+The immutable `FlowsheetReceipt` retains original inputs and a `Claim<FlowsheetSummary>` over every unit
+and the full boundary. Each element is projected through the existing `account_interval` owner; dry
+matter and H2O close independently with exact arithmetic. Internal streams enter both endpoint accounts
+but cancel from external feed/outflow totals. Every original source still participates in the final
+evidence and confidentiality, including an internal observation that cancels from the outer balance.
 
 ## 4. Invariants
 
@@ -52,6 +65,12 @@ signed numerator/denominator, without a closed receipt or balancing stream.
   (`typed_value_mutation_is_caught_even_when_generic_claim_id_still_matches`).
 - Unusable source states and failed calibration cannot supply totals
   (`unknown_refused_stale_and_uncertain_sources_cannot_supply_numeric_totals`).
+- Flowsheet units close independently; offsetting hidden unit gains/losses cannot be masked by outer
+  closure. Recycle uses one original observation at both endpoints, never an extra external feed.
+- Every declared stream and both stocks per unit are required. Undeclared, duplicated, missing or
+  temporally incompatible observations refuse; no missing channel becomes a measured zero.
+- Nonnegative elemental masses sum to no more than dry matter plus H2O; non-H/O elements sum to no more
+  than dry matter. Water cannot supply metal mass. Phase/species allocation is not inferred.
 
 ## 5. Refusals
 
@@ -71,9 +90,11 @@ signed numerator/denominator, without a closed receipt or balancing stream.
 
 ## 6. Determinism class
 
-`lib` and `inventory`: Exact. Conserved quantities use reduced i128 rationals; inputs are ordered by role,
+`lib`, `inventory` and `flowsheet`: Exact. Conserved quantities use reduced i128 rationals; inputs are ordered by role,
 parents/anchors by ordered sets, and UU scenarios by identity. IEEE bits are retained only for supplied
 epistemic metadata. `receipt_identity_is_input_order_independent_and_immutable` checks input permutations.
+Flowsheet units, streams and elements have canonical identity order; declaration/input permutations
+preserve the graph receipt. Generic claim-admission helper extraction preserves original inventory receipts.
 
 ## 7. Evidence class of outputs
 
@@ -89,6 +110,9 @@ two endpoint stocks and integrated nonnegative nominal mass totals. Element symb
 case/shape, not looked up or chemically interpreted. The completeness declaration is conditional input;
 its truth is not independently audited. Closure is exact, with no measurement tolerance or error-model
 adjustment. No sequence continuity, as-of availability or authority-ledger check is inferred.
+The flowsheet is restricted to conservative mechanical transfer on the declared dry-matter/H2O basis.
+Cycles and held inventory are admitted; reactions, phase changes that alter carrier definitions,
+process prediction and estimated recoveries are outside this nominal-accounting interface.
 
 ## 9. Oracles
 
@@ -98,10 +122,19 @@ by 0.000000001 kg refuses with the signed exact residual. These are known-answer
 not empirical plant observations. The runnable `inventory_pulse` example cites its own constructed
 source schedule and labels every output synthetic.
 
+`flowsheet/tests.rs` and runnable `flowsheet_recycle` construct a mill/classifier recycle with changing
+inventories: external dry feed 100 kg, product 80 kg, other outflow 5 kg and stocks increasing 30→45 kg;
+external H2O feed 200 kg, product 150 kg, other outflow 20 kg and stocks increasing 60→90 kg; Au feed 1 kg,
+product 0.8 kg, other outflow 0.05 kg and stocks increasing 0.3→0.45 kg. Internal dry recycle is 60 kg,
+not new external feed. `--hidden-gain` perturbs the shared mill-discharge observation and refuses with
+no successful output although the outer account is unchanged. Source mutations, missing zero stocks,
+impossible metal-in-water composition, identity order and internal confidentiality have regressions.
+
 ## 10. Known gaps
 
-BD-175 still needs the shared material-flow graph. BD-177 still needs raw-stream error models and P754
-reconciliation. BD-287 process-card ingestion and BD-313 RTD inversion/deconvolution remain unimplemented
+BD-175 now has a nominal conservative plant-flow graph; process-model prediction and shared cross-domain
+flow adapters remain. BD-177 still needs raw-stream error models and P754 reconciliation.
+BD-287 process-card ingestion and BD-313 RTD inversion/deconvolution remain unimplemented
 here. No real plant fixture, source-file verification, assay/ore conversion, durable receipt decoder,
 CLI importer, forecast registration, sequence authority or permission-to-operate claim is supplied.
 Generic Claim hashes omit some fields; this slice independently checks values and binds admitted
@@ -113,6 +146,11 @@ support, representation, UU, supersession and calibration metadata into its rece
 account_interval, INPUT_METRIC, OUTPUT_METRIC, MASS_BASIS, NO_CLAIM}`. `MetalBalanceInput::canonical_tag`
 binds typed source projections. `MetalBalanceReceipt::{inputs, summary, claim, digest}` exposes immutable
 views. No physical public signature uses bare f64.
+
+`flowsheet::{UnitId, StreamId, UnitKind, UnitSpec, OutflowRole, StreamRoute, StreamSpec, ElementKey,
+MaterialAmounts, FlowsheetScope, StocktakeKind, FlowsheetValue, FlowsheetInput, CarrierBalance,
+MaterialBalance, FlowsheetSummary, FlowsheetReceipt, account_flowsheet}`. `FlowsheetInput::canonical_tag`
+binds the entire typed source projection; receipt accessors expose immutable original inputs and results.
 
 ## 12. Proof obligations
 

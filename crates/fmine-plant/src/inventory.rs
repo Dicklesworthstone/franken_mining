@@ -213,46 +213,31 @@ fn put_scope(enc: &mut Encoder, scope: &BalanceScope) {
     enc.put_str(MASS_BASIS);
 }
 
-fn admit(input: &Claim<MetalBalanceInput>) -> Result<()> {
+/// Admit a source's common nominal envelope; callers validate their typed payload.
+/// The semantic tag is recomputed by that payload's owner, not read from the claim.
+pub(crate) fn admit_source<T>(
+    input: &Claim<T>,
+    expected_metric: &str,
+    semantic_tag: &str,
+    expected_additivity: AdditivityClass,
+) -> Result<()> {
     input.check_id()?;
-    if input.metric_key != INPUT_METRIC || input.value_tag() != input.value.canonical_tag() {
+    if input.metric_key != expected_metric || input.value_tag() != semantic_tag {
         return Err(bad(
             RefusalCode::FrozenRecordMutation507,
             "input value or metric differs from its bound semantic identity",
         ));
     }
-    let source = &input.value;
-    let scope = &source.scope;
-    let symbol = scope.element.as_bytes();
-    if !named(&scope.boundary)
-        || !named(&scope.measurand)
-        || !(symbol.len() == 1 || symbol.len() == 2)
-        || !symbol[0].is_ascii_uppercase()
-        || (symbol.len() == 2 && !symbol[1].is_ascii_lowercase())
-    {
-        return Err(bad(
-            RefusalCode::UndeclaredUnitBasisOrTz107,
-            "declare a boundary, case-sensitive elemental symbol and conserved measurand identity",
-        ));
-    }
-    if scope.interval.start_ns >= scope.interval.end_ns {
-        return Err(bad(
-            RefusalCode::OutsidePhysicalDomain109,
-            "the reporting interval must have positive duration",
-        ));
-    }
-    if source.physical_time != source.value.expected_time(scope.interval)
-        || input.support != SpatialSupport::PeriodAggregate
-    {
+    if input.support != SpatialSupport::PeriodAggregate {
         return Err(bad(
             RefusalCode::SupportMismatch102,
-            "flow totals need the exact interval; opening/closing stocks need the corresponding endpoint; all inputs need the common period-aggregate boundary support",
+            "source inputs need the common period-aggregate boundary support",
         ));
     }
-    if input.additivity != source.value.additivity() {
+    if input.additivity != expected_additivity {
         return Err(bad(
             RefusalCode::NonAdditiveAverage103,
-            "stock and flow totals must be extensive; the population declaration is non-additive",
+            "source additivity does not match the declared input role",
         ));
     }
     if input.stale || input.state == KnowledgeState::Stale {
@@ -272,12 +257,6 @@ fn admit(input: &Claim<MetalBalanceInput>) -> Result<()> {
         return Err(bad(
             RefusalCode::NotObservable202,
             "requires usable deterministic nominal totals; uncertain or unavailable inputs need explicit reconciliation",
-        ));
-    }
-    if source.value.mass().is_some_and(|q| q.signum() < 0) {
-        return Err(bad(
-            RefusalCode::OutsidePhysicalDomain109,
-            "individual physical stocks and boundary flow totals must be nonnegative",
         ));
     }
     if input.anchors.is_empty()
@@ -314,12 +293,54 @@ fn admit(input: &Claim<MetalBalanceInput>) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn admit(input: &Claim<MetalBalanceInput>) -> Result<()> {
+    admit_source(
+        input,
+        INPUT_METRIC,
+        &input.value.canonical_tag(),
+        input.value.value.additivity(),
+    )?;
+    let source = &input.value;
+    let scope = &source.scope;
+    let symbol = scope.element.as_bytes();
+    if !named(&scope.boundary)
+        || !named(&scope.measurand)
+        || !(symbol.len() == 1 || symbol.len() == 2)
+        || !symbol[0].is_ascii_uppercase()
+        || (symbol.len() == 2 && !symbol[1].is_ascii_lowercase())
+    {
+        return Err(bad(
+            RefusalCode::UndeclaredUnitBasisOrTz107,
+            "declare a boundary, case-sensitive elemental symbol and conserved measurand identity",
+        ));
+    }
+    if scope.interval.start_ns >= scope.interval.end_ns {
+        return Err(bad(
+            RefusalCode::OutsidePhysicalDomain109,
+            "the reporting interval must have positive duration",
+        ));
+    }
+    if source.physical_time != source.value.expected_time(scope.interval) {
+        return Err(bad(
+            RefusalCode::SupportMismatch102,
+            "flow totals need the exact interval; opening/closing stocks need the corresponding endpoint",
+        ));
+    }
+    if source.value.mass().is_some_and(|q| q.signum() < 0) {
+        return Err(bad(
+            RefusalCode::OutsidePhysicalDomain109,
+            "individual physical stocks and boundary flow totals must be nonnegative",
+        ));
+    }
+    Ok(())
+}
+
 // Generic Claim bodies omit these fields. Binding the admitted envelope keeps
 // calibration, support, uncertainty and supersession changes visible in receipts.
-fn put_envelope(enc: &mut Encoder, input: &Claim<MetalBalanceInput>) {
+pub(crate) fn put_source_envelope<T>(enc: &mut Encoder, input: &Claim<T>, role_tag: u8) {
     enc.put_bytes(&input.canonical_body());
     enc.put_str("Deterministic/PeriodAggregate");
-    enc.put_u8(input.value.value.key());
+    enc.put_u8(role_tag);
     enc.put_u8(u8::from(input.stale));
     enc.put_u8(u8::from(input.calibration_failed));
     enc.put_str(
@@ -365,6 +386,22 @@ fn put_envelope(enc: &mut Encoder, input: &Claim<MetalBalanceInput>) {
     }
 }
 
+pub(crate) fn put_envelope(enc: &mut Encoder, input: &Claim<MetalBalanceInput>) {
+    put_source_envelope(enc, input, input.value.value.key());
+}
+
+/// Shared nominal conservation identity for elemental and carrier balances.
+/// Callers supply already admitted nonnegative masses in one consistent unit.
+pub(crate) fn conservation_residual(
+    opening: ExactQty,
+    feed: ExactQty,
+    outflow: ExactQty,
+    closing: ExactQty,
+) -> Result<ExactQty> {
+    let available = exact(opening.checked_add(feed))?;
+    exact(exact(available.checked_sub(outflow))?.checked_sub(closing))
+}
+
 /// Account for one complete interval without fitting, plugging, tolerance
 /// selection or implicit unit/basis conversion. Inputs may be in any order.
 /// On a nonzero residual, `FMINE-REF-101` reports the signed exact quantity and
@@ -407,9 +444,8 @@ pub fn account_interval(inputs: &[Claim<MetalBalanceInput>]) -> Result<MetalBala
     let [opening, feed, product, other, closing] = masses.as_slice() else {
         return Err(bad(RefusalCode::NoClaimInDomain201, "missing mass role"));
     };
-    let available = exact(opening.checked_add(*feed))?;
     let discharge = exact(product.checked_add(*other))?;
-    let residual = exact(exact(available.checked_sub(discharge))?.checked_sub(*closing))?;
+    let residual = conservation_residual(*opening, *feed, discharge, *closing)?;
     if residual != ZERO {
         return Err(bad(
             RefusalCode::Conservation101,
