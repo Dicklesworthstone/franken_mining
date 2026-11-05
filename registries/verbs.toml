@@ -255,6 +255,18 @@ mutates_authority = false
 description = "Emit machine-readable documentation for all CLI verbs, exit codes, and FMT-ENV-1 schemas"
 
 [[verb]]
+path = "plant balance"
+subsystem = "Crucible"
+mutates_authority = false
+description = "Check exact closure of declared source-bound elemental stocks and flows without adjusting observations"
+
+[[verb]]
+path = "plant reconcile"
+subsystem = "Crucible"
+mutates_authority = false
+description = "Reconcile declared elemental inventory under a full error covariance, retaining rejected diagnostics without a balance Claim"
+
+[[verb]]
 path = "robot schema"
 subsystem = "Adit"
 mutates_authority = false

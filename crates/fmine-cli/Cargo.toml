@@ -29,6 +29,7 @@ fmine-io = { path = "../fmine-io" }
 fmine-public = { path = "../fmine-public" }
 fmine-metrics = { path = "../fmine-metrics" }
 fmine-optimize = { path = "../fmine-optimize" }
+fmine-plant = { path = "../fmine-plant" }
 
 [lints]
 workspace = true

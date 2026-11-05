@@ -1,0 +1,39 @@
+# SYNTHETIC known answer: 10 + 100 = 72 + 8 + 30 kg. No operating-site data.
+schema = "fmine.plant-inventory.v1"
+boundary = "synthetic-plant/v1"
+element = "Au"
+measurand = "total-Au/all-phases"
+basis = "kg-total-element/all-phases/full-physical-boundary"
+start_ns = "0"
+end_ns = "10"
+complete = "true"
+
+[[observation]]
+role = "opening"
+kg = "10"
+start_ns = "0"
+end_ns = "0"
+
+[[observation]]
+role = "feed"
+kg = "100"
+start_ns = "0"
+end_ns = "10"
+
+[[observation]]
+role = "product"
+kg = "72"
+start_ns = "0"
+end_ns = "10"
+
+[[observation]]
+role = "other_outflow"
+kg = "8"
+start_ns = "0"
+end_ns = "10"
+
+[[observation]]
+role = "closing"
+kg = "30"
+start_ns = "10"
+end_ns = "10"

@@ -1,0 +1,104 @@
+# SYNTHETIC WLS known answer. Variances and threshold are illustrative assumptions.
+schema = "fmine.plant-inventory.v1"
+boundary = "synthetic-plant/v1"
+element = "Au"
+measurand = "total-Au/all-phases"
+basis = "kg-total-element/all-phases/full-physical-boundary"
+start_ns = "0"
+end_ns = "10"
+complete = "true"
+unbiased_gaussian_errors = "true"
+global_chi_square_limit = "9"
+closure_tolerance_kg = "1e-9"
+error_model_basis = "Constructed independent errors with variances 1,4,1,1,9 kg2; illustrative rejection policy, not calibrated plant data"
+
+[[observation]]
+role = "opening"
+kg = "10"
+start_ns = "0"
+end_ns = "0"
+
+[[observation]]
+role = "feed"
+kg = "100"
+start_ns = "0"
+end_ns = "10"
+
+[[observation]]
+role = "product"
+kg = "72"
+start_ns = "0"
+end_ns = "10"
+
+[[observation]]
+role = "other_outflow"
+kg = "8"
+start_ns = "0"
+end_ns = "10"
+
+[[observation]]
+role = "closing"
+kg = "31"
+start_ns = "10"
+end_ns = "10"
+
+[[covariance]]
+left = "opening"
+right = "opening"
+kg2 = "1"
+[[covariance]]
+left = "opening"
+right = "feed"
+kg2 = "0"
+[[covariance]]
+left = "opening"
+right = "product"
+kg2 = "0"
+[[covariance]]
+left = "opening"
+right = "other_outflow"
+kg2 = "0"
+[[covariance]]
+left = "opening"
+right = "closing"
+kg2 = "0"
+[[covariance]]
+left = "feed"
+right = "feed"
+kg2 = "4"
+[[covariance]]
+left = "feed"
+right = "product"
+kg2 = "0"
+[[covariance]]
+left = "feed"
+right = "other_outflow"
+kg2 = "0"
+[[covariance]]
+left = "feed"
+right = "closing"
+kg2 = "0"
+[[covariance]]
+left = "product"
+right = "product"
+kg2 = "1"
+[[covariance]]
+left = "product"
+right = "other_outflow"
+kg2 = "0"
+[[covariance]]
+left = "product"
+right = "closing"
+kg2 = "0"
+[[covariance]]
+left = "other_outflow"
+right = "other_outflow"
+kg2 = "1"
+[[covariance]]
+left = "other_outflow"
+right = "closing"
+kg2 = "0"
+[[covariance]]
+left = "closing"
+right = "closing"
+kg2 = "9"

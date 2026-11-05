@@ -69,6 +69,23 @@ of the whole operation. See [Alongside your systems](#alongside-your-systems-and
 | Is there code? | **Yes, and the public lane runs.** `fmine assure public --issuer barrick` runs end to end on the 18 registered workbooks (not in git) and reproduces the state root pinned in `repro/barrick/expected.toml`. The M0 gate is not passed: the M0 report, the security pack and the hashed FY2026 forecasts are still open |
 | Has anything been benchmarked? | **No benchmark suite.** One machine has timed `fmine-optimize`'s certified ultimate pit: MineLib's 2.1M-block mclaughlin in about 1.2 s, and a synthetic 10⁷-block model in under a minute (`crates/fmine-optimize/CONTRACT.md` §8). Every other speed and scale number in the plan is a TARGET |
 
+### Run declared plant accounting
+
+DESIGN: the plant CLI accepts explicit elemental inventory worksheets and preserves the submitted source
+bytes, physical support, original observations and model assumptions in its output:
+
+```bash
+cargo run -p fmine-cli -- plant balance --input tests/plant/closed_inventory.toml
+cargo run -p fmine-cli -- plant reconcile --input tests/plant/measured_inventory.toml
+```
+
+The supplied examples are synthetic. `balance` checks exact nominal closure. `reconcile` uses the declared full
+error covariance and reports fitted amounts, adjustments, posterior covariance and gross-error diagnostics.
+Rejected candidates return a nonzero exit status and no admitted balance Claim while retaining the original
+observations and available diagnostics. Inputs remain Assumed, Internal and uncalibrated. This calculation
+does not audit a site's measurements, infer recovery or certify P754 compliance. `fmine robot-docs` documents
+the strict worksheet fields, explicit kg basis, stocktake timing and all required covariance pairs.
+
 ### Run the public lane
 
 With the pinned Rust toolchain, fetch the registered public workbooks and run:

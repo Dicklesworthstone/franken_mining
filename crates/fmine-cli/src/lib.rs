@@ -18,6 +18,7 @@ mod lint_publicness;
 pub mod mirror;
 pub mod packet;
 pub mod pit;
+pub mod plant;
 pub mod reliance;
 mod reliance_binding;
 pub mod reliance_explicit;
@@ -60,6 +61,8 @@ pub enum CliCommand {
     MetricsGeo(geo::Command),
     /// The certified ultimate pit of a MineLib UPIT pair (bd-ip99).
     PlanPit(pit::Command),
+    /// Account or reconcile declared elemental inventory with original observations retained.
+    Plant(plant::Command),
     /// Project exact registered HTML cells with source-verified semantic labels into canonical Claims.
     HtmlClaims(html::Command),
     /// Compute complete registered reserve-replacement windows from explicitly selected PDF assertions.
@@ -518,6 +521,7 @@ fn verb_hint(args: &[String]) -> &'static str {
                 return "metrics cost";
             }
             "plan" => return "plan pit",
+            "plant" => return "plant",
             "html" => return "html claims",
             "mirror" => return "mirror",
             "reserve" => return "reserve replacement",
@@ -856,13 +860,14 @@ pub fn parse_args(
     let verb = verb_hint(args);
     if matches!(
         verb,
-        "metrics cost" | "metrics geo" | "plan pit" | "html claims"
+        "metrics cost" | "metrics geo" | "plan pit" | "html claims" | "plant"
     ) {
         let (words, format, root) = common_options(args, default_root)?;
         let command = match verb {
             "metrics cost" => CliCommand::MetricsCost(cost::parse(&words)?),
             "metrics geo" => CliCommand::MetricsGeo(geo::parse(&words)?),
             "plan pit" => CliCommand::PlanPit(pit::parse(&words)?),
+            "plant" => CliCommand::Plant(plant::parse(&words)?),
             _ => CliCommand::HtmlClaims(html::parse(&words)?),
         };
         return Ok((command, format, root));
@@ -1736,6 +1741,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
         CliCommand::MetricsCost(command) => cost::execute(command, workspace_root),
         CliCommand::MetricsGeo(command) => geo::execute(command, workspace_root),
         CliCommand::PlanPit(command) => pit::execute(command, workspace_root),
+        CliCommand::Plant(command) => plant::execute(command, workspace_root),
         CliCommand::HtmlClaims(command) => html::execute(command, workspace_root),
         CliCommand::ReserveReplacement(command) => reserve::execute(command, workspace_root),
         CliCommand::DecideCard { model } => decision::execute(model, workspace_root),
@@ -2119,6 +2125,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 cost::USAGE,
                 geo::USAGE,
                 pit::USAGE,
+                plant::BALANCE_USAGE,
+                plant::RECONCILE_USAGE,
                 html::USAGE,
                 "decide card <model-file>",
                 capital::USAGE,
@@ -2216,6 +2224,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(geo::ROBOT_DOCS_JSON);
             payload.push_str(",\"plan_pit\":");
             payload.push_str(pit::ROBOT_DOCS_JSON);
+            payload.push_str(",\"plant_inventory\":");
+            payload.push_str(plant::ROBOT_DOCS_JSON);
             payload.push_str(",\"html_claims\":");
             payload.push_str(html::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_distributions\":");

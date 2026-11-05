@@ -5,7 +5,7 @@
 - **Layer:** `U` (User Surfaces & CLI)
 - **Subsystem:** `Surfaces`
 - **LOC Budget:** `26k planned / 30k ceiling` (`registries/loc_budget.toml`)
-- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "cost", "geo", "pit", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
+- **Allowed Module Families:** `["cli", "envelope", "assure_report", "claim_inspection", "cost", "geo", "pit", "plant", "worksheet_input", "html", "decision", "capital", "packet", "guidance", "guidance_capacity", "track_record", "track_record_as_of", "track_record_binding", "track_record_data", "track_record_price", "lint", "lint_publicness", "lint_guidance", "lint_html", "mirror", "forecast", "reliance", "reliance_binding", "reliance_explicit", "reserve", "issued", "tables"]`
 
 ## 2. Mathematical & Domain Formulation
 The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
@@ -29,6 +29,25 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Negative production is unusable. A degenerate printed range is interpreted as a point target.
 - **Envelope:** `FMT-ENV-1` (`schema_version: "fmine.env.v1"`).
 - **Verbs:**
+  - DESIGN (BD-177): `plant balance --input <worksheet.toml>` and
+    `plant reconcile --input <worksheet.toml>` read bounded, SHA-256-bound declared worksheets through
+    `worksheet_input`, then use the existing `fmine-plant` accounting/reconciliation owners. Five original
+    elemental-kg roles and a completeness declaration remain Assumed, Internal and uncalibrated. Stocktakes
+    must be endpoint instants and flows must cover the exact full reporting interval; wet tonnes, grades,
+    ownership shares and unit inference are not admitted by this schema. `balance` requires exact closure
+    and refuses error-model fields instead of ignoring them. `reconcile` requires all fifteen unordered
+    covariance pairs (including explicit zero cross terms), an unbiased-Gaussian declaration, a named model
+    basis and caller-supplied rejection/closure limits. Full observed and fitted vectors, posterior covariance,
+    normalized adjustments, exact original residual and global statistic are returned. Gross-error or physical
+    rejection keeps these diagnostics and every original observation, returns a nonzero exit code and exposes
+    `admitted_claim: null`. No fitted numbers are converted to an exact closed receipt. The command appends no
+    authority ledger and establishes no empirical calibration, recovery estimate or P754 compliance.
+    FACT (constructed known answers in `crates/xtask/testdata/plant_inventory_contract.rs`): the exact example
+    closes 10 + 100 = 72 + 8 + 30 kg; the measured example with closing stock 31 kg and variances
+    [1,4,1,1,9] kg² fits [10.0625,100.25,71.9375,7.9375,30.4375] kg with chi-square 0.0625.
+    Changing closing stock to 50 kg yields chi-square 25 and refusal against the illustrative limit 9.
+    Byte mutation, time support, missing roles/covariances, unsupported units, duplicates and nonfinite inputs
+    have real-executable regressions. `robot-docs` includes the strict input schema and example paths.
   - `metrics geo --input <worksheet.toml>` (BD-062, GB-27): reads a regular UTF-8 file bounded to 1 MiB,
     hashes the actual bytes and evaluates `fmine-metrics::definitions::geo::worksheet`. Schema
     `fmine.geo-worksheet.v1` requires explicit physical scope, included metals and reference deck/version;
