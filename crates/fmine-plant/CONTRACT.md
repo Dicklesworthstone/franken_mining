@@ -144,8 +144,9 @@ reconciliation of fully measured carrier and elemental totals, plus identifiable
 streams with measured endpoint stocks (§17), including cross-element and cross-stream covariance.
 Nonlinear uncertainty propagation, missing-stock inference, sensor bias estimation, plant error-model
 calibration and full P754 reconciliation remain.
-BD-287 process-card ingestion and BD-313 RTD inversion/deconvolution remain unimplemented
-here. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
+BD-287 now has source-bound, versioned nominal recovery-card evaluation (§18); report ingestion,
+source-box qualification, fitting and calibration remain. BD-313 RTD inversion/deconvolution remains
+unimplemented here. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
 forecast registration, sequence authority or permission-to-operate claim is supplied. The declared CLI
 worksheets expose nominal material conversion, elemental inventory accounting/reconciliation and joint flowsheet reconciliation;
 their byte-bound declarations remain Assumed rather than verified plant measurements.
@@ -373,3 +374,67 @@ source/model mutation, missing roles and provenance/confidentiality retention.
 worksheet parser. The separate schema explicitly names unmeasured streams and supplies covariance only
 for observed coordinates. The result retains source Claims, the full joint covariance, observed/inferred
 distinctions and the explicit availability of gross-error testing. No missing stock or prior is invented.
+
+## 18. Versioned nominal recovery cards (DESIGN; BD-176/287)
+
+`cards::RecoveryModel::compile` admits four separately sourced layers: a test-work card,
+an ordered sequence of operational factors, a correction with an optional explicit upper cap,
+and an assumed processing route. Every dependent layer binds the exact test-work Claim ID.
+Versions, source claims and intermediate values remain in the immutable model and evaluation
+receipt. Updating one source requires compiling a new model; an old receipt retains its original
+model and inputs.
+
+A card names its circuit, material domain, dry basis and element, declares its valid period and
+exact open or closed input bounds, and assigns each variable both a measurand and a numerical
+unit. Supported coordinates distinguish grams per dry metric tonne, troy ounces per dry short
+ton, dry mass percent/fraction, dry mass ppm, spike-test percent, micrometres and hours.
+Evaluation never silently converts a coordinate or treats spike-test recovery as an assay.
+Output scale is separately declared as fraction or percent. Exact bounds are checked before
+conversion to binary64, including values whose floating-point representations coincide with a
+boundary. Inputs require the same scope, complete declared variable set and period-aggregate
+support. Physical input domains, failed calibration, stale or mutated source claims, missing
+support and nonfinite or out-of-range results refuse.
+
+The bounded formula compiler accepts arithmetic, parentheses, scientific numeric literals,
+`exp`/`EXP`, `ln`/`LN` and integer powers from -16 through 16. It resolves declared variable
+names once and uses the existing deterministic scalar numerical owner. The compiled program
+evaluates on a fixed stack, without reparsing or allocating an expression tree on each call.
+Limits are 4,096 ASCII formula bytes, 512 operations, 32 nesting levels, 32 inputs and eight
+operational factors. Unknown names, unsupported syntax, domain errors, overflow and destructive
+underflow refuse. This is a nominal scalar calculation with `DeterministicPerIsa` classification;
+it is not an interval enclosure or a fitted response surface.
+
+The evaluation receipt exposes the raw test-work fraction, the result after each nonnegative
+operational multiplier, the result after the signed additive correction, whether the explicit cap
+applied, the final recovery fraction and the selected route. Corrections use fractional units
+(`0.02` means two percentage points). A positive raw test-work estimate may exceed one only
+when the declared layers produce an admissible final fraction; an explicitly sourced cap can
+supply that bound. No implicit clipping occurs. Source evidence, confidentiality, support and
+unknown-unknown metadata are combined using the existing plant admission and receipt machinery;
+outputs are never promoted beyond `Estimated`.
+
+### Executable source-unit illustrations
+
+```sh
+cargo run -p fmine-plant --example process_recovery_cards
+cargo run -p fmine-plant --example process_recovery_cards -- --wrong-unit
+```
+
+The example retains the Carlin, Cortez and Juniper Mega formula transcriptions already recorded
+in corpus C2 section 3.4 (E171), including their different numeric input units and output scales.
+Carlin retains its printed `0.029167` factor; this is not substituted for an exact statutory unit
+conversion. Cortez explicitly selects the no-arsenic-impact regime. Juniper Mega's logarithmic
+expression is interpreted as a fractional output despite its source heading. The original
+technical reports have not been requalified by this example. All validity boxes, time intervals,
+input claims, operational factors, corrections, caps and routes are authored illustrations,
+classified `Assumed`; none establish plant applicability.
+
+The normal command evaluates nine cases before emitting output. The wrong-unit variant refuses
+with `FMINE-REF-107` and empty stdout. Thirteen tests include independent 60-digit Decimal
+known answers for all three equations, exact boundary and unit/measurand checks, strict spike-test
+bounds, four-layer intermediate values, explicit caps, source/version retargeting, metadata
+retention, parser bounds, physical domains and mathematical refusal paths.
+
+This completes typed nominal card evaluation, not all of BD-287. Report ingestion, source-box
+qualification, parameter estimation, empirical uncertainty/covariance, forecast calibration,
+automatic route selection and plant control remain outside this contract.
