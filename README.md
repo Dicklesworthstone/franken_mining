@@ -1942,7 +1942,8 @@ public_members = "north-mara-production=North Mara"
 The frozen digest binds the exact issuer, subject, period, metric/unit and ownership basis for every member.
 Supported metrics are gold production (`production_koz`), copper production (`production_kt`),
 issuer-reported AISC (`aisc_usd_per_oz`) and total cash costs (`tcc_usd_per_oz`) per sold gold ounce,
-and copper C1 cash costs per sold pound (`c1_usd_per_lb`), at site level over a calendar year (`YYYYFY`)
+and copper AISC (`aisc_usd_per_lb`) and C1 cash costs (`c1_usd_per_lb`) per sold pound, at site level over a
+calendar year (`YYYYFY`)
 or individual calendar quarter. Cost definitions and sold-unit denominators must match exactly; negative
 printed costs remain signed. Copper production retains the printed kilotonnes and the declared full or attributable
 ownership basis; resolution performs no implicit pounds conversion or ownership scaling.

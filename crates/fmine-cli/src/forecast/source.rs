@@ -374,6 +374,11 @@ fn sold_unit_cost(metric: PublicMetric, header: Option<&str>) -> bool {
             "($/oz)",
             ["per sold ounce", "per ounce sold"],
         ),
+        PublicMetric::AiscUsdPerLb => (
+            "all-in sustaining costs",
+            "($/lb)",
+            ["per sold pound", "per pound sold"],
+        ),
         PublicMetric::TccUsdPerOz => (
             "total cash costs",
             "($/oz)",

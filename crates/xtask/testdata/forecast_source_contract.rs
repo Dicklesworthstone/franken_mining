@@ -2,7 +2,7 @@ use super::*;
 use std::collections::BTreeMap;
 
 use fmine_calib::ledger::binding::PublicMetric::{
-    AiscUsdPerOz, C1UsdPerLb, ProductionKoz, ProductionKt, TccUsdPerOz,
+    AiscUsdPerLb, AiscUsdPerOz, C1UsdPerLb, ProductionKoz, ProductionKt, TccUsdPerOz,
 };
 use fmine_core::id::PrefixKind;
 use fmine_io::xlsx::{MinimalCell, MinimalSheet, Workbook, build_minimal_xlsx};
@@ -64,6 +64,7 @@ fn example(metric: PublicMetric) -> (PublicResolutionPolicy, ObjectId, SourceRow
     );
     cell.label_as_printed = match metric {
         AiscUsdPerOz => Some("All-in sustaining costs ($/oz)".into()),
+        AiscUsdPerLb => Some("All-in sustaining costs ($/lb)".into()),
         TccUsdPerOz => Some("Total cash costs ($/oz)".into()),
         C1UsdPerLb => Some("C1 cash costs ($/lb)".into()),
         _ => None,
@@ -98,6 +99,7 @@ fn original_displayed_number_and_source_identity_survive_the_receipt() {
         ProductionKt,
         TccUsdPerOz,
         C1UsdPerLb,
+        AiscUsdPerLb,
     ] {
         let (policy, id, source, cell) = example(metric);
         let ResolvedOriginalOutcome::Published(result) =
@@ -236,14 +238,16 @@ fn mutated_source_or_wrong_scope_never_becomes_an_outcome() {
             .code,
         "FMINE-REF-502"
     );
-    let (policy, id, source, mut cost) = example(PublicMetric::AiscUsdPerOz);
-    cost.printed_basis = OwnershipBasis::Unprinted;
-    assert_eq!(
-        bind(&source, &policy, id, &[cost])
-            .expect_err("unprinted cost basis")
-            .code,
-        "FMINE-REF-105"
-    );
+    for metric in [AiscUsdPerOz, AiscUsdPerLb] {
+        let (policy, id, source, mut cost) = example(metric);
+        cost.printed_basis = OwnershipBasis::Unprinted;
+        assert_eq!(
+            bind(&source, &policy, id, &[cost])
+                .expect_err("unprinted cost basis")
+                .code,
+            "FMINE-REF-105"
+        );
+    }
 }
 
 #[test]
@@ -252,6 +256,7 @@ fn cost_headers_admit_only_the_frozen_definition_and_sold_unit() {
         (AiscUsdPerOz, "All-in sustaining costs", "$/oz", "ounce"),
         (TccUsdPerOz, "Total cash costs", "$/oz", "ounce"),
         (C1UsdPerLb, "C1 cash costs", "$/lb", "pound"),
+        (AiscUsdPerLb, "All-in sustaining costs", "$/lb", "pound"),
     ] {
         let (policy, id, source, mut cell) = example(metric);
         for header in [
@@ -303,6 +308,19 @@ fn a_matching_cost_unit_cannot_substitute_a_different_definition() {
     );
     let (policy, id, source, mut cell) = example(C1UsdPerLb);
     cell.label_as_printed = Some("All-in sustaining costs ($/lb)".into());
+    assert_eq!(
+        bind(&source, &policy, id, &[cell]).unwrap_err().code,
+        "FMINE-REF-105"
+    );
+    let (policy, id, source, mut cell) = example(AiscUsdPerLb);
+    cell.label_as_printed = Some("C1 cash costs ($/lb)".into());
+    assert_eq!(
+        bind(&source, &policy, id, &[cell]).unwrap_err().code,
+        "FMINE-REF-105"
+    );
+    let (policy, id, source, mut cell) = example(AiscUsdPerLb);
+    cell.key.unit = "usd_per_oz".into();
+    reseal(&mut cell);
     assert_eq!(
         bind(&source, &policy, id, &[cell]).unwrap_err().code,
         "FMINE-REF-105"
@@ -470,6 +488,7 @@ fn explicit_comparative_retains_frozen_target_and_reconstructs_exact_source_clai
         ProductionKt,
         TccUsdPerOz,
         C1UsdPerLb,
+        AiscUsdPerLb,
     ] {
         let (policy, id, registered, cell) = comparative(metric);
         let result = bind_release(

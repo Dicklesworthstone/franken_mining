@@ -204,6 +204,7 @@ impl Fixture {
             match metric {
                 "tcc_usd_per_oz" => "Total cash costs ($/oz)",
                 "c1_usd_per_lb" => "C1 cash costs ($/lb)",
+                "aisc_usd_per_lb" => "All-in sustaining costs ($/lb)",
                 _ => "All-in sustaining costs ($/oz)",
             },
             "December 31",
@@ -433,6 +434,24 @@ fn original_registered_cells_resolve_exact_printed_values_and_reopen_their_asses
             900,
             1100,
         ),
+        (
+            "aisc_usd_per_lb",
+            "attributable:3/5",
+            "2030FY",
+            "2030Q4.xlsx:YTD!D5",
+            1000,
+            900,
+            1100,
+        ),
+        (
+            "aisc_usd_per_lb",
+            "attributable:3/5",
+            "2030Q4",
+            "2030Q4.xlsx:QTD!D5",
+            1000,
+            900,
+            1100,
+        ),
     ] {
         let mut fixture = Fixture::new(metric, ownership, period, lo, hi);
         let source = fixture.source_claim(locator);
@@ -520,6 +539,23 @@ fn original_registered_cells_resolve_exact_printed_values_and_reopen_their_asses
             );
             assert!(source.key.line.label.starts_with("summary:cu_prod_"));
             assert!(!expected.contains("summary:au_prod_"));
+        }
+        if matches!(metric, "c1_usd_per_lb" | "aisc_usd_per_lb") {
+            assert_eq!(source.key.unit, "usd_per_lb");
+            assert_eq!(source.key.line.label, format!("summary:{metric}"));
+            assert_eq!(
+                source.claim.additivity,
+                fmine_claim::AdditivityClass::IntensiveWeighted
+            );
+            assert_eq!(
+                source.key.ownership_basis,
+                fmine_public::key::OwnershipBasis::Attributable {
+                    num: 3,
+                    den: 5,
+                    source: fmine_public::key::ShareSource::Printed,
+                }
+            );
+            assert_eq!(source.printed_basis, source.key.ownership_basis);
         }
         let saved = digest_field(expected, "digest");
         let before = fixture.bytes();
@@ -917,6 +953,13 @@ fn cash_cost_headers_keep_sold_unit_definitions_and_refuse_substitution_before_a
             "C1 cash costs ($/oz)",
             "All-in sustaining costs ($/lb)",
         ),
+        (
+            "aisc_usd_per_lb",
+            "All-in sustaining costs ($/lb)",
+            "pound",
+            "All-in sustaining costs ($/oz)",
+            "C1 cash costs ($/lb)",
+        ),
     ] {
         for (header, expected) in [
             (format!("{label} per {sold} sold"), None),
@@ -954,6 +997,35 @@ fn cash_cost_headers_keep_sold_unit_definitions_and_refuse_substitution_before_a
         let wrong_ownership = Fixture::new(metric, "100%", "2030FY", 900, 1100);
         wrong_ownership.refuse(&wrong_ownership.resolve(), ns(AVAILABLE), "FMINE-REF-105");
     }
+}
+
+#[test]
+fn copper_aisc_never_infers_full_ownership_from_an_unprinted_site_label() {
+    let mut fixture = Fixture::new("aisc_usd_per_lb", "100%", "2030FY", 900, 1100);
+    let mut annual = sheet(
+        "YTD",
+        "twelve",
+        "400.4",
+        "All-in sustaining costs ($/lb)",
+        "December 31",
+    );
+    annual
+        .cells
+        .iter_mut()
+        .find(|(cell, _)| cell == "A5")
+        .unwrap()
+        .1 = MinimalCell::Text("Site A".into());
+    fixture.replace_workbook(&[annual]);
+    let claim = fixture.source_claim("2030Q4.xlsx:YTD!D5");
+    assert_eq!(
+        claim.key.ownership_basis,
+        fmine_public::key::OwnershipBasis::Unprinted
+    );
+    assert_eq!(
+        claim.printed_basis,
+        fmine_public::key::OwnershipBasis::Unprinted
+    );
+    fixture.refuse(&fixture.resolve(), ns(AVAILABLE), "FMINE-REF-105");
 }
 
 #[test]
@@ -1457,6 +1529,17 @@ fn cash_cost_revisions_preserve_decimal_signed_values_first_scores_and_offline_r
             [("9", "4"), ("-1", "4")],
             (2, 3),
             ["1", "23.5"],
+        ),
+        (
+            "aisc_usd_per_lb",
+            "All-in sustaining costs ($/lb) per pound sold",
+            2,
+            ["3.754", "-0.754"],
+            ["3.75", "-0.75"],
+            [("15", "4"), ("-3", "4")],
+            (3, 4),
+            // Width 1; the second 80% interval score adds 10 × (3 − (−0.75)).
+            ["1", "38.5"],
         ),
     ] {
         let mut fixture = Fixture::with_vintages(

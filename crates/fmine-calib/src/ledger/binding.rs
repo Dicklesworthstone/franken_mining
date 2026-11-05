@@ -76,6 +76,7 @@ pub enum PublicMetric {
     AiscUsdPerOz,
     TccUsdPerOz,
     C1UsdPerLb,
+    AiscUsdPerLb,
 }
 
 impl PublicMetric {
@@ -86,6 +87,7 @@ impl PublicMetric {
             "aisc_usd_per_oz" => Ok(Self::AiscUsdPerOz),
             "tcc_usd_per_oz" => Ok(Self::TccUsdPerOz),
             "c1_usd_per_lb" => Ok(Self::C1UsdPerLb),
+            "aisc_usd_per_lb" => Ok(Self::AiscUsdPerLb),
             _ => Err(domain("unsupported public-resolution metric")),
         }
     }
@@ -97,6 +99,7 @@ impl PublicMetric {
             Self::AiscUsdPerOz => "aisc_usd_per_oz",
             Self::TccUsdPerOz => "tcc_usd_per_oz",
             Self::C1UsdPerLb => "c1_usd_per_lb",
+            Self::AiscUsdPerLb => "aisc_usd_per_lb",
         }
     }
 
@@ -105,7 +108,7 @@ impl PublicMetric {
             Self::ProductionKoz => "koz",
             Self::ProductionKt => "kt",
             Self::AiscUsdPerOz | Self::TccUsdPerOz => "usd_per_oz",
-            Self::C1UsdPerLb => "usd_per_lb",
+            Self::C1UsdPerLb | Self::AiscUsdPerLb => "usd_per_lb",
         }
     }
 
@@ -115,7 +118,7 @@ impl PublicMetric {
     }
 
     /// Exact original-release line label. Costs retain their issuer-reported definition and sold-unit
-    /// denominator: AISC/TCC per gold ounce, C1 per copper pound (plan Appendix I.9).
+    /// denominator: AISC/TCC per gold ounce, AISC/C1 per copper pound (plan Appendix I.9).
     pub const fn field(self, ownership: PublicOwnership) -> &'static str {
         match (self, ownership) {
             (Self::ProductionKoz, PublicOwnership::Full) => "summary:au_prod_100_koz",
@@ -127,6 +130,7 @@ impl PublicMetric {
             (Self::AiscUsdPerOz, _) => "summary:aisc_usd_per_oz",
             (Self::TccUsdPerOz, _) => "summary:tcc_usd_per_oz",
             (Self::C1UsdPerLb, _) => "summary:c1_usd_per_lb",
+            (Self::AiscUsdPerLb, _) => "summary:aisc_usd_per_lb",
         }
     }
 }
@@ -980,7 +984,7 @@ mod tests {
                 );
             }
         }
-        for unsupported in ["production_mlb", "production_t", "aisc_usd_per_lb"] {
+        for unsupported in ["production_mlb", "production_t"] {
             assert!(PublicMetric::parse(unsupported).is_err(), "{unsupported}");
         }
     }
@@ -993,6 +997,7 @@ mod tests {
             ("aisc_usd_per_oz", "usd_per_oz", "summary:aisc_usd_per_oz"),
             ("tcc_usd_per_oz", "usd_per_oz", "summary:tcc_usd_per_oz"),
             ("c1_usd_per_lb", "usd_per_lb", "summary:c1_usd_per_lb"),
+            ("aisc_usd_per_lb", "usd_per_lb", "summary:aisc_usd_per_lb"),
         ] {
             target.metric = PublicMetric::parse(name).unwrap();
             assert_eq!(target.metric.as_str(), name);
@@ -1000,6 +1005,7 @@ mod tests {
             assert!(!target.metric.is_production());
             for ownership in [
                 PublicOwnership::Full,
+                PublicOwnership::Attributable { num: 1, den: 1 },
                 PublicOwnership::Attributable { num: 3, den: 5 },
             ] {
                 target.ownership = ownership;
@@ -1030,6 +1036,8 @@ mod tests {
             "tcc_usd_per_lb",
             "c1_usd_per_oz",
             "c1_usd_per_kt",
+            "aisc_usd_per_kt",
+            "adjusted_aisc_usd_per_lb",
             "adjusted_tcc",
         ] {
             assert!(PublicMetric::parse(unsupported).is_err(), "{unsupported}");
@@ -1235,7 +1243,7 @@ mod tests {
         let (mut ledger, ids) = forecasts(PublicPeriod::Year(1970).end_ns().unwrap());
         let first = policy(&ids[..1]);
         let digest = ledger.freeze_cohort(spec(&first, "first", 2)).unwrap();
-        for mutation in 0..8 {
+        for mutation in 0..9 {
             let mut changed = first.clone();
             match mutation {
                 0 => changed.issuer = "another_issuer".into(),
@@ -1245,6 +1253,7 @@ mod tests {
                 4 => changed.metric = PublicMetric::ProductionKt,
                 5 => changed.metric = PublicMetric::TccUsdPerOz,
                 6 => changed.metric = PublicMetric::C1UsdPerLb,
+                7 => changed.metric = PublicMetric::AiscUsdPerLb,
                 _ => {
                     changed.members.insert(ids[0], "another_site".into());
                 }

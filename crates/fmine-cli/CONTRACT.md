@@ -310,8 +310,9 @@ The adapter converts aliases to immutable forecast IDs and embeds the canonical
 `fmine_calib::ledger::binding::PublicResolutionPolicy` in the cohort's hashed resolution rule.
 The complete member set, sole eligible issuer, metric/unit, original FY/quarter release and ownership
 basis are fixed before any outcome. Supported metrics are site-level gold `production_koz`, copper
-`production_kt`, gold `aisc_usd_per_oz` and `tcc_usd_per_oz`, and copper `c1_usd_per_lb`, over calendar years
-(`YYYYFY`) or individual calendar quarters; ownership is `100%` or `attributable:n/d`. The three cost metrics
+`production_kt`, gold `aisc_usd_per_oz` and `tcc_usd_per_oz`, and copper `aisc_usd_per_lb` and `c1_usd_per_lb`,
+over calendar years (`YYYYFY`) or individual calendar quarters; ownership is `100%` or `attributable:n/d`.
+The four cost metrics
 retain separate issuer-reported definitions per sold gold ounce or sold copper pound, with no subtraction
 of annual and year-to-date rates or implicit ownership conversion. Admission requires the exact cost name
 and dollar unit; numeric footnotes and an explicit matching sold-unit suffix are accepted. Adjusted,
@@ -320,7 +321,7 @@ in the Mine Stats reader, which preserves the printed definition for this check.
 Copper production retains the printed kilotonnes and the same exact source-Claim, original-release and
 ownership checks. Gold figures, pounds, and unsupported copper cost definitions never substitute for that
 target. Both production metrics refuse negative values during admission and semantic replay; an unmarked
-printed zero remains valid. TCC and C1 retain signed cost values and displayed decimal precision through
+printed zero remains valid. Gold/copper AISC, TCC and C1 retain signed cost values and displayed decimal precision through
 original admission, permitted comparative restatement, scoring and offline report replay. Existing target
 and receipt encodings remain unchanged.
 
