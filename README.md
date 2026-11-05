@@ -78,6 +78,7 @@ bytes, physical support, original observations and model assumptions in its outp
 cargo run -p fmine-cli -- plant balance --input tests/plant/closed_inventory.toml
 cargo run -p fmine-cli -- plant reconcile --input tests/plant/measured_inventory.toml
 cargo run -p fmine-cli -- plant project --input tests/plant/material_projection.toml
+cargo run -p fmine-cli -- plant transfer --input tests/plant/raw_transfer.toml
 cargo run -p fmine-cli -- plant flowsheet --input tests/plant/flowsheet_reconcile.toml
 cargo run -p fmine-cli -- plant infer --input tests/plant/flowsheet_infer.toml
 ```
@@ -93,6 +94,13 @@ the strict worksheet fields, explicit kg basis, stocktake timing and all require
 material and elemental kilograms. It preserves the submitted values and units. It requires all measurements
 to cover the same declared whole material; sampled assays and chemical species are not silently promoted to
 total-material measurements. The nominal conversion does not invent an uncertainty model or close a balance.
+
+`plant transfer` aggregates a declared complete lot population from wet kg, wet-basis moisture and dry-basis
+elemental assays. It forms each lot's exact dry, water and elemental mass before aggregation, then propagates
+explicit standard uncertainties and the full raw correlation matrix, including cross-lot terms. The example
+yields 250 kg dry matter, 50 kg water and 4.1 kg Cu, with a weighted dry grade of 1.64%. Output preserves the
+source Claims, exact totals, full first-order covariance and a parent-linked nominal graph transfer. The
+first-order covariance remains distinct from a declared Gaussian reconciliation model.
 
 `plant flowsheet` fits all declared unit balances together, with each internal transfer shared by its two
 endpoints. Its worksheet explicitly supplies the graph, every stream and stocktake coordinate, every covariance

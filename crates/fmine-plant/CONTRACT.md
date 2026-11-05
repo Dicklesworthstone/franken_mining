@@ -327,6 +327,12 @@ Tests independently check this full matrix, near-one moisture derivatives, direc
 exact graph, source/basis/model refusals, numerical range and provenance/confidentiality retention.
 Nominal quantities are Exact; covariance arithmetic is DeterministicPerIsa.
 
+`fmine plant transfer --input tests/plant/raw_transfer.toml` exposes this owner through a strict,
+byte-bound worksheet with explicit whole-lot declarations and every raw uncertainty/correlation.
+The output preserves original observation tokens, canonical model binding, exact aggregate totals,
+full first-order covariance and the parent-linked nominal transfer. It does not automatically adopt
+that approximate covariance as a Gaussian reconciliation error model.
+
 ## 17. Explicitly unmeasured flows (DESIGN; BD-149/175/177)
 
 `flowsheet::reconciliation::unmeasured::reconcile_unmeasured_flowsheet` accepts the original graph

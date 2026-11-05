@@ -1,0 +1,194 @@
+# DESIGN: synthetic complete lots, matched moisture/assay dry state, no site data.
+# FACT: hand nominal totals are 250 kg dry, 50 kg H2O, 4.1 kg Cu, dry grade 1.64%.
+# The hand-computed first-order covariance in [dry, water, Cu] order is
+# [[7.17,-4.62,0.1217],[-4.62,5.07,-0.0842],[0.1217,-0.0842,0.035881]] kg2.
+# Raw wet weights have correlation 0.5; every other cross correlation is explicit zero.
+schema = "fmine.plant-transfer.v1"
+boundary = "synthetic-lot-feed/v1"
+stream = "feed"
+dry_basis = "synthetic-matched-moisture-and-assay-dry-state/v1"
+start_ns = "0"
+end_ns = "20"
+complete = "true"
+nonoverlapping_lots = "true"
+whole_lot_support = "true"
+moisture_is_h2o = "true"
+moisture_basis = "water_over_wet_mass"
+assay_basis = "total_element/all_non_water_dry_matter"
+first_order_approximation_accepted = "true"
+error_model_basis = "Synthetic first-order measurement declaration; no empirical calibration"
+
+[[lot]]
+id = "lot-1"
+
+[[lot]]
+id = "lot-2"
+
+[[element]]
+symbol = "Cu"
+measurand = "total-Cu/all-phases"
+
+[[measurement]]
+lot = "lot-1"
+channel = "wet_mass"
+value = "100.000"
+unit = "kg"
+start_ns = "0"
+end_ns = "10"
+standard_uncertainty = "1.00"
+uncertainty_unit = "kg"
+
+[[measurement]]
+lot = "lot-1"
+channel = "moisture"
+value = "0.10"
+unit = "mass_fraction"
+start_ns = "0"
+end_ns = "10"
+standard_uncertainty = "0.010"
+uncertainty_unit = "mass_fraction"
+
+[[measurement]]
+lot = "lot-1"
+channel = "Cu"
+value = "0.0100"
+unit = "mass_fraction"
+start_ns = "0"
+end_ns = "10"
+standard_uncertainty = "0.0010"
+uncertainty_unit = "mass_fraction"
+
+[[measurement]]
+lot = "lot-2"
+channel = "wet_mass"
+value = "200"
+unit = "kg"
+start_ns = "10"
+end_ns = "20"
+standard_uncertainty = "1.00"
+uncertainty_unit = "kg"
+
+[[measurement]]
+lot = "lot-2"
+channel = "moisture"
+value = "0.20"
+unit = "mass_fraction"
+start_ns = "10"
+end_ns = "20"
+standard_uncertainty = "0.010"
+uncertainty_unit = "mass_fraction"
+
+[[measurement]]
+lot = "lot-2"
+channel = "Cu"
+value = "0.0200"
+unit = "mass_fraction"
+start_ns = "10"
+end_ns = "20"
+standard_uncertainty = "0.0010"
+uncertainty_unit = "mass_fraction"
+
+[[correlation]]
+left = "lot-1/wet_mass"
+right = "lot-1/wet_mass"
+value = "1"
+
+[[correlation]]
+left = "lot-1/wet_mass"
+right = "lot-1/moisture"
+value = "0"
+
+[[correlation]]
+left = "lot-1/wet_mass"
+right = "lot-1/Cu"
+value = "0"
+
+[[correlation]]
+left = "lot-1/wet_mass"
+right = "lot-2/wet_mass"
+value = "0.5000"
+
+[[correlation]]
+left = "lot-1/wet_mass"
+right = "lot-2/moisture"
+value = "0"
+
+[[correlation]]
+left = "lot-1/wet_mass"
+right = "lot-2/Cu"
+value = "0"
+
+[[correlation]]
+left = "lot-1/moisture"
+right = "lot-1/moisture"
+value = "1"
+
+[[correlation]]
+left = "lot-1/moisture"
+right = "lot-1/Cu"
+value = "0"
+
+[[correlation]]
+left = "lot-1/moisture"
+right = "lot-2/wet_mass"
+value = "0"
+
+[[correlation]]
+left = "lot-1/moisture"
+right = "lot-2/moisture"
+value = "0"
+
+[[correlation]]
+left = "lot-1/moisture"
+right = "lot-2/Cu"
+value = "0"
+
+[[correlation]]
+left = "lot-1/Cu"
+right = "lot-1/Cu"
+value = "1"
+
+[[correlation]]
+left = "lot-1/Cu"
+right = "lot-2/wet_mass"
+value = "0"
+
+[[correlation]]
+left = "lot-1/Cu"
+right = "lot-2/moisture"
+value = "0"
+
+[[correlation]]
+left = "lot-1/Cu"
+right = "lot-2/Cu"
+value = "0"
+
+[[correlation]]
+left = "lot-2/wet_mass"
+right = "lot-2/wet_mass"
+value = "1"
+
+[[correlation]]
+left = "lot-2/wet_mass"
+right = "lot-2/moisture"
+value = "0"
+
+[[correlation]]
+left = "lot-2/wet_mass"
+right = "lot-2/Cu"
+value = "0"
+
+[[correlation]]
+left = "lot-2/moisture"
+right = "lot-2/moisture"
+value = "1"
+
+[[correlation]]
+left = "lot-2/moisture"
+right = "lot-2/Cu"
+value = "0"
+
+[[correlation]]
+left = "lot-2/Cu"
+right = "lot-2/Cu"
+value = "1"

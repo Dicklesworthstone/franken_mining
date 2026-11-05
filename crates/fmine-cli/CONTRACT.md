@@ -29,6 +29,20 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Negative production is unusable. A degenerate printed range is interpreted as a point target.
 - **Envelope:** `FMT-ENV-1` (`schema_version: "fmine.env.v1"`).
 - **Verbs:**
+  - DESIGN (BD-177): `plant transfer --input <worksheet.toml>` reads a source-bound
+    `fmine.plant-transfer.v1` worksheet and invokes the raw-lot projection owner. It requires explicit
+    complete/nonoverlapping whole-lot support, matched moisture/assay dry bases, wet mass in kg,
+    moisture and total-element dry assays as mass fractions, times, dimensioned standard uncertainties,
+    every raw correlation pair and acceptance of first-order applicability. Raw tokens and source
+    Claims are retained while uncertainty coordinates are bound to the owner's canonical observation
+    order. The output supplies exact extensive totals and weighted grades, full first-order kg²
+    covariance, its channel order and a parent-linked nominal graph transfer. Missing lots/channels,
+    unsupported bases, inadmissible correlations and numerical range loss refuse without clamping,
+    inferred independence or an invented probability distribution. Gaussian WLS adoption requires a
+    separate declaration. Inputs remain Assumed, Internal and uncalibrated. `robot-docs.plant_transfer`
+    documents the schema; `tests/plant/raw_transfer.toml` is a constructed two-lot example with an
+    independent covariance oracle. Actual-binary checks live in
+    `crates/xtask/testdata/plant_transfer_contract.rs`.
   - DESIGN (BD-149/175/177): `plant infer --input <worksheet.toml>` extends the shared graph worksheet
     parser under the distinct `fmine.plant-unmeasured.v1` schema. `[[unmeasured]] stream` rows explicitly
     name complete stream observations to infer; all unit stocktakes remain measured. The covariance
