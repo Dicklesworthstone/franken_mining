@@ -700,6 +700,16 @@ fn put_balance(enc: &mut Encoder, balance: &MaterialBalance) {
 }
 
 pub(crate) fn admit_flowsheet(inputs: &[Claim<FlowsheetInput>]) -> Result<AdmittedFlowsheet<'_>> {
+    admit_flowsheet_with_unmeasured(inputs, &BTreeSet::new())
+}
+
+/// Shared source/topology admission. Only the partial reconciliation owner may
+/// omit explicitly named stream observations; stocktakes remain measured.
+/// Rows then contain measured contributions, not complete nominal balances.
+pub(crate) fn admit_flowsheet_with_unmeasured<'a>(
+    inputs: &'a [Claim<FlowsheetInput>],
+    unmeasured: &BTreeSet<StreamId>,
+) -> Result<AdmittedFlowsheet<'a>> {
     let mut inputs: Vec<_> = inputs.iter().collect();
     inputs.sort_by(|a, b| a.value.value.key().cmp(&b.value.value.key()));
     let declaration = *inputs.first().ok_or_else(|| {
@@ -798,6 +808,12 @@ pub(crate) fn admit_flowsheet(inputs: &[Claim<FlowsheetInput>]) -> Result<Admitt
             ));
         }
     }
+    if unmeasured.iter().any(|stream| !routes.contains_key(stream)) {
+        return Err(bad(
+            RefusalCode::BasisMismatch105,
+            "an explicitly unmeasured stream is absent from the declared topology",
+        ));
+    }
     let mut observations = BTreeMap::new();
     let mut stocks = BTreeMap::new();
     for &source in &inputs {
@@ -807,6 +823,12 @@ pub(crate) fn admit_flowsheet(inputs: &[Claim<FlowsheetInput>]) -> Result<Admitt
         match &source.value.value {
             FlowsheetValue::Declaration { .. } => {}
             FlowsheetValue::Transfer { stream, .. } => {
+                if unmeasured.contains(stream) {
+                    return Err(bad(
+                        RefusalCode::BasisMismatch105,
+                        "a stream cannot be both measured and explicitly unmeasured",
+                    ));
+                }
                 if !routes.contains_key(stream) {
                     return Err(bad(
                         RefusalCode::NoClaimInDomain201,
@@ -858,6 +880,12 @@ pub(crate) fn admit_flowsheet(inputs: &[Claim<FlowsheetInput>]) -> Result<Admitt
     }
     let mut internal_streams = Vec::new();
     for (stream, route) in &routes {
+        if unmeasured.contains(stream) {
+            if matches!(route, StreamRoute::Internal { .. }) {
+                internal_streams.push(stream.clone());
+            }
+            continue;
+        }
         let source = *observations.get(stream).ok_or_else(|| {
             bad(
                 RefusalCode::NoClaimInDomain201,

@@ -140,9 +140,10 @@ impossible metal-in-water composition, identity order and internal confidentiali
 
 BD-175 now has a nominal conservative plant-flow graph and a joint conditional reconciliation adapter;
 process-model prediction and shared cross-domain flow adapters remain. BD-177 now has covariance-aware
-reconciliation of fully measured carrier and elemental totals, including cross-element and cross-stream
-covariance. Nonlinear uncertainty propagation, missing observations, sensor bias estimation, plant
-error-model calibration and full P754 reconciliation remain.
+reconciliation of fully measured carrier and elemental totals, plus identifiable explicitly unmeasured
+streams with measured endpoint stocks (§17), including cross-element and cross-stream covariance.
+Nonlinear uncertainty propagation, missing-stock inference, sensor bias estimation, plant error-model
+calibration and full P754 reconciliation remain.
 BD-287 process-card ingestion and BD-313 RTD inversion/deconvolution remain unimplemented
 here. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
 forecast registration, sequence authority or permission-to-operate claim is supplied. The declared CLI
@@ -267,8 +268,9 @@ a stream, deletes an observation or turns a fitted float into an exact nominal b
 
 Evidence meets all sources, confidentiality joins, compatible UU scenarios remain, and output knowledge
 is capped at Estimated. The graph remains conservative on the declared non-water/H2O carrier basis.
-Missing measurements, correlated systematic-bias inference, chemical conversion, process prediction,
-error-model calibration and empirical P754 qualification require their own supported models.
+This fully measured API requires every observation. Section 17 adds explicitly unmeasured streams
+with measured stocks. Missing-stock and correlated systematic-bias inference, chemical conversion,
+process prediction, error-model calibration and empirical P754 qualification require separate models.
 
 FACT (constructed known answers): `examples/reconcile_flowsheet.rs` fits a two-unit recycle with
 27 coordinates, six constraints and correlated dry feed/product errors. Its global statistic is 32/133;
@@ -323,3 +325,46 @@ and 4.1 kg Cu, giving 1.64% aggregate dry Cu. With sigmas [1 kg,0.01,0.001] per 
 Tests independently check this full matrix, near-one moisture derivatives, direct use by the existing
 exact graph, source/basis/model refusals, numerical range and provenance/confidentiality retention.
 Nominal quantities are Exact; covariance arithmetic is DeterministicPerIsa.
+
+## 17. Explicitly unmeasured flows (DESIGN; BD-149/175/177)
+
+`flowsheet::reconciliation::unmeasured::reconcile_unmeasured_flowsheet` accepts the original graph
+Claims and a separate `Claim<UnmeasuredFlowModel>`. The model binds the complete topology, scope,
+canonical measured `ObservationKey`s, explicitly unmeasured stream IDs, full covariance of genuine
+observations, Gaussian assumption, diagnostic policy and per-channel closure allowances.
+`observation_order(inputs, &unmeasured_streams)` supplies the admitted measured ordering.
+
+All carriers and elements of each named unmeasured stream are inferred together. Opening and closing
+stocktakes for every unit remain measured. Missing stocktakes, undeclared omissions and a stream
+supplied as both measured and unmeasured refuse. The original exact and fully measured entry points
+retain their complete-observation requirements. No observation, variance or prior is supplied for
+an unmeasured quantity.
+
+The shared `fmine_numerics::reconciliation::partial` owner solves measured/latent GLS. Independent
+measured stock coordinates support the measured-row covariance; the latent incidence must have full
+column rank. Ambiguous unmeasured cycles, parallel unknown outlets and excess unknowns refuse
+`FMINE-REF-104`. Bounds are 128 total measured/inferred coordinates and 64 unit/channel rows.
+An internal inferred stream uses one coordinate at both endpoints.
+
+The immutable admitted or rejected receipt retains original Claims, the model, measured adjustments,
+full joint covariance in measured-then-inferred order, and source-bound diagnostics. Observed
+contributions are distinguished from complete balance residuals. External totals involving an
+unmeasured stream have no observed total; fitted totals retain full covariance and independent
+precision/closure audits. Negative or impossible fitted compositions and gross-error failures expose
+no admitted Claim. Evidence meets, confidentiality joins and output knowledge is capped at Estimated.
+
+Redundancy is the number of unit/channel rows minus identifiable unmeasured coordinates.
+`GrossErrorDiagnostic::NoRedundancy` explicitly supplies no gross-error test when this is zero;
+a uniquely inferred flow does not establish that the measurements passed such a test.
+The determinism class is DeterministicPerIsa. Missing-stock state estimation, temporal/bias R2
+learning, bilinear grade/tonnage fitting, chemical conversion and empirical P754 qualification remain
+outside this slice.
+
+FACT (constructed known answers): unmeasured tails in a two-unit recycle infer 5.4 kg dry matter
+with variance 4.2 kg², feed/tails covariance 0.4 kg², chi-square 0.2 and three redundant constraints.
+`cargo run -p fmine-plant --example reconcile_unmeasured_flowsheet` infers product quantities
+[30 kg dry matter, 15 kg H2O, 0.6 kg Au], variances [8, 2, 0.0008] kg² and dry/Au covariance
+0.02 kg² from measured stock drawdown. It explicitly reports unavailable gross-error testing.
+`--ambiguous` adds a second unmeasured outlet and refuses before successful stdout. Tests cover
+these analytical answers, cross-scale correlated errors, observability, physical/policy rejection,
+source/model mutation, missing roles and provenance/confidentiality retention.

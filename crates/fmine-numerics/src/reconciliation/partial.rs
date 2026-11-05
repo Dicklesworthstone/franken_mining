@@ -300,6 +300,9 @@ pub fn reconcile_with_unmeasured(
         joint_constraints.extend_from_slice(&measured_constraints[r * n..(r + 1) * n]);
         joint_constraints.extend_from_slice(&latent_constraints[r * p..(r + 1) * p]);
     }
+    let posterior_sigmas = (0..states)
+        .map(|i| posterior_covariance[i * states + i].sqrt())
+        .collect::<Vec<_>>();
     let mut reconciled_residuals = Vec::with_capacity(m);
     for r in 0..m {
         let row = &joint_constraints[r * states..(r + 1) * states];
@@ -313,14 +316,27 @@ pub fn reconcile_with_unmeasured(
             .fold(targets[r].abs(), |a, (&c, &x)| a + (c * x).abs());
         audit(residual, scale, "partially observed conservation")?;
         reconciled_residuals.push(residual);
+        // True cross-covariances may be zero while both marginal uncertainties
+        // are positive. Judge cancellation against retained posterior marginal
+        // scales, not against the roundoff cross-terms themselves. Using the
+        // original V here would conceal loss of a much smaller retained variance.
+        let marginal_scale = dot(
+            &row.iter().map(|v| v.abs()).collect::<Vec<_>>(),
+            &posterior_sigmas,
+        )?;
         for j in 0..states {
             let column = (0..states)
                 .map(|i| posterior_covariance[i * states + j])
                 .collect::<Vec<_>>();
-            let scale = row
-                .iter()
-                .zip(&column)
-                .fold(0.0, |a, (&c, &x)| a + (c * x).abs());
+            let scale = finite(
+                marginal_scale * posterior_sigmas[j],
+                "joint covariance backward-error scale",
+            )?;
+            if marginal_scale != 0.0 && posterior_sigmas[j] != 0.0 && scale == 0.0 {
+                return Err(refuse(
+                    "partial reconciliation: covariance audit scale loses range",
+                ));
+            }
             audit(dot(row, &column)?, scale, "joint constrained covariance")?;
         }
     }

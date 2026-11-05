@@ -139,6 +139,40 @@ fn redundant_partial_balance_retains_cross_measurement_covariance() {
 }
 
 #[test]
+fn correlated_carrier_and_trace_element_stock_differences_retain_posterior_scale() {
+    let mut v = vec![0.0; 36];
+    for (i, variance) in [4.0, 1.0, 0.0004, 4.0, 1.0, 0.0004].into_iter().enumerate() {
+        v[i * 6 + i] = variance;
+    }
+    v[2] = 0.02;
+    v[12] = 0.02;
+    let r = reconcile_with_unmeasured(
+        &[100.0, 40.0, 2.0, 70.0, 25.0, 1.4],
+        &v,
+        &[
+            1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+            -1.0,
+        ],
+        &[-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0],
+        &[0.0; 3],
+        3,
+    )
+    .unwrap();
+    assert_eq!(r.degrees_of_freedom, 0);
+    assert_eq!(r.measured_adjustments, vec![0.0; 6]);
+    for (&actual, expected) in r.latent_estimates.iter().zip([30.0, 15.0, 0.6]) {
+        close(actual, expected);
+    }
+    for (i, variance) in [8.0, 2.0, 0.0008].into_iter().enumerate() {
+        close(r.posterior_covariance[(6 + i) * 9 + 6 + i], variance);
+    }
+    close(r.posterior_covariance[6 * 9 + 8], 0.02);
+    // Unrelated water/element cross terms stay roundoff near zero, never a
+    // variance floor or a reason to delete the physical source correlation.
+    assert!(r.posterior_covariance[7 * 9 + 8].abs() < 1e-15);
+}
+
+#[test]
 fn affine_constraints_allow_fixed_measured_coordinate_and_signed_latent_coordinate() {
     let r = reconcile_with_unmeasured(
         &[2.0, 3.0],

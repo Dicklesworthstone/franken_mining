@@ -6,7 +6,7 @@ The K0 numerical kernels that the domain crates call:
 - anytime-valid betting e-processes, on PIT values and on bounded scores (`eproc`), EVPI and EVSI in closed form and by Monte Carlo (`voi`), empirical VaR and CVaR (`risk`), and `(max, +)` / `(min, +)` precedence scheduling (`tropical`);
 - `sparse`: CSR with deterministic COO assembly, AMD with a supernodal LDLᵀ, and PCG with ILU(0);
 - `exact_feas`: exact rounding-interval feasibility for published tables (BD-340), with its discovery reports, table generator and power study;
-- `reconciliation`: fully measured linear WLS with full measurement and posterior covariance (plan §20.3 R1).
+- `reconciliation`: fully measured linear WLS and identifiable unmeasured-coordinate GLS, with full joint covariance (plan §20.3 R1; §13).
 
 It does no I/O and holds no domain rules (L-3). `xtask check-claims` exempts it from L-6, so its kernels take bare `f64`.
 
@@ -413,6 +413,16 @@ FACT (independent constructed oracles): eliminating a missing intermediate from 
 feed-product-tail=0. Measurements [100,72,31], variances [4,1,9] yield inferred intermediate 706/7,
 global statistic 9/14 and joint variance 20/7 for feed/intermediate. Correlated stocktakes [10,30]
 with covariance [[4,1],[1,9]] infer an unmeasured inflow 20 with variance 11 and no redundancy.
-Nine partial-owner tests cover full covariance, affine constraints, multiple unknowns, unobservable
+Ten partial-owner tests cover full covariance, affine constraints, multiple unknowns, unobservable
 splits/cycles, scale changes, inadmissible models and a finite error population with independently
 known joint moments. Existing complete-data reconciliation remains unchanged.
+
+The covariance-closure audit uses retained posterior marginal uncertainties:
+for row a and column j, its backward-error scale is
+sum_i(abs(a_i)*sqrt(P_ii))*sqrt(P_jj). This admits cancellation of a truly zero
+cross-covariance between uncertain quantities without using original variance
+to conceal an unresolved posterior. Zero-variance columns remain exact under
+the original covariance admission; no covariance is clipped or floored.
+The cross-scale regression infers dry/water/Au stock differences [30,15,0.6],
+variances [8,2,0.0008] and dry/Au covariance 0.02 from a correlated carrier and
+trace-element observation model. Both numerical and typed graph paths check it.

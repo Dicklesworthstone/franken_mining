@@ -33,6 +33,7 @@ use fmine_units::ExactQty;
 use std::collections::BTreeMap;
 
 type Result<T> = std::result::Result<T, Refusal>;
+pub mod unmeasured;
 pub const ERROR_MODEL_METRIC: &str = "plant.flowsheet.error_model/1";
 pub const OUTPUT_METRIC: &str = "plant.flowsheet.reconciled_interval/1";
 
@@ -446,6 +447,42 @@ fn sum(values: impl Iterator<Item = f64>) -> Result<f64> {
         Err(numerical("boundary projection overflow"))
     }
 }
+fn project_group_covariance(
+    covariance: &[f64],
+    n: usize,
+    groups: &[Vec<usize>],
+) -> Result<Vec<KilogramsSquared>> {
+    let k = groups.len();
+    let mut posterior_covariance = vec![KilogramsSquared::new(0.0); k * k];
+    for r in 0..k {
+        for s in r..k {
+            let value = sum(groups[r]
+                .iter()
+                .flat_map(|&i| groups[s].iter().map(move |&j| covariance[i * n + j])))?;
+            posterior_covariance[r * k + s] = KilogramsSquared::new(value);
+            posterior_covariance[s * k + r] = KilogramsSquared::new(value);
+        }
+        if posterior_covariance[r * k + r].value() < 0.0 {
+            return Err(numerical("negative projected boundary variance"));
+        }
+    }
+    for r in 0..k {
+        for s in r + 1..k {
+            let a = posterior_covariance[r * k + r].value().sqrt();
+            let b = posterior_covariance[s * k + s].value().sqrt();
+            let cross = posterior_covariance[r * k + s].value();
+            if if a == 0.0 || b == 0.0 {
+                cross != 0.0
+            } else {
+                ((cross / a.max(b)) / a.min(b)).abs() > 1.0 + 2e-10
+            } {
+                return Err(numerical("inconsistent projected boundary covariance"));
+            }
+        }
+    }
+    Ok(posterior_covariance)
+}
+
 fn boundary_projection(
     graph: &AdmittedFlowsheet<'_>,
     data: &Coordinates,
@@ -471,7 +508,6 @@ fn boundary_projection(
             );
         }
     }
-    let k = groups.len();
     let observed_kg = groups
         .iter()
         .map(|group| sum(group.iter().map(|&i| observed[i])).map(Kilograms::new))
@@ -512,33 +548,7 @@ fn boundary_projection(
             }
         }
     }
-    let mut posterior_covariance = vec![KilogramsSquared::new(0.0); k * k];
-    for r in 0..k {
-        for s in r..k {
-            let value = sum(groups[r]
-                .iter()
-                .flat_map(|&i| groups[s].iter().map(move |&j| covariance[i * n + j])))?;
-            posterior_covariance[r * k + s] = KilogramsSquared::new(value);
-            posterior_covariance[s * k + r] = KilogramsSquared::new(value);
-        }
-        if posterior_covariance[r * k + r].value() < 0.0 {
-            return Err(numerical("negative projected boundary variance"));
-        }
-    }
-    for r in 0..k {
-        for s in r + 1..k {
-            let a = posterior_covariance[r * k + r].value().sqrt();
-            let b = posterior_covariance[s * k + s].value().sqrt();
-            let cross = posterior_covariance[r * k + s].value();
-            if if a == 0.0 || b == 0.0 {
-                cross != 0.0
-            } else {
-                ((cross / a.max(b)) / a.min(b)).abs() > 1.0 + 2e-10
-            } {
-                return Err(numerical("inconsistent projected boundary covariance"));
-            }
-        }
-    }
+    let posterior_covariance = project_group_covariance(covariance, n, &groups)?;
     let mut conservation = Vec::new();
     for (c, channel) in data.channels.iter().enumerate() {
         let mut raw_exact = ExactQty::from_integer(0);
