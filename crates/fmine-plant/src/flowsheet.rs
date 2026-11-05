@@ -16,6 +16,8 @@ use fmine_units::{ExactQty, UnitsError};
 
 use crate::inventory::{self, BalanceScope, BalanceValue, MetalBalanceInput, MetalBalanceReceipt};
 
+pub mod reconciliation;
+
 type Result<T> = std::result::Result<T, Refusal>;
 const ZERO: ExactQty = ExactQty::from_integer(0);
 pub const INPUT_METRIC: &str = "plant.flowsheet.input/1";
@@ -165,14 +167,14 @@ impl FlowsheetValue {
             _ => AdditivityClass::ExtensiveAdditive,
         }
     }
-    fn key(&self) -> (u8, &str, u8) {
+    pub(crate) fn key(&self) -> (u8, &str, u8) {
         match self {
             Self::Declaration { .. } => (0, "", 0),
             Self::Transfer { stream, .. } => (1, stream.as_str(), 0),
             Self::Stocktake { unit, kind, .. } => (2, unit.as_str(), *kind as u8),
         }
     }
-    fn amounts(&self) -> Option<&MaterialAmounts> {
+    pub(crate) fn amounts(&self) -> Option<&MaterialAmounts> {
         match self {
             Self::Declaration { .. } => None,
             Self::Transfer { amounts, .. } | Self::Stocktake { amounts, .. } => Some(amounts),
@@ -505,12 +507,23 @@ fn derived<T>(
 
 type Source<'a> = &'a Claim<FlowsheetInput>;
 #[derive(Default)]
-struct Rows<'a> {
-    opening: Vec<Source<'a>>,
-    feed: Vec<Source<'a>>,
-    product: Vec<Source<'a>>,
-    other: Vec<Source<'a>>,
-    closing: Vec<Source<'a>>,
+pub(crate) struct Rows<'a> {
+    pub(crate) opening: Vec<Source<'a>>,
+    pub(crate) feed: Vec<Source<'a>>,
+    pub(crate) product: Vec<Source<'a>>,
+    pub(crate) other: Vec<Source<'a>>,
+    pub(crate) closing: Vec<Source<'a>>,
+}
+
+/// Admitted original observations shared by exact accounting and conditional
+/// reconciliation. Admission checks the graph and sources, not balance closure.
+pub(crate) struct AdmittedFlowsheet<'a> {
+    pub(crate) inputs: Vec<Source<'a>>,
+    pub(crate) declaration: Source<'a>,
+    pub(crate) schema: BTreeSet<ElementKey>,
+    pub(crate) per_unit: BTreeMap<UnitId, Rows<'a>>,
+    pub(crate) outer: Rows<'a>,
+    pub(crate) internal_streams: Vec<StreamId>,
 }
 
 fn aggregate(rows: &[Source<'_>], elements: &BTreeSet<ElementKey>) -> Result<MaterialAmounts> {
@@ -686,13 +699,10 @@ fn put_balance(enc: &mut Encoder, balance: &MaterialBalance) {
     }
 }
 
-/// Check every declared unit, then independently close the outer boundary.
-/// Recycle cycles are allowed with explicitly supplied stream amounts; this
-/// evaluates no process equation and does not solve unknown stream flows.
-pub fn account_flowsheet(inputs: &[Claim<FlowsheetInput>]) -> Result<FlowsheetReceipt> {
-    let mut inputs = inputs.to_vec();
+pub(crate) fn admit_flowsheet(inputs: &[Claim<FlowsheetInput>]) -> Result<AdmittedFlowsheet<'_>> {
+    let mut inputs: Vec<_> = inputs.iter().collect();
     inputs.sort_by(|a, b| a.value.value.key().cmp(&b.value.value.key()));
-    let declaration = inputs.first().ok_or_else(|| {
+    let declaration = *inputs.first().ok_or_else(|| {
         bad(
             RefusalCode::NoClaimInDomain201,
             "missing complete flowsheet declaration",
@@ -710,7 +720,7 @@ pub fn account_flowsheet(inputs: &[Claim<FlowsheetInput>]) -> Result<FlowsheetRe
             "requires an explicit complete flowsheet declaration",
         ));
     };
-    for source in &inputs {
+    for &source in &inputs {
         admit(source)?;
         if source.value.scope != declaration.value.scope {
             return Err(bad(
@@ -790,7 +800,7 @@ pub fn account_flowsheet(inputs: &[Claim<FlowsheetInput>]) -> Result<FlowsheetRe
     }
     let mut observations = BTreeMap::new();
     let mut stocks = BTreeMap::new();
-    for source in &inputs {
+    for &source in &inputs {
         if let Some(amounts) = source.value.value.amounts() {
             validate_amounts(amounts, &schema)?;
         }
@@ -881,6 +891,29 @@ pub fn account_flowsheet(inputs: &[Claim<FlowsheetInput>]) -> Result<FlowsheetRe
             }
         }
     }
+    Ok(AdmittedFlowsheet {
+        inputs,
+        declaration,
+        schema,
+        per_unit,
+        outer,
+        internal_streams,
+    })
+}
+
+/// Check every declared unit, then independently close the outer boundary.
+/// Recycle cycles are allowed with explicitly supplied stream amounts; this
+/// evaluates no process equation and does not solve unknown stream flows.
+pub fn account_flowsheet(inputs: &[Claim<FlowsheetInput>]) -> Result<FlowsheetReceipt> {
+    let admitted = admit_flowsheet(inputs)?;
+    let AdmittedFlowsheet {
+        inputs,
+        declaration,
+        schema,
+        per_unit,
+        outer,
+        internal_streams,
+    } = admitted;
     let scope = declaration.value.scope.clone();
     let mut unit_balances = BTreeMap::new();
     for (unit, rows) in &per_unit {
@@ -917,16 +950,15 @@ pub fn account_flowsheet(inputs: &[Claim<FlowsheetInput>]) -> Result<FlowsheetRe
         enc.put_str(stream.as_str());
     }
     let digest = blake3_hash(&enc.finish()).to_hex();
-    let sources: Vec<_> = inputs.iter().collect();
     let claim = derived(
-        &sources,
+        &inputs,
         OUTPUT_METRIC,
         summary,
         &digest,
         AdditivityClass::NonAdditive,
     )?;
     Ok(FlowsheetReceipt {
-        inputs,
+        inputs: inputs.into_iter().cloned().collect(),
         claim,
         digest,
     })

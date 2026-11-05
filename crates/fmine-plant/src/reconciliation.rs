@@ -184,7 +184,7 @@ fn role(value: BalanceValue) -> usize {
 
 // Compare the original rational against the exact binary64 value. A covariance
 // smaller than source conversion error cannot support an honest WLS statistic.
-fn represented_rational(value: f64) -> Result<ExactQty> {
+pub(crate) fn represented_rational(value: f64) -> Result<ExactQty> {
     if value == 0.0 {
         return Ok(ExactQty::from_integer(0));
     }
@@ -235,17 +235,60 @@ fn represented_rational(value: f64) -> Result<ExactQty> {
     })
 }
 
-struct Metadata {
-    evidence: EvidenceClass,
-    epistemic: EpistemicStatus,
-    state: KnowledgeState,
-    confidentiality: Confidentiality,
-    uu: BTreeMap<String, UuTerm>,
-    parents: BTreeSet<ClaimId>,
-    anchors: BTreeSet<fmine_core::anchor::SourceAnchor>,
+/// Admit an exact nominal mass under the shared conversion/adjustment budget.
+/// Splitting the closure allowance among every coordinate bounds accumulated
+/// conversion loss without treating numerical precision as measurement error.
+pub(crate) fn nominal_with_precision_budget(
+    q: ExactQty,
+    variance: KilogramsSquared,
+    closure_allowance: Kilograms,
+    coordinates: usize,
+) -> Result<(f64, f64)> {
+    let observed = q.to_f64();
+    if !observed.is_finite() || q.signum() < 0 || (q.signum() > 0 && observed == 0.0) {
+        return Err(fail(
+            RefusalCode::NumericalCertificateFailed207,
+            "nominal kg value is unrepresentable",
+        ));
+    }
+    let variance = variance.value();
+    if !variance.is_finite() || variance <= 0.0 {
+        return Err(fail(
+            RefusalCode::OutsidePhysicalDomain109,
+            "every measurement variance must be finite and positive",
+        ));
+    }
+    let allowance = (variance.sqrt() * 1e-6).min(closure_allowance.value() / coordinates as f64);
+    let loss = q
+        .checked_sub(represented_rational(observed)?)
+        .map_err(|_| {
+            fail(
+                RefusalCode::NumericalCertificateFailed207,
+                "exact conversion comparison overflow",
+            )
+        })?
+        .to_f64()
+        .abs();
+    if loss > allowance {
+        return Err(fail(
+            RefusalCode::NumericalCertificateFailed207,
+            "nominal conversion exceeds declared closure or one-millionth-sigma numerical budget",
+        ));
+    }
+    Ok((observed, allowance))
+}
+
+pub(crate) struct Metadata {
+    pub(crate) evidence: EvidenceClass,
+    pub(crate) epistemic: EpistemicStatus,
+    pub(crate) state: KnowledgeState,
+    pub(crate) confidentiality: Confidentiality,
+    pub(crate) uu: BTreeMap<String, UuTerm>,
+    pub(crate) parents: BTreeSet<ClaimId>,
+    pub(crate) anchors: BTreeSet<fmine_core::anchor::SourceAnchor>,
 }
 impl Metadata {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             evidence: EvidenceClass::Derived,
             epistemic: EpistemicStatus::KnownKnown,
@@ -256,7 +299,7 @@ impl Metadata {
             anchors: BTreeSet::new(),
         }
     }
-    fn include<T>(&mut self, input: &Claim<T>) -> Result<()> {
+    pub(crate) fn include<T>(&mut self, input: &Claim<T>) -> Result<()> {
         self.evidence = self.evidence.meet(input.evidence);
         self.epistemic = self.epistemic.and(input.epistemic);
         self.state = self.state.and(input.state);
@@ -274,6 +317,24 @@ impl Metadata {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn into_claim<T>(self, metric: &str, value: T, digest: &str) -> Claim<T> {
+        Claim::new(
+            metric,
+            value,
+            digest,
+            Representation::Deterministic,
+            SpatialSupport::PeriodAggregate,
+            AdditivityClass::NonAdditive,
+            self.evidence,
+            self.epistemic,
+            self.state.and(KnowledgeState::Estimated),
+            self.confidentiality,
+            self.uu.into_values().collect(),
+            self.parents.into_iter().collect(),
+            self.anchors.into_iter().collect(),
+        )
     }
 }
 
@@ -359,13 +420,12 @@ pub fn reconcile_inventory(
                 return Err(fail(RefusalCode::BasisMismatch105, "mass role required"));
             }
         };
-        observations[i] = q.to_f64();
-        if !observations[i].is_finite() || (q.signum() > 0 && observations[i] == 0.0) {
-            return Err(fail(
-                RefusalCode::NumericalCertificateFailed207,
-                "nominal kg value is unrepresentable",
-            ));
-        }
+        (observations[i], precision_allowance[i]) = nominal_with_precision_budget(
+            q,
+            model.covariance[i * 5 + i],
+            model.closure_tolerance_kg,
+            5,
+        )?;
         raw_exact = if BALANCE_ROW[i] > 0.0 {
             raw_exact.checked_add(q)
         } else {
@@ -377,31 +437,6 @@ pub fn reconcile_inventory(
                 "exact raw balance overflow",
             )
         })?;
-        let variance = model.covariance[i * 5 + i].value();
-        if !variance.is_finite() || variance <= 0.0 {
-            return Err(fail(
-                RefusalCode::OutsidePhysicalDomain109,
-                "every measurement variance must be finite and positive",
-            ));
-        }
-        precision_allowance[i] =
-            (variance.sqrt() * 1e-6).min(model.closure_tolerance_kg.value() / 5.0);
-        let loss = q
-            .checked_sub(represented_rational(observations[i])?)
-            .map_err(|_| {
-                fail(
-                    RefusalCode::NumericalCertificateFailed207,
-                    "exact conversion comparison overflow",
-                )
-            })?
-            .to_f64()
-            .abs();
-        if loss > precision_allowance[i] {
-            return Err(fail(
-                RefusalCode::NumericalCertificateFailed207,
-                "nominal conversion exceeds declared closure or one-millionth-sigma numerical budget",
-            ));
-        }
     }
     let mut meta = Metadata::new();
     let mut enc = Encoder::new_frame(*b"PIMR", 1);
@@ -513,21 +548,7 @@ pub fn reconcile_inventory(
             },
         )));
     }
-    let claim = Claim::new(
-        OUTPUT_METRIC,
-        diagnostics,
-        &digest,
-        Representation::Deterministic,
-        SpatialSupport::PeriodAggregate,
-        AdditivityClass::NonAdditive,
-        meta.evidence,
-        meta.epistemic,
-        meta.state.and(KnowledgeState::Estimated),
-        meta.confidentiality,
-        meta.uu.into_values().collect(),
-        meta.parents.into_iter().collect(),
-        meta.anchors.into_iter().collect(),
-    );
+    let claim = meta.into_claim(OUTPUT_METRIC, diagnostics, &digest);
     Ok(InventoryReconciliationOutcome::Admitted(Box::new(
         ReconciledInventoryReceipt {
             inputs,

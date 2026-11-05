@@ -258,3 +258,96 @@ fn covariance_consistency_refuses_zero_variance_cross_terms_and_excess_correlati
     assert!(audit_covariance(&[1e-20, 1.01e-20, 1.01e-20, 1e-20], 2, "test covariance").is_err());
     assert!(audit_covariance(&[1e-20, -1e-20, -1e-20, 1e-20], 2, "test covariance").is_ok());
 }
+
+#[test]
+fn linear_covariance_projection_matches_correlated_analytic_answers_and_zero_rows() {
+    let covariance = [4.0, 1.0, 1.0, 9.0];
+    // Y=(2X1-X2, 3X2, 0). Independent expansion gives Var(Y1)=21,
+    // Cov(Y1,Y2)=-21 and Var(Y2)=81; the last coordinate is identically zero.
+    let projected =
+        propagate_linear_covariance(&covariance, &[2.0, -1.0, 0.0, 3.0, 0.0, 0.0], 2, 3).unwrap();
+    assert_eq!(
+        projected,
+        vec![21.0, -21.0, 0.0, -21.0, 81.0, 0.0, 0.0, 0.0, 0.0]
+    );
+    // A singular result need not contain any zero rows: Y2=2Y1 here.
+    assert_eq!(
+        propagate_linear_covariance(&covariance, &[1.0, 1.0, 2.0, 2.0], 2, 2).unwrap(),
+        vec![15.0, 30.0, 30.0, 60.0]
+    );
+    assert_eq!(
+        propagate_linear_covariance(&covariance, &[0.0; 4], 2, 2).unwrap(),
+        vec![0.0; 4]
+    );
+}
+
+#[test]
+fn linear_covariance_projection_preserves_units_and_small_variances() {
+    let covariance = [4.0, 1.0, 1.0, 9.0];
+    let jacobian = [2.0, -1.0, 0.0, 3.0];
+    let baseline = propagate_linear_covariance(&covariance, &jacobian, 2, 2).unwrap();
+    // X'=diag(s)X must be paired with J'=J diag(s)^-1, preserving Y.
+    for scales in [[1e12, 1e-12], [1e-12, 1e12]] {
+        let scaled_v: Vec<_> = (0..4)
+            .map(|k| covariance[k] * scales[k / 2] * scales[k % 2])
+            .collect();
+        let scaled_j: Vec<_> = (0..4).map(|k| jacobian[k] / scales[k % 2]).collect();
+        let actual = propagate_linear_covariance(&scaled_v, &scaled_j, 2, 2).unwrap();
+        for (a, b) in actual.into_iter().zip(&baseline) {
+            close(a, *b);
+        }
+    }
+    let tiny =
+        propagate_linear_covariance(&diagonal(&[1e20, 1e-20]), &[1e-20, 1.0], 2, 1).unwrap()[0];
+    assert!((tiny - 2e-20).abs() <= 2e-12 * 2e-20, "{tiny:e}");
+}
+
+#[test]
+fn linear_covariance_projection_retains_cross_lot_measurement_correlation() {
+    // Authored two-lot first-order oracle, not measured plant calibration.
+    // Nominal (wet kg, wet-basis moisture, dry element fraction):
+    // (100,.1,.01), (200,.2,.02); stddevs (1,.01,.001) for both lots.
+    // Raw mass errors have correlation .5; every other off-diagonal is
+    // explicitly zero. These derivative rows already include the stddevs.
+    let mut correlation = diagonal(&[1.0; 6]);
+    correlation[3] = 0.5;
+    correlation[18] = 0.5;
+    let jacobian = [
+        0.9, -1.0, 0.0, 0.8, -2.0, 0.0, 0.1, 1.0, 0.0, 0.2, 2.0, 0.0, 0.009, -0.01, 0.09, 0.016,
+        -0.04, 0.16,
+    ];
+    // Independent rational expansion, in dry matter/water/element order, kg².
+    let expected = [
+        7.17, -4.62, 0.1217, -4.62, 5.07, -0.0842, 0.1217, -0.0842, 0.035881,
+    ];
+    let actual = propagate_linear_covariance(&correlation, &jacobian, 6, 3).unwrap();
+    for (&a, b) in actual.iter().zip(expected) {
+        close(a, b);
+    }
+    // Var(dry+water)=Var(wet1+wet2)=1+1+2*.5, not 2.
+    close(actual[0] + actual[4] + 2.0 * actual[1], 3.0);
+}
+
+#[test]
+fn linear_covariance_projection_refuses_invalid_sources_shapes_and_lost_range() {
+    for covariance in [
+        [1.0, 1.0, 1.0, 1.0],
+        [1.0, 2.0, 2.0, 1.0],
+        [1.0, 0.1, 0.2, 1.0],
+        [1.0, 0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, f64::NAN],
+    ] {
+        assert!(propagate_linear_covariance(&covariance, &[1.0, 0.0], 2, 1).is_err());
+    }
+    assert!(propagate_linear_covariance(&[], &[], 0, 1).is_err());
+    assert!(propagate_linear_covariance(&[1.0], &[], 1, 0).is_err());
+    assert!(propagate_linear_covariance(&[], &[], 129, 1).is_err());
+    assert!(propagate_linear_covariance(&[], &[], 1, 129).is_err());
+    assert!(propagate_linear_covariance(&[1.0], &[1.0], 2, 1).is_err());
+    assert!(propagate_linear_covariance(&[1.0], &[], 1, 1).is_err());
+    assert!(propagate_linear_covariance(&[1.0], &[f64::INFINITY], 1, 1).is_err());
+    assert!(propagate_linear_covariance(&[1e300], &[1e100], 1, 1).is_err());
+    assert!(propagate_linear_covariance(&[1e-200], &[1e-200], 1, 1).is_err());
+    // Even a constant output does not authorize an invalid source covariance.
+    assert!(propagate_linear_covariance(&[0.0], &[0.0], 1, 1).is_err());
+}

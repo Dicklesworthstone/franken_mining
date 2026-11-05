@@ -140,8 +140,9 @@ impossible metal-in-water composition, identity order and internal confidentiali
 
 BD-175 now has a nominal conservative plant-flow graph; process-model prediction and shared cross-domain
 flow adapters remain. BD-177 now has covariance-aware reconciliation of fully measured elemental totals;
-raw-stream uncertainty propagation, cross-element network reconciliation, missing observations, sensor
-bias estimation, plant error-model calibration and full P754 reconciliation remain.
+raw-stream uncertainty propagation, missing observations, sensor bias estimation, plant error-model
+calibration and full P754 reconciliation remain. Joint cross-channel reconciliation of a fully measured
+conservative flowsheet is now available through the shared numerical owner (section 15).
 BD-287 process-card ingestion and BD-313 RTD inversion/deconvolution remain unimplemented
 here. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
 forecast registration, sequence authority or permission-to-operate claim is supplied. The declared CLI
@@ -206,9 +207,9 @@ gross-error rejection, a negative candidate, exact-to-float precision loss, sour
 scoped observation identities and participation of model evidence/confidentiality.
 
 This is plan §20.3's fully measured linear R1 slice using `fmine_numerics::reconciliation`; it does not
-claim a real plant fixture, empirical confidence calibration, latent-state/bias R2 model, uncertainty
-reconciliation across an entire flowsheet, reconciliation of grades as independent extensive totals,
-or P754 compliance. Original source families and receiver-side permissions remain authoritative.
+claim a real plant fixture, empirical confidence calibration, a latent-state/bias R2 model,
+reconciliation of grades as independent extensive totals or P754 compliance. The full conservative
+graph adapter is described in section 15. Original source families and receiver-side permissions remain authoritative.
 
 ## 14. Nominal material projection (DESIGN; BD-177/336)
 
@@ -237,3 +238,37 @@ source mutations, input-order determinism, exact overflow and physical/support r
 strict worksheet requires an explicit total-element assay basis and whole-material support declaration.
 Inputs remain Assumed, Internal and uncalibrated; the exact submitted bytes are hashed. Site source
 auditing, sampled-support conversion, full P754 qualification and the complete BD-177/336 gates remain open.
+
+## 15. Joint conservative-flowsheet reconciliation (DESIGN; BD-149/175/177)
+
+`flowsheet::reconciliation::observation_order` admits the original complete graph and returns a
+canonical source-bound coordinate order. `reconcile_flowsheet` uses one full kg² covariance over
+all dry-matter, H2O and elemental stream/stock quantities. `ObservationKey` binds the exact source
+ClaimId, transfer or endpoint stock location, and channel. The error-model Claim binds the declaration,
+scope, complete ordered keys, explicit unbiased-Gaussian assumption, gross-error policy and one kg
+closure allowance for every channel. No block-diagonal or independent-error assumption is supplied.
+
+Every unit/channel contributes a conservation row. Internal streams share a single observation at
+both endpoints, including recycles; no redundant outer-boundary row enters the solve. The existing
+`fmine_numerics::reconciliation` owner fits the fully measured graph under its 128-coordinate and
+64-independent-row bounds. Exact source admission is shared with the nominal graph. Exact-to-binary64
+conversion and closure checks refuse loss that exceeds the declared measurement/precision budget.
+
+The immutable receipt retains originals, the error model, fitted amounts, adjustments, full posterior
+and adjustment covariance, original exact unit residuals, fitted residuals and discrepancy diagnostics.
+External opening/feed/product/other/closing totals are projected with their full cross-channel and
+cross-role covariance. A separate whole-boundary audit checks aggregate closure and precision.
+Fitted negatives, physically impossible elemental composition and declared gross-error failures keep
+the originals and numerical diagnostics but expose no admitted balance Claim. Arithmetic never plugs
+a stream, deletes an observation or turns a fitted float into an exact nominal balance receipt.
+
+Evidence meets all sources, confidentiality joins, compatible UU scenarios remain, and output knowledge
+is capped at Estimated. The graph remains conservative on the declared non-water/H2O carrier basis.
+Missing measurements, correlated systematic-bias inference, chemical conversion, process prediction,
+error-model calibration and empirical P754 qualification require their own supported models.
+
+FACT (constructed known answers): `examples/reconcile_flowsheet.rs` fits a two-unit recycle with
+27 coordinates, six constraints and correlated dry feed/product errors. Its global statistic is 32/133;
+opening-stock variance is 550/399 kg². `--gross-error` refuses before any successful stdout.
+Thirteen graph tests include an independent two-metal correlated stocktake solution and a case whose
+exact aggregate closes but binary64 loses 1 kg. Existing exact-flow receipt identities remain unchanged.

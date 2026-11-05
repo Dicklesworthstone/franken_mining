@@ -255,6 +255,15 @@ faulty instrument or supply an independent multiple-testing rule. Missing measur
 biases, uncertain constraint coefficients, nonnegativity-constrained fitting and model calibration
 are outside this fully measured linear slice; no posterior probability or empirical coverage is inferred.
 
+`reconciliation::propagate_linear_covariance(V, J, input_count, output_count)` exposes the same
+audited covariance congruence used by reconciliation. It returns full row-major `J V J'` for
+1–128 input/output coordinates. The source V must remain finite, exactly symmetric and positive
+definite; zero or dependent projection rows may produce a singular output. No diagonal padding or
+independence assumption is added. Nonfinite arithmetic, lost nonzero products or lost positive
+variance refuse. Four independent projection tests cover correlation, scaling, singular outputs
+and range/domain refusals. The helper supplies numerical propagation only; callers own units,
+source evidence, Jacobian validity and any first-order approximation or distribution assumption.
+
 Primary reference: [Tamhane and Mah (1985), Technometrics 27, 409–422](https://doi.org/10.1080/00401706.1985.10488080).
 `reconciliation/tests.rs` transcribes Example 1's original measurement units and checks both estimates
 and full covariance against an independently derived one-dimensional nullspace solution, reproducing

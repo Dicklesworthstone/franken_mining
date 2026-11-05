@@ -64,6 +64,9 @@ fn dot(a: &[f64], b: &[f64]) -> Result<f64> {
     let (mut sum, mut correction) = (0.0, 0.0);
     for (&x, &y) in a.iter().zip(b) {
         let term = finite(x * y, "product")?;
+        if x != 0.0 && y != 0.0 && term == 0.0 {
+            return Err(refuse("linear reconciliation: nonzero product underflows"));
+        }
         let next = finite(sum + term, "sum")?;
         correction += if sum.abs() >= term.abs() {
             (sum - next) + term
@@ -197,6 +200,85 @@ impl ScaledSpd {
     }
 }
 
+/// Propagate a declared covariance through a fixed linear map: `J V J'`.
+/// `covariance` is row-major input_count² and `jacobian` is row-major
+/// output_count × input_count. Both counts must be in 1..=128. The original
+/// covariance must be finite, exactly symmetric and positive definite under
+/// the existing scaled LDLT admission; no independence or diagonal nugget is
+/// supplied. The result may be singular and may contain genuine zero rows.
+///
+/// These are numerical coordinates. Units, source binding and any first-order
+/// linearization of a nonlinear measurement belong to the domain caller. For
+/// example, a dimensionless correlation matrix and a Jacobian with standard
+/// deviations already incorporated produce the full output covariance. This
+/// operation supplies no Gaussian assumption or calibration claim. Lost range,
+/// lost positive variance and failed covariance consistency checks refuse.
+pub fn propagate_linear_covariance(
+    covariance: &[f64],
+    jacobian: &[f64],
+    input_count: usize,
+    output_count: usize,
+) -> Result<Vec<f64>> {
+    if !(1..=MAX_OBSERVATIONS).contains(&input_count)
+        || !(1..=MAX_OBSERVATIONS).contains(&output_count)
+        || covariance.len() != input_count * input_count
+        || jacobian.len() != output_count * input_count
+        || jacobian.iter().any(|v| !v.is_finite())
+    {
+        return Err(refuse(
+            "covariance propagation: invalid dimensions, work limit or nonfinite map",
+        ));
+    }
+    // Reuse the same source-covariance admission as the WLS owner.
+    ScaledSpd::new(covariance, input_count)?;
+    covariance_congruence(covariance, jacobian, input_count, output_count)
+}
+
+// Both callers have already admitted V as SPD and supplied a finite map of
+// the stated dimensions. WLS reuses its original admission and this arithmetic.
+fn covariance_congruence(
+    covariance: &[f64],
+    jacobian: &[f64],
+    input_count: usize,
+    output_count: usize,
+) -> Result<Vec<f64>> {
+    let mut intermediate = vec![0.0; output_count * input_count];
+    for i in 0..output_count {
+        for j in 0..input_count {
+            // The original covariance is exactly symmetric, so its jth row
+            // is its jth column without copying or changing the source.
+            intermediate[i * input_count + j] = dot(
+                &jacobian[i * input_count..(i + 1) * input_count],
+                &covariance[j * input_count..(j + 1) * input_count],
+            )?;
+        }
+    }
+    let mut result = vec![0.0; output_count * output_count];
+    for i in 0..output_count {
+        for j in i..output_count {
+            let value = dot(
+                &intermediate[i * input_count..(i + 1) * input_count],
+                &jacobian[j * input_count..(j + 1) * input_count],
+            )?;
+            result[i * output_count + j] = value;
+            result[j * output_count + i] = value;
+        }
+        // Positive-definite V gives positive variance for every nonzero row.
+        // An unrepresentable variance must not be reported as certainty.
+        if result[i * output_count + i] == 0.0
+            && jacobian[i * input_count..(i + 1) * input_count]
+                .iter()
+                .any(|v| *v != 0.0)
+        {
+            return Err(refuse(
+                "covariance propagation: nonzero map lost its positive variance",
+            ));
+        }
+    }
+    audit_covariance(&result, output_count, "propagated covariance")?;
+    Ok(result)
+}
+
 /// Reconcile all observations against `A x = b`. `covariance` is row-major n×n,
 /// `constraints` row-major m×n, n=observations.len(), m=targets.len().
 /// The bounded complete-data problem needs 1..=128 observations and 1..=64
@@ -326,30 +408,14 @@ pub fn reconcile_linear(
             )?;
         }
     }
-    let mut propagated_covariance = vec![0.0; n * n];
-    for i in 0..n {
-        for j in 0..n {
-            // The original covariance is exactly symmetric, so its jth row
-            // is its jth column without copying or altering the source.
-            propagated_covariance[i * n + j] = dot(
-                &propagation[i * n..(i + 1) * n],
-                &covariance[j * n..(j + 1) * n],
-            )?;
-        }
-    }
-    let mut posterior_covariance = vec![0.0; n * n];
+    let posterior_covariance = covariance_congruence(covariance, &propagation, n, n)?;
     let mut adjustment_covariance = vec![0.0; n * n];
     for i in 0..n {
         for j in i..n {
             let reduction = dot(&va[i * m..(i + 1) * m], &solved_rows[j])?;
-            let posterior = dot(
-                &propagated_covariance[i * n..(i + 1) * n],
-                &propagation[j * n..(j + 1) * n],
-            )?;
+            let posterior = posterior_covariance[i * n + j];
             adjustment_covariance[i * n + j] = reduction;
             adjustment_covariance[j * n + i] = reduction;
-            posterior_covariance[i * n + j] = posterior;
-            posterior_covariance[j * n + i] = posterior;
             audit(
                 dot(&[posterior, reduction, -covariance[i * n + j]], &[1.0; 3])?,
                 posterior.abs() + reduction.abs() + covariance[i * n + j].abs(),
@@ -357,17 +423,13 @@ pub fn reconcile_linear(
             )?;
         }
     }
-    audit_covariance(&posterior_covariance, n, "posterior covariance")?;
     audit_covariance(&adjustment_covariance, n, "adjustment covariance")?;
     let mut normalized_adjustments = Vec::with_capacity(n);
     for i in 0..n {
         let variance = adjustment_covariance[i * n + i];
         // Positive-definite source matrices give positive quadratic variance
         // for every nonzero row. A zero caused by range loss is not certainty.
-        if (posterior_covariance[i * n + i] == 0.0
-            && propagation[i * n..(i + 1) * n].iter().any(|v| *v != 0.0))
-            || (variance == 0.0 && va[i * m..(i + 1) * m].iter().any(|v| *v != 0.0))
-        {
+        if variance == 0.0 && va[i * m..(i + 1) * m].iter().any(|v| *v != 0.0) {
             return Err(refuse(
                 "linear reconciliation: nonzero covariance propagation lost its variance",
             ));
