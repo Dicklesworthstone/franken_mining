@@ -1738,6 +1738,29 @@ cargo run -p fmine-cli -- forecast assess --ledger tests/forecasts/empirical_syn
   --cohort empirical-demo --as-of 2031-02-17T00:00:00Z
 ```
 
+DESIGN (BD-049): forecasts can also freeze `family`, `author_role`, `domain`, `horizon`, `site`, `quantity`
+and `unit`. All seven fields are required together at registration; the metadata becomes part of the forecast
+identity. Use an agent/model identifier or a role for the author. Omission preserves legacy identities and
+does not assign new labels to old forecasts. A tagged cohort requires one exact family, quantity and unit;
+different units and legacy unclassified forecasts need separate cohorts. Public-source resolution additionally
+requires the declared site, quantity and unit to match the prospectively frozen public target.
+
+Assessment JSON includes a separate `segmented_assessment`, partitioned by the full model and metadata key.
+Each group retains its forecast IDs, unresolved reasons, coverage and proper-score completion bounds.
+These are descriptive comparisons, with no inferred independence, subgroup calibration verdict or ranking.
+Saved journal reports render the same groups in Markdown and keep their original outcome selection after
+later restatements. The optional registration uses journal operation v7; earlier operation versions reject
+metadata instead of silently ignoring it.
+
+The synthetic example below keeps an unresolved northern forecast in its two-member group: the observed
+interval score is 10, while the final group mean can range from 10 to 260 under its declared outcome domain.
+The southern forecast remains a separate group with an interval score of 110.
+
+```bash
+cargo run -p fmine-cli -- forecast assess --ledger tests/forecasts/segmented_synthetic.toml \
+  --cohort synthetic-segments --as-of 2031-01-10T00:00:00Z
+```
+
 Sequential coverage monitoring is an optional policy frozen with the cohort. In the synthetic interval
 fixture `tests/forecasts/cohort_synthetic.toml`, add these fields inside its `[[cohort]]` row, before the outcome rows:
 

@@ -40,6 +40,27 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
 
 ## 4. Public API Surface
 - `FrozenForecast`, `ForecastPayload`, `ForecastLedger`
+- DESIGN (BD-047/BD-049, plan §10.1): `register_payload_with_metadata` freezes a complete
+  `ForecastMetadata` beside the predictive distribution: family, author role, domain, horizon, site,
+  quantity and unit. Every label is nonempty, trimmed, at most 256 bytes and free of control characters.
+  These are declared role/model identifiers, not personal names or independently verified identities.
+  The opt-in uses FOR2/v2; `register_payload` and compatibility `register` retain their exact prior identities
+  and an absent metadata field. No existing registration can acquire labels retrospectively.
+  A tagged cohort requires the same exact family, quantity and unit for every member and refuses mixed
+  tagged/legacy membership. This prevents dimensioned aggregate scores knowingly pooling incompatible or
+  unknown quantities. The new COH1/v5 frame binds the complete metadata and an explicit policy-layout
+  discriminator; all legacy COH1/v1–v4 and assessment bytes remain unchanged. Public-bound cohorts additionally
+  require site to equal the bound subject, quantity to equal the public metric key and unit to equal its
+  canonical unit. Ownership remains separately frozen in the public policy; grouping labels cannot override it.
+- DESIGN: `segmented_assessment(saved_digest)` derives a deterministic `SegmentedAssessment` only from an
+  already saved immutable assessment. Each group retains its full model/family/author/domain/horizon/site/
+  quantity/unit key, member IDs, resolved and unresolved counts, missing reasons, observed scores and
+  full-group completion bounds under the original policy. No new outcome selection, time sample or authority
+  seal occurs. `DescriptiveSummary` has no calibration verdict or effective-sample-size field. Legacy-only
+  reports list every member as unclassified without inferring labels or pooling scores. SGM1/v1 supplies a
+  separate digest binding the exact parent report, complete partition and descriptive calculations;
+  later outcomes and restatements cannot rewrite an earlier report. These groups are neither confidence
+  intervals nor an author ranking, and they do not establish independent observations or predictive skill.
 - BD-343: `freeze_cohort(CohortSpec)` freezes sorted membership, the resolution rule, eligible sources and
   `AssessmentPolicy` before outcomes. The digest binds the complete payload, including exact float bits.
   Payloads are Gaussian, a uniform empirical distribution, an interval with a stated or explicitly absent

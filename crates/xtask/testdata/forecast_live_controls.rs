@@ -335,7 +335,8 @@ fn monitor_markdown_displays_original_intervals_and_the_missing_reason() {
             v5: 1,
             ..VersionCounts::default()
         },
-    );
+    )
+    .expect("readable saved assessment");
     let monitor = rendered
         .split_once("## Sequential coverage monitor")
         .expect("human monitor")

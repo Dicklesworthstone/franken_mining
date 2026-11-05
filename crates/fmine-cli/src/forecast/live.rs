@@ -32,6 +32,7 @@ const V3_SCHEMA: &str = "fmine.forecast-operation.v3";
 const V4_SCHEMA: &str = "fmine.forecast-operation.v4";
 const V5_SCHEMA: &str = "fmine.forecast-operation.v5";
 const V6_SCHEMA: &str = "fmine.forecast-operation.v6";
+const V7_SCHEMA: &str = "fmine.forecast-operation.v7";
 
 /// An offline receipt for a retained prefix, verified under explicitly selected PEM trust roots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +51,7 @@ enum OperationVersion {
     V4,
     V5,
     V6,
+    V7,
 }
 
 fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
@@ -75,6 +77,10 @@ fn operation_version(doc: &TomlDoc) -> Result<OperationVersion, Refusal> {
         && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V6_SCHEMA)
     {
         Ok(OperationVersion::V6)
+    } else if doc.top.len() == 1
+        && matches!(doc.top_get("schema").map(|field| &field.value), Some(TomlValue::Str(schema)) if schema == V7_SCHEMA)
+    {
+        Ok(OperationVersion::V7)
     } else {
         Err(invalid("unknown stored forecast operation schema"))
     }
@@ -88,7 +94,12 @@ fn version_request(request: &str, expected_table: &str) -> Result<String, Refusa
             "a {expected_table} request needs exactly its one table and no top-level fields"
         )));
     }
-    let schema = if doc.rows[0].get("gaussian_crps_bounds").is_some() {
+    let schema = if super::segments::FIELDS
+        .iter()
+        .any(|key| doc.rows[0].get(key).is_some())
+    {
+        V7_SCHEMA
+    } else if doc.rows[0].get("gaussian_crps_bounds").is_some() {
         V6_SCHEMA
     } else if super::MONITOR_FIELDS
         .iter()
@@ -384,6 +395,7 @@ fn perform(
             OperationVersion::V4 => versions.v4 += 1,
             OperationVersion::V5 => versions.v5 += 1,
             OperationVersion::V6 => versions.v6 += 1,
+            OperationVersion::V7 => versions.v7 += 1,
         }
         let report_origin = match (previous.report_origin, assessment.as_ref()) {
             (Some(origin), _) => Some(origin),
@@ -1064,6 +1076,19 @@ fn apply(
         return Err(invalid("a stored live request needs exactly one table"));
     }
     let row = &doc.rows[0];
+    let metadata_declared = super::segments::FIELDS
+        .iter()
+        .any(|key| row.get(key).is_some());
+    if metadata_declared && version != OperationVersion::V7 {
+        return Err(invalid(
+            "forecast metadata requires operation version seven",
+        ));
+    }
+    if version == OperationVersion::V7 && (row.table != "forecast" || !metadata_declared) {
+        return Err(invalid(
+            "operation version seven requires a forecast registration with complete metadata",
+        ));
+    }
     let monitor_declared = super::MONITOR_FIELDS
         .iter()
         .any(|key| row.get(key).is_some());
@@ -1130,7 +1155,8 @@ fn apply(
         | OperationVersion::V3
         | OperationVersion::V4
         | OperationVersion::V5
-        | OperationVersion::V6 => upper,
+        | OperationVersion::V6
+        | OperationVersion::V7 => upper,
     };
     let row = Row(row);
     match row.0.table.as_str() {
@@ -1229,13 +1255,14 @@ struct VersionCounts {
     v4: usize,
     v5: usize,
     v6: usize,
+    v7: usize,
 }
 
 impl VersionCounts {
     fn policy(self) -> &'static str {
         match (
             self.legacy_v1,
-            self.v2 + self.v3 + self.v4 + self.v5 + self.v6,
+            self.v2 + self.v3 + self.v4 + self.v5 + self.v6 + self.v7,
         ) {
             (0, 0) => "none",
             (_, 0) => "legacy_observed",
@@ -1274,8 +1301,13 @@ impl VersionCounts {
         } else {
             format!(",\"v6\":{}", self.v6)
         };
+        let v7 = if self.v7 == 0 {
+            String::new()
+        } else {
+            format!(",\"v7\":{}", self.v7)
+        };
         format!(
-            "\"operation_version_counts\":{{\"legacy_v1\":{},\"v2\":{}{v3}{v4}{v5}{v6}}},\"record_time_policy\":{}",
+            "\"operation_version_counts\":{{\"legacy_v1\":{},\"v2\":{}{v3}{v4}{v5}{v6}{v7}}},\"record_time_policy\":{}",
             self.legacy_v1,
             self.v2,
             js(self.policy())
@@ -1318,6 +1350,7 @@ fn version_counts(
             OperationVersion::V4 => counts.v4 += 1,
             OperationVersion::V5 => counts.v5 += 1,
             OperationVersion::V6 => counts.v6 += 1,
+            OperationVersion::V7 => counts.v7 += 1,
         }
         if doc
             .rows
@@ -1401,7 +1434,8 @@ fn presentation_at(
         .sum();
     let forecasts = state.forecasts.iter().map(|(alias, id)| {
         let row = state.ledger.forecast(*id).ok_or_else(|| absent("registered forecast missing"))?;
-        Ok(format!("{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_ns\":{},\"registered_at\":{},\"outcome_due_ns\":{},\"outcome_due\":{},\"payload\":{}}}",
+        let metadata = super::segments::metadata_field(row.metadata.as_ref());
+        Ok(format!("{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_ns\":{},\"registered_at\":{},\"outcome_due_ns\":{},\"outcome_due\":{},\"payload\":{}{metadata}}}",
             js(alias), js(&id.to_string()), js(&row.model_key), row.registered_ns, utc(row.registered_ns), row.freeze_time_ns, utc(row.freeze_time_ns), payload_json(&row.payload)))
     }).collect::<Result<Vec<_>, Refusal>>()?.join(",");
     let cohorts = state
@@ -1512,7 +1546,7 @@ fn presentation_at(
         assessment,
         outcomes,
         report_origin.map_or(versions, |origin| origin.versions),
-    );
+    )?;
     let _ = writeln!(
         rendered_markdown,
         "\nTimestamp commitment (SHA-256): `{}`. This imprint alone is not external time proof.",
@@ -1532,7 +1566,7 @@ fn markdown(
     assessment: Option<&Assessment>,
     outcomes: usize,
     versions: VersionCounts,
-) -> String {
+) -> Result<String, Refusal> {
     use crate::guidance::text;
     let mut out = format!(
         "# Forecast journal: {operation}\n\nCell: {}. Head: `{}`.\n\n{NO_CLAIM}\n\nClock uncertainty bound: {} ns. Forecasts: {}; frozen cohorts: {}; outcome events: {outcomes}; persisted assessments: {}.\n",
@@ -1638,6 +1672,7 @@ fn markdown(
                 coverage.whole_cohort.0, coverage.whole_cohort.1
             );
         }
+        super::segments::assessment_markdown(&mut out, state, report)?;
         if let Some(log) = report.summary.event_log {
             let score = log.score;
             let _ = writeln!(
@@ -1735,7 +1770,7 @@ fn markdown(
             }
         }
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]

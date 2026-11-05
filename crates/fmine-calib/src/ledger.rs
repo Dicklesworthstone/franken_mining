@@ -23,7 +23,11 @@ use crate::{
 
 pub mod binding;
 pub mod coverage;
+pub mod segments;
 pub use coverage::{CoverageMonitorAssessment, CoverageMonitorPolicy, CoverageObservation};
+pub use segments::{
+    DescriptiveSummary, ForecastMetadata, ForecastSegment, SegmentAssessment, SegmentedAssessment,
+};
 
 /// Plan §21.6's floor on independent outcomes for a positive calibration claim. A policy may be stricter.
 pub const MIN_CALIBRATION_N: usize = 35;
@@ -175,6 +179,8 @@ impl ForecastPayload {
 pub struct FrozenForecast {
     pub forecast_id: ObjectId,
     pub model_key: String,
+    /// Prospectively declared grouping and quantity identity; absent in legacy registrations.
+    pub metadata: Option<ForecastMetadata>,
     pub registered_ns: i64,
     pub freeze_time_ns: i64,
     pub payload: ForecastPayload,
@@ -567,6 +573,7 @@ impl ForecastLedger {
         self.insert_forecast(FrozenForecast {
             forecast_id: ObjectId::from_canonical_bytes(PrefixKind::Forecast, old.as_bytes()),
             model_key,
+            metadata: None,
             registered_ns,
             freeze_time_ns,
             payload: ForecastPayload::Gaussian { mean, std_dev },
@@ -596,6 +603,39 @@ impl ForecastLedger {
         self.insert_forecast(FrozenForecast {
             forecast_id: ObjectId::from_canonical_bytes(PrefixKind::Forecast, &enc.finish()),
             model_key,
+            metadata: None,
+            registered_ns,
+            freeze_time_ns,
+            payload,
+        })
+    }
+
+    /// Registration with a complete declared segment, frozen before any outcome. Metadata is part of the
+    /// new FOR2/v2 identity; omission through `register_payload` retains the original FOR2/v1 bytes.
+    pub fn register_payload_with_metadata(
+        &mut self,
+        model_key: impl Into<String>,
+        registered_ns: i64,
+        freeze_time_ns: i64,
+        payload: ForecastPayload,
+        metadata: ForecastMetadata,
+    ) -> Result<ObjectId, Refusal> {
+        if registered_ns >= freeze_time_ns {
+            return Err(late("registration must precede the outcome time"));
+        }
+        payload.validate()?;
+        metadata.validate()?;
+        let model_key = model_key.into();
+        let mut enc = Encoder::new_frame(*b"FOR2", 2);
+        enc.put_str(&model_key);
+        enc.put_i64(registered_ns);
+        enc.put_i64(freeze_time_ns);
+        payload.encode(&mut enc);
+        metadata.encode(&mut enc);
+        self.insert_forecast(FrozenForecast {
+            forecast_id: ObjectId::from_canonical_bytes(PrefixKind::Forecast, &enc.finish()),
+            model_key,
+            metadata: Some(metadata),
             registered_ns,
             freeze_time_ns,
             payload,
@@ -610,6 +650,9 @@ impl ForecastLedger {
             return Err(domain("forecast model key is empty"));
         }
         record.payload.validate()?;
+        if let Some(metadata) = &record.metadata {
+            metadata.validate()?;
+        }
         if self.records.contains_key(&record.forecast_id) {
             return Err(frozen(
                 "forecast id already exists; no duplicate or changed payload may replace it",
@@ -695,7 +738,10 @@ impl ForecastLedger {
             }
         }
         self.check_record_time(spec.frozen_at_ns)?;
-        let version = if spec.policy.gaussian_crps_bounds {
+        // DESIGN: dimensioned aggregate scores must not knowingly pool different quantities, units or
+        // forecast families. Unknown legacy metadata cannot establish that compatibility retrospectively.
+        let has_metadata = segments::validate_cohort_metadata(&self.records, &spec.members)?;
+        let policy_version = if spec.policy.gaussian_crps_bounds {
             4
         } else if spec.policy.event_log_floor.is_some() {
             3
@@ -704,10 +750,15 @@ impl ForecastLedger {
         } else {
             1
         };
+        let version = if has_metadata { 5 } else { policy_version };
         let mut enc = Encoder::new_frame(*b"COH1", version);
         enc.put_str(&spec.name);
         enc.put_i64(spec.frozen_at_ns);
         enc.put_str(&spec.resolution_rule);
+        if has_metadata {
+            // The older envelope version distinguished policy layouts; v5 must retain that discriminator.
+            enc.put_u8(policy_version as u8);
+        }
         spec.policy.encode(&mut enc);
         enc.put_u64(spec.eligible_sources.len() as u64);
         for source in &spec.eligible_sources {
@@ -772,6 +823,9 @@ impl ForecastLedger {
                 coverage::monitor_interval(&rec.payload, spec.policy.alpha)?;
             }
             rec.encode(&mut enc);
+            if has_metadata && let Some(metadata) = &rec.metadata {
+                metadata.encode(&mut enc);
+            }
         }
         if spec.policy.gaussian_crps_bounds && !has_gaussian {
             return Err(domain(

@@ -23,12 +23,14 @@ pub mod live;
 mod provenance;
 pub mod record_score;
 mod record_sources;
+mod segments;
 mod source;
 
 const SCHEMA: &str = "fmine.forecast-ledger.v1";
 pub const DISTRIBUTIONS_JSON: &str = r#"{"kinds":["gaussian","interval","quantiles","bernoulli","empirical"],"empirical":{"samples":"Quoted comma-separated finite numbers, from one through 4096 samples; the live journal also limits each operation to 64 KiB","weights":"Uniform; repeated samples retain their probability mass","quantiles":"Inverse empirical CDF without interpolation","scoring":"CRPS and central interval score; mixed Gaussian/empirical cohorts retain a common CRPS denominator","identity":"Original sample order is frozen; reordering keeps the distribution scores but changes its record identity","scope":"Univariate predictive distribution; no joint realization join or calibration claim","example":"tests/forecasts/empirical_synthetic.toml"}}"#;
 pub const COVERAGE_MONITOR_JSON: &str = r#"{"cohort_fields":["monitor_alarm_alpha","monitor_support","monitor_conditional_null","monitor_order"],"declaration":"All four fields are required together; monitor_order is the comma-separated complete permutation of forecast aliases","null":"Exact conditional P(interval hit | past) = 1-alpha at the declared support; not a claim that marginal coverage or effective sample size establishes this assumption","payloads":"Gaussian, explicitly probability-bearing intervals and exact central quantiles; Bernoulli and empirical forecasts refuse","sequence":"Original publications only; stop at the first unresolved member and retain deferred counts even under latest-as-of scoring","evidence":"Finite log evidence, running maximum, first alarm, original values, citations and event digests; an alarm does not recalibrate","journal":"Monitor freezes use operation v5 and retain the existing bounded host-clock policy"}"#;
 pub const EVENT_LOG_JSON: &str = r#"{"cohort_field":"event_log_floor","declaration":"A quoted finite probability strictly between zero and 0.5, frozen before outcomes in an all-Bernoulli cohort","loss":"-ln(max(P(observed outcome), probability_floor)) in nats; the forecast probability is unchanged","interpretation":"The explicit floor caps extreme losses and removes strict propriety in the floored tails; the unchanged proper Brier score is also reported","missing":"Every unresolved member contributes both possible binary losses to whole-cohort completion bounds; no missing outcome leaves the denominator","journal":"Opt-in freezes use operation v5; omission preserves existing record identities and output","scope":"Descriptive scoring, not a calibration claim; continuous coverage monitoring cannot be enabled on the same cohort"}"#;
+pub const METADATA_JSON: &str = segments::ROBOT_DOCS_JSON;
 
 const MONITOR_FIELDS: [&str; 4] = [
     "monitor_alarm_alpha",
@@ -151,9 +153,23 @@ impl Replay {
             _ => return Err(invalid(format!("unknown forecast kind {kind:?}"))),
         };
         row.allowed(
-            &["id", "model_key", "registered_at", "outcome_due", "kind"],
+            &[
+                "id",
+                "model_key",
+                "registered_at",
+                "outcome_due",
+                "kind",
+                "family",
+                "author_role",
+                "domain",
+                "horizon",
+                "site",
+                "quantity",
+                "unit",
+            ],
             payload_fields,
         )?;
+        let metadata = segments::parse(&row)?;
         let alias = identifier(row.string("id")?)?;
         if self.forecasts.contains_key(alias) {
             return Err(Refusal::new(
@@ -183,12 +199,17 @@ impl Replay {
             },
             _ => return Err(invalid("unsupported forecast kind")),
         };
-        let id = self.ledger.register_payload(
-            row.string("model_key")?,
-            row.assigned_time("registered_at", observed_ns)?,
-            row.time("outcome_due")?,
-            payload,
-        )?;
+        let model = row.string("model_key")?;
+        let registered = row.assigned_time("registered_at", observed_ns)?;
+        let due = row.time("outcome_due")?;
+        let id = match metadata {
+            Some(metadata) => self
+                .ledger
+                .register_payload_with_metadata(model, registered, due, payload, metadata)?,
+            None => self
+                .ledger
+                .register_payload(model, registered, due, payload)?,
+        };
         self.forecasts.insert(alias.to_string(), id);
         self.aliases.insert(id, alias.to_string());
         Ok(())
@@ -549,8 +570,9 @@ impl Replay {
             })
             .transpose()?
             .unwrap_or_default();
+        let segments = segments::assessment_json(self, report)?;
         Ok(format!(
-            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":{},\"lane\":{},{identity_key}:{},\"authority_times\":{},\"source_citations\":{},\"external_time_proof\":\"not_verified\",\"temporal_validation\":{},\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]{monitor}}},\"checkpoints\":[{}]}}",
+            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":{},\"lane\":{},{identity_key}:{},\"authority_times\":{},\"source_citations\":{},\"external_time_proof\":\"not_verified\",\"temporal_validation\":{},\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]{monitor}{segments}}},\"checkpoints\":[{}]}}",
             js(mode),
             js(&self.lane),
             js(&identity.to_hex()),
@@ -678,8 +700,9 @@ impl Replay {
             .selected_event
             .and_then(|(seq, _)| self.source_admissions.get(&(member.forecast_id, seq)))
             .map_or_else(|| "null".to_string(), live::SourceAdmission::to_json);
+        let metadata = segments::metadata_field(record.metadata.as_ref());
         Ok(format!(
-            "{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_at\":{},\"outcome_due\":{},\"payload\":{},\"selected_event\":{selected},\"outcome\":{outcome},\"source_admission\":{admission}}}",
+            "{{\"alias\":{},\"forecast_id\":{},\"model_key\":{},\"registered_at\":{},\"outcome_due\":{},\"payload\":{}{metadata},\"selected_event\":{selected},\"outcome\":{outcome},\"source_admission\":{admission}}}",
             js(alias),
             js(&record.forecast_id.to_string()),
             js(&record.model_key),

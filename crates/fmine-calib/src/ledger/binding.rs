@@ -426,9 +426,17 @@ impl PublicResolutionPolicy {
     }
 
     pub fn validate_forecast(&self, forecast: &FrozenForecast) -> Result<(), Refusal> {
-        if !self.members.contains_key(&forecast.forecast_id) {
+        let subject = self
+            .members
+            .get(&forecast.forecast_id)
+            .ok_or_else(|| domain("forecast is absent from its public-resolution policy"))?;
+        if let Some(metadata) = &forecast.metadata
+            && (metadata.site != *subject
+                || metadata.quantity != self.metric.as_str()
+                || metadata.unit != self.metric.unit())
+        {
             return Err(domain(
-                "forecast is absent from its public-resolution policy",
+                "forecast metadata must match the frozen public subject, metric key and unit; labels do not override source semantics",
             ));
         }
         if forecast.freeze_time_ns > self.period.end_ns()? {

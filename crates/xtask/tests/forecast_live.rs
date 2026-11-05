@@ -240,6 +240,146 @@ fn one_member(skew: u64) -> Journal {
     journal
 }
 
+fn metadata_forecast(alias: &str, author: &str, site: &str) -> String {
+    let base = forecast(alias, 40, 50, DUE)
+        .replace(&format!("synthetic:{alias}"), "synthetic:production-v1");
+    format!(
+        "{base}family = \"annual-production\"\nauthor_role = \"{author}\"\ndomain = \"mine-total\"\nhorizon = \"one-year\"\nsite = \"{site}\"\nquantity = \"gold-production-100pct\"\nunit = \"koz\"\n"
+    )
+}
+
+#[test]
+fn prospective_segments_keep_missing_members_and_replay_saved_scores() {
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    for (index, (alias, author, site)) in [
+        ("f1", "agent:planner-a@v1", "synthetic-north"),
+        ("f2", "agent:planner-a@v1", "synthetic-north"),
+        ("f3", "agent:planner-b@v1", "synthetic-south"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        journal.append(
+            &metadata_forecast(alias, author, site),
+            ns("2030-01-02T00:00:00Z") + index as i64 * SECOND,
+        );
+    }
+    journal.append(&cohort("f3, f2, f1"), ns("2030-01-03T00:00:00Z"));
+    for (alias, value) in [("f1", 45), ("f3", 60)] {
+        journal.append(
+            &outcome(alias, value, "2031-01-01T00:00:00Z", false),
+            ns("2031-01-02T00:00:00Z"),
+        );
+    }
+    let saved = journal.assess(CUT, "first-published", None, ns(CUT));
+    let json = &saved;
+    assert!(json.contains("\"v7\":3"), "{json}");
+    assert!(
+        json.contains("\"schema\":\"fmine.forecast-segments.v1\""),
+        "{json}"
+    );
+    let segments = json.split_once("\"segmented_assessment\":").unwrap().1;
+    assert!(segments.contains("\"n_members\":3,\"interpretation\":\"descriptive_only\""));
+    assert!(segments.contains("\"n_members\":2,\"n_resolved\":1,\"n_unresolved\":1"));
+    // Independent interval-score arithmetic: width 10; the unresolved member ranges from
+    // 10 to 510 over frozen outcomes [0,100], so this two-member mean ranges from 10 to 260.
+    assert!(segments.contains("\"interval_score\":{\"n_scored\":1,\"observed_mean\":10,\"whole_cohort\":{\"lower\":10,\"upper\":260,"));
+    assert!(segments.contains("\"inside\":1,\"observed_fraction\":1,\"whole_cohort\":[0.5,1]"));
+    assert!(segments.contains("\"observed_mean\":110"));
+    assert!(!segments.contains("\"effective_n\""));
+    assert!(!segments.contains("\"calibration_flag\""));
+    let digest = assessment_digest(json);
+    journal.append(
+        &outcome("f1", 70, "2031-01-11T00:00:00Z", true),
+        ns("2031-01-12T00:00:00Z"),
+    );
+    let replayed = journal.run(
+        &Command::Report {
+            journal: journal.path.clone(),
+            head: Some(journal.head),
+            assessment: digest,
+            provenance: None,
+            timestamp: None,
+        },
+        0,
+    );
+    assert_eq!(replayed.exit_code, 0, "{}", replayed.to_json());
+    assert_eq!(assessment(&replayed.payload_json), assessment(json));
+    let markdown = replayed.rendered_markdown.as_deref().unwrap();
+    assert!(markdown.contains("## Forecast segments"));
+    assert!(markdown.contains("synthetic-north"));
+    assert!(markdown.contains("Completion upper"));
+    assert!(markdown.contains("| Interval score | 1 | 10 | 10 | 260 | koz |"));
+}
+
+#[test]
+fn metadata_admission_refuses_partial_and_mixed_quantities_without_appending() {
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    let valid = metadata_forecast("f1", "agent:planner@v1", "synthetic-north");
+    let partial = valid.replace("unit = \"koz\"\n", "");
+    let command = journal.request(&partial);
+    journal.refuse(&command, ns("2030-01-02T00:00:00Z"), "FMINE-REF-107");
+    journal.append(&valid, ns("2030-01-02T00:00:00Z"));
+    journal.append(&forecast("legacy", 40, 50, DUE), ns("2030-01-02T00:00:00Z"));
+    let command = journal.request(&cohort("f1, legacy"));
+    journal.refuse(&command, ns("2030-01-03T00:00:00Z"), "FMINE-REF-109");
+    let other_unit = metadata_forecast("f2", "agent:planner@v1", "synthetic-north")
+        .replace("unit = \"koz\"", "unit = \"oz\"");
+    journal.append(&other_unit, ns("2030-01-02T00:00:00Z"));
+    let command = journal.request(&cohort("f1, f2"));
+    journal.refuse(&command, ns("2030-01-03T00:00:00Z"), "FMINE-REF-109");
+    // Failed freezes did not reserve the name or advance authority chronology.
+    journal.append(&cohort("f1"), ns("2030-01-03T00:00:00Z"));
+}
+
+#[test]
+fn metadata_schema_downgrade_removal_and_retagging_cannot_rewrite_a_checkpoint() {
+    let mut journal = Journal::new(ns("2030-01-01T00:00:00Z"), 0);
+    journal.append(
+        &metadata_forecast("f1", "agent:planner@v1", "synthetic-north"),
+        ns("2030-01-02T00:00:00Z"),
+    );
+    journal.append(&cohort("f1"), ns("2030-01-03T00:00:00Z"));
+    journal.assess(CUT, "first-published", None, ns(CUT));
+    let snapshot = DurableJournal::open_read(&journal.path, Some(journal.head)).unwrap();
+    for (change, from, to, code) in [
+        (
+            "downgrade",
+            "fmine.forecast-operation.v7",
+            "fmine.forecast-operation.v2",
+            "FMINE-REF-107",
+        ),
+        ("partial", "unit = \"koz\"\n", "", "FMINE-REF-107"),
+        (
+            "retag",
+            "agent:planner@v1",
+            "agent:different@v2",
+            "FMINE-REF-505",
+        ),
+    ] {
+        let mut records = snapshot.records().to_vec();
+        for record in &mut records {
+            if let Entry::Operation(text) = &mut record.entry
+                && text.contains("schema = \"fmine.forecast-operation.v7\"")
+            {
+                *text = text.replace(from, to);
+            }
+        }
+        let path = journal.root.join(format!("metadata-{change}.journal"));
+        let pin = write_fixture(&path, &mut records);
+        assert_refused(
+            &journal.run(
+                &Command::Inspect {
+                    journal: path,
+                    head: Some(pin),
+                },
+                0,
+            ),
+            code,
+        );
+    }
+}
+
 /// Encode explicitly constructed legacy or negative fixture records; the production replay still checks them.
 fn write_fixture(path: &std::path::Path, records: &mut [Record]) -> Digest32 {
     let mut previous = Digest32::default();

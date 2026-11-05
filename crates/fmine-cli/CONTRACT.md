@@ -301,6 +301,23 @@ Workbook Claim reads retain their established payload and identity-ledger certif
 
 ### Durable forecast registration (BD-047)
 
+DESIGN (BD-049, plan §10.1): optional forecast fields `family`, `author_role`, `domain`, `horizon`, `site`,
+`quantity` and `unit` must be supplied together. All labels are nonempty, trimmed, control-free and at most
+256 bytes. They are frozen into a new forecast identity; earlier untagged forecast and cohort encodings stay
+unchanged. Tagged cohorts require one family/quantity/unit and cannot mix legacy members with unknown labels.
+Source-bound public cohorts also require metadata site/quantity/unit to match the frozen source target.
+Metadata describes supplied authorship and context; source verification does not authenticate those labels.
+
+Assessments with metadata include a separately digested `segmented_assessment`, derived only from the saved
+assessment and partitioned by every declared field plus model key. Member IDs and missing outcomes remain in
+each segment; coverage, CRPS, interval/Brier and optional capped log scores use the existing scoring kernel.
+No effective-sample estimate or calibration verdict is inferred for a subgroup. JSON and saved-report Markdown
+retain the original parent assessment, selector and cut. Later restatements do not rewrite that report.
+Metadata registrations use operation v7 under the existing host-clock upper-bound policy. Older stored
+operation versions reject metadata; v7 refuses a non-forecast operation or missing/partial metadata.
+The `forecast_live` integration tests exercise independent interval-score answers, refusal without append,
+retained missing members, saved-report replay, schema downgrade and metadata changes against checkpoints.
+
 DESIGN: `forecast journal init` binds a cell id and operator-declared clock uncertainty to a new journal.
 `register`, `freeze`, `outcome`, `resolve`, `restate` and `assess` require an exact predecessor `--head`; all mutations require
 `--trust-host-clock`. The runtime clock is sampled under the journal's exclusive lock. The captured nanoseconds

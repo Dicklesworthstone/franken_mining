@@ -22,10 +22,11 @@ pub mod record;
 pub mod scoring;
 pub use ledger::{
     Assessment, AssessmentPolicy, AssessmentSummary, Cohort, CohortSpec, CoverageMonitorAssessment,
-    CoverageMonitorPolicy, CoverageObservation, CoverageSummary, EffectiveSampleSize,
-    EventLogScoreSummary, ForecastLedger, ForecastPayload, FrozenForecast, MemberAssessment,
-    MemberOutcome, MissingReason, OutcomeCitation, OutcomeEvent, OutcomeKind, OutcomeSelector,
-    ScoreBounds, ScoreSummary,
+    CoverageMonitorPolicy, CoverageObservation, CoverageSummary, DescriptiveSummary,
+    EffectiveSampleSize, EventLogScoreSummary, ForecastLedger, ForecastMetadata, ForecastPayload,
+    ForecastSegment, FrozenForecast, MemberAssessment, MemberOutcome, MissingReason,
+    OutcomeCitation, OutcomeEvent, OutcomeKind, OutcomeSelector, ScoreBounds, ScoreSummary,
+    SegmentAssessment, SegmentedAssessment,
 };
 
 /// Calibration health classification (`BD-049`).
