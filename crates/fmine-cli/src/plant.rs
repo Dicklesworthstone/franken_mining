@@ -2,6 +2,7 @@
 //! Exact nominal accounting and conditional Gaussian reconciliation remain separate modes.
 //! Determinism: Exact for balance; DeterministicPerIsa for reconciliation.
 
+mod network;
 mod project;
 
 use std::collections::BTreeMap;
@@ -27,6 +28,8 @@ pub const BALANCE_USAGE: &str = "plant balance --input <worksheet.toml>";
 pub const RECONCILE_USAGE: &str = "plant reconcile --input <worksheet.toml>";
 pub const PROJECT_USAGE: &str = "plant project --input <worksheet.toml>";
 pub const PROJECT_DOCS_JSON: &str = project::ROBOT_DOCS_JSON;
+pub const NETWORK_USAGE: &str = "plant flowsheet --input <worksheet.toml>";
+pub const NETWORK_DOCS_JSON: &str = network::ROBOT_DOCS_JSON;
 pub const SCHEMA: &str = "fmine.plant-inventory.v1";
 const MAX_BYTES: u64 = 1024 * 1024;
 const ROLES: [&str; 5] = ["opening", "feed", "product", "other_outflow", "closing"];
@@ -68,6 +71,7 @@ impl Mode {
 pub enum Command {
     Inventory { mode: Mode, input: PathBuf },
     Project { input: PathBuf },
+    Network { input: PathBuf },
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -78,7 +82,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         || args[3].starts_with("--")
     {
         return Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {NETWORK_USAGE}"
         ));
     }
     let input = PathBuf::from(&args[3]);
@@ -92,8 +96,9 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             input,
         }),
         "project" => Ok(Command::Project { input }),
+        "flowsheet" => Ok(Command::Network { input }),
         _ => Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {NETWORK_USAGE}"
         )),
     }
 }
@@ -159,6 +164,16 @@ fn finite(value: (&str, usize)) -> Result<f64, Refusal> {
         .map_err(|_| bad(value.1, "expected a finite number"))?;
     if !parsed.is_finite() {
         return Err(bad(value.1, "expected a finite number"));
+    }
+    let mantissa = value.0.split(['e', 'E']).next().unwrap_or(value.0);
+    if parsed == 0.0 && mantissa.bytes().any(|byte| matches!(byte, b'1'..=b'9')) {
+        return Err(Refusal::new(
+            RefusalCode::NumericalCertificateFailed207,
+            format!(
+                "plant worksheet line {}: nonzero decimal underflows binary64",
+                value.1
+            ),
+        ));
     }
     Ok(parsed)
 }
@@ -536,6 +551,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
     let (mode, input) = match command {
         Command::Inventory { mode, input } => (*mode, input),
         Command::Project { input } => return project::execute(input, root),
+        Command::Network { input } => return network::execute(input, root),
     };
     let run = || -> Result<Envelope, Refusal> {
         let (text, source) =

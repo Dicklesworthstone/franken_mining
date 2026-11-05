@@ -2128,6 +2128,7 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
                 plant::BALANCE_USAGE,
                 plant::RECONCILE_USAGE,
                 plant::PROJECT_USAGE,
+                plant::NETWORK_USAGE,
                 html::USAGE,
                 "decide card <model-file>",
                 capital::USAGE,
@@ -2229,6 +2230,8 @@ pub fn execute_command(cmd: &CliCommand, workspace_root: &Path) -> Envelope {
             payload.push_str(plant::ROBOT_DOCS_JSON);
             payload.push_str(",\"plant_material\":");
             payload.push_str(plant::PROJECT_DOCS_JSON);
+            payload.push_str(",\"plant_flowsheet\":");
+            payload.push_str(plant::NETWORK_DOCS_JSON);
             payload.push_str(",\"html_claims\":");
             payload.push_str(html::ROBOT_DOCS_JSON);
             payload.push_str(",\"forecast_distributions\":");

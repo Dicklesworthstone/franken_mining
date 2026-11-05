@@ -6,7 +6,7 @@ DESIGN: Crucible accounts for elemental inventory and declared conservative plan
 physical boundaries and intervals (plan §§17.2–17.5; BD-175/177/313). It keeps stocktake timing separate
 from integrated flows and refuses unclosed unit or whole-plant balances. This is original code, using
 the existing claim-admission pattern; no FrankenSim solver is copied or linked.
-An additional inventory adapter performs conditional measurement reconciliation through the shared
+Inventory and joint-flowsheet adapters perform conditional measurement reconciliation through the shared
 K0 numerical owner, preserving the original observations and a separately declared error model.
 
 - **Crate:** `fmine-plant`
@@ -97,7 +97,7 @@ parents/anchors by ordered sets, and UU scenarios by identity. IEEE bits are ret
 epistemic metadata. `receipt_identity_is_input_order_independent_and_immutable` checks input permutations.
 Flowsheet units, streams and elements have canonical identity order; declaration/input permutations
 preserve the graph receipt. Generic claim-admission helper extraction preserves original inventory receipts.
-`reconciliation`: DeterministicPerIsa. Its typed binary64 estimates and covariance come from the
+`reconciliation` and `flowsheet::reconciliation`: DeterministicPerIsa. Their typed binary64 estimates and covariance come from the
 shared LDLT-based numerical owner; source observations retain their original exact rational values.
 
 ## 7. Evidence class of outputs
@@ -138,15 +138,15 @@ impossible metal-in-water composition, identity order and internal confidentiali
 
 ## 10. Known gaps
 
-BD-175 now has a nominal conservative plant-flow graph; process-model prediction and shared cross-domain
-flow adapters remain. BD-177 now has covariance-aware reconciliation of fully measured elemental totals;
-nonlinear uncertainty propagation, missing observations, sensor bias estimation, plant error-model
-calibration and full P754 reconciliation remain. Joint cross-channel reconciliation of a fully measured
-conservative flowsheet is now available through the shared numerical owner (section 15).
+BD-175 now has a nominal conservative plant-flow graph and a joint conditional reconciliation adapter;
+process-model prediction and shared cross-domain flow adapters remain. BD-177 now has covariance-aware
+reconciliation of fully measured carrier and elemental totals, including cross-element and cross-stream
+covariance. Nonlinear uncertainty propagation, missing observations, sensor bias estimation, plant
+error-model calibration and full P754 reconciliation remain.
 BD-287 process-card ingestion and BD-313 RTD inversion/deconvolution remain unimplemented
 here. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
 forecast registration, sequence authority or permission-to-operate claim is supplied. The declared CLI
-worksheets expose nominal material conversion and elemental inventory accounting/reconciliation;
+worksheets expose nominal material conversion, elemental inventory accounting/reconciliation and joint flowsheet reconciliation;
 their byte-bound declarations remain Assumed rather than verified plant measurements.
 Generic Claim hashes omit some fields; this slice independently checks values and binds admitted
 support, representation, UU, supersession and calibration metadata into its receipt.
@@ -207,9 +207,10 @@ gross-error rejection, a negative candidate, exact-to-float precision loss, sour
 scoped observation identities and participation of model evidence/confidentiality.
 
 This is plan §20.3's fully measured linear R1 slice using `fmine_numerics::reconciliation`; it does not
-claim a real plant fixture, empirical confidence calibration, a latent-state/bias R2 model,
-reconciliation of grades as independent extensive totals or P754 compliance. The full conservative
-graph adapter is described in section 15. Original source families and receiver-side permissions remain authoritative.
+claim a real plant fixture, empirical confidence calibration, latent-state/bias R2 model,
+reconciliation of grades as independent extensive totals, or P754 compliance. Joint flowsheet
+reconciliation is a separate adapter described in §15. Original source families and receiver-side
+permissions remain authoritative.
 
 ## 14. Nominal material projection (DESIGN; BD-177/336)
 
@@ -258,6 +259,8 @@ The immutable receipt retains originals, the error model, fitted amounts, adjust
 and adjustment covariance, original exact unit residuals, fitted residuals and discrepancy diagnostics.
 External opening/feed/product/other/closing totals are projected with their full cross-channel and
 cross-role covariance. A separate whole-boundary audit checks aggregate closure and precision.
+Each nominal and fitted role total also receives an independent exact precision check, with one-fifth
+of its channel tolerance, so equal opening/closing rounding losses cannot cancel in the residual.
 Fitted negatives, physically impossible elemental composition and declared gross-error failures keep
 the originals and numerical diagnostics but expose no admitted balance Claim. Arithmetic never plugs
 a stream, deletes an observation or turns a fitted float into an exact nominal balance receipt.
@@ -270,8 +273,16 @@ error-model calibration and empirical P754 qualification require their own suppo
 FACT (constructed known answers): `examples/reconcile_flowsheet.rs` fits a two-unit recycle with
 27 coordinates, six constraints and correlated dry feed/product errors. Its global statistic is 32/133;
 opening-stock variance is 550/399 kg². `--gross-error` refuses before any successful stdout.
-Thirteen graph tests include an independent two-metal correlated stocktake solution and a case whose
-exact aggregate closes but binary64 loses 1 kg. Existing exact-flow receipt identities remain unchanged.
+Graph tests include an independent two-metal correlated stocktake solution and cases whose
+exact aggregate closes but binary64 loses 1 kg, including equal losses in opening and closing totals.
+Existing exact-flow receipt identities remain unchanged. These constructed oracles do not establish
+real plant calibration or P754 qualification.
+
+`fmine plant flowsheet --input tests/plant/flowsheet_reconcile.toml` exposes this owner through a bounded,
+byte-bound worksheet. The input explicitly supplies topology, all extensive kg coordinates, temporal
+supports, every covariance pair and per-channel tolerances. The output preserves the full graph, original
+Claims and model, fitted covariance, unit/outer diagnostics and admitted or rejected receipt identity.
+Worksheet declarations remain Assumed, Internal and uncalibrated.
 
 ## 16. Lot-to-stream projection with first-order covariance (DESIGN; BD-151/155/177)
 

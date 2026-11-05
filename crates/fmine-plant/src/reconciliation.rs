@@ -200,14 +200,26 @@ pub(crate) fn represented_rational(value: f64) -> Result<ExactQty> {
         mantissa /= 2;
         shift += 1;
     }
+    // Rejected fitted candidates can be negative. Preserve their sign during
+    // exact diagnostics; nominal physical admission remains nonnegative.
+    let mantissa = if value.is_sign_negative() {
+        -(mantissa as i128)
+    } else {
+        mantissa as i128
+    };
     let (num, den) = if shift >= 0 {
-        let num = (mantissa as i128)
-            .checked_mul(1_i128.checked_shl(shift as u32).ok_or_else(|| {
-                fail(
-                    RefusalCode::NumericalCertificateFailed207,
-                    "binary64 mass is outside exact comparison range",
-                )
-            })?)
+        let num = mantissa
+            .checked_mul(
+                1_i128
+                    .checked_shl(shift as u32)
+                    .filter(|factor| *factor > 0)
+                    .ok_or_else(|| {
+                        fail(
+                            RefusalCode::NumericalCertificateFailed207,
+                            "binary64 mass is outside exact comparison range",
+                        )
+                    })?,
+            )
             .ok_or_else(|| {
                 fail(
                     RefusalCode::NumericalCertificateFailed207,
@@ -225,7 +237,7 @@ pub(crate) fn represented_rational(value: f64) -> Result<ExactQty> {
                     "binary64 denominator is outside exact comparison range",
                 )
             })?;
-        (mantissa as i128, den)
+        (mantissa, den)
     };
     ExactQty::new(num, den).map_err(|_| {
         fail(

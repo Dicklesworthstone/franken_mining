@@ -105,6 +105,21 @@ fn close(actual: f64, expected: f64) {
 }
 
 #[test]
+fn exact_binary_comparison_preserves_signed_rejected_estimates() {
+    assert_eq!(represented_rational(-1.25).unwrap(), q("-1.25"));
+    assert_eq!(represented_rational(1.25).unwrap(), q("1.25"));
+    assert_eq!(represented_rational(-0.0).unwrap(), q("0"));
+    assert_eq!(represented_rational(-8.0).unwrap(), q("-8"));
+    assert_eq!(
+        represented_rational(-1.25)
+            .unwrap()
+            .checked_add(represented_rational(2.0).unwrap())
+            .unwrap(),
+        q("0.75")
+    );
+}
+
+#[test]
 fn two_metal_posterior_matches_an_independent_rational_covariance_oracle() {
     let amounts = |gold| MaterialAmounts {
         dry_solids_kg: q("100"),

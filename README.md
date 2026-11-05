@@ -78,6 +78,7 @@ bytes, physical support, original observations and model assumptions in its outp
 cargo run -p fmine-cli -- plant balance --input tests/plant/closed_inventory.toml
 cargo run -p fmine-cli -- plant reconcile --input tests/plant/measured_inventory.toml
 cargo run -p fmine-cli -- plant project --input tests/plant/material_projection.toml
+cargo run -p fmine-cli -- plant flowsheet --input tests/plant/flowsheet_reconcile.toml
 ```
 
 The supplied examples are synthetic. `balance` checks exact nominal closure. `reconcile` uses the declared full
@@ -91,6 +92,15 @@ the strict worksheet fields, explicit kg basis, stocktake timing and all require
 material and elemental kilograms. It preserves the submitted values and units. It requires all measurements
 to cover the same declared whole material; sampled assays and chemical species are not silently promoted to
 total-material measurements. The nominal conversion does not invent an uncertainty model or close a balance.
+
+`plant flowsheet` fits all declared unit balances together, with each internal transfer shared by its two
+endpoints. Its worksheet explicitly supplies the graph, every stream and stocktake coordinate, every covariance
+pair and the error policy. It retains cross-stream and cross-element covariance and independently audits the
+whole boundary. The Rust owner is `fmine_plant::flowsheet::reconciliation::reconcile_flowsheet`.
+Run its synthetic mill/classifier
+example with `cargo run -p fmine-plant --example reconcile_flowsheet`; adding `-- --gross-error` demonstrates
+rejection. This fully measured conditional model preserves source evidence and does not infer missing
+measurements, sensor calibration or process performance.
 
 ### Run the public lane
 

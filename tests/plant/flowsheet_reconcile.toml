@@ -1,0 +1,1730 @@
+# ASSUMPTION: synthetic fully measured mill/classifier recycle; no operating data.
+# Shared dry transfer is deliberately 121 kg, one kg above exact unit closure.
+# Outer dry residual is zero, while unit A/B residuals are -1/+1 kg.
+# Independent constructed covariance has unit variances; EVERY zero is explicit.
+# Hand oracle: residual covariance [[5,-2],[-2,5]], chi-square = 2/7.
+schema = "fmine.plant-flowsheet.v1"
+boundary = "synthetic-recycle/v1"
+basis = "kg/dry-matter+water/total-elements/all-phases/full-boundary"
+start_ns = "0"
+end_ns = "10"
+complete = "true"
+unbiased_gaussian_errors = "true"
+global_chi_square_limit = "9"
+error_model_basis = "Synthetic unit-variance independent Gaussian errors, explicitly declared for this example only"
+
+[[unit]]
+id = "a"
+kind = "mill"
+
+[[unit]]
+id = "b"
+kind = "classifier"
+
+[[stream]]
+id = "feed"
+kind = "feed"
+to = "a"
+
+[[stream]]
+id = "shared"
+kind = "internal"
+from = "a"
+to = "b"
+source_role = "product"
+
+[[stream]]
+id = "recycle"
+kind = "internal"
+from = "b"
+to = "a"
+source_role = "other"
+
+[[stream]]
+id = "product"
+kind = "product"
+from = "b"
+
+[[element]]
+symbol = "Au"
+measurand = "total-Au/all-phases"
+
+[[coordinate]]
+observation = "transfer:feed"
+channel = "dry"
+kg = "100"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "transfer:feed"
+channel = "water"
+kg = "20"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "transfer:feed"
+channel = "Au"
+kg = "10"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "transfer:shared"
+channel = "dry"
+kg = "121.000"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "transfer:shared"
+channel = "water"
+kg = "25"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "transfer:shared"
+channel = "Au"
+kg = "12"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "transfer:recycle"
+channel = "dry"
+kg = "20"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "transfer:recycle"
+channel = "water"
+kg = "5"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "transfer:recycle"
+channel = "Au"
+kg = "2"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "transfer:product"
+channel = "dry"
+kg = "100"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "transfer:product"
+channel = "water"
+kg = "20"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "transfer:product"
+channel = "Au"
+kg = "10"
+start_ns = "0"
+end_ns = "10"
+
+[[coordinate]]
+observation = "opening:a"
+channel = "dry"
+kg = "10"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "opening:a"
+channel = "water"
+kg = "5"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "opening:a"
+channel = "Au"
+kg = "1"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "closing:a"
+channel = "dry"
+kg = "10"
+start_ns = "10"
+end_ns = "10"
+
+[[coordinate]]
+observation = "closing:a"
+channel = "water"
+kg = "5"
+start_ns = "10"
+end_ns = "10"
+
+[[coordinate]]
+observation = "closing:a"
+channel = "Au"
+kg = "1"
+start_ns = "10"
+end_ns = "10"
+
+[[coordinate]]
+observation = "opening:b"
+channel = "dry"
+kg = "10"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "opening:b"
+channel = "water"
+kg = "5"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "opening:b"
+channel = "Au"
+kg = "1"
+start_ns = "0"
+end_ns = "0"
+
+[[coordinate]]
+observation = "closing:b"
+channel = "dry"
+kg = "10"
+start_ns = "10"
+end_ns = "10"
+
+[[coordinate]]
+observation = "closing:b"
+channel = "water"
+kg = "5"
+start_ns = "10"
+end_ns = "10"
+
+[[coordinate]]
+observation = "closing:b"
+channel = "Au"
+kg = "1"
+start_ns = "10"
+end_ns = "10"
+
+[[tolerance]]
+channel = "dry"
+kg = "1e-8"
+
+[[tolerance]]
+channel = "water"
+kg = "1e-8"
+
+[[tolerance]]
+channel = "Au"
+kg = "1e-8"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "transfer:feed/dry"
+kg2 = "1"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "transfer:feed/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "transfer:feed/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "transfer:shared/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "transfer:shared/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "transfer:shared/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "transfer:recycle/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "transfer:recycle/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "transfer:recycle/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "transfer:product/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "transfer:product/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "transfer:product/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "opening:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/dry"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "transfer:feed/water"
+kg2 = "1"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "transfer:feed/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "transfer:shared/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "transfer:shared/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "transfer:shared/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "transfer:recycle/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "transfer:recycle/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "transfer:recycle/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "transfer:product/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "transfer:product/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "transfer:product/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "opening:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/water"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "transfer:feed/Au"
+kg2 = "1"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "transfer:shared/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "transfer:shared/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "transfer:shared/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "transfer:recycle/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "transfer:recycle/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "transfer:recycle/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "transfer:product/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "transfer:product/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "transfer:product/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "opening:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:feed/Au"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "transfer:shared/dry"
+kg2 = "1"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "transfer:shared/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "transfer:shared/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "transfer:recycle/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "transfer:recycle/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "transfer:recycle/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "transfer:product/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "transfer:product/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "transfer:product/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "opening:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/dry"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "transfer:shared/water"
+kg2 = "1"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "transfer:shared/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "transfer:recycle/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "transfer:recycle/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "transfer:recycle/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "transfer:product/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "transfer:product/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "transfer:product/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "opening:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/water"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "transfer:shared/Au"
+kg2 = "1"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "transfer:recycle/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "transfer:recycle/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "transfer:recycle/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "transfer:product/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "transfer:product/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "transfer:product/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "opening:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:shared/Au"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "transfer:recycle/dry"
+kg2 = "1"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "transfer:recycle/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "transfer:recycle/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "transfer:product/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "transfer:product/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "transfer:product/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "opening:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/dry"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "transfer:recycle/water"
+kg2 = "1"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "transfer:recycle/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "transfer:product/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "transfer:product/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "transfer:product/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "opening:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/water"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "transfer:recycle/Au"
+kg2 = "1"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "transfer:product/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "transfer:product/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "transfer:product/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "opening:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:recycle/Au"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "transfer:product/dry"
+kg2 = "1"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "transfer:product/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "transfer:product/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "opening:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/dry"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "transfer:product/water"
+kg2 = "1"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "transfer:product/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "opening:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/water"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/Au"
+right = "transfer:product/Au"
+kg2 = "1"
+
+[[covariance]]
+left = "transfer:product/Au"
+right = "opening:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/Au"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/Au"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/Au"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/Au"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/Au"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/Au"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/Au"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/Au"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/Au"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/Au"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "transfer:product/Au"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "opening:a/dry"
+kg2 = "1"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "opening:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/dry"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "opening:a/water"
+kg2 = "1"
+
+[[covariance]]
+left = "opening:a/water"
+right = "opening:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/water"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "opening:a/Au"
+kg2 = "1"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "closing:a/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:a/Au"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/dry"
+right = "closing:a/dry"
+kg2 = "1"
+
+[[covariance]]
+left = "closing:a/dry"
+right = "closing:a/water"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/dry"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/dry"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/dry"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/dry"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/dry"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/dry"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/dry"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/water"
+right = "closing:a/water"
+kg2 = "1"
+
+[[covariance]]
+left = "closing:a/water"
+right = "closing:a/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/water"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/water"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/water"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/water"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/water"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/water"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/Au"
+right = "closing:a/Au"
+kg2 = "1"
+
+[[covariance]]
+left = "closing:a/Au"
+right = "opening:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/Au"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/Au"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/Au"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/Au"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:a/Au"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/dry"
+right = "opening:b/dry"
+kg2 = "1"
+
+[[covariance]]
+left = "opening:b/dry"
+right = "opening:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/dry"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/dry"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/dry"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/dry"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/water"
+right = "opening:b/water"
+kg2 = "1"
+
+[[covariance]]
+left = "opening:b/water"
+right = "opening:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/water"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/water"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/water"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/Au"
+right = "opening:b/Au"
+kg2 = "1"
+
+[[covariance]]
+left = "opening:b/Au"
+right = "closing:b/dry"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/Au"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "opening:b/Au"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:b/dry"
+right = "closing:b/dry"
+kg2 = "1"
+
+[[covariance]]
+left = "closing:b/dry"
+right = "closing:b/water"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:b/dry"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:b/water"
+right = "closing:b/water"
+kg2 = "1"
+
+[[covariance]]
+left = "closing:b/water"
+right = "closing:b/Au"
+kg2 = "0"
+
+[[covariance]]
+left = "closing:b/Au"
+right = "closing:b/Au"
+kg2 = "1"

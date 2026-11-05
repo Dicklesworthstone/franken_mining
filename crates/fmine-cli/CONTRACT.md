@@ -29,6 +29,23 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Negative production is unusable. A degenerate printed range is interpreted as a point target.
 - **Envelope:** `FMT-ENV-1` (`schema_version: "fmine.env.v1"`).
 - **Verbs:**
+  - DESIGN (BD-149/175/177): `plant flowsheet --input <worksheet.toml>` reads a byte-bound
+    `fmine.plant-flowsheet.v1` worksheet and invokes the joint flowsheet reconciliation owner.
+    The worksheet declares units, directed streams, total elemental measurands, explicit dry-matter/H2O/
+    elemental kg coordinates for every stream and both stocks per unit, one kg tolerance per channel,
+    all unordered covariance pairs including zeros, and a named unbiased-Gaussian error policy.
+    Stream coordinates cover the reporting interval; stocks are endpoint instants. Internal transfers
+    are measured once and shared by their two endpoints. Unknown fields, missing observations or channels,
+    omitted covariance entries, invalid topology, unsupported physical support and invalid policy refuse.
+    The JSON result retains graph/source Claims, original exact values and tokens, canonical matrix order,
+    the full model covariance, fitted quantities and full covariance, unit and whole-boundary residuals,
+    chi-square, degrees of freedom and a receipt digest. Rejected candidates preserve their diagnostics
+    and expose no admitted Claim. The bounded model admits at most 128 coordinates and 64 independent
+    unit/channel equations. Sources remain Assumed, Internal and uncalibrated; the command infers no
+    missing-stream values, assay uncertainty, sensor bias, recovery or P754 qualification.
+    `robot-docs` exposes the strict schema as `plant_flowsheet`; the synthetic worksheet is
+    `tests/plant/flowsheet_reconcile.toml` and real-binary tests live in
+    `crates/xtask/testdata/plant_network_contract.rs`.
   - DESIGN (BD-177/336): `plant project --input <worksheet.toml>` binds the actual bytes of a bounded
     `fmine.plant-material.v1` declaration, then calls `fmine-plant::measurements::project_material`.
     Explicit kg/metric-tonne masses, wet-basis moisture and fraction/percent/g-per-tonne assays become
