@@ -480,6 +480,38 @@ fn boundary_projection(
         .iter()
         .map(|group| sum(group.iter().map(|&i| fitted[i])).map(Kilograms::new))
         .collect::<Result<Vec<_>>>()?;
+    // Equal losses in opening and closing totals can cancel in the balance
+    // residual. Audit every reported role against an exact sum independently.
+    // Five role budgets together bound one channel's signed boundary sum.
+    for (r, group) in groups.iter().enumerate() {
+        let mut original_exact = ExactQty::from_integer(0);
+        let mut fitted_exact = ExactQty::from_integer(0);
+        for &i in group {
+            original_exact = original_exact
+                .checked_add(data.exact[i])
+                .map_err(|_| numerical("exact original boundary total overflow"))?;
+            fitted_exact = fitted_exact
+                .checked_add(represented_rational(fitted[i])?)
+                .map_err(|_| numerical("exact represented fitted boundary total overflow"))?;
+        }
+        let budget = tolerances[&keys[r].channel].value() / 5.0;
+        for (kind, expected, reported) in [
+            ("original exact", original_exact, observed_kg[r].value()),
+            ("represented fitted", fitted_exact, estimates_kg[r].value()),
+        ] {
+            let loss = expected
+                .checked_sub(represented_rational(reported)?)
+                .map_err(|_| numerical("exact boundary total comparison overflow"))?
+                .to_f64()
+                .abs();
+            if loss > budget {
+                return Err(numerical(format!(
+                    "projected {kind} boundary total exceeds its rounding allowance at {:?}",
+                    keys[r]
+                )));
+            }
+        }
+    }
     let mut posterior_covariance = vec![KilogramsSquared::new(0.0); k * k];
     for r in 0..k {
         for s in r..k {

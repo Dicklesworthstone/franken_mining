@@ -237,7 +237,7 @@ fn whole_boundary_projection_cannot_lose_a_kilogram_that_unit_balances_retain() 
     // 1 kg product remains. The independent boundary audit must catch that loss.
     let refusal = reconcile_flowsheet(&inputs, &bind_model(model(&inputs))).unwrap_err();
     assert_eq!(refusal.code, "FMINE-REF-207");
-    assert!(refusal.what.contains("original exact boundary imbalance"));
+    assert!(refusal.what.contains("original exact boundary total"));
 
     let inputs = closed_two_store_boundary("1000000");
     let outcome = reconcile_flowsheet(&inputs, &bind_model(model(&inputs))).unwrap();
@@ -253,5 +253,87 @@ fn whole_boundary_projection_cannot_lose_a_kilogram_that_unit_balances_retain() 
     assert_eq!(
         result.boundary.conservation[0].raw_residual_exact_kg,
         q("0")
+    );
+}
+
+#[test]
+fn matching_boundary_total_losses_cannot_cancel_between_opening_and_closing() {
+    let inputs = |large_stock, small_opening, small_closing| {
+        let mut inputs = vec![bind(FlowsheetValue::Declaration {
+            units: vec![
+                UnitSpec {
+                    id: unit("a"),
+                    kind: UnitKind::Storage,
+                },
+                UnitSpec {
+                    id: unit("b"),
+                    kind: UnitKind::Storage,
+                },
+            ],
+            streams: vec![],
+            elements: vec![],
+            complete: true,
+        })];
+        for (name, opening, closing) in [
+            ("a", large_stock, large_stock),
+            ("b", small_opening, small_closing),
+        ] {
+            for (kind, dry) in [
+                (StocktakeKind::Opening, opening),
+                (StocktakeKind::Closing, closing),
+            ] {
+                inputs.push(bind(FlowsheetValue::Stocktake {
+                    unit: unit(name),
+                    kind,
+                    amounts: MaterialAmounts {
+                        dry_solids_kg: q(dry),
+                        water_kg: q("0"),
+                        elements_kg: BTreeMap::new(),
+                    },
+                }));
+            }
+        }
+        inputs
+    };
+    let large = inputs("10000000000000000", "1", "1");
+    let exact = account_flowsheet(&large).unwrap();
+    let boundary = &exact.summary().boundary.dry_solids;
+    assert_eq!(boundary.opening_kg, q("10000000000000001"));
+    assert_eq!(boundary.closing_kg, q("10000000000000001"));
+    assert_eq!(boundary.residual_kg, q("0"));
+    // Both displayed totals round down by 1 kg. Their residual is still zero,
+    // so only an independent exact comparison of each total detects the loss.
+    let refusal = reconcile_flowsheet(&large, &bind_model(model(&large))).unwrap_err();
+    assert_eq!(refusal.code, "FMINE-REF-207");
+    assert!(refusal.what.contains("original exact boundary total"));
+
+    // These original totals, 10^16 + 2 and 10^16 + 4, are representable.
+    // Equal stocktake variances fit the small store to 3 kg at both times.
+    // Each fitted aggregate rounds upward by 1 kg, although the errors cancel.
+    let fitted_loss = inputs("10000000000000000", "2", "4");
+    let refusal = reconcile_flowsheet(&fitted_loss, &bind_model(model(&fitted_loss))).unwrap_err();
+    assert_eq!(refusal.code, "FMINE-REF-207");
+    assert!(refusal.what.contains("represented fitted boundary total"));
+
+    let small = inputs("1000000", "1", "1");
+    let outcome = reconcile_flowsheet(&small, &bind_model(model(&small))).unwrap();
+    let result = &outcome.admitted_claim().unwrap().value;
+    close(result.chi_square, 0.0);
+    for (i, key) in result.boundary.keys.iter().enumerate() {
+        if key.channel == MaterialChannel::DrySolids
+            && matches!(
+                key.role,
+                BoundaryRole::OpeningInventory | BoundaryRole::ClosingInventory
+            )
+        {
+            close(result.boundary.observed_kg[i].value(), 1000001.0);
+            close(result.boundary.estimates_kg[i].value(), 1000001.0);
+        }
+    }
+    close(
+        result.boundary.conservation[0]
+            .reconciled_residual_kg
+            .value(),
+        0.0,
     );
 }
