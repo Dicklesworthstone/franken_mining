@@ -1,0 +1,18 @@
+[package]
+name = "fmine-plant"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Claim-native elemental plant inventory accounting with exact conservation and source-bound receipts."
+
+[dependencies]
+fmine-core = { path = "../fmine-core" }
+fmine-units = { path = "../fmine-units" }
+fmine-time = { path = "../fmine-time" }
+fmine-evidence = { path = "../fmine-evidence" }
+fmine-claim = { path = "../fmine-claim" }
+
+[lints]
+workspace = true

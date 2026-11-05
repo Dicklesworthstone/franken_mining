@@ -168,6 +168,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmine-plant"
+version = "0.1.0"
+dependencies = [
+ "fmine-claim",
+ "fmine-core",
+ "fmine-evidence",
+ "fmine-time",
+ "fmine-units",
+]
+
+[[package]]
 name = "fmine-public"
 version = "0.1.0"
 dependencies = [

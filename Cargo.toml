@@ -17,6 +17,7 @@ members = [
     "crates/fmine-optimize",
     "crates/fmine-lp",
     "crates/fmine-calib",
+    "crates/fmine-plant",
     "crates/fmine-decide",
     "crates/fmine-capital",
     "crates/fmine-io",
