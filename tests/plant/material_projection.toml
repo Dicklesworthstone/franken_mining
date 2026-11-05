@@ -1,0 +1,32 @@
+# SYNTHETIC known answer: 2.5 dry metric tonnes at 4 g/t Au and 2% Cu.
+# This is 0.01 kg Au and 50 kg Cu, with 125 kg of H2O explicitly supplied.
+# These declared whole-material assays include all non-water dry residue.
+schema = "fmine.plant-material.v1"
+boundary = "synthetic-plant/v1"
+material = "feed/period-1"
+start_ns = "0"
+end_ns = "10"
+assay_basis = "total_element/all_non_water_dry_matter"
+whole_material_support = "true"
+
+[[mass]]
+role = "dry"
+value = "2.5"
+unit = "t"
+
+[[mass]]
+role = "water"
+value = "125"
+unit = "kg"
+
+[[assay]]
+element = "Au"
+measurand = "total-Au/all-phases"
+value = "4.000"
+unit = "g_per_t"
+
+[[assay]]
+element = "Cu"
+measurand = "total-Cu/all-phases"
+value = "2"
+unit = "mass_percent"

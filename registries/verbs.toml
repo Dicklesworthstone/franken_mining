@@ -267,6 +267,12 @@ mutates_authority = false
 description = "Reconcile declared elemental inventory under a full error covariance, retaining rejected diagnostics without a balance Claim"
 
 [[verb]]
+path = "plant project"
+subsystem = "Crucible"
+mutates_authority = false
+description = "Convert explicitly supported dry or wet material mass and total dry-basis assays to exact elemental kilograms"
+
+[[verb]]
 path = "robot schema"
 subsystem = "Adit"
 mutates_authority = false

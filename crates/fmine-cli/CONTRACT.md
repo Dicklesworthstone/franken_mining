@@ -29,6 +29,16 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Negative production is unusable. A degenerate printed range is interpreted as a point target.
 - **Envelope:** `FMT-ENV-1` (`schema_version: "fmine.env.v1"`).
 - **Verbs:**
+  - DESIGN (BD-177/336): `plant project --input <worksheet.toml>` binds the actual bytes of a bounded
+    `fmine.plant-material.v1` declaration, then calls `fmine-plant::measurements::project_material`.
+    Explicit kg/metric-tonne masses, wet-basis moisture and fraction/percent/g-per-tonne assays become
+    exact extensive kg. The worksheet must declare total-element assays over all non-water dry matter
+    and common whole-material support. Original tokens, declared units, source locators, Claims and
+    computed quantities remain available in the JSON result. No uncertainty propagation or reconciliation
+    is inferred. Conflicting mass routes, missing water, unsupported assay bases/units and physical-domain
+    violations refuse, with no admitted projection Claim. Inputs remain Assumed, Internal and uncalibrated.
+    FACT: `crates/xtask/testdata/plant_projection_contract.rs` checks the actual binary against independent
+    dry/wet material examples, equivalent declared units, source-byte mutations and the refusal matrix.
   - DESIGN (BD-177): `plant balance --input <worksheet.toml>` and
     `plant reconcile --input <worksheet.toml>` read bounded, SHA-256-bound declared worksheets through
     `worksheet_input`, then use the existing `fmine-plant` accounting/reconciliation owners. Five original

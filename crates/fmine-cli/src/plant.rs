@@ -2,6 +2,8 @@
 //! Exact nominal accounting and conditional Gaussian reconciliation remain separate modes.
 //! Determinism: Exact for balance; DeterministicPerIsa for reconciliation.
 
+mod project;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -23,6 +25,8 @@ use crate::{Envelope, NextAction, escape_json, worksheet_input};
 
 pub const BALANCE_USAGE: &str = "plant balance --input <worksheet.toml>";
 pub const RECONCILE_USAGE: &str = "plant reconcile --input <worksheet.toml>";
+pub const PROJECT_USAGE: &str = "plant project --input <worksheet.toml>";
+pub const PROJECT_DOCS_JSON: &str = project::ROBOT_DOCS_JSON;
 pub const SCHEMA: &str = "fmine.plant-inventory.v1";
 const MAX_BYTES: u64 = 1024 * 1024;
 const ROLES: [&str; 5] = ["opening", "feed", "product", "other_outflow", "closing"];
@@ -61,34 +65,37 @@ impl Mode {
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Command {
-    pub mode: Mode,
-    pub input: PathBuf,
+pub enum Command {
+    Inventory { mode: Mode, input: PathBuf },
+    Project { input: PathBuf },
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
-    let mode = match (
-        args.first().map(String::as_str),
-        args.get(1).map(String::as_str),
-    ) {
-        (Some("plant"), Some("balance")) => Mode::Balance,
-        (Some("plant"), Some("reconcile")) => Mode::Reconcile,
-        _ => return Err(format!("{BALANCE_USAGE} | {RECONCILE_USAGE}")),
-    };
     if args.len() != 4
+        || args[0] != "plant"
         || args[2] != "--input"
         || args[3].trim().is_empty()
         || args[3].starts_with("--")
     {
         return Err(format!(
-            "{} requires exactly --input <worksheet.toml>",
-            mode.verb()
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE}"
         ));
     }
-    Ok(Command {
-        mode,
-        input: PathBuf::from(&args[3]),
-    })
+    let input = PathBuf::from(&args[3]);
+    match args[1].as_str() {
+        "balance" => Ok(Command::Inventory {
+            mode: Mode::Balance,
+            input,
+        }),
+        "reconcile" => Ok(Command::Inventory {
+            mode: Mode::Reconcile,
+            input,
+        }),
+        "project" => Ok(Command::Project { input }),
+        _ => Err(format!(
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE}"
+        )),
+    }
 }
 
 type Fields<'a> = BTreeMap<&'a str, (&'a str, usize)>;
@@ -526,10 +533,14 @@ fn actions() -> Vec<NextAction> {
 }
 
 pub fn execute(command: &Command, root: &Path) -> Envelope {
+    let (mode, input) = match command {
+        Command::Inventory { mode, input } => (*mode, input),
+        Command::Project { input } => return project::execute(input, root),
+    };
     let run = || -> Result<Envelope, Refusal> {
         let (text, source) =
-            worksheet_input::read(&root.join(&command.input), "plant worksheet", MAX_BYTES)?;
-        let worksheet = parse_worksheet(&text, &source, command.mode)?;
+            worksheet_input::read(&root.join(input), "plant worksheet", MAX_BYTES)?;
+        let worksheet = parse_worksheet(&text, &source, mode)?;
         let scope = &worksheet.inputs[0].value.scope;
         let scope_json = format!(
             "{{\"boundary\":{},\"element\":{},\"measurand\":{},\"basis\":{},\"start_ns\":\"{}\",\"end_ns\":\"{}\"}}",
@@ -549,7 +560,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
             "{{\"claim\":{},\"basis\":{},\"covariance_kg2\":{},\"unbiased_gaussian_errors\":true,\"global_chi_square_limit\":{},\"normalized_adjustment_limit\":{},\"closure_tolerance_kg\":{}}}",
             claim_json(model), quoted(worksheet.model_basis.as_deref().unwrap_or("")), numbers(model.value.covariance.map(|v| v.value())),
             number(model.value.global_chi_square_limit), model.value.normalized_adjustment_limit.map_or_else(|| "null".into(), number), number(model.value.closure_tolerance_kg.value())));
-        let (mut envelope, admitted, digest, result) = match command.mode {
+        let (mut envelope, admitted, digest, result) = match mode {
             Mode::Balance => match inventory::account_interval(&worksheet.inputs) {
                 Ok(receipt) => {
                     let s = receipt.summary();
@@ -565,14 +576,14 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
                         s.product_to_feed_ratio.map_or_else(|| "null".into(), exact)
                     );
                     (
-                        Envelope::ok(command.mode.verb(), String::new(), vec![]),
+                        Envelope::ok(mode.verb(), String::new(), vec![]),
                         claim_json(receipt.claim()),
                         quoted(receipt.digest()),
                         summary,
                     )
                 }
                 Err(refusal) => (
-                    Envelope::refused(command.mode.verb(), refusal, actions()),
+                    Envelope::refused(mode.verb(), refusal, actions()),
                     "null".into(),
                     "null".into(),
                     "null".into(),
@@ -585,19 +596,19 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
                     .ok_or_else(|| bad(1, "error model required"))?;
                 match reconciliation::reconcile_inventory(&worksheet.inputs, model) {
                     Ok(InventoryReconciliationOutcome::Admitted(receipt)) => (
-                        Envelope::ok(command.mode.verb(), String::new(), vec![]),
+                        Envelope::ok(mode.verb(), String::new(), vec![]),
                         claim_json(receipt.claim()),
                         quoted(receipt.digest()),
                         diagnostics(&receipt.claim().value),
                     ),
                     Ok(InventoryReconciliationOutcome::Rejected(report)) => (
-                        Envelope::refused(command.mode.verb(), report.refusal().clone(), actions()),
+                        Envelope::refused(mode.verb(), report.refusal().clone(), actions()),
                         "null".into(),
                         quoted(report.digest()),
                         diagnostics(report.diagnostics()),
                     ),
                     Err(refusal) => (
-                        Envelope::refused(command.mode.verb(), refusal, actions()),
+                        Envelope::refused(mode.verb(), refusal, actions()),
                         "null".into(),
                         "null".into(),
                         "null".into(),
@@ -607,7 +618,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         };
         envelope.payload_json = format!(
             "{{\"schema\":\"fmine.plant-result.v1\",\"mode\":{},\"source\":{{\"path\":{},\"sha256\":{},\"bytes\":{}}},\"scope\":{},\"population\":{},\"observations\":[{}],\"error_model\":{},\"admitted_claim\":{},\"receipt_digest\":{},\"result\":{}}}",
-            quoted(match command.mode {
+            quoted(match mode {
                 Mode::Balance => "exact_nominal_balance",
                 Mode::Reconcile => "conditional_gaussian_reconciliation",
             }),
@@ -625,7 +636,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         Ok(envelope)
     };
     let mut envelope =
-        run().unwrap_or_else(|refusal| Envelope::refused(command.mode.verb(), refusal, actions()));
+        run().unwrap_or_else(|refusal| Envelope::refused(mode.verb(), refusal, actions()));
     envelope.no_claim = Some(NO_CLAIM);
     envelope.warnings.push("Worksheet observations, completeness and any error policy are Assumed, Internal and uncalibrated; exact byte binding is not independent source verification.".into());
     envelope

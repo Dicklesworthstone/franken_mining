@@ -77,6 +77,7 @@ bytes, physical support, original observations and model assumptions in its outp
 ```bash
 cargo run -p fmine-cli -- plant balance --input tests/plant/closed_inventory.toml
 cargo run -p fmine-cli -- plant reconcile --input tests/plant/measured_inventory.toml
+cargo run -p fmine-cli -- plant project --input tests/plant/material_projection.toml
 ```
 
 The supplied examples are synthetic. `balance` checks exact nominal closure. `reconcile` uses the declared full
@@ -85,6 +86,11 @@ Rejected candidates return a nonzero exit status and no admitted balance Claim w
 observations and available diagnostics. Inputs remain Assumed, Internal and uncalibrated. This calculation
 does not audit a site's measurements, infer recovery or certify P754 compliance. `fmine robot-docs` documents
 the strict worksheet fields, explicit kg basis, stocktake timing and all required covariance pairs.
+
+`plant project` converts explicit dry/wet masses, wet-basis moisture and total dry-basis assays into exact
+material and elemental kilograms. It preserves the submitted values and units. It requires all measurements
+to cover the same declared whole material; sampled assays and chemical species are not silently promoted to
+total-material measurements. The nominal conversion does not invent an uncertainty model or close a balance.
 
 ### Run the public lane
 

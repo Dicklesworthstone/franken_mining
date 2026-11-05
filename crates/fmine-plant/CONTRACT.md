@@ -13,7 +13,7 @@ K0 numerical owner, preserving the original observations and a separately declar
 - **Layer:** K2
 - **Subsystem:** Crucible
 - **LOC budget:** 32,000 planned / 37,000 ceiling
-- **Allowed Module Families:** `["inventory", "flowsheet", "reconciliation"]`
+- **Allowed Module Families:** `["inventory", "flowsheet", "reconciliation", "measurements"]`
 
 ## 2. Inputs
 
@@ -140,11 +140,13 @@ impossible metal-in-water composition, identity order and internal confidentiali
 
 BD-175 now has a nominal conservative plant-flow graph; process-model prediction and shared cross-domain
 flow adapters remain. BD-177 now has covariance-aware reconciliation of fully measured elemental totals;
-raw-stream tonnage/assay conversion, cross-element network reconciliation, missing observations, sensor
+raw-stream uncertainty propagation, cross-element network reconciliation, missing observations, sensor
 bias estimation, plant error-model calibration and full P754 reconciliation remain.
 BD-287 process-card ingestion and BD-313 RTD inversion/deconvolution remain unimplemented
-here. No real plant fixture, source-file verification, assay/ore conversion, durable receipt decoder,
-CLI importer, forecast registration, sequence authority or permission-to-operate claim is supplied.
+here. No real plant fixture, independent source verification, durable receipt decoder, site-format importer,
+forecast registration, sequence authority or permission-to-operate claim is supplied. The declared CLI
+worksheets expose nominal material conversion and elemental inventory accounting/reconciliation;
+their byte-bound declarations remain Assumed rather than verified plant measurements.
 Generic Claim hashes omit some fields; this slice independently checks values and binds admitted
 support, representation, UU, supersession and calibration metadata into its receipt.
 
@@ -207,3 +209,31 @@ This is plan §20.3's fully measured linear R1 slice using `fmine_numerics::reco
 claim a real plant fixture, empirical confidence calibration, latent-state/bias R2 model, uncertainty
 reconciliation across an entire flowsheet, reconciliation of grades as independent extensive totals,
 or P754 compliance. Original source families and receiver-side permissions remain authoritative.
+
+## 14. Nominal material projection (DESIGN; BD-177/336)
+
+`measurements::project_material` converts Claims over one full physical material and time into exact
+`MaterialAmounts`: all non-water dry matter, H2O and total elemental kilograms. Source masses explicitly
+declare kg or metric tonnes; dry-basis assays declare mass fraction, mass percent or grams per tonne.
+Two exclusive routes are admitted: dry mass plus explicit water mass, or wet mass plus wet-basis moisture
+(H2O / wet mass). Missing water never defaults to zero. An instant may identify a stocktake. Assays refer
+to all non-water dry matter, including dissolved residue; separated-solid, partial or speciated assays
+cannot acquire that meaning through this arithmetic. H/O refuse because their total elemental content
+would require an explicit water-stoichiometry model. Fractions outside the physical domain, overlapping
+elemental assay identities, incompatible supports, conflicting routes and unrepresentable arithmetic refuse.
+
+The immutable receipt retains original Claims and declared units. Source semantic tags and admitted
+envelopes participate in its digest; evidence meets, confidentiality joins and compatible UU scenarios
+survive. Every output is nominal arithmetic. No variance, independence, Gaussian law, measurement
+accuracy, recovery or uncertainty interval is inferred from multiplying a mass and an assay.
+
+FACT (constructed unit tests in `measurements/tests.rs`): 2.5 dry tonnes at 4 g/t Au and 2% Cu produce
+0.01 kg Au and 50 kg Cu. A 1,000 wet-tonne input at 8% wet-basis moisture and 0.6% dry-basis Cu produces
+920,000 kg dry matter, 80,000 kg H2O and 5,520 kg Cu. The BD-336 monthly example preserves its 25,000 kg
+Cu imbalance; projection does not reconcile it. Tests cover declared unit equivalents, metadata and
+source mutations, input-order determinism, exact overflow and physical/support refusals.
+
+`fmine plant project --input tests/plant/material_projection.toml` exposes this nominal owner. Its
+strict worksheet requires an explicit total-element assay basis and whole-material support declaration.
+Inputs remain Assumed, Internal and uncalibrated; the exact submitted bytes are hashed. Site source
+auditing, sampled-support conversion, full P754 qualification and the complete BD-177/336 gates remain open.
