@@ -6,8 +6,10 @@
 //! covariance audits refuse unresolved binary64 results; no entries are clipped.
 //! The existing sparse LDLT owner supplies both reusable factorizations. Inputs
 //! are numerical coordinates; a domain consumer must supply units, support,
-//! measurement evidence and a gross-error policy. No missing observation,
-//! unknown bias, uncertain coefficient or variance is estimated here.
+//! measurement evidence and a gross-error policy. The complete-data entry point
+//! estimates no missing observation, unknown bias, uncertain coefficient or
+//! variance. The separate `partial` owner infers explicitly unmeasured variables
+//! only when the retained measurements and constraints identify them.
 //!
 //! Reference: Tamhane and Mah (1985), Technometrics 27, 409–422, §§2–4,
 //! <https://doi.org/10.1080/00401706.1985.10488080>. The chi-square interpretation
@@ -26,6 +28,9 @@ type Result<T> = std::result::Result<T, Refusal>;
 pub const MAX_OBSERVATIONS: usize = 128;
 pub const MAX_CONSTRAINTS: usize = 64;
 const RELATIVE_AUDIT: f64 = 2.0e-10;
+
+/// Observable unmeasured variables without fictitious observations or priors.
+pub mod partial;
 
 /// A complete numerical calculation; admission into a plant account belongs to its caller.
 #[derive(Debug, Clone, PartialEq)]

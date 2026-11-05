@@ -380,3 +380,39 @@ variances 1e20 and 1e-20 in either coordinate order.
 - **PO-NUM-3** (a determinism class and a thread-count test for each kernel on a certified path) is not discharged (Known gaps).
 - **PO-HELM-1** (VOI ≥ 0 in expectation; the estimator is unbiased on conjugate toys; known-answer tests). Partly here, for finite problems only: `test_gb29_closed_form_known_answers`, the exhaustive policy check (`every_small_discrete_policy_matches_an_independent_exhaustive_oracle`), and GATE-HELM-02's check of the Monte Carlo mean and SE. No conjugate continuous toy is tested.
 - **Mislabelled in the old contract.** It used PO-NUM-1 for `0 ≤ EVSI ≤ EVPI`, PO-NUM-3 for Ville and CVaR subadditivity, and PO-NUM-4 for tropical duality. The plan's PO-NUM-1 and PO-NUM-3 say something else, and it has no PO-NUM-4. Those properties are tested by `test_evpi_non_negative_and_evsi_monotone`, `test_ville_inequality_type1_error_bound`, `test_cvar_coherent_subadditivity_and_monotonicity` and `test_min_plus_longest_path_duality` (Validity domain).
+
+## 13. Observable unmeasured coordinates (DESIGN; BD-149/177)
+
+`reconciliation::partial::reconcile_with_unmeasured(y,V,Am,Au,b,p)` jointly estimates measured
+coordinates xm and explicitly unmeasured coordinates xu under `Am*xm+Au*xu=b`. Its objective uses
+only the real measurements and their full covariance. It introduces no latent observation, prior,
+variance floor, arbitrary split or balancing stream. Original observations are never discarded.
+
+The bounded domain requires V positive definite, independent measured balance rows
+C=Am V Am' positive definite, and Au independently identifiable under S=Au' C^-1 Au. A plant
+consumer meets the measured-row condition by retaining endpoint stocktakes for every unit.
+Unobservable latent splits and cycles refuse FMINE-REF-104; unresolved covariance, arithmetic or
+dependent measured rows refuse FMINE-REF-207. Bounds are 1<=p<=m<=min(n,64) and n+p<=128.
+
+Three scaled LDLT factorizations are reused throughout the block solves and affine estimator map.
+Two bounded Schur refinement passes correct latent stationarity without relaxing the audits.
+The full joint covariance is J V J', in measured-then-inferred order; measured adjustment covariance
+uses its separate full propagation map. Conservation, stationarity, covariance closure and marginal
+consistency are checked before a result is returned. Negative physical estimates require domain
+admission; the unitless numerical owner retains their signs.
+
+`PartialReconciliation` exposes measured and inferred estimates, original measured contributions
+Am*y-b, fitted residuals, joint covariance, measured adjustments/covariance, estimator map and
+normalized diagnostics. Am*y-b is not a complete raw imbalance while terms are unmeasured.
+Degrees of freedom are m-p. At zero redundancy the measured estimates remain unchanged and the
+objective is exactly zero; this is no passed gross-error test and supplies no detection power.
+Gaussian interpretation remains conditional on the caller's measurement model. There is no temporal
+inventory model, bias prior, nonlinear measurement fit or empirical calibration in this owner.
+
+FACT (independent constructed oracles): eliminating a missing intermediate from two balances gives
+feed-product-tail=0. Measurements [100,72,31], variances [4,1,9] yield inferred intermediate 706/7,
+global statistic 9/14 and joint variance 20/7 for feed/intermediate. Correlated stocktakes [10,30]
+with covariance [[4,1],[1,9]] infer an unmeasured inflow 20 with variance 11 and no redundancy.
+Nine partial-owner tests cover full covariance, affine constraints, multiple unknowns, unobservable
+splits/cycles, scale changes, inadmissible models and a finite error population with independently
+known joint moments. Existing complete-data reconciliation remains unchanged.
