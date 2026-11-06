@@ -73,7 +73,7 @@ FMINE-REF-504
 FMINE-REF-505
 FMINE-REF-506
 FMINE-REF-507
-[verbs] 46
+[verbs] 53
 decide card
 decide program
 assure public
@@ -116,6 +116,13 @@ doctor
 repair plan
 repair apply
 robot-docs
+plant balance
+plant reconcile
+plant project
+plant flowsheet
+plant transfer
+plant infer
+plant recovery
 robot schema
 assure issue
 reliance export
