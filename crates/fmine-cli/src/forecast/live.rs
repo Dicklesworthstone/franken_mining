@@ -1673,6 +1673,7 @@ fn markdown(
             );
         }
         super::segments::assessment_markdown(&mut out, state, report)?;
+        super::diagnostics::assessment_markdown(&mut out, state, report)?;
         if let Some(log) = report.summary.event_log {
             let score = log.score;
             let _ = writeln!(

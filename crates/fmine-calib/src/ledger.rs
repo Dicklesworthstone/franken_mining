@@ -23,6 +23,7 @@ use crate::{
 
 pub mod binding;
 pub mod coverage;
+pub mod diagnostics;
 pub mod segments;
 pub use coverage::{CoverageMonitorAssessment, CoverageMonitorPolicy, CoverageObservation};
 pub use segments::{

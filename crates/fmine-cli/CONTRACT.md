@@ -28,6 +28,13 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Their per-site, cross-year summaries keep guidance ordinals and comparative populations separate.
   Negative production is unusable. A degenerate printed range is interpreted as a point target.
 - **Envelope:** `FMT-ENV-1` (`schema_version: "fmine.env.v1"`).
+- DESIGN (BD-048/049): forecast assessment JSON and saved-journal Markdown include the calibration
+  kernel's immutable Gaussian PIT and Bernoulli reliability diagnostics. The separate DGN1 digest binds
+  the saved assessment, selected events, source evidence and diagnostic values. Missing members remain in
+  full-population completion bounds; resolved and full probability averages are separate. Empty bins have
+  absent averages, and unsupported distributions remain explicit. `robot-docs.forecast_diagnostics`
+  documents the fixed bin rules and descriptive scope; no calibration verdict or new outcome selection
+  is performed by the surface.
 - **Verbs:**
   - DESIGN (BD-176/287): `plant recovery --input <worksheet.toml>` reads the bounded, byte-bound
     `fmine.plant-recovery.v1` worksheet and delegates to `fmine-plant::cards::RecoveryModel`.

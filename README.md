@@ -1762,6 +1762,17 @@ Saved journal reports render the same groups in Markdown and keep their original
 later restatements. The optional registration uses journal operation v7; earlier operation versions reject
 metadata instead of silently ignoring it.
 
+DESIGN (BD-048/049): every saved assessment also has a separately digested `diagnostics` projection.
+Gaussian forecasts retain each selected outcome's probability integral transform (PIT) and a fixed-decile
+histogram. Bernoulli forecasts retain their original probability bins, complete and resolved-only mean
+probabilities, observed event frequencies and completion bounds for pending outcomes. Compare the resolved
+mean probability with the observed event frequency; those two quantities use the same population. Empty-bin
+averages remain absent, and pending forecasts never disappear from the denominators. Empirical distributions,
+sparse quantiles and standalone intervals remain explicitly unsupported for these diagnostics. JSON and saved
+journal Markdown reports preserve the selected sources and parent assessment digest, so later outcomes or
+restatements cannot rewrite the earlier diagnostic report. These are descriptive diagnostics, not calibration
+verdicts, confidence intervals or claims of independent observations.
+
 The synthetic example below keeps an unresolved northern forecast in its two-member group: the observed
 interval score is 10, while the final group mean can range from 10 to 260 under its declared outcome domain.
 The southern forecast remains a separate group with an interval score of 110.

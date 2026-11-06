@@ -61,6 +61,16 @@ Enforces pre-registration of forecasts prior to outcome observation (`INV-008`) 
   separate digest binding the exact parent report, complete partition and descriptive calculations;
   later outcomes and restatements cannot rewrite an earlier report. These groups are neither confidence
   intervals nor an author ranking, and they do not establish independent observations or predictive skill.
+- DESIGN (BD-048/049, plan §10.2): `assessment_diagnostics(saved_digest)` derives Gaussian PIT values and
+  fixed-decile histograms, plus Bernoulli reliability bins, from the selected outcomes in an immutable
+  saved assessment. Every member and event/source identity is retained. Missing Gaussian outcomes widen
+  each bin's whole-population completion bounds; missing event outcomes stay in their original probability
+  bins. Full-population and resolved-only mean probabilities are separate, and empty-bin averages remain
+  absent. The normal CDF uses the existing numerical owner, retaining its approximate tail saturation.
+  Empirical distributions, sparse quantiles and standalone intervals remain unsupported for this diagnostic
+  projection. DGN1/v1 binds the parent assessment and exact diagnostic values without changing old durable
+  forecast/cohort/assessment bytes. The projection supplies no calibration verdict, independence estimate,
+  confidence interval or retrospective outcome selection.
 - BD-343: `freeze_cohort(CohortSpec)` freezes sorted membership, the resolution rule, eligible sources and
   `AssessmentPolicy` before outcomes. The digest binds the complete payload, including exact float bits.
   Payloads are Gaussian, a uniform empirical distribution, an interval with a stated or explicitly absent

@@ -19,6 +19,7 @@ use fmine_core::id::ObjectId;
 use fmine_evidence::{Refusal, RefusalCode};
 use fmine_registry::toml_subset::{TomlField, TomlRow, TomlValue, parse_subset};
 
+mod diagnostics;
 pub mod live;
 mod provenance;
 pub mod record_score;
@@ -31,6 +32,7 @@ pub const DISTRIBUTIONS_JSON: &str = r#"{"kinds":["gaussian","interval","quantil
 pub const COVERAGE_MONITOR_JSON: &str = r#"{"cohort_fields":["monitor_alarm_alpha","monitor_support","monitor_conditional_null","monitor_order"],"declaration":"All four fields are required together; monitor_order is the comma-separated complete permutation of forecast aliases","null":"Exact conditional P(interval hit | past) = 1-alpha at the declared support; not a claim that marginal coverage or effective sample size establishes this assumption","payloads":"Gaussian, explicitly probability-bearing intervals and exact central quantiles; Bernoulli and empirical forecasts refuse","sequence":"Original publications only; stop at the first unresolved member and retain deferred counts even under latest-as-of scoring","evidence":"Finite log evidence, running maximum, first alarm, original values, citations and event digests; an alarm does not recalibrate","journal":"Monitor freezes use operation v5 and retain the existing bounded host-clock policy"}"#;
 pub const EVENT_LOG_JSON: &str = r#"{"cohort_field":"event_log_floor","declaration":"A quoted finite probability strictly between zero and 0.5, frozen before outcomes in an all-Bernoulli cohort","loss":"-ln(max(P(observed outcome), probability_floor)) in nats; the forecast probability is unchanged","interpretation":"The explicit floor caps extreme losses and removes strict propriety in the floored tails; the unchanged proper Brier score is also reported","missing":"Every unresolved member contributes both possible binary losses to whole-cohort completion bounds; no missing outcome leaves the denominator","journal":"Opt-in freezes use operation v5; omission preserves existing record identities and output","scope":"Descriptive scoring, not a calibration claim; continuous coverage monitoring cannot be enabled on the same cohort"}"#;
 pub const METADATA_JSON: &str = segments::ROBOT_DOCS_JSON;
+pub const DIAGNOSTICS_JSON: &str = diagnostics::ROBOT_DOCS_JSON;
 
 const MONITOR_FIELDS: [&str; 4] = [
     "monitor_alarm_alpha",
@@ -571,8 +573,9 @@ impl Replay {
             .transpose()?
             .unwrap_or_default();
         let segments = segments::assessment_json(self, report)?;
+        let diagnostics = diagnostics::assessment_json(self, report)?;
         Ok(format!(
-            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":{},\"lane\":{},{identity_key}:{},\"authority_times\":{},\"source_citations\":{},\"external_time_proof\":\"not_verified\",\"temporal_validation\":{},\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]{monitor}{segments}}},\"checkpoints\":[{}]}}",
+            "{{\"schema\":\"fmine.forecast-assessment.v1\",\"mode\":{},\"lane\":{},{identity_key}:{},\"authority_times\":{},\"source_citations\":{},\"external_time_proof\":\"not_verified\",\"temporal_validation\":{},\"cohort\":{},\"assessment\":{{\"as_of\":{},\"selector\":{},\"digest\":{},\"summary\":{},\"members\":[{}]{monitor}{segments}{diagnostics}}},\"checkpoints\":[{}]}}",
             js(mode),
             js(&self.lane),
             js(&identity.to_hex()),
