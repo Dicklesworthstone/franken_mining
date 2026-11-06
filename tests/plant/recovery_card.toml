@@ -1,0 +1,72 @@
+# SYNTHETIC known answer, with authored applicability bounds and processing route.
+# Test work: (70 + 2*5.5 - 1)/100 = 0.8 recovery fraction.
+# Ordered factors: 0.8*0.95 = 0.76, then 0.76*1.02 = 0.7752.
+# Correction: +0.02 gives 0.7952. An explicitly declared cap gives 0.79.
+# These inputs are not verified plant measurements or a calibrated recovery model.
+schema = "fmine.plant-recovery.v1"
+circuit = "synthetic-circuit/v1"
+material_domain = "invented-ore-domain"
+dry_basis = "total-non-water-dry-matter/v1"
+element = "Au"
+processing_support = "true"
+valid_start_ns = "0"
+valid_end_ns = "100"
+start_ns = "10"
+end_ns = "20"
+
+[[test_work]]
+id = "invented-test-work"
+revision = "v1"
+formula = "70 + 2 * Au - S"
+output_scale = "percent"
+
+[[requirement]]
+name = "Au"
+measurand = "total-Au/dry"
+unit = "g_per_dry_t"
+lower = "1.0"
+upper = "10.0"
+lower_inclusive = "true"
+upper_inclusive = "true"
+
+[[requirement]]
+name = "S"
+measurand = "total-S/dry"
+unit = "dry_mass_percent"
+lower = "0"
+upper = "5"
+lower_inclusive = "true"
+upper_inclusive = "false"
+
+[[operation]]
+id = "invented-availability-factor"
+revision = "v1"
+multiplier = "0.950"
+
+[[operation]]
+id = "invented-stage-factor"
+revision = "v2"
+multiplier = "1.02"
+
+[[correction]]
+id = "invented-correction-policy"
+revision = "v1"
+additive_fraction = "0.02"
+upper_cap_fraction = "0.79"
+
+[[route]]
+id = "invented-route-assumption"
+revision = "v1"
+route = "synthetic-roast-and-leach"
+
+[[input]]
+name = "Au"
+measurand = "total-Au/dry"
+unit = "g_per_dry_t"
+value = "5.500"
+
+[[input]]
+name = "S"
+measurand = "total-S/dry"
+unit = "dry_mass_percent"
+value = "1.00"

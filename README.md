@@ -81,6 +81,7 @@ cargo run -p fmine-cli -- plant project --input tests/plant/material_projection.
 cargo run -p fmine-cli -- plant transfer --input tests/plant/raw_transfer.toml
 cargo run -p fmine-cli -- plant flowsheet --input tests/plant/flowsheet_reconcile.toml
 cargo run -p fmine-cli -- plant infer --input tests/plant/flowsheet_infer.toml
+cargo run -p fmine-cli -- plant recovery --input tests/plant/recovery_card.toml
 ```
 
 The supplied examples are synthetic. `balance` checks exact nominal closure. `reconcile` uses the declared full
@@ -116,6 +117,15 @@ stocks for every unit. It uses the existing partial reconciliation owner to infe
 flows, retaining full measured/inferred covariance and distinguishing observed contributions from complete
 totals. Ambiguous splits or unmeasured cycles refuse. A uniquely inferred flow with no redundant observations
 is labelled `no_redundancy`, with no gross-error statistic or claim that a consistency test passed.
+
+`plant recovery` evaluates an explicitly declared recovery formula through the existing versioned model-card
+engine. Its worksheet names the circuit, material domain, dry basis, element, validity bounds and processing
+support, plus the test-work formula, ordered operational factors, correction, optional cap and assumed route.
+Each input repeats its unit and measurand; no conversion or extrapolation is inferred. The output retains the
+submitted source hash, exact bounds, original tokens, source Claims and every intermediate recovery fraction.
+The synthetic example gives 0.8 from the formula, 0.7752 after its two operational factors, 0.7952 after the
+correction and 0.79 after the explicitly declared cap. These are conditional nominal calculations with assumed,
+uncalibrated inputs; they do not qualify a model for an actual plant or authorize an operating change.
 
 ### Run the public lane
 

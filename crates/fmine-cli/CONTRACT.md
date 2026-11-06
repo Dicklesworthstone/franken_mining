@@ -29,6 +29,16 @@ The `fmine` binary and library surface (`WP-06`, `BD-111`–`BD-117`, `BD-071`).
   Negative production is unusable. A degenerate printed range is interpreted as a point target.
 - **Envelope:** `FMT-ENV-1` (`schema_version: "fmine.env.v1"`).
 - **Verbs:**
+  - DESIGN (BD-176/287): `plant recovery --input <worksheet.toml>` reads the bounded, byte-bound
+    `fmine.plant-recovery.v1` worksheet and delegates to `fmine-plant::cards::RecoveryModel`.
+    One versioned test-work formula, exact input requirements, ordered operational factors, a correction,
+    optional explicit cap and route retain their source Claims. Processing support, scope, validity and
+    matching input units/measurands are explicit. Original numeric tokens and every intermediate fraction
+    remain visible; parsed kernel refusals retain the model and inputs with no admitted result. All
+    declarations remain Assumed, Internal and uncalibrated. No source qualification, uncertainty propagation,
+    sample-to-blend conversion, forecast calibration or operating authorization is inferred. The schema is
+    documented in `robot-docs.plant_recovery`; `tests/plant/recovery_card.toml` is synthetic, with real-binary
+    checks in `crates/xtask/testdata/plant_recovery_contract.rs`.
   - DESIGN (BD-177): `plant transfer --input <worksheet.toml>` reads a source-bound
     `fmine.plant-transfer.v1` worksheet and invokes the raw-lot projection owner. It requires explicit
     complete/nonoverlapping whole-lot support, matched moisture/assay dry bases, wet mass in kg,

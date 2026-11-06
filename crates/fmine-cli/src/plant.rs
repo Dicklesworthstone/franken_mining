@@ -4,6 +4,7 @@
 
 mod network;
 mod project;
+mod recovery;
 mod transfer;
 
 use std::collections::BTreeMap;
@@ -35,6 +36,8 @@ pub const NETWORK_USAGE: &str = "plant flowsheet --input <worksheet.toml>";
 pub const NETWORK_DOCS_JSON: &str = network::ROBOT_DOCS_JSON;
 pub const INFER_USAGE: &str = "plant infer --input <worksheet.toml>";
 pub const INFERENCE_DOCS_JSON: &str = network::INFERENCE_ROBOT_DOCS_JSON;
+pub const RECOVERY_USAGE: &str = "plant recovery --input <worksheet.toml>";
+pub const RECOVERY_DOCS_JSON: &str = recovery::ROBOT_DOCS_JSON;
 pub const SCHEMA: &str = "fmine.plant-inventory.v1";
 const MAX_BYTES: u64 = 1024 * 1024;
 const ROLES: [&str; 5] = ["opening", "feed", "product", "other_outflow", "closing"];
@@ -79,6 +82,7 @@ pub enum Command {
     Transfer { input: PathBuf },
     Network { input: PathBuf },
     Infer { input: PathBuf },
+    Recovery { input: PathBuf },
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -89,7 +93,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         || args[3].starts_with("--")
     {
         return Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE}"
         ));
     }
     let input = PathBuf::from(&args[3]);
@@ -106,8 +110,9 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "transfer" => Ok(Command::Transfer { input }),
         "flowsheet" => Ok(Command::Network { input }),
         "infer" => Ok(Command::Infer { input }),
+        "recovery" => Ok(Command::Recovery { input }),
         _ => Err(format!(
-            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE}"
+            "{BALANCE_USAGE} | {RECONCILE_USAGE} | {PROJECT_USAGE} | {TRANSFER_USAGE} | {NETWORK_USAGE} | {INFER_USAGE} | {RECOVERY_USAGE}"
         )),
     }
 }
@@ -563,6 +568,7 @@ pub fn execute(command: &Command, root: &Path) -> Envelope {
         Command::Transfer { input } => return transfer::execute(input, root),
         Command::Network { input } => return network::execute(input, root),
         Command::Infer { input } => return network::execute_unmeasured(input, root),
+        Command::Recovery { input } => return recovery::execute(input, root),
     };
     let run = || -> Result<Envelope, Refusal> {
         let (text, source) =

@@ -291,6 +291,12 @@ mutates_authority = false
 description = "Infer explicitly unmeasured identifiable streams from observed flows and stocks, retaining joint covariance and unavailable gross-error diagnostics"
 
 [[verb]]
+path = "plant recovery"
+subsystem = "Crucible"
+mutates_authority = false
+description = "Evaluate explicitly declared versioned recovery cards, preserving source units, operational factors, corrections, caps and route assumptions"
+
+[[verb]]
 path = "robot schema"
 subsystem = "Adit"
 mutates_authority = false
