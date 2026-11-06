@@ -1,3 +1,5 @@
+//! Determinism: DeterministicPerIsa
+
 use super::*;
 
 fn close(a: f64, b: f64) {

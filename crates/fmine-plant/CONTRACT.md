@@ -13,7 +13,7 @@ K0 numerical owner, preserving the original observations and a separately declar
 - **Layer:** K2
 - **Subsystem:** Crucible
 - **LOC budget:** 32,000 planned / 37,000 ceiling
-- **Allowed Module Families:** `["inventory", "flowsheet", "reconciliation", "measurements", "raw_measurements"]`
+- **Allowed Module Families:** `["inventory", "flowsheet", "reconciliation", "measurements", "raw_measurements", "cards", "rtd"]`
 
 ## 2. Inputs
 

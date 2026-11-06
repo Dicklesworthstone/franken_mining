@@ -1,6 +1,7 @@
 //! FACT: constructed nominal-card known answers, not plant calibration.
 //! Decimal exponential/logarithm references were evaluated independently at
 //! 60-digit precision; equations are transcribed in corpus C2 §3.4 (E171).
+//! Determinism: DeterministicPerIsa
 
 use super::*;
 use fmine_claim::{Confidentiality, Representation, SpatialSupport, UuTerm};

@@ -16,6 +16,13 @@ use fmine_public::{Lane, PublicAssuranceReport};
 
 use crate::packet;
 
+#[path = "assure_report/consolidation.rs"]
+pub(super) mod consolidation;
+
+pub(super) fn consolidation_json(report: &PublicAssuranceReport) -> String {
+    consolidation::assess(report).to_json()
+}
+
 const STATES: [&str; 6] = ["i", "ii", "iii", "iv", "v", "np"];
 
 fn text(value: &str) -> String {
@@ -761,6 +768,7 @@ pub(super) fn markdown(report: &PublicAssuranceReport) -> Result<String, Refusal
     out.push_str("The certificate identifies the assessed source ledger. Canonical Claim, disclosure and model digests retain their own stated scopes; rendering adds no certification of source truth. The metric inventory keeps every selected reporting vintage.\n\n## Reading the report\n\nThe verified source inventory and visible identity ledger come first, followed by source values, cross-vintage findings, extraction limits, derived results and complete evidence-challenge packets. The final appendix reports hidden-sheet identities separately.\n\n");
     source_inventory(&mut out, report);
     ledger(&mut out, report);
+    out.push_str(&consolidation::assess(report).markdown());
     metrics(&mut out, report);
     out.push_str("\n## Issuer consistency and changes across vintages\n\nA changed value does not identify a true vintage. A silent classification means no applicable verified note in registered documents, not absence of disclosure everywhere. An incomplete disclosure registry leaves that question unassessed.\n");
     identity_history(

@@ -1591,6 +1591,12 @@ fn report_envelope(
         Err(refusal) => return Envelope::refused("assure public", refusal, next_actions),
     };
     let mut payload = report.to_json();
+    if payload.ends_with('}') {
+        payload.pop();
+        payload.push_str(",\"aisc_component_comparisons\":");
+        payload.push_str(&assure_report::consolidation_json(report));
+        payload.push('}');
+    }
     if let Some(section) = cutoffs
         && payload.ends_with('}')
     {

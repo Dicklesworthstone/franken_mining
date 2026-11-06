@@ -1,4 +1,5 @@
 //! Independent constructed linear-Gaussian and finite-population known answers.
+//! Determinism: DeterministicPerIsa
 
 use super::*;
 

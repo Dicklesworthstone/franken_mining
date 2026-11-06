@@ -635,6 +635,19 @@ and a FIFO that must refuse before it can hold a journal lock indefinitely.
 - The `waterfall` payload (BD-333) reports first-published year-on-year public AISC bridges, signed additive
   fallbacks and named refusals. Bars carry rounding intervals and source citations; exact printed-rate gaps
   remain separate. It is descriptive and non-identifying, and its digest is bound into the M0AS v8 certificate.
+- DESIGN (BD-273): assurance JSON adds `aisc_component_comparisons` (`fmine.aisc_component_comparisons.v1`),
+  with the same registered region/subtotal comparisons in Markdown. The adapter binds complete selected
+  columns from one AISC table, full-period membership, original numeric Claims, labels and workbook hashes;
+  the pure metrics kernel computes signed component differences, numerator and sold gaps, column footings
+  and an unexplained remainder with exact display-rounding bounds. Source knowledge, support, additivity,
+  representation, units and semantic keys must admit the arithmetic. Missing members and unlabelled numeric
+  rows refuse even if omitted amounts cancel; known observations and locators remain visible. UU scenarios
+  survive in the derived result. Printed arithmetic closes only with zero nominal unexplained remainder,
+  zero column footings and matching sold quantities. The separate comparison digest does not enlarge the
+  identity-ledger certificate. `accounting_reconciliation_verified` is always false; no residual is labelled
+  a corporate/JV allocation and no ownership conversion is inferred. The current registry excludes company
+  Total, so no company-level bridge or complete BD-273/M0 gate is claimed. FACT: all 10 focused invented-source
+  tests in `crates/xtask/tests/public_consolidation.rs` pass, including cancellation and source-admission controls.
 - A successful `recovery gap` envelope carries a `fmine.recovery.gap.v1` payload and the model's explicit
   `no_claim` text. Its own digest binds source rows, source Claims, the fit and quarterly outcomes. Both
   `anchor_id` and `certificate` remain null; no ledger snapshot or forecast registration is created. Each

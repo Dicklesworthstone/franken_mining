@@ -1,6 +1,7 @@
 //! DESIGN (BD-048/049, plan §10.2): descriptive diagnostics of an immutable saved assessment.
 //! No outcome is reselected, no authority time is advanced, and no independence or calibration is inferred.
-//! Determinism: DeterministicPerIsa, using the existing deterministic normal-CDF owner and fixed bin edges.
+//! Determinism: DeterministicPerIsa
+//! Uses the existing deterministic normal-CDF owner and fixed bin edges.
 
 use fmine_core::codec::Encoder;
 use fmine_core::hash::{Digest32, blake3_hash};
@@ -324,7 +325,7 @@ mod tests {
             .map(|(i, payload)| {
                 // Publications at 100 must be strictly after the registered resolution deadline.
                 ledger
-                    .register_payload(&format!("synthetic-{i}"), 1, 99, payload)
+                    .register_payload(format!("synthetic-{i}"), 1, 99, payload)
                     .unwrap()
             })
             .collect::<Vec<_>>();

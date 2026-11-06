@@ -5,7 +5,7 @@
 //! f(x) is not asserted to be E[f(X)], and no Gaussian output law is inferred.
 //! Reference: NIST TN 1297, Appendix A.3, first-order propagation with covariance:
 //! <https://www.nist.gov/pml/nist-technical-note-1297/nist-tn-1297-appendix-law-propagation-uncertainty>.
-//! Determinism: exact nominal arithmetic; DeterministicPerIsa covariance.
+//! Determinism: DeterministicPerIsa (covariance); nominal arithmetic is Exact.
 
 use std::collections::{BTreeMap, BTreeSet};
 

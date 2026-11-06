@@ -223,6 +223,22 @@ The JSON envelope and state root are the same for either presentation. A synthet
 ineligible for a public-lane gate, and a readable report does not turn the current implementation into
 a complete M0 gate pass.
 
+### Compare registered AISC aggregation layers
+
+DESIGN (BD-273): the same `assure public` run includes `aisc_component_comparisons` in JSON and an **AISC component
+comparisons** section in Markdown. For explicitly registered region and subtotal memberships, it compares
+the aggregate's printed USD-million component rows with every selected member in the same workbook table.
+The report lists each named difference, the reported numerator and sold-quantity gaps, each column's
+arithmetic footing, and any unexplained numerator remainder. Exact display-rounding bounds, original source
+Claims, file hashes, cell locators and membership policies remain available alongside a separate report digest.
+
+Missing members, partial-period membership, incompatible source semantics and unlabelled numeric components
+leave the comparison unavailable; cancelling omitted rows cannot make it pass. Printed arithmetic closes
+only when the reported numerator is explained by the named differences, every column foots, and the printed
+sold quantities agree. These checks never establish accounting reconciliation. Differences are not assigned
+to corporate or JV costs, and ownership is not rescaled. The current source registry does not select company
+Total, so this feature does not provide a company-level corporate/JV bridge or complete BD-273 or M0.
+
 ### Calculate a cost metric under an explicit definition
 
 `metrics cost` evaluates a declared cost worksheet under a selected AISC or AIC definition from

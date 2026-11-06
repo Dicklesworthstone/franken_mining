@@ -330,11 +330,19 @@ fn public_cli_markdown_uses_the_report_without_changing_the_json_receipt() {
     let (json, _) = fmine_cli::invoke(&args("json"), &root);
     let (markdown, format) = fmine_cli::invoke(&args("markdown"), &root);
     assert_eq!(json.exit_code, 0);
+    let source_report = run_synthetic_assurance(&[]).expect("same synthetic source report");
+    let comparisons = assure_report::consolidation_json(&source_report);
+    assert!(
+        json.to_json()
+            .contains(&format!("\"aisc_component_comparisons\":{comparisons}")),
+        "the CLI envelope must retain the exact source-bound comparison projection"
+    );
     assert_eq!(format, fmine_cli::OutputFormat::Markdown);
     assert_eq!(json.to_json(), markdown.to_json());
     let (rendered, exit) = fmine_cli::run(&args("markdown"), &root);
     assert_eq!(exit, 0);
     assert!(rendered.starts_with("# Public assurance — synthetic\n"));
+    assert!(rendered.contains("## AISC component comparisons"));
     assert_eq!(rendered, markdown.rendered_markdown.unwrap());
     assert!(!rendered.starts_with("# fmine"));
 }

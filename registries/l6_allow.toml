@@ -158,3 +158,11 @@ fn = "logarithmic_mean"
 params = "a, b"
 kind = "generic"
 reason = "the LMDI logarithmic mean of two positive values of one quantity, as pure arithmetic"
+
+[[allow]]
+crate = "fmine-plant"
+file = "src/rtd/kernel.rs"
+fn = "add"
+params = "value"
+kind = "generic"
+reason = "module-private compensated sum in one caller-chosen unit: dimensionless Poisson weights or admitted material-channel masses; public RTD inputs remain typed Claims"

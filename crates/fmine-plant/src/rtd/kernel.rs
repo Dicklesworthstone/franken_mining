@@ -18,6 +18,10 @@ pub(super) struct Weights {
     pub fed_exit: f64,
 }
 
+/// DESIGN: unit-agnostic compensated reduction, internal to RTD.
+/// Each accumulator uses one caller-chosen scalar unit: dimensionless transition
+/// weights or admitted material-channel masses. Public RTD inputs remain Claims;
+/// this arithmetic helper performs neither source admission nor unit conversion.
 #[derive(Default)]
 pub(super) struct Sum {
     value: f64,

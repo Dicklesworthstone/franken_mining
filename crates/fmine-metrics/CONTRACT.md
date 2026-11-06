@@ -23,9 +23,14 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Layer:** E
 - **Subsystem:** Bullion
 - **LOC budget:** 18,000 planned / 21,000 ceiling
-- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserve_replacement", "reserves", "roll_forward", "mirror", "public_derivation"]`
+- **Allowed Module Families:** `["lmdi", "cutoff", "definitions", "guidance", "capacity", "recovery", "reserve_replacement", "reserves", "roll_forward", "mirror", "public_derivation", "consolidation"]`
 
 ## 2. Inputs
+- DESIGN (BD-273): `consolidation::compare` accepts one bound `Claim<Table>` with complete named
+  component rows, one aggregate column, explicitly matched member columns and membership rules. Each
+  amount retains its signed exact value and display step; numerator components are USD millions and sold
+  quantities are thousand ounces. Source scope, public evidence, knowledge state, support, shape and Claim
+  identity are checked. No ownership conversion or inference of company membership occurs.
 - **Crate root.** Bare `f64` values: site AISC rows and bridge totals, gold koz and copper Mlb with a `PriceDeck`, reserve movements in Moz, and a cost, net price, starting grade and recovery closure for `solve_cutoff_grade`.
 - **`definitions`.** A `MetricRegistry`, a definition id, `CostLine { item, usd: ExactQty }` rows, ounces sold, and a gold share for a co-product definition. `is_non_sustaining` takes the registry's `ProjectTest` and a `Project`. `bundled_registry` parses `registries/metrics.toml`, which `include_str!` embeds at compile time.
 - **`definitions::claims`.** The metric registry and `Claim<CostInput>`s: exact USD `Money` lines, gold ounces sold and an optional separately stated co-product allocation, all deterministic period aggregates on one issuer, subject, calendar support, ownership and declared accounting basis. A rule Claim must declare that the lines form the complete cost population.
@@ -46,6 +51,12 @@ The results are descriptive arithmetic. None identifies an operational cause, fo
 - **Every `Quantity`** carries exact rational bounds, a subject, a calendar-month `Period`, an `Ownership` and a kind. Units are fixed by the kind, never inferred from magnitudes.
 
 ## 3. Outputs
+- DESIGN (BD-273): `consolidation::compare` returns a derived comparison Claim with each observed
+  aggregate-minus-member component difference, the summed differences, numerator and sold-quantity gaps,
+  unexplained remainder and every column's own footing residual. Exact marginal display-rounding bounds
+  remain separate from the nominal `printed_arithmetic_closed` result. Closure is not an accounting
+  reconciliation or evidence identifying corporate/JV allocations. The CLI binds verified AISC workbook
+  Claims to this kernel for its explicit region and subtotal selections and retains unavailable members.
 - **`AiscConsolidationBridge::verify_rollup`** gives `Ok(())` or a `Refusal`.
 - **`compute_geo`** gives `GeoBreakdown`. Copper GEO koz is copper Mlb × 1,000 × the copper price ÷ the gold price.
 - **`ReserveReplacementBridge::compute`** gives organic and headline replacement as percentages of depletion, or `None`.

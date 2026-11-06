@@ -1383,6 +1383,10 @@ mod tests {
         let json = report.to_json();
         assert!(json.contains(&format!("\"company_cost_layers\":{}", projection.to_json())));
         let markdown = assure_report::markdown(&report).expect("public report");
+        assert!(
+            assure_report::consolidation_json(&report).contains("\"rows\":[]"),
+            "Mine Statistics cost layers cannot invent a source AISC component table"
+        );
         assert!(markdown.contains("Implied unallocated company cost layers"));
         assert!(markdown.contains(&projection.digest().to_hex()));
         assert!(markdown.contains("unresolved breakdown"));

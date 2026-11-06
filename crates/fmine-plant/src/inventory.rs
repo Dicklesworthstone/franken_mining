@@ -365,7 +365,11 @@ pub(crate) fn put_source_envelope<T>(enc: &mut Encoder, input: &Claim<T>, role_t
             enc.put_str("Deterministic/Composite");
             enc.put_u32(length_mm);
         }
-        SpatialSupport::SmuBlock { dx_cm, dy_cm, dz_cm } => {
+        SpatialSupport::SmuBlock {
+            dx_cm,
+            dy_cm,
+            dz_cm,
+        } => {
             enc.put_str("Deterministic/SmuBlock");
             enc.put_u32(dx_cm);
             enc.put_u32(dy_cm);

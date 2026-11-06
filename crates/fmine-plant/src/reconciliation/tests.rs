@@ -1,4 +1,6 @@
 //! Constructed source observations and analytical checks; no plant calibration.
+//! Determinism: DeterministicPerIsa
+
 use super::*;
 use fmine_core::{anchor::SourceAnchor, hash::sha256};
 use fmine_time::ValidTime;

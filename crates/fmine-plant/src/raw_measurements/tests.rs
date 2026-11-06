@@ -1,5 +1,5 @@
 //! Constructed lot observations and independent exact/linearized known answers.
-//! Determinism: exact nominal arithmetic; DeterministicPerIsa covariance.
+//! Determinism: DeterministicPerIsa (covariance); nominal arithmetic is Exact.
 
 use super::*;
 use crate::flowsheet::{
